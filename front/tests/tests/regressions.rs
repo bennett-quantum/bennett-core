@@ -5,38 +5,17 @@ use std::process::Command;
 
 use bennett_exec::{Executor, Options, Outcome, RunError};
 use bennett_front_tests::{
-    CLANG_FLAGS, c_dir, entry, is_fault_register, lower, lower_text, lower_text_with_budget, native_build,
-    native_exit_status, options, run, write_c,
+    CLANG_FLAGS, CLANG_O2_FLAGS, assert_agrees_with_native, c_dir, entry, is_fault_register, lower, lower_text,
+    lower_text_with_budget, native_build, options, run, write_c,
 };
 use bennett_ir::{Fault, Inst, ValidModule};
 
 /// Seeds per program, for outcomes that should not depend on the seed.
 const SEEDS: u64 = 16;
 
-/// As in thesis.rs: the front end also takes code clang has already optimised.
-const CLANG_O2_FLAGS: &[&str] =
-    &["-O2", "-fno-vectorize", "-fno-slp-vectorize", "-gline-tables-only", "-fno-discard-value-names"];
-
 fn program(name: &str, clang_flags: &[&str]) -> ValidModule {
     let tag = format!("{name}{}", if clang_flags == CLANG_FLAGS { "" } else { ".o2" });
     lower(&c_dir().join(format!("{name}.c")), &tag, clang_flags, &[])
-}
-
-/// `main`'s result as the exit status the native program would have.
-fn exit_status(outcome: Outcome, context: &str) -> i32 {
-    let Outcome::Returned(Some(value)) = outcome else { panic!("{context}: {outcome:?}") };
-    i32::from(value as u8)
-}
-
-/// The device program agrees with the native build of the same C, from unoptimised and optimised input.
-fn assert_agrees_with_native(name: &str, expected: i32) {
-    let native = native_exit_status(&c_dir().join(format!("{name}.c")), name);
-    assert_eq!(native, expected, "{name}.c: the native build");
-    for flags in [CLANG_FLAGS, CLANG_O2_FLAGS] {
-        let module = program(name, flags);
-        let context = format!("{name}.c {flags:?}");
-        assert_eq!(exit_status(run(&module, "main", &[], 0), &context), native, "{context}");
-    }
 }
 
 /// The fault registers of the `apply`s in `@main`, in order.
@@ -193,7 +172,7 @@ fn initialisers_are_written_in_full() {
         let module = program("initialisers", flags);
         let device: Vec<u64> = (0..expected.len() as u64)
             .map(|i| match run(&module, "byte_at", &[i], 0) {
-                Outcome::Returned(Some(value)) => value,
+                Outcome::Returned(Some(value)) => value as u64,
                 other => panic!("byte_at({i}): {other:?}"),
             })
             .collect();
@@ -205,14 +184,13 @@ fn initialisers_are_written_in_full() {
 
 /// Floating-point arithmetic and the other things this version cannot lower are refused by name.
 #[test]
-fn floating_point_arithmetic_and_variadic_functions_are_refused() {
+fn floating_point_arithmetic_and_library_calls_are_refused() {
     let cases = [
         ("float_arithmetic", "volatile double a = 1.5;\nint main(void) { return (int)(a * 3.0); }\n", "double"),
         (
-            "variadic",
-            "#include <stdarg.h>\n__attribute__((noinline)) int first(int n, ...) { va_list l; va_start(l, n); \
-             int v = va_arg(l, int); va_end(l); return v; }\nint main(void) { return first(1, 7); }\n",
-            "variadic",
+            "printf",
+            "int printf(const char *, ...);\nint main(int n, char **v) { (void)v; return printf(\"%d\", n); }\n",
+            "printf",
         ),
     ];
     for (name, text, expected) in cases {
@@ -262,5 +240,41 @@ fn a_gate_on_a_bit_the_type_does_not_have_is_refused() {
     match lower_text(&source, "bool_bit", &flags, &[]) {
         Ok(program) => panic!("accepted\n{program}"),
         Err(message) => assert!(message.contains("whose type does not have that bit"), "{message}"),
+    }
+}
+
+/// Inline assembly that executes an instruction, or whose output would hold whatever its register held,
+/// is refused by name.
+#[test]
+fn inline_assembly_with_an_effect_is_refused() {
+    let cases = [
+        ("asm_nop", "int main(void) { __asm__ volatile(\"nop\"); return 0; }\n"),
+        ("asm_output", "int main(void) { long x; __asm__(\"\" : \"=r\"(x)); return (int)x; }\n"),
+        ("asm_any_output", "int main(void) { long x = 3; __asm__ volatile(\"\" : \"=g\"(x)); return (int)x; }\n"),
+    ];
+    for (name, text) in cases {
+        let source = write_c(name, text);
+        assert_refused(&source, name, "inline assembly");
+    }
+}
+
+/// When one register is left for a variadic `__int128`, the psABI passes it on the stack and leaves the
+/// register to the next argument, which is where clang's inline `va_arg` reads it. LLVM's x86-64 backend
+/// skips the register instead, so a native build gets this wrong at some optimisation levels; the device
+/// program follows the callee, and gets the C answer.
+#[test]
+fn a_variadic_int128_that_misses_the_last_register_leaves_it_to_the_next_argument() {
+    let source = write_c(
+        "int128_last_register",
+        "#include <stdarg.h>\ntypedef unsigned __int128 u128;\n\
+         __attribute__((noinline)) u128 f(int n, ...) {\n  va_list ap;\n  va_start(ap, n);\n  u128 s = 0;\n  \
+         for (int i = 0; i < n; i++) s = s * 10 + (unsigned long)va_arg(ap, long);\n  \
+         s = s * 1000 + va_arg(ap, u128);\n  s = s * 10 + (unsigned long)va_arg(ap, long);\n  va_end(ap);\n  return s;\n}\n\
+         int main(void) {\n  u128 r = f(4, 1L, 2L, 3L, 4L, (u128)99, 5L);\n  \
+         return r == ((u128)1234 * 1000 + 99) * 10 + 5 ? 0 : 1;\n}\n",
+    );
+    for flags in [CLANG_FLAGS, CLANG_O2_FLAGS] {
+        let module = lower(&source, "int128_last_register", flags, &[]);
+        assert_eq!(run(&module, "main", &[], 0), Outcome::Returned(Some(0)), "{flags:?}");
     }
 }

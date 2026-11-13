@@ -66,7 +66,7 @@ fn check_data(module: &Module, errors: &mut Vec<ValidationError>) {
             if let DataItem::FuncAddr { width, func } = item {
                 match module.functions.get(func.index()) {
                     None => error(index, Problem::UnknownFunction(func.0)),
-                    Some(f) if func.address() > width.mask() => {
+                    Some(f) if u128::from(func.address()) > width.mask() => {
                         error(index, Problem::AddressTooWide { function: f.name.clone(), bits: width.bits() });
                     }
                     Some(_) => {}

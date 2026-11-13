@@ -11,23 +11,24 @@ pub(super) fn parse_type(word: &str) -> Option<Type> {
     let width = Width::new(digits.parse().ok()?)?;
     match kind {
         "i" => Some(Type::Int(width)),
-        "q" => Some(Type::Qreg(width)),
+        "q" if width.bits() <= Width::MAX_QUBITS => Some(Type::Qreg(width)),
         _ => None,
     }
 }
 
-/// The value of an integer literal: decimal or `0x` hexadecimal, optionally negative.
-pub(super) fn parse_integer(text: &str) -> Option<i128> {
+/// An integer literal: decimal or `0x` hexadecimal, optionally negative; whether it is negative, and its
+/// magnitude.
+pub(super) fn parse_integer(text: &str) -> Option<(bool, u128)> {
     let (negative, digits) = match text.strip_prefix('-') {
         Some(rest) => (true, rest),
         None => (false, text),
     };
     let magnitude = match digits.strip_prefix("0x") {
-        Some(hex) => i128::from_str_radix(hex, 16).ok()?,
+        Some(hex) if hex.bytes().all(|b| b.is_ascii_hexdigit()) => u128::from_str_radix(hex, 16).ok()?,
         None if digits.bytes().all(|b| b.is_ascii_digit()) => digits.parse().ok()?,
-        None => return None,
+        _ => return None,
     };
-    Some(if negative { -magnitude } else { magnitude })
+    Some((negative, magnitude))
 }
 
 /// The bytes a string literal denotes. Escapes: `\n`, `\t`, `\r`, `\0`, `\\`, `\"` and `\xHH`.
@@ -69,7 +70,9 @@ mod tests {
         assert_eq!(parse_type("i32"), Width::new(32).map(Type::Int));
         assert_eq!(parse_type("q1"), Some(Type::Qreg(Width::BIT)));
         assert_eq!(parse_type("i0"), None);
-        assert_eq!(parse_type("i65"), None);
+        assert_eq!(parse_type("i128"), Width::new(128).map(Type::Int));
+        assert_eq!(parse_type("i129"), None);
+        assert_eq!(parse_type("q65"), None);
         assert_eq!(parse_type("i+8"), None);
         assert_eq!(parse_type("x8"), None);
         assert_eq!(parse_type("i"), None);
@@ -77,8 +80,11 @@ mod tests {
 
     #[test]
     fn integers() {
-        assert_eq!(parse_integer("42"), Some(42));
-        assert_eq!(parse_integer("-0x10"), Some(-16));
+        assert_eq!(parse_integer("42"), Some((false, 42)));
+        assert_eq!(parse_integer("-0x10"), Some((true, 16)));
+        assert_eq!(parse_integer("340282366920938463463374607431768211455"), Some((false, u128::MAX)));
+        assert_eq!(parse_integer("340282366920938463463374607431768211456"), None);
+        assert_eq!(parse_integer("0x+1"), None);
         assert_eq!(parse_integer("1.5"), None);
         assert_eq!(parse_integer("1e3"), None);
     }

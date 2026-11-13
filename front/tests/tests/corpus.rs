@@ -47,7 +47,7 @@ fn device_results() -> &'static BTreeMap<String, Vec<Result<u64, Fault>>> {
             .map(|name| {
                 let results = (0..INPUTS)
                     .map(|x| match run(module, &name, &[x], 0) {
-                        Outcome::Returned(Some(value)) => Ok(value),
+                        Outcome::Returned(Some(value)) => Ok(value as u64),
                         Outcome::Faulted(fault) => Err(fault),
                         other => panic!("@{name}({x}): {other:?}"),
                     })
@@ -144,6 +144,7 @@ fn every_function_applied_coherently_holds_x_and_f_of_x_on_every_branch() {
         for seed in 0..SEEDS {
             match run(module, &format!("coherent_{name}"), &[key], seed) {
                 Outcome::Returned(Some(packed)) => {
+                    let packed = packed as u64;
                     let (x, y) = (packed >> 32, packed & 0xffff_ffff);
                     assert_eq!(Ok(y), device_results()[&name][x as usize], "{name}: seed {seed} measured x = {x}");
                 }

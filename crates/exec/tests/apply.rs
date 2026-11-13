@@ -153,7 +153,7 @@ fn apply_is_the_permutation_of_direct_evaluation() {
                     let (outcome, executor) = run(&module, "case", &case, allowing_region_faults());
                     assert_eq!(outcome, Outcome::Returned(None));
                     let expected = match direct {
-                        Outcome::Returned(Some(r)) => [args.clone(), vec![t ^ r, e]].concat(),
+                        Outcome::Returned(Some(r)) => [args.clone(), vec![t ^ r as u64, e]].concat(),
                         Outcome::Faulted(fault) => [args.clone(), vec![t, e ^ fault.code()]].concat(),
                         Outcome::Returned(None) => panic!("a region returns a value"),
                         Outcome::Stopped(error) => panic!("a classical run reaches no simulator limit: {error}"),
@@ -235,10 +235,10 @@ copy(q1 %same_register):
 fn effects_and_quantum_instructions_inside_a_region_are_faults() {
     let module = load(FORBIDDEN);
     let (outcome, executor) = run(&module, "main", &[0], allowing_region_faults());
-    assert_eq!(outcome, Outcome::Returned(Some(Fault::EffectInRegion.code())));
+    assert_eq!(outcome, Outcome::Returned(Some(u128::from(Fault::EffectInRegion.code()))));
     assert!(executor.tape().is_empty(), "the effect never happened");
     let (outcome, executor) = run(&module, "main", &[1], allowing_region_faults());
-    assert_eq!(outcome, Outcome::Returned(Some(Fault::QuantumInRegion.code())));
+    assert_eq!(outcome, Outcome::Returned(Some(u128::from(Fault::QuantumInRegion.code()))));
     assert_eq!(executor.stats().peak_live_qubits, 6, "the region allocated nothing");
     // By default the faulting apply stops the run.
     let (outcome, executor) = run(&module, "main", &[0], bounded());

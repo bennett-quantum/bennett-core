@@ -148,6 +148,7 @@ fn treating_everything_as_tainted_changes_no_result() {
             let outcome = run(&precise, "coarse", &[param], seed);
             assert_eq!(outcome, run(&coarse, "coarse", &[param], seed), "coarse({param}), seed {seed}");
             let Outcome::Returned(Some(packed)) = outcome else { panic!("coarse({param}): {outcome:?}") };
+            let packed = packed as u64;
             let (out, k, b) = (packed & 0xffff_ffff, packed >> 32 & 0xff, packed >> 40 & 0xff);
             let (first, copy, early) = (packed >> 48 & 1, packed >> 50 & 1, packed >> 56);
             assert_eq!(early, (param * 3 + 1) & 0xff, "coarse({param}): measuring a known value");

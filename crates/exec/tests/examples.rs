@@ -20,7 +20,7 @@ fn sum_counts_and_reverses() {
     let module = load(SUM);
     for n in [0, 1, 2, 10, 1000] {
         let (outcome, _) = run(&module, "main", &[n], bounded());
-        assert_eq!(outcome, Outcome::Returned(Some(n * n.saturating_sub(1) / 2)), "n = {n}");
+        assert_eq!(outcome, Outcome::Returned(Some(u128::from(n * n.saturating_sub(1) / 2))), "n = {n}");
         assert_eq!(assert_reverses(&module, "main", &[n], bounded()), outcome);
     }
 }
@@ -91,6 +91,7 @@ fn fault_outcomes_follow_the_budget_and_leave_out_unchanged() {
         let (out, fault) = (packed & 0xff, packed >> 8);
         let expected =
             if n <= 3 { (initial_out ^ (n * n.saturating_sub(1) / 2), 0) } else { (initial_out, Fault::Budget.code()) };
+        let expected = (u128::from(expected.0), u128::from(expected.1));
         assert_eq!((out, fault), expected, "n = {n}");
     }
 }

@@ -5,9 +5,12 @@ design rule is that `bennett-front` either handles a program correctly, refuses 
 in a named fault; never a silent wrong result, a crash or a hang. How true is that on a few thousand real self-checking
 test programs, and why are programs refused?
 
-Measured on 2026-11-13 at commit `4b65247` (tree clean when the binaries were copied). `bennett-front` and
-`bennett` were built once (`cargo build --release`, `front/test.sh`, all tests passing), then copied to
-`.tmp/c-corpus/bin/`, and only those copies were used. File and line references below are at `4b65247`.
+Measured twice on 2026-11-13. First at commit `4b65247` (tree clean when the binaries were copied):
+`bennett-front` and `bennett` were built once (`cargo build --release`, `front/test.sh`, all tests passing), then
+copied to `.tmp/c-corpus/bin/`, and only those copies were used. File and line references in the sections on the
+first measurement are at `4b65247`. Then again for step 5, which widened the C the front handles, with the same
+harness: at `b5ffb85` before the step, and at `b5ffb85` plus the step's changes (not yet committed; binaries
+copied to `.tmp/c-corpus/s5-r5/bin/`). Its results come first, below.
 
 ## Method
 
@@ -66,7 +69,58 @@ error. **wrong**: the device reaches `abort()`/`exit(≠0)`, or `main` returns a
 exits other than 0 or 3, `bennett check` rejects its output, or `bennett run` exits other than 0, 1 or 2. **budget**:
 the 10^8-step budget ran out. **skipped**: no native reference, as above.
 
-## Results
+## Results after step 5
+
+| outcome | GCC, README pipeline: before | after | GCC, `OPTNONE=1`: first | after | c-testsuite: before | after |
+|---|---:|---:|---:|---:|---:|---:|
+| agrees | 1,241 | **1,402** | 1,244 | **1,407** | 146 | **149** |
+| refused by name | 334 | 172 | 331 | 168 | 73 | 70 |
+| named fault (native passed) | 0 | 1 | 0 | 0 | 0 | 0 |
+| **wrong** | **0** | **0** | **0** | **0** | **0** | **0** |
+| crash | 1 | 1 | 1 | 1 | 0 | 0 |
+| budget | 0 | 0 | 0 | 0 | 1 | 1 |
+| skipped | 80 | 80 | 80 | 80 | 0 | 0 |
+
+"Before" is `b5ffb85` (the same numbers as `4b65247`, except that one c-testsuite program, `00025`, moved from the
+named fault `bad_indirect` to a refusal; for `OPTNONE=1` the column is the first measurement at `4b65247`). The
+crash is still the LLVM 18 dead-store-elimination bug of cause 1, which `bennett-front` now reports by name
+(exit status 2, "LLVM's optimiser crashed on this module"); the harness counts any exit status other than 3 as a
+crash. The named fault is GCC `pr67037`: a call through an unprototyped (K&R) function pointer that passes an
+argument its target does not take. Natively the extra argument is ignored; on the device the call's signature
+does not match the target's, and the run ends in `bad_indirect`. It was a refusal before. With inlining
+(`OPTNONE=1`) it agrees.
+
+GCC, README pipeline: 161 programs moved from refused to agrees, one (`pr67037`) from refused to a named fault,
+none in any other direction. Of the 161, 9 take fewer than 10 device steps (folded at compile time), 92 take
+10–99, 39 take 100–999, 15 take 10^3–10^5 and 6 take more. By the refusal they had before: empty inline
+assembly 56, variadic functions 36, aggregate values 17, intrinsics 17, vectors 13, integers wider than 64 bits
+9, computed goto 7, constant expressions on addresses 6.
+
+**Wrong results during the step.** The first re-run (variadic functions only) gave 6 wrong results, GCC
+`va-arg-1`, `va-arg-2`, `va-arg-8`, `va-arg-9`, `va-arg-10`, `va-arg-23`, all from one cause: named parameters
+beyond the registers (more than six, or a named struct passed in memory) take stack slots, the caller placed the
+variadic arguments after them, but `va_start` pointed the `va_list` at the start of the stack arguments. Fixed
+(`va_start` starts after the named parameters' stack bytes); `front/tests/c/variadic.c` checks 16 and 17 fail
+on the old code. No later run had a wrong result.
+
+### Refusal reasons after step 5 (GCC, README pipeline, 172 refusals)
+
+| count | family |
+|---:|---|
+| 127 | floating point (`double` 58, FP constants 32, `float` 20, `x86_fp80` 11, conversions and `fcmp` 5, a variadic `<2 x float>` 1) |
+| 37 | library not provided: `printf`-family 25 (`printf` 15, `sprintf` 6, `vprintf` 2, `snprintf`, `puts`), `stdout`/`stderr` 5, `open` 2, `fopen`, `qsort`, `isprint`, `longjmp`, `_setjmp` |
+| 3 | `llvm.returnaddress` (GCC's `__builtin_return_address`) |
+| 2 | `llvm.eh.sjlj.longjmp` |
+| 1 | a `bitcast` left from a vector of doubles (`pr92618`) |
+| 1 | a variadic argument aligned to more than 16 bytes (`pr92904`: natively the stack is 16-byte aligned at a call) |
+| 1 | a call with variadic arguments through a pointer, where no variadic function is defined (`930513-1`: `sprintf` through a pointer) |
+
+Outside floating point and the C library, 6 programs remain: GCC's return address (3), its `setjmp`/`longjmp`
+builtins (2) and the over-aligned variadic argument. c-testsuite: 70 refusals: 64 library calls (`printf`, `puts`
+and other stdio), 4 floating point, 1 call through a mismatched prototype (`00025`, cause 2 of the first
+measurement) and 1 call of a library function through a pointer.
+
+## Results at `4b65247` (first measurement)
 
 ### GCC torture `execute`, README pipeline (1,656 programs)
 
@@ -122,7 +176,7 @@ budget of 2·10^9: it **agrees**, and simply needs more than 10^8 steps. The fau
 prototype cause below. 65 of the 72 refusals are `printf` (41 of the 43 calls of a variadic function, and 22 calls
 of `puts`, which LLVM makes from `printf("...\n")`) or other stdio.
 
-### Refusal reasons: the work list (GCC, README pipeline, 334 refusals)
+### Refusal reasons at `4b65247`: the work list for step 5 (GCC, README pipeline, 334 refusals)
 
 By family:
 
@@ -148,7 +202,7 @@ until the check was removed), `llvm.prefetch` (a no-op), `llvm.stacksave`/`stack
 integers (registers holding structs), and calls through unprototyped declarations whose definition is visible.
 The large families are floating point (101), variadic functions (90) and inline assembly (57).
 
-## Every distinct crash and fault cause
+## Every distinct crash and fault cause (first measurement)
 
 **1. `bennett-front` segfaults in LLVM's dead-store elimination** (crash; GCC `20051113-1`; the same in the optnone
 run). Reduced by hand (`reduced/dse-calloc-crash.c`, 7 lines): a module that defines `calloc` and a non-inlinable
@@ -178,7 +232,7 @@ to agree, the call runs, which is ABI-faithful.
 **Named faults where native succeeded:** only the one above. No `out_of_bounds`, `stack_overflow`, `unreachable` or
 `divide_by_zero` from a program itself.
 
-## Measured facts
+## Measured facts (first measurement)
 
 - At `4b65247`, GCC torture `execute` through the README pipeline: 1,241 agree, 334 refused by name, 1 crash (an upstream
   LLVM pass), 0 wrong, 0 named faults, 0 budget, 80 skipped.

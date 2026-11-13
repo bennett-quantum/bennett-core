@@ -1,8 +1,8 @@
 //! The undo journal: for each executed step, exactly what the step destroyed.
 //!
 //! A record is one byte naming the kind of step, plus the words that kind needs, on a separate word
-//! stack. Most steps need one word (the overwritten slot), so the journal costs about nine bytes per
-//! step. Everything else needed to undo a step (operand values, addresses, which instruction ran) is
+//! stack. A word holds any value (up to 128 bits). Most steps need one word (the overwritten slot), so
+//! the journal costs about seventeen bytes per step. Everything else needed to undo a step (operand values, addresses, which instruction ran) is
 //! still in the state when the step is undone, because later steps have been undone first.
 
 /// What kind of step a record undoes, and therefore which words it has.
@@ -15,6 +15,8 @@ pub(crate) enum Undo {
     Store,
     /// An `alloca`. Words: the old slot value, the old stack pointer.
     Alloca,
+    /// A `stackrestore`. Words: the old stack pointer.
+    StackRestore,
     /// An `effect`, undone by dropping the last console byte. No words.
     Effect,
     /// A frame pushed by a call or by entering a region. Words: the old value of each parameter slot.
@@ -42,7 +44,7 @@ pub(crate) enum Undo {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Journal {
     kinds: Vec<Undo>,
-    words: Vec<u64>,
+    words: Vec<u128>,
 }
 
 impl Journal {
@@ -50,7 +52,7 @@ impl Journal {
         self.kinds.push(undo);
     }
 
-    pub(crate) fn push_word(&mut self, word: u64) {
+    pub(crate) fn push_word(&mut self, word: u128) {
         self.words.push(word);
     }
 
@@ -62,13 +64,13 @@ impl Journal {
         self.kinds.pop()
     }
 
-    pub(crate) fn pop_word(&mut self) -> u64 {
+    pub(crate) fn pop_word(&mut self) -> u128 {
         self.words.pop().expect("every undo record's words were pushed with it")
     }
 
     /// The bytes the journal holds.
     pub(crate) fn bytes(&self) -> usize {
-        self.kinds.len() * size_of::<Undo>() + self.words.len() * size_of::<u64>()
+        self.kinds.len() * size_of::<Undo>() + self.words.len() * size_of::<u128>()
     }
 
     pub(crate) fn clear(&mut self) {

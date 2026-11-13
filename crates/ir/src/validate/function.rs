@@ -144,6 +144,11 @@ impl<'a> Checker<'a> {
             self.error(site, Problem::Redefined(name));
             return;
         }
+        if let Some(Type::Qreg(width)) = ty
+            && width.bits() > Width::MAX_QUBITS
+        {
+            self.error(site, Problem::RegisterTooWide(width.bits()));
+        }
         self.defs[slot.index()] = Some(def);
         self.types[slot.index()] = ty;
     }
@@ -156,13 +161,14 @@ impl<'a> Checker<'a> {
             }
             Inst::Compare { .. } => Some(Type::Int(Width::BIT)),
             Inst::Cast { to, .. } => Some(Type::Int(*to)),
-            Inst::Alloca { .. } | Inst::FuncAddr { .. } => Some(Type::Int(Width::WORD)),
+            Inst::Alloca { .. } | Inst::FuncAddr { .. } | Inst::StackSave { .. } => Some(Type::Int(Width::WORD)),
             Inst::Qalloc { width, .. } => Some(Type::Qreg(*width)),
             Inst::Call { callee, .. } => self.call_result(site, self.module.function(*callee).result),
             Inst::CallIndirect { signature, .. } => self.call_result(site, signature.result),
             Inst::Measure { .. }
             | Inst::Store { .. }
             | Inst::Effect { .. }
+            | Inst::StackRestore { .. }
             | Inst::Qfree { .. }
             | Inst::Gate { .. }
             | Inst::Apply { .. } => None,
@@ -227,7 +233,9 @@ impl<'a> Checker<'a> {
                     self.error(site, problem);
                 }
             }
-            Inst::Load { address, .. } | Inst::Alloca { size: address, .. } => {
+            Inst::Load { address, .. }
+            | Inst::Alloca { size: address, .. }
+            | Inst::StackRestore { pointer: address } => {
                 self.expect(site, *address, Type::Int(Width::WORD));
             }
             Inst::Store { width, value, address } => {
@@ -251,7 +259,7 @@ impl<'a> Checker<'a> {
                 self.apply(site, *callee, args, *out, *fault);
                 self.expect(site, *budget, Type::Int(Width::WORD));
             }
-            Inst::FuncAddr { .. } | Inst::Qalloc { .. } => {}
+            Inst::FuncAddr { .. } | Inst::Qalloc { .. } | Inst::StackSave { .. } => {}
         }
     }
 

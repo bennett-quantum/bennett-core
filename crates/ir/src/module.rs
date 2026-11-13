@@ -113,7 +113,7 @@ impl DataItem {
         let (width, value) = match self {
             DataItem::Bytes(bytes) => return out.extend_from_slice(bytes),
             DataItem::Int(value) => (value.width(), value.value()),
-            DataItem::FuncAddr { width, func } => (*width, func.address()),
+            DataItem::FuncAddr { width, func } => (*width, u128::from(func.address())),
         };
         let bytes = value.to_le_bytes();
         out.extend_from_slice(&bytes[..width.bytes() as usize]);
@@ -274,6 +274,18 @@ pub enum Inst {
         /// The `i64` number of bytes.
         size: Operand,
     },
+    /// `dst = stacksave`: the stack pointer, for a later `stackrestore`.
+    StackSave {
+        /// The `i64` stack pointer.
+        dst: Slot,
+    },
+    /// `stackrestore pointer`: frees what `alloca` reserved since `pointer` was saved, by setting the
+    /// stack pointer back to it. `pointer` must be at or above the stack pointer and within the current
+    /// frame's allocations; otherwise the fault `bad_stack_restore`.
+    StackRestore {
+        /// The `i64` stack pointer, as `stacksave` gave it.
+        pointer: Operand,
+    },
     /// `[dst =] call @callee(args)`.
     Call {
         /// The function called.
@@ -360,13 +372,17 @@ impl Inst {
             | Inst::Cast { dst, .. }
             | Inst::Load { dst, .. }
             | Inst::Alloca { dst, .. }
+            | Inst::StackSave { dst }
             | Inst::FuncAddr { dst, .. }
             | Inst::Qalloc { dst, .. }
             | Inst::Measure { dst, .. } => Some(*dst),
             Inst::Call { dst, .. } | Inst::CallIndirect { dst, .. } => *dst,
-            Inst::Store { .. } | Inst::Effect { .. } | Inst::Qfree { .. } | Inst::Gate { .. } | Inst::Apply { .. } => {
-                None
-            }
+            Inst::Store { .. }
+            | Inst::StackRestore { .. }
+            | Inst::Effect { .. }
+            | Inst::Qfree { .. }
+            | Inst::Gate { .. }
+            | Inst::Apply { .. } => None,
         }
     }
 
@@ -394,13 +410,14 @@ impl Inst {
                 operand(address);
             }
             Inst::Alloca { size, .. } => operand(size),
+            Inst::StackRestore { pointer } => operand(pointer),
             Inst::Call { args, .. } => args.iter().for_each(operand),
             Inst::CallIndirect { target, args, .. } => {
                 operand(target);
                 args.iter().for_each(operand);
             }
             Inst::Effect { byte } => operand(byte),
-            Inst::FuncAddr { .. } | Inst::Qalloc { .. } => {}
+            Inst::FuncAddr { .. } | Inst::Qalloc { .. } | Inst::StackSave { .. } => {}
             Inst::Qfree { register } | Inst::Measure { register, .. } => operand(&Operand::Slot(*register)),
             Inst::Gate { target, controls, .. } => {
                 operand(&Operand::Slot(target.register));
@@ -429,7 +446,7 @@ pub struct Target {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SwitchCase {
     /// The value selecting this arm, canonical at the switch's width.
-    pub value: u64,
+    pub value: u128,
     /// Where control goes.
     pub target: Target,
 }

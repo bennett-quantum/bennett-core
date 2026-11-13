@@ -159,7 +159,7 @@ fn the_predicate_is_an_applied_ordinary_function() {
             module.function(callee).params.len() == 1
                 && (0..N as u64).all(|x| {
                     let mut executor = Executor::new(module, callee, &[x], options(0)).expect("starts");
-                    executor.run() == Outcome::Returned(Some(u64::from(solutions[x as usize])))
+                    executor.run() == Outcome::Returned(Some(u128::from(solutions[x as usize])))
                 })
         });
         assert!(computes_predicate, "@{search}: no applied function computes the predicate");

@@ -42,7 +42,8 @@ fn random_programs_round_trip_and_reverse_step_by_step() {
         let module =
             validate(module).unwrap_or_else(|e| panic!("seed {seed}: generated an invalid program: {e}\n{text}"));
         let mut rng = ChaCha8Rng::seed_from_u64(seed);
-        let args = [rng.random_range(0..=VALUE.mask()), rng.random_range(0..=VALUE.mask())];
+        let max = VALUE.mask() as u64;
+        let args = [rng.random_range(0..=max), rng.random_range(0..=max)];
         // Random regions fault on some branches; this test is about reversal, so the run goes on.
         let options = Options {
             budget: Some(STEP_BUDGET),
@@ -177,7 +178,7 @@ impl<'r> FunctionGen<'r> {
 
     /// An address: mostly inside memory, sometimes just past it.
     fn address(&mut self) -> Operand {
-        constant(Width::WORD, self.rng.random_range(0..MEMORY + 16))
+        constant(Width::WORD, u128::from(self.rng.random_range(0..MEMORY + 16)))
     }
 
     fn some_width(&mut self) -> Width {
@@ -215,8 +216,21 @@ impl<'r> FunctionGen<'r> {
                 insts.push(Inst::Store { width, value, address });
             }
             8 => {
-                let size = constant(Width::WORD, self.rng.random_range(0..64));
+                let size = constant(Width::WORD, u128::from(self.rng.random_range(0u64..64)));
+                // Sometimes the allocation is freed again, and sometimes the stack pointer is set to any
+                // value, which is mostly the fault `bad_stack_restore`.
+                let saved = self.rng.random_bool(0.5).then(|| {
+                    let saved = self.define(Width::WORD);
+                    insts.push(Inst::StackSave { dst: saved });
+                    saved
+                });
                 insts.push(Inst::Alloca { dst: self.define(Width::WORD), size });
+                if let Some(saved) = saved {
+                    insts.push(Inst::StackRestore { pointer: Operand::Slot(saved) });
+                } else if self.rng.random_bool(0.1) {
+                    let pointer = self.operand(Width::WORD);
+                    insts.push(Inst::StackRestore { pointer });
+                }
             }
             9 => self.call(insts),
             10 => {
@@ -312,7 +326,7 @@ impl<'r> FunctionGen<'r> {
         let first = input.unwrap_or_else(|| self.operand(VALUE));
         let args = vec![first, self.operand(VALUE)];
         let callee = FuncId(self.rng.random_range(0..FUNCTIONS as u32));
-        let budget = constant(Width::WORD, REGION_BUDGET);
+        let budget = constant(Width::WORD, u128::from(REGION_BUDGET));
         insts.push(Inst::Apply { callee, args, out, fault, budget });
         self.registers.push((out, VALUE));
         self.registers.push((fault, Fault::CODE_WIDTH));
@@ -357,10 +371,10 @@ impl<'r> FunctionGen<'r> {
 }
 
 fn random_width(rng: &mut ChaCha8Rng) -> Width {
-    let bits = *[1, 3, 8, 16, 32, 64].choose(rng).expect("widths");
+    let bits = *[1, 3, 8, 16, 32, 64, 65, 100, 128].choose(rng).expect("widths");
     Width::new(bits).expect("listed widths are valid")
 }
 
-fn constant(width: Width, value: u64) -> Operand {
+fn constant(width: Width, value: u128) -> Operand {
     Operand::Const(Const::new(width, value & width.mask()).expect("masked to the width"))
 }

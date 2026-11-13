@@ -2,6 +2,7 @@
 //
 //   bennett-front input.bc -o output.bn --region-budget N --stack-bytes N [--taint-all] [--emit-llvm file.ll]
 
+#include "Abi.h"
 #include "Diagnostic.h"
 #include "Emit.h"
 #include "Markers.h"
@@ -91,6 +92,10 @@ int main(int argc, char **argv) {
   }
   verify(*module, "on input");
   bennett::checkMarkers(*module);
+  bennett::lowerVariadics(*module);
+  bennett::lowerValuesInMemory(*module);
+  bennett::lowerIndirectBranches(*module);
+  verify(*module, "after lowering calls and computed goto");
   bennett::lowerParameterAttributes(*module);
   // LLVM's optimiser has bugs of its own. A crash inside it is reported by name; no device program is written.
   CrashRecoveryContext::Enable();
@@ -101,6 +106,8 @@ int main(int argc, char **argv) {
   CrashRecoveryContext::Disable();
   bennett::checkMarkers(*module);
   bennett::lowerParameterAttributes(*module);
+  bennett::scalarise(*module);
+  bennett::lowerEmptyAssembly(*module);
   bennett::lowerIntrinsics(*module, /*keepBijections=*/true);
 
   std::set<const Function *> control = bennett::controlFunctions(*module);

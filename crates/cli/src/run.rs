@@ -47,11 +47,10 @@ fn entry_arguments(module: &ValidModule, entry: FuncId, literals: &[i128]) -> Re
         return Err(CliError::ArgumentCount { function: function.name.clone(), expected, found });
     }
     let convert = |(index, (param, &value)): (usize, (&bennett_ir::Param, &i128))| match param.ty {
-        Type::Int(width) => Const::from_literal(width, value).map(Const::value).ok_or(CliError::ArgumentRange {
-            index,
-            value,
-            ty: param.ty,
-        }),
+        Type::Int(width) => Const::from_literal(width, value < 0, value.unsigned_abs())
+            .map(Const::value)
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or(CliError::ArgumentRange { index, value, ty: param.ty }),
         // The executor rejects register parameters with its own error.
         Type::Qreg(_) => Ok(0),
     };

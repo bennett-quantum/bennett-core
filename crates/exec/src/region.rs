@@ -18,7 +18,7 @@ enum Input {
     /// A register, read as an integer: a column of the configuration.
     Register(usize),
     /// A classical value, the same on every configuration.
-    Value(u64),
+    Value(u128),
 }
 
 impl Executor<'_> {
@@ -35,21 +35,21 @@ impl Executor<'_> {
         fault: Slot,
         budget: &Operand,
     ) -> Result<(), Halt> {
-        let out = self.quantum.resolve(self.slot(out))?;
-        let fault = self.quantum.resolve(self.slot(fault))?;
+        let out = self.quantum.resolve(self.handle(out))?;
+        let fault = self.quantum.resolve(self.handle(fault))?;
         let inputs = args.iter().map(|arg| self.input(arg)).collect::<Result<Vec<_>, _>>()?;
         let targets = [Input::Register(out), Input::Register(fault)];
         if out == fault || inputs.iter().any(|input| targets.contains(input)) {
             return Err(Fault::QubitAlias.into());
         }
-        let budget = self.read(budget);
+        let budget = self.read_word(budget);
         let mut values = Vec::with_capacity(inputs.len());
         let original = self.quantum.take_amplitudes();
         let mut outcomes = Vec::with_capacity(original.len());
         for config in original.keys() {
             values.clear();
             values.extend(inputs.iter().map(|input| match *input {
-                Input::Register(column) => config[column],
+                Input::Register(column) => u128::from(config[column]),
                 Input::Value(value) => value,
             }));
             outcomes.push(self.evaluate(callee, &values, budget));
@@ -75,7 +75,8 @@ impl Executor<'_> {
         let mut permuted = BTreeMap::new();
         for ((mut config, amplitude), outcome) in original.into_iter().zip(outcomes) {
             match outcome {
-                Outcome::Returned(result) => config[out] ^= result.expect("a region callee returns an integer"),
+                // The validator made the result as wide as the register, at most 64 bits.
+                Outcome::Returned(result) => config[out] ^= result.expect("a region callee returns an integer") as u64,
                 Outcome::Faulted(code) => config[fault] ^= code.code(),
                 Outcome::Stopped(_) => unreachable!("a region reaches no gate, so no limit of the quantum state"),
             }
@@ -88,14 +89,14 @@ impl Executor<'_> {
     fn input(&self, arg: &Operand) -> Result<Input, Fault> {
         match arg {
             Operand::Slot(slot) if matches!(self.slot_type(*slot), Type::Qreg(_)) => {
-                Ok(Input::Register(self.quantum.resolve(self.slot(*slot))?))
+                Ok(Input::Register(self.quantum.resolve(self.handle(*slot))?))
             }
             _ => Ok(Input::Value(self.read(arg))),
         }
     }
 
     /// Runs `callee(args)` within `budget` steps on top of the current frames, then undoes the run.
-    fn evaluate(&mut self, callee: FuncId, args: &[u64], budget: u64) -> Outcome {
+    fn evaluate(&mut self, callee: FuncId, args: &[u128], budget: u64) -> Outcome {
         let region_journal = std::mem::take(&mut self.spare_journal);
         let outer = Saved {
             journal: self.journal.replace(region_journal),

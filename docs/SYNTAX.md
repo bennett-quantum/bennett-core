@@ -12,7 +12,7 @@ function   := "func" @name "(" [param {"," param}] ")" ["->" type] "{" block {bl
 param      := type %name
 block      := label ":" {statement} terminator           ; a line ending in ":" is a label
 label      := name ["(" param {"," param} ")"]           ; block parameters replace phi nodes
-type       := iN | qN                                    ; N from 1 to 64; qN is a register handle
+type       := iN | qN                                    ; iN: N from 1 to 128; qN: a register handle, N from 1 to 64
 
 operand    := %name | INT          ; an INT takes its type from the instruction
 typed      := %name | iN INT       ; in argument lists, a constant names its type
@@ -25,6 +25,8 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | %d = load iN operand                       ; address is i64
             | store iN operand, operand
             | %d = alloca operand
+            | %d = stacksave                             ; the stack pointer, as an i64
+            | stackrestore operand                       ; back to a saved stack pointer; else fault bad_stack_restore
             | [%d =] call @f(typed, ...)
             | [%d =] call_indirect fn(type, ...) [-> type] operand(typed, ...)
             | %d = faddr @f

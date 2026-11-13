@@ -322,3 +322,28 @@ pub fn corpus_names() -> Vec<String> {
         .map(str::to_owned)
         .collect()
 }
+
+/// How `clang` compiles C that it has already optimised, for the front end: it takes that too.
+pub const CLANG_O2_FLAGS: &[&str] =
+    &["-O2", "-fno-vectorize", "-fno-slp-vectorize", "-gline-tables-only", "-fno-discard-value-names"];
+
+/// `main`'s result as the exit status the native program would have.
+pub fn exit_status(outcome: Outcome, context: &str) -> i32 {
+    let Outcome::Returned(Some(value)) = outcome else { panic!("{context}: {outcome:?}") };
+    i32::from(value as u8)
+}
+
+/// The C program `front/tests/c/<name>.c`, whose native build exits with `expected`, and whose device
+/// program, from unoptimised and from optimised input, and with `--taint-all`, returns the same from `main`.
+pub fn assert_agrees_with_native(name: &str, expected: i32) {
+    let source = c_dir().join(format!("{name}.c"));
+    let native = native_exit_status(&source, name);
+    assert_eq!(native, expected, "{name}.c: the native build");
+    let runs: [(&[&str], &[&str], &str); 3] =
+        [(CLANG_FLAGS, &[], ""), (CLANG_O2_FLAGS, &[], ".o2"), (CLANG_FLAGS, &["--taint-all"], ".taint-all")];
+    for (clang_flags, front_flags, suffix) in runs {
+        let module = lower(&source, &format!("{name}{suffix}"), clang_flags, front_flags);
+        let context = format!("{name}.c {clang_flags:?} {front_flags:?}");
+        assert_eq!(exit_status(run(&module, "main", &[], 0), &context), native, "{context}");
+    }
+}

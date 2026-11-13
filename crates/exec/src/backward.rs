@@ -16,8 +16,12 @@ impl<'m> Executor<'m> {
             Undo::Store => self.undo_store(),
             Undo::Alloca => {
                 self.retreat();
-                self.stack_pointer = self.pop_word();
+                self.stack_pointer = self.pop_word() as u64;
                 self.restore_result();
+            }
+            Undo::StackRestore => {
+                self.retreat();
+                self.stack_pointer = self.pop_word() as u64;
             }
             Undo::Effect => {
                 self.retreat();
@@ -37,7 +41,7 @@ impl<'m> Executor<'m> {
             Undo::Qfree => {
                 let Inst::Qfree { register } = self.retreat() else { unreachable!("a qfree record") };
                 let Type::Qreg(width) = self.slot_type(*register) else { unreachable!("a register slot") };
-                self.quantum.revive(self.slot(*register), width);
+                self.quantum.revive(self.handle(*register), width);
             }
             Undo::Apply => {
                 let Inst::Apply { callee, args, out, fault, budget } = self.retreat() else {
@@ -61,14 +65,14 @@ impl<'m> Executor<'m> {
         let inst = self.retreat();
         if undo == Undo::Qalloc {
             let dst = inst.result().expect("qalloc defines its handle");
-            self.quantum.unallocate(self.slot(dst));
+            self.quantum.unallocate(self.handle(dst));
         }
         self.restore_result();
     }
 
     fn undo_store(&mut self) {
         let Inst::Store { width, address, .. } = self.retreat() else { unreachable!("a store record") };
-        let range = self.memory_range(self.read(address), *width).expect("a store that ran forward is in bounds");
+        let range = self.memory_range(self.read_word(address), *width).expect("a store that ran forward is in bounds");
         let old = self.pop_word();
         self.write_bytes(range, old);
     }
@@ -98,8 +102,8 @@ impl<'m> Executor<'m> {
         if call.result().is_some() {
             self.restore_result();
         }
-        let callee_stack_pointer = self.pop_word();
-        let packed = self.pop_word();
+        let callee_stack_pointer = self.pop_word() as u64;
+        let packed = self.pop_word() as u64;
         let (func, block) = (FuncId((packed >> 32) as u32), BlockId(packed as u32));
         let frame = Frame {
             func,
@@ -128,7 +132,7 @@ impl<'m> Executor<'m> {
         self.slots[frame.base + dst.index()] = self.pop_word();
     }
 
-    fn pop_word(&mut self) -> u64 {
+    fn pop_word(&mut self) -> u128 {
         self.journal.as_mut().expect("undoing needs a journal").pop_word()
     }
 }

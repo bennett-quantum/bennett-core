@@ -14,6 +14,7 @@ endif()
 
 add_executable(bennett-front
   src/main.cpp
+  src/Abi.cpp
   src/Diagnostic.cpp
   src/Markers.cpp
   src/Normalise.cpp

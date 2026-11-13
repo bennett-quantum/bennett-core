@@ -35,7 +35,7 @@ pub struct Options {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
     /// The entry function returned, with its value if it has one.
-    Returned(Option<u64>),
+    Returned(Option<u128>),
     /// Execution stopped with a named fault. The state is as it was before the faulting step.
     Faulted(Fault),
     /// The simulator stopped the run at one of its own limits or checks; the program has no result. The
@@ -180,7 +180,8 @@ pub struct Frame {
     pub entry_stack_pointer: u64,
 }
 
-/// Bytes of stack a frame reserves per slot: a slot holds one 64-bit value.
+/// Bytes of stack a frame reserves per slot. A slot holds a value of up to 128 bits, but nearly all are
+/// 64 bits or less, so a slot is accounted as one 64-bit word.
 pub(crate) const SLOT_BYTES: u64 = 8;
 
 /// Executes a valid module, forward and, in reversible mode, backward.
@@ -188,7 +189,7 @@ pub struct Executor<'m> {
     pub(crate) module: &'m ValidModule,
     pub(crate) memory: Vec<u8>,
     /// The slots of every frame, each frame a contiguous window. Values above the live frames are dead.
-    pub(crate) slots: Vec<u64>,
+    pub(crate) slots: Vec<u128>,
     pub(crate) frames: Vec<Frame>,
     pub(crate) stack_pointer: u64,
     pub(crate) stack_floor: u64,
@@ -206,7 +207,7 @@ pub struct Executor<'m> {
     /// A journal kept for reuse by coherent regions, which always run reversibly.
     pub(crate) spare_journal: Journal,
     /// A buffer for argument values, kept to avoid allocating per call.
-    pub(crate) scratch: Vec<u64>,
+    pub(crate) scratch: Vec<u128>,
     pub(crate) rng: ChaCha8Rng,
     pub(crate) region_steps: u64,
     pub(crate) allow_region_faults: bool,
@@ -245,7 +246,8 @@ impl<'m> Executor<'m> {
             region_fault_weight: 0.0,
             region_fault_max_weight: 0.0,
         };
-        if let Err(fault) = executor.push_frame(entry, args) {
+        let args: Vec<u128> = args.iter().map(|&arg| u128::from(arg)).collect();
+        if let Err(fault) = executor.push_frame(entry, &args) {
             executor.outcome = Some(Outcome::Faulted(fault));
         }
         executor.journal = options.reversible.then(Journal::default);
@@ -369,11 +371,21 @@ impl<'m> Executor<'m> {
         self.frames.last().map_or(0, |frame| frame.base + self.function(frame.func).slot_count())
     }
 
-    pub(crate) fn slot(&self, slot: Slot) -> u64 {
+    pub(crate) fn slot(&self, slot: Slot) -> u128 {
         self.slots[self.top().base + slot.index()]
     }
 
-    pub(crate) fn read(&self, operand: &Operand) -> u64 {
+    /// A register handle, which a slot of register type holds.
+    pub(crate) fn handle(&self, slot: Slot) -> u64 {
+        self.slot(slot) as u64
+    }
+
+    /// The value of an operand of 64 bits or fewer: an address, a size, a budget.
+    pub(crate) fn read_word(&self, operand: &Operand) -> u64 {
+        self.read(operand) as u64
+    }
+
+    pub(crate) fn read(&self, operand: &Operand) -> u128 {
         match *operand {
             Operand::Slot(slot) => self.slot(slot),
             Operand::Const(value) => value.value(),
@@ -392,7 +404,7 @@ impl<'m> Executor<'m> {
     }
 
     /// Appends a word to the journal, if there is one.
-    pub(crate) fn record_word(&mut self, word: u64) {
+    pub(crate) fn record_word(&mut self, word: u128) {
         if let Some(journal) = &mut self.journal {
             journal.push_word(word);
         }
@@ -407,7 +419,7 @@ fn check_arguments(entry: &Function, args: &[u64]) -> Result<(), StartError> {
     for (index, (param, &value)) in entry.params.iter().zip(args).enumerate() {
         match param.ty {
             Type::Qreg(_) => return Err(StartError::RegisterParameter { function: entry.name.clone(), index }),
-            Type::Int(width) if value > width.mask() => {
+            Type::Int(width) if u128::from(value) > width.mask() => {
                 return Err(StartError::ArgumentRange { index, value, ty: param.ty });
             }
             Type::Int(_) => {}

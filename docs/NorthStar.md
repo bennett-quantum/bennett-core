@@ -436,7 +436,17 @@ is not clean is a legitimate operation, the partial trace; measurement is
 described by effects; noise by channels. The finished Bennett covers all
 of these. The first working Bennett is built on unitaries and clean
 discard, and until channels are in it reports a dirty discard as a fault
-instead of performing it. This is the rule that
+instead of performing it.
+
+**What is promised when history is left behind.** Ordinary code that
+destroys information keeps what it destroyed as history, entangled with
+the data until the program un-runs it. Classical results are exact: if
+the state was classical before and the code runs, a measurement gives
+what the program says. Coherence is guaranteed for a documented class of
+updates (gates, XOR-assignment, the in-place bijections) and for anything
+that is un-run. Everywhere else the amount of coherence that survives is
+unspecified, and the toolchain warns; so does un-running a region after
+something changed what it read or wrote. Neither is refused. This is the rule that
 makes controlled modular arithmetic, and `when(q) do x += a end`, compile
 from unmodified code.
 

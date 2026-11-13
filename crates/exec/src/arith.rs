@@ -1,40 +1,85 @@
-//! Integer semantics. Values are `u64` holding the canonical (zero-extended) bits of their width.
+//! Integer semantics. Values are `u128` holding the canonical (zero-extended) bits of their width. Widths
+//! up to 64 bits are computed in `u64`, which is what nearly every value is, and gives the same bits.
 
 use bennett_ir::{BinOp, CastOp, Fault, Predicate, Width};
 
-/// The value of `bits` read as a signed integer of `width`.
-fn signed(width: Width, bits: u64) -> i64 {
-    let unused = 64 - width.bits();
-    // Moving the sign bit to the top and shifting back arithmetically sign-extends.
-    ((bits << unused) as i64) >> unused
+/// The integer operations, at one machine width: `u64` or `u128`.
+trait Machine: Copy + Eq + Ord {
+    type Signed: Copy + Ord;
+    fn wide(self) -> u128;
+    fn signed(self, width: Width) -> Self::Signed;
+    fn unsigned(value: Self::Signed) -> Self;
+    fn binary(op: BinOp, width: Width, lhs: Self, rhs: Self) -> Result<Self, Fault>;
 }
 
+macro_rules! machine {
+    ($unsigned:ty, $signed:ty) => {
+        impl Machine for $unsigned {
+            type Signed = $signed;
+
+            fn wide(self) -> u128 {
+                self as u128
+            }
+
+            /// The value read as a signed integer of `width`.
+            fn signed(self, width: Width) -> $signed {
+                let unused = <$unsigned>::BITS - width.bits();
+                // Moving the sign bit to the top and shifting back arithmetically sign-extends.
+                ((self << unused) as $signed) >> unused
+            }
+
+            fn unsigned(value: $signed) -> Self {
+                value as $unsigned
+            }
+
+            fn binary(op: BinOp, width: Width, lhs: Self, rhs: Self) -> Result<Self, Fault> {
+                let shift_in_range = rhs < width.bits() as $unsigned;
+                Ok(match op {
+                    BinOp::Add => lhs.wrapping_add(rhs),
+                    BinOp::Sub => lhs.wrapping_sub(rhs),
+                    BinOp::Mul => lhs.wrapping_mul(rhs),
+                    BinOp::Udiv => lhs.checked_div(rhs).ok_or(Fault::DivideByZero)?,
+                    BinOp::Urem => lhs.checked_rem(rhs).ok_or(Fault::DivideByZero)?,
+                    BinOp::Sdiv | BinOp::Srem if rhs == 0 => return Err(Fault::DivideByZero),
+                    BinOp::Sdiv => lhs.signed(width).wrapping_div(rhs.signed(width)) as $unsigned,
+                    BinOp::Srem => lhs.signed(width).wrapping_rem(rhs.signed(width)) as $unsigned,
+                    BinOp::And => lhs & rhs,
+                    BinOp::Or => lhs | rhs,
+                    BinOp::Xor => lhs ^ rhs,
+                    BinOp::Shl | BinOp::Lshr | BinOp::Ashr if !shift_in_range => 0,
+                    BinOp::Shl => lhs << rhs,
+                    BinOp::Lshr => lhs >> rhs,
+                    BinOp::Ashr => (lhs.signed(width) >> rhs) as $unsigned,
+                })
+            }
+        }
+    };
+}
+
+machine!(u64, i64);
+machine!(u128, i128);
+
 /// `lhs op rhs` at `width`; total except for division and remainder by zero.
-pub(crate) fn binary(op: BinOp, width: Width, lhs: u64, rhs: u64) -> Result<u64, Fault> {
-    let shift_in_range = rhs < u64::from(width.bits());
-    let result = match op {
-        BinOp::Add => lhs.wrapping_add(rhs),
-        BinOp::Sub => lhs.wrapping_sub(rhs),
-        BinOp::Mul => lhs.wrapping_mul(rhs),
-        BinOp::Udiv => lhs.checked_div(rhs).ok_or(Fault::DivideByZero)?,
-        BinOp::Urem => lhs.checked_rem(rhs).ok_or(Fault::DivideByZero)?,
-        BinOp::Sdiv | BinOp::Srem if rhs == 0 => return Err(Fault::DivideByZero),
-        BinOp::Sdiv => signed(width, lhs).wrapping_div(signed(width, rhs)) as u64,
-        BinOp::Srem => signed(width, lhs).wrapping_rem(signed(width, rhs)) as u64,
-        BinOp::And => lhs & rhs,
-        BinOp::Or => lhs | rhs,
-        BinOp::Xor => lhs ^ rhs,
-        BinOp::Shl | BinOp::Lshr | BinOp::Ashr if !shift_in_range => 0,
-        BinOp::Shl => lhs << rhs,
-        BinOp::Lshr => lhs >> rhs,
-        BinOp::Ashr => (signed(width, lhs) >> rhs) as u64,
+pub(crate) fn binary(op: BinOp, width: Width, lhs: u128, rhs: u128) -> Result<u128, Fault> {
+    let result = if width.bits() <= u64::BITS {
+        <u64 as Machine>::binary(op, width, lhs as u64, rhs as u64)?.wide()
+    } else {
+        <u128 as Machine>::binary(op, width, lhs, rhs)?
     };
     Ok(result & width.mask())
 }
 
 /// Whether `lhs pred rhs` holds at `width`.
-pub(crate) fn compare(pred: Predicate, width: Width, lhs: u64, rhs: u64) -> bool {
-    let (slhs, srhs) = (signed(width, lhs), signed(width, rhs));
+pub(crate) fn compare(pred: Predicate, width: Width, lhs: u128, rhs: u128) -> bool {
+    if width.bits() <= u64::BITS {
+        compare_at(pred, width, lhs as u64, rhs as u64)
+    } else {
+        compare_at(pred, width, lhs, rhs)
+    }
+}
+
+fn compare_at<M: Machine>(pred: Predicate, width: Width, lhs: M, rhs: M) -> bool {
+    let (slhs, srhs) = (lhs.signed(width), rhs.signed(width));
     match pred {
         Predicate::Eq => lhs == rhs,
         Predicate::Ne => lhs != rhs,
@@ -50,10 +95,10 @@ pub(crate) fn compare(pred: Predicate, width: Width, lhs: u64, rhs: u64) -> bool
 }
 
 /// `value` converted from width `from` to width `to`.
-pub(crate) fn cast(op: CastOp, from: Width, to: Width, value: u64) -> u64 {
+pub(crate) fn cast(op: CastOp, from: Width, to: Width, value: u128) -> u128 {
     match op {
         CastOp::Zext => value,
-        CastOp::Sext => signed(from, value) as u64 & to.mask(),
+        CastOp::Sext => u128::unsigned(value.signed(from)) & to.mask(),
         CastOp::Trunc => value & to.mask(),
     }
 }
@@ -90,7 +135,27 @@ mod tests {
         assert_eq!(binary(BinOp::Shl, w(8), 1, 8), Ok(0));
         assert_eq!(binary(BinOp::Ashr, w(8), 0x80, 7), Ok(0xff));
         assert_eq!(binary(BinOp::Ashr, w(8), 0x80, 8), Ok(0));
-        assert_eq!(binary(BinOp::Lshr, w(64), u64::MAX, 64), Ok(0));
+        assert_eq!(binary(BinOp::Lshr, w(64), u128::from(u64::MAX), 64), Ok(0));
+    }
+
+    #[test]
+    fn widths_beyond_sixty_four_bits_compute_exactly() {
+        let max = u128::MAX;
+        assert_eq!(binary(BinOp::Mul, w(128), u128::from(u64::MAX), u128::from(u64::MAX)), Ok(max - (1 << 65) + 2));
+        assert_eq!(binary(BinOp::Add, w(65), 1 << 64, 1 << 64), Ok(0));
+        assert_eq!(binary(BinOp::Sub, w(72), 0, 1), Ok((1 << 72) - 1));
+        assert_eq!(binary(BinOp::Sdiv, w(128), 1 << 127, max), Ok(1 << 127));
+        assert_eq!(binary(BinOp::Sdiv, w(128), max - 6, 2), Ok(max - 2)); // -7 / 2 = -3
+        assert_eq!(binary(BinOp::Udiv, w(128), max, 1 << 64), Ok(u128::from(u64::MAX)));
+        assert_eq!(binary(BinOp::Ashr, w(100), 1 << 99, 99), Ok((1 << 100) - 1));
+        assert_eq!(binary(BinOp::Shl, w(128), 1, 128), Ok(0));
+        assert_eq!(binary(BinOp::Lshr, w(65), 1 << 64, 64), Ok(1));
+        assert!(compare(Predicate::Slt, w(128), 1 << 127, 0));
+        assert!(compare(Predicate::Ugt, w(128), 1 << 127, 0));
+        assert!(compare(Predicate::Sgt, w(65), (1 << 64) - 1, 1 << 64));
+        assert_eq!(cast(CastOp::Sext, w(64), w(128), u128::from(u64::MAX)), max);
+        assert_eq!(cast(CastOp::Sext, w(65), w(128), 1 << 64), max << 64);
+        assert_eq!(cast(CastOp::Trunc, w(128), w(64), max), u128::from(u64::MAX));
     }
 
     #[test]

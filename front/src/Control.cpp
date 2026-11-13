@@ -20,6 +20,7 @@
 #include "Normalise.h"
 #include "Taint.h"
 
+#include <llvm/ADT/StringExtras.h>
 #include <llvm/Analysis/CFG.h>
 #include <llvm/Analysis/ValueTracking.h>
 #include <llvm/IR/Constants.h>
@@ -404,12 +405,9 @@ void ControlWriter::xorInto(const Storage &target, const Value *value, const Ins
 std::string ControlWriter::converted(const Value *value, unsigned bits, bool typedConstant) {
   unsigned from = widthOf(value->getType(), value);
   if (isa<Constant>(resolve(value))) {
-    std::string number = operand(value);
-    uint64_t n = std::stoull(number);
-    if (bits < 64) {
-      n &= (uint64_t(1) << bits) - 1;
-    }
-    return (typedConstant ? intType(bits) + " " : "") + std::to_string(n);
+    // operand() prints the constant unsigned, in at most 128 bits.
+    APInt n = APInt(128, operand(value), 10).trunc(bits);
+    return (typedConstant ? intType(bits) + " " : "") + toString(n, 10, false);
   }
   if (from == bits) {
     return operand(value);

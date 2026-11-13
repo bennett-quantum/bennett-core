@@ -23,7 +23,7 @@ pub struct ClassicalSnapshot {
     /// The frames, outermost first.
     pub frames: Vec<Frame>,
     /// The slots of the live frames.
-    pub slots: Vec<u64>,
+    pub slots: Vec<u128>,
     /// The stack pointer.
     pub stack_pointer: u64,
     /// The console output.

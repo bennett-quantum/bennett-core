@@ -5,6 +5,7 @@
 
 #include <llvm/ADT/MapVector.h>
 #include <llvm/ADT/PostOrderIterator.h>
+#include <llvm/ADT/StringExtras.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/Function.h>
@@ -25,6 +26,9 @@ namespace {
 
 // The lowest address static data may use: address 0 is the null pointer, so nothing lives near it.
 constexpr uint64_t firstDataAddress = 16;
+
+// The widest integer of the device program.
+constexpr unsigned deviceMaxBits = 128;
 
 // The alignment of every `alloca` result in the device program (docs/SYNTAX.md). A wider alignment is
 // made by allocating more and rounding the address up.
@@ -226,18 +230,60 @@ std::optional<uint64_t> ModuleWriter::constantValue(const Constant *constant) co
       }
       return *base + offset.getZExtValue();
     }
+    // The other constant expressions, evaluated at their width now that every address is known. A shift
+    // by the width or more is poison, and 0 refines it.
+    auto bitsOf = [](const Type *type) -> unsigned {
+      return type->isPointerTy() ? 64 : type->isIntegerTy() ? type->getIntegerBitWidth() : 0;
+    };
+    unsigned bits = bitsOf(expr->getType());
+    unsigned operandBits = expr->getNumOperands() > 0 ? bitsOf(expr->getOperand(0)->getType()) : 0;
+    if (bits == 0 || bits > 64 || operandBits == 0 || operandBits > 64) {
+      return std::nullopt;
+    }
+    std::vector<APInt> operands;
+    for (const Use &use : expr->operands()) {
+      std::optional<uint64_t> value = constantValue(cast<Constant>(use.get()));
+      if (!value) {
+        return std::nullopt;
+      }
+      operands.emplace_back(operandBits, *value);
+    }
+    auto shift = [&](auto op) -> std::optional<uint64_t> {
+      if (operands[1].uge(operandBits)) {
+        return 0;
+      }
+      return op(operands[0], unsigned(operands[1].getZExtValue())).getZExtValue();
+    };
     switch (expr->getOpcode()) {
     case Instruction::PtrToInt:
     case Instruction::IntToPtr:
     case Instruction::BitCast:
-    case Instruction::AddrSpaceCast: {
-      std::optional<uint64_t> value = constantValue(expr->getOperand(0));
-      unsigned bits = expr->getType()->isPointerTy() ? 64 : expr->getType()->getIntegerBitWidth();
-      if (!value || bits > 64) {
-        return std::nullopt;
-      }
-      return bits == 64 ? *value : *value & ((uint64_t(1) << bits) - 1);
-    }
+    case Instruction::AddrSpaceCast:
+    case Instruction::Trunc:
+    case Instruction::ZExt:
+      return operands[0].zextOrTrunc(bits).getZExtValue();
+    case Instruction::SExt:
+      return operands[0].sext(bits).getZExtValue();
+    case Instruction::Add:
+      return (operands[0] + operands[1]).getZExtValue();
+    case Instruction::Sub:
+      return (operands[0] - operands[1]).getZExtValue();
+    case Instruction::Mul:
+      return (operands[0] * operands[1]).getZExtValue();
+    case Instruction::And:
+      return (operands[0] & operands[1]).getZExtValue();
+    case Instruction::Or:
+      return (operands[0] | operands[1]).getZExtValue();
+    case Instruction::Xor:
+      return (operands[0] ^ operands[1]).getZExtValue();
+    case Instruction::Shl:
+      return shift([](const APInt &x, unsigned n) { return x.shl(n); });
+    case Instruction::LShr:
+      return shift([](const APInt &x, unsigned n) { return x.lshr(n); });
+    case Instruction::AShr:
+      return shift([](const APInt &x, unsigned n) { return x.ashr(n); });
+    case Instruction::ICmp:
+      return uint64_t(ICmpInst::compare(operands[0], operands[1], ICmpInst::Predicate(expr->getPredicate())));
     default:
       return std::nullopt;
     }
@@ -418,7 +464,7 @@ unsigned BodyWriter::widthOf(const Type *type, const Value *at) {
   if (type->isPointerTy()) {
     return 64;
   }
-  if (type->isIntegerTy() && type->getIntegerBitWidth() <= 64) {
+  if (type->isIntegerTy() && type->getIntegerBitWidth() <= deviceMaxBits) {
     return type->getIntegerBitWidth();
   }
   notHandled("a value of type " + printedType(type), at);
@@ -443,6 +489,9 @@ std::string BodyWriter::slot(const Value *value) {
 
 std::string BodyWriter::operand(const Value *value) {
   value = resolve(value);
+  if (const auto *integer = dyn_cast<ConstantInt>(value); integer && integer->getBitWidth() > 64) {
+    return toString(integer->getValue(), 10, false);
+  }
   if (const auto *constant = dyn_cast<Constant>(value)) {
     std::optional<uint64_t> number = module.constantValue(constant);
     if (!number) {
@@ -628,9 +677,9 @@ void BodyWriter::instruction(const Instruction &inst) {
     } else {
       unsigned width = widthOf(count->getType(), &inst);
       std::string wide = operand(count);
-      if (width < 64) {
+      if (width != 64) {
         wide = fresh("count");
-        line(wide + " = zext " + intType(width) + " " + operand(count) + " to i64");
+        line(wide + " = " + (width < 64 ? "zext " : "trunc ") + intType(width) + " " + operand(count) + " to i64");
       }
       std::string bytes = fresh("bytes");
       line(bytes + " = mul i64 " + wide + ", " + std::to_string(element));
@@ -664,6 +713,16 @@ void BodyWriter::call(const Instruction &inst) {
         intrinsic->getIntrinsicID() == Intrinsic::experimental_noalias_scope_decl) {
       return;
     }
+    // A variable-length array in a loop: the stack is saved before it and restored after.
+    if (intrinsic->getIntrinsicID() == Intrinsic::stacksave && intrinsic->getType()->getPointerAddressSpace() == 0) {
+      line(slot(&inst) + " = stacksave");
+      return;
+    }
+    if (intrinsic->getIntrinsicID() == Intrinsic::stackrestore &&
+        intrinsic->getArgOperand(0)->getType()->getPointerAddressSpace() == 0) {
+      line("stackrestore " + operand(intrinsic->getArgOperand(0)));
+      return;
+    }
     notHandled("the intrinsic @" + intrinsic->getCalledFunction()->getName().str(), &inst);
   }
   if (call.isInlineAsm()) {
@@ -674,6 +733,10 @@ void BodyWriter::call(const Instruction &inst) {
   }
   if (call.hasOperandBundles()) {
     notHandled("a call with the operand bundle `" + call.getOperandBundleAt(0).getTagName().str() + "`", &inst);
+  }
+  if (const auto *callee = dyn_cast<Function>(call.getCalledOperand()); callee && callee->isDeclaration()) {
+    notHandled("a call to @" + callee->getName().str() + ", which has no definition (no library is linked yet)",
+               &inst);
   }
   if (call.getFunctionType()->isVarArg()) {
     notHandled("a call of a variadic function", &inst);
@@ -718,9 +781,10 @@ void BodyWriter::address(const Instruction &inst) {
   for (auto &[index, scale] : variables) {
     unsigned width = widthOf(index->getType(), &inst);
     std::string term = operand(index);
-    if (width < 64) {
+    if (width != 64) {
+      // An index is sign-extended or truncated to the 64 bits of an address offset.
       std::string wide = fresh("index");
-      line(wide + " = sext " + intType(width) + " " + term + " to i64");
+      line(wide + " = " + (width < 64 ? "sext " : "trunc ") + intType(width) + " " + term + " to i64");
       term = wide;
     }
     if (scale != 1) {
@@ -754,7 +818,7 @@ void BodyWriter::terminator(const Instruction &term) {
     unsigned width = widthOf(switchInst->getCondition()->getType(), &term);
     std::string text = "switch " + intType(width) + " " + operand(switchInst->getCondition());
     for (const auto &kase : switchInst->cases()) {
-      text += ", " + std::to_string(kase.getCaseValue()->getZExtValue()) + ": " +
+      text += ", " + toString(kase.getCaseValue()->getValue(), 10, false) + ": " +
               target(from, kase.getCaseSuccessor());
     }
     line(text + ", default: " + target(from, switchInst->getDefaultDest()));

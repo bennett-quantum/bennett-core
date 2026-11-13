@@ -62,7 +62,7 @@ fn assert_state(
 fn assert_every_run(module: &ValidModule, context: &str, name: &str, args: &[u64], allowed: &[u64]) -> Vec<u64> {
     (0..SEEDS)
         .map(|seed| match run(module, name, args, seed) {
-            Outcome::Returned(Some(value)) if allowed.contains(&value) => value,
+            Outcome::Returned(Some(value)) if allowed.iter().any(|&a| u128::from(a) == value) => value as u64,
             other => panic!("{context} @{name}{args:?}, seed {seed}: {other:?}"),
         })
         .collect()

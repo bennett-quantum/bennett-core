@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-/// The bit width of an integer value or a quantum register: 1 to 64 bits.
+/// The bit width of an integer value (1 to 128 bits) or of a quantum register (1 to 64 qubits).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Width(pub(crate) u8);
 
@@ -14,9 +14,14 @@ impl Width {
     /// Sixty-four bits: the width of addresses, allocation sizes and budgets.
     pub const WORD: Width = Width(64);
 
-    /// The width of `bits` bits, or `None` outside 1 to 64.
+    /// The widest integer.
+    pub const MAX_BITS: u32 = 128;
+    /// The most qubits in one register: a register's value in a basis configuration is a `u64`.
+    pub const MAX_QUBITS: u32 = 64;
+
+    /// The width of `bits` bits, or `None` outside 1 to 128.
     pub const fn new(bits: u32) -> Option<Width> {
-        if matches!(bits, 1..=64) { Some(Width(bits as u8)) } else { None }
+        if bits >= 1 && bits <= Self::MAX_BITS { Some(Width(bits as u8)) } else { None }
     }
 
     /// The number of bits.
@@ -25,8 +30,8 @@ impl Width {
     }
 
     /// All ones in the low `bits()` bits; every value of this width is at most this.
-    pub const fn mask(self) -> u64 {
-        u64::MAX >> (64 - self.0 as u32)
+    pub const fn mask(self) -> u128 {
+        u128::MAX >> (128 - self.0 as u32)
     }
 
     /// The number of bytes a value of this width occupies in memory.
@@ -86,27 +91,24 @@ dense_index!(
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Const {
     width: Width,
-    value: u64,
+    value: u128,
 }
 
 impl Const {
     /// The constant `value` of `width`, if `value` fits in `width` bits.
-    pub fn new(width: Width, value: u64) -> Option<Const> {
+    pub fn new(width: Width, value: u128) -> Option<Const> {
         (value <= width.mask()).then_some(Const { width, value })
     }
 
     /// The constant a source literal denotes at `width`: either an unsigned value below `2^bits` or a
-    /// negative value of at least `-2^(bits-1)`, stored as its two's complement.
-    pub fn from_literal(width: Width, literal: i128) -> Option<Const> {
-        let unsigned_max = i128::from(width.mask());
-        let signed_min = -(1i128 << (width.bits() - 1));
-        if (signed_min..=unsigned_max).contains(&literal) {
-            // Truncating to the low 64 bits of the two's complement, then masking, is the intent.
-            let value = (literal as u64) & width.mask();
-            Some(Const { width, value })
-        } else {
-            None
+    /// negative value of at least `-2^(bits-1)` (`negative` with `magnitude` at most `2^(bits-1)`),
+    /// stored as its two's complement.
+    pub fn from_literal(width: Width, negative: bool, magnitude: u128) -> Option<Const> {
+        if !negative {
+            return Const::new(width, magnitude);
         }
+        let signed_min_magnitude = 1u128 << (width.bits() - 1);
+        (magnitude <= signed_min_magnitude).then(|| Const { width, value: magnitude.wrapping_neg() & width.mask() })
     }
 
     /// The width of the constant.
@@ -114,8 +116,8 @@ impl Const {
         self.width
     }
 
-    /// The value, zero-extended to 64 bits.
-    pub fn value(self) -> u64 {
+    /// The value, zero-extended to 128 bits.
+    pub fn value(self) -> u128 {
         self.value
     }
 }
@@ -134,10 +136,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn widths_outside_one_to_sixty_four_are_rejected() {
+    fn widths_outside_one_to_one_hundred_twenty_eight_are_rejected() {
         assert_eq!(Width::new(0), None);
-        assert_eq!(Width::new(65), None);
-        assert_eq!(Width::new(64).map(Width::mask), Some(u64::MAX));
+        assert_eq!(Width::new(129), None);
+        assert_eq!(Width::new(64).map(Width::mask), Some(u128::from(u64::MAX)));
+        assert_eq!(Width::new(128).map(Width::mask), Some(u128::MAX));
+        assert_eq!(Width::new(65).map(Width::bytes), Some(9));
         assert_eq!(Width::new(1).map(Width::bytes), Some(1));
         assert_eq!(Width::new(9).map(Width::bytes), Some(2));
     }
@@ -145,12 +149,16 @@ mod tests {
     #[test]
     fn literals_accept_signed_and_unsigned_ranges() {
         let byte = Width::BYTE;
-        assert_eq!(Const::from_literal(byte, 255).map(Const::value), Some(255));
-        assert_eq!(Const::from_literal(byte, -1).map(Const::value), Some(255));
-        assert_eq!(Const::from_literal(byte, -128).map(Const::value), Some(128));
-        assert_eq!(Const::from_literal(byte, 256), None);
-        assert_eq!(Const::from_literal(byte, -129), None);
-        assert_eq!(Const::from_literal(Width::WORD, -1).map(Const::value), Some(u64::MAX));
-        assert_eq!(Const::from_literal(Width::BIT, -1).map(Const::value), Some(1));
+        assert_eq!(Const::from_literal(byte, false, 255).map(Const::value), Some(255));
+        assert_eq!(Const::from_literal(byte, true, 1).map(Const::value), Some(255));
+        assert_eq!(Const::from_literal(byte, true, 128).map(Const::value), Some(128));
+        assert_eq!(Const::from_literal(byte, false, 256), None);
+        assert_eq!(Const::from_literal(byte, true, 129), None);
+        assert_eq!(Const::from_literal(Width::WORD, true, 1).map(Const::value), Some(u128::from(u64::MAX)));
+        assert_eq!(Const::from_literal(Width::BIT, true, 1).map(Const::value), Some(1));
+        let wide = Width::new(128).unwrap_or(Width::WORD);
+        assert_eq!(Const::from_literal(wide, false, u128::MAX).map(Const::value), Some(u128::MAX));
+        assert_eq!(Const::from_literal(wide, true, 1 << 127).map(Const::value), Some(1 << 127));
+        assert_eq!(Const::from_literal(wide, true, (1 << 127) + 1), None);
     }
 }

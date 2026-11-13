@@ -104,6 +104,8 @@ impl Writer<'_> {
                 write!(self.out, "store {} {}, {}", Type::Int(*width), op(value), op(address))
             }
             Inst::Alloca { size, .. } => write!(self.out, "alloca {}", op(size)),
+            Inst::StackSave { .. } => write!(self.out, "stacksave"),
+            Inst::StackRestore { pointer } => write!(self.out, "stackrestore {}", op(pointer)),
             Inst::Call { callee, args, .. } => {
                 write!(self.out, "call @{}", self.module.function(*callee).name)?;
                 write_args(self.out, f, args)

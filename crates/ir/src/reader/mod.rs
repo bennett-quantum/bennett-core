@@ -225,7 +225,8 @@ impl<'s> Parser<'s> {
     fn unsigned(&mut self, expected: &'static str) -> Result<u64, Failure> {
         let (text, offset) = self.cursor.number(expected)?;
         literal::parse_integer(text)
-            .and_then(|value| u64::try_from(value).ok())
+            .filter(|&(negative, _)| !negative)
+            .and_then(|(_, value)| u64::try_from(value).ok())
             .ok_or(Failure { offset, kind: ReadErrorKind::BadNumber(text.to_owned()) })
     }
 
@@ -246,9 +247,9 @@ impl<'s> Parser<'s> {
     /// An integer literal at `width`.
     fn literal(&mut self, width: Width) -> Result<Const, Failure> {
         let (text, offset) = self.cursor.number("an integer")?;
-        let value = literal::parse_integer(text)
+        let (negative, magnitude) = literal::parse_integer(text)
             .ok_or_else(|| Failure { offset, kind: ReadErrorKind::BadNumber(text.to_owned()) })?;
-        Const::from_literal(width, value).ok_or_else(|| Failure {
+        Const::from_literal(width, negative, magnitude).ok_or_else(|| Failure {
             offset,
             kind: ReadErrorKind::OutOfRange { literal: text.to_owned(), ty: Type::Int(width) },
         })

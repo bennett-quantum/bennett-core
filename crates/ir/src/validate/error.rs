@@ -192,7 +192,10 @@ pub enum Problem {
     },
     /// A switch case outside the switch's width, or repeated.
     #[error("case {0} is repeated or does not fit the switch's width")]
-    BadCase(u64),
+    BadCase(u128),
+    /// A register of more qubits than a basis configuration holds.
+    #[error("a register of {0} qubits; at most 64")]
+    RegisterTooWide(u32),
     /// An `apply` callee that does not return an integer.
     #[error("a coherent region must return an integer")]
     RegionResult,

@@ -72,6 +72,11 @@ impl<'s> Parser<'s> {
                 Inst::Store { width, value, address: self.operand(scope, Width::WORD)? }
             }
             "alloca" => Inst::Alloca { dst: line.result("alloca")?, size: self.operand(scope, Width::WORD)? },
+            "stacksave" => Inst::StackSave { dst: line.result("stacksave")? },
+            "stackrestore" => {
+                line.no_result("stackrestore")?;
+                Inst::StackRestore { pointer: self.operand(scope, Width::WORD)? }
+            }
             "call" => {
                 let callee = self.function_use()?;
                 Inst::Call { callee, args: self.arguments(scope)?, dst: line.dst }
@@ -306,7 +311,7 @@ impl<'s> Parser<'s> {
 
     fn register_width(&mut self) -> Result<Width, Failure> {
         let (text, offset) = self.cursor.number("a number of qubits")?;
-        let bits = text.parse().ok().and_then(Width::new);
+        let bits = text.parse().ok().filter(|&bits| bits <= Width::MAX_QUBITS).and_then(Width::new);
         bits.ok_or_else(|| Failure { offset, kind: ReadErrorKind::BadNumber(text.to_owned()) })
     }
 

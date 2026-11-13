@@ -50,6 +50,8 @@ faults! {
     QubitAlias = 10 "qubit_alias",
     /// `qfree` of a register that is not zero in every basis configuration.
     DirtyFree = 11 "dirty_free",
+    /// `stackrestore` to a stack pointer below the current one or above the current frame's allocations.
+    BadStackRestore = 12 "bad_stack_restore",
 }
 
 impl Fault {
@@ -86,7 +88,7 @@ mod tests {
     fn codes_are_distinct_nonzero_and_fit_the_code_width() {
         for (i, fault) in Fault::ALL.iter().enumerate() {
             assert_ne!(fault.code(), 0);
-            assert!(fault.code() <= Fault::CODE_WIDTH.mask());
+            assert!(u128::from(fault.code()) <= Fault::CODE_WIDTH.mask());
             assert_eq!(Fault::from_code(fault.code()), Some(*fault));
             assert_eq!(Fault::from_name(fault.name()), Some(*fault));
             assert!(Fault::ALL[..i].iter().all(|other| other.name() != fault.name()));
