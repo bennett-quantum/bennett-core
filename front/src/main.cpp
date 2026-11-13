@@ -15,6 +15,7 @@
 #include <llvm/IRReader/IRReader.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/CommandLine.h>
+#include <llvm/Support/CrashRecoveryContext.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/InitLLVM.h>
 #include <llvm/Support/SourceMgr.h>
@@ -91,7 +92,13 @@ int main(int argc, char **argv) {
   verify(*module, "on input");
   bennett::checkMarkers(*module);
   bennett::lowerParameterAttributes(*module);
-  runPipeline(*module, "", true);
+  // LLVM's optimiser has bugs of its own. A crash inside it is reported by name; no device program is written.
+  CrashRecoveryContext::Enable();
+  CrashRecoveryContext recovery;
+  if (!recovery.RunSafely([&] { runPipeline(*module, "", true); })) {
+    bennett::fail("LLVM's optimiser crashed on this module (a bug in LLVM); no device program was written");
+  }
+  CrashRecoveryContext::Disable();
   bennett::checkMarkers(*module);
   bennett::lowerParameterAttributes(*module);
   bennett::lowerIntrinsics(*module, /*keepBijections=*/true);

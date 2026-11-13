@@ -6,6 +6,7 @@
 #include <llvm/ADT/PostOrderIterator.h>
 #include <llvm/Analysis/CFG.h>
 #include <llvm/Analysis/ValueTracking.h>
+#include <llvm/IR/ConstantRange.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/InstIterator.h>
@@ -179,6 +180,20 @@ void ControlAnalysis::checkUses(Storage &storage) {
           notHandled("bennett_bit on qubit variable " + storage.name +
                          " with a bit index that is not a constant within the variable",
                      inst);
+        }
+        // A _Bool has one bit although it is stored in a byte: the compiler says so with a range on its loads,
+        // and LLVM may assume it. A gate on any other bit would make those assumptions false.
+        for (const User *reader : pointer->users()) {
+          const auto *load = dyn_cast<LoadInst>(reader);
+          const MDNode *range = load ? load->getMetadata(LLVMContext::MD_range) : nullptr;
+          if (range && load->getType()->isIntegerTy()) {
+            APInt bit = APInt::getOneBitSet(load->getType()->getIntegerBitWidth(), unsigned(index->getZExtValue()));
+            if (!getConstantRangeFromMetadata(*range).contains(bit)) {
+              misuse("bennett_bit on bit " + std::to_string(index->getZExtValue()) + " of qubit variable " +
+                         storage.name + ", whose type does not have that bit",
+                     inst);
+            }
+          }
         }
         for (User *qubitUser : call->users()) {
           auto *gate = dyn_cast<CallBase>(qubitUser);

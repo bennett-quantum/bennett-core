@@ -220,3 +220,47 @@ fn floating_point_arithmetic_and_variadic_functions_are_refused() {
         assert_refused(&source, name, expected);
     }
 }
+
+#[test]
+fn a_call_through_a_mismatched_prototype_is_refused() {
+    let source = write_c(
+        "mismatched_prototype",
+        "long f(long x) { return x; }\nint main(void) { return ((int (*)(int))f)(5) - 5; }\n",
+    );
+    assert_refused(&source, "mismatched_prototype", "a call through a mismatched prototype of @f");
+}
+
+/// LLVM 18's dead-store elimination crashes on a module that defines `calloc` and a `malloc` it cannot inline.
+/// The crash is LLVM's; the front must report it by name instead of crashing.
+#[test]
+fn a_crash_inside_llvms_optimiser_is_reported_by_name() {
+    let source = write_c(
+        "optimiser_crash",
+        "typedef __SIZE_TYPE__ size_t;\nvoid *memset(void *, int, size_t);\nstatic char heap[256];\nsize_t used;\n\
+         __attribute__((noinline)) void *malloc(size_t n) { used = 0; return heap + (n & 1); }\n\
+         void *calloc(size_t n, size_t s) { (void)n; (void)s; return 0; }\n\
+         int main(void) { char *p = malloc(94); memset(p, 0, 94); return p[3]; }\n",
+    );
+    match lower_text(&source, "optimiser_crash", CLANG_FLAGS, &[]) {
+        // A later LLVM may fix its bug; then the program simply lowers.
+        Ok(_) => {}
+        Err(message) => assert!(message.contains("LLVM's optimiser crashed"), "{message}"),
+    }
+}
+
+/// A `_Bool` has one bit. Optimised clang input says so on its loads, and a gate on another bit would make
+/// LLVM's assumption false.
+#[test]
+fn a_gate_on_a_bit_the_type_does_not_have_is_refused() {
+    let source = write_c(
+        "bool_bit",
+        "#include \"bennett.h\"\nint main(void) {\n  _Bool b = 0;\n  bennett_h(&b);\n  bennett_x(bennett_bit(&b, 3));\n  \
+         _Bool c = 0;\n  c ^= b;\n  bennett_x(bennett_bit(&b, 3));\n  c ^= b;\n  bennett_h(&b);\n  \
+         return (int)bennett_measure(&b) + (int)bennett_measure(&c);\n}\n",
+    );
+    let flags: Vec<&str> = CLANG_FLAGS.iter().copied().filter(|flag| *flag != "-O0").chain(["-O2"]).collect();
+    match lower_text(&source, "bool_bit", &flags, &[]) {
+        Ok(program) => panic!("accepted\n{program}"),
+        Err(message) => assert!(message.contains("whose type does not have that bit"), "{message}"),
+    }
+}

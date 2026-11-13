@@ -684,11 +684,13 @@ void BodyWriter::call(const Instruction &inst) {
   }
   std::string result = call.getType()->isVoidTy() || call.use_empty() ? "" : slot(&inst) + " = ";
   if (const Function *callee = call.getCalledFunction()) {
-    if (callee->getFunctionType() != call.getFunctionType()) {
-      notHandled("a call through a mismatched prototype of @" + callee->getName().str(), &inst);
-    }
     line(result + "call " + module.functionName(callee) + "(" + args + ")");
     return;
+  }
+  // getCalledFunction() is null when the call's type differs from the callee's, so a direct call through a
+  // wrong prototype arrives here.
+  if (const auto *callee = dyn_cast<Function>(call.getCalledOperand()->stripPointerCasts())) {
+    notHandled("a call through a mismatched prototype of @" + callee->getName().str(), &inst);
   }
   const FunctionType *type = call.getFunctionType();
   std::string params;
