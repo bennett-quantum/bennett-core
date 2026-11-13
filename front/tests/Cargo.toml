@@ -1,0 +1,14 @@
+[package]
+name = "bennett-front-tests"
+version = "0.1.0"
+description = "Tests of bennett-front: C through clang and bennett-front to a device program, run by the executor"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bennett-ir.workspace = true
+bennett-exec.workspace = true
+num-complex.workspace = true
+
+[lints]
+workspace = true

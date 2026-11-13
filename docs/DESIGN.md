@@ -77,6 +77,41 @@ own inverse. An `effect` reached inside a region is a fault. This is the lifted-
 
 Control needs no special form at this level: `if (q) y = f(3)` is a region whose argument is `q`.
 
+## From C to a device program (`front`)
+
+`front` is the only module that links LLVM. It reads the bitcode stock `clang` emits, runs LLVM's own pipeline
+(without vectorisers), and writes the text form; the reader and validator in `ir` check what it wrote. The marker
+surface is `docs/MARKERS.md`.
+
+- **A qubit is a variable, not a value.** A local variable whose address is passed to a marker becomes a quantum
+  register as wide as the variable. There is no allocation call.
+- **A store into a qubit variable applies the whole computation of the stored value into it.** `v ^= expr` is an
+  `apply` into `v`; an assignment to a variable known to be clean likewise. There are no temporaries and no
+  uncompute ordering; the price is recomputation when one value feeds several stores.
+- **Branches, joins and loops that depend on a qubit** are outlined into ordinary functions and applied.
+- **Each qubit variable is Known** (it holds an ordinary value: fresh, assigned, just measured) **or Quantum.**
+- **What it cannot do yet it refuses by name**, with the source location: a gate under qubit control, a
+  qubit-dependent value used by ordinary code, a non-XOR overwrite of a variable whose value is not known, reading
+  a qubit variable's old value after it changed, qubit variables passed to functions or written partially.
+- **`--taint-all`** treats more as tainted; tests check that no result changes.
+
+Two things the first C programs taught:
+
+- An unused dependence does not exist. LLVM deletes a dead value, which is the same thing as uncomputing it, so a
+  dirty discard needs a *variable* that outlives the computation.
+- "The operands are still there" is not enough to uncompute; they must be unchanged. A value read from a qubit
+  before a gate and used after it cannot be uncomputed, and is refused.
+
+## Decided in code
+
+- Memory: the stack grows down from the top; data starts at address 16; address 0 is never a function (a function's
+  address is its index plus 1). A null dereference does not fault yet.
+- Fault codes fit in 4 bits; a fault register is at least that wide.
+- `qfree` requires the register to be zero in every configuration, otherwise the named fault `dirty_free`.
+- `measure` reads a whole register. Amplitudes at or below `f64::EPSILON` are dropped.
+- Bounds of the simulator (steps, number of basis configurations) are parameters of a run. Exceeding the
+  configuration limit stops the run with a named error; it is not a program fault.
+
 ## Text form
 
 Line-oriented and writable by hand, in the style of LLVM assembly. No hashes, no embedded JSON, no version
@@ -93,9 +128,9 @@ negotiation. The exact syntax is whatever the single reader in `ir` accepts; `ex
 - Random programs, forward and back.
 - `cargo test` finishes in seconds. Throughput and journal bytes per step are *reported*, never gated on wall time.
 
-## Not in this step
+## Not yet
 
-The plugin, the optimiser, any cost beyond step and qubit counts, certificates, target descriptions, a binary
+The optimiser, any cost beyond step and qubit counts, certificates, target descriptions, a binary
 format, in-place bijections, coherent memory that outlives a region, and quantum instructions inside an applied
 function.
 
@@ -114,5 +149,4 @@ function.
 - **Channels.** A dirty discard is the partial trace, measurement is described by effects, noise by channels; the
   finished Bennett covers them (maintainer, 2026-11-13). This step is unitaries and clean discard, and a dirty
   `qfree` is a fault. Nothing in the device program should make channels impossible to add.
-- **How `front` (C++) produces `ir`:** a text writer, or a builder exported from the Rust crate.
 - **Integers wider than 64 bits**, and exact amplitudes for the permutation tier.

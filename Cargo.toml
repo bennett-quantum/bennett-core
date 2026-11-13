@@ -1,5 +1,7 @@
 [workspace]
-members = ["crates/ir", "crates/exec", "crates/cli"]
+members = ["crates/ir", "crates/exec", "crates/cli", "front/tests"]
+# The front end's tests need LLVM and clang; `cargo test` alone stays fast and needs neither.
+default-members = ["crates/ir", "crates/exec", "crates/cli"]
 resolver = "3"
 
 [workspace.package]
