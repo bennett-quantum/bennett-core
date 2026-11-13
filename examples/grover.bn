@@ -1,0 +1,79 @@
+; grover.bn: Grover search where the oracle is an ordinary function.
+; @is_solution(x) holds for x = 2 and x = 13: M = 2 of N = 16. With sin θ = √(M/N), k iterations
+; find a solution with probability sin²((2k + 1)θ); two iterations give about 0.945.
+memory 256
+
+; (x² + x) mod 16 == 6, computed in 4-bit arithmetic.
+func @is_solution(i4 %x) -> i1 {
+entry:
+    %square = mul i4 %x, %x
+    %sum = add i4 %square, %x
+    %hit = icmp eq i4 %sum, 6
+    ret %hit
+}
+
+; Runs `iterations` Grover iterations on x. The oracle flips the phase of solutions by kickback
+; through `kick`, prepared in |−⟩; `e` stays 0 because the oracle never faults.
+func @search(q4 %x, q1 %kick, q4 %e, i8 %iterations) {
+entry:
+    h %x[0]
+    h %x[1]
+    h %x[2]
+    h %x[3]
+    x %kick
+    h %kick
+    %none = icmp eq i8 %iterations, 0
+    br %none, finish, iterate(i8 0)
+iterate(i8 %k):
+    apply @is_solution(%x) -> %kick, %e budget 16
+    call @diffuse(%x)
+    %k.next = add i8 %k, 1
+    %more = icmp ult i8 %k.next, %iterations
+    br %more, iterate(%k.next), finish
+finish:
+    ret
+}
+
+; Reflection about the uniform superposition (up to a global phase).
+func @diffuse(q4 %x) {
+entry:
+    h %x[0]
+    h %x[1]
+    h %x[2]
+    h %x[3]
+    x %x[0]
+    x %x[1]
+    x %x[2]
+    x %x[3]
+    z %x[3] ctrl %x[0], %x[1], %x[2]
+    x %x[0]
+    x %x[1]
+    x %x[2]
+    x %x[3]
+    h %x[0]
+    h %x[1]
+    h %x[2]
+    h %x[3]
+    ret
+}
+
+; The state after `iterations` iterations, before measurement, for inspection.
+func @searched(i8 %iterations) {
+entry:
+    %x = qalloc 4
+    %kick = qalloc 1
+    %e = qalloc 4
+    call @search(%x, %kick, %e, %iterations)
+    ret
+}
+
+; Two iterations, then measure x.
+func @main() -> i4 {
+entry:
+    %x = qalloc 4
+    %kick = qalloc 1
+    %e = qalloc 4
+    call @search(%x, %kick, %e, i8 2)
+    %found = measure %x
+    ret %found
+}

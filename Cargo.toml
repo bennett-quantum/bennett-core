@@ -1,0 +1,25 @@
+[workspace]
+members = ["crates/ir", "crates/exec", "crates/cli"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+bennett-ir = { path = "crates/ir" }
+bennett-exec = { path = "crates/exec" }
+clap = { version = "4.5", features = ["derive"] }
+logos = "0.15"
+num-complex = "0.4"
+petgraph = { version = "0.8", default-features = false, features = ["std"] }
+rand = { version = "0.9", default-features = false }
+rand_chacha = { version = "0.9", default-features = false }
+thiserror = "2"
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"

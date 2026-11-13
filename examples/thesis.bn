@@ -1,0 +1,48 @@
+; thesis.bn: the thesis in miniature. Rotate a qubit, let ordinary code depend on it, undo the
+; dependence, rotate back and measure. The measurement gives 0 for every seed only if the coherent
+; region leaves nothing entangled with the qubit.
+memory 256
+
+func @f(i8 %x) -> i8 {
+entry:
+    %square = mul i8 %x, %x
+    %y = add i8 %square, 1
+    ret %y
+}
+
+; g(b) = f(3) if b else 0: ordinary control flow on the region's input.
+func @g(i1 %b) -> i8 {
+entry:
+    br %b, then, else
+then:
+    %y = call @f(i8 3)
+    ret %y
+else:
+    ret 0
+}
+
+func @main() -> i1 {
+entry:
+    %q = qalloc 1
+    h %q
+    %y = qalloc 8
+    %e = qalloc 4
+    apply @g(%q) -> %y, %e budget 100   ; (q=0, y=0) and (q=1, y=10)
+    apply @g(%q) -> %y, %e budget 100   ; y is 0 again on both branches
+    qfree %y
+    qfree %e
+    h %q
+    %m = measure %q
+    ret %m
+}
+
+; The state after one application, for inspection: (q=0, y=0) and (q=1, y=10), each 1/√2.
+func @entangled() {
+entry:
+    %q = qalloc 1
+    h %q
+    %y = qalloc 8
+    %e = qalloc 4
+    apply @g(%q) -> %y, %e budget 100
+    ret
+}

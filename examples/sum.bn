@@ -1,0 +1,15 @@
+; sum.bn: 0 + 1 + ... + (n - 1) by a counting loop. Run forward and back with --reverse.
+memory 64
+
+func @main(i64 %n) -> i64 {
+entry:
+    %empty = icmp eq i64 %n, 0
+    br %empty, done(i64 0), loop(i64 0, i64 0)
+loop(i64 %i, i64 %acc):
+    %acc.next = add i64 %acc, %i
+    %i.next = add i64 %i, 1
+    %again = icmp ult i64 %i.next, %n
+    br %again, loop(%i.next, %acc.next), done(%acc.next)
+done(i64 %sum):
+    ret %sum
+}

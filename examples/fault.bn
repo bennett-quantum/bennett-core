@@ -1,0 +1,37 @@
+; fault.bn: a coherent region whose running time depends on its input. @triangle(n) takes 5n + 5
+; steps, so with a budget of 20 inputs up to 3 succeed and inputs from 4 run out of budget. A fault
+; leaves the output register as it was (5 here) and puts the fault's code in the fault register.
+memory 256
+
+; 0 + 1 + ... + (n - 1).
+func @triangle(i4 %n) -> i8 {
+entry:
+    %limit = zext i4 %n to i8
+    br loop(i8 0, i8 0)
+loop(i8 %i, i8 %acc):
+    %more = icmp ult i8 %i, %limit
+    br %more, body, done
+body:
+    %acc.next = add i8 %acc, %i
+    %i.next = add i8 %i, 1
+    br loop(%i.next, %acc.next)
+done:
+    ret %acc
+}
+
+; Returns out | fault << 8 after applying @triangle(n) with out starting at 5.
+func @main(i4 %n) -> i16 {
+entry:
+    %out = qalloc 8
+    x %out[0]
+    x %out[2]
+    %e = qalloc 4
+    apply @triangle(%n) -> %out, %e budget 20
+    %o = measure %out
+    %f = measure %e
+    %o.wide = zext i8 %o to i16
+    %f.wide = zext i4 %f to i16
+    %f.high = shl i16 %f.wide, 8
+    %result = or i16 %o.wide, %f.high
+    ret %result
+}

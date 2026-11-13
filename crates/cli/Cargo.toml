@@ -1,0 +1,15 @@
+[package]
+name = "bennett"
+version = "0.1.0"
+description = "The bennett command: run and check device programs"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bennett-ir.workspace = true
+bennett-exec.workspace = true
+clap.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

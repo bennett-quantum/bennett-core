@@ -1,0 +1,67 @@
+; calls.bn: memory, alloca, direct calls, a table of function pointers called through
+; call_indirect, and console output through effect. Prints "hello" and returns ((3 + 1) * 2)^2 = 64.
+memory 1024
+data 0 = "hello\n"
+data 16 = i64 @increment, i64 @double, i64 @square
+
+func @main() -> i64 {
+entry:
+    call @print(i64 0, i64 6)
+    %cell = alloca 8
+    store i64 3, %cell
+    br step(i64 0)
+step(i64 %i):
+    %offset = mul i64 %i, 8
+    %entry = add i64 %offset, 16
+    %f = load i64 %entry
+    %x = load i64 %cell
+    %y = call_indirect fn(i64) -> i64 %f(%x)
+    store i64 %y, %cell
+    %i.next = add i64 %i, 1
+    %more = icmp ult i64 %i.next, 3
+    br %more, step(%i.next), finish
+finish:
+    %result = load i64 %cell
+    ret %result
+}
+
+; Writes the `len` bytes at `address` to the console.
+func @print(i64 %address, i64 %len) {
+entry:
+    %end = add i64 %address, %len
+    br next(%address)
+next(i64 %p):
+    %done = icmp eq i64 %p, %end
+    br %done, finish, emit
+emit:
+    %byte = load i8 %p
+    effect %byte
+    %p.next = add i64 %p, 1
+    br next(%p.next)
+finish:
+    ret
+}
+
+func @increment(i64 %x) -> i64 {
+entry:
+    %y = add i64 %x, 1
+    ret %y
+}
+
+func @double(i64 %x) -> i64 {
+entry:
+    %y = shl i64 %x, 1
+    ret %y
+}
+
+func @square(i64 %x) -> i64 {
+entry:
+    %y = call @multiply(%x, %x)
+    ret %y
+}
+
+func @multiply(i64 %a, i64 %b) -> i64 {
+entry:
+    %product = mul i64 %a, %b
+    ret %product
+}
