@@ -77,8 +77,8 @@ void ControlAnalysis::computeSupport(bool gatesOnly) {
           continue;
         }
         support |= (~computeKnownBits(store->getValueOperand(), layout).Zero).getZExtValue();
-      } else if (markerCall(mutation)->kind != MarkerKind::Measure) {
-        support |= uint64_t(1) << (8 * access(cast<CallBase>(mutation)->getArgOperand(0))->offset);
+      } else if (isGateCall(mutation)) {
+        support |= uint64_t(1) << access(cast<CallBase>(mutation)->getArgOperand(0))->bit;
       }
     }
     storage->support = storage->bits == 64 ? support : support & ((uint64_t(1) << storage->bits) - 1);
@@ -88,15 +88,23 @@ void ControlAnalysis::computeSupport(bool gatesOnly) {
 void ControlAnalysis::findStorage() {
   const DataLayout &layout = function.getParent()->getDataLayout();
   for (Instruction &inst : instructions(function)) {
-    if (!markerCall(&inst)) {
+    const AllocaInst *alloca = nullptr;
+    if (auto *tagged = dyn_cast<AllocaInst>(&inst); tagged && tagged->getMetadata(qubitMetadata)) {
+      alloca = tagged;
+    } else if (markerCall(&inst)) {
+      auto *call = cast<CallBase>(&inst);
+      if (isGateCall(call) && markerCall(call->getArgOperand(0)) &&
+          markerCall(call->getArgOperand(0))->kind == MarkerKind::Bit) {
+        continue; // the variable is found at the call of bennett_bit
+      }
+      APInt offset(64, 0);
+      const Value *base = call->getArgOperand(0)->stripAndAccumulateConstantOffsets(layout, offset, true);
+      alloca = dyn_cast<AllocaInst>(base);
+      if (!alloca) {
+        notHandled("a marker applied to something other than a local variable", call);
+      }
+    } else {
       continue;
-    }
-    auto *call = cast<CallBase>(&inst);
-    APInt offset(64, 0);
-    const Value *base = call->getArgOperand(0)->stripAndAccumulateConstantOffsets(layout, offset, true);
-    const auto *alloca = dyn_cast<AllocaInst>(base);
-    if (!alloca) {
-      notHandled("a marker applied to something other than a local variable", call);
     }
     if (access(alloca)) {
       continue;
@@ -161,6 +169,30 @@ void ControlAnalysis::checkUses(Storage &storage) {
         storage.mutations.push_back(store);
         continue;
       }
+      if (std::optional<Marker> marker = markerCall(inst); marker && marker->kind == MarkerKind::Bit) {
+        auto *call = cast<CallBase>(inst);
+        const auto *index = dyn_cast<ConstantInt>(call->getArgOperand(1));
+        if (call->getArgOperand(0) != pointer) {
+          other(inst);
+        }
+        if (!index || index->getValue().uge(8 * (bytes - offset))) {
+          notHandled("bennett_bit on qubit variable " + storage.name +
+                         " with a bit index that is not a constant within the variable",
+                     inst);
+        }
+        for (User *qubitUser : call->users()) {
+          auto *gate = dyn_cast<CallBase>(qubitUser);
+          bool asQubit = gate && isGateCall(gate) && gate->getArgOperand(0) == call;
+          for (unsigned i = 1; asQubit && i < gate->arg_size(); ++i) {
+            asQubit = gate->getArgOperand(i) != call;
+          }
+          if (!asQubit) {
+            notHandled("the result of bennett_bit used other than as the qubit of a gate", qubitUser);
+          }
+          storage.mutations.push_back(gate);
+        }
+        continue;
+      }
       if (std::optional<Marker> marker = markerCall(inst)) {
         auto *call = cast<CallBase>(inst);
         bool asQubit = call->getArgOperand(0) == pointer;
@@ -189,12 +221,23 @@ std::optional<Access> ControlAnalysis::access(const Value *pointer) const {
   if (!pointer->getType()->isPointerTy()) {
     return std::nullopt;
   }
+  if (std::optional<Marker> marker = markerCall(pointer); marker && marker->kind == MarkerKind::Bit) {
+    const auto *call = cast<CallBase>(pointer);
+    std::optional<Access> variable = access(call->getArgOperand(0));
+    const auto *index = dyn_cast<ConstantInt>(call->getArgOperand(1));
+    if (!variable || !index) {
+      return std::nullopt; // checkUses refuses it
+    }
+    variable->bit = 8 * variable->offset + unsigned(index->getZExtValue());
+    return variable;
+  }
   const DataLayout &layout = function.getParent()->getDataLayout();
   APInt offset(64, 0);
   const Value *base = pointer->stripAndAccumulateConstantOffsets(layout, offset, true);
   for (const auto &storage : storages) {
     if (storage->alloca == base) {
-      return Access{storage.get(), unsigned(offset.getZExtValue())};
+      unsigned bytes = unsigned(offset.getZExtValue());
+      return Access{storage.get(), bytes, 8 * bytes};
     }
   }
   return std::nullopt;
@@ -217,7 +260,7 @@ void ControlAnalysis::transfer(const Instruction &inst, std::vector<Fact> &facts
     }
     return;
   }
-  if (std::optional<Marker> marker = markerCall(&inst)) {
+  if (std::optional<Marker> marker = markerCall(&inst); marker && marker->kind != MarkerKind::Bit) {
     const auto *call = cast<CallBase>(&inst);
     if (std::optional<Access> target = access(call->getArgOperand(0))) {
       Fact &fact = facts[indexOf(target->storage)];

@@ -54,6 +54,26 @@ void simplify(Function &function) {
   passes.run(function, functions);
 }
 
+void simplifyDeep(Function &function) {
+  LoopAnalysisManager loops;
+  FunctionAnalysisManager functions;
+  CGSCCAnalysisManager sccs;
+  ModuleAnalysisManager modules;
+  PassBuilder builder;
+  functions.registerPass([&] { return builder.buildDefaultAAPipeline(); });
+  builder.registerModuleAnalyses(modules);
+  builder.registerCGSCCAnalyses(sccs);
+  builder.registerFunctionAnalyses(functions);
+  builder.registerLoopAnalyses(loops);
+  builder.crossRegisterProxies(loops, functions, sccs, modules);
+  FunctionPassManager passes;
+  if (Error error = builder.parsePassPipeline(
+          passes, "sccp,instcombine,simplifycfg,early-cse,instcombine,simplifycfg,adce,instcombine,simplifycfg")) {
+    fail("internal: " + toString(std::move(error)));
+  }
+  passes.run(function, functions);
+}
+
 namespace {
 
 // a < b ? a : b and the like.
@@ -61,17 +81,20 @@ Value *minMax(IRBuilder<> &b, CmpInst::Predicate pred, Value *x, Value *y) {
   return b.CreateSelect(b.CreateICmp(pred, x, y), x, y);
 }
 
-// fshl(a, b, c) = (a << (c mod w)) | (b >> (w - c mod w)); the device program's shift by the full width
-// gives 0, which is exactly the c mod w = 0 case. fshr is the mirror image.
+// fshl(a, b, c) = (a << s) | (b >> (w - s)) with s = c mod w, where the second term is 0 when s = 0.
+// It is written ((b >> 1) >> (w - 1 - s)) so that no shift is by the full width: that would be 0 in the
+// device program but poison in LLVM, and the front still runs LLVM's simplifier on lowered code. fshr is
+// the mirror image.
 Value *funnel(IRBuilder<> &b, bool left, Value *hi, Value *lo, Value *amount) {
   auto *type = cast<IntegerType>(hi->getType());
   Value *width = ConstantInt::get(type, type->getBitWidth());
   Value *shift = b.CreateURem(amount, width);
-  Value *rest = b.CreateSub(width, shift);
+  Value *rest = b.CreateSub(ConstantInt::get(type, type->getBitWidth() - 1), shift);
+  Value *one = ConstantInt::get(type, 1);
   if (left) {
-    return b.CreateOr(b.CreateShl(hi, shift), b.CreateLShr(lo, rest));
+    return b.CreateOr(b.CreateShl(hi, shift), b.CreateLShr(b.CreateLShr(lo, one), rest));
   }
-  return b.CreateOr(b.CreateShl(hi, rest), b.CreateLShr(lo, shift));
+  return b.CreateOr(b.CreateShl(b.CreateShl(hi, one), rest), b.CreateLShr(lo, shift));
 }
 
 // Runs `expand`, then gives every instruction it added that has no debug location the location `at`, so
@@ -164,7 +187,7 @@ void lowerParameterAttributes(Module &module) {
   }
 }
 
-void lowerIntrinsics(Module &module) {
+void lowerIntrinsics(Module &module, bool keepBijections) {
   const DataLayout &layout = module.getDataLayout();
   TargetTransformInfo costs(layout);
   IntrinsicLowering generic(layout);
@@ -209,13 +232,20 @@ void lowerIntrinsics(Module &module) {
       }
       case Intrinsic::fshl:
       case Intrinsic::fshr:
+        if (keepBijections) {
+          continue;
+        }
         replacement = funnel(b, call->getIntrinsicID() == Intrinsic::fshl, call->getArgOperand(0),
                              call->getArgOperand(1), call->getArgOperand(2));
         break;
+      case Intrinsic::bswap:
+        if (keepBijections) {
+          continue;
+        }
+        [[fallthrough]];
       case Intrinsic::ctpop:
       case Intrinsic::ctlz:
       case Intrinsic::cttz:
-      case Intrinsic::bswap:
         locate(function, call->getDebugLoc(), [&] { generic.LowerIntrinsicCall(call); });
         continue;
       case Intrinsic::memset:

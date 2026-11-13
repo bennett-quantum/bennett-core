@@ -97,15 +97,35 @@ surface is `docs/MARKERS.md`.
 - **A store into a qubit variable applies the whole computation of the stored value into it.** `v ^= expr` is an
   `apply` into `v`; an assignment to a variable known to be clean likewise. There are no temporaries and no
   uncompute ordering; the price is recomputation when one value feeds several stores.
+- **An in-place update `x = g(x, a)`**, where g is a bijection in x that the front can invert, is three
+  XORs through a fresh register n: `n ^= g(x, a); x ^= g⁻¹(n, a) ^ n; n ^= x`. g is the chain of LLVM
+  operations from a load of x to the store, each a bijection in its x operand: add, sub, xor, multiply
+  by an odd constant, rotation, byte swap, a select whose condition does not read x, and the truncations
+  and extensions across which ring operations keep their low bits (`InPlace.h`). The other operands must
+  not read x. Anything else that reads x's old value is refused: it needs history (open questions).
 - **Branches, joins and loops that depend on a qubit** are outlined into ordinary functions and applied. They
   may not write memory: an ordinary write under quantum control is a channel, and is refused.
+- **Quantum operations under such a branch are predicated** (`Predicate.h`). On each basis configuration the
+  region runs one path; its gates and stores are moved after it, in a topological order of the region,
+  each acting only where its path reaches it. A gate becomes a gate controlled by "this configuration
+  reaches it"; a store `x = v` becomes `x ^= (reached ? v ^ x : 0)`, or, when that still reads x, the
+  straight-line `x = reached ? v : x` that the in-place update then inverts. Each condition and change is
+  an ordinary function copied from the region, control flow and all, so nothing is computed on a branch
+  whose path would not compute it. A condition that LLVM's simplifier proves to be a conjunction of
+  single qubits becomes the gate's controls (a CNOT, a Toffoli); any other is computed into a fresh
+  qubit, controls the gate, and is computed again to clear it. A gate whose condition reads the gate's
+  own variable, a value read before an operation of the region changed it and needed after, an operation
+  on a cycle (a loop that is not unrolled), and a measurement are refused by name.
+- **No new device instruction was needed** for any of this: gates take control lists, and `apply` XORs
+  into any register.
 - **Every `apply` has a fault register of its own**, released when the function returns (inside a loop: right
   after the `apply`), so the codes of two faults never cancel. A fault the run was allowed to go past ends it
   with `dirty_free`.
 - **Each qubit variable is Known** (it holds an ordinary value: fresh, assigned, just measured) **or Quantum.**
-- **What it cannot do yet it refuses by name**, with the source location: a gate under qubit control, a
-  qubit-dependent value used by ordinary code, a non-XOR overwrite of a variable whose value is not known, reading
-  a qubit variable's old value after it changed, qubit variables passed to functions or written partially.
+- **What it cannot do yet it refuses by name**, with the source location: a qubit-dependent value used by
+  ordinary code, a non-XOR overwrite of a variable whose value is not known that is not an invertible
+  update, reading a qubit variable's old value after it changed, qubit variables passed to functions or
+  written partially, and the cases under qubit control above.
 - **`--taint-all`** treats more as tainted; tests check that no result changes.
 
 Two things the first C programs taught:
@@ -119,6 +139,11 @@ Two things the first C programs taught:
 
 - Memory: the stack grows down from the top; data starts at address 16; address 0 is never a function (a function's
   address is its index plus 1). A null dereference does not fault yet.
+- Funnel shifts and byte swaps are lowered after the front's own analyses (it inverts them), and a funnel
+  shift is lowered without a shift by the full width, which is poison in LLVM: the front runs LLVM's
+  simplifier on lowered code to prove things.
+- The front's tests run the executor optimised (`[profile.dev.package.bennett-exec]`): they enumerate
+  2^16 branches per program.
 - `alloca` results are 8-byte aligned; `front` makes a wider alignment by allocating more and rounding up. A
   `byval` parameter is copied by the callee on entry. Initialisers are written byte for byte at any width.
 - Fault codes fit in 4 bits; a fault register is at least that wide.
@@ -146,21 +171,21 @@ negotiation. The exact syntax is whatever the single reader in `ir` accepts; `ex
 ## Not yet
 
 The optimiser, any cost beyond step and qubit counts, certificates, target descriptions, a binary
-format, in-place bijections, coherent memory that outlives a region, and quantum instructions inside an applied
-function.
+format, coherent memory that outlives a region, quantum instructions inside an applied function, and
+recomputation shared between conditions (each predicated operation computes and clears its own).
 
 ## Open questions
 
 - **Budget unit.** Steps should be counted in something the source fixes (executed instructions of the normalised
   LLVM bitcode), so that a better lowering never changes which inputs fault. How the plugin tells the executor which
   instructions count is undecided.
-- **Quantum actions inside regions** (rotations under control, `x += a` in place) and the adjoint of a region that
-  is not its own inverse.
+- **The adjoint of a region that is not its own inverse.** Gates under qubit control and bijective in-place
+  updates are done (above) without one.
 - **Coherent memory across regions.**
 - **Running code under a qubit with its history kept.** `apply` is the cleaned-up special case: compute, copy the
   result out, uncompute at once. The general case keeps the journal as quantum workspace and un-runs later. That is
-  what `when (q) x += a`, a controlled region that contains gates, and a conditional boot all need. The executor has
-  both halves (journal, superposition) but no instruction joins them.
+  what an update with no known inverse (`x = x * x`), a loop under qubit control that contains gates, and a
+  conditional boot need. The executor has both halves (journal, superposition) but no instruction joins them.
 - **Channels.** A dirty discard is the partial trace, measurement is described by effects, noise by channels; the
   finished Bennett covers them (maintainer, 2026-11-13). This step is unitaries and clean discard, and a dirty
   `qfree` is a fault. Nothing in the device program should make channels impossible to add.

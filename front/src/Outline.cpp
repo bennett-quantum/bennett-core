@@ -1,7 +1,9 @@
 #include "Outline.h"
 
 #include "Diagnostic.h"
+#include "InPlace.h"
 #include "Markers.h"
+#include "Predicate.h"
 #include "Taint.h"
 
 #include <llvm/Analysis/DominanceFrontier.h>
@@ -222,15 +224,14 @@ void outlineAround(Function &function, Instruction *seed, ControlAnalysis &analy
   std::vector<LoadInst *> loads;
   for (BasicBlock *member : blocks) {
     for (Instruction &inst : *member) {
+      if (std::optional<Marker> marker = markerCall(&inst); marker && marker->kind == MarkerKind::Measure) {
+        notHandled("a measurement under the control of a value that depends on a qubit", &inst);
+      }
       if (markerCall(&inst)) {
-        notHandled(branch ? "a quantum operation controlled by a value that depends on a qubit"
-                          : "a quantum operation inside control flow that carries a value that depends on a qubit",
-                   &inst);
+        continue; // gates and the qubits they act on: predicated below
       }
       if (auto *store = dyn_cast<StoreInst>(&inst); store && analysis.access(store->getPointerOperand())) {
-        notHandled("a store into qubit variable " + analysis.access(store->getPointerOperand())->storage->name +
-                       " controlled by a value that depends on a qubit",
-                   &inst);
+        continue; // predicated below
       }
       if (auto *call = dyn_cast<CallBase>(&inst); call && control.count(call->getCalledFunction())) {
         notHandled("a call to @" + call->getCalledFunction()->getName().str() +
@@ -248,6 +249,12 @@ void outlineAround(Function &function, Instruction *seed, ControlAnalysis &analy
         loads.push_back(load);
       }
     }
+  }
+
+  // Gates and stores into qubit variables move after the region, each acting where its path reaches it.
+  if (hasQuantumOperations(blocks, analysis)) {
+    predicateRegion(function, blocks, region->getExit(), analysis);
+    return;
   }
 
   // Nothing in the region changes a qubit variable, so its loads read what they would read just before
@@ -343,6 +350,9 @@ void outlineRegions(Function &function, bool taintAll, const std::set<const Func
     ControlAnalysis analysis(function, taintAll);
     Instruction *seed = analysis.seed();
     if (!seed) {
+      if (rewriteInPlaceUpdate(function, analysis)) {
+        continue;
+      }
       annotateRanges(function, analysis);
       return;
     }

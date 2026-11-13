@@ -37,7 +37,15 @@ std::optional<Marker> markerOf(const Function *callee) {
   if (name == "measure") {
     return Marker{MarkerKind::Measure, "measure"};
   }
+  if (name == "bit") {
+    return Marker{MarkerKind::Bit, "bit"};
+  }
   return std::nullopt;
+}
+
+bool isGateCall(const Value *value) {
+  std::optional<Marker> marker = markerCall(value);
+  return marker && (marker->kind == MarkerKind::Gate || marker->kind == MarkerKind::Rotation);
 }
 
 std::optional<Marker> markerCall(const Value *value) {
@@ -74,6 +82,10 @@ void checkMarkers(const Module &module) {
       break;
     case MarkerKind::Measure:
       shape = type->getReturnType()->isIntegerTy(64) && type->getNumParams() == 1 && pointerFirst;
+      break;
+    case MarkerKind::Bit:
+      shape = type->getReturnType()->isPointerTy() && type->getNumParams() == 2 && pointerFirst &&
+              type->getParamType(1)->isIntegerTy();
       break;
     }
     if (!shape || type->isVarArg()) {

@@ -94,14 +94,19 @@ int main(int argc, char **argv) {
   runPipeline(*module, "", true);
   bennett::checkMarkers(*module);
   bennett::lowerParameterAttributes(*module);
-  bennett::lowerIntrinsics(*module);
+  bennett::lowerIntrinsics(*module, /*keepBijections=*/true);
 
   std::set<const Function *> control = bennett::controlFunctions(*module);
+  std::vector<Function *> controlled;
   for (Function &function : *module) {
     if (control.count(&function)) {
-      bennett::outlineRegions(function, taintAll, control);
+      controlled.push_back(&function);
     }
   }
+  for (Function *function : controlled) {
+    bennett::outlineRegions(*function, taintAll, control);
+  }
+  bennett::lowerIntrinsics(*module);
   // Memory effects of the outlined functions, which decide what may run coherently.
   runPipeline(*module, "cgscc(function-attrs)", false);
   verify(*module, "after outlining");

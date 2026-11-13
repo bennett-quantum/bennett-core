@@ -25,3 +25,8 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"
+
+# The front end's tests run coherent regions over 2^16 branches: the executor is optimised even in test
+# builds, which makes them several times faster and costs a few seconds of compilation.
+[profile.dev.package.bennett-exec]
+opt-level = 3

@@ -29,6 +29,7 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Module.h>
+#include <llvm/Transforms/Utils/Cloning.h>
 #include <llvm/Transforms/Utils/ValueMapper.h>
 
 #include <algorithm>
@@ -93,13 +94,26 @@ private:
   void xorClassical(const Storage &target, const Value *value, const Instruction &at);
   void xorConstant(const Storage &target, uint64_t value);
   void release(const Instruction &ret);
+  void controlledGate(const CallBase &call, const Access &target, const std::string &gate);
+  // The qubits whose conjunction `condition` is, if LLVM's simplifier proves it is one: each qubit of a
+  // variable whose support is that one bit, and whether it must be 1 (or 0).
+  std::optional<std::vector<std::pair<std::string, bool>>> literals(const Slice &slice, const Value *condition);
+  // `root` with each variable in `assigned` replaced by the value given, folded by LLVM's simplifier with
+  // every call it makes inlined once, if that gives a constant.
+  std::optional<uint64_t> evaluate(const Slice &slice, const Value *root,
+                                   const std::map<const Storage *, uint64_t> &assigned);
   // `value` at `bits` bits: a slot (converting it first if needed) or a constant, typed or not.
   std::string converted(const Value *value, unsigned bits, bool typedConstant = true);
   // Writes `apply callee(args) -> target`, with a fault register of its own, for the instruction `at`.
-  void apply(const std::string &callee, const std::string &args, const Storage &target, const Instruction &at);
+  void apply(const std::string &callee, const std::string &args, const std::string &target, const Instruction &at);
+  void apply(const std::string &callee, const std::string &args, const Storage &target, const Instruction &at) {
+    apply(callee, args, registers.at(&target), at);
+  }
   Slice collect(const Value *root, const Instruction &sink);
-  std::string slice(const Slice &slice, const Value *root, const Storage &target, const Instruction &sink,
-                    std::string &args, bool flipProved = false);
+  // The function computing `root` at `sink` into a register of `bits` bits: the variable `target`, or a
+  // fresh register when it is null.
+  std::string slice(const Slice &slice, const Value *root, const Storage *target, unsigned bits,
+                    const Instruction &sink, std::string &args, bool flipProved = false);
   bool provesFlip(const Slice &slice, const Value *root, const Storage &target);
   bool sliceable(const Value *value) const;
 };
@@ -158,16 +172,16 @@ std::string ControlWriter::write() {
 
 void ControlWriter::prologue() { out += allocatePlaceholder; }
 
-void ControlWriter::apply(const std::string &callee, const std::string &args, const Storage &target,
+void ControlWriter::apply(const std::string &callee, const std::string &args, const std::string &target,
                           const Instruction &at) {
-  std::string faultRegister = fresh(registers.at(&target).substr(1) + ".fault");
+  std::string faultRegister = fresh(target.substr(1) + ".fault");
   bool once = !cyclic.count(at.getParent());
   if (once) {
     faultRegisters.push_back(faultRegister);
   } else {
     line(faultRegister + " = qalloc " + std::to_string(faultCodeBits));
   }
-  line("apply " + callee + "(" + args + ") -> " + registers.at(&target) + ", " + faultRegister + " budget " +
+  line("apply " + callee + "(" + args + ") -> " + target + ", " + faultRegister + " budget " +
        std::to_string(module.options.regionBudget));
   if (!once) {
     line("qfree " + faultRegister);
@@ -247,12 +261,17 @@ void ControlWriter::knownLoad(const LoadInst &load) {
 }
 
 void ControlWriter::marker(const CallBase &call, const Marker &marker) {
+  if (marker.kind == MarkerKind::Bit) {
+    return; // a qubit, named where a gate uses it
+  }
   Access target = *analysis.access(call.getArgOperand(0));
   const std::string &reg = registers.at(target.storage);
-  std::string qubit = reg + "[" + std::to_string(8 * target.offset) + "]";
+  std::string qubit = reg + "[" + std::to_string(target.bit) + "]";
   switch (marker.kind) {
+  case MarkerKind::Bit:
+    return;
   case MarkerKind::Gate:
-    line(marker.mnemonic + " " + qubit);
+    controlledGate(call, target, marker.mnemonic + " " + qubit);
     return;
   case MarkerKind::Rotation: {
     const auto *angle = dyn_cast<ConstantFP>(call.getArgOperand(1));
@@ -261,7 +280,7 @@ void ControlWriter::marker(const CallBase &call, const Marker &marker) {
     }
     char text[64];
     std::snprintf(text, sizeof text, "%.17g", angle->getValueAPF().convertToDouble());
-    line(marker.mnemonic + "(" + text + ") " + qubit);
+    controlledGate(call, target, marker.mnemonic + "(" + text + ") " + qubit);
     return;
   }
   case MarkerKind::Measure: {
@@ -311,9 +330,21 @@ void ControlWriter::store(const StoreInst &store) {
     }
     if (readsItself && current && provesFlip(computation, value, target)) {
       std::string args;
-      std::string callee = slice(computation, value, target, store, args, true);
+      std::string callee = slice(computation, value, &target, target.bits, store, args, true);
       apply(callee, args, target, store);
       return;
+    }
+  }
+  if (!known && analysis.tainted(value)) {
+    for (const LoadInst *load : collect(value, store).loads) {
+      if (analysis.access(load->getPointerOperand())->storage == &target) {
+        notHandled("an update of qubit variable " + target.name +
+                       " that is not a bijection the front knows how to invert (it handles `" + plainName(target) +
+                       " ^= e` with e not reading " + plainName(target) +
+                       ", and chains of +, -, ^, ~, negation, multiplication by an odd constant, rotation and "
+                       "byte swap with operands that do not read it)",
+                   &store);
+      }
     }
   }
   if (!known) {
@@ -366,7 +397,7 @@ void ControlWriter::xorInto(const Storage &target, const Value *value, const Ins
     return;
   }
   std::string args;
-  std::string callee = slice(collect(value, at), value, target, at, args);
+  std::string callee = slice(collect(value, at), value, &target, target.bits, at, args);
   apply(callee, args, target, at);
 }
 
@@ -523,12 +554,12 @@ bool ControlWriter::provesFlip(const Slice &slice, const Value *root, const Stor
 // registers are passed in and read as integers). Every instruction of the computation dominates the sink,
 // so the function computes exactly what the control program would have computed there. Loads of the
 // target itself read 0: they occur only where provesFlip has shown that this gives the XOR form.
-std::string ControlWriter::slice(const Slice &slice, const Value *root, const Storage &target,
+std::string ControlWriter::slice(const Slice &slice, const Value *root, const Storage *target, unsigned bits,
                                  const Instruction &sink, std::string &args, bool flipProved) {
   bool inPlace = false;
   for (const LoadInst *load : slice.loads) {
     const Storage *storage = analysis.access(load->getPointerOperand())->storage;
-    if (storage == &target) {
+    if (storage == target) {
       inPlace = true;
       continue;
     }
@@ -539,8 +570,8 @@ std::string ControlWriter::slice(const Slice &slice, const Value *root, const St
     }
   }
   if (inPlace && !flipProved) {
-    notHandled("an update of qubit variable " + target.name + " computed from its own value; only `" +
-                   plainName(target) + " ^= expression` without it is handled",
+    notHandled("an update of qubit variable " + target->name + " computed from its own value; only `" +
+                   plainName(*target) + " ^= expression` without it, and in-place bijections, are handled",
                &sink);
   }
 
@@ -555,7 +586,7 @@ std::string ControlWriter::slice(const Slice &slice, const Value *root, const St
   }
   std::map<const Storage *, std::string> qubits;
   for (const Storage *storage : slice.quantum) {
-    if (storage == &target) {
+    if (storage == target) {
       continue;
     }
     std::string name = writer.fresh(storage->alloca->hasName() ? storage->alloca->getName().str() : "qubits");
@@ -565,7 +596,7 @@ std::string ControlWriter::slice(const Slice &slice, const Value *root, const St
   }
   for (const LoadInst *load : slice.loads) {
     Access source = *analysis.access(load->getPointerOperand());
-    if (source.storage == &target) {
+    if (source.storage == target) {
       writer.alias(load, ConstantInt::get(load->getType(), 0));
       continue;
     }
@@ -586,12 +617,172 @@ std::string ControlWriter::slice(const Slice &slice, const Value *root, const St
   for (const Instruction *inst : slice.body) {
     writer.instruction(*inst);
   }
-  if (widthOf(root->getType(), root) != target.bits) {
+  if (widthOf(root->getType(), root) != bits) {
     fail("internal: a stored value of the wrong width");
   }
   writer.line("ret " + writer.operand(root));
-  std::string text = "(" + params + ") -> " + intType(target.bits) + " {\nentry:\n" + writer.out + "}\n";
+  std::string text = "(" + params + ") -> " + intType(bits) + " {\nentry:\n" + writer.out + "}\n";
   return module.addFunction(fn.getName().str() + ".apply", text);
+}
+
+// A gate, controlled by the condition in the call's bundle if it has one. A condition that is a conjunction
+// of qubits becomes the gate's controls; any other is computed into a fresh qubit, controls the gate, and
+// is computed again to return the qubit to 0 before it is released. Either way the condition must not read
+// the gate's own variable, or the gate would change what controls it.
+void ControlWriter::controlledGate(const CallBase &call, const Access &target, const std::string &gate) {
+  std::optional<OperandBundleUse> bundle = call.getOperandBundle(controlBundle);
+  if (!bundle) {
+    line(gate);
+    return;
+  }
+  const Value *condition = bundle->Inputs[0];
+  if (const auto *constant = dyn_cast<ConstantInt>(resolve(condition))) {
+    if (constant->isOne()) {
+      line(gate);
+    }
+    return;
+  }
+  bool coherent = analysis.tainted(condition) || (module.options.taintAll && sliceable(condition));
+  Slice computation;
+  if (coherent) {
+    computation = collect(condition, call);
+    for (const Storage *storage : computation.quantum) {
+      if (storage == target.storage) {
+        notHandled("a gate on qubit variable " + storage->name + " under a condition that depends on " +
+                       storage->name + " (it would change the condition it is controlled by)",
+                   &call);
+      }
+    }
+    if (std::optional<std::vector<std::pair<std::string, bool>>> qubits = literals(computation, condition)) {
+      std::string controls;
+      for (const auto &[qubit, one] : *qubits) {
+        controls += (controls.empty() ? " ctrl " : ", ") + qubit;
+        if (!one) {
+          line("x " + qubit);
+        }
+      }
+      line(gate + controls);
+      for (const auto &[qubit, one] : *qubits) {
+        if (!one) {
+          line("x " + qubit);
+        }
+      }
+      return;
+    }
+  }
+  std::string qubit = fresh("condition");
+  line(qubit + " = qalloc 1");
+  auto compute = [&] {
+    if (!coherent) {
+      apply(module.copyFunction(1), converted(condition, 1), qubit, call);
+      return;
+    }
+    std::string args;
+    std::string callee = slice(computation, condition, nullptr, 1, call, args);
+    apply(callee, args, qubit, call);
+  };
+  compute();
+  line(gate + " ctrl " + qubit + "[0]");
+  compute();
+  line("qfree " + qubit);
+}
+
+std::optional<std::vector<std::pair<std::string, bool>>> ControlWriter::literals(const Slice &slice,
+                                                                                 const Value *condition) {
+  // Every variable read must be one qubit as far as LLVM's known bits show (its support is one bit).
+  std::vector<std::pair<const Storage *, unsigned>> qubits;
+  for (const Storage *storage : slice.quantum) {
+    if (storage->support == 0 || (storage->support & (storage->support - 1)) != 0) {
+      return std::nullopt;
+    }
+    qubits.push_back({storage, unsigned(countr_zero(storage->support))});
+  }
+  // The condition is the conjunction of literals l_i exactly when it is 0 wherever one l_i is false,
+  // whatever the others are, and 1 where all are true.
+  std::vector<std::pair<std::string, bool>> result;
+  std::map<const Storage *, uint64_t> all;
+  for (const auto &[storage, bit] : qubits) {
+    std::optional<bool> one;
+    for (bool value : {true, false}) {
+      std::optional<uint64_t> folded = evaluate(slice, condition, {{storage, value ? 0 : uint64_t(1) << bit}});
+      if (folded && *folded == 0) {
+        one = value;
+        break;
+      }
+    }
+    if (!one) {
+      return std::nullopt;
+    }
+    all[storage] = *one ? uint64_t(1) << bit : 0;
+    result.push_back({registers.at(storage) + "[" + std::to_string(bit) + "]", *one});
+  }
+  std::optional<uint64_t> folded = evaluate(slice, condition, all);
+  if (!folded || *folded != 1) {
+    return std::nullopt;
+  }
+  return result;
+}
+
+std::optional<uint64_t> ControlWriter::evaluate(const Slice &slice, const Value *root,
+                                                const std::map<const Storage *, uint64_t> &assigned) {
+  Module &module = *fn.getParent();
+  LLVMContext &context = module.getContext();
+  std::vector<Type *> params;
+  for (const Value *value : slice.classical) {
+    params.push_back(value->getType());
+  }
+  for (size_t i = 0; i < slice.quantum.size(); ++i) {
+    params.push_back(PointerType::get(context, 0));
+  }
+  Function *scratch = Function::Create(FunctionType::get(root->getType(), params, false),
+                                       GlobalValue::InternalLinkage, "bennett.evaluate", module);
+  BasicBlock *entry = BasicBlock::Create(context, "entry", scratch);
+  IRBuilder<> b(entry);
+  ValueToValueMapTy map;
+  for (size_t i = 0; i < slice.classical.size(); ++i) {
+    map[slice.classical[i]] = scratch->getArg(unsigned(i));
+  }
+  for (const LoadInst *load : slice.loads) {
+    Access source = *analysis.access(load->getPointerOperand());
+    auto found = assigned.find(source.storage);
+    if (found != assigned.end()) {
+      map[load] = ConstantInt::get(load->getType(), found->second >> (8 * source.offset));
+      continue;
+    }
+    size_t index = std::find(slice.quantum.begin(), slice.quantum.end(), source.storage) - slice.quantum.begin();
+    Value *pointer = b.CreateConstInBoundsGEP1_64(b.getInt8Ty(), scratch->getArg(unsigned(slice.classical.size() + index)),
+                                                  source.offset);
+    LoadInst *copy = b.CreateLoad(load->getType(), pointer);
+    copy->setMetadata(LLVMContext::MD_range, load->getMetadata(LLVMContext::MD_range));
+    map[load] = copy;
+  }
+  std::vector<CallBase *> calls;
+  for (const Instruction *inst : slice.body) {
+    Instruction *copy = inst->clone();
+    copy->setDebugLoc(DebugLoc());
+    b.Insert(copy);
+    RemapInstruction(copy, map, RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
+    map[inst] = copy;
+    if (auto *call = dyn_cast<CallBase>(copy); call && call->getCalledFunction() &&
+                                               !call->getCalledFunction()->isDeclaration()) {
+      calls.push_back(call);
+    }
+  }
+  b.CreateRet(map.count(root) ? static_cast<Value *>(map[root]) : const_cast<Value *>(root));
+  for (CallBase *call : calls) {
+    InlineFunctionInfo info;
+    (void)InlineFunction(*call, info); // a call that cannot be inlined stays, and nothing folds
+  }
+  simplifyDeep(*scratch);
+  std::optional<uint64_t> result;
+  if (scratch->size() == 1) {
+    const auto *ret = cast<ReturnInst>(scratch->front().getTerminator());
+    if (const auto *constant = dyn_cast<ConstantInt>(ret->getReturnValue())) {
+      result = constant->getZExtValue();
+    }
+  }
+  scratch->eraseFromParent();
+  return result;
 }
 
 void ControlWriter::release(const Instruction &ret) {

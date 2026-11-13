@@ -25,9 +25,15 @@ void lowerParameterAttributes(llvm::Module &module);
 
 // Rewrites min/max/abs/funnel shifts/ctpop/ctlz/cttz/bswap and memset/memcpy/memmove into ordinary
 // instructions and loops, and deletes intrinsics that have no meaning here (lifetime, debug, assume).
-void lowerIntrinsics(llvm::Module &module);
+// With `keepBijections`, funnel shifts and byte swaps stay: the front inverts updates made of them
+// (InPlace.h), so they are lowered only after that.
+void lowerIntrinsics(llvm::Module &module, bool keepBijections = false);
 
 // Runs InstCombine and EarlyCSE on one function: LLVM's simplifier, used to prove small identities.
 void simplify(llvm::Function &function);
+
+// Runs LLVM's scalar simplifiers on one function, including its CFG: SCCP, InstCombine, SimplifyCFG,
+// EarlyCSE and aggressive dead-code elimination, to a fixed point of the pipeline's own choosing.
+void simplifyDeep(llvm::Function &function);
 
 } // namespace bennett

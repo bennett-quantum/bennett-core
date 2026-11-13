@@ -36,11 +36,16 @@ struct Storage {
   std::vector<llvm::Instruction *> mutations; // the stores into it and the markers applied to it
 };
 
-// A pointer into a qubit variable: the variable and a constant byte offset.
+// A pointer into a qubit variable: the variable and a constant byte offset. As the qubit of a gate it
+// names bit `bit` of the register: bit 0 of the byte it points to, or the bit `bennett_bit` names.
 struct Access {
   Storage *storage;
   unsigned offset;
+  unsigned bit;
 };
+
+// The metadata kind that makes an alloca a qubit variable without a marker: the front's own temporaries.
+inline constexpr const char *qubitMetadata = "bennett.qubit";
 
 struct Fact {
   enum Kind { Unvisited, Known, Quantum };

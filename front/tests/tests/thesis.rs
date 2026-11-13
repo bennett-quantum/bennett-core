@@ -171,7 +171,6 @@ fn what_is_not_handled_is_refused_by_name() {
             "used after the variable changed",
         ),
         ("in_place", "b = b ? 0 : b; return (int)bennett_measure(&b);", "an overwrite of qubit variable 'b'"),
-        ("controlled_gate", "if (b) bennett_x(&c); return (int)bennett_measure(&c);", "a quantum operation"),
         ("stored", "sink = b; return 0;", "used by ordinary code"),
     ];
     for (name, body, expected) in cases {

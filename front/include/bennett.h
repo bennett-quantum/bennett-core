@@ -25,6 +25,10 @@ void bennett_rx(_Bool *qubit, double theta);
 void bennett_ry(_Bool *qubit, double theta);
 void bennett_rz(_Bool *qubit, double theta);
 
+/* The qubit of bit `bit` (a constant) of the qubit variable `variable` points to, for the gates above:
+ * bennett_h(bennett_bit(&x, 3)) is a Hadamard on bit 3 of x. Its result may only be given to a gate. */
+_Bool *bennett_bit(void *variable, unsigned bit);
+
 /* Measures the whole qubit variable `variable` points to and returns its value, zero-extended. */
 unsigned long long bennett_measure(const void *variable);
 

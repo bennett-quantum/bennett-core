@@ -150,8 +150,19 @@ pub fn run_with_stats(module: &ValidModule, name: &str, args: &[u64], seed: u64)
 
 /// Runs `name(args)` up to, not including, its first measurement and returns the state there.
 pub fn state_before_first_measurement(module: &ValidModule, name: &str, args: &[u64]) -> Snapshot {
+    state_before_first_measurement_within(module, name, args, MAX_CONFIGURATIONS)
+}
+
+/// [`state_before_first_measurement`] for a state of up to `max_configurations` basis configurations.
+pub fn state_before_first_measurement_within(
+    module: &ValidModule,
+    name: &str,
+    args: &[u64],
+    max_configurations: usize,
+) -> Snapshot {
+    let options = Options { max_configurations: Some(max_configurations), ..options(0) };
     let mut executor =
-        Executor::new(module, entry(module, name), args, options(0)).unwrap_or_else(|e| panic!("@{name}: {e}"));
+        Executor::new(module, entry(module, name), args, options).unwrap_or_else(|e| panic!("@{name}: {e}"));
     loop {
         let snapshot = executor.snapshot();
         let frame = snapshot.classical.frames.last().unwrap_or_else(|| panic!("@{name} has no frame"));
@@ -209,6 +220,45 @@ pub fn state_without_fault_registers(module: &ValidModule, name: &str, args: &[u
         .collect();
     kept.sort_by(|a, b| a.0.cmp(&b.0));
     kept
+}
+
+/// Whether register `name` was made by `bennett-front` (a fault register, the fresh register of an in-place
+/// update, ...) rather than being a C variable: C names have no dots.
+pub fn is_front_register(name: &str) -> bool {
+    name.contains('.')
+}
+
+/// The branches of `name(args)` just before its first measurement: the values of the C variables among
+/// the registers `name` allocates in its entry block, in that order, with their amplitudes, sorted. Checks
+/// on the way that every register the front made, and every register allocated later, is 0 on every
+/// branch: nothing is left behind.
+pub fn branches(
+    module: &ValidModule,
+    name: &str,
+    args: &[u64],
+    max_configurations: usize,
+) -> (Vec<String>, Vec<(Vec<u64>, Complex64)>) {
+    let columns = registers(module, name);
+    let state = state_before_first_measurement_within(module, name, args, max_configurations).quantum;
+    let variables: Vec<String> = columns.iter().filter(|c| !is_front_register(c)).cloned().collect();
+    let mut kept: Vec<(Vec<u64>, Complex64)> = state
+        .amplitudes
+        .iter()
+        .map(|(config, amplitude)| {
+            let mut values = Vec::new();
+            for (column, register) in columns.iter().enumerate() {
+                if is_front_register(register) {
+                    assert_eq!(config[column], 0, "@{name}: register %{register} is left behind on {config:?}");
+                } else {
+                    values.push(config[column]);
+                }
+            }
+            assert!(config[columns.len()..].iter().all(|&v| v == 0), "@{name}: a later register is left behind");
+            (values, *amplitude)
+        })
+        .collect();
+    kept.sort_by(|a, b| a.0.cmp(&b.0));
+    (variables, kept)
 }
 
 /// The column of register `register` among `columns`.

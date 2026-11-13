@@ -21,6 +21,8 @@ add_executable(bennett-front
   src/Outline.cpp
   src/Emit.cpp
   src/Control.cpp
+  src/Predicate.cpp
+  src/InPlace.cpp
 )
 target_include_directories(bennett-front SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_compile_definitions(bennett-front PRIVATE ${LLVM_DEFINITIONS})
