@@ -60,3 +60,23 @@ fn bad_input_is_an_error_with_a_location() {
     let output = bennett(&["run", "no-such-file.bn"]);
     assert_eq!(output.status.code(), Some(2));
 }
+
+#[test]
+fn a_region_fault_is_reported_by_name_unless_allowed() {
+    // fault.bn with n = 5 runs out of the region's budget on its only branch.
+    let output = bennett(&["run", "fault.bn", "--arg", "5", "--stats"]);
+    assert_eq!(output.status.code(), Some(1));
+    let text = stdout(&output);
+    assert!(text.contains("region fault: apply @triangle faulted (budget) on 1 of 1 branches"), "{text}");
+    assert!(text.contains("region faults: 1 apply executions faulted on some branch"), "{text}");
+
+    let output = bennett(&["run", "fault.bn", "--arg", "5", "--allow-region-faults"]);
+    assert_eq!(output.status.code(), Some(0));
+    let text = stdout(&output);
+    assert!(text.contains("result: 261\n"), "out 5, fault code 1: {text}");
+    assert!(text.contains("region faults (allowed): 1 apply executions faulted on some branch"), "{text}");
+
+    let output = bennett(&["run", "fault.bn", "--arg", "2"]);
+    assert_eq!(output.status.code(), Some(0), "no region fault: {}", stdout(&output));
+    assert!(!stdout(&output).contains("region fault"));
+}

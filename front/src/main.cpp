@@ -90,8 +90,10 @@ int main(int argc, char **argv) {
   }
   verify(*module, "on input");
   bennett::checkMarkers(*module);
+  bennett::lowerParameterAttributes(*module);
   runPipeline(*module, "", true);
   bennett::checkMarkers(*module);
+  bennett::lowerParameterAttributes(*module);
   bennett::lowerIntrinsics(*module);
 
   std::set<const Function *> control = bennett::controlFunctions(*module);

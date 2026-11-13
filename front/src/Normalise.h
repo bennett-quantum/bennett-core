@@ -17,6 +17,12 @@ namespace bennett {
 // user's flags, fixes the pipeline.
 void optimise(llvm::Module &module, llvm::PassBuilder &builder, llvm::ModuleAnalysisManager &analyses);
 
+// Gives every `byval` parameter its private copy explicitly: the callee copies the pointee into an alloca
+// of its own on entry and uses that, and the attribute is dropped from the function and its call sites.
+// Refuses parameters whose meaning the device program cannot give (`inalloca`, `preallocated`,
+// `swifterror`). `sret` and `byref` mean nothing beyond a pointer, so they need nothing. Idempotent.
+void lowerParameterAttributes(llvm::Module &module);
+
 // Rewrites min/max/abs/funnel shifts/ctpop/ctlz/cttz/bswap and memset/memcpy/memmove into ordinary
 // instructions and loops, and deletes intrinsics that have no meaning here (lifetime, debug, assume).
 void lowerIntrinsics(llvm::Module &module);

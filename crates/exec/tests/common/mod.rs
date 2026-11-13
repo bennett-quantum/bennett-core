@@ -22,6 +22,12 @@ pub fn bounded() -> Options {
     Options { budget: Some(STEPS), max_configurations: Some(CONFIGURATIONS), ..Options::default() }
 }
 
+/// [`bounded`], for hand-written programs that read their fault registers on purpose: an `apply` may
+/// fault on some branches and the run goes on.
+pub fn allowing_region_faults() -> Options {
+    Options { allow_region_faults: true, ..bounded() }
+}
+
 pub fn load(text: &str) -> ValidModule {
     bennett_ir::load(text).unwrap_or_else(|error| panic!("{error}"))
 }

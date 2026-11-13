@@ -43,8 +43,14 @@ fn random_programs_round_trip_and_reverse_step_by_step() {
             validate(module).unwrap_or_else(|e| panic!("seed {seed}: generated an invalid program: {e}\n{text}"));
         let mut rng = ChaCha8Rng::seed_from_u64(seed);
         let args = [rng.random_range(0..=VALUE.mask()), rng.random_range(0..=VALUE.mask())];
-        let options =
-            Options { budget: Some(STEP_BUDGET), max_configurations: Some(MAX_CONFIGURATIONS), seed, reversible: true };
+        // Random regions fault on some branches; this test is about reversal, so the run goes on.
+        let options = Options {
+            budget: Some(STEP_BUDGET),
+            max_configurations: Some(MAX_CONFIGURATIONS),
+            seed,
+            reversible: true,
+            allow_region_faults: true,
+        };
         let mut executor = Executor::new(&module, FuncId(0), &args, options).unwrap_or_else(|e| panic!("{e}"));
         let history = run_recording(&mut executor);
         match executor.outcome() {

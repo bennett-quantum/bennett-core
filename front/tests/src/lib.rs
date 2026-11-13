@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Once;
 
-use bennett_exec::{Executor, Options, Outcome, Snapshot};
+use bennett_exec::{Executor, Options, Outcome, Snapshot, Stats};
 use bennett_ir::{FuncId, Inst, ValidModule};
+use num_complex::Complex64;
 
 /// Steps allowed for each run of an applied function. The longest coherent computation in the tests,
 /// `collatz_steps` on 8-bit inputs (at most 127 iterations of about ten instructions), needs a few
@@ -67,6 +68,17 @@ pub const CLANG_FLAGS: &[&str] =
 /// Compiles `source` with `clang_flags`, lowers it with `bennett-front` and `front_flags`, and returns the
 /// device program text, or `bennett-front`'s error output. `name` names the build products.
 pub fn lower_text(source: &Path, name: &str, clang_flags: &[&str], front_flags: &[&str]) -> Result<String, String> {
+    lower_text_with_budget(source, name, clang_flags, front_flags, REGION_BUDGET)
+}
+
+/// [`lower_text`] with a region budget of `region_budget` steps.
+pub fn lower_text_with_budget(
+    source: &Path,
+    name: &str,
+    clang_flags: &[&str],
+    front_flags: &[&str],
+    region_budget: u64,
+) -> Result<String, String> {
     let dir = out_dir();
     let bitcode = dir.join(format!("{name}.bc"));
     let program = dir.join(format!("{name}.bn"));
@@ -87,7 +99,7 @@ pub fn lower_text(source: &Path, name: &str, clang_flags: &[&str], front_flags: 
             .arg(&bitcode)
             .arg("-o")
             .arg(&program)
-            .arg(format!("--region-budget={REGION_BUDGET}"))
+            .arg(format!("--region-budget={region_budget}"))
             .arg(format!("--stack-bytes={STACK_BYTES}"))
             .args(front_flags),
     )?;
@@ -112,16 +124,28 @@ pub fn entry(module: &ValidModule, name: &str) -> FuncId {
     module.function_named(name).unwrap_or_else(|| panic!("no function @{name}"))
 }
 
-/// Options for a run: bounded, with `seed`.
+/// Options for a run: bounded, with `seed`, and strict: an `apply` that faults on any branch stops the run
+/// (`RunError::RegionFault`), since nothing a program from `bennett-front` does could detect it.
 pub fn options(seed: u64) -> Options {
-    Options { budget: Some(RUN_BUDGET), max_configurations: Some(MAX_CONFIGURATIONS), seed, reversible: false }
+    Options {
+        budget: Some(RUN_BUDGET),
+        max_configurations: Some(MAX_CONFIGURATIONS),
+        seed,
+        reversible: false,
+        allow_region_faults: false,
+    }
 }
 
 /// Runs `name(args)` to the end.
 pub fn run(module: &ValidModule, name: &str, args: &[u64], seed: u64) -> Outcome {
+    run_with_stats(module, name, args, seed).0
+}
+
+/// Runs `name(args)` to the end and returns the outcome and the run's counts.
+pub fn run_with_stats(module: &ValidModule, name: &str, args: &[u64], seed: u64) -> (Outcome, Stats) {
     let mut executor =
         Executor::new(module, entry(module, name), args, options(seed)).unwrap_or_else(|e| panic!("@{name}: {e}"));
-    executor.run()
+    (executor.run(), executor.stats())
 }
 
 /// Runs `name(args)` up to, not including, its first measurement and returns the state there.
@@ -155,9 +179,56 @@ pub fn registers(module: &ValidModule, name: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether register `name` is a fault register: `bennett-front` names each after the variable it guards,
+/// `<variable>.fault`, and C names have no dots.
+pub fn is_fault_register(name: &str) -> bool {
+    name.contains(".fault")
+}
+
+/// The state of `name(args)` just before its first measurement with the fault registers left out, after
+/// checking that they are 0 on every branch: two programs that differ only in how many `apply`s they
+/// make have the same such state. Configurations are in order.
+pub fn state_without_fault_registers(module: &ValidModule, name: &str, args: &[u64]) -> Vec<(Vec<u64>, Complex64)> {
+    let columns = registers(module, name);
+    let state = state_before_first_measurement(module, name, args).quantum;
+    let mut kept: Vec<(Vec<u64>, Complex64)> = state
+        .amplitudes
+        .iter()
+        .map(|(config, amplitude)| {
+            let mut values = Vec::new();
+            for (column, register) in columns.iter().enumerate() {
+                if is_fault_register(register) {
+                    assert_eq!(config[column], 0, "@{name}: fault register %{register} on {config:?}");
+                } else {
+                    values.push(config[column]);
+                }
+            }
+            assert!(config[columns.len()..].iter().all(|&v| v == 0), "@{name}: registers beyond the entry's");
+            (values, *amplitude)
+        })
+        .collect();
+    kept.sort_by(|a, b| a.0.cmp(&b.0));
+    kept
+}
+
 /// The column of register `register` among `columns`.
 pub fn column(columns: &[String], register: &str) -> usize {
     columns.iter().position(|c| c == register).unwrap_or_else(|| panic!("no register %{register} in {columns:?}"))
+}
+
+/// Compiles the C program `source` natively (`clang -O2` and `flags`) and returns the executable.
+pub fn native_build(source: &Path, name: &str, flags: &[&str]) -> PathBuf {
+    let executable = out_dir().join(format!("{name}.native"));
+    run_tool(Command::new(clang()).arg("-O2").args(flags).arg(source).arg("-o").arg(&executable))
+        .unwrap_or_else(|e| panic!("cannot compile {source:?} natively:\n{e}"));
+    executable
+}
+
+/// Compiles the C program `source` natively, runs it, and returns its exit status.
+pub fn native_exit_status(source: &Path, name: &str) -> i32 {
+    let executable = native_build(source, name, &[]);
+    let status = Command::new(&executable).status().unwrap_or_else(|e| panic!("cannot run {executable:?}: {e}"));
+    status.code().unwrap_or_else(|| panic!("{executable:?} was killed: {status}"))
 }
 
 /// Compiles `native.c` (the corpus) natively, once per test process, and returns the executable.

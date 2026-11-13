@@ -27,6 +27,11 @@ Any other write would discard x's old value, and is refused. When the function r
 value is known is returned to 0 first; any other is released as it is, and if it is not 0 on every branch
 the run ends with the fault `dirty_free` (a dirty discard is a fault in this version).
 
+A computation applied coherently may fault on some branches (a division by zero, an exhausted region
+budget). That is a region fault: `bennett run` stops at it and reports it by name, unless it is run with
+`--allow-region-faults`; then the fault stays in the state, and the run ends with `dirty_free` when the
+function returns.
+
 ## Gates
 
 ```c
@@ -57,5 +62,6 @@ has gates, under the control of a value that depends on a qubit; a branch on suc
 not rejoin before the function returns; a qubit variable passed to a function, or wider than 8 bytes; a
 write into part of a qubit variable; a value that depends on a qubit used by ordinary code (returned,
 stored to ordinary memory, passed to a function that writes memory, used as an address of memory that is
-not constant); a value read from a qubit variable used after that variable changed; a loop that
+not constant); a write to memory, a call of a function that may write memory, or a volatile read, under the
+control of a value that depends on a qubit; a value read from a qubit variable used after that variable changed; a loop that
 re-initialises a qubit variable whose known value differs from pass to pass (fully unrolled loops work).

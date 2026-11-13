@@ -2,6 +2,7 @@
 
 #include <llvm/IR/DebugInfoMetadata.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/Instruction.h>
 #include <llvm/Support/raw_ostream.h>
 
@@ -28,6 +29,17 @@ std::string locationOf(const Value *at) {
       return out.str();
     }
     out << "@" << function->getName();
+    return out.str();
+  }
+  if (const auto *global = dyn_cast_or_null<GlobalVariable>(at)) {
+    SmallVector<DIGlobalVariableExpression *, 1> debug;
+    global->getDebugInfo(debug);
+    if (!debug.empty()) {
+      const DIGlobalVariable *variable = debug.front()->getVariable();
+      out << variable->getFilename() << ":" << variable->getLine() << " (@" << global->getName() << ")";
+      return out.str();
+    }
+    out << "@" << global->getName();
     return out.str();
   }
   if (const auto *arg = dyn_cast_or_null<Argument>(at)) {

@@ -56,6 +56,22 @@ std::set<const Function *> controlFunctions(const Module &module) {
 
 namespace {
 
+// What a memory-writing instruction is, for messages.
+std::string memoryWrite(const Instruction &inst) {
+  if (isa<StoreInst>(inst)) {
+    return "a store to memory";
+  }
+  if (isa<LoadInst>(inst)) {
+    return "a volatile or atomic load";
+  }
+  if (const auto *call = dyn_cast<CallBase>(&inst)) {
+    const Function *callee = call->getCalledFunction();
+    return callee ? "a call to @" + callee->getName().str() + ", which may write memory,"
+                  : "an indirect call that may write memory";
+  }
+  return "the instruction `" + std::string(inst.getOpcodeName()) + "`, which writes memory,";
+}
+
 void removeTrivialPhis(Function &function) {
   bool changed = true;
   while (changed) {
@@ -118,6 +134,16 @@ void splitOutputs(Function &region, const SetVector<Value *> &inputs, const SetV
     fail("CodeExtractor produced a region with more than one exit or aggregate arguments");
   }
   unsigned count = inputs.size();
+  // Each output gets a copy of the region, and a region without used outputs disappears: that is only
+  // right because outlineAround refused every write to memory in the region.
+  for (Instruction &inst : instructions(region)) {
+    auto *store = dyn_cast<StoreInst>(&inst);
+    bool output = store && isa<Argument>(store->getPointerOperand()) &&
+                  cast<Argument>(store->getPointerOperand())->getArgNo() >= count;
+    if (inst.mayWriteToMemory() && !output) {
+      fail("internal: an outlined region writes memory, at " + locationOf(&inst));
+    }
+  }
   std::vector<Value *> args(call->arg_begin(), call->arg_begin() + count);
   IRBuilder<> b(call);
   std::vector<Value *> cells;
@@ -209,6 +235,13 @@ void outlineAround(Function &function, Instruction *seed, ControlAnalysis &analy
       if (auto *call = dyn_cast<CallBase>(&inst); call && control.count(call->getCalledFunction())) {
         notHandled("a call to @" + call->getCalledFunction()->getName().str() +
                        ", which performs quantum operations, controlled by a value that depends on a qubit",
+                   &inst);
+      }
+      // The region becomes an ordinary function applied coherently, whose memory is private to each run:
+      // a write to memory that outlives it would be lost. An ordinary write under quantum control acts
+      // irreversibly on a quantum system, which is a channel, not a unitary.
+      if (inst.mayWriteToMemory()) {
+        notHandled(memoryWrite(inst) + " controlled by a value that depends on a qubit (measure the value first)",
                    &inst);
       }
       if (auto *load = dyn_cast<LoadInst>(&inst); load && analysis.access(load->getPointerOperand())) {

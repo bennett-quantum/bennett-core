@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use bennett_ir::{Fault, FuncId, Operand, Slot, Type};
 
-use crate::executor::{Executor, Outcome};
+use crate::executor::{Executor, Halt, Outcome, RunError};
 use crate::journal::Journal;
 
 /// Where an argument's value comes from on each configuration.
@@ -23,6 +23,10 @@ enum Input {
 
 impl Executor<'_> {
     /// XORs `callee(args)` into `out`, or its fault code into `fault`, on every configuration.
+    ///
+    /// Every execution that faults on some configuration is counted, with the weight of the faulting
+    /// configurations. Unless the run allows region faults, such an execution stops the run instead, with
+    /// the state as it was before the `apply`.
     pub(crate) fn apply(
         &mut self,
         callee: FuncId,
@@ -30,24 +34,47 @@ impl Executor<'_> {
         out: Slot,
         fault: Slot,
         budget: &Operand,
-    ) -> Result<(), Fault> {
+    ) -> Result<(), Halt> {
         let out = self.quantum.resolve(self.slot(out))?;
         let fault = self.quantum.resolve(self.slot(fault))?;
         let inputs = args.iter().map(|arg| self.input(arg)).collect::<Result<Vec<_>, _>>()?;
         let targets = [Input::Register(out), Input::Register(fault)];
         if out == fault || inputs.iter().any(|input| targets.contains(input)) {
-            return Err(Fault::QubitAlias);
+            return Err(Fault::QubitAlias.into());
         }
         let budget = self.read(budget);
         let mut values = Vec::with_capacity(inputs.len());
-        let mut permuted = BTreeMap::new();
-        for (mut config, amplitude) in self.quantum.take_amplitudes() {
+        let original = self.quantum.take_amplitudes();
+        let mut outcomes = Vec::with_capacity(original.len());
+        for config in original.keys() {
             values.clear();
             values.extend(inputs.iter().map(|input| match *input {
                 Input::Register(column) => config[column],
                 Input::Value(value) => value,
             }));
-            match self.evaluate(callee, &values, budget) {
+            outcomes.push(self.evaluate(callee, &values, budget));
+        }
+        let (mut branches, mut weight, mut first) = (0, 0.0, None);
+        for (amplitude, outcome) in original.values().zip(&outcomes) {
+            if let Outcome::Faulted(code) = *outcome {
+                branches += 1;
+                weight += amplitude.norm_sqr();
+                first.get_or_insert(code);
+            }
+        }
+        if let Some(code) = first {
+            self.region_faults += 1;
+            self.region_fault_weight += weight;
+            self.region_fault_max_weight = self.region_fault_max_weight.max(weight);
+            if !self.allow_region_faults {
+                let configurations = original.len();
+                self.quantum.replace_amplitudes(original);
+                return Err(RunError::RegionFault { callee, fault: code, branches, configurations }.into());
+            }
+        }
+        let mut permuted = BTreeMap::new();
+        for ((mut config, amplitude), outcome) in original.into_iter().zip(outcomes) {
+            match outcome {
                 Outcome::Returned(result) => config[out] ^= result.expect("a region callee returns an integer"),
                 Outcome::Faulted(code) => config[fault] ^= code.code(),
                 Outcome::Stopped(_) => unreachable!("a region reaches no gate, so no limit of the quantum state"),

@@ -23,6 +23,12 @@ pub struct Options {
     pub seed: u64,
     /// Whether to keep the undo journal, so that the run can be reversed.
     pub reversible: bool,
+    /// Whether an `apply` may fault on some of its branches and the run continue. By default (`false`) the
+    /// first such `apply` stops the run with [`RunError::RegionFault`]: a program cannot detect a fault on
+    /// only some branches with certainty, and the other branches continue with the interference gone, so
+    /// a run that went on would look like a success. Set it for programs that inspect their fault
+    /// registers on purpose. Either way the faults are counted in [`Stats`].
+    pub allow_region_faults: bool,
 }
 
 /// How a run ended.
@@ -32,13 +38,14 @@ pub enum Outcome {
     Returned(Option<u64>),
     /// Execution stopped with a named fault. The state is as it was before the faulting step.
     Faulted(Fault),
-    /// The simulator stopped the run at one of its own limits; the program has no result. The state is as
-    /// it was before the step that would have exceeded the limit.
+    /// The simulator stopped the run at one of its own limits or checks; the program has no result. The
+    /// state is as it was before the step that would have exceeded the limit or failed the check.
     Stopped(RunError),
 }
 
-/// A limit of the simulator that a run reached. Unlike a [`Fault`], it is not part of the program's
-/// meaning: another simulator, or the same one with a larger limit, would continue.
+/// A limit or check of the simulator that a run reached. Unlike a [`Fault`], it is not part of the
+/// program's meaning: another simulator, or the same one with a larger limit or the check switched off,
+/// would continue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum RunError {
     /// A gate would raise the number of basis configurations above the run's limit.
@@ -46,6 +53,19 @@ pub enum RunError {
     ConfigurationLimit {
         /// The limit the run was given ([`Options::max_configurations`]).
         limit: usize,
+    },
+    /// An `apply` faulted on at least one branch, and the run does not allow region faults
+    /// ([`Options::allow_region_faults`]). The simulator sees every branch; a program could not.
+    #[error("region fault: an apply faulted ({fault}) on {branches} of {configurations} branches")]
+    RegionFault {
+        /// The applied function.
+        callee: FuncId,
+        /// The fault of the first faulting branch, in configuration order.
+        fault: Fault,
+        /// The number of basis configurations on which the function faulted.
+        branches: usize,
+        /// The number of basis configurations it ran on.
+        configurations: usize,
     },
 }
 
@@ -116,7 +136,7 @@ pub enum ReverseError {
 }
 
 /// Counts reported after a run.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Stats {
     /// Steps taken by the run, not counting steps inside coherent regions.
     pub steps: u64,
@@ -126,6 +146,13 @@ pub struct Stats {
     pub max_configurations: Option<usize>,
     /// Steps taken inside coherent regions, summed over every basis configuration they ran on.
     pub region_steps: u64,
+    /// Executions of `apply` (forward or, when reversing, backward) that faulted on at least one basis
+    /// configuration. The configurations are those of nonzero amplitude: negligible ones are dropped.
+    pub region_faults: u64,
+    /// The weight (summed squared amplitude) of the faulting configurations, summed over those executions.
+    pub region_fault_weight: f64,
+    /// The largest weight of the faulting configurations in any one of those executions.
+    pub region_fault_max_weight: f64,
     /// The size of the undo journal, in reversible mode.
     pub journal_bytes: Option<usize>,
     /// Qubits allocated now.
@@ -182,6 +209,10 @@ pub struct Executor<'m> {
     pub(crate) scratch: Vec<u64>,
     pub(crate) rng: ChaCha8Rng,
     pub(crate) region_steps: u64,
+    pub(crate) allow_region_faults: bool,
+    pub(crate) region_faults: u64,
+    pub(crate) region_fault_weight: f64,
+    pub(crate) region_fault_max_weight: f64,
 }
 
 impl<'m> Executor<'m> {
@@ -209,6 +240,10 @@ impl<'m> Executor<'m> {
             scratch: Vec::new(),
             rng: ChaCha8Rng::seed_from_u64(options.seed),
             region_steps: 0,
+            allow_region_faults: options.allow_region_faults,
+            region_faults: 0,
+            region_fault_weight: 0.0,
+            region_fault_max_weight: 0.0,
         };
         if let Err(fault) = executor.push_frame(entry, args) {
             executor.outcome = Some(Outcome::Faulted(fault));
@@ -305,6 +340,9 @@ impl<'m> Executor<'m> {
             budget: self.budget,
             max_configurations: self.max_configurations,
             region_steps: self.region_steps,
+            region_faults: self.region_faults,
+            region_fault_weight: self.region_fault_weight,
+            region_fault_max_weight: self.region_fault_max_weight,
             journal_bytes: self.journal.as_ref().map(Journal::bytes),
             live_qubits: self.quantum.live_qubits(),
             peak_live_qubits: self.quantum.peak_qubits(),

@@ -77,6 +77,15 @@ own inverse. An `effect` reached inside a region is a fault. This is the lifted-
 
 Control needs no special form at this level: `if (q) y = f(3)` is a region whose argument is `q`.
 
+**Region faults.** A fault on only some branches cannot be detected with certainty by anything inside the
+program: a fault register flags it with probability equal to the weight of the faulting branches, and the other
+branches go on with a wrong result, because the interference is gone. The executor sees every branch. It counts
+each `apply` execution that faulted on some branch of nonzero amplitude, with the weight of those branches, in
+the run statistics. By default such an `apply` stops the run with the run error `region fault`, leaving the state
+as it was before the `apply`; `allow_region_faults` (`bennett run --allow-region-faults`) lets the run go on, for
+programs that read their fault registers on purpose (`examples/fault.bn`). Programs from `front` are always run
+strictly in the tests.
+
 ## From C to a device program (`front`)
 
 `front` is the only module that links LLVM. It reads the bitcode stock `clang` emits, runs LLVM's own pipeline
@@ -88,7 +97,11 @@ surface is `docs/MARKERS.md`.
 - **A store into a qubit variable applies the whole computation of the stored value into it.** `v ^= expr` is an
   `apply` into `v`; an assignment to a variable known to be clean likewise. There are no temporaries and no
   uncompute ordering; the price is recomputation when one value feeds several stores.
-- **Branches, joins and loops that depend on a qubit** are outlined into ordinary functions and applied.
+- **Branches, joins and loops that depend on a qubit** are outlined into ordinary functions and applied. They
+  may not write memory: an ordinary write under quantum control is a channel, and is refused.
+- **Every `apply` has a fault register of its own**, released when the function returns (inside a loop: right
+  after the `apply`), so the codes of two faults never cancel. A fault the run was allowed to go past ends it
+  with `dirty_free`.
 - **Each qubit variable is Known** (it holds an ordinary value: fresh, assigned, just measured) **or Quantum.**
 - **What it cannot do yet it refuses by name**, with the source location: a gate under qubit control, a
   qubit-dependent value used by ordinary code, a non-XOR overwrite of a variable whose value is not known, reading
@@ -106,6 +119,8 @@ Two things the first C programs taught:
 
 - Memory: the stack grows down from the top; data starts at address 16; address 0 is never a function (a function's
   address is its index plus 1). A null dereference does not fault yet.
+- `alloca` results are 8-byte aligned; `front` makes a wider alignment by allocating more and rounding up. A
+  `byval` parameter is copied by the callee on entry. Initialisers are written byte for byte at any width.
 - Fault codes fit in 4 bits; a fault register is at least that wide.
 - `qfree` requires the register to be zero in every configuration, otherwise the named fault `dirty_free`.
 - `measure` reads a whole register. Amplitudes at or below `f64::EPSILON` are dropped.

@@ -1,6 +1,7 @@
 ; fault.bn: a coherent region whose running time depends on its input. @triangle(n) takes 5n + 5
 ; steps, so with a budget of 20 inputs up to 3 succeed and inputs from 4 run out of budget. A fault
 ; leaves the output register as it was (5 here) and puts the fault's code in the fault register.
+; It reads its fault register on purpose, so run it with `--allow-region-faults`.
 memory 256
 
 ; 0 + 1 + ... + (n - 1).

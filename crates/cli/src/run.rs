@@ -3,7 +3,7 @@
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use bennett_exec::{Executor, Options, Outcome, ReverseError, Snapshot, Stats};
+use bennett_exec::{Executor, Options, Outcome, ReverseError, RunError, Snapshot, Stats};
 use bennett_ir::{Const, FuncId, Type, ValidModule};
 
 use crate::{CliError, RunArgs};
@@ -17,6 +17,7 @@ pub(crate) fn run(args: &RunArgs) -> Result<ExitCode, CliError> {
         max_configurations: args.max_configurations,
         seed: args.seed,
         reversible: args.reverse,
+        allow_region_faults: args.allow_region_faults,
     };
     let mut executor = Executor::new(&module, entry, &values, options)?;
     let entry_state = executor.snapshot();
@@ -25,7 +26,7 @@ pub(crate) fn run(args: &RunArgs) -> Result<ExitCode, CliError> {
     let outcome = executor.run();
     let forward = Timed { steps: executor.stats().steps, time: started.elapsed() };
     let stats = executor.stats();
-    report_outcome(&module, entry, outcome, executor.tape(), stats.steps);
+    report_outcome(&module, entry, outcome, executor.tape(), &stats);
 
     let reverse = args.reverse.then(|| reverse_and_report(&mut executor, &entry_state, &stats));
     if args.stats {
@@ -33,7 +34,7 @@ pub(crate) fn run(args: &RunArgs) -> Result<ExitCode, CliError> {
     }
     Ok(match outcome {
         Outcome::Returned(_) => ExitCode::SUCCESS,
-        Outcome::Faulted(_) => ExitCode::FAILURE,
+        Outcome::Faulted(_) | Outcome::Stopped(RunError::RegionFault { .. }) => ExitCode::FAILURE,
         Outcome::Stopped(_) => ExitCode::from(2),
     })
 }
@@ -57,7 +58,7 @@ fn entry_arguments(module: &ValidModule, entry: FuncId, literals: &[i128]) -> Re
     function.params.iter().zip(literals).enumerate().map(convert).collect()
 }
 
-fn report_outcome(module: &ValidModule, entry: FuncId, outcome: Outcome, tape: &[u8], steps: u64) {
+fn report_outcome(module: &ValidModule, entry: FuncId, outcome: Outcome, tape: &[u8], stats: &Stats) {
     match outcome {
         Outcome::Returned(None) => println!("result: none"),
         Outcome::Returned(Some(value)) => match module.function(entry).result {
@@ -68,12 +69,24 @@ fn report_outcome(module: &ValidModule, entry: FuncId, outcome: Outcome, tape: &
             _ => println!("result: {value}"),
         },
         Outcome::Faulted(fault) => println!("fault: {fault} (code {})", fault.code()),
+        Outcome::Stopped(RunError::RegionFault { callee, fault, branches, configurations }) => println!(
+            "region fault: apply @{} faulted ({fault}) on {branches} of {configurations} branches, weight {:e}; \
+             the program could not detect this with certainty (--allow-region-faults lets the run go on)",
+            module.function(callee).name,
+            stats.region_fault_max_weight
+        ),
         Outcome::Stopped(error) => println!("stopped: {error}"),
+    }
+    if !matches!(outcome, Outcome::Stopped(RunError::RegionFault { .. })) && stats.region_faults > 0 {
+        println!(
+            "region faults (allowed): {} apply executions faulted on some branch, total weight {:e}",
+            stats.region_faults, stats.region_fault_weight
+        );
     }
     if !tape.is_empty() {
         println!("console: \"{}\"", tape.escape_ascii());
     }
-    println!("steps: {steps}");
+    println!("steps: {}", stats.steps);
 }
 
 /// Reverses the run and reports whether the state returned to `entry_state`; returns the timing.
@@ -143,6 +156,10 @@ fn report_stats(stats: &Stats, forward: Timed, reverse: Option<Timed>) {
         println!("  reverse: {reverse}");
     }
     println!("  region steps: {}", stats.region_steps);
+    println!(
+        "  region faults: {} apply executions faulted on some branch; weight {:e} in all, {:e} at most",
+        stats.region_faults, stats.region_fault_weight, stats.region_fault_max_weight
+    );
     match (stats.journal_bytes, per_step(stats)) {
         (Some(bytes), Some(per_step)) => println!("  journal: {bytes} bytes, {per_step:.1} bytes per step"),
         (Some(bytes), None) => println!("  journal: {bytes} bytes"),

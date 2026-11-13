@@ -5,7 +5,8 @@ use std::f64::consts::FRAC_1_SQRT_2;
 
 use bennett_exec::Outcome;
 use bennett_front_tests::{
-    CLANG_FLAGS, c_dir, column, entry, lower, lower_text, registers, run, state_before_first_measurement, write_c,
+    CLANG_FLAGS, c_dir, column, entry, lower, lower_text, registers, run, state_before_first_measurement,
+    state_without_fault_registers, write_c,
 };
 use bennett_ir::{Fault, FixedGate, Gate, Inst, ValidModule};
 use num_complex::Complex64;
@@ -70,7 +71,7 @@ fn a_kept_dependence_is_entangled_before_measurement() {
     for flags in [CLANG_FLAGS, CLANG_O2_FLAGS] {
         let module = program("thesis_kept", flags, &[]);
         let columns = registers(&module, "main");
-        let (b, y, fault) = (column(&columns, "b"), column(&columns, "y"), column(&columns, "bennett.fault"));
+        let (b, y, fault) = (column(&columns, "b"), column(&columns, "y"), column(&columns, "y.fault"));
         let state = state_before_first_measurement(&module, "main", &[]).quantum;
         assert_eq!(state.amplitudes.len(), 2, "{:?}", state.amplitudes);
         let half = Complex64::new(FRAC_1_SQRT_2, 0.0);
@@ -121,9 +122,9 @@ fn treating_everything_as_tainted_changes_no_result() {
         let coarse = program(name, CLANG_FLAGS, &["--taint-all"]);
         assert_eq!(outcomes(&precise), outcomes(&coarse), "{name}");
     }
-    let precise = state_before_first_measurement(&program("thesis_kept", CLANG_FLAGS, &[]), "main", &[]);
-    let coarse = state_before_first_measurement(&program("thesis_kept", CLANG_FLAGS, &["--taint-all"]), "main", &[]);
-    assert_eq!(precise.quantum.amplitudes, coarse.quantum.amplitudes);
+    let precise = state_without_fault_registers(&program("thesis_kept", CLANG_FLAGS, &[]), "main", &[]);
+    let coarse = state_without_fault_registers(&program("thesis_kept", CLANG_FLAGS, &["--taint-all"]), "main", &[]);
+    assert_eq!(precise, coarse);
 
     // coarse.c gives the switch something to change: ordinary inputs to a quantum computation.
     let source = c_dir().join("coarse.c");
@@ -141,8 +142,7 @@ fn treating_everything_as_tainted_changes_no_result() {
     };
     assert!(coherent_arithmetic(&coarse) > coherent_arithmetic(&precise), "--taint-all runs more coherently");
     for param in [0, 1, 7, 200, 255] {
-        let state =
-            |module: &ValidModule| state_before_first_measurement(module, "coarse", &[param]).quantum.amplitudes;
+        let state = |module: &ValidModule| state_without_fault_registers(module, "coarse", &[param]);
         assert_eq!(state(&precise), state(&coarse), "coarse({param})");
         for seed in 0..SEEDS {
             let outcome = run(&precise, "coarse", &[param], seed);

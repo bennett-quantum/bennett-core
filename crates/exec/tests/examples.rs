@@ -6,7 +6,7 @@ use std::f64::consts::FRAC_1_SQRT_2;
 
 use bennett_exec::{Options, Outcome, ReverseError, RunError};
 use bennett_ir::Fault;
-use common::{TOLERANCE, assert_reverses, bounded, executor, load, run};
+use common::{TOLERANCE, allowing_region_faults, assert_reverses, bounded, executor, load, run};
 use num_complex::Complex64;
 
 const SUM: &str = include_str!("../../../examples/sum.bn");
@@ -80,8 +80,14 @@ fn fault_outcomes_follow_the_budget_and_leave_out_unchanged() {
     let module = load(FAULT);
     let initial_out = 5;
     for n in 0..16u64 {
-        let (outcome, _) = run(&module, "main", &[n], bounded());
+        let (outcome, executor) = run(&module, "main", &[n], allowing_region_faults());
         let Outcome::Returned(Some(packed)) = outcome else { panic!("n = {n}: {outcome:?}") };
+        assert_eq!(executor.stats().region_faults, u64::from(n > 3), "n = {n}: counted");
+        // By default a region fault stops the run: fault.bn reads its fault register on purpose.
+        let (strict, _) = run(&module, "main", &[n], bounded());
+        let callee = module.function_named("triangle").expect("@triangle");
+        let fault = RunError::RegionFault { callee, fault: Fault::Budget, branches: 1, configurations: 1 };
+        assert_eq!(strict, if n <= 3 { outcome } else { Outcome::Stopped(fault) }, "n = {n}");
         let (out, fault) = (packed & 0xff, packed >> 8);
         let expected =
             if n <= 3 { (initial_out ^ (n * n.saturating_sub(1) / 2), 0) } else { (initial_out, Fault::Budget.code()) };

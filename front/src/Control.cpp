@@ -6,6 +6,13 @@
 // ordinary function and applies it into the variable, so no intermediate value needs a register or an
 // uncomputation. `x ^= e` applies e into x. A store into a variable whose value is known (fresh, written
 // with an ordinary value, or measured) first XORs the known value away. Everything else is not handled yet.
+//
+// Every `apply` has a fault register of its own, so that the codes of two faults can never cancel (a
+// compute and its uncompute that fault on the same branch would XOR the same code twice into a shared
+// register). Outside a cycle of the control flow the register is allocated on entry and released at every
+// return, so the evidence stays in the state to the end; the release faults (dirty_free) if any branch
+// faulted. Inside a cycle each execution allocates a fresh register and releases it right after the
+// `apply`, before anything else can write it.
 
 #include "Diagnostic.h"
 #include "Emit.h"
@@ -13,6 +20,7 @@
 #include "Normalise.h"
 #include "Taint.h"
 
+#include <llvm/Analysis/CFG.h>
 #include <llvm/Analysis/ValueTracking.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
@@ -27,6 +35,7 @@
 #include <cmath>
 #include <cstdio>
 #include <functional>
+#include <set>
 
 using namespace llvm;
 
@@ -66,7 +75,11 @@ private:
   Function &fn;
   ControlAnalysis analysis;
   std::map<const Storage *, std::string> registers;
-  std::string faultRegister;
+  // The fault registers allocated on entry and released at every return. Their `qalloc` and `qfree` lines
+  // are written where the placeholders are once the whole body is known.
+  std::vector<std::string> faultRegisters;
+  // Blocks on a cycle of the control flow.
+  std::set<const BasicBlock *> cyclic;
 
   void prologue() override;
   void instruction(const Instruction &inst) override;
@@ -77,12 +90,13 @@ private:
   void marker(const CallBase &call, const Marker &marker);
   void store(const StoreInst &store);
   void xorInto(const Storage &target, const Value *value, const Instruction &at);
-  void xorClassical(const Storage &target, const Value *value);
+  void xorClassical(const Storage &target, const Value *value, const Instruction &at);
   void xorConstant(const Storage &target, uint64_t value);
   void release(const Instruction &ret);
   // `value` at `bits` bits: a slot (converting it first if needed) or a constant, typed or not.
   std::string converted(const Value *value, unsigned bits, bool typedConstant = true);
-  std::string apply(const std::string &callee, const std::string &args, const Storage &target) const;
+  // Writes `apply callee(args) -> target`, with a fault register of its own, for the instruction `at`.
+  void apply(const std::string &callee, const std::string &args, const Storage &target, const Instruction &at);
   Slice collect(const Value *root, const Instruction &sink);
   std::string slice(const Slice &slice, const Value *root, const Storage &target, const Instruction &sink,
                     std::string &args, bool flipProved = false);
@@ -90,7 +104,25 @@ private:
   bool sliceable(const Value *value) const;
 };
 
+// Stand-ins for the lines that allocate and release the entry fault registers.
+const std::string allocatePlaceholder = "\x01allocate fault registers\n";
+const std::string releasePlaceholder = "\x01release fault registers\n";
+
+void replaceAll(std::string &text, const std::string &from, const std::string &to) {
+  for (size_t at = text.find(from); at != std::string::npos; at = text.find(from, at + to.size())) {
+    text.replace(at, from.size(), to);
+  }
+}
+
 std::string ControlWriter::write() {
+  for (const BasicBlock &block : fn) {
+    for (const BasicBlock *succ : successors(&block)) {
+      if (isPotentiallyReachable(succ, &block, nullptr, &analysis.dominators)) {
+        cyclic.insert(&block);
+        break;
+      }
+    }
+  }
   for (const auto &storage : analysis.storages) {
     registers[storage.get()] = fresh(storage->alloca->hasName() ? storage->alloca->getName().str() : "qubits");
   }
@@ -113,19 +145,33 @@ std::string ControlWriter::write() {
       alias(load, fact.value);
     }
   }
-  return function();
+  std::string text = function();
+  std::string allocate, release;
+  for (const std::string &faultRegister : faultRegisters) {
+    allocate += "    " + faultRegister + " = qalloc " + std::to_string(faultCodeBits) + "\n";
+    release += "    qfree " + faultRegister + "\n";
+  }
+  replaceAll(text, allocatePlaceholder, allocate);
+  replaceAll(text, releasePlaceholder, release);
+  return text;
 }
 
-void ControlWriter::prologue() {
-  if (!analysis.storages.empty()) {
-    faultRegister = fresh("bennett.fault");
+void ControlWriter::prologue() { out += allocatePlaceholder; }
+
+void ControlWriter::apply(const std::string &callee, const std::string &args, const Storage &target,
+                          const Instruction &at) {
+  std::string faultRegister = fresh(registers.at(&target).substr(1) + ".fault");
+  bool once = !cyclic.count(at.getParent());
+  if (once) {
+    faultRegisters.push_back(faultRegister);
+  } else {
     line(faultRegister + " = qalloc " + std::to_string(faultCodeBits));
   }
-}
-
-std::string ControlWriter::apply(const std::string &callee, const std::string &args, const Storage &target) const {
-  return "apply " + callee + "(" + args + ") -> " + registers.at(&target) + ", " + faultRegister + " budget " +
-         std::to_string(module.options.regionBudget);
+  line("apply " + callee + "(" + args + ") -> " + registers.at(&target) + ", " + faultRegister + " budget " +
+       std::to_string(module.options.regionBudget));
+  if (!once) {
+    line("qfree " + faultRegister);
+  }
 }
 
 void ControlWriter::instruction(const Instruction &inst) {
@@ -266,7 +312,7 @@ void ControlWriter::store(const StoreInst &store) {
     if (readsItself && current && provesFlip(computation, value, target)) {
       std::string args;
       std::string callee = slice(computation, value, target, store, args, true);
-      line(apply(callee, args, target));
+      apply(callee, args, target, store);
       return;
     }
   }
@@ -283,17 +329,17 @@ void ControlWriter::store(const StoreInst &store) {
       return;
     }
     if (isZero(fact.value) || isZero(value)) {
-      xorClassical(target, isZero(value) ? fact.value : value);
+      xorClassical(target, isZero(value) ? fact.value : value, store);
       return;
     }
     std::string delta = fresh(target.alloca->getName().str() + ".delta");
     line(delta + " = xor " + intType(target.bits) + " " + converted(fact.value, target.bits, false) + ", " +
          converted(value, target.bits, false));
-    line(apply(module.copyFunction(target.bits), delta, target));
+    apply(module.copyFunction(target.bits), delta, target, store);
     return;
   }
   if (!isZero(fact.value)) {
-    xorClassical(target, fact.value);
+    xorClassical(target, fact.value, store);
   }
   xorInto(target, value, store);
 }
@@ -306,22 +352,22 @@ void ControlWriter::xorConstant(const Storage &target, uint64_t value) {
   }
 }
 
-void ControlWriter::xorClassical(const Storage &target, const Value *value) {
+void ControlWriter::xorClassical(const Storage &target, const Value *value, const Instruction &at) {
   if (const auto *constant = dyn_cast<ConstantInt>(value)) {
     xorConstant(target, constant->getZExtValue());
     return;
   }
-  line(apply(module.copyFunction(target.bits), converted(value, target.bits), target));
+  apply(module.copyFunction(target.bits), converted(value, target.bits), target, at);
 }
 
 void ControlWriter::xorInto(const Storage &target, const Value *value, const Instruction &at) {
   if (isa<Constant>(value) || (!analysis.tainted(value) && !(module.options.taintAll && sliceable(value)))) {
-    xorClassical(target, value);
+    xorClassical(target, value, at);
     return;
   }
   std::string args;
   std::string callee = slice(collect(value, at), value, target, at, args);
-  line(apply(callee, args, target));
+  apply(callee, args, target, at);
 }
 
 std::string ControlWriter::converted(const Value *value, unsigned bits, bool typedConstant) {
@@ -555,13 +601,11 @@ void ControlWriter::release(const Instruction &ret) {
     // A variable whose value is known is returned to zero first; any other is released as it is, and the
     // executor faults (dirty_free) if it is not zero on every branch.
     if (fact.kind == Fact::Known && analysis.dominators.dominates(fact.value, &ret) && !isZero(fact.value)) {
-      xorClassical(storage, fact.value);
+      xorClassical(storage, fact.value, ret);
     }
     line("qfree " + registers.at(&storage));
   }
-  if (!faultRegister.empty()) {
-    line("qfree " + faultRegister);
-  }
+  out += releasePlaceholder;
 }
 
 } // namespace

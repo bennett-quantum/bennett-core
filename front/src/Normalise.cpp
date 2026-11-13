@@ -1,7 +1,10 @@
 #include "Normalise.h"
 
+#include "Diagnostic.h"
+
 #include <llvm/Analysis/TargetTransformInfo.h>
 #include <llvm/CodeGen/IntrinsicLowering.h>
+#include <llvm/IR/AttributeMask.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/IntrinsicInst.h>
@@ -12,6 +15,9 @@
 #include <llvm/Transforms/Scalar/EarlyCSE.h>
 #include <llvm/Transforms/Utils/LowerMemIntrinsics.h>
 
+#include <functional>
+#include <set>
+#include <string>
 #include <vector>
 
 using namespace llvm;
@@ -68,7 +74,95 @@ Value *funnel(IRBuilder<> &b, bool left, Value *hi, Value *lo, Value *amount) {
   return b.CreateOr(b.CreateShl(hi, rest), b.CreateLShr(lo, shift));
 }
 
+// Runs `expand`, then gives every instruction it added that has no debug location the location `at`, so
+// that diagnostics about the expansion point at the source.
+void locate(Function &function, const DebugLoc &at, const std::function<void()> &expand) {
+  std::set<const Instruction *> before;
+  for (const Instruction &inst : instructions(function)) {
+    before.insert(&inst);
+  }
+  expand();
+  for (Instruction &inst : instructions(function)) {
+    if (!before.count(&inst) && !inst.getDebugLoc()) {
+      inst.setDebugLoc(at);
+    }
+  }
+}
+
+// Parameter attributes that change what an argument is, and that the device program cannot give.
+const Attribute::AttrKind refusedParameterAttributes[] = {Attribute::InAlloca, Attribute::Preallocated,
+                                                          Attribute::SwiftError};
+
+void refuseParameterAttributes(const AttributeList &attributes, unsigned params, const Value *at) {
+  for (unsigned i = 0; i < params; ++i) {
+    for (Attribute::AttrKind kind : refusedParameterAttributes) {
+      if (attributes.hasParamAttr(i, kind)) {
+        notHandled("a parameter with the attribute `" + Attribute::getNameFromAttrKind(kind).str() + "`", at);
+      }
+    }
+  }
+}
+
+// Writes through the parameter, or reading it, are no longer what the attributes promised once the callee
+// reads the pointee to copy it.
+void dropByVal(AttributeMask &mask) {
+  mask.addAttribute(Attribute::ByVal);
+  mask.addAttribute(Attribute::ReadNone);
+  mask.addAttribute(Attribute::WriteOnly);
+}
+
 } // namespace
+
+void lowerParameterAttributes(Module &module) {
+  const DataLayout &layout = module.getDataLayout();
+  for (Function &function : module) {
+    refuseParameterAttributes(function.getAttributes(), function.arg_size(), &function);
+    for (Instruction &inst : instructions(function)) {
+      auto *call = dyn_cast<CallBase>(&inst);
+      if (!call) {
+        continue;
+      }
+      refuseParameterAttributes(call->getAttributes(), call->arg_size(), call);
+      bool byval = false;
+      for (unsigned i = 0; i < call->arg_size(); ++i) {
+        if (call->isByValArgument(i)) {
+          AttributeMask mask;
+          dropByVal(mask);
+          call->removeParamAttrs(i, mask);
+          byval = true;
+        }
+      }
+      if (byval && call->hasFnAttr(Attribute::Memory)) {
+        call->setMemoryEffects(call->getMemoryEffects() | MemoryEffects::argMemOnly(ModRefInfo::Ref));
+      }
+    }
+    if (function.isDeclaration()) {
+      continue;
+    }
+    bool byval = false;
+    for (Argument &arg : function.args()) {
+      if (!arg.hasByValAttr()) {
+        continue;
+      }
+      byval = true;
+      Type *type = arg.getParamByValType();
+      Align align = std::max(arg.getParamAlign().valueOrOne(), layout.getABITypeAlign(type));
+      BasicBlock &entry = function.getEntryBlock();
+      IRBuilder<> b(&entry, entry.getFirstInsertionPt());
+      b.SetCurrentDebugLocation(entry.getFirstNonPHIOrDbg()->getDebugLoc());
+      AllocaInst *copy = b.CreateAlloca(type, nullptr, arg.getName() + ".copy");
+      copy->setAlignment(align);
+      arg.replaceAllUsesWith(copy);
+      b.CreateMemCpy(copy, align, &arg, arg.getParamAlign(), layout.getTypeAllocSize(type).getFixedValue());
+      AttributeMask mask;
+      dropByVal(mask);
+      arg.removeAttrs(mask);
+    }
+    if (byval && function.hasFnAttribute(Attribute::Memory)) {
+      function.setMemoryEffects(function.getMemoryEffects() | MemoryEffects::argMemOnly(ModRefInfo::Ref));
+    }
+  }
+}
 
 void lowerIntrinsics(Module &module) {
   const DataLayout &layout = module.getDataLayout();
@@ -122,21 +216,25 @@ void lowerIntrinsics(Module &module) {
       case Intrinsic::ctlz:
       case Intrinsic::cttz:
       case Intrinsic::bswap:
-        generic.LowerIntrinsicCall(call);
+        locate(function, call->getDebugLoc(), [&] { generic.LowerIntrinsicCall(call); });
         continue;
       case Intrinsic::memset:
-        expandMemSetAsLoop(cast<MemSetInst>(call));
+        locate(function, call->getDebugLoc(), [&] { expandMemSetAsLoop(cast<MemSetInst>(call)); });
         call->eraseFromParent();
         continue;
       case Intrinsic::memcpy:
-        expandMemCpyAsLoop(cast<MemCpyInst>(call), costs);
+        locate(function, call->getDebugLoc(), [&] { expandMemCpyAsLoop(cast<MemCpyInst>(call), costs); });
         call->eraseFromParent();
         continue;
-      case Intrinsic::memmove:
-        if (expandMemMoveAsLoop(cast<MemMoveInst>(call), costs)) {
+      case Intrinsic::memmove: {
+        bool expanded = false;
+        locate(function, call->getDebugLoc(),
+               [&] { expanded = expandMemMoveAsLoop(cast<MemMoveInst>(call), costs); });
+        if (expanded) {
           call->eraseFromParent();
         }
         continue;
+      }
       default:
         continue; // the emitter names whatever is left as not handled
       }

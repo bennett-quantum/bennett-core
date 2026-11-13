@@ -23,8 +23,8 @@ struct Cli {
 enum Command {
     /// Run a program and report its result or fault, console output and step count.
     ///
-    /// Exits with 0 when the program returns, 1 when it faults, 2 when it cannot be run or the simulator
-    /// stops it at one of its limits.
+    /// Exits with 0 when the program returns, 1 when it faults or (unless allowed) a coherent region faults
+    /// on some branch, 2 when it cannot be run or the simulator stops it at one of its limits.
     Run(RunArgs),
     /// Read and validate a program. Exits with 0 when it is valid, 2 otherwise.
     Check {
@@ -50,6 +50,11 @@ struct RunArgs {
     /// the simulator, not a fault of the program.
     #[arg(long, value_name = "N")]
     max_configurations: Option<usize>,
+    /// Let an `apply` fault on some branches and the run go on, for programs that inspect their fault
+    /// registers on purpose. Without it the first such `apply` ends the run as a region fault: the program
+    /// could not detect it with certainty, and its other branches would go on with the interference gone.
+    #[arg(long)]
+    allow_region_faults: bool,
     /// The seed for `measure`.
     #[arg(long, value_name = "N", default_value_t = 0)]
     seed: u64,

@@ -52,6 +52,9 @@ public:
   // writes no memory that outlives the call.
   bool isCoherent(const llvm::Function *function) const;
   std::string functionName(const llvm::Function *function) const;
+  // Refuses to take the address of `function` if LLVM may assume more alignment of it than its device
+  // address (its index plus 1) has.
+  void checkFunctionAddress(const llvm::Function *function) const;
   // The integer an LLVM constant denotes: integers, null, addresses of globals and functions, and constant
   // expressions over them. Undefined values denote 0.
   std::optional<uint64_t> constantValue(const llvm::Constant *constant) const;

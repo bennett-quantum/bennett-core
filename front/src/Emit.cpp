@@ -26,6 +26,10 @@ namespace {
 // The lowest address static data may use: address 0 is the null pointer, so nothing lives near it.
 constexpr uint64_t firstDataAddress = 16;
 
+// The alignment of every `alloca` result in the device program (docs/SYNTAX.md). A wider alignment is
+// made by allocating more and rounding the address up.
+constexpr uint64_t deviceAllocaAlign = 8;
+
 std::string sanitize(const std::string &hint) {
   std::string name;
   for (char c : hint) {
@@ -101,14 +105,45 @@ std::string Namer::fresh(const std::string &hint) {
 // ---------------------------------------------------------------------------------------------------------
 // The module.
 
+namespace {
+
+// Pointers in another address space than 0 may have another size or meaning; the device program has one
+// flat memory addressed by 64-bit integers.
+void checkAddressSpace(const Type *type, const Value *at) {
+  if (const auto *pointer = dyn_cast<PointerType>(type->getScalarType()); pointer && pointer->getAddressSpace() != 0) {
+    notHandled("a pointer in address space " + std::to_string(pointer->getAddressSpace()), at);
+  }
+}
+
+} // namespace
+
 ModuleWriter::ModuleWriter(Module &module, const Options &options, const std::set<const Function *> &control)
     : options(options), module(module), control(control) {
-  if (module.getDataLayout().getPointerSizeInBits() != 64) {
-    fail("the input's pointers are not 64 bits wide");
+  const DataLayout &layout = module.getDataLayout();
+  if (layout.getPointerSizeInBits() != 64 || layout.getIndexSizeInBits(0) != 64) {
+    fail("the input's pointers or address offsets are not 64 bits wide");
+  }
+  if (layout.isBigEndian()) {
+    fail("the input is for a big-endian target; the device program's memory is little-endian");
+  }
+  for (const GlobalVariable &global : module.globals()) {
+    checkAddressSpace(global.getType(), &global);
+    if (global.isExternallyInitialized()) {
+      notHandled("the global @" + global.getName().str() + ", which is initialised outside the program", &global);
+    }
   }
   for (const Function &function : module) {
     if (function.isDeclaration()) {
       continue;
+    }
+    if (function.isVarArg()) {
+      notHandled("the variadic function @" + function.getName().str(), &function);
+    }
+    for (const Instruction &inst : instructions(function)) {
+      checkAddressSpace(inst.getType(), &inst);
+      for (const Use &use : inst.operands()) {
+        checkAddressSpace(use->getType(), &inst);
+      }
     }
     indices[&function] = definedCount++;
     names[&function] = "@" + functionNames.fresh(function.getName().str());
@@ -120,6 +155,15 @@ const DataLayout &ModuleWriter::layout() const { return module.getDataLayout(); 
 
 bool ModuleWriter::isCoherent(const Function *function) const {
   return function && !function->isDeclaration() && !isControl(function) && function->onlyReadsMemory();
+}
+
+void ModuleWriter::checkFunctionAddress(const Function *function) const {
+  uint64_t align = function->getPointerAlignment(layout()).value();
+  if (align > 1) {
+    notHandled("the address of @" + function->getName().str() + ", which LLVM assumes is a multiple of " +
+                   std::to_string(align) + " (a function's address is its index plus 1)",
+               function);
+  }
 }
 
 std::string ModuleWriter::functionName(const Function *function) const {
@@ -137,10 +181,15 @@ void ModuleWriter::layoutGlobals() {
     if (!global.hasInitializer()) {
       notHandled("the global @" + global.getName().str() + ", which has no definition", &global);
     }
-    uint64_t align = layout().getPreferredAlign(&global).value();
+    TypeSize size = layout().getTypeAllocSize(global.getValueType());
+    if (size.isScalable()) {
+      notHandled("the global @" + global.getName().str() + ", whose size is not fixed", &global);
+    }
+    // At least the explicit alignment, and what LLVM may have assumed about the address.
+    uint64_t align = std::max(layout().getPreferredAlign(&global), global.getPointerAlignment(layout())).value();
     address = (address + align - 1) / align * align;
     addresses[&global] = address;
-    address += layout().getTypeAllocSize(global.getValueType()).getFixedValue();
+    address += size.getFixedValue();
   }
   staticEnd = address;
 }
@@ -160,6 +209,7 @@ std::optional<uint64_t> ModuleWriter::constantValue(const Constant *constant) co
     return found == addresses.end() ? std::nullopt : std::optional<uint64_t>(found->second);
   }
   if (const auto *function = dyn_cast<Function>(constant)) {
+    checkFunctionAddress(function);
     auto found = indices.find(function);
     // A function's address is its index plus one (bennett_ir::FuncId::address).
     return found == indices.end() ? std::nullopt : std::optional<uint64_t>(found->second + 1);
@@ -203,51 +253,79 @@ struct Image {
   std::vector<std::pair<uint64_t, const Function *>> functions;
 };
 
-void encode(const ModuleWriter &writer, const Constant *constant, uint64_t at, Image &image) {
+// Writes the bytes of `constant`, of any type and width, at `at`: an initializer is just bytes. What it
+// cannot write it refuses by name.
+void encode(const ModuleWriter &writer, const GlobalVariable &global, const Constant *constant, uint64_t at,
+            Image &image) {
+  if (!constant) {
+    notHandled("an initializer of @" + global.getName().str() + " whose elements LLVM does not list", &global);
+  }
   const DataLayout &layout = writer.layout();
-  auto put = [&](uint64_t value, uint64_t size) {
-    for (uint64_t i = 0; i < size && i < 8; ++i) {
-      image.bytes[at + i] = uint8_t(value >> (8 * i));
+  Type *type = constant->getType();
+  auto refuse = [&](const std::string &why) {
+    notHandled("the initializer " + printed(constant) + " of type " + printedType(type) + " in @" +
+                   global.getName().str() + " (" + why + ")",
+               &global);
+  };
+  auto put = [&](APInt bits) {
+    uint64_t size = layout.getTypeStoreSize(type).getFixedValue();
+    bits = bits.zext(unsigned(size * 8));
+    for (uint64_t i = 0; i < size; ++i) {
+      image.bytes[at + i] = uint8_t(bits.extractBitsAsZExtValue(8, unsigned(8 * i)));
     }
   };
   if (isa<ConstantAggregateZero>(constant) || isa<ConstantPointerNull>(constant) || isa<UndefValue>(constant)) {
-    return; // already zero
+    return; // already zero; an undefined value may be any value, and 0 refines it
   }
   if (const auto *function = dyn_cast<Function>(constant)) {
+    writer.checkFunctionAddress(function);
     image.functions.push_back({at, function});
     return;
   }
+  if (const auto *integer = dyn_cast<ConstantInt>(constant)) {
+    put(integer->getValue());
+    return;
+  }
   if (const auto *fp = dyn_cast<ConstantFP>(constant)) {
-    APInt bits = fp->getValueAPF().bitcastToAPInt();
-    put(bits.getZExtValue(), layout.getTypeStoreSize(fp->getType()).getFixedValue());
+    if (type->isPPC_FP128Ty()) {
+      refuse("the byte order of ppc_fp128 is not known here");
+    }
+    put(fp->getValueAPF().bitcastToAPInt());
     return;
   }
-  if (const auto *data = dyn_cast<ConstantDataSequential>(constant)) {
-    uint64_t step = layout.getTypeAllocSize(data->getElementType()).getFixedValue();
-    for (unsigned i = 0; i < data->getNumElements(); ++i) {
-      encode(writer, data->getElementAsConstant(i), at + i * step, image);
+  if (auto *structure = dyn_cast<StructType>(type)) {
+    const StructLayout *fields = layout.getStructLayout(structure);
+    for (unsigned i = 0; i < structure->getNumElements(); ++i) {
+      encode(writer, global, constant->getAggregateElement(i), at + fields->getElementOffset(i), image);
     }
     return;
   }
-  if (const auto *structure = dyn_cast<ConstantStruct>(constant)) {
-    const StructLayout *fields = layout.getStructLayout(structure->getType());
-    for (unsigned i = 0; i < structure->getNumOperands(); ++i) {
-      encode(writer, structure->getOperand(i), at + fields->getElementOffset(i), image);
+  if (auto *array = dyn_cast<ArrayType>(type)) {
+    uint64_t step = layout.getTypeAllocSize(array->getElementType()).getFixedValue();
+    for (uint64_t i = 0; i < array->getNumElements(); ++i) {
+      encode(writer, global, constant->getAggregateElement(unsigned(i)), at + i * step, image);
     }
     return;
   }
-  if (const auto *array = dyn_cast<ConstantArray>(constant)) {
-    uint64_t step = layout.getTypeAllocSize(array->getType()->getElementType()).getFixedValue();
-    for (unsigned i = 0; i < array->getNumOperands(); ++i) {
-      encode(writer, array->getOperand(i), at + i * step, image);
+  if (auto *vector = dyn_cast<FixedVectorType>(type)) {
+    // A vector is stored as one integer of all its elements' bits, element 0 lowest: elements of whole
+    // bytes are packed without padding.
+    uint64_t bits = layout.getTypeSizeInBits(vector->getElementType()).getFixedValue();
+    if (bits % 8 != 0) {
+      refuse("vector elements that are not a whole number of bytes");
+    }
+    for (unsigned i = 0; i < vector->getNumElements(); ++i) {
+      encode(writer, global, constant->getAggregateElement(i), at + i * bits / 8, image);
     }
     return;
   }
-  if (std::optional<uint64_t> value = writer.constantValue(constant)) {
-    put(*value, layout.getTypeStoreSize(constant->getType()).getFixedValue());
-    return;
+  if (type->isIntOrPtrTy() && layout.getTypeStoreSize(type).getFixedValue() <= 8) {
+    if (std::optional<uint64_t> value = writer.constantValue(constant)) {
+      put(APInt(64, *value));
+      return;
+    }
   }
-  notHandled("the initializer " + printed(constant), constant);
+  refuse("not a value known before the program runs");
 }
 
 std::string quoted(const std::vector<uint8_t> &bytes, uint64_t from, uint64_t to) {
@@ -277,7 +355,7 @@ std::string ModuleWriter::dataSegments() const {
     }
     Image image;
     image.bytes.assign(size, 0);
-    encode(*this, global.getInitializer(), 0, image);
+    encode(*this, global, global.getInitializer(), 0, image);
     std::string items;
     uint64_t from = 0;
     for (auto [offset, function] : image.functions) {
@@ -531,21 +609,43 @@ void BodyWriter::instruction(const Instruction &inst) {
   }
   case Instruction::Alloca: {
     const auto &alloca = cast<AllocaInst>(inst);
-    uint64_t element = module.layout().getTypeAllocSize(alloca.getAllocatedType()).getFixedValue();
+    if (alloca.isUsedWithInAlloca()) {
+      notHandled("an `inalloca` allocation", &inst);
+    }
+    TypeSize elementSize = module.layout().getTypeAllocSize(alloca.getAllocatedType());
+    if (elementSize.isScalable()) {
+      notHandled("an allocation whose size is not fixed", &inst);
+    }
+    uint64_t element = elementSize.getFixedValue();
+    // A wider alignment than the device program's: allocate align - 1 bytes more and round up.
+    uint64_t align = alloca.getAlign().value();
+    uint64_t padding = align > deviceAllocaAlign ? align - 1 : 0;
+    std::string result = padding ? fresh(alloca.hasName() ? alloca.getName().str() + ".unaligned" : "unaligned")
+                                 : slot(&inst);
     const Value *count = alloca.getArraySize();
     if (const auto *constant = dyn_cast<ConstantInt>(count)) {
-      line(slot(&inst) + " = alloca " + std::to_string(element * constant->getZExtValue()));
-      return;
+      line(result + " = alloca " + std::to_string(element * constant->getZExtValue() + padding));
+    } else {
+      unsigned width = widthOf(count->getType(), &inst);
+      std::string wide = operand(count);
+      if (width < 64) {
+        wide = fresh("count");
+        line(wide + " = zext " + intType(width) + " " + operand(count) + " to i64");
+      }
+      std::string bytes = fresh("bytes");
+      line(bytes + " = mul i64 " + wide + ", " + std::to_string(element));
+      if (padding) {
+        std::string padded = fresh("bytes");
+        line(padded + " = add i64 " + bytes + ", " + std::to_string(padding));
+        bytes = padded;
+      }
+      line(result + " = alloca " + bytes);
     }
-    unsigned width = widthOf(count->getType(), &inst);
-    std::string wide = operand(count);
-    if (width < 64) {
-      wide = fresh("count");
-      line(wide + " = zext " + intType(width) + " " + operand(count) + " to i64");
+    if (padding) {
+      std::string up = fresh("rounding");
+      line(up + " = add i64 " + result + ", " + std::to_string(padding));
+      line(slot(&inst) + " = and i64 " + up + ", " + std::to_string(~(align - 1)));
     }
-    std::string bytes = fresh("bytes");
-    line(bytes + " = mul i64 " + wide + ", " + std::to_string(element));
-    line(slot(&inst) + " = alloca " + bytes);
     return;
   }
   case Instruction::Call:
@@ -571,6 +671,12 @@ void BodyWriter::call(const Instruction &inst) {
   }
   if (markerCall(&inst)) {
     fail("internal: a marker call in a function treated as classical");
+  }
+  if (call.hasOperandBundles()) {
+    notHandled("a call with the operand bundle `" + call.getOperandBundleAt(0).getTagName().str() + "`", &inst);
+  }
+  if (call.getFunctionType()->isVarArg()) {
+    notHandled("a call of a variadic function", &inst);
   }
   std::string args;
   for (const Use &arg : call.args()) {
@@ -598,6 +704,9 @@ void BodyWriter::call(const Instruction &inst) {
 
 void BodyWriter::address(const Instruction &inst) {
   const auto &gep = cast<GEPOperator>(inst);
+  if (inst.getType()->isVectorTy()) {
+    notHandled("an address computation on vectors", &inst);
+  }
   MapVector<Value *, APInt> variables;
   APInt constant(64, 0);
   if (!gep.collectOffset(module.layout(), 64, variables, constant)) {
