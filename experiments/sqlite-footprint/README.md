@@ -174,3 +174,25 @@ What these numbers do not show:
   recorded per call, not per access.
 - Nothing here is a gate count. The cost of one access of a given lookup size, and of one step of a machine whose
   program counter is in superposition, is not measured.
+
+## Control schedules (unfinished)
+
+`schedule.py` asks what a superposed program counter costs: a circuit that advances every branch by one step must
+contain all the code some branch may be executing at that step, and a schedule says which code each step provides.
+The work was stopped at a pause before it finished. Only `arith` at N = 256 completed, nothing was checked, and no
+write-up of method or limits exists yet. Treat these as preliminary.
+
+| Schedule family (arith, N = 256; one run is 3,749 instructions) | Cost against one run |
+|---|---|
+| Structured, with the exact loop trip counts from the traces | 1.08 |
+| Structured, loops padded to the largest trip count seen | 12.6 |
+| Structured, both arms of every conditional provided | 67.5 |
+| Step-aligned, exactly the blocks some branch runs at each step | 22.3 |
+| Step intervals per block | 32.3 |
+| Every reached block at every step | 422 |
+| Every reached instruction at every instruction step | 2,715 |
+
+Open points for whoever finishes it: the other workloads (`arith` at 1,024, `like_note`, `scan`); the split-half
+test of whether a schedule built from half the branches covers the other half; why the common-supersequence figure
+here (7.96) differs from the 2.04 another calculation reported at N = 1,024; and which families a compiler could
+build without running the program.

@@ -1,6 +1,6 @@
 # bennett-core
 
-Read `README.md`, then `docs/DESIGN.md`. Scope and vision: `docs/NorthStar.md`.
+Read `HANDOFF.md`, `README.md`, then `docs/DESIGN.md`. Scope and vision: `docs/NorthStar.md`.
 
 This workspace is the project's current focus. The sibling `bennett-*` repositories are a read-only archive.
 

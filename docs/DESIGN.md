@@ -193,6 +193,33 @@ history, and that history is entangled with the data unless the program un-runs 
 Consequences: a test may assert a quantum state only for the documented class or after an un-run; an optimiser is
 free to choose what history to keep (a planned tape, recomputation) without changing any promised behaviour.
 
+## The next extension: code that is not a clean function (decided, not built)
+
+Decided by the maintainer on 2026-11-13 after five independent proposals (`docs/AUDITION.md`). Nothing below is
+implemented yet.
+
+- **One layering.** A journalled machine defines meaning and is the fallback that needs no analysis: the quantum
+  state is a superposition of whole machine states, and each step keeps what it destroys as history. Two
+  optimisations sit on top and must give the same promised results: memory lowered as objects whose accesses name
+  the cells they may touch, and history shrunk to what cannot be recomputed (a compiler-planned tape).
+- **Instructions:** `mark %h` and `rewind %h keep (src -> dst, ...)`. A mark remembers a point; rewind pops the
+  history back to it while XORing chosen values out. Marks nest. Today's `apply` is then the idiom mark, call,
+  rewind-keep.
+- **Memory** is a per-branch overlay of writes over a classical base that never becomes quantum, so qubits scale
+  with steps run and bytes written, never with memory size.
+- **Gates take addresses,** so a qubit can live anywhere in memory.
+- **`apply`, `qalloc` and `qfree` stay** as accepted forms until the new instructions pass every existing test.
+- **Why optimising history is safe:** between a run and its un-run, any history that makes the run reversible gives
+  the same final state, provided nothing in between changes what the run read or wrote.
+- **The one known exponential:** cleaning up inside every call, inside callers that also clean up, doubles work per
+  call level. Keeping the callees' history open until the caller rewinds avoids it, at the price of more history.
+
+Experiments to run before and while building, each named by a proposal as what would show it wrong: every
+journalled step is a permutation, on a clean and on a dirty history; `apply` equals mark, call, rewind-keep on every
+example and test; how much of the journal is the same on all branches, recoverable, or irreducible; what a
+superposed program counter costs under a schedule a compiler could build; un-running through gates equals the
+conjugated operation, checked against an independent matrix calculation.
+
 ## Text form
 
 Line-oriented and writable by hand, in the style of LLVM assembly. No hashes, no embedded JSON, no version
