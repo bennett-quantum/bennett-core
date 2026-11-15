@@ -39,7 +39,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `cd2d920` | The complex multiply and divide helpers: compiler-rt 18.1.8 vendored unmodified (`rt/compiler-rt`), linked by the front where a program calls them; bit for bit with the same helpers on the hardware, NaN bits aside |
 | `31f5138` | `setjmp`/`longjmp` (library and built-in forms, `sigsetjmp` with musl): a device `setjmp` instruction and `longjmp` terminator, journalled (`docs/DESIGN.md`, "Non-local jumps") |
 
-Check it: `cargo test` (148 passed and 2 ignored witnesses of wrong results, about 4 s, no LLVM needed) and `front/test.sh` (137 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (156 tests, about 4 s, no LLVM needed) and `front/test.sh` (137 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check that needs `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
