@@ -105,6 +105,8 @@ pub(crate) fn cast(op: CastOp, from: Width, to: Width, value: u128) -> u128 {
 
 #[cfg(test)]
 mod tests {
+    use std::cmp::Ordering;
+
     use super::*;
 
     fn w(bits: u32) -> Width {
@@ -165,5 +167,56 @@ mod tests {
         assert_eq!(cast(CastOp::Sext, w(4), w(8), 0b1000), 0xf8);
         assert_eq!(cast(CastOp::Zext, w(4), w(8), 0b1000), 0b1000);
         assert_eq!(cast(CastOp::Trunc, w(16), w(8), 0x1234), 0x34);
+    }
+
+    /// `value` at `width` as a signed number, computed by subtraction rather than by the shifts `signed` uses.
+    fn reference_signed(width: Width, value: u128) -> i128 {
+        let bits = width.bits();
+        if bits < 128 && value >> (bits - 1) == 1 { value as i128 - (1i128 << bits) } else { value as i128 }
+    }
+
+    #[test]
+    fn every_comparison_at_equal_just_below_and_just_above() {
+        let predicates = [
+            Predicate::Eq,
+            Predicate::Ne,
+            Predicate::Ult,
+            Predicate::Ule,
+            Predicate::Ugt,
+            Predicate::Uge,
+            Predicate::Slt,
+            Predicate::Sle,
+            Predicate::Sgt,
+            Predicate::Sge,
+        ];
+        // Widths on both machines (64-bit and 128-bit), each at zero, the signed maximum, the signed minimum
+        // and the unsigned maximum, where the signed and unsigned orders disagree.
+        for bits in [8, 64, 65, 128] {
+            let width = w(bits);
+            let mask = width.mask();
+            let signed_min = 1u128 << (bits - 1);
+            for pivot in [0, signed_min - 1, signed_min, mask] {
+                let next = pivot.wrapping_add(1) & mask;
+                for (lhs, rhs) in [(pivot, pivot), (pivot, next), (next, pivot)] {
+                    let unsigned = lhs.cmp(&rhs);
+                    let signed = reference_signed(width, lhs).cmp(&reference_signed(width, rhs));
+                    for pred in predicates {
+                        let expected = match pred {
+                            Predicate::Eq => unsigned == Ordering::Equal,
+                            Predicate::Ne => unsigned != Ordering::Equal,
+                            Predicate::Ult => unsigned == Ordering::Less,
+                            Predicate::Ule => unsigned != Ordering::Greater,
+                            Predicate::Ugt => unsigned == Ordering::Greater,
+                            Predicate::Uge => unsigned != Ordering::Less,
+                            Predicate::Slt => signed == Ordering::Less,
+                            Predicate::Sle => signed != Ordering::Greater,
+                            Predicate::Sgt => signed == Ordering::Greater,
+                            Predicate::Sge => signed != Ordering::Less,
+                        };
+                        assert_eq!(compare(pred, width, lhs, rhs), expected, "{pred:?} i{bits} {lhs:#x} {rhs:#x}");
+                    }
+                }
+            }
+        }
     }
 }

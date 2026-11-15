@@ -66,3 +66,33 @@ impl QuantumSnapshot {
         Some(configs.map(|config| (self.amplitude(config) - other.amplitude(config)).norm()).fold(0.0, f64::max))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bennett_ir::Width;
+
+    fn snapshot(amplitudes: &[(u64, Complex64)]) -> QuantumSnapshot {
+        QuantumSnapshot {
+            registers: vec![RegisterState { generation: 1, width: Width::new(2) }],
+            amplitudes: amplitudes.iter().map(|&(config, amplitude)| (vec![config], amplitude)).collect(),
+        }
+    }
+
+    #[test]
+    fn distance_is_the_largest_amplitude_difference() {
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let plus = snapshot(&[(0, Complex64::new(h, 0.0)), (1, Complex64::new(h, 0.0))]);
+        let minus = snapshot(&[(0, Complex64::new(h, 0.0)), (1, Complex64::new(-h, 0.0))]);
+        let three = snapshot(&[(3, Complex64::new(0.0, 1.0))]);
+        assert_eq!(plus.distance(&plus), Some(0.0));
+        // Equal probabilities, opposite phase on |1⟩: |h - (-h)| = 2h.
+        assert!((plus.distance(&minus).unwrap_or(0.0) - 2.0 * h).abs() < 1e-15);
+        // Disjoint supports: each side's amplitude against zero, the larger being 1.
+        assert_eq!(three.distance(&plus), Some(1.0));
+        assert_eq!(plus.distance(&three), Some(1.0));
+        let mut other_table = plus.clone();
+        other_table.registers[0].generation = 2;
+        assert_eq!(plus.distance(&other_table), None);
+    }
+}

@@ -78,4 +78,30 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn each_rotation_is_cos_identity_minus_i_sin_pauli_entry_by_entry() {
+        // exp(-iθσ/2) = cos(θ/2) I - i sin(θ/2) σ; compared entry by entry, so a wrong phase on one
+        // diagonal entry fails as surely as a wrong probability.
+        let (zero, one, i) = (real(0.0), real(1.0), Complex64::i());
+        let pauli = |axis| match axis {
+            Rotation::Rx => [[zero, one], [one, zero]],
+            Rotation::Ry => [[zero, -i], [i, zero]],
+            Rotation::Rz => [[one, zero], [zero, -one]],
+        };
+        for angle in [0.7, -1.9, 3.0] {
+            let (c, s) = ((angle / 2.0_f64).cos(), (angle / 2.0_f64).sin());
+            for &axis in Rotation::ALL {
+                let sigma = pauli(axis);
+                let got = matrix(Gate::Rotate(axis, angle));
+                for r in 0..2 {
+                    for col in 0..2 {
+                        let identity = if r == col { one } else { zero };
+                        let expected = identity * c - i * s * sigma[r][col];
+                        assert!((got[r][col] - expected).norm() < 1e-15, "{axis:?}({angle}) [{r}][{col}]: {got:?}");
+                    }
+                }
+            }
+        }
+    }
 }
