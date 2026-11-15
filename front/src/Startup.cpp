@@ -162,14 +162,21 @@ Array collect(Module &module, StringRef special, StringRef prefix) {
   return array;
 }
 
+void checkBounds(Module &module) {
+  for (StringRef name : bounds) {
+    GlobalValue *old = module.getNamedValue(name);
+    if (old && (!old->isDeclaration() || !isa<GlobalVariable>(old) || old->getAddressSpace() != 0 ||
+                old->getPointerAlignment(module.getDataLayout()) > Align(8))) {
+      notHandled("the linker array bound @" + name.str() + " is already defined or has unsupported type/alignment",
+                 old);
+    }
+  }
+}
+
 void defineBound(Module &module, StringRef name, Constant *address) {
   GlobalValue *old = module.getNamedValue(name);
   if (!old) {
     return;
-  }
-  if (!old->isDeclaration() || !isa<GlobalVariable>(old) ||
-      old->getAddressSpace() != 0 || old->getPointerAlignment(module.getDataLayout()) > Align(8)) {
-    notHandled("the linker array bound @" + name.str() + " is already defined or has unsupported type/alignment", old);
   }
   old->setName("");
   auto *alias = GlobalAlias::create(Type::getInt8Ty(module.getContext()), 0, GlobalValue::ExternalLinkage,
@@ -192,16 +199,20 @@ void materialize(Module &module, Array &array, StringRef kind) {
     }
     global->eraseFromParent();
   }
-  auto *i64 = Type::getInt64Ty(module.getContext());
-  Constant *startIndices[] = {ConstantInt::get(i64, 0), ConstantInt::get(i64, 0)};
-  Constant *endIndices[] = {ConstantInt::get(i64, 0), ConstantInt::get(i64, array.functions.size())};
-  defineBound(module, ("__" + kind + "_array_start").str(),
-              ConstantExpr::getGetElementPtr(type, array.storage, startIndices));
-  defineBound(module, ("__" + kind + "_array_end").str(),
-              ConstantExpr::getGetElementPtr(type, array.storage, endIndices));
   if (array.special) {
     array.special->eraseFromParent();
   }
+}
+
+// What the static linker does: the bounds become the start and the end of the merged array.
+void defineBounds(Module &module, GlobalVariable *storage, StringRef kind) {
+  auto *i64 = Type::getInt64Ty(module.getContext());
+  auto *type = cast<ArrayType>(storage->getValueType());
+  Constant *startIndices[] = {ConstantInt::get(i64, 0), ConstantInt::get(i64, 0)};
+  Constant *endIndices[] = {ConstantInt::get(i64, 0), ConstantInt::get(i64, type->getNumElements())};
+  defineBound(module, ("__" + kind + "_array_start").str(),
+              ConstantExpr::getGetElementPtr(type, storage, startIndices));
+  defineBound(module, ("__" + kind + "_array_end").str(), ConstantExpr::getGetElementPtr(type, storage, endIndices));
 }
 
 bool boundsReferenced(Module &module) {
@@ -262,6 +273,7 @@ void lowerStartup(Module &module, StringRef entryName) {
       notHandled("the startup section " + section.str(), &global);
     }
   }
+  checkBounds(module);
   Array ctors = collect(module, "llvm.global_ctors", ".init_array");
   Array dtors = collect(module, "llvm.global_dtors", ".fini_array");
   // llvm.used is an LLVM retention list, not a program read of these section objects. Remove only these
@@ -272,15 +284,20 @@ void lowerStartup(Module &module, StringRef entryName) {
   });
   materialize(module, ctors, "init");
   materialize(module, dtors, "fini");
-  if (ctors.functions.empty() && dtors.functions.empty()) {
+  bool none = ctors.functions.empty() && dtors.functions.empty();
+  if (none || !referenced) {
+    // Nothing to run, or no C startup to run it: ownership is already decided.
+    defineBounds(module, ctors.storage, "init");
+    defineBounds(module, dtors.storage, "fini");
+    if (!none) {
+      wrapEntry(module, entryName, ctors.functions, dtors.functions);
+    }
     return;
   }
-  if (!referenced) {
-    wrapEntry(module, entryName, ctors.functions, dtors.functions);
-    return;
-  }
-  // A bound reference may sit in code the front's optimiser deletes. Ownership is decided by finishStartup on the
-  // references that survive it; until then the arrays are kept so their functions survive too.
+  // A bound reference may sit in code the front's optimiser deletes; ownership is decided by finishStartup on the
+  // references that survive it. Until then the bounds stay the undefined linker symbols a native compile sees, so
+  // the optimiser cannot fold a read of the arrays into a direct call and erase a live reference that way: a
+  // reference disappears only with dead code or an unused value. The arrays are kept so their functions survive.
   appendToCompilerUsed(module, {ctors.storage, dtors.storage});
   module.getOrInsertNamedMetadata(pending)->addOperand(MDNode::get(
       module.getContext(), {ConstantAsMetadata::get(ctors.storage), ConstantAsMetadata::get(dtors.storage)}));
@@ -297,14 +314,16 @@ void finishStartup(Module &module, StringRef entryName) {
   }
   module.eraseNamedMetadata(marker);
   removeFromUsedLists(module, [&](Constant *value) { return llvm::is_contained(storage, value->stripPointerCasts()); });
+  if (!storage[0] || !storage[1] || !storage[0]->hasInitializer() || !storage[1]->hasInitializer()) {
+    fail("internal: the constructor/destructor arrays did not survive the optimiser");
+  }
   if (boundsReferenced(module)) {
+    defineBounds(module, storage[0], "init");
+    defineBounds(module, storage[1], "fini");
     return;
   }
   std::vector<Constant *> functions[2];
   for (int i = 0; i < 2; ++i) {
-    if (!storage[i] || !storage[i]->hasInitializer()) {
-      fail("internal: the constructor/destructor arrays did not survive the optimiser");
-    }
     Constant *init = storage[i]->getInitializer();
     for (unsigned j = 0; j < cast<ArrayType>(storage[i]->getValueType())->getNumElements(); ++j) {
       functions[i].push_back(init->getAggregateElement(j));

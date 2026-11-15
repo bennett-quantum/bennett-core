@@ -110,5 +110,7 @@ entry to `bennett run --entry name`. Constructors run in ascending priority orde
 order after a normal return; the entry's result is preserved. Ties run in the order a native build of the same
 module runs them. A module that references (after the front's optimiser) any standard
 `__init_array_start`/`__init_array_end` or `__fini_array_start`/`__fini_array_end` owns startup itself: the front
-supplies the arrays and bounds, and the library's C startup and exit code must walk them. The device exit call
+supplies the arrays and bounds, and the library's C startup and exit code must walk them. The bounds are defined
+only after the optimiser, as a linker defines them, so a reference is lost only with dead code or an unused value,
+never by folding a read of the array. The device exit call
 bypasses the automatic destructor wrapper, just as `_Exit` bypasses C library cleanup.

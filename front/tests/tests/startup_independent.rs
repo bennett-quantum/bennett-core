@@ -5,7 +5,7 @@ use bennett_front_tests::{
 };
 use std::process::Command;
 
-const PRELUDE: &str = r#"
+const EMIT: &str = r#"
 #ifdef NATIVE
 #include <unistd.h>
 #include <stdlib.h>
@@ -17,8 +17,8 @@ const PRELUDE: &str = r#"
 #define finish(c) __bennett_exit(c)
 #endif
 typedef void (*fn)(void);
-extern fn __init_array_start[], __init_array_end[], __fini_array_start[], __fini_array_end[];
 "#;
+const BOUNDS: &str = "extern fn __init_array_start[], __init_array_end[], __fini_array_start[], __fini_array_end[];\n";
 
 // No CRT: the C startup under test is the only owner in both builds. The assembly
 // aligns the stack before calling an ordinary C entry and exits with its result.
@@ -29,7 +29,11 @@ fn native_owned(source: &std::path::Path, tag: &str, selected: &str) -> std::pat
 }
 
 fn compare_owned(tag: &str, body: &str, expected: &[u8], status: u128, selected: &str) {
-    let source = write_c(tag, &format!("{PRELUDE}\n{body}"));
+    compare_owned_source(tag, &format!("{EMIT}{BOUNDS}\n{body}"), expected, status, selected);
+}
+
+fn compare_owned_source(tag: &str, text: &str, expected: &[u8], status: u128, selected: &str) {
+    let source = write_c(tag, text);
     let native = native_owned(&source, tag, selected);
     let native = Command::new(native).output().expect("run native");
     assert_eq!(native.status.code(), Some(status as i32), "{tag} native");
@@ -178,17 +182,65 @@ ret i32 0 }
     assert_eq!(exec.tape(), native.stdout);
 }
 
-// F1: folding a bound load to a direct call erases its last use. finishStartup
-// then adds an automatic wrapper even though C startup already calls the array.
+// A live read of an array element must not lose C ownership when the optimiser could fold it into a direct call.
+// The bounds stay undefined through the optimiser, so there is nothing to fold (the check of e13a6c8 found the
+// constructor or destructor run twice here).
 #[test]
-#[ignore = "F1: a folded init-array call loses C ownership and the constructor runs twice"]
 fn folding_an_init_bound_call_must_not_add_automatic_startup() {
+    for (tag, call) in [("start", "__init_array_start[0]()"), ("end", "__init_array_end[-1]()")] {
+        compare_owned(
+            &format!("independent_folded_init_{tag}"),
+            &format!(
+                r#"
+volatile int x;
+__attribute__((constructor)) static void init(void) {{ ++x; emit('i'); }}
+__attribute__((destructor)) static void fini(void) {{ emit('f'); }}
+int start(void) {{ {call}; emit('m'); return x; }}
+"#
+            ),
+            b"im",
+            1,
+            "start",
+        );
+    }
+}
+
+#[test]
+fn folding_a_fini_bound_call_must_not_add_automatic_cleanup() {
+    for (tag, call) in [("start", "__fini_array_start[0]()"), ("end", "__fini_array_end[-1]()")] {
+        compare_owned(
+            &format!("independent_folded_fini_{tag}"),
+            &format!(
+                r#"
+volatile int x;
+__attribute__((constructor)) static void init(void) {{ x = 5; emit('i'); }}
+__attribute__((destructor)) static void fini(void) {{ emit('f'); }}
+int start(void) {{ {call}; emit('m'); return x; }}
+"#
+            ),
+            b"fm",
+            0,
+            "start",
+        );
+    }
+}
+
+// The deleted fini walk does not matter: the live, foldable init call owns both arrays.
+#[test]
+fn a_folded_init_call_owns_startup_when_the_fini_walk_is_deleted() {
     compare_owned(
-        "independent_folded_init",
+        "independent_folded_init_dead_fini",
         r#"
 volatile int x;
+static int never;
 __attribute__((constructor)) static void init(void) { ++x; emit('i'); }
-int start(void) { __init_array_start[0](); emit('m'); return x; }
+__attribute__((destructor)) static void fini(void) { emit('f'); }
+int start(void) {
+    __init_array_start[0]();
+    emit('m');
+    if (never) for (fn *p = __fini_array_end; p != __fini_array_start;) (*--p)();
+    return x;
+}
 "#,
         b"im",
         1,
@@ -196,17 +248,38 @@ int start(void) { __init_array_start[0](); emit('m'); return x; }
     );
 }
 
+// musl's own startup and exit loops (src/env/__libc_start_main.c, src/exit/exit.c): weak hidden scalar bounds walked
+// as integers. With one entry per array an optimiser that knew the arrays could unroll each loop and fold its load
+// into a direct call; the bounds stay undefined through the optimiser, so the loops reach the device intact.
 #[test]
-#[ignore = "F1: a folded fini-array call loses C ownership and the destructor runs twice"]
-fn folding_a_fini_bound_call_must_not_add_automatic_cleanup() {
-    compare_owned(
-        "independent_folded_fini",
-        r#"
-__attribute__((destructor)) static void fini(void) { emit('f'); }
-int start(void) { __fini_array_start[0](); emit('m'); return 0; }
-"#,
-        b"fm",
-        0,
+fn musl_shaped_walks_of_one_entry_arrays_own_startup() {
+    compare_owned_source(
+        "independent_musl_shape",
+        &format!(
+            r#"{EMIT}
+#include <stdint.h>
+#define weak __attribute__((__weak__))
+#define hidden __attribute__((__visibility__("hidden")))
+extern weak hidden void (*const __init_array_start)(void), (*const __init_array_end)(void);
+extern weak hidden void (*const __fini_array_start)(void), (*const __fini_array_end)(void);
+static void libc_start_init(void) {{
+    uintptr_t a = (uintptr_t)&__init_array_start;
+    for (; a<(uintptr_t)&__init_array_end; a+=sizeof(void(*)()))
+        (*(void (**)(void))a)();
+}}
+static void libc_exit_fini(void) {{
+    uintptr_t a = (uintptr_t)&__fini_array_end;
+    for (; a>(uintptr_t)&__fini_array_start; a-=sizeof(void(*)()))
+        (*(void (**)())(a-sizeof(void(*)())))();
+}}
+volatile int x;
+__attribute__((constructor)) static void init(void) {{ ++x; emit('i'); }}
+__attribute__((destructor)) static void fini(void) {{ emit('f'); }}
+int start(void) {{ libc_start_init(); emit('m'); libc_exit_fini(); return x; }}
+"#
+        ),
+        b"imf",
+        1,
         "start",
     );
 }
@@ -217,7 +290,7 @@ fn compare_automatic(tag: &str, body: &str, expected: &[u8], status: u128, selec
     } else {
         format!("\n#ifdef NATIVE\nint main(void) {{ return {selected}(); }}\n#endif\n")
     };
-    let source = write_c(tag, &format!("{PRELUDE}\n{body}{native_main}"));
+    let source = write_c(tag, &format!("{EMIT}{BOUNDS}\n{body}{native_main}"));
     let native = native_build_with(&source, tag, &["-DNATIVE", "-fuse-ld=bfd"], &[]);
     let native = Command::new(native).output().expect("run native");
     assert_eq!(native.status.code(), Some(status as i32), "{tag} native");
@@ -461,7 +534,7 @@ fn real_library_atexit_and_exit_are_still_named_debts() {
             tag,
             &format!(
                 r#"
-{PRELUDE}
+{EMIT}{BOUNDS}
 #ifndef NATIVE
 extern int atexit(fn);
 extern _Noreturn void exit(int);

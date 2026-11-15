@@ -211,7 +211,10 @@ Two things the first C programs taught:
   order. Same-priority order is unspecified in C, and `llvm-link` (like LTO) moves the special arrays first, so a
   linked module can order ties differently from separately compiled objects. References to any of
   `__init_array_start/end` or `__fini_array_start/end` that survive the front's optimiser give C startup ownership
-  of both arrays: the front defines their bounds, including empty arrays, and C calls them. Otherwise it wraps
+  of both arrays: the front defines their bounds, including empty arrays, and C calls them. The optimiser sees the
+  bounds as a native compile does, as undefined linker symbols; the front defines them only after it, as the
+  linker does. So a reference cannot vanish because a read of the array was folded into a direct call (there is
+  nothing to fold), only with code that is dead or a value that is unused. Otherwise it wraps
   `--entry` (default `main`), calls constructors first and destructors after a normal return, in reverse array
   order. Recursive entry calls call the original body. `exit` does no automatic cleanup: the C library must run
   its exit sequence first. Associated-data constructor records, `!associated` section objects, address-taken or
