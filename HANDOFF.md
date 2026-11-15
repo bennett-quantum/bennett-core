@@ -239,11 +239,15 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
    rewind: 21 + 20d); a mark, call, rewind loop costs the same per iteration at 50 and 1,500 iterations.
    Its independent testing pass (`8c917c4`, sol: the oracle plugged in; 2,180 matrix comparisons of un-running
    through gates under `rewind keep`, 18,432 whole-state images of mark and nested rewinds on clean and dirty
-   history, 64 stale-handle fault states, all agree) found two wrong results, kept as ignored witnesses in
-   `crates/exec/tests/history_independent.rs`: **F1** a rewind whose un-run frees a temporary that is entangled
-   with a keep destination returns success with norm 0 (the allocation's undo drops nonzero configurations; not a
-   bijection, whatever rule 4 leaves unspecified); **F2** undoing a rewind reached a second time in a loop replays
-   to its first dynamic visit, not the one being undone (`rewind keep (1 -> q); br loop`: q 0 where 1 is right).
+   history, 64 stale-handle fault states, all agree) found two wrong results, both fixed (`d012728`): **F1** a
+   rewind whose un-run freed a temporary entangled with a keep destination returned success with norm 0; now an
+   un-run that meets a state its history does not describe (a register allocated since the mark not zero when
+   its allocation is un-run, an inner rewind whose region faults when run again) runs the un-run steps forward
+   again and faults `bad_rewind`, changing nothing, as the interim answer to question (1) below; checked
+   against an independent calculation on 1,776 programs (`crates/exec/tests/history_unrun.rs`). **F2** undoing
+   a rewind reached again in a loop replayed to its first visit; a rewind's record now keeps how many steps it
+   un-ran and exactly that many run again. Costs of every other history test unchanged; rewinding one mark
+   again doubles the work (n rewinds of one mark in a loop: 3 * 2^(n-1) - 2 steps un-run).
    The implementer's order for the rest: worlds (a superposition of whole machine states, split where a call passes
    a register as an integer, merged where equal), the memory overlay, address-taking gates, then `apply` as mark,
    call, rewind-keep shown equal on every example and test.
@@ -303,7 +307,9 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
 - **The journalled machine (step 3), from its first step.** (1) Once worlds differ (its next step), keeping a
   result into a register the region read can make two worlds equal after the un-run, so their amplitudes add:
   not merely unspecified but not unitary. Proposed: detect it and stop with a named fault for now (the warning of
-  step 4 needs the same detection), keeping later choices open. (2) The 4-bit fault codes are full (`bad_rewind`
+  step 4 needs the same detection), keeping later choices open. The same thing on today's machine (F1: a
+  temporary not back to zero) is now detected and faults `bad_rewind`, changing nothing (`d012728`); that is the
+  orchestrator's interim decision and the place a warning or another outcome would go. (2) The 4-bit fault codes are full (`bad_rewind`
   took 15); the next fault needs wider codes, and every `q4` fault register in the examples and the front with
   them. Widen, or another scheme? (3) A rewind across a measurement faults, as reversal does; "What is promised
   when history is left behind" says un-running after a change is a warning, not a refusal. Keep this one a fault?
