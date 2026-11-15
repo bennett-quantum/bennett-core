@@ -42,9 +42,10 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 Check it: `cargo test` (83 tests, about 2 s, no LLVM needed) and `front/test.sh` (127 tests; ignored by default: the full journal-content measurement and its sensitivity check, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 With musl linked, standard output and exit status compared with native (`experiments/c-corpus/README.md`):
-GCC's C torture tests 1,557 agree, 12 refused by name, 6 named faults (programs that open files), none wrong;
+GCC's C torture tests 1,560 agree, 9 refused by name, 6 named faults (programs that open files), none wrong;
 c-testsuite 217 agree, 1 refused, 1 named fault, 1 over the step budget, none wrong; GCC's `ieee/` 64 agree, 3
-refused, none wrong. Without the library the same snapshot gives 1,521 / 52 refused, 151 / 68, 58 / 9. Since
+refused, none wrong (`b961292`, after the complex helpers and the 128-bit conversions moved three GCC programs
+from refused to agreeing). Without the library an earlier snapshot gives 1,521 / 52 refused, 151 / 68, 58 / 9. Since
 the complex helpers, the two GCC programs that waited on them agree too, with and without the library (run
 alone, not as a whole corpus): GCC 1,559 agree and 10 refused with musl, if nothing else moved.
 
