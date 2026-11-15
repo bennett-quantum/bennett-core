@@ -29,8 +29,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `60bd56b`, `2f11a5f`, `bc8661c` | The console reachable from C; the `exit` instruction; constructors and destructors run, or their linker arrays supplied (a silent wrong result the probe found) |
 | `9e15ebf`, `4dfb423` | Large data strings read without recursion (the debug CLI overflowed its stack); musl 1.2.5 vendored unmodified (`rt/musl`), its 1,345 C files built to bitcode offline |
 
-Check it: `cargo test` (59 tests, about 2 s, no LLVM needed) and `front/test.sh` (91 tests and 2 ignored known
-wrong results, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
+Check it: `cargo test` (59 tests, about 2 s, no LLVM needed) and `front/test.sh` (94 tests, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 On GCC's C torture tests 1,521 of 1,576 runnable programs agree with native, 53 are refused by name, none is wrong;
 on its floating-point tests (`ieee/`) 58 of 67, 9 refused (C library calls), none wrong
@@ -99,14 +98,16 @@ before floating point landed (`experiments/libc-probe/README.md`). The two have 
   executor that changes nothing when off. It decides whether the two optimisations buy orders of magnitude or a
   constant.
 
-- **Two wrong results in constructor startup**, found by the independent testing pass of `exit`, the console call
-  and constructors (`40b04b4`; `exit` and the console call held under every probe). At equal priority, explicit
-  `.init_array`/`.fini_array` contributions run after the special-array entries on the device but before them
-  natively; and a reference to `__init_array_start` from an uncalled function that the front's pipeline deletes
-  still hands startup to C, so the constructor silently never runs. Both are `#[ignore]` tests in
-  `front/tests/tests/startup.rs`; a fix is in flight. Safe refusals noted by the same pass: a constructor through
-  an alias; a null entry in a section array (a null in `llvm.global_ctors` is skipped); an array variable in
-  `.init_array` with alignment above 8; `front/include/bennett.h` cannot be included from C++ (`_Bool`).
+- **Constructor startup, after its independent testing pass** (`40b04b4`, Muse; `exit` and the console call held
+  under every probe). It found two wrong results, both fixed in `e13a6c8` and now regression tests: at equal
+  priority the device ran explicit `.init_array`/`.fini_array` contributions after the special-array entries
+  (the front now follows the order LLVM emits and GNU ld links, measured against native builds); and a reference
+  to the array bounds from a function the optimiser deletes handed startup to C, so a constructor silently never
+  ran (ownership is now decided on the references that survive the optimiser). Order at equal priority follows a
+  native build of the linked module; separately compiled objects linked natively can differ (C leaves it
+  unspecified; `docs/DESIGN.md`). Safe refusals noted by the pass: a constructor through an alias; a null entry
+  in a section array; an array variable in `.init_array` with alignment above 8; `front/include/bennett.h`
+  cannot be included from C++ (`_Bool`).
 
 ## Next steps, in order
 
