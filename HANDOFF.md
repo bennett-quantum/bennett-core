@@ -3,8 +3,7 @@
 State on 2026-11-15, evening (work resumed at about 18:45 UTC). Landed since: the musl runtime, validated on the
 three corpora with no wrong result; `zero N`; the journal-content and control-schedule measurements; the salvage
 survey; testing passes of `exit`, constructors, `zero N`, the musl boundary and the journal measurement. In flight: a fix for constructors
-that run twice when a bound read is folded ("Stopped in flight"), the remaining floating-point conversions, and
-the complex-number helpers.
+that run twice when a bound read is folded ("Stopped in flight"), the complex-number helpers.
 
 ## What this repository is
 
@@ -33,9 +32,10 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `e13a6c8` | Constructors and destructors in the order the native link gives them; startup ownership decided after the optimiser |
 | `4e34a3c` | Zero-filled data written as `zero N` in the text form (a musl-linked hello: 4.4 MB to 216 kB) |
 | `d8050df`..`b464c0b` | The C library: musl 1.2.5 at the system-call boundary, running its own startup and exit; signals a program sends itself; stdin at end of file; an honest `fenv` |
+| `663e9fb`..`caaac7a` | Conversions between floats and 128-bit integers, `fmal`, `_Float16` and `__bf16`, each bit for bit against native (`rt/softfloat/README.md`) |
 | `9817fe0`, `c17bde9`, `08d7799` | Measurements: journal content in coherent regions; control schedules on the SQLite traces |
 
-Check it: `cargo test` (79 tests, about 2 s, no LLVM needed) and `front/test.sh` (112 tests; ignored by default: the full journal-content measurement and its sensitivity check,
+Check it: `cargo test` (79 tests, about 2 s, no LLVM needed) and `front/test.sh` (116 tests; ignored by default: the full journal-content measurement and its sensitivity check,
 and two known wrong results below, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 With musl linked, standard output and exit status compared with native (`experiments/c-corpus/README.md`):
@@ -149,9 +149,12 @@ refused, none wrong. Without the library the same snapshot gives 1,521 / 52 refu
    its form, and the two warnings (history still entangled at a measurement or at the end; an un-run that meets a
    state its history does not match).
 5. **Floating point** is done over Berkeley SoftFloat 3e (decided 2026-11-15; `rt/softfloat/README.md`). Left:
-   the complex multiply/divide helpers (`__mulsc3`, ...; compiler-rt vendored after musl lands), `fmal`
-   (SoftFloat has no 80-bit fused multiply-add), conversions to and from 128-bit integers, `_Float16`,
-   `__bf16`, `__float128`. Then `setjmp`/`longjmp` and the remaining intrinsics.
+   the complex multiply/divide helpers (`__mulsc3`, ...; compiler-rt being vendored now) and `__float128`.
+   Done on 2026-11-15: conversions to and from 128-bit integers (and `_BitInt` up to 128), `fmal` (over
+   SoftFloat's primitives, rounding once), `_Float16` and `__bf16` (computed in `float` as the x86-64 back end
+   does). Checked: every 16-bit input, all 2^32 `float` inputs of the conversions from `float`, 10^7 random
+   operands per operation and 10^8 `fmal` triples against libgcc and glibc, 0 mismatches. `powi` on the two
+   short formats is refused by name (it calls `powf` natively). Then `setjmp`/`longjmp` and the remaining intrinsics.
 6. **A SQL query as an oracle.**
 
 ## What the earlier workspace offers
@@ -197,7 +200,7 @@ refused, none wrong. Without the library the same snapshot gives 1,521 / 52 refu
 | Refused today | What removes it |
 |---|---|
 | Files, clocks and the other unimplemented system calls (named faults); `setjmp`/`longjmp`; return address; a program that redeclares a library function incompatibly | Step 1 above |
-| `fmal`; 128-bit integer conversions of floats; `_Float16`, `__bf16`, `__float128`; `#pragma STDC FENV_ACCESS`; non-default rounding modes and floating-point flags; the complex helpers | Step 5 above |
+| `__float128`; `powi` on `_Float16`/`__bf16`; `#pragma STDC FENV_ACCESS`; non-default rounding modes and floating-point flags; the complex helpers | Step 5 above |
 | A store under qubit control; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control | The journalled machine (step 3) |
 | A qubit-dependent value used by ordinary code or printed; measurement under control; a dirty discard | Channels |
 | Non-empty inline assembly; code without source | An emulator of the real machine, compiled as an ordinary program |
