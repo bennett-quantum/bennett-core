@@ -399,10 +399,10 @@ impl<'a> Oracle<'a> {
 fn mask(bits: u32) -> u128 {
     u128::MAX >> (128 - bits)
 }
-fn signed(n: u128, bits: u32) -> i128 {
+pub(super) fn signed(n: u128, bits: u32) -> i128 {
     ((n << (128 - bits)) as i128) >> (128 - bits)
 }
-fn binary(op: BinOp, bits: u32, a: u128, b: u128) -> Result<u128, Fault> {
+pub(super) fn binary(op: BinOp, bits: u32, a: u128, b: u128) -> Result<u128, Fault> {
     use BinOp::*;
     let value = match op {
         Add => a.wrapping_add(b),
@@ -423,7 +423,7 @@ fn binary(op: BinOp, bits: u32, a: u128, b: u128) -> Result<u128, Fault> {
     };
     Ok(value & mask(bits))
 }
-fn compare(pred: Predicate, bits: u32, a: u128, b: u128) -> bool {
+pub(super) fn compare(pred: Predicate, bits: u32, a: u128, b: u128) -> bool {
     use Predicate::*;
     match pred {
         Eq => a == b,

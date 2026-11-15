@@ -14,6 +14,7 @@ fn load(text: &str) -> ValidModule {
     bennett_ir::load(text).expect("valid test program")
 }
 fn executor<'a>(module: &'a ValidModule, entry: &str, args: &[u64]) -> Executor<'a> {
+    oracle_support::worlds_executor::compare(module, entry, args, 100_000, false);
     Executor::new(
         module,
         module.function_named(entry).expect("entry"),

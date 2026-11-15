@@ -25,3 +25,30 @@
 
 pub mod dense;
 pub mod permutation;
+
+#[allow(dead_code, reason = "test binaries use different oracle entry points")]
+pub mod worlds;
+#[allow(dead_code, reason = "test binaries use different adapters")]
+pub mod worlds_executor;
+
+// Whole-world reference integration (test-only):
+// `worlds::Model::new(program, entry)` owns the immutable classical base;
+// `initial(entry,args)` constructs one complete `World`. Use `worlds::basis` or build a
+// `worlds::Superposition` (BTreeMap<World, Complex64>) with arbitrary initial complex amplitudes.
+// `run(initial, forward_rounds)` returns the complete final superposition, with `Finish` on EVERY
+// world. `step` and `undo_state` expose the unprojected state for the same finite-domain checker.
+// Measurement is an explicit boundary; `measurement_branches` gives Born weights and normalized
+// states, and `collapse` follows a chosen outcome without assuming identical seeded RNG streams.
+// The current executor adapter checks public memory, live slots (including encoded handles), every
+// frame and PC, stack, tape, outcome, widths/generations and amplitudes after every instruction.
+// It cannot compare private executor history encodings; model whole-state bijections and existing
+// private-state executor bijection tests are separate checks. When worlds lands, replace only this
+// adapter with a conversion that retains each world's private journal/marks, not a marginal over
+// registers. The mathematical model deliberately uses classical snapshots, not production records.
+//
+// Open semantics must be resolved before asserting outcomes for mismatched history shapes,
+// divergent fault/measurement sites or other unspecified changed-read rewinds. One round steps every
+// active world, finished worlds wait; the model's fault groups are equal classical state AND history
+// (today's common quantum shape). This is an explicit extension convention, not a scheduler/fault
+// scope requirement for the next implementation. The model detects failed clean inverse/replay as
+// bad_rewind per the documented interim rule. The progress handover lists the remaining questions.

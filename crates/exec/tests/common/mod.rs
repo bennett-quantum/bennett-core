@@ -2,6 +2,10 @@
 
 #![allow(dead_code, reason = "each test binary uses a different subset")]
 
+#[allow(dead_code, reason = "optional independent comparison uses a subset of helpers")]
+#[path = "../oracle_support/mod.rs"]
+mod oracle_support;
+
 use bennett_exec::{Executor, Options, Outcome, Snapshot};
 use bennett_ir::{FuncId, ValidModule};
 
@@ -37,6 +41,26 @@ pub fn entry(module: &ValidModule, name: &str) -> FuncId {
 }
 
 pub fn executor<'m>(module: &'m ValidModule, name: &str, args: &[u64], options: Options) -> Executor<'m> {
+    if std::env::var_os("BENNETT_WORLDS_REFERENCE").is_some() {
+        let function = module.function(entry(module, name));
+        let cap = if function
+            .blocks
+            .iter()
+            .any(|b| matches!(b.term, bennett_ir::Terminator::Return(_) | bennett_ir::Terminator::Exit(_)))
+        {
+            256
+        } else {
+            12
+        };
+        let steps = oracle_support::worlds_executor::compare(
+            module,
+            name,
+            args,
+            options.budget.unwrap_or(cap).min(cap) as usize,
+            true,
+        );
+        eprintln!("worlds reference @{name}{args:?}: {steps} steps");
+    }
     Executor::new(module, entry(module, name), args, options).unwrap_or_else(|error| panic!("{error}"))
 }
 
