@@ -39,7 +39,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `cd2d920` | The complex multiply and divide helpers: compiler-rt 18.1.8 vendored unmodified (`rt/compiler-rt`), linked by the front where a program calls them; bit for bit with the same helpers on the hardware, NaN bits aside |
 | `31f5138` | `setjmp`/`longjmp` (library and built-in forms, `sigsetjmp` with musl): a device `setjmp` instruction and `longjmp` terminator, journalled (`docs/DESIGN.md`, "Non-local jumps") |
 
-Check it: `cargo test` (122 tests, about 4 s, no LLVM needed) and `front/test.sh` (137 tests; ignored by default: the two heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (141 tests and 2 ignored witnesses of wrong results, about 4 s, no LLVM needed) and `front/test.sh` (137 tests; ignored by default: the two heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check that needs `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -218,6 +218,13 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
    faulting, and 8,192 rewinds from their mark, on clean and dirty history); the known exponential is real (every
    level cleaning up: work 19, 55, 127, ... 36,847 at depth 0..10; keeping callees' history open until the outer
    rewind: 21 + 20d); a mark, call, rewind loop costs the same per iteration at 50 and 1,500 iterations.
+   Its independent testing pass (`8c917c4`, sol: the oracle plugged in; 2,180 matrix comparisons of un-running
+   through gates under `rewind keep`, 18,432 whole-state images of mark and nested rewinds on clean and dirty
+   history, 64 stale-handle fault states, all agree) found two wrong results, kept as ignored witnesses in
+   `crates/exec/tests/history_independent.rs`: **F1** a rewind whose un-run frees a temporary that is entangled
+   with a keep destination returns success with norm 0 (the allocation's undo drops nonzero configurations; not a
+   bijection, whatever rule 4 leaves unspecified); **F2** undoing a rewind reached a second time in a loop replays
+   to its first dynamic visit, not the one being undone (`rewind keep (1 -> q); br loop`: q 0 where 1 is right).
    The implementer's order for the rest: worlds (a superposition of whole machine states, split where a call passes
    a register as an integer, merged where equal), the memory overlay, address-taking gates, then `apply` as mark,
    call, rewind-keep shown equal on every example and test.
