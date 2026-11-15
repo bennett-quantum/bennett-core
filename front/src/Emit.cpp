@@ -236,6 +236,14 @@ std::optional<uint64_t> ModuleWriter::constantValue(const Constant *constant) co
       return type->isPointerTy() ? 64 : type->isIntegerTy() ? type->getIntegerBitWidth() : 0;
     };
     unsigned bits = bitsOf(expr->getType());
+    // A one-element vector as the integer it holds (GCC's vector extensions over a pointer-sized value).
+    if (expr->getOpcode() == Instruction::BitCast) {
+      const auto *vector = dyn_cast<FixedVectorType>(expr->getOperand(0)->getType());
+      if (vector && vector->getNumElements() == 1 && bits != 0 && bitsOf(vector->getElementType()) == bits) {
+        const Constant *element = cast<Constant>(expr->getOperand(0))->getAggregateElement(0u);
+        return element ? constantValue(element) : std::nullopt;
+      }
+    }
     unsigned operandBits = expr->getNumOperands() > 0 ? bitsOf(expr->getOperand(0)->getType()) : 0;
     if (bits == 0 || bits > 64 || operandBits == 0 || operandBits > 64) {
       return std::nullopt;

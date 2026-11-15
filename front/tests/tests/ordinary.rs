@@ -61,3 +61,8 @@ fn constant_expressions_on_addresses_are_evaluated_where_the_globals_are() {
 fn variable_length_arrays_in_loops_free_their_stack_each_pass() {
     assert_agrees_with_native("vla_loop", 0);
 }
+
+#[test]
+fn a_one_element_vector_constant_is_the_integer_it_holds() {
+    assert_agrees_with_native("vector_of_address", 0);
+}
