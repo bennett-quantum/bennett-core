@@ -9,8 +9,9 @@
 //!   reachable-state sampling or truncating/discarding overflowing history proves less.
 //! - Source and target domains can differ for a push/pop but must have equal cardinality.
 //!   Supply the machine's documented boundary/fault states too; do not silently wrap a stack
-//!   unless that is its semantics. Current tests include only actual `apply`, history spectators,
-//!   reachable journal-prefix round trips, and a small checker adapter example.
+//!   unless that is its semantics. The independent history unit adapter now includes actual
+//!   mark/nested-rewind states, allocation history and garbage-prefix words
+//!   (`src/independent_history_tests.rs`).
 //! - `dense::Oracle::new` + `prefix` give the independent expected vector from program text
 //!   loaded by `bennett_ir::load`. Compare mark/call/rewind-keep snapshots with the existing
 //!   apply vectors. The interpreter stops before measurement and caps total allocation at
@@ -19,8 +20,8 @@
 //!   region-conjugation test explicitly computes A† G A. Map a future whole-machine basis
 //!   (including history) to these dense indices for the same conjugation experiment.
 //!
-//! No mark/rewind encoding or arbitrary-history injection API exists in this test's base.
-//! Add that adapter when available; these helpers impose no guessed history representation.
+//! Mark/rewind integration uses a test-only private-state adapter; no production injection API.
+//! Dense expectations are explicit U† X U matrices rather than a second journal interpreter.
 
 pub mod dense;
 pub mod permutation;

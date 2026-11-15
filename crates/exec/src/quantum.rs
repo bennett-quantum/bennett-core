@@ -281,3 +281,7 @@ fn accumulate(map: &mut BTreeMap<Config, Complex64>, config: Config, amplitude: 
         *map.entry(config).or_default() += amplitude;
     }
 }
+
+#[cfg(test)]
+#[path = "independent_history_tests.rs"]
+mod independent_history_tests;

@@ -97,3 +97,17 @@ fn a_negative_result_wider_than_64_bits_is_printed_signed() {
         assert!(text.contains(&format!("result: {expected}\n")), "@{entry}: {text}");
     }
 }
+
+#[test]
+fn history_example_reports_the_executed_unrun_and_replay_counts() {
+    let output = bennett(&["run", "history.bn", "--entry", "copy", "--arg", "7", "--stats"]);
+    let text = stdout(&output);
+    assert_eq!(output.status.code(), Some(0), "{text}");
+    assert!(text.contains("result: 5632\n"), "{text}");
+    assert!(text.contains("history: 5 steps un-run by rewind, 0 run again"), "{text}");
+    let output = bennett(&["run", "history.bn", "--entry", "nest", "--stats"]);
+    let text = stdout(&output);
+    assert_eq!(output.status.code(), Some(0), "{text}");
+    assert!(text.contains("result: 3\n"), "{text}");
+    assert!(text.contains("history: 2 steps un-run by rewind, 0 run again"), "{text}");
+}
