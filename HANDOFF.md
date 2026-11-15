@@ -39,7 +39,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `cd2d920` | The complex multiply and divide helpers: compiler-rt 18.1.8 vendored unmodified (`rt/compiler-rt`), linked by the front where a program calls them; bit for bit with the same helpers on the hardware, NaN bits aside |
 | `31f5138` | `setjmp`/`longjmp` (library and built-in forms, `sigsetjmp` with musl): a device `setjmp` instruction and `longjmp` terminator, journalled (`docs/DESIGN.md`, "Non-local jumps") |
 
-Check it: `cargo test` (156 tests, about 4 s, no LLVM needed) and `front/test.sh` (137 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (160 tests, about 4 s, no LLVM needed) and `front/test.sh` (138 tests; ignored by default: two `sigsetjmp` wrong-result witnesses, the three heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check that needs `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -202,6 +202,11 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
   (nested, repeated, across frames, from a callback, through a copied `jmp_buf`, value 0, the built-ins,
   allocations freed by the jump) on 32 inputs each against native from -O0 and -O2 and with `--taint-all`;
   `rt/musl/tests/setjmp.c` (masks saved and not, jumps out of signal handlers) prints what native prints.
+  Its independent testing pass (`e8149f1`, sol: 512 device runs matched to native with exact reversal,
+  recursive and copied buffers, VLAs, the built-ins, eight coherent branches, rewinds, jumps out of signal
+  handlers) found two wrong results with `sigsetjmp`, kept as ignored witnesses (`front/tests/c/setjmp_saved_mask.c`,
+  `setjmp_saved_buffer.c`; native status 0, device 1, at -O0 and -O2): revisiting a `sigsetjmp` loses a copied
+  buffer's run-time `savemask`, and revisiting one site restores the last buffer's mask, not the target's.
   Debt: a function that uses `setjmp` is not run coherently from C (refused by name at a qubit-dependent
   call), because LLVM must see `setjmp` as writing any memory; route in `docs/DESIGN.md`.
 
