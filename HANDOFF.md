@@ -38,7 +38,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `9817fe0`, `c17bde9`, `08d7799` | Measurements: journal content in coherent regions; control schedules on the SQLite traces |
 | `cd2d920` | The complex multiply and divide helpers: compiler-rt 18.1.8 vendored unmodified (`rt/compiler-rt`), linked by the front where a program calls them; bit for bit with the same helpers on the hardware, NaN bits aside |
 
-Check it: `cargo test` (92 tests, about 2 s, no LLVM needed) and `front/test.sh` (132 tests; ignored by default: the two heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (95 tests, about 2 s, no LLVM needed) and `front/test.sh` (132 tests; ignored by default: the two heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check that needs `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -111,7 +111,7 @@ alone, not as a whole corpus): GCC 1,559 agree and 10 refused with musl, if noth
   are not recorded). Held-out halves of the input show learned bounds are not sound: exact structure misses
   75-333 held-out scan rows. Every family still depends on observed runs; what a compiler could build without
   them is tabulated there.
-- **Journal content: measured** (`9817fe0`, `c17bde9`; `experiments/journal-content/README.md`). A hook in the
+- **Journal content: measured** (`9817fe0`, `c17bde9`, depth-one recomputation in `e7a571c`; `experiments/journal-content/README.md`). A hook in the
   executor, off by default and shown to change nothing, classifies every journal word of a coherent region as the
   same on every branch, recoverable from live state, or irreducible, under two alignments. Answer for these
   workloads: keeping history under superposition costs a constant factor, not orders of magnitude. In every loop
