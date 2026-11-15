@@ -134,14 +134,15 @@ before floating point landed (`experiments/libc-probe/README.md`). The two have 
    `__bf16`, `__float128`. Then `setjmp`/`longjmp` and the remaining intrinsics.
 6. **A SQL query as an oracle.**
 
-## Queued, not started
+## What the earlier workspace offers
 
-- **A salvage survey of the earlier workspace**: per piece, what demonstrably worked, the evidence, and what it
-  would cost to carry over (maintainer, 2026-11-15: borrow the bits that worked). Candidates by step: the
-  runtimes' device models for files and clocks; `bennett-pebble`, the VM's journals and the branch
-  `wip/bake-muse-8f3` of `bennett-vm` for the journalled machine; the SQLite analysis findings and
-  `wip/rung4-plugin` of `bennett-plugin` for step 6; `bennett-arith` and Bennett.jl's branch-free soft-float for
-  the optimiser. The archive's work that existed on one machine only was pushed there as `wip/` branches.
+- **The salvage survey** (`docs/SALVAGE.md`, ordered by the next step that would
+  use each piece, with what was re-run and what was only read). The one direct code carry is for step 1:
+  `bennett-runtimes`' clock and entropy models, file system and system-call dispatch (about 550 lines of ordinary
+  C) fill the traps of the musl runtime, once what time and randomness mean on the device is decided. For step 5,
+  `bennett-arith`'s bitcode uses integers far wider than the device's 128 bits, so only its test oracles carry;
+  Bennett.jl's branch-free routines remain the cheap port. For step 6 no lifted SQLite oracle ever existed; the
+  measured findings and the acceptance shape carry. Steps 2 and 3 carry designs and test shapes, not code.
 
 ## Decisions the maintainer took on 2026-11-15: the two open choices
 
