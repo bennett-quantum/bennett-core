@@ -5,8 +5,9 @@ design rule is that `bennett-front` either handles a program correctly, refuses 
 in a named fault; never a silent wrong result, a crash or a hang. How true is that on a few thousand real self-checking
 test programs, and why are programs refused?
 
-Measured twice on 2026-11-13, a third time on 2026-11-15 after floating point, and a fourth time on 2026-11-15
-with the C library linked (musl 1.2.5, `rt/musl`); the newest section comes first.
+Measured twice on 2026-11-13, a third time on 2026-11-15 after floating point, a fourth time on 2026-11-15
+with the C library linked (musl 1.2.5, `rt/musl`), and a fifth time with the library linked at `b961292`, after
+the 128-bit conversions and the complex helpers; the newest section comes first.
 First at commit `4b65247` (tree clean when the binaries were copied): `bennett-front` and `bennett` were built
 once (`cargo build --release`, `front/test.sh`, all tests passing), then copied to `.tmp/c-corpus/bin/`, and
 only those copies were used. File and line references in the sections on the
@@ -70,6 +71,53 @@ bytes, not the old block's size. A harness self-test (`.tmp/c-corpus/selftest`) 
 error. **wrong**: the device reaches `abort()`/`exit(≠0)`, or `main` returns a value ≢ 0. **crash**: `bennett-front`
 exits other than 0 or 3, `bennett check` rejects its output, or `bennett run` exits other than 0, 1 or 2. **budget**:
 the 10^8-step budget ran out. **skipped**: no native reference, as above.
+
+## The three corpora at `b961292`, with the C library linked (2026-11-15)
+
+The method of "Results with the C library linked" below: the tree at `b961292` exported with `git archive`,
+`bennett-front` with its float and complex runtimes and the release `bennett` copied from builds of the same
+sources, the library built from the exported tree, 6 programs in parallel, `ieee/` with `EXTRA_FLAGS=-fno-inline`.
+Wall time: GCC 372 s, c-testsuite 30 s, `ieee/` 10 s. Compared per program with the previous run: `72807c5`
+plus the init/fini bounds change (`713d996`), before the front inlined runtime routines that return an
+aggregate (`a9ce585`), the 128-bit conversions and the complex helpers (`cd2d920`):
+
+| outcome | GCC | c-testsuite | GCC `ieee/` |
+|---|---:|---:|---:|
+| agrees | **1,560** (was 1,557) | **217** | **64** |
+| refused by name | 9 (was 12) | 1 | 3 |
+| named fault (native passed) | 6 | 1 | 0 |
+| **wrong** | **0** | **0** | **0** |
+| crash | 0 | 0 | 0 |
+| budget | 0 | 1 | 0 |
+| skipped | 81 | 0 | 1 |
+
+Three programs changed outcome, all from refused to agrees: GCC `20070614-1` (`__mulsc3`, 3,662 steps) and
+`complex-5` (`__divsc3`, 3,263 steps) through the complex helpers, and `pr49218` (`float` to `i128`, 2,233
+steps) through the 128-bit conversions. Every other program has the same outcome and detail. Fifteen that agree
+both times changed step count, all programs using `long double` or formatting a floating-point value through
+musl's `printf` (which computes in `long double`): GCC `20020413-1`, `20030914-1`, `920501-8`, `930513-1`,
+`960215-1`, `960513-1`, `regstack-1`, `stdarg-2`, `struct-ret-1`; c-testsuite `00174`, `00175`, `00195`,
+`00204`; `ieee/` `20010226-1`, `920810-1` (largest: `00204` 1,068,923 to 1,062,821; `960215-1` 3,863 to 3,673).
+
+What still does not run, per reason:
+
+| corpus | refused or faulted | programs |
+|---|---|---:|
+| GCC | `llvm.returnaddress` (`20030323-1`, `20030811-1`, `pr17377`) | 3 |
+| GCC | `llvm.eh.sjlj.longjmp` (`built-in-setjmp`, `pr84521`) | 2 |
+| GCC | `longjmp` (`20210505-1`), `setjmp` (`pr56982`): musl's are x86-64 assembly, not built | 2 |
+| GCC | inline assembly (`990413-2`) | 1 |
+| GCC | a variadic argument aligned to more than 16 bytes (`pr92904`) | 1 |
+| GCC | named fault `unreachable`: no file system (`printf-2`, `user-printf`, `fprintf-2`, `loop-2f`, `loop-2g`) | 5 |
+| GCC | named fault `bad_indirect`: unprototyped call with an extra argument (`pr67037`) | 1 |
+| c-testsuite | a call through a mismatched prototype of `strlen` (`00025`) | 1 |
+| c-testsuite | named fault `unreachable`: `fopen` (`00187`) | 1 |
+| c-testsuite | the 10^8-step budget (`00040`) | 1 |
+| `ieee/` | `cdivchkf`, `cdivchkd`, `cdivchkld`: musl's `ilogb.c`, `ilogbl.c` under `FENV_ACCESS` | 3 |
+
+The first pass of the GCC run reported `20070614-1` and `complex-5` as crashes ("cannot read the
+complex-arithmetic runtime"): the front now loads `complex-runtime.bc` beside its binary, and it had not been
+copied with the others. With it copied, those two were run again with the same binaries and library.
 
 ## The programs that waited on the complex helpers (2026-11-15)
 

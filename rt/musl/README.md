@@ -92,8 +92,8 @@ integer-only printf/scanf patches is applied: every upstream file, including flo
 
 ## On the corpora
 
-Measured on 2026-11-15 at `6da7ef6` (`experiments/c-corpus/README.md`, "Results with the C library linked"):
-on GCC's C torture tests 1,557 of 1,575 runnable programs agree with native on status and stdout, on
+Measured on 2026-11-15 at `b961292` (`experiments/c-corpus/README.md`, "The three corpora at `b961292`"):
+on GCC's C torture tests 1,560 of 1,575 runnable programs agree with native on status and stdout, on
 c-testsuite 217 of 220, on GCC's `ieee/` 64 of 67; none is wrong and none crashes. What still does not run,
 and what removes it:
 
@@ -101,10 +101,10 @@ and what removes it:
 |---|---:|---|
 | files: `open`, `fopen`, `freopen` trap by name | 6 | a file model at this boundary |
 | `setjmp`, `_setjmp`, `longjmp`: no definition (musl's are x86-64 assembly, not built) | 2 | `setjmp`/`longjmp` on the device (`HANDOFF.md`, next step 5) |
-| `__mulsc3`, `__divsc3`: no definition | 2 GCC | removed: compiler-rt's helpers (`rt/compiler-rt`); both agree since |
+| `__mulsc3`, `__divsc3`: no definition | 2 GCC | removed: compiler-rt's helpers (`rt/compiler-rt`); both agree at `b961292` |
 | musl's `ilogb`, `ilogbl` (and ten other math files) under `#pragma STDC FENV_ACCESS ON`: constrained operations refused by the front | 3 `ieee/` (`cdivchkf` was counted at `__divsc3` before the helpers) | lowering constrained operations in the device's fixed environment (to nearest, no readable flags), which `fenv` here already enforces; the same refusal stops `__divxc3` (musl's `logbl` calls `ilogbl`). These three then meet compiler-rt's division, which fails them natively too (`rt/compiler-rt/README.md`) |
 | a program's own `int strlen(char *)` against the library's (c-testsuite `00025`) | 1 | a call through a mismatched prototype, a front refusal |
-| not library calls: `llvm.returnaddress`, `llvm.eh.sjlj.longjmp`, inline assembly, `float` to `i128`, an over-aligned variadic argument, an unprototyped call with an extra argument (`bad_indirect`), a run past the step budget | 10 | the front's own debts (`HANDOFF.md`) |
+| not library calls: `llvm.returnaddress`, `llvm.eh.sjlj.longjmp`, inline assembly, an over-aligned variadic argument, an unprototyped call with an extra argument (`bad_indirect`), a run past the step budget (`float` to `i128` was one; it agrees since the 128-bit conversions) | 9 | the front's own debts (`HANDOFF.md`) |
 
 ## Tests and text size
 
