@@ -94,7 +94,8 @@ strictly in the tests.
 ### History: `mark` and `rewind`
 
 Built on 2026-11-15 as the first step of the next extension (below), on today's machine: one classical
-state, with a superposition only over registers. Worlds that differ in classical state come next.
+state, with a superposition only over registers. Worlds that differ in classical state are the second
+step ("Worlds", below).
 
 - **`%h = mark`** sets `%h`, an `i64`, to the number of journal records up to and including the mark's
   own. A run that keeps no journal starts one at its first mark (a run that was not started reversible
@@ -130,9 +131,11 @@ state, with a superposition only over registers. Worlds that differ in classical
 - **In a coherent region** (`apply`) a rewind runs, but may not keep: registers are quantum
   (`quantum_in_region`).
 - **Undoing a rewind** (by reversal, or by an outer rewind reaching past it) runs its region again from
-  the mark to the rewind, then XORs the kept values again. Its record keeps how many steps it un-ran, and
-  exactly that many run again, so a rewind reached again in a loop is restored at the visit being
-  undone, not the first one that reaches its position. The steps ran before from the same classical
+  the mark to the rewind, then XORs the kept values again. Its record keeps which visit of the rewind
+  (in its frame, since the mark) it was, and running again stops at that visit, so a rewind reached
+  again in a loop is restored at the visit being undone, not the first one that reaches its position.
+  (The first fix kept the number of steps un-run; worlds that took paths of different lengths would then
+  never be equal again, so the visit is kept instead.) The steps ran before from the same classical
   state, so they run again identically; budget, configuration limit and region-fault checks are not
   repeated. Under an outer rewind's keeps one may still fault (step 3), and then is undone again. An
   `apply` un-run or run again by a rewind may fault on some branches without stopping the run: it is a
@@ -156,6 +159,91 @@ state, with a superposition only over registers. Worlds that differ in classical
   checked from its mark: 8,192 starts, each giving the state at the mark with the handle set, the kept
   values XORed and the program counter after the rewind, all distinct, and stepping back gives the state
   at the rewind exactly.
+
+### Worlds
+
+Built on 2026-11-15 as the second step of the next extension: the quantum state is a superposition of
+whole machine states (`crates/exec/src/worlds.rs`). A **world** is a classical machine state (memory,
+frames, every slot, stack pointer, console tape, register table, journal, outcome) together with the
+amplitudes of the register configurations that go with it; a basis state is a world and one
+configuration. With one world the machine is exactly the machine above.
+
+- **Reading a register.** A `call` or `call_indirect` may pass a register `qN` to a parameter `iN` of its
+  width (the validator accepts nothing else new; a `qN` parameter still takes the handle). The callee
+  receives the register's value as an integer: ordinary code depends on the qubits. If the world's
+  configurations disagree on the value, the world first **splits** into one world per value, each with the
+  configurations of that value, and each takes the call. From the first split on every world keeps a
+  journal, as from a first `mark`. The journal also notes each read (which register, which parameter,
+  whether it split).
+- **Every step keeps what it destroys**, so two different worlds stay different, and stepping forward
+  never makes them equal. A `rewind` that un-runs the read makes them the same machine state again; then
+  they are one basis state and **merge**: their amplitudes add. That is interference, and it is exact
+  wherever every un-run is faithful. `apply @f(args) -> out` is the idiom `%h = mark`, `%y = call @f(args)`,
+  `rewind %h keep (%y -> out)` wherever no branch faults (shown below).
+- **A read the state no longer matches.** Keeping a value into a register the region read as an integer
+  would make the read's un-run discard information: two worlds could become one with their amplitudes
+  added though they no longer belong together (the derivation in `HANDOFF.md`, question 1). The same
+  happens when a kept value into another register reaches a read one through a gate between the read
+  and the rewind (`x %q ctrl %o` carries a keep into `o` over to `q`). The un-run of each read checks
+  that the register still holds the value read, in every configuration; if not, the rewind faults
+  `bad_rewind` and changes nothing (the orchestrator's interim decision until the maintainer answers;
+  rule 4 of "What is promised" makes it a warning in the end, so it is a debt). A nonzero keep into a
+  register read since the mark is refused before un-running; anything else is found while un-running,
+  and the rewind runs forward again what it un-ran, as for the other mismatches above, or, if worlds
+  split off during its un-run (running an earlier merging rewind again), restores a copy of the world
+  it took first. Summing the parts of worlds whose
+  un-runs were faithful is exactly the linear map: `h q; mark; read q; rewind; h q` measures 0 every time.
+- **Shared history is un-run part by part.** Below the read where a world split from others, its rewind
+  un-runs its *part* of the state the worlds shared. Every undo there is linear, but a part need not hold
+  what the shared history read, nor be zero where it allocated a register: the parts sum to a state that
+  is. So those checks are off below a world's split point, un-allocating keeps a part's zero
+  configurations (the adjoint of allocating), and steps run again there do not check `qfree`. The norm is
+  checked where every world has stopped (a run stops with `RunError::NormLost` if the worlds' weights do
+  not sum to 1 there).
+- **Scheduling.** Worlds run in lockstep: one tick steps every running world once, and `steps` and the
+  budget count ticks (`Stats::world_steps` counts the steps of all worlds). A world that has just rewound
+  **parks** while another world runs, because that world may still rewind the same mark to the same state
+  (padding is invisible in meaning: a world's state does not include time). When no world runs, equal
+  worlds merge and the parked worlds with the longest history go on; a world can only become equal to
+  another by rewinding a mark they share, and every world still inside that mark's region has a longer
+  history. Reversal undoes the worlds with the longest history first, so worlds merge where they split
+  before anything they share is undone.
+- **Faults in some worlds.** As for `apply`, a fault on only some worlds cannot be detected by the program
+  with certainty: by default the first world to fault while others go on stops the run with
+  `RunError::WorldFault`; `allow_region_faults` lets the faulting world end and the others go on.
+- **Observation.** A `measure` waits until no world runs or is parked, so every world that will merge has
+  merged and the worlds' weights are the probabilities of their machine states. With several worlds it is
+  the exact instrument "the machine is in this world at this measurement, or not": with this world's
+  weight every other world is dropped and the register is measured; otherwise this world is dropped and
+  the others keep their coherence. When every world has ended and several remain, the host reading the
+  result observes the machine: one world is sampled by its weight. Both count in `Stats::observations` and
+  are the first warning of `HANDOFF.md` step 4 (history still entangled at a measurement or at the end).
+  Reversal refuses to cross either, as it refuses a measurement.
+- **Non-local jumps** are journalled per world: a world-dependent `longjmp` discards frames in that world
+  only, and a rewind un-runs it like any step, so worlds that jumped differently merge again
+  (`a_jump_in_one_world_is_un_run_by_the_rewind`). A jump record lives in the world's own memory.
+- **Not yet decided, stopped instead.** A world reaching, by a rewind, a state another world reached by a
+  rewind and already left (only possible when a world re-rewinds a mark it shares with others, at
+  another world's rewind site): whether those two interfere depends on whether time is part of the state
+  (`HANDOFF.md` question). The run stops with `RunError::Unaligned`.
+- **Costs.** A split copies the whole world, memory included (the memory overlay, the next step, removes
+  that). Every world from the first split on keeps a journal. The known exponential with worlds
+  (`crates/exec/tests/worlds.rs`): a chain of `d` levels that each read a qubit, mark, call the next level
+  and rewind costs c(d) = 2 c(d - 1) + 47 steps of all worlds, un-run and run again (22,481 at `d` = 8),
+  against 48 more per level (430 at `d` = 8) when only the outermost level rewinds; two worlds throughout.
+  The apply idiom in a loop on a superposed qubit costs 31 steps of work and about 135 journal bytes per
+  iteration at 50 and at 1,500 iterations.
+- **Checked.** Every split and merge is the linear extension of bijections
+  (`permutation_tests.rs`): a reading call and a merging rewind from 128 starts each (four values of two
+  arguments, two memory bytes, clean and dirty history), each on all 16 basis configurations of two 2-bit
+  registers (distinct results, stepped back exactly) and on their superposition, which must step to
+  exactly the worlds the basis results give and step back to itself. `apply` equals the idiom on the
+  thesis program and Grover (states and outcomes over 16 seeds) and on the exhaustive `apply` harness
+  (108 basis states and the arguments in superposition; a region budget the idiom lacks is a debt).
+  Un-running through gates across worlds equals G† X G applied to each world's part, against an
+  independent dense calculation, on 91 programs (75 states equal, 16 refused exactly where the
+  calculation finds an unfaithful read), and the independent whole-world reference
+  (`oracle_support/worlds.rs`) agrees on the same 91.
 
 ## From C to a device program (`front`)
 
@@ -409,11 +497,12 @@ and x87 (`front/tests/tests/softfloat.rs`): no other difference in any operation
 included, except for `long double` encodings no arithmetic produces and out-of-range conversions, which C
 leaves undefined.
 
-## The next extension: code that is not a clean function (decided; `mark` and `rewind` built)
+## The next extension: code that is not a clean function (decided; `mark`, `rewind` and worlds built)
 
 Decided by the maintainer on 2026-11-13 after five independent proposals (`docs/AUDITION.md`). Built so far:
-`mark` and `rewind ... keep` on today's machine, one classical state ("History: `mark` and `rewind`",
-above; the text form is `%h = mark`, a result like any other). The rest is not built yet.
+`mark` and `rewind ... keep` ("History: `mark` and `rewind`", above; the text form is `%h = mark`, a result
+like any other), and worlds, a superposition of whole machine states ("Worlds", above). The memory
+overlay and gates that take addresses are not built yet.
 
 - **One layering.** A journalled machine defines meaning and is the fallback that needs no analysis: the quantum
   state is a superposition of whole machine states, and each step keeps what it destroys as history. Two
@@ -470,11 +559,14 @@ recomputation shared between conditions (each predicated operation computes and 
 - **Running code under a qubit with its history kept.** `apply` is the cleaned-up special case: compute, copy the
   result out, uncompute at once. The general case keeps the journal as quantum workspace and un-runs later. That is
   what an update with no known inverse (`x = x * x`), a loop under qubit control that contains gates, and a
-  conditional boot need. `mark` and `rewind` join journal and superposition for one classical state; ordinary
-  code reading a qubit (worlds that differ in classical state) is the next step.
+  conditional boot need. `mark`, `rewind` and worlds join journal and superposition: ordinary code reads a
+  qubit, keeps its history, and un-runs it. A store under qubit control is now a store in some worlds; the
+  memory overlay makes that cheap, and the front's fallback (`HANDOFF.md` step 4) is what uses it.
 - **Channels.** A dirty discard is the partial trace, measurement is described by effects, noise by channels; the
   finished Bennett covers them (maintainer, 2026-11-13). This step is unitaries and clean discard, and a dirty
-  `qfree` is a fault. Nothing in the device program should make channels impossible to add.
+  `qfree` is a fault. Nothing in the device program should make channels impossible to add. Worlds keep that
+  open: a world is already a classical record with amplitudes, so a mixture is a weighted list of such
+  superpositions, and the host's observation at the end is the first, simplest instrument.
 - **Exact amplitudes** for the permutation tier.
 - **Integers wider than 128 bits.** The device program has integers up to 128 bits (decided 2026-11-13: Rust's
   `u128` gives their semantics; splitting them in the front would need a type legaliser, which LLVM has only in

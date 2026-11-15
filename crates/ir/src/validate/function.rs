@@ -249,11 +249,11 @@ impl<'a> Checker<'a> {
             }
             Inst::Call { callee, args, .. } => {
                 let params = self.module.function(*callee).params.iter().map(|p| p.ty);
-                self.arguments(site, args, params);
+                self.call_arguments(site, args, params);
             }
             Inst::CallIndirect { signature, target, args, .. } => {
                 self.expect(site, *target, Type::Int(Width::WORD));
-                self.arguments(site, args, signature.params.iter().copied());
+                self.call_arguments(site, args, signature.params.iter().copied());
             }
             Inst::Effect { byte } => self.expect(site, *byte, Type::Int(Width::BYTE)),
             Inst::Qfree { register } | Inst::Measure { register, .. } => {
@@ -393,6 +393,24 @@ impl<'a> Checker<'a> {
         }
         for (arg, ty) in args.iter().zip(params) {
             self.expect(site, *arg, ty);
+        }
+    }
+
+    /// A call's arguments: as for a branch, except that a register may be passed to an integer parameter of
+    /// its width, which reads the register as an integer (`docs/DESIGN.md`, "Worlds").
+    fn call_arguments(&mut self, site: Site, args: &[Operand], params: impl ExactSizeIterator<Item = Type>) {
+        if args.len() != params.len() {
+            self.error(site, Problem::ArgumentCount { expected: params.len(), found: args.len() });
+            return;
+        }
+        for (arg, ty) in args.iter().zip(params) {
+            match (self.type_of(*arg), ty) {
+                (Some(Type::Qreg(found)), Type::Int(width)) if found == width => {}
+                (Some(found @ Type::Qreg(_)), Type::Int(width)) => {
+                    self.mismatch(site, *arg, Expected::IntOrRegister(width.bits()), found);
+                }
+                _ => self.expect(site, *arg, ty),
+            }
         }
     }
 

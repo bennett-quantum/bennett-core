@@ -94,3 +94,26 @@ pub fn assert_reverses(module: &ValidModule, name: &str, args: &[u64], options: 
     assert_same_state(&executor.snapshot(), &at_entry, &format!("@{name}{args:?} after {outcome:?}"));
     outcome
 }
+
+/// Rewrites every `apply @f(args) -> %out, %fault budget B` as the history idiom
+/// `%h = mark`, `%y = call @f(args)`, `rewind %h keep (%y -> %out)` (`docs/DESIGN.md`, "Worlds"). The idiom
+/// has no fault register and no region budget: it equals the `apply` wherever no branch faults.
+pub fn as_history_idiom(text: &str) -> String {
+    let mut out = String::new();
+    for (index, line) in text.lines().enumerate() {
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed.strip_prefix("apply ") else {
+            out += line;
+            out.push('\n');
+            continue;
+        };
+        let indent = &line[..line.len() - trimmed.len()];
+        let rest = rest.split(';').next().unwrap_or(rest);
+        let (call, targets) = rest.split_once("->").unwrap_or_else(|| panic!("an apply: {line}"));
+        let out_register = targets.split(',').next().unwrap_or_else(|| panic!("an out register: {line}")).trim();
+        let (h, y) = (format!("%idiom.{index}.h"), format!("%idiom.{index}.y"));
+        out += &format!("{indent}{h} = mark\n{indent}{y} = call {}\n", call.trim());
+        out += &format!("{indent}rewind {h} keep ({y} -> {out_register})\n");
+    }
+    out
+}

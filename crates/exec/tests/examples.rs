@@ -135,3 +135,34 @@ fn the_configuration_limit_stops_the_run_without_a_fault() {
     executor.reverse().unwrap_or_else(|error| panic!("{error}"));
     common::assert_same_state(&executor.snapshot(), &at_entry, "reversed after the stop");
 }
+
+/// `apply` equals mark, call, rewind-keep (`docs/DESIGN.md`, "Worlds") on the examples whose regions never
+/// fault: the thesis program and Grover, as states before measurement and as measured outcomes per seed.
+#[test]
+fn apply_equals_the_history_idiom_on_the_examples() {
+    for (text, entries) in [
+        (THESIS, &[("entangled", None), ("main", None)][..]),
+        (GROVER, &[("searched", Some(0)), ("searched", Some(1)), ("searched", Some(2)), ("main", None)][..]),
+    ] {
+        let module = load(text);
+        let idiom_text = common::as_history_idiom(text);
+        assert!(!idiom_text.contains("apply "), "every apply rewritten");
+        let idiom = load(&idiom_text);
+        for &(name, arg) in entries {
+            let args: Vec<u64> = arg.into_iter().collect();
+            for seed in 0..16 {
+                let options = Options { seed, ..bounded() };
+                let (expected, applied) = run(&module, name, &args, options);
+                let (outcome, rewound) = run(&idiom, name, &args, options);
+                let context = format!("@{name}{args:?} seed {seed}");
+                assert_eq!(outcome, expected, "{context}");
+                let (a, b) = (rewound.snapshot(), applied.snapshot());
+                assert!(a.worlds.is_empty(), "{context}: the worlds merged");
+                assert_eq!(a.classical.tape, b.classical.tape, "{context}");
+                let distance = a.quantum.distance(&b.quantum);
+                assert!(distance.is_some_and(|d| d <= TOLERANCE), "{context}: {distance:?}");
+                assert!(rewound.stats().peak_worlds > 1 || name == "searched" && args == [0], "{context} splits");
+            }
+        }
+    }
+}

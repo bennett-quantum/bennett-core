@@ -157,6 +157,10 @@ fn report_stats(stats: &Stats, forward: Timed, reverse: Option<Timed>) {
     println!("  region steps: {}", stats.region_steps);
     println!("  history: {} steps un-run by rewind, {} run again", stats.rewound_steps, stats.rerun_steps);
     println!(
+        "  worlds: {} now, {} peak; {} splits, {} merges, {} observed; {} steps of all worlds",
+        stats.worlds, stats.peak_worlds, stats.splits, stats.merges, stats.observations, stats.world_steps
+    );
+    println!(
         "  region faults: {} apply executions faulted on some branch; weight {:e} in all, {:e} at most",
         stats.region_faults, stats.region_fault_weight, stats.region_fault_max_weight
     );

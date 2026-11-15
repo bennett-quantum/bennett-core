@@ -128,7 +128,7 @@ entry:
 
 /// Everything a step can read or write, made comparable; amplitudes rounded so that rounding residue
 /// does not make equal states differ.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct Key {
     memory: Vec<u8>,
     frames: Vec<(u32, u32, usize, usize, u64)>,
@@ -139,6 +139,7 @@ struct Key {
     kinds: Vec<Undo>,
     words: Vec<u128>,
     marks: Vec<(usize, u64)>,
+    reads: Vec<(usize, usize, u32)>,
     registers: Vec<(u32, Option<u32>)>,
     amplitudes: Vec<(Vec<u64>, i64, i64)>,
 }
@@ -157,6 +158,7 @@ fn key(executor: &Executor) -> Key {
         kinds: (0..journal.records()).map(|index| journal.kind_at(index)).collect(),
         words: journal.words().to_vec(),
         marks: journal.marks().iter().map(|entry| (entry.position, entry.allocations)).collect(),
+        reads: journal.reads_from(0).iter().map(|read| (read.record, read.column, read.slot.0)).collect(),
         registers: executor.quantum.registers().iter().map(|r| (r.generation, r.width.map(|w| w.bits()))).collect(),
         amplitudes: executor
             .quantum
@@ -559,4 +561,191 @@ fn the_fixture_reaches_every_kind_of_step() {
         assert!(kinds.contains(&kind), "no {kind:?} step in the fixtures");
     }
     assert!(outcomes.len() >= 3, "returns, an exit and a fault: {outcomes:?}");
+}
+
+/// Worlds (`docs/DESIGN.md`, "Worlds"): a call that reads a register as an integer, and a rewind that
+/// merges the worlds it split into. Each is checked on basis states (one configuration: one world) as a
+/// bijection, as above, and on superpositions of them: the worlds a superposition steps to must be the
+/// linear extension of the basis results, configurations of equal machine states together in one world,
+/// and stepping back must return to the superposition exactly.
+const WORLDS: &str = r#"
+memory 256
+data 16 = i8 3, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 5
+
+func @pick(i2 %x, i2 %a) -> i2 {
+entry:
+    %y = add i2 %x, %a
+    %c = icmp eq i2 %x, 2
+    br %c, two, other
+two:
+    %w = zext i2 %y to i8
+    store i8 %w, 24
+    ret %y
+other:
+    ret %a
+}
+
+func @worlds(i2 %a, i2 %b) -> i2 {
+entry:
+    %q = qalloc 2
+    %r = qalloc 2
+    %m = mark
+    %s = call @pick(%q, %a)
+    %t = add i2 %s, %b
+    rewind %m keep (%t -> %r)
+    ret %a
+}
+"#;
+
+/// A world's machine state without its amplitudes, and its amplitudes.
+type WorldKey = (Key, Vec<(Vec<u64>, i64, i64)>);
+
+/// Every world of the executor, each as its machine state and amplitudes, sorted.
+fn world_keys(executor: &mut Executor) -> Vec<WorldKey> {
+    let mut keys = Vec::new();
+    let count = executor.worlds.len().max(1);
+    for index in 0..count {
+        if executor.has_worlds() {
+            executor.select_world(index);
+        }
+        let mut key = key(executor);
+        // The callee's slots, dead once it returned, still hold what it read: part of the machine state.
+        key.slots = executor.slots.clone();
+        let end = key.slots.iter().rposition(|&slot| slot != 0).map_or(0, |last| last + 1);
+        key.slots.truncate(end);
+        let amplitudes = std::mem::take(&mut key.amplitudes);
+        keys.push((key, amplitudes));
+    }
+    keys.sort();
+    keys
+}
+
+/// The worlds a superposition of `basis` results gives: results with equal machine states together.
+fn superposed(basis: &[(WorldKey, (f64, f64))]) -> Vec<WorldKey> {
+    let mut worlds: Vec<WorldKey> = Vec::new();
+    for ((machine, amplitudes), (re, im)) in basis {
+        let scaled = amplitudes.iter().map(|(config, a, b)| {
+            let (a, b) = (*a as f64 / 1e9, *b as f64 / 1e9);
+            let rounded = |x: f64| (x * 1e9).round() as i64;
+            (config.clone(), rounded(a * re - b * im), rounded(a * im + b * re))
+        });
+        match worlds.iter_mut().find(|(other, _)| other == machine) {
+            Some((_, existing)) => existing.extend(scaled),
+            None => worlds.push((machine.clone(), scaled.collect())),
+        }
+    }
+    for (_, amplitudes) in &mut worlds {
+        amplitudes.sort();
+    }
+    worlds.sort();
+    worlds
+}
+
+/// Distinct amplitudes for the 16 configurations of two 2-bit registers, normalised.
+fn weights() -> Vec<(Vec<u64>, (f64, f64))> {
+    let raw: Vec<(f64, f64)> = (0..16).map(|k| (1.0 + k as f64, 0.5 * (k % 3) as f64)).collect();
+    let norm = raw.iter().map(|(re, im)| re * re + im * im).sum::<f64>().sqrt();
+    (0..16u64).map(|k| (vec![k & 3, k >> 2], (raw[k as usize].0 / norm, raw[k as usize].1 / norm))).collect()
+}
+
+fn set_state(executor: &mut Executor, configs: &[(Vec<u64>, (f64, f64))]) {
+    let amplitudes = configs
+        .iter()
+        .map(|(config, (re, im))| (config.clone().into_boxed_slice(), num_complex::Complex64::new(*re, *im)))
+        .collect();
+    executor.quantum.replace_amplitudes(amplitudes);
+}
+
+/// One step if `through` is `start`, otherwise every world past `through`.
+fn advance(executor: &mut Executor, start: usize, through: usize) {
+    if start == through {
+        assert_eq!(executor.step(), None, "the step runs");
+    } else {
+        run_past(executor, through);
+    }
+}
+
+/// Steps every world until each has stepped past `instruction` (an index in the entry block), which
+/// only the entry frame reaches.
+fn run_past(executor: &mut Executor, instruction: usize) {
+    loop {
+        let mut all_past = true;
+        let count = executor.worlds.len().max(1);
+        for index in 0..count {
+            if executor.has_worlds() {
+                executor.select_world(index);
+            }
+            all_past &= executor.frames.len() == 1 && executor.top().inst > instruction;
+        }
+        if all_past {
+            return;
+        }
+        assert_eq!(executor.step(), None, "the run goes on");
+    }
+}
+
+#[test]
+fn reading_a_register_and_merging_are_the_linear_extension_of_bijections() {
+    let module = bennett_ir::load(WORLDS).expect("valid");
+    let entry = module.function_named("worlds").expect("entry");
+    let (mut reads, mut rewinds) = (0, 0);
+    for dirty in [false, true] {
+        let fixture = Fixture { module: &module, entry, args: vec![0, 0], dirty };
+        // Positions: 3 is the reading call, 2 the mark; the rewind is instruction 5.
+        for (start, through) in [(3, 3), (2, 5)] {
+            let mut outputs = HashMap::new();
+            for a in 0..4u128 {
+                for b in 0..4u128 {
+                    for bytes in assignments(&[BYTE_VALUES.to_vec(), BYTE_VALUES.to_vec()]) {
+                        let at = |configs: &[(Vec<u64>, (f64, f64))]| {
+                            let mut executor = fixture.at(start);
+                            let slots = executor.frames[0].base;
+                            executor.slots[slots] = a;
+                            executor.slots[slots + 1] = b;
+                            executor.memory[BYTES[0]] = bytes[0] as u8;
+                            executor.memory[BYTES[1]] = bytes[1] as u8;
+                            set_state(&mut executor, configs);
+                            executor
+                        };
+                        let mut basis = Vec::new();
+                        let mut before_basis = Vec::new();
+                        for (config, amplitude) in weights() {
+                            let mut executor = at(&[(config.clone(), (1.0, 0.0))]);
+                            let before = world_keys(&mut executor);
+                            advance(&mut executor, start, through);
+                            let after = world_keys(&mut executor);
+                            assert_eq!(after.len(), 1, "a basis state is one world");
+                            if let Some(other) = outputs.insert(after[0].clone(), (a, b, bytes.clone(), config.clone()))
+                            {
+                                panic!("{other:?} and {:?} step to the same state", (a, b, &bytes, &config));
+                            }
+                            // Back: the step at `through` and everything after `start` undone exactly.
+                            let mut back = executor;
+                            while back.frames.len() != 1 || back.top().inst != start {
+                                assert_eq!(back.step_back(), Ok(true));
+                            }
+                            assert_eq!(world_keys(&mut back), before, "{config:?}: not undone exactly");
+                            basis.push((after[0].clone(), amplitude));
+                            before_basis.push((before[0].clone(), amplitude));
+                        }
+                        // All sixteen at once.
+                        let mut executor = at(&weights());
+                        let before = world_keys(&mut executor);
+                        assert_eq!(before, superposed(&before_basis), "the superposition is one world");
+                        advance(&mut executor, start, through);
+                        let after = world_keys(&mut executor);
+                        assert_eq!(after, superposed(&basis), "a={a} b={b} {bytes:?}: not the linear extension");
+                        assert_eq!(after.len(), if through == 3 { 4 } else { 1 }, "a world per value read, merged");
+                        while executor.has_worlds() || executor.frames.len() != 1 || executor.top().inst != start {
+                            assert_eq!(executor.step_back(), Ok(true));
+                        }
+                        assert_eq!(world_keys(&mut executor), before, "the superposition is not restored");
+                        if through == 3 { reads += 1 } else { rewinds += 1 }
+                    }
+                }
+            }
+        }
+    }
+    // a, b, two bytes, clean and dirty: 64 starts each, every one with 16 basis states and their sum.
+    assert_eq!((reads, rewinds), (128, 128));
 }

@@ -27,7 +27,7 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | %d = alloca operand
             | %d = stacksave                             ; the stack pointer, as an i64
             | stackrestore operand                       ; back to a saved stack pointer; else fault bad_stack_restore
-            | [%d =] call @f(typed, ...)
+            | [%d =] call @f(typed, ...)                  ; a qN argument to an iN parameter reads the register
             | [%d =] call_indirect fn(type, ...) [-> type] operand(typed, ...)
             | %d = setjmp operand                        ; i32 0; writes a jump record at the i64 address
             | %d = faddr @f
@@ -126,6 +126,13 @@ function (the validator's `NotAMark`), not a value derived from one or passed th
 Each kept value is an integer exactly as wide as its register (a typed constant names its width); keeping
 a register's value is not accepted. `keep` with an empty list is not accepted: write `rewind %h`. The
 meaning, and when a rewind faults (`bad_rewind`), is in `docs/DESIGN.md`, "History: `mark` and `rewind`".
+
+## Reading a register
+
+A `call` or `call_indirect` may pass a register `%q` of type `qN` to a parameter of type `iN`, the same
+width: the callee receives the register's value as an integer, and the world splits into one world per
+value if its configurations disagree (`docs/DESIGN.md`, "Worlds"). To a `qN` parameter the handle is
+passed, as before. Nowhere else does a register stand for an integer.
 
 ## Whole-run exit
 

@@ -20,6 +20,7 @@ mod permutation_tests;
 mod quantum;
 mod region;
 mod snapshot;
+mod worlds;
 
 pub use executor::{Executor, Frame, Options, Outcome, ReverseError, RunError, StartError, Stats};
 pub use journal::Undo;

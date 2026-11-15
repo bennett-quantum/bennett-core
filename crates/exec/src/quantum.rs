@@ -16,12 +16,15 @@ use crate::gates::Matrix;
 /// The values of every register column, one basis state.
 pub(crate) type Config = Box<[u64]>;
 
+/// The amplitude of every configuration of nonzero amplitude.
+pub(crate) type Amplitudes = BTreeMap<Config, Complex64>;
+
 /// An amplitude no larger than this is treated as zero and dropped. Amplitudes of a normalised state
 /// are at most 1, so this is one unit of rounding: what cancellation leaves behind.
 const NEGLIGIBLE_AMPLITUDE: f64 = f64::EPSILON;
 
 /// The state of one register id.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RegisterState {
     /// Counts the allocations of this id, so a handle to an earlier allocation is recognised as stale.
     pub generation: u32,
@@ -99,8 +102,10 @@ impl QuantumState {
     }
 
     /// Undoes `allocate`: the register's column is dropped and the id gets its previous generation.
-    /// Configurations where the register is not zero can only be rounding residue and are dropped: a
-    /// rewind's un-run, which could find it otherwise, checks `is_zero` first (`history.rs`).
+    /// Configurations where the register is not zero are dropped: in a whole state they can only be
+    /// rounding residue (a rewind's un-run, which could find it otherwise, checks `is_zero` first,
+    /// `history.rs`); in one world's part of a state shared by several, they cancel once the parts merge
+    /// again (dropping them is the adjoint of allocating, a linear map).
     pub(crate) fn unallocate(&mut self, handle: u64) {
         let id = self.resolve(handle).expect("an allocation being undone is live");
         self.amplitudes.retain(|config, _| config[id] == 0);
@@ -122,10 +127,15 @@ impl QuantumState {
     }
 
     /// Frees the register, which must be zero in every configuration.
-    pub(crate) fn free(&mut self, id: usize) -> Result<(), Fault> {
-        if !self.is_zero(id) {
+    ///
+    /// Unchecked (`checked` false), it keeps only the configurations where the register is zero: the
+    /// adjoint of allocating it, a linear map. Steps run again to undo a rewind use it where they run on
+    /// one world's part of a state that was zero only summed over worlds.
+    pub(crate) fn free(&mut self, id: usize, checked: bool) -> Result<(), Fault> {
+        if checked && !self.is_zero(id) {
             return Err(Fault::DirtyFree);
         }
+        self.amplitudes.retain(|config, _| config[id] == 0);
         self.release(id);
         Ok(())
     }
@@ -275,6 +285,72 @@ impl QuantumState {
 
     pub(crate) fn peak_configurations(&self) -> usize {
         self.peak_configurations
+    }
+
+    /// A copy with the same registers and `amplitudes` in place of this state's.
+    pub(crate) fn with_amplitudes(&self, amplitudes: BTreeMap<Config, Complex64>) -> QuantumState {
+        QuantumState {
+            registers: self.registers.clone(),
+            columns: self.columns,
+            amplitudes,
+            peak_qubits: self.peak_qubits,
+            peak_configurations: self.peak_configurations,
+            allocations: self.allocations,
+            allocation_numbers: self.allocation_numbers.clone(),
+        }
+    }
+
+    /// The configurations grouped by the values of `columns`, in order of those values.
+    pub(crate) fn partition(&self, columns: &[usize]) -> Vec<(Vec<u64>, BTreeMap<Config, Complex64>)> {
+        let mut parts = BTreeMap::<Vec<u64>, BTreeMap<Config, Complex64>>::new();
+        for (config, &amplitude) in &self.amplitudes {
+            let key = columns.iter().map(|&column| config[column]).collect();
+            parts.entry(key).or_default().insert(config.clone(), amplitude);
+        }
+        parts.into_iter().collect()
+    }
+
+    /// Whether register `column` holds `value` in every configuration.
+    pub(crate) fn holds(&self, column: usize, value: u64) -> bool {
+        self.amplitudes.keys().all(|config| config[column] == value)
+    }
+
+    /// The summed squared amplitude: the probability of this world among all.
+    pub(crate) fn weight(&self) -> f64 {
+        self.amplitudes.values().map(Complex64::norm_sqr).sum()
+    }
+
+    /// Multiplies every amplitude by `factor`.
+    pub(crate) fn scale(&mut self, factor: f64) {
+        self.amplitudes.values_mut().for_each(|amplitude| *amplitude *= factor);
+    }
+
+    /// Whether `other` has the same registers allocated in the same order: the classical part of a world's
+    /// quantum state, which worlds must share to be one machine state.
+    pub(crate) fn same_registers(&self, other: &QuantumState) -> bool {
+        self.registers == other.registers
+            && self.columns == other.columns
+            && self.allocations == other.allocations
+            && self.allocation_numbers == other.allocation_numbers
+    }
+
+    /// Feeds the classical part (the register table) to `state`.
+    pub(crate) fn hash_registers(&self, state: &mut impl std::hash::Hasher) {
+        use std::hash::Hash;
+        self.registers.hash(state);
+        self.columns.hash(state);
+        self.allocations.hash(state);
+        self.allocation_numbers.hash(state);
+    }
+
+    /// Adds `other`'s amplitudes to this state's: two worlds that are the same machine state become one.
+    pub(crate) fn absorb(&mut self, other: QuantumState) {
+        for (config, amplitude) in other.amplitudes {
+            accumulate(&mut self.amplitudes, config, amplitude);
+        }
+        self.amplitudes.retain(|_, amplitude| amplitude.norm() > NEGLIGIBLE_AMPLITUDE);
+        self.peak_qubits = self.peak_qubits.max(other.peak_qubits);
+        self.peak_configurations = self.peak_configurations.max(other.peak_configurations).max(self.amplitudes.len());
     }
 }
 

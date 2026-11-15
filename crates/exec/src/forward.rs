@@ -76,17 +76,21 @@ impl<'m> Executor<'m> {
             }
             Inst::Qfree { register } => {
                 let id = self.quantum.resolve(self.handle(*register))?;
-                self.quantum.free(id)?;
+                self.quantum.free(id, !self.partial)?;
                 self.record(Undo::Qfree);
                 self.advance();
             }
             Inst::Gate { gate, target, controls } => {
-                self.gate(*gate, target, controls, self.max_configurations)?;
+                let limit = self.max_configurations.map(|limit| limit.saturating_sub(self.others_configurations));
+                self.gate(*gate, target, controls, limit)?;
                 self.record(Undo::Gate);
                 self.advance();
             }
             Inst::Measure { dst, register } => {
                 let id = self.quantum.resolve(self.handle(*register))?;
+                if self.has_worlds() {
+                    self.observe_world()?;
+                }
                 let value = self.quantum.measure(id, &mut self.rng);
                 self.write_slot(*dst, u128::from(value));
                 self.record(Undo::Measure);
@@ -302,22 +306,56 @@ impl<'m> Executor<'m> {
         Ok(())
     }
 
-    fn call(&mut self, callee: FuncId, args: &[Operand]) -> Result<(), Fault> {
+    /// Calls `callee`. An argument that is a register passed to an integer parameter reads the register
+    /// as an integer: if the world's configurations disagree on its value, the world splits into one world
+    /// per value first (`docs/DESIGN.md`, "Worlds"), and the journal notes the read, which un-running the
+    /// call checks.
+    fn call(&mut self, callee: FuncId, args: &'m [Operand]) -> Result<(), Fault> {
+        let function = self.function(callee);
+        let mut reads = Vec::new();
+        for (index, (arg, param)) in args.iter().zip(&function.params).enumerate() {
+            if let (Operand::Slot(slot), Type::Int(_)) = (arg, param.ty)
+                && matches!(self.slot_type(*slot), Type::Qreg(_))
+            {
+                reads.push((index, self.quantum.resolve(self.handle(*slot))?, param.slot));
+            }
+        }
+        let mut split = false;
+        if !reads.is_empty() {
+            // A call that cannot enter faults in every world alike, before any splits.
+            self.frame_fits(callee)?;
+            let columns: Vec<usize> = reads.iter().map(|&(_, column, _)| column).collect();
+            split = self.split(&columns, &|executor| executor.call(callee, args)) || self.splitting;
+        }
         let mut values = std::mem::take(&mut self.scratch);
         values.clear();
         values.extend(args.iter().map(|arg| self.read(arg)));
+        if !reads.is_empty() {
+            let config = self.quantum.amplitudes().keys().next().expect("a state has a configuration");
+            for &(index, column, slot) in &reads {
+                values[index] = u128::from(config[column]);
+                if let Some(journal) = &mut self.journal {
+                    journal.push_read(column, slot, split);
+                }
+            }
+        }
         let pushed = self.push_frame(callee, &values);
         self.scratch = values;
         pushed
+    }
+
+    /// The stack pointer below a new frame of `func`, if it fits on the stack.
+    fn frame_fits(&self, func: FuncId) -> Result<u64, Fault> {
+        let frame_bytes = (self.function(func).slot_count() as u64).checked_mul(SLOT_BYTES);
+        let lowered = frame_bytes.and_then(|bytes| self.stack_pointer.checked_sub(bytes));
+        lowered.filter(|&sp| sp >= self.stack_floor).ok_or(Fault::StackOverflow)
     }
 
     /// Enters `func` with `args`: reserves its frame on the stack and writes its parameters. The caller's
     /// position stays on the call until the callee returns.
     pub(crate) fn push_frame(&mut self, func: FuncId, args: &[u128]) -> Result<(), Fault> {
         let callee = self.function(func);
-        let frame_bytes = (callee.slot_count() as u64).checked_mul(SLOT_BYTES);
-        let lowered = frame_bytes.and_then(|bytes| self.stack_pointer.checked_sub(bytes));
-        let new_sp = lowered.filter(|&sp| sp >= self.stack_floor).ok_or(Fault::StackOverflow)?;
+        let new_sp = self.frame_fits(func)?;
         let base = self.live_top();
         let end = base + callee.slot_count();
         if self.slots.len() < end {

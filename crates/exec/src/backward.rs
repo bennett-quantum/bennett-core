@@ -20,9 +20,17 @@ impl<'m> Executor<'m> {
     /// registers the history may have read: it also refuses to un-run a `qalloc` whose register is not
     /// zero in every configuration, which would discard those configurations. Undoing a `rewind` record
     /// refuses whenever running its region again faults.
+    ///
+    /// Un-running a call that read registers as integers also refuses, checked, if a register no longer
+    /// holds the value the call read. Below a world's split point the checks are off (`partial`, see
+    /// `history.rs`).
     pub(crate) fn unrun_last(&mut self, checked: bool) -> Result<(), Mismatch> {
+        let checked = checked && !self.partial;
         let last = self.journal.as_ref().and_then(Journal::last).expect("a record to undo");
         if checked && last == Undo::Qalloc && !self.allocation_undone_is_zero() {
+            return Err(Mismatch);
+        }
+        if checked && last == Undo::Call && !self.reads_still_hold() {
             return Err(Mismatch);
         }
         let undo = self.journal.as_mut().and_then(|journal| journal.pop()).expect("a record to undo");
@@ -127,7 +135,25 @@ impl<'m> Executor<'m> {
         self.write_bytes(range, old);
     }
 
+    /// Whether every register the call of the last record read as an integer still holds the value it
+    /// read, in every configuration. The top frame is the callee's.
+    fn reads_still_hold(&self) -> bool {
+        let journal = self.journal.as_ref().expect("undoing needs a journal");
+        let record = journal.records() - 1;
+        let base = self.top().base;
+        let reads = journal.reads_from(record);
+        reads.iter().all(|read| self.quantum.holds(read.column, self.slots[base + read.slot.index()] as u64))
+    }
+
     fn undo_call(&mut self) {
+        // Below a read that split the world, a rewind's un-run is of this world's part of a shared state.
+        let journal = self.journal.as_mut().expect("undoing needs a journal");
+        let record = journal.records();
+        while let Some(read) = journal.pop_read_of(record) {
+            if read.split && self.rewinding > 0 {
+                self.partial = true;
+            }
+        }
         let frame = self.frames.pop().expect("a pushed frame");
         for param in self.function(frame.func).params.iter().rev() {
             self.slots[frame.base + param.slot.index()] = self.pop_word();

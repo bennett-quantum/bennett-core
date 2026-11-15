@@ -53,7 +53,7 @@ pub enum Undo {
 }
 
 /// A stack of undo records.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) struct Journal {
     kinds: Vec<Undo>,
     words: Vec<u128>,
@@ -62,10 +62,25 @@ pub(crate) struct Journal {
     /// One entry per `Longjmp` record, in order: the number of frames it discarded, which a `rewind`
     /// counts as returns when it checks that its mark belongs to the running activation.
     jumps: Vec<usize>,
+    /// One entry per register a `Call` record's call read as an integer, in order.
+    reads: Vec<ReadEntry>,
+}
+
+/// A register a call read as an integer: what un-running the call must find still there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ReadEntry {
+    /// The index of the call's `Call` record.
+    pub(crate) record: usize,
+    /// The register's column.
+    pub(crate) column: usize,
+    /// The callee's parameter slot that received the value.
+    pub(crate) slot: bennett_ir::Slot,
+    /// Whether the world split at this read: its configurations disagreed on the value.
+    pub(crate) split: bool,
 }
 
 /// What the journal keeps about a `mark` besides its record.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct MarkEntry {
     /// The number of records up to and including the mark's own: what a `rewind` pops back to.
     pub(crate) position: usize,
@@ -92,6 +107,22 @@ impl Journal {
     /// Removes the last `Longjmp` entry, when its record is undone.
     pub(crate) fn pop_jump(&mut self) {
         self.jumps.pop().expect("a longjmp record has an entry");
+    }
+
+    /// Notes that the call whose `Call` record is pushed next read a register.
+    pub(crate) fn push_read(&mut self, column: usize, slot: bennett_ir::Slot, split: bool) {
+        self.reads.push(ReadEntry { record: self.kinds.len(), column, slot, split });
+    }
+
+    /// Removes and returns the last read if it belongs to the `Call` record at `record`.
+    pub(crate) fn pop_read_of(&mut self, record: usize) -> Option<ReadEntry> {
+        self.reads.pop_if(|entry| entry.record == record)
+    }
+
+    /// The reads made by calls whose records are at `record` or later.
+    pub(crate) fn reads_from(&self, record: usize) -> &[ReadEntry] {
+        let start = self.reads.partition_point(|entry| entry.record < record);
+        &self.reads[start..]
     }
 
     /// The discarded-frame counts of the `Longjmp` records, in order.
@@ -137,6 +168,7 @@ impl Journal {
             + self.words.len() * size_of::<u128>()
             + self.marks.len() * size_of::<MarkEntry>()
             + self.jumps.len() * size_of::<usize>()
+            + self.reads.len() * size_of::<ReadEntry>()
     }
 
     pub(crate) fn clear(&mut self) {
@@ -144,6 +176,7 @@ impl Journal {
         self.words.clear();
         self.marks.clear();
         self.jumps.clear();
+        self.reads.clear();
     }
 
     /// The number of records.

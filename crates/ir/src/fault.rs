@@ -59,7 +59,9 @@ faults! {
     /// The exit operand's type differs from the selected entry's result type.
     ExitTypeMismatch = 14 "exit_type_mismatch",
     /// A `rewind` that cannot un-run: its handle is not a mark of the running function's activation, the
-    /// history since the mark holds a measurement, or a kept value goes into a register allocated since.
+    /// history since the mark holds a measurement, a kept value goes into a register allocated since, or
+    /// the un-run meets a state its history does not describe (a register read as an integer since the
+    /// mark that no longer holds the value read, a register allocated since that is not zero).
     BadRewind = 15 "bad_rewind",
 }
 

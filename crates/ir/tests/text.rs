@@ -280,3 +280,22 @@ fn mark_and_rewind_read_write_and_validate() {
     let text = "func @f() {\nentry:\n %h = mark\n br next(%h)\nnext(i64 %k):\n rewind %k\n ret\n}\n";
     assert_eq!(problems(text), vec![Problem::NotAMark("k".into())]);
 }
+
+/// A call may pass a register to an integer parameter of its width: ordinary code reads the register as an
+/// integer (`docs/DESIGN.md`, "Worlds"). A register of another width, or one passed to a branch target, is
+/// still a type mismatch; a register parameter still takes the handle.
+#[test]
+fn a_call_reads_a_register_passed_to_an_integer_parameter() {
+    let callee = "func @g(i4 %x) -> i4 {\nentry:\n ret %x\n}\nfunc @h(q4 %x) {\nentry:\n ret\n}\n";
+    let body = |statements: &str| {
+        format!(
+            "{callee}func @f(q4 %q, q2 %p) {{\nentry:\n{statements}\n ret\n}}\nfunc @t(i4 %x) {{\nentry:\n ret\n}}\n"
+        )
+    };
+    for valid in [" %v = call @g(%q)", " call @h(%q)", " %f = faddr @g\n %v = call_indirect fn(i4) -> i4 %f(%q)"] {
+        assert!(load(&body(valid)).is_ok(), "{valid}");
+    }
+    assert!(matches!(problems(&body(" %v = call @g(%p)")).as_slice(), [Problem::TypeMismatch { .. }]));
+    let text = format!("{callee}func @f(q4 %q) {{\nentry:\n br next(%q)\nnext(i4 %x):\n ret\n}}\n");
+    assert!(matches!(problems(&text).as_slice(), [Problem::TypeMismatch { .. }]));
+}

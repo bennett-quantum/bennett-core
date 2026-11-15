@@ -9,6 +9,7 @@ use crate::journal::{Journal, Undo};
 use crate::measure::Collector;
 use crate::quantum::QuantumState;
 use crate::snapshot::{ClassicalSnapshot, QuantumSnapshot, Snapshot};
+use crate::worlds::{Status, World};
 
 /// How to run.
 #[derive(Clone, Copy, Debug, Default)]
@@ -68,6 +69,27 @@ pub enum RunError {
         /// The number of basis configurations it ran on.
         configurations: usize,
     },
+    /// A world faulted while other worlds go on, and the run does not allow region faults
+    /// ([`Options::allow_region_faults`]): as for an `apply`, a program cannot detect a fault on only some
+    /// worlds with certainty. The faulting world is as it was before its step; worlds before it in the
+    /// executor's order have taken this tick's step.
+    #[error("world fault: one of {worlds} worlds faulted ({fault}) while others go on")]
+    WorldFault {
+        /// The fault.
+        fault: Fault,
+        /// The number of worlds.
+        worlds: usize,
+    },
+    /// A world reached, by a rewind, a machine state that another world had reached by a rewind and
+    /// already left. Whether the two interfere depends on a choice not yet made (`docs/DESIGN.md`,
+    /// "Worlds"), so the simulator stops instead of guessing. The state is the one after the rewind.
+    #[error("a world rewound to a state another world had already left; the schedule cannot align them")]
+    Unaligned,
+    /// When every world had stopped (to measure, or at the end), their summed squared amplitudes were not
+    /// 1: a step that un-ran shared history in one world's part was not unitary on the whole state (it
+    /// freed or un-allocated a register that was not zero there). The state is kept as it is.
+    #[error("the worlds' summed probability is {0} parts per billion away from 1: an un-run step was not unitary")]
+    NormLost(u64),
 }
 
 /// Why a step did not complete: a fault of the program or a limit of the simulator.
@@ -75,6 +97,8 @@ pub enum RunError {
 pub(crate) enum Halt {
     Fault(Fault),
     Stop(RunError),
+    /// The world was observed not to be there and is dropped (a measurement in another world).
+    Discard,
 }
 
 impl From<Fault> for Halt {
@@ -161,6 +185,20 @@ pub struct Stats {
     /// Steps run again to undo an earlier `rewind`: by a later `rewind` that reaches back past it, or by
     /// reversal. With `steps` and `rewound_steps` this is the work the history instructions cost.
     pub rerun_steps: u64,
+    /// The number of worlds now: whole machine states in superposition (`docs/DESIGN.md`, "Worlds").
+    pub worlds: usize,
+    /// The most worlds at once.
+    pub peak_worlds: usize,
+    /// Steps taken, summed over the worlds that took them: `steps` counts ticks, in which every running
+    /// world takes one step.
+    pub world_steps: u64,
+    /// Worlds that split off because ordinary code read a register whose configurations disagree.
+    pub splits: u64,
+    /// Worlds that merged into another because both became the same machine state.
+    pub merges: u64,
+    /// Times the host or a measurement observed which of several worlds the machine is in: the history
+    /// those worlds carried was still entangled (the warning of `docs/DESIGN.md`, "What is promised").
+    pub observations: u64,
     /// Qubits allocated now.
     pub live_qubits: u32,
     /// The most qubits allocated at once.
@@ -172,7 +210,7 @@ pub struct Stats {
 }
 
 /// One activation of a function.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Frame {
     /// The function.
     pub func: FuncId,
@@ -227,6 +265,38 @@ pub struct Executor<'m> {
     pub(crate) reversible: bool,
     pub(crate) rewound_steps: u64,
     pub(crate) rerun_steps: u64,
+    /// The current world's status, when there are several.
+    pub(crate) status: Status,
+    /// Every world when there are several, `None` at the current one's index; empty for one world.
+    pub(crate) worlds: Vec<Option<World>>,
+    pub(crate) current: usize,
+    /// Worlds that split off during the step in progress and have finished it.
+    pub(crate) forked: Vec<World>,
+    /// How a run of several worlds ended; with one world, `outcome` says it.
+    pub(crate) run_outcome: Option<Outcome>,
+    /// Hashes of states parked worlds left while other worlds went on (`RunError::Unaligned`).
+    pub(crate) departed: Vec<u64>,
+    /// Whether a run of several worlds was observed, which reversal cannot cross.
+    pub(crate) observed: bool,
+    /// Un-runs of a register read that found the register no longer holding the value read.
+    pub(crate) mismatches: u64,
+    pub(crate) splits: u64,
+    pub(crate) merges: u64,
+    pub(crate) observations: u64,
+    pub(crate) world_steps: u64,
+    pub(crate) peak_worlds: usize,
+    pub(crate) peak_world_configurations: usize,
+    /// The configurations of the worlds other than the current one, while it steps among several.
+    pub(crate) others_configurations: usize,
+    /// How deep in running steps again to undo a rewind the executor is.
+    pub(crate) rerunning: u32,
+    /// How deep in rewinds' un-runs the executor is.
+    pub(crate) rewinding: u32,
+    /// Whether the current world's rewind has un-run past a read that split it, so that it now un-runs its
+    /// part of a state shared with other worlds (`history.rs`).
+    pub(crate) partial: bool,
+    /// Whether the world being made by a split is running its first step.
+    pub(crate) splitting: bool,
 }
 
 impl<'m> Executor<'m> {
@@ -262,6 +332,25 @@ impl<'m> Executor<'m> {
             reversible: options.reversible,
             rewound_steps: 0,
             rerun_steps: 0,
+            status: Status::Running,
+            worlds: Vec::new(),
+            current: 0,
+            forked: Vec::new(),
+            run_outcome: None,
+            departed: Vec::new(),
+            observed: false,
+            mismatches: 0,
+            splits: 0,
+            merges: 0,
+            observations: 0,
+            world_steps: 0,
+            peak_worlds: 1,
+            peak_world_configurations: 0,
+            others_configurations: 0,
+            rerunning: 0,
+            rewinding: 0,
+            partial: false,
+            splitting: false,
         };
         let args: Vec<u128> = args.iter().map(|&arg| u128::from(arg)).collect();
         if let Err(fault) = executor.push_frame(entry, &args) {
@@ -271,8 +360,20 @@ impl<'m> Executor<'m> {
         Ok(executor)
     }
 
-    /// Executes one step, unless the run has ended; returns the outcome once it has.
+    /// Executes one step, unless the run has ended; returns the outcome once it has. With several worlds,
+    /// one step is one tick: every running world takes a step.
     pub fn step(&mut self) -> Option<Outcome> {
+        if self.in_region {
+            return self.step_world();
+        }
+        if self.has_worlds() {
+            return self.tick();
+        }
+        self.step_alone()
+    }
+
+    /// One step of the current world alone: the machine as it is without worlds.
+    pub(crate) fn step_world(&mut self) -> Option<Outcome> {
         if self.outcome.is_some() {
             return self.outcome;
         }
@@ -287,9 +388,13 @@ impl<'m> Executor<'m> {
                     self.measure_after_step(pending);
                 }
                 self.steps += 1;
+                if !self.in_region {
+                    self.world_steps += 1;
+                }
             }
             Err(Halt::Fault(fault)) => self.outcome = Some(Outcome::Faulted(fault)),
             Err(Halt::Stop(error)) => self.outcome = Some(Outcome::Stopped(error)),
+            Err(Halt::Discard) => unreachable!("a single world is never observed away"),
         }
         self.outcome
     }
@@ -307,7 +412,16 @@ impl<'m> Executor<'m> {
     /// to running, which changes nothing else; a run whose entry frame never fit has no frame and nothing to undo, so its
     /// fault is part of its entry state. Returns `false` when there is nothing left to undo.
     pub fn step_back(&mut self) -> Result<bool, ReverseError> {
-        let journal = self.journal.as_ref().filter(|_| self.reversible).ok_or(ReverseError::NotReversible)?;
+        if !self.reversible {
+            return Err(ReverseError::NotReversible);
+        }
+        if self.observed {
+            return Err(ReverseError::PastMeasurement);
+        }
+        if self.has_worlds() {
+            return self.step_back_worlds();
+        }
+        let journal = self.journal.as_ref().ok_or(ReverseError::NotReversible)?;
         if matches!(self.outcome, Some(Outcome::Faulted(_) | Outcome::Stopped(_))) && !self.frames.is_empty() {
             self.outcome = None;
         }
@@ -316,7 +430,13 @@ impl<'m> Executor<'m> {
             Some(Undo::Measure) => Err(ReverseError::PastMeasurement),
             Some(_) => {
                 self.undo_last();
-                self.steps -= 1;
+                // After several worlds, ticks and records need not match one for one; none is left once
+                // the journal is empty.
+                self.steps = self.steps.saturating_sub(1);
+                if self.journal.as_ref().is_some_and(|journal| journal.last().is_none()) {
+                    self.steps = 0;
+                }
+                self.adopt_forks(Status::Running);
                 Ok(true)
             }
         }
@@ -333,29 +453,33 @@ impl<'m> Executor<'m> {
 
     /// How the run ended, or `None` while it is running.
     pub fn outcome(&self) -> Option<Outcome> {
-        self.outcome
+        if self.has_worlds() { self.run_outcome } else { self.outcome }
     }
 
-    /// The console output so far.
+    /// The console output so far; with several worlds, the first world's.
     pub fn tape(&self) -> &[u8] {
-        &self.tape
+        self.world_states()[0].tape
     }
 
     /// A copy of the whole state, for comparison by a test harness or a report.
+    /// With several worlds, the first is `classical` and `quantum` and the others are in `worlds`.
     pub fn snapshot(&self) -> Snapshot {
-        let live = self.live_top();
-        Snapshot {
+        let mut worlds = self.world_states().into_iter().map(|world| Snapshot {
             classical: ClassicalSnapshot {
-                memory: self.memory.clone(),
-                frames: self.frames.clone(),
-                slots: self.slots[..live].to_vec(),
-                stack_pointer: self.stack_pointer,
-                tape: self.tape.clone(),
-                outcome: self.outcome,
+                memory: world.memory.to_vec(),
+                frames: world.frames.to_vec(),
+                slots: world.slots.to_vec(),
+                stack_pointer: world.stack_pointer,
+                tape: world.tape.to_vec(),
+                outcome: world.outcome,
                 steps: self.steps,
             },
-            quantum: QuantumSnapshot::of(&self.quantum),
-        }
+            quantum: QuantumSnapshot::of(world.quantum),
+            worlds: Vec::new(),
+        });
+        let mut first = worlds.next().expect("at least one world");
+        first.worlds = worlds.collect();
+        first
     }
 
     /// The counts of the run so far.
@@ -368,13 +492,25 @@ impl<'m> Executor<'m> {
             region_faults: self.region_faults,
             region_fault_weight: self.region_fault_weight,
             region_fault_max_weight: self.region_fault_max_weight,
-            journal_bytes: self.journal.as_ref().map(Journal::bytes),
+            journal_bytes: self.journals().into_iter().flatten().map(Journal::bytes).reduce(|a, b| a + b),
             rewound_steps: self.rewound_steps,
             rerun_steps: self.rerun_steps,
-            live_qubits: self.quantum.live_qubits(),
-            peak_live_qubits: self.quantum.peak_qubits(),
-            configurations: self.quantum.amplitudes().len(),
-            peak_configurations: self.quantum.peak_configurations(),
+            worlds: self.worlds.len().max(1),
+            peak_worlds: self.peak_worlds,
+            world_steps: self.world_steps,
+            splits: self.splits,
+            merges: self.merges,
+            observations: self.observations,
+            live_qubits: self.quantum_states().iter().map(|q| q.live_qubits()).max().unwrap_or(0),
+            peak_live_qubits: self.quantum_states().iter().map(|q| q.peak_qubits()).max().unwrap_or(0),
+            configurations: self.quantum_states().iter().map(|q| q.amplitudes().len()).sum(),
+            peak_configurations: self
+                .quantum_states()
+                .iter()
+                .map(|q| q.peak_configurations())
+                .max()
+                .unwrap_or(0)
+                .max(self.peak_world_configurations),
         }
     }
 
