@@ -1,8 +1,8 @@
 //! Constructors run, or remain in linker arrays owned by C startup; none become inert data.
 use bennett_exec::{Executor, Outcome};
 use bennett_front_tests::{
-    CLANG_FLAGS, CLANG_O2_FLAGS, assert_agrees_with_native, c_dir, entry, lower, lower_text, native_build, options,
-    out_dir, write_c,
+    CLANG_FLAGS, CLANG_O2_FLAGS, assert_agrees_with_native, c_dir, entry, lower, lower_text, native_build,
+    native_build_with, options, out_dir, write_c,
 };
 use std::process::Command;
 
@@ -189,13 +189,9 @@ int main(int argc, char **argv) { return x + argc + (argv != 0); }
 }
 
 // At equal priority the native program runs an explicit section contribution before the
-// entries of `llvm.global_ctors`/`llvm.global_dtors`: LLVM emits the section globals first
-// and lowers the special arrays after them (one `.init_array` in the native object, section
-// entry first). The front collects the special arrays first, so each program below disagrees
-// with its native build: expected tapes are the native ones, observed device tapes are
-// "asm", "asm" and "msa".
+// entries of `llvm.global_ctors`/`llvm.global_dtors` when clang emits the section globals first
+// (it emits the special arrays last): they share one `.init_array` input section.
 #[test]
-#[ignore = "section contributions run after same-priority global_ctors/dtors entries, opposite to native"]
 fn section_contributions_precede_same_priority_special_entries() {
     for (tag, text, expected) in [
         (
@@ -223,12 +219,9 @@ fn section_contributions_precede_same_priority_special_entries() {
 }
 
 // The only mention of a linker bound is an uncalled internal function, which the front's
-// own pipeline deletes (it does not reach the device program). Startup ownership is decided
-// before that pipeline, so the constructor is supplied as an array nobody walks and silently
-// never runs: observed Returned(0) with tape "m". With no C startup left in the program the
-// front must run the constructor itself (or refuse by name).
+// own optimiser deletes. No C startup is left to walk the arrays, so the front runs the
+// constructor itself: ownership is decided on the references that survive the optimiser.
 #[test]
-#[ignore = "a bound reference the pipeline deletes still disables automatic constructors, silently"]
 fn a_deleted_bound_reference_does_not_own_startup() {
     let path = out_dir().join("startup_dead_bound.ll");
     std::fs::write(
@@ -240,4 +233,107 @@ fn a_deleted_bound_reference_does_not_own_startup() {
     let mut executor = Executor::new(&module, entry(&module, "main"), &[], options(0)).expect("starts");
     assert_eq!(executor.run(), Outcome::Returned(Some(5)));
     assert_eq!(executor.tape(), b"im");
+    // The same from C: the only walk of the array is in a branch the optimiser folds away.
+    let source = write_c(
+        "startup_folded_bound",
+        r#"
+#include "bennett.h"
+typedef void (*fn)(void);
+extern fn __init_array_start[], __init_array_end[];
+static int never; // never written: the optimiser folds it to 0
+volatile int seed = 5;
+int x;
+__attribute__((constructor)) static void init(void) { x = seed; __bennett_effect('i'); }
+__attribute__((destructor)) static void fini(void) { __bennett_effect('f'); }
+int start(void) {
+    if (never) for (fn *p = __init_array_start; p != __init_array_end; ++p) (*p)();
+    __bennett_effect('m');
+    return x;
+}
+"#,
+    );
+    let module = lower(&source, "startup_folded_bound", CLANG_FLAGS, &["--entry=start"]);
+    let mut executor = Executor::new(&module, entry(&module, "start"), &[], options(0)).expect("starts");
+    assert_eq!(executor.run(), Outcome::Returned(Some(5)));
+    assert_eq!(executor.tape(), b"imf");
+    // Decided after the optimiser, automatic startup still needs its entry.
+    let error =
+        lower_text(&source, "startup_folded_bound_no_entry", CLANG_FLAGS, &[]).expect_err("must name the entry");
+    assert!(error.contains("constructors/destructors without a defined entry @main"), "{error}");
+}
+
+/// Runs `source` on the device and natively and checks both tapes are `expected` (each with
+/// entry result 0). `native` builds the native program.
+fn assert_tape_agrees(source: &std::path::Path, tag: &str, native: std::path::PathBuf, expected: &[u8]) {
+    let output = Command::new(native).output().expect("run native");
+    assert_eq!(output.status.code(), Some(0), "{tag}");
+    assert_eq!(output.stdout, expected, "{tag}: native");
+    for (flags, suffix) in [(CLANG_FLAGS, ""), (CLANG_O2_FLAGS, ".o2")] {
+        let module = lower(source, &format!("{tag}{suffix}"), flags, &[]);
+        let mut executor = Executor::new(&module, entry(&module, "main"), &[], options(0)).expect("starts");
+        assert_eq!(executor.run(), Outcome::Returned(Some(0)), "{tag}{suffix}");
+        assert_eq!(executor.tape(), expected, "{tag}{suffix}");
+    }
+}
+
+// The native order is the static link's: LLVM emits each global in module order into its object
+// section (a `retain`ed one gets a section of its own; the special arrays' entries share the
+// section of their priority's name), and GNU ld places numbered sections sorted by priority, ties
+// by section name, before the plain sections in input order.
+#[test]
+fn startup_order_matches_the_native_link() {
+    let source = write_c(
+        "startup_link_order",
+        r#"
+#ifdef NATIVE
+#include <stdio.h>
+#define emit(c) ((void)putchar(c))
+#else
+#include "bennett.h"
+#define emit(c) __bennett_effect(c)
+#endif
+typedef void (*fn)(void);
+#define AT(name, ch, ...) static void name##_f(void) { emit(ch); } __attribute__((__VA_ARGS__)) static fn name = name##_f;
+AT(a, 'a', used, section(".init_array"))
+AT(b, 'b', retain, used, section(".init_array"))
+__attribute__((constructor)) static void c(void) { emit('c'); }
+AT(d, 'd', used, section(".init_array.150"))
+__attribute__((constructor(150))) static void e(void) { emit('e'); }
+AT(f, 'f', retain, used, section(".init_array.150"))
+AT(g, 'g', used, section(".init_array.65535"))
+AT(h, 'h', used, section(".init_array.101"))
+AT(i, 'i', used, section(".init_array.0101"))
+__attribute__((constructor(101))) static void j(void) { emit('j'); }
+AT(A, 'A', used, section(".fini_array"))
+AT(B, 'B', retain, used, section(".fini_array"))
+__attribute__((destructor)) static void C(void) { emit('C'); }
+AT(D, 'D', used, section(".fini_array.200"))
+__attribute__((destructor(200))) static void E(void) { emit('E'); }
+int main(void) { emit('m'); return 0; }
+"#,
+    );
+    let native = native_build(&source, "startup_link_order", &["-DNATIVE"]);
+    assert_tape_agrees(&source, "startup_link_order", native, b"ihjdefgacbmBCAED");
+    // LLVM IR can place the special arrays before the section objects, and give a priority above
+    // 65535, which LLVM clamps to the plain section.
+    let effect =
+        write_c("startup_native_effect", "#include <stdio.h>\nvoid __bennett_effect(char c) { putchar(c); }\n");
+    let calls = "define internal void @f1() { call void @__bennett_effect(i8 49)\n ret void }\ndefine internal void @f2() { call void @__bennett_effect(i8 50)\n ret void }\ndefine internal void @f3() { call void @__bennett_effect(i8 51)\n ret void }\ndefine internal void @f4() { call void @__bennett_effect(i8 52)\n ret void }\ndefine internal void @f5() { call void @__bennett_effect(i8 53)\n ret void }\ndefine internal void @f6() { call void @__bennett_effect(i8 54)\n ret void }\ndefine internal void @f7() { call void @__bennett_effect(i8 55)\n ret void }\ndefine internal void @f8() { call void @__bennett_effect(i8 56)\n ret void }\ndefine i32 @main() { call void @__bennett_effect(i8 109)\n ret i32 0 }\ndeclare void @__bennett_effect(i8)\n";
+    for (tag, globals, expected) in [
+        (
+            "startup_link_order_ir",
+            "@r150 = internal global ptr @f1, section \".init_array.150\"\n@llvm.used = appending global [2 x ptr] [ptr @r150, ptr @rplain], section \"llvm.metadata\"\n@p150 = internal global ptr @f2, section \".init_array.150\"\n@llvm.global_ctors = appending global [3 x {i32, ptr, ptr}] [{i32, ptr, ptr} {i32 150, ptr @f3, ptr null}, {i32, ptr, ptr} {i32 65535, ptr @f4, ptr null}, {i32, ptr, ptr} {i32 70000, ptr @f8, ptr null}]\n@rplain = internal global ptr @f5, section \".init_array\"\n@n65535 = internal global ptr @f6, section \".init_array.65535\"\n@cplain = internal constant ptr @f7, section \".init_array\"\n@llvm.compiler.used = appending global [3 x ptr] [ptr @p150, ptr @n65535, ptr @cplain], section \"llvm.metadata\"\n",
+            b"12364875m".as_slice(),
+        ),
+        (
+            "startup_link_order_ir_fini",
+            "@a = internal global ptr @f1, section \".init_array.101\"\n@b = internal global ptr @f2, section \".init_array.0101\"\n@c = internal global ptr @f3, section \".fini_array\"\n@llvm.global_dtors = appending global [1 x {i32, ptr, ptr}] [{i32, ptr, ptr} {i32 65535, ptr @f4, ptr null}]\n@d = internal global ptr @f5, section \".fini_array\"\n@llvm.used = appending global [1 x ptr] [ptr @d], section \"llvm.metadata\"\n@llvm.compiler.used = appending global [3 x ptr] [ptr @a, ptr @b, ptr @c], section \"llvm.metadata\"\n",
+            b"21m543".as_slice(),
+        ),
+    ] {
+        let path = out_dir().join(format!("{tag}.ll"));
+        std::fs::write(&path, format!("{globals}{calls}")).expect("write IR");
+        let native = native_build_with(&path, tag, &["-Wno-override-module"], &[effect.to_str().expect("UTF-8 path")]);
+        assert_tape_agrees(&path, tag, native, expected);
+    }
 }

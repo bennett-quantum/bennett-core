@@ -107,7 +107,8 @@ It does not run C cleanup itself: a library's `exit` runs handlers and flushing 
 
 Constructors and destructors run automatically around `main`, or the front's `--entry=name`. Pass the same
 entry to `bennett run --entry name`. Constructors run in ascending priority order, destructors in reverse
-order after a normal return; the entry's result is preserved. A module that references any standard
+order after a normal return; the entry's result is preserved. Ties run in the order a native build of the same
+module runs them. A module that references (after the front's optimiser) any standard
 `__init_array_start`/`__init_array_end` or `__fini_array_start`/`__fini_array_end` owns startup itself: the front
 supplies the arrays and bounds, and the library's C startup and exit code must walk them. The device exit call
 bypasses the automatic destructor wrapper, just as `_Exit` bypasses C library cleanup.

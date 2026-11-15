@@ -141,6 +141,8 @@ int main(int argc, char **argv) {
       runPipeline(*module, "globaldce,cgscc(function-attrs)", false);
     }
   }
+  bennett::finishStartup(*module, entryName);
+  verify(*module, "after deciding constructor/destructor startup");
   bennett::checkMarkers(*module, /*floatsAreBits=*/true);
   bennett::lowerParameterAttributes(*module);
   bennett::scalarise(*module);
