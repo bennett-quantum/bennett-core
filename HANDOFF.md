@@ -29,7 +29,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `60bd56b`, `2f11a5f`, `bc8661c` | The console reachable from C; the `exit` instruction; constructors and destructors run, or their linker arrays supplied (a silent wrong result the probe found) |
 | `9e15ebf`, `4dfb423` | Large data strings read without recursion (the debug CLI overflowed its stack); musl 1.2.5 vendored unmodified (`rt/musl`), its 1,345 C files built to bitcode offline |
 
-Check it: `cargo test` (71 tests, about 2 s, no LLVM needed) and `front/test.sh` (98 tests, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
+Check it: `cargo test` (77 tests, about 2 s, no LLVM needed) and `front/test.sh` (100 tests and the full journal-content measurement, ignored by default, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 On GCC's C torture tests 1,521 of 1,576 runnable programs agree with native, 53 are refused by name, none is wrong;
 on its floating-point tests (`ieee/`) 58 of 67, 9 refused (C library calls), none wrong
@@ -89,14 +89,19 @@ before floating point landed (`experiments/libc-probe/README.md`). The two have 
   with musl was started, so the prediction in next step 1 is untested); the refusal tables; the complex-number
   helpers. To resume: check out `wip/rt-musl`, rebase on `main`, finish the audit, run the three corpora from a
   clean commit with copied binaries, reduce every wrong result or crash, then land.
-- **Control schedules on the SQLite traces** (`experiments/sqlite-footprint/schedule.py`). Unfinished and unchecked;
+- **Control schedules on the SQLite traces** (`experiments/sqlite-footprint/schedule.py`; being finished now). Unfinished and unchecked;
   one workload completed. The preliminary table and the open points are at the end of that directory's README.
-- **Journal content.** Nothing was written. The task: on real coherent regions, classify every journal word as the
-  same on every branch, recoverable from live state, or irreducible, under two alignments, by record kind, with
-  slopes against step count; on everything that runs today plus memory-heavy lookups written in C (binary search,
-  hash table, B-tree over 1,024 keys) and one workload that writes memory. It needs a measurement hook in the
-  executor that changes nothing when off. It decides whether the two optimisations buy orders of magnitude or a
-  constant.
+- **Journal content: measured** (`9817fe0`, `c17bde9`; `experiments/journal-content/README.md`). A hook in the
+  executor, off by default and shown to change nothing, classifies every journal word of a coherent region as the
+  same on every branch, recoverable from live state, or irreducible, under two alignments. Answer for these
+  workloads: keeping history under superposition costs a constant factor, not orders of magnitude. In every loop
+  that repeats, irreducible words grow linearly with steps (0.41 to 0.86 per step against 1.23 to 1.36 journal
+  words per step: a saving of 1.4 to 3.1 times). Over 256 branches and 1/2/4/8 chained lookups the irreducible
+  share is 37/50/59/64 % for binary search, 36/46/51/53 % for a B-tree, 0/5.5/17/23 % for a hash table; of 67
+  other coherent runs, 49 have none. It is an upper bound: only values that can be copied are credited, not
+  values that could be recomputed. Not measured yet: whether the linear growth survives a recompute witness, and
+  global-memory writes inside a region (refused until the journalled machine exists). An independent check is
+  in flight.
 
 - **Constructor startup, after its independent testing pass** (`40b04b4`, Muse; `exit` and the console call held
   under every probe). It found two wrong results, both fixed in `e13a6c8` and now regression tests: at equal
@@ -107,7 +112,7 @@ before floating point landed (`experiments/libc-probe/README.md`). The two have 
   native build of the linked module; separately compiled objects linked natively can differ (C leaves it
   unspecified; `docs/DESIGN.md`). Safe refusals noted by the pass: a constructor through an alias; a null entry
   in a section array; an array variable in `.init_array` with alignment above 8; `front/include/bennett.h`
-  cannot be included from C++ (`_Bool`).
+  cannot be included from C++ (`_Bool`). An independent check of the fix is in flight.
 
 ## Next steps, in order
 
@@ -120,9 +125,8 @@ before floating point landed (`experiments/libc-probe/README.md`). The two have 
    `__mulsc3`, `__divsc3`, `fopen`, `qsort`, `isprint`, `longjmp`, `_setjmp`), 66 of 68 on c-testsuite and all
    9 on `ieee/` (`signal` 3, `sqrt`, `sin`, `ilogb`, `ilogbl`, `sprintf`, `__divsc3`); floating-point programs
    that wait on it: 8 GCC, 2 c-testsuite, 5 `ieee/`.
-2. **Finish the two stopped measurements.** The journal-content one should come before step 3: it decides
-   whether keeping history under superposition costs a constant or orders of magnitude, which neither this
-   repository nor the earlier workspace has measured (advisor's recommendation, 2026-11-15).
+2. **Finish the control-schedule measurement** (in flight). The journal-content one is done ("Stopped in flight"):
+   a constant factor, as far as copies go; the recompute witness is its next measurement.
 3. **Build the journalled machine in the executor** and run the experiments listed in `docs/DESIGN.md` as it is
    built: every journalled step is a permutation; `apply` equals mark, call, rewind-keep; un-running through gates
    equals the conjugated operation.
