@@ -5,7 +5,8 @@ design rule is that `bennett-front` either handles a program correctly, refuses 
 in a named fault; never a silent wrong result, a crash or a hang. How true is that on a few thousand real self-checking
 test programs, and why are programs refused?
 
-Measured twice on 2026-11-13, and a third time on 2026-11-15 after floating point (its section comes first).
+Measured twice on 2026-11-13, a third time on 2026-11-15 after floating point, and a fourth time on 2026-11-15
+with the C library linked (musl 1.2.5, `rt/musl`); the newest section comes first.
 First at commit `4b65247` (tree clean when the binaries were copied): `bennett-front` and `bennett` were built
 once (`cargo build --release`, `front/test.sh`, all tests passing), then copied to `.tmp/c-corpus/bin/`, and
 only those copies were used. File and line references in the sections on the
@@ -69,6 +70,83 @@ bytes, not the old block's size. A harness self-test (`.tmp/c-corpus/selftest`) 
 error. **wrong**: the device reaches `abort()`/`exit(≠0)`, or `main` returns a value ≢ 0. **crash**: `bennett-front`
 exits other than 0 or 3, `bennett check` rejects its output, or `bennett run` exits other than 0, 1 or 2. **budget**:
 the 10^8-step budget ran out. **skipped**: no native reference, as above.
+
+## Results with the C library linked (musl 1.2.5, 2026-11-15)
+
+Each program is linked with the musl runtime (`rt/musl/link.py`: the program, musl's own startup and exit code,
+the archive members a static linker would pull, and the device's system calls), run from
+`__bennett_entry`, and compared with the native program on exit status **and standard output**. Native is
+clang 18 with the system's glibc; its stdout goes to a file and its stdin is `/dev/null`, as the device's
+console and empty stdin. Set `MUSL_LIBDIR` to a library built by `rt/musl/build.py` to select this mode in
+`run-one.sh`; without it the harness is the one described below (`rt.c`, exit status only). In this mode a
+program's own `abort()` or `exit(n)` reaches musl, so a failing self-check is a status other than 0 (abort's
+is 134); variants A and B build the same program, so a fault the program raises is reported as a fault. Programs whose native stdout differs between `-O0` and
+`-O2` are skipped (one GCC program). An "agrees" with output that differs from native is counted as wrong.
+
+Method: the tree at `9a1ff39` exported with `git archive`, `bennett-front` and its float runtime and the
+release `bennett` copied from builds of the same sources, the library built from the exported tree; 6
+programs in parallel. The baseline is the same snapshot without the library. Wall time with the library:
+GCC 492 s, c-testsuite 66 s, `ieee/` 18 s (baseline 276 s, 18 s, 8 s). An earlier run at `97e1c0d`,
+before the `fenv` change (which no corpus program uses), gave the same outcome and detail for every program.
+
+| outcome | GCC: baseline | with musl | c-testsuite: baseline | with musl | GCC `ieee/`: baseline | with musl |
+|---|---:|---:|---:|---:|---:|---:|
+| agrees | 1,521 | **1,557** | 151 | **217** | 58 | **64** |
+| refused by name | 52 | 12 | 68 | 1 | 9 | 3 |
+| named fault (native passed) | 1 | 6 | 0 | 1 | 0 | 0 |
+| **wrong** | **0** | **0** | **0** | **0** | **0** | **0** |
+| crash | 1 | 0 | 0 | 0 | 0 | 0 |
+| budget | 0 | 0 | 1 | 1 | 0 | 0 |
+| skipped | 81 | 81 | 0 | 0 | 1 | 1 |
+
+No program moved from agrees to anything else. GCC: 35 refusals now agree, 5 became named faults, 12 stay
+refused, and the crash (`20051113-1`, LLVM's dead-store-elimination bug of cause 1) does not occur when musl's
+string functions are linked in place of `rt.c`'s loops; it agrees. The musl startup and exit sequence adds
+about 2,050 device steps to a program (median over the programs that agree both ways: 2,047 GCC, 2,047
+c-testsuite, 2,041 `ieee/`).
+
+**The prediction against the measurement**, per refusal reason of the baseline (the prediction was 44 of 53
+GCC refusals removed, 66 of 68 on c-testsuite, all 9 on `ieee/`):
+
+| corpus | baseline refusal | programs | with musl |
+|---|---|---:|---|
+| GCC | `printf` | 14 | agree |
+| GCC | `sprintf` | 9 | agree |
+| GCC | `sprintf` through a pointer (`930513-1`) | 1 | agrees |
+| GCC | `vprintf` 2, `snprintf` 1, `puts` 2 | 5 | agree |
+| GCC | `stdout` | 4 | 2 agree (`fprintf-1`, `vfprintf-1`); 2 named faults (`printf-2`, `user-printf` open a temporary file) |
+| GCC | `stderr` (`gofast`) | 1 | agrees (it writes to it only when a check fails) |
+| GCC | `open` (`loop-2f`, `loop-2g`: `/dev/zero`) | 2 | named faults: no file system |
+| GCC | `fopen` (`fprintf-2`) | 1 | named fault: no file system |
+| GCC | `pow`, `isprint`, `qsort` | 3 | agree |
+| GCC | `__mulsc3` (`20070614-1`), `__divsc3` (`complex-5`) | 2 | refused: no definition (the open choice of where the complex helpers come from) |
+| GCC | `longjmp` (`20210505-1`), `_setjmp` (`pr56982`, now refused at `setjmp`) | 2 | refused: musl's `setjmp` and `longjmp` are x86-64 assembly, not built |
+| GCC | `llvm.returnaddress` 3, `llvm.eh.sjlj.longjmp` 2, inline assembly 1, `float` to `i128` 1, an over-aligned variadic argument 1 | 8 | refused, unchanged (not library calls) |
+| c-testsuite | `printf` 42, `puts` 22, `sprintf` 1, `stdout` 1 | 66 | agree |
+| c-testsuite | `fopen` (`00187`) | 1 | named fault: no file system |
+| c-testsuite | `strlen` declared as `int strlen(char *)` (`00025`) | 1 | refused, unchanged: a call through a mismatched prototype |
+| `ieee/` | `signal` (`fp-cmp-1`, `-2`, `-3`) | 3 | agree: the handler is installed and never raised |
+| `ieee/` | `sqrt`, `sin`, `sprintf` | 3 | agree |
+| `ieee/` | `ilogb` (`cdivchkd`), `ilogbl` (`cdivchkld`), `__divsc3` (`cdivchkf`) | 3 | refused at musl's `ilogb.c`: `#pragma STDC FENV_ACCESS ON` gives a constrained operation the front refuses; they also divide complex numbers |
+
+So GCC: 40 of 52 refusals removed (35 agree, 5 named faults on files), against 44 predicted; the four the
+prediction counted and the measurement does not are `__mulsc3`, `__divsc3`, `longjmp` and `_setjmp`.
+c-testsuite: 67 of 68 removed (66 agree, 1 named fault), against 66 predicted. `ieee/`: 6 of 9, against 9
+predicted; the three complex-division checks wait on `FENV_ACCESS` and the complex helpers.
+
+**Named faults that remain, and what removes them.** File I/O (`open`, `fopen`, `freopen` of temporary files;
+6 programs) traps by name: it needs a file model in the runtime. `pr67037` is the unprototyped call with an
+extra argument described below (`bad_indirect`), as before. c-testsuite `00040` runs out of the 10^8-step
+budget, as before.
+
+**What the corpus run found before it was clean** (all fixed, each with a regression test; details in
+`rt/musl/README.md`): musl's `malloc` trapped on its first call (a fixed `PROT_NONE` guard page); `abort`
+trapped (musl's `raise` blocks the signal around `tkill`); reads of stdin through `readv` trapped; every
+program that used `scanf` ended in `bad_indirect` at exit, a front bug: `scanf`'s alias made a variadic
+function address-taken, and the front then lowered every call through an unprototyped pointer (musl's call
+of each destructor) as a variadic call. The front now compares the pointer with each address-taken variadic
+function at the call. A harness bug left `run-one.sh` without `here`, and two library build problems made a
+fresh library resolve nothing (a stale symbol cache) or crash six concurrent links (one shared partial file).
 
 ## Results after floating point (2026-11-15)
 
