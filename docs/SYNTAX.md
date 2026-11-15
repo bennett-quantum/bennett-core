@@ -72,8 +72,9 @@ unsigned integer (decimal or `0x` hex) from 0 to 2^64 - 1.
 - `zero` is the lowercase word, recognised only where an item may start; it is not a type and not a
   reserved name elsewhere. COUNT follows it on the same line.
 - COUNT is an unsigned integer from 0 to 2^64 - 1 = 18446744073709551615: decimal digits, or `0x`
-  (lowercase x) followed by hex digits of either case; leading zeros are allowed. A sign (`-1`, also `-0`),
-  a fraction, an exponent or a value above 2^64 - 1 is the read error `BadNumber`. A missing COUNT, one
+  (lowercase x) followed by hex digits of either case; leading zeros are allowed. A minus sign (`-1`, also `-0`),
+  a fraction, an exponent or a value above 2^64 - 1 is the read error `BadNumber`; a plus sign is not a character
+  of the text form anywhere, so `+0` is `BadCharacter`. A missing COUNT, one
   that is not a number, or anything after it but `,` or the end of the line is `Unexpected`; so are `0X10`
   and a bare `0x`, which read as the number `0` followed by a word. `zero16`, without the space, is one word and
   reads as a bad type (`BadType`).

@@ -2,11 +2,11 @@
 
 use bennett_ir::{DataItem, LoadError, Problem, ReadErrorKind, load, read, validate, write};
 
+// ZERO-001: the grammar promised `BadNumber` for any sign; `+` is not a character of the text form.
 #[test]
-#[ignore = "ZERO-001: docs/SYNTAX.md promises BadNumber for a signed zero count; plus gives BadCharacter"]
-fn a_plus_signed_zero_count_reports_the_documented_bad_number() {
+fn a_plus_signed_zero_count_is_a_bad_character() {
     let error = read("data 0 = zero +0").expect_err("a signed count is invalid");
-    assert_eq!(error.kind, ReadErrorKind::BadNumber("+0".into()));
+    assert_eq!(error.kind, ReadErrorKind::BadCharacter);
 }
 
 #[test]
