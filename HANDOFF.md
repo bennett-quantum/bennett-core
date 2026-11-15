@@ -38,7 +38,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `9817fe0`, `c17bde9`, `08d7799` | Measurements: journal content in coherent regions; control schedules on the SQLite traces |
 | `cd2d920` | The complex multiply and divide helpers: compiler-rt 18.1.8 vendored unmodified (`rt/compiler-rt`), linked by the front where a program calls them; bit for bit with the same helpers on the hardware, NaN bits aside |
 
-Check it: `cargo test` (95 tests, about 2 s, no LLVM needed) and `front/test.sh` (132 tests; ignored by default: the two heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (111 tests, about 4 s, no LLVM needed) and `front/test.sh` (132 tests; ignored by default: the two heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check that needs `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -183,6 +183,18 @@ alone, not as a whole corpus): GCC 1,559 agree and 10 refused with musl, if noth
    un-run, reversed control polarity, an `apply` that assigns instead of XORs) each fail it. `mark` and
    `rewind keep` plug in through the checker once the executor exposes whole machine and history state
    (`crates/exec/tests/oracle_support/mod.rs`).
+   **First step landed** (`d1db45c`): `%h = mark` and `rewind %h keep (v -> %reg, ...)` in the text form
+   (`docs/SYNTAX.md`), the validator and the executor, on today's single classical state (`docs/DESIGN.md`).
+   A rewind XORs the kept values in, un-runs every step since the mark (gates inverted, so `mark; h q; rewind keep
+   (i1 1 -> q)` is Z) and continues; marks nest; a rewind that cannot un-run (stale or foreign handle, a
+   measurement since the mark, a keep into a register allocated after the mark) is the named fault `bad_rewind`
+   and changes nothing. Measured: every step is a permutation by brute force (38,360 single steps, 3,016 of them
+   faulting, and 8,192 rewinds from their mark, on clean and dirty history); the known exponential is real (every
+   level cleaning up: work 19, 55, 127, ... 36,847 at depth 0..10; keeping callees' history open until the outer
+   rewind: 21 + 20d); a mark, call, rewind loop costs the same per iteration at 50 and 1,500 iterations.
+   The implementer's order for the rest: worlds (a superposition of whole machine states, split where a call passes
+   a register as an integer, merged where equal), the memory overlay, address-taking gates, then `apply` as mark,
+   call, rewind-keep shown equal on every example and test.
 4. **The front's fallback**: the program almost verbatim under marks, the documented coherent class recognised by
    its form, and the two warnings (history still entangled at a measurement or at the end; an un-run that meets a
    state its history does not match).
@@ -234,6 +246,16 @@ alone, not as a whole corpus): GCC 1,559 agree and 10 refused with musl, if noth
   which calls `logbl` and `scalbnl` (and through musl's `ilogbl` a `FENV_ACCESS` pragma, so it stays refused).
 
 ## Questions for the maintainer (2026-11-15, evening)
+
+- **The journalled machine (step 3), from its first step.** (1) Once worlds differ (its next step), keeping a
+  result into a register the region read can make two worlds equal after the un-run, so their amplitudes add:
+  not merely unspecified but not unitary. Proposed: detect it and stop with a named fault for now (the warning of
+  step 4 needs the same detection), keeping later choices open. (2) The 4-bit fault codes are full (`bad_rewind`
+  took 15); the next fault needs wider codes, and every `q4` fault register in the examples and the front with
+  them. Widen, or another scheme? (3) A rewind across a measurement faults, as reversal does; "What is promised
+  when history is left behind" says un-running after a change is a warning, not a refusal. Keep this one a fault?
+  (4) A value defined between a mark and its rewind still reads its mark-time value afterwards; the validator
+  allows such uses. Reject them?
 
 - **Complex division: compiler-rt or libgcc?** compiler-rt's division (decided) fails GCC's three `cdivchk`
   accuracy checks natively, which pass with libgcc, the runtime of the corpus's native reference. When the
