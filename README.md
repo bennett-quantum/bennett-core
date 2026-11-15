@@ -27,7 +27,7 @@ cargo run -p bennett -- run prog.bn
 ```
 
 `bennett-front` runs its own O2 pipeline, so the input need not be optimised (it must not be vectorised).
-`float` and `double` become calls of the floating-point runtime, `target/front/float-runtime.bc` by default
+`float`, `double` and `long double` become calls of the floating-point runtime, `target/front/float-runtime.bc` by default
 (`--float-runtime file.bc` takes any bitcode defining the libgcc soft-float names).
 The budget is the step budget of every coherent region; the stack is the memory above static data.
 

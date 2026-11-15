@@ -10,7 +10,7 @@ use std::process::Command;
 use bennett_exec::Outcome;
 use bennett_front_tests::{
     CLANG_FLAGS, CLANG_O2_FLAGS, MAX_CONFIGURATIONS, bitcode, branches, c_dir, lower, lower_text, native_build_with,
-    native_exit_status, run, write_c,
+    native_exit_status, root, run, write_c,
 };
 use bennett_ir::ValidModule;
 use num_complex::Complex64;
@@ -86,6 +86,21 @@ fn arithmetic_square_roots_multiply_adds_and_conversions_agree_with_native_on_di
     assert_results_agree("float_values", &[]);
 }
 
+/// long double, the x87 80-bit format, over SoftFloat's extF80: every operation, comparison, class and
+/// conversion on directed values (`float_long_double.c`).
+#[test]
+fn long_double_arithmetic_comparisons_and_conversions_agree_with_native_on_directed_values() {
+    assert_results_agree("float_long_double", &[]);
+}
+
+/// Ordinary C on long double: structs by value, a variadic function, function pointers, arrays, select
+/// and phi (`float_long_double_programs.c`).
+#[test]
+fn structs_variadics_function_pointers_and_arrays_of_long_doubles_agree_with_native() {
+    assert_results_agree("float_long_double_programs", &[]);
+    assert_results_agree("float_long_double_programs", &["--taint-all"]);
+}
+
 #[test]
 fn every_comparison_and_classification_agrees_with_native_on_nans_zeros_and_infinities() {
     assert_results_agree("float_compare", &[]);
@@ -154,6 +169,38 @@ fn doubles_compute_under_quantum_control() {
     }
 }
 
+/// long double under quantum control (`float_long_double_controlled.c`): a computation on long doubles
+/// applied coherently to a superposition and a gate controlled by a comparison of long doubles, against
+/// the values the native build computes.
+#[test]
+fn long_doubles_compute_under_quantum_control() {
+    let source = c_dir().join("float_long_double_controlled.c");
+    let include = format!("-I{}", root().join("front/include").display());
+    let executable = native_build_with(&source, "float_long_double_controlled", &["-DNATIVE", &include], &[]);
+    let output = Command::new(&executable).output().unwrap_or_else(|e| panic!("cannot run {executable:?}: {e}"));
+    assert!(output.status.success());
+    let expected: Vec<(Vec<u64>, f64)> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .enumerate()
+        .map(|(k, line)| {
+            let values: Vec<u64> =
+                line.split(' ').map(|v| v.parse().unwrap_or_else(|e| panic!("{line:?}: {e}"))).collect();
+            let q = (0..4).map(|i| (k as u64 >> i & 1) << (8 * i)).sum();
+            (vec![q, values[0], values[1], values[2]], 0.25)
+        })
+        .collect();
+    assert_eq!(expected.len(), 16);
+    for (flags, front, suffix) in [
+        (CLANG_FLAGS, &[][..], ""),
+        (CLANG_O2_FLAGS, &[][..], ".o2"),
+        (CLANG_FLAGS, &["--taint-all"][..], ".taint-all"),
+    ] {
+        let context = format!("{flags:?} {front:?}");
+        let module = lower(&source, &format!("float_long_double_controlled{suffix}"), flags, front);
+        assert_branches(&module, &context, "ratio", &[], &expected);
+    }
+}
+
 /// Lowering the C program `text` with `clang_flags` is refused by name, at its line, with `expected`.
 fn assert_refused(name: &str, text: &str, clang_flags: &[&str], front_flags: &[&str], expected: &str) {
     let source = write_c(name, text);
@@ -169,7 +216,7 @@ fn assert_refused(name: &str, text: &str, clang_flags: &[&str], front_flags: &[&
 /// What has no soft-float routine yet, and the C library's functions, are refused by name.
 #[test]
 fn what_the_runtime_does_not_compute_is_refused_by_name() {
-    let cases: [(&str, &str, &[&str], &str); 11] = [
+    let cases: [(&str, &str, &[&str], &str); 14] = [
         (
             "float_frem",
             "volatile double a = 5.5, b = 2;\nint main(void) { return (int)__builtin_fmod(a, b); }\n",
@@ -196,10 +243,29 @@ fn what_the_runtime_does_not_compute_is_refused_by_name() {
             "a call to @strtod, which has no definition",
         ),
         (
-            "float_long_double",
-            "volatile long double a = 5.5;\nint main(void) { return (int)(a * 2); }\n",
+            "float_fmal",
+            "volatile long double a = 5.5;\nint main(void) { return (int)__builtin_fmal(a, a, a); }\n",
+            &[NO_ERRNO],
+            "the fused multiply-add of `x86_fp80` (long double) values (`fmal`, @llvm.fma.f80): Berkeley SoftFloat \
+             3e has none for the 80-bit format",
+        ),
+        (
+            "float_long_double_from_i128",
+            "volatile __int128 a = 5;\nint main(void) { return (int)(long double)a; }\n",
             &[],
-            "an operation on `x86_fp80` (long double) values",
+            "a conversion from `i128` to `x86_fp80` (long double)",
+        ),
+        (
+            "float_long_double_to_u128",
+            "volatile long double a = 5;\nint main(void) { return (int)(unsigned __int128)a; }\n",
+            &[],
+            "a conversion from `x86_fp80` (long double) to `i128`",
+        ),
+        (
+            "float_bfloat",
+            "volatile __bf16 a = 5.5;\nint main(void) { return (int)(float)a; }\n",
+            &[],
+            "an operation on `bfloat` (__bf16) values",
         ),
         (
             "float_half",

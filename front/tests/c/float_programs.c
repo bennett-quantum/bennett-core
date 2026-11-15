@@ -141,7 +141,7 @@ NOINLINE static u64 vectors(double x, double y) {
   return bits(c[0]) ^ bits(c[1]) * 3 ^ (u64)less[0] * 5 ^ (u64)less[1] * 7;
 }
 
-/* A long double is only moved (computing on it is not handled yet). */
+/* A long double moved through a struct in memory. */
 struct holder {
   long double value;
   int tag;

@@ -76,8 +76,8 @@ bool hasFloat(const Type *type) {
   return false;
 }
 
-// A floating-point type the runtime computes on: float and double.
-bool computable(const Type *type) { return type->isFloatTy() || type->isDoubleTy(); }
+// A floating-point type the runtime computes on: float, double and x86_fp80 (long double).
+bool computable(const Type *type) { return type->isFloatTy() || type->isDoubleTy() || type->isX86_FP80Ty(); }
 
 // The C name of a floating-point type that is not computed on yet.
 std::string described(const Type *type) {
@@ -99,7 +99,8 @@ std::string described(const Type *type) {
 }
 
 [[noreturn]] void refuseType(const Type *type, const Value *at) {
-  notHandled("an operation on " + described(type) + " values (only float and double are computed on yet)", at);
+  notHandled("an operation on " + described(type) + " values (only float, double and long double are computed on yet)",
+             at);
 }
 
 // A floating-point operation inside a constant expression.
@@ -292,10 +293,12 @@ private:
     return made;
   }
 
-  // The suffix of a libgcc name for `type`: sf or df.
-  static std::string mode(const Type *type) { return type->isFloatTy() ? "sf" : "df"; }
-  // The suffix of a C library name for `type`: f or nothing.
-  static std::string libm(const Type *type) { return type->isFloatTy() ? "f" : ""; }
+  // The suffix of a libgcc name for `type`: sf, df or xf.
+  static std::string mode(const Type *type) {
+    return type->isFloatTy() ? "sf" : type->isDoubleTy() ? "df" : "xf";
+  }
+  // The suffix of a C library name for `type`: f, nothing or l.
+  static std::string libm(const Type *type) { return type->isFloatTy() ? "f" : type->isDoubleTy() ? "" : "l"; }
 
   static Type *bitsOf(Type *type) { return IntegerType::get(type->getContext(), type->getPrimitiveSizeInBits()); }
   static Value *bits(IRBuilder<> &b, Value *x) { return b.CreateBitCast(x, bitsOf(x->getType())); }
@@ -466,15 +469,27 @@ private:
     return result;
   }
 
-  // fptosi, fptoui: through the 32- or 64-bit routine, then truncated.
+  // fptosi, fptoui: as LLVM's x86-64 back end legalises them, which decides what an out-of-range value
+  // gives (undefined in C): the conversion to the narrowest signed integer of the machine (SSE has 32
+  // and 64 bits, x87 also 16) that holds every value of the result, then truncated; to 32 bits
+  // unsigned the routine that truncates the 64-bit conversion, to 64 bits unsigned its own routine.
+  // x87's 16-bit conversion gives its indefinite integer, -2^15, out of range: the 32-bit conversion,
+  // replaced by that when it is not a 16-bit value.
   Value *toInteger(IRBuilder<> &b, Value *x, IntegerType *to, bool isSigned, const Instruction *at) {
     unsigned width = to->getBitWidth();
     if (width > 64) {
       notHandled("a conversion from " + described(x->getType()) + " to `" + printedType(to) + "`", at);
     }
-    bool narrow = width <= 32;
-    std::string name = std::string("__fix") + (isSigned ? "" : "uns") + mode(x->getType()) + (narrow ? "si" : "di");
+    unsigned signedWidth = isSigned ? width : width + 1;
+    bool narrow = signedWidth <= 32 || (!isSigned && width == 32);
+    bool unsignedRoutine = !isSigned && (width == 32 || width == 64);
+    std::string name =
+        std::string("__fix") + (unsignedRoutine ? "uns" : "") + mode(x->getType()) + (narrow ? "si" : "di");
     Value *result = call(b, name, narrow ? b.getInt32Ty() : b.getInt64Ty(), {x}, at);
+    if (x->getType()->isX86_FP80Ty() && signedWidth <= 16) {
+      Value *fits = b.CreateICmpULT(b.CreateAdd(result, b.getInt32(0x8000)), b.getInt32(0x10000));
+      result = b.CreateSelect(fits, result, b.getInt32(0xFFFF8000));
+    }
     return b.CreateTrunc(result, to);
   }
 
@@ -514,6 +529,18 @@ private:
                                      b.CreateICmpULT(magnitude, constant(APInt::getOneBitSet(width, fraction))));
     Value *isNormal = b.CreateAnd(b.CreateICmpUGE(magnitude, constant(APInt::getOneBitSet(width, fraction))),
                                   b.CreateICmpULT(magnitude, constant(infinity)));
+    if (type->isX86_FP80Ty()) {
+      // x87's explicit integer bit (bit 63): set in every normal number, which has an exponent from 1 to
+      // 0x7FFE (bits 64 to 78). Without it (an unnormal, a pseudo-infinity, a pseudo-NaN), or with it and
+      // a zero exponent (a pseudo-denormal), an encoding is in no class, as LLVM's x86 expansion of
+      // is.fpclass decides class by class; no arithmetic produces one.
+      APInt exponentOne = APInt::getOneBitSet(width, 64);
+      Value *integer = b.CreateICmpNE(b.CreateAnd(value, constant(APInt::getOneBitSet(width, 63))),
+                                      constant(APInt::getZero(width)));
+      isNormal = b.CreateAnd(b.CreateICmpULT(b.CreateSub(magnitude, constant(exponentOne)),
+                                             constant(APInt::getBitsSet(width, 64, 79) - exponentOne)),
+                             integer);
+    }
     Value *classes[10] = {
         b.CreateAnd(isNaN, b.CreateNot(isQuiet)), isQuiet,
         b.CreateAnd(isInfinity, negative),        b.CreateAnd(isNormal, negative),
@@ -593,6 +620,11 @@ private:
       replacement = unary("nearbyint");
       break;
     case Intrinsic::fma:
+      if (type->isX86_FP80Ty()) {
+        notHandled("the fused multiply-add of " + described(type) + " values (`fmal`, @" + name +
+                       "): Berkeley SoftFloat 3e has none for the 80-bit format",
+                   call);
+      }
       replacement = this->call(b, "fma" + libm(type), type, {x, call->getArgOperand(1), call->getArgOperand(2)}, call);
       break;
     case Intrinsic::fmuladd: {
@@ -691,7 +723,9 @@ private:
       Type *from = operandType(), *to = inst->getType();
       check(from);
       check(to);
-      replacement = call(b, from->isFloatTy() ? "__extendsfdf2" : "__truncdfsf2", to, {inst->getOperand(0)}, inst);
+      std::string name = std::string(inst->getOpcode() == Instruction::FPExt ? "__extend" : "__trunc") + mode(from) +
+                         mode(to) + "2";
+      replacement = call(b, name, to, {inst->getOperand(0)}, inst);
       break;
     }
     case Instruction::FPToSI:
@@ -760,10 +794,47 @@ bool usesFloat(const Module &module) {
   return false;
 }
 
-// Step 3: each floating-point type is the integer of its width.
+// Step 3: each floating-point type is the integer of its width. Memory must not move: every rewritten type
+// that has a size has the same size, store size and alignments as the type it replaces, and a structure
+// every field at the same offset (an internal error otherwise). On x86-64 the integer of 80 bits is
+// aligned as the next wider integer the data layout names, i128, to 16 bytes, as x86_fp80 is.
 class FloatBits : public ValueMapTypeRemapper {
 public:
+  explicit FloatBits(const DataLayout &layout) : layout(layout) {}
+
   Type *remapType(Type *type) override {
+    Type *mapped = rewritten(type);
+    if (mapped != type && type->isSized()) {
+      checkLayout(type, mapped);
+    }
+    return mapped;
+  }
+
+private:
+  void checkLayout(Type *from, Type *to) {
+    if (!checked.insert(from).second) {
+      return;
+    }
+    bool same = layout.getTypeSizeInBits(from) == layout.getTypeSizeInBits(to) &&
+                layout.getTypeStoreSize(from) == layout.getTypeStoreSize(to) &&
+                layout.getTypeAllocSize(from) == layout.getTypeAllocSize(to) &&
+                layout.getABITypeAlign(from) == layout.getABITypeAlign(to) &&
+                layout.getPrefTypeAlign(from) == layout.getPrefTypeAlign(to);
+    if (auto *structure = dyn_cast<StructType>(from); same && structure) {
+      const StructLayout *before = layout.getStructLayout(structure);
+      const StructLayout *after = layout.getStructLayout(cast<StructType>(to));
+      for (unsigned i = 0; i < structure->getNumElements(); ++i) {
+        same &= before->getElementOffset(i) == after->getElementOffset(i);
+      }
+    }
+    if (!same) {
+      fail("internal: rewriting " + printedType(from) + " as " + printedType(to) +
+           " changes its size, alignment or field offsets in the data layout `" +
+           layout.getStringRepresentation() + "`");
+    }
+  }
+
+  Type *rewritten(Type *type) {
     if (!hasFloat(type)) {
       return type;
     }
@@ -799,8 +870,9 @@ public:
     return mapped;
   }
 
-private:
+  const DataLayout &layout;
   std::map<StructType *, StructType *> structs;
+  std::set<Type *> checked;
 };
 
 // Constants of floating-point type become their bit patterns.
@@ -958,7 +1030,7 @@ void floatsToIntegers(Module &module) {
     }
   }
 
-  FloatBits types;
+  FloatBits types(module.getDataLayout());
   ConstantBits constants(types);
   ValueToValueMapTy map;
 
