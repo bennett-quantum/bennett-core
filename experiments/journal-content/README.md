@@ -112,7 +112,7 @@ Slopes against steps per branch (reps 1 to 8):
 |---|---|---|---|---|---|---|
 | binary search | 1.23 | 0.86 | 0.70 | 0.13 | 0.03 | - |
 | hash table | 1.27 | 0.41 | 0.35 | 0.04 | 0.00 | - |
-| B-tree | 1.28 | 0.75 | 0.61 | 0.10 | 0.04 | - |
+| B-tree | 1.27 | 0.75 | 0.61 | 0.10 | 0.04 | - |
 | writes memory | 1.36 | 0.81 | 0.58 | 0.10 | 0.07 | 0.05 |
 
 By record kind and word, all lookup runs together (A and B identical):

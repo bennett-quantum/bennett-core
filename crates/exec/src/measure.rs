@@ -514,7 +514,11 @@ struct StepInfo {
 }
 
 fn live_copy(live: &[(LiveSource, u128)], value: u128) -> WordWitness {
-    let sources: Vec<LiveSource> = live.iter().filter(|(_, held)| *held == value).map(|(source, _)| *source).collect();
+    let mut sources: Vec<LiveSource> =
+        live.iter().filter(|(_, held)| *held == value).map(|(source, _)| *source).collect();
+    // Sorted and unique: `classify_alignment` intersects these lists with a binary search.
+    sources.sort_unstable();
+    sources.dedup();
     if sources.is_empty() { WordWitness::None } else { WordWitness::LiveCopy(sources) }
 }
 

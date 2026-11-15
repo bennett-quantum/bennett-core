@@ -95,10 +95,9 @@ fn canonical_live_source_sets_on_published_workloads() {
     assert_eq!(runs, 83, "16 lookups and 67 other runs");
 }
 
-/// The README's max-journal-words/step slope for the B-tree is printed as 1.28.
+/// The README's max-journal-words/step slope for the B-tree (once printed as 1.28; 1.2746 rounds to 1.27).
 /// Recompute from exact aggregate step counts, then round once, to check that displayed number.
 #[test]
-#[ignore = "known README discrepancy: B-tree journal slope rounds to 1.27, not 1.28"]
 fn documented_btree_slope_uses_full_precision_before_rounding() {
     let module = lower(&c_dir().join("journal_content.c"), "jc_independent_slope", CLANG_FLAGS, &[]);
     let callee = entry(&module, "coherent_jc_btree_lookup.apply");

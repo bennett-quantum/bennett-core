@@ -1,4 +1,4 @@
-//! Independent checks of the journal-content observer; known wrong results stay ignored.
+//! Independent checks of the journal-content observer, kept as regression tests.
 
 mod common;
 
@@ -31,7 +31,6 @@ entry:
 ";
 
 #[test]
-#[ignore = "known wrong classification: unsorted live sources invalidate a common copy witness"]
 fn additional_matching_stack_pointers_do_not_erase_a_live_slot_witness() {
     let module = load(COPY_WITH_EXTRA_MATCHES);
     let mut executor = Executor::new(&module, entry(&module, "main"), &[], bounded()).expect("starts");
