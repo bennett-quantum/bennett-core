@@ -3,9 +3,11 @@
 #include "pthread_impl.h"
 #include "ksigaction.h"
 #include <errno.h>
+#include <fenv.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdint.h>
+#include <string.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
@@ -192,6 +194,51 @@ static long send_self(long sig)
     if (sig >= FIRST_REALTIME_SIGNAL && (pending & bit(sig))) __builtin_trap();
     pending |= bit(sig);
     deliver();
+    return 0;
+}
+
+/* <fenv.h>. Floating point is SoftFloat in round-to-nearest-even, and no exception flag is readable from C
+ * (rt/softfloat/libgcc.c). musl's generic dummies, built in place of its x86-64 assembly, would report
+ * success for every rounding mode and never see a flag, while the x86-64 headers name them all: a silent
+ * wrong result. So the default environment is supported and anything else traps by name. */
+static const fenv_t default_environment = {
+    .__control_word = 0x37f, /* x87: all exceptions masked, extended precision, to nearest */
+    .__tags = 0xffff,        /* every x87 register empty */
+    .__mxcsr = 0x1f80,       /* SSE: all exceptions masked, to nearest, no flags */
+};
+int fegetround(void)
+{
+    return FE_TONEAREST;
+}
+int __fesetround(int mode)
+{
+    if (mode != FE_TONEAREST) __builtin_trap();
+    return 0;
+}
+int feclearexcept(int mask)
+{
+    (void)mask; /* no flag is ever set */
+    return 0;
+}
+int feraiseexcept(int mask)
+{
+    if (mask & FE_ALL_EXCEPT) __builtin_trap();
+    return 0;
+}
+int fetestexcept(int mask)
+{
+    if (mask & FE_ALL_EXCEPT) __builtin_trap();
+    return 0;
+}
+int fegetenv(fenv_t *environment)
+{
+    *environment = default_environment;
+    return 0;
+}
+int fesetenv(const fenv_t *environment)
+{
+    if (environment != FE_DFL_ENV && memcmp(environment, &default_environment, sizeof *environment))
+        __builtin_trap();
     return 0;
 }
 

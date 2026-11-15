@@ -27,10 +27,12 @@ def main():
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
+    # tests/regress: witnesses of the independent testing pass, each self-checking (status 0 natively).
+    regressions = sorted(f"regress/{path.stem}" for path in (HERE / "tests/regress").glob("*.c"))
     for name in ["library", "exit", "arena", "unimplemented", "stderr", "heap", "signals", "abort", "stdin",
-                 "brk"]:
+                 "brk", "fenv", "fenv-mode", "fenv-flags", *regressions]:
         source = HERE / "tests" / f"{name}.c"
-        program = args.out / f"{name}.bn"
+        program = args.out / f"{name.replace('/', '-')}.bn"
         command = ["python3", HERE / "link.py", source, "--libdir", args.libdir, "--front", args.front,
                    "--arena-bytes", 16384 if name == "arena" else 1048576, "-o", program]
         linked = run(command)
@@ -38,13 +40,13 @@ def main():
         checked = run([args.executor, "check", program])
         assert checked.returncode == 0, checked.stderr
         result = run([args.executor, "run", "--entry", "__bennett_entry", "--budget", 100000000, program])
-        if name in ["unimplemented", "stderr"]:
+        if name in ["unimplemented", "stderr", "fenv-mode", "fenv-flags"]:
             assert result.returncode == 1 and "fault: unreachable" in result.stdout, (name, result)
         else:
             if name == "arena":
                 status, output = 0, b"pages=4 errno=12\n"
             else:
-                native = args.out / f"{name}.native"
+                native = args.out / f"{name.replace('/', '-')}.native"
                 built = run(["clang-18", "-O0", source, "-lm", "-o", native])
                 assert built.returncode == 0, built.stderr
                 reference = subprocess.run([native], capture_output=True, stdin=subprocess.DEVNULL)

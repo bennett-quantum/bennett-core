@@ -78,7 +78,16 @@ Measured before selecting the flags: the existing front refuses musl's `sin.c` b
 floating-point lowering and waits on the ordinary library dependency `__rem_pio2`. The product build
 therefore uses `-fno-rounding-math`, leaving the front's refusal of constrained operations intact. It uses
 SoftFloat's existing round-to-nearest-even mode; dynamic floating-point environments are not supported.
-This is a build choice within that existing layer, not a new floating-point promise. Neither of the probe's
+This is a build choice within that existing layer, not a new floating-point promise.
+
+`<fenv.h>` is Bennett's (`runtime.c`), not musl's: musl's generic dummy `fenv.c`, built where x86-64 has
+assembly, reported success for `fesetround(FE_UPWARD)` without changing the rounding and never saw a flag,
+while the x86-64 headers name every mode and flag (a measured silent wrong result). The default environment
+is supported: `fegetround` gives `FE_TONEAREST`, `fesetround(FE_TONEAREST)`, `feclearexcept`, `fegetenv`,
+`feholdexcept` and `fesetenv` of the default or a saved environment succeed. Another rounding mode, raising
+or testing a flag, and setting another environment trap as `unreachable`. Twelve musl math files use
+`#pragma STDC FENV_ACCESS ON` (`ilogb`, `ilogbf`, `ilogbl`, `fma`, `fmaf`, `fmal`, `lrint`, `lrintl`,
+`llrintl`, `nearbyint`, `nearbyintf`, `nearbyintl`); the front refuses their constrained operations by name. Neither of the probe's
 integer-only printf/scanf patches is applied: every upstream file, including floating-point stdio, is intact.
 
 ## Tests and text size
@@ -91,8 +100,11 @@ These offline integration tests are separate from `cargo test` and `front/test.s
 stdout/status for floating-point printf/strtod/sqrt/sin/pow, for constructors, atexit, destructors and
 nested exit, for `malloc`/`realloc`/`calloc`/`free`, for signals raised, blocked, ignored and handled, for
 `abort` after a handler returns, for reads of the empty stdin through `scanf`, `getchar` and `fgets`, and for
-a break that shrinks and grows again; they check arena exhaustion and named faults for stderr and an
-unimplemented syscall. The ten tests take about 50 seconds with the debug CLI after building the library.
+a break that shrinks and grows again, and for the default floating-point environment; they check arena
+exhaustion and named faults for stderr, an unimplemented syscall, another rounding mode and a flag test.
+`tests/regress/` holds the self-checking witnesses of the independent testing pass of this boundary (each
+returns 0 natively and failed or faulted here before its fix). The 22 tests took 22 seconds with the debug
+CLI after building the library.
 The debug CLI now reads their large data strings without overflowing its host stack.
 
 The library example produces about 4.8 MB of device text, mostly explicit zeros in the arena. No text-form
