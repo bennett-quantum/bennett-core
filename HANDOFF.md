@@ -1,8 +1,10 @@
 # HANDOFF
 
-State on 2026-11-15, evening: work resumed at about 18:45 UTC with jobs in flight on the musl runtime (from
-`wip/rt-musl`) and its independent testing pass, the journal-content measurement, the testing pass of `exit`, the
-console call and constructors, and the salvage survey. Code on `main` is unchanged since `4dfb423`.
+State on 2026-11-15, evening (work resumed at about 18:45 UTC). Landed since: the musl runtime, validated on the
+three corpora with no wrong result; `zero N`; the journal-content and control-schedule measurements; the salvage
+survey; testing passes of `exit`, constructors, `zero N` and the musl boundary. In flight: a fix for constructors
+that run twice when a bound read is folded ("Stopped in flight"), the remaining floating-point conversions, and
+an independent check of the journal-content measurement.
 
 ## What this repository is
 
@@ -28,15 +30,18 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `f51861b`..`40e7e26` | `experiments/libc-probe`: musl 1.2.5 and picolibc 1.8.12 as bitcode under the device, output and status compared with native |
 | `60bd56b`, `2f11a5f`, `bc8661c` | The console reachable from C; the `exit` instruction; constructors and destructors run, or their linker arrays supplied (a silent wrong result the probe found) |
 | `9e15ebf`, `4dfb423` | Large data strings read without recursion (the debug CLI overflowed its stack); musl 1.2.5 vendored unmodified (`rt/musl`), its 1,345 C files built to bitcode offline |
+| `e13a6c8` | Constructors and destructors in the order the native link gives them; startup ownership decided after the optimiser |
+| `4e34a3c` | Zero-filled data written as `zero N` in the text form (a musl-linked hello: 4.4 MB to 216 kB) |
+| `d8050df`..`b464c0b` | The C library: musl 1.2.5 at the system-call boundary, running its own startup and exit; signals a program sends itself; stdin at end of file; an honest `fenv` |
+| `9817fe0`, `c17bde9`, `08d7799` | Measurements: journal content in coherent regions; control schedules on the SQLite traces |
 
 Check it: `cargo test` (77 tests, about 2 s, no LLVM needed) and `front/test.sh` (111 tests; ignored by default: the full journal-content measurement and two known wrong
 results below, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
-On GCC's C torture tests 1,521 of 1,576 runnable programs agree with native, 53 are refused by name, none is wrong;
-on its floating-point tests (`ieee/`) 58 of 67, 9 refused (C library calls), none wrong
-(`experiments/c-corpus/README.md`). The corpus on `main` compares exit status only and links no C library; the
-probe, with musl linked and output compared, had 1,438 GCC programs and 212 of 220 c-testsuite programs agreeing
-before floating point landed (`experiments/libc-probe/README.md`). The two have not been measured together.
+With musl linked, standard output and exit status compared with native (`experiments/c-corpus/README.md`):
+GCC's C torture tests 1,557 agree, 12 refused by name, 6 named faults (programs that open files), none wrong;
+c-testsuite 217 agree, 1 refused, 1 named fault, 1 over the step budget, none wrong; GCC's `ieee/` 64 agree, 3
+refused, none wrong. Without the library the same snapshot gives 1,521 / 52 refused, 151 / 68, 58 / 9.
 
 ## Decisions the maintainer took on 2026-11-13
 
@@ -74,22 +79,21 @@ before floating point landed (`experiments/libc-probe/README.md`). The two have 
 
 ## Stopped in flight
 
-- **The musl product runtime** (next step 1), stopped at wind-down on 2026-11-15. On `main`: musl vendored and
-  built to bitcode. On the branch `wip/rt-musl` (one commit, `2adbb26`, on top of `4dfb423`; the four checks pass
-  there, but it is not validated on the corpora, so it is not on `main`): startup that enters musl's own
-  `__libc_start_main`, the system-call function, `rt/musl/link.py` (links as a static linker pulls archive
-  members), five integration tests (`printf` with floats, `strtod`, `sqrt`, `sin`, `pow`, nested `exit`, arena
-  exhaustion, an unknown system call, standard error), and a corpus harness that compares standard output as
-  well as status. Choices made there, open to change: musl is built with `-fno-rounding-math`, so `fesetround`
-  has no effect (with the flag, musl's `sin` is refused at a constrained intrinsic); descriptor 1 is the
-  console and a write to descriptor 2 is a named fault; the arena is a link parameter, 1 MiB by default, `brk`
-  upward and anonymous `mmap` downward, `munmap` reclaims nothing; `argc` is 1, standard input and the
-  environment are empty; files and every other system call trap. `hello` printed `hello 42` in 3,691 steps.
-  Not done: an audit of the system-call corner cases; the corpora with the runtime linked (the baseline with
-  the new harness is 1,521 / 52 refused / 0 wrong on GCC, 151 / 68 on c-testsuite, 58 / 9 on `ieee/`; no run
-  with musl was started, so the prediction in next step 1 is untested); the refusal tables; the complex-number
-  helpers. To resume: check out `wip/rt-musl`, rebase on `main`, finish the audit, run the three corpora from a
-  clean commit with copied binaries, reduce every wrong result or crash, then land.
+- **The musl runtime: landed** (`d8050df`..`b464c0b`; `rt/musl/README.md`). musl 1.2.5's own startup and exit run
+  on the device; its system calls are answered at one boundary function by console effects, an arena and `exit`;
+  everything else traps by name. The audit, with each case run against native, found and fixed: `malloc` faulted
+  on its first call (a `PROT_NONE` guard page), `abort` faulted (signals a program sends itself now run their
+  handlers, before the raising call returns), stdin through `readv`, a front bug that made every `scanf` program
+  fault at exit (a call through an unprototyped pointer to a non-variadic target), and `fesetround` reporting
+  success while changing nothing (a silent wrong result; non-default floating-point modes and flags now stop
+  with a named fault). An independent testing pass (sol) found eight boundary wrong results; all fixed, kept in
+  `rt/musl/tests/regress/` (`rt/musl/test.py`, 22 programs). Corpora: see "What works". Refusals removed against
+  the prediction: GCC 40 of 52 (44 predicted; left: `__mulsc3`, `__divsc3`, `setjmp`/`longjmp`, whose musl
+  versions are assembly), c-testsuite 67 of 68 (66 predicted; left: a program declaring its own `strlen`), `ieee/`
+  6 of 9 (9 predicted; left: three complex-division checks, refused at musl's `ilogb` `#pragma STDC FENV_ACCESS`
+  and needing the complex helpers). musl's startup and exit add about 2,050 steps. The corpora took 321 s, 49 s
+  and 14 s with 6 runners on a 12-core laptop. Provisional choices unchanged (`-fno-rounding-math`; descriptor 2 a
+  named fault, except that a zero-byte write succeeds; the 1 MiB arena; `argc` 1, empty input and environment).
 - **Control schedules on the SQLite traces: measured** (`08d7799`; `experiments/sqlite-footprint/README.md`, all
   eight workloads, independently recomputed by `check_schedule.py`). What a superposed program counter costs in
   provided IR instructions against one mean run (a trace-derived model, not gates): exact structural alignment
@@ -129,15 +133,9 @@ before floating point landed (`experiments/libc-probe/README.md`). The two have 
 
 ## Next steps, in order
 
-1. **Finish the musl 1.2.5 runtime at the system-call boundary** decided above (state: "Stopped in flight").
-   Console and whole-run exit are device calls; the front supplies constructor/destructor arrays or runs them around the entry when no C startup
-   owns them. Compile musl to bitcode with the probe's overlays and generic C substitutions, implement the supported
-   system calls with console effects and a fixed arena, and trap by name for the rest. Keep musl's startup and exit
-   code responsible for constructors, destructors, atexit handlers and flushing.
-   Predicted, not yet measured: it removes 44 of the 53 refusals on the GCC corpus (`printf`-family 29, `stdout`/`stderr` 5, `open` 2, `pow`,
-   `__mulsc3`, `__divsc3`, `fopen`, `qsort`, `isprint`, `longjmp`, `_setjmp`), 66 of 68 on c-testsuite and all
-   9 on `ieee/` (`signal` 3, `sqrt`, `sin`, `ilogb`, `ilogbl`, `sprintf`, `__divsc3`); floating-point programs
-   that wait on it: 8 GCC, 2 c-testsuite, 5 `ieee/`.
+1. **The musl runtime is done** ("Stopped in flight"). Left on it: files and clocks (`docs/SALVAGE.md` names the
+   earlier workspace's device models; what time and randomness mean on the device must be decided first),
+   `setjmp`/`longjmp`, and the two questions below.
 2. **The two stopped measurements are done** ("Stopped in flight"). Journal content: a constant factor as far as
    copies go; the recompute witness is its next measurement. Control schedules: exact structure costs about 1-5x a
    run on these traces, but only from observed runs.
@@ -179,12 +177,24 @@ before floating point landed (`experiments/libc-probe/README.md`). The two have 
   `scalbn` they need comes from musl; checked bit for bit against native. Whether the helpers are self-contained
   or call the maths library for some widths is not yet known. Not built yet.
 
+## Questions for the maintainer (2026-11-15, evening)
+
+- **Floating-point environment**: keep the named fault for non-default rounding modes and flags, or make them real
+  through SoftFloat's state? (The float runtime lets the optimiser delete its flags today.)
+- **Exit status**: the device reports the full 32-bit `exit` value; a process status is its low 8 bits. The corpus
+  harness compares modulo 256, the integration tests exactly. Mask at the boundary?
+- **Time and randomness on the device** (clock start value, entropy image): needed before the earlier workspace's
+  clock and entropy models can be carried over (`docs/SALVAGE.md`).
+- **Equal-priority constructor order across separately compiled objects** follows a native build of the linked
+  module, not separately linked objects (C leaves it unspecified). Record as a debt, with the route of lowering
+  startup per unit before linking?
+
 ## What is still refused, and what removes it
 
 | Refused today | What removes it |
 |---|---|
-| C library calls (and with them `sin`, `pow`, `printf("%f")`, `sqrt` under errno); `setjmp`; return address | Step 1 above |
-| `fmal`; 128-bit integer conversions of floats; `_Float16`, `__bf16`, `__float128`; `#pragma STDC FENV_ACCESS` | Step 5 above |
+| Files, clocks and the other unimplemented system calls (named faults); `setjmp`/`longjmp`; return address; a program that redeclares a library function incompatibly | Step 1 above |
+| `fmal`; 128-bit integer conversions of floats; `_Float16`, `__bf16`, `__float128`; `#pragma STDC FENV_ACCESS`; non-default rounding modes and floating-point flags; the complex helpers | Step 5 above |
 | A store under qubit control; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control | The journalled machine (step 3) |
 | A qubit-dependent value used by ordinary code or printed; measurement under control; a dirty discard | Channels |
 | Non-empty inline assembly; code without source | An emulator of the real machine, compiled as an ordinary program |
