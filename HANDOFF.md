@@ -29,8 +29,8 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `60bd56b`, `2f11a5f`, `bc8661c` | The console reachable from C; the `exit` instruction; constructors and destructors run, or their linker arrays supplied (a silent wrong result the probe found) |
 | `9e15ebf`, `4dfb423` | Large data strings read without recursion (the debug CLI overflowed its stack); musl 1.2.5 vendored unmodified (`rt/musl`), its 1,345 C files built to bitcode offline |
 
-Check it: `cargo test` (50 tests, about 2 s, no LLVM needed) and `front/test.sh` (87 tests, about 30 s with a
-clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
+Check it: `cargo test` (59 tests, about 2 s, no LLVM needed) and `front/test.sh` (91 tests and 2 ignored known
+wrong results, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 On GCC's C torture tests 1,521 of 1,576 runnable programs agree with native, 53 are refused by name, none is wrong;
 on its floating-point tests (`ieee/`) 58 of 67, 9 refused (C library calls), none wrong
@@ -99,6 +99,15 @@ before floating point landed (`experiments/libc-probe/README.md`). The two have 
   executor that changes nothing when off. It decides whether the two optimisations buy orders of magnitude or a
   constant.
 
+- **Two wrong results in constructor startup**, found by the independent testing pass of `exit`, the console call
+  and constructors (`40b04b4`; `exit` and the console call held under every probe). At equal priority, explicit
+  `.init_array`/`.fini_array` contributions run after the special-array entries on the device but before them
+  natively; and a reference to `__init_array_start` from an uncalled function that the front's pipeline deletes
+  still hands startup to C, so the constructor silently never runs. Both are `#[ignore]` tests in
+  `front/tests/tests/startup.rs`; a fix is in flight. Safe refusals noted by the same pass: a constructor through
+  an alias; a null entry in a section array (a null in `llvm.global_ctors` is skipped); an array variable in
+  `.init_array` with alignment above 8; `front/include/bennett.h` cannot be included from C++ (`_Bool`).
+
 ## Next steps, in order
 
 1. **Finish the musl 1.2.5 runtime at the system-call boundary** decided above (state: "Stopped in flight").
@@ -127,9 +136,6 @@ before floating point landed (`experiments/libc-probe/README.md`). The two have 
 
 ## Queued, not started
 
-- **An independent testing pass of `exit`, the console call and constructors** by a model family other than the
-  one that built them (they were built and mutation-checked by one implementer; no second look yet). `exit`
-  changes the device program, so this pass is owed.
 - **A salvage survey of the earlier workspace**: per piece, what demonstrably worked, the evidence, and what it
   would cost to carry over (maintainer, 2026-11-15: borrow the bits that worked). Candidates by step: the
   runtimes' device models for files and clocks; `bennett-pebble`, the VM's journals and the branch
