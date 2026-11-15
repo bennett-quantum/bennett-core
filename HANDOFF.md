@@ -38,8 +38,9 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `9817fe0`, `c17bde9`, `08d7799` | Measurements: journal content in coherent regions; control schedules on the SQLite traces |
 | `cd2d920` | The complex multiply and divide helpers: compiler-rt 18.1.8 vendored unmodified (`rt/compiler-rt`), linked by the front where a program calls them; bit for bit with the same helpers on the hardware, NaN bits aside |
 
-Check it: `cargo test` (83 tests, about 2 s, no LLVM needed) and `front/test.sh` (132 tests; ignored by default: the two heavy journal-content runs, an extended float sweep, and
-two witnesses of named refusals that are debts (a packed 129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
+Check it: `cargo test` (83 tests, about 2 s, no LLVM needed) and `front/test.sh` (132 tests; ignored by default: the two heavy journal-content runs, an extended float sweep, a
+musl-linked ABI check that needs `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
+129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 With musl linked, standard output and exit status compared with native (`experiments/c-corpus/README.md`):
 GCC's C torture tests 1,560 agree, 9 refused by name, 6 named faults (programs that open files), none wrong;
