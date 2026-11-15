@@ -41,6 +41,7 @@ terminator := br label[(typed, ...)]
             | br operand, target, target
             | switch iN operand, INT: target, ..., default: target
             | ret [operand]
+            | exit typed                                 ; finish the whole run, even from a nested call
             | fault NAME                                 ; budget, unreachable, ... (bennett_ir::Fault)
 ```
 
@@ -71,3 +72,11 @@ done(i64 %sum):
     ret %sum
 }
 ```
+
+## Whole-run exit
+
+`exit %status` or `exit i32 5` is a terminator. Its operand must be an integer; constants name their width
+because the enclosing function need not return that type. When executed, its type must match the selected
+entry function's result type exactly, otherwise the named fault is `exit_type_mismatch`. A void entry cannot
+use `exit`. A successful exit has precisely the entry-return outcome, keeps output and memory, and is
+journalled for reversal. Inside `apply` it always faults with `exit_in_region`, before checking the entry type.

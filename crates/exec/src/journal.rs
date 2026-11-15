@@ -26,7 +26,7 @@ pub(crate) enum Undo {
     /// A return to a caller. Words: the callee's function and block, its stack pointer at the return, and
     /// the old value of the caller's result slot if the call names one.
     Return,
-    /// The return from the outermost frame that finished the run. No words.
+    /// The outermost return or whole-run exit that finished the run. No words.
     Finish,
     /// A gate, undone by its inverse. No words.
     Gate,

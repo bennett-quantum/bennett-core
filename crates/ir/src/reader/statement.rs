@@ -9,7 +9,7 @@ use crate::{
 };
 
 /// The mnemonics that end a block.
-const TERMINATORS: [&str; 4] = ["br", "switch", "ret", "fault"];
+const TERMINATORS: [&str; 5] = ["br", "switch", "ret", "exit", "fault"];
 
 /// One line of a block body.
 pub(super) enum Statement {
@@ -124,6 +124,7 @@ impl<'s> Parser<'s> {
             }
             "switch" => self.switch(scope),
             "ret" => self.ret(scope),
+            "exit" => Ok(Terminator::Exit(self.typed_operand(scope)?)),
             _ => {
                 let offset = self.cursor.offset();
                 let name = self.cursor.word("a fault name")?;

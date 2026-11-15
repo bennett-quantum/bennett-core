@@ -111,3 +111,25 @@ fn data_must_fit_memory_without_overlapping() {
     assert!(problems.contains(&Problem::DataOverlap(0)));
     assert!(problems.iter().any(|p| matches!(p, Problem::DataOutOfBounds { address: 6, len: 3, .. })));
 }
+
+#[test]
+fn exit_is_a_typed_integer_terminator() {
+    for statement in ["exit", "exit 7", "exit i8 256", "%x = exit i8 1", "exit q1 0", "exit i8 1, 2"] {
+        let text = format!("func @f() {{\nentry:\n {statement}\n}}\n");
+        assert!(read(&text).is_err(), "accepted {statement}");
+    }
+    let text = "func @f() {\nentry:\n exit i8 1\n ret\n}\n";
+    assert!(read(text).is_err(), "exit must end its block");
+    let text = "func @f() {\nentry:\n %q = qalloc 1\n exit %q\n}\n";
+    assert_eq!(problems(text), vec![Problem::ExitOperand]);
+    let text = "func @f() {\nentry:\n exit %missing\n}\n";
+    assert!(matches!(read_error(text).2, ReadErrorKind::Undefined { kind: NameKind::Value, .. }));
+    for text in [
+        include_str!("../../../examples/exit.bn"),
+        "func @f() {\nentry:\n exit i128 0xffffffffffffffffffffffffffffffff\n}\n",
+    ] {
+        let module = read(text).expect("reads");
+        assert_eq!(read(&write(&module)).expect("rereads"), module);
+        validate(module).expect("valid");
+    }
+}

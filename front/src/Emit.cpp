@@ -606,6 +606,10 @@ void BodyWriter::body(const Function &function) {
         terminator(inst);
       } else {
         instruction(inst);
+        if (const auto *call = dyn_cast<CallBase>(&inst);
+            call && call->getCalledFunction() && call->getCalledFunction()->getName() == "__bennett_exit") {
+          break; // `exit` is the device terminator; LLVM follows a noreturn call with unreachable.
+        }
       }
     }
   }
@@ -741,6 +745,10 @@ void BodyWriter::call(const Instruction &inst) {
   }
   if (call.hasOperandBundles()) {
     notHandled("a call with the operand bundle `" + call.getOperandBundleAt(0).getTagName().str() + "`", &inst);
+  }
+  if (const auto *callee = call.getCalledFunction(); callee && callee->getName() == "__bennett_exit") {
+    line("exit " + typed(call.getArgOperand(0)));
+    return;
   }
   if (const auto *callee = call.getCalledFunction(); callee && callee->getName() == "__bennett_effect") {
     line("effect " + operand(call.getArgOperand(0)));

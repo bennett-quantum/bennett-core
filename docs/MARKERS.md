@@ -89,9 +89,16 @@ pass. `bennett_bit` with an index that is not constant, or its result used other
 
 ```c
 void __bennett_effect(char byte);
+_Noreturn void __bennett_exit(int status);
 ```
 
 Declared in `bennett.h`, this emits one byte to the device console (`effect`). It is journalled in reversible
 execution and faults with `effect_in_region` in a coherent region. It does not make its callers control functions:
 a call under qubit control is refused as an ordinary call that may write memory. Definitions, other signatures,
 and attributes that permit deleting or moving the call are refused by name, as for markers.
+
+`__bennett_exit` lowers to the `exit` terminator: it ends the whole run with `status` as the entry's result,
+including from a nested call or loop. The selected entry must return `i32`; another result type gives the
+named fault `exit_type_mismatch`. Inside a coherent region it faults with `exit_in_region`. It is journalled,
+is not a marker, and has the same declaration checks as the console call, including its `noreturn` attribute.
+It does not run C cleanup itself: a library's `exit` runs handlers and flushing before calling this boundary.

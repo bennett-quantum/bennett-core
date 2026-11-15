@@ -1,7 +1,7 @@
 //! Forward execution of one step. Every step either faults without changing anything, or changes the
 //! state and journals exactly what it overwrote.
 
-use bennett_ir::{Fault, FuncId, Gate, Inst, Operand, Qubit, Slot, Target, Terminator, Width};
+use bennett_ir::{Fault, FuncId, Gate, Inst, Operand, Qubit, Slot, Target, Terminator, Type, Width};
 
 use crate::executor::{Executor, Frame, Halt, Outcome, SLOT_BYTES};
 use crate::gates;
@@ -108,6 +108,22 @@ impl<'m> Executor<'m> {
                 self.jump(case.map_or(default, |case| &case.target));
             }
             Terminator::Return(value) => self.ret(value.map(|value| self.read(&value))),
+            Terminator::Exit(value) => {
+                if self.in_region {
+                    return Err(Fault::ExitInRegion.into());
+                }
+                let ty = match value {
+                    Operand::Const(value) => Type::Int(value.width()),
+                    Operand::Slot(slot) => self.slot_type(*slot),
+                };
+                // The caller selects the entry at run time; the module validator cannot know its type.
+                if self.function(self.frames[0].func).result != Some(ty) {
+                    return Err(Fault::ExitTypeMismatch.into());
+                }
+                self.outcome = Some(Outcome::Returned(Some(self.read(value))));
+                // Like an outer return, finishing changes only the outcome. Keep all frames for reversal.
+                self.record(Undo::Finish);
+            }
             Terminator::Fault(fault) => return Err((*fault).into()),
         }
         Ok(())

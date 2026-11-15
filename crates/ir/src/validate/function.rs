@@ -344,6 +344,11 @@ impl<'a> Checker<'a> {
                 (Some(value), Some(ty)) => self.expect(site, *value, ty),
                 _ => self.error(site, Problem::ReturnMismatch),
             },
+            Terminator::Exit(value) => {
+                if let Some(Type::Qreg(_)) = self.type_of(*value) {
+                    self.error(site, Problem::ExitOperand);
+                }
+            }
             Terminator::Jump(_) | Terminator::Fault(_) => {}
         }
         let function = self.function;

@@ -478,6 +478,8 @@ pub enum Terminator {
     },
     /// `ret [value]`.
     Return(Option<Operand>),
+    /// `exit value`: finishes the whole run as an entry return, even from a nested call.
+    Exit(Operand),
     /// `fault name`: ends execution with the named fault.
     Fault(Fault),
 }
@@ -495,7 +497,7 @@ impl Terminator {
                 cases.iter().for_each(|case| visit(&case.target));
                 visit(default);
             }
-            Terminator::Return(_) | Terminator::Fault(_) => {}
+            Terminator::Return(_) | Terminator::Exit(_) | Terminator::Fault(_) => {}
         }
     }
 
@@ -511,7 +513,7 @@ impl Terminator {
                 cases.iter_mut().for_each(|case| visit(&mut case.target));
                 visit(default);
             }
-            Terminator::Return(_) | Terminator::Fault(_) => {}
+            Terminator::Return(_) | Terminator::Exit(_) | Terminator::Fault(_) => {}
         }
     }
 
@@ -525,7 +527,7 @@ impl Terminator {
         match self {
             Terminator::Branch { cond, .. } => operand(cond),
             Terminator::Switch { value, .. } => operand(value),
-            Terminator::Return(Some(value)) => operand(value),
+            Terminator::Return(Some(value)) | Terminator::Exit(value) => operand(value),
             Terminator::Jump(_) | Terminator::Return(None) | Terminator::Fault(_) => {}
         }
         self.visit_targets(|target| target.args.iter().for_each(&mut operand));

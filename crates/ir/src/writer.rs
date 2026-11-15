@@ -167,6 +167,9 @@ impl Writer<'_> {
             }
             Terminator::Return(None) => write!(self.out, "ret"),
             Terminator::Return(Some(value)) => write!(self.out, "ret {}", op(value)),
+            Terminator::Exit(value) => {
+                write!(self.out, "exit {}", OperandText { function: f, operand: *value, typed: true })
+            }
             Terminator::Fault(fault) => write!(self.out, "fault {fault}"),
         }
     }

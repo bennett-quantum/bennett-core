@@ -35,7 +35,8 @@ A module is a list of functions, an initial memory image and a memory size.
   `select`; `zext sext trunc`; `load` and `store` at a width, little-endian; `alloca` (frame lifetime, or until a
   `stackrestore` to a stack pointer `stacksave` gave, which is how a variable-length array in a loop is freed); direct `call`;
   **`call_indirect` through a function address** and `faddr @f` to take one; `ret`; `br`, conditional `br`, `switch`;
-  `fault code`; `effect` (console byte output for now).
+  `fault code`; `effect` (console byte output for now); `exit v` (a terminator finishing the whole run with the
+  entry-return outcome, even from a nested call).
 - **Every operation is total.** A shift by at least the width gives 0. Division by zero, an out-of-bounds access, a
   bad indirect target, `unreachable` and an exhausted budget are *named faults*: part of the result, never a crash.
 - **Quantum instructions**, allowed in ordinary control code: `qalloc w`, `qfree`, single-qubit gates
@@ -75,7 +76,7 @@ memory, for at most `B` steps.
 - On a fault with code `c`: `out` unchanged, `fault ^= c`.
 
 Arguments are preserved and the private memory is discarded, so the region is a permutation of basis states and its
-own inverse. An `effect` reached inside a region is a fault. This is the lifted-oracle contract of the North Star
+own inverse. An `effect` or `exit` reached inside a region is a fault (`effect_in_region` or `exit_in_region`). This is the lifted-oracle contract of the North Star
 (§4.2); branch enumeration is its definition here, not an optimisation.
 
 Control needs no special form at this level: `if (q) y = f(3)` is a region whose argument is `q`.
@@ -196,6 +197,12 @@ Two things the first C programs taught:
   2^16 branches per program.
 - `alloca` results are 8-byte aligned; `front` makes a wider alignment by allocating more and rounding up. A
   `byval` parameter is copied by the callee on entry. Initialisers are written byte for byte at any width.
+- `exit` takes a typed integer operand (`exit %v` or `exit i32 5`). The executor checks its type against the
+  selected entry's result when the instruction executes, because entries are chosen at run time; a mismatch
+  faults as `exit_type_mismatch` (14). Inside a coherent region it faults first as `exit_in_region` (13).
+  Success changes only the outcome, journals the same finish record as an outer return, and leaves active
+  frames in place for reversal. C's `_Noreturn void __bennett_exit(int)` lowers to it; like
+  `void __bennett_effect(char)`, it is an ordinary device call, not a quantum marker.
 - Fault codes fit in 4 bits; a fault register is at least that wide.
 - `qfree` requires the register to be zero in every configuration, otherwise the named fault `dirty_free`.
 - `measure` reads a whole register. Amplitudes at or below `f64::EPSILON` are dropped.

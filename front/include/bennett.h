@@ -35,6 +35,13 @@ unsigned long long bennett_measure(const void *variable);
 /* Device console byte output. An ordinary effectful call, not a quantum marker. */
 void __bennett_effect(char byte);
 
+/* Finish the whole run with an int status, even in a nested call. */
+#ifdef __cplusplus
+[[noreturn]] void __bennett_exit(int status);
+#else
+_Noreturn void __bennett_exit(int status);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

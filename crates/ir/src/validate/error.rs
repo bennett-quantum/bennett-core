@@ -94,6 +94,9 @@ impl fmt::Display for Expected {
 /// A problem the validator found.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum Problem {
+    /// A whole-run exit needs an integer status.
+    #[error("exit requires an integer operand")]
+    ExitOperand,
     /// A data segment reaching past the end of memory.
     #[error("{len} bytes at address {address} reach past the end of memory ({memory_size} bytes)")]
     DataOutOfBounds {

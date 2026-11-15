@@ -1,0 +1,20 @@
+; A nested exit preserves memory and output, returns 37, and reverses completely.
+memory 256
+data 16 = i8 9
+
+func @stop(i32 %status) {
+entry:
+    %p = alloca 8
+    store i64 123, %p
+    store i8 42, 16
+    effect 33
+    exit %status
+}
+
+func @main() -> i32 {
+entry:
+    %q = qalloc 1
+    h %q
+    call @stop(i32 37)
+    ret 0
+}

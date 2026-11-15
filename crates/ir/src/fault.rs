@@ -52,6 +52,10 @@ faults! {
     DirtyFree = 11 "dirty_free",
     /// `stackrestore` to a stack pointer below the current one or above the current frame's allocations.
     BadStackRestore = 12 "bad_stack_restore",
+    /// A whole-run exit was reached inside a coherent region.
+    ExitInRegion = 13 "exit_in_region",
+    /// The exit operand's type differs from the selected entry's result type.
+    ExitTypeMismatch = 14 "exit_type_mismatch",
 }
 
 impl Fault {
