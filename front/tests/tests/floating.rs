@@ -101,6 +101,14 @@ fn structs_variadics_function_pointers_and_arrays_of_long_doubles_agree_with_nat
     assert_results_agree("float_long_double_programs", &["--taint-all"]);
 }
 
+/// Conversions between float, double, long double and 128-bit integers (and a `_BitInt(100)`): ties and
+/// sticky bits, the edges of the ranges, and out of range, as the native program's libgcc routines give
+/// (`float_wide_integers.c`).
+#[test]
+fn conversions_to_and_from_128_bit_integers_agree_with_native() {
+    assert_results_agree("float_wide_integers", &[]);
+}
+
 #[test]
 fn every_comparison_and_classification_agrees_with_native_on_nans_zeros_and_infinities() {
     assert_results_agree("float_compare", &[]);
@@ -216,7 +224,7 @@ fn assert_refused(name: &str, text: &str, clang_flags: &[&str], front_flags: &[&
 /// What has no soft-float routine yet, and the C library's functions, are refused by name.
 #[test]
 fn what_the_runtime_does_not_compute_is_refused_by_name() {
-    let cases: [(&str, &str, &[&str], &str); 14] = [
+    let cases: [(&str, &str, &[&str], &str); 11] = [
         (
             "float_frem",
             "volatile double a = 5.5, b = 2;\nint main(void) { return (int)__builtin_fmod(a, b); }\n",
@@ -250,16 +258,10 @@ fn what_the_runtime_does_not_compute_is_refused_by_name() {
              3e has none for the 80-bit format",
         ),
         (
-            "float_long_double_from_i128",
-            "volatile __int128 a = 5;\nint main(void) { return (int)(long double)a; }\n",
+            "float_from_i200",
+            "volatile _BitInt(200) a = 5;\nint main(void) { return (int)(double)a; }\n",
             &[],
-            "a conversion from `i128` to `x86_fp80` (long double)",
-        ),
-        (
-            "float_long_double_to_u128",
-            "volatile long double a = 5;\nint main(void) { return (int)(unsigned __int128)a; }\n",
-            &[],
-            "a conversion from `x86_fp80` (long double) to `i128`",
+            "a conversion from `i200` to `double`",
         ),
         (
             "float_bfloat",
@@ -278,18 +280,6 @@ fn what_the_runtime_does_not_compute_is_refused_by_name() {
             "volatile __float128 a = 5.5;\nint main(void) { return (int)(a + a); }\n",
             &[],
             "an operation on `fp128` (__float128) values",
-        ),
-        (
-            "float_from_i128",
-            "volatile __int128 a = 5;\nint main(void) { return (int)(double)a; }\n",
-            &[],
-            "a conversion from `i128` to `double`",
-        ),
-        (
-            "float_to_i128",
-            "volatile double a = 5;\nint main(void) { return (int)(__int128)a; }\n",
-            &[],
-            "a conversion from `double` to `i128`",
         ),
         (
             "float_fenv",

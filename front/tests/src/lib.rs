@@ -50,6 +50,11 @@ fn front() -> PathBuf {
     std::env::var_os("BENNETT_FRONT").map_or_else(|| root().join("target/front/bennett-front"), PathBuf::from)
 }
 
+/// The default floating-point runtime, `float-runtime.bc` next to `bennett-front`.
+pub fn float_runtime() -> PathBuf {
+    front().with_file_name("float-runtime.bc")
+}
+
 fn clang() -> PathBuf {
     std::env::var_os("CLANG").map_or_else(|| PathBuf::from("clang"), PathBuf::from)
 }

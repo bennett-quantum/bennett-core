@@ -15,13 +15,18 @@
 //!
 //! Longer runs (10^7 random operands per operation, all 2^32 float inputs of the unary operations) take
 //! arguments: `softfloat_exact <random-per-op> <threads> 1`.
+//!
+//! The runtime's own routines, those that are more than a call of SoftFloat (conversions to and from 128-bit
+//! integers, ...), are checked the same way against the native program's: `front/tests/c/float_runtime_exact.c`
+//! with the device's runtime, `float-runtime.bc`, compiled natively and every symbol prefixed `rt_`. It takes
+//! the same arguments.
 
 #![cfg(target_arch = "x86_64")]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use bennett_front_tests::{c_dir, out_dir, root};
+use bennett_front_tests::{c_dir, float_runtime, out_dir, root};
 
 /// The vendored release.
 fn softfloat() -> PathBuf {
@@ -147,4 +152,50 @@ fn softfloat_is_bit_exact_against_sse_and_x87_except_the_known_classes() {
         let line = line(op);
         assert!(!line.contains(" value=") && !line.contains(" nan-bits="), "{line}");
     }
+}
+
+fn objcopy() -> PathBuf {
+    std::env::var_os("OBJCOPY").map_or_else(|| PathBuf::from("objcopy"), PathBuf::from)
+}
+
+/// The device's floating-point runtime, compiled natively, against what the native program calls.
+#[test]
+fn the_runtime_routines_beyond_softfloat_are_bit_exact_against_native() {
+    let dir = out_dir().join("float-runtime-native");
+    std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("cannot create {dir:?}: {e}"));
+    let object = dir.join("float-runtime.o");
+    let prefixed = dir.join("float-runtime-prefixed.o");
+    run_tool(Command::new(clang()).args(["-c", "-O2"]).arg(float_runtime()).arg("-o").arg(&object));
+    run_tool(Command::new(objcopy()).arg("--prefix-symbols=rt_").arg(&object).arg(&prefixed));
+    let undefined = Command::new("nm").arg("-u").arg(&prefixed).output().map(|o| o.stdout).unwrap_or_default();
+    assert!(
+        undefined.is_empty(),
+        "the runtime needs symbols it does not define:\n{}",
+        String::from_utf8_lossy(&undefined)
+    );
+
+    let program = dir.join("float_runtime_exact");
+    run_tool(
+        Command::new(clang())
+            .args(["-O2", "-ffp-contract=off", "-fno-fast-math"])
+            .arg(c_dir().join("float_runtime_exact.c"))
+            .arg(&prefixed)
+            .args(["-lm", "-lpthread", "-o"])
+            .arg(&program),
+    );
+    let output = Command::new(&program).output().unwrap_or_else(|e| panic!("cannot run {program:?}: {e}"));
+    let report = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "unexpected differences from native:\n{report}");
+    assert!(report.contains("unexpected mismatch classes: 0"), "{report}");
+    let line = |op: &str| {
+        report
+            .lines()
+            .find(|line| line.split_whitespace().next() == Some(op))
+            .unwrap_or_else(|| panic!("no line for {op}:\n{report}"))
+    };
+    for op in ["f32_i128", "f64_u128", "i128_f32", "u128_f64", "i128_x80", "u128_x80"] {
+        assert!(line(op).ends_with(" ok"), "{op}: {}", line(op));
+    }
+    // Non-canonical long double encodings, which x87 rejects, are still the only difference.
+    assert!(line("x80_i128").contains("noncanonical="), "{}", line("x80_i128"));
 }

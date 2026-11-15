@@ -177,7 +177,9 @@ and utilities where they exist (`Abi.h`, `Normalise.h`):
 - **Refused by name**: `frem` and the C library's functions (`sin`, `pow`, `strtod`, and `sqrt` under the
   default `-fmath-errno`, since errno is the C library's); `fmal` (SoftFloat has no 80-bit fused
   multiply-add); operations on `_Float16`, `__bf16`, `__float128` (moving them is fine); conversions to and
-  from 128-bit integers; `#pragma STDC FENV_ACCESS`.
+  from integers wider than 128 bits; `#pragma STDC FENV_ACCESS`. Conversions to and from 128-bit integers
+  are libgcc's routines on x86-64, followed step for step, so out of range they give what the native
+  program gives.
 
 Two things the first C programs taught:
 

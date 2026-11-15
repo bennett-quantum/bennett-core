@@ -24,6 +24,7 @@
 
 #include "platform.h"
 #include "softfloat.h"
+#include "internals.h" /* SoftFloat's own rounding (softfloat_roundPackTo...) for the routines it has no entry for */
 
 /* What a comparison returns: libgcc's CMPtype, a machine word on x86-64, and compiler-rt's CMP_RESULT. */
 typedef long cmp_t;
@@ -180,6 +181,99 @@ long double __floatsixf(int a) { return of_x80(i32_to_extF80(a)); }
 long double __floatdixf(long long a) { return of_x80(i64_to_extF80(a)); }
 long double __floatunsixf(unsigned a) { return of_x80(ui32_to_extF80(a)); }
 long double __floatundixf(unsigned long long a) { return of_x80(ui64_to_extF80(a)); }
+
+/* Conversions between floating point and 128-bit integers (`__fixdfti`, `__floattidf`, ...).
+ *
+ * From an integer: correctly rounded, by SoftFloat's own rounding: the magnitude shifted until its bit 127 is
+ * set, its high 64 bits the significand and the low 64 jammed into its lowest bit (extF80 takes them as its
+ * extra word), packed as SoftFloat's ui64_to_* pack a 64-bit integer whose top bit is set.
+ *
+ * To an integer: the native program calls libgcc's routines, which on x86-64 are libgcc2.c's (`__fixunsdfDI`,
+ * `__fixunsxfDI`, compiled by GCC to SSE and x87 instructions). They are followed here step for step, so that
+ * what an out-of-range value or a NaN gives (undefined in C) is what the native routine gives: the high word is
+ * x / 2^64 converted to 64 bits unsigned, the low word what is left converted likewise; a negative x goes
+ * through -x and the negated result for the signed conversions, and gives 0 for the unsigned long double one.
+ * GCC converts to 64 bits unsigned as `x >= 2^63 ? (x - 2^63 converted signed) ^ 2^63 : x converted signed`, a
+ * NaN taking the second branch, and the signed conversion of a value out of range is 2^63 (cvttsd2si, fistp).
+ * float goes through double, as libgcc2.c's __fixunssfDI does. */
+typedef __int128 ti_t;
+typedef unsigned __int128 uti_t;
+
+/* a, not 0, shifted left until its bit 127 is set: the high and the low 64 bits, and the shift. */
+struct normalised {
+  uint64_t sig, extra;
+  int_fast16_t shift;
+};
+static struct normalised normalised(uti_t a) {
+  uint64_t hi = (uint64_t)(a >> 64);
+  int_fast16_t shift = hi ? softfloat_countLeadingZeros64(hi) : 64 + softfloat_countLeadingZeros64((uint64_t)a);
+  a <<= shift;
+  struct normalised n = {(uint64_t)(a >> 64), (uint64_t)a, shift};
+  return n;
+}
+static float32_t f32_of_ti(bool sign, uti_t a) {
+  if (!a) return (float32_t){0};
+  struct normalised n = normalised(a);
+  return softfloat_roundPackToF32(sign, 0xBD + 64 - n.shift, softfloat_shortShiftRightJam64(n.sig | (n.extra != 0), 33));
+}
+static float64_t f64_of_ti(bool sign, uti_t a) {
+  if (!a) return (float64_t){0};
+  struct normalised n = normalised(a);
+  return softfloat_roundPackToF64(sign, 0x43D + 64 - n.shift, softfloat_shortShiftRightJam64(n.sig | (n.extra != 0), 1));
+}
+static extFloat80_t x80_of_ti(bool sign, uti_t a) {
+  if (!a) return (extFloat80_t){0, 0};
+  struct normalised n = normalised(a);
+  return softfloat_roundPackToExtF80(sign, 0x407E - n.shift, n.sig, n.extra, extF80_roundingPrecision);
+}
+static uti_t magnitude(ti_t a) { return a < 0 ? -(uti_t)a : (uti_t)a; }
+float __floattisf(ti_t a) { return of_f32(f32_of_ti(a < 0, magnitude(a))); }
+float __floatuntisf(uti_t a) { return of_f32(f32_of_ti(false, a)); }
+double __floattidf(ti_t a) { return of_f64(f64_of_ti(a < 0, magnitude(a))); }
+double __floatuntidf(uti_t a) { return of_f64(f64_of_ti(false, a)); }
+long double __floattixf(ti_t a) { return of_x80(x80_of_ti(a < 0, magnitude(a))); }
+long double __floatuntixf(uti_t a) { return of_x80(x80_of_ti(false, a)); }
+
+static uint64_t u64_of_f64_gcc(float64_t x) {
+  const float64_t two63 = {UINT64_C(0x43E0000000000000)};
+  if (f64_le_quiet(two63, x)) return (uint64_t)f64_to_i64_r_minMag(f64_sub(x, two63), false) ^ UINT64_C(0x8000000000000000);
+  return (uint64_t)f64_to_i64_r_minMag(x, false);
+}
+static uti_t uti_of_f64(float64_t x) {
+  const float64_t twoM64 = {UINT64_C(0x3BF0000000000000)}, two64 = {UINT64_C(0x43F0000000000000)};
+  uint64_t hi = u64_of_f64_gcc(f64_mul(twoM64, x));
+  uint64_t lo = u64_of_f64_gcc(f64_sub(x, f64_mul(ui64_to_f64(hi), two64)));
+  return (uti_t)hi << 64 | lo;
+}
+static ti_t ti_of_f64(float64_t x) {
+  const float64_t zero = {0};
+  if (f64_lt_quiet(x, zero)) return (ti_t)-uti_of_f64((float64_t){x.v ^ UINT64_C(0x8000000000000000)});
+  return (ti_t)uti_of_f64(x);
+}
+ti_t __fixsfti(float a) { return ti_of_f64(f32_to_f64(f32_of(a))); }
+uti_t __fixunssfti(float a) { return uti_of_f64(f32_to_f64(f32_of(a))); }
+ti_t __fixdfti(double a) { return ti_of_f64(f64_of(a)); }
+uti_t __fixunsdfti(double a) { return uti_of_f64(f64_of(a)); }
+
+static uint64_t u64_of_x80_gcc(extFloat80_t x) {
+  const extFloat80_t two63 = {UINT64_C(0x8000000000000000), 0x403E};
+  if (extF80_le_quiet(two63, x)) return (uint64_t)extF80_to_i64_r_minMag(extF80_sub(x, two63), false) ^ UINT64_C(0x8000000000000000);
+  return (uint64_t)extF80_to_i64_r_minMag(x, false);
+}
+static uti_t uti_of_x80(extFloat80_t x) {
+  const extFloat80_t zero = {0, 0}, twoM64 = {UINT64_C(0x8000000000000000), 0x3FBF};
+  if (extF80_lt_quiet(x, zero)) return 0;
+  uti_t v = (uti_t)u64_of_x80_gcc(extF80_mul(x, twoM64)) << 64;
+  extFloat80_t rest = extF80_sub(x, x80_of_ti(false, v));
+  if (extF80_lt_quiet(rest, zero)) return v - u64_of_x80_gcc((extFloat80_t){rest.signif, (uint16_t)(rest.signExp ^ 0x8000)});
+  return v + u64_of_x80_gcc(rest);
+}
+ti_t __fixxfti(long double a) {
+  extFloat80_t x = x80_of(a), zero = {0, 0};
+  if (extF80_lt_quiet(x, zero)) return (ti_t)-uti_of_x80((extFloat80_t){x.signif, (uint16_t)(x.signExp ^ 0x8000)});
+  return (ti_t)uti_of_x80(x);
+}
+uti_t __fixunsxfti(long double a) { return uti_of_x80(x80_of(a)); }
 
 /* x to the power m by repeated squaring, as libgcc2.c computes it (`__builtin_powi`). */
 float __powisf2(float x, int m) {

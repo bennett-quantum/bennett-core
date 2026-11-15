@@ -32,6 +32,26 @@ that these classes are the only ones. The promise that follows (`docs/DESIGN.md`
 NaN is bit for bit the native one; a NaN result is a NaN. Which NaN, when several operands are NaNs, is
 unspecified, as in LLVM (whose optimiser commutes operands) and on the hardware.
 
+## The runtime's own routines, against the native program
+
+Some routines of `libgcc.c` are more than a call of SoftFloat. They are checked against what the native program
+calls for the same C operation (clang 18 on x86-64 links GCC 13's libgcc and glibc), by
+`front/tests/c/float_runtime_exact.c`: the device's own `float-runtime.bc` compiled natively, every symbol
+prefixed `rt_`, so that `rt___fixdfti` is the runtime's and `__fixdfti` libgcc's. Measured on 2026-11-15 on the
+machine above with `float_runtime_exact 10000000 3 1`: directed values, 10^7 random operands per operation, and
+every 32-bit input of each conversion from `float`.
+
+| routines | how | mismatches |
+|---|---|---|
+| `__floattisf`, `__floattidf`, `__floattixf` and the unsigned `__floatunti*` | the magnitude's top 64 bits, the rest jammed into the lowest bit (extF80 keeps it as its extra word), rounded by SoftFloat's `softfloat_roundPackTo*` | none (ties and sticky bits at each format's precision, every power of two ±2) |
+| `__fixsfti`, `__fixdfti`, `__fixxfti` and the unsigned `__fixunss*ti` | libgcc2.c's algorithm, which libgcc's routines are on x86-64, step for step over SoftFloat: the high word from x / 2^64, the low word from what is left, each through GCC's 64-bit unsigned conversion; negative values through their negation. Out of range and NaN (undefined in C) give what libgcc gives, e.g. 2^127 + 2^63 for a NaN | none, out of range included; long double encodings x87 rejects differ, as above |
+
+`front/tests/tests/softfloat.rs` repeats this with 2·10^4 random operands per operation in well under a
+second. Integers from 65 to 128 bits wide go through the 128-bit routine of their signedness and are
+truncated, as LLVM's x86-64 back end does (a `_BitInt(100)` included); a 128-bit integer crosses the interface
+as C passes it on x86-64 (two 64-bit arguments, a pair of 64-bit results), as clang writes it in the runtime's
+IR. Wider integers are refused by name.
+
 ## Cost on the device
 
 Device steps of one operation, after the front's optimiser, on normal / subnormal / NaN operands (the steps of

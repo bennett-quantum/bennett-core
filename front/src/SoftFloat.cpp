@@ -469,16 +469,30 @@ private:
     return result;
   }
 
+  // A 128-bit integer crosses the runtime interface as C passes it on x86-64, which clang writes in the IR
+  // of the runtime: an argument as two 64-bit ones, low then high, a result as a pair of them.
+  static Value *joined(IRBuilder<> &b, Value *pair) {
+    Value *low = b.CreateZExt(b.CreateExtractValue(pair, 0), b.getInt128Ty());
+    Value *high = b.CreateZExt(b.CreateExtractValue(pair, 1), b.getInt128Ty());
+    return b.CreateOr(b.CreateShl(high, 64), low);
+  }
+
   // fptosi, fptoui: as LLVM's x86-64 back end legalises them, which decides what an out-of-range value
   // gives (undefined in C): the conversion to the narrowest signed integer of the machine (SSE has 32
   // and 64 bits, x87 also 16) that holds every value of the result, then truncated; to 32 bits
   // unsigned the routine that truncates the 64-bit conversion, to 64 bits unsigned its own routine.
   // x87's 16-bit conversion gives its indefinite integer, -2^15, out of range: the 32-bit conversion,
-  // replaced by that when it is not a 16-bit value.
+  // replaced by that when it is not a 16-bit value. Wider than 64 bits (up to 128): the 128-bit routine
+  // of the same signedness (`__fixdfti`, `__fixunsdfti`), then truncated, as the back end promotes them.
   Value *toInteger(IRBuilder<> &b, Value *x, IntegerType *to, bool isSigned, const Instruction *at) {
     unsigned width = to->getBitWidth();
-    if (width > 64) {
+    if (width > 128) {
       notHandled("a conversion from " + described(x->getType()) + " to `" + printedType(to) + "`", at);
+    }
+    if (width > 64) {
+      std::string name = std::string("__fix") + (isSigned ? "" : "uns") + mode(x->getType()) + "ti";
+      Type *pair = StructType::get(b.getInt64Ty(), b.getInt64Ty());
+      return b.CreateTrunc(joined(b, call(b, name, pair, {x}, at)), to);
     }
     unsigned signedWidth = isSigned ? width : width + 1;
     bool narrow = signedWidth <= 32 || (!isSigned && width == 32);
@@ -493,16 +507,24 @@ private:
     return b.CreateTrunc(result, to);
   }
 
-  // sitofp, uitofp: extended to 32 or 64 bits, then the routine.
+  // sitofp, uitofp: extended to 32, 64 or 128 bits, then the routine.
   Value *fromInteger(IRBuilder<> &b, Value *x, Type *to, bool isSigned, const Instruction *at) {
     unsigned width = x->getType()->getIntegerBitWidth();
-    if (width > 64) {
+    if (width > 128) {
       notHandled("a conversion from `" + printedType(x->getType()) + "` to " + described(to), at);
     }
-    bool narrow = width <= 32;
-    Type *wide = narrow ? b.getInt32Ty() : b.getInt64Ty();
+    Type *wide = width <= 32 ? b.getInt32Ty() : width <= 64 ? b.getInt64Ty() : b.getInt128Ty();
     Value *extended = isSigned ? b.CreateSExt(x, wide) : b.CreateZExt(x, wide);
-    std::string name = std::string("__float") + (isSigned ? "" : "un") + (narrow ? "si" : "di") + mode(to);
+    std::string name = std::string("__float") + (isSigned ? "" : "un") +
+                       (width <= 32   ? "si"
+                        : width <= 64 ? "di"
+                                      : "ti") +
+                       mode(to);
+    if (width > 64) {
+      Value *low = b.CreateTrunc(extended, b.getInt64Ty());
+      Value *high = b.CreateTrunc(b.CreateLShr(extended, 64), b.getInt64Ty());
+      return call(b, name, to, {low, high}, at);
+    }
     return call(b, name, to, {extended}, at);
   }
 
