@@ -112,9 +112,12 @@ fn the_measurement_is_off_by_default() {
 /// reversal — with and without raw records, on an interference program and on Grover.
 #[test]
 fn turning_the_measurement_on_changes_nothing() {
-    for (text, name, args) in
-        [(THESIS, "main", &[][..]), (THESIS, "entangled", &[][..]), (GROVER, "searched", &[2][..])]
-    {
+    for (text, name, args) in [
+        (THESIS, "main", &[][..]),
+        (THESIS, "entangled", &[][..]),
+        (GROVER, "searched", &[2][..]),
+        (ALIAS, "main", &[][..]),
+    ] {
         let module = load(text);
         let mut off = Executor::new(&module, entry(&module, name), args, bounded()).expect("starts");
         let off_outcome = off.run();
@@ -275,4 +278,143 @@ fn a_faulting_branch_is_measured_up_to_its_fault() {
     assert_eq!(branch.steps, 20);
     assert_eq!(branch.entries.len(), branch.records);
     assert_eq!(branch.entries.iter().map(|r| r.words.len()).sum::<usize>(), branch.words);
+}
+
+/// At the second multiply, the old result is 6/10, the new one is 3/5. Its original
+/// operands (2 and 3/5) remain in %saved and %seed. Recompute multiplies those live values.
+/// Moving the save before the multiply destroys the only copy of 2: a depth-two chain
+/// could recreate it from the first loop edge, but this witness must leave it irreducible.
+const ALIAS: &str = "memory 1024
+func @f(i1 %b) -> i8 {
+entry:
+    %seed = select i8 %b, 5, 3
+    br loop(i8 2)
+loop(i8 %n):
+    %v = mul i8 %n, %seed
+    %saved = or i8 %n, 0
+    %next = sub i8 %n, 1
+    %more = icmp ult i8 0, %next
+    br %more, loop(%next), done(%v)
+done(i8 %out):
+    ret %out
+}
+func @main() -> i8 {
+entry:
+    %q = qalloc 1
+    h %q
+    %y = qalloc 8
+    %e = qalloc 4
+    apply @f(%q) -> %y, %e budget 100
+    %m = measure %y
+    ret %m
+}
+";
+
+#[test]
+fn recomputation_uses_live_operand_copies_and_requires_a_common_recipe() {
+    use bennett_exec::classify_with_recompute;
+    let module = load(ALIAS);
+    let mut executor = measured(&module, "main", &[], true);
+    let mut measurement = executor.take_journal_measurement().expect("on");
+    let copy = classify(&measurement);
+    let recompute = classify_with_recompute(&measurement);
+    let multiply = |p: &&bennett_exec::ClassifiedPosition| {
+        p.kind == Undo::Slot && p.site.block.0 == 1 && p.site.pos == SitePos::Inst(0) && p.k == 1
+    };
+    for (copy, recompute) in
+        [(&copy[0].site_count, &recompute[0].site_count), (&copy[0].call_path, &recompute[0].call_path)]
+    {
+        let old = copy.iter().find(multiply).expect("second multiply");
+        let new = recompute.iter().find(multiply).expect("second multiply");
+        assert_eq!(old.class, WordClass::Irreducible);
+        assert_eq!(new.class, WordClass::Recomputed);
+        assert_eq!(new.distinct_values, 2);
+        assert_eq!(new.recompute.as_ref().expect("recipe").inputs.len(), 2);
+    }
+    // Every instance having *some* recovery is insufficient: one common source per operand
+    // is required across branches. Mutate one branch's metadata to model disjoint source identities.
+    let witness = measurement.applies[0].branches[1]
+        .entries
+        .iter_mut()
+        .find(|r| r.site.block.0 == 1 && r.site.pos == SitePos::Inst(0) && r.b_k == 1)
+        .expect("multiply")
+        .words[0]
+        .recompute
+        .as_mut()
+        .expect("instance recipe");
+    for source in &mut witness.inputs[0] {
+        source.call_path = u32::MAX;
+    }
+    let different = classify_with_recompute(&measurement);
+    assert_eq!(different[0].site_count.iter().find(multiply).expect("multiply").class, WordClass::Irreducible);
+    assert_eq!(different[0].call_path.iter().find(multiply).expect("multiply").class, WordClass::Irreducible);
+
+    let no_alias = ALIAS.replace(
+        "    %v = mul i8 %n, %seed\n    %saved = or i8 %n, 0",
+        "    %saved = or i8 %n, 0\n    %v = mul i8 %n, %seed",
+    );
+    let module = load(&no_alias);
+    let executor = measured(&module, "main", &[], true);
+    for branch in &executor.journal_measurement().expect("on").applies[0].branches {
+        let old = &branch
+            .entries
+            .iter()
+            .find(|r| r.site.block.0 == 1 && r.site.pos == SitePos::Inst(1) && r.b_k == 1)
+            .expect("multiply")
+            .words[0];
+        assert!(old.recompute.is_none(), "cannot read the vanished operand from observer history");
+    }
+}
+
+#[test]
+fn recomputation_of_a_load_checks_current_memory_and_store_overlap_invalidates_provenance() {
+    let program = ALIAS
+        .replace(
+            "    %seed = select i8 %b, 5, 3",
+            "    %seed = select i8 %b, 5, 3\n    %cell = alloca 8\n    store i8 %seed, %cell",
+        )
+        .replace(
+            "    %v = mul i8 %n, %seed\n    %saved = or i8 %n, 0",
+            "    %v = load i8 %cell\n    store i8 %n, %cell",
+        );
+    let module = load(&program);
+    let executor = measured(&module, "main", &[], true);
+    for branch in &executor.journal_measurement().expect("on").applies[0].branches {
+        let old = &branch
+            .entries
+            .iter()
+            .find(|r| r.site.block.0 == 1 && r.site.pos == SitePos::Inst(0) && r.b_k == 1)
+            .expect("load")
+            .words[0];
+        assert!(old.recompute.is_none(), "the same address now holds different bytes");
+    }
+
+    let text = HAND
+        .replace("    store i8 40, %cell", "    store i16 4660, %cell\n    store i8 7, %cell")
+        .replace("    store i8 41, %cell", "    store i16 41, %cell");
+    let module = load(&text);
+    let executor = measured(&module, "main_f", &[], true);
+    let branch = &executor.journal_measurement().expect("on").applies[0].branches[1];
+    let overwritten =
+        &branch.entries.iter().find(|r| r.kind == Undo::Store && r.site.block.0 == 1).expect("store").words[0];
+    assert_eq!(overwritten.value, 0x1207);
+    assert!(overwritten.recompute.is_none(), "overlapping stores do not leave one whole-word producer");
+}
+
+#[test]
+fn the_hand_program_with_recomputation() {
+    let module = load(HAND);
+    let executor = measured(&module, "main_f", &[], true);
+    let measurement = executor.journal_measurement().expect("on");
+    let copy = classify(measurement);
+    let recompute = bennett_exec::classify_with_recompute(measurement);
+    for (old, new) in [(&copy[0].site_count, &recompute[0].site_count), (&copy[0].call_path, &recompute[0].call_path)] {
+        assert_eq!(counts(old), (11, 0, 3, 14));
+        assert_eq!(counts(new), (11, 0, 2, 14));
+        let recovered: Vec<_> = new.iter().filter(|p| p.class == WordClass::Recomputed).collect();
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].role, WordRole::Store);
+        assert!(recovered[0].recompute.as_ref().expect("store 40 recipe").inputs.is_empty());
+        assert!(new.iter().filter(|p| p.class == WordClass::Irreducible).all(|p| p.role == WordRole::JumpSource));
+    }
 }

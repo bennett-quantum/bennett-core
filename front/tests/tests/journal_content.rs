@@ -1,7 +1,7 @@
 //! The journal-content measurement (`experiments/journal-content/README.md`) on C: memory-heavy lookups
 //! over 1,024 keys (`front/tests/c/journal_content.c`) and everything else that runs coherently in these
 //! tests. Each coherent region's journal words are classified per branch as the same on every branch,
-//! recoverable from live state, or irreducible, under two alignments (`bennett_exec::classify`).
+//! recoverable from live state, recomputed in one operation, or irreducible, under two alignments.
 //!
 //! The tables of the README come from one command, which prints them as tab-separated lines starting
 //! with `table`: `front/test.sh --test journal_content -- --include-ignored --nocapture --test-threads=1`.
@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 
 use bennett_exec::{
     ApplyClassification, ClassifiedPosition, Executor, JournalMeasurement, Options, Outcome, Undo, WordClass, WordRole,
-    classify,
+    classify, classify_with_recompute,
 };
 use bennett_front_tests::{CLANG_FLAGS, c_dir, entry, lower, native_build, options, root, run};
 use bennett_ir::{Inst, Type, ValidModule};
@@ -91,7 +91,7 @@ fn measure(module: &ValidModule, name: &str, args: &[u64]) -> JournalMeasurement
 /// each on one branch), as each branch's arguments and outcome, and its classification summary.
 struct LookupRun {
     branches: Vec<(Vec<u128>, Outcome)>,
-    summary: Summary,
+    summaries: [Summary; 2],
 }
 
 fn lookup_run(lookup: &str, reps: u64) -> LookupRun {
@@ -104,9 +104,13 @@ fn lookup_run(lookup: &str, reps: u64) -> LookupRun {
     );
     measurement.applies.retain(|apply| apply.callee == callee);
     assert_eq!(measurement.applies.len(), 1, "{lookup}: one apply of the lookup");
-    let summary = summarize(&measurement, &classify(&measurement));
+    let summaries = [
+        summarize(&measurement, &classify(&measurement)),
+        summarize(&measurement, &classify_with_recompute(&measurement)),
+    ];
+    assert_refinement(&summaries);
     let branches = measurement.applies[0].branches.iter().map(|b| (b.args.clone(), b.outcome)).collect();
-    LookupRun { branches, summary }
+    LookupRun { branches, summaries }
 }
 
 /// The measured runs of every lookup at every repetition count, made once per test process.
@@ -153,12 +157,12 @@ fn every_lookup_agrees_with_the_native_build_on_every_branch() {
     }
 }
 
-/// Counts by class (same, recoverable, irreducible): of positions, and of word instances (one per
+/// Counts by class (same, recoverable, irreducible, recomputed): of positions, and of word instances (one per
 /// branch that journalled the position).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct Tally {
-    positions: [u64; 3],
-    instances: [u64; 3],
+    positions: [u64; 4],
+    instances: [u64; 4],
     /// Positions present on only some branches.
     partial: u64,
     /// Irreducible positions whose value is the same on every branch that has them: all they hold is
@@ -172,6 +176,7 @@ impl Tally {
             WordClass::Same => 0,
             WordClass::Recoverable => 1,
             WordClass::Irreducible => 2,
+            WordClass::Recomputed => 3,
         };
         self.positions[class] += 1;
         self.instances[class] += position.instances as u64;
@@ -236,10 +241,24 @@ fn summarize(measurement: &JournalMeasurement, classes: &[ApplyClassification]) 
     summary
 }
 
-fn run_summary(module: &ValidModule, name: &str, args: &[u64]) -> Summary {
+fn assert_refinement(summaries: &[Summary; 2]) {
+    for alignment in 0..2 {
+        let (copy, recompute) = (summaries[0].all[alignment], summaries[1].all[alignment]);
+        for counts in [(copy.positions, recompute.positions), (copy.instances, recompute.instances)] {
+            assert_eq!(counts.0[0..2], counts.1[0..2], "same and copy witnesses retain priority");
+            assert_eq!(counts.0[2], counts.1[2] + counts.1[3], "only irreducible words can become recomputed");
+        }
+    }
+}
+
+fn run_summaries(module: &ValidModule, name: &str, args: &[u64]) -> [Summary; 2] {
     let measurement = measure(module, name, args);
-    let classes = classify(&measurement);
-    summarize(&measurement, &classes)
+    let summaries = [
+        summarize(&measurement, &classify(&measurement)),
+        summarize(&measurement, &classify_with_recompute(&measurement)),
+    ];
+    assert_refinement(&summaries);
+    summaries
 }
 
 const ALIGNMENTS: [&str; 2] = ["A", "B"];
@@ -249,10 +268,10 @@ fn percent(part: u64, whole: u64) -> String {
 }
 
 /// One line per alignment: the headline columns of the README's first table.
-fn print_summary(group: &str, label: &str, summary: &Summary) {
+fn print_summary(mode: &str, group: &str, label: &str, summary: &Summary) {
     for (alignment, tally) in summary.all.iter().enumerate() {
         println!(
-            "table\tworkload\t{group}\t{label}\t{}\t{}\t{}\t{:.1}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "table\t{mode}workload\t{group}\t{label}\t{}\t{}\t{}\t{:.1}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             ALIGNMENTS[alignment],
             summary.applies,
             summary.branches,
@@ -268,6 +287,8 @@ fn print_summary(group: &str, label: &str, summary: &Summary) {
             percent(tally.positions[2], summary.max_words),
             percent(tally.instances[0], tally.total_instances()),
             percent(tally.instances[0] + tally.instances[1], tally.total_instances()),
+            tally.positions[3],
+            percent(tally.instances[3], tally.total_instances()),
         );
     }
 }
@@ -276,20 +297,20 @@ fn print_header() {
     println!(
         "table\tworkload\tgroup\tworkload\talignment\tapplies\tbranches\tsteps/branch\tmax words/branch\tpositions\t\
          same\trecoverable\tirreducible\tpartial\tirreducible, control only\tirreducible % of words\tirreducible positions % of max \
-         words/branch\tsame % of words\tsame+recoverable % of words"
+         words/branch\tsame % of words\tsame+recoverable % of words\trecomputed\trecomputed % of words"
     );
 }
 
-fn print_roles(group: &str, roles: &[BTreeMap<String, Tally>; 2]) {
+fn print_roles(mode: &str, group: &str, roles: &[BTreeMap<String, Tally>; 2]) {
     println!(
         "table\trole\tgroup\talignment\tkind/word\tinstances\tsame %\trecoverable %\tirreducible %\tpositions\t\
-         irreducible positions\tirreducible positions, control only"
+         irreducible positions\tirreducible positions, control only\trecomputed positions\trecomputed %"
     );
     for (alignment, by_role) in roles.iter().enumerate() {
         for (role, tally) in by_role {
             let total = tally.total_instances();
             println!(
-                "table\trole\t{group}\t{}\t{role}\t{total}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "table\t{mode}role\t{group}\t{}\t{role}\t{total}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 ALIGNMENTS[alignment],
                 percent(tally.instances[0], total),
                 percent(tally.instances[1], total),
@@ -297,6 +318,8 @@ fn print_roles(group: &str, roles: &[BTreeMap<String, Tally>; 2]) {
                 tally.total_positions(),
                 tally.positions[2],
                 tally.control,
+                tally.positions[3],
+                percent(tally.instances[3], total),
             );
         }
     }
@@ -306,7 +329,7 @@ fn merge_roles(into: &mut [BTreeMap<String, Tally>; 2], from: &[BTreeMap<String,
     for (into, from) in into.iter_mut().zip(from) {
         for (role, tally) in from {
             let entry = into.entry(role.clone()).or_default();
-            for class in 0..3 {
+            for class in 0..4 {
                 entry.positions[class] += tally.positions[class];
                 entry.instances[class] += tally.instances[class];
             }
@@ -330,50 +353,52 @@ fn slope(xs: &[f64], ys: &[f64]) -> f64 {
 #[test]
 fn journal_content_of_the_lookups() {
     print_header();
-    let mut roles: [BTreeMap<String, Tally>; 2] = Default::default();
-    let mut slopes = Vec::new();
-    for lookup in LOOKUPS {
-        let name = format!("coherent_{lookup}");
-        let mut steps = Vec::new();
-        let mut max_words = Vec::new();
-        let mut irreducible: [Vec<f64>; 2] = Default::default();
-        let mut by_role: [BTreeMap<String, Vec<f64>>; 2] = Default::default();
-        for (point, reps) in REPS.into_iter().enumerate() {
-            let summary = &lookup_runs()[&(lookup, reps)].summary;
-            assert_eq!((summary.applies, summary.branches), (1, INPUTS as u64), "{name}({reps})");
-            print_summary("lookups", &format!("{lookup} reps={reps}"), summary);
-            merge_roles(&mut roles, &summary.by_role);
-            steps.push(summary.steps as f64 / summary.branches as f64);
-            max_words.push(summary.max_words as f64);
-            for alignment in 0..2 {
-                irreducible[alignment].push(summary.all[alignment].positions[2] as f64);
-                for (role, tally) in &summary.by_role[alignment] {
-                    let series = by_role[alignment].entry(role.clone()).or_insert_with(|| vec![0.0; REPS.len()]);
-                    series[point] = tally.positions[2] as f64;
+    for (mode_index, mode) in ["", "recompute-"].into_iter().enumerate() {
+        let mut roles: [BTreeMap<String, Tally>; 2] = Default::default();
+        let mut slopes = Vec::new();
+        for lookup in LOOKUPS {
+            let name = format!("coherent_{lookup}");
+            let mut steps = Vec::new();
+            let mut max_words = Vec::new();
+            let mut irreducible: [Vec<f64>; 2] = Default::default();
+            let mut by_role: [BTreeMap<String, Vec<f64>>; 2] = Default::default();
+            for (point, reps) in REPS.into_iter().enumerate() {
+                let summary = &lookup_runs()[&(lookup, reps)].summaries[mode_index];
+                assert_eq!((summary.applies, summary.branches), (1, INPUTS as u64), "{name}({reps})");
+                print_summary(mode, "lookups", &format!("{lookup} reps={reps}"), summary);
+                merge_roles(&mut roles, &summary.by_role);
+                steps.push(summary.steps as f64 / summary.branches as f64);
+                max_words.push(summary.max_words as f64);
+                for alignment in 0..2 {
+                    irreducible[alignment].push(summary.all[alignment].positions[2] as f64);
+                    for (role, tally) in &summary.by_role[alignment] {
+                        let series = by_role[alignment].entry(role.clone()).or_insert_with(|| vec![0.0; REPS.len()]);
+                        series[point] = tally.positions[2] as f64;
+                    }
                 }
             }
+            for alignment in 0..2 {
+                let roles: Vec<String> = by_role[alignment]
+                    .iter()
+                    .map(|(role, series)| format!("{role}={:.3}", slope(&steps, series)))
+                    .collect();
+                slopes.push(format!(
+                    "table\t{mode}slope\t{lookup}\t{}\t{:.3}\t{:.3}\t{}",
+                    ALIGNMENTS[alignment],
+                    slope(&steps, &max_words),
+                    slope(&steps, &irreducible[alignment]),
+                    roles.join(" "),
+                ));
+            }
         }
-        for alignment in 0..2 {
-            let roles: Vec<String> = by_role[alignment]
-                .iter()
-                .map(|(role, series)| format!("{role}={:.3}", slope(&steps, series)))
-                .collect();
-            slopes.push(format!(
-                "table\tslope\t{lookup}\t{}\t{:.3}\t{:.3}\t{}",
-                ALIGNMENTS[alignment],
-                slope(&steps, &max_words),
-                slope(&steps, &irreducible[alignment]),
-                roles.join(" "),
-            ));
-        }
-    }
-    print_roles("lookups", &roles);
-    println!(
-        "table\tslope\tworkload\talignment\tmax words per step\tirreducible positions per step\t\
+        print_roles(mode, "lookups", &roles);
+        println!(
+            "table\tslope\tworkload\talignment\tmax words per step\tirreducible positions per step\t\
          irreducible positions per step, by kind/word"
-    );
-    for line in slopes {
-        println!("{line}");
+        );
+        for line in slopes {
+            println!("{line}");
+        }
     }
 }
 
@@ -384,7 +409,7 @@ fn journal_content_of_the_lookups() {
 #[ignore = "the full measurement: about 35 s; run it with --include-ignored"]
 fn journal_content_of_everything_else_that_runs_coherently() {
     print_header();
-    let mut roles: [BTreeMap<String, Tally>; 2] = Default::default();
+    let mut roles: [[BTreeMap<String, Tally>; 2]; 2] = Default::default();
     let mut runs = 0;
     for program in COHERENT_PROGRAMS {
         let module = lower(&c_dir().join(format!("{program}.c")), &format!("{program}.journal"), CLANG_FLAGS, &[]);
@@ -395,10 +420,11 @@ fn journal_content_of_everything_else_that_runs_coherently() {
                 continue;
             }
             let args = vec![1; function.params.len()];
-            let summary = run_summary(&module, &function.name, &args);
-            assert!(summary.applies > 0, "@{}", function.name);
-            print_summary(program, &function.name, &summary);
-            merge_roles(&mut roles, &summary.by_role);
+            for (mode_index, summary) in run_summaries(&module, &function.name, &args).iter().enumerate() {
+                assert!(summary.applies > 0, "@{}", function.name);
+                print_summary(["", "recompute-"][mode_index], program, &function.name, summary);
+                merge_roles(&mut roles[mode_index], &summary.by_role);
+            }
             runs += 1;
         }
     }
@@ -411,11 +437,13 @@ fn journal_content_of_everything_else_that_runs_coherently() {
         let path = root().join(format!("examples/{example}.bn"));
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
         let module = bennett_ir::load(&text).unwrap_or_else(|e| panic!("{path:?}: {e}"));
-        let summary = run_summary(&module, name, args);
-        print_summary("examples", &format!("{example}.bn {name}"), &summary);
-        merge_roles(&mut roles, &summary.by_role);
+        for (mode_index, summary) in run_summaries(&module, name, args).iter().enumerate() {
+            print_summary(["", "recompute-"][mode_index], "examples", &format!("{example}.bn {name}"), summary);
+            merge_roles(&mut roles[mode_index], &summary.by_role);
+        }
         runs += 1;
     }
-    print_roles("rest", &roles);
-    assert!(runs > 30, "the corpus and the other programs ran: {runs}");
+    print_roles("", "rest", &roles[0]);
+    print_roles("recompute-", "rest", &roles[1]);
+    assert_eq!(runs, 67, "the identical non-lookup workload set");
 }

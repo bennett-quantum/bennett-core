@@ -8,14 +8,15 @@ history under superposition costs a constant or orders of magnitude, and it is t
 audition's proposals (`docs/AUDITION.md`: B, "align journal entries by (instruction, count)"; C, "classify
 journal words zero / recoverable / irreducible").
 
-**Answer on these workloads.** With the witnesses defined below (copies only, no recomputation), irreducible
-history **grows linearly with steps** wherever a loop runs more than once: 0.41 to 0.86 irreducible words per
-step, against 1.23 to 1.36 journal words per step. The classification buys a constant factor (1.4 to 3.1 on
-the lookups), not orders of magnitude. Regions without a repeating loop are the exception: there every journal
-word is the same on all branches (49 of the 67 runs that are not lookups). Almost all irreducible words are old values of
-registers rewritten by later loop iterations; memory stores are mostly the same on every branch. Whether
-recomputation (which this measurement deliberately does not credit) turns the linear growth into a constant is
-not measured here.
+**Answer on these workloads: yes, linear growth survives depth-one recomputation.** Over the same
+1/2/4/8 repetitions, the fitted irreducible slopes are 0.840 words/step for binary search, 0.388 for hashing,
+0.711 for the B-tree and 0.781 for stack writes (both alignments). Copy-only slopes are 0.862, 0.405, 0.749
+and 0.810; the naive journal grows at 1.228 to 1.364 words/step. This witness buys a further constant-factor
+saving on these four points, rather than making the history constant. It removes 241 lookup positions in all
+(199 old `Slot` values and 42 `Jump` parameters); it removes no additional store positions. The 49 of 67 other
+runs with all words classical remain so. This is still an **upper bound** for stronger recomputation: no chain
+of producers, inverse operation, replay or time/storage schedule is measured. Four fitted points do not establish
+an asymptotic law.
 
 ## Method
 
@@ -35,7 +36,7 @@ not measured here.
     caller's frame), k counted within the frame instance.
 
   A position is one aligned word of one `apply` execution; each branch that reached it holds one instance.
-- **Classes**, in this order of priority:
+- **Copy-only classes**, in this order of priority (`classify`, unchanged):
   - **Same**: every branch reached the position and all hold one value. Such a word is classical.
   - **Recoverable**: every instance has a witness of one kind, so one circuit recovers it on every branch:
     - *first write*: the first write to that slot in its frame activation (the old value is executor residue
@@ -54,6 +55,26 @@ not measured here.
   - **Control only**, reported inside Irreducible: positions reached by some branches only, whose value is the
     same wherever reached (a `Jump` source block or a `Return`'s packed callee is fixed by the site). What they
     hold is which branches got there.
+- **Depth-one recomputation** (`classify_with_recompute`). Keeps Same and Recoverable exactly as above;
+  then adds **Recomputed**, before Irreducible. A Recomputed position has one common producer and one common
+  live source for **each** of its slot operands on every branch that reached it. Mixed copy/recompute witnesses
+  do not count. Constants are literals of that producer, never captured old values treated as free constants.
+  The observer records which instruction last defined each slot and the values of its operands at that time.
+  After the destructive step it finds live copies of those operands, re-evaluates that one instruction from the
+  actual live sources and current memory, and checks exact equality with the journal word. Across branches it
+  requires the same (producer site, producer call path, output) and intersects each operand's live-source list.
+  Merely finding some individually successful recipe on every branch is insufficient.
+
+  Supported producers: integer arithmetic, comparisons, casts, selects (all three operands must be available),
+  loads (the address must be available and the **current bytes** must give the old result), function addresses
+  and `stacksave`. A block parameter's producer is its actual predecessor edge's argument, a depth-one identity
+  or literal; a store's producer is the value operand of the last store to exactly those bytes. These identities
+  do not follow the operand's own arithmetic producer. Distinct edges to the same block are distinguished.
+  Overlapping stores invalidate whole-word provenance; fragments are not assembled. Calls, allocations, jump
+  source blocks, packed return control and old stack-pointer records have no recompute recipe. A returned
+  callee's result is not reconstructed by replaying the call. Recipes may use any live frame's slot or the
+  existing stack-pointer sources; no operand is recovered recursively. Observer snapshots of operands are only
+  used to **find** copies and never substitute for a missing live input.
 - **Workloads.**
   - `front/tests/c/journal_content.c`: 1,024 keys in a sorted array, an open-addressing hash table of 2,048
     slots, and a B-tree of at most 7 keys per node (170 nodes, depth 4), built classically before the qubits
@@ -74,16 +95,28 @@ not measured here.
 ## Reproduce
 
 ```sh
-front/test.sh --test journal_content -- --include-ignored --nocapture --test-threads=1
+CARGO_BUILD_JOBS=3 CMAKE_BUILD_PARALLEL_LEVEL=3 front/test.sh --test journal_content -- --include-ignored --nocapture --test-threads=1
 ```
 
-prints every table below as tab-separated lines starting with `table` (about 35 s; the in-place updates' 2^17
-branches take most of it). Without `--include-ignored` only the lookups run (about 5 s, part of `front/test.sh`).
-The classification is `bennett_exec::classify`; the case worked by hand is the `HAND` program in
-`crates/exec/tests/journal_content.rs` (two branches, every word listed in the test's comments: 14 positions,
-11 same and 3 irreducible; and a two-iteration loop, 19 positions, 11 same, 5 recoverable, 3 irreducible).
+prints the underlying tables as tab-separated lines starting with `table` (about 24 s warm).
+`workload` / `role` / `slope` lines retain the copy-only results; `recompute-workload` / `recompute-role` /
+`recompute-slope` lines add the witness. Both A and B are always printed, including unchanged runs. Workload
+and role lines append Recomputed counts and instance percentages. Without `--include-ignored` only the lookups
+run (about 4 s, part of `front/test.sh`); heavy runs stay ignored. The runner checks native results for every
+lookup branch and checks that each word instance is classified exactly once and only copy-Irreducible words
+move to Recomputed.
 
-## Results: the lookups, 256 branches each
+The case small enough to check by hand is `HAND/@f` in `crates/exec/tests/journal_content.rs`: 14 positions,
+11 Same and 3 copy-Irreducible. One of the three is a branch-only store overwriting literal 40 with 41.
+Re-evaluating its defining `store i8 40, %cell` value operand returns literal 40 without any live input, so
+it becomes Recomputed. The two branch-only Jump source blocks remain Irreducible. Both alignments give
+**11 Same + 0 Recoverable + 1 Recomputed + 2 Irreducible**. The same test file's `ALIAS` program checks actual
+arithmetic: the second multiply destroys 6/10 when producing 3/5, but its old inputs 2 and 3/5 remain in
+`%saved` and `%seed`; multiplying those live values recovers the old word. Overwriting `%saved` earlier removes
+the witness. The suite also rejects a changed-memory load, invalidated store provenance and disjoint operand
+sources across branches, and retains the hook off/on and reversal checks.
+
+## Copy-only results: the lookups, 256 branches each
 
 Alignment A; B gives identical numbers on every lookup (each branch makes the same calls in the same order).
 
@@ -128,7 +161,7 @@ By record kind and word, all lookup runs together (A and B identical):
 | `Return` packed callee, stack pointer | 19,456 each | 100.0 | 0.0 | 0.0 | 76 each | 0 | 0 |
 | `Alloca` slot, stack pointer | 2,048 each | 100.0 | 0.0 | 0.0 | 8 each | 0 | 0 |
 
-## Results: everything else that runs coherently
+## Copy-only results: everything else that runs coherently
 
 67 runs. In 49 every journal word is the same on all branches: every in-place update (2^16 and 2^17 branches),
 the controlled-gate programs except `phase` and `block`, `thesis.c` and its variants, `kickback`, `fault_cancel`,
@@ -153,7 +186,8 @@ the same on every branch. The rest (alignment A unless marked):
 | grover.c | search_digit_sum_12 | 907 | 19 | 101 | 103 | 37 | 38 | 28 | 14 | 26.3 | 27.7 |
 | float_controlled.c | scaled | 4 | 49 | 220 | 221 | 13 | 182 | 26 | 26 | 11.2 | 11.8 |
 | | ratio | 51 | 136 | 538 | 577 | 166 | 380 | 31 | 31 | 4.0 | 5.8 |
-| float_long_double_controlled.c | ratio | 68 | 160 | 837 | 923 | 398 | 473 | 52 | 52 | 3.4 | 6.2 |
+| float_long_double_controlled.c | ratio | 68 | 175 | 929 | 1,015 | 430 | 523 | 62 | 60 | 4.2 | 6.7 |
+| | ratio (B) | | | | 1,015 | 432 | 523 | 60 | 60 | 4.0 | 6.5 |
 | controlled.c | phase | 6 | 6 | 30 | 32 | 26 | 4 | 2 | 2 | 3.6 | 6.7 |
 | | block | 15 | 8 | 46 | 47 | 39 | 5 | 3 | 3 | 3.1 | 6.5 |
 | coarse.c | coarse | 13 | 3 | 34 | 37 | 29 | 6 | 2 | 2 | 3.4 | 5.9 |
@@ -161,10 +195,83 @@ the same on every branch. The rest (alignment A unless marked):
 | | entangled | 2 | 4 | 8 | 8 | 2 | 4 | 2 | 2 | 20.0 | 25.0 |
 
 (Branches and positions are summed over the run's `apply` executions; the front's wrappers add one-branch
-`apply`s, which is why the corpus functions show 258 branches.) Alignments A and B differ only on
+`apply`s, which is why the corpus functions show 258 branches.) Alignments A and B differ on `recursive_split` and the current `long double` ratio. For
 `recursive_split`, where branches recurse to different depths: B confines the shift to the frame where the paths
-differ: 323 positions irreducible under A are recoverable under B (836 irreducible become 512). In the float,
-controlled, `coarse` and `thesis.bn` runs every irreducible position is control only.
+differ: 323 positions irreducible under A are recoverable under B (836 irreducible become 512). In the short-float,
+controlled, `coarse` and `thesis.bn` runs every irreducible position is control only. The current long-double
+ratio has two additional non-control irreducible positions under A.
+
+## Results with depth-one recomputation
+
+Same workloads, branches, steps and positions as the copy-only tables. A and B are identical for every lookup.
+Same and copy-Recoverable counts retain priority; Recomputed is a separate, additional class.
+
+| Workload | reps | same | copy recov. | recomputed | irreducible | control only | irred. % of words | irred. / max words |
+|---|---|---|---|---|---|---|---|---|
+| binary search | 1 | 136 | 19 | 0 | 91 | 0 | 37.0 | 37.0 |
+| binary search | 2 | 145 | 79 | 7 | 219 | 34 | 48.7 | 49.7 |
+| binary search | 4 | 208 | 151 | 14 | 485 | 36 | 57.0 | 58.4 |
+| binary search | 8 | 316 | 297 | 25 | 998 | 47 | 62.1 | 63.4 |
+| hash table | 1 | 89 | 0 | 0 | 0 | 0 | 0.0 | 0.0 |
+| hash table | 2 | 101 | 19 | 2 | 5 | 0 | 3.9 | 3.9 |
+| hash table | 4 | 121 | 48 | 3 | 31 | 0 | 15.3 | 15.3 |
+| hash table | 8 | 161 | 111 | 4 | 79 | 0 | 22.3 | 22.3 |
+| B-tree | 1 | 203 | 60 | 13 | 187 | 40 | 33.5 | 41.0 |
+| B-tree | 2 | 292 | 117 | 21 | 415 | 65 | 43.5 | 49.6 |
+| B-tree | 4 | 473 | 209 | 37 | 830 | 90 | 48.6 | 53.9 |
+| B-tree | 8 | 859 | 420 | 85 | 1565 | 113 | 50.3 | 53.6 |
+| writes memory | 1 | 576 | 0 | 0 | 0 | 0 | 0.0 | 0.0 |
+| writes memory | 2 | 617 | 28 | 3 | 13 | 1 | 1.9 | 2.0 |
+| writes memory | 4 | 676 | 80 | 8 | 112 | 13 | 10.9 | 12.9 |
+| writes memory | 8 | 786 | 178 | 19 | 480 | 54 | 27.8 | 33.3 |
+
+Least-squares slopes against full-precision mean steps/branch (reps 1, 2, 4, 8), both alignments.
+The component slopes below are the **remaining** irreducible positions per step.
+
+| Workload | max words/step | copy irred./step | recompute irred./step | `Slot` | `Jump` param | `Jump` source | `Store` | `Return` result |
+|---|---|---|---|---|---|---|---|---|
+| binary search | 1.228 | 0.862 | 0.840 | 0.687 | 0.120 | 0.033 | 0.000 | 0.000 |
+| hash table | 1.267 | 0.405 | 0.388 | 0.348 | 0.030 | 0.000 | 0.000 | 0.010 |
+| B-tree | 1.275 | 0.749 | 0.711 | 0.578 | 0.098 | 0.036 | 0.000 | 0.000 |
+| writes memory | 1.364 | 0.810 | 0.781 | 0.562 | 0.095 | 0.067 | 0.050 | 0.007 |
+
+All other record-kind components (`Alloca`, `Call`, return packed callee and stack pointer) have zero
+irreducible slope. Among the lookup roles, only `Slot` and `Jump` parameters gain recompute witnesses:
+
+| Kind / word | instances | same % | copy recov. % | recomputed % | irreducible % | positions | recomputed positions | irreducible positions | control only |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `Alloca/AllocaSlot` | 2,048 | 100.0 | 0.0 | 0.0 | 0.0 | 8 | 0 | 0 | 0 |
+| `Alloca/AllocaStack` | 2,048 | 100.0 | 0.0 | 0.0 | 0.0 | 8 | 0 | 0 | 0 |
+| `Call/param` | 35,840 | 68.6 | 31.4 | 0.0 | 0.0 | 140 | 0 | 0 | 0 |
+| `Jump/JumpSource` | 365,420 | 83.4 | 0.0 | 0.0 | 16.6 | 1,597 | 0 | 406 | 406 |
+| `Jump/param` | 376,525 | 41.7 | 13.6 | 2.5 | 42.2 | 1,709 | 42 | 726 | 1 |
+| `Return/ReturnPacked` | 19,456 | 100.0 | 0.0 | 0.0 | 0.0 | 76 | 0 | 0 | 0 |
+| `Return/ReturnResult` | 19,456 | 42.1 | 48.7 | 0.0 | 9.2 | 76 | 0 | 7 | 0 |
+| `Return/ReturnStack` | 19,456 | 100.0 | 0.0 | 0.0 | 0.0 | 76 | 0 | 0 | 0 |
+| `Slot/Slot` | 2,180,809 | 39.8 | 14.1 | 2.0 | 44.0 | 9,318 | 199 | 4,332 | 84 |
+| `Store/Store` | 77,648 | 87.4 | 4.1 | 0.0 | 8.5 | 318 | 0 | 39 | 2 |
+
+On the other 67 runs, these six gain Recomputed positions; every unlisted row keeps the copy-only counts,
+including the 49 entirely Same runs. A and B coincide except for recursive split (and the unchanged
+long-double ratio already listed above). No fixed-input run here supplies a repetition slope.
+
+| Program / function | alignment | same | copy recov. | recomputed | irreducible | control only | irred. % of words | irred. / max words |
+|---|---|---|---|---|---|---|---|---|
+| grover.c / search_digit_sum_12 | A | 37 | 38 | 10 | 18 | 10 | 16.4 | 17.8 |
+| coherent.c / coherent_collatz_steps | A | 47 | 333 | 89 | 979 | 183 | 64.4 | 67.7 |
+| coherent.c / coherent_bit_count | A | 47 | 18 | 6 | 36 | 14 | 32.6 | 34.0 |
+| coherent.c / coherent_gcd_with_60 | A | 52 | 16 | 6 | 13 | 8 | 7.4 | 14.9 |
+| coherent.c / coherent_fibonacci_mod | A | 49 | 917 | 253 | 870 | 617 | 40.2 | 41.6 |
+| coherent.c / coherent_recursive_split | A | 55 | 381 | 1 | 835 | 352 | 67.3 | 65.6 |
+| coherent.c / coherent_recursive_split | B | 56 | 704 | 28 | 484 | 408 | 37.7 | 38.1 |
+
+The copy-only tables were rerun with the original observer from base `a29ea90` and compared with this
+observer: all 166 workload/alignment rows and all role/slope rows agree. One historical README row predates
+this base: long-double `ratio` formerly reported 160 steps, 837 max words, 923 positions, 398 Same,
+473 Recoverable and 52 Irreducible (all control). The table above is refreshed to the current copy-only result;
+this drift is present with the original observer as well. Its cause was not measured in this experiment.
+The historical table and its software remain available at `613b925`; the current command always emits the
+copy-only classification as well as recomputation, so the witness comparison uses identical code and runs.
 
 ## Reading against the audition's falsifiers
 
@@ -172,19 +279,27 @@ controlled, `coarse` and `thesis.bn` runs every irreducible position is control 
   the same on every branch is 0 to 79% on the lookups (100% minus "same % of words") and 0 to 96% elsewhere
   (`fibonacci_mod`). Not near 1 on short regions; it approaches it on the long loop-heavy ones.
 - **C** ("kill: irreducible > 25% of journal, or irreducible slot words grow with step count in loop-heavy
-  programs"): both conditions hold under these witnesses. Irreducible exceeds 25% of the journal on binary
-  search, the B-tree, the write workload at 8 reps, and five other runs (`collatz_steps`, `recursive_split`,
-  `fibonacci_mod`, `bit_count`, `search_digit_sum_12`); irreducible `Slot` positions grow at 0.35 to 0.70 per
-  step. Because recomputation is not credited, this kills a history of copies, not a compiler-planned tape that
-  recomputes.
+  programs"): both conditions **still hold after this depth-one witness**. Irreducible exceeds 25% on binary
+  search, the B-tree, writes at 8 reps, Collatz, recursive split, Fibonacci and bit count. Remaining irreducible
+  `Slot` slopes are 0.348 to 0.687 words/step. This rules out copies plus this local recomputation as the way to
+  make these histories constant over the measured range. It does not rule out a compiler-planned tape that
+  recomputes longer chains or replays from preserved inputs.
 
 ## What the numbers do not show
 
-- **Recomputation.** Irreducible is an upper bound: a loop-carried value such as `acc * 31 + v` or a
-  temporary of an earlier iteration is irreducible here even when the producer could be re-run or inverted.
-  Whether the linear growth survives Bennett-style recomputation (at its price in time) is the next
-  measurement; it needs a recomputation witness in the hook (the old value equals what re-evaluating its
-  defining instruction from values the post-step state holds would give).
+- **Deeper recomputation and its time price.** This is one producer with operands available by live copies,
+  not Bennett-style pebbling, an inverse, a recursive producer chain or a replay from preserved region inputs.
+  Missing operands are not recovered even if a chain of depth two would recover them. Inputs are sought only
+  in slots and the two stack-pointer kinds, not by scanning arbitrary memory for aliases. No gates, temporary
+  storage, memory lookup cost or recomputation time are charged. A smaller journal may cost more time.
+- **When values exist.** The witness is local to the state just after the destructive step. Later steps can
+  overwrite its inputs; ordinary reversal restores them before this step is undone. This does not show a global
+  scheme that discards all such histories simultaneously, nor use values that become available only later.
+  No alternate recovery schedule or strategy for preserving/recreating later-overwritten inputs is measured.
+- **Conservative recipe coverage.** All select operands must have copies. Different producer sites or call
+  paths, mixed copy/recompute cases and partial-store assemblies are not unified even when a more general
+  circuit could handle them. Old call results and allocations are not recomputed. Thus the remaining
+  Irreducible count is an upper bound under richer witnesses, not an information-theoretic lower bound.
 - **Bits.** Counts are journal words, whatever their width (the executor keeps each as up to 128 bits; most
   here are 1 to 64). The qubit cost is the sum of the widths, which is not computed.
 - **Layout.** An irreducible position is counted once however many branches reach it. Packing positions that

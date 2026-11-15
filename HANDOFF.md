@@ -119,8 +119,13 @@ alone, not as a whole corpus): GCC 1,559 agree and 10 refused with musl, if noth
   words per step: a saving of 1.4 to 3.1 times). Over 256 branches and 1/2/4/8 chained lookups the irreducible
   share is 37/50/59/64 % for binary search, 36/46/51/53 % for a B-tree, 0/5.5/17/23 % for a hash table; of 67
   other coherent runs, 49 have none. It is an upper bound: only values that can be copied are credited, not
-  values that could be recomputed. Not measured yet: whether the linear growth survives a recompute witness, and
-  global-memory writes inside a region (refused until the journalled machine exists). The independent check
+  values that could be recomputed. **Depth-one recomputation now measured** on the same workloads and both
+  alignments: linear growth survives, at 0.840/0.388/0.711/0.781 irreducible words per step for binary search,
+  hashing, B-tree and stack writes (copy-only: 0.862/0.405/0.749/0.810). Re-evaluating the old value's producer
+  from live copies of its operands removes 199 Slot positions and 42 Jump parameters across the lookups; no
+  additional Store positions. Copy-only classification remains available. Longer chains, replay, the time price,
+  and global-memory writes inside a region remain unmeasured (the last is refused until the journalled machine
+  exists). The independent check
   (`5d41748`, sol) reproduced every table and showed the hook off, the hook on and the executor before the hook
   give identical journals, outcomes and step counts on 127 tests; it found the classifier could lose a common
   live copy (unsorted lists under a binary search; no published number changes) and one slope rounded twice;
@@ -164,8 +169,8 @@ alone, not as a whole corpus): GCC 1,559 agree and 10 refused with musl, if noth
    earlier workspace's device models; what time and randomness mean on the device must be decided first),
    `setjmp`/`longjmp`, and the two questions below.
 2. **The two stopped measurements are done** ("Stopped in flight"). Journal content: a constant factor as far as
-   copies go; the recompute witness is its next measurement. Control schedules: exact structure costs about 1-5x a
-   run on these traces, but only from observed runs.
+   copies and depth-one recomputation go; longer chains and their time price are unmeasured. Control schedules:
+   exact structure costs about 1-5x a run on these traces, but only from observed runs.
 3. **Build the journalled machine in the executor** and run the experiments listed in `docs/DESIGN.md` as it is
    built: every journalled step is a permutation; `apply` equals mark, call, rewind-keep; un-running through gates
    equals the conjugated operation.

@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use bennett_ir::{BlockId, FuncId, Inst, Slot};
+use bennett_ir::{BlockId, FuncId, Inst, Operand, Slot, Terminator};
 
 use crate::executor::{Executor, Frame, Outcome};
 use crate::journal::Undo;
@@ -123,6 +123,63 @@ pub enum WordWitness {
     LiveCopy(Vec<LiveSource>),
 }
 
+/// The output of a defining instruction that can be evaluated once, without replay or recursion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ProducerOutput {
+    /// A pure instruction result, or a store's value operand (the bytes it writes).
+    Instruction,
+    /// A block argument on the indexed target, in `Terminator::visit_targets` order.
+    JumpArgument {
+        /// The target index, distinguishing two edges to the same block.
+        target: usize,
+        /// The argument index within that target.
+        argument: usize,
+    },
+}
+
+/// One depth-one recovery circuit: re-evaluate this producer using live copies of its original
+/// operands and current memory in the state just after the destructive step.
+/// Equality to the old journal word is checked, not assumed. No operand's producer is followed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecomputeWitness {
+    /// The defining instruction or transfer.
+    pub site: Site,
+    /// Its frame's call path, shared across branches of this apply.
+    pub call_path: PathId,
+    /// Which output of that instruction defined the old value.
+    pub output: ProducerOutput,
+    /// For each slot operand, sorted live sources holding the operand's defining-time value.
+    /// Constants remain constants of the instruction. A classifier intersects each list across branches.
+    pub inputs: Vec<Vec<LiveSource>>,
+}
+
+impl RecomputeWitness {
+    fn intersect(&mut self, other: &Self) -> bool {
+        if (self.site, self.call_path, self.output) != (other.site, other.call_path, other.output)
+            || self.inputs.len() != other.inputs.len()
+        {
+            return false;
+        }
+        for (common, sources) in self.inputs.iter_mut().zip(&other.inputs) {
+            common.retain(|source| sources.binary_search(source).is_ok());
+            if common.is_empty() {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Observer-only provenance, never a source of constants in a recovery circuit. Historical operands
+/// must each have a live copy after the destructive step before a witness is emitted.
+#[derive(Clone)]
+struct Producer {
+    site: Site,
+    call_path: PathId,
+    output: ProducerOutput,
+    inputs: Vec<(Slot, u128)>,
+}
+
 /// One journal word, as one branch journalled it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WordInstance {
@@ -132,6 +189,8 @@ pub struct WordInstance {
     pub value: u128,
     /// Its witness, if any.
     pub witness: WordWitness,
+    /// A checked depth-one producer, independently of the copy-only witness.
+    pub recompute: Option<RecomputeWitness>,
 }
 
 /// One journal record, as one branch journalled it.
@@ -203,7 +262,9 @@ pub enum WordClass {
     Same,
     /// Not the same on every branch, but every instance carries one common witness.
     Recoverable,
-    /// Neither.
+    /// A common depth-one producer recovers every instance (only with `classify_with_recompute`).
+    Recomputed,
+    /// No enabled witness covers the position.
     Irreducible,
 }
 
@@ -247,6 +308,8 @@ pub struct ClassifiedPosition {
     pub class: WordClass,
     /// The witness behind `Recoverable`, when that is the class.
     pub reason: Option<RecoverableReason>,
+    /// The common recovery circuit, only for the Recomputed class.
+    pub recompute: Option<RecomputeWitness>,
 }
 
 /// The classification of one `apply` execution under both alignments.
@@ -271,20 +334,30 @@ pub struct ApplyClassification {
 /// these rules, which deliberately exclude recomputing a value from its producer or replaying the
 /// region from its preserved inputs, so the count is an upper bound for those stronger mechanisms.
 pub fn classify(measurement: &JournalMeasurement) -> Vec<ApplyClassification> {
+    classify_mode(measurement, false)
+}
+
+/// Like [`classify`], additionally crediting one common checked depth-one producer per position.
+/// Same and copy recovery retain priority. This never follows an operand producer or replays a call.
+pub fn classify_with_recompute(measurement: &JournalMeasurement) -> Vec<ApplyClassification> {
+    classify_mode(measurement, true)
+}
+
+fn classify_mode(measurement: &JournalMeasurement, recompute: bool) -> Vec<ApplyClassification> {
     measurement
         .applies
         .iter()
         .map(|apply| ApplyClassification {
             callee: apply.callee,
             branches_total: apply.branches.len(),
-            site_count: classify_alignment(apply, Alignment::SiteCount),
-            call_path: classify_alignment(apply, Alignment::CallPath),
+            site_count: classify_alignment(apply, Alignment::SiteCount, recompute),
+            call_path: classify_alignment(apply, Alignment::CallPath, recompute),
         })
         .collect()
 }
 
 /// The classification of one `apply` execution under one alignment.
-fn classify_alignment(apply: &ApplyJournal, alignment: Alignment) -> Vec<ClassifiedPosition> {
+fn classify_alignment(apply: &ApplyJournal, alignment: Alignment, recompute: bool) -> Vec<ClassifiedPosition> {
     type Key = (Option<PathId>, Site, u64, WordRole);
     struct Acc {
         kind: Undo,
@@ -296,6 +369,8 @@ fn classify_alignment(apply: &ApplyJournal, alignment: Alignment) -> Vec<Classif
         all_unchanged: bool,
         all_store_base: bool,
         all_live_copy: bool,
+        common_recompute: Option<RecomputeWitness>,
+        all_recompute: bool,
         /// The sources common to every instance so far, sorted.
         live_intersection: Option<Vec<LiveSource>>,
     }
@@ -317,12 +392,18 @@ fn classify_alignment(apply: &ApplyJournal, alignment: Alignment) -> Vec<Classif
                     all_unchanged: true,
                     all_store_base: true,
                     all_live_copy: true,
+                    common_recompute: word.recompute.clone(),
+                    all_recompute: recompute && word.recompute.is_some(),
                     live_intersection: None,
                 });
                 if acc.last_branch != branch {
                     acc.branches += 1;
                     acc.last_branch = branch;
                 }
+                acc.all_recompute &= match (&mut acc.common_recompute, &word.recompute) {
+                    (Some(common), Some(witness)) => common.intersect(witness),
+                    _ => false,
+                };
                 acc.instances += 1;
                 acc.values.push(word.value);
                 let (first_write, unchanged, store_base) = match &word.witness {
@@ -372,6 +453,8 @@ fn classify_alignment(apply: &ApplyJournal, alignment: Alignment) -> Vec<Classif
                 WordClass::Same
             } else if reason.is_some() {
                 WordClass::Recoverable
+            } else if acc.all_recompute {
+                WordClass::Recomputed
             } else {
                 WordClass::Irreducible
             };
@@ -388,6 +471,7 @@ fn classify_alignment(apply: &ApplyJournal, alignment: Alignment) -> Vec<Classif
                 same_where_present,
                 class,
                 reason: (class == WordClass::Recoverable).then_some(reason).flatten(),
+                recompute: (class == WordClass::Recomputed).then_some(acc.common_recompute).flatten(),
             }
         })
         .collect()
@@ -399,6 +483,7 @@ struct ShadowFrame {
     call_path: PathId,
     site_counts: HashMap<Site, u64>,
     slot_writes: Vec<u32>,
+    producers: Vec<Option<Producer>>,
 }
 
 /// The observer. Created by [`Executor::measure_journal_content`]; dropped or taken by the caller.
@@ -409,6 +494,8 @@ pub(crate) struct Collector {
     shadow: Vec<ShadowFrame>,
     written: Vec<bool>,
     written_list: Vec<usize>,
+    /// Exact, unfragmented ranges last written by a store; overlaps invalidate the old producer.
+    stores: HashMap<(usize, usize), Producer>,
     entries: Vec<RecordInstance>,
     branch_args: Vec<u128>,
     captured_records: usize,
@@ -428,6 +515,7 @@ impl Collector {
             shadow: Vec::new(),
             written: Vec::new(),
             written_list: Vec::new(),
+            stores: HashMap::new(),
             entries: Vec::new(),
             branch_args: Vec::new(),
             captured_records: 0,
@@ -481,6 +569,7 @@ impl Collector {
             self.written[byte] = false;
         }
         self.written_list.clear();
+        self.stores.clear();
         self.a_counts.clear();
         self.shadow.clear();
         self.entries.clear();
@@ -496,6 +585,7 @@ pub(crate) struct Pending {
     frame: Frame,
     records_before: usize,
     words_before: usize,
+    producers: Vec<Producer>,
 }
 
 /// Executor facts about a just-run step, gathered before the observer is borrowed again.
@@ -594,7 +684,12 @@ impl Executor<'_> {
                 slot_writes[slot.index()] = 1;
             }
         }
-        collector.shadow.push(ShadowFrame { call_path: 0, site_counts: HashMap::new(), slot_writes });
+        collector.shadow.push(ShadowFrame {
+            call_path: 0,
+            site_counts: HashMap::new(),
+            producers: vec![None; slot_count],
+            slot_writes,
+        });
         let record = RecordInstance {
             site,
             kind: Undo::Call,
@@ -608,6 +703,7 @@ impl Executor<'_> {
                     role: WordRole::CallParam(index),
                     value,
                     witness: WordWitness::FirstWrite,
+                    recompute: None,
                 })
                 .collect(),
         };
@@ -653,12 +749,45 @@ impl Executor<'_> {
         let block = self.function(frame.func).block(frame.block);
         let pos = if frame.inst < block.insts.len() { SitePos::Inst(frame.inst) } else { SitePos::Term };
         let journal = self.journal.as_ref().expect("a region runs with a journal");
-        Some(Pending {
-            site: Site { func: frame.func, block: frame.block, pos },
-            frame,
-            records_before: journal.records(),
-            words_before: journal.words().len(),
-        })
+        let site = Site { func: frame.func, block: frame.block, pos };
+        let call_path = self.journal_measurement.as_ref()?.shadow.last()?.call_path;
+        let mut outputs = Vec::new();
+        if pos == SitePos::Term {
+            let target = match &block.term {
+                Terminator::Jump(_) => Some(0),
+                Terminator::Branch { cond, .. } => Some(usize::from(self.read(cond) != 1)),
+                Terminator::Switch { value, cases, .. } => {
+                    Some(cases.iter().position(|case| case.value == self.read(value)).unwrap_or(cases.len()))
+                }
+                _ => None,
+            };
+            let mut index = 0;
+            block.term.visit_targets(|edge| {
+                if Some(index) == target {
+                    outputs.extend(
+                        (0..edge.args.len()).map(|argument| ProducerOutput::JumpArgument { target: index, argument }),
+                    );
+                }
+                index += 1;
+            });
+        } else {
+            outputs.push(ProducerOutput::Instruction);
+        }
+        let producers = outputs
+            .into_iter()
+            .filter_map(|output| {
+                let operands = self.producer_operands(site, output)?;
+                let inputs = operands
+                    .into_iter()
+                    .filter_map(|operand| match operand {
+                        Operand::Slot(slot) => Some((slot, self.slot(slot))),
+                        Operand::Const(_) => None,
+                    })
+                    .collect();
+                Some(Producer { site, call_path, output, inputs })
+            })
+            .collect();
+        Some(Pending { site, frame, records_before: journal.records(), words_before: journal.words().len(), producers })
     }
 
     /// Copies the one record the step just pushed, with witnesses from the state after the step.
@@ -682,7 +811,7 @@ impl Executor<'_> {
         let call_path = collector.shadow[executing].call_path;
         let live_scratch = std::mem::take(&mut collector.live);
         let live = &live_scratch[..];
-        let words: Vec<WordInstance> = match info.kind {
+        let mut words: Vec<WordInstance> = match info.kind {
             Undo::Slot | Undo::Qalloc | Undo::Measure => {
                 let dst = info.dst.expect("a slot record defines a result");
                 let first = collector.bump(executing, dst);
@@ -690,6 +819,7 @@ impl Executor<'_> {
                     role: WordRole::Slot,
                     value: info.words[0],
                     witness: slot_witness(first, info.dst_new, info.words[0], live),
+                    recompute: None,
                 }]
             }
             Undo::Store => {
@@ -708,7 +838,7 @@ impl Executor<'_> {
                         collector.written_list.push(byte);
                     }
                 }
-                vec![WordInstance { role: WordRole::Store, value: info.words[0], witness }]
+                vec![WordInstance { role: WordRole::Store, value: info.words[0], witness, recompute: None }]
             }
             Undo::Alloca => {
                 let dst = info.dst.expect("an alloca defines its address");
@@ -718,11 +848,13 @@ impl Executor<'_> {
                         role: WordRole::AllocaSlot,
                         value: info.words[0],
                         witness: slot_witness(first, info.dst_new, info.words[0], live),
+                        recompute: None,
                     },
                     WordInstance {
                         role: WordRole::AllocaStack,
                         value: info.words[1],
                         witness: live_copy(live, info.words[1]),
+                        recompute: None,
                     },
                 ]
             }
@@ -730,6 +862,7 @@ impl Executor<'_> {
                 role: WordRole::StackRestore,
                 value: info.words[0],
                 witness: live_copy(live, info.words[0]),
+                recompute: None,
             }],
             Undo::Call => info
                 .words
@@ -739,6 +872,7 @@ impl Executor<'_> {
                     role: WordRole::CallParam(index),
                     value,
                     witness: WordWitness::FirstWrite,
+                    recompute: None,
                 })
                 .collect(),
             Undo::Jump => {
@@ -749,6 +883,7 @@ impl Executor<'_> {
                         role: WordRole::JumpParam(index),
                         value: info.words[index],
                         witness: slot_witness(first, Some(new), info.words[index], live),
+                        recompute: None,
                     });
                 }
                 // The predecessor block is control history: a slot that happens to hold the same
@@ -757,16 +892,23 @@ impl Executor<'_> {
                     role: WordRole::JumpSource,
                     value: *info.words.last().expect("a jump record ends with its source block"),
                     witness: WordWitness::None,
+                    recompute: None,
                 });
                 words
             }
             Undo::Return => {
                 let mut words = vec![
-                    WordInstance { role: WordRole::ReturnPacked, value: info.words[0], witness: WordWitness::None },
+                    WordInstance {
+                        role: WordRole::ReturnPacked,
+                        value: info.words[0],
+                        witness: WordWitness::None,
+                        recompute: None,
+                    },
                     WordInstance {
                         role: WordRole::ReturnStack,
                         value: info.words[1],
                         witness: live_copy(live, info.words[1]),
+                        recompute: None,
                     },
                 ];
                 if info.words.len() > 2 {
@@ -776,12 +918,55 @@ impl Executor<'_> {
                         role: WordRole::ReturnResult,
                         value: info.words[2],
                         witness: slot_witness(first, info.return_dst_new, info.words[2], live),
+                        recompute: None,
                     });
                 }
                 words
             }
             Undo::Effect | Undo::Finish | Undo::Gate | Undo::Qfree | Undo::Apply => Vec::new(),
         };
+        // Check original operand values against live state; captured values alone never suffice.
+        for word in &mut words {
+            let producer = match word.role {
+                WordRole::Slot | WordRole::AllocaSlot => {
+                    info.dst.and_then(|dst| collector.shadow[executing].producers[dst.index()].as_ref())
+                }
+                WordRole::JumpParam(index) => {
+                    collector.shadow[executing].producers[info.jump_params[index].0.index()].as_ref()
+                }
+                WordRole::ReturnResult => {
+                    info.return_dst.and_then(|dst| collector.shadow[executing - 1].producers[dst.index()].as_ref())
+                }
+                WordRole::Store => info.store_range.as_ref().and_then(|r| collector.stores.get(&(r.start, r.end))),
+                _ => None,
+            };
+            word.recompute = producer.and_then(|p| self.recompute_witness(p, word.value, live));
+        }
+        match info.kind {
+            Undo::Slot | Undo::Alloca => {
+                let dst = info.dst.expect("a result slot");
+                collector.shadow[executing].producers[dst.index()] = pending.producers.first().cloned();
+            }
+            Undo::Jump => {
+                for (argument, &(slot, _)) in info.jump_params.iter().enumerate() {
+                    collector.shadow[executing].producers[slot.index()] = pending.producers.get(argument).cloned();
+                }
+            }
+            Undo::Return => {
+                if let Some(dst) = info.return_dst {
+                    // Replaying a callee is not depth-one recomputation.
+                    collector.shadow[executing - 1].producers[dst.index()] = None;
+                }
+            }
+            Undo::Store => {
+                let range = info.store_range.as_ref().expect("store range");
+                collector.stores.retain(|&(start, end), _| end <= range.start || start >= range.end);
+                if let Some(producer) = pending.producers.first() {
+                    collector.stores.insert((range.start, range.end), producer.clone());
+                }
+            }
+            _ => {}
+        }
         assert_eq!(words.len(), info.words.len(), "every journal word gets a role");
         collector.live = live_scratch;
         collector.push_record(RecordInstance { site: pending.site, kind: info.kind, a_k, b_k, call_path, words });
@@ -794,13 +979,100 @@ impl Executor<'_> {
                         slot_writes[slot.index()] = 1;
                     }
                 }
-                collector.shadow.push(ShadowFrame { call_path: callee_path, site_counts: HashMap::new(), slot_writes });
+                collector.shadow.push(ShadowFrame {
+                    call_path: callee_path,
+                    site_counts: HashMap::new(),
+                    producers: vec![None; info.callee_slot_count],
+                    slot_writes,
+                });
             }
             Undo::Return => {
                 collector.shadow.pop().expect("a return pops a shadow frame");
             }
             _ => {}
         }
+    }
+
+    /// The semantic operands of the supported producer, in fixed order. Stores and transfers
+    /// produce their value operands, not an arithmetic chain that led to those operands.
+    fn producer_operands(&self, site: Site, output: ProducerOutput) -> Option<Vec<Operand>> {
+        let block = self.function(site.func).block(site.block);
+        match (site.pos, output) {
+            (SitePos::Inst(index), ProducerOutput::Instruction) => Some(match &block.insts[index] {
+                Inst::Binary { lhs, rhs, .. } | Inst::Compare { lhs, rhs, .. } => vec![*lhs, *rhs],
+                Inst::Select { cond, if_true, if_false, .. } => vec![*cond, *if_true, *if_false],
+                Inst::Cast { value, .. } | Inst::Store { value, .. } => vec![*value],
+                Inst::Load { address, .. } => vec![*address],
+                Inst::FuncAddr { .. } | Inst::StackSave { .. } => vec![],
+                _ => return None,
+            }),
+            (SitePos::Term, ProducerOutput::JumpArgument { target, argument }) => {
+                let mut operand = None;
+                let mut index = 0;
+                block.term.visit_targets(|edge| {
+                    if index == target {
+                        operand = edge.args.get(argument).copied();
+                    }
+                    index += 1;
+                });
+                operand.map(|operand| vec![operand])
+            }
+            _ => None,
+        }
+    }
+
+    fn recompute_witness(
+        &self,
+        producer: &Producer,
+        old: u128,
+        live: &[(LiveSource, u128)],
+    ) -> Option<RecomputeWitness> {
+        let mut inputs = Vec::with_capacity(producer.inputs.len());
+        for &(_, value) in &producer.inputs {
+            let WordWitness::LiveCopy(sources) = live_copy(live, value) else { return None };
+            inputs.push(sources);
+        }
+        // Evaluate from actual live sources, not from historical snapshots in the observer.
+        let read = |operand: &Operand| match operand {
+            Operand::Const(value) => value.value(),
+            Operand::Slot(slot) => {
+                let index = producer.inputs.iter().position(|(input, _)| input == slot).expect("captured operand");
+                live.iter().find(|(source, _)| *source == inputs[index][0]).expect("live source").1
+            }
+        };
+        let block = self.function(producer.site.func).block(producer.site.block);
+        let value = match (producer.site.pos, producer.output) {
+            (SitePos::Inst(index), ProducerOutput::Instruction) => match &block.insts[index] {
+                Inst::Binary { op, width, lhs, rhs, .. } => {
+                    crate::arith::binary(*op, *width, read(lhs), read(rhs)).ok()
+                }
+                Inst::Compare { pred, width, lhs, rhs, .. } => {
+                    Some(u128::from(crate::arith::compare(*pred, *width, read(lhs), read(rhs))))
+                }
+                Inst::Select { cond, if_true, if_false, .. } => {
+                    Some(read(if read(cond) == 1 { if_true } else { if_false }))
+                }
+                Inst::Cast { op, from, to, value, .. } => Some(crate::arith::cast(*op, *from, *to, read(value))),
+                Inst::Load { width, address, .. } => self
+                    .memory_range(read(address) as u64, *width)
+                    .ok()
+                    .map(|range| self.read_bytes(range) & width.mask()),
+                Inst::FuncAddr { func, .. } => Some(u128::from(func.address())),
+                Inst::StackSave { .. } => Some(u128::from(self.stack_pointer)),
+                Inst::Store { value, .. } => Some(read(value)),
+                _ => None,
+            },
+            (SitePos::Term, ProducerOutput::JumpArgument { .. }) => {
+                self.producer_operands(producer.site, producer.output).map(|operands| read(&operands[0]))
+            }
+            _ => None,
+        };
+        (value == Some(old)).then_some(RecomputeWitness {
+            site: producer.site,
+            call_path: producer.call_path,
+            output: producer.output,
+            inputs,
+        })
     }
 
     fn step_info(&self, pending: &Pending, collector: &mut Collector) -> StepInfo {
