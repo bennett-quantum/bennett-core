@@ -14,7 +14,7 @@ mod writer;
 
 pub use fault::Fault;
 pub use module::{
-    Block, DataItem, DataSegment, Function, Inst, Module, Param, Qubit, Signature, SwitchCase, Target, Terminator,
+    Block, DataItem, DataSegment, Function, Inst, Keep, Module, Param, Qubit, Signature, SwitchCase, Target, Terminator,
 };
 pub use ops::{BinOp, CastOp, FixedGate, Gate, Predicate, Rotation};
 pub use reader::{NameKind, ReadError, ReadErrorKind, read};

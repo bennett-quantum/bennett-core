@@ -211,4 +211,7 @@ pub enum Problem {
     /// A register that is both an `apply` target and an argument, or both targets.
     #[error("`%{0}` is used twice among the arguments, output and fault register")]
     RegionAlias(String),
+    /// A `rewind` whose handle is not the result of a `mark` in the same function.
+    #[error("`%{0}` is not defined by a `mark`")]
+    NotAMark(String),
 }

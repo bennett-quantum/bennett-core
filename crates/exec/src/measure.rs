@@ -627,7 +627,8 @@ impl Executor<'_> {
     /// `keep_raw`, every journal record of every branch is kept (what [`classify`] needs); without
     /// it, only per-branch counts, arguments and outcomes are. Off by default, and a pure observer
     /// when on: it copies journal words the run already made and writes no executor state, so a run
-    /// with it on has the outcome, state and journal of the same run with it off.
+    /// with it on has the outcome, state and journal of the same run with it off. It does not follow a
+    /// `rewind` inside a region, and panics at one.
     pub fn measure_journal_content(&mut self, keep_raw: bool) {
         self.journal_measurement = Some(Collector::new(keep_raw));
     }
@@ -748,6 +749,11 @@ impl Executor<'_> {
         let frame = *self.top();
         let block = self.function(frame.func).block(frame.block);
         let pos = if frame.inst < block.insts.len() { SitePos::Inst(frame.inst) } else { SitePos::Term };
+        // A rewind pops records the measurement has already classified; it does not model that.
+        assert!(
+            !matches!(block.insts.get(frame.inst), Some(Inst::Rewind { .. })),
+            "the journal-content measurement does not follow `rewind`"
+        );
         let journal = self.journal.as_ref().expect("a region runs with a journal");
         let site = Site { func: frame.func, block: frame.block, pos };
         let call_path = self.journal_measurement.as_ref()?.shadow.last()?.call_path;
@@ -812,7 +818,7 @@ impl Executor<'_> {
         let live_scratch = std::mem::take(&mut collector.live);
         let live = &live_scratch[..];
         let mut words: Vec<WordInstance> = match info.kind {
-            Undo::Slot | Undo::Qalloc | Undo::Measure => {
+            Undo::Slot | Undo::Qalloc | Undo::Measure | Undo::Mark => {
                 let dst = info.dst.expect("a slot record defines a result");
                 let first = collector.bump(executing, dst);
                 vec![WordInstance {
@@ -924,6 +930,7 @@ impl Executor<'_> {
                 words
             }
             Undo::Effect | Undo::Finish | Undo::Gate | Undo::Qfree | Undo::Apply => Vec::new(),
+            Undo::Rewind => unreachable!("the measurement stops before a rewind"),
         };
         // Check original operand values against live state; captured values alone never suffice.
         for word in &mut words {

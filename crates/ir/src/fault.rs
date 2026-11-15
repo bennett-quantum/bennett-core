@@ -56,6 +56,9 @@ faults! {
     ExitInRegion = 13 "exit_in_region",
     /// The exit operand's type differs from the selected entry's result type.
     ExitTypeMismatch = 14 "exit_type_mismatch",
+    /// A `rewind` that cannot un-run: its handle is not a mark of the running function's activation, the
+    /// history since the mark holds a measurement, or a kept value goes into a register allocated since.
+    BadRewind = 15 "bad_rewind",
 }
 
 impl Fault {

@@ -154,8 +154,13 @@ pub struct Stats {
     pub region_fault_weight: f64,
     /// The largest weight of the faulting configurations in any one of those executions.
     pub region_fault_max_weight: f64,
-    /// The size of the undo journal, in reversible mode.
+    /// The size of the undo journal, in reversible mode or once a `mark` has run.
     pub journal_bytes: Option<usize>,
+    /// Steps undone by `rewind`, including those undone again inside steps run again.
+    pub rewound_steps: u64,
+    /// Steps run again to undo an earlier `rewind`: by a later `rewind` that reaches back past it, or by
+    /// reversal. With `steps` and `rewound_steps` this is the work the history instructions cost.
+    pub rerun_steps: u64,
     /// Qubits allocated now.
     pub live_qubits: u32,
     /// The most qubits allocated at once.
@@ -217,6 +222,11 @@ pub struct Executor<'m> {
     pub(crate) region_fault_max_weight: f64,
     /// The journal-content observer, when turned on. It only copies what steps already journalled.
     pub(crate) journal_measurement: Option<Collector>,
+    /// Whether the run was started reversible, so that `step_back` may undo it. A run that is not keeps a
+    /// journal anyway from its first `mark`, for `rewind`.
+    pub(crate) reversible: bool,
+    pub(crate) rewound_steps: u64,
+    pub(crate) rerun_steps: u64,
 }
 
 impl<'m> Executor<'m> {
@@ -249,6 +259,9 @@ impl<'m> Executor<'m> {
             region_fault_weight: 0.0,
             region_fault_max_weight: 0.0,
             journal_measurement: None,
+            reversible: options.reversible,
+            rewound_steps: 0,
+            rerun_steps: 0,
         };
         let args: Vec<u128> = args.iter().map(|&arg| u128::from(arg)).collect();
         if let Err(fault) = executor.push_frame(entry, &args) {
@@ -294,7 +307,7 @@ impl<'m> Executor<'m> {
     /// to running, which changes nothing else; a run whose entry frame never fit has no frame and nothing to undo, so its
     /// fault is part of its entry state. Returns `false` when there is nothing left to undo.
     pub fn step_back(&mut self) -> Result<bool, ReverseError> {
-        let journal = self.journal.as_ref().ok_or(ReverseError::NotReversible)?;
+        let journal = self.journal.as_ref().filter(|_| self.reversible).ok_or(ReverseError::NotReversible)?;
         if matches!(self.outcome, Some(Outcome::Faulted(_) | Outcome::Stopped(_))) && !self.frames.is_empty() {
             self.outcome = None;
         }
@@ -356,6 +369,8 @@ impl<'m> Executor<'m> {
             region_fault_weight: self.region_fault_weight,
             region_fault_max_weight: self.region_fault_max_weight,
             journal_bytes: self.journal.as_ref().map(Journal::bytes),
+            rewound_steps: self.rewound_steps,
+            rerun_steps: self.rerun_steps,
             live_qubits: self.quantum.live_qubits(),
             peak_live_qubits: self.quantum.peak_qubits(),
             configurations: self.quantum.amplitudes().len(),

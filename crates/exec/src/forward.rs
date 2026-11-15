@@ -62,6 +62,8 @@ impl<'m> Executor<'m> {
                 self.record(Undo::Effect);
                 self.advance();
             }
+            Inst::Mark { dst } => self.mark(*dst),
+            Inst::Rewind { mark, keep } => self.rewind(*mark, keep)?,
             _ if self.in_region => return Err(Fault::QuantumInRegion.into()),
             Inst::Qalloc { dst, width } => {
                 let handle = self.quantum.allocate(*width);
@@ -143,7 +145,7 @@ impl<'m> Executor<'m> {
         self.record_word(old);
     }
 
-    fn advance(&mut self) {
+    pub(crate) fn advance(&mut self) {
         self.top_mut().inst += 1;
     }
 

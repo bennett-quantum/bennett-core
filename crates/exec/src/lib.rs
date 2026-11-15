@@ -12,8 +12,11 @@ mod backward;
 mod executor;
 mod forward;
 mod gates;
+mod history;
 mod journal;
 mod measure;
+#[cfg(test)]
+mod permutation_tests;
 mod quantum;
 mod region;
 mod snapshot;

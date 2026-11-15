@@ -13,6 +13,15 @@ impl<'m> Executor<'m> {
         let undo = self.journal.as_mut().and_then(|journal| journal.pop()).expect("a record to undo");
         match undo {
             Undo::Slot | Undo::Qalloc => self.undo_definition(undo),
+            Undo::Mark => {
+                self.undo_definition(undo);
+                self.journal.as_mut().expect("a mark record is in the journal").pop_mark();
+            }
+            Undo::Rewind => {
+                let rewind = self.retreat();
+                let mark_at = self.pop_word();
+                self.undo_rewind(rewind, mark_at);
+            }
             Undo::Store => self.undo_store(),
             Undo::Alloca => {
                 self.retreat();

@@ -375,6 +375,30 @@ pub enum Inst {
         /// The `i64` step budget of each run of the callee.
         budget: Operand,
     },
+    /// `dst = mark`: remembers the current point of the history, as an `i64` handle for `rewind`. See
+    /// `docs/DESIGN.md`, "History: `mark` and `rewind`".
+    Mark {
+        /// The handle.
+        dst: Slot,
+    },
+    /// `rewind mark [keep (value -> register, ...)]`: XORs each kept value into its register, then un-runs
+    /// every step since `mark`, and continues after the rewind.
+    Rewind {
+        /// The handle, defined by a `mark` of the same function.
+        mark: Slot,
+        /// The values copied out before the un-run.
+        keep: Vec<Keep>,
+    },
+}
+
+/// One `value -> register` pair of a `rewind`: the value is XORed into the register on every basis
+/// configuration.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Keep {
+    /// An integer as wide as the register.
+    pub value: Operand,
+    /// The register handle.
+    pub register: Slot,
 }
 
 impl Inst {
@@ -390,14 +414,16 @@ impl Inst {
             | Inst::StackSave { dst }
             | Inst::FuncAddr { dst, .. }
             | Inst::Qalloc { dst, .. }
-            | Inst::Measure { dst, .. } => Some(*dst),
+            | Inst::Measure { dst, .. }
+            | Inst::Mark { dst } => Some(*dst),
             Inst::Call { dst, .. } | Inst::CallIndirect { dst, .. } => *dst,
             Inst::Store { .. }
             | Inst::StackRestore { .. }
             | Inst::Effect { .. }
             | Inst::Qfree { .. }
             | Inst::Gate { .. }
-            | Inst::Apply { .. } => None,
+            | Inst::Apply { .. }
+            | Inst::Rewind { .. } => None,
         }
     }
 
@@ -432,7 +458,7 @@ impl Inst {
                 args.iter().for_each(operand);
             }
             Inst::Effect { byte } => operand(byte),
-            Inst::FuncAddr { .. } | Inst::Qalloc { .. } | Inst::StackSave { .. } => {}
+            Inst::FuncAddr { .. } | Inst::Qalloc { .. } | Inst::StackSave { .. } | Inst::Mark { .. } => {}
             Inst::Qfree { register } | Inst::Measure { register, .. } => operand(&Operand::Slot(*register)),
             Inst::Gate { target, controls, .. } => {
                 operand(&Operand::Slot(target.register));
@@ -443,6 +469,13 @@ impl Inst {
                 operand(&Operand::Slot(*out));
                 operand(&Operand::Slot(*fault));
                 operand(budget);
+            }
+            Inst::Rewind { mark, keep } => {
+                operand(&Operand::Slot(*mark));
+                for pair in keep {
+                    operand(&pair.value);
+                    operand(&Operand::Slot(pair.register));
+                }
             }
         }
     }

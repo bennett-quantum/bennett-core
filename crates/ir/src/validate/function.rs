@@ -161,7 +161,9 @@ impl<'a> Checker<'a> {
             }
             Inst::Compare { .. } => Some(Type::Int(Width::BIT)),
             Inst::Cast { to, .. } => Some(Type::Int(*to)),
-            Inst::Alloca { .. } | Inst::FuncAddr { .. } | Inst::StackSave { .. } => Some(Type::Int(Width::WORD)),
+            Inst::Alloca { .. } | Inst::FuncAddr { .. } | Inst::StackSave { .. } | Inst::Mark { .. } => {
+                Some(Type::Int(Width::WORD))
+            }
             Inst::Qalloc { width, .. } => Some(Type::Qreg(*width)),
             Inst::Call { callee, .. } => self.call_result(site, self.module.function(*callee).result),
             Inst::CallIndirect { signature, .. } => self.call_result(site, signature.result),
@@ -171,7 +173,8 @@ impl<'a> Checker<'a> {
             | Inst::StackRestore { .. }
             | Inst::Qfree { .. }
             | Inst::Gate { .. }
-            | Inst::Apply { .. } => None,
+            | Inst::Apply { .. }
+            | Inst::Rewind { .. } => None,
         }
     }
 
@@ -259,7 +262,26 @@ impl<'a> Checker<'a> {
                 self.apply(site, *callee, args, *out, *fault);
                 self.expect(site, *budget, Type::Int(Width::WORD));
             }
-            Inst::FuncAddr { .. } | Inst::Qalloc { .. } | Inst::StackSave { .. } => {}
+            Inst::Rewind { mark, keep } => {
+                self.rewind_mark(site, *mark);
+                for pair in keep {
+                    if let Some(width) = self.register_width(site, pair.register) {
+                        self.expect(site, pair.value, Type::Int(width));
+                    }
+                }
+            }
+            Inst::FuncAddr { .. } | Inst::Qalloc { .. } | Inst::StackSave { .. } | Inst::Mark { .. } => {}
+        }
+    }
+
+    /// Reports `mark` unless a `mark` instruction of this function defines it.
+    fn rewind_mark(&mut self, site: Site, mark: Slot) {
+        let Some(def) = self.defs[mark.index()] else { return };
+        let block = &self.function.blocks[def.block];
+        let is_mark = def.position > 0 && matches!(block.insts[def.position - 1], Inst::Mark { .. });
+        if !is_mark {
+            let name = self.slot_name(mark);
+            self.error(site, Problem::NotAMark(name));
         }
     }
 

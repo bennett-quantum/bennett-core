@@ -2,12 +2,13 @@
 
 use bennett_ir::{DataItem, LoadError, NameKind, Problem, ReadErrorKind, load, read, validate, write};
 
-const EXAMPLES: [(&str, &str); 5] = [
+const EXAMPLES: [(&str, &str); 6] = [
     ("sum", include_str!("../../../examples/sum.bn")),
     ("calls", include_str!("../../../examples/calls.bn")),
     ("thesis", include_str!("../../../examples/thesis.bn")),
     ("fault", include_str!("../../../examples/fault.bn")),
     ("grover", include_str!("../../../examples/grover.bn")),
+    ("history", include_str!("../../../examples/history.bn")),
 ];
 
 #[test]
@@ -229,4 +230,53 @@ fn zero_extents_must_fit_memory_without_overlapping() {
     assert_eq!(problems("memory 64\ndata 0 = zero 20\ndata 16 = i8 1\n"), [Problem::DataOverlap(0)]);
     assert!(load("memory 64\ndata 0 = zero 16\ndata 16 = i8 1\n").is_ok(), "adjacent extents do not overlap");
     assert!(load("memory 64\ndata 16 = zero 0\ndata 16 = i8 1\n").is_ok(), "an empty extent overlaps nothing");
+}
+
+#[test]
+fn mark_and_rewind_read_write_and_validate() {
+    let text = "func @f(q8 %r, q2 %s, i8 %v) {\nentry:\n %h = mark\n %g = mark\n rewind %g\n \
+                rewind %h keep (%v -> %r, i2 -1 -> %s, i8 0 -> %r)\n ret\n}\n";
+    let module = read(text).expect("reads");
+    let written = write(&module);
+    assert!(written.contains("%h = mark\n"), "{written}");
+    assert!(written.contains("rewind %g\n"), "{written}");
+    assert!(written.contains("rewind %h keep (%v -> %r, i2 3 -> %s, i8 0 -> %r)\n"), "{written}");
+    assert_eq!(read(&written).as_ref(), Ok(&module));
+    validate(module).expect("valid");
+    for statement in [
+        "mark",
+        "%h = mark 3",
+        "%x = rewind %h",
+        "rewind",
+        "rewind %h keep",
+        "rewind %h keep ()",
+        "rewind %h keep (%v %r)",
+        "rewind %h keep (%v -> %r",
+        "rewind %h keep (3 -> %r)",
+        "rewind %h keep (%v -> 3)",
+        "rewind %h keep (%v -> %r,)",
+    ] {
+        let text = format!("func @f(q8 %r, i8 %v) {{\nentry:\n %h = mark\n {statement}\n ret\n}}\n");
+        assert!(read(&text).is_err(), "accepted {statement}");
+    }
+    let body = |statements: &str| format!("func @f(q8 %r, q4 %s, i8 %v, i64 %n) {{\nentry:\n{statements}\n ret\n}}\n");
+    assert_eq!(problems(&body(" rewind %n")), vec![Problem::NotAMark("n".into())]);
+    assert_eq!(problems(&body(" %h = add i64 %n, 1\n rewind %h")), vec![Problem::NotAMark("h".into())]);
+    assert!(matches!(
+        problems(&body(" %h = mark\n rewind %h keep (%v -> %s)")).as_slice(),
+        [Problem::TypeMismatch { .. }]
+    ));
+    assert!(matches!(
+        problems(&body(" %h = mark\n rewind %h keep (%v -> %v)")).as_slice(),
+        [Problem::TypeMismatch { .. }]
+    ));
+    assert!(matches!(
+        problems(&body(" %h = mark\n rewind %h keep (%s -> %s)")).as_slice(),
+        [Problem::TypeMismatch { .. }]
+    ));
+    assert!(matches!(problems(&body(" rewind %h\n %h = mark")).as_slice(), [Problem::NotDominated(_)]));
+    // A handle is an i64 like any other value: it may be compared, but only a mark's own slot rewinds.
+    assert!(load(&body(" %h = mark\n %same = icmp eq i64 %h, %n\n rewind %h")).is_ok());
+    let text = "func @f() {\nentry:\n %h = mark\n br next(%h)\nnext(i64 %k):\n rewind %k\n ret\n}\n";
+    assert_eq!(problems(text), vec![Problem::NotAMark("k".into())]);
 }

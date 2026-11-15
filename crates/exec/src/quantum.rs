@@ -54,13 +54,25 @@ pub(crate) struct QuantumState {
     amplitudes: BTreeMap<Config, Complex64>,
     peak_qubits: u32,
     peak_configurations: usize,
+    /// The number of allocations made and not undone. Each allocation is numbered by it.
+    allocations: u64,
+    /// For each register id, the numbers of its allocations that are not undone, latest last.
+    allocation_numbers: Vec<Vec<u64>>,
 }
 
 impl Default for QuantumState {
     /// No registers: one empty configuration with amplitude 1.
     fn default() -> Self {
         let amplitudes = BTreeMap::from([(Config::default(), Complex64::new(1.0, 0.0))]);
-        QuantumState { registers: Vec::new(), columns: 0, amplitudes, peak_qubits: 0, peak_configurations: 1 }
+        QuantumState {
+            registers: Vec::new(),
+            columns: 0,
+            amplitudes,
+            peak_qubits: 0,
+            peak_configurations: 1,
+            allocations: 0,
+            allocation_numbers: Vec::new(),
+        }
     }
 }
 
@@ -71,7 +83,10 @@ impl QuantumState {
         let id = self.registers.iter().position(|r| r.width.is_none()).unwrap_or(self.registers.len());
         if id == self.registers.len() {
             self.registers.push(RegisterState { generation: 0, width: None });
+            self.allocation_numbers.push(Vec::new());
         }
+        self.allocations += 1;
+        self.allocation_numbers[id].push(self.allocations);
         let register = &mut self.registers[id];
         register.generation = register.generation.wrapping_add(1);
         register.width = Some(width);
@@ -90,10 +105,13 @@ impl QuantumState {
         self.amplitudes.retain(|config, _| config[id] == 0);
         let register = &mut self.registers[id];
         register.generation = register.generation.wrapping_sub(1);
+        self.allocations -= 1;
+        self.allocation_numbers[id].pop();
         self.release(id);
         // Ids that were never allocated before are forgotten again, as `allocate` found them.
         while self.registers.last().is_some_and(|r| r.width.is_none() && r.generation == 0) {
             self.registers.pop();
+            self.allocation_numbers.pop();
         }
     }
 
@@ -174,6 +192,29 @@ impl QuantumState {
         }
         self.replace_amplitudes(next);
         Ok(())
+    }
+
+    /// XORs `value` into register `column` on every configuration: a permutation of configurations.
+    pub(crate) fn xor_register(&mut self, column: usize, value: u64) {
+        if value == 0 {
+            return;
+        }
+        let xor = |(mut config, amplitude): (Config, Complex64)| {
+            config[column] ^= value;
+            (config, amplitude)
+        };
+        self.amplitudes = std::mem::take(&mut self.amplitudes).into_iter().map(xor).collect();
+    }
+
+    /// The number of allocations made and not undone.
+    pub(crate) fn allocations(&self) -> u64 {
+        self.allocations
+    }
+
+    /// The number of the live register `column`'s allocation: it was made after `allocations()` had
+    /// that value minus one.
+    pub(crate) fn allocation_number(&self, column: usize) -> u64 {
+        *self.allocation_numbers[column].last().expect("a live register was allocated")
     }
 
     /// Samples the value of register `id` and collapses the state onto it.

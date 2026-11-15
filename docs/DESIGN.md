@@ -41,6 +41,7 @@ A module is a list of functions, an initial memory image and a memory size.
   bad indirect target, `unreachable` and an exhausted budget are *named faults*: part of the result, never a crash.
 - **Quantum instructions**, allowed in ordinary control code: `qalloc w`, `qfree`, single-qubit gates
   (`x h z s sdg t tdg rx ry rz`) with an optional list of control qubits, `measure`, and `apply` (below).
+- **History instructions:** `mark` and `rewind ... keep` (below).
 
 There is one instruction set for every tier. A tier is a way of running code, not a different language.
 
@@ -89,6 +90,53 @@ the run statistics. By default such an `apply` stops the run with the run error 
 as it was before the `apply`; `allow_region_faults` (`bennett run --allow-region-faults`) lets the run go on, for
 programs that read their fault registers on purpose (`examples/fault.bn`). Programs from `front` are always run
 strictly in the tests.
+
+### History: `mark` and `rewind`
+
+Built on 2026-11-15 as the first step of the next extension (below), on today's machine: one classical
+state, with a superposition only over registers. Worlds that differ in classical state come next.
+
+- **`%h = mark`** sets `%h`, an `i64`, to the number of journal records up to and including the mark's
+  own. A run that keeps no journal starts one at its first mark (a run that was not started reversible
+  still cannot be reversed).
+- **`rewind %h keep (v -> r, ...)`** checks, then copies, then un-runs:
+  1. It faults with `bad_rewind`, changing nothing, unless `%h` names a mark of the running activation
+     that is still in the history (the frame was not left, below its own depth, since the mark), no
+     `measure` ran since it, and every register kept into was allocated before it (un-running a later
+     allocation would discard the kept value). A register freed since faults `dangling_register`.
+  2. It XORs each value, read now, into its register on every basis configuration, in order.
+  3. It un-runs every step since the mark, latest first, exactly as reversal does: gates by their
+     inverses, memory and stack writes, console output (un-printed), calls and returns, inner marks, and
+     earlier rewinds (below). The copy comes before the un-run (compute, copy, uncompute), so un-running
+     through gates conjugates it: `mark; h q; rewind keep (i1 1 -> q)` is H X H = Z on `q`.
+  4. The frame continues after the rewind, wherever the mark was. Every slot holds its value at the
+     mark: a slot defined between the mark and the rewind reads, after it, as it did at the mark, so a
+     program should not use one there. The validator does not check that.
+- **Marks nest**, and a rewind un-runs every mark and rewind inside its region. Rewinding the same mark
+  twice is allowed; the second un-runs the first, its keep included.
+- **In a coherent region** (`apply`) a rewind runs, but may not keep: registers are quantum
+  (`quantum_in_region`).
+- **Undoing a rewind** (by reversal, or by an outer rewind reaching past it) runs its region again from
+  the mark to the rewind, then XORs the kept values again. The steps ran before from the same state, so
+  they run again identically; budget, configuration limit and region-fault checks are not repeated. An
+  `apply` un-run or run again by a rewind may fault on some branches without stopping the run: it is a
+  permutation either way, and the strict check is for running forward.
+- **Cost.** A rewind counts as one step and `steps` never goes back, so the budget bounds a loop of
+  rewinds. The work of un-running is counted apart (`Stats::rewound_steps`, `Stats::rerun_steps`). The
+  known exponential is measured (`crates/exec/tests/history.rs`): a chain of `d` levels that each mark,
+  work, call the next level and rewind costs 19, 55, 127, 271, ... 36,847 steps in all at `d` = 0, 1, 2,
+  3, ... 10, a factor tending to 2 per level, against 21 + 20 `d` (221 at `d` = 10) when only the
+  outermost level rewinds. A mark copies nothing: the work and journal bytes per iteration of a loop of
+  mark, call, rewind are the same at 50 and 1,500 iterations.
+- **Every journalled step is a bijection** of (machine state, history), checked by brute force at small
+  widths (`crates/exec/src/permutation_tests.rs`): every kind of step at every position of two
+  programs, from every assignment of small values to the slots it reads or overwrites and to two memory
+  bytes, on the history the run wrote and on garbage records below it (38,360 steps, 3,016 of them
+  faulting); distinct inputs give distinct outputs, the history below is untouched, and stepping back
+  gives the input exactly. A rewind is a bijection only of states its history describes, so it is
+  checked from its mark: 8,192 starts, each giving the state at the mark with the handle set, the kept
+  values XORed and the program counter after the rewind, all distinct, and stepping back gives the state
+  at the rewind exactly.
 
 ## From C to a device program (`front`)
 
@@ -237,7 +285,8 @@ Two things the first C programs taught:
   Success changes only the outcome, journals the same finish record as an outer return, and leaves active
   frames in place for reversal. C's `_Noreturn void __bennett_exit(int)` lowers to it; like
   `void __bennett_effect(char)`, it is an ordinary device call, not a quantum marker.
-- Fault codes fit in 4 bits; a fault register is at least that wide.
+- Fault codes fit in 4 bits; a fault register is at least that wide. All fifteen codes are used since
+  `bad_rewind` (15).
 - `qfree` requires the register to be zero in every configuration, otherwise the named fault `dirty_free`.
 - `measure` reads a whole register. Amplitudes at or below `f64::EPSILON` are dropped.
 - Bounds of the simulator (steps, number of basis configurations) are parameters of a run. Exceeding the
@@ -276,10 +325,11 @@ and x87 (`front/tests/tests/softfloat.rs`): no other difference in any operation
 included, except for `long double` encodings no arithmetic produces and out-of-range conversions, which C
 leaves undefined.
 
-## The next extension: code that is not a clean function (decided, not built)
+## The next extension: code that is not a clean function (decided; `mark` and `rewind` built)
 
-Decided by the maintainer on 2026-11-13 after five independent proposals (`docs/AUDITION.md`). Nothing below is
-implemented yet.
+Decided by the maintainer on 2026-11-13 after five independent proposals (`docs/AUDITION.md`). Built so far:
+`mark` and `rewind ... keep` on today's machine, one classical state ("History: `mark` and `rewind`",
+above; the text form is `%h = mark`, a result like any other). The rest is not built yet.
 
 - **One layering.** A journalled machine defines meaning and is the fallback that needs no analysis: the quantum
   state is a superposition of whole machine states, and each step keeps what it destroys as history. Two
@@ -336,7 +386,8 @@ recomputation shared between conditions (each predicated operation computes and 
 - **Running code under a qubit with its history kept.** `apply` is the cleaned-up special case: compute, copy the
   result out, uncompute at once. The general case keeps the journal as quantum workspace and un-runs later. That is
   what an update with no known inverse (`x = x * x`), a loop under qubit control that contains gates, and a
-  conditional boot need. The executor has both halves (journal, superposition) but no instruction joins them.
+  conditional boot need. `mark` and `rewind` join journal and superposition for one classical state; ordinary
+  code reading a qubit (worlds that differ in classical state) is the next step.
 - **Channels.** A dirty discard is the partial trace, measurement is described by effects, noise by channels; the
   finished Bennett covers them (maintainer, 2026-11-13). This step is unitaries and clean discard, and a dirty
   `qfree` is a fault. Nothing in the device program should make channels impossible to add.

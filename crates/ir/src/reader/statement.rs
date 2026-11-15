@@ -4,8 +4,8 @@ use super::error::{Failure, ReadErrorKind};
 use super::lexer::Token;
 use super::{Parser, Scope};
 use crate::{
-    BinOp, BlockId, CastOp, Fault, FixedGate, FuncId, Gate, Inst, Operand, Predicate, Qubit, Rotation, Signature, Slot,
-    SwitchCase, Target, Terminator, Type, Width,
+    BinOp, BlockId, CastOp, Fault, FixedGate, FuncId, Gate, Inst, Keep, Operand, Predicate, Qubit, Rotation, Signature,
+    Slot, SwitchCase, Target, Terminator, Type, Width,
 };
 
 /// The mnemonics that end a block.
@@ -96,6 +96,11 @@ impl<'s> Parser<'s> {
             "apply" => {
                 line.no_result("apply")?;
                 self.apply(scope)?
+            }
+            "mark" => Inst::Mark { dst: line.result("mark")? },
+            "rewind" => {
+                line.no_result("rewind")?;
+                self.rewind(scope)?
             }
             _ if TERMINATORS.contains(&mnemonic) => {
                 if line.dst.is_some() {
@@ -217,6 +222,25 @@ impl<'s> Parser<'s> {
         self.cursor.expect(Token::Word("budget"), "`budget`")?;
         let budget = self.operand(scope, Width::WORD)?;
         Ok(Inst::Apply { callee, args, out, fault, budget })
+    }
+
+    /// `rewind %mark [keep (VALUE -> %register, ...)]`
+    fn rewind(&mut self, scope: &mut Scope<'s>) -> Result<Inst, Failure> {
+        let mark = self.slot_use(scope, "a mark")?;
+        let mut keep = Vec::new();
+        if self.cursor.eat(Token::Word("keep")) {
+            self.cursor.expect(Token::LParen, "`(`")?;
+            loop {
+                let value = self.typed_operand(scope)?;
+                self.cursor.expect(Token::Arrow, "`->`")?;
+                keep.push(Keep { value, register: self.slot_use(scope, "a register")? });
+                if self.cursor.eat(Token::RParen) {
+                    break;
+                }
+                self.cursor.expect(Token::Comma, "`,` or `)`")?;
+            }
+        }
+        Ok(Inst::Rewind { mark, keep })
     }
 
     /// `switch iN value, CASE: target, ..., default: target`

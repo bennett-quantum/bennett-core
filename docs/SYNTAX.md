@@ -37,6 +37,8 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | (rx | ry | rz)(ANGLE) qubit [ctrl ...]     ; radians
             | %d = measure %r
             | apply @f(typed, ...) -> %out, %fault budget operand
+            | %d = mark                                  ; an i64 handle for rewind
+            | rewind %h [keep (typed -> %r {, typed -> %r})]  ; XOR each value into its register, un-run since %h
 terminator := br label[(typed, ...)]
             | br operand, target, target
             | switch iN operand, INT: target, ..., default: target
@@ -112,6 +114,16 @@ done(i64 %sum):
     ret %sum
 }
 ```
+
+## History: `mark` and `rewind`
+
+`%h = mark` defines an `i64` handle naming the current point of the history. `rewind %h` un-runs every
+step since that point and the program continues after the rewind; `rewind %h keep (%v -> %r, i2 1 -> %s)`
+first XORs each value into its register, in order. `%h` must be the result of a `mark` in the same
+function (the validator's `NotAMark`), not a value derived from one or passed through a block parameter.
+Each kept value is an integer exactly as wide as its register (a typed constant names its width); keeping
+a register's value is not accepted. `keep` with an empty list is not accepted: write `rewind %h`. The
+meaning, and when a rewind faults (`bad_rewind`), is in `docs/DESIGN.md`, "History: `mark` and `rewind`".
 
 ## Whole-run exit
 

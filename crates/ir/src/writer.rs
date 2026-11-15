@@ -128,6 +128,19 @@ impl Writer<'_> {
                 write_args(self.out, f, args)?;
                 write!(self.out, " -> {}, {} budget {}", name(out), name(fault), op(budget))
             }
+            Inst::Mark { .. } => write!(self.out, "mark"),
+            Inst::Rewind { mark, keep } => {
+                write!(self.out, "rewind {}", name(mark))?;
+                for (i, pair) in keep.iter().enumerate() {
+                    let separator = if i == 0 { " keep (" } else { ", " };
+                    let value = OperandText { function: f, operand: pair.value, typed: true };
+                    write!(self.out, "{separator}{value} -> {}", name(&pair.register))?;
+                }
+                if !keep.is_empty() {
+                    self.out.push(')');
+                }
+                Ok(())
+            }
         }
     }
 
