@@ -24,9 +24,10 @@ mod snapshot;
 pub use executor::{Executor, Frame, Options, Outcome, ReverseError, RunError, StartError, Stats};
 pub use journal::Undo;
 pub use measure::{
-    Alignment, ApplyClassification, ApplyJournal, BranchJournal, CallPathStep, ClassifiedPosition, JournalMeasurement,
-    LiveSource, PathId, ProducerOutput, RecomputeWitness, RecordInstance, RecoverableReason, Site, SitePos, SourceKind,
-    WordClass, WordInstance, WordRole, WordWitness, classify, classify_with_recompute,
+    Alignment, ApplyClassification, ApplyJournal, BranchJournal, CallPathStep, ChainRecovery, ClassifiedPosition,
+    JournalMeasurement, LiveSource, PathId, ProducerOutput, RecomputeWitness, RecordInstance, RecoverableReason, Site,
+    SitePos, SourceKind, WordClass, WordInstance, WordRole, WordWitness, classify, classify_with_chains,
+    classify_with_recompute,
 };
 pub use quantum::RegisterState;
 pub use snapshot::{ClassicalSnapshot, QuantumSnapshot, Snapshot};

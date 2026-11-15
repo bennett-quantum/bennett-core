@@ -8,15 +8,19 @@ history under superposition costs a constant or orders of magnitude, and it is t
 audition's proposals (`docs/AUDITION.md`: B, "align journal entries by (instruction, count)"; C, "classify
 journal words zero / recoverable / irreducible").
 
-**Answer on these workloads: yes, linear growth survives depth-one recomputation.** Over the same
-1/2/4/8 repetitions, the fitted irreducible slopes are 0.840 words/step for binary search, 0.388 for hashing,
-0.711 for the B-tree and 0.781 for stack writes (both alignments). Copy-only slopes are 0.862, 0.405, 0.749
-and 0.810; the naive journal grows at 1.228 to 1.364 words/step. This witness buys a further constant-factor
-saving on these four points, rather than making the history constant. It removes 241 lookup positions in all
-(199 old `Slot` values and 42 `Jump` parameters); it removes no additional store positions. The 49 of 67 other
-runs with all words classical remain so. This is still an **upper bound** for stronger recomputation: no chain
-of producers, inverse operation, replay or time/storage schedule is measured. Four fitted points do not establish
-an asymptotic law.
+**Measured answer: linear growth survives these common-circuit producer chains, without a depth limit.**
+The new live-state DAG witness leaves fitted slopes of 0.859/0.382/0.651/0.753 irreducible positions per
+step for binary search/hash/B-tree/stack writes. Allowing already counted classical or retained journal
+words as additional inputs lowers them to **0.434/0.109/0.444/0.500** (both alignments). Depth-one slopes
+remain 0.840/0.388/0.711/0.781, and all older results remain reproducible, unchanged.
+
+The saving has a time price. At 8 repetitions the journal-assisted recipes re-evaluate
+489,555/201,728/531,648/214,986 instructions over the 256 branches, or
+3.898/12.918/3.533/5.738 instructions per recovered word instance. These are forward evaluations of
+recovery DAGs, not gates or a complete reversible cleanup schedule. The residuals include common-circuit
+failures and unsupported origins: **Irreducible is still an upper bound**, not proof that the underlying
+information is lost. For binary search at 8 reps, 441 of 481 remaining journal-assisted positions have individual-branch recipes; 40 require control-presence replay. Its residual is not demonstrated data loss. Individual-branch recoverability is measured separately below. Four fitted points do
+not establish an asymptotic law; unrestricted replay and optimal pebbling remain open.
 
 ## Method
 
@@ -75,6 +79,50 @@ an asymptotic law.
   callee's result is not reconstructed by replaying the call. Recipes may use any live frame's slot or the
   existing stack-pointer sources; no operand is recovered recursively. Observer snapshots of operands are only
   used to **find** copies and never substitute for a missing live input.
+- **Unbounded chains** (`classify_with_chains(measurement, false)`, `chain-*` rows). Starts with the
+  existing Same, Recoverable and depth-one Recomputed classes, then credits additional Recomputed positions.
+  A branch-local arena records every supported dynamic producer and links its slot operands to their
+  defining-time producers, before the destructive instruction executes. The links refer to dynamic values,
+  not the current contents of the slot with that name. There is no depth or work cutoff; traversal uses an
+  explicit stack, and cycles cannot occur because parents precede their definitions.
+
+  For each old word, the leaves must be actual live slot/stack-pointer sources in its **post-step** state,
+  or literal operands of the original instruction. A value may be copied from a different live slot with
+  exactly the same bits, as in the original observer. A successful producer requires the same site, call
+  path and output on every executing branch; each leaf requires one common source. The solver descends
+  across all branches together, so an alias on only one branch does not prematurely stop its search.
+  Constants in different producer sites are not unified. Loads read current bytes: the verifier reconstructs
+  the byte writes since the defining load, checks the result with its original width mask, and rejects a
+  changed value; a change followed by restoration is allowed. Arithmetic uses the executor's existing
+  integer semantics. Historical values validate equalities and find aliases, and never become free inputs.
+  The supported producers are exactly the depth-one set above, now linked recursively, including transfer
+  arguments and store-value identities. Jump source blocks and packed return control are kept opaque: a
+  numeric slot/tape alias does not reconstruct their branch-presence predicate. Calls/returned results and allocations remain opaque origins;
+  this is not callee replay. Overlapping stores still invalidate whole-word store provenance.
+- **Journal-assisted chains** (`classify_with_chains(measurement, true)`, `tape-*` rows). Uses the same
+  DAG search and additionally permits one common aligned journal word as a leaf. Positions are processed
+  in order of (maximum dynamic record index across their instances, alignment key). Only previously
+  processed **Same or still-Irreducible** positions are available: the former are counted classical data,
+  and the latter are counted retained tape. The source record must strictly precede the target record on
+  **every** executing branch. Recoverable and Recomputed words are omitted and never become free inputs,
+  including ones credited by depth one; their producers can instead be followed from the current state.
+  Same-record and circular dependencies are disallowed. The first unhandled word stays on the tape and can
+  help later words. This is an explicit greedy tape choice, not a minimum tape or a global recovery schedule.
+- **Time and resistance diagnostics.** A successful common recovery DAG counts each distinct dynamic
+  producer node once per recovered word. Copies and journal reads cost zero *re-evaluated instructions*;
+  a store-value or block-argument identity costs one. No common subexpression cache is shared between
+  different recovered words. Total cost is the sum of this count over executing word instances; average
+  cost divides by recovered instances, including earlier depth-one witnesses. Maximum instructions and
+  producer depth are also printed. Same/Recoverable positions have no added instruction cost. This measures
+  one forward evaluation with intermediates available, excludes their clearing, scratch storage, lookup and
+  control costs, and is not observer wall time. Time slopes fit total evaluations/branch against mean original
+  steps, using the same four repetition counts.
+
+  For failures the instrument records missing function/slot origins, unavailable journal-role producers,
+  changed current memory/stack, and differing producer identities. It also reruns each executing branch's
+  search separately with the **same retained tape**, crediting its individual copy witness where present.
+  The count of remaining positions where every individual branch succeeds separates a common-circuit
+  restriction from missing operands. These diagnostics come from measured dynamic graphs, not C inspection.
 - **Workloads.**
   - `front/tests/c/journal_content.c`: 1,024 keys in a sorted array, an open-addressing hash table of 2,048
     slots, and a B-tree of at most 7 keys per node (170 nodes, depth 4), built classically before the qubits
@@ -98,11 +146,11 @@ an asymptotic law.
 CARGO_BUILD_JOBS=3 CMAKE_BUILD_PARALLEL_LEVEL=3 front/test.sh --test journal_content -- --include-ignored --nocapture --test-threads=1
 ```
 
-prints the underlying tables as tab-separated lines starting with `table` (about 24 s warm).
+prints the underlying tables as tab-separated lines starting with `table` (several minutes on the shared laptop).
 `workload` / `role` / `slope` lines retain the copy-only results; `recompute-workload` / `recompute-role` /
-`recompute-slope` lines add the witness. Both A and B are always printed, including unchanged runs. Workload
-and role lines append Recomputed counts and instance percentages. Without `--include-ignored` only the lookups
-run (about 4 s, part of `front/test.sh`); heavy runs stay ignored. The runner checks native results for every
+`recompute-slope` lines add the witness. The `chain-*` and `tape-*` rows add the two unbounded measurements. Both A and B are always printed, including unchanged runs. Workload
+and role lines append Recomputed counts and instance percentages. Without `--include-ignored` only the original copy/depth-one lookup checks run;
+the new chain lookup measurement and the full coherent suite stay ignored. The runner checks native results for every
 lookup branch and checks that each word instance is classified exactly once and only copy-Irreducible words
 move to Recomputed.
 
@@ -163,11 +211,11 @@ By record kind and word, all lookup runs together (A and B identical):
 
 ## Copy-only results: everything else that runs coherently
 
-67 runs. In 49 every journal word is the same on all branches: every in-place update (2^16 and 2^17 branches),
+67 runs. In 49 no journal word is irreducible. In 46 every word is Same; three further runs (`controlled/computed`, `grover/search_one_solution`, `coherent/coherent_calls_helper`) also use copy-Recoverable words. The zero-Irreducible runs include: every in-place update (2^16 and 2^17 branches),
 the controlled-gate programs except `phase` and `block`, `thesis.c` and its variants, `kickback`, `fault_cancel`,
 Grover over one solution, `folded` in the float program, the `grover.bn` and `fault.bn` examples, and the
 corpus functions without a loop
-(`square_plus_one`, `shifts`, `calls_helper`, `table_lookup`, `clamp_and_abs`, `local_array`). Their regions
+(`square_plus_one`, `shifts`, `calls_helper`, `table_lookup`, `clamp_and_abs`, `local_array`). The 46 entirely Same regions
 are straight-line or take the same path on every branch, and each slot is written once, over residue that is
 the same on every branch. The rest (alignment A unless marked):
 
@@ -252,7 +300,7 @@ irreducible slope. Among the lookup roles, only `Slot` and `Jump` parameters gai
 | `Store/Store` | 77,648 | 87.4 | 4.1 | 0.0 | 8.5 | 318 | 0 | 39 | 2 |
 
 On the other 67 runs, these six gain Recomputed positions; every unlisted row keeps the copy-only counts,
-including the 49 entirely Same runs. A and B coincide except for recursive split (and the unchanged
+including all 49 zero-Irreducible runs (46 entirely Same). A and B coincide except for recursive split (and the unchanged
 long-double ratio already listed above). No fixed-input run here supplies a repetition slope.
 
 | Program / function | alignment | same | copy recov. | recomputed | irreducible | control only | irred. % of words | irred. / max words |
@@ -273,30 +321,147 @@ this drift is present with the original observer as well. Its cause was not meas
 The historical table and its software remain available at `613b925`; the current command always emits the
 copy-only classification as well as recomputation, so the witness comparison uses identical code and runs.
 
+## Results with unbounded producer chains
+
+All 83 workloads, both alignments, are in [chains.tsv](chains.tsv), including unchanged runs, role components, failure origins and time fits. Its comment header defines every field. Re-running the original observer from `0185b4b` in a separate build and using the same front binary gives **428 identical old data rows** (both original modes, all workloads, roles and slopes). Hook off/on state, outcome, statistics and reversal checks still pass. The four-test full reproduction passed in 229 s on the shared laptop; heavy measurements remain ignored by default.
+
+The small new hand check is `chains_recover_vanished_operands_at_unbounded_depth`: with the saved copy overwritten before the second multiply, 6/10 is destroyed when producing 3/5. The old operand 2 is gone. Re-evaluating the initial `br loop(i8 2)` argument gives 2 (one identity), then multiplying it by live `%seed` = 3/5 gives 6/10 (one multiply): **two instructions, depth two**, both alignments. The 40-iteration variant needs depth greater than 32. A separate alternating-call-result fixture retains the first two opaque results and recovers the repeated third from the first retained word; it cannot use itself or an omitted word as a seed. Another test rejects disjoint cross-branch leaf identities even when each branch separately succeeds. The control regression inserts live numeric aliases 1/2 for the branch predecessors, yet both control-presence words remain Irreducible.
+
+Same and copy-Recoverable counts remain exactly those in the earlier tables. A=B for every lookup. Recomputed here includes depth-one recoveries.
+
+| Workload | reps | live Recomputed | live Irreducible | tape Recomputed | tape Irreducible |
+|---|---:|---:|---:|---:|---:|
+| binary search | 1 | 55 | 36 | 69 | 22 |
+| binary search | 2 | 126 | 100 | 164 | 62 |
+| binary search | 4 | 81 | 418 | 293 | 206 |
+| binary search | 8 | 86 | 937 | 542 | 481 |
+| hash table | 1 | 0 | 0 | 0 | 0 |
+| hash table | 2 | 4 | 3 | 6 | 1 |
+| hash table | 4 | 5 | 29 | 24 | 10 |
+| hash table | 8 | 6 | 77 | 61 | 22 |
+| B-tree | 1 | 31 | 169 | 88 | 112 |
+| B-tree | 2 | 58 | 378 | 173 | 263 |
+| B-tree | 4 | 111 | 756 | 350 | 517 |
+| B-tree | 8 | 219 | 1431 | 674 | 976 |
+| stack writes | 1 | 0 | 0 | 0 | 0 |
+| stack writes | 2 | 5 | 11 | 9 | 7 |
+| stack writes | 4 | 19 | 101 | 59 | 61 |
+| stack writes | 8 | 37 | 462 | 192 | 307 |
+
+Least-squares fits against mean original steps (full-precision inputs, reps 1/2/4/8):
+
+| Workload | depth-one I/step | live I/step | tape I/step | live evaluations/step | tape evaluations/step |
+|---|---:|---:|---:|---:|---:|
+| binary search | .840 | 0.859 | 0.434 | -0.896 | 1.562 |
+| hash table | .388 | 0.382 | 0.109 | 0.039 | 3.890 |
+| B-tree | .711 | 0.651 | 0.444 | 0.295 | 1.007 |
+| stack writes | .781 | 0.753 | 0.500 | 0.090 | 1.371 |
+
+The live binary slope is larger than depth one despite **fewer retained positions at every point**: much more is recovered at reps 1/2 than at 4/8. A fitted slope alone is not the saving. The negative live binary time slope likewise reflects loss of certifiable recoveries at higher reps, not faster recovery of the same words. All point counts and time costs must be read together.
+
+Forward re-evaluations of the successful recovery DAGs, summed over all 256 branches; Same/copy-Recoverable costs excluded. A/B coincide. “max” counts instructions per recovered word; depth is producer depth. Zero recovered words gives zero cost (the displayed 0 average is a convention).
+
+| Workload | reps | mode | total evaluations | evaluations/recovered word | max | depth |
+|---|---:|---|---:|---:|---:|---:|
+| binary search | 1 | live | 605,440 | 43.000 | 85 | 61 |
+| binary search | 1 | tape | 61,440 | 3.478 | 12 | 12 |
+| binary search | 2 | live | 1,266,839 | 42.434 | 106 | 78 |
+| binary search | 2 | tape | 111,090 | 2.856 | 12 | 12 |
+| binary search | 4 | live | 636,036 | 33.897 | 96 | 69 |
+| binary search | 4 | tape | 226,267 | 3.416 | 18 | 12 |
+| binary search | 8 | live | 638,029 | 29.564 | 85 | 61 |
+| binary search | 8 | tape | 489,555 | 3.898 | 38 | 23 |
+| hash table | 1 | live | 0 | 0.000 | 0 | 0 |
+| hash table | 1 | tape | 0 | 0.000 | 0 | 0 |
+| hash table | 2 | live | 2,304 | 2.250 | 4 | 4 |
+| hash table | 2 | tape | 3,328 | 2.167 | 4 | 4 |
+| hash table | 4 | live | 2,560 | 2.000 | 4 | 4 |
+| hash table | 4 | tape | 29,440 | 4.792 | 14 | 13 |
+| hash table | 8 | live | 2,816 | 1.833 | 4 | 4 |
+| hash table | 8 | tape | 201,728 | 12.918 | 40 | 28 |
+| B-tree | 1 | live | 18,574 | 3.292 | 8 | 8 |
+| B-tree | 1 | tape | 30,409 | 2.084 | 9 | 9 |
+| B-tree | 2 | live | 42,500 | 3.389 | 10 | 10 |
+| B-tree | 2 | tape | 112,977 | 3.418 | 23 | 23 |
+| B-tree | 4 | live | 78,342 | 3.042 | 9 | 9 |
+| B-tree | 4 | tape | 230,405 | 3.251 | 23 | 23 |
+| B-tree | 8 | live | 165,425 | 3.150 | 10 | 10 |
+| B-tree | 8 | tape | 531,648 | 3.533 | 23 | 23 |
+| stack writes | 1 | live | 0 | 0.000 | 0 | 0 |
+| stack writes | 1 | tape | 0 | 0.000 | 0 | 0 |
+| stack writes | 2 | live | 2,560 | 2.000 | 4 | 4 |
+| stack writes | 2 | tape | 3,584 | 1.556 | 4 | 4 |
+| stack writes | 4 | live | 13,826 | 3.504 | 10 | 10 |
+| stack writes | 4 | tape | 68,836 | 5.292 | 22 | 15 |
+| stack writes | 8 | live | 15,072 | 2.666 | 10 | 10 |
+| stack writes | 8 | tape | 214,986 | 5.738 | 39 | 31 |
+
+At 8 reps, the remaining tape components are measured as follows. “individual success” counts retained positions for which **every executing branch** has its own recipe or copy witness with this same retained tape; these are not certified as one common circuit.
+
+| Workload | tape I | individual success | Slot I/step | Jump parameter I/step | Jump source I/step | Store I/step | Return-result I/step |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| binary search | 481 | 441 | 0.298 | 0.104 | 0.033 | 0.000 | 0.000 |
+| hash table | 22 | 17 | 0.099 | 0.000 | 0.000 | 0.000 | 0.010 |
+| B-tree | 976 | 873 | 0.324 | 0.085 | 0.036 | 0.000 | 0.000 |
+| stack writes | 307 | 252 | 0.296 | 0.086 | 0.067 | 0.045 | 0.007 |
+
+The measured barriers do **not** support describing the residual as loop-carried words whose every ancestor disappeared. In binary search, 441 of 481 remaining tape positions at reps 8 are individually recoverable; the other 40 are control-presence words. The common search records differing producer identities at 335 `Slot` and 106 `Jump`-parameter positions, with unavailable/mixed-copy producer metadata also present in some branches. Hashing leaves 22 tape positions: 17 have individual recipes, while the other five hit the measured missing origin `@jc_hash_lookup/%call` (callee replay is unsupported). The B-tree leaves 976 positions: 873 have individual recipes and 103 need control-presence replay. Stack writes leave 307: 252 have individual recipes, 41 need control-presence replay, and the remaining failure rows include changed current memory/stack at two `Slot` positions and missing `@jc_write_lookup/%call` at three `Slot` and nine `Store` positions. A numeric alias is never credited as a control-presence witness. Diagnostic counts can overlap when a DAG has several barriers. No source reading is used to decide that a value is unrecoverable.
+
+Thus **the linear retained-tape count survives the measured unbounded common-producer search, with a substantial time price; unavoidable linear history has not been established**. In particular, this experiment supplies evidence for investigating guarded producer choices and call replay rather than treating common-circuit failures as lost information. The tape is greedy and local to the post-step reversal state; it is not a demonstrated global optimum.
+
+The other 67 runs: 49 have no copy-Irreducible positions, of which 46 are entirely Same and three also use copies. Every non-Same run appears below (all applies in the run combined). A=B unless separate rows are shown; exact Same/copy/Recomputed counts and total/average/depth time columns for every row remain in the TSV. No repetition slope is fitted to these fixed-input runs. The 46/49 distinction corrects the older prose, not the measured classification.
+
+| Program / function | alignment | live I | tape I | live total evaluations | tape total evaluations |
+|---|---|---:|---:|---:|---:|
+| controlled / phase | A=B | 2 | 2 | 0 | 0 |
+| controlled / computed | A=B | 0 | 0 | 0 | 0 |
+| controlled / block | A=B | 3 | 3 | 0 | 0 |
+| grover / search_one_solution | A=B | 0 | 0 | 0 | 0 |
+| grover / search_digit_sum_12 | A=B | 16 | 14 | 2,904 | 1,428 |
+| coarse / coarse | A=B | 2 | 2 | 0 | 0 |
+| float_controlled / scaled | A=B | 26 | 26 | 0 | 0 |
+| float_controlled / ratio | A=B | 31 | 31 | 0 | 0 |
+| float_long_double_controlled / ratio | A | 62 | 62 | 0 | 0 |
+| float_long_double_controlled / ratio | B | 60 | 60 | 0 | 0 |
+| coherent / coherent_collatz_steps | A=B | 445 | 432 | 12,096,918 | 8,654,162 |
+| coherent / coherent_bit_count | A=B | 36 | 27 | 1,520 | 1,012 |
+| coherent / coherent_gcd_with_60 | A=B | 7 | 7 | 2,991 | 2,265 |
+| coherent / coherent_signed_divide | A=B | 2 | 2 | 0 | 0 |
+| coherent / coherent_unsigned_divide | A=B | 2 | 2 | 0 | 0 |
+| coherent / coherent_compare_chain | A=B | 4 | 4 | 0 | 0 |
+| coherent / coherent_switch_on_residue | A=B | 5 | 5 | 0 | 0 |
+| coherent / coherent_fibonacci_mod | A=B | 509 | 508 | 6,915,398 | 246,578 |
+| coherent / coherent_calls_helper | A=B | 0 | 0 | 0 | 0 |
+| coherent / coherent_recursive_split | A | 830 | 709 | 1,240 | 1,800 |
+| coherent / coherent_recursive_split | B | 456 | 340 | 21,586 | 36,918 |
+| examples / thesis.bn main | A=B | 4 | 4 | 0 | 0 |
+| examples / thesis.bn entangled | A=B | 2 | 2 | 0 | 0 |
+
 ## Reading against the audition's falsifiers
 
 - **B** ("share of entries whose old value differs between branches; refuted if near 1"): the share that is not
   the same on every branch is 0 to 79% on the lookups (100% minus "same % of words") and 0 to 96% elsewhere
   (`fibonacci_mod`). Not near 1 on short regions; it approaches it on the long loop-heavy ones.
 - **C** ("kill: irreducible > 25% of journal, or irreducible slot words grow with step count in loop-heavy
-  programs"): both conditions **still hold after this depth-one witness**. Irreducible exceeds 25% on binary
+  programs"): both conditions **hold for depth one**. Irreducible exceeds 25% on binary
   search, the B-tree, writes at 8 reps, Collatz, recursive split, Fibonacci and bit count. Remaining irreducible
   `Slot` slopes are 0.348 to 0.687 words/step. This rules out copies plus this local recomputation as the way to
-  make these histories constant over the measured range. It does not rule out a compiler-planned tape that
-  recomputes longer chains or replays from preserved inputs.
+  make these histories constant over the measured range. The unbounded chain results above retain positive slopes under their common-circuit rule; this does not establish unavoidable linear information loss.
 
 ## What the numbers do not show
 
-- **Deeper recomputation and its time price.** This is one producer with operands available by live copies,
-  not Bennett-style pebbling, an inverse, a recursive producer chain or a replay from preserved region inputs.
-  Missing operands are not recovered even if a chain of depth two would recover them. Inputs are sought only
-  in slots and the two stack-pointer kinds, not by scanning arbitrary memory for aliases. No gates, temporary
-  storage, memory lookup cost or recomputation time are charged. A smaller journal may cost more time.
+- **Optimal replay and its full time/storage price.** Chains of supported producers now have no depth
+  limit, and their forward instruction evaluations are counted. They do not synthesize inverses, replay
+  calls, unify differing producer sites using a branch-controlled circuit, or optimize the retained tape.
+  Operand aliases are searched in slots and stack pointers, and now in counted journal words, rather than
+  arbitrary memory. Clearing DAG temporaries, their peak storage, reversible gates and lookup costs are
+  unmeasured. The route to a tighter answer is guarded producer/call replay and an explicit global pebbling
+  schedule, checked against the retained-tape and time tables here.
 - **When values exist.** The witness is local to the state just after the destructive step. Later steps can
   overwrite its inputs; ordinary reversal restores them before this step is undone. This does not show a global
   scheme that discards all such histories simultaneously, nor use values that become available only later.
   No alternate recovery schedule or strategy for preserving/recreating later-overwritten inputs is measured.
-- **Conservative recipe coverage.** All select operands must have copies. Different producer sites or call
+- **Conservative recipe coverage.** All select operands must be available (copies at depth one, supported chains in the new modes). Different producer sites or call
   paths, mixed copy/recompute cases and partial-store assemblies are not unified even when a more general
   circuit could handle them. Old call results and allocations are not recomputed. Thus the remaining
   Irreducible count is an upper bound under richer witnesses, not an information-theoretic lower bound.

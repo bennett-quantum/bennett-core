@@ -418,3 +418,111 @@ fn the_hand_program_with_recomputation() {
         assert!(new.iter().filter(|p| p.class == WordClass::Irreducible).all(|p| p.role == WordRole::JumpSource));
     }
 }
+
+#[test]
+fn chains_recover_vanished_operands_at_unbounded_depth() {
+    // The final multiply overwrites 6/10 with 3/5. Its old operand 2 has no live copy.
+    // Follow the literal initial loop argument and every subtract/edge, without a depth cap.
+    for n in [2, 40] {
+        let text = ALIAS
+            .replace(
+                "    %v = mul i8 %n, %seed\n    %saved = or i8 %n, 0",
+                "    %saved = or i8 %n, 0\n    %v = mul i8 %n, %seed",
+            )
+            .replace("br loop(i8 2)", &format!("br loop(i8 {n})"))
+            .replace("budget 100", "budget 1000");
+        let module = load(&text);
+        let executor = measured(&module, "main", &[], true);
+        let m = executor.journal_measurement().expect("measurement fixture");
+        let old = bennett_exec::classify_with_recompute(m);
+        let new = bennett_exec::classify_with_chains(m, false);
+        for (old, new) in [(&old[0].site_count, &new[0].site_count), (&old[0].call_path, &new[0].call_path)] {
+            let find = |p: &&bennett_exec::ClassifiedPosition| {
+                p.site.block.0 == 1 && p.site.pos == SitePos::Inst(1) && p.k == n - 1
+            };
+            assert_eq!(old.iter().find(find).expect("measurement fixture").class, WordClass::Irreducible);
+            let recovered = new.iter().find(find).expect("measurement fixture");
+            assert_eq!(recovered.class, WordClass::Recomputed);
+            let chain = recovered.chain.as_ref().expect("measurement fixture");
+            if n == 2 {
+                assert_eq!((chain.instructions, chain.depth), (2, 2));
+            } else {
+                assert!(chain.depth > 32, "{chain:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_journal_seed_is_counted_once_and_must_precede_the_recovery() {
+    // An unsupported call result alternates between 9/25 and 10/26. The first two
+    // overwritten results must be retained; the third may read the first retained word.
+    let text = ALIAS.replace(
+        "    %v = mul i8 %n, %seed",
+        "    %v = call @helper(%n, %seed)",
+    ).replace("func @f(i1 %b)", "func @helper(i8 %n, i8 %seed) -> i8 {\nentry:\n    %p = and i8 %n, 1\n    %s = mul i8 %seed, %seed\n    %r = add i8 %s, %p\n    ret %r\n}\nfunc @f(i1 %b)")
+     .replace("br loop(i8 2)", "br loop(i8 4)").replace("budget 100", "budget 1000");
+    let module = load(&text);
+    let executor = measured(&module, "main", &[], true);
+    let m = executor.journal_measurement().expect("measurement fixture");
+    let live = bennett_exec::classify_with_chains(m, false);
+    let tape = bennett_exec::classify_with_chains(m, true);
+    for (live, tape) in [(&live[0].site_count, &tape[0].site_count), (&live[0].call_path, &tape[0].call_path)] {
+        let returns: Vec<_> = live
+            .iter()
+            .zip(tape)
+            .filter(|(p, _)| p.role == WordRole::ReturnResult && p.class == WordClass::Irreducible)
+            .collect();
+        assert_eq!(returns.len(), 3);
+        assert_eq!(returns.iter().filter(|(_, p)| p.class == WordClass::Irreducible).count(), 2);
+        let recovered = returns.iter().find(|(_, p)| p.class == WordClass::Recomputed).expect("measurement fixture").1;
+        assert_eq!(
+            recovered.chain.as_ref().expect("measurement fixture").instructions,
+            0,
+            "a retained-word copy is a zero-instruction leaf"
+        );
+    }
+}
+
+#[test]
+fn chains_do_not_use_historical_load_bytes_as_inputs() {
+    let text = ALIAS.replace("func @f(i1 %b) -> i8 {\nentry:\n    %seed = select i8 %b, 5, 3\n    br loop(i8 2)\nloop(i8 %n):\n    %v = mul i8 %n, %seed\n    %saved = or i8 %n, 0", "func @f(i1 %b) -> i8 {\nentry:\n    %cell = alloca 8\n    br %b, hi, lo\nhi:\n    store i8 5, %cell\n    br loop(i8 2)\nlo:\n    store i8 3, %cell\n    br loop(i8 2)\nloop(i8 %n):\n    %a = load i8 %cell\n    store i8 %n, %cell\n    %v = mul i8 %a, 7\n    br clear(%n)\nclear(i8 %discard):");
+    // Literal stores leave no live 3/5 alias when the cell is overwritten before the next multiply.
+    let module = load(&text);
+    let executor = measured(&module, "main", &[], true);
+    let m = executor.journal_measurement().expect("measurement fixture");
+    let deep = bennett_exec::classify_with_chains(m, false);
+    let old = deep[0]
+        .site_count
+        .iter()
+        .find(|p| p.site.pos == SitePos::Inst(2) && p.k == 1 && p.role == WordRole::Slot)
+        .expect("measurement fixture");
+    assert_eq!(old.class, WordClass::Irreducible);
+    assert!(
+        old.chain
+            .as_ref()
+            .expect("measurement fixture")
+            .blockers
+            .iter()
+            .any(|s| s == "current-memory-or-stack differs")
+    );
+}
+
+#[test]
+fn chains_do_not_confuse_numeric_aliases_with_control_presence() {
+    let text =
+        HAND.replace("    %cell = alloca 8", "    %one = or i8 1, 0\n    %two = or i8 2, 0\n    %cell = alloca 8");
+    let module = load(&text);
+    let executor = measured(&module, "main_f", &[], true);
+    let m = executor.journal_measurement().expect("on");
+    for tape in [false, true] {
+        let classes = bennett_exec::classify_with_chains(m, tape);
+        for positions in [&classes[0].site_count, &classes[0].call_path] {
+            assert_eq!(counts(positions), (13, 0, 2, 16));
+            assert_eq!(positions.iter().filter(|p| p.class == WordClass::Recomputed).count(), 1);
+            for p in positions.iter().filter(|p| p.role == WordRole::JumpSource && p.class == WordClass::Irreducible) {
+                assert!(!p.chain.as_ref().expect("control diagnostic").individually_recovered);
+            }
+        }
+    }
+}

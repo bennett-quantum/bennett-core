@@ -11,6 +11,11 @@
 //! irreducible? The definitions there are the ones implemented here.
 
 use std::collections::HashMap;
+use std::sync::Arc;
+
+mod chains;
+use chains::{ChainContext, HistoryNode, MemoryWrite};
+pub use chains::{ChainRecovery, classify_with_chains};
 
 use bennett_ir::{BlockId, FuncId, Inst, Operand, Slot, Terminator};
 
@@ -188,6 +193,8 @@ struct Producer {
     call_path: PathId,
     output: ProducerOutput,
     inputs: Vec<(Slot, u128)>,
+    ancestors: Vec<Option<usize>>,
+    node: Option<usize>,
 }
 
 /// One journal word, as one branch journalled it.
@@ -201,6 +208,7 @@ pub struct WordInstance {
     pub witness: WordWitness,
     /// A checked depth-one producer, independently of the copy-only witness.
     pub recompute: Option<RecomputeWitness>,
+    chain: Option<ChainContext>,
 }
 
 /// One journal record, as one branch journalled it.
@@ -236,6 +244,8 @@ pub struct BranchJournal {
     pub words: usize,
     /// Every record, when raw records were requested; empty otherwise.
     pub entries: Vec<RecordInstance>,
+    history: Vec<HistoryNode>,
+    memory_writes: Vec<MemoryWrite>,
 }
 
 /// Every branch of one dynamic `apply` execution, in configuration order.
@@ -272,7 +282,7 @@ pub enum WordClass {
     Same,
     /// Not the same on every branch, but every instance carries one common witness.
     Recoverable,
-    /// A common depth-one producer recovers every instance (only with `classify_with_recompute`).
+    /// A checked common producer recovery covers every instance (in recomputation classifiers).
     Recomputed,
     /// No enabled witness covers the position.
     Irreducible,
@@ -318,8 +328,10 @@ pub struct ClassifiedPosition {
     pub class: WordClass,
     /// The witness behind `Recoverable`, when that is the class.
     pub reason: Option<RecoverableReason>,
-    /// The common recovery circuit, only for the Recomputed class.
+    /// The common depth-one circuit, when used; deeper recoveries are summarized in `chain`.
     pub recompute: Option<RecomputeWitness>,
+    /// The chain measurement, only populated by `classify_with_chains`.
+    pub chain: Option<ChainRecovery>,
 }
 
 /// The classification of one `apply` execution under both alignments.
@@ -482,6 +494,7 @@ fn classify_alignment(apply: &ApplyJournal, alignment: Alignment, recompute: boo
                 class,
                 reason: (class == WordClass::Recoverable).then_some(reason).flatten(),
                 recompute: (class == WordClass::Recomputed).then_some(acc.common_recompute).flatten(),
+                chain: None,
             }
         })
         .collect()
@@ -514,6 +527,8 @@ pub(crate) struct Collector {
     path_ids: HashMap<Vec<CallPathStep>, PathId>,
     /// Scratch for the live sources of one step, reused so that a step allocates nothing for them.
     live: Vec<(LiveSource, u128)>,
+    history: Vec<HistoryNode>,
+    memory_writes: Vec<MemoryWrite>,
 }
 
 impl Collector {
@@ -532,6 +547,8 @@ impl Collector {
             captured_words: 0,
             path_ids: HashMap::new(),
             live: Vec::new(),
+            history: Vec::new(),
+            memory_writes: Vec::new(),
         }
     }
 
@@ -580,6 +597,8 @@ impl Collector {
         }
         self.written_list.clear();
         self.stores.clear();
+        self.history.clear();
+        self.memory_writes.clear();
         self.a_counts.clear();
         self.shadow.clear();
         self.entries.clear();
@@ -717,6 +736,7 @@ impl Executor<'_> {
                     value,
                     witness: WordWitness::FirstWrite,
                     recompute: None,
+                    chain: None,
                 })
                 .collect(),
         };
@@ -743,6 +763,8 @@ impl Executor<'_> {
             records: journal_records,
             words: journal_words,
             entries: std::mem::take(&mut collector.entries),
+            history: std::mem::take(&mut collector.history),
+            memory_writes: std::mem::take(&mut collector.memory_writes),
         };
         collector.reset_branch();
         collector
@@ -795,14 +817,19 @@ impl Executor<'_> {
             .into_iter()
             .filter_map(|output| {
                 let operands = self.producer_operands(site, output)?;
-                let inputs = operands
+                let inputs: Vec<_> = operands
                     .into_iter()
                     .filter_map(|operand| match operand {
                         Operand::Slot(slot) => Some((slot, self.slot(slot))),
                         Operand::Const(_) => None,
                     })
                     .collect();
-                Some(Producer { site, call_path, output, inputs })
+                let shadow = self.journal_measurement.as_ref()?.shadow.last()?;
+                let ancestors = inputs
+                    .iter()
+                    .map(|(slot, _)| shadow.producers[slot.index()].as_ref().and_then(|p| p.node))
+                    .collect();
+                Some(Producer { site, call_path, output, inputs, ancestors, node: None })
             })
             .collect();
         Some(Pending { site, frame, records_before: journal.records(), words_before: journal.words().len(), producers })
@@ -817,7 +844,7 @@ impl Executor<'_> {
     }
 
     /// Classifies the words of the record a step pushed and updates the shadow frames.
-    fn measure_record(&self, pending: Pending, info: StepInfo, collector: &mut Collector) {
+    fn measure_record(&self, mut pending: Pending, info: StepInfo, collector: &mut Collector) {
         let executing = collector.shadow.len() - 1;
         let a_k = collector.next_a(pending.site);
         let b_k = {
@@ -838,6 +865,7 @@ impl Executor<'_> {
                     value: info.words[0],
                     witness: slot_witness(first, info.dst_new, info.words[0], live),
                     recompute: None,
+                    chain: None,
                 }]
             }
             Undo::Store => {
@@ -856,7 +884,13 @@ impl Executor<'_> {
                         collector.written_list.push(byte);
                     }
                 }
-                vec![WordInstance { role: WordRole::Store, value: info.words[0], witness, recompute: None }]
+                vec![WordInstance {
+                    role: WordRole::Store,
+                    value: info.words[0],
+                    witness,
+                    recompute: None,
+                    chain: None,
+                }]
             }
             Undo::Alloca => {
                 let dst = info.dst.expect("an alloca defines its address");
@@ -867,12 +901,14 @@ impl Executor<'_> {
                         value: info.words[0],
                         witness: slot_witness(first, info.dst_new, info.words[0], live),
                         recompute: None,
+                        chain: None,
                     },
                     WordInstance {
                         role: WordRole::AllocaStack,
                         value: info.words[1],
                         witness: live_copy(live, info.words[1]),
                         recompute: None,
+                        chain: None,
                     },
                 ]
             }
@@ -881,6 +917,7 @@ impl Executor<'_> {
                 value: info.words[0],
                 witness: live_copy(live, info.words[0]),
                 recompute: None,
+                chain: None,
             }],
             Undo::Call => info
                 .words
@@ -891,6 +928,7 @@ impl Executor<'_> {
                     value,
                     witness: WordWitness::FirstWrite,
                     recompute: None,
+                    chain: None,
                 })
                 .collect(),
             Undo::Jump => {
@@ -902,6 +940,7 @@ impl Executor<'_> {
                         value: info.words[index],
                         witness: slot_witness(first, Some(new), info.words[index], live),
                         recompute: None,
+                        chain: None,
                     });
                 }
                 // The predecessor block is control history: a slot that happens to hold the same
@@ -911,6 +950,7 @@ impl Executor<'_> {
                     value: *info.words.last().expect("a jump record ends with its source block"),
                     witness: WordWitness::None,
                     recompute: None,
+                    chain: None,
                 });
                 words
             }
@@ -921,12 +961,14 @@ impl Executor<'_> {
                         value: info.words[0],
                         witness: WordWitness::None,
                         recompute: None,
+                        chain: None,
                     },
                     WordInstance {
                         role: WordRole::ReturnStack,
                         value: info.words[1],
                         witness: live_copy(live, info.words[1]),
                         recompute: None,
+                        chain: None,
                     },
                 ];
                 if info.words.len() > 2 {
@@ -937,6 +979,7 @@ impl Executor<'_> {
                         value: info.words[2],
                         witness: slot_witness(first, info.return_dst_new, info.words[2], live),
                         recompute: None,
+                        chain: None,
                     });
                 }
                 words
@@ -996,6 +1039,7 @@ impl Executor<'_> {
             Undo::Rewind => unreachable!("the measurement stops before a rewind"),
         };
         // Check original operand values against live state; captured values alone never suffice.
+        let context_live = Arc::new(if collector.keep_raw { live.to_vec() } else { Vec::new() });
         for word in &mut words {
             let producer = match word.role {
                 WordRole::Slot | WordRole::AllocaSlot => {
@@ -1011,6 +1055,72 @@ impl Executor<'_> {
                 _ => None,
             };
             word.recompute = producer.and_then(|p| self.recompute_witness(p, word.value, live));
+            // First writes and unchanged/base words already have zero-cost copy witnesses.
+            // Other words retain a post-step context, never historical values as free inputs.
+            if collector.keep_raw
+                && !matches!(word.witness, WordWitness::FirstWrite | WordWitness::Unchanged | WordWitness::StoreBase)
+            {
+                word.chain = Some(ChainContext {
+                    node: producer.and_then(|p| p.node),
+                    live: Arc::clone(&context_live),
+                    record: collector.captured_records,
+                });
+            }
+        }
+        if collector.keep_raw {
+            for producer in &mut pending.producers {
+                let value = match producer.output {
+                    ProducerOutput::JumpArgument { argument, .. } => info.jump_params.get(argument).map(|p| p.1),
+                    ProducerOutput::Instruction if info.kind == Undo::Store => info.store_new,
+                    _ => info.dst_new,
+                };
+                if let Some(value) = value {
+                    let operands = self.producer_operands(producer.site, producer.output).expect("supported producer");
+                    let mut parents = Vec::new();
+                    for ((slot, old), ancestor) in producer.inputs.iter().zip(&producer.ancestors) {
+                        let parent = ancestor.unwrap_or_else(|| {
+                            let id = collector.history.len();
+                            collector.history.push(HistoryNode::missing(*old, producer.site.func, *slot));
+                            id
+                        });
+                        parents.push(parent);
+                    }
+                    let load = match producer.site.pos {
+                        SitePos::Inst(index) => {
+                            match &self.function(producer.site.func).block(producer.site.block).insts[index] {
+                                Inst::Load { width, address, .. } => {
+                                    let address = match address {
+                                        Operand::Const(v) => v.value(),
+                                        Operand::Slot(slot) => {
+                                            producer.inputs.iter().find(|(s, _)| s == slot).expect("address").1
+                                        }
+                                    };
+                                    Some((address as usize, width.bytes() as usize))
+                                }
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    };
+                    let id = collector.history.len();
+                    let mut node =
+                        HistoryNode::produced(value, producer, parents, operands, load, collector.captured_records);
+                    if let SitePos::Inst(index) = producer.site.pos {
+                        node.set_instruction(
+                            self.function(producer.site.func).block(producer.site.block).insts[index].clone(),
+                        );
+                    }
+                    collector.history.push(node);
+                    producer.node = Some(id);
+                }
+            }
+            if let Some(range) = &info.store_range {
+                collector.memory_writes.push(MemoryWrite {
+                    record: collector.captured_records,
+                    range: range.clone(),
+                    value: info.store_new.expect("store"),
+                });
+            }
         }
         match info.kind {
             Undo::Slot | Undo::Alloca => {

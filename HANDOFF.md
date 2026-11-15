@@ -39,7 +39,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `cd2d920` | The complex multiply and divide helpers: compiler-rt 18.1.8 vendored unmodified (`rt/compiler-rt`), linked by the front where a program calls them; bit for bit with the same helpers on the hardware, NaN bits aside |
 | `31f5138` | `setjmp`/`longjmp` (library and built-in forms, `sigsetjmp` with musl): a device `setjmp` instruction and `longjmp` terminator, journalled (`docs/DESIGN.md`, "Non-local jumps") |
 
-Check it: `cargo test` (141 tests and 2 ignored witnesses of wrong results, about 4 s, no LLVM needed) and `front/test.sh` (137 tests; ignored by default: the two heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (141 tests and 2 ignored witnesses of wrong results, about 4 s, no LLVM needed) and `front/test.sh` (137 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check that needs `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -126,9 +126,21 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
   alignments: linear growth survives, at 0.840/0.388/0.711/0.781 irreducible words per step for binary search,
   hashing, B-tree and stack writes (copy-only: 0.862/0.405/0.749/0.810). Re-evaluating the old value's producer
   from live copies of its operands removes 199 Slot positions and 42 Jump parameters across the lookups; no
-  additional Store positions. Copy-only classification remains available. Longer chains, replay, the time price,
-  and global-memory writes inside a region remain unmeasured (the last is refused until the journalled machine
-  exists). The independent check
+  additional Store positions. Copy-only and depth-one classification remain available, with all 428 old data
+  rows reproduced exactly. **Unbounded producer chains and forward instruction time now measured**, on all
+  83 workloads and both alignments. Live-state DAG slopes are 0.859/0.382/0.651/0.753; adding earlier already
+  counted classical/retained journal words gives 0.434/0.109/0.444/0.500. At 8 reps that costs
+  489555/201728/531648/214986 re-evaluated instructions across 256 branches, averaging
+  3.898/12.918/3.533/5.738 per recovered word. This is a greedy local tape with one common producer/source
+  circuit per position, not optimal replay. Important qualification from measured failures: 441 of 481 binary
+  and 873 of 976 B-tree residual positions at 8 reps have individual-branch recipes; the others are control
+  presence words needing replay. Their remaining data history reflects the common-circuit restriction. Hashing has five residual positions with missing `%call` origins;
+  stack writes have changed-memory and missing-call origins. Linear growth survives the measured witness,
+  but unavoidable linear information loss is not established. Guarded producer/call replay, global pebbling,
+  DAG scratch/cleanup cost and global-memory writes remain open. Tables and exact rules:
+  `experiments/journal-content/README.md`, `chains.tsv`. All 49 zero-copy-Irreducible other runs stay so;
+  46 are entirely Same, three also use copies (corrected from the older prose using the unchanged tables).
+  Heavy chain measurements are ignored by default. The independent check of the original copy observer
   (`5d41748`, sol) reproduced every table and showed the hook off, the hook on and the executor before the hook
   give identical journals, outcomes and step counts on 127 tests; it found the classifier could lose a common
   live copy (unsorted lists under a binary search; no published number changes) and one slope rounded twice;
@@ -195,7 +207,10 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
    earlier workspace's device models; what time and randomness mean on the device must be decided first)
    and the two questions below. `setjmp`/`longjmp` are done (`31f5138`).
 2. **The two stopped measurements are done** ("Stopped in flight"). Journal content: a constant factor as far as
-   copies and depth-one recomputation go; longer chains and their time price are unmeasured. Control schedules:
+   copies, depth-one and unbounded common-producer chains go. The journal-assisted fitted slopes are
+   0.434/0.109/0.444/0.500 words/step, with measured forward recomputation time. Remaining counts include
+   producer-alignment restrictions, so this is not evidence of unavoidable linear information loss; guarded
+   producer/call replay and global pebbling/cleanup costs remain open. Control schedules:
    exact structure costs about 1-5x a run on these traces, but only from observed runs.
 3. **Build the journalled machine in the executor** and run the experiments listed in `docs/DESIGN.md` as it is
    built: every journalled step is a permutation; `apply` equals mark, call, rewind-keep; un-running through gates
