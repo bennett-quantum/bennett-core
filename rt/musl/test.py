@@ -27,7 +27,8 @@ def main():
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
-    for name in ["library", "exit", "arena", "unimplemented", "stderr"]:
+    for name in ["library", "exit", "arena", "unimplemented", "stderr", "heap", "signals", "abort", "stdin",
+                 "brk"]:
         source = HERE / "tests" / f"{name}.c"
         program = args.out / f"{name}.bn"
         command = ["python3", HERE / "link.py", source, "--libdir", args.libdir, "--front", args.front,
@@ -46,8 +47,10 @@ def main():
                 native = args.out / f"{name}.native"
                 built = run(["clang-18", "-O0", source, "-lm", "-o", native])
                 assert built.returncode == 0, built.stderr
-                reference = subprocess.run([native], capture_output=True)
-                status, output = reference.returncode, reference.stdout
+                reference = subprocess.run([native], capture_output=True, stdin=subprocess.DEVNULL)
+                # A process killed by a signal has the status a shell reports.
+                status = reference.returncode if reference.returncode >= 0 else 128 - reference.returncode
+                output = reference.stdout
             assert result.returncode == 0 and f"result: {status}\n" in result.stdout, (name, result)
             console = next((line.removeprefix("console: ") for line in result.stdout.splitlines()
                             if line.startswith("console: ")), "")

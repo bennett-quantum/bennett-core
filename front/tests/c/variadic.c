@@ -3,7 +3,9 @@
  * registers against the stack (more than six integer arguments), a 16-byte-aligned struct that clang passes
  * as two plain integers when registers are free and in memory when they are not, structs with padding
  * copied by value, narrow and negative integers (sign extension), va_copy, a va_list passed on, a call
- * through a pointer, and a K&R call of a function that is not variadic. */
+ * through a pointer, and a K&R call of a function that is not variadic. Calls through unprototyped
+ * pointers (`void (*)()`) reach functions that are not variadic while a variadic function's address is
+ * taken: clang gives such a call a variadic type, and its target is known only when it runs. */
 #include <stdarg.h>
 
 struct small { char c; int i; };                         /* one register, with padding */
@@ -115,6 +117,12 @@ int kr(a, b) int a; long b; { return a * 100 + (int)b; }
 
 long (*volatile through)(int, ...) = ints;
 
+static int noted;
+__attribute__((noinline)) void note(void) { noted += 5; }
+__attribute__((noinline)) long widen(int a, long b) { return a * 1000L + b; }
+void (*volatile unprototyped)() = note;
+long (*volatile unprototyped_args)() = widen;
+
 int main(void) {
   if (ints(3, 1, -2, 3) != (1 * 31 - 2) * 31 + 3) return 1;
   if (ints(9, 1, 2, 3, 4, 5, 6, 7, 8, -9) != ((((((((1L * 31 + 2) * 31 + 3) * 31 + 4) * 31 + 5) * 31 + 6) * 31 + 7) *
@@ -168,6 +176,9 @@ int main(void) {
   for (int i = 0; i < 100; i++) total += ints(2, i, -i);
   if (total != 30 * 4950) return 12;
   if (kr(3, 4L) != 304) return 13;
+  unprototyped();
+  if (noted != 5) return 18;
+  if (unprototyped_args(7, -2L) != 6998) return 19;
   if (many(1, 1, 1, 1, 1, 1, 2, 3, 4L, -5, a) != (((6 * 100 + 2) * 100 + 3) * 100 + 4) * 100 - 5 + 33 * 7 + 44)
     return 16;
   struct pair p2 = {1, 2};

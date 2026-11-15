@@ -242,6 +242,92 @@ void lowerCallOfFixed(CallInst *call, Function *callee) {
   call->eraseFromParent();
 }
 
+// A call of variadic type through a pointer. clang gives every call through an unprototyped pointer
+// (`void (*)()`) a variadic type, and on x86-64 System V such a call reaches a variadic and a fixed function
+// alike. The target is known only when the call runs, so the call compares the pointer with each variadic
+// function whose address is taken: on a match it passes the area as a call of that function would, with
+// that function's named parameters; otherwise it is a plain call with the argument types it has. A target
+// whose parameters differ from the arguments still ends in the named fault of a mismatched indirect call.
+void lowerCallThroughPointer(CallInst *call, const std::vector<Function *> &reachable, const DataLayout &layout) {
+  IRBuilder<> b(call);
+  Value *target = call->getCalledOperand();
+  auto plainCall = [&](IRBuilder<> &at) {
+    std::vector<Type *> params;
+    for (Value *arg : call->args()) {
+      params.push_back(arg->getType());
+    }
+    FunctionType *type = FunctionType::get(call->getType(), params, false);
+    std::vector<Value *> args(call->arg_begin(), call->arg_end());
+    CallInst *plain = at.CreateCall(type, target, args);
+    plain->setAttributes(call->getAttributes());
+    plain->setCallingConv(call->getCallingConv());
+    plain->setDebugLoc(call->getDebugLoc());
+    return plain;
+  };
+  std::vector<Function *> candidates;
+  for (Function *function : reachable) {
+    FunctionType *type = function->getFunctionType();
+    bool fits = call->arg_size() >= type->getNumParams() &&
+                (call->getType() == type->getReturnType() || call->use_empty() || call->getType()->isVoidTy());
+    for (unsigned i = 0; fits && i < type->getNumParams(); ++i) {
+      fits = call->getArgOperand(i)->getType() == type->getParamType(i) &&
+             call->isByValArgument(i) == function->hasParamAttribute(i, Attribute::ByVal);
+    }
+    if (fits) {
+      candidates.push_back(function);
+    }
+  }
+  if (candidates.empty()) {
+    CallInst *plain = plainCall(b);
+    plain->takeName(call);
+    call->replaceAllUsesWith(plain);
+    call->eraseFromParent();
+    return;
+  }
+  BasicBlock *head = call->getParent();
+  Function &caller = *head->getParent();
+  BasicBlock *tail = head->splitBasicBlock(call, "call.join");
+  head->getTerminator()->eraseFromParent();
+  bool result = !call->getType()->isVoidTy() && !call->use_empty();
+  PHINode *phi = nullptr;
+  if (result) {
+    phi = PHINode::Create(call->getType(), unsigned(candidates.size() + 1), "", &*tail->begin());
+  }
+  BasicBlock *test = head;
+  std::vector<CallInst *> toLower;
+  for (Function *function : candidates) {
+    BasicBlock *match = BasicBlock::Create(call->getContext(), "call.variadic", &caller, tail);
+    BasicBlock *next = BasicBlock::Create(call->getContext(), "call.next", &caller, tail);
+    IRBuilder<> t(test);
+    t.SetCurrentDebugLocation(call->getDebugLoc());
+    t.CreateCondBr(t.CreateICmpEQ(target, function), match, next);
+    IRBuilder<> m(match);
+    std::vector<Value *> args(call->arg_begin(), call->arg_end());
+    CallInst *direct = m.CreateCall(function->getFunctionType(), function, args);
+    direct->setAttributes(call->getAttributes());
+    direct->setCallingConv(call->getCallingConv());
+    direct->setDebugLoc(call->getDebugLoc());
+    m.CreateBr(tail);
+    if (phi) {
+      phi->addIncoming(direct, match);
+    }
+    toLower.push_back(direct);
+    test = next;
+  }
+  IRBuilder<> e(test);
+  CallInst *plain = plainCall(e);
+  e.CreateBr(tail);
+  if (phi) {
+    phi->addIncoming(plain, test);
+    phi->takeName(call);
+    call->replaceAllUsesWith(phi);
+  }
+  call->eraseFromParent();
+  for (CallInst *direct : toLower) {
+    lowerCall(direct, layout); // replaces the call, and its use in the phi
+  }
+}
+
 // Fills the `va_list` at `list` for a function whose named parameters use `named`, reading `area`.
 void startList(VAStartInst *start, Value *area, const Assigner &named) {
   IRBuilder<> b(start);
@@ -518,11 +604,9 @@ void lowerValuesInMemory(Module &module) {
 void lowerVariadics(Module &module) {
   const DataLayout &layout = module.getDataLayout();
   std::vector<Function *> variadic;
-  bool variadicAddressTaken = false;
   for (Function &function : module) {
     if (function.isVarArg() && !function.isDeclaration()) {
       variadic.push_back(&function);
-      variadicAddressTaken |= function.hasAddressTaken();
     }
   }
   std::vector<CallInst *> calls;
@@ -553,6 +637,12 @@ void lowerVariadics(Module &module) {
     notHandled("a variadic function for a target other than x86-64 System V", at);
   }
 
+  std::vector<Function *> reachable; // variadic functions a pointer may hold
+  for (Function *function : variadic) {
+    if (function->hasAddressTaken()) {
+      reachable.push_back(function);
+    }
+  }
   for (CallInst *call : calls) {
     auto *callee = dyn_cast<Function>(call->getCalledOperand());
     if (callee && callee->isDeclaration()) {
@@ -562,20 +652,8 @@ void lowerVariadics(Module &module) {
       lowerCallOfFixed(call, callee);
       continue;
     }
-    if (!callee && !variadicAddressTaken) {
-      // No variadic function is reachable through a pointer: the target is not variadic.
-      if (call->arg_size() != call->getFunctionType()->getNumParams()) {
-        notHandled("a call with variadic arguments through a pointer, where no variadic function is", call);
-      }
-      IRBuilder<> b(call);
-      FunctionType *type = FunctionType::get(call->getType(), call->getFunctionType()->params(), false);
-      std::vector<Value *> args(call->arg_begin(), call->arg_end());
-      CallInst *plain = b.CreateCall(type, call->getCalledOperand(), args);
-      plain->setAttributes(call->getAttributes());
-      plain->setDebugLoc(call->getDebugLoc());
-      plain->takeName(call);
-      call->replaceAllUsesWith(plain);
-      call->eraseFromParent();
+    if (!callee) {
+      lowerCallThroughPointer(call, reachable, layout);
       continue;
     }
     lowerCall(call, layout);

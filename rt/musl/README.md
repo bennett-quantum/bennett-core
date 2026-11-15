@@ -38,24 +38,38 @@ there is no probe hash oracle or hand-made exit sequence.
 
 ## The boundary
 
-The device has empty stdin and one console. Writes/writev to fd 1 append bytes with `__bennett_effect`.
-**A write to fd 2 faults as `unreachable`**: stderr cannot disappear silently, and cannot be mixed into the
-stdout-only comparison. Closing a standard fd is remembered; unsupported descriptors fail with `EBADF`.
-The console is not a terminal (`ioctl` gives `ENOTTY`), and seeking it gives `ESPIPE`.
+The device has empty stdin and one console. Reads of fd 0 (`read`, `readv`) report end of file.
+Writes/writev to fd 1 append bytes with `__bennett_effect`; a vector is checked whole before any byte is
+written. **A write of one or more bytes to fd 2 faults as `unreachable`**: stderr cannot disappear silently,
+and cannot be mixed into the stdout-only comparison. Closing a standard fd is remembered; closed and
+unsupported descriptors fail with `EBADF`. The console is not a terminal (`ioctl` gives `ENOTTY`), and
+seeking it gives `ESPIPE`.
 
 `exit`/`exit_group` finish through `__bennett_exit`, including from nested calls. The arena defaults to 1 MiB;
 `--arena-bytes` is a link parameter in whole 4096-byte pages. `brk` grows from the bottom and anonymous
-private read/write mappings from the top. Exhaustion returns `ENOMEM`; `mremap` fails with `ENOMEM`.
-The arena is monotone: `munmap` accepts valid ranges but does not reclaim storage; use after release is
-outside the C allocation lifetime. `MADV_DONTNEED` zeros the range; other advice and protection changes
-other than read/write trap. Fixed, file-backed and shared mappings trap. This is a bounded allocation
-backend, not a host virtual-memory implementation.
+private mappings from the top; without `MAP_FIXED` an address is only a hint. Exhaustion returns `ENOMEM`;
+`mremap` fails with `ENOMEM` (musl's `realloc` then copies). The arena is monotone: `munmap` accepts valid
+ranges but does not reclaim storage; use after release is outside the C allocation lifetime. A `MAP_FIXED`
+anonymous mapping is accepted over arena pages already handed out and gives fresh zero pages there (musl's
+`malloc` maps its guard page this way); elsewhere it traps. Pages the break gives back read as zero when it
+grows over them again, and `MADV_DONTNEED` zeros whole pages; the hints `MADV_NORMAL`, `RANDOM`,
+`SEQUENTIAL` and `WILLNEED` are accepted, other advice traps. Protections `PROT_NONE`, `PROT_READ` and
+read/write are accepted by `mmap` and `mprotect` but not enforced: a program that passes natively never
+touches memory it may not, and one that does would fault natively where the device goes on. Executable,
+file-backed and shared mappings trap. This is a bounded allocation backend, not a host virtual-memory
+implementation.
 
-The boundary supports signal masks, queries of default signal dispositions, process/thread id 1 and
-thread-id registration. Installing a signal handler is unsupported and traps; abort's signal terminates
-with status 134. Opening files and every unimplemented system call trap as `unreachable`. Threads,
-asynchronous signals, clocks, file I/O and dynamic loading are not implemented. No unsupported operation
-is turned into a successful no-op with an observable result.
+Signals are the ones a program sends itself (`raise`, `kill` or `tkill` of process and thread 1); there are
+no asynchronous signals. They are delivered as the kernel delivers them, before the system call that raises
+or unblocks them returns: dispositions, the signal mask, the pending set (`sigpending`) and installed
+handlers, with `SA_SIGINFO` (a `siginfo_t` with the signal number and `SI_TKILL`; the context is zero),
+`SA_RESETHAND`, `SA_NODEFER` and the handler's mask. A default action terminates with status 128 plus the
+signal number without flushing stdio (`abort` gives 134), or ignores `SIGCHLD`, `SIGCONT`, `SIGURG` and
+`SIGWINCH`; stop signals trap. A second real-time signal raised while one is pending traps (it would queue).
+Hardware signals have no counterpart: a division by zero is the device's named fault, not `SIGFPE`.
+Process and thread ids are 1. Opening files and every unimplemented system call trap as `unreachable`.
+Threads, clocks, file I/O and dynamic loading are not implemented. No unsupported operation is turned into a
+successful no-op with an observable result.
 
 ## Floating point
 
@@ -74,10 +88,12 @@ python3 rt/musl/test.py                   # needs the library build, front, and 
 ```
 
 These offline integration tests are separate from `cargo test` and `front/test.sh`. They compare native
-stdout/status for floating-point printf/strtod/sqrt/sin/pow and for constructors, atexit, destructors and
-nested exit; they check arena exhaustion and named faults for stderr and an unimplemented syscall.
-The five tests take about seven seconds after building the library. The debug CLI now reads their large
-data strings without overflowing its host stack.
+stdout/status for floating-point printf/strtod/sqrt/sin/pow, for constructors, atexit, destructors and
+nested exit, for `malloc`/`realloc`/`calloc`/`free`, for signals raised, blocked, ignored and handled, for
+`abort` after a handler returns, for reads of the empty stdin through `scanf`, `getchar` and `fgets`, and for
+a break that shrinks and grows again; they check arena exhaustion and named faults for stderr and an
+unimplemented syscall. The ten tests take about 50 seconds with the debug CLI after building the library.
+The debug CLI now reads their large data strings without overflowing its host stack.
 
 The library example produces about 4.8 MB of device text, mostly explicit zeros in the arena. No text-form
 change is implemented. The smallest proposal needs no new grammar: emit only nonzero runs plus the final static byte (even if

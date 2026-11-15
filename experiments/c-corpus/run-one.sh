@@ -11,6 +11,7 @@
 # a 2 GiB memory cap with no swap. The device run is bounded by BUDGET; bennett-front and clang have no step
 # budget and are bounded only by the memory cap.
 set -u
+here=$(cd "$(dirname "$0")" && pwd)
 src=$1
 name=$(basename "$src" .c)
 out="$WORK/out/$name"
