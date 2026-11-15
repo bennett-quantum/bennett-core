@@ -76,6 +76,8 @@ def main():
         results = list(pool.map(compile_one, sources))
     members = [str(out / "bc" / source.with_suffix(".bc")) for source in sources if source.suffix == ".c"]
     (out / "members.txt").write_text("".join(member + "\n" for member in members))
+    if not unchanged:
+        (out / "index.tsv").unlink(missing_ok=True)  # resolve.py's symbol cache names the members by path
     (out / "compile.tsv").write_text("".join(f"{source}\t{state}\n" for source, state in results))
     (out / "cflags.json").write_text(json.dumps(flags))
     (out / "libc.a").unlink(missing_ok=True)
