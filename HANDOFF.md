@@ -2,8 +2,9 @@
 
 State on 2026-11-15, evening (work resumed at about 18:45 UTC). Landed since: the musl runtime, validated on the
 three corpora with no wrong result; `zero N`; the journal-content and control-schedule measurements; the salvage
-survey; testing passes of `exit`, constructors, `zero N`, the musl boundary and the journal measurement. In flight: the complex-number helpers,
-an independent testing pass of today's floating-point work, and two small fixes from a review audit.
+survey; testing passes of `exit`, constructors, `zero N`, the musl boundary and the journal measurement. The complex-number helpers (`cd2d920`).
+In flight: an independent testing pass of today's floating-point work, two small fixes from a review audit, and
+one corpus run with musl linked on the final tree.
 
 ## What this repository is
 
@@ -34,7 +35,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `d8050df`..`b464c0b` | The C library: musl 1.2.5 at the system-call boundary, running its own startup and exit; signals a program sends itself; stdin at end of file; an honest `fenv` |
 | `663e9fb`..`caaac7a` | Conversions between floats and 128-bit integers, `fmal`, `_Float16` and `__bf16`, each bit for bit against native (`rt/softfloat/README.md`) |
 | `9817fe0`, `c17bde9`, `08d7799` | Measurements: journal content in coherent regions; control schedules on the SQLite traces |
-| `rt/compiler-rt` | The complex multiply and divide helpers: compiler-rt 18.1.8 vendored unmodified (`rt/compiler-rt`), linked by the front where a program calls them; bit for bit with the same helpers on the hardware, NaN bits aside |
+| `cd2d920` | The complex multiply and divide helpers: compiler-rt 18.1.8 vendored unmodified (`rt/compiler-rt`), linked by the front where a program calls them; bit for bit with the same helpers on the hardware, NaN bits aside |
 
 Check it: `cargo test` (79 tests, about 2 s, no LLVM needed) and `front/test.sh` (123 tests; ignored by default: the full journal-content measurement and its sensitivity check, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -200,8 +201,8 @@ alone, not as a whole corpus): GCC 1,559 agree and 10 refused with musl, if noth
   or native) found no wrong result; one wording mismatch in the grammar (`+0`) was corrected in `07fdea4`.
 - **The complex-number helpers (`__mulsc3`, `__divsc3` and the double and long double versions): vendor
   compiler-rt's sources unmodified**, as SoftFloat was, after the musl runtime has landed so that any `logb` or
-  `scalbn` they need comes from musl; checked bit for bit against native. Whether the helpers are self-contained
-  or call the maths library for some widths is not yet known. Not built yet.
+  `scalbn` they need comes from musl; checked bit for bit against native. Built in `cd2d920`: self-contained except the `long double` divide,
+  which calls `logbl` and `scalbnl` (and through musl's `ilogbl` a `FENV_ACCESS` pragma, so it stays refused).
 
 ## Questions for the maintainer (2026-11-15, evening)
 
