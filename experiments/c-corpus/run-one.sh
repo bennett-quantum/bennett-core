@@ -6,8 +6,10 @@
 #
 # Environment (set by run-all.sh): WORK (scratch root), BIN (bennett-front and bennett), RT_A, RT_B (runtime
 # bitcode, variants A and B, see rt.c), BUDGET (device step budget), STACK (device stack bytes), CLANG,
-# LLVM_LINK, OPTNONE (1: keep clang's optnone on the test's functions). Every stage runs under a 2 GiB memory cap with no swap. The device run is bounded by BUDGET;
-# bennett-front and clang have no step budget and are bounded only by the memory cap.
+# LLVM_LINK, OPTNONE (1: keep clang's optnone on the test's functions), EXTRA_FLAGS (options for every test of
+# the corpus, both builds), KEEP (0: delete the per-program outputs except result.tsv). Every stage runs under
+# a 2 GiB memory cap with no swap. The device run is bounded by BUDGET; bennett-front and clang have no step
+# budget and are bounded only by the memory cap.
 set -u
 src=$1
 name=$(basename "$src" .c)
@@ -22,6 +24,9 @@ capped() {
 
 emit() { # outcome detail [steps]
   printf '%s\t%s\t%s\t%s\n' "$name" "$1" "$2" "${3:-}" | tee result.tsv
+  if [ "${KEEP:-1}" = 0 ]; then
+    find . -mindepth 1 ! -name result.tsv -delete
+  fi
   exit 0
 }
 
@@ -35,6 +40,12 @@ for opt in $(grep -E 'dg-(additional-)?options' "$src" | grep -v target | tr -d 
     -fno-inline | -finput-charset=utf-8) flags="$flags $opt" ;;
   esac
 done
+# A GCC test's .x file may add -fno-trapping-math (in ieee/).
+x="${src%.c}.x"
+if [ -f "$x" ] && grep -q -- '-fno-trapping-math' "$x"; then
+  flags="$flags -fno-trapping-math"
+fi
+flags="$flags ${EXTRA_FLAGS:-}"
 # Old-style C is ordinary in this corpus; clang 18 makes these errors by default.
 common="-w -Wno-error=implicit-function-declaration -Wno-error=implicit-int -Wno-error=int-conversion
   -Wno-error=incompatible-pointer-types -Wno-error=incompatible-function-pointer-types -Wno-error=return-type
