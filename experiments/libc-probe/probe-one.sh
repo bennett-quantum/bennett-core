@@ -10,6 +10,7 @@
 # LIB_MEMBERS (the library's member bitcode files, in archive order), LIB_INDEX (their symbol tables, resolve.py), RT_SRC (the probe runtime, e.g. musl-rt.c), RT_CFLAGS (flags for it),
 # PROG_CFLAGS (flags for the program: the library's headers), BUDGET, STACK, FRONT_TIMEOUT (seconds), LINK
 # (internalize, the default: archive members, then everything but the entry internal; external: members only).
+# DEVICE_EXIT=1 (musl): real exit/console and front-provided init/fini arrays; compare status and console directly.
 #
 # Oracle: stdout bytes and exit status, as a hash (hash.py, the runtime's hash()). Outcomes: agrees, refused,
 # fault (a named fault native did not have), wrong (device output or status differs from native while the run
@@ -86,6 +87,7 @@ build() {
   variant=$1
   rtflag=""
   [ "$variant" = B ] && rtflag=-DRT_B
+  [ "${DEVICE_EXIT:-0}" = 1 ] && rtflag="$rtflag -DBENNETT_DEVICE_EXIT"
   [ "${CONSOLE:-0}" = 1 ] && rtflag="$rtflag -DBENNETT_EFFECT"
   # shellcheck disable=SC2086
   if ! "$CLANG" $RT_CFLAGS -DMAIN_ARGS=$main_args -DBENNETT_EXPECT="${want}ull" $rtflag -O0 -Xclang \
@@ -107,9 +109,11 @@ build() {
     fi
     # What a static linker does beyond llvm-link: constructors and destructors into arrays the runtime calls
     # (ctors.py), undefined weak references to null (weak.py, names in weak-*.txt).
-    llvm-dis-18 linked-$variant.bc -o linked-$variant.ll &&
-      python3 -I "$here/ctors.py" linked-$variant.ll linked-$variant.ll &&
-      python3 -I "$here/weak.py" linked-$variant.ll linked-$variant.ll 2>weak-$variant.txt &&
+    llvm-dis-18 linked-$variant.bc -o linked-$variant.ll || emit crash "llvm-dis failed"
+    if [ "${DEVICE_EXIT:-0}" != 1 ]; then
+      python3 -I "$here/ctors.py" linked-$variant.ll linked-$variant.ll || emit crash "ctors.py failed"
+    fi
+    python3 -I "$here/weak.py" linked-$variant.ll linked-$variant.ll 2>weak-$variant.txt &&
       llvm-as-18 linked-$variant.ll -o linked-$variant.bc || emit crash "ctors.py or weak.py failed"
     rm -f linked-$variant.ll
     if [ "${LINK:-internalize}" = internalize ]; then
@@ -184,6 +188,11 @@ fault:*) emit fault "$value" "$steps" ;;
 stopped:*) emit fault "$value" "$steps" ;;
 crash:*) emit crash "$value" "$steps" ;;
 result:*)
+  if [ "${DEVICE_EXIT:-0}" = 1 ]; then
+    [ "$((value % 256))" = "$s0" ] && [ "$console" = equal ] &&
+      emit agrees "device exit/return status and console equal native" "$steps"
+    emit wrong "device status $value, native $s0, console $console" "$steps"
+  fi
   [ "$value" = "$want" ] && emit agrees "return path, output and status equal native" "$steps"
   emit wrong "return path: hash $value, native $want (status $s0)" "$steps"
   ;;

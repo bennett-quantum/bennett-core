@@ -24,6 +24,7 @@ add_executable(bennett-front
   src/Control.cpp
   src/Predicate.cpp
   src/InPlace.cpp
+  src/Startup.cpp
   src/SoftFloat.cpp
 )
 target_include_directories(bennett-front SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})

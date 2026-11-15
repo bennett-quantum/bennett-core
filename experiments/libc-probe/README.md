@@ -373,6 +373,31 @@ linker's `.init_array`/`.fini_array` (or `ctors.py`'s arrays) to be called by th
 `write` before the end must survive the end, which `effect` already does (the console is not rolled back by a
 fault).
 
+## Device-boundary recheck (2026-11-15)
+
+The front now lowers `__bennett_effect` and `__bennett_exit`, supplies the standard init/fini array bounds,
+and runs constructors/destructors around an entry when no C startup references those bounds. The reduced
+constructor finding below is now a regression in `front/tests`; the original measurements below describe
+`b875989` and remain unchanged.
+
+`musl-rt.c` has an optional `BENNETT_DEVICE_EXIT` mode: its entry returns an `int` status, system-call exit
+calls `__bennett_exit`, output uses `__bennett_effect`, and startup/exit walk the standard array bounds.
+`DEVICE_EXIT=1` in the probe harness selects this mode, skips `ctors.py`, and compares console bytes and
+status modulo 256 directly against native. The default hash-and-fault mode remains available.
+
+Rebuilt musl 1.2.5 with the same three overlays, generic C and the two integer-only stdio patches as the
+published final probe configuration; used clang/LLVM 18, `LINK=external`, a release-built executor,
+1 MiB stack and the existing billion-step budget. All ten hand programs retain their published outcomes:
+**nine agree on stdout and status; `fopen` faults as `unreachable` at the unsupported file operation**.
+A repeat with `LINK=internalize` gives the same ten outcomes.
+In particular `exit` returns 5 after its handlers, destructor/flush sequence, and `ctor` uses the front's
+arrays directly. The current floating-point runtime was built with the front, but this recheck does not
+claim to test musl's floating-point stdio paths.
+
+The debug-built CLI overflowed its host stack while checking these roughly 4 MiB text programs on the
+default host stack; the release CLI checked and ran them. This is an executor/tooling limitation found
+by the recheck, not repaired by the device-boundary changes.
+
 ## Findings
 
 1. **A constructor that LLVM cannot evaluate at compile time is never run** (silent wrong result in `bennett-front`

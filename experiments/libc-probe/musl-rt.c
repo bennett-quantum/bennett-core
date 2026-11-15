@@ -15,7 +15,9 @@
  * Opening a file traps too (no file system), unless FILES_ENOENT is defined: then it fails with ENOENT.
  * Any system call not listed below traps (the named fault `unreachable`), so nothing unplanned passes silently.
  *
- * BENNETT_EFFECT: also write each byte for fd 1 to the device console (needs the front of front-effect.patch).
+ * BENNETT_DEVICE_EXIT: use the real device exit and console, return an int status, and use standard linker
+ * array bounds (the front supplies them). The default hash-and-fault probe is unchanged.
+ * BENNETT_EFFECT: also write each byte for fd 1 to the device console.
  * MAIN_ARGS (0, 2 or 3): the parameters of the program's main, so that the call matches its prototype.
  */
 #include "libc.h"
@@ -44,8 +46,15 @@
 
 struct pthread __bennett_thread;
 
+#ifdef BENNETT_DEVICE_EXIT
+#ifndef BENNETT_EFFECT
+#define BENNETT_EFFECT
+#endif
+_Noreturn void __bennett_exit(int);
+#endif
+
 #ifdef BENNETT_EFFECT
-/* The device's console, one byte (front-effect.patch); only with the experimental front. */
+/* The device console, one byte. */
 void __bennett_effect(char);
 #endif
 
@@ -91,8 +100,12 @@ static unsigned long long hash(int status)
 
 static void __attribute__((noreturn)) end(int status)
 {
+#ifdef BENNETT_DEVICE_EXIT
+	__bennett_exit(status);
+#else
 	if (hash(status) == BENNETT_EXPECT) RT_MATCH();
 	RT_MISMATCH();
+#endif
 }
 
 static long out_write(int fd, const void *buf, size_t n)
@@ -204,10 +217,19 @@ static void init(void)
 /* Constructors and destructors, as ctors.py lays them out from the linked module (a static linker would put them
  * in .init_array and .fini_array, which musl's __libc_start_init and __libc_exit_fini walk). This strong
  * __libc_exit_fini replaces musl's weak one, so exit() runs the destructors too. */
+#ifdef BENNETT_DEVICE_EXIT
+extern void (*const __init_array_start[])(void), (*const __init_array_end[])(void);
+extern void (*const __fini_array_start[])(void), (*const __fini_array_end[])(void);
+#define __bennett_ctors __init_array_start
+#define __bennett_ctors_n (__init_array_end - __init_array_start)
+#define __bennett_dtors __fini_array_start
+#define __bennett_dtors_n (__fini_array_end - __fini_array_start)
+#else
 extern void (*const __bennett_ctors[])(void);
 extern const long __bennett_ctors_n;
 extern void (*const __bennett_dtors[])(void);
 extern const long __bennett_dtors_n;
+#endif
 
 void __libc_exit_fini(void)
 {
@@ -227,7 +249,12 @@ int main(int, char **, char **);
 
 void __stdio_exit(void);
 
-unsigned long long __bennett_entry(void)
+#ifdef BENNETT_DEVICE_EXIT
+int
+#else
+unsigned long long
+#endif
+__bennett_entry(void)
 {
 	init();
 	for (long i = 0; i < __bennett_ctors_n; i++) __bennett_ctors[i]();
@@ -235,5 +262,9 @@ unsigned long long __bennett_entry(void)
 	__funcs_on_exit();
 	__libc_exit_fini();
 	__stdio_exit();
+#ifdef BENNETT_DEVICE_EXIT
+	return status;
+#else
 	return hash(status);
+#endif
 }

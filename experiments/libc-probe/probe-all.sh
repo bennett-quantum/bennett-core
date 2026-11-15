@@ -4,6 +4,7 @@
 #   probe-all.sh <file listing .c paths, or a directory> <work dir> [jobs]
 #
 # LIBDIR: a library built by musl-bc.sh or picolibc-bc.sh (libc.bc, cflags, sysroot/include, rt.c). Binaries from
+# DEVICE_EXIT=1 selects musl's real device exit/console mode and skips ctors.py.
 # BIN (default <work dir>/../bin). BUDGET (default 10^9 steps), STACK (1 MiB), FRONT_TIMEOUT (900 s), LINK.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
@@ -19,6 +20,7 @@ mkdir -p "$TMPDIR"
 [ -f "$LIBDIR/index.tsv" ] || python3 -I "$here/resolve.py" "$LIBDIR/members.txt" "$LIBDIR/index.tsv"
 export WORK BIN CLANG=${CLANG:-clang-18} LLVM_LINK=${LLVM_LINK:-llvm-link-18}
 export BUDGET=${BUDGET:-1000000000} STACK=${STACK:-1048576}
+if [ "${DEVICE_EXIT:-0}" = 1 ]; then export CONSOLE=1; fi
 export FRONT_TIMEOUT=${FRONT_TIMEOUT:-900} LINK=${LINK:-internalize}
 export LIB_MEMBERS="$LIBDIR/members.txt" LIB_INDEX="$LIBDIR/index.tsv" RT_SRC=${RT_SRC:-$LIBDIR/rt.c} RT_CFLAGS PROG_CFLAGS
 RT_CFLAGS=$(cat "$LIBDIR/cflags")

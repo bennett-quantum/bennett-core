@@ -10,6 +10,7 @@
 #include "Normalise.h"
 #include "Outline.h"
 #include "SoftFloat.h"
+#include "Startup.h"
 
 #include <llvm/Analysis/AliasAnalysis.h>
 #include <llvm/IR/LLVMContext.h>
@@ -37,6 +38,8 @@ cl::opt<uint64_t> regionBudget("region-budget", cl::desc("Step budget of each ru
                                cl::Required, cl::cat(category));
 cl::opt<uint64_t> stackBytes("stack-bytes", cl::desc("Bytes of memory above the static data, for the stack"),
                              cl::Required, cl::cat(category));
+cl::opt<std::string> entryName("entry", cl::desc("Entry wrapped by automatic constructors/destructors"),
+                               cl::init("main"), cl::cat(category));
 cl::opt<bool> taintAll("taint-all",
                        cl::desc("Treat every value that can run coherently as if it depended on a qubit (a check: "
                                 "results must not change)"),
@@ -108,6 +111,8 @@ int main(int argc, char **argv) {
   }
   verify(*module, "on input");
   bennett::checkMarkers(*module);
+  bennett::lowerStartup(*module, entryName);
+  verify(*module, "after constructor/destructor startup");
   bool softFloat =
       bennett::lowerFloatOperations(*module, floatRuntime.empty() ? defaultFloatRuntime(argv[0]) : floatRuntime);
   verify(*module, "after lowering floating-point operations");

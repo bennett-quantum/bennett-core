@@ -30,6 +30,9 @@ cargo run -p bennett -- run prog.bn
 `float`, `double` and `long double` become calls of the floating-point runtime, `target/front/float-runtime.bc` by default
 (`--float-runtime file.bc` takes any bitcode defining the libgcc soft-float names).
 The budget is the step budget of every coherent region; the stack is the memory above static data.
+Constructors and destructors wrap `main` by default; `bennett-front --entry name` chooses another automatic
+startup entry (use the same `bennett run --entry name`). A C runtime that references the standard init/fini
+array bounds owns startup instead; the front supplies those arrays for it.
 
 The design, and what is deliberately left open, is in `docs/DESIGN.md`. It is a working note, not a contract.
 The text form of the device program is in `docs/SYNTAX.md`; `examples/` has one program per feature.

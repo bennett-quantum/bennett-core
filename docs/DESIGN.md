@@ -197,6 +197,15 @@ Two things the first C programs taught:
   2^16 branches per program.
 - `alloca` results are 8-byte aligned; `front` makes a wider alignment by allocating more and rounding up. A
   `byval` parameter is copied by the callee on entry. Initialisers are written byte for byte at any width.
+- The front collects `llvm.global_ctors`/`llvm.global_dtors` and explicit `.init_array[.N]`/`.fini_array[.N]`
+  contributions into arrays sorted by ascending priority (stable for ties). References to any of
+  `__init_array_start/end` or `__fini_array_start/end` give C startup ownership of both arrays: the front
+  defines their bounds, including empty arrays, and C calls them. Otherwise it wraps `--entry` (default `main`),
+  calls constructors first and destructors after a normal return, in reverse array order. Recursive entry calls
+  call the original body. `exit` does no automatic cleanup: the C library must run its exit sequence first.
+  Associated-data constructor records, address-taken or over-aligned section objects/bounds, nonnumeric section suffixes, old
+  `.ctors`/`.dtors`, `.preinit_array`, and `.init`/`.fini` code sections are refused by name; they need linker
+  semantics not supplied here. A missing automatic entry is refused rather than dropping startup.
 - `exit` takes a typed integer operand (`exit %v` or `exit i32 5`). The executor checks its type against the
   selected entry's result when the instruction executes, because entries are chosen at run time; a mismatch
   faults as `exit_type_mismatch` (14). Inside a coherent region it faults first as `exit_in_region` (13).

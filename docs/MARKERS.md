@@ -102,3 +102,12 @@ including from a nested call or loop. The selected entry must return `i32`; anot
 named fault `exit_type_mismatch`. Inside a coherent region it faults with `exit_in_region`. It is journalled,
 is not a marker, and has the same declaration checks as the console call, including its `noreturn` attribute.
 It does not run C cleanup itself: a library's `exit` runs handlers and flushing before calling this boundary.
+
+## C startup
+
+Constructors and destructors run automatically around `main`, or the front's `--entry=name`. Pass the same
+entry to `bennett run --entry name`. Constructors run in ascending priority order, destructors in reverse
+order after a normal return; the entry's result is preserved. A module that references any standard
+`__init_array_start`/`__init_array_end` or `__fini_array_start`/`__fini_array_end` owns startup itself: the front
+supplies the arrays and bounds, and the library's C startup and exit code must walk them. The device exit call
+bypasses the automatic destructor wrapper, just as `_Exit` bypasses C library cleanup.
