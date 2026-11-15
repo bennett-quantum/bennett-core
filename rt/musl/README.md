@@ -92,7 +92,8 @@ integer-only printf/scanf patches is applied: every upstream file, including flo
 
 ## On the corpora
 
-Measured on 2026-11-15 at `b961292` (`experiments/c-corpus/README.md`, "The three corpora at `b961292`"):
+Measured on 2026-11-15 at `b961292` and again at `8bbb56c`, with the same outcome for every program
+(`experiments/c-corpus/README.md`, "The three corpora at `8bbb56c`" and "at `b961292`"):
 on GCC's C torture tests 1,560 of 1,575 runnable programs agree with native on status and stdout, on
 c-testsuite 217 of 220, on GCC's `ieee/` 64 of 67; none is wrong and none crashes. What still does not run,
 and what removes it:

@@ -7,7 +7,8 @@ test programs, and why are programs refused?
 
 Measured twice on 2026-11-13, a third time on 2026-11-15 after floating point, a fourth time on 2026-11-15
 with the C library linked (musl 1.2.5, `rt/musl`), and a fifth time with the library linked at `b961292`, after
-the 128-bit conversions and the complex helpers; the newest section comes first.
+the 128-bit conversions and the complex helpers, and a sixth at `8bbb56c`, which returns a small aggregate as one
+integer; the newest section comes first.
 First at commit `4b65247` (tree clean when the binaries were copied): `bennett-front` and `bennett` were built
 once (`cargo build --release`, `front/test.sh`, all tests passing), then copied to `.tmp/c-corpus/bin/`, and
 only those copies were used. File and line references in the sections on the
@@ -71,6 +72,37 @@ bytes, not the old block's size. A harness self-test (`.tmp/c-corpus/selftest`) 
 error. **wrong**: the device reaches `abort()`/`exit(≠0)`, or `main` returns a value ≢ 0. **crash**: `bennett-front`
 exits other than 0 or 3, `bennett check` rejects its output, or `bennett run` exits other than 0, 1 or 2. **budget**:
 the 10^8-step budget ran out. **skipped**: no native reference, as above.
+
+## The three corpora at `8bbb56c`, with the C library linked (2026-11-15)
+
+Same method as the next section, at `8bbb56c`: `6418e6b` (fresh names and debug locations without rescanning) and
+`8bbb56c` (an aggregate of at most 128 bits of integer and float fields is returned as one integer instead of
+through memory; the always-inline of runtime routines that return an aggregate, `a9ce585`, removed) on top of
+`b961292`. Wall time: GCC 267 s, c-testsuite 36 s, `ieee/` 13 s. Compared per program with `b961292`:
+
+| outcome | GCC | c-testsuite | GCC `ieee/` |
+|---|---:|---:|---:|
+| agrees | **1,560** | **217** | **64** |
+| refused by name | 9 | 1 | 3 |
+| named fault (native passed) | 6 | 1 | 0 |
+| **wrong** | **0** | **0** | **0** |
+| crash | 0 | 0 | 0 |
+| budget | 0 | 1 | 0 |
+| skipped | 81 | 0 | 1 |
+
+No program changed outcome or detail (the three `ieee/` refusals differ only in the exported tree's path), so the
+per-reason table of the next section stands. Forty programs that agree both times changed step count:
+
+- 25 GCC programs got cheaper, by 1 to 128 steps; the largest are `960512-1` (2,176 to 2,048), `pr85582-3`
+  (2,275 to 2,149), `20030613-1` (2,101 to 2,048), `pr85582-2` (2,131 to 2,089).
+- 15 got dearer, all of them programs using `long double` or formatting a floating-point value through musl's
+  `printf`, plus `20070614-1` (`__mulsc3`, 3,662 to 3,672): GCC `960215-1` (3,673 to 4,052), `regstack-1`
+  (3,954 to 4,354), `960513-1` (2,676 to 2,776), `20030914-1` (4,427 to 4,555), `struct-ret-1` (28,992 to
+  29,610), `930513-1`, `920501-8`, `stdarg-2`; c-testsuite `00204` (1,062,821 to 1,089,594), `00174` (49,778 to
+  50,744), `00195` (7,563 to 7,769), `00175` (23,518 to 23,638); `ieee/` `920810-1` (+9), `20010226-1` (+8).
+  Several are now above their count before `a9ce585` (the run before the next section): `960215-1` 3,863,
+  `regstack-1` 4,145, `struct-ret-1` 29,112, `00204` 1,068,923, `00174` 50,015. `20020413-1` is back at its
+  count before `a9ce585` (3,298).
 
 ## The three corpora at `b961292`, with the C library linked (2026-11-15)
 
