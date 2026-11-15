@@ -39,7 +39,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `9817fe0`, `c17bde9`, `08d7799` | Measurements: journal content in coherent regions; control schedules on the SQLite traces |
 | `cd2d920` | The complex multiply and divide helpers: compiler-rt 18.1.8 vendored unmodified (`rt/compiler-rt`), linked by the front where a program calls them; bit for bit with the same helpers on the hardware, NaN bits aside |
 
-Check it: `cargo test` (83 tests, about 2 s, no LLVM needed) and `front/test.sh` (123 tests; ignored by default: the full journal-content measurement and its sensitivity check, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
+Check it: `cargo test` (83 tests, about 2 s, no LLVM needed) and `front/test.sh` (127 tests; ignored by default: the full journal-content measurement and its sensitivity check, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 With musl linked, standard output and exit status compared with native (`experiments/c-corpus/README.md`):
 GCC's C torture tests 1,557 agree, 12 refused by name, 6 named faults (programs that open files), none wrong;
@@ -176,7 +176,12 @@ alone, not as a whole corpus): GCC 1,559 agree and 10 refused with musl, if noth
    Done on 2026-11-15: conversions to and from 128-bit integers (and `_BitInt` up to 128), `fmal` (over
    SoftFloat's primitives, rounding once), `_Float16` and `__bf16` (computed in `float` as the x86-64 back end
    does). Checked: every 16-bit input, all 2^32 `float` inputs of the conversions from `float`, 10^7 random
-   operands per operation and 10^8 `fmal` triples against libgcc and glibc, 0 mismatches. `powi` on the two
+   operands per operation and 10^8 `fmal` triples against libgcc and glibc, 0 mismatches. The independent
+   testing pass (`6873b1c`, sol) found no wrong number (123,368 `fmal` cases, 17,676 conversions, 46,640 device
+   words; `ieee/` unchanged) but a cost regression from `a9ce585`, which always inlines runtime routines that
+   return an aggregate: three `long double` to `__int128` conversions grow from 966 to 9,981 instructions and
+   overflow a 64 KiB stack, and sixteen do not finish lowering in 120 s. Ignored witness in
+   `front/tests/tests/float_independent.rs`; a fix is in flight. `powi` on the two
    short formats is refused by name (it calls `powf` natively). Then `setjmp`/`longjmp` and the remaining intrinsics.
 6. **A SQL query as an oracle.**
 
