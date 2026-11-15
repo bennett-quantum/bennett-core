@@ -742,6 +742,10 @@ void BodyWriter::call(const Instruction &inst) {
   if (call.hasOperandBundles()) {
     notHandled("a call with the operand bundle `" + call.getOperandBundleAt(0).getTagName().str() + "`", &inst);
   }
+  if (const auto *callee = call.getCalledFunction(); callee && callee->getName() == "__bennett_effect") {
+    line("effect " + operand(call.getArgOperand(0)));
+    return;
+  }
   if (const auto *callee = dyn_cast<Function>(call.getCalledOperand()); callee && callee->isDeclaration()) {
     notHandled("a call to @" + callee->getName().str() + ", which has no definition (no library is linked yet)",
                &inst);

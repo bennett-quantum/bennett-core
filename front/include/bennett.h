@@ -32,6 +32,9 @@ _Bool *bennett_bit(void *variable, unsigned bit);
 /* Measures the whole qubit variable `variable` points to and returns its value, zero-extended. */
 unsigned long long bennett_measure(const void *variable);
 
+/* Device console byte output. An ordinary effectful call, not a quantum marker. */
+void __bennett_effect(char byte);
+
 #ifdef __cplusplus
 }
 #endif

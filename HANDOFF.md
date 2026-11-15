@@ -52,6 +52,17 @@ On GCC's C torture tests 1,402 of 1,576 runnable programs agree with native, 172
   format, it is a verified reference, and it needs no hand port. Bennett.jl's branch-free routines are kept as
   a later, cheaper alternative for the optimiser, checked bit for bit against it (`docs/DESIGN.md`).
 
+## Decisions the maintainer took on 2026-11-15: the C runtime boundary
+
+- **Console output is reachable from C** as `void __bennett_effect(char)`, lowered to the existing journalled
+  `effect`. It is an ordinary device call, not a quantum marker.
+- **`exit v` ends the run from anywhere**, with the same outcome as an entry return; it is journalled in reversible
+  execution and a named fault inside a coherent region. C calls `_Noreturn void __bennett_exit(int)`.
+- **The C library is musl 1.2.5 at the system-call boundary**: one function taking a system-call number, implemented
+  by device effects, an arena and `exit`; everything not implemented traps by name. Chosen over picolibc for scope,
+  because the goal is unmodified real programs. No design audition: the two libraries gave matching outcomes in the
+  probe (`experiments/libc-probe/README.md`).
+
 ## Stopped in flight
 
 - **Control schedules on the SQLite traces** (`experiments/sqlite-footprint/schedule.py`). Unfinished and unchecked;
@@ -65,12 +76,11 @@ On GCC's C torture tests 1,402 of 1,576 runnable programs agree with native, 172
 
 ## Next steps, in order
 
-1. **The C library calls.** The 37 refusals on the GCC corpus are `printf`-family 25, `stdout`/`stderr` 5, `open` 2,
-   `fopen`, `qsort`, `isprint`, `longjmp`, `_setjmp`; on c-testsuite 64 of 70 refusals are library calls. They are
-   refused because the test harness supplies no C library (`experiments/c-corpus/rt.c` leaves stdio undefined), not
-   because the compiler cannot lower them. The route is a real C library compiled to bitcode and linked in, with the
-   system-call boundary mapped to device effects (console output, memory from a fixed arena). Not started. Choosing
-   the library and the shape of that boundary is the first decision.
+1. **Build the musl 1.2.5 runtime at the system-call boundary** decided above. Console and whole-run exit are
+   device calls; the front supplies constructor/destructor arrays or runs them around the entry when no C startup
+   owns them. Compile musl to bitcode with the probe's overlays and generic C substitutions, implement the supported
+   system calls with console effects and a fixed arena, and trap by name for the rest. Keep musl's startup and exit
+   code responsible for constructors, destructors, atexit handlers and flushing. The product runtime is the next slice.
 2. **Finish the two stopped measurements.**
 3. **Build the journalled machine in the executor** and run the experiments listed in `docs/DESIGN.md` as it is
    built: every journalled step is a permutation; `apply` equals mark, call, rewind-keep; un-running through gates

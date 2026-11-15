@@ -84,3 +84,14 @@ used by ordinary code (returned, stored to ordinary memory, passed to a function
 as an address of memory that is not constant); a value read from a qubit variable used after that
 variable changed; a loop that re-initialises a qubit variable whose known value differs from pass to
 pass. `bennett_bit` with an index that is not constant, or its result used other than by a gate.
+
+## Device calls (not markers)
+
+```c
+void __bennett_effect(char byte);
+```
+
+Declared in `bennett.h`, this emits one byte to the device console (`effect`). It is journalled in reversible
+execution and faults with `effect_in_region` in a coherent region. It does not make its callers control functions:
+a call under qubit control is refused as an ordinary call that may write memory. Definitions, other signatures,
+and attributes that permit deleting or moving the call are refused by name, as for markers.

@@ -67,6 +67,19 @@ std::optional<Marker> markerCall(const Value *value) {
 
 void checkMarkers(const Module &module, bool floatsAreBits) {
   for (const Function &function : module) {
+    if (function.getName() == "__bennett_effect") {
+      FunctionType *type = function.getFunctionType();
+      if (!function.isDeclaration() || !type->getReturnType()->isVoidTy() || type->getNumParams() != 1 ||
+          !type->getParamType(0)->isIntegerTy(8) || type->isVarArg()) {
+        misuse("the device function @__bennett_effect has the wrong signature or is defined; include bennett.h",
+               &function);
+      }
+      if (function.onlyReadsMemory() || function.willReturn() || function.isSpeculatable()) {
+        misuse("the device function @__bennett_effect has attributes that let LLVM remove or move its calls",
+               &function);
+      }
+      continue; // Device effects are ordinary calls, never quantum markers.
+    }
     if (!function.getName().starts_with(prefix)) {
       continue;
     }
