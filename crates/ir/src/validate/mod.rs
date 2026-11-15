@@ -54,13 +54,15 @@ fn check_data(module: &Module, errors: &mut Vec<ValidationError>) {
     let mut error = |index, problem| errors.push(ValidationError { location: Location::Data(index), problem });
     let mut extents = Vec::new();
     for (index, segment) in module.data.iter().enumerate() {
-        let len = segment.len();
-        match segment.address.checked_add(len) {
-            Some(end) if end <= module.memory_size => extents.push((segment.address, end, index)),
-            _ => error(
-                index,
-                Problem::DataOutOfBounds { address: segment.address, len, memory_size: module.memory_size },
-            ),
+        match segment.checked_len() {
+            None => error(index, Problem::DataTooLong),
+            Some(len) => match segment.address.checked_add(len) {
+                Some(end) if end <= module.memory_size => extents.push((segment.address, end, index)),
+                _ => error(
+                    index,
+                    Problem::DataOutOfBounds { address: segment.address, len, memory_size: module.memory_size },
+                ),
+            },
         }
         for item in &segment.items {
             if let DataItem::FuncAddr { width, func } = item {

@@ -1,6 +1,6 @@
 //! The reader, writer and validator on the examples and on deliberately broken programs.
 
-use bennett_ir::{LoadError, NameKind, Problem, ReadErrorKind, load, read, validate, write};
+use bennett_ir::{DataItem, LoadError, NameKind, Problem, ReadErrorKind, load, read, validate, write};
 
 const EXAMPLES: [(&str, &str); 5] = [
     ("sum", include_str!("../../../examples/sum.bn")),
@@ -159,4 +159,74 @@ fn effect_takes_exactly_one_byte() {
     assert!(matches!(problems(text).as_slice(), [Problem::TypeMismatch { .. }]), "a wide slot is not truncated");
     let text = "func @f() {\nentry:\n %q = qalloc 8\n effect %q\n ret\n}\n";
     assert!(!problems(text).is_empty(), "a register is not a byte");
+}
+
+#[test]
+fn zero_items_read_write_and_count_towards_static_data() {
+    let text = "memory 4096\ndata 16 = \"ab\", zero 0, zero 3, i8 7, zero 0x10\ndata 64 = zero 4000\n";
+    let module = read(text).expect("reads");
+    let items = &module.data[0].items;
+    assert_eq!(items[1], DataItem::Zero(0));
+    assert_eq!(items[2], DataItem::Zero(3));
+    assert_eq!(items[4], DataItem::Zero(16));
+    assert_eq!(module.data[0].len(), 2 + 3 + 1 + 16);
+    assert_eq!(module.data[0].encode(), [b'a', b'b', 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(module.static_end(), 4064, "a zero extent is static data");
+    let written = write(&module);
+    assert_eq!(written, "memory 4096\ndata 16 = \"ab\", zero 0, zero 3, i8 7, zero 16\ndata 64 = zero 4000\n");
+    assert_eq!(read(&written).as_ref(), Ok(&module));
+    assert_eq!(write(&read(&written).expect("rereads")), written);
+    validate(module).expect("valid");
+}
+
+#[test]
+fn a_zero_extent_and_its_bytes_spelled_out_are_the_same_memory() {
+    let zero = read("memory 64\ndata 16 = i8 1, zero 30, i8 2\n").expect("reads");
+    let spelled = read(&format!("memory 64\ndata 16 = i8 1, \"{}\", i8 2\n", "\\0".repeat(30))).expect("reads");
+    assert_eq!(zero.static_end(), 48);
+    assert_eq!(zero.static_end(), spelled.static_end());
+    assert_eq!(zero.data[0].encode(), spelled.data[0].encode());
+}
+
+#[test]
+fn malformed_zero_items_are_named() {
+    let data = |items: &str| read_error(&format!("memory 64\ndata 16 = {items}\n")).2;
+    for count in ["-1", "-0", "18446744073709551616", "0x10000000000000000", "1.5", "1e3"] {
+        assert_eq!(data(&format!("zero {count}")), ReadErrorKind::BadNumber(count.into()), "zero {count}");
+    }
+    assert!(matches!(data("zero"), ReadErrorKind::Unexpected { .. }));
+    assert!(matches!(data("zero i8"), ReadErrorKind::Unexpected { .. }));
+    assert!(matches!(data("zero 1 2"), ReadErrorKind::Unexpected { .. }));
+    assert!(matches!(data("i8 zero"), ReadErrorKind::Unexpected { .. }));
+    assert!(matches!(data("zeros 1"), ReadErrorKind::BadType(_)));
+    assert!(matches!(data("zero16"), ReadErrorKind::BadType(_)));
+    for count in ["0x", "0X10"] {
+        assert!(matches!(data(&format!("zero {count}")), ReadErrorKind::Unexpected { .. }), "the number 0, a word");
+    }
+    assert!(matches!(read_error("memory 64\ndata 16 = zero\n1\n").2, ReadErrorKind::Unexpected { .. }));
+    assert!(matches!(data("ZERO 1"), ReadErrorKind::BadType(_)));
+    assert!(read("memory 64\ndata 16 = zero 18446744073709551615\n").is_ok(), "the largest count reads");
+    let module = read("memory 64\ndata 16 = zero 0xFf, zero 007, zero 0x0\n").expect("hex and leading zeros");
+    assert_eq!(module.data[0].items, [DataItem::Zero(255), DataItem::Zero(7), DataItem::Zero(0)]);
+}
+
+#[test]
+fn zero_extents_must_fit_memory_without_overlapping() {
+    assert!(load("memory 64\ndata 0 = zero 64\n").is_ok());
+    assert!(load("memory 0\ndata 0 = zero 0\n").is_ok());
+    assert_eq!(
+        problems("memory 64\ndata 1 = zero 64\n"),
+        [Problem::DataOutOfBounds { address: 1, len: 64, memory_size: 64 }]
+    );
+    let max = u64::MAX;
+    assert_eq!(
+        problems(&format!("memory {max}\ndata 1 = zero {max}\n")),
+        [Problem::DataOutOfBounds { address: 1, len: max, memory_size: max }],
+        "the end address overflows"
+    );
+    assert_eq!(problems(&format!("memory {max}\ndata 0 = zero {max}, zero 1\n")), [Problem::DataTooLong]);
+    assert_eq!(problems(&format!("memory {max}\ndata 0 = \"a\", zero {max}\n")), [Problem::DataTooLong]);
+    assert_eq!(problems("memory 64\ndata 0 = zero 20\ndata 16 = i8 1\n"), [Problem::DataOverlap(0)]);
+    assert!(load("memory 64\ndata 0 = zero 16\ndata 16 = i8 1\n").is_ok(), "adjacent extents do not overlap");
+    assert!(load("memory 64\ndata 16 = zero 0\ndata 16 = i8 1\n").is_ok(), "an empty extent overlaps nothing");
 }

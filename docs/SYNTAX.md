@@ -7,7 +7,7 @@ One statement per line; `;` starts a comment. The single reader is `bennett_ir::
 
 ```
 module     := { "memory" INT | "data" INT "=" item {"," item} | function }
-item       := STRING | iN INT | iN @func                 ; bytes, integer, function address
+item       := STRING | iN INT | iN @func | zero COUNT    ; bytes, integer, function address, zero bytes
 function   := "func" @name "(" [param {"," param}] ")" ["->" type] "{" block {block} "}"
 param      := type %name
 block      := label ":" {statement} terminator           ; a line ending in ":" is a label
@@ -51,8 +51,47 @@ accept `\n \t \r \0 \\ \" \xHH`. Names may be used before they are defined.
 ## Memory
 
 `memory N` gives N bytes, all zero except the `data` segments. The stack grows down from the top and
-may not reach below the highest data byte: each call reserves 8 bytes per slot of the callee's frame,
+may not reach below the highest data byte (`Module::static_end`, the largest `address + length` over all
+segments, `zero` items included): each call reserves 8 bytes per slot of the callee's frame,
 and `alloca` reserves its size (8-byte aligned). Running out is the fault `stack_overflow`.
+
+## Data items
+
+A `data ADDRESS = item, ...` line places its items one after another from ADDRESS. ADDRESS is an
+unsigned integer (decimal or `0x` hex) from 0 to 2^64 - 1.
+
+| Item | Bytes |
+|---|---|
+| `"..."` | the string's bytes, escapes decoded; `""` is no bytes |
+| `iN INT` | the integer, little-endian, in N/8 bytes rounded up (`i1` takes one byte) |
+| `iN @f` | the address of `@f`, little-endian in the same number of bytes |
+| `zero COUNT` | COUNT bytes of value zero |
+
+`zero COUNT`, precisely:
+
+- `zero` is the lowercase word, recognised only where an item may start; it is not a type and not a
+  reserved name elsewhere. COUNT follows it on the same line.
+- COUNT is an unsigned integer from 0 to 2^64 - 1 = 18446744073709551615: decimal digits, or `0x`
+  (lowercase x) followed by hex digits of either case; leading zeros are allowed. A sign (`-1`, also `-0`),
+  a fraction, an exponent or a value above 2^64 - 1 is the read error `BadNumber`. A missing COUNT, one
+  that is not a number, or anything after it but `,` or the end of the line is `Unexpected`; so are `0X10`
+  and a bare `0x`, which read as the number `0` followed by a word. `zero16`, without the space, is one word and
+  reads as a bad type (`BadType`).
+- `zero 0` is allowed and places no bytes, like `""`.
+- A `zero` extent is static data like any other item: its bytes count towards the segment's length, the
+  bounds and overlap checks, and `Module::static_end`, so the stack never uses them. Memory written as
+  `zero N` and memory written as N `\0` bytes in a string are the same initial image with the same stack
+  floor.
+- The writer prints `zero` followed by COUNT in decimal and never merges or splits items, so reading and
+  writing reproduce the items exactly.
+
+The validator checks every segment: its items' lengths must add up to at most 2^64 - 1 bytes
+(`DataTooLong`), `address + length` must not exceed the memory size (`DataOutOfBounds`, also when the
+sum overflows), and no two segments may share a byte (`DataOverlap`; a segment of no bytes overlaps
+nothing).
+
+`bennett-front` writes every run of 16 or more zero bytes in an initializer as `zero N` and keeps shorter
+runs inside the surrounding string (the reason is at `minZeroRun` in `front/src/Emit.cpp`).
 
 ## Annotated example
 

@@ -182,6 +182,30 @@ fn initialisers_are_written_in_full() {
     }
 }
 
+#[test]
+fn zero_runs_are_written_as_zero_items() {
+    assert_agrees_with_native("zero_runs", 0);
+    let source = c_dir().join("zero_runs.c");
+    let text = lower_text(&source, "zero_runs.text", CLANG_FLAGS, &[]).unwrap_or_else(|e| panic!("{e}"));
+    let line = |global: &str| {
+        let mut lines = text.lines().skip_while(|line| *line != format!("; @{global}"));
+        lines.nth(1).unwrap_or_else(|| panic!("no data for @{global}:\n{text}")).split_once(" = ").expect("data").1
+    };
+    let zeros = |n: usize| "\\x00".repeat(n);
+    assert_eq!(line("big"), "zero 65536");
+    assert_eq!(line("tail"), "\"\\x01\\x02\", zero 38");
+    assert_eq!(line("head"), "zero 39, \"\\x03\"");
+    assert_eq!(line("short_run"), format!("\"\\x04{}\\x05\"", zeros(15)), "15 zero bytes stay in the string");
+    assert_eq!(line("exact_run"), "\"\\x06\", zero 16, \"\\x07\"");
+    let with_function = line("with_function");
+    assert!(with_function.starts_with("zero 24, i64 @"), "{with_function}");
+    assert!(with_function.ends_with(&format!(", zero 16, \"\\x09{}\"", zeros(7))), "{with_function}");
+    let module = bennett_ir::read(&text).unwrap_or_else(|e| panic!("{e}"));
+    let written = bennett_ir::write(&module);
+    assert_eq!(bennett_ir::read(&written).as_ref(), Ok(&module));
+    assert_eq!(bennett_ir::write(&bennett_ir::read(&written).expect("rereads")), written);
+}
+
 /// Calls of the C library, which is not linked yet, are refused by name.
 #[test]
 fn library_calls_are_refused() {

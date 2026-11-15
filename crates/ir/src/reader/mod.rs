@@ -102,15 +102,22 @@ impl<'s> Parser<'s> {
         self.cursor.end_of_line()
     }
 
-    /// `"string"`, `iN INTEGER` or `iN @function`.
+    /// `"string"`, `iN INTEGER`, `iN @function` or `zero COUNT`.
     fn data_item(&mut self) -> Result<DataItem, Failure> {
         let offset = self.cursor.offset();
-        if let Some(Token::Str(text)) = self.cursor.peek() {
-            self.cursor.advance();
-            let bytes = literal::decode_string(text).ok_or(Failure { offset, kind: ReadErrorKind::BadEscape })?;
-            return Ok(DataItem::Bytes(bytes));
+        match self.cursor.peek() {
+            Some(Token::Str(text)) => {
+                self.cursor.advance();
+                let bytes = literal::decode_string(text).ok_or(Failure { offset, kind: ReadErrorKind::BadEscape })?;
+                return Ok(DataItem::Bytes(bytes));
+            }
+            Some(Token::Word("zero")) => {
+                self.cursor.advance();
+                return Ok(DataItem::Zero(self.unsigned("a number of zero bytes")?));
+            }
+            _ => {}
         }
-        let width = self.int_type("a string or an integer type")?;
+        let width = self.int_type("a string, `zero` or an integer type")?;
         if let Some(Token::Global(name)) = self.cursor.peek() {
             let offset = self.cursor.offset();
             self.cursor.advance();

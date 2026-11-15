@@ -35,7 +35,8 @@ impl Module {
         (id.index() < self.functions.len()).then_some(id)
     }
 
-    /// The first address above all static data: the lowest address the stack may use.
+    /// The first address above all static data, `zero` items included: the lowest address the stack may
+    /// use.
     pub fn static_end(&self) -> u64 {
         self.data.iter().map(|s| s.address.saturating_add(s.len())).max().unwrap_or(0)
     }
@@ -58,9 +59,15 @@ pub struct DataSegment {
 }
 
 impl DataSegment {
-    /// The number of bytes the segment occupies.
+    /// The number of bytes the segment occupies, or `u64::MAX` if that does not fit (the validator rejects
+    /// such a segment).
     pub fn len(&self) -> u64 {
-        self.items.iter().map(DataItem::len).sum()
+        self.checked_len().unwrap_or(u64::MAX)
+    }
+
+    /// The number of bytes the segment occupies, if it fits in a `u64`.
+    pub fn checked_len(&self) -> Option<u64> {
+        self.items.iter().try_fold(0u64, |len, item| len.checked_add(item.len()))
     }
 
     /// Whether the segment occupies no bytes.
@@ -92,6 +99,9 @@ pub enum DataItem {
         /// The function.
         func: FuncId,
     },
+    /// This many zero bytes. They occupy memory like any other item, so they count towards
+    /// [`Module::static_end`] and the stack may not use them.
+    Zero(u64),
 }
 
 impl DataItem {
@@ -101,6 +111,7 @@ impl DataItem {
             DataItem::Bytes(bytes) => bytes.len() as u64,
             DataItem::Int(value) => value.width().bytes(),
             DataItem::FuncAddr { width, .. } => width.bytes(),
+            DataItem::Zero(len) => *len,
         }
     }
 
@@ -112,6 +123,10 @@ impl DataItem {
     fn encode(&self, out: &mut Vec<u8>) {
         let (width, value) = match self {
             DataItem::Bytes(bytes) => return out.extend_from_slice(bytes),
+            DataItem::Zero(len) => {
+                let len = usize::try_from(*len).expect("a zero item longer than the address space");
+                return out.resize(out.len() + len, 0);
+            }
             DataItem::Int(value) => (value.width(), value.value()),
             DataItem::FuncAddr { width, func } => (*width, u128::from(func.address())),
         };

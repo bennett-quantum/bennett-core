@@ -107,6 +107,9 @@ pub enum Problem {
         /// The memory size.
         memory_size: u64,
     },
+    /// A data segment whose items add up to more bytes than a `u64` counts.
+    #[error("the items add up to more than 2^64 - 1 bytes")]
+    DataTooLong,
     /// Two data segments sharing bytes.
     #[error("overlaps data segment {}", .0 + 1)]
     DataOverlap(usize),

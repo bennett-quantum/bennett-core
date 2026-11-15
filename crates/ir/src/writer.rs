@@ -46,6 +46,7 @@ impl Writer<'_> {
                 DataItem::FuncAddr { width, func } => {
                     write!(self.out, "{} @{}", Type::Int(*width), self.module.function(*func).name)?;
                 }
+                DataItem::Zero(len) => write!(self.out, "zero {len}")?,
             }
         }
         writeln!(self.out)
