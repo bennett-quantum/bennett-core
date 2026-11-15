@@ -209,6 +209,39 @@ fn long_doubles_compute_under_quantum_control() {
     }
 }
 
+/// The routines beyond SoftFloat under quantum control (`float_leftovers_controlled.c`): `fmal` and a
+/// conversion to and from a 128-bit integer, applied coherently to a superposition, against the values the
+/// native build computes. They return aggregates inside, which the front inlines: through memory, a result
+/// could not come back under qubit control.
+#[test]
+fn fmal_and_wide_conversions_compute_under_quantum_control() {
+    let source = c_dir().join("float_leftovers_controlled.c");
+    let include = format!("-I{}", root().join("front/include").display());
+    let executable = native_build_with(&source, "float_leftovers_controlled", &["-DNATIVE", &include], &["-lm"]);
+    let output = Command::new(&executable).output().unwrap_or_else(|e| panic!("cannot run {executable:?}: {e}"));
+    assert!(output.status.success());
+    let expected: Vec<(Vec<u64>, f64)> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .enumerate()
+        .map(|(k, line)| {
+            let values: Vec<u64> =
+                line.split(' ').map(|v| v.parse().unwrap_or_else(|e| panic!("{line:?}: {e}"))).collect();
+            let q = (0..4).map(|i| (k as u64 >> i & 1) << (8 * i)).sum();
+            (vec![q, values[0], values[1]], 0.25)
+        })
+        .collect();
+    assert_eq!(expected.len(), 16);
+    for (flags, front, suffix) in [
+        (CLANG_FLAGS, &[][..], ""),
+        (CLANG_O2_FLAGS, &[][..], ".o2"),
+        (CLANG_FLAGS, &["--taint-all"][..], ".taint-all"),
+    ] {
+        let context = format!("{flags:?} {front:?}");
+        let module = lower(&source, &format!("float_leftovers_controlled{suffix}"), flags, front);
+        assert_branches(&module, &context, "ratio", &[], &expected);
+    }
+}
+
 /// Lowering the C program `text` with `clang_flags` is refused by name, at its line, with `expected`.
 fn assert_refused(name: &str, text: &str, clang_flags: &[&str], front_flags: &[&str], expected: &str) {
     let source = write_c(name, text);

@@ -201,6 +201,16 @@ public:
     if (failed) {
       fail("cannot link the floating-point runtime " + path);
     }
+    // A routine that returns an aggregate (SoftFloat's extFloat80_t, a 128-bit integer as C returns it on
+    // x86-64) is inlined wherever it is called: a device function returns one integer, so an aggregate
+    // would come back through memory, which code under qubit control cannot write.
+    for (Function &function : module) {
+      if (!function.isDeclaration() && function.getName().starts_with(runtimePrefix) &&
+          function.getReturnType()->isAggregateType()) {
+        function.removeFnAttr(Attribute::NoInline);
+        function.addFnAttr(Attribute::AlwaysInline);
+      }
+    }
     return true;
   }
 
