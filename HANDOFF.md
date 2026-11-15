@@ -37,8 +37,9 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `663e9fb`..`caaac7a` | Conversions between floats and 128-bit integers, `fmal`, `_Float16` and `__bf16`, each bit for bit against native (`rt/softfloat/README.md`) |
 | `9817fe0`, `c17bde9`, `08d7799` | Measurements: journal content in coherent regions; control schedules on the SQLite traces |
 | `cd2d920` | The complex multiply and divide helpers: compiler-rt 18.1.8 vendored unmodified (`rt/compiler-rt`), linked by the front where a program calls them; bit for bit with the same helpers on the hardware, NaN bits aside |
+| `31f5138` | `setjmp`/`longjmp` (library and built-in forms, `sigsetjmp` with musl): a device `setjmp` instruction and `longjmp` terminator, journalled (`docs/DESIGN.md`, "Non-local jumps") |
 
-Check it: `cargo test` (111 tests, about 4 s, no LLVM needed) and `front/test.sh` (132 tests; ignored by default: the two heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (122 tests, about 4 s, no LLVM needed) and `front/test.sh` (137 tests; ignored by default: the two heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check that needs `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -48,7 +49,9 @@ c-testsuite 217 agree, 1 refused, 1 named fault, 1 over the step budget, none wr
 refused, none wrong (`b961292`, after the complex helpers and the 128-bit conversions moved three GCC programs
 from refused to agreeing). Without the library an earlier snapshot gives 1,521 / 52 refused, 151 / 68, 58 / 9. Since
 the complex helpers, the two GCC programs that waited on them agree too, with and without the library (run
-alone, not as a whole corpus): GCC 1,559 agree and 10 refused with musl, if nothing else moved.
+alone, not as a whole corpus): GCC 1,559 agree and 10 refused with musl, if nothing else moved. Since
+`setjmp`/`longjmp` (`31f5138`), the four GCC programs that waited on them agree too, with musl and without (run
+alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
 
 ## Decisions the maintainer took on 2026-11-13
 
@@ -163,11 +166,34 @@ alone, not as a whole corpus): GCC 1,559 agree and 10 refused with musl, if noth
   tests, with musl's own startup loops as one of them; the three corpora with musl linked are unchanged and musl
   programs take the same steps.
 
+- **`setjmp`/`longjmp`: landed** (`31f5138`; `docs/DESIGN.md`, "Non-local jumps"; `docs/SYNTAX.md`). The
+  device has no registers, so not musl's assembly: `%r = setjmp %buf` writes a 32-byte jump record (frame
+  depth and function, position, entry and current stack pointer) into program memory and gives 0; the
+  terminator `longjmp %buf, %v` checks the record against the live frames (otherwise the named fault
+  `bad_indirect`, shared with `call_indirect`: the 4-bit code space is full), discards the frames above, restores the stack pointer and resumes after the
+  `setjmp` with `%v`. Both are journalled: un-running through jumps restores the state exactly, checked
+  step by step, and by a `rewind` (a jump counts as the returns of the frames it discards when a rewind
+  checks its mark's activation). In a coherent region a jump within the region works on every branch; out
+  of it, `bad_indirect`. The front lowers the C library's names (`setjmp`, `_setjmp`, `longjmp`, `_longjmp`,
+  `siglongjmp`, `__longjmp_chk`; `sigsetjmp` saving the mask through musl's own `__sigsetjmp_tail`, as
+  musl's assembly does), clang's `__builtin_setjmp`/`__builtin_longjmp` and `llvm.frameaddress(0)`.
+  Executor changes (rebased onto `mark`/`rewind`, `0513c5e`): `Undo::Setjmp`/`Undo::Longjmp` and their
+  forward and backward steps (`forward.rs`, `backward.rs`), the journal's list of discarded-frame counts
+  and its use in `open_mark` (`journal.rs`, `history.rs`), the journal-content observer following them
+  (`measure.rs`), and one panic arm for `longjmp` in the oracle's interpreter (`oracle_support/dense.rs`).
+  Measured: GCC `20210505-1`, `pr56982`, `built-in-setjmp`, `pr84521` agree with native, with musl
+  (2,059 / 2,074 / 2,161 / 2,122 steps) and without the library (10 / 33 / 130 / 73); ten front functions
+  (nested, repeated, across frames, from a callback, through a copied `jmp_buf`, value 0, the built-ins,
+  allocations freed by the jump) on 32 inputs each against native from -O0 and -O2 and with `--taint-all`;
+  `rt/musl/tests/setjmp.c` (masks saved and not, jumps out of signal handlers) prints what native prints.
+  Debt: a function that uses `setjmp` is not run coherently from C (refused by name at a qubit-dependent
+  call), because LLVM must see `setjmp` as writing any memory; route in `docs/DESIGN.md`.
+
 ## Next steps, in order
 
 1. **The musl runtime is done** ("Stopped in flight"). Left on it: files and clocks (`docs/SALVAGE.md` names the
-   earlier workspace's device models; what time and randomness mean on the device must be decided first),
-   `setjmp`/`longjmp`, and the two questions below.
+   earlier workspace's device models; what time and randomness mean on the device must be decided first)
+   and the two questions below. `setjmp`/`longjmp` are done (`31f5138`).
 2. **The two stopped measurements are done** ("Stopped in flight"). Journal content: a constant factor as far as
    copies and depth-one recomputation go; longer chains and their time price are unmeasured. Control schedules:
    exact structure costs about 1-5x a run on these traces, but only from observed runs.
@@ -216,7 +242,8 @@ alone, not as a whole corpus): GCC 1,559 agree and 10 refused with musl, if noth
    0.05 s; a controlled `fmal` at `-O2` lowers with no memory writes. Its testing pass (`8cea574`, sol: 4,224
    result words across layouts and separately optimised callers and callees, coherent and with musl) found no
    wrong answer. `powi` on the two
-   short formats is refused by name (it calls `powf` natively). Then `setjmp`/`longjmp` and the remaining intrinsics.
+   short formats is refused by name (it calls `powf` natively). `setjmp`/`longjmp` are done (`31f5138`); then the
+   remaining intrinsics.
 6. **A SQL query as an oracle.**
 
 ## What the earlier workspace offers
@@ -267,6 +294,11 @@ alone, not as a whole corpus): GCC 1,559 agree and 10 refused with musl, if noth
   through SoftFloat's state? (The float runtime lets the optimiser delete its flags today.)
 - **Exit status**: the device reports the full 32-bit `exit` value; a process status is its low 8 bits. The corpus
   harness compares modulo 256, the integration tests exactly. Mask at the boundary?
+- **The fault code space is full**: `bad_rewind` took code 15, the last that fits `Fault::CODE_WIDTH` (4 bits;
+  a fault register is at least that wide). An invalid jump record therefore shares `bad_indirect` (a control
+  transfer through a value that names no valid target) instead of a `bad_longjmp` of its own. Widen the code
+  to 5 bits (every fault register one qubit wider; about 24 hand-written programs allocate 4) and give it its
+  own code, now or when the next fault comes?
 - **Time and randomness on the device** (clock start value, entropy image): needed before the earlier workspace's
   clock and entropy models can be carried over (`docs/SALVAGE.md`).
 - **Equal-priority constructor order across separately compiled objects** follows a native build of the linked
@@ -277,7 +309,8 @@ alone, not as a whole corpus): GCC 1,559 agree and 10 refused with musl, if noth
 
 | Refused today | What removes it |
 |---|---|
-| Files, clocks and the other unimplemented system calls (named faults); `setjmp`/`longjmp`; return address; a program that redeclares a library function incompatibly | Step 1 above |
+| Files, clocks and the other unimplemented system calls (named faults); return address; a program that redeclares a library function incompatibly | Step 1 above |
+| A qubit-dependent call of a function that uses `setjmp` | The front's own effect summary of `setjmp` (writes only its buffer) when deciding what runs coherently (`docs/DESIGN.md`, "Non-local jumps") |
 | `__float128`; `powi` on `_Float16`/`__bf16`; `#pragma STDC FENV_ACCESS` (with it musl's `ilogb`, and so `__divxc3`, the `long double` complex division); non-default rounding modes and floating-point flags | Step 5 above |
 | A store under qubit control; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control | The journalled machine (step 3) |
 | A qubit-dependent value used by ordinary code or printed; measurement under control; a dirty discard | Channels |
