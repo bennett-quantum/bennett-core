@@ -91,18 +91,31 @@ cmp_t __gtdf2(double a, double b) { return order64(f64_of(a), f64_of(b), -1); }
 cmp_t __gedf2(double a, double b) { return order64(f64_of(a), f64_of(b), -1); }
 cmp_t __unorddf2(double a, double b) { return nan64(f64_of(a)) || nan64(f64_of(b)); }
 
-/* Conversions. To an integer: rounded toward zero, as C converts; out of range (undefined in C) the
- * value x86 SSE gives, the 8086-SSE specialisation's. */
+/* Conversions. To an integer: rounded toward zero, as C converts. Out of range is undefined in C; there the
+ * signed conversions give what x86 SSE gives (the 8086-SSE specialisation's value), and the unsigned ones
+ * what clang's x86-64 code gives for the same source: to 32 bits, the low half of the signed 64-bit
+ * conversion; to 64 bits, the signed conversion below 2^63 (so a negative value wraps), 2^63 from 2^64 up
+ * and for a NaN. */
 double __extendsfdf2(float a) { return of_f64(f32_to_f64(f32_of(a))); }
 float __truncdfsf2(double a) { return of_f32(f64_to_f32(f64_of(a))); }
 int __fixsfsi(float a) { return f32_to_i32_r_minMag(f32_of(a), false); }
 long long __fixsfdi(float a) { return f32_to_i64_r_minMag(f32_of(a), false); }
-unsigned __fixunssfsi(float a) { return f32_to_ui32_r_minMag(f32_of(a), false); }
-unsigned long long __fixunssfdi(float a) { return f32_to_ui64_r_minMag(f32_of(a), false); }
+unsigned __fixunssfsi(float a) { return (unsigned)f32_to_i64_r_minMag(f32_of(a), false); }
+unsigned long long __fixunssfdi(float a) {
+  float32_t x = f32_of(a), two63 = {0x5F000000}, two64 = {0x5F800000};
+  return f32_lt_quiet(x, two63)   ? (unsigned long long)f32_to_i64_r_minMag(x, false)
+         : f32_lt_quiet(x, two64) ? f32_to_ui64_r_minMag(x, false)
+                                  : UINT64_C(0x8000000000000000);
+}
 int __fixdfsi(double a) { return f64_to_i32_r_minMag(f64_of(a), false); }
 long long __fixdfdi(double a) { return f64_to_i64_r_minMag(f64_of(a), false); }
-unsigned __fixunsdfsi(double a) { return f64_to_ui32_r_minMag(f64_of(a), false); }
-unsigned long long __fixunsdfdi(double a) { return f64_to_ui64_r_minMag(f64_of(a), false); }
+unsigned __fixunsdfsi(double a) { return (unsigned)f64_to_i64_r_minMag(f64_of(a), false); }
+unsigned long long __fixunsdfdi(double a) {
+  float64_t x = f64_of(a), two63 = {UINT64_C(0x43E0000000000000)}, two64 = {UINT64_C(0x43F0000000000000)};
+  return f64_lt_quiet(x, two63)   ? (unsigned long long)f64_to_i64_r_minMag(x, false)
+         : f64_lt_quiet(x, two64) ? f64_to_ui64_r_minMag(x, false)
+                                  : UINT64_C(0x8000000000000000);
+}
 float __floatsisf(int a) { return of_f32(i32_to_f32(a)); }
 float __floatdisf(long long a) { return of_f32(i64_to_f32(a)); }
 float __floatunsisf(unsigned a) { return of_f32(ui32_to_f32(a)); }
