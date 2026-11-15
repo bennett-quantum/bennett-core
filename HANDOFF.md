@@ -29,7 +29,8 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `60bd56b`, `2f11a5f`, `bc8661c` | The console reachable from C; the `exit` instruction; constructors and destructors run, or their linker arrays supplied (a silent wrong result the probe found) |
 | `9e15ebf`, `4dfb423` | Large data strings read without recursion (the debug CLI overflowed its stack); musl 1.2.5 vendored unmodified (`rt/musl`), its 1,345 C files built to bitcode offline |
 
-Check it: `cargo test` (77 tests, about 2 s, no LLVM needed) and `front/test.sh` (100 tests and the full journal-content measurement, ignored by default, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
+Check it: `cargo test` (77 tests, about 2 s, no LLVM needed) and `front/test.sh` (111 tests; ignored by default: the full journal-content measurement and two known wrong
+results below, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 On GCC's C torture tests 1,521 of 1,576 runnable programs agree with native, 53 are refused by name, none is wrong;
 on its floating-point tests (`ieee/`) 58 of 67, 9 refused (C library calls), none wrong
@@ -120,7 +121,11 @@ before floating point landed (`experiments/libc-probe/README.md`). The two have 
   native build of the linked module; separately compiled objects linked natively can differ (C leaves it
   unspecified; `docs/DESIGN.md`). Safe refusals noted by the pass: a constructor through an alias; a null entry
   in a section array; an array variable in `.init_array` with alignment above 8; `front/include/bennett.h`
-  cannot be included from C++ (`_Bool`). An independent check of the fix is in flight.
+  cannot be included from C++ (`_Bool`). The independent check of the fix (`9d40852`, sol) found it introduced
+  a silent wrong result: when the optimiser folds a live read of `__init_array_start[0]` (or a fini bound) into a
+  direct call, no bound reference survives, so the front wraps the entry as if C did not own startup and
+  constructors or destructors run twice (`iim` and 2 where native gives `im` and 1). Two `#[ignore]` tests in
+  `front/tests/tests/startup_independent.rs`; a fix is in flight.
 
 ## Next steps, in order
 
