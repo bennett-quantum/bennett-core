@@ -24,7 +24,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `8dfc289` | Variadic calls, 128-bit integers, struct and vector values, intrinsics, computed goto |
 | `b9f504d`..`167bafe` | `float`, `double`, `long double` over Berkeley SoftFloat 3e (`rt/softfloat`), checked bit for bit against the hardware; GCC's `ieee/` tests |
 
-Check it: `cargo test` (44 tests, about 2 s, no LLVM needed) and `front/test.sh` (75 tests, about 30 s with a
+Check it: `cargo test` (44 tests, about 2 s, no LLVM needed) and `front/test.sh` (79 tests, about 30 s with a
 clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 On GCC's C torture tests 1,521 of 1,576 runnable programs agree with native, 53 are refused by name, none is wrong;
