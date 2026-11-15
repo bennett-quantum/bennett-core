@@ -2,8 +2,8 @@
 
 State on 2026-11-15, evening (work resumed at about 18:45 UTC). Landed since: the musl runtime, validated on the
 three corpora with no wrong result; `zero N`; the journal-content and control-schedule measurements; the salvage
-survey; testing passes of `exit`, constructors, `zero N`, the musl boundary and the journal measurement. In flight: a fix for constructors
-that run twice when a bound read is folded ("Stopped in flight"), the complex-number helpers.
+survey; testing passes of `exit`, constructors, `zero N`, the musl boundary and the journal measurement. In flight: the complex-number helpers,
+an independent testing pass of today's floating-point work, and two small fixes from a review audit.
 
 ## What this repository is
 
@@ -35,8 +35,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `663e9fb`..`caaac7a` | Conversions between floats and 128-bit integers, `fmal`, `_Float16` and `__bf16`, each bit for bit against native (`rt/softfloat/README.md`) |
 | `9817fe0`, `c17bde9`, `08d7799` | Measurements: journal content in coherent regions; control schedules on the SQLite traces |
 
-Check it: `cargo test` (79 tests, about 2 s, no LLVM needed) and `front/test.sh` (116 tests; ignored by default: the full journal-content measurement and its sensitivity check,
-and two known wrong results below, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
+Check it: `cargo test` (79 tests, about 2 s, no LLVM needed) and `front/test.sh` (120 tests; ignored by default: the full journal-content measurement and its sensitivity check, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 With musl linked, standard output and exit status compared with native (`experiments/c-corpus/README.md`):
 GCC's C torture tests 1,557 agree, 12 refused by name, 6 named faults (programs that open files), none wrong;
@@ -131,8 +130,11 @@ refused, none wrong. Without the library the same snapshot gives 1,521 / 52 refu
   cannot be included from C++ (`_Bool`). The independent check of the fix (`9d40852`, sol) found it introduced
   a silent wrong result: when the optimiser folds a live read of `__init_array_start[0]` (or a fini bound) into a
   direct call, no bound reference survives, so the front wraps the entry as if C did not own startup and
-  constructors or destructors run twice (`iim` and 2 where native gives `im` and 1). Two `#[ignore]` tests in
-  `front/tests/tests/startup_independent.rs`; a fix is in flight.
+  constructors or destructors run twice (`iim` and 2 where native gives `im` and 1). Fixed in `713d996`: the
+  bounds stay undefined through the optimiser, as in a native compile, and are defined afterwards as a linker
+  would, so a surviving reference reliably means C owns startup (`docs/DESIGN.md`). The witnesses are regression
+  tests, with musl's own startup loops as one of them; the three corpora with musl linked are unchanged and musl
+  programs take the same steps.
 
 ## Next steps, in order
 
