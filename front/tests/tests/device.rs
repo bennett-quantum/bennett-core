@@ -1,6 +1,7 @@
 //! Ordinary device calls stay outside the quantum marker classification.
 use bennett_exec::{Executor, Outcome};
 use bennett_front_tests::{CLANG_FLAGS, c_dir, entry, lower, lower_text, options, write_c};
+use bennett_ir::Fault;
 
 #[test]
 fn c_console_bytes_are_preserved() {
@@ -87,5 +88,41 @@ fn exit_declarations_require_noreturn_void_int() {
         );
         let error = lower_text(&source, &tag, CLANG_FLAGS, &[]).expect_err("must refuse");
         assert!(error.starts_with("error:") && error.contains("@__bennett_exit"), "{error}");
+    }
+}
+
+#[test]
+fn c_exit_into_an_entry_that_does_not_return_int_faults_by_name() {
+    // The status is an `int`; a `long` or `void` entry is not silently widened to fit.
+    for (tag, declaration) in [("exit_entry_long", "long f(void)"), ("exit_entry_void", "void f(void)")] {
+        let source = write_c(tag, &format!("#include \"bennett.h\"\n{declaration} {{ __bennett_exit(5); }}\n"));
+        let module = lower(&source, tag, CLANG_FLAGS, &["--entry=f"]);
+        let mut executor = Executor::new(&module, entry(&module, "f"), &[], options(0)).expect("starts");
+        assert_eq!(executor.run(), Outcome::Faulted(Fault::ExitTypeMismatch), "{tag}");
+        assert_eq!(executor.tape(), b"", "{tag}");
+    }
+}
+
+#[test]
+fn device_calls_through_function_pointers_are_refused_not_miscompiled() {
+    // The calls are recognised by name at direct call sites; taking the address must not
+    // quietly turn into a call of some other function (or of nothing).
+    for (tag, text) in [
+        (
+            "effect_fnptr",
+            "#include \"bennett.h\"\nvoid (*volatile p)(char) = __bennett_effect;\nint main(void) { p('x'); return 4; }",
+        ),
+        (
+            "exit_fnptr",
+            "#include \"bennett.h\"\nvoid (*volatile p)(int) = __bennett_exit;\nint main(void) { __bennett_effect('a'); p(9); }",
+        ),
+        (
+            "effect_address_only",
+            "#include \"bennett.h\"\nvoid (*volatile keep)(char) = __bennett_effect;\nint main(void) { return keep != 0; }",
+        ),
+    ] {
+        let source = write_c(tag, text);
+        let error = lower_text(&source, tag, CLANG_FLAGS, &[]).expect_err("must refuse");
+        assert!(error.contains("not handled yet"), "{tag}: {error}");
     }
 }

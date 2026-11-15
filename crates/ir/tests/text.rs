@@ -127,9 +127,36 @@ fn exit_is_a_typed_integer_terminator() {
     for text in [
         include_str!("../../../examples/exit.bn"),
         "func @f() {\nentry:\n exit i128 0xffffffffffffffffffffffffffffffff\n}\n",
+        // Negative constants at several widths, a narrow slot, and exits on block parameters and
+        // down switch arms: each writes back as the same module.
+        "func @f() {\nentry:\n exit i8 -1\n}\n",
+        "func @f() {\nentry:\n exit i8 -128\n}\n",
+        "func @f() {\nentry:\n exit i1 -1\n}\n",
+        "func @f() {\nentry:\n exit i128 -1\n}\n",
+        "func @f(i7 %v) {\nentry:\n exit %v\n}\n",
+        "func @f(i1 %c) {\nentry:\n br %c, a(i32 4), a(i32 9)\na(i32 %v):\n exit %v\n}\n",
+        "func @f(i8 %c) {\nentry:\n switch i8 %c, 1: a, default: b\na:\n exit i32 1\nb:\n ret\n}\n",
     ] {
         let module = read(text).expect("reads");
         assert_eq!(read(&write(&module)).expect("rereads"), module);
         validate(module).expect("valid");
     }
+    for statement in ["exit i8 -129", "exit i0 0", "exit i129 0"] {
+        let text = format!("func @f() {{\nentry:\n {statement}\n}}\n");
+        assert!(read(&text).is_err(), "accepted {statement}");
+    }
+    // A register reaching the exit through a block parameter is still the one problem.
+    let text = "func @f(i1 %c) {\nentry:\n %q = qalloc 2\n br %c, a(%q), a(%q)\na(q2 %v):\n exit %v\n}\n";
+    assert_eq!(problems(text), vec![Problem::ExitOperand]);
+}
+
+#[test]
+fn effect_takes_exactly_one_byte() {
+    assert!(read("func @f() {\nentry:\n effect 256\n ret\n}\n").is_err(), "a wide constant is not truncated");
+    assert!(read("func @f() {\nentry:\n effect -129\n ret\n}\n").is_err());
+    assert!(read("func @f() {\nentry:\n effect -1\n ret\n}\n").is_ok());
+    let text = "func @f(i32 %v) {\nentry:\n effect %v\n ret\n}\n";
+    assert!(matches!(problems(text).as_slice(), [Problem::TypeMismatch { .. }]), "a wide slot is not truncated");
+    let text = "func @f() {\nentry:\n %q = qalloc 8\n effect %q\n ret\n}\n";
+    assert!(!problems(text).is_empty(), "a register is not a byte");
 }
