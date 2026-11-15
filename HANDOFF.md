@@ -38,7 +38,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `9817fe0`, `c17bde9`, `08d7799` | Measurements: journal content in coherent regions; control schedules on the SQLite traces |
 | `cd2d920` | The complex multiply and divide helpers: compiler-rt 18.1.8 vendored unmodified (`rt/compiler-rt`), linked by the front where a program calls them; bit for bit with the same helpers on the hardware, NaN bits aside |
 
-Check it: `cargo test` (83 tests, about 2 s, no LLVM needed) and `front/test.sh` (132 tests; ignored by default: the two heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (92 tests, about 2 s, no LLVM needed) and `front/test.sh` (132 tests; ignored by default: the two heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check that needs `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -169,6 +169,15 @@ alone, not as a whole corpus): GCC 1,559 agree and 10 refused with musl, if noth
 3. **Build the journalled machine in the executor** and run the experiments listed in `docs/DESIGN.md` as it is
    built: every journalled step is a permutation; `apply` equals mark, call, rewind-keep; un-running through gates
    equals the conjugated operation.
+   In progress since 2026-11-15, 21:17 UTC. The independent oracle for these experiments landed first
+   (`2201a6e`, sol, written without reading the machine's code): `crates/exec/tests/independent_oracles.rs`, a
+   dense matrix calculation (nalgebra, test-only) of gates, controls, `apply` regions and un-running through gates,
+   and a brute-force bijection checker over whole finite states. Against today's executor: all six examples, 480
+   gate/control runs, 64 conjugation columns, 32 generated circuits, 20,480 finite `apply` states and 512
+   journal-prefix round trips agree; four deliberate executor mutations (a phase sign, a missing adjoint on
+   un-run, reversed control polarity, an `apply` that assigns instead of XORs) each fail it. `mark` and
+   `rewind keep` plug in through the checker once the executor exposes whole machine and history state
+   (`crates/exec/tests/oracle_support/mod.rs`).
 4. **The front's fallback**: the program almost verbatim under marks, the documented coherent class recognised by
    its form, and the two warnings (history still entangled at a measurement or at the end; an un-run that meets a
    state its history does not match).
