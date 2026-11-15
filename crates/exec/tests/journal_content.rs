@@ -526,3 +526,71 @@ fn chains_do_not_confuse_numeric_aliases_with_control_presence() {
         }
     }
 }
+
+#[test]
+fn setjmp_invalidates_load_chains_in_both_halves_of_its_buffer() {
+    for offset in [0, 15, 16, 31] {
+        let text = format!(
+            "memory 1024
+func @f(i1 %b) -> i8 {{
+entry:
+    %cell = alloca 32
+    %at = add i64 %cell, {offset}
+    br %b, hi, lo
+hi:
+    store i8 5, %at
+    br loop(i8 2)
+lo:
+    store i8 3, %at
+    br loop(i8 2)
+loop(i8 %n):
+    %a = load i8 %at
+    %v = mul i8 %a, 7
+    %r = setjmp %cell
+    br clear(%n)
+clear(i8 %discard):
+    %next = sub i8 %discard, 1
+    %more = icmp ult i8 0, %next
+    br %more, loop(%next), done(%v)
+done(i8 %out):
+    ret %out
+}}
+func @main() -> i8 {{
+entry:
+    %q = qalloc 1
+    h %q
+    %out = qalloc 8
+    %fault = qalloc 4
+    apply @f(%q) -> %out, %fault budget 100
+    ret 0
+}}"
+        );
+        let module = load(&text);
+        let on = measured(&module, "main", &[], true);
+        let measurement = on.journal_measurement().expect("on");
+        // With no intervening write the identical load/multiply chain is recoverable.
+        let unchanged = load(&text.replace("    %r = setjmp %cell\n", ""));
+        let baseline = measured(&unchanged, "main", &[], true);
+        let target = |p: &&bennett_exec::ClassifiedPosition| {
+            p.site.block == bennett_ir::BlockId(3) && p.site.pos == SitePos::Inst(1) && p.k == 1
+        };
+        // Retained tape can legitimately supply the old load value; test live memory alone.
+        let classes = bennett_exec::classify_with_chains(measurement, false);
+        let baseline = bennett_exec::classify_with_chains(baseline.journal_measurement().expect("on"), false);
+        for (positions, unchanged) in
+            [(&classes[0].site_count, &baseline[0].site_count), (&classes[0].call_path, &baseline[0].call_path)]
+        {
+            let p = positions.iter().find(target).expect("second multiply");
+            assert_eq!(p.class, WordClass::Irreducible, "offset {offset}");
+            assert!(
+                p.chain
+                    .as_ref()
+                    .expect("load diagnostic")
+                    .blockers
+                    .iter()
+                    .any(|b| b == "current-memory-or-stack differs")
+            );
+            assert_ne!(unchanged.iter().find(target).expect("second multiply").class, WordClass::Irreducible);
+        }
+    }
+}

@@ -79,14 +79,14 @@ pub enum WordRole {
     ReturnStack,
     /// The old value of the caller's result slot in a `Return` record.
     ReturnResult,
-    /// The old bytes under a jump record, in a `Setjmp` record (two words).
-    JumpRecord,
+    /// The indexed half of the old bytes under a jump record (low half first).
+    JumpRecord(usize),
     /// The old value of the result slot in a `Setjmp` record.
     SetjmpSlot,
     /// A discarded frame's position or entry stack pointer, the target frame's old position, the old
     /// stack pointer or the count of discarded frames, in a `Longjmp` record: control history, never
     /// credited to a witness.
-    LongjmpControl,
+    LongjmpControl(usize),
     /// The old value of the `setjmp`'s result slot in a `Longjmp` record.
     LongjmpResult,
 }
@@ -999,17 +999,25 @@ impl Executor<'_> {
                 let first = collector.bump(executing, dst);
                 vec![
                     WordInstance {
-                        role: WordRole::JumpRecord,
+                        role: WordRole::JumpRecord(0),
                         value: info.words[0],
                         witness: witness.clone(),
                         recompute: None,
+                        chain: None,
                     },
-                    WordInstance { role: WordRole::JumpRecord, value: info.words[1], witness, recompute: None },
+                    WordInstance {
+                        role: WordRole::JumpRecord(1),
+                        value: info.words[1],
+                        witness,
+                        recompute: None,
+                        chain: None,
+                    },
                     WordInstance {
                         role: WordRole::SetjmpSlot,
                         value: info.words[2],
                         witness: slot_witness(first, info.dst_new, info.words[2], live),
                         recompute: None,
+                        chain: None,
                     },
                 ]
             }
@@ -1017,11 +1025,13 @@ impl Executor<'_> {
                 let (result, control) = info.words.split_last().expect("a longjmp record ends with its result slot");
                 let mut words: Vec<WordInstance> = control
                     .iter()
-                    .map(|&value| WordInstance {
-                        role: WordRole::LongjmpControl,
+                    .enumerate()
+                    .map(|(index, &value)| WordInstance {
+                        role: WordRole::LongjmpControl(index),
                         value,
                         witness: WordWitness::None,
                         recompute: None,
+                        chain: None,
                     })
                     .collect();
                 let target = executing - info.discarded;
@@ -1032,6 +1042,7 @@ impl Executor<'_> {
                     value: *result,
                     witness: slot_witness(first, info.dst_new, *result, live),
                     recompute: None,
+                    chain: None,
                 });
                 words
             }
@@ -1042,9 +1053,12 @@ impl Executor<'_> {
         let context_live = Arc::new(if collector.keep_raw { live.to_vec() } else { Vec::new() });
         for word in &mut words {
             let producer = match word.role {
-                WordRole::Slot | WordRole::AllocaSlot => {
+                WordRole::Slot | WordRole::AllocaSlot | WordRole::SetjmpSlot => {
                     info.dst.and_then(|dst| collector.shadow[executing].producers[dst.index()].as_ref())
                 }
+                WordRole::LongjmpResult => info
+                    .dst
+                    .and_then(|dst| collector.shadow[executing - info.discarded].producers[dst.index()].as_ref()),
                 WordRole::JumpParam(index) => {
                     collector.shadow[executing].producers[info.jump_params[index].0.index()].as_ref()
                 }
@@ -1115,11 +1129,16 @@ impl Executor<'_> {
                 }
             }
             if let Some(range) = &info.store_range {
-                collector.memory_writes.push(MemoryWrite {
-                    record: collector.captured_records,
-                    range: range.clone(),
-                    value: info.store_new.expect("store"),
-                });
+                // A setjmp writes 32 bytes, twice the capacity of a journal word. Capture every
+                // new byte, in word-sized chunks, so old loads check the actual post-step memory.
+                for start in (range.start..range.end).step_by(16) {
+                    let chunk = start..range.end.min(start + 16);
+                    collector.memory_writes.push(MemoryWrite {
+                        record: collector.captured_records,
+                        value: self.read_bytes(chunk.clone()),
+                        range: chunk,
+                    });
+                }
             }
         }
         match info.kind {
@@ -1145,7 +1164,8 @@ impl Executor<'_> {
                     collector.stores.insert((range.start, range.end), producer.clone());
                 }
             }
-            // A jump record and a jumped-to result are control history, never depth-one recomputation.
+            // Setting a jump record invalidates overlapping store provenance; neither jump
+            // instruction is a supported scalar producer for the new result slot value.
             Undo::Setjmp => {
                 let range = info.store_range.as_ref().expect("a jump record range");
                 collector.stores.retain(|&(start, end), _| end <= range.start || start >= range.end);

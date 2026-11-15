@@ -229,7 +229,7 @@ struct Proof {
 fn solve(refs: &[(usize, &Instance<'_>)], seeds: &[Seed<'_>]) -> ChainRecovery {
     // These words encode reachability, not ordinary scalar data. A numeric coincidence
     // in a slot/tape word is not a witness for the missing branch-presence predicate.
-    if matches!(refs[0].1.word.role, WordRole::JumpSource | WordRole::ReturnPacked) {
+    if matches!(refs[0].1.word.role, WordRole::JumpSource | WordRole::ReturnPacked | WordRole::LongjmpControl(_)) {
         return ChainRecovery {
             blockers: vec!["control presence needs replay".to_owned()],
             ..ChainRecovery::default()

@@ -2,7 +2,7 @@
 //! name no live frame of the run or region.
 mod common;
 
-use bennett_exec::{Options, Outcome, RunError};
+use bennett_exec::{Options, Outcome, RunError, WordClass, WordRole, classify_with_chains};
 use bennett_ir::Fault;
 use common::{allowing_region_faults, assert_reverses, assert_same_state, bounded, executor, load, run};
 
@@ -236,6 +236,67 @@ fn the_journal_content_observer_follows_jumps() {
     let records: Vec<bennett_exec::Undo> =
         measurement.applies[0].branches[0].entries.iter().map(|record| record.kind).collect();
     assert!(records.contains(&bennett_exec::Undo::Setjmp) && records.contains(&bennett_exec::Undo::Longjmp));
+    let mut counted = executor(&module, "main", &[], bounded());
+    counted.measure_journal_content(false);
+    assert_eq!(counted.run(), off_outcome);
+    assert_eq!(counted.stats(), off.stats());
+    assert_same_state(&counted.snapshot(), &off.snapshot(), "observer counts only");
+    for (raw, counts) in measurement.applies.iter().zip(&counted.journal_measurement().expect("on").applies) {
+        for (raw, counts) in raw.branches.iter().zip(&counts.branches) {
+            assert_eq!((raw.records, raw.words), (counts.records, counts.words));
+            assert!(counts.entries.is_empty());
+        }
+    }
+    for tape in [false, true] {
+        for (apply, classes) in measurement.applies.iter().zip(classify_with_chains(measurement, tape)) {
+            for positions in [&classes.site_count, &classes.call_path] {
+                assert_eq!(
+                    positions.iter().map(|p| p.instances).sum::<usize>(),
+                    apply.branches.iter().map(|b| b.words).sum()
+                );
+                assert!(
+                    positions.iter().all(|p| p.instances == p.branches_present),
+                    "one instance per branch and word"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn branch_only_longjmp_control_stays_opaque_even_when_live_slots_hold_its_numbers() {
+    // Branch zero returns without jumping. The other branches discard one frame, and the live
+    // %one aliases that control word. It does not certify which branches reached the jump.
+    let text = REGION.replace("    %buf = alloca 32", "    %one = or i64 1, 0\n    %buf = alloca 32").replace(
+        "    br %first, throw, done",
+        "    %jumps = icmp ne i2 %n, 0\n    %both = and i1 %first, %jumps\n    br %both, throw, done",
+    );
+    let module = load(&text);
+    let mut on = executor(&module, "main", &[], bounded());
+    on.measure_journal_content(true);
+    assert_eq!(on.run(), Outcome::Returned(Some(0)));
+    let measurement = on.journal_measurement().expect("on");
+    for tape in [false, true] {
+        for classes in classify_with_chains(measurement, tape) {
+            for positions in [&classes.site_count, &classes.call_path] {
+                assert_eq!(
+                    positions.iter().find(|p| p.role == WordRole::LongjmpResult).expect("old scalar result").class,
+                    WordClass::Recoverable,
+                    "the overwritten result is scalar data with a live copy, unlike control presence"
+                );
+                let control: Vec<_> =
+                    positions.iter().filter(|p| matches!(p.role, WordRole::LongjmpControl(_))).collect();
+                assert_eq!(control.len(), 5, "two discarded-frame words and three target/control words");
+                for p in control {
+                    assert_eq!((p.branches_present, p.branches_total), (3, 4));
+                    assert_eq!(p.class, WordClass::Irreducible);
+                    let diagnostic = p.chain.as_ref().expect("control diagnostic");
+                    assert!(!diagnostic.recovered && !diagnostic.individually_recovered);
+                    assert!(diagnostic.blockers.iter().any(|b| b == "control presence needs replay"));
+                }
+            }
+        }
+    }
 }
 
 /// A `rewind` whose history holds a jump: `@kept(x)` marks, sets a record, jumps back to it from a callee

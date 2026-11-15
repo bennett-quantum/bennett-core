@@ -96,9 +96,18 @@ not establish an asymptotic law; unrestricted replay and optimal pebbling remain
   changed value; a change followed by restoration is allowed. Arithmetic uses the executor's existing
   integer semantics. Historical values validate equalities and find aliases, and never become free inputs.
   The supported producers are exactly the depth-one set above, now linked recursively, including transfer
-  arguments and store-value identities. Jump source blocks and packed return control are kept opaque: a
+  arguments and store-value identities. Jump source blocks, packed return control and `longjmp` control words are kept opaque: a
   numeric slot/tape alias does not reconstruct their branch-presence predicate. Calls/returned results and allocations remain opaque origins;
   this is not callee replay. Overlapping stores still invalidate whole-word store provenance.
+
+  Non-local jumps are observed too. Each half of a `setjmp` buffer's old bytes and each `longjmp`
+  control word has its own indexed role, so distinct words never share an alignment position. Old
+  buffer bytes and overwritten result slots are scalar data; the existing base/first-write/copy
+  rules apply, with chain inputs where available. Jump control words get no scalar recovery witness.
+  Both halves of every 32-byte `setjmp` write enter the current-memory verifier, and overlapping
+  store provenance is invalidated. Tests check word-instance counts, branch-only control with live
+  numeric aliases, and loads changed in either half of the buffer. Neither jump instruction is a
+  supported producer for recomputing its new result; jump/call replay remains unmeasured.
 - **Journal-assisted chains** (`classify_with_chains(measurement, true)`, `tape-*` rows). Uses the same
   DAG search and additionally permits one common aligned journal word as a leaf. Positions are processed
   in order of (maximum dynamic record index across their instances, alignment key). Only previously
@@ -324,6 +333,12 @@ copy-only classification as well as recomputation, so the witness comparison use
 ## Results with unbounded producer chains
 
 All 83 workloads, both alignments, are in [chains.tsv](chains.tsv), including unchanged runs, role components, failure origins and time fits. Its comment header defines every field. Re-running the original observer from `0185b4b` in a separate build and using the same front binary gives **428 identical old data rows** (both original modes, all workloads, roles and slopes). Hook off/on state, outcome, statistics and reversal checks still pass. The four-test full reproduction passed in 229 s on the shared laptop; heavy measurements remain ignored by default.
+
+After integrating the observer with `setjmp`/`longjmp` on base `ff338cb`, the full four-test
+reproduction passed again (150 s test time). All **1,992 data rows** match the original chain
+measurement exactly: 428 copy/depth-one rows and all 1,564 published chain/tape rows, including counts,
+slopes, time costs and blockers. No published measurement changed. Jump semantics are covered by
+separate executor regressions; the measured workload set remains the same 83 runs.
 
 The small new hand check is `chains_recover_vanished_operands_at_unbounded_depth`: with the saved copy overwritten before the second multiply, 6/10 is destroyed when producing 3/5. The old operand 2 is gone. Re-evaluating the initial `br loop(i8 2)` argument gives 2 (one identity), then multiplying it by live `%seed` = 3/5 gives 6/10 (one multiply): **two instructions, depth two**, both alignments. The 40-iteration variant needs depth greater than 32. A separate alternating-call-result fixture retains the first two opaque results and recovers the repeated third from the first retained word; it cannot use itself or an omitted word as a seed. Another test rejects disjoint cross-branch leaf identities even when each branch separately succeeds. The control regression inserts live numeric aliases 1/2 for the branch predecessors, yet both control-presence words remain Irreducible.
 

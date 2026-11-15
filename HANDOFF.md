@@ -39,7 +39,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `cd2d920` | The complex multiply and divide helpers: compiler-rt 18.1.8 vendored unmodified (`rt/compiler-rt`), linked by the front where a program calls them; bit for bit with the same helpers on the hardware, NaN bits aside |
 | `31f5138` | `setjmp`/`longjmp` (library and built-in forms, `sigsetjmp` with musl): a device `setjmp` instruction and `longjmp` terminator, journalled (`docs/DESIGN.md`, "Non-local jumps") |
 
-Check it: `cargo test` (141 tests and 2 ignored witnesses of wrong results, about 4 s, no LLVM needed) and `front/test.sh` (137 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (148 passed and 2 ignored witnesses of wrong results, about 4 s, no LLVM needed) and `front/test.sh` (137 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check that needs `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -140,7 +140,11 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
   DAG scratch/cleanup cost and global-memory writes remain open. Tables and exact rules:
   `experiments/journal-content/README.md`, `chains.tsv`. All 49 zero-copy-Irreducible other runs stay so;
   46 are entirely Same, three also use copies (corrected from the older prose using the unchanged tables).
-  Heavy chain measurements are ignored by default. The independent check of the original copy observer
+  Heavy chain measurements are ignored by default. After integrating the observer with `setjmp`/`longjmp`
+  on base `ff338cb`, all 1,992 data rows reproduce exactly (428 copy/depth-one, 1,564 chain/tape). Jump
+  words have distinct indexed roles; all 32 bytes of each `setjmp` write are tracked for current-memory
+  checks, and `longjmp` control words remain opaque to scalar aliases. Executor regressions cover these
+  rules and raw/counts-only observer state/statistics equivalence. The independent check of the original copy observer
   (`5d41748`, sol) reproduced every table and showed the hook off, the hook on and the executor before the hook
   give identical journals, outcomes and step counts on 127 tests; it found the classifier could lose a common
   live copy (unsorted lists under a binary search; no published number changes) and one slope rounded twice;
