@@ -1,0 +1,17 @@
+--- a/front/src/Emit.cpp
++++ b/front/src/Emit.cpp
+@@ -734,6 +734,14 @@
+   if (call.hasOperandBundles()) {
+     notHandled("a call with the operand bundle `" + call.getOperandBundleAt(0).getTagName().str() + "`", &inst);
+   }
++  // Experiment (libc-probe): `void __bennett_effect(char)` is the device program's `effect`, one byte to the
++  // console. Not a marker: it does not make its caller a control function.
++  if (const auto *callee = dyn_cast<Function>(call.getCalledOperand());
++      callee && callee->isDeclaration() && callee->getName() == "__bennett_effect" && call.arg_size() == 1 &&
++      call.getArgOperand(0)->getType()->isIntegerTy(8) && call.getType()->isVoidTy()) {
++    line("effect " + operand(call.getArgOperand(0)));
++    return;
++  }
+   if (const auto *callee = dyn_cast<Function>(call.getCalledOperand()); callee && callee->isDeclaration()) {
+     notHandled("a call to @" + callee->getName().str() + ", which has no definition (no library is linked yet)",
+                &inst);

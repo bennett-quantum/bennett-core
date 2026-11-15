@@ -1,0 +1,51 @@
+--- a/libc/stdio/vfprintf.c
++++ b/libc/stdio/vfprintf.c
+@@ -38,6 +38,7 @@
+ #define PRINTF_NAME    __d_vfprintf
+ #endif
+ 
++#define BENNETT_NOFP_TRAP 1
+ #include "local-stdio.h"
+ #include "../../libm/common/math_config.h"
+ #include "../stdlib/local.h"
+@@ -786,11 +787,17 @@
+ #if IO_VARIANT_IS_FLOAT(PRINTF_VARIANT)
+ #include "vfprintf_float.c"
+ #else
++#ifdef BENNETT_NOFP_TRAP
++            /* the probe's patch: a floating-point conversion in an integer-only printf is the named fault
++             * `unreachable`, not the text "*float*" */
++            __builtin_trap();
++#else
+             SKIP_FLOAT_ARG(flags, ap);
+             pnt = "*float*";
+             size = sizeof("*float*") - 1;
+             goto str_lpad;
+ #endif
++#endif
+         } else
+ #endif /* ifndef PRINT_SHRINK */
+         {
+--- a/libc/stdio/vfscanf.c
++++ b/libc/stdio/vfscanf.c
+@@ -37,6 +37,7 @@
+ #define SCANF_NAME    __d_vfscanf
+ #endif
+ 
++#define BENNETT_NOFP_TRAP 1
+ #include "local-stdio.h"
+ #include <wctype.h>
+ #include "scanf_private.h"
+@@ -734,6 +735,12 @@
+ #define CNV_FLOAT ""
+ #endif
+ #define CNV_LIST CNV_BASE CNV_BRACKET CNV_FLOAT
++#if defined(BENNETT_NOFP_TRAP) && !defined(_NEED_IO_FLOAT) && !defined(_NEED_IO_DOUBLE)
++            /* the probe's patch: a floating-point conversion in an integer-only scanf is the named fault
++             * `unreachable`, not the end of the conversions */
++            if (c && strchr("aefgAEFG", c))
++                __builtin_trap();
++#endif
+             if (!c || !strchr(CNV_LIST, c))
+                 break;
+ 

@@ -9,8 +9,9 @@ output is right, what it costs, and what the boundary would need from the device
 `crates/` or `front/` is changed.
 
 Measured on 2026-11-15 with `bennett-front` and `bennett` built from commit `b875989` (tree clean, `front/test.sh`
-passing) and copied to `.tmp/libc-probe/bin/`; only those copies were used. clang 18.1.3,
-LLVM 18.  musl 1.2.5 (the release archive). A second library follows in a later step.
+passing) and copied to `.tmp/libc-probe/bin/`; only those copies were used, except for the numbers labelled
+**front-effect**, which used a separate binary built from `b875989` plus `front-effect.patch` (section 6). clang
+18.1.3, LLVM 18. musl 1.2.5 (the release archive). picolibc 1.8.12 (tag `1.8.12`, commit `2ae376c6`, from GitHub).
 
 ## Method
 
@@ -23,6 +24,13 @@ LLVM 18.  musl 1.2.5 (the release archive). A second library follows in a later 
   `-O0 -Xclang -disable-O0-optnone -gline-tables-only -emit-llvm`. Overlay directories come before musl's arch
   headers; `GENERIC=1` compiles musl's generic C file in place of an x86_64 assembly or inline-assembly file of the
   same name where one exists; `MUSL_PATCHES` are applied to the extracted sources.
+- `picolibc-bc.sh <out>` copies `PICOLIBC_DIR`, applies `PICOLIBC_PATCHES`, runs `meson setup` only (meson 1.12.1
+  and ninja from a venv under `.tmp/`: `python3 -m venv`, `pip install meson ninja`), and `picolibc-cmds.py` turns
+  meson's compile database into one bitcode compile per source of `libc.a`, the x86 machine library and
+  `libstrcmp.a`, with picolibc's flags minus `-Oz -g -ffunction-sections` and plus the README's flags. Configuration:
+  tinystdio with `format-default=long-long` (integer printf and scanf with `long long`), `posix-console` (stdin,
+  stdout, stderr over `read`/`write`), `stdio-exit-flush`, `single-thread`, no thread-local storage, no semihosting,
+  `atomic-ungetc=false` (see 5). The 7 x86 assembly string functions are replaced by picolibc's generic C files.
 
 **Link.** `resolve.py` does what a static linker does with an archive: starting from the program and the probe
 runtime, it pulls the members that define a symbol still undefined, transitively; a strong definition is preferred
@@ -47,7 +55,7 @@ created, e.g. `puts` from `printf("...\n")`) adds `f` as a root and links again.
 file, so a member brings every function of its file.
 
 **Probe runtime** (`musl-rt.c`, `picolibc-rt.c`). The device has no operating system, no console instruction
-reachable from C, and a run ends only by returning from the entry function or by a named fault. The
+reachable from C (section 6), and a run ends only by returning from the entry function or by a named fault. The
 runtime is the boundary: for musl one C function `__bennett_syscall(n, a1..a6)` that the overlay `syscall_arch.h`
 calls for every system call; for picolibc its porting layer (`write`, `read`, `_exit`, `sbrk`, `open`, `close`,
 `lseek`, `fstat`, `isatty`, `getpid`, `kill`, `unlink`). Writes to fd 1 append to a 64 KiB buffer; fd 2 is dropped;
@@ -112,7 +120,8 @@ any one of the three overlays makes the front refuse all 9 hand programs at that
 
 `programs/`: `puts`, `printf("hello %d\n", 42)` (`hello`), integer `printf` with flags, widths and `%ld %lld %llu %lx
 %p` (`printf-int`, returns 3), `sprintf`, `qsort`, `isprint` over 256 characters, `fopen` of a missing file, `malloc`
-/`free`/`realloc` (64 blocks), `atexit` + buffered output + `exit(5)` (`exit`), a constructor and a destructor (`ctor`).
+/`free`/`realloc` (64 blocks), `atexit` + buffered output + `exit(5)` (`exit`), a constructor and a destructor
+(`ctor`).
 
 | step | substitution (cumulative) | agree | refused | named fault | first refusal or fault |
 |---|---|---:|---:|---:|---|
@@ -134,12 +143,13 @@ Steps and sizes are in section 4.
 | step 3 (+ integer-only `printf`) | 30 | 6 | 0 | 1 | 61 | 2 | 1 (`00187`: `fopen` fails, the test uses the null `FILE`, `bad_indirect`) |
 | step 5 (+ integer-only `scanf`, `open` traps, constructors) | **28** | 3 | 5 | 1 | **61** | 2 | 1 |
 
-At step 2, 29 of the 31 GCC refusals and 63 of the 64 c-testsuite refusals are `x86_fp80` in `vfprintf.c`; the
-others are `setjmp`, `longjmp` and one program's own `float`. At step 3 the 3 new GCC refusals are `x86_fp80` in
-`vfscanf.c` (`printf-2`, `fprintf-2`, `user-printf` read back a temporary file with `fscanf`). At step 5 those three end in the named fault `unreachable` at
-system call 228, `clock_gettime`, which musl's `tmpnam` uses to make a name (the runtime has no clock; found by printing the call number before the trap), and `loop-2f`/`loop-2g` (which
-`open("/dev/zero")` to `mmap` it) end there when they open a file. With `FILES_ENOENT` `loop-2f`/`loop-2g` agree,
-because the tests skip their check when `open` fails, which tests less. The rest of the final state:
+At step 2, 29 of the 31 GCC refusals and 63 of the 64 c-testsuite refusals are `x86_fp80` in `vfprintf.c`; the others
+are `setjmp`, `longjmp` and one program's own `float`. At step 3 the 3 new GCC refusals are `x86_fp80` in `vfscanf.c`
+(`printf-2`, `fprintf-2`, `user-printf` read back a temporary file with `fscanf`). At step 5 those three end in the
+named fault `unreachable` at system call 228, `clock_gettime`, which musl's `tmpnam` uses to make a name (the runtime
+has no clock; found by printing the call number to the console with the front-effect binary), and `loop-2f`/`loop-2g`
+(which `open("/dev/zero")` to `mmap` it) end there when they open a file. With `FILES_ENOENT` `loop-2f`/`loop-2g`
+agree, because the tests skip their check when `open` fails, which tests less. The rest of the final state:
 
 | program | outcome | why |
 |---|---|---|
@@ -168,20 +178,22 @@ run in full (configuration of step 5).
 | skipped | 80 | 74 | 74 | 0 | 0 | 0 |
 
 External, GCC: 28 library refusals now agree, 7 programs that fail natively (status 134, which c-corpus skips) are
-reproduced exactly, and the LLVM crash of c-corpus cause 1 (`20051113-1`; the module now has musl's allocator instead of `rt.c`'s, and
-LLVM does not crash on it) agrees; no program moved from agrees to anything else. The 138 refusals are floating
-point 129 (all in the test programs, none in the library), `llvm.returnaddress` 3, `llvm.eh.sjlj.longjmp` 2, `setjmp`,
-`longjmp`, a `bitcast` of a vector of doubles and an over-aligned variadic argument. The 6 faults: the 5 of the list above (`clock_gettime` 3, `open` 2) and `pr67037` (c-corpus cause 2). The budget case of c-testsuite (`00040`) finishes in 489,691,542 steps
-under the larger budget of this harness.
+reproduced exactly, and the LLVM crash of c-corpus cause 1 (`20051113-1`; the module now has musl's allocator instead
+of `rt.c`'s, and LLVM does not crash on it) agrees; no program moved from agrees to anything else. The 138 refusals
+are floating point 129 (all in the test programs, none in the library), `llvm.returnaddress` 3, `llvm.eh.sjlj.longjmp`
+2, `setjmp`, `longjmp`, a `bitcast` of a vector of doubles and an over-aligned variadic argument. The 6 faults: the 5
+of the list above (`clock_gettime` 3, `open` 2) and `pr67037` (c-corpus cause 2). The budget case of c-testsuite
+(`00040`) finishes in 489,691,542 steps under the larger budget of this harness.
 
-Internalisation moves 49 more GCC programs to agrees: 46 floating-point refusals, 2 return-address refusals and
-the vector `bitcast` disappear because, with every function internal, LLVM inlines and folds them away before
-lowering (as c-corpus's `OPTNONE=1` showed on a smaller scale), and `pr67037`'s mismatched K&R call is inlined. And it creates the **one wrong result**, `bcp-1`, which is the probe's own fault, not the front's:
-the test checks that `__builtin_constant_p(global)` is 0 for a global it marks `externally_visible` (a GCC attribute
-clang ignores); once the probe makes `global` internal, LLVM proves it is never written and constant-folds it, and
-the test aborts. With `LINK=external` it agrees. Reduced: `reduced/internalize-constant-p.c`. The lesson for a
-design: internalising a whole program is an LTO assumption with a visible semantic edge
-(`__builtin_constant_p`, `externally_visible`, symbols used from outside the module).
+Internalisation moves 49 more GCC programs to agrees: 46 floating-point refusals, 2 return-address refusals and the
+vector `bitcast` disappear because, with every function internal, LLVM inlines and folds them away before lowering (as
+c-corpus's `OPTNONE=1` showed on a smaller scale), and `pr67037`'s mismatched K&R call is inlined. And it creates the
+**one wrong result**, `bcp-1`, which is the probe's own fault, not the front's: the test checks that
+`__builtin_constant_p(global)` is 0 for a global it marks `externally_visible` (a GCC attribute clang ignores); once
+the probe makes `global` internal, LLVM proves it is never written and constant-folds it, and the test aborts. With
+`LINK=external` it agrees. Reduced: `reduced/internalize-constant-p.c`. The lesson for a design: internalising a whole
+program is an LTO assumption with a visible semantic edge (`__builtin_constant_p`, `externally_visible`, symbols used
+from outside the module).
 
 ## 3. Floating point inside `printf`
 
@@ -212,15 +224,15 @@ SoftFloat-as-libcalls would not cover by itself, measured in musl's bitcode:
 
 - **Constrained intrinsics.** musl builds with `-frounding-math`, so clang emits
   `llvm.experimental.constrained.fadd/fmul/fsub/fdiv/fcmp/fmuladd/sitofp/uitofp/fptosi/fptoui/fpext/fptrunc`, with
-  dynamic rounding and strict exceptions, not plain `fadd`: 227 of 1,345 files (`vfprintf.c`: 11 `sitofp.f80.i32`,
-  9 `fmul.f80`, 8 `fcmp.f80`, 7 `fpext.f80.f64`, 5 `fadd`, 5 `fsub`, ...; `floatscan.c` 33 `sitofp.f80`, 16 `fmul.f80`,
+  dynamic rounding and strict exceptions, not plain `fadd`: 227 of 1,345 files (`vfprintf.c`: 11 `sitofp.f80.i32`, 9
+  `fmul.f80`, 8 `fcmp.f80`, 7 `fpext.f80.f64`, 5 `fadd`, 5 `fsub`, ...; `floatscan.c` 33 `sitofp.f80`, 16 `fmul.f80`,
   6 `fmuladd.f80`, 4 `fdiv.f80`). The lowering must accept them (and either honour the rounding mode, which the
   `__adddf3` interface has no argument for, or document round-to-nearest; musl's generic `fenv.c` supports only
   `FE_TONEAREST`, so the second is consistent), or musl must be built without `-frounding-math`.
 - **`long double` in memory and through unions.** 125 files load and store `x86_fp80` (`vfprintf.c` 40 loads and 24
   stores); `frexpl`, `__signbitl`, `__fpclassifyl`, `fabsl` read its bits through `union ldshape` (a 64-bit mantissa
-  and a 16-bit sign-exponent in a 16-byte slot). The front must lay out `x86_fp80` as 10 bytes in 16 and allow
-  integer loads of its parts, which is memory layout, not arithmetic.
+  and a 16-bit sign-exponent in a 16-byte slot). The front must lay out `x86_fp80` as 10 bytes in 16 and allow integer
+  loads of its parts, which is memory layout, not arithmetic.
 - **`fneg`** (3 in `vfprintf.c`) is a sign-bit flip, not a libcall in compiler-rt's interface.
 - **Inline assembly in libm**: 14 arch C files (x87/SSE `fsqrt`, `frndint`, `fprem`, `cvtsd2si`, ...) and 15 x87
   assembly files; `GENERIC=1` replaces all of them with C, which then needs `long double` arithmetic. `fenv.s` is
@@ -253,6 +265,108 @@ as `\x00` text**, 4 bytes of text per byte of memory, so the probe's 1 MiB arena
 4.47 MB of `data` lines in every program that pulls them (`sprintf` and `qsort` do not). That is a property of the
 `.bn` writer, not of the library; a `data` segment of zeros need not be written at all (`memory N` is zero already).
 
+picolibc (section 5), same programs, `LINK=internalize`: `hello` 28 functions, 832 instructions, 299,020 bytes
+(264,775 of them the output buffer), 760 steps, 0.07 s, 53 MiB; `puts` 25 / 319 / 405 steps; `sprintf` 9 / 642 / 606
+steps. With `LINK=external`: `hello` 39 / 897 / 772 steps.
+
+## 5. picolibc 1.8.12
+
+Why picolibc rather than LLVM's libc: picolibc is C, builds the integer-only printf and scanf variants itself, has a
+`FILE` that wraps put/get function pointers and newlib's small porting layer, and needs no C++ or a newer clang.
+LLVM's libc is C++ (templates, its own build of the matching LLVM version; the baremetal configuration in LLVM 18 is
+young), so it would test a C++ path through the front as much as a library.
+
+**Compile.** meson's database for this configuration lists 1,076 sources; the library proper (`libc.a`, the
+x86 machine library, `libstrcmp.a`) is 1,057: 1,047 C sources, all of which compile to bitcode as is, and 10 x86
+assembly files. 7 of those (`memcpy`, `memset`, `memmove`, `memchr`, `memcmp`, `strchr`, `strlen`) have generic C
+files in `libc/string`, which are compiled instead; 3 have none (`setjmp.S`, `interrupt.S`, `tcb.S`). No
+system-call assembly, atomics or thread pointer: picolibc's porting layer is plain C functions
+(`libos/dummyhost` has 16 stubs, which the probe runtime replaces). 373 files use floating point; one file has
+non-empty inline assembly (`libm/machine/x86/fenv.c`).
+
+**Run, substitution by substitution** (hand programs, `LINK=internalize`):
+
+| step | substitution (cumulative) | agree | refused | fault | first refusal or fault |
+|---|---|---:|---:|---:|---|
+| 0 | picolibc as configured, probe porting layer | 4 | 6 | 0 | `the global @stdin, which has no definition`: an undefined *weak* reference (`&stdin != NULL`) |
+| 1 | + `weak.py` (undefined weak to null) | — | — | — | `puts`: fault `bad_indirect` (measured on one program) |
+| 2 | + `picolibc-bufio-abi.patch` | 9 | 0 | 1 | `fopen`: fault `unreachable` (no file system) |
+| 3 | + `-Datomic-ungetc=false` | (self-test) | | | without it `scanf` is refused: `the LLVM instruction atomicrmw, at local-stdio.h:793` |
+| 4 | + `picolibc-nofp-trap.patch` | 9 | 0 | 1 | |
+
+Step 1's fault: on x86-64 picolibc assumes that a function taking an `int` file descriptor may be called through a
+pointer typed with a `void *` first parameter (`BUFIO_ABI_MATCHES` in `local-stdio.h`), so `write(int, ...)` is
+called as `ssize_t (*)(void *, const void *, size_t)`. Natively the ABI hides it; on the device the call's signature
+does not match the target's and the run ends in `bad_indirect`. Named, not silent; the patch removes `__x86_64` from
+that condition so that picolibc calls through the `int` member of its union.
+
+Step 3's finding (self-test `float.c`, `sscanf("1.5", "%f", &f)`): picolibc's integer-only scanf stops at `%f` and
+returns 0 matches; native prints 1. **The run succeeds with different output: a silent wrong result from the library's
+configuration**, not from the front. Its integer-only printf prints the text `*float*` for `%f`, by design. The
+patch makes both a trap (named fault `unreachable`); with it the self-test faults. Neither corpus list happened to
+hit this, because their `%f` programs are refused at the test's own `double` first.
+
+**The 37 and 64** (step 4 with an `unlink` stub, `LINK=external`): GCC 28 agree, 5 fault (at `open`; picolibc's
+`tmpnam` needs no clock), 3 refused (`setjmp`, `longjmp`, `gofast`'s own `float`), 1 skipped; c-testsuite 61 agree, 2
+refused (own floating point), 1 fault (`00187`, files). Exactly the musl outcome, program by program. Whole corpora,
+`LINK=external`: see the table at the end of this section.
+
+| outcome | GCC: baseline | picolibc | musl | c-testsuite: baseline | picolibc | musl |
+|---|---:|---:|---:|---:|---:|---:|
+| agrees (output and status) | 1,402 | **1,437** | 1,438 | 149 | **212** | 212 |
+| refused by name | 172 | 138 | 138 | 70 | 7 | 7 |
+| named fault (native passed) | 1 | 6 | 6 | 0 | 1 | 1 |
+| **wrong** | 0 | **0** | 0 | 0 | **0** | 0 |
+| crash | 1 | 1 | 0 | 0 | 0 | 0 |
+| budget | 0 | 0 | 0 | 1 | 0 | 0 |
+| skipped | 80 | 74 | 74 | 0 | 0 | 0 |
+
+Program by program the two libraries give the same outcome everywhere except GCC `20051113-1`: with picolibc's
+`malloc` and `calloc` in the module, LLVM 18's dead-store elimination crashes again (c-corpus cause 1), now reported
+by name ("LLVM's optimiser crashed on this module", exit 2, counted as a crash as in c-corpus).
+
+## 6. Where the boundary could sit
+
+**The console effect from C.** The device program has `effect` (one `i8` to the console; the executor journals it,
+`bennett run` prints `console: "..."`, and inside a coherent region it is the fault `effect_in_region`). The front at
+`b875989` has no way to emit it: no marker names it (`front/src/Markers.h`), and every call to a function without a
+definition is refused (`front/src/Emit.cpp`, `BodyWriter::call`). What it would take is small:
+`front-effect.patch` (8 lines in `BodyWriter::call`) lowers a call of the declaration `void __bennett_effect(char)`
+to `effect`. It must not be a marker, because every caller of a marker becomes a control function
+(`front/src/Outline.cpp`, `controlFunctions`); as an opaque external call it already keeps LLVM from deleting or
+reordering it, and a function that calls it does not only read memory, so it is never run coherently. A real
+version would declare it in `front/include/bennett.h`, refuse other signatures by name as the markers are, and give
+it a test.
+
+Measured with that front (**front-effect** binary; nothing else differs from `b875989`) and the runtimes built
+with `-DBENNETT_EFFECT`, so that every byte written to fd 1 is also an `effect`, and `CONSOLE=1`, so that the harness
+compares `bennett run`'s `console:` line with native stdout directly: all 10 hand programs on both libraries give a
+console equal to native stdout, except `fopen`, which faults before it prints (by design); this includes `exit`,
+which ends in a fault, because the console survives the end of the run. c-testsuite in full (musl, `LINK=external`):
+212 agree, and for all 212 the console equals native stdout and therefore the `.expected` file. Cost: one `effect`
+per byte, e.g. `hello` 1,771 steps against 1,749.
+
+**The three shapes, and what the probe measured for each.**
+
+| shape | what the probe has | what it needs from the device |
+|---|---|---|
+| (a) one function taking a system-call number | musl: `syscall_arch.h` overlay -> `__bennett_syscall(n, a1..a6)`, a `switch` over `write`, `writev`, `read`, `ioctl`, `open`/`openat`, `close`, `lseek`, `brk`, `mmap`, `munmap`, `madvise`, `mprotect`, `mremap`, `rt_sigprocmask`, `rt_sigaction`, `gettid`, `getpid`, `set_tid_address`, `kill`/`tkill`/`tgkill`, `exit`/`exit_group`; anything else traps. Works for everything measured here; musl's code above it runs unchanged. | console (`effect`), an arena for `brk`/`mmap`, an end of the run with a status. The thread descriptor and startup are C in the runtime. The surface is musl's: 288 system calls are named in the library; the runtime implements 24, and the only unknown
+one any measured program reached is `clock_gettime` (from `tmpnam`), which traps. |
+| (b) the library's stdio back end | not measured separately; in musl it is `__stdio_write`/`__stdout_write` (both call `writev`/`ioctl` through (a)); in picolibc the `FILE`'s put function (`posixiob_stdout.c` puts it over `write`). Replacing one of these is a few lines but leaves `malloc` (`brk`/`mmap` or `sbrk`), `exit`, files and the rest on their own path. | console; plus everything (a) or (c) still needs for non-stdio calls |
+| (c) the library's porting layer | picolibc: `write`, `read`, `_exit`, `sbrk`, `open`, `close`, `lseek`, `fstat`, `isatty`, `getpid`, `kill`, `unlink` in `picolibc-rt.c`, 12 functions; the same results as (a) on every program measured. | the same three: console, arena, end of run |
+
+**What `exit` needs.** Today a run ends only by returning from the entry function or by a fault, so the probe
+returns from `__bennett_entry` and must reproduce by hand what `exit` does on a return from `main`: atexit
+handlers, then destructors, then the stdio flush (musl: `__funcs_on_exit`, `__libc_exit_fini`, `__stdio_exit`;
+picolibc: `__call_exitprocs`, then the `.fini_array` destructor that flushes `stdout`). A program that calls
+`exit(n)` or `abort()` from deep inside cannot return, which is why the probe ends those runs in a fault that only
+says whether the output matched. A real design needs one device way to end the run with a status from anywhere
+(an instruction, or an entry convention the executor honours), after which `exit` is the library's own code:
+`atexit` is a table in the library, the flush is the library's, and constructors and destructors need the static
+linker's `.init_array`/`.fini_array` (or `ctors.py`'s arrays) to be called by the startup code. Output written by
+`write` before the end must survive the end, which `effect` already does (the console is not rolled back by a
+fault).
+
 ## Findings
 
 1. **A constructor that LLVM cannot evaluate at compile time is never run** (silent wrong result in `bennett-front`
@@ -263,13 +377,69 @@ as `\x00` text**, 4 bytes of text per byte of memory, so the probe's 1 MiB arena
    the corpus did not see it. The probe works around it with `ctors.py`.
 2. **One wrong result in the full GCC run, caused by the probe's link step** (`bcp-1`, section 2): internalising the
    program changes what `__builtin_constant_p` sees. Not a front bug. Reduced: `reduced/internalize-constant-p.c`.
+3. **picolibc's integer-only scanf and printf give silently different output for floating-point conversions**
+   (section 5). A library configuration, not a front bug; patched to trap.
+4. **Undefined weak references and an ABI pun are refused or fault by name**, not silent: `the global @stdin, which
+   has no definition` (picolibc), `bad_indirect` for `write(int)` through a `void *` pointer (picolibc on x86-64).
+5. **Zero data costs 4 bytes of `.bn` text per byte** (section 4).
+6. No crash of the front (other than LLVM's own, reported by name), no timeout, no executor limit, no cost
+   explosion, in three full runs of both corpora (musl internalised and external, picolibc external), one console
+   run of c-testsuite and the hand programs.
+
+## Interpretation, and what would make these numbers misleading
+
+- **The library is not the problem for integer code.** With three overlay headers, musl's generic C and one runtime
+  file, every integer program measured runs unchanged and prints exactly what native prints; picolibc needs one
+  ABI patch and a configuration. What stops the rest is floating point (in the library's `printf` today, and in the
+  programs themselves), `setjmp`/`longjmp`, and files.
+- **`%f` is the line.** Integer-only `printf` today needs a patch; SoftFloat would remove it, and would also be the
+  first thing to run `fmt_fp` and `__floatscan`, so the output comparison of this harness is the test that matters for
+  it. The hand programs and the two lists contain no successful `%f` at all.
+- **Coverage of the library is thin.** The programs pull 20-40 members of 1,345; `vfprintf`'s integer paths,
+  `fwrite`, `mallocng`, `qsort`, `ctype`, `atexit` and `exit` run; locale, wide characters, `printf` positional
+  arguments, `scanf` beyond a few cases, time, signals, threads do not. Agreement says nothing about them.
+- **Agreement is (output, status) on one input**: stdin is empty, `argc` is 1, there are no files. A program whose
+  behaviour depends on its environment is compared in that environment only. stderr is not compared.
+- **A missing file system must fault, not fail.** With `FILES_ENOENT` (open fails with `ENOENT`), picolibc runs
+  `printf-2`, `fprintf-2`, `user-printf` and c-testsuite `00187` to a successful end with output that differs from
+  native: four "wrong" results that are the environment's, indistinguishable by the harness from a miscompilation.
+  The default trap turns them into named faults.
+- **The boundary is the probe's own code**, about 230 lines each; a bug there would show as a mismatch or a fault, not
+  hide one, except that `brk`/`mmap`/`sbrk` semantics are simplified (no `munmap`, a fixed arena). `malloc` ran
+  536,094 steps (musl) and 942,183 (picolibc) without a mismatch.
+- **Internalisation inflates agreement**: 49 of the GCC agreements under `LINK=internalize` exist only because LLVM
+  folded floating point after internalising, and it caused the one wrong result. The `LINK=external` columns are the
+  conservative numbers.
+- **One clang, one target.** Native and device share clang 18's front end and headers differ (glibc natively, musl or
+  picolibc on the device), so a header-level difference shows up as a mismatch, not hidden; a bug shared by the two
+  compilations (clang itself) is invisible.
+- Not measured: LLVM's libc; picolibc's `FILE` put-function shape (b) separately; `atexit` beyond one handler;
+  programs reading stdin; `.bn` size with the zero-data issue fixed; `front/test.sh` with the front-effect binary.
+
+## Candidate designs for independent designers (not chosen)
+
+1. **musl at the system-call boundary.** musl as it is, three overlay headers, generic C instead of assembly, a
+   runtime with one `syscall(n, ...)` function implemented by device effects (console, arena, end of run) and
+   faults for the rest; startup and exit in C. Largest coverage of real C for the least porting; the boundary is
+   Linux's, wide (288 calls named, ~20 needed) but each is a `switch` case.
+2. **picolibc at its porting layer.** picolibc built for the device (integer or, once SoftFloat lands, full stdio),
+   the dozen newlib-style functions implemented by device effects; one ABI patch and the configuration upstream.
+   Smallest library and code (`hello` 832 instructions against 2,179), the porting layer is the documented one, a
+   `FILE` with put/get pointers is the natural place for the console. Less of POSIX.
+3. **Either library, with a device-level end of run and console in the front first.** Make `effect` reachable from C
+   (as `front-effect.patch`) and give the device one way to end a run with a status, then put stdio's back end or the
+   porting layer directly on them; the hash-and-fault oracle of this probe becomes unnecessary and the console is
+   compared directly. This is a front and device change, which the other two can be built on.
 
 ## Files
 
 - `musl-bc.sh`, `musl-overlay/{syscall,atomic,tp}/*.h`, `musl-printf-nofp.patch`, `musl-scanf-nofp.patch`,
   `musl-rt.c`: musl as bitcode and its probe runtime.
+- `picolibc-bc.sh`, `picolibc-cmds.py`, `picolibc-bufio-abi.patch`, `picolibc-nofp-trap.patch`, `picolibc-rt.c`:
+  the same for picolibc.
 - `probe-one.sh`, `probe-all.sh <list or dir> <work dir> [jobs]` (`LIBDIR`, `LINK`, `BIN`, `FRONT_TIMEOUT`, ...):
   the harness. `resolve.py`, `ctors.py`, `weak.py`: the link steps. `hash.py`: the native side of the oracle.
 - `classify.py`, `cost.py`, `summarize.py`: the tables. `granularity/`: the refusal-granularity programs.
 - `programs/`: the hand programs. `selftest/`: the oracle's self-tests. `reduced/`: the reduced findings.
+- `front-effect.patch`: the experimental front change of section 6 (not applied to `front/`).
 - Work directories are under `.tmp/libc-probe/` (git-ignored): per-program outputs in `<work dir>/out/<name>/`.
