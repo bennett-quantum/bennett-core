@@ -329,6 +329,11 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
   when history is left behind" says un-running after a change is a warning, not a refusal. Keep this one a fault?
   (4) A value defined between a mark and its rewind still reads its mark-time value afterwards; the validator
   allows such uses. Reject them?
+- **`setjmp`/`longjmp`.** (1) `docs/DESIGN.md` ("Non-local jumps") lets a stale jump record succeed when a later
+  call of the same function sits at the same depth and stack address (C leaves it undefined; the testing pass's
+  probe returned 77). Keep that, or fault by name? (2) Since `595339c` a copied `sigjmp_buf` carries its own saved
+  mask and the mask is restored before the jump, as glibc (the native reference) does; musl's assembly restores
+  from the original buffer, which differs only if the original is saved again after the copy. Keep glibc's?
 
 - **Complex division: compiler-rt or libgcc?** compiler-rt's division (decided) fails GCC's three `cdivchk`
   accuracy checks natively, which pass with libgcc, the runtime of the corpus's native reference. When the
