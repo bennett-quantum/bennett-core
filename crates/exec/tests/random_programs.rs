@@ -52,7 +52,7 @@ fn random_programs_round_trip_and_reverse_step_by_step() {
             reversible: true,
             allow_region_faults: true,
         };
-        let mut executor = Executor::new(&module, FuncId(0), &args, options).unwrap_or_else(|e| panic!("{e}"));
+        let mut executor = common::executor(&module, &module.functions[0].name, &args, options);
         let history = run_recording(&mut executor);
         match executor.outcome() {
             Some(Outcome::Returned(_)) => returned += 1,

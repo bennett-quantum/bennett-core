@@ -41,7 +41,9 @@ pub fn entry(module: &ValidModule, name: &str) -> FuncId {
 }
 
 pub fn executor<'m>(module: &'m ValidModule, name: &str, args: &[u64], options: Options) -> Executor<'m> {
-    if std::env::var_os("BENNETT_WORLDS_REFERENCE").is_some() {
+    if std::env::var_os("BENNETT_WORLDS_REFERENCE").is_some()
+        && !oracle_support::worlds_executor::compare_world_entry(module, name, args)
+    {
         let function = module.function(entry(module, name));
         let cap = if function
             .blocks

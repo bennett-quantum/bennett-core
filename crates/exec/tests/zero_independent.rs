@@ -1,9 +1,9 @@
 //! Compare compact and explicit initializers independently of the emitter's own tests.
 mod common;
 
-use bennett_exec::{Executor, Options, Outcome};
+use bennett_exec::{Options, Outcome};
 use bennett_ir::{DataItem, Fault};
-use common::{bounded, entry, load};
+use common::{bounded, load};
 
 #[test]
 fn mixed_zero_items_produce_the_expected_entire_initial_memory() {
@@ -13,7 +13,7 @@ fn mixed_zero_items_produce_the_expected_entire_initial_memory() {
              i9 511, zero 0, i64 @main, \"\\0z\"\nfunc @main() {{\nentry:\n ret\n}}\n"
         );
         let module = load(&text);
-        let executor = Executor::new(&module, entry(&module, "main"), &[], bounded()).expect("starts");
+        let executor = common::executor(&module, "main", &[], bounded());
         let mut expected = vec![0; 512];
         expected[3..7].copy_from_slice(b"\xff;\"\\");
         let at = 7 + zeros;
@@ -52,8 +52,8 @@ fn expanding_zero_items_preserves_stack_boundaries_calls_writes_and_reversal() {
             assert_eq!(compact.static_end(), floor);
             assert_eq!(compact.static_end(), spelled.static_end());
             let options = Options { reversible: true, ..bounded() };
-            let mut a = Executor::new(&compact, entry(&compact, "main"), &[], options).expect("starts");
-            let mut b = Executor::new(&spelled, entry(&spelled, "main"), &[], options).expect("starts");
+            let mut a = common::executor(&compact, "main", &[], options);
+            let mut b = common::executor(&spelled, "main", &[], options);
             let initial = a.snapshot();
             assert_eq!(initial, b.snapshot(), "floor {floor}, alloca {size}: entry");
             let actual = a.run();

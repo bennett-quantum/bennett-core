@@ -2,8 +2,8 @@
 
 mod common;
 
-use bennett_exec::{Executor, Outcome, SitePos, Undo, WordClass, WordRole, WordWitness, classify};
-use common::{bounded, entry, load};
+use bennett_exec::{Outcome, SitePos, Undo, WordClass, WordRole, WordWitness, classify};
+use common::{bounded, load};
 
 // @main reserves 3 slots (24 bytes), @f 2 (16): its entry SP is 984.
 // Both branches overwrite cell 0 twice. The second store destroys a copy of %v, still in the same live
@@ -33,7 +33,7 @@ entry:
 #[test]
 fn additional_matching_stack_pointers_do_not_erase_a_live_slot_witness() {
     let module = load(COPY_WITH_EXTRA_MATCHES);
-    let mut executor = Executor::new(&module, entry(&module, "main"), &[], bounded()).expect("starts");
+    let mut executor = common::executor(&module, "main", &[], bounded());
     executor.measure_journal_content(true);
     assert_eq!(executor.run(), Outcome::Returned(Some(0)));
     let measurement = executor.take_journal_measurement().expect("on");
@@ -106,7 +106,7 @@ entry:
     ret 0
 }",
     );
-    let mut executor = Executor::new(&module, entry(&module, "main"), &[], bounded()).expect("starts");
+    let mut executor = common::executor(&module, "main", &[], bounded());
     executor.measure_journal_content(true);
     assert_eq!(executor.run(), Outcome::Returned(Some(0)));
     let measurement = executor.take_journal_measurement().expect("on");

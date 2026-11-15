@@ -32,23 +32,20 @@ pub mod worlds;
 pub mod worlds_executor;
 
 // Whole-world reference integration (test-only):
-// `worlds::Model::new(program, entry)` owns the immutable classical base;
-// `initial(entry,args)` constructs one complete `World`. Use `worlds::basis` or build a
-// `worlds::Superposition` (BTreeMap<World, Complex64>) with arbitrary initial complex amplitudes.
-// `run(initial, forward_rounds)` returns the complete final superposition, with `Finish` on EVERY
-// world. `step` and `undo_state` expose the unprojected state for the same finite-domain checker.
-// Measurement is an explicit boundary; `measurement_branches` gives Born weights and normalized
-// states, and `collapse` follows a chosen outcome without assuming identical seeded RNG streams.
-// The current executor adapter checks public memory, live slots (including encoded handles), every
-// frame and PC, stack, tape, outcome, widths/generations and amplitudes after every instruction.
-// It cannot compare private executor history encodings; model whole-state bijections and existing
-// private-state executor bijection tests are separate checks. When worlds lands, replace only this
-// adapter with a conversion that retains each world's private journal/marks, not a marginal over
-// registers. The mathematical model deliberately uses classical snapshots, not production records.
-//
-// Open semantics must be resolved before asserting outcomes for mismatched history shapes,
-// divergent fault/measurement sites or other unspecified changed-read rewinds. One round steps every
-// active world, finished worlds wait; the model's fault groups are equal classical state AND history
-// (today's common quantum shape). This is an explicit extension convention, not a scheduler/fault
-// scope requirement for the next implementation. The model detects failed clean inverse/replay as
-// bad_rewind per the documented interim rule. The progress handover lists the remaining questions.
+// `worlds::Model::new(program, entry)` owns immutable base memory. `World` retains
+// every classical coordinate and generous snapshot history; it is NOT production journal encoding.
+// `step`/`run` compare one-world prefixes; `run_joined` independently executes coherent
+// marked regions, waits at their rewind sites, and sums inverse paths before shared-history
+// gates/allocations. Joined rewind records replay to dynamic visits, so unequal path lengths
+// share history again. These are the two choices now decided by DESIGN.md “Worlds”.
+// `observed_reference` enumerates Born instruments through measurement and host return;
+// `assert_worlds` matches unordered complete classical/history groups, `assert_observed`
+// checks the normalized sampled world without assuming identical RNG draw consumption.
+// Public snapshots omit private journal/dead slots. `src/independent_history_tests.rs`
+// independently checks private split/merge state, dirty history, allocations, read metadata,
+// signed superpositions, injectivity and exact inverses. Model history uses snapshots so
+// it does not assert equality of private encodings between the two implementations.
+// Joined evaluation compares completed coherent regions, not tick budgets or strict-stop
+// policy. Multiple rewind sites/time remain explicitly undecided; Unaligned and WorldFault
+// are tested by direct policy probes. The optional suite adapter uses args capped at three
+// for long cost workloads; original tests still run their original arguments and limits.

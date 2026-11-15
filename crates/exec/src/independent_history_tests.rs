@@ -211,3 +211,193 @@ fn independent_checker_includes_stale_handle_fault_states_without_erasing_histor
     }
     assert_eq!(check_bijection(&source, &target, |s| images[s].clone()), Ok(64));
 }
+
+/// All private machine coordinates, including dead slots and read/split and jump metadata.
+/// Partition flags describe how a superposition is represented; the analytic linear-extension
+/// comparison sets them on its expected reading-call records when that input actually splits.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct WholeWorld {
+    state: State,
+    reads: Vec<(usize, usize, u32, bool)>,
+    jumps: Vec<usize>,
+}
+
+fn whole_worlds(e: &mut Executor<'_>) -> Vec<WholeWorld> {
+    let mut worlds = Vec::new();
+    for i in 0..e.worlds.len().max(1) {
+        if e.has_worlds() {
+            e.select_world(i);
+        }
+        let mut s = state(e);
+        s.slots = e.slots.clone();
+        while s.slots.last() == Some(&0) {
+            s.slots.pop();
+        }
+        let j = e.journal.as_ref().expect("journal");
+        worlds.push(WholeWorld {
+            state: s,
+            reads: j.reads_from(0).iter().map(|r| (r.record, r.column, r.slot.0, r.split)).collect(),
+            jumps: j.jumps().to_vec(),
+        });
+    }
+    worlds.sort();
+    worlds
+}
+
+#[test]
+fn independent_whole_state_split_merge_checker_includes_dirty_history_and_all_private_metadata() {
+    let p = bennett_ir::load(
+        r#"
+memory 512
+func @f(i2 %q, i1 %r, i2 %a)->i2 {
+entry:
+%c = icmp eq i2 %q, 2
+br %c, two, other
+two:
+%w = zext i1 %r to i2
+%x = xor i2 %q, %w
+store i2 %x, 16
+%v = add i2 %x, %a
+ret %v
+other:
+ret %q
+}
+func @main(i2 %a) {
+entry:
+%q = qalloc 2
+%r = qalloc 1
+%o = qalloc 2
+%m = mark
+%v = call @f(%q, %r, %a)
+rewind %m keep (%v -> %o)
+ret
+}
+"#,
+    )
+    .expect("private checker fixture");
+    let (mut starts, mut images, mut map) = (Vec::new(), Vec::new(), BTreeMap::new());
+    let mut total = 0;
+    for merging in [false, true] {
+        for dirty in [false, true] {
+            for a in 0..4 {
+                for byte in 0..4 {
+                    let prepare = |configs: Vec<(Vec<u64>, num_complex::Complex64)>| {
+                        let mut e = Executor::new(
+                            &p,
+                            p.function_named("main").expect("main"),
+                            &[a],
+                            Options { reversible: true, budget: Some(1000), ..Options::default() },
+                        )
+                        .expect("start");
+                        for _ in 0..3 {
+                            assert_eq!(e.step(), None);
+                        }
+                        e.memory[16] = byte;
+                        if dirty {
+                            let j = e.journal.as_mut().expect("journal");
+                            j.push_word(0xdead);
+                            j.push(Undo::Store);
+                            j.push_word(0xbeef);
+                            j.push(Undo::Jump);
+                        }
+                        e.quantum
+                            .replace_amplitudes(configs.into_iter().map(|(c, a)| (c.into_boxed_slice(), a)).collect());
+                        if !merging {
+                            assert_eq!(e.step(), None);
+                        }
+                        e
+                    };
+                    let mut basis_results = Vec::new();
+                    let advance = |e: &mut Executor<'_>| {
+                        if !merging {
+                            assert_eq!(e.step(), None);
+                            return;
+                        }
+                        for _ in 0..100 {
+                            let done =
+                                whole_worlds(e).iter().all(|w| w.state.frames.len() == 1 && w.state.frames[0].2 == 6);
+                            if done {
+                                return;
+                            }
+                            assert_eq!(e.step(), None);
+                        }
+                        panic!("merge did not finish");
+                    };
+                    for k in 0..32u64 {
+                        let config = vec![k & 3, (k >> 2) & 1, k >> 3];
+                        let mut e = prepare(vec![(config, num_complex::Complex64::new(1.0, 0.0))]);
+                        let before = whole_worlds(&mut e);
+                        advance(&mut e);
+                        let after = whole_worlds(&mut e);
+                        assert_eq!(after.len(), 1);
+                        // Independent classical result, including the unequal branch and per-world store.
+                        if merging {
+                            let f = if k & 3 == 2 { (((k & 3) ^ ((k >> 2) & 1)) + a) & 3 } else { k & 3 };
+                            assert_eq!(after[0].state.amplitudes[0].0, vec![k & 3, (k >> 2) & 1, (k >> 3) ^ f]);
+                            assert_eq!(after[0].state.memory[16], byte);
+                        }
+                        starts.push(before.clone());
+                        images.push(after.clone());
+                        map.insert(before.clone(), after.clone());
+                        basis_results.push(after[0].clone());
+                        let target = if merging { 3 } else { 4 };
+                        while e.has_worlds() || e.frames.len() != 1 || e.top().inst != target {
+                            assert_eq!(e.step_back(), Ok(true));
+                        }
+                        assert_eq!(whole_worlds(&mut e), before, "basis inverse, k={k}, dirty={dirty}");
+                    }
+                    let scale = (1.0 / 32.0f64).sqrt();
+                    let configs = (0..32u64)
+                        .map(|k| {
+                            (
+                                vec![k & 3, (k >> 2) & 1, k >> 3],
+                                num_complex::Complex64::new(if k & 1 == 0 { scale } else { -scale }, 0.0),
+                            )
+                        })
+                        .collect();
+                    let mut e = prepare(configs);
+                    let before = whole_worlds(&mut e);
+                    advance(&mut e);
+                    let after = whole_worlds(&mut e);
+                    let mut expected = BTreeMap::<WholeWorld, Vec<(Vec<u64>, i64, i64)>>::new();
+                    for (k, mut w) in basis_results.into_iter().enumerate() {
+                        let mut amp = std::mem::take(&mut w.state.amplitudes);
+                        if !merging {
+                            for read in &mut w.reads {
+                                read.3 = true;
+                            }
+                        }
+                        for (_, re, im) in &mut amp {
+                            *re = (*re as f64 * if k & 1 == 0 { scale } else { -scale }).round() as i64;
+                            *im = 0;
+                        }
+                        expected.entry(w).or_default().extend(amp);
+                    }
+                    let mut expected: Vec<_> = expected
+                        .into_iter()
+                        .map(|(mut w, mut a)| {
+                            a.sort();
+                            w.state.amplitudes = a;
+                            w
+                        })
+                        .collect();
+                    expected.sort();
+                    assert_eq!(after, expected, "linear extension dirty={dirty}, a={a}, byte={byte}");
+                    while e.has_worlds() || e.frames.len() != 1 || e.top().inst != if merging { 3 } else { 4 } {
+                        assert_eq!(e.step_back(), Ok(true));
+                    }
+                    assert_eq!(whole_worlds(&mut e), before, "superposition inverse");
+                }
+            }
+        }
+        total +=
+            check_bijection(&starts, &images, |s| map[s].clone()).expect("whole-state bijection on enumerated images");
+        starts.clear();
+        images.clear();
+        map.clear();
+    }
+    assert_eq!(total, 2048);
+    println!(
+        "2048 full private split/merge images; 64 signed 32-basis superpositions; clean/dirty histories; exact inverses"
+    );
+}

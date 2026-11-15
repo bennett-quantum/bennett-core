@@ -5,7 +5,7 @@ mod common;
 
 use bennett_exec::{Executor, Options, Outcome, SitePos, Undo, WordClass, WordRole, classify};
 use bennett_ir::ValidModule;
-use common::{allowing_region_faults, assert_same_state, bounded, entry, load};
+use common::{allowing_region_faults, assert_same_state, bounded, load};
 
 const THESIS: &str = include_str!("../../../examples/thesis.bn");
 const GROVER: &str = include_str!("../../../examples/grover.bn");
@@ -83,7 +83,7 @@ entry:
 ";
 
 fn measured<'m>(module: &'m ValidModule, name: &str, args: &[u64], keep_raw: bool) -> Executor<'m> {
-    let mut executor = Executor::new(module, entry(module, name), args, bounded()).expect("starts");
+    let mut executor = common::executor(module, name, args, bounded());
     executor.measure_journal_content(keep_raw);
     executor.run();
     executor
@@ -98,7 +98,7 @@ fn counts(positions: &[bennett_exec::ClassifiedPosition]) -> (usize, usize, usiz
 #[test]
 fn the_measurement_is_off_by_default() {
     let module = load(THESIS);
-    let mut executor = Executor::new(&module, entry(&module, "main"), &[], bounded()).expect("starts");
+    let mut executor = common::executor(&module, "main", &[], bounded());
     assert!(executor.journal_measurement().is_none());
     executor.run();
     assert!(executor.journal_measurement().is_none());
@@ -119,7 +119,7 @@ fn turning_the_measurement_on_changes_nothing() {
         (ALIAS, "main", &[][..]),
     ] {
         let module = load(text);
-        let mut off = Executor::new(&module, entry(&module, name), args, bounded()).expect("starts");
+        let mut off = common::executor(&module, name, args, bounded());
         let off_outcome = off.run();
         for keep_raw in [false, true] {
             let on = measured(&module, name, args, keep_raw);
@@ -132,11 +132,11 @@ fn turning_the_measurement_on_changes_nothing() {
     // journal is the size it is without the observer.
     let module = load(THESIS);
     let options = Options { reversible: true, ..bounded() };
-    let mut off = Executor::new(&module, entry(&module, "entangled"), &[], options).expect("starts");
+    let mut off = common::executor(&module, "entangled", &[], options);
     let at_entry = off.snapshot();
     off.run();
     let journal_bytes = off.stats().journal_bytes;
-    let mut on = Executor::new(&module, entry(&module, "entangled"), &[], options).expect("starts");
+    let mut on = common::executor(&module, "entangled", &[], options);
     on.measure_journal_content(true);
     on.run();
     assert_eq!(on.stats().journal_bytes, journal_bytes, "the program journal is untouched");
@@ -265,9 +265,9 @@ fn the_hand_program_loop() {
 #[test]
 fn a_faulting_branch_is_measured_up_to_its_fault() {
     let module = load(FAULT);
-    let mut off = Executor::new(&module, entry(&module, "main"), &[4], allowing_region_faults()).expect("starts");
+    let mut off = common::executor(&module, "main", &[4], allowing_region_faults());
     let off_outcome = off.run();
-    let mut on = Executor::new(&module, entry(&module, "main"), &[4], allowing_region_faults()).expect("starts");
+    let mut on = common::executor(&module, "main", &[4], allowing_region_faults());
     on.measure_journal_content(true);
     assert_eq!(on.run(), off_outcome);
     assert_eq!(on.stats(), off.stats());

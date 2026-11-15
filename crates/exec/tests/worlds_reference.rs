@@ -328,3 +328,14 @@ fn measurement_checks_liveness_before_becoming_a_born_boundary() {
         Some(Finish::Faulted(Fault::DanglingRegister))
     );
 }
+
+#[test]
+fn an_applied_setjmp_record_keeps_the_callers_physical_frame_depth() {
+    // DESIGN.md Non-local jumps: the buffer stores frame depth. Private memory
+    // does not remove the caller's physical activation while the function runs.
+    let p=bennett_ir::load("memory 256\nfunc @f(i1 %x)->i8 {\nentry:\n%buf = alloca 32\n%r = setjmp %buf\n%depth = load i8 %buf\nret %depth\n}\nfunc @main() {\nentry:\n%q = qalloc 1\nh %q\n%out = qalloc 8\n%fault = qalloc 4\napply @f(%q) -> %out, %fault budget 16\nret\n}").expect("physical-depth fixture");
+    compare(&p, "main", &[], 16, false);
+    let model = Model::new(&p, "main");
+    let state = model.run(basis(model.initial("main", &[])), 16);
+    assert!(state.keys().all(|w| w.quantum[1] == 1 && w.quantum[2] == 0));
+}

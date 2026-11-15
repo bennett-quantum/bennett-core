@@ -79,6 +79,10 @@ pub enum Action {
     /// The operation is read from the program position in `before`.
     Gate,
     Apply,
+    JoinedRewind {
+        start: Box<Classical>,
+        visit: usize,
+    },
     Rewind {
         start: Box<Classical>,
         count: usize,
@@ -163,8 +167,7 @@ pub struct Model<'a> {
     pub base: Vec<u8>,
     entry_result: Option<Type>,
     region: bool,
-    /// Inside a region: the positions (function, block, instruction) of the frames it runs on top of.
-    below: Vec<(FuncId, BlockId, usize)>,
+    region_depth: usize,
 }
 
 impl<'a> Model<'a> {
@@ -190,7 +193,7 @@ impl<'a> Model<'a> {
             base,
             entry_result: program.function(program.function_named(entry).expect("entry")).result,
             region: false,
-            below: Vec::new(),
+            region_depth: 0,
         }
     }
 
@@ -422,8 +425,9 @@ impl<'a> Model<'a> {
                     // docs/SYNTAX.md: the caller's function address in the high half, the position after its
                     // call in the low half (every instruction and terminator counted in block order); the
                     // outermost frame gives 0xFFFF_FFFF_0000_0000 and a level beyond it 0.
-                    let mut frames = self.below.clone();
-                    frames.extend(w.classical.frames.iter().map(|f| (f.function, f.block, f.instruction)));
+                    // A region keeps its caller's frames, so the frames below it are read directly.
+                    let frames: Vec<_> =
+                        w.classical.frames.iter().map(|f| (f.function, f.block, f.instruction)).collect();
                     let callee = frames.len() as i64 - 1 - i64::from(*level);
                     let address = if callee < 0 {
                         0
@@ -540,7 +544,7 @@ impl<'a> Model<'a> {
                 }
                 Terminator::Return(value) => {
                     let value = value.map(|v| w.integer(v)).transpose()?;
-                    if w.classical.frames.len() == 1 {
+                    if w.classical.frames.len() == self.region_depth + 1 {
                         w.classical.finish = Some(Finish::Returned(value));
                     } else {
                         let frame = w.classical.frames.pop().expect("callee");
@@ -604,6 +608,9 @@ impl<'a> Model<'a> {
         let func = FuncId((words[0] >> 32) as u32);
         let block = BlockId(words[1] as u32);
         let inst = (words[1] >> 32) as usize;
+        if depth < self.region_depth {
+            return Err(Fault::BadIndirect);
+        }
         let frame = w.classical.frames.get(depth).ok_or(Fault::BadIndirect)?;
         if frame.function != func || frame.entry_sp != words[2] {
             return Err(Fault::BadIndirect);
@@ -689,16 +696,13 @@ impl<'a> Model<'a> {
                 let mut region = w.clone();
                 region.history.clear();
                 region.quantum.clear();
-                region.classical.frames.clear();
-                region.classical.slots.clear();
                 region.classical.registers.clear();
                 region.classical.marks.clear();
                 region.classical.finish = None;
                 let mut model = Model::new(self.program, &self.program.function(*callee).name);
                 model.base = self.base.clone();
                 model.region = true;
-                model.below = self.below.clone();
-                model.below.extend(w.classical.frames.iter().map(|f| (f.function, f.block, f.instruction)));
+                model.region_depth = region.classical.frames.len();
                 let result = match model.call(&mut region, *callee, values, None) {
                     Err(f) => Finish::Faulted(f),
                     Ok(()) => model
@@ -786,6 +790,187 @@ impl<'a> Model<'a> {
         Ok(result)
     }
 
+    /// Independent barrier interpretation of Worlds: run paths to their next rewind,
+    /// wait for all paths, then undo the deepest marked region together. This uses no
+    /// production scheduler or journal encoding. It compares completed coherent programs,
+    /// not tick counts or simulator stop policies.
+    pub fn run_joined(&self, state: Superposition, limit: usize) -> Superposition {
+        self.joined_until(state, limit, None)
+    }
+
+    fn joined_until(&self, mut state: Superposition, limit: usize, stop: Option<&Frame>) -> Superposition {
+        let stopped = |w: &World| {
+            stop.is_some_and(|site| {
+                let f = w.frame();
+                (f.activation, f.block, f.instruction) == (site.activation, site.block, site.instruction)
+            })
+        };
+        for _ in 0..limit {
+            let running = state.keys().any(|w| {
+                !stopped(w)
+                    && w.classical.finish.is_none()
+                    && !matches!(self.instruction(&w.classical), Some(Inst::Rewind { .. }))
+            });
+            if running {
+                let mut next = BTreeMap::new();
+                let mut active = BTreeMap::new();
+                for (w, a) in state {
+                    if stopped(&w)
+                        || w.classical.finish.is_some()
+                        || matches!(self.instruction(&w.classical), Some(Inst::Rewind { .. }))
+                    {
+                        add(&mut next, w, a);
+                    } else {
+                        add(&mut active, w, a);
+                    }
+                }
+                for (w, a) in self.step(&active) {
+                    add(&mut next, w, a);
+                }
+                state = next;
+            } else {
+                let deepest = state
+                    .keys()
+                    .filter_map(|w| {
+                        if stopped(w) || w.classical.finish.is_some() {
+                            return None;
+                        }
+                        let Some(Inst::Rewind { mark, .. }) = self.instruction(&w.classical) else {
+                            return None;
+                        };
+                        Some(w.integer(Operand::Slot(*mark)).expect("integer mark") as usize)
+                    })
+                    .max();
+                let Some(depth) = deepest else {
+                    clean(&mut state);
+                    return state;
+                };
+                let mut cohort = BTreeMap::new();
+                let mut next = BTreeMap::new();
+                for (w, a) in state {
+                    let same = !stopped(&w)
+                        && w.classical.finish.is_none()
+                        && matches!(self.instruction(&w.classical),
+                        Some(Inst::Rewind {mark,..}) if w.integer(Operand::Slot(*mark)) == Ok(depth as u128));
+                    if same {
+                        add(&mut cohort, w, a);
+                    } else {
+                        add(&mut next, w, a);
+                    }
+                }
+                // Different rewind sites are an explicitly undecided schedule. This entry is
+                // for coherent programs whose paths join at one site.
+                let site = cohort.keys().next().expect("cohort").frame();
+                assert!(
+                    cohort.keys().all(|w| {
+                        let f = w.frame();
+                        (f.function, f.block, f.instruction, f.activation)
+                            == (site.function, site.block, site.instruction, site.activation)
+                    }),
+                    "different rewind sites require a policy probe"
+                );
+                match self.joined_rewind(&cohort, depth) {
+                    Ok(out) => {
+                        for (w, a) in out {
+                            add(&mut next, w, a);
+                        }
+                    }
+                    Err(fault) => {
+                        for (mut w, a) in cohort {
+                            w.classical.finish = Some(Finish::Faulted(fault));
+                            add(&mut next, w, a);
+                        }
+                    }
+                }
+                state = next;
+            }
+        }
+        panic!("joined reference exhausted {limit} rounds");
+    }
+
+    fn joined_rewind(&self, inputs: &Superposition, h: usize) -> Result<Superposition, Fault> {
+        let first = inputs.keys().next().expect("rewind inputs");
+        let site = first.frame().clone();
+        let mut state = BTreeMap::new();
+        let mut visit = 1;
+        for (w, &a) in inputs {
+            let Some(Inst::Rewind { mark, keep }) = self.instruction(&w.classical) else { unreachable!() };
+            // Reuse validation, including liveness and mark ownership, independently of the inverse.
+            if h == 0
+                || h > w.history.len()
+                || w.history[h - 1].action != Action::Mark
+                || !w.classical.marks.iter().any(|m| m.handle == h && m.valid && m.activation == w.frame().activation)
+                || w.history[h..].iter().any(|r| r.action == Action::Measurement)
+                || w.integer(Operand::Slot(*mark))? != h as u128
+            {
+                return Err(Fault::BadRewind);
+            }
+            visit = 1 + w.history[h..]
+                .iter()
+                .filter_map(|r| {
+                    let Action::JoinedRewind { visit, .. } = r.action else {
+                        return None;
+                    };
+                    r.before
+                        .frames
+                        .last()
+                        .filter(|f| {
+                            (f.activation, f.block, f.instruction) == (site.activation, site.block, site.instruction)
+                        })
+                        .map(|_| visit)
+                })
+                .max()
+                .unwrap_or(0);
+            let mut out = w.clone();
+            for k in keep {
+                let id = w.register(k.register)?;
+                if w.classical.registers[id].allocated_at >= h {
+                    return Err(Fault::BadRewind);
+                }
+                out.quantum[id] ^= w.integer(k.value)? as u64;
+            }
+            add(&mut state, out, a);
+        }
+        // Longest histories first: all shares meet before their common allocation/gates
+        // are undone, so the ordinary exact zero check applies to the summed state.
+        loop {
+            let longest = state.keys().map(|w| w.history.len()).max().expect("state");
+            if longest <= h {
+                break;
+            }
+            let (mut active, mut waiting) = (BTreeMap::new(), BTreeMap::new());
+            for (w, a) in state {
+                if w.history.len() == longest {
+                    add(&mut active, w, a);
+                } else {
+                    add(&mut waiting, w, a);
+                }
+            }
+            for (w, a) in self.undo_state(&active)? {
+                add(&mut waiting, w, a);
+            }
+            state = waiting;
+            clean(&mut state);
+        }
+        let mut result = BTreeMap::new();
+        for (mut w, a) in state {
+            let start = Box::new(w.classical.clone());
+            let mut before = w.classical.clone();
+            let f = before.frames.last_mut().expect("frame");
+            (f.block, f.instruction) = (site.block, site.instruction);
+            (w.frame_mut().block, w.frame_mut().instruction) = (site.block, site.instruction + 1);
+            w.history.push(Record { before, action: Action::JoinedRewind { start, visit } });
+            add(&mut result, w, a);
+        }
+        let restored = self.undo_state(&result)?;
+        if inputs.keys().chain(restored.keys()).any(|w| {
+            (inputs.get(w).copied().unwrap_or_default() - restored.get(w).copied().unwrap_or_default()).norm() > 1e-11
+        }) {
+            return Err(Fault::BadRewind);
+        }
+        Ok(result)
+    }
+
     /// Undo a complete superposition, combining inverse-gate paths BEFORE testing clean discard.
     /// A per-input check would incorrectly reject paths whose temporary amplitudes cancel.
     pub fn undo_state(&self, inputs: &Superposition) -> Result<Superposition, Fault> {
@@ -800,6 +985,36 @@ impl<'a> Model<'a> {
             for (mut w, a) in group {
                 w.history.pop();
                 add(&mut state, w, a);
+            }
+            if let Action::JoinedRewind { start, visit } = &record.action {
+                let site = record.before.frames.last().expect("rewind site");
+                let mut reset = BTreeMap::new();
+                for (mut w, a) in state {
+                    w.classical = (**start).clone();
+                    add(&mut reset, w, a);
+                }
+                let mut completed = self.joined_until(reset, 4096, Some(site));
+                for _ in 1..*visit {
+                    let w = completed.keys().next().expect("replay");
+                    let Some(Inst::Rewind { mark, .. }) = self.instruction(&w.classical) else {
+                        return Err(Fault::BadRewind);
+                    };
+                    let h = w.integer(Operand::Slot(*mark))? as usize;
+                    completed = self.joined_rewind(&completed, h)?;
+                    completed = self.joined_until(completed, 4096, Some(site));
+                }
+                let Some(Inst::Rewind { keep, .. }) = self.instruction(&record.before) else { unreachable!() };
+                for (mut w, a) in completed {
+                    let values = keep
+                        .iter()
+                        .map(|k| Ok((w.register(k.register)?, w.integer(k.value)? as u64)))
+                        .collect::<Result<Vec<_>, Fault>>()?;
+                    for (r, n) in values {
+                        w.quantum[r] ^= n;
+                    }
+                    add(&mut result, w, a);
+                }
+                continue;
             }
             if let Action::Rewind { start, count } = &record.action {
                 let mut reset = BTreeMap::new();

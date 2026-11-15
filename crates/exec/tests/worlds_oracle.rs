@@ -232,3 +232,40 @@ fn the_whole_world_reference_agrees_where_worlds_stay_in_step() {
     }
     assert_eq!((agreed, both_refused), (75, 16));
 }
+
+/// cargo test -p bennett-exec --test worlds_oracle three_gate -- --ignored --nocapture
+#[test]
+#[ignore = "729 dense conjugation probes beyond the fast two-gate pass"]
+fn three_gate_read_mismatches_match_the_independent_dense_operator() {
+    let mut counts = [0, 0];
+    for a in MIDDLE {
+        for b in MIDDLE {
+            for c in MIDDLE {
+                let middle = [a, b, c];
+                let module = bennett_ir::load(&program(&middle)).expect("valid");
+                let options = Options { budget: Some(10000), reversible: true, ..Options::default() };
+                let (outcome, executor) = run(&module, options);
+                if let Some(dense) = expected(&module) {
+                    assert_eq!(outcome, Outcome::Returned(None), "{middle:?}");
+                    assert!(executor.snapshot().worlds.is_empty());
+                    for basis in 0..32 {
+                        assert!(
+                            (executor.snapshot().quantum.amplitude(&dense.config(basis)) - dense.state[basis]).norm()
+                                < 1e-10,
+                            "{middle:?}, basis {basis}"
+                        );
+                    }
+                    counts[0] += 1;
+                } else {
+                    assert_eq!(
+                        outcome,
+                        Outcome::Stopped(RunError::WorldFault { fault: Fault::BadRewind, worlds: 4 }),
+                        "{middle:?}"
+                    );
+                    counts[1] += 1;
+                }
+            }
+        }
+    }
+    println!("729 dense three-gate cases: {} faithful, {} refused", counts[0], counts[1]);
+}
