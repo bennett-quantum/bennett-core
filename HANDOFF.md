@@ -1,12 +1,11 @@
 # HANDOFF
 
-State on 2026-11-15, evening (work resumed at about 18:45 UTC). Landed since: the musl runtime, validated on the
-three corpora with no wrong result; `zero N`; the journal-content and control-schedule measurements; the salvage
-survey; testing passes of `exit`, constructors, `zero N`, the musl boundary and the journal measurement. The complex-number helpers (`cd2d920`).
-Two review-audit findings fixed (`fe5e057`: `bennett run` printed a negative result wider than 64 bits as
-`(signed 0)`; `8b7f56c`: tests that kill the 15 executor mutants that had survived, 10 of which the front's tests
-missed too). In flight: an independent testing pass of today's floating-point work and one corpus run with musl
-linked on the final tree.
+State on 2026-11-15, end of the evening session (work resumed at about 18:45 UTC; nothing is running). Landed:
+the musl runtime, validated on the three corpora with no wrong result; `zero N`; the journal-content and
+control-schedule measurements; the salvage survey; the floating-point leftovers (128-bit conversions, `fmal`,
+`_Float16`, `__bf16`) and the complex helpers; two constructor-startup fixes; small aggregates returned as one
+integer; two review-audit fixes; and an independent testing pass by another model family of each of these. The
+last corpus run (`8bbb56c`, musl linked) has GCC 1,560 agree, c-testsuite 217, `ieee/` 64, none wrong.
 
 ## What this repository is
 
@@ -39,7 +38,8 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `9817fe0`, `c17bde9`, `08d7799` | Measurements: journal content in coherent regions; control schedules on the SQLite traces |
 | `cd2d920` | The complex multiply and divide helpers: compiler-rt 18.1.8 vendored unmodified (`rt/compiler-rt`), linked by the front where a program calls them; bit for bit with the same helpers on the hardware, NaN bits aside |
 
-Check it: `cargo test` (83 tests, about 2 s, no LLVM needed) and `front/test.sh` (127 tests; ignored by default: the full journal-content measurement and its sensitivity check, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
+Check it: `cargo test` (83 tests, about 2 s, no LLVM needed) and `front/test.sh` (132 tests; ignored by default: the two heavy journal-content runs, an extended float sweep, and
+two witnesses of named refusals that are debts (a packed 129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 With musl linked, standard output and exit status compared with native (`experiments/c-corpus/README.md`):
 GCC's C torture tests 1,560 agree, 9 refused by name, 6 named faults (programs that open files), none wrong;
@@ -182,7 +182,13 @@ alone, not as a whole corpus): GCC 1,559 agree and 10 refused with musl, if noth
    words; `ieee/` unchanged) but a cost regression from `a9ce585`, which always inlines runtime routines that
    return an aggregate: three `long double` to `__int128` conversions grow from 966 to 9,981 instructions and
    overflow a 64 KiB stack, and sixteen do not finish lowering in 120 s. Ignored witness in
-   `front/tests/tests/float_independent.rs`; a fix is in flight. `powi` on the two
+   `front/tests/tests/float_independent.rs`. Fixed in `6418e6b` (fresh names without
+   rescanning: lowering time linear in a function's size, output byte-identical) and `8bbb56c` (an aggregate of at
+   most 128 bits of integer and float fields is returned as one integer, so the inlining is gone): 1/4/16/64
+   conversion sites now take 879/897/969/1,257 lines (932/980/1,148/1,820 before `a9ce585`) and lower in about
+   0.05 s; a controlled `fmal` at `-O2` lowers with no memory writes. Its testing pass (`8cea574`, sol: 4,224
+   result words across layouts and separately optimised callers and callees, coherent and with musl) found no
+   wrong answer. `powi` on the two
    short formats is refused by name (it calls `powf` natively). Then `setjmp`/`longjmp` and the remaining intrinsics.
 6. **A SQL query as an oracle.**
 
@@ -241,6 +247,14 @@ alone, not as a whole corpus): GCC 1,559 agree and 10 refused with musl, if noth
 | Non-empty inline assembly; code without source | An emulator of the real machine, compiled as an ordinary program |
 
 ## Known weak spots
+
+- Since `8bbb56c` some `long double` programs take more steps than before `a9ce585` (GCC `960215-1` 3,863 to
+  4,052, `regstack-1` 4,145 to 4,354, c-testsuite `00204` 1,068,923 to 1,089,594; 25 other programs got
+  cheaper). The cause is not measured.
+- A small aggregate result that contains a pointer is still returned through memory, so it is refused under qubit
+  control at `-O2` (route: pack it too, after measuring what turning a pointer into an integer costs LLVM's alias
+  analysis). A packed struct of 129 bits of bitfields becomes an `i136` and is refused (route: split memory
+  operations LLVM widens past 128 bits before emission).
 
 - The region budget counts device instructions, not the source-fixed unit the North Star asks for.
 - A `_Bool` qubit costs 8 qubits.
