@@ -26,6 +26,7 @@ add_executable(bennett-front
   src/InPlace.cpp
   src/Startup.cpp
   src/SoftFloat.cpp
+  src/Complex.cpp
 )
 target_include_directories(bennett-front SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_compile_definitions(bennett-front PRIVATE ${LLVM_DEFINITIONS})
@@ -87,3 +88,27 @@ add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/float-runtime.bc"
           -o "${CMAKE_CURRENT_BINARY_DIR}/float-runtime.bc"
   DEPENDS "${interface_bitcode}" ${softfloat_bitcode} VERBATIM)
 add_custom_target(float-runtime ALL DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/float-runtime.bc")
+
+# The complex multiply and divide helpers, `complex-runtime.bc` next to bennett-front: compiler-rt's own
+# sources (rt/compiler-rt, vendored unmodified), compiled to bitcode with floating-point operations intact
+# (the front links them into the program before lowering its floating point) and linked into one file.
+set(compiler_rt "${CMAKE_CURRENT_SOURCE_DIR}/../rt/compiler-rt/compiler-rt-18.1.8/lib/builtins")
+set(complex_flags
+  -O2 -fno-vectorize -fno-slp-vectorize -ffreestanding -fno-builtin -Werror-implicit-function-declaration
+  -emit-llvm -c)
+set(complex_bitcode)
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/complex")
+foreach(name mulsc3 divsc3 muldc3 divdc3 mulxc3 divxc3)
+  set(bitcode "${CMAKE_CURRENT_BINARY_DIR}/complex/${name}.bc")
+  add_custom_command(OUTPUT "${bitcode}"
+    COMMAND "${BENNETT_CLANG}" ${complex_flags} "${compiler_rt}/${name}.c" -o "${bitcode}"
+    DEPENDS "${compiler_rt}/${name}.c" "${compiler_rt}/fp_lib.h" "${compiler_rt}/int_lib.h"
+            "${compiler_rt}/int_math.h" "${compiler_rt}/int_types.h" "${compiler_rt}/int_util.h"
+            "${compiler_rt}/int_endianness.h"
+    VERBATIM)
+  list(APPEND complex_bitcode "${bitcode}")
+endforeach()
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/complex-runtime.bc"
+  COMMAND "${BENNETT_LLVM_LINK}" ${complex_bitcode} -o "${CMAKE_CURRENT_BINARY_DIR}/complex-runtime.bc"
+  DEPENDS ${complex_bitcode} VERBATIM)
+add_custom_target(complex-runtime ALL DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/complex-runtime.bc")

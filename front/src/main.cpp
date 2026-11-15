@@ -1,9 +1,10 @@
 // bennett-front: reads LLVM bitcode (or text IR) and writes a Bennett device program.
 //
 //   bennett-front input.bc -o output.bn --region-budget N --stack-bytes N [--taint-all] [--emit-llvm file.ll]
-//                 [--float-runtime file.bc]
+//                 [--float-runtime file.bc] [--complex-runtime file.bc]
 
 #include "Abi.h"
+#include "Complex.h"
 #include "Diagnostic.h"
 #include "Emit.h"
 #include "Markers.h"
@@ -51,12 +52,17 @@ cl::opt<std::string> floatRuntime("float-runtime",
                                            "float-runtime.bc next to bennett-front, Berkeley SoftFloat 3e)"),
                                   cl::cat(category));
 
-// float-runtime.bc in the directory of this executable.
-std::string defaultFloatRuntime(const char *argv0) {
+cl::opt<std::string> complexRuntime("complex-runtime",
+                                    cl::desc("Bitcode defining the complex multiply and divide helpers (default: "
+                                             "complex-runtime.bc next to bennett-front, compiler-rt's)"),
+                                    cl::cat(category));
+
+// `name` in the directory of this executable.
+std::string besideFront(const char *argv0, const char *name) {
   static int anchor;
   SmallString<256> path(sys::fs::getMainExecutable(argv0, &anchor));
   sys::path::remove_filename(path);
-  sys::path::append(path, "float-runtime.bc");
+  sys::path::append(path, name);
   return std::string(path);
 }
 
@@ -113,8 +119,11 @@ int main(int argc, char **argv) {
   bennett::checkMarkers(*module);
   bennett::lowerStartup(*module, entryName);
   verify(*module, "after constructor/destructor startup");
-  bool softFloat =
-      bennett::lowerFloatOperations(*module, floatRuntime.empty() ? defaultFloatRuntime(argv[0]) : floatRuntime);
+  bennett::linkComplexHelpers(*module,
+                              complexRuntime.empty() ? besideFront(argv[0], "complex-runtime.bc") : complexRuntime);
+  verify(*module, "after linking the complex multiply and divide helpers");
+  bool softFloat = bennett::lowerFloatOperations(
+      *module, floatRuntime.empty() ? besideFront(argv[0], "float-runtime.bc") : floatRuntime);
   verify(*module, "after lowering floating-point operations");
   bennett::lowerVariadics(*module);
   bennett::lowerValuesInMemory(*module);

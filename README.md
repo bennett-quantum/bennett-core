@@ -10,7 +10,7 @@ runs classically, reversibly or coherently. Each piece of plumbing exists once, 
 | `cli` | `bennett run`, `bennett check` | step 2 |
 | `front` | `bennett-front` (C++, LLVM 18): bitcode with marker calls to `ir` text; taint, outlining, lowering | step 3 |
 | `opt` | optimiser and cost model | not started |
-| `rt` | runtime bitcode: floating point (Berkeley SoftFloat 3e under the libgcc names), built with `front` | step 3 |
+| `rt` | runtime bitcode: floating point (Berkeley SoftFloat 3e under the libgcc names), the complex helpers (compiler-rt), built with `front`; the C library (musl) | step 3 |
 
 ```sh
 cargo test                                   # the Rust crates, in seconds; needs no LLVM
@@ -41,7 +41,8 @@ explicit stderr fault, are in [rt/musl/README.md](rt/musl/README.md).
 
 `bennett-front` runs its own O2 pipeline, so the input need not be optimised (it must not be vectorised).
 `float`, `double` and `long double` become calls of the floating-point runtime, `target/front/float-runtime.bc` by default
-(`--float-runtime file.bc` takes any bitcode defining the libgcc soft-float names).
+(`--float-runtime file.bc` takes any bitcode defining the libgcc soft-float names). Complex products and quotients
+call compiler-rt's helpers, from `target/front/complex-runtime.bc` (`--complex-runtime file.bc`).
 The budget is the step budget of every coherent region; the stack is the memory above static data.
 Constructors and destructors wrap `main` by default; `bennett-front --entry name` chooses another automatic
 startup entry (use the same `bennett run --entry name`). A C runtime that references the standard init/fini

@@ -174,6 +174,12 @@ and utilities where they exist (`Abi.h`, `Normalise.h`):
   library's), its `softfloat_raiseFlags` does nothing, and the optimiser deletes them, so the routines write
   no memory and run under qubit control. Runtime calls on constants are evaluated after the optimiser, so a
   rotation's angle may be computed.
+- **Complex multiply and divide** (`Complex.h`): clang's calls of `__mulsc3`, `__divsc3`, `__muldc3`,
+  `__divdc3`, `__mulxc3`, `__divxc3` go to compiler-rt's own sources (`rt/compiler-rt`, vendored unmodified,
+  decided 2026-11-15), which are ordinary C on floating-point values: the helpers a program calls and does not
+  define are linked from `complex-runtime.bc` before floating point is lowered, internal, and lowered with the
+  program. `--complex-runtime` swaps them. `__divxc3` needs the C library's `logbl` (musl's calls `ilogbl`,
+  under `FENV_ACCESS`), so it is refused with the pragma.
 - **Refused by name**: `frem` and the C library's functions (`sin`, `pow`, `strtod`, and `sqrt` under the
   default `-fmath-errno`, since errno is the C library's); operations on `__float128` (moving it is fine);
   conversions to and from integers wider than 128 bits; `powi` on `_Float16` and `__bf16` (natively the C

@@ -71,6 +71,24 @@ error. **wrong**: the device reaches `abort()`/`exit(≠0)`, or `main` returns a
 exits other than 0 or 3, `bennett check` rejects its output, or `bennett run` exits other than 0, 1 or 2. **budget**:
 the 10^8-step budget ran out. **skipped**: no native reference, as above.
 
+## The programs that waited on the complex helpers (2026-11-15)
+
+After compiler-rt's complex multiply and divide helpers were vendored (`rt/compiler-rt`), only the programs
+refused for want of them were run again, with `run-all.sh` on a directory holding just them, 3 at a time,
+with musl linked (`MUSL_LIBDIR`) and without:
+
+| program | before | with musl | without the library |
+|---|---|---|---|
+| GCC `20070614-1` | refused: `__mulsc3` | agrees (3,662 steps) | agrees (1,613 steps) |
+| GCC `complex-5` | refused: `__divsc3` | agrees (3,263 steps) | agrees (1,222 steps) |
+| `ieee/` `cdivchkf` | refused: `__divsc3` (with musl: at `ilogb`) | refused at musl's `ilogb.c` (`FENV_ACCESS`) | refused: `ilogb` has no definition |
+| `ieee/` `cdivchkd`, `cdivchkld` | refused at musl's `ilogb.c`, `ilogbl.c` | unchanged | refused: `ilogb`, `ilogbl` have no definition |
+
+The three `cdivchk` programs call `ilogb` themselves. Given a test-only `ilogb` computed from the bits, all
+three abort on the device (status 134), as they do natively when built with `clang --rtlib=compiler-rt`:
+compiler-rt's division misses their accuracy bound, libgcc's (the native reference here) meets it
+(`rt/compiler-rt/README.md`, "Not libgcc").
+
 ## Results with the C library linked (musl 1.2.5, 2026-11-15)
 
 Each program is linked with the musl runtime (`rt/musl/link.py`: the program, musl's own startup and exit code,

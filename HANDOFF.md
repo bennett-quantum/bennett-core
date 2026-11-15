@@ -34,13 +34,16 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `d8050df`..`b464c0b` | The C library: musl 1.2.5 at the system-call boundary, running its own startup and exit; signals a program sends itself; stdin at end of file; an honest `fenv` |
 | `663e9fb`..`caaac7a` | Conversions between floats and 128-bit integers, `fmal`, `_Float16` and `__bf16`, each bit for bit against native (`rt/softfloat/README.md`) |
 | `9817fe0`, `c17bde9`, `08d7799` | Measurements: journal content in coherent regions; control schedules on the SQLite traces |
+| `rt/compiler-rt` | The complex multiply and divide helpers: compiler-rt 18.1.8 vendored unmodified (`rt/compiler-rt`), linked by the front where a program calls them; bit for bit with the same helpers on the hardware, NaN bits aside |
 
-Check it: `cargo test` (79 tests, about 2 s, no LLVM needed) and `front/test.sh` (120 tests; ignored by default: the full journal-content measurement and its sensitivity check, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
+Check it: `cargo test` (79 tests, about 2 s, no LLVM needed) and `front/test.sh` (123 tests; ignored by default: the full journal-content measurement and its sensitivity check, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 With musl linked, standard output and exit status compared with native (`experiments/c-corpus/README.md`):
 GCC's C torture tests 1,557 agree, 12 refused by name, 6 named faults (programs that open files), none wrong;
 c-testsuite 217 agree, 1 refused, 1 named fault, 1 over the step budget, none wrong; GCC's `ieee/` 64 agree, 3
-refused, none wrong. Without the library the same snapshot gives 1,521 / 52 refused, 151 / 68, 58 / 9.
+refused, none wrong. Without the library the same snapshot gives 1,521 / 52 refused, 151 / 68, 58 / 9. Since
+the complex helpers, the two GCC programs that waited on them agree too, with and without the library (run
+alone, not as a whole corpus): GCC 1,559 agree and 10 refused with musl, if nothing else moved.
 
 ## Decisions the maintainer took on 2026-11-13
 
@@ -86,7 +89,7 @@ refused, none wrong. Without the library the same snapshot gives 1,521 / 52 refu
   fault at exit (a call through an unprototyped pointer to a non-variadic target), and `fesetround` reporting
   success while changing nothing (a silent wrong result; non-default floating-point modes and flags now stop
   with a named fault). An independent testing pass (sol) found eight boundary wrong results; all fixed, kept in
-  `rt/musl/tests/regress/` (`rt/musl/test.py`, 22 programs). Corpora: see "What works". Refusals removed against
+  `rt/musl/tests/regress/` (`rt/musl/test.py`, 22 programs; 23 with the complex test). Corpora: see "What works". Refusals removed against
   the prediction: GCC 40 of 52 (44 predicted; left: `__mulsc3`, `__divsc3`, `setjmp`/`longjmp`, whose musl
   versions are assembly), c-testsuite 67 of 68 (66 predicted; left: a program declaring its own `strlen`), `ieee/`
   6 of 9 (9 predicted; left: three complex-division checks, refused at musl's `ilogb` `#pragma STDC FENV_ACCESS`
@@ -118,6 +121,20 @@ refused, none wrong. Without the library the same snapshot gives 1,521 / 52 refu
   live copy (unsorted lists under a binary search; no published number changes) and one slope rounded twice;
   both fixed in `613b925`.
 
+- **The complex helpers: landed** (`rt/compiler-rt/README.md`, `VENDOR.md`). compiler-rt 18.1.8's `__mulsc3`,
+  `__divsc3`, `__muldc3`, `__divdc3`, `__mulxc3`, `__divxc3`, vendored unmodified, compiled to
+  `complex-runtime.bc`, linked by the front before floating point is lowered, where the program calls them
+  without defining them (`--complex-runtime` replaces them). The `float` and `double` helpers and `__mulxc3` are
+  self-contained; `__divxc3` calls the C library's `logbl` and `scalbnl`, and musl's `logbl` calls `ilogbl`,
+  whose `FENV_ACCESS` pragma the front refuses: `__divxc3` stays refused by name (a debt, removed with the
+  constrained operations). 491,520 directed and random tuples on the device against the helpers compiled
+  natively: every non-NaN result identical; NaN results differ only in sign and payload, which LLVM leaves
+  open. Corpora (only the programs that waited): GCC `20070614-1` and `complex-5` now agree, with musl and
+  without; `ieee/` `cdivchkf`, `cdivchkd`, `cdivchkld` are still refused, at their own `ilogb`/`ilogbl` (musl's
+  `FENV_ACCESS`). Found: those three **abort natively when built with clang's own runtime**
+  (`--rtlib=compiler-rt`) and pass with libgcc, whose division is a different algorithm (it differs from
+  compiler-rt's on 12-17 % of the division tuples, last bit and sign of zeros); on the device with a test-only
+  `ilogb` they abort as well. See the question below.
 - **Constructor startup, after its independent testing pass** (`40b04b4`, Muse; `exit` and the console call held
   under every probe). It found two wrong results, both fixed in `e13a6c8` and now regression tests: at equal
   priority the device ran explicit `.init_array`/`.fini_array` contributions after the special-array entries
@@ -150,8 +167,9 @@ refused, none wrong. Without the library the same snapshot gives 1,521 / 52 refu
 4. **The front's fallback**: the program almost verbatim under marks, the documented coherent class recognised by
    its form, and the two warnings (history still entangled at a measurement or at the end; an un-run that meets a
    state its history does not match).
-5. **Floating point** is done over Berkeley SoftFloat 3e (decided 2026-11-15; `rt/softfloat/README.md`). Left:
-   the complex multiply/divide helpers (`__mulsc3`, ...; compiler-rt being vendored now) and `__float128`.
+5. **Floating point** is done over Berkeley SoftFloat 3e (decided 2026-11-15; `rt/softfloat/README.md`), the
+   complex helpers over compiler-rt (`rt/compiler-rt/README.md`). Left: `__divxc3` (musl's `ilogbl`, under
+   `FENV_ACCESS`) and `__float128`.
    Done on 2026-11-15: conversions to and from 128-bit integers (and `_BitInt` up to 128), `fmal` (over
    SoftFloat's primitives, rounding once), `_Float16` and `__bf16` (computed in `float` as the x86-64 back end
    does). Checked: every 16-bit input, all 2^32 `float` inputs of the conversions from `float`, 10^7 random
@@ -187,6 +205,12 @@ refused, none wrong. Without the library the same snapshot gives 1,521 / 52 refu
 
 ## Questions for the maintainer (2026-11-15, evening)
 
+- **Complex division: compiler-rt or libgcc?** compiler-rt's division (decided) fails GCC's three `cdivchk`
+  accuracy checks natively, which pass with libgcc, the runtime of the corpus's native reference. When the
+  `FENV_ACCESS` refusal goes they will be counted as wrong results. Keep compiler-rt and compare those against
+  a `--rtlib=compiler-rt` native build, or vendor libgcc's division (GPL with the GCC runtime exception), or
+  something else? (`rt/compiler-rt/README.md`, "Not libgcc".)
+
 - **Floating-point environment**: keep the named fault for non-default rounding modes and flags, or make them real
   through SoftFloat's state? (The float runtime lets the optimiser delete its flags today.)
 - **Exit status**: the device reports the full 32-bit `exit` value; a process status is its low 8 bits. The corpus
@@ -202,7 +226,7 @@ refused, none wrong. Without the library the same snapshot gives 1,521 / 52 refu
 | Refused today | What removes it |
 |---|---|
 | Files, clocks and the other unimplemented system calls (named faults); `setjmp`/`longjmp`; return address; a program that redeclares a library function incompatibly | Step 1 above |
-| `__float128`; `powi` on `_Float16`/`__bf16`; `#pragma STDC FENV_ACCESS`; non-default rounding modes and floating-point flags; the complex helpers | Step 5 above |
+| `__float128`; `powi` on `_Float16`/`__bf16`; `#pragma STDC FENV_ACCESS` (with it musl's `ilogb`, and so `__divxc3`, the `long double` complex division); non-default rounding modes and floating-point flags | Step 5 above |
 | A store under qubit control; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control | The journalled machine (step 3) |
 | A qubit-dependent value used by ordinary code or printed; measurement under control; a dirty discard | Channels |
 | Non-empty inline assembly; code without source | An emulator of the real machine, compiled as an ordinary program |
