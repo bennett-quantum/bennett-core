@@ -1,0 +1,22 @@
+; Negative results wider than 64 bits: `bennett run` printed `(signed 0)` for @main when it narrowed the
+; value to i64 before sign-extending it.
+memory 256
+func @main() -> i128 {
+entry:
+ret -18446744073709551616
+}
+
+func @min128() -> i128 {
+entry:
+ret -170141183460469231731687303715884105728
+}
+
+func @minus_one_i65() -> i65 {
+entry:
+ret -1
+}
+
+func @minus_one_i8() -> i8 {
+entry:
+ret -1
+}

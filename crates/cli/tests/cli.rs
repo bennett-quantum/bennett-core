@@ -80,3 +80,20 @@ fn a_region_fault_is_reported_by_name_unless_allowed() {
     assert_eq!(output.status.code(), Some(0), "no region fault: {}", stdout(&output));
     assert!(!stdout(&output).contains("region fault"));
 }
+
+#[test]
+fn a_negative_result_wider_than_64_bits_is_printed_signed() {
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/wide-negative.bn");
+    let cases = [
+        ("main", "340282366920938463444927863358058659840 (signed -18446744073709551616)"),
+        ("min128", "170141183460469231731687303715884105728 (signed -170141183460469231731687303715884105728)"),
+        ("minus_one_i65", "36893488147419103231 (signed -1)"),
+        ("minus_one_i8", "255 (signed -1)"),
+    ];
+    for (entry, expected) in cases {
+        let output = bennett(&["run", fixture, "--entry", entry]);
+        assert_eq!(output.status.code(), Some(0), "@{entry}: {}", String::from_utf8_lossy(&output.stderr));
+        let text = stdout(&output);
+        assert!(text.contains(&format!("result: {expected}\n")), "@{entry}: {text}");
+    }
+}

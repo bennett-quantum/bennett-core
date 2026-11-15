@@ -62,7 +62,7 @@ fn report_outcome(module: &ValidModule, entry: FuncId, outcome: Outcome, tape: &
         Outcome::Returned(None) => println!("result: none"),
         Outcome::Returned(Some(value)) => match module.function(entry).result {
             Some(Type::Int(width)) if width.bits() > 1 && value >> (width.bits() - 1) == 1 => {
-                let signed = value as i64 | !(width.mask() as i64);
+                let signed = (value | !width.mask()).cast_signed();
                 println!("result: {value} (signed {signed})");
             }
             _ => println!("result: {value}"),
