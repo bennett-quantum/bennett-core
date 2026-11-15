@@ -29,8 +29,11 @@ namespace bennett {
 // lowerParameterAttributes, which would drop the `byval` of a variadic argument.
 void lowerVariadics(llvm::Module &module);
 
-// Results that are aggregates (`{ i64, i64 }`, how clang returns a small struct in two registers) or
-// vectors, and parameters that are vectors (GCC's vector extensions): they go through memory. Each
+// Results that are aggregates of integer and floating-point fields of at most 128 bits in all (`{ i64, i64 }`,
+// how clang returns a small struct in two registers; SoftFloat's `extFloat80_t`) come back as one integer,
+// the fields side by side from bit 0 in order, so no memory is written and code under qubit control can
+// call such a function. Other aggregate results (with a pointer, or wider), results that are vectors, and
+// parameters that are vectors (GCC's vector extensions): they go through memory. Each
 // function that returns one takes the address of its result as a new first parameter and stores it
 // there, an aggregate field by field (padding is neither written nor read, as in registers); each call
 // allocates the result in the caller's entry block and reads it back. A vector argument is copied into

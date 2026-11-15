@@ -415,29 +415,91 @@ void forEachLeaf(Type *type, const DataLayout &layout,
 
 bool isAggregate(Type *type) { return type->isStructTy() || type->isArrayTy(); }
 
-// A result that goes through memory: an aggregate or a vector.
-bool resultInMemory(Type *type) { return isAggregate(type) || type->isVectorTy(); }
+// The widest integer a device value has.
+constexpr uint64_t widestValueBits = 128;
 
-// Whether a function of `type` passes something through memory.
-bool passesInMemory(FunctionType *type) {
-  return resultInMemory(type->getReturnType()) ||
+// The integer that carries an aggregate result whose fields are integers and floating-point values of
+// at most 128 bits in all (SoftFloat's extFloat80_t, a 128-bit integer or a small struct as clang returns
+// it on x86-64), the fields side by side from bit 0 in order; null for any other type. Pointers stay out:
+// an address turned into an integer hides from LLVM what memory a call may touch.
+IntegerType *packedResult(Type *type, const DataLayout &layout) {
+  if (!isAggregate(type)) {
+    return nullptr;
+  }
+  uint64_t bits = 0;
+  bool scalars = true;
+  forEachLeaf(type, layout, [&](const std::vector<unsigned> &, uint64_t, Type *leaf) {
+    scalars = scalars && (leaf->isIntegerTy() || leaf->isFloatingPointTy());
+    bits += layout.getTypeSizeInBits(leaf).getFixedValue();
+  });
+  if (!scalars || bits == 0 || bits > widestValueBits) {
+    return nullptr;
+  }
+  return IntegerType::get(type->getContext(), unsigned(bits));
+}
+
+// A result that goes through memory: a vector, or an aggregate that is not carried as one integer.
+bool resultInMemory(Type *type, const DataLayout &layout) {
+  return (isAggregate(type) && !packedResult(type, layout)) || type->isVectorTy();
+}
+
+// Whether a function of `type` passes something through memory: a result, or a vector parameter.
+bool usesMemory(FunctionType *type, const DataLayout &layout) {
+  return resultInMemory(type->getReturnType(), layout) ||
          std::any_of(type->param_begin(), type->param_end(), [](Type *param) { return param->isVectorTy(); });
 }
 
-// The type once results and vector parameters go through memory: a result address first, if any, and an
-// address in place of each vector.
-FunctionType *inMemory(FunctionType *type) {
+// Whether a function of `type` is rewritten: it passes something through memory or packs its result.
+bool passesInMemory(FunctionType *type, const DataLayout &layout) {
+  return usesMemory(type, layout) || isAggregate(type->getReturnType());
+}
+
+// The type once results are packed or go through memory and vector parameters go through memory: a
+// result address first, if any, and an address in place of each vector.
+FunctionType *inMemory(FunctionType *type, const DataLayout &layout) {
   Type *pointer = PointerType::get(type->getContext(), 0);
   std::vector<Type *> params;
-  bool result = resultInMemory(type->getReturnType());
+  bool result = resultInMemory(type->getReturnType(), layout);
   if (result) {
     params.push_back(pointer);
   }
   for (Type *param : type->params()) {
     params.push_back(param->isVectorTy() ? pointer : param);
   }
-  return FunctionType::get(result ? Type::getVoidTy(type->getContext()) : type->getReturnType(), params,
-                           type->isVarArg());
+  Type *returned = type->getReturnType();
+  if (result) {
+    returned = Type::getVoidTy(type->getContext());
+  } else if (IntegerType *packed = packedResult(returned, layout)) {
+    returned = packed;
+  }
+  return FunctionType::get(returned, params, type->isVarArg());
+}
+
+// `value`, an aggregate that packedResult carries, as that integer. Each field is frozen: a poison field
+// (one never set) must not make the others poison, as it does not when the fields are stored one by one.
+Value *pack(IRBuilder<> &b, Value *value, IntegerType *packed, const DataLayout &layout) {
+  Value *result = ConstantInt::get(packed, 0);
+  uint64_t at = 0;
+  forEachLeaf(value->getType(), layout, [&](const std::vector<unsigned> &indices, uint64_t, Type *leaf) {
+    unsigned bits = unsigned(layout.getTypeSizeInBits(leaf).getFixedValue());
+    Value *field = b.CreateBitCast(b.CreateFreeze(b.CreateExtractValue(value, indices)), b.getIntNTy(bits));
+    result = b.CreateOr(result, b.CreateShl(b.CreateZExt(field, packed), at));
+    at += bits;
+  });
+  return result;
+}
+
+// The aggregate of `type` that the integer `packed` carries, as pack made it.
+Value *unpack(IRBuilder<> &b, Value *packed, Type *type, const DataLayout &layout) {
+  Value *value = PoisonValue::get(type);
+  uint64_t at = 0;
+  forEachLeaf(type, layout, [&](const std::vector<unsigned> &indices, uint64_t, Type *leaf) {
+    unsigned bits = unsigned(layout.getTypeSizeInBits(leaf).getFixedValue());
+    Value *field = b.CreateBitCast(b.CreateTrunc(b.CreateLShr(packed, at), b.getIntNTy(bits)), leaf);
+    value = b.CreateInsertValue(value, field, indices);
+    at += bits;
+  });
+  return value;
 }
 
 // Stores `value` at `address`: an aggregate field by field (its padding untouched, as in registers), a
@@ -465,9 +527,12 @@ Value *loadValue(IRBuilder<> &b, Type *type, Value *address, const DataLayout &l
   return value;
 }
 
-// The attributes of a call or function of `type` once inMemory: those of the parameters that stay.
-AttributeList inMemoryAttributes(LLVMContext &context, FunctionType *type, const AttributeList &attributes) {
-  bool result = resultInMemory(type->getReturnType());
+// The attributes of a call or function of `type` once inMemory: those of the parameters that stay, and
+// those of the result if it is unchanged.
+AttributeList inMemoryAttributes(LLVMContext &context, FunctionType *type, const AttributeList &attributes,
+                                 const DataLayout &layout) {
+  bool result = resultInMemory(type->getReturnType(), layout);
+  bool changed = isAggregate(type->getReturnType()) || result;
   std::vector<AttributeSet> params;
   if (result) {
     params.push_back(AttributeSet());
@@ -475,7 +540,7 @@ AttributeList inMemoryAttributes(LLVMContext &context, FunctionType *type, const
   for (unsigned i = 0; i < type->getNumParams(); ++i) {
     params.push_back(type->getParamType(i)->isVectorTy() ? AttributeSet() : attributes.getParamAttrs(i));
   }
-  return AttributeList::get(context, attributes.getFnAttrs(), result ? AttributeSet() : attributes.getRetAttrs(),
+  return AttributeList::get(context, attributes.getFnAttrs(), changed ? AttributeSet() : attributes.getRetAttrs(),
                             params);
 }
 
@@ -487,7 +552,7 @@ void lowerCallInMemory(CallInst *call, const DataLayout &layout) {
   IRBuilder<> b(call);
   std::vector<Value *> args;
   AllocaInst *result = nullptr;
-  if (resultInMemory(type->getReturnType())) {
+  if (resultInMemory(type->getReturnType(), layout)) {
     result = entry.CreateAlloca(type->getReturnType(), nullptr, "result");
     args.push_back(result);
   }
@@ -501,14 +566,22 @@ void lowerCallInMemory(CallInst *call, const DataLayout &layout) {
     storeValue(b, arg, copy, layout);
     args.push_back(copy);
   }
-  CallInst *lowered = b.CreateCall(inMemory(type), call->getCalledOperand(), args);
-  lowered->setAttributes(inMemoryAttributes(call->getContext(), type, call->getAttributes()));
+  CallInst *lowered = b.CreateCall(inMemory(type, layout), call->getCalledOperand(), args);
+  lowered->setAttributes(inMemoryAttributes(call->getContext(), type, call->getAttributes(), layout));
   lowered->setCallingConv(call->getCallingConv());
-  lowered->setTailCallKind(CallInst::TCK_None); // the copies are in the caller's frame
   lowered->setDebugLoc(call->getDebugLoc());
-  allowArgumentMemory(lowered, ModRefInfo::ModRef);
+  if (usesMemory(type, layout)) {
+    lowered->setTailCallKind(CallInst::TCK_None); // the copies are in the caller's frame
+    allowArgumentMemory(lowered, ModRefInfo::ModRef);
+  } else {
+    lowered->setTailCallKind(call->getTailCallKind());
+  }
   if (result) {
     Value *value = loadValue(b, type->getReturnType(), result, layout);
+    value->takeName(call);
+    call->replaceAllUsesWith(value);
+  } else if (isAggregate(type->getReturnType())) {
+    Value *value = unpack(b, lowered, type->getReturnType(), layout);
     value->takeName(call);
     call->replaceAllUsesWith(value);
   } else if (!call->getType()->isVoidTy()) {
@@ -521,15 +594,18 @@ void lowerCallInMemory(CallInst *call, const DataLayout &layout) {
 void lowerDefinitionInMemory(Function *function, const DataLayout &layout) {
   FunctionType *type = function->getFunctionType();
   Function *lowered =
-      Function::Create(inMemory(type), function->getLinkage(), function->getAddressSpace(), "", function->getParent());
+      Function::Create(inMemory(type, layout), function->getLinkage(), function->getAddressSpace(), "",
+                       function->getParent());
   lowered->copyAttributesFrom(function);
-  lowered->setAttributes(inMemoryAttributes(function->getContext(), type, function->getAttributes()));
-  allowArgumentMemory(lowered, ModRefInfo::ModRef);
+  lowered->setAttributes(inMemoryAttributes(function->getContext(), type, function->getAttributes(), layout));
+  if (usesMemory(type, layout)) {
+    allowArgumentMemory(lowered, ModRefInfo::ModRef);
+  }
   lowered->setSubprogram(function->getSubprogram());
   function->setSubprogram(nullptr);
   lowered->takeName(function);
   lowered->splice(lowered->begin(), function);
-  bool inMemoryResult = resultInMemory(type->getReturnType());
+  bool inMemoryResult = resultInMemory(type->getReturnType(), layout);
   Argument *result = inMemoryResult ? lowered->getArg(0) : nullptr;
   if (result) {
     result->setName("result");
@@ -549,7 +625,8 @@ void lowerDefinitionInMemory(Function *function, const DataLayout &layout) {
     }
     ++arg;
   }
-  if (result) {
+  IntegerType *packed = packedResult(type->getReturnType(), layout);
+  if (result || packed) {
     std::vector<ReturnInst *> returns;
     for (BasicBlock &block : *lowered) {
       if (auto *ret = dyn_cast<ReturnInst>(block.getTerminator())) {
@@ -558,8 +635,13 @@ void lowerDefinitionInMemory(Function *function, const DataLayout &layout) {
     }
     for (ReturnInst *ret : returns) {
       IRBuilder<> b(ret);
-      storeValue(b, ret->getReturnValue(), result, layout);
-      b.CreateRetVoid()->setDebugLoc(ret->getDebugLoc());
+      b.SetCurrentDebugLocation(ret->getDebugLoc());
+      if (packed) {
+        b.CreateRet(pack(b, ret->getReturnValue(), packed, layout));
+      } else {
+        storeValue(b, ret->getReturnValue(), result, layout);
+        b.CreateRetVoid();
+      }
       ret->eraseFromParent();
     }
   }
@@ -574,12 +656,13 @@ void lowerValuesInMemory(Module &module) {
   std::vector<Function *> functions;
   std::vector<CallInst *> calls;
   for (Function &function : module) {
-    if (!function.isDeclaration() && passesInMemory(function.getFunctionType())) {
+    if (!function.isDeclaration() && passesInMemory(function.getFunctionType(), layout)) {
       functions.push_back(&function);
     }
     for (Instruction &inst : instructions(function)) {
       auto *call = dyn_cast<CallInst>(&inst);
-      if (!call || call->isInlineAsm() || isa<IntrinsicInst>(call) || !passesInMemory(call->getFunctionType())) {
+      if (!call || call->isInlineAsm() || isa<IntrinsicInst>(call) ||
+          !passesInMemory(call->getFunctionType(), layout)) {
         continue;
       }
       auto *callee = dyn_cast<Function>(call->getCalledOperand());

@@ -1,6 +1,5 @@
-/* Three conversion sites: aggregate-return runtime inlining increases the entry
- * frame beyond 64 KiB. This is a named resource fault, not a wrong numeric
- * answer; see the ignored integration test. */
+/* Three conversion sites within a 64 KiB device stack: inlining the runtime's
+ * aggregate-returning routines at every site once overflowed it. */
 typedef unsigned long long u64;
 volatile long double x = 0x1.23456789abcdefp64L;
 u64 result(int i) {

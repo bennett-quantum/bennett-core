@@ -115,9 +115,10 @@ to the initial values (round to nearest even, tininess after rounding as x86 det
 Linux sets x87). The flags are only ever or-ed into: `libgcc.c` supplies a `softfloat_raiseFlags` that does
 nothing, SoftFloat's direct writes to the flags are deleted by the optimiser because nothing reads them, and
 the front re-infers memory effects afterwards. A routine that returns an aggregate (SoftFloat's
-`extFloat80_t`, a 128-bit integer as C returns it on x86-64) is inlined by the front wherever it is called,
-since a device function returns one integer and an aggregate would come back through memory. So no routine
+`extFloat80_t`, a 128-bit integer as C returns it on x86-64) returns it as one integer of at most 128 bits,
+as the front does for every aggregate result that fits (`front/src/Abi.h`), not through memory. So no routine
 writes memory, and floating-point code runs in control code, under a qubit branch, and inside a coherent
-region alike (`fmal` and the 128-bit conversions were refused under qubit control at `-O2` before that). C can observe the flags and the
+region alike (`fmal` and the 128-bit conversions were refused under qubit control at `-O2` while such results
+came back through memory). C can observe the flags and the
 rounding mode only through `<fenv.h>`, which belongs to the C library; `#pragma STDC FENV_ACCESS` (constrained
 intrinsics) is refused by name.

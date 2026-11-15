@@ -142,9 +142,12 @@ and utilities where they exist (`Abi.h`, `Normalise.h`):
   16-byte-aligned struct that fits in two registers as two plain `i64`s and reads it back at a 16-byte boundary
   from the stack. Where LLVM's backend and the psABI disagree (an `i128` when one register is left) the front
   follows the psABI, which is what the callee's `va_arg` reads.
-- **Aggregate and vector results, and vector parameters**, go through memory: a result address, or the
-  address of a copy. **Vector values** are split into their elements by LLVM's Scalarizer; a bitcast between
-  a vector and an integer goes through memory first.
+- **Aggregate results of at most 128 bits of integer and floating-point fields** (`{ i64, i64 }`, how
+  clang returns a small struct in two registers; SoftFloat's `extFloat80_t`) come back as one integer, the
+  fields side by side, so code under a qubit branch can call such a function. **Other aggregate and vector
+  results, and vector parameters**, go through memory: a result address, or the address of a copy.
+  **Vector values** are split into their elements by LLVM's Scalarizer; a bitcast between a vector and an
+  integer goes through memory first.
 - **Computed goto** numbers the blocks whose address is taken and makes each `indirectbr` a `switch`, as
   LLVM's IndirectBrExpand does. **Empty inline assembly** (an optimisation barrier) is removed, its outputs
   set as the operand constraints say; any other assembly is refused.
@@ -189,7 +192,8 @@ and utilities where they exist (`Abi.h`, `Normalise.h`):
   80-bit format, is written over SoftFloat's primitives and rounded once by its own rounding, and agrees
   with glibc's; `_Float16` and `__bf16` are computed in `float` and rounded back after each operation, as
   LLVM's x86-64 back end computes them without half-precision hardware (`rt/softfloat/README.md`). A
-  runtime routine that returns an aggregate is inlined, so that no result comes back through memory.
+  runtime routine that returns an aggregate returns it as one integer, so no result comes back through
+  memory.
 
 Two things the first C programs taught:
 

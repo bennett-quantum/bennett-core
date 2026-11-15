@@ -249,6 +249,38 @@ fn fmal_wide_conversions_and_half_precision_compute_under_quantum_control() {
     }
 }
 
+/// Functions returning a small struct (`small_results_controlled.c`: `{ i64, i64 }` and `{ double, i32 }`
+/// as clang returns them) called under quantum control, against the values the native build computes. The
+/// result comes back as one integer, not through memory, which code under a qubit branch cannot write.
+#[test]
+fn small_struct_results_compute_under_quantum_control() {
+    let source = c_dir().join("small_results_controlled.c");
+    let include = format!("-I{}", root().join("front/include").display());
+    let executable = native_build_with(&source, "small_results_controlled", &["-DNATIVE", &include], &[]);
+    let output = Command::new(&executable).output().unwrap_or_else(|e| panic!("cannot run {executable:?}: {e}"));
+    assert!(output.status.success());
+    let expected: Vec<(Vec<u64>, f64)> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .enumerate()
+        .map(|(k, line)| {
+            let values: Vec<u64> =
+                line.split(' ').map(|v| v.parse().unwrap_or_else(|e| panic!("{line:?}: {e}"))).collect();
+            let q = (0..4).map(|i| (k as u64 >> i & 1) << (8 * i)).sum();
+            (vec![q, values[0], values[1]], 0.25)
+        })
+        .collect();
+    assert_eq!(expected.len(), 16);
+    for (flags, front, suffix) in [
+        (CLANG_FLAGS, &[][..], ""),
+        (CLANG_O2_FLAGS, &[][..], ".o2"),
+        (CLANG_FLAGS, &["--taint-all"][..], ".taint-all"),
+    ] {
+        let context = format!("{flags:?} {front:?}");
+        let module = lower(&source, &format!("small_results_controlled{suffix}"), flags, front);
+        assert_branches(&module, &context, "ratio", &[], &expected);
+    }
+}
+
 /// Lowering the C program `text` with `clang_flags` is refused by name, at its line, with `expected`.
 fn assert_refused(name: &str, text: &str, clang_flags: &[&str], front_flags: &[&str], expected: &str) {
     let source = write_c(name, text);

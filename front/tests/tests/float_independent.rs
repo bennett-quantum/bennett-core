@@ -144,9 +144,9 @@ fn cancellation_and_rounding_boundaries_compute_under_qubit_control() {
     }
 }
 
-/// The same program runs with a 64 KiB device stack before a9ce585 and faults after it.
+/// Three long double to __int128 conversions run with a 64 KiB device stack: the runtime routine is called,
+/// its 128-bit result returned as one integer, not inlined at every site (that overflowed the stack).
 #[test]
-#[ignore = "FT-1: aggregate-return inlining makes three conversions overflow a 64 KiB stack"]
 fn three_long_double_integer_conversions_fit_the_pre_inlining_stack() {
     compare("float_inline_stack", &[]);
 }
