@@ -1,7 +1,8 @@
 # HANDOFF
 
-State on 2026-11-15 at wind-down, `main` at `4dfb423` plus this file. Work is paused at the maintainer's request.
-Nothing is running. One job is unfinished and parked on a branch ("Stopped in flight", first item).
+State on 2026-11-15, evening: work resumed at about 18:45 UTC with jobs in flight on the musl runtime (from
+`wip/rt-musl`) and its independent testing pass, the journal-content measurement, the testing pass of `exit`, the
+console call and constructors, and the salvage survey. Code on `main` is unchanged since `4dfb423`.
 
 ## What this repository is
 
@@ -119,7 +120,7 @@ before floating point landed (`experiments/libc-probe/README.md`). The two have 
    its form, and the two warnings (history still entangled at a measurement or at the end; an un-run that meets a
    state its history does not match).
 5. **Floating point** is done over Berkeley SoftFloat 3e (decided 2026-11-15; `rt/softfloat/README.md`). Left:
-   the complex multiply/divide helpers (`__mulsc3`, ...; need the C library's `logb`/`scalbn`), `fmal`
+   the complex multiply/divide helpers (`__mulsc3`, ...; compiler-rt vendored after musl lands), `fmal`
    (SoftFloat has no 80-bit fused multiply-add), conversions to and from 128-bit integers, `_Float16`,
    `__bf16`, `__float128`. Then `setjmp`/`longjmp` and the remaining intrinsics.
 6. **A SQL query as an oracle.**
@@ -136,14 +137,18 @@ before floating point landed (`experiments/libc-probe/README.md`). The two have 
   `wip/rung4-plugin` of `bennett-plugin` for step 6; `bennett-arith` and Bennett.jl's branch-free soft-float for
   the optimiser. The archive's work that existed on one machine only was pushed there as `wip/` branches.
 
-## Open choices for the maintainer
+## Decisions the maintainer took on 2026-11-15: the two open choices
 
-- **Zero-filled data in the text form.** A program linked with musl is about 4.5 MB of text, almost all of it
-  the zero-filled arena written four bytes per byte. Either keep the grammar and write only the non-zero runs
-  plus the last static byte (the implementer's recommendation; no change to the text form), or add a compact
-  `zero N` data item (a change to the device program's text form). Neither is built.
-- **The complex-number helpers** (`__mulsc3`, `__divsc3`; 3 corpus programs): wait for musl's `logb`/`scalbn`
-  (taken provisionally), or vendor compiler-rt's helpers.
+- **Zero-filled data in the text form: a compact `zero N` data item.** The text form is not frozen, the change is
+  small, and the stack floor stays a stated fact instead of resting on a byte that looks meaningless. Scope: the
+  reader, validator and writer in `crates/ir`, the front's data emitter, `docs/SYNTAX.md`; `Module::static_end`
+  still counts a `zero` extent, so the stack floor is unchanged for every existing program. (Today a program
+  linked with musl is about 4.5 MB of text, almost all of it the zero-filled arena written four bytes per byte.)
+  It changes the text form, so it gets one independent testing pass. Not built yet.
+- **The complex-number helpers (`__mulsc3`, `__divsc3` and the double and long double versions): vendor
+  compiler-rt's sources unmodified**, as SoftFloat was, after the musl runtime has landed so that any `logb` or
+  `scalbn` they need comes from musl; checked bit for bit against native. Whether the helpers are self-contained
+  or call the maths library for some widths is not yet known. Not built yet.
 
 ## What is still refused, and what removes it
 
