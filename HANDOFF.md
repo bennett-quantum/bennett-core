@@ -41,7 +41,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (213 tests; ignored: 4 heavy reference or generated runs, the memory-cost report, 1 heavy recomputation check, 2 witnesses of wrong results; about 8 s, no LLVM needed) and `front/test.sh` (142 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (214 tests; ignored: 4 heavy reference or generated runs, the memory-cost report, 1 heavy recomputation check, 1 witness of a wrong result; about 8 s, no LLVM needed) and `front/test.sh` (142 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check that needs `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -238,7 +238,7 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
    exact structure costs about 1-5x a run on these traces, but only from observed runs.
    Independent check of both recomputation measurements (`b1454ec`, Opus) found every credited word
    sound and one completeness gap: a branch's cheap copy witness suppressed its chain context, so a
-   common circuit was never tried for mixed-witness positions. **Fixed and remeasured**: context is now
+   common circuit was never tried for mixed-witness positions. **Fixed and remeasured** (`a74b3de`): context is now
    retained for every step word in raw mode, and the formerly ignored mixed-copy witness runs normally
    with both alignment keys checked. The corrected live slopes are 0.848/0.341/0.606/0.641 and tape slopes
    0.308/0.033/0.331/0.347 (binary search/hash/B-tree/writes), exactly the checker's independent rerun.
