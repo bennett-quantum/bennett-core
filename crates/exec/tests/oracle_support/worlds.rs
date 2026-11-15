@@ -163,6 +163,8 @@ pub struct Model<'a> {
     pub base: Vec<u8>,
     entry_result: Option<Type>,
     region: bool,
+    /// Inside a region: the positions (function, block, instruction) of the frames it runs on top of.
+    below: Vec<(FuncId, BlockId, usize)>,
 }
 
 impl<'a> Model<'a> {
@@ -188,6 +190,7 @@ impl<'a> Model<'a> {
             base,
             entry_result: program.function(program.function_named(entry).expect("entry")).result,
             region: false,
+            below: Vec::new(),
         }
     }
 
@@ -415,6 +418,25 @@ impl<'a> Model<'a> {
                     result = Some(Value::Int(w.classical.sp.into()));
                 }
                 Inst::StackSave { .. } => result = Some(Value::Int(w.classical.sp.into())),
+                Inst::ReturnAddress { level, .. } => {
+                    // docs/SYNTAX.md: the caller's function address in the high half, the position after its
+                    // call in the low half (every instruction and terminator counted in block order); the
+                    // outermost frame gives 0xFFFF_FFFF_0000_0000 and a level beyond it 0.
+                    let mut frames = self.below.clone();
+                    frames.extend(w.classical.frames.iter().map(|f| (f.function, f.block, f.instruction)));
+                    let callee = frames.len() as i64 - 1 - i64::from(*level);
+                    let address = if callee < 0 {
+                        0
+                    } else if callee == 0 {
+                        0xFFFF_FFFF_0000_0000
+                    } else {
+                        let (function, block, instruction) = frames[callee as usize - 1];
+                        let blocks = &self.program.function(function).blocks;
+                        let before: usize = blocks.iter().take(block.0 as usize).map(|b| b.insts.len() + 1).sum();
+                        (u64::from(function.0) + 1) << 32 | (before + instruction + 1) as u64
+                    };
+                    result = Some(Value::Int(address.into()));
+                }
                 Inst::StackRestore { pointer } => {
                     let p = w.integer(*pointer)? as u64;
                     let ceiling =
@@ -675,6 +697,8 @@ impl<'a> Model<'a> {
                 let mut model = Model::new(self.program, &self.program.function(*callee).name);
                 model.base = self.base.clone();
                 model.region = true;
+                model.below = self.below.clone();
+                model.below.extend(w.classical.frames.iter().map(|f| (f.function, f.block, f.instruction)));
                 let result = match model.call(&mut region, *callee, values, None) {
                     Err(f) => Finish::Faulted(f),
                     Ok(()) => model

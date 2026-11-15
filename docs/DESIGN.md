@@ -422,6 +422,46 @@ value that names no valid target (`call_indirect`): the 4-bit fault code space i
 and a code of its own needs every fault register one qubit wider (a question for the maintainer,
 `HANDOFF.md`).
 
+## Return addresses (`__builtin_return_address`)
+
+What C observes of a return address (`llvm.returnaddress`) is an opaque code address: every call from one
+site gives the same one, calls from different sites different ones, and it is not null for a frame that was
+called; the number itself, and anything at a level above 0, is the machine's business (natively level 1 and
+above follow the frame-pointer chain: with frame pointers omitted, clang 18 at -O2 on x86-64 reads another
+word or crashes, and a sibling call skips a frame). The call site lives only in the executor's frames, so no
+C routine and no rewrite in the front can give it; instrumenting every call to store its site in memory would
+add a memory write to each, which a coherent region refuses, and still could not give level 1. The device has
+one instruction that reads the frames:
+
+- **`%r = retaddr N`** (an `i64`; `N` a constant) gives the code address that the frame `N` levels below the
+  current one returns to: the address of the caller's function in the high 32 bits and, in the low 32, the
+  position after the call in that function, counting every instruction and terminator in block order
+  (`docs/SYNTAX.md`). So a code address is at least 2^32: never a function's address (its index plus 1) nor,
+  below 4 GiB of memory, a data address; a call through it is `bad_indirect` and a load `out_of_bounds`, as
+  calling or reading a native return address is undefined. Calls from one site give one address, from two
+  sites two, for the same reason natively.
+- **The outermost frame** of a run, which the executor entered and no device call did, gives
+  `0xFFFF_FFFF_0000_0000`, a code address outside every function (natively it is inside the C library's
+  startup, not null). With musl linked, `main` is called by musl's startup and has an ordinary return address.
+  **A level beyond the outermost frame** gives 0 (natively unspecified; GCC's manual allows any value once
+  the top of the stack is reached).
+- **Levels above 0** follow the device's frames: the device has no frame pointers to lose and no tail calls,
+  so level `N` is always the `N`-th caller, where native code gives that only with frame pointers kept and
+  sibling calls off (the front's tests compare against such a native build). The meaning follows the optimised
+  module, as natively: LLVM may inline a function not marked `noinline`, and then its return address is its
+  caller's, on the device as natively.
+- **Un-run**: `retaddr` changes nothing but its result slot, journalled like any value; un-running restores
+  it exactly, and running again gives the same address, since the frames are restored too.
+- **In a coherent region** the region's frames sit on the run's own, so a region callee returns to its
+  `apply` and a higher level reads the frames below the region. Those are the same on every branch; the
+  region's own frames may differ between branches, and each branch reads its own. A region the front
+  outlines (`main.apply`) is a frame the native program does not have, so the address of a call made from it
+  is not the native one; it stays opaque, so nothing C defines depends on it.
+- **The journal-content observer** (`crates/exec/src/measure.rs`) does not credit a `retaddr` result as
+  recomputable from live state, which keeps its counts an upper bound.
+
+The front writes `retaddr N` for every `llvm.returnaddress(N)` in the default address space.
+
 ## Decided in code
 
 - Memory: the stack grows down from the top; data starts at address 16; address 0 is never a function (a function's

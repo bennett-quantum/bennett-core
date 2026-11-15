@@ -106,6 +106,7 @@ impl Writer<'_> {
             }
             Inst::Alloca { size, .. } => write!(self.out, "alloca {}", op(size)),
             Inst::StackSave { .. } => write!(self.out, "stacksave"),
+            Inst::ReturnAddress { level, .. } => write!(self.out, "retaddr {level}"),
             Inst::StackRestore { pointer } => write!(self.out, "stackrestore {}", op(pointer)),
             Inst::Setjmp { buffer, .. } => write!(self.out, "setjmp {}", op(buffer)),
             Inst::Call { callee, args, .. } => {

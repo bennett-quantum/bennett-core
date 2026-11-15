@@ -162,9 +162,11 @@ impl<'a> Checker<'a> {
             Inst::Compare { .. } => Some(Type::Int(Width::BIT)),
             Inst::Setjmp { .. } => Some(Type::Int(Width::JUMP_VALUE)),
             Inst::Cast { to, .. } => Some(Type::Int(*to)),
-            Inst::Alloca { .. } | Inst::FuncAddr { .. } | Inst::StackSave { .. } | Inst::Mark { .. } => {
-                Some(Type::Int(Width::WORD))
-            }
+            Inst::Alloca { .. }
+            | Inst::FuncAddr { .. }
+            | Inst::StackSave { .. }
+            | Inst::ReturnAddress { .. }
+            | Inst::Mark { .. } => Some(Type::Int(Width::WORD)),
             Inst::Qalloc { width, .. } => Some(Type::Qreg(*width)),
             Inst::Call { callee, .. } => self.call_result(site, self.module.function(*callee).result),
             Inst::CallIndirect { signature, .. } => self.call_result(site, signature.result),
@@ -272,7 +274,11 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
-            Inst::FuncAddr { .. } | Inst::Qalloc { .. } | Inst::StackSave { .. } | Inst::Mark { .. } => {}
+            Inst::FuncAddr { .. }
+            | Inst::Qalloc { .. }
+            | Inst::StackSave { .. }
+            | Inst::ReturnAddress { .. }
+            | Inst::Mark { .. } => {}
         }
     }
 

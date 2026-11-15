@@ -74,6 +74,24 @@ error. **wrong**: the device reaches `abort()`/`exit(≠0)`, or `main` returns a
 exits other than 0 or 3, `bennett check` rejects its output, or `bennett run` exits other than 0, 1 or 2. **budget**:
 the 10^8-step budget ran out. **skipped**: no native reference, as above.
 
+## The programs that waited on the return address (2026-11-15)
+
+After `llvm.returnaddress` became the device's `retaddr` (`docs/DESIGN.md`, "Return addresses"), only the
+three GCC programs refused on it were run again, with `run-one.sh` one at a time (binaries built from the job's
+tree and copied), with musl linked (`MUSL_LIBDIR`) and without the library (`rt.c`):
+
+| program | before | with musl | without the library |
+|---|---|---|---|
+| `20030323-1` | refused: `llvm.returnaddress` | agrees (2,048 steps) | agrees (1 step) |
+| `20030811-1` | refused: `llvm.returnaddress` | agrees (2,048 steps) | agrees (1 step) |
+| `pr17377` | refused: `llvm.returnaddress` | agrees (2,149 steps) | agrees, `exit(0)` (108 steps) |
+
+The same with `OPTNONE=1`: all three agree (`pr17377` without the library in 13 steps: the front's optimiser
+may inline a function clang -O0 marked `noinline` only because of `optnone`). The first two only need the
+return address to compile (their functions are never called); `pr17377` checks that one site gives one address
+across five calls. With nothing else changed, GCC with musl would be 1,567 agree and 2 refused (inline assembly
+1, an over-aligned variadic argument 1).
+
 ## The programs that waited on `setjmp` and `longjmp` (2026-11-15)
 
 After `setjmp` and `longjmp` became device instructions (`docs/DESIGN.md`, "Non-local jumps"), only the four
@@ -153,7 +171,7 @@ What still does not run, per reason:
 
 | corpus | refused or faulted | programs |
 |---|---|---:|
-| GCC | `llvm.returnaddress` (`20030323-1`, `20030811-1`, `pr17377`) | 3 |
+| GCC | `llvm.returnaddress` (`20030323-1`, `20030811-1`, `pr17377`); agree since, run alone (section above) | 3 |
 | GCC | `llvm.eh.sjlj.longjmp` (`built-in-setjmp`, `pr84521`); agree since, run alone (section above) | 2 |
 | GCC | `longjmp` (`20210505-1`), `setjmp` (`pr56982`): musl's are x86-64 assembly, not built; agree since, run alone | 2 |
 | GCC | inline assembly (`990413-2`) | 1 |

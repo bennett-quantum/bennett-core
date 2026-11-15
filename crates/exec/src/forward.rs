@@ -2,7 +2,8 @@
 //! state and journals exactly what it overwrote.
 
 use bennett_ir::{
-    BlockId, Fault, FuncId, Gate, Inst, JUMP_RECORD_BYTES, Operand, Qubit, Slot, Target, Terminator, Type, Width,
+    BlockId, ENTRY_RETURN_ADDRESS, Fault, FuncId, Gate, Inst, JUMP_RECORD_BYTES, Operand, Qubit, Slot, Target,
+    Terminator, Type, Width,
 };
 
 use crate::executor::{Executor, Frame, Halt, Outcome, SLOT_BYTES};
@@ -49,6 +50,7 @@ impl<'m> Executor<'m> {
             Inst::Store { width, value, address } => self.store(*width, self.read(value), self.read_word(address))?,
             Inst::Alloca { dst, size } => self.alloca(*dst, self.read_word(size))?,
             Inst::StackSave { dst } => self.produce(*dst, u128::from(self.stack_pointer)),
+            Inst::ReturnAddress { dst, level } => self.produce(*dst, u128::from(self.return_address(*level))),
             Inst::StackRestore { pointer } => self.stack_restore(self.read_word(pointer))?,
             Inst::Call { callee, args, .. } => self.call(*callee, args)?,
             Inst::CallIndirect { signature, target, args, .. } => {
@@ -226,6 +228,22 @@ impl<'m> Executor<'m> {
         self.record(Undo::Longjmp);
         self.advance();
         Ok(())
+    }
+
+    /// The code address the frame `level` frames below the top returns to: the position after the call in
+    /// the frame below it, [`ENTRY_RETURN_ADDRESS`] for the outermost frame, 0 beyond it. Frames below a
+    /// coherent region are read like the region's own: they are the same on every branch.
+    pub(crate) fn return_address(&self, level: u32) -> u64 {
+        let Some(callee) = (self.frames.len() - 1).checked_sub(level as usize) else {
+            return 0;
+        };
+        match callee.checked_sub(1) {
+            None => ENTRY_RETURN_ADDRESS,
+            Some(caller) => {
+                let frame = self.frames[caller];
+                self.function(frame.func).code_address_after(frame.func, frame.block, frame.inst)
+            }
+        }
     }
 
     /// Writes an instruction's result and moves on: the common end of a value instruction.

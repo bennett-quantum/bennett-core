@@ -1,0 +1,68 @@
+; Return addresses: `retaddr N` is the code address the frame N levels down returns to, the caller's
+; function address in the high 32 bits and the position after the call in the low 32. Calls from one site
+; give the same address, calls from two sites different ones; the outermost frame gives
+; 0xFFFF_FFFF_0000_0000 and a level beyond it 0. Each check sets one bit: returns 127.
+memory 1024
+
+func @here() -> i64 {
+entry:
+    %r = retaddr 0
+    ret %r
+}
+
+; One level down: where the caller of @via returns to.
+func @above() -> i64 {
+entry:
+    %r = retaddr 1
+    ret %r
+}
+
+func @via() -> i64 {
+entry:
+    %r = call @above()
+    ret %r
+}
+
+func @main() -> i64 {
+entry:
+    %a = call @here()                      ; position 0 of @main (function 3): 4 << 32 | 1
+    %b = call @here()
+    %v1 = call @via()
+    %v2 = call @via()
+    br again(i32 0, i64 0)
+again(i32 %i, i64 %prev):
+    %c = call @here()                      ; one site, two calls
+    %i1 = add i32 %i, 1
+    %last = icmp eq i32 %i1, 2
+    br %last, check(%c, %prev), again(%i1, %c)
+check(i64 %c2, i64 %c1):
+    %two_sites = icmp ne i64 %a, %b
+    %bit0 = zext i1 %two_sites to i64
+    %one_site = icmp eq i64 %c1, %c2
+    %one = zext i1 %one_site to i64
+    %bit1 = shl i64 %one, 1
+    %nonnull = icmp ne i64 %a, 0
+    %nn = zext i1 %nonnull to i64
+    %bit2 = shl i64 %nn, 2
+    %via_sites = icmp ne i64 %v1, %v2
+    %vs = zext i1 %via_sites to i64
+    %bit3 = shl i64 %vs, 3
+    %own = retaddr 0
+    %entry = icmp eq i64 %own, -4294967296
+    %en = zext i1 %entry to i64
+    %bit4 = shl i64 %en, 4
+    %beyond = retaddr 1
+    %top = icmp eq i64 %beyond, 0
+    %tp = zext i1 %top to i64
+    %bit5 = shl i64 %tp, 5
+    %exact = icmp eq i64 %a, 17179869185
+    %ex = zext i1 %exact to i64
+    %bit6 = shl i64 %ex, 6
+    %s1 = or i64 %bit0, %bit1
+    %s2 = or i64 %s1, %bit2
+    %s3 = or i64 %s2, %bit3
+    %s4 = or i64 %s3, %bit4
+    %s5 = or i64 %s4, %bit5
+    %s6 = or i64 %s5, %bit6
+    ret %s6
+}

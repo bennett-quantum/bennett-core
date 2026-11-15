@@ -771,6 +771,17 @@ void BodyWriter::call(const Instruction &inst) {
       line(slot(&inst) + " = stacksave");
       return;
     }
+    // `__builtin_return_address(N)`: the device's code address of the call the frame N levels down returns
+    // to (docs/DESIGN.md, "Return addresses"). LLVM requires a constant level.
+    if (intrinsic->getIntrinsicID() == Intrinsic::returnaddress &&
+        intrinsic->getType()->getPointerAddressSpace() == 0) {
+      const auto *level = dyn_cast<ConstantInt>(intrinsic->getArgOperand(0));
+      if (!level || level->getValue().getActiveBits() > 32) {
+        notHandled("a return address at a level that is not a 32-bit constant", &inst);
+      }
+      line(slot(&inst) + " = retaddr " + std::to_string(level->getZExtValue()));
+      return;
+    }
     if (intrinsic->getIntrinsicID() == Intrinsic::stackrestore &&
         intrinsic->getArgOperand(0)->getType()->getPointerAddressSpace() == 0) {
       line("stackrestore " + operand(intrinsic->getArgOperand(0)));

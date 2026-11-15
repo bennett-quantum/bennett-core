@@ -161,6 +161,13 @@ impl Function {
         &self.blocks[id.index()]
     }
 
+    /// The code address of the position after instruction `inst` of `block` in this function, `func`: what a
+    /// call there returns to (`retaddr`). See [`code_address`].
+    pub fn code_address_after(&self, func: FuncId, block: BlockId, inst: usize) -> u64 {
+        let before: usize = self.blocks[..block.index()].iter().map(|b| b.insts.len() + 1).sum();
+        code_address(func, (before + inst + 1) as u64)
+    }
+
     /// Whether the function's parameter and result types are exactly `signature`.
     pub fn has_signature(&self, signature: &Signature) -> bool {
         self.result == signature.result
@@ -214,6 +221,19 @@ pub struct Qubit {
 /// the frame's entry stack pointer, and the stack pointer when `setjmp` ran. It fits the smallest buffer
 /// C provides for this, the five words of `__builtin_setjmp`.
 pub const JUMP_RECORD_BYTES: u64 = 32;
+
+/// The code address of position `offset` in function `func`: the function's address in the high 32 bits and
+/// the offset in the low 32, where positions count every instruction and terminator in block order. It is at
+/// least 2^32, so never a function's address, and never the address of memory below 4 GiB. A function has
+/// fewer than 2^32 positions and a module fewer than 2^32 - 1 functions: more would need more memory than a
+/// host has.
+pub fn code_address(func: FuncId, offset: u64) -> u64 {
+    func.address() << 32 | (offset & u64::from(u32::MAX))
+}
+
+/// What `retaddr` gives for the outermost frame of a run, which the executor entered and no device call
+/// did: a code address outside every function (its high half names no function).
+pub const ENTRY_RETURN_ADDRESS: u64 = 0xFFFF_FFFF_0000_0000;
 
 /// A non-terminating instruction.
 #[derive(Clone, Debug, PartialEq)]
@@ -315,6 +335,16 @@ pub enum Inst {
         dst: Slot,
         /// The `i64` address of the record.
         buffer: Operand,
+    },
+    /// `dst = retaddr level`: the `i64` code address a call returns to ([`code_address`]), for the frame
+    /// `level` frames below the current one (0: the current frame's own return). The outermost frame of the
+    /// run gives [`ENTRY_RETURN_ADDRESS`], and a level beyond it 0. Reads only the frames. See
+    /// `docs/DESIGN.md`, "Return addresses".
+    ReturnAddress {
+        /// The `i64` code address.
+        dst: Slot,
+        /// How many frames to go down, a constant.
+        level: u32,
     },
     /// `[dst =] call @callee(args)`.
     Call {
@@ -427,6 +457,7 @@ impl Inst {
             | Inst::Load { dst, .. }
             | Inst::Alloca { dst, .. }
             | Inst::StackSave { dst }
+            | Inst::ReturnAddress { dst, .. }
             | Inst::Setjmp { dst, .. }
             | Inst::FuncAddr { dst, .. }
             | Inst::Qalloc { dst, .. }
@@ -475,7 +506,11 @@ impl Inst {
                 args.iter().for_each(operand);
             }
             Inst::Effect { byte } => operand(byte),
-            Inst::FuncAddr { .. } | Inst::Qalloc { .. } | Inst::StackSave { .. } | Inst::Mark { .. } => {}
+            Inst::FuncAddr { .. }
+            | Inst::Qalloc { .. }
+            | Inst::StackSave { .. }
+            | Inst::ReturnAddress { .. }
+            | Inst::Mark { .. } => {}
             Inst::Qfree { register } | Inst::Measure { register, .. } => operand(&Operand::Slot(*register)),
             Inst::Gate { target, controls, .. } => {
                 operand(&Operand::Slot(target.register));

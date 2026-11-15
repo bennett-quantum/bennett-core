@@ -73,6 +73,13 @@ impl<'s> Parser<'s> {
             }
             "alloca" => Inst::Alloca { dst: line.result("alloca")?, size: self.operand(scope, Width::WORD)? },
             "stacksave" => Inst::StackSave { dst: line.result("stacksave")? },
+            "retaddr" => {
+                let dst = line.result("retaddr")?;
+                let (text, offset) = self.cursor.number("a frame level")?;
+                let level =
+                    text.parse().map_err(|_| Failure { offset, kind: ReadErrorKind::BadNumber(text.to_owned()) })?;
+                Inst::ReturnAddress { dst, level }
+            }
             "stackrestore" => {
                 line.no_result("stackrestore")?;
                 Inst::StackRestore { pointer: self.operand(scope, Width::WORD)? }

@@ -399,7 +399,7 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
 
 | Refused today | What removes it |
 |---|---|
-| Files, clocks and the other unimplemented system calls (named faults); return address; a program that redeclares a library function incompatibly | Step 1 above |
+| Files, clocks and the other unimplemented system calls (named faults); a program that redeclares a library function incompatibly | Step 1 above |
 | A qubit-dependent call of a function that uses `setjmp` | The front's own effect summary of `setjmp` (writes only its buffer) when deciding what runs coherently (`docs/DESIGN.md`, "Non-local jumps") |
 | `__float128`; `powi` on `_Float16`/`__bf16`; `#pragma STDC FENV_ACCESS` (with it musl's `ilogb`, and so `__divxc3`, the `long double` complex division); non-default rounding modes and floating-point flags | Step 5 above |
 | A store under qubit control; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control | The journalled machine (step 3) |

@@ -19,6 +19,7 @@ fn raw_constant<'a>(source: &'a str, name: &str) -> &'a str {
 fn history_and_jump_fixtures_match_the_independent_world_machine() {
     let history = include_str!("history.rs");
     let jumps = include_str!("setjmp.rs");
+    let return_addresses = include_str!("retaddr.rs");
     let fixtures = [
         raw_constant(history, "RUNS"),
         raw_constant(history, "FAULTS"),
@@ -28,8 +29,11 @@ fn history_and_jump_fixtures_match_the_independent_world_machine() {
         raw_constant(jumps, "REGION"),
         raw_constant(jumps, "ESCAPE"),
         raw_constant(jumps, "REWIND"),
+        raw_constant(return_addresses, "POSITIONS"),
+        raw_constant(return_addresses, "REGION"),
         include_str!("../../../examples/history.bn"),
         include_str!("../../../examples/setjmp.bn"),
+        include_str!("../../../examples/retaddr.bn"),
     ];
     let mut runs = 0;
     let mut steps = 0;
@@ -190,6 +194,8 @@ fn all_existing_history_programs() {
             "history_unrun",
             "--test",
             "setjmp",
+            "--test",
+            "retaddr",
             "--",
             "--nocapture",
         ])

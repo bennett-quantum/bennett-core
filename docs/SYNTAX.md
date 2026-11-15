@@ -30,6 +30,7 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | [%d =] call @f(typed, ...)                  ; a qN argument to an iN parameter reads the register
             | [%d =] call_indirect fn(type, ...) [-> type] operand(typed, ...)
             | %d = setjmp operand                        ; i32 0; writes a jump record at the i64 address
+            | %d = retaddr N                             ; i64 code address the frame N levels down returns to
             | %d = faddr @f
             | effect operand                             ; one i8 to the console
             | %d = qalloc N
@@ -141,6 +142,14 @@ because the enclosing function need not return that type. When executed, its typ
 entry function's result type exactly, otherwise the named fault is `exit_type_mismatch`. A void entry cannot
 use `exit`. A successful exit has precisely the entry-return outcome, keeps output and memory, and is
 journalled for reversal. Inside `apply` it always faults with `exit_in_region`, before checking the entry type.
+
+## Return addresses
+
+`%r = retaddr N` has an `i64` result; `N` is a decimal constant up to 2^32 - 1. It gives the code address the
+frame `N` levels below the current one returns to: `(f + 1) << 32 | p`, where `f` is the index of the caller's
+function (so `f + 1` is its address) and `p` the position after the call in that function, counting from 0
+every instruction and every terminator of its blocks in order (so `p` is at least 1). The outermost frame of the
+run gives `0xFFFF_FFFF_0000_0000`, a level beyond it 0 (`docs/DESIGN.md`, "Return addresses").
 
 ## Non-local jumps
 
