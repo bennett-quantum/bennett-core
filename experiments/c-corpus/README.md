@@ -83,11 +83,13 @@ program's own `abort()` or `exit(n)` reaches musl, so a failing self-check is a 
 is 134); variants A and B build the same program, so a fault the program raises is reported as a fault. Programs whose native stdout differs between `-O0` and
 `-O2` are skipped (one GCC program). An "agrees" with output that differs from native is counted as wrong.
 
-Method: the tree at `9a1ff39` exported with `git archive`, `bennett-front` and its float runtime and the
+Method: the tree at `6da7ef6` exported with `git archive`, `bennett-front` and its float runtime and the
 release `bennett` copied from builds of the same sources, the library built from the exported tree; 6
 programs in parallel. The baseline is the same snapshot without the library. Wall time with the library:
-GCC 492 s, c-testsuite 66 s, `ieee/` 18 s (baseline 276 s, 18 s, 8 s). An earlier run at `97e1c0d`,
-before the `fenv` change (which no corpus program uses), gave the same outcome and detail for every program.
+GCC 321 s, c-testsuite 49 s, `ieee/` 14 s (baseline 276 s, 18 s, 8 s, measured before `zero N`). Two earlier
+runs of this work, before it moved onto the constructor-order change and `zero N`, gave the same outcome and
+detail for every program: one before the `fenv` change (which no corpus program uses) and one after it, whose
+step counts are also unchanged now (its wall time was GCC 492 s, c-testsuite 66 s, `ieee/` 18 s).
 
 | outcome | GCC: baseline | with musl | c-testsuite: baseline | with musl | GCC `ieee/`: baseline | with musl |
 |---|---:|---:|---:|---:|---:|---:|

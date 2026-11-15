@@ -92,7 +92,7 @@ integer-only printf/scanf patches is applied: every upstream file, including flo
 
 ## On the corpora
 
-Measured on 2026-11-15 at `9a1ff39` (`experiments/c-corpus/README.md`, "Results with the C library linked"):
+Measured on 2026-11-15 at `6da7ef6` (`experiments/c-corpus/README.md`, "Results with the C library linked"):
 on GCC's C torture tests 1,557 of 1,575 runnable programs agree with native on status and stdout, on
 c-testsuite 217 of 220, on GCC's `ieee/` 64 of 67; none is wrong and none crashes. What still does not run,
 and what removes it:
@@ -119,12 +119,12 @@ nested exit, for `malloc`/`realloc`/`calloc`/`free`, for signals raised, blocked
 a break that shrinks and grows again, and for the default floating-point environment; they check arena
 exhaustion and named faults for stderr, an unimplemented syscall, another rounding mode and a flag test.
 `tests/regress/` holds the self-checking witnesses of the independent testing pass of this boundary (each
-returns 0 natively and failed or faulted here before its fix). The 22 tests took 22 seconds with the debug
-CLI after building the library.
+returns 0 natively and failed or faulted here before its fix). The 22 tests took 13 to 20 seconds with the
+debug CLI after building the library.
 The debug CLI now reads their large data strings without overflowing its host stack.
 
-The library example produces about 4.8 MB of device text, mostly explicit zeros in the arena. No text-form
-change is implemented. The smallest proposal needs no new grammar: emit only nonzero runs plus the final static byte (even if
-zero). That last byte keeps the existing stack floor at the same address; omitting the arena outright
-would let the stack overlap it. An alternative is a compact `zero N` data item reserving a zero-filled
-extent. Neither proposal is implemented; the maintainer chooses the representation.
+The front writes zero runs of 16 bytes or more as one `zero N` data item, so the 1 MiB arena costs a
+line, not a megabyte of explicit zeros. Measured at `6da7ef6` with `link.py` and default limits: a `printf`
+hello world is 215,785 bytes of device text, and the library example (`tests/library.c`, with
+floating-point `printf`, `strtod`, `sqrt`, `sin` and `pow`) 652,468 bytes, of which 26 `zero` items reserve
+1,054,135 zero bytes; the same example was about 4.8 MB before `zero N`.
