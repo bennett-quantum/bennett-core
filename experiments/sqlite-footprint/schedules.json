@@ -1,0 +1,5711 @@
+{
+  "description": "Forward control-schedule IR instruction costs; same SQLite traces as results.md. Full-data costs and five train/test halves. Independent checks use block traces and reconstructed structural keys; no emitted circuit.",
+  "python": "3.12.3",
+  "numpy": "1.26.4",
+  "workloads": {
+    "256/arith": {
+      "schedule": {
+        "N": 256,
+        "run_mean": 3748.609375,
+        "run_max": 3909,
+        "run_min": 3555,
+        "blocks_mean": 577.13671875,
+        "blocks_max": 608,
+        "families": {
+          "0a_supersequence": {
+            "cost": 29843,
+            "steps": 5228,
+            "fail_half": [
+              6,
+              8,
+              4,
+              9,
+              2
+            ],
+            "test_branches": 128
+          },
+          "0b_step_exact": {
+            "cost": 83612,
+            "steps": 608,
+            "fail_half": [
+              79,
+              85,
+              89,
+              77,
+              77
+            ],
+            "test_branches": 128
+          },
+          "0c_all_reached_blocks": {
+            "cost": 1583232,
+            "steps": 608,
+            "reached_blocks": 404,
+            "reached_instr": 2604,
+            "fail_half": [
+              5,
+              5,
+              0,
+              2,
+              0
+            ],
+            "test_branches": 128
+          },
+          "0d_all_reached_instr": {
+            "cost": 10179036,
+            "steps": 3909,
+            "fail_half": [
+              5,
+              5,
+              0,
+              2,
+              0
+            ],
+            "test_branches": 128
+          },
+          "2a_step_interval": {
+            "cost": 121223,
+            "steps": 608,
+            "fail_half": [
+              22,
+              14,
+              14,
+              9,
+              10
+            ],
+            "test_branches": 128
+          },
+          "2b_func_interval": {
+            "cost": 111300,
+            "steps": 608,
+            "call_paths": 42,
+            "fail_half": [
+              17,
+              11,
+              11,
+              8,
+              7
+            ],
+            "test_branches": 128
+          },
+          "3a_struct_exact": {
+            "cost": 4052,
+            "steps": 634,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                1493,
+                0.368
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                634,
+                0.156
+              ],
+              [
+                "btreeBeginTrans",
+                303,
+                0.075
+              ],
+              [
+                "releaseMemArray",
+                167,
+                0.041
+              ],
+              [
+                "sqlite3VdbeHalt",
+                147,
+                0.036
+              ],
+              [
+                "getPageNormal",
+                138,
+                0.034
+              ],
+              [
+                "vdbeCommit",
+                128,
+                0.032
+              ],
+              [
+                "sqlite3_step",
+                92,
+                0.023
+              ]
+            ],
+            "fail_half": [
+              2,
+              4,
+              0,
+              2,
+              0
+            ],
+            "test_branches": 128
+          },
+          "3b_struct_instance_trip": {
+            "cost": 47340,
+            "steps": 7658,
+            "by_func": [
+              [
+                "sqlite3BtreeTableMoveto",
+                14850,
+                0.314
+              ],
+              [
+                "sqlite3VdbeExec",
+                11339,
+                0.24
+              ],
+              [
+                "btreeBeginTrans",
+                5454,
+                0.115
+              ],
+              [
+                "getPageNormal",
+                3312,
+                0.07
+              ],
+              [
+                "pcache1Fetch",
+                1584,
+                0.033
+              ],
+              [
+                "moveToChild",
+                1548,
+                0.033
+              ],
+              [
+                "allocateCursor",
+                1170,
+                0.025
+              ],
+              [
+                "btreeParseCellPtr",
+                1134,
+                0.024
+              ]
+            ],
+            "fail_half": [
+              2,
+              4,
+              0,
+              2,
+              0
+            ],
+            "test_branches": 128
+          },
+          "3c_struct_static_trip": {
+            "cost": 47340,
+            "steps": 7658,
+            "by_func": [
+              [
+                "sqlite3BtreeTableMoveto",
+                14850,
+                0.314
+              ],
+              [
+                "sqlite3VdbeExec",
+                11339,
+                0.24
+              ],
+              [
+                "btreeBeginTrans",
+                5454,
+                0.115
+              ],
+              [
+                "getPageNormal",
+                3312,
+                0.07
+              ],
+              [
+                "pcache1Fetch",
+                1584,
+                0.033
+              ],
+              [
+                "moveToChild",
+                1548,
+                0.033
+              ],
+              [
+                "allocateCursor",
+                1170,
+                0.025
+              ],
+              [
+                "btreeParseCellPtr",
+                1134,
+                0.024
+              ]
+            ],
+            "fail_half": [
+              2,
+              4,
+              0,
+              2,
+              0
+            ],
+            "test_branches": 128
+          },
+          "3d_struct_all_arms": {
+            "cost": 253055,
+            "steps": null,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                162347,
+                0.642
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                25668,
+                0.101
+              ],
+              [
+                "getPageNormal",
+                14544,
+                0.057
+              ],
+              [
+                "btreeBeginTrans",
+                12330,
+                0.049
+              ],
+              [
+                "sqlite3PagerSharedLock",
+                8136,
+                0.032
+              ],
+              [
+                "getAndInitPage",
+                4590,
+                0.018
+              ],
+              [
+                "moveToChild",
+                3312,
+                0.013
+              ],
+              [
+                "moveToRoot",
+                3258,
+                0.013
+              ]
+            ],
+            "fail_half": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "test_branches": 128
+          },
+          "4b_hybrid_exact": {
+            "cost": 45075,
+            "steps": 740,
+            "struct_cost": 1753,
+            "region_cost": 43322,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                28941,
+                0.642
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                5675,
+                0.126
+              ],
+              [
+                "btreeParseCellPtr",
+                3063,
+                0.068
+              ],
+              [
+                "getCellInfo",
+                1854,
+                0.041
+              ],
+              [
+                "getPageNormal",
+                920,
+                0.02
+              ],
+              [
+                "sqlite3MulInt64",
+                810,
+                0.018
+              ],
+              [
+                "moveToChild",
+                774,
+                0.017
+              ],
+              [
+                "pcache1Fetch",
+                440,
+                0.01
+              ]
+            ],
+            "fail_half": [
+              79,
+              85,
+              89,
+              77,
+              77
+            ],
+            "test_branches": 128
+          },
+          "4b_hybrid_interval": {
+            "cost": 75835,
+            "steps": 740,
+            "struct_cost": 1753,
+            "region_cost": 74082,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                42754,
+                0.564
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                8922,
+                0.118
+              ],
+              [
+                "getPageNormal",
+                8234,
+                0.109
+              ],
+              [
+                "pcache1Fetch",
+                3938,
+                0.052
+              ],
+              [
+                "btreeParseCellPtr",
+                3534,
+                0.047
+              ],
+              [
+                "getCellInfo",
+                2113,
+                0.028
+              ],
+              [
+                "getAndInitPage",
+                1365,
+                0.018
+              ],
+              [
+                "moveToChild",
+                1333,
+                0.018
+              ]
+            ],
+            "fail_half": [
+              22,
+              14,
+              14,
+              9,
+              10
+            ],
+            "test_branches": 128
+          },
+          "4b_hybrid_all_reached": {
+            "cost": 609395,
+            "steps": 740,
+            "struct_cost": 1753,
+            "region_cost": 607642,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                229228,
+                0.376
+              ],
+              [
+                "btreeBeginTrans",
+                118170,
+                0.194
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                65130,
+                0.107
+              ],
+              [
+                "allocateCursor",
+                25350,
+                0.042
+              ],
+              [
+                "btreeParseCellPtr",
+                24570,
+                0.04
+              ],
+              [
+                "moveToRoot",
+                22230,
+                0.036
+              ],
+              [
+                "getPageNormal",
+                17940,
+                0.029
+              ],
+              [
+                "moveToChild",
+                16770,
+                0.028
+              ]
+            ],
+            "fail_half": [
+              5,
+              5,
+              0,
+              2,
+              0
+            ],
+            "test_branches": 128
+          },
+          "4c_hybrid_exact": {
+            "cost": 45075,
+            "steps": 740,
+            "struct_cost": 1753,
+            "region_cost": 43322,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                28941,
+                0.642
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                5675,
+                0.126
+              ],
+              [
+                "btreeParseCellPtr",
+                3063,
+                0.068
+              ],
+              [
+                "getCellInfo",
+                1854,
+                0.041
+              ],
+              [
+                "getPageNormal",
+                920,
+                0.02
+              ],
+              [
+                "sqlite3MulInt64",
+                810,
+                0.018
+              ],
+              [
+                "moveToChild",
+                774,
+                0.017
+              ],
+              [
+                "pcache1Fetch",
+                440,
+                0.01
+              ]
+            ],
+            "fail_half": [
+              79,
+              85,
+              89,
+              77,
+              77
+            ],
+            "test_branches": 128
+          },
+          "4c_hybrid_interval": {
+            "cost": 75835,
+            "steps": 740,
+            "struct_cost": 1753,
+            "region_cost": 74082,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                42754,
+                0.564
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                8922,
+                0.118
+              ],
+              [
+                "getPageNormal",
+                8234,
+                0.109
+              ],
+              [
+                "pcache1Fetch",
+                3938,
+                0.052
+              ],
+              [
+                "btreeParseCellPtr",
+                3534,
+                0.047
+              ],
+              [
+                "getCellInfo",
+                2113,
+                0.028
+              ],
+              [
+                "getAndInitPage",
+                1365,
+                0.018
+              ],
+              [
+                "moveToChild",
+                1333,
+                0.018
+              ]
+            ],
+            "fail_half": [
+              22,
+              14,
+              14,
+              9,
+              10
+            ],
+            "test_branches": 128
+          },
+          "4c_hybrid_all_reached": {
+            "cost": 609395,
+            "steps": 740,
+            "struct_cost": 1753,
+            "region_cost": 607642,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                229228,
+                0.376
+              ],
+              [
+                "btreeBeginTrans",
+                118170,
+                0.194
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                65130,
+                0.107
+              ],
+              [
+                "allocateCursor",
+                25350,
+                0.042
+              ],
+              [
+                "btreeParseCellPtr",
+                24570,
+                0.04
+              ],
+              [
+                "moveToRoot",
+                22230,
+                0.036
+              ],
+              [
+                "getPageNormal",
+                17940,
+                0.029
+              ],
+              [
+                "moveToChild",
+                16770,
+                0.028
+              ]
+            ],
+            "fail_half": [
+              5,
+              5,
+              0,
+              2,
+              0
+            ],
+            "test_branches": 128
+          }
+        },
+        "static_inline": {
+          "sqlite3_step": "infinite",
+          "sqlite3_column_int64": 611,
+          "sqlite3_reset": "infinite",
+          "sqlite3_bind_int64": "infinite"
+        },
+        "region_loops": [
+          231,
+          660,
+          665
+        ],
+        "region_static": {
+          "231": {
+            "blocks": 4,
+            "instr": 17,
+            "functions": 0,
+            "indirect_call_slots": 0,
+            "total_ir_instr": 251828
+          },
+          "660": {
+            "blocks": 5568,
+            "instr": 29638,
+            "functions": 162,
+            "indirect_call_slots": 598,
+            "total_ir_instr": 251828
+          },
+          "665": {
+            "blocks": 34944,
+            "instr": 188938,
+            "functions": 845,
+            "indirect_call_slots": 1323,
+            "total_ir_instr": 251828
+          }
+        },
+        "split_seeds": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "train_branches": 128
+      },
+      "check": {
+        "N": 256,
+        "mean": 3748.609375,
+        "costs": {
+          "0b_step_exact": 83612,
+          "0c_all_reached_blocks": 1583232,
+          "0d_all_reached_instr": 10179036,
+          "2a_step_interval": 121223,
+          "0a_supersequence": 29843
+        },
+        "greedy_slots": 5228,
+        "lower_bound_cost": 4042,
+        "lower_bound_slots": 630,
+        "key_order": {
+          "keyX": {
+            "keys": 634,
+            "acyclic": true,
+            "cost": 4052,
+            "slots": 634
+          },
+          "keyN": {
+            "keys": 439,
+            "acyclic": false
+          }
+        }
+      }
+    },
+    "256/like_name": {
+      "schedule": {
+        "N": 256,
+        "run_mean": 3567.2734375,
+        "run_max": 3907,
+        "run_min": 3373,
+        "blocks_mean": 566.640625,
+        "blocks_max": 630,
+        "families": {
+          "0a_supersequence": {
+            "cost": 23079,
+            "steps": 4169,
+            "fail_half": [
+              5,
+              4,
+              1,
+              7,
+              2
+            ],
+            "test_branches": 128
+          },
+          "0b_step_exact": {
+            "cost": 100789,
+            "steps": 630,
+            "fail_half": [
+              67,
+              75,
+              61,
+              59,
+              48
+            ],
+            "test_branches": 128
+          },
+          "0c_all_reached_blocks": {
+            "cost": 1748250,
+            "steps": 630,
+            "reached_blocks": 438,
+            "reached_instr": 2775,
+            "fail_half": [
+              2,
+              2,
+              2,
+              2,
+              0
+            ],
+            "test_branches": 128
+          },
+          "0d_all_reached_instr": {
+            "cost": 10841925,
+            "steps": 3907,
+            "fail_half": [
+              2,
+              2,
+              2,
+              2,
+              0
+            ],
+            "test_branches": 128
+          },
+          "2a_step_interval": {
+            "cost": 147604,
+            "steps": 630,
+            "fail_half": [
+              20,
+              12,
+              13,
+              9,
+              5
+            ],
+            "test_branches": 128
+          },
+          "2b_func_interval": {
+            "cost": 143380,
+            "steps": 630,
+            "call_paths": 46,
+            "fail_half": [
+              11,
+              4,
+              10,
+              5,
+              2
+            ],
+            "test_branches": 128
+          },
+          "3a_struct_exact": {
+            "cost": 4151,
+            "steps": 681,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                1037,
+                0.25
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                634,
+                0.153
+              ],
+              [
+                "patternCompare",
+                462,
+                0.111
+              ],
+              [
+                "btreeBeginTrans",
+                303,
+                0.073
+              ],
+              [
+                "sqlite3VdbeHalt",
+                147,
+                0.035
+              ],
+              [
+                "getPageNormal",
+                138,
+                0.033
+              ],
+              [
+                "vdbeCommit",
+                128,
+                0.031
+              ],
+              [
+                "releaseMemArray",
+                118,
+                0.028
+              ]
+            ],
+            "fail_half": [
+              2,
+              4,
+              2,
+              2,
+              0
+            ],
+            "test_branches": 128
+          },
+          "3b_struct_instance_trip": {
+            "cost": 36114,
+            "steps": 6200,
+            "by_func": [
+              [
+                "sqlite3BtreeTableMoveto",
+                8250,
+                0.228
+              ],
+              [
+                "patternCompare",
+                8100,
+                0.224
+              ],
+              [
+                "sqlite3VdbeExec",
+                6077,
+                0.168
+              ],
+              [
+                "btreeBeginTrans",
+                3030,
+                0.084
+              ],
+              [
+                "getPageNormal",
+                1840,
+                0.051
+              ],
+              [
+                "pcache1Fetch",
+                880,
+                0.024
+              ],
+              [
+                "moveToChild",
+                860,
+                0.024
+              ],
+              [
+                "likeFunc",
+                840,
+                0.023
+              ]
+            ],
+            "fail_half": [
+              2,
+              2,
+              0,
+              2,
+              0
+            ],
+            "test_branches": 128
+          },
+          "3c_struct_static_trip": {
+            "cost": 36294,
+            "steps": 6240,
+            "by_func": [
+              [
+                "patternCompare",
+                8280,
+                0.228
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                8250,
+                0.227
+              ],
+              [
+                "sqlite3VdbeExec",
+                6077,
+                0.167
+              ],
+              [
+                "btreeBeginTrans",
+                3030,
+                0.083
+              ],
+              [
+                "getPageNormal",
+                1840,
+                0.051
+              ],
+              [
+                "pcache1Fetch",
+                880,
+                0.024
+              ],
+              [
+                "moveToChild",
+                860,
+                0.024
+              ],
+              [
+                "likeFunc",
+                840,
+                0.023
+              ]
+            ],
+            "fail_half": [
+              2,
+              2,
+              0,
+              2,
+              0
+            ],
+            "test_branches": 128
+          },
+          "3d_struct_all_arms": {
+            "cost": 184726,
+            "steps": null,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                91511,
+                0.495
+              ],
+              [
+                "patternCompare",
+                35960,
+                0.195
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                14260,
+                0.077
+              ],
+              [
+                "getPageNormal",
+                8080,
+                0.044
+              ],
+              [
+                "btreeBeginTrans",
+                6850,
+                0.037
+              ],
+              [
+                "sqlite3PagerSharedLock",
+                4520,
+                0.024
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                2600,
+                0.014
+              ],
+              [
+                "getAndInitPage",
+                2550,
+                0.014
+              ]
+            ],
+            "fail_half": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "test_branches": 128
+          },
+          "4b_hybrid_exact": {
+            "cost": 48839,
+            "steps": 732,
+            "struct_cost": 1613,
+            "region_cost": 47226,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                17025,
+                0.349
+              ],
+              [
+                "patternCompare",
+                8076,
+                0.165
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                5675,
+                0.116
+              ],
+              [
+                "likeFunc",
+                4612,
+                0.094
+              ],
+              [
+                "btreeParseCellPtr",
+                3063,
+                0.063
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                2862,
+                0.059
+              ],
+              [
+                "getCellInfo",
+                1854,
+                0.038
+              ],
+              [
+                "sqlite3DbMallocRawNN",
+                1100,
+                0.023
+              ]
+            ],
+            "fail_half": [
+              67,
+              75,
+              61,
+              59,
+              48
+            ],
+            "test_branches": 128
+          },
+          "4b_hybrid_interval": {
+            "cost": 76663,
+            "steps": 732,
+            "struct_cost": 1613,
+            "region_cost": 75050,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                23498,
+                0.307
+              ],
+              [
+                "patternCompare",
+                10633,
+                0.139
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                8922,
+                0.116
+              ],
+              [
+                "getPageNormal",
+                7774,
+                0.101
+              ],
+              [
+                "likeFunc",
+                5284,
+                0.069
+              ],
+              [
+                "pcache1Fetch",
+                3718,
+                0.048
+              ],
+              [
+                "btreeParseCellPtr",
+                3534,
+                0.046
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                3233,
+                0.042
+              ]
+            ],
+            "fail_half": [
+              20,
+              12,
+              13,
+              9,
+              5
+            ],
+            "test_branches": 128
+          },
+          "4b_hybrid_all_reached": {
+            "cost": 729585,
+            "steps": 732,
+            "struct_cost": 1613,
+            "region_cost": 727972,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                210454,
+                0.288
+              ],
+              [
+                "btreeBeginTrans",
+                127866,
+                0.175
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                70474,
+                0.097
+              ],
+              [
+                "patternCompare",
+                51906,
+                0.071
+              ],
+              [
+                "likeFunc",
+                35448,
+                0.049
+              ],
+              [
+                "allocateCursor",
+                27430,
+                0.038
+              ],
+              [
+                "btreeParseCellPtr",
+                26586,
+                0.036
+              ],
+              [
+                "moveToRoot",
+                24054,
+                0.033
+              ]
+            ],
+            "fail_half": [
+              2,
+              2,
+              2,
+              2,
+              0
+            ],
+            "test_branches": 128
+          },
+          "4c_hybrid_exact": {
+            "cost": 48839,
+            "steps": 732,
+            "struct_cost": 1613,
+            "region_cost": 47226,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                17025,
+                0.349
+              ],
+              [
+                "patternCompare",
+                8076,
+                0.165
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                5675,
+                0.116
+              ],
+              [
+                "likeFunc",
+                4612,
+                0.094
+              ],
+              [
+                "btreeParseCellPtr",
+                3063,
+                0.063
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                2862,
+                0.059
+              ],
+              [
+                "getCellInfo",
+                1854,
+                0.038
+              ],
+              [
+                "sqlite3DbMallocRawNN",
+                1100,
+                0.023
+              ]
+            ],
+            "fail_half": [
+              67,
+              75,
+              61,
+              59,
+              48
+            ],
+            "test_branches": 128
+          },
+          "4c_hybrid_interval": {
+            "cost": 76663,
+            "steps": 732,
+            "struct_cost": 1613,
+            "region_cost": 75050,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                23498,
+                0.307
+              ],
+              [
+                "patternCompare",
+                10633,
+                0.139
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                8922,
+                0.116
+              ],
+              [
+                "getPageNormal",
+                7774,
+                0.101
+              ],
+              [
+                "likeFunc",
+                5284,
+                0.069
+              ],
+              [
+                "pcache1Fetch",
+                3718,
+                0.048
+              ],
+              [
+                "btreeParseCellPtr",
+                3534,
+                0.046
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                3233,
+                0.042
+              ]
+            ],
+            "fail_half": [
+              20,
+              12,
+              13,
+              9,
+              5
+            ],
+            "test_branches": 128
+          },
+          "4c_hybrid_all_reached": {
+            "cost": 729585,
+            "steps": 732,
+            "struct_cost": 1613,
+            "region_cost": 727972,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                210454,
+                0.288
+              ],
+              [
+                "btreeBeginTrans",
+                127866,
+                0.175
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                70474,
+                0.097
+              ],
+              [
+                "patternCompare",
+                51906,
+                0.071
+              ],
+              [
+                "likeFunc",
+                35448,
+                0.049
+              ],
+              [
+                "allocateCursor",
+                27430,
+                0.038
+              ],
+              [
+                "btreeParseCellPtr",
+                26586,
+                0.036
+              ],
+              [
+                "moveToRoot",
+                24054,
+                0.033
+              ]
+            ],
+            "fail_half": [
+              2,
+              2,
+              2,
+              2,
+              0
+            ],
+            "test_branches": 128
+          }
+        },
+        "static_inline": {
+          "sqlite3_step": "infinite",
+          "sqlite3_column_int64": 611,
+          "sqlite3_reset": "infinite",
+          "sqlite3_bind_int64": "infinite"
+        },
+        "region_loops": [
+          231,
+          660,
+          665
+        ],
+        "region_static": {
+          "231": {
+            "blocks": 4,
+            "instr": 17,
+            "functions": 0,
+            "indirect_call_slots": 0,
+            "total_ir_instr": 251828
+          },
+          "660": {
+            "blocks": 5568,
+            "instr": 29638,
+            "functions": 162,
+            "indirect_call_slots": 598,
+            "total_ir_instr": 251828
+          },
+          "665": {
+            "blocks": 34944,
+            "instr": 188938,
+            "functions": 845,
+            "indirect_call_slots": 1323,
+            "total_ir_instr": 251828
+          }
+        },
+        "split_seeds": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "train_branches": 128
+      },
+      "check": {
+        "N": 256,
+        "mean": 3567.2734375,
+        "costs": {
+          "0b_step_exact": 100789,
+          "0c_all_reached_blocks": 1748250,
+          "0d_all_reached_instr": 10841925,
+          "2a_step_interval": 147604,
+          "0a_supersequence": 23079
+        },
+        "greedy_slots": 4169,
+        "lower_bound_cost": 4085,
+        "lower_bound_slots": 664,
+        "key_order": {
+          "keyX": {
+            "keys": 681,
+            "acyclic": true,
+            "cost": 4151,
+            "slots": 681
+          },
+          "keyN": {
+            "keys": 486,
+            "acyclic": false
+          }
+        }
+      }
+    },
+    "256/like_note": {
+      "schedule": {
+        "N": 256,
+        "run_mean": 4142.44140625,
+        "run_max": 18616,
+        "run_min": 3427,
+        "blocks_mean": 673.94140625,
+        "blocks_max": 3356,
+        "families": {
+          "0a_supersequence": {
+            "cost": 51198,
+            "steps": 9591,
+            "fail_half": [
+              10,
+              3,
+              5,
+              11,
+              2
+            ],
+            "test_branches": 128
+          },
+          "0b_step_exact": {
+            "cost": 219023,
+            "steps": 3356,
+            "fail_half": [
+              108,
+              110,
+              109,
+              109,
+              108
+            ],
+            "test_branches": 128
+          },
+          "0c_all_reached_blocks": {
+            "cost": 12178924,
+            "steps": 3356,
+            "reached_blocks": 590,
+            "reached_instr": 3629,
+            "fail_half": [
+              7,
+              3,
+              0,
+              5,
+              0
+            ],
+            "test_branches": 128
+          },
+          "0d_all_reached_instr": {
+            "cost": 67557464,
+            "steps": 18616,
+            "fail_half": [
+              7,
+              3,
+              0,
+              5,
+              0
+            ],
+            "test_branches": 128
+          },
+          "2a_step_interval": {
+            "cost": 2868418,
+            "steps": 3356,
+            "fail_half": [
+              21,
+              15,
+              15,
+              11,
+              9
+            ],
+            "test_branches": 128
+          },
+          "2b_func_interval": {
+            "cost": 3127967,
+            "steps": 5815,
+            "call_paths": 78,
+            "fail_half": [
+              13,
+              10,
+              10,
+              7,
+              5
+            ],
+            "test_branches": 128
+          },
+          "3a_struct_exact": {
+            "cost": 20087,
+            "steps": 3664,
+            "by_func": [
+              [
+                "patternCompare",
+                14794,
+                0.736
+              ],
+              [
+                "sqlite3VdbeExec",
+                1095,
+                0.055
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                634,
+                0.032
+              ],
+              [
+                "accessPayload",
+                306,
+                0.015
+              ],
+              [
+                "btreeBeginTrans",
+                303,
+                0.015
+              ],
+              [
+                "getPageNormal",
+                230,
+                0.011
+              ],
+              [
+                "memsys5Malloc",
+                191,
+                0.01
+              ],
+              [
+                "memsys5Free",
+                187,
+                0.009
+              ]
+            ],
+            "fail_half": [
+              12,
+              9,
+              5,
+              10,
+              2
+            ],
+            "test_branches": 128
+          },
+          "3b_struct_instance_trip": {
+            "cost": 319387,
+            "steps": 63989,
+            "by_func": [
+              [
+                "patternCompare",
+                276740,
+                0.866
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                8250,
+                0.026
+              ],
+              [
+                "sqlite3VdbeExec",
+                7177,
+                0.022
+              ],
+              [
+                "accessPayload",
+                3190,
+                0.01
+              ],
+              [
+                "btreeBeginTrans",
+                3030,
+                0.009
+              ],
+              [
+                "getPageNormal",
+                2760,
+                0.009
+              ],
+              [
+                "memsys5Malloc",
+                1950,
+                0.006
+              ],
+              [
+                "sqlite3GetVarint32",
+                1450,
+                0.005
+              ]
+            ],
+            "fail_half": [
+              7,
+              3,
+              0,
+              5,
+              0
+            ],
+            "test_branches": 128
+          },
+          "3c_struct_static_trip": {
+            "cost": 319635,
+            "steps": 64042,
+            "by_func": [
+              [
+                "patternCompare",
+                276920,
+                0.866
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                8250,
+                0.026
+              ],
+              [
+                "sqlite3VdbeExec",
+                7177,
+                0.022
+              ],
+              [
+                "accessPayload",
+                3190,
+                0.01
+              ],
+              [
+                "btreeBeginTrans",
+                3030,
+                0.009
+              ],
+              [
+                "getPageNormal",
+                2760,
+                0.009
+              ],
+              [
+                "memsys5Malloc",
+                2000,
+                0.006
+              ],
+              [
+                "sqlite3GetVarint32",
+                1450,
+                0.005
+              ]
+            ],
+            "fail_half": [
+              7,
+              3,
+              0,
+              5,
+              0
+            ],
+            "test_branches": 128
+          },
+          "3d_struct_all_arms": {
+            "cost": 1323471,
+            "steps": null,
+            "by_func": [
+              [
+                "patternCompare",
+                1141800,
+                0.863
+              ],
+              [
+                "sqlite3VdbeExec",
+                91961,
+                0.069
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                14260,
+                0.011
+              ],
+              [
+                "getPageNormal",
+                12120,
+                0.009
+              ],
+              [
+                "accessPayload",
+                7570,
+                0.006
+              ],
+              [
+                "btreeBeginTrans",
+                6850,
+                0.005
+              ],
+              [
+                "sqlite3GetVarint32",
+                4850,
+                0.004
+              ],
+              [
+                "sqlite3PagerSharedLock",
+                4520,
+                0.003
+              ]
+            ],
+            "fail_half": [
+              5,
+              1,
+              0,
+              3,
+              0
+            ],
+            "test_branches": 128
+          },
+          "4b_hybrid_exact": {
+            "cost": 98600,
+            "steps": 3646,
+            "struct_cost": 3006,
+            "region_cost": 95594,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "patternCompare",
+                45460,
+                0.461
+              ],
+              [
+                "sqlite3VdbeExec",
+                20415,
+                0.207
+              ],
+              [
+                "likeFunc",
+                5788,
+                0.059
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                5675,
+                0.058
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                3322,
+                0.034
+              ],
+              [
+                "btreeParseCellPtr",
+                3063,
+                0.031
+              ],
+              [
+                "getCellInfo",
+                1909,
+                0.019
+              ],
+              [
+                "sqlite3DbMallocRawNN",
+                1452,
+                0.015
+              ]
+            ],
+            "fail_half": [
+              106,
+              108,
+              106,
+              105,
+              107
+            ],
+            "test_branches": 128
+          },
+          "4b_hybrid_interval": {
+            "cost": 436806,
+            "steps": 3646,
+            "struct_cost": 3006,
+            "region_cost": 433800,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "patternCompare",
+                242860,
+                0.556
+              ],
+              [
+                "sqlite3VdbeExec",
+                82717,
+                0.189
+              ],
+              [
+                "likeFunc",
+                27028,
+                0.062
+              ],
+              [
+                "getPageNormal",
+                18676,
+                0.043
+              ],
+              [
+                "pcache1Fetch",
+                8932,
+                0.02
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                8922,
+                0.02
+              ],
+              [
+                "accessPayload",
+                7573,
+                0.017
+              ],
+              [
+                "sqlite3DbMallocRawNN",
+                5267,
+                0.012
+              ]
+            ],
+            "fail_half": [
+              20,
+              13,
+              14,
+              10,
+              7
+            ],
+            "test_branches": 128
+          },
+          "4b_hybrid_all_reached": {
+            "cost": 7422544,
+            "steps": 3646,
+            "struct_cost": 3006,
+            "region_cost": 7419538,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                1643901,
+                0.221
+              ],
+              [
+                "btreeBeginTrans",
+                941421,
+                0.127
+              ],
+              [
+                "accessPayload",
+                699075,
+                0.094
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                518869,
+                0.07
+              ],
+              [
+                "patternCompare",
+                382161,
+                0.051
+              ],
+              [
+                "vdbeColumnFromOverflow",
+                301379,
+                0.041
+              ],
+              [
+                "memsys5Malloc",
+                285844,
+                0.039
+              ],
+              [
+                "likeFunc",
+                260988,
+                0.035
+              ]
+            ],
+            "fail_half": [
+              7,
+              3,
+              0,
+              5,
+              0
+            ],
+            "test_branches": 128
+          },
+          "4c_hybrid_exact": {
+            "cost": 98618,
+            "steps": 3649,
+            "struct_cost": 3024,
+            "region_cost": 95594,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "patternCompare",
+                45460,
+                0.461
+              ],
+              [
+                "sqlite3VdbeExec",
+                20415,
+                0.207
+              ],
+              [
+                "likeFunc",
+                5788,
+                0.059
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                5675,
+                0.058
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                3322,
+                0.034
+              ],
+              [
+                "btreeParseCellPtr",
+                3063,
+                0.031
+              ],
+              [
+                "getCellInfo",
+                1909,
+                0.019
+              ],
+              [
+                "sqlite3DbMallocRawNN",
+                1452,
+                0.015
+              ]
+            ],
+            "fail_half": [
+              106,
+              108,
+              106,
+              105,
+              107
+            ],
+            "test_branches": 128
+          },
+          "4c_hybrid_interval": {
+            "cost": 436824,
+            "steps": 3649,
+            "struct_cost": 3024,
+            "region_cost": 433800,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "patternCompare",
+                242860,
+                0.556
+              ],
+              [
+                "sqlite3VdbeExec",
+                82717,
+                0.189
+              ],
+              [
+                "likeFunc",
+                27028,
+                0.062
+              ],
+              [
+                "getPageNormal",
+                18676,
+                0.043
+              ],
+              [
+                "pcache1Fetch",
+                8932,
+                0.02
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                8922,
+                0.02
+              ],
+              [
+                "accessPayload",
+                7573,
+                0.017
+              ],
+              [
+                "sqlite3DbMallocRawNN",
+                5267,
+                0.012
+              ]
+            ],
+            "fail_half": [
+              20,
+              13,
+              14,
+              10,
+              7
+            ],
+            "test_branches": 128
+          },
+          "4c_hybrid_all_reached": {
+            "cost": 7422562,
+            "steps": 3649,
+            "struct_cost": 3024,
+            "region_cost": 7419538,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                1643901,
+                0.221
+              ],
+              [
+                "btreeBeginTrans",
+                941421,
+                0.127
+              ],
+              [
+                "accessPayload",
+                699075,
+                0.094
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                518869,
+                0.07
+              ],
+              [
+                "patternCompare",
+                382161,
+                0.051
+              ],
+              [
+                "vdbeColumnFromOverflow",
+                301379,
+                0.041
+              ],
+              [
+                "memsys5Malloc",
+                285844,
+                0.039
+              ],
+              [
+                "likeFunc",
+                260988,
+                0.035
+              ]
+            ],
+            "fail_half": [
+              7,
+              3,
+              0,
+              5,
+              0
+            ],
+            "test_branches": 128
+          }
+        },
+        "static_inline": {
+          "sqlite3_step": "infinite",
+          "sqlite3_column_int64": 611,
+          "sqlite3_reset": "infinite",
+          "sqlite3_bind_int64": "infinite"
+        },
+        "region_loops": [
+          231,
+          660,
+          665
+        ],
+        "region_static": {
+          "231": {
+            "blocks": 4,
+            "instr": 17,
+            "functions": 0,
+            "indirect_call_slots": 0,
+            "total_ir_instr": 251828
+          },
+          "660": {
+            "blocks": 5568,
+            "instr": 29638,
+            "functions": 162,
+            "indirect_call_slots": 598,
+            "total_ir_instr": 251828
+          },
+          "665": {
+            "blocks": 34944,
+            "instr": 188938,
+            "functions": 845,
+            "indirect_call_slots": 1323,
+            "total_ir_instr": 251828
+          }
+        },
+        "split_seeds": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "train_branches": 128
+      },
+      "check": {
+        "N": 256,
+        "mean": 4142.44140625,
+        "costs": {
+          "0b_step_exact": 219023,
+          "0c_all_reached_blocks": 12178924,
+          "0d_all_reached_instr": 67557464,
+          "2a_step_interval": 2868418,
+          "0a_supersequence": 51198
+        },
+        "greedy_slots": 9591,
+        "lower_bound_cost": 19344,
+        "lower_bound_slots": 3490,
+        "key_order": {
+          "keyX": {
+            "keys": 3664,
+            "acyclic": true,
+            "cost": 20087,
+            "slots": 3664
+          },
+          "keyN": {
+            "keys": 720,
+            "acyclic": false
+          }
+        }
+      }
+    },
+    "256/scan": {
+      "schedule": {
+        "N": 256,
+        "run_mean": 125336.859375,
+        "run_max": 125753,
+        "run_min": 124948,
+        "blocks_mean": 15896.6640625,
+        "blocks_max": 16050,
+        "families": {
+          "0a_supersequence": {
+            "cost": 627723,
+            "steps": 81527,
+            "fail_half": [
+              5,
+              5,
+              3,
+              7,
+              8
+            ],
+            "test_branches": 128
+          },
+          "0b_step_exact": {
+            "cost": 6431092,
+            "steps": 16050,
+            "fail_half": [
+              115,
+              113,
+              108,
+              112,
+              114
+            ],
+            "test_branches": 128
+          },
+          "0c_all_reached_blocks": {
+            "cost": 46159800,
+            "steps": 16050,
+            "reached_blocks": 452,
+            "reached_instr": 2876,
+            "fail_half": [
+              1,
+              0,
+              0,
+              0,
+              0
+            ],
+            "test_branches": 128
+          },
+          "0d_all_reached_instr": {
+            "cost": 361665628,
+            "steps": 125753,
+            "fail_half": [
+              1,
+              0,
+              0,
+              0,
+              0
+            ],
+            "test_branches": 128
+          },
+          "2a_step_interval": {
+            "cost": 13558656,
+            "steps": 16050,
+            "fail_half": [
+              12,
+              9,
+              2,
+              11,
+              11
+            ],
+            "test_branches": 128
+          },
+          "2b_func_interval": {
+            "cost": 14861311,
+            "steps": 16050,
+            "call_paths": 60,
+            "fail_half": [
+              8,
+              1,
+              1,
+              1,
+              6
+            ],
+            "test_branches": 128
+          },
+          "3a_struct_exact": {
+            "cost": 380544,
+            "steps": 52492,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                244759,
+                0.643
+              ],
+              [
+                "btreeParseCellPtr",
+                40989,
+                0.108
+              ],
+              [
+                "getCellInfo",
+                27898,
+                0.073
+              ],
+              [
+                "sqlite3BtreeNext",
+                24617,
+                0.065
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                8851,
+                0.023
+              ],
+              [
+                "btreeNext",
+                6025,
+                0.016
+              ],
+              [
+                "countStep",
+                4665,
+                0.012
+              ],
+              [
+                "createAggContext",
+                4525,
+                0.012
+              ]
+            ],
+            "fail_half": [
+              83,
+              84,
+              75,
+              87,
+              94
+            ],
+            "test_branches": 128
+          },
+          "3b_struct_instance_trip": {
+            "cost": 2188819,
+            "steps": 334212,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                580531,
+                0.265
+              ],
+              [
+                "getPageNormal",
+                251804,
+                0.115
+              ],
+              [
+                "btreeBeginTrans",
+                236946,
+                0.108
+              ],
+              [
+                "moveToChild",
+                168130,
+                0.077
+              ],
+              [
+                "btreeNext",
+                128248,
+                0.059
+              ],
+              [
+                "pcache1Fetch",
+                120428,
+                0.055
+              ],
+              [
+                "sqlite3BtreeNext",
+                115736,
+                0.053
+              ],
+              [
+                "getAndInitPage",
+                98532,
+                0.045
+              ]
+            ],
+            "fail_half": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "test_branches": 128
+          },
+          "3c_struct_static_trip": {
+            "cost": 2188819,
+            "steps": 334212,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                580531,
+                0.265
+              ],
+              [
+                "getPageNormal",
+                251804,
+                0.115
+              ],
+              [
+                "btreeBeginTrans",
+                236946,
+                0.108
+              ],
+              [
+                "moveToChild",
+                168130,
+                0.077
+              ],
+              [
+                "btreeNext",
+                128248,
+                0.059
+              ],
+              [
+                "pcache1Fetch",
+                120428,
+                0.055
+              ],
+              [
+                "sqlite3BtreeNext",
+                115736,
+                0.053
+              ],
+              [
+                "getAndInitPage",
+                98532,
+                0.045
+              ]
+            ],
+            "fail_half": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "test_branches": 128
+          },
+          "3d_struct_all_arms": {
+            "cost": 11793296,
+            "steps": null,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                7121051,
+                0.604
+              ],
+              [
+                "getPageNormal",
+                1105748,
+                0.094
+              ],
+              [
+                "btreeBeginTrans",
+                535670,
+                0.045
+              ],
+              [
+                "getAndInitPage",
+                398820,
+                0.034
+              ],
+              [
+                "moveToChild",
+                359720,
+                0.031
+              ],
+              [
+                "btreeNext",
+                354246,
+                0.03
+              ],
+              [
+                "sqlite3PagerSharedLock",
+                353464,
+                0.03
+              ],
+              [
+                "pcache1Fetch",
+                240856,
+                0.02
+              ]
+            ],
+            "fail_half": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "test_branches": 128
+          },
+          "4b_hybrid_exact": {
+            "cost": 6314771,
+            "steps": 16152,
+            "struct_cost": 1554,
+            "region_cost": 6313217,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                4019801,
+                0.637
+              ],
+              [
+                "btreeParseCellPtr",
+                782862,
+                0.124
+              ],
+              [
+                "getCellInfo",
+                519233,
+                0.082
+              ],
+              [
+                "sqlite3BtreeNext",
+                453760,
+                0.072
+              ],
+              [
+                "btreeNext",
+                160113,
+                0.025
+              ],
+              [
+                "getPageNormal",
+                94898,
+                0.015
+              ],
+              [
+                "moveToChild",
+                88623,
+                0.014
+              ],
+              [
+                "sqlite3PcacheRelease",
+                48400,
+                0.008
+              ]
+            ],
+            "fail_half": [
+              115,
+              113,
+              108,
+              112,
+              114
+            ],
+            "test_branches": 128
+          },
+          "4b_hybrid_interval": {
+            "cost": 13357660,
+            "steps": 16152,
+            "struct_cost": 1554,
+            "region_cost": 13356106,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                5187848,
+                0.388
+              ],
+              [
+                "sqlite3BtreeNext",
+                1038360,
+                0.078
+              ],
+              [
+                "btreeNext",
+                1025756,
+                0.077
+              ],
+              [
+                "btreeParseCellPtr",
+                902942,
+                0.068
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                819062,
+                0.061
+              ],
+              [
+                "getPageNormal",
+                718796,
+                0.054
+              ],
+              [
+                "moveToChild",
+                666414,
+                0.05
+              ],
+              [
+                "getCellInfo",
+                575835,
+                0.043
+              ]
+            ],
+            "fail_half": [
+              12,
+              9,
+              2,
+              11,
+              11
+            ],
+            "test_branches": 128
+          },
+          "4b_hybrid_all_reached": {
+            "cost": 29632702,
+            "steps": 16152,
+            "struct_cost": 1554,
+            "region_cost": 29631148,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                10622478,
+                0.358
+              ],
+              [
+                "btreeBeginTrans",
+                4803762,
+                0.162
+              ],
+              [
+                "btreeNext",
+                1648816,
+                0.056
+              ],
+              [
+                "sqlite3BtreeNext",
+                1173196,
+                0.04
+              ],
+              [
+                "allocateCursor",
+                1030510,
+                0.035
+              ],
+              [
+                "btreeParseCellPtr",
+                998802,
+                0.034
+              ],
+              [
+                "moveToRoot",
+                903678,
+                0.03
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                840262,
+                0.028
+              ]
+            ],
+            "fail_half": [
+              1,
+              0,
+              0,
+              0,
+              0
+            ],
+            "test_branches": 128
+          },
+          "4c_hybrid_exact": {
+            "cost": 6314771,
+            "steps": 16152,
+            "struct_cost": 1554,
+            "region_cost": 6313217,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                4019801,
+                0.637
+              ],
+              [
+                "btreeParseCellPtr",
+                782862,
+                0.124
+              ],
+              [
+                "getCellInfo",
+                519233,
+                0.082
+              ],
+              [
+                "sqlite3BtreeNext",
+                453760,
+                0.072
+              ],
+              [
+                "btreeNext",
+                160113,
+                0.025
+              ],
+              [
+                "getPageNormal",
+                94898,
+                0.015
+              ],
+              [
+                "moveToChild",
+                88623,
+                0.014
+              ],
+              [
+                "sqlite3PcacheRelease",
+                48400,
+                0.008
+              ]
+            ],
+            "fail_half": [
+              115,
+              113,
+              108,
+              112,
+              114
+            ],
+            "test_branches": 128
+          },
+          "4c_hybrid_interval": {
+            "cost": 13357660,
+            "steps": 16152,
+            "struct_cost": 1554,
+            "region_cost": 13356106,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                5187848,
+                0.388
+              ],
+              [
+                "sqlite3BtreeNext",
+                1038360,
+                0.078
+              ],
+              [
+                "btreeNext",
+                1025756,
+                0.077
+              ],
+              [
+                "btreeParseCellPtr",
+                902942,
+                0.068
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                819062,
+                0.061
+              ],
+              [
+                "getPageNormal",
+                718796,
+                0.054
+              ],
+              [
+                "moveToChild",
+                666414,
+                0.05
+              ],
+              [
+                "getCellInfo",
+                575835,
+                0.043
+              ]
+            ],
+            "fail_half": [
+              12,
+              9,
+              2,
+              11,
+              11
+            ],
+            "test_branches": 128
+          },
+          "4c_hybrid_all_reached": {
+            "cost": 29632702,
+            "steps": 16152,
+            "struct_cost": 1554,
+            "region_cost": 29631148,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                10622478,
+                0.358
+              ],
+              [
+                "btreeBeginTrans",
+                4803762,
+                0.162
+              ],
+              [
+                "btreeNext",
+                1648816,
+                0.056
+              ],
+              [
+                "sqlite3BtreeNext",
+                1173196,
+                0.04
+              ],
+              [
+                "allocateCursor",
+                1030510,
+                0.035
+              ],
+              [
+                "btreeParseCellPtr",
+                998802,
+                0.034
+              ],
+              [
+                "moveToRoot",
+                903678,
+                0.03
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                840262,
+                0.028
+              ]
+            ],
+            "fail_half": [
+              1,
+              0,
+              0,
+              0,
+              0
+            ],
+            "test_branches": 128
+          }
+        },
+        "static_inline": {
+          "sqlite3_step": "infinite",
+          "sqlite3_column_int64": 611,
+          "sqlite3_reset": "infinite",
+          "sqlite3_bind_int64": "infinite"
+        },
+        "region_loops": [
+          231,
+          660,
+          665
+        ],
+        "region_static": {
+          "231": {
+            "blocks": 4,
+            "instr": 17,
+            "functions": 0,
+            "indirect_call_slots": 0,
+            "total_ir_instr": 251828
+          },
+          "660": {
+            "blocks": 5568,
+            "instr": 29638,
+            "functions": 162,
+            "indirect_call_slots": 598,
+            "total_ir_instr": 251828
+          },
+          "665": {
+            "blocks": 34944,
+            "instr": 188938,
+            "functions": 845,
+            "indirect_call_slots": 1323,
+            "total_ir_instr": 251828
+          }
+        },
+        "split_seeds": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "train_branches": 128
+      },
+      "check": {
+        "N": 256,
+        "mean": 125336.859375,
+        "costs": {
+          "0b_step_exact": 6431092,
+          "0c_all_reached_blocks": 46159800,
+          "0d_all_reached_instr": 361665628,
+          "2a_step_interval": 13558656,
+          "0a_supersequence": 627723
+        },
+        "greedy_slots": 81527,
+        "lower_bound_cost": 127158,
+        "lower_bound_slots": 16331,
+        "key_order": {
+          "keyX": {
+            "keys": 52492,
+            "acyclic": true,
+            "cost": 380544,
+            "slots": 52492
+          },
+          "keyN": {
+            "keys": 546,
+            "acyclic": false
+          }
+        }
+      }
+    },
+    "1024/arith": {
+      "schedule": {
+        "N": 1024,
+        "run_mean": 3871.009765625,
+        "run_max": 4016,
+        "run_min": 3694,
+        "blocks_mean": 599.904296875,
+        "blocks_max": 627,
+        "families": {
+          "0a_supersequence": {
+            "cost": 30348,
+            "steps": 5373,
+            "fail_half": [
+              1,
+              4,
+              9,
+              3,
+              10
+            ],
+            "test_branches": 512
+          },
+          "0b_step_exact": {
+            "cost": 93186,
+            "steps": 627,
+            "fail_half": [
+              82,
+              71,
+              81,
+              75,
+              82
+            ],
+            "test_branches": 512
+          },
+          "0c_all_reached_blocks": {
+            "cost": 1632708,
+            "steps": 627,
+            "reached_blocks": 404,
+            "reached_instr": 2604,
+            "fail_half": [
+              0,
+              0,
+              1,
+              0,
+              0
+            ],
+            "test_branches": 512
+          },
+          "0d_all_reached_instr": {
+            "cost": 10457664,
+            "steps": 4016,
+            "fail_half": [
+              0,
+              0,
+              1,
+              0,
+              0
+            ],
+            "test_branches": 512
+          },
+          "2a_step_interval": {
+            "cost": 125546,
+            "steps": 627,
+            "fail_half": [
+              9,
+              13,
+              24,
+              6,
+              16
+            ],
+            "test_branches": 512
+          },
+          "2b_func_interval": {
+            "cost": 114640,
+            "steps": 627,
+            "call_paths": 42,
+            "fail_half": [
+              8,
+              10,
+              23,
+              6,
+              16
+            ],
+            "test_branches": 512
+          },
+          "3a_struct_exact": {
+            "cost": 4158,
+            "steps": 655,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                1498,
+                0.36
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                735,
+                0.177
+              ],
+              [
+                "btreeBeginTrans",
+                303,
+                0.073
+              ],
+              [
+                "releaseMemArray",
+                167,
+                0.04
+              ],
+              [
+                "sqlite3VdbeHalt",
+                147,
+                0.035
+              ],
+              [
+                "getPageNormal",
+                138,
+                0.033
+              ],
+              [
+                "vdbeCommit",
+                128,
+                0.031
+              ],
+              [
+                "sqlite3_step",
+                92,
+                0.022
+              ]
+            ],
+            "fail_half": [
+              2,
+              2,
+              2,
+              0,
+              2
+            ],
+            "test_branches": 512
+          },
+          "3b_struct_instance_trip": {
+            "cost": 51804,
+            "steps": 8594,
+            "by_func": [
+              [
+                "sqlite3BtreeTableMoveto",
+                19314,
+                0.373
+              ],
+              [
+                "sqlite3VdbeExec",
+                11339,
+                0.219
+              ],
+              [
+                "btreeBeginTrans",
+                5454,
+                0.105
+              ],
+              [
+                "getPageNormal",
+                3312,
+                0.064
+              ],
+              [
+                "pcache1Fetch",
+                1584,
+                0.031
+              ],
+              [
+                "moveToChild",
+                1548,
+                0.03
+              ],
+              [
+                "allocateCursor",
+                1170,
+                0.023
+              ],
+              [
+                "btreeParseCellPtr",
+                1134,
+                0.022
+              ]
+            ],
+            "fail_half": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "test_branches": 512
+          },
+          "3c_struct_static_trip": {
+            "cost": 51804,
+            "steps": 8594,
+            "by_func": [
+              [
+                "sqlite3BtreeTableMoveto",
+                19314,
+                0.373
+              ],
+              [
+                "sqlite3VdbeExec",
+                11339,
+                0.219
+              ],
+              [
+                "btreeBeginTrans",
+                5454,
+                0.105
+              ],
+              [
+                "getPageNormal",
+                3312,
+                0.064
+              ],
+              [
+                "pcache1Fetch",
+                1584,
+                0.031
+              ],
+              [
+                "moveToChild",
+                1548,
+                0.03
+              ],
+              [
+                "allocateCursor",
+                1170,
+                0.023
+              ],
+              [
+                "btreeParseCellPtr",
+                1134,
+                0.022
+              ]
+            ],
+            "fail_half": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "test_branches": 512
+          },
+          "3d_struct_all_arms": {
+            "cost": 261551,
+            "steps": null,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                162347,
+                0.621
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                34164,
+                0.131
+              ],
+              [
+                "getPageNormal",
+                14544,
+                0.056
+              ],
+              [
+                "btreeBeginTrans",
+                12330,
+                0.047
+              ],
+              [
+                "sqlite3PagerSharedLock",
+                8136,
+                0.031
+              ],
+              [
+                "getAndInitPage",
+                4590,
+                0.018
+              ],
+              [
+                "moveToChild",
+                3312,
+                0.013
+              ],
+              [
+                "moveToRoot",
+                3258,
+                0.012
+              ]
+            ],
+            "fail_half": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "test_branches": 512
+          },
+          "4b_hybrid_exact": {
+            "cost": 51982,
+            "steps": 759,
+            "struct_cost": 1753,
+            "region_cost": 50229,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                31094,
+                0.598
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                7800,
+                0.15
+              ],
+              [
+                "btreeParseCellPtr",
+                3515,
+                0.068
+              ],
+              [
+                "getCellInfo",
+                2075,
+                0.04
+              ],
+              [
+                "getPageNormal",
+                1380,
+                0.027
+              ],
+              [
+                "moveToChild",
+                1204,
+                0.023
+              ],
+              [
+                "sqlite3MulInt64",
+                885,
+                0.017
+              ],
+              [
+                "btreeParseCellAdjustSizeForOverflow",
+                759,
+                0.015
+              ]
+            ],
+            "fail_half": [
+              82,
+              71,
+              81,
+              75,
+              82
+            ],
+            "test_branches": 512
+          },
+          "4b_hybrid_interval": {
+            "cost": 82201,
+            "steps": 759,
+            "struct_cost": 1753,
+            "region_cost": 80448,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                43952,
+                0.535
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                11061,
+                0.135
+              ],
+              [
+                "getPageNormal",
+                9062,
+                0.11
+              ],
+              [
+                "pcache1Fetch",
+                4334,
+                0.053
+              ],
+              [
+                "btreeParseCellPtr",
+                3679,
+                0.045
+              ],
+              [
+                "getCellInfo",
+                2113,
+                0.026
+              ],
+              [
+                "moveToChild",
+                2021,
+                0.025
+              ],
+              [
+                "getAndInitPage",
+                1743,
+                0.021
+              ]
+            ],
+            "fail_half": [
+              9,
+              13,
+              24,
+              6,
+              16
+            ],
+            "test_branches": 512
+          },
+          "4b_hybrid_all_reached": {
+            "cost": 638997,
+            "steps": 759,
+            "struct_cost": 1753,
+            "region_cost": 637244,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                240381,
+                0.376
+              ],
+              [
+                "btreeBeginTrans",
+                123927,
+                0.194
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                68303,
+                0.107
+              ],
+              [
+                "allocateCursor",
+                26585,
+                0.042
+              ],
+              [
+                "btreeParseCellPtr",
+                25767,
+                0.04
+              ],
+              [
+                "moveToRoot",
+                23313,
+                0.036
+              ],
+              [
+                "getPageNormal",
+                18814,
+                0.029
+              ],
+              [
+                "moveToChild",
+                17587,
+                0.028
+              ]
+            ],
+            "fail_half": [
+              0,
+              0,
+              1,
+              0,
+              0
+            ],
+            "test_branches": 512
+          },
+          "4c_hybrid_exact": {
+            "cost": 51982,
+            "steps": 759,
+            "struct_cost": 1753,
+            "region_cost": 50229,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                31094,
+                0.598
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                7800,
+                0.15
+              ],
+              [
+                "btreeParseCellPtr",
+                3515,
+                0.068
+              ],
+              [
+                "getCellInfo",
+                2075,
+                0.04
+              ],
+              [
+                "getPageNormal",
+                1380,
+                0.027
+              ],
+              [
+                "moveToChild",
+                1204,
+                0.023
+              ],
+              [
+                "sqlite3MulInt64",
+                885,
+                0.017
+              ],
+              [
+                "btreeParseCellAdjustSizeForOverflow",
+                759,
+                0.015
+              ]
+            ],
+            "fail_half": [
+              82,
+              71,
+              81,
+              75,
+              82
+            ],
+            "test_branches": 512
+          },
+          "4c_hybrid_interval": {
+            "cost": 82201,
+            "steps": 759,
+            "struct_cost": 1753,
+            "region_cost": 80448,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                43952,
+                0.535
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                11061,
+                0.135
+              ],
+              [
+                "getPageNormal",
+                9062,
+                0.11
+              ],
+              [
+                "pcache1Fetch",
+                4334,
+                0.053
+              ],
+              [
+                "btreeParseCellPtr",
+                3679,
+                0.045
+              ],
+              [
+                "getCellInfo",
+                2113,
+                0.026
+              ],
+              [
+                "moveToChild",
+                2021,
+                0.025
+              ],
+              [
+                "getAndInitPage",
+                1743,
+                0.021
+              ]
+            ],
+            "fail_half": [
+              9,
+              13,
+              24,
+              6,
+              16
+            ],
+            "test_branches": 512
+          },
+          "4c_hybrid_all_reached": {
+            "cost": 638997,
+            "steps": 759,
+            "struct_cost": 1753,
+            "region_cost": 637244,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                240381,
+                0.376
+              ],
+              [
+                "btreeBeginTrans",
+                123927,
+                0.194
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                68303,
+                0.107
+              ],
+              [
+                "allocateCursor",
+                26585,
+                0.042
+              ],
+              [
+                "btreeParseCellPtr",
+                25767,
+                0.04
+              ],
+              [
+                "moveToRoot",
+                23313,
+                0.036
+              ],
+              [
+                "getPageNormal",
+                18814,
+                0.029
+              ],
+              [
+                "moveToChild",
+                17587,
+                0.028
+              ]
+            ],
+            "fail_half": [
+              0,
+              0,
+              1,
+              0,
+              0
+            ],
+            "test_branches": 512
+          }
+        },
+        "static_inline": {
+          "sqlite3_step": "infinite",
+          "sqlite3_column_int64": 611,
+          "sqlite3_reset": "infinite",
+          "sqlite3_bind_int64": "infinite"
+        },
+        "region_loops": [
+          231,
+          660,
+          665
+        ],
+        "region_static": {
+          "231": {
+            "blocks": 4,
+            "instr": 17,
+            "functions": 0,
+            "indirect_call_slots": 0,
+            "total_ir_instr": 251828
+          },
+          "660": {
+            "blocks": 5568,
+            "instr": 29638,
+            "functions": 162,
+            "indirect_call_slots": 598,
+            "total_ir_instr": 251828
+          },
+          "665": {
+            "blocks": 34944,
+            "instr": 188938,
+            "functions": 845,
+            "indirect_call_slots": 1323,
+            "total_ir_instr": 251828
+          }
+        },
+        "split_seeds": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "train_branches": 512
+      },
+      "check": {
+        "N": 1024,
+        "mean": 3871.009765625,
+        "costs": {
+          "0b_step_exact": 93186,
+          "0c_all_reached_blocks": 1632708,
+          "0d_all_reached_instr": 10457664,
+          "2a_step_interval": 125546,
+          "0a_supersequence": 30348
+        },
+        "greedy_slots": 5373,
+        "lower_bound_cost": 4143,
+        "lower_bound_slots": 650,
+        "key_order": {
+          "keyX": {
+            "keys": 655,
+            "acyclic": true,
+            "cost": 4158,
+            "slots": 655
+          },
+          "keyN": {
+            "keys": 439,
+            "acyclic": false
+          }
+        }
+      }
+    },
+    "1024/like_name": {
+      "schedule": {
+        "N": 1024,
+        "run_mean": 3684.416015625,
+        "run_max": 4006,
+        "run_min": 3468,
+        "blocks_mean": 588.9140625,
+        "blocks_max": 648,
+        "families": {
+          "0a_supersequence": {
+            "cost": 21712,
+            "steps": 3967,
+            "fail_half": [
+              1,
+              4,
+              3,
+              1,
+              3
+            ],
+            "test_branches": 512
+          },
+          "0b_step_exact": {
+            "cost": 119521,
+            "steps": 648,
+            "fail_half": [
+              50,
+              50,
+              54,
+              50,
+              41
+            ],
+            "test_branches": 512
+          },
+          "0c_all_reached_blocks": {
+            "cost": 1798200,
+            "steps": 648,
+            "reached_blocks": 438,
+            "reached_instr": 2775,
+            "fail_half": [
+              0,
+              1,
+              1,
+              1,
+              1
+            ],
+            "test_branches": 512
+          },
+          "0d_all_reached_instr": {
+            "cost": 11116650,
+            "steps": 4006,
+            "fail_half": [
+              0,
+              1,
+              2,
+              1,
+              1
+            ],
+            "test_branches": 512
+          },
+          "2a_step_interval": {
+            "cost": 153652,
+            "steps": 648,
+            "fail_half": [
+              7,
+              16,
+              13,
+              3,
+              8
+            ],
+            "test_branches": 512
+          },
+          "2b_func_interval": {
+            "cost": 149965,
+            "steps": 648,
+            "call_paths": 46,
+            "fail_half": [
+              1,
+              6,
+              11,
+              2,
+              7
+            ],
+            "test_branches": 512
+          },
+          "3a_struct_exact": {
+            "cost": 4365,
+            "steps": 724,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                1037,
+                0.238
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                735,
+                0.168
+              ],
+              [
+                "patternCompare",
+                575,
+                0.132
+              ],
+              [
+                "btreeBeginTrans",
+                303,
+                0.069
+              ],
+              [
+                "sqlite3VdbeHalt",
+                147,
+                0.034
+              ],
+              [
+                "getPageNormal",
+                138,
+                0.032
+              ],
+              [
+                "vdbeCommit",
+                128,
+                0.029
+              ],
+              [
+                "releaseMemArray",
+                118,
+                0.027
+              ]
+            ],
+            "fail_half": [
+              3,
+              2,
+              1,
+              1,
+              0
+            ],
+            "test_branches": 512
+          },
+          "3b_struct_instance_trip": {
+            "cost": 40054,
+            "steps": 7020,
+            "by_func": [
+              [
+                "sqlite3BtreeTableMoveto",
+                10730,
+                0.268
+              ],
+              [
+                "patternCompare",
+                9560,
+                0.239
+              ],
+              [
+                "sqlite3VdbeExec",
+                6077,
+                0.152
+              ],
+              [
+                "btreeBeginTrans",
+                3030,
+                0.076
+              ],
+              [
+                "getPageNormal",
+                1840,
+                0.046
+              ],
+              [
+                "pcache1Fetch",
+                880,
+                0.022
+              ],
+              [
+                "moveToChild",
+                860,
+                0.021
+              ],
+              [
+                "likeFunc",
+                840,
+                0.021
+              ]
+            ],
+            "fail_half": [
+              1,
+              0,
+              1,
+              1,
+              0
+            ],
+            "test_branches": 512
+          },
+          "3c_struct_static_trip": {
+            "cost": 40234,
+            "steps": 7060,
+            "by_func": [
+              [
+                "sqlite3BtreeTableMoveto",
+                10730,
+                0.267
+              ],
+              [
+                "patternCompare",
+                9740,
+                0.242
+              ],
+              [
+                "sqlite3VdbeExec",
+                6077,
+                0.151
+              ],
+              [
+                "btreeBeginTrans",
+                3030,
+                0.075
+              ],
+              [
+                "getPageNormal",
+                1840,
+                0.046
+              ],
+              [
+                "pcache1Fetch",
+                880,
+                0.022
+              ],
+              [
+                "moveToChild",
+                860,
+                0.021
+              ],
+              [
+                "likeFunc",
+                840,
+                0.021
+              ]
+            ],
+            "fail_half": [
+              1,
+              0,
+              1,
+              1,
+              0
+            ],
+            "test_branches": 512
+          },
+          "3d_struct_all_arms": {
+            "cost": 195456,
+            "steps": null,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                91511,
+                0.468
+              ],
+              [
+                "patternCompare",
+                41970,
+                0.215
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                18980,
+                0.097
+              ],
+              [
+                "getPageNormal",
+                8080,
+                0.041
+              ],
+              [
+                "btreeBeginTrans",
+                6850,
+                0.035
+              ],
+              [
+                "sqlite3PagerSharedLock",
+                4520,
+                0.023
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                2600,
+                0.013
+              ],
+              [
+                "getAndInitPage",
+                2550,
+                0.013
+              ]
+            ],
+            "fail_half": [
+              1,
+              0,
+              1,
+              1,
+              0
+            ],
+            "test_branches": 512
+          },
+          "4b_hybrid_exact": {
+            "cost": 57254,
+            "steps": 750,
+            "struct_cost": 1613,
+            "region_cost": 55641,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                18591,
+                0.325
+              ],
+              [
+                "patternCompare",
+                9421,
+                0.165
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                7800,
+                0.136
+              ],
+              [
+                "likeFunc",
+                5072,
+                0.089
+              ],
+              [
+                "btreeParseCellPtr",
+                3515,
+                0.061
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                3127,
+                0.055
+              ],
+              [
+                "getCellInfo",
+                2075,
+                0.036
+              ],
+              [
+                "getPageNormal",
+                1380,
+                0.024
+              ]
+            ],
+            "fail_half": [
+              50,
+              50,
+              54,
+              50,
+              41
+            ],
+            "test_branches": 512
+          },
+          "4b_hybrid_interval": {
+            "cost": 82711,
+            "steps": 750,
+            "struct_cost": 1613,
+            "region_cost": 81098,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                23858,
+                0.288
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                11061,
+                0.134
+              ],
+              [
+                "patternCompare",
+                10982,
+                0.133
+              ],
+              [
+                "getPageNormal",
+                8602,
+                0.104
+              ],
+              [
+                "likeFunc",
+                5284,
+                0.064
+              ],
+              [
+                "pcache1Fetch",
+                4114,
+                0.05
+              ],
+              [
+                "btreeParseCellPtr",
+                3679,
+                0.044
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                3233,
+                0.039
+              ]
+            ],
+            "fail_half": [
+              7,
+              16,
+              13,
+              3,
+              8
+            ],
+            "test_branches": 512
+          },
+          "4b_hybrid_all_reached": {
+            "cost": 760635,
+            "steps": 750,
+            "struct_cost": 1613,
+            "region_cost": 759022,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                219418,
+                0.288
+              ],
+              [
+                "btreeBeginTrans",
+                133320,
+                0.175
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                73480,
+                0.097
+              ],
+              [
+                "patternCompare",
+                54120,
+                0.071
+              ],
+              [
+                "likeFunc",
+                36960,
+                0.049
+              ],
+              [
+                "allocateCursor",
+                28600,
+                0.038
+              ],
+              [
+                "btreeParseCellPtr",
+                27720,
+                0.036
+              ],
+              [
+                "moveToRoot",
+                25080,
+                0.033
+              ]
+            ],
+            "fail_half": [
+              0,
+              1,
+              1,
+              1,
+              1
+            ],
+            "test_branches": 512
+          },
+          "4c_hybrid_exact": {
+            "cost": 57254,
+            "steps": 750,
+            "struct_cost": 1613,
+            "region_cost": 55641,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                18591,
+                0.325
+              ],
+              [
+                "patternCompare",
+                9421,
+                0.165
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                7800,
+                0.136
+              ],
+              [
+                "likeFunc",
+                5072,
+                0.089
+              ],
+              [
+                "btreeParseCellPtr",
+                3515,
+                0.061
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                3127,
+                0.055
+              ],
+              [
+                "getCellInfo",
+                2075,
+                0.036
+              ],
+              [
+                "getPageNormal",
+                1380,
+                0.024
+              ]
+            ],
+            "fail_half": [
+              50,
+              50,
+              54,
+              50,
+              41
+            ],
+            "test_branches": 512
+          },
+          "4c_hybrid_interval": {
+            "cost": 82711,
+            "steps": 750,
+            "struct_cost": 1613,
+            "region_cost": 81098,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                23858,
+                0.288
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                11061,
+                0.134
+              ],
+              [
+                "patternCompare",
+                10982,
+                0.133
+              ],
+              [
+                "getPageNormal",
+                8602,
+                0.104
+              ],
+              [
+                "likeFunc",
+                5284,
+                0.064
+              ],
+              [
+                "pcache1Fetch",
+                4114,
+                0.05
+              ],
+              [
+                "btreeParseCellPtr",
+                3679,
+                0.044
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                3233,
+                0.039
+              ]
+            ],
+            "fail_half": [
+              7,
+              16,
+              13,
+              3,
+              8
+            ],
+            "test_branches": 512
+          },
+          "4c_hybrid_all_reached": {
+            "cost": 760635,
+            "steps": 750,
+            "struct_cost": 1613,
+            "region_cost": 759022,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                219418,
+                0.288
+              ],
+              [
+                "btreeBeginTrans",
+                133320,
+                0.175
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                73480,
+                0.097
+              ],
+              [
+                "patternCompare",
+                54120,
+                0.071
+              ],
+              [
+                "likeFunc",
+                36960,
+                0.049
+              ],
+              [
+                "allocateCursor",
+                28600,
+                0.038
+              ],
+              [
+                "btreeParseCellPtr",
+                27720,
+                0.036
+              ],
+              [
+                "moveToRoot",
+                25080,
+                0.033
+              ]
+            ],
+            "fail_half": [
+              0,
+              1,
+              1,
+              1,
+              1
+            ],
+            "test_branches": 512
+          }
+        },
+        "static_inline": {
+          "sqlite3_step": "infinite",
+          "sqlite3_column_int64": 611,
+          "sqlite3_reset": "infinite",
+          "sqlite3_bind_int64": "infinite"
+        },
+        "region_loops": [
+          231,
+          660,
+          665
+        ],
+        "region_static": {
+          "231": {
+            "blocks": 4,
+            "instr": 17,
+            "functions": 0,
+            "indirect_call_slots": 0,
+            "total_ir_instr": 251828
+          },
+          "660": {
+            "blocks": 5568,
+            "instr": 29638,
+            "functions": 162,
+            "indirect_call_slots": 598,
+            "total_ir_instr": 251828
+          },
+          "665": {
+            "blocks": 34944,
+            "instr": 188938,
+            "functions": 845,
+            "indirect_call_slots": 1323,
+            "total_ir_instr": 251828
+          }
+        },
+        "split_seeds": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "train_branches": 512
+      },
+      "check": {
+        "N": 1024,
+        "mean": 3684.416015625,
+        "costs": {
+          "0b_step_exact": 119521,
+          "0c_all_reached_blocks": 1798200,
+          "0d_all_reached_instr": 11116650,
+          "2a_step_interval": 153652,
+          "0a_supersequence": 21712
+        },
+        "greedy_slots": 3967,
+        "lower_bound_cost": 4261,
+        "lower_bound_slots": 698,
+        "key_order": {
+          "keyX": {
+            "keys": 724,
+            "acyclic": true,
+            "cost": 4365,
+            "slots": 724
+          },
+          "keyN": {
+            "keys": 486,
+            "acyclic": false
+          }
+        }
+      }
+    },
+    "1024/like_note": {
+      "schedule": {
+        "N": 1024,
+        "run_mean": 4255.09375,
+        "run_max": 18738,
+        "run_min": 3518,
+        "blocks_mean": 695.2626953125,
+        "blocks_max": 3378,
+        "families": {
+          "0a_supersequence": {
+            "cost": 52616,
+            "steps": 9923,
+            "fail_half": [
+              3,
+              5,
+              5,
+              1,
+              6
+            ],
+            "test_branches": 512
+          },
+          "0b_step_exact": {
+            "cost": 373499,
+            "steps": 3378,
+            "fail_half": [
+              204,
+              178,
+              184,
+              184,
+              197
+            ],
+            "test_branches": 512
+          },
+          "0c_all_reached_blocks": {
+            "cost": 12008790,
+            "steps": 3378,
+            "reached_blocks": 580,
+            "reached_instr": 3555,
+            "fail_half": [
+              0,
+              0,
+              0,
+              1,
+              0
+            ],
+            "test_branches": 512
+          },
+          "0d_all_reached_instr": {
+            "cost": 66613590,
+            "steps": 18738,
+            "fail_half": [
+              0,
+              0,
+              0,
+              1,
+              0
+            ],
+            "test_branches": 512
+          },
+          "2a_step_interval": {
+            "cost": 2898766,
+            "steps": 3378,
+            "fail_half": [
+              9,
+              8,
+              19,
+              18,
+              10
+            ],
+            "test_branches": 512
+          },
+          "2b_func_interval": {
+            "cost": 3043805,
+            "steps": 5836,
+            "call_paths": 78,
+            "fail_half": [
+              4,
+              4,
+              15,
+              3,
+              7
+            ],
+            "test_branches": 512
+          },
+          "3a_struct_exact": {
+            "cost": 20701,
+            "steps": 3815,
+            "by_func": [
+              [
+                "patternCompare",
+                15402,
+                0.744
+              ],
+              [
+                "sqlite3VdbeExec",
+                1095,
+                0.053
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                735,
+                0.036
+              ],
+              [
+                "accessPayload",
+                306,
+                0.015
+              ],
+              [
+                "btreeBeginTrans",
+                303,
+                0.015
+              ],
+              [
+                "getPageNormal",
+                230,
+                0.011
+              ],
+              [
+                "sqlite3PcacheRelease",
+                154,
+                0.007
+              ],
+              [
+                "memsys5Malloc",
+                148,
+                0.007
+              ]
+            ],
+            "fail_half": [
+              10,
+              10,
+              8,
+              14,
+              7
+            ],
+            "test_branches": 512
+          },
+          "3b_struct_instance_trip": {
+            "cost": 320962,
+            "steps": 64374,
+            "by_func": [
+              [
+                "patternCompare",
+                276740,
+                0.862
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                10730,
+                0.033
+              ],
+              [
+                "sqlite3VdbeExec",
+                7177,
+                0.022
+              ],
+              [
+                "accessPayload",
+                3190,
+                0.01
+              ],
+              [
+                "btreeBeginTrans",
+                3030,
+                0.009
+              ],
+              [
+                "getPageNormal",
+                2760,
+                0.009
+              ],
+              [
+                "memsys5Malloc",
+                1480,
+                0.005
+              ],
+              [
+                "sqlite3GetVarint32",
+                1450,
+                0.005
+              ]
+            ],
+            "fail_half": [
+              0,
+              0,
+              0,
+              1,
+              0
+            ],
+            "test_branches": 512
+          },
+          "3c_struct_static_trip": {
+            "cost": 321142,
+            "steps": 64414,
+            "by_func": [
+              [
+                "patternCompare",
+                276920,
+                0.862
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                10730,
+                0.033
+              ],
+              [
+                "sqlite3VdbeExec",
+                7177,
+                0.022
+              ],
+              [
+                "accessPayload",
+                3190,
+                0.01
+              ],
+              [
+                "btreeBeginTrans",
+                3030,
+                0.009
+              ],
+              [
+                "getPageNormal",
+                2760,
+                0.009
+              ],
+              [
+                "memsys5Malloc",
+                1480,
+                0.005
+              ],
+              [
+                "sqlite3GetVarint32",
+                1450,
+                0.005
+              ]
+            ],
+            "fail_half": [
+              0,
+              0,
+              0,
+              1,
+              0
+            ],
+            "test_branches": 512
+          },
+          "3d_struct_all_arms": {
+            "cost": 1327361,
+            "steps": null,
+            "by_func": [
+              [
+                "patternCompare",
+                1141800,
+                0.86
+              ],
+              [
+                "sqlite3VdbeExec",
+                91961,
+                0.069
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                18980,
+                0.014
+              ],
+              [
+                "getPageNormal",
+                12120,
+                0.009
+              ],
+              [
+                "accessPayload",
+                7570,
+                0.006
+              ],
+              [
+                "btreeBeginTrans",
+                6850,
+                0.005
+              ],
+              [
+                "sqlite3GetVarint32",
+                4850,
+                0.004
+              ],
+              [
+                "sqlite3PagerSharedLock",
+                4520,
+                0.003
+              ]
+            ],
+            "fail_half": [
+              0,
+              0,
+              0,
+              1,
+              0
+            ],
+            "test_branches": 512
+          },
+          "4b_hybrid_exact": {
+            "cost": 169925,
+            "steps": 3604,
+            "struct_cost": 2571,
+            "region_cost": 167354,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "patternCompare",
+                89630,
+                0.527
+              ],
+              [
+                "sqlite3VdbeExec",
+                25034,
+                0.147
+              ],
+              [
+                "likeFunc",
+                8296,
+                0.049
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                7800,
+                0.046
+              ],
+              [
+                "accessPayload",
+                6098,
+                0.036
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                3674,
+                0.022
+              ],
+              [
+                "btreeParseCellPtr",
+                3515,
+                0.021
+              ],
+              [
+                "getPageNormal",
+                3082,
+                0.018
+              ]
+            ],
+            "fail_half": [
+              178,
+              164,
+              163,
+              166,
+              187
+            ],
+            "test_branches": 512
+          },
+          "4b_hybrid_interval": {
+            "cost": 476017,
+            "steps": 3604,
+            "struct_cost": 2571,
+            "region_cost": 473446,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "patternCompare",
+                265376,
+                0.557
+              ],
+              [
+                "sqlite3VdbeExec",
+                83539,
+                0.175
+              ],
+              [
+                "likeFunc",
+                27208,
+                0.057
+              ],
+              [
+                "getPageNormal",
+                19642,
+                0.041
+              ],
+              [
+                "accessPayload",
+                11929,
+                0.025
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                11061,
+                0.023
+              ],
+              [
+                "pcache1Fetch",
+                9394,
+                0.02
+              ],
+              [
+                "sqlite3DbMallocRawNN",
+                5658,
+                0.012
+              ]
+            ],
+            "fail_half": [
+              8,
+              6,
+              18,
+              14,
+              9
+            ],
+            "test_branches": 512
+          },
+          "4b_hybrid_all_reached": {
+            "cost": 7358093,
+            "steps": 3604,
+            "struct_cost": 2571,
+            "region_cost": 7355522,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                1656068,
+                0.225
+              ],
+              [
+                "btreeBeginTrans",
+                948390,
+                0.129
+              ],
+              [
+                "accessPayload",
+                704250,
+                0.096
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                522710,
+                0.071
+              ],
+              [
+                "patternCompare",
+                384990,
+                0.052
+              ],
+              [
+                "vdbeColumnFromOverflow",
+                303610,
+                0.041
+              ],
+              [
+                "likeFunc",
+                262920,
+                0.036
+              ],
+              [
+                "allocateCursor",
+                203450,
+                0.028
+              ]
+            ],
+            "fail_half": [
+              0,
+              0,
+              0,
+              1,
+              0
+            ],
+            "test_branches": 512
+          },
+          "4c_hybrid_exact": {
+            "cost": 169925,
+            "steps": 3604,
+            "struct_cost": 2571,
+            "region_cost": 167354,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "patternCompare",
+                89630,
+                0.527
+              ],
+              [
+                "sqlite3VdbeExec",
+                25034,
+                0.147
+              ],
+              [
+                "likeFunc",
+                8296,
+                0.049
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                7800,
+                0.046
+              ],
+              [
+                "accessPayload",
+                6098,
+                0.036
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                3674,
+                0.022
+              ],
+              [
+                "btreeParseCellPtr",
+                3515,
+                0.021
+              ],
+              [
+                "getPageNormal",
+                3082,
+                0.018
+              ]
+            ],
+            "fail_half": [
+              178,
+              164,
+              163,
+              166,
+              187
+            ],
+            "test_branches": 512
+          },
+          "4c_hybrid_interval": {
+            "cost": 476017,
+            "steps": 3604,
+            "struct_cost": 2571,
+            "region_cost": 473446,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "patternCompare",
+                265376,
+                0.557
+              ],
+              [
+                "sqlite3VdbeExec",
+                83539,
+                0.175
+              ],
+              [
+                "likeFunc",
+                27208,
+                0.057
+              ],
+              [
+                "getPageNormal",
+                19642,
+                0.041
+              ],
+              [
+                "accessPayload",
+                11929,
+                0.025
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                11061,
+                0.023
+              ],
+              [
+                "pcache1Fetch",
+                9394,
+                0.02
+              ],
+              [
+                "sqlite3DbMallocRawNN",
+                5658,
+                0.012
+              ]
+            ],
+            "fail_half": [
+              8,
+              6,
+              18,
+              14,
+              9
+            ],
+            "test_branches": 512
+          },
+          "4c_hybrid_all_reached": {
+            "cost": 7358093,
+            "steps": 3604,
+            "struct_cost": 2571,
+            "region_cost": 7355522,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                1656068,
+                0.225
+              ],
+              [
+                "btreeBeginTrans",
+                948390,
+                0.129
+              ],
+              [
+                "accessPayload",
+                704250,
+                0.096
+              ],
+              [
+                "sqlite3BtreeTableMoveto",
+                522710,
+                0.071
+              ],
+              [
+                "patternCompare",
+                384990,
+                0.052
+              ],
+              [
+                "vdbeColumnFromOverflow",
+                303610,
+                0.041
+              ],
+              [
+                "likeFunc",
+                262920,
+                0.036
+              ],
+              [
+                "allocateCursor",
+                203450,
+                0.028
+              ]
+            ],
+            "fail_half": [
+              0,
+              0,
+              0,
+              1,
+              0
+            ],
+            "test_branches": 512
+          }
+        },
+        "static_inline": {
+          "sqlite3_step": "infinite",
+          "sqlite3_column_int64": 611,
+          "sqlite3_reset": "infinite",
+          "sqlite3_bind_int64": "infinite"
+        },
+        "region_loops": [
+          231,
+          660,
+          665
+        ],
+        "region_static": {
+          "231": {
+            "blocks": 4,
+            "instr": 17,
+            "functions": 0,
+            "indirect_call_slots": 0,
+            "total_ir_instr": 251828
+          },
+          "660": {
+            "blocks": 5568,
+            "instr": 29638,
+            "functions": 162,
+            "indirect_call_slots": 598,
+            "total_ir_instr": 251828
+          },
+          "665": {
+            "blocks": 34944,
+            "instr": 188938,
+            "functions": 845,
+            "indirect_call_slots": 1323,
+            "total_ir_instr": 251828
+          }
+        },
+        "split_seeds": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "train_branches": 512
+      },
+      "check": {
+        "N": 1024,
+        "mean": 4255.09375,
+        "costs": {
+          "0b_step_exact": 373499,
+          "0c_all_reached_blocks": 12008790,
+          "0d_all_reached_instr": 66613590,
+          "2a_step_interval": 2898766,
+          "0a_supersequence": 52616
+        },
+        "greedy_slots": 9923,
+        "lower_bound_cost": 19350,
+        "lower_bound_slots": 3497,
+        "key_order": {
+          "keyX": {
+            "keys": 3815,
+            "acyclic": true,
+            "cost": 20701,
+            "slots": 3815
+          },
+          "keyN": {
+            "keys": 710,
+            "acyclic": false
+          }
+        }
+      }
+    },
+    "1024/scan": {
+      "schedule": {
+        "N": 1024,
+        "run_mean": 501812.751953125,
+        "run_max": 503009,
+        "run_min": 500663,
+        "blocks_mean": 63385.8212890625,
+        "blocks_max": 63927,
+        "families": {
+          "0a_supersequence": {
+            "cost": 2880519,
+            "steps": 367018,
+            "fail_half": [
+              5,
+              2,
+              14,
+              1,
+              9
+            ],
+            "test_branches": 512
+          },
+          "0b_step_exact": {
+            "cost": 34771663,
+            "steps": 63927,
+            "fail_half": [
+              439,
+              438,
+              432,
+              441,
+              438
+            ],
+            "test_branches": 512
+          },
+          "0c_all_reached_blocks": {
+            "cost": 183854052,
+            "steps": 63927,
+            "reached_blocks": 452,
+            "reached_instr": 2876,
+            "fail_half": [
+              0,
+              3,
+              0,
+              0,
+              0
+            ],
+            "test_branches": 512
+          },
+          "0d_all_reached_instr": {
+            "cost": 1446653884,
+            "steps": 503009,
+            "fail_half": [
+              1,
+              0,
+              1,
+              1,
+              0
+            ],
+            "test_branches": 512
+          },
+          "2a_step_interval": {
+            "cost": 56308416,
+            "steps": 63927,
+            "fail_half": [
+              11,
+              10,
+              8,
+              12,
+              5
+            ],
+            "test_branches": 512
+          },
+          "2b_func_interval": {
+            "cost": 60359363,
+            "steps": 63927,
+            "call_paths": 60,
+            "fail_half": [
+              6,
+              6,
+              3,
+              7,
+              4
+            ],
+            "test_branches": 512
+          },
+          "3a_struct_exact": {
+            "cost": 1566995,
+            "steps": 215620,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                989777,
+                0.632
+              ],
+              [
+                "btreeParseCellPtr",
+                177549,
+                0.113
+              ],
+              [
+                "getCellInfo",
+                112628,
+                0.072
+              ],
+              [
+                "sqlite3BtreeNext",
+                106803,
+                0.068
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                34026,
+                0.022
+              ],
+              [
+                "btreeNext",
+                28679,
+                0.018
+              ],
+              [
+                "countStep",
+                18715,
+                0.012
+              ],
+              [
+                "getPageNormal",
+                18400,
+                0.012
+              ]
+            ],
+            "fail_half": [
+              317,
+              315,
+              327,
+              324,
+              333
+            ],
+            "test_branches": 512
+          },
+          "3b_struct_instance_trip": {
+            "cost": 8638701,
+            "steps": 1318874,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                2291583,
+                0.265
+              ],
+              [
+                "getPageNormal",
+                994336,
+                0.115
+              ],
+              [
+                "btreeBeginTrans",
+                935664,
+                0.108
+              ],
+              [
+                "moveToChild",
+                663920,
+                0.077
+              ],
+              [
+                "btreeNext",
+                506432,
+                0.059
+              ],
+              [
+                "pcache1Fetch",
+                475552,
+                0.055
+              ],
+              [
+                "sqlite3BtreeNext",
+                457024,
+                0.053
+              ],
+              [
+                "getAndInitPage",
+                389088,
+                0.045
+              ]
+            ],
+            "fail_half": [
+              0,
+              0,
+              3,
+              0,
+              0
+            ],
+            "test_branches": 512
+          },
+          "3c_struct_static_trip": {
+            "cost": 8638701,
+            "steps": 1318874,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                2291583,
+                0.265
+              ],
+              [
+                "getPageNormal",
+                994336,
+                0.115
+              ],
+              [
+                "btreeBeginTrans",
+                935664,
+                0.108
+              ],
+              [
+                "moveToChild",
+                663920,
+                0.077
+              ],
+              [
+                "btreeNext",
+                506432,
+                0.059
+              ],
+              [
+                "pcache1Fetch",
+                475552,
+                0.055
+              ],
+              [
+                "sqlite3BtreeNext",
+                457024,
+                0.053
+              ],
+              [
+                "getAndInitPage",
+                389088,
+                0.045
+              ]
+            ],
+            "fail_half": [
+              0,
+              0,
+              3,
+              0,
+              0
+            ],
+            "test_branches": 512
+          },
+          "3d_struct_all_arms": {
+            "cost": 46553940,
+            "steps": null,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                28117181,
+                0.604
+              ],
+              [
+                "getPageNormal",
+                4366432,
+                0.094
+              ],
+              [
+                "btreeBeginTrans",
+                2115280,
+                0.045
+              ],
+              [
+                "getAndInitPage",
+                1574880,
+                0.034
+              ],
+              [
+                "moveToChild",
+                1420480,
+                0.031
+              ],
+              [
+                "btreeNext",
+                1398864,
+                0.03
+              ],
+              [
+                "sqlite3PagerSharedLock",
+                1395776,
+                0.03
+              ],
+              [
+                "pcache1Fetch",
+                951104,
+                0.02
+              ]
+            ],
+            "fail_half": [
+              0,
+              0,
+              3,
+              0,
+              0
+            ],
+            "test_branches": 512
+          },
+          "4b_hybrid_exact": {
+            "cost": 34336463,
+            "steps": 64029,
+            "struct_cost": 1554,
+            "region_cost": 34334909,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                17951342,
+                0.523
+              ],
+              [
+                "btreeParseCellPtr",
+                3756311,
+                0.109
+              ],
+              [
+                "sqlite3BtreeNext",
+                3034093,
+                0.088
+              ],
+              [
+                "getCellInfo",
+                2307731,
+                0.067
+              ],
+              [
+                "btreeNext",
+                2145058,
+                0.062
+              ],
+              [
+                "getPageNormal",
+                1373422,
+                0.04
+              ],
+              [
+                "moveToChild",
+                1283765,
+                0.037
+              ],
+              [
+                "sqlite3PcacheRelease",
+                666490,
+                0.019
+              ]
+            ],
+            "fail_half": [
+              439,
+              438,
+              432,
+              441,
+              438
+            ],
+            "test_branches": 512
+          },
+          "4b_hybrid_interval": {
+            "cost": 55613722,
+            "steps": 64029,
+            "struct_cost": 1554,
+            "region_cost": 55612168,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                21085871,
+                0.379
+              ],
+              [
+                "sqlite3BtreeNext",
+                4575813,
+                0.082
+              ],
+              [
+                "btreeNext",
+                4400988,
+                0.079
+              ],
+              [
+                "btreeParseCellPtr",
+                3914122,
+                0.07
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                3345095,
+                0.06
+              ],
+              [
+                "getPageNormal",
+                2904946,
+                0.052
+              ],
+              [
+                "moveToChild",
+                2709989,
+                0.049
+              ],
+              [
+                "getCellInfo",
+                2347284,
+                0.042
+              ]
+            ],
+            "fail_half": [
+              11,
+              10,
+              8,
+              12,
+              5
+            ],
+            "test_branches": 512
+          },
+          "4b_hybrid_all_reached": {
+            "cost": 119114815,
+            "steps": 64029,
+            "struct_cost": 1554,
+            "region_cost": 119113261,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                42700068,
+                0.358
+              ],
+              [
+                "btreeBeginTrans",
+                19310493,
+                0.162
+              ],
+              [
+                "btreeNext",
+                6628024,
+                0.056
+              ],
+              [
+                "sqlite3BtreeNext",
+                4716094,
+                0.04
+              ],
+              [
+                "allocateCursor",
+                4142515,
+                0.035
+              ],
+              [
+                "btreeParseCellPtr",
+                4015053,
+                0.034
+              ],
+              [
+                "moveToRoot",
+                3632667,
+                0.03
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                3377743,
+                0.028
+              ]
+            ],
+            "fail_half": [
+              0,
+              3,
+              0,
+              0,
+              0
+            ],
+            "test_branches": 512
+          },
+          "4c_hybrid_exact": {
+            "cost": 34336463,
+            "steps": 64029,
+            "struct_cost": 1554,
+            "region_cost": 34334909,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                17951342,
+                0.523
+              ],
+              [
+                "btreeParseCellPtr",
+                3756311,
+                0.109
+              ],
+              [
+                "sqlite3BtreeNext",
+                3034093,
+                0.088
+              ],
+              [
+                "getCellInfo",
+                2307731,
+                0.067
+              ],
+              [
+                "btreeNext",
+                2145058,
+                0.062
+              ],
+              [
+                "getPageNormal",
+                1373422,
+                0.04
+              ],
+              [
+                "moveToChild",
+                1283765,
+                0.037
+              ],
+              [
+                "sqlite3PcacheRelease",
+                666490,
+                0.019
+              ]
+            ],
+            "fail_half": [
+              439,
+              438,
+              432,
+              441,
+              438
+            ],
+            "test_branches": 512
+          },
+          "4c_hybrid_interval": {
+            "cost": 55613722,
+            "steps": 64029,
+            "struct_cost": 1554,
+            "region_cost": 55612168,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                21085871,
+                0.379
+              ],
+              [
+                "sqlite3BtreeNext",
+                4575813,
+                0.082
+              ],
+              [
+                "btreeNext",
+                4400988,
+                0.079
+              ],
+              [
+                "btreeParseCellPtr",
+                3914122,
+                0.07
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                3345095,
+                0.06
+              ],
+              [
+                "getPageNormal",
+                2904946,
+                0.052
+              ],
+              [
+                "moveToChild",
+                2709989,
+                0.049
+              ],
+              [
+                "getCellInfo",
+                2347284,
+                0.042
+              ]
+            ],
+            "fail_half": [
+              11,
+              10,
+              8,
+              12,
+              5
+            ],
+            "test_branches": 512
+          },
+          "4c_hybrid_all_reached": {
+            "cost": 119114815,
+            "steps": 64029,
+            "struct_cost": 1554,
+            "region_cost": 119113261,
+            "region_instances": 2,
+            "by_func": [
+              [
+                "sqlite3VdbeExec",
+                42700068,
+                0.358
+              ],
+              [
+                "btreeBeginTrans",
+                19310493,
+                0.162
+              ],
+              [
+                "btreeNext",
+                6628024,
+                0.056
+              ],
+              [
+                "sqlite3BtreeNext",
+                4716094,
+                0.04
+              ],
+              [
+                "allocateCursor",
+                4142515,
+                0.035
+              ],
+              [
+                "btreeParseCellPtr",
+                4015053,
+                0.034
+              ],
+              [
+                "moveToRoot",
+                3632667,
+                0.03
+              ],
+              [
+                "sqlite3VdbeMemGrow",
+                3377743,
+                0.028
+              ]
+            ],
+            "fail_half": [
+              0,
+              3,
+              0,
+              0,
+              0
+            ],
+            "test_branches": 512
+          }
+        },
+        "static_inline": {
+          "sqlite3_step": "infinite",
+          "sqlite3_column_int64": 611,
+          "sqlite3_reset": "infinite",
+          "sqlite3_bind_int64": "infinite"
+        },
+        "region_loops": [
+          231,
+          660,
+          665
+        ],
+        "region_static": {
+          "231": {
+            "blocks": 4,
+            "instr": 17,
+            "functions": 0,
+            "indirect_call_slots": 0,
+            "total_ir_instr": 251828
+          },
+          "660": {
+            "blocks": 5568,
+            "instr": 29638,
+            "functions": 162,
+            "indirect_call_slots": 598,
+            "total_ir_instr": 251828
+          },
+          "665": {
+            "blocks": 34944,
+            "instr": 188938,
+            "functions": 845,
+            "indirect_call_slots": 1323,
+            "total_ir_instr": 251828
+          }
+        },
+        "split_seeds": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "train_branches": 512
+      },
+      "check": {
+        "N": 1024,
+        "mean": 501812.751953125,
+        "costs": {
+          "0b_step_exact": 34771663,
+          "0c_all_reached_blocks": 183854052,
+          "0d_all_reached_instr": 1446653884,
+          "2a_step_interval": 56308416,
+          "0a_supersequence": 2880519
+        },
+        "greedy_slots": 367018,
+        "lower_bound_cost": 508394,
+        "lower_bound_slots": 64996,
+        "key_order": {
+          "keyX": {
+            "keys": 215620,
+            "acyclic": true,
+            "cost": 1566995,
+            "slots": 215620
+          },
+          "keyN": {
+            "keys": 546,
+            "acyclic": false
+          }
+        }
+      }
+    }
+  }
+}

@@ -787,7 +787,7 @@ class Workload:
         o = np.argsort(starts)
         starts, ends = starts[o], ends[o]
         ok = in_intervals((b_te.astype(np.int64) << 32) + t_te, starts, ends)
-        out["2b_func_interval"] = dict(cost=cost2b, steps=steps2b, fail=fails(bad_events=~ok),
+        out["2b_func_interval"] = dict(cost=int(cost2b), steps=int(steps2b), fail=fails(bad_events=~ok),
                                        call_paths=len(paths))
         # 3a exact structural keys (iteration-specific unrolling)
         kx_tr = np.unique(self.kx[evtr])
@@ -970,8 +970,9 @@ def region_static(loop):
                 ind += 1
             elif c >= 0 and c not in seen_f:
                 seen_f.add(c)
-                blocks.update(fb[c])
-                work.extend(fb[c])
+                new = set(fb[c]) - blocks
+                blocks.update(new)
+                work.extend(new)
     return dict(blocks=len(blocks), instr=int(sum(int(g["w"][b]) for b in blocks)), functions=len(seen_f),
                 indirect_call_slots=ind, total_ir_instr=int(g["w"].sum()))
 
@@ -987,6 +988,10 @@ def report(build, cache, run, kdir, splits="5"):
     W = Workload(run, kdir, jobs)
     N = W.N
     full = W.evaluate(np.ones(N, bool), np.zeros(N, bool), attribute=True)
+    # There is no held-out set in the full-data calculation. Its zero failures
+    # are vacuous; actual full-trace checks live in check_schedule.py.
+    for v in full.values():
+        del v["fail"]
     rob = defaultdict(list)
     for s in range(int(splits)):
         rng = np.random.default_rng(s)
@@ -1004,11 +1009,12 @@ def report(build, cache, run, kdir, splits="5"):
                 families={k: v | {"fail_half": rob[k], "test_branches": N - N // 2} for k, v in full.items()},
                 static_inline={k: (v if v != float("inf") else "infinite") for k, v in stat.items()},
                 region_loops=regs, region_static={str(l): region_static(l) for l in regs},
-                loop_static_trips_top=None)
-    json.dump(info, open(os.path.join(kdir, "schedule.json"), "w"), indent=1, default=str)
+                split_seeds=list(range(int(splits))), train_branches=N // 2)
+    json.dump(info, open(os.path.join(kdir, "schedule.json"), "w"), indent=1)
     m, mx = info["run_mean"], info["run_max"]
     print(f"N={N} one run: mean {m:.0f} IR instr, max {mx}; blocks mean {W.len.mean():.0f} max {W.len.max()}")
-    print(f"{'family':32} {'cost':>12} {'x mean':>9} {'x max':>9} {'steps':>9}  fail/{N - N // 2} (5 splits)")
+    print(f"{'family':32} {'cost':>12} {'x mean':>9} {'x max':>9} {'steps':>9}  "
+          f"fail/{N - N // 2} ({splits} splits)")
     for k, v in info["families"].items():
         print(f"{k:32} {v['cost']:>12} {v['cost'] / m:>9.2f} {v['cost'] / mx:>9.2f} {str(v['steps']):>9}  "
               f"{v['fail_half']}")

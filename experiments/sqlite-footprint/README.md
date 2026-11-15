@@ -4,9 +4,10 @@ Question: for the project's own target workload (Grover search whose oracle is a
 in-memory SQLite database, parameterised by a row id), how far is the slowest branch from the typical one
 (n4), and how many memory accesses have an address that differs between branches (n5)?
 
-Every number here is a **dynamic measurement over all N inputs**. It is a lower bound on what a coherent
-region must handle: a sound static analysis can only find more variation (more varying accesses, larger
-address sets, a larger step bound), never less.
+The footprint tables below are **dynamic measurements over all N inputs**. They bound the variation a coherent
+region must handle: a sound static analysis can only find more varying accesses, larger address sets and a larger
+step bound. The control-schedule section separately costs candidate schedules; a heuristic schedule need not be
+close to the cheapest one.
 
 ## Method
 
@@ -175,24 +176,229 @@ What these numbers do not show:
 - Nothing here is a gate count. The cost of one access of a given lookup size, and of one step of a machine whose
   program counter is in superposition, is not measured.
 
-## Control schedules (unfinished)
+## Control schedules (2026-11-15)
 
-`schedule.py` asks what a superposed program counter costs: a circuit that advances every branch by one step must
-contain all the code some branch may be executing at that step, and a schedule says which code each step provides.
-The work was stopped at a pause before it finished. Only `arith` at N = 256 completed, nothing was checked, and no
-write-up of method or limits exists yet. Treat these as preliminary.
+The cheap alignment in the initial measurement survives for the short point lookups, but does not generalise to
+all four queries. Exact structural alignment costs about 1.1–1.2 times a mean run for arith/like_name, about 4.9
+for like_note, and 3.0–3.1 for scan. Replacing iteration-specific paths with padded loop bodies is substantially
+more expensive. These are **forward IR instruction costs in a trace-derived control model**, not gate counts,
+execution times, or bounds obtained by a compiler. Every family still depends on observations.
 
-| Schedule family (arith, N = 256; one run is 3,749 instructions) | Cost against one run |
+### Cost model and families
+
+An event is entry to one LLVM basic block, including entries to callees. Its weight is that block's original IR
+instruction count, including its terminator and calls, excluding instrumentation. Each branch supplies a sequence
+of these events. A schedule supplies blocks at positions; its cost is the sum of their weights, counting a block
+again at each position that provides it. Costs below are divided by that workload's **mean** executed IR count,
+not its mean block count or its maximum. Nothing is multiplied by N: this is code provision for a coherent run,
+not the total work of enumerating N branches.
+
+- **0a, waiting / greedy:** a common supersequence of the block traces. Emit whichever block is next for the most
+  unfinished branches (ties: smallest block id); matching branches advance, others wait. This constructs a valid
+  schedule on the traces, with no optimality guarantee.
+- **0b, step exact:** at block-event offset t, provide each distinct block observed at t once. Branches advance
+  at the same rate. **0c** provides the union of reached blocks at every block-event step up to the longest run;
+  **0d** provides every reached IR instruction at every instruction step up to the largest executed IR count.
+  0d uses a different step unit; both still charge in instructions.
+- **2a, global intervals:** provide block b at every block-event offset from its earliest to its latest occurrence.
+  **2b, function intervals:** use block offsets within frames and call-entry offsets within callers, merge those
+  intervals across all frames, add the intervals along each reached call path, then union overlapping intervals
+  for the same block. This discards correlations; it need not improve on 2a.
+- **3a, exact structure:** identify an event by its call-site path, enclosing loop iteration indices and block.
+  Provide each distinct key once. This costs the union of the iteration-specific paths, not a Cartesian product
+  of every body's alternatives. A common order is an extra requirement: the independent check below verifies it.
+- **3b, instance padding:** remove iteration indices from the structural keys, union the reached body blocks, and
+  multiply each block's weight by the product of enclosing loop maxima. A maximum is taken per normalised loop
+  instance (call-site/loop path). This also repeats reached callees at their call sites, and combines maxima that
+  may never occur together. **3c** instead shares one observed maximum across every instance of a static loop.
+- **3d, all arms:** use 3c's loop maxima, but include all static blocks in each reached function/loop body, not
+  just the blocks observed there. Calls and nested-loop instances are still included only where observed; this
+  is not an all-static schedule.
+- **4b / 4c, hybrid:** use 3b / 3c outside selected regions and a step machine inside them. The regions are the
+  main `sqlite3VdbeExec` dispatch loop and the two irreducible SCC loops. Within each normalised region instance,
+  use exact step sets, per-block step intervals, or every reached block at every step; multiply by the surrounding
+  structured loop maxima. Each region instance's step offset includes its callees.
+
+The CFG supplies an SCC loop forest: identify cycle headers, remove edges back into them, then recurse. Two
+loops are irreducible (multiple headers). The trace pass reconstructs calls and iterations, checks every
+intra-frame CFG transition, requires each frame to end on `ret`, and rejects duplicate exact keys within a branch.
+Indirect calls are attributed by the next compatible call slot in the current block, not by a separately recorded
+call-site event; this remains an attribution limit even when reconstruction reports no issues.
+
+### All workloads
+
+Full integer costs, steps, function attribution, all five split outcomes and independent checks are saved in
+[`schedules.json`](schedules.json). Columns below use A = arith, L = like_name, T = like_note, S = scan.
+Family rows are multiples of the mean run; the first two rows give absolute instruction counts.
+
+| Family | A256 | L256 | T256 | S256 | A1024 | L1024 | T1024 | S1024 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Mean run (IR instructions) | 3,748.61 | 3,567.27 | 4,142.44 | 125,336.86 | 3,871.01 | 3,684.42 | 4,255.09 | 501,812.75 |
+| Max run (IR instructions) | 3,909 | 3,907 | 18,616 | 125,753 | 4,016 | 4,006 | 18,738 | 503,009 |
+| 0a waiting / greedy | 7.96 | 6.47 | 12.36 | 5.01 | 7.84 | 5.89 | 12.37 | 5.74 |
+| 0b step exact | 22.30 | 28.25 | 52.87 | 51.31 | 24.07 | 32.44 | 87.78 | 69.29 |
+| 0c all reached / block step | 422.35 | 490.08 | 2940.04 | 368.29 | 421.78 | 488.06 | 2822.22 | 366.38 |
+| 0d all reached / instr step | 2715.42 | 3039.28 | 16308.61 | 2885.55 | 2701.53 | 3017.21 | 15655.02 | 2882.86 |
+| 2a global intervals | 32.34 | 41.38 | 692.45 | 108.18 | 32.43 | 41.70 | 681.25 | 112.21 |
+| 2b function intervals | 29.69 | 40.19 | 755.10 | 118.57 | 29.62 | 40.70 | 715.33 | 120.28 |
+| 3a exact structure | 1.08 | 1.16 | 4.85 | 3.04 | 1.07 | 1.18 | 4.86 | 3.12 |
+| 3b instance padding | 12.63 | 10.12 | 77.10 | 17.46 | 13.38 | 10.87 | 75.43 | 17.21 |
+| 3c static-loop padding | 12.63 | 10.17 | 77.16 | 17.46 | 13.38 | 10.92 | 75.47 | 17.21 |
+| 3d all arms | 67.51 | 51.78 | 319.49 | 94.09 | 67.57 | 53.05 | 311.95 | 92.77 |
+| 4b hybrid exact | 12.02 | 13.69 | 23.80 | 50.38 | 13.43 | 15.54 | 39.93 | 68.42 |
+| 4b hybrid intervals | 20.23 | 21.49 | 105.45 | 106.57 | 21.24 | 22.45 | 111.87 | 110.83 |
+| 4b hybrid all reached | 162.57 | 204.52 | 1791.83 | 236.42 | 165.07 | 206.45 | 1729.24 | 237.37 |
+| 4c hybrid exact | 12.02 | 13.69 | 23.81 | 50.38 | 13.43 | 15.54 | 39.93 | 68.42 |
+| 4c hybrid intervals | 20.23 | 21.49 | 105.45 | 106.57 | 21.24 | 22.45 | 111.87 | 110.83 |
+| 4c hybrid all reached | 162.57 | 204.52 | 1791.83 | 236.42 | 165.07 | 206.45 | 1729.24 | 237.37 |
+
+The difference between 3b and 3c is real but small here: sharing maxima across loop instances adds work for the
+text queries; it adds none for arith or scan. At N=1024, `patternCompare` accounts for 86.2% of like_note's padded
+3b cost (276,740 of 320,962), and 86.0% of its 3d cost. In arith/1024, the largest 3b contributions are
+`sqlite3BtreeTableMoveto` (37.3%), `sqlite3VdbeExec` (21.9%) and `btreeBeginTrans` (10.5%). This is measured
+attribution of the padding cost, not evidence that these functions dominate a circuit's gate count. Keeping the
+VDBE interpreter as a step machine (family 4) does not automatically make this cost smaller.
+
+### Does half the input domain cover the other half?
+
+For each workload and seed 0,1,2,3,4, NumPy's `default_rng(seed).permutation(N)` selects N/2 training rows and
+N/2 held-out rows. Build the schedule and all bounds from training rows only. A branch fails if any of its
+positions/keys/loop trips is absent or outside those bounds; 0a is tested as a subsequence. For structured and
+hybrid families this checks the model's presence and trip conditions, not an emitted circuit. Each table entry
+is the **minimum–maximum number of missed held-out rows** across five splits (out of 128 or 512). The JSON
+contains the individual counts, so a zero minimum cannot be mistaken for five clean splits.
+
+| Family | A256 | L256 | T256 | S256 | A1024 | L1024 | T1024 | S1024 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0a waiting / greedy | 2–9 | 1–7 | 2–11 | 3–8 | 1–10 | 1–4 | 1–6 | 1–14 |
+| 0b step exact | 77–89 | 48–75 | 108–110 | 108–115 | 71–82 | 41–54 | 178–204 | 432–441 |
+| 0c all reached / block step | 0–5 | 0–2 | 0–7 | 0–1 | 0–1 | 0–1 | 0–1 | 0–3 |
+| 0d all reached / instr step | 0–5 | 0–2 | 0–7 | 0–1 | 0–1 | 0–2 | 0–1 | 0–1 |
+| 2a global intervals | 9–22 | 5–20 | 9–21 | 2–12 | 6–24 | 3–16 | 8–19 | 5–12 |
+| 2b function intervals | 7–17 | 2–11 | 5–13 | 1–8 | 6–23 | 1–11 | 3–15 | 3–7 |
+| 3a exact structure | 0–4 | 0–4 | 2–12 | 75–94 | 0–2 | 0–3 | 7–14 | 315–333 |
+| 3b instance padding | 0–4 | 0–2 | 0–7 | 0 | 0 | 0–1 | 0–1 | 0–3 |
+| 3c static-loop padding | 0–4 | 0–2 | 0–7 | 0 | 0 | 0–1 | 0–1 | 0–3 |
+| 3d all arms | 0 | 0 | 0–5 | 0 | 0 | 0–1 | 0–1 | 0–3 |
+| 4b hybrid exact | 77–89 | 48–75 | 105–108 | 108–115 | 71–82 | 41–54 | 163–187 | 432–441 |
+| 4b hybrid intervals | 9–22 | 5–20 | 7–20 | 2–12 | 6–24 | 3–16 | 6–18 | 5–12 |
+| 4b hybrid all reached | 0–5 | 0–2 | 0–7 | 0–1 | 0–1 | 0–1 | 0–1 | 0–3 |
+| 4c hybrid exact | 77–89 | 48–75 | 105–108 | 108–115 | 71–82 | 41–54 | 163–187 | 432–441 |
+| 4c hybrid intervals | 9–22 | 5–20 | 7–20 | 2–12 | 6–24 | 3–16 | 6–18 | 5–12 |
+| 4c hybrid all reached | 0–5 | 0–2 | 0–7 | 0–1 | 0–1 | 0–1 | 0–1 | 0–3 |
+
+Even a family with five clean splits has only passed this particular coverage experiment. The N=256 text tail
+shows why maxima learned from samples are not sound bounds. The exact structural union also misses paths that
+only held-out rows take. Exhaustively tracing all N inputs covers this fixed database, warm state and parameter
+domain; it says nothing about another database, SQLite build, query, layout or input domain.
+
+### Checks and the 7.96 versus 2.04 discrepancy
+
+The previously completed arith/256 report was first rerun from fresh prep/trace data and matched all 16 families'
+costs, steps and split failures exactly. The trace pass completed all eight workloads without reconstruction
+issues. [`check_schedule.py`](check_schedule.py) independently recomputes 0a, 0b, 0c, 0d and 2a from `blk.*.bin`
+and `blocks.tsv`, without importing `schedule.py`; all match. Its heap/bucket majority merge also verifies that
+every original branch is a subsequence. Mean/max block and instruction counts match the separate footprint
+analysis. The structural check verifies unique per-branch exact keys, one block per key, and an acyclic union of
+all per-branch key orders. Thus a topological order supplies a **valid waiting schedule with 3a's cost on every
+measured workload**. Merely counting keys would not establish that. The normalised-key order is cyclic, so
+normalised keys cannot simply be emitted once.
+
+A further lower bound on any waiting schedule is `sum_b weight(b) * max_r count_r(b)`: every block must be
+provided at least as often as the branch using it most. This ignores order conflicts, so need not be attainable.
+
+| Workload | Multiplicity lower bound, cost (× mean) | Exact-key waiting schedule, cost (× mean) | Greedy waiting, cost (× mean) |
+|---|---:|---:|---:|
+| 256/arith | 4,042 (1.078) | 4,052 (1.081) | 29,843 (7.961) |
+| 256/like_name | 4,085 (1.145) | 4,151 (1.164) | 23,079 (6.470) |
+| 256/like_note | 19,344 (4.670) | 20,087 (4.849) | 51,198 (12.359) |
+| 256/scan | 127,158 (1.015) | 380,544 (3.036) | 627,723 (5.008) |
+| 1024/arith | 4,143 (1.070) | 4,158 (1.074) | 30,348 (7.840) |
+| 1024/like_name | 4,261 (1.156) | 4,365 (1.185) | 21,712 (5.893) |
+| 1024/like_note | 19,350 (4.547) | 20,701 (4.865) | 52,616 (12.365) |
+| 1024/scan | 508,394 (1.013) | 1,566,995 (3.123) | 2,880,519 (5.740) |
+
+The exact-key construction proves that greedy-majority's cost is far from optimal on arith; the constructed
+waiting schedules are within 0.4% of the multiplicity lower bound at both sizes. At N=256 the
+original 7.96 is 29,843 instructions / 3,748.609375; at N=1024 the same algorithm gives 30,348 / 3,871.009765625
+= 7.84, in 5,373 **block** slots. Those slots / mean block count is 8.96, not 2.04. N and the block/instruction
+unit conversion do not explain the difference.
+
+[`docs/AUDITION.md`, Opus B](../../docs/AUDITION.md) reported “7,886 slots = 2.04x” for arith/1024; dividing by
+3,871.01 shows that its “slots” were charged in instructions. Its accompanying step-aligned 93,186 reproduces
+exactly here. No implementation for that merge is recorded in the proposal or the measurement files checked
+here, and 7,886 is **not reproduced** by the specified majority rule. An independently tried sum-distance greedy gives 54,560 instead
+(14.09x). The 4,158-cost exact-key waiting schedule and the 4,143 multiplicity bound show that 7,886 is entirely
+plausible as a different, suboptimal merge; there is no contradiction in possible schedule cost. There is no
+basis to identify its exact merge rule or event granularity, or retain 2.04 as a validated result. Use the reproducible figures above.
+
+### What can a compiler build without running the program?
+
+The schedule *forms* are available statically; their measured bounds and pruning generally are not.
+
+| Form | What makes it sound without observing executions |
 |---|---|
-| Structured, with the exact loop trip counts from the traces | 1.08 |
-| Structured, loops padded to the largest trip count seen | 12.6 |
-| Structured, both arms of every conditional provided | 67.5 |
-| Step-aligned, exactly the blocks some branch runs at each step | 22.3 |
-| Step intervals per block | 32.3 |
-| Every reached block at every step | 422 |
-| Every reached instruction at every instruction step | 2,715 |
+| 0a waiting / 3a iteration-specific structure | A bounded CFG/call expansion and a common order for its admitted paths; a sound over-approximation suffices. Matching the small traced union additionally needs iteration-specific reachability information. Enumerating CFG paths can explode in size; the traced key DAG establishes only these measured paths. |
+| 0b exact step sets | Propagate reachable control states for each bounded step, including call/return state. Sound over-approximation is possible; matching these exact sets requires resolving their data-dependent reachability. |
+| 2a / 2b intervals | Sound earliest/latest block and call-entry bounds, from loop/recursion analysis or a region step budget. Without either, a finite latest offset need not be provable; interval propagation also loses correlations. |
+| 3b / 3c / 3d structured padding | Restructure the CFG, resolve call targets and bound every loop and recursion depth. 3c's global per-loop bound and 3d's static bodies are straightforward forms, but the observed maxima and reached call/loop instances here still need proof or replacement. |
+| 4 hybrid | Use structured code where such bounds are known, bounded dispatch inside the remaining regions. Its inner block sets and outer bounds must be sound; observed region sizes are insufficient. |
+| 0c / 0d universal fallback | Provide all possibly executable code, not just reached code, with a chosen whole-region step budget and explicit call/return/indirect-target state. Include a done/fault state and handle budget exhaustion according to the region contract. 0d is the direct instruction-step form. This needs no data-dependent loop bound to be semantically total. |
 
-Open points for whoever finishes it: the other workloads (`arith` at 1,024, `like_note`, `scan`); the split-half
-test of whether a schedule built from half the branches covers the other half; why the common-supersequence figure
-here (7.96) differs from the 2.04 another calculation reported at N = 1,024; and which families a compiler could
-build without running the program.
+A whole-region instruction budget B also supplies conservative per-loop iteration and recursion-depth bounds.
+Using B throughout nested structured expansion can make the product enormous; it does not recover the cheap
+observed maxima. No exact reachability solver is required for the expensive fallback. The done/fault behaviour
+must preserve the [documented region contract](../../docs/DESIGN.md).
+
+The static measurements explain part of the gap. There are 48,365 blocks / 251,828 IR instructions in this
+SQLite build, versus 404 / 2,604 reached by arith. Inlining direct callees at every call site (loops counted once,
+indirect calls omitted) encounters a direct-call cycle from `sqlite3_step`, `sqlite3_reset` and
+`sqlite3_bind_int64`; the naive expansion is infinite. This is a syntactic call-graph result, not a claim that
+these executions recurse without bound. `sqlite3_column_int64` expands to 611 instructions.
+
+The dispatch region plus its direct-call closure contains 34,944 blocks / 188,938 instructions, 845 called
+functions and 1,323 indirect-call slots. The irreducible VDBE loop's closure is 5,568 / 29,638, with 598 indirect
+slots; the tokenizer loop is 4 / 17. These closures **omit indirect callees**, so even these are lower bounds on
+an IR-only region machine's code provision. Taking all 251,828 instructions and arith/1024's observed maximum
+of 4,016 instruction steps would cost about 261,260 mean runs in the 0d model; the maximum itself is still an
+observation, not a proved budget. Specialising the prepared VDBE bytecode and propagating concrete database
+facts might narrow the code and bounds. That improvement has not been measured here.
+
+### Reproduce and limits
+
+After building and tracing the workloads as above (Python 3 and NumPy required):
+
+```sh
+mkdir -p .tmp/sqlite-footprint/sched
+python3 experiments/sqlite-footprint/schedule.py prep .tmp/sqlite-footprint/build .tmp/sqlite-footprint/sched/ir.pkl
+# Repeat for N=256,1024 and q=arith,like_name,like_note,scan:
+N=256 q=arith
+JOBS=3 python3 experiments/sqlite-footprint/schedule.py trace .tmp/sqlite-footprint/build .tmp/sqlite-footprint/sched/ir.pkl .tmp/sqlite-footprint/runs/$N/$q .tmp/sqlite-footprint/sched/$N/$q
+JOBS=3 python3 experiments/sqlite-footprint/schedule.py report .tmp/sqlite-footprint/build .tmp/sqlite-footprint/sched/ir.pkl .tmp/sqlite-footprint/runs/$N/$q .tmp/sqlite-footprint/sched/$N/$q 5
+python3 experiments/sqlite-footprint/check_schedule.py .tmp/sqlite-footprint/build .tmp/sqlite-footprint/runs/$N/$q .tmp/sqlite-footprint/sched/$N/$q
+```
+
+The scan report aggregates about 65 million events at N=1024. Measuring N=256 first gave a 694,488 KiB
+peak; scaling by events predicted about 10.6 GiB. The N=1024 report completed in 13:31.51 with a measured peak
+of 9,847,624 KiB (9.39 GiB), under a 14 GiB address-space ceiling. Run these sequentially;
+the full report retains several event-sized arrays. The checker reads structural data one branch at a time.
+
+Limits beyond the footprint study's data and coverage caveats:
+
+- These schedules have not been lowered to coherent circuits. Branch masks, program-counter comparisons,
+  coherent call/return and loop state, reversible history, uncomputation, memory/address selection, and gates
+  for arithmetic are not charged. Reverse execution is not included. An instruction-weight ratio is no speedup
+  claim, and a valid block supersequence does not itself establish a reversible implementation.
+- The trace records **block entries**, while calls may occur within a block. The caller's weight is charged at
+  entry even though its instructions surround callee executions. A real compiler must split at calls and respect
+  SSA/data dependencies; the exact block-offset tables would change. Instructions inside libc/intrinsics remain
+  uncounted, particularly in like_note's expensive text scan and copies.
+- The independent checks cover the trace-only families and 3a's waiting order. The padded, interval-composition
+  and hybrid costs additionally rely on the documented model and code audit; no separate circuit validates them.
+  Reconstruction checks constrain the trace parser, but do not independently identify indirect call sites.
+- The implementation packs block ids into 16 bits, region offsets into 18 bits and uses 64-bit structural hashes.
+  The measured traces fit those ranges, have unique exact keys within every branch, and show no key-to-block
+  conflicts. These checks are evidence for this dataset, not a general collision-free key representation.
+- Sample coverage is not a proof of static reachability or trip bounds. Keeping every instruction and enforcing
+  the documented region budget is the sound fallback; recovering the cheap measured schedules statically remains
+  compiler work.
