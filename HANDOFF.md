@@ -41,7 +41,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (199 tests; ignored: 1 heavy reference run, 1 heavy recomputation check, 1 witness of a measurement gap; about 5 s, no LLVM needed) and `front/test.sh` (142 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (207 tests; ignored: 4 heavy reference or generated runs, 1 heavy recomputation check, 2 witnesses of wrong results; about 5 s, no LLVM needed) and `front/test.sh` (142 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check that needs `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -301,6 +301,14 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
    allocated, rotated and read inside one region (it checks each world's share for zero; the executor sums the
    shares and checks the norm when all worlds stop), and its lockstep gives no interference when worlds' paths
    differ in length.
+   Its independent testing pass (`9b3fd45`, sol; the whole-world reference plugged into the executor): 256 generated
+   coherent programs, 729 dense un-run cases (557 equal, 172 refusals exactly where the reads no longer match),
+   2,048 whole-state split/merge images, 64 `apply`/idiom comparisons, sampling by weight at measurement and end
+   of run (4,096 seeds each, within 0.035 per bin), 11,129 reference comparisons across every executor test. One
+   wrong result: **a later split hides an earlier changed read**, so a rewind that must fault `bad_rewind` returns
+   success with (q, out) = (1, 1) (`worlds_independent.rs`, ignored witness; read checks are switched off below
+   the later split point). The two earlier differences from the reference are decided by `docs/DESIGN.md`
+   ("Worlds") in the executor's favour.
    The implementer's order for the rest (done: 1 mark/rewind, 2 worlds): worlds (a superposition of whole machine states, split where a call passes
    a register as an integer, merged where equal), the memory overlay, address-taking gates, then `apply` as mark,
    call, rewind-keep shown equal on every example and test.
