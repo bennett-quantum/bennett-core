@@ -13,6 +13,7 @@ rand_chacha.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+nalgebra = { version = "0.33", default-features = false, features = ["std"] }
 num-complex.workspace = true
 rand = { workspace = true, features = ["alloc"] }
 
