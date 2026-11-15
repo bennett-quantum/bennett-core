@@ -29,15 +29,27 @@ const MIDDLE: [&str; 9] = [
     "x %q[0] ctrl %r",
 ];
 
-fn program(middle: &[&str]) -> String {
+/// The program with gates `middle`; with `memory`, each world also writes memory between the read and
+/// the rewind (the callee at an address that depends on the value read, the caller the value), so the
+/// worlds' overlays differ and the rewind must restore them for the worlds to merge.
+fn program(middle: &[&str], memory: bool) -> String {
     let middle: String = middle.iter().map(|gate| format!("    {gate}\n")).collect();
+    let (callee_store, caller_store) = if memory {
+        (
+            "    %w = zext i2 %z to i8\n    %a = zext i2 %x to i64\n    %p = add i64 %a, 8\n    store i8 %w, %p\n",
+            "    %yb = zext i2 %y to i8\n    store i8 %yb, 32\n",
+        )
+    } else {
+        ("", "")
+    };
     format!(
-        "memory 64
+        "memory 256
+data 8 = i8 7, i8 7, i8 7, i8 7
 func @f(i2 %x) -> i2 {{
 entry:
     %y = mul i2 %x, 3
     %z = add i2 %y, 1
-    ret %z
+{callee_store}    ret %z
 }}
 func @main() {{
 entry:
@@ -50,7 +62,7 @@ entry:
     rx(0.3) %o[0]
     %m = mark
     %y = call @f(%q)
-{middle}    rewind %m keep (%y -> %o)
+{caller_store}{middle}    rewind %m keep (%y -> %o)
     h %q[0]
     ret
 }}
@@ -136,6 +148,14 @@ fn expected(module: &ValidModule) -> Option<Dense> {
     Some(total)
 }
 
+/// No gates, each gate, and each pair, without and with memory writes in the worlds.
+fn cases() -> Vec<(Vec<&'static str>, bool)> {
+    let mut middles: Vec<Vec<&str>> = vec![Vec::new()];
+    middles.extend(MIDDLE.iter().map(|&g| vec![g]));
+    middles.extend(MIDDLE.iter().flat_map(|&a| MIDDLE.iter().map(move |&b| vec![a, b])));
+    [false, true].into_iter().flat_map(|memory| middles.iter().map(move |middle| (middle.clone(), memory))).collect()
+}
+
 fn run(module: &ValidModule, options: Options) -> (Outcome, Executor<'_>) {
     let mut executor =
         Executor::new(module, module.function_named("main").expect("@main"), &[], options).expect("starts");
@@ -144,19 +164,26 @@ fn run(module: &ValidModule, options: Options) -> (Outcome, Executor<'_>) {
 
 #[test]
 fn un_running_through_gates_across_worlds_is_the_conjugated_xor() {
-    let mut cases: Vec<Vec<&str>> = vec![Vec::new()];
-    cases.extend(MIDDLE.iter().map(|&g| vec![g]));
-    cases.extend(MIDDLE.iter().flat_map(|&a| MIDDLE.iter().map(move |&b| vec![a, b])));
+    let cases = cases();
     let (mut matched, mut refused) = (0, 0);
     let options = Options { budget: Some(10_000), max_configurations: Some(1 << 10), ..Options::default() };
-    for middle in &cases {
-        let module = bennett_ir::load(&program(middle)).expect("valid");
+    for (middle, memory) in &cases {
+        let module = bennett_ir::load(&program(middle, *memory)).expect("valid");
         let (outcome, executor) = run(&module, options);
         match expected(&module) {
             Some(dense) => {
                 assert_eq!(outcome, Outcome::Returned(None), "{middle:?}");
                 let snapshot = executor.snapshot();
                 assert!(snapshot.worlds.is_empty(), "{middle:?}: the worlds merged");
+                assert_eq!(&snapshot.classical.memory[8..12], &[7; 4], "{middle:?}: memory restored");
+                assert_eq!(snapshot.classical.memory[32], 0, "{middle:?}: memory restored");
+                let stats = executor.stats();
+                assert_eq!(stats.overlay_bytes, 0, "{middle:?}: one world again, its overlay folded");
+                if *memory {
+                    // Every world wrote one byte in the callee (its value is never the base's 7) and the
+                    // caller's byte where the value read is not 0.
+                    assert!(stats.peak_overlay_bytes >= 4, "{middle:?}: {stats:?}");
+                }
                 for basis in 0..32 {
                     let found = snapshot.quantum.amplitude(&dense.config(basis));
                     assert!(
@@ -190,10 +217,10 @@ fn un_running_through_gates_across_worlds_is_the_conjugated_xor() {
             }
         }
     }
-    // 91 cases. 18 contain the gate that carries o into q; the dense calculation finds 16 of them
+    // 91 cases, without and with memory writes. 18 contain the gate that carries o into q; the dense calculation finds 16 of them
     // unfaithful, and the executor refuses exactly those. The other two: the gate twice is the identity,
     // and after `h %q[1]` the carried X conjugates into a phase Z on q[1], which leaves q's value alone.
-    assert_eq!((matched, refused), (75, 16));
+    assert_eq!((matched, refused), (150, 32));
 }
 
 /// The same programs against the independent whole-world reference (`oracle_support::worlds`, written
@@ -205,14 +232,12 @@ fn un_running_through_gates_across_worlds_is_the_conjugated_xor() {
 fn the_whole_world_reference_agrees_where_worlds_stay_in_step() {
     use oracle_support::worlds::{Finish, Model, basis};
     use oracle_support::worlds_executor::assert_snapshot;
-    let mut cases: Vec<Vec<&str>> = vec![Vec::new()];
-    cases.extend(MIDDLE.iter().map(|&g| vec![g]));
-    cases.extend(MIDDLE.iter().flat_map(|&a| MIDDLE.iter().map(move |&b| vec![a, b])));
+    let cases = cases();
     let (mut agreed, mut both_refused) = (0, 0);
     let options =
         Options { budget: Some(10_000), max_configurations: Some(1 << 10), reversible: true, ..Options::default() };
-    for middle in &cases {
-        let module = bennett_ir::load(&program(middle)).expect("valid");
+    for (middle, memory) in &cases {
+        let module = bennett_ir::load(&program(middle, *memory)).expect("valid");
         let model = Model::new(&module, "main");
         let reference = model.run(basis(model.initial("main", &[])), 1_000);
         let (outcome, executor) = run(&module, options);
@@ -230,7 +255,7 @@ fn the_whole_world_reference_agrees_where_worlds_stay_in_step() {
             agreed += 1;
         }
     }
-    assert_eq!((agreed, both_refused), (75, 16));
+    assert_eq!((agreed, both_refused), (150, 32));
 }
 
 /// cargo test -p bennett-exec --test worlds_oracle three_gate -- --ignored --nocapture

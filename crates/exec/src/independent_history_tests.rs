@@ -37,7 +37,7 @@ fn state(e: &Executor<'_>) -> State {
     let j = e.journal.as_ref().expect("journal");
     let q = &e.quantum;
     State {
-        memory: e.memory.clone(),
+        memory: e.memory.to_vec(),
         frames: e.frames.iter().map(|f| (f.func.0, f.block.0, f.inst, f.base, f.entry_stack_pointer)).collect(),
         slots: e.slots[..e.live_top()].to_vec(),
         stack: e.stack_pointer,
@@ -102,8 +102,8 @@ fn independent_checker_exhausts_mark_and_nested_rewind_on_clean_and_dirty_histor
             for (at, &value) in [1, 3, 4].into_iter().zip(&input[2..5]) {
                 e.slots[slot(at).index()] = value.into();
             }
-            e.memory[16] = input[5] as u8;
-            e.memory[17] = input[6] as u8;
+            e.memory.write(16, &[input[5] as u8]);
+            e.memory.write(17, &[input[6] as u8]);
             e.tape.push(input[7] as u8);
             if dirty {
                 let j = e.journal.as_mut().expect("journal");
@@ -195,7 +195,7 @@ fn independent_checker_includes_stale_handle_fault_states_without_erasing_histor
         let Inst::Mark { dst } = module.functions[0].blocks[0].insts[1] else { panic!("mark") };
         e.slots[dst.index()] = 0; // stale: mark not run
         e.frames[0].inst = 6;
-        e.memory[16] = values[1] as u8;
+        e.memory.write(16, &[values[1] as u8]);
         let journal = e.journal.as_mut().expect("journal");
         journal.push_word(values[2].into());
         journal.push(Undo::Store);

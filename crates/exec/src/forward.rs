@@ -168,7 +168,7 @@ impl<'m> Executor<'m> {
         let (low, high) = (range.start..range.start + 16, range.start + 16..range.end);
         self.record_word(self.read_bytes(low));
         self.record_word(self.read_bytes(high));
-        self.memory[range].copy_from_slice(&record);
+        self.memory.write(range.start, &record);
         self.write_slot(dst, 0);
         self.record(Undo::Setjmp);
         self.advance();
@@ -181,8 +181,10 @@ impl<'m> Executor<'m> {
     /// (a frame that returned, or one outside a coherent region) faults instead of jumping.
     fn longjmp(&mut self, buffer: u64, value: u128) -> Result<(), Fault> {
         let range = self.jump_record_range(buffer)?;
+        let mut record = [0u8; JUMP_RECORD_BYTES as usize];
+        self.memory.read_into(range, &mut record);
         let mut words = [0u64; 4];
-        for (word, chunk) in words.iter_mut().zip(self.memory[range].as_chunks::<8>().0) {
+        for (word, chunk) in words.iter_mut().zip(record.as_chunks::<8>().0) {
             *word = u64::from_le_bytes(*chunk);
         }
         let [frame_word, position, entry_stack_pointer, stack_pointer] = words;
@@ -274,13 +276,12 @@ impl<'m> Executor<'m> {
     /// The bytes at `range`, little-endian, unmasked.
     pub(crate) fn read_bytes(&self, range: std::ops::Range<usize>) -> u128 {
         let mut bytes = [0; 16];
-        bytes[..range.len()].copy_from_slice(&self.memory[range]);
+        self.memory.read_into(range.clone(), &mut bytes[..range.len()]);
         u128::from_le_bytes(bytes)
     }
 
     pub(crate) fn write_bytes(&mut self, range: std::ops::Range<usize>, value: u128) {
-        let len = range.len();
-        self.memory[range].copy_from_slice(&value.to_le_bytes()[..len]);
+        self.memory.write(range.start, &value.to_le_bytes()[..range.len()]);
     }
 
     fn load(&self, address: u64, width: Width) -> Result<u128, Fault> {

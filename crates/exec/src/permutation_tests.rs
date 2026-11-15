@@ -131,6 +131,9 @@ entry:
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct Key {
     memory: Vec<u8>,
+    /// How the memory is held: the overlay over the shared base (`memory.rs`). Normal, so it follows from
+    /// `memory` once the base is fixed; kept to check that a step restores the representation too.
+    overlay: Vec<(usize, u8)>,
     frames: Vec<(u32, u32, usize, usize, u64)>,
     slots: Vec<u128>,
     stack_pointer: u64,
@@ -148,8 +151,10 @@ fn key(executor: &Executor) -> Key {
     let journal = executor.journal.as_ref().expect("the checks run reversibly");
     let live = executor.live_top();
     let rounded = |x: f64| (x * 1e9).round() as i64;
+    assert!(executor.memory.is_normal(), "an overlay entry equal to the base");
     Key {
-        memory: executor.memory.clone(),
+        memory: executor.memory.to_vec(),
+        overlay: executor.memory.overlay(),
         frames: executor.frames.iter().map(|f| (f.func.0, f.block.0, f.inst, f.base, f.entry_stack_pointer)).collect(),
         slots: executor.slots[..live].to_vec(),
         stack_pointer: executor.stack_pointer,
@@ -221,6 +226,9 @@ struct Fixture<'m> {
     entry: FuncId,
     args: Vec<u64>,
     dirty: bool,
+    /// Whether memory is held as an overlay over a shared base (as with several worlds), and the base's
+    /// byte at each of `BYTES` under it; `None`: one world owning its memory.
+    shared: Option<u8>,
 }
 
 impl<'m> Fixture<'m> {
@@ -228,6 +236,12 @@ impl<'m> Fixture<'m> {
     fn at(&self, steps: usize) -> Executor<'m> {
         let options = Options { reversible: true, budget: Some(10_000), ..Options::default() };
         let mut executor = Executor::new(self.module, self.entry, &self.args, options).expect("starts");
+        if let Some(byte) = self.shared {
+            for address in BYTES {
+                executor.memory.write(address, &[byte]);
+            }
+            executor.memory.pin();
+        }
         if self.dirty {
             make_dirty(&mut executor);
         }
@@ -245,7 +259,7 @@ fn assign(executor: &mut Executor, places: &[Place], values: &[u128]) {
                 let index = executor.frames[frame].base + slot.index();
                 executor.slots[index] = value;
             }
-            Place::Byte(address) => executor.memory[address] = value as u8,
+            Place::Byte(address) => executor.memory.write(address, &[value as u8]),
         }
     }
 }
@@ -488,9 +502,13 @@ fn check_rewinds(fixture: &Fixture) -> usize {
     checked
 }
 
+/// Memory owned by one world, and memory as an overlay over a shared base whose bytes at `BYTES` are one
+/// of the values a check assigns, or neither (so every assigned byte is in the overlay).
+const SHARED: [Option<u8>; 3] = [None, Some(0x5a), Some(0x33)];
+
 fn fixtures(module: &ValidModule) -> Vec<Fixture<'_>> {
     let mut fixtures = Vec::new();
-    for dirty in [false, true] {
+    for (dirty, shared) in [false, true].into_iter().flat_map(|dirty| SHARED.map(|shared| (dirty, shared))) {
         // Down each arm of @steps (a switch default, the right arm, an exit, a fault, a division by zero)
         // and each arm of @mix.
         let runs = [
@@ -504,7 +522,7 @@ fn fixtures(module: &ValidModule) -> Vec<Fixture<'_>> {
         ];
         for (name, args) in runs {
             let entry = module.function_named(name).expect("entry");
-            fixtures.push(Fixture { module, entry, args: args.to_vec(), dirty });
+            fixtures.push(Fixture { module, entry, args: args.to_vec(), dirty, shared });
         }
     }
     fixtures
@@ -518,14 +536,14 @@ fn every_journalled_step_is_a_bijection_on_clean_and_dirty_history() {
         .map(check_single_steps)
         .fold((0, 0), |(c, f), (checked, faults)| (c + checked, f + faults));
     // The counts pin the coverage: a change to the program or the value sets shows here.
-    assert_eq!((checked, faults), (38_360, 3_016), "single steps checked, and faulting ones among them");
+    assert_eq!((checked, faults), (115_080, 9_048), "single steps checked, and faulting ones among them");
 }
 
 #[test]
 fn every_rewind_is_a_bijection_from_its_mark_on_clean_and_dirty_history() {
     let module = bennett_ir::load(PROGRAM).expect("valid");
     let checked: usize = fixtures(&module).iter().map(check_rewinds).sum();
-    assert_eq!(checked, 8_192, "rewinds checked");
+    assert_eq!(checked, 24_576, "rewinds checked");
 }
 
 #[test]
@@ -609,6 +627,9 @@ fn world_keys(executor: &mut Executor) -> Vec<WorldKey> {
             executor.select_world(index);
         }
         let mut key = key(executor);
+        // A basis state stays one world, which writes its base; a superposition's worlds write overlays.
+        // Both are normal (checked by `key`) over one base, so equal memory is equal representation.
+        key.overlay.clear();
         // The callee's slots, dead once it returned, still hold what it read: part of the machine state.
         key.slots = executor.slots.clone();
         let end = key.slots.iter().rposition(|&slot| slot != 0).map_or(0, |last| last + 1);
@@ -689,8 +710,8 @@ fn reading_a_register_and_merging_are_the_linear_extension_of_bijections() {
     let module = bennett_ir::load(WORLDS).expect("valid");
     let entry = module.function_named("worlds").expect("entry");
     let (mut reads, mut rewinds) = (0, 0);
-    for dirty in [false, true] {
-        let fixture = Fixture { module: &module, entry, args: vec![0, 0], dirty };
+    for (dirty, shared) in [false, true].into_iter().flat_map(|dirty| SHARED.map(|shared| (dirty, shared))) {
+        let fixture = Fixture { module: &module, entry, args: vec![0, 0], dirty, shared };
         // Positions: 3 is the reading call, 2 the mark; the rewind is instruction 5.
         for (start, through) in [(3, 3), (2, 5)] {
             let mut outputs = HashMap::new();
@@ -702,8 +723,8 @@ fn reading_a_register_and_merging_are_the_linear_extension_of_bijections() {
                             let slots = executor.frames[0].base;
                             executor.slots[slots] = a;
                             executor.slots[slots + 1] = b;
-                            executor.memory[BYTES[0]] = bytes[0] as u8;
-                            executor.memory[BYTES[1]] = bytes[1] as u8;
+                            executor.memory.write(BYTES[0], &[bytes[0] as u8]);
+                            executor.memory.write(BYTES[1], &[bytes[1] as u8]);
                             set_state(&mut executor, configs);
                             executor
                         };
@@ -746,6 +767,7 @@ fn reading_a_register_and_merging_are_the_linear_extension_of_bijections() {
             }
         }
     }
-    // a, b, two bytes, clean and dirty: 64 starts each, every one with 16 basis states and their sum.
-    assert_eq!((reads, rewinds), (128, 128));
+    // a, b, two bytes, clean and dirty, memory owned or an overlay over two bases: 192 starts each, every
+    // one with 16 basis states and their sum.
+    assert_eq!((reads, rewinds), (384, 384));
 }

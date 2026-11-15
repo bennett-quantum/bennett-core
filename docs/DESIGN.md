@@ -226,8 +226,9 @@ configuration. With one world the machine is exactly the machine above.
   rewind and already left (only possible when a world re-rewinds a mark it shares with others, at
   another world's rewind site): whether those two interfere depends on whether time is part of the state
   (`HANDOFF.md` question). The run stops with `RunError::Unaligned`.
-- **Costs.** A split copies the whole world, memory included (the memory overlay, the next step, removes
-  that). Every world from the first split on keeps a journal. The known exponential with worlds
+- **Costs.** A split copies the world's frames, slots, tape, journal and register table, and of memory only
+  its overlay, the bytes it wrote since worlds share the base ("Memory as an overlay", below). Every world
+  from the first split on keeps a journal. The known exponential with worlds
   (`crates/exec/tests/worlds.rs`): a chain of `d` levels that each read a qubit, mark, call the next level
   and rewind costs c(d) = 2 c(d - 1) + 47 steps of all worlds, un-run and run again (22,481 at `d` = 8),
   against 48 more per level (430 at `d` = 8) when only the outermost level rewinds; two worlds throughout.
@@ -497,6 +498,49 @@ The front writes `retaddr N` for every `llvm.returnaddress(N)` in the default ad
   Success changes only the outcome, journals the same finish record as an outer return, and leaves active
   frames in place for reversal. C's `_Noreturn void __bennett_exit(int)` lowers to it; like
   `void __bennett_effect(char)`, it is an ordinary device call, not a quantum marker.
+### Memory as an overlay
+
+Built on 2026-11-16 as the third step of the next extension (`crates/exec/src/memory.rs`): memory is a
+classical base shared by every world and, per world, an overlay of the bytes it wrote, so a split copies
+what the world wrote, never the memory, and what the worlds hold grows with the bytes they wrote, not with
+the memory's size.
+
+- **The base is classical.** It is written only while one world owns it alone: with one world the
+  machine writes the base as it wrote its byte array before, and keeps no overlay. From the first split
+  every world reads the same base and writes its own overlay; the base does not change while it is
+  shared. When one world is left (the others merged into it or were observed away) its overlay is
+  folded into the base.
+- **The overlay is normal**: it holds a byte exactly where the world's memory differs from the base. A
+  write of the base's own byte removes the entry, so un-running a write (which writes the old byte
+  back) leaves no trace. The overlay is then the set `{(a, m[a]) : m[a] != base[a]}`, a function of the
+  memory `m` alone, whatever order and number of writes made it.
+- **Equality.** Worlds compare memory by their overlays: equal overlays over the one base are equal
+  memories and the converse holds by normality, so worlds that differ only in memory merge exactly when
+  their memories are equal. The overlay is an ordered map, compared and hashed entry by entry in address
+  order, so neither the comparison nor the hash depends on the order of the writes. (The executor
+  asserts that the worlds it compares share one base.)
+- **Meaning unchanged.** Loads, stores, jump records and every other access read the overlay first and
+  the base beneath; snapshots and reports give the whole memory. With one world the machine is exactly
+  the machine above.
+- **Checked.** The brute-force bijection checks run with memory owned by one world and as an overlay
+  over two different bases (115,080 single steps, 9,048 of them faulting; 24,576 rewinds; 384 reading
+  calls and 384 merging rewinds over all 16 basis configurations and their superposition), comparing
+  the representation, overlay included, and asserting normality at every state. 400 pairs of worlds
+  written in random orders merge exactly when their memories are equal. The un-running-through-gates
+  programs run again with each world writing memory between its read and the rewind (an address that
+  depends on the value read, and the value): against the dense calculation and the whole-world
+  reference, 150 equal and 32 refused exactly where the calculation says (`worlds_oracle.rs`).
+- **Measured** (`crates/exec/tests/memory_overlay.rs`; eight worlds that each write `n` bytes, then split
+  again): splits copy `4n` bytes of overlay and the overlays hold at most `8n` bytes, at 16 KiB, 1 MiB
+  and 4 MiB of memory alike; with a full copy they copied 7 times the memory size. In a release build
+  at 16 MiB of memory the run's peak resident size went from 134 MB to 19.7 MB and its time from about
+  90 ms to about 7 ms (at 1 MiB: 11.5 MB to 4.4 MB, about 7 ms to 0.55 ms). Over the existing tests that
+  split (worlds, `apply`, examples, the gate programs; 1,234 runs, 5,640 splits, memories of 256 bytes
+  to 4 KiB), splits copied 7.5 MB of memory before and 0 bytes now: no world had written memory when it
+  split. What a split still copies is its journal, which grows with the steps run (2.77 MB over the four
+  second splits after 4,096 bytes written each, against 16 KiB of overlay): sharing the journal's
+  common prefix between worlds, as the base is shared, is the route if it matters.
+
 - Fault codes fit in 4 bits; a fault register is at least that wide. All fifteen codes are used since
   `bad_rewind` (15).
 - `qfree` requires the register to be zero in every configuration, otherwise the named fault `dirty_free`.
@@ -537,12 +581,13 @@ and x87 (`front/tests/tests/softfloat.rs`): no other difference in any operation
 included, except for `long double` encodings no arithmetic produces and out-of-range conversions, which C
 leaves undefined.
 
-## The next extension: code that is not a clean function (decided; `mark`, `rewind` and worlds built)
+## The next extension: code that is not a clean function (decided; `mark`, `rewind`, worlds and the memory overlay built)
 
 Decided by the maintainer on 2026-11-13 after five independent proposals (`docs/AUDITION.md`). Built so far:
 `mark` and `rewind ... keep` ("History: `mark` and `rewind`", above; the text form is `%h = mark`, a result
-like any other), and worlds, a superposition of whole machine states ("Worlds", above). The memory
-overlay and gates that take addresses are not built yet.
+like any other), worlds, a superposition of whole machine states ("Worlds", above), and memory as an
+overlay over a classical base ("Memory as an overlay", above). Gates that take addresses are not built
+yet.
 
 - **One layering.** A journalled machine defines meaning and is the fallback that needs no analysis: the quantum
   state is a superposition of whole machine states, and each step keeps what it destroys as history. Two

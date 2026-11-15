@@ -7,6 +7,7 @@ use thiserror::Error;
 
 use crate::journal::{Journal, Undo};
 use crate::measure::Collector;
+use crate::memory::Memory;
 use crate::quantum::QuantumState;
 use crate::snapshot::{ClassicalSnapshot, QuantumSnapshot, Snapshot};
 use crate::worlds::{Status, World};
@@ -196,6 +197,17 @@ pub struct Stats {
     pub splits: u64,
     /// Worlds that merged into another because both became the same machine state.
     pub merges: u64,
+    /// Bytes of memory copied by splits: each new world copies the overlay of the world it splits from,
+    /// the bytes that world wrote since it shares the base (`docs/DESIGN.md`, "Memory as an overlay");
+    /// never the memory itself.
+    pub split_memory_bytes: u64,
+    /// Bytes of journal copied by splits: each new world copies the journal of the world it splits from.
+    pub split_journal_bytes: u64,
+    /// Bytes the worlds' overlays hold now, summed: where each world's memory differs from the shared
+    /// base. Zero with one world, whose writes are the base.
+    pub overlay_bytes: usize,
+    /// The most bytes the overlays held at once, sampled after every tick of several worlds.
+    pub peak_overlay_bytes: usize,
     /// Times the host or a measurement observed which of several worlds the machine is in: the history
     /// those worlds carried was still entangled (the warning of `docs/DESIGN.md`, "What is promised").
     pub observations: u64,
@@ -231,7 +243,8 @@ pub(crate) const SLOT_BYTES: u64 = 8;
 /// Executes a valid module, forward and, in reversible mode, backward.
 pub struct Executor<'m> {
     pub(crate) module: &'m ValidModule,
-    pub(crate) memory: Vec<u8>,
+    /// This world's memory: the classical base every world shares and its overlay (`memory.rs`).
+    pub(crate) memory: Memory,
     /// The slots of every frame, each frame a contiguous window. Values above the live frames are dead.
     pub(crate) slots: Vec<u128>,
     pub(crate) frames: Vec<Frame>,
@@ -285,6 +298,11 @@ pub struct Executor<'m> {
     pub(crate) observations: u64,
     pub(crate) world_steps: u64,
     pub(crate) peak_worlds: usize,
+    /// Overlay bytes copied by splits, and journal bytes.
+    pub(crate) split_memory_bytes: u64,
+    pub(crate) split_journal_bytes: u64,
+    /// The most overlay bytes all worlds held at once, sampled where worlds are put back after a tick.
+    pub(crate) peak_overlay_bytes: usize,
     pub(crate) peak_world_configurations: usize,
     /// The configurations of the worlds other than the current one, while it steps among several.
     pub(crate) others_configurations: usize,
@@ -345,6 +363,9 @@ impl<'m> Executor<'m> {
             observations: 0,
             world_steps: 0,
             peak_worlds: 1,
+            split_memory_bytes: 0,
+            split_journal_bytes: 0,
+            peak_overlay_bytes: 0,
             peak_world_configurations: 0,
             others_configurations: 0,
             rerunning: 0,
@@ -501,6 +522,10 @@ impl<'m> Executor<'m> {
             splits: self.splits,
             merges: self.merges,
             observations: self.observations,
+            split_memory_bytes: self.split_memory_bytes,
+            split_journal_bytes: self.split_journal_bytes,
+            overlay_bytes: self.overlay_bytes(),
+            peak_overlay_bytes: self.peak_overlay_bytes.max(self.overlay_bytes()),
             live_qubits: self.quantum_states().iter().map(|q| q.live_qubits()).max().unwrap_or(0),
             peak_live_qubits: self.quantum_states().iter().map(|q| q.peak_qubits()).max().unwrap_or(0),
             configurations: self.quantum_states().iter().map(|q| q.amplitudes().len()).sum(),
@@ -589,7 +614,7 @@ fn check_arguments(entry: &Function, args: &[u64]) -> Result<(), StartError> {
     Ok(())
 }
 
-fn initial_memory(module: &Module) -> Result<Vec<u8>, StartError> {
+fn initial_memory(module: &Module) -> Result<Memory, StartError> {
     let too_large = StartError::MemoryTooLarge(module.memory_size);
     let size = usize::try_from(module.memory_size).map_err(|_| too_large.clone())?;
     let mut memory = Vec::new();
@@ -601,5 +626,5 @@ fn initial_memory(module: &Module) -> Result<Vec<u8>, StartError> {
         let bytes = segment.encode();
         memory[start..start + bytes.len()].copy_from_slice(&bytes);
     }
-    Ok(memory)
+    Ok(Memory::new(memory))
 }

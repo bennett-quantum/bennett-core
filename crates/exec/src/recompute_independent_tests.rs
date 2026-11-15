@@ -185,7 +185,7 @@ fn replay(
     e.base_depth = e.frames.len();
     e.in_region = true;
     let base = e.frames.len();
-    let entry_memory = e.memory.clone();
+    let entry_memory = e.memory.to_vec();
     let small = entry_memory.len() <= 1 << 17;
     e.push_frame(callee, args).expect("the region callee enters");
     let mut a_counts: HashMap<Site, u64> = HashMap::new();
@@ -272,7 +272,7 @@ fn replay(
         }
         let journal = e.journal.as_ref().expect("journal");
         let (records_before, words_before) = (journal.records(), journal.words().len());
-        let memory_before = small.then(|| e.memory.clone());
+        let memory_before = small.then(|| e.memory.to_vec());
         let outcome = e.step();
         let journal = e.journal.as_ref().expect("journal");
         if journal.records() == records_before {
@@ -298,14 +298,15 @@ fn replay(
         // Memory changes, found by comparison when memory is small.
         match memory_before {
             Some(before) => {
+                let now = e.memory.to_vec();
                 let mut address = 0;
                 while address < before.len() {
-                    if before[address] != e.memory[address] {
+                    if before[address] != now[address] {
                         let start = address;
-                        while address < before.len() && before[address] != e.memory[address] {
+                        while address < before.len() && before[address] != now[address] {
                             address += 1;
                         }
-                        replay.writes.push((record, start, e.memory[start..address].to_vec()));
+                        replay.writes.push((record, start, now[start..address].to_vec()));
                     } else {
                         address += 1;
                     }
@@ -321,7 +322,9 @@ fn replay(
                     _ => None,
                 };
                 if let Some(range) = range {
-                    replay.writes.push((record, range.start, e.memory[range].to_vec()));
+                    let mut bytes = vec![0; range.len()];
+                    e.memory.read_into(range.clone(), &mut bytes);
+                    replay.writes.push((record, range.start, bytes));
                 }
             }
         }
@@ -348,7 +351,7 @@ fn replay(
                 let range = store_range.expect("a store has a range");
                 roots[0] = slot_root;
                 let mut bytes = [0u8; 16];
-                bytes[..range.len()].copy_from_slice(&e.memory[range.clone()]);
+                e.memory.read_into(range.clone(), &mut bytes[..range.len()]);
                 let value = u128::from_le_bytes(bytes);
                 stores.retain(|(r, _)| r.end <= range.start || r.start >= range.end);
                 let (output, inputs) = producers.pop().expect("a store produces its value operand");
@@ -1159,7 +1162,11 @@ fn assert_observer_changes_nothing(module: &ValidModule, what: &str) {
         assert_eq!(a, b, "{what}: outcome");
         assert_eq!(off.stats(), on.stats(), "{what}: stats");
         assert_eq!(off.snapshot(), on.snapshot(), "{what}: state");
-        assert_eq!((&off.memory, &off.slots, off.stack_pointer), (&on.memory, &on.slots, on.stack_pointer), "{what}");
+        assert_eq!(
+            (off.memory.to_vec(), &off.slots, off.stack_pointer),
+            (on.memory.to_vec(), &on.slots, on.stack_pointer),
+            "{what}"
+        );
         assert_eq!(journal(&off), journal(&on), "{what}: journal");
         if a.is_some() {
             break;

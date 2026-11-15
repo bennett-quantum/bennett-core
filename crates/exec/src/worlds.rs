@@ -27,6 +27,7 @@ use rand::Rng;
 
 use crate::executor::{Executor, Frame, Halt, Outcome, ReverseError, RunError};
 use crate::journal::{Journal, Undo};
+use crate::memory::Memory;
 use crate::quantum::QuantumState;
 
 /// How far the worlds' summed squared amplitudes may be from 1 where every world has stopped. Rounding
@@ -52,7 +53,7 @@ pub(crate) enum Status {
 
 /// A view of one world, for snapshots and reports.
 pub(crate) struct WorldRef<'w> {
-    pub(crate) memory: &'w [u8],
+    pub(crate) memory: &'w Memory,
     pub(crate) frames: &'w [Frame],
     pub(crate) slots: &'w [u128],
     pub(crate) stack_pointer: u64,
@@ -64,7 +65,7 @@ pub(crate) struct WorldRef<'w> {
 /// A world that is not the current one: the executor's per-world fields, set aside.
 #[derive(Clone, Debug)]
 pub(crate) struct World {
-    pub(crate) memory: Vec<u8>,
+    pub(crate) memory: Memory,
     pub(crate) slots: Vec<u128>,
     pub(crate) frames: Vec<Frame>,
     pub(crate) stack_pointer: u64,
@@ -79,7 +80,7 @@ pub(crate) struct World {
 impl World {
     fn empty() -> Self {
         World {
-            memory: Vec::new(),
+            memory: Memory::default(),
             slots: Vec::new(),
             frames: Vec::new(),
             stack_pointer: 0,
@@ -151,6 +152,8 @@ impl<'m> Executor<'m> {
         for (_, amplitudes) in parts {
             let mut world = self.clone_world(Some(amplitudes));
             self.splits += 1;
+            self.split_memory_bytes += self.memory.overlay_len() as u64;
+            self.split_journal_bytes += self.journal.as_ref().map_or(0, Journal::bytes) as u64;
             self.swap_world(&mut world);
             self.splitting = true;
             step(self).expect("a part of a world runs the step that its world runs");
@@ -214,6 +217,8 @@ impl<'m> Executor<'m> {
     /// Puts `worlds` back, the first as the current one. A single world is the ordinary machine again.
     fn put_worlds(&mut self, worlds: Vec<World>) {
         self.peak_worlds = self.peak_worlds.max(worlds.len());
+        let overlays: usize = worlds.iter().map(|world| world.memory.overlay_len()).sum();
+        self.peak_overlay_bytes = self.peak_overlay_bytes.max(overlays);
         let total: usize = worlds.iter().map(|world| world.quantum.amplitudes().len()).sum();
         self.peak_world_configurations = self.peak_world_configurations.max(total);
         let mut worlds: Vec<Option<World>> = worlds.into_iter().map(Some).collect();
@@ -221,6 +226,9 @@ impl<'m> Executor<'m> {
         self.swap_world(&mut first);
         self.current = 0;
         if worlds.len() == 1 {
+            // The other worlds are gone, so this one owns the base alone and its writes become the base.
+            drop(first);
+            self.memory.fold();
             self.status = Status::Running;
             self.run_outcome = None;
             self.departed.clear();
@@ -500,7 +508,7 @@ impl<'m> Executor<'m> {
             && a.tape == b.tape
             && a.journal == b.journal
             && a.quantum.same_registers(&b.quantum)
-            && a.memory == b.memory
+            && a.memory.same(&b.memory)
     }
 
     fn hash_world(world: &World) -> u64 {
@@ -512,7 +520,7 @@ impl<'m> Executor<'m> {
         world.tape.hash(&mut state);
         world.journal.hash(&mut state);
         world.quantum.hash_registers(&mut state);
-        world.memory.hash(&mut state);
+        world.memory.hash_overlay(&mut state);
         state.finish()
     }
 
@@ -621,6 +629,11 @@ impl<'m> Executor<'m> {
             .collect()
     }
 
+    /// The bytes every world's overlay holds now, summed.
+    pub(crate) fn overlay_bytes(&self) -> usize {
+        self.world_states().iter().map(|world| world.memory.overlay_len()).sum()
+    }
+
     /// The quantum states of every world.
     pub(crate) fn quantum_states(&self) -> Vec<&QuantumState> {
         if self.worlds.is_empty() {
@@ -641,4 +654,62 @@ impl<'m> Executor<'m> {
 fn written_slots(slots: &[u128]) -> &[u128] {
     let end = slots.iter().rposition(|&slot| slot != 0).map_or(0, |last| last + 1);
     &slots[..end]
+}
+
+#[cfg(test)]
+mod tests {
+    use rand::seq::SliceRandom;
+    use rand::{Rng, SeedableRng};
+    use rand_chacha::ChaCha8Rng;
+
+    use crate::executor::{Executor, Options};
+
+    /// The merge rule on memory: two worlds that are the same machine state but for their memory merge
+    /// exactly when their overlays describe the same bytes, however their writes were ordered. Each case
+    /// writes the same final bytes into both worlds' overlays in different random orders, with other
+    /// values and the base's own bytes written in between; in half the cases one byte then differs.
+    #[test]
+    fn worlds_merge_exactly_when_their_overlays_describe_equal_memory() {
+        let module = bennett_ir::load("memory 64\nfunc @main() {\nentry:\n    ret\n}\n").expect("valid");
+        let entry = module.function_named("main").expect("@main");
+        let mut executor = Executor::new(&module, entry, &[], Options::default()).expect("starts");
+        let mut rng = ChaCha8Rng::seed_from_u64(11);
+        let (mut merged, mut apart) = (0, 0);
+        for case in 0..400 {
+            let base: Vec<u8> = executor.memory.to_vec();
+            let target: Vec<u8> =
+                (0..base.len()).map(|_| if rng.random_bool(0.2) { rng.random_range(0..3) } else { 0 }).collect();
+            let mut worlds = vec![executor.clone_world(None), executor.clone_world(None)];
+            for world in &mut worlds {
+                let mut writes: Vec<(usize, u8, bool)> = Vec::new();
+                for (address, &byte) in target.iter().enumerate() {
+                    for _ in 0..rng.random_range(0..3u32) {
+                        writes.push((address, rng.random_range(0..3), false));
+                    }
+                    writes.push((address, byte, true));
+                }
+                writes.shuffle(&mut rng);
+                writes.sort_by_key(|&(_, _, last)| last);
+                for (address, byte, _) in writes {
+                    world.memory.write(address, &[byte]);
+                }
+            }
+            let differ = case % 2 == 1;
+            if differ {
+                let address = rng.random_range(0..target.len());
+                worlds[1].memory.write(address, &[target[address] ^ 4]);
+            }
+            let merges = executor.merges;
+            executor.merge_equal(&mut worlds, |_| true);
+            if differ {
+                assert_eq!((worlds.len(), executor.merges), (2, merges), "case {case}: unequal memory merged");
+                apart += 1;
+            } else {
+                assert_eq!((worlds.len(), executor.merges), (1, merges + 1), "case {case}: equal memory apart");
+                assert_eq!(worlds[0].memory.to_vec(), target);
+                merged += 1;
+            }
+        }
+        assert_eq!((merged, apart), (200, 200));
+    }
 }

@@ -15,6 +15,7 @@ mod gates;
 mod history;
 mod journal;
 mod measure;
+mod memory;
 #[cfg(test)]
 mod permutation_tests;
 mod quantum;
