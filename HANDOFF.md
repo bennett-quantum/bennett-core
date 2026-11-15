@@ -29,7 +29,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `60bd56b`, `2f11a5f`, `bc8661c` | The console reachable from C; the `exit` instruction; constructors and destructors run, or their linker arrays supplied (a silent wrong result the probe found) |
 | `9e15ebf`, `4dfb423` | Large data strings read without recursion (the debug CLI overflowed its stack); musl 1.2.5 vendored unmodified (`rt/musl`), its 1,345 C files built to bitcode offline |
 
-Check it: `cargo test` (64 tests, about 2 s, no LLVM needed) and `front/test.sh` (95 tests, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
+Check it: `cargo test` (71 tests, about 2 s, no LLVM needed) and `front/test.sh` (98 tests, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 On GCC's C torture tests 1,521 of 1,576 runnable programs agree with native, 53 are refused by name, none is wrong;
 on its floating-point tests (`ieee/`) 58 of 67, 9 refused (C library calls), none wrong
@@ -153,7 +153,9 @@ before floating point landed (`experiments/libc-probe/README.md`). The two have 
   `Module::static_end` counts the extent. Measured against the front before the change: lowest stack address,
   memory size and initial image identical on 120 front-test programs and on every tenth GCC corpus program (154);
   the sample's text went from 648 MB to 2.3 MB, and a musl-linked `printf("hello %d\n", 42)` from 4.4 MB to
-  214 kB, same output in the same 3,718 steps. Its independent testing pass is in flight.
+  214 kB, same output in the same 3,718 steps. Its independent testing pass (`60aafad`: 1,233 stack-floor
+  comparisons, 135 generated globals at every run length 0..33, megabyte arrays, all against explicit zero bytes
+  or native) found no wrong result; one wording mismatch in the grammar (`+0`) was corrected in `07fdea4`.
 - **The complex-number helpers (`__mulsc3`, `__divsc3` and the double and long double versions): vendor
   compiler-rt's sources unmodified**, as SoftFloat was, after the musl runtime has landed so that any `logb` or
   `scalbn` they need comes from musl; checked bit for bit against native. Whether the helpers are self-contained
