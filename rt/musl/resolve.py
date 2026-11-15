@@ -16,6 +16,7 @@ every member first makes the strong one win always and pulls in what the program
 import os
 import subprocess
 import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 
 
@@ -41,11 +42,13 @@ def load_index(members, index_path):
     if not os.path.exists(index_path):
         with ThreadPoolExecutor(32) as pool:
             tables = list(pool.map(symbols, members))
-        with open(index_path + ".part", "w") as f:
+        # Several links may build the cache at once: each writes its own file and replaces atomically.
+        fd, part = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(index_path)), suffix=".part")
+        with os.fdopen(fd, "w") as f:
             for member, rows in zip(members, tables):
                 for kind, name in rows:
                     f.write(f"{member}\t{kind}\t{name}\n")
-        os.replace(index_path + ".part", index_path)
+        os.replace(part, index_path)
     table = {}
     for line in open(index_path):
         member, kind, name = line.rstrip("\n").split("\t")
