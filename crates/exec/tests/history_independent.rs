@@ -207,8 +207,9 @@ fn a_rewind_has_finite_budget_even_in_an_infinite_loop() {
         let mut e = executor(&module, "main", &[], Options { budget: Some(budget), ..options() });
         assert_eq!(e.run(), Outcome::Faulted(Fault::Budget));
         assert_eq!(e.stats().steps, budget);
-        // Full reversal of repeated dynamic visits is separately pinned by ignored F2.
-        assert!(e.stats().rewound_steps <= 2 * budget);
+        // Repeated dynamic visits reverse fully (F2, fixed); their work is pinned in `history_unrun.rs`.
+        assert_eq!(e.reverse(), Ok(budget));
+        assert_eq!(e.stats().steps, 0);
     }
 }
 
@@ -283,21 +284,26 @@ fn simple_rewind_replays_identically_with_and_without_an_initial_journal() {
 
 /// DESIGN.md “History”: every journalled step is a bijection, including mark-to-rewind composites.
 /// Rule 4 leaves the output unspecified when a kept input changed, but erasing its norm is not a bijection.
+/// F1, fixed: the un-run finds the temporary not back to zero, so the rewind faults `bad_rewind` and
+/// changes nothing (the interim decision until worlds that no longer match their history are decided).
 #[test]
-#[ignore = "jm-test1 F1: unallocating an entangled temporary during rewind erases all amplitude"]
 fn rewind_keep_must_not_erase_norm_when_a_temporary_read_the_destination() {
     let module = load(
         "memory 256\nfunc @main() {\nentry:\n%q = qalloc 1\n%h = mark\n%tmp = qalloc 1\nx %tmp ctrl %q\nrewind %h keep (i1 1 -> %q)\nret\n}",
     );
     let mut e = executor(&module, "main", &[], options());
-    assert_eq!(e.run(), Outcome::Returned(None));
+    at_rewind(&mut e, &module);
+    let before = e.snapshot();
+    assert_eq!(e.run(), Outcome::Faulted(Fault::BadRewind));
+    let mut after = e.snapshot();
+    after.classical.outcome = None;
+    assert_same_state(&after, &before, "a refused rewind changes nothing");
     let norm: f64 = e.snapshot().quantum.amplitudes.iter().map(|(_, a)| a.norm_sqr()).sum();
     assert!((norm - 1.0).abs() < 1e-12, "rewind destroyed probability: norm {norm}, {:?}", e.snapshot().quantum);
 }
 
-/// DESIGN.md “History”, “Undoing a rewind”: re-run its region to restore the pre-rewind state.
+/// DESIGN.md “History”, “Undoing a rewind”: re-run its region to restore the pre-rewind state. F2, fixed.
 #[test]
-#[ignore = "jm-test1 F2: rewind undo stops at the first visit to its PC, losing later loop visits"]
 fn undo_rewind_restores_the_second_dynamic_visit_to_the_same_instruction() {
     let module = load(
         "memory 256\nfunc @main() {\nentry:\n%q = qalloc 1\n%h = mark\nbr loop\nloop:\nrewind %h keep (i1 1 -> %q)\nbr loop\n}",

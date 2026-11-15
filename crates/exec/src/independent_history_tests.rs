@@ -155,9 +155,10 @@ fn independent_checker_exhausts_mark_and_nested_rewind_on_clean_and_dirty_histor
             let mut expected = mark.clone();
             expected.frames[0].2 = 7;
             expected.amplitudes[0].0[0] ^= input[0];
-            // Rewind leaves only the mark plus a record of where that mark left its frame.
+            // Rewind leaves only the mark plus a record of where that mark left its frame, and of the
+            // four steps its region takes to run again (store, inner mark, add, inner rewind).
             expected.kinds.push(Undo::Rewind);
-            expected.history.push(2);
+            expected.history.push(4 << 64 | 2);
             assert_eq!(after_outer, expected, "outer: input {input:?}");
             assert_eq!(e.step_back(), Ok(true));
             assert_eq!(state(&e), before_outer, "undo outer: input {input:?}");

@@ -6,11 +6,25 @@ use bennett_ir::{BlockId, FuncId, Inst, Slot, Type};
 use crate::executor::{Executor, Frame};
 use crate::forward::unpack_position;
 use crate::gates;
-use crate::journal::Undo;
+use crate::history::Mismatch;
+use crate::journal::{Journal, Undo};
 
 impl<'m> Executor<'m> {
-    /// Pops the most recent journal record and undoes its step.
+    /// Pops the most recent journal record and undoes its step, which the run took from this state.
     pub(crate) fn undo_last(&mut self) {
+        self.unrun_last(false).expect("a step the run took is undone");
+    }
+
+    /// Pops the most recent journal record and undoes its step, unless that would not invert a step from
+    /// this state; then it changes nothing. `checked` is set by a rewind's un-run, whose keeps changed
+    /// registers the history may have read: it also refuses to un-run a `qalloc` whose register is not
+    /// zero in every configuration, which would discard those configurations. Undoing a `rewind` record
+    /// refuses whenever running its region again faults.
+    pub(crate) fn unrun_last(&mut self, checked: bool) -> Result<(), Mismatch> {
+        let last = self.journal.as_ref().and_then(Journal::last).expect("a record to undo");
+        if checked && last == Undo::Qalloc && !self.allocation_undone_is_zero() {
+            return Err(Mismatch);
+        }
         let undo = self.journal.as_mut().and_then(|journal| journal.pop()).expect("a record to undo");
         match undo {
             Undo::Slot | Undo::Qalloc => self.undo_definition(undo),
@@ -20,8 +34,13 @@ impl<'m> Executor<'m> {
             }
             Undo::Rewind => {
                 let rewind = self.retreat();
-                let mark_at = self.pop_word();
-                self.undo_rewind(rewind, mark_at);
+                let word = self.pop_word();
+                if let Err(mismatch) = self.undo_rewind(rewind, word) {
+                    self.advance();
+                    self.record_word(word);
+                    self.record(Undo::Rewind);
+                    return Err(mismatch);
+                }
             }
             Undo::Store => self.undo_store(),
             Undo::Alloca => {
@@ -72,6 +91,17 @@ impl<'m> Executor<'m> {
             Undo::Longjmp => self.undo_longjmp(),
             Undo::Measure => unreachable!("reversal stops before a measurement"),
         }
+        Ok(())
+    }
+
+    /// Whether the register that the `qalloc` of the last record allocated is zero in every
+    /// configuration. The top frame is just after that `qalloc`.
+    fn allocation_undone_is_zero(&self) -> bool {
+        let frame = *self.top();
+        let inst = &self.function(frame.func).block(frame.block).insts[frame.inst - 1];
+        let dst = inst.result().expect("qalloc defines its handle");
+        let id = self.quantum.resolve(self.handle(dst)).expect("an allocation being undone is live");
+        self.quantum.is_zero(id)
     }
 
     /// Undoes every record in the journal.

@@ -99,7 +99,8 @@ impl QuantumState {
     }
 
     /// Undoes `allocate`: the register's column is dropped and the id gets its previous generation.
-    /// Configurations where the register is not zero can only be rounding residue and are dropped.
+    /// Configurations where the register is not zero can only be rounding residue and are dropped: a
+    /// rewind's un-run, which could find it otherwise, checks `is_zero` first (`history.rs`).
     pub(crate) fn unallocate(&mut self, handle: u64) {
         let id = self.resolve(handle).expect("an allocation being undone is live");
         self.amplitudes.retain(|config, _| config[id] == 0);
@@ -115,9 +116,14 @@ impl QuantumState {
         }
     }
 
+    /// Whether register `id` is zero in every configuration.
+    pub(crate) fn is_zero(&self, id: usize) -> bool {
+        self.amplitudes.keys().all(|config| config[id] == 0)
+    }
+
     /// Frees the register, which must be zero in every configuration.
     pub(crate) fn free(&mut self, id: usize) -> Result<(), Fault> {
-        if self.amplitudes.keys().any(|config| config[id] != 0) {
+        if !self.is_zero(id) {
             return Err(Fault::DirtyFree);
         }
         self.release(id);

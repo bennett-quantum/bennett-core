@@ -109,6 +109,19 @@ state, with a superposition only over registers. Worlds that differ in classical
      inverses, memory and stack writes, console output (un-printed), calls and returns, inner marks, and
      earlier rewinds (below). The copy comes before the un-run (compute, copy, uncompute), so un-running
      through gates conjugates it: `mark; h q; rewind keep (i1 1 -> q)` is H X H = Z on `q`.
+     The keeps may change registers the region read, so the un-run can meet a state its history does
+     not describe: a register allocated since the mark that is not zero in every configuration when its
+     allocation is un-run (un-running it would discard those configurations, losing norm), or an inner
+     rewind whose region, run again (below), faults (a `qfree` of a register that is not zero, an inner
+     rewind meeting the same). "What is promised when history is left behind", rule 4, leaves the result
+     of such an un-run unspecified, but every step stays a bijection: until worlds that no longer match
+     their history are decided (`HANDOFF.md`, questions), the rewind runs forward again the steps it
+     un-ran, XORs the keeps out, and faults with `bad_rewind`, having changed nothing. "Not zero" is the
+     test `qfree` applies. Checked exhaustively against an independent two-qubit calculation
+     (`crates/exec/tests/history_unrun.rs`): 1,776 programs of a temporary, up to two of ten gates between
+     it and a kept qubit, an optional free, four preparations and both keep values; the rewind faults
+     exactly where the calculation leaves the temporary nonzero (156), runs with the calculated state
+     elsewhere (1,064; 556 fault at the free going forward), and every run reverses.
   4. The frame continues after the rewind, wherever the mark was. Every slot holds its value at the
      mark: a slot defined between the mark and the rewind reads, after it, as it did at the mark, so a
      program should not use one there. The validator does not check that.
@@ -117,8 +130,11 @@ state, with a superposition only over registers. Worlds that differ in classical
 - **In a coherent region** (`apply`) a rewind runs, but may not keep: registers are quantum
   (`quantum_in_region`).
 - **Undoing a rewind** (by reversal, or by an outer rewind reaching past it) runs its region again from
-  the mark to the rewind, then XORs the kept values again. The steps ran before from the same state, so
-  they run again identically; budget, configuration limit and region-fault checks are not repeated. An
+  the mark to the rewind, then XORs the kept values again. Its record keeps how many steps it un-ran, and
+  exactly that many run again, so a rewind reached again in a loop is restored at the visit being
+  undone, not the first one that reaches its position. The steps ran before from the same classical
+  state, so they run again identically; budget, configuration limit and region-fault checks are not
+  repeated. Under an outer rewind's keeps one may still fault (step 3), and then is undone again. An
   `apply` un-run or run again by a rewind may fault on some branches without stopping the run: it is a
   permutation either way, and the strict check is for running forward.
 - **Cost.** A rewind counts as one step and `steps` never goes back, so the budget bounds a loop of
@@ -127,7 +143,10 @@ state, with a superposition only over registers. Worlds that differ in classical
   work, call the next level and rewind costs 19, 55, 127, 271, ... 36,847 steps in all at `d` = 0, 1, 2,
   3, ... 10, a factor tending to 2 per level, against 21 + 20 `d` (221 at `d` = 10) when only the
   outermost level rewinds. A mark copies nothing: the work and journal bytes per iteration of a loop of
-  mark, call, rewind are the same at 50 and 1,500 iterations.
+  mark, call, rewind are the same at 50 and 1,500 iterations. Rewinding one mark again un-runs the
+  previous rewind of it, so it doubles the same way: a loop whose every iteration rewinds one mark made
+  before the loop un-runs 3 * 2^(n-1) - 2 steps in all for n rewinds (`history_unrun.rs`); a mark made
+  in each iteration, as above, keeps the work per iteration constant.
 - **Every journalled step is a bijection** of (machine state, history), checked by brute force at small
   widths (`crates/exec/src/permutation_tests.rs`): every kind of step at every position of two
   programs, from every assignment of small values to the slots it reads or overwrites and to two memory
