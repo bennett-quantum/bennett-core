@@ -13,10 +13,17 @@ mod executor;
 mod forward;
 mod gates;
 mod journal;
+mod measure;
 mod quantum;
 mod region;
 mod snapshot;
 
 pub use executor::{Executor, Frame, Options, Outcome, ReverseError, RunError, StartError, Stats};
+pub use journal::Undo;
+pub use measure::{
+    Alignment, ApplyClassification, ApplyJournal, BranchJournal, CallPathStep, ClassifiedPosition, JournalMeasurement,
+    LiveSource, PathId, RecordInstance, RecoverableReason, Site, SitePos, SourceKind, WordClass, WordInstance,
+    WordRole, WordWitness, classify,
+};
 pub use quantum::RegisterState;
 pub use snapshot::{ClassicalSnapshot, QuantumSnapshot, Snapshot};

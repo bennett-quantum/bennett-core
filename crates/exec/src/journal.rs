@@ -6,9 +6,9 @@
 //! still in the state when the step is undone, because later steps have been undone first.
 
 /// What kind of step a record undoes, and therefore which words it has.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
-pub(crate) enum Undo {
+pub enum Undo {
     /// An instruction that wrote its result slot. Words: the old slot value.
     Slot,
     /// A store. Words: the old bytes, little-endian.
@@ -76,5 +76,20 @@ impl Journal {
     pub(crate) fn clear(&mut self) {
         self.kinds.clear();
         self.words.clear();
+    }
+
+    /// The number of records, for the journal-content measurement.
+    pub(crate) fn records(&self) -> usize {
+        self.kinds.len()
+    }
+
+    /// The kind of record `index`, for the journal-content measurement.
+    pub(crate) fn kind_at(&self, index: usize) -> Undo {
+        self.kinds[index]
+    }
+
+    /// All words, in push order, for the journal-content measurement.
+    pub(crate) fn words(&self) -> &[u128] {
+        &self.words
     }
 }

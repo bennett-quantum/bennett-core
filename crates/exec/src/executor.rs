@@ -6,6 +6,7 @@ use rand_chacha::ChaCha8Rng;
 use thiserror::Error;
 
 use crate::journal::{Journal, Undo};
+use crate::measure::Collector;
 use crate::quantum::QuantumState;
 use crate::snapshot::{ClassicalSnapshot, QuantumSnapshot, Snapshot};
 
@@ -214,6 +215,8 @@ pub struct Executor<'m> {
     pub(crate) region_faults: u64,
     pub(crate) region_fault_weight: f64,
     pub(crate) region_fault_max_weight: f64,
+    /// The journal-content observer, when turned on. It only copies what steps already journalled.
+    pub(crate) journal_measurement: Option<Collector>,
 }
 
 impl<'m> Executor<'m> {
@@ -245,6 +248,7 @@ impl<'m> Executor<'m> {
             region_faults: 0,
             region_fault_weight: 0.0,
             region_fault_max_weight: 0.0,
+            journal_measurement: None,
         };
         let args: Vec<u128> = args.iter().map(|&arg| u128::from(arg)).collect();
         if let Err(fault) = executor.push_frame(entry, &args) {
@@ -263,8 +267,14 @@ impl<'m> Executor<'m> {
             self.outcome = Some(Outcome::Faulted(Fault::Budget));
             return self.outcome;
         }
+        let pending = self.measure_before_step();
         match self.execute() {
-            Ok(()) => self.steps += 1,
+            Ok(()) => {
+                if let Some(pending) = pending {
+                    self.measure_after_step(pending);
+                }
+                self.steps += 1;
+            }
             Err(Halt::Fault(fault)) => self.outcome = Some(Outcome::Faulted(fault)),
             Err(Halt::Stop(error)) => self.outcome = Some(Outcome::Stopped(error)),
         }

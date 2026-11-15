@@ -45,6 +45,7 @@ impl Executor<'_> {
         let budget = self.read_word(budget);
         let mut values = Vec::with_capacity(inputs.len());
         let original = self.quantum.take_amplitudes();
+        self.measure_begin_apply(callee);
         let mut outcomes = Vec::with_capacity(original.len());
         for config in original.keys() {
             values.clear();
@@ -106,11 +107,20 @@ impl Executor<'_> {
             base_depth: std::mem::replace(&mut self.base_depth, self.frames.len()),
             in_region: std::mem::replace(&mut self.in_region, true),
         };
+        self.measure_begin_branch(args);
         let outcome = match self.push_frame(callee, args) {
-            Ok(()) => self.run(),
+            Ok(()) => {
+                self.measure_entry_call(callee);
+                self.run()
+            }
             Err(fault) => Outcome::Faulted(fault),
         };
         self.region_steps += self.steps;
+        if self.journal_measurement.is_some() {
+            let journal = self.journal.as_ref().expect("a region runs with a journal");
+            let (records, words) = (journal.records(), journal.words().len());
+            self.measure_end_branch(outcome, self.steps, records, words);
+        }
         self.unwind();
         self.restore(outer);
         outcome
