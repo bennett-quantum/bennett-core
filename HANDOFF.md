@@ -38,8 +38,9 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `9817fe0`, `c17bde9`, `08d7799` | Measurements: journal content in coherent regions; control schedules on the SQLite traces |
 | `cd2d920` | The complex multiply and divide helpers: compiler-rt 18.1.8 vendored unmodified (`rt/compiler-rt`), linked by the front where a program calls them; bit for bit with the same helpers on the hardware, NaN bits aside |
 | `31f5138` | `setjmp`/`longjmp` (library and built-in forms, `sigsetjmp` with musl): a device `setjmp` instruction and `longjmp` terminator, journalled (`docs/DESIGN.md`, "Non-local jumps") |
+| `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (160 tests, about 4 s, no LLVM needed) and `front/test.sh` (138 tests; ignored by default: two `sigsetjmp` wrong-result witnesses, the three heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (161 tests, about 4 s, no LLVM needed) and `front/test.sh` (138 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check that needs `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -204,9 +205,17 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
   `rt/musl/tests/setjmp.c` (masks saved and not, jumps out of signal handlers) prints what native prints.
   Its independent testing pass (`e8149f1`, sol: 512 device runs matched to native with exact reversal,
   recursive and copied buffers, VLAs, the built-ins, eight coherent branches, rewinds, jumps out of signal
-  handlers) found two wrong results with `sigsetjmp`, kept as ignored witnesses (`front/tests/c/setjmp_saved_mask.c`,
-  `setjmp_saved_buffer.c`; native status 0, device 1, at -O0 and -O2): revisiting a `sigsetjmp` loses a copied
-  buffer's run-time `savemask`, and revisiting one site restores the last buffer's mask, not the target's.
+  handlers) found two wrong results with `sigsetjmp` (native status 0, device 1, at -O0 and -O2): revisiting a
+  `sigsetjmp` lost a copied buffer's run-time `savemask`, and revisiting one site restored the last buffer's mask,
+  not the target's. **Fixed** (`595339c`): the front took the buffer and `savemask` from the frame's slots after
+  the jump, which hold the site's latest visit; now the mask state lives in the buffer (a flag word and the saved
+  mask, written before the device `setjmp`) and every library `longjmp` restores its own target's mask before it
+  jumps, as glibc does. Front only, no executor change. The witnesses are regular tests
+  (`rt/musl/tests/regress/setjmp-saved-{mask,buffer}.c`); `rt/musl/tests/setjmp-masks.c` checks every way to save,
+  copy and jump with two buffers, a copy, five call sites, two visits and two jumps (17,640 jumps), and a chain of
+  sixteen buffers, against native: 65 of 421 output lines differed before, none now, from -O0 and -O2.
+  `rt/musl/test.py` also links the `setjmp` programs from -O2 and un-runs the small ones (33 runs, about 30 s), and
+  an executor test runs the lowered shape under a `rewind`, step by step.
   Debt: a function that uses `setjmp` is not run coherently from C (refused by name at a qubit-dependent
   call), because LLVM must see `setjmp` as writing any memory; route in `docs/DESIGN.md`.
 
