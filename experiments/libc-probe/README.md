@@ -97,12 +97,12 @@ to bitcode as is**, with musl's headers and flags. What they and the 30 others c
 | what | sources (as musl builds them) | substitute in this probe | without it the front says |
 |---|---|---|---|
 | system calls as inline assembly (`arch/x86_64/syscall_arch.h`, `__syscall0`..`6`) | 260 files with 325 `syscall` asm statements; 284 C files use the syscall macros; 288 distinct `SYS_` numbers named | `musl-overlay/syscall/syscall_arch.h`: each `__syscallN` calls the C function `__bennett_syscall`; no vDSO | `inline assembly, at ./arch/x86_64/syscall_arch.h:38` |
-| atomics (`arch/x86_64/atomic_arch.h`: `lock cmpxchg`, `xchg`, `lock or`, `pause`, `bsf`, ...) | 52 files, 101 asm statements; 53 files use `a_*` | `musl-overlay/atomic/atomic_arch.h`: `a_cas`/`a_cas_p` as a plain read and write (one thread), `a_crash` a trap; musl derives the rest from `a_cas` | `inline assembly, at ./arch/x86_64/atomic_arch.h:4` |
+| atomics (`arch/x86_64/atomic_arch.h`: `lock cmpxchg`, `xchg`, `lock or`, `pause`, `bsf`, ...) | 52 files, 101 asm statements; 53 to 57 C files use `a_*` (text search; the count depends on the pattern) | `musl-overlay/atomic/atomic_arch.h`: `a_cas`/`a_cas_p` as a plain read and write (one thread), `a_crash` a trap; musl derives the rest from `a_cas` | `inline assembly, at ./arch/x86_64/atomic_arch.h:4` |
 | thread pointer (`%fs:0`, `__get_tp`) | 66 files (51 via `__pthread_self()`/`CURRENT_LOCALE`, e.g. `errno`, locale) | `musl-overlay/tp/pthread_arch.h`: the address of one static descriptor that the runtime fills | `inline assembly, at ./arch/x86_64/pthread_arch.h:4` |
 | assembly sources | 30: x87 `long double` libm 15 (`acosl` ... `truncl`, `__invtrigl`), `memcpy`/`memmove`/`memset`, `setjmp`/`longjmp`/`sigsetjmp`, `syscall_cp`/`clone`/`__set_thread_area`/`__unmapself`, `vfork`, `restore` (signal return), `fenv`, `dlsym`, `tlsdesc` | `GENERIC=1`: musl's generic C file of the same name (all 30 have one; 4 are empty: `setjmp`, `longjmp`, `sigsetjmp`, `syscall_cp`) | `a call to @memset, which has no definition` |
 | x87/SSE inline assembly in arch C files | 14 files (`sqrt`, `sqrtf`, `sqrtl`, `fabsl`, `fmodl`, `remainderl`, `remquol`, `rintl`, `lrint*`, `llrint*`) | `GENERIC=1`: the generic C files (18 arch C files replaced) | inline assembly |
 | startup | `crt1.c` (`_start` as 12 lines of top-level asm in `crt_arch.h`), `crti.s`/`crtn.s`, `__libc_start_main.c` (`__init_libc`, `__init_tls` from the program headers, `__init_tp` -> `__set_thread_area`) | `musl-rt.c`: `__bennett_entry` and `init()` set the descriptor's `self`, `tid`, `locale`, `robust_list`, `libc.auxv`, page size, `environ`, `__progname` | not reached: no `_start` |
-| locks | 66 files (`LOCK`/`FLOCK`/`__lock`/`__lockfile`); futex wait/wake in 20 | none needed: with one thread `libc.threaded` is 0 and the lock paths are skipped; `a_cas` is plain | |
+| locks | 61 to 66 files (`LOCK`/`FLOCK`/`__lock`/`__lockfile`, text search as above); futex wait/wake in 20 | none needed: with one thread `libc.threaded` is 0 and the lock paths are skipped; `a_cas` is plain | |
 | `setjmp`/`longjmp` | 3 assembly files, no C version | none | `a call to @setjmp, which has no definition` (by name) |
 | malloc | mallocng (7 files) over `brk` and `mmap` (+ `munmap`, `madvise`, `mprotect`, `mremap`); `lite_malloc` (bump) behind `__libc_calloc` | the runtime's `brk` grows up, `mmap` down, in a 1 MiB static arena | |
 | `.init_array`/`.fini_array` | `__libc_start_init`, `__libc_exit_fini` walk linker-provided bounds | `ctors.py` arrays; the runtime's strong `__libc_exit_fini` | constructors do not run (finding 1) |
@@ -143,8 +143,9 @@ Steps and sizes are in section 4.
 | step 3 (+ integer-only `printf`) | 30 | 6 | 0 | 1 | 61 | 2 | 1 (`00187`: `fopen` fails, the test uses the null `FILE`, `bad_indirect`) |
 | step 5 (+ integer-only `scanf`, `open` traps, constructors) | **28** | 3 | 5 | 1 | **61** | 2 | 1 |
 
-At step 2, 29 of the 31 GCC refusals and 63 of the 64 c-testsuite refusals are `x86_fp80` in `vfprintf.c`; the others
-are `setjmp`, `longjmp` and one program's own `float`. At step 3 the 3 new GCC refusals are `x86_fp80` in `vfscanf.c`
+At step 2, 28 of the 31 GCC refusals and 62 of the 64 c-testsuite refusals are `x86_fp80` in `vfprintf.c`; the other
+three GCC refusals are `setjmp`, `longjmp` and one program's own `float`, the other two c-testsuite refusals the
+programs' own floating point. At step 3 the 3 new GCC refusals are `x86_fp80` in `vfscanf.c`
 (`printf-2`, `fprintf-2`, `user-printf` read back a temporary file with `fscanf`). At step 5 those three end in the
 named fault `unreachable` at system call 228, `clock_gettime`, which musl's `tmpnam` uses to make a name (the runtime
 has no clock; found by printing the call number to the console with the front-effect binary), and `loop-2f`/`loop-2g`
@@ -169,7 +170,7 @@ run in full (configuration of step 5).
 
 | outcome | GCC: c-corpus baseline | musl, `LINK=external` | musl, `LINK=internalize` | c-testsuite: baseline | external | internalize |
 |---|---:|---:|---:|---:|---:|---:|
-| agrees (output and status) | 1,402 | **1,438** | 1,487 | 149 | **212** | 214 |
+| agrees (baseline: status only; probe: output and status) | 1,402 | **1,438** | 1,487 | 149 | **212** | 214 |
 | refused by name | 172 | 138 | 89 | 70 | 7 | 5 |
 | named fault (native passed) | 1 | 6 | 5 | 0 | 1 | 1 |
 | **wrong** | 0 | **0** | **1** | 0 | **0** | **0** |
@@ -185,9 +186,10 @@ are floating point 129 (all in the test programs, none in the library), `llvm.re
 of the list above (`clock_gettime` 3, `open` 2) and `pr67037` (c-corpus cause 2). The budget case of c-testsuite
 (`00040`) finishes in 489,691,542 steps under the larger budget of this harness.
 
-Internalisation moves 49 more GCC programs to agrees: 46 floating-point refusals, 2 return-address refusals and the
-vector `bitcast` disappear because, with every function internal, LLVM inlines and folds them away before lowering (as
-c-corpus's `OPTNONE=1` showed on a smaller scale), and `pr67037`'s mismatched K&R call is inlined. And it creates the
+Internalisation adds 49 GCC agreements net: 47 floating-point refusals and 2 return-address refusals disappear
+because, with every function internal, LLVM inlines and folds them away before lowering (as
+c-corpus's `OPTNONE=1` showed on a smaller scale), and `pr67037`'s mismatched K&R call is inlined (fault to agrees); the vector `bitcast` (`pr92618`) stays refused. And it
+moves one program from agrees to the
 **one wrong result**, `bcp-1`, which is the probe's own fault, not the front's: the test checks that
 `__builtin_constant_p(global)` is 0 for a global it marks `externally_visible` (a GCC attribute clang ignores); once
 the probe makes `global` internal, LLVM proves it is never written and constant-folds it, and the test aborts. With
@@ -215,9 +217,13 @@ and the `%a %e %f %g %A %E %F %G` case a trap (`__builtin_trap()`, which the fro
 never prints something else. Effect: the step 2 -> 3 rows above (GCC 37: 5 -> 30 agree; c-testsuite 64: 0 -> 61).
 
 **What SoftFloat behind the libcall interface should remove** (`__adddf3`-style calls for f32, f64 and x87 80-bit,
-another job): with unpatched musl, every `printf`-family refusal here is floating point in the library: GCC 29 of the
-37 and c-testsuite 63 of the 64 are `x86_fp80` at `vfprintf.c:627`; at step 3, 3 more GCC programs are `x86_fp80` in
-`vfscanf.c`. These 32 + 63 should go once floating point is lowered, and the two patches become unnecessary; then
+another job): with unpatched musl, every `printf`-family refusal here is floating point in the library: GCC 28 of the
+37 and c-testsuite 62 of the 64 are `x86_fp80` at `vfprintf.c:627`. Three of those 28 GCC programs meet two more
+barriers one after the other: past `vfprintf.c` they stop at `x86_fp80` in `vfscanf.c` (step 3), and past that at the
+missing clock (step 5), which SoftFloat does not remove. So these 28 + 62 programs should get past the library's
+floating point once it is lowered (with the patches, 25 of the GCC ones agreed at step 3; 61 of the c-testsuite ones agree and 1 faults for lack of
+files), and the
+two patches become unnecessary; then
 `fmt_fp` and `__floatscan` actually run, which today nothing tests. The test programs' own floating point (GCC:
 `gofast`, 129 in the whole corpus; c-testsuite: `00174`, `00175`, 6 in the whole corpus) should go too. What
 SoftFloat-as-libcalls would not cover by itself, measured in musl's bitcode:
@@ -313,7 +319,7 @@ refused (own floating point), 1 fault (`00187`, files). Exactly the musl outcome
 
 | outcome | GCC: baseline | picolibc | musl | c-testsuite: baseline | picolibc | musl |
 |---|---:|---:|---:|---:|---:|---:|
-| agrees (output and status) | 1,402 | **1,437** | 1,438 | 149 | **212** | 212 |
+| agrees (baseline: status only; probe: output and status) | 1,402 | **1,437** | 1,438 | 149 | **212** | 212 |
 | refused by name | 172 | 138 | 138 | 70 | 7 | 7 |
 | named fault (native passed) | 1 | 6 | 6 | 0 | 1 | 1 |
 | **wrong** | 0 | **0** | 0 | 0 | **0** | 0 |
@@ -353,7 +359,7 @@ per byte, e.g. `hello` 1,771 steps against 1,749.
 | (a) one function taking a system-call number | musl: `syscall_arch.h` overlay -> `__bennett_syscall(n, a1..a6)`, a `switch` over `write`, `writev`, `read`, `ioctl`, `open`/`openat`, `close`, `lseek`, `brk`, `mmap`, `munmap`, `madvise`, `mprotect`, `mremap`, `rt_sigprocmask`, `rt_sigaction`, `gettid`, `getpid`, `set_tid_address`, `kill`/`tkill`/`tgkill`, `exit`/`exit_group`; anything else traps. Works for everything measured here; musl's code above it runs unchanged. | console (`effect`), an arena for `brk`/`mmap`, an end of the run with a status. The thread descriptor and startup are C in the runtime. The surface is musl's: 288 system calls are named in the library; the runtime implements 24, and the only unknown
 one any measured program reached is `clock_gettime` (from `tmpnam`), which traps. |
 | (b) the library's stdio back end | not measured separately; in musl it is `__stdio_write`/`__stdout_write` (both call `writev`/`ioctl` through (a)); in picolibc the `FILE`'s put function (`posixiob_stdout.c` puts it over `write`). Replacing one of these is a few lines but leaves `malloc` (`brk`/`mmap` or `sbrk`), `exit`, files and the rest on their own path. | console; plus everything (a) or (c) still needs for non-stdio calls |
-| (c) the library's porting layer | picolibc: `write`, `read`, `_exit`, `sbrk`, `open`, `close`, `lseek`, `fstat`, `isatty`, `getpid`, `kill`, `unlink` in `picolibc-rt.c`, 12 functions; the same results as (a) on every program measured. | the same three: console, arena, end of run |
+| (c) the library's porting layer | picolibc: `write`, `read`, `_exit`, `sbrk`, `open`, `close`, `lseek`, `fstat`, `isatty`, `getpid`, `kill`, `unlink` in `picolibc-rt.c`, 12 functions; the same results as (a) on every program measured, except `20051113-1`, on which LLVM's optimiser crashes (reported by name) under picolibc and not under musl. | the same three: console, arena, end of run |
 
 **What `exit` needs.** Today a run ends only by returning from the entry function or by a fault, so the probe
 returns from `__bennett_entry` and must reproduce by hand what `exit` does on a return from `main`: atexit
@@ -389,13 +395,17 @@ fault).
 ## Interpretation, and what would make these numbers misleading
 
 - **The library is not the problem for integer code.** With three overlay headers, musl's generic C and one runtime
-  file, every integer program measured runs unchanged and prints exactly what native prints; picolibc needs one
-  ABI patch and a configuration. What stops the rest is floating point (in the library's `printf` today, and in the
+  file, plus the two no-floating-point stdio patches (`musl-printf-nofp.patch`, `musl-scanf-nofp.patch`), every
+  integer program measured prints what native prints, except those that need files, a clock or `setjmp`/`longjmp`,
+  and those that meet a front refusal or fault unrelated to the library (`pr92904`'s over-aligned variadic argument,
+  `pr67037`, c-testsuite `00025`'s mismatched prototype, the return-address tests) or, under picolibc, LLVM's
+  optimiser crash on `20051113-1`. picolibc needs one ABI patch, a no-floating-point trap patch and a configuration. What stops the rest is floating point (in the library's `printf` today, and in the
   programs themselves), `setjmp`/`longjmp`, and files.
 - **`%f` is the line.** Integer-only `printf` today needs a patch; SoftFloat would remove it, and would also be the
   first thing to run `fmt_fp` and `__floatscan`, so the output comparison of this harness is the test that matters for
   it. The hand programs and the two lists contain no successful `%f` at all.
-- **Coverage of the library is thin.** The programs pull 20-40 members of 1,345; `vfprintf`'s integer paths,
+- **Coverage of the library is thin.** The hand programs pull 14 to 36 members of 1,345, single corpus programs up to
+  78, and all GCC programs together 107 distinct members; `vfprintf`'s integer paths,
   `fwrite`, `mallocng`, `qsort`, `ctype`, `atexit` and `exit` run; locale, wide characters, `printf` positional
   arguments, `scanf` beyond a few cases, time, signals, threads do not. Agreement says nothing about them.
 - **Agreement is (output, status) on one input**: stdin is empty, `argc` is 1, there are no files. A program whose
@@ -407,8 +417,8 @@ fault).
 - **The boundary is the probe's own code**, about 230 lines each; a bug there would show as a mismatch or a fault, not
   hide one, except that `brk`/`mmap`/`sbrk` semantics are simplified (no `munmap`, a fixed arena). `malloc` ran
   536,094 steps (musl) and 942,183 (picolibc) without a mismatch.
-- **Internalisation inflates agreement**: 49 of the GCC agreements under `LINK=internalize` exist only because LLVM
-  folded floating point after internalising, and it caused the one wrong result. The `LINK=external` columns are the
+- **Internalisation inflates agreement**: of the 49 extra GCC agreements under `LINK=internalize`, 47 exist only
+  because LLVM folded floating point after internalising (2 more folded a return address, 1 inlined a mismatched call), and it caused the one wrong result. The `LINK=external` columns are the
   conservative numbers.
 - **One clang, one target.** Native and device share clang 18's front end and headers differ (glibc natively, musl or
   picolibc on the device), so a header-level difference shows up as a mismatch, not hidden; a bug shared by the two
@@ -420,11 +430,12 @@ fault).
 
 1. **musl at the system-call boundary.** musl as it is, three overlay headers, generic C instead of assembly, a
    runtime with one `syscall(n, ...)` function implemented by device effects (console, arena, end of run) and
-   faults for the rest; startup and exit in C. Largest coverage of real C for the least porting; the boundary is
+   faults for the rest; startup and exit in C. Expected, not measured here: the widest coverage of POSIX for little porting; the boundary is
    Linux's, wide (288 calls named, ~20 needed) but each is a `switch` case.
 2. **picolibc at its porting layer.** picolibc built for the device (integer or, once SoftFloat lands, full stdio),
    the dozen newlib-style functions implemented by device effects; one ABI patch and the configuration upstream.
-   Smallest library and code (`hello` 832 instructions against 2,179), the porting layer is the documented one, a
+   Smaller device code on the programs measured (`hello` 832 instructions against 2,179; library size and porting
+   effort were not compared); the porting layer is the documented one, a
    `FILE` with put/get pointers is the natural place for the console. Less of POSIX.
 3. **Either library, with a device-level end of run and console in the front first.** Make `effect` reachable from C
    (as `front-effect.patch`) and give the device one way to end a run with a status, then put stdio's back end or the
