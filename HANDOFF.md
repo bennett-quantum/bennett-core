@@ -40,7 +40,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `31f5138` | `setjmp`/`longjmp` (library and built-in forms, `sigsetjmp` with musl): a device `setjmp` instruction and `longjmp` terminator, journalled (`docs/DESIGN.md`, "Non-local jumps") |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (170 tests and 1 heavy reference run ignored, about 5 s, no LLVM needed) and `front/test.sh` (138 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (191 tests and 1 heavy reference run ignored, about 5 s, no LLVM needed) and `front/test.sh` (138 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check that needs `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -270,7 +270,29 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
    detection must reach and which history a coherent fault keeps; whether a fault in one world stops all worlds;
    how marks, rewinds and replays align when worlds' histories differ in shape; what one measurement event is
    when worlds reach it at different places; whether dead slots count in world equality.
-   The implementer's order for the rest: worlds (a superposition of whole machine states, split where a call passes
+   **Second step landed: worlds** (`2c0563e`; `docs/DESIGN.md`, "Worlds"). A `call` may pass a register to an
+   integer parameter; where configurations disagree on its value the machine state splits into one world per
+   value (a full copy, memory included, journalled from then on); a rewind that makes worlds equal merges them and
+   their amplitudes add. Worlds run in lockstep ticks (the budget counts ticks); a world that has rewound waits
+   until no world runs, then equal worlds merge. Interim choices (questions below): a keep that changes a register
+   the region read faults `bad_rewind` and changes nothing (also when a later gate carries it there); a fault in
+   some worlds stops the run unless region faults are allowed; a measurement with several worlds waits for all,
+   then observes which world; a run ending with several worlds hands the host one, sampled by weight, and
+   reversal stops there. With one world the machine is the old one: every existing test passes, except one
+   expected rewind word, now the visit number of the rewind rather than the steps it undid (paths of different
+   length must merge). Measured: splits and merges are bijections by brute force (128 starting states each, all
+   16 basis configurations and their superposition, clean and dirty history); `apply` equals mark, call,
+   rewind-keep on the thesis program and Grover (16 seeds each), 108 basis states and superposed arguments (the
+   idiom has no region budget: a debt); un-running through gates across worlds equals the independent dense
+   calculation on 91 programs (75 equal, 16 refused exactly where the calculation says the read no longer
+   matches), and the whole-world reference agrees on the same 91; the known exponential with worlds: cleaning up
+   at every level c(d) = 2c(d-1) + 47 steps (22,481 at depth 8), history left open 48 per level (430 at depth 8);
+   a loop of the idiom costs 31 steps and about 135 journal bytes per iteration at 50 and at 1,500 iterations.
+   The reference model differs in two places, both where the documents are silent: it faults a register
+   allocated, rotated and read inside one region (it checks each world's share for zero; the executor sums the
+   shares and checks the norm when all worlds stop), and its lockstep gives no interference when worlds' paths
+   differ in length.
+   The implementer's order for the rest (done: 1 mark/rewind, 2 worlds): worlds (a superposition of whole machine states, split where a call passes
    a register as an integer, merged where equal), the memory overlay, address-taking gates, then `apply` as mark,
    call, rewind-keep shown equal on every example and test.
 4. **The front's fallback**: the program almost verbatim under marks, the documented coherent class recognised by
@@ -337,6 +359,15 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
   when history is left behind" says un-running after a change is a warning, not a refusal. Keep this one a fault?
   (4) A value defined between a mark and its rewind still reads its mark-time value afterwards; the validator
   allows such uses. Reject them?
+- **Worlds (step 3's second step), with the reversible choice taken.** (W1) Is time part of the machine state? A
+  world can rewind into a state another world reached and already left (only by rewinding a shared mark again):
+  without a clock they interfere, on hardware padded to a budget they do not; the run stops with
+  `RunError::Unaligned`. (W2) Question (1) above, refined: adding equal worlds' amplitudes is interference and
+  exact; what breaks unitarity is un-running a read whose register changed; detected exactly, `bad_rewind`; rule
+  4's warning is the route (keeping `v XOR q` as history, with channels). (W3) Should a fault in some worlds stop
+  the whole run by default? (W4) Is observing which world at a measurement, and sampling one at the end, the
+  intended reading of rule 1? (Counted in `Stats::observations` for step 4's warning.) (W5) Every split copies
+  the whole memory until the overlay (next step).
 - **`setjmp`/`longjmp`.** (1) `docs/DESIGN.md` ("Non-local jumps") lets a stale jump record succeed when a later
   call of the same function sits at the same depth and stack address (C leaves it undefined; the testing pass's
   probe returned 77). Keep that, or fault by name? (2) Since `595339c` a copied `sigjmp_buf` carries its own saved
