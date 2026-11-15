@@ -65,9 +65,12 @@ impl<'m> Executor<'m> {
         let journal = self.journal.as_ref()?;
         let entry = journal.mark_at(usize::try_from(handle).ok()?)?;
         let mut depth = 0usize;
+        // A longjmp left the frames it discarded, as that many returns would have.
+        let mut jumps = journal.jumps().iter().rev();
         for index in (entry.position..journal.records()).rev() {
             match journal.kind_at(index) {
                 Undo::Return => depth += 1,
+                Undo::Longjmp => depth += jumps.next().expect("a longjmp record has an entry"),
                 Undo::Call => depth = depth.checked_sub(1)?,
                 Undo::Measure | Undo::Finish => return None,
                 _ => {}

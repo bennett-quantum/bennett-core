@@ -74,6 +74,16 @@ pub enum WordRole {
     ReturnStack,
     /// The old value of the caller's result slot in a `Return` record.
     ReturnResult,
+    /// The old bytes under a jump record, in a `Setjmp` record (two words).
+    JumpRecord,
+    /// The old value of the result slot in a `Setjmp` record.
+    SetjmpSlot,
+    /// A discarded frame's position or entry stack pointer, the target frame's old position, the old
+    /// stack pointer or the count of discarded frames, in a `Longjmp` record: control history, never
+    /// credited to a witness.
+    LongjmpControl,
+    /// The old value of the `setjmp`'s result slot in a `Longjmp` record.
+    LongjmpResult,
 }
 
 /// What live thing holds a value, named in a [`WordWitness::LiveCopy`].
@@ -601,6 +611,8 @@ struct StepInfo {
     jump_params: Vec<(Slot, u128)>,
     return_dst: Option<Slot>,
     return_dst_new: Option<u128>,
+    /// The frames a `longjmp` discarded.
+    discarded: usize,
 }
 
 fn live_copy(live: &[(LiveSource, u128)], value: u128) -> WordWitness {
@@ -929,6 +941,57 @@ impl Executor<'_> {
                 }
                 words
             }
+            Undo::Setjmp => {
+                let range = info.store_range.clone().expect("a setjmp record has a range");
+                // Only a record over bytes nothing in the branch wrote yet is credited to the base.
+                let first_store = !range.clone().any(|byte| collector.written[byte]);
+                let witness = if first_store { WordWitness::StoreBase } else { WordWitness::None };
+                for byte in range {
+                    if !collector.written[byte] {
+                        collector.written[byte] = true;
+                        collector.written_list.push(byte);
+                    }
+                }
+                let dst = info.dst.expect("a setjmp defines a result");
+                let first = collector.bump(executing, dst);
+                vec![
+                    WordInstance {
+                        role: WordRole::JumpRecord,
+                        value: info.words[0],
+                        witness: witness.clone(),
+                        recompute: None,
+                    },
+                    WordInstance { role: WordRole::JumpRecord, value: info.words[1], witness, recompute: None },
+                    WordInstance {
+                        role: WordRole::SetjmpSlot,
+                        value: info.words[2],
+                        witness: slot_witness(first, info.dst_new, info.words[2], live),
+                        recompute: None,
+                    },
+                ]
+            }
+            Undo::Longjmp => {
+                let (result, control) = info.words.split_last().expect("a longjmp record ends with its result slot");
+                let mut words: Vec<WordInstance> = control
+                    .iter()
+                    .map(|&value| WordInstance {
+                        role: WordRole::LongjmpControl,
+                        value,
+                        witness: WordWitness::None,
+                        recompute: None,
+                    })
+                    .collect();
+                let target = executing - info.discarded;
+                let dst = info.dst.expect("a longjmp resumes a setjmp");
+                let first = collector.bump(target, dst);
+                words.push(WordInstance {
+                    role: WordRole::LongjmpResult,
+                    value: *result,
+                    witness: slot_witness(first, info.dst_new, *result, live),
+                    recompute: None,
+                });
+                words
+            }
             Undo::Effect | Undo::Finish | Undo::Gate | Undo::Qfree | Undo::Apply => Vec::new(),
             Undo::Rewind => unreachable!("the measurement stops before a rewind"),
         };
@@ -972,6 +1035,17 @@ impl Executor<'_> {
                     collector.stores.insert((range.start, range.end), producer.clone());
                 }
             }
+            // A jump record and a jumped-to result are control history, never depth-one recomputation.
+            Undo::Setjmp => {
+                let range = info.store_range.as_ref().expect("a jump record range");
+                collector.stores.retain(|&(start, end), _| end <= range.start || start >= range.end);
+                let dst = info.dst.expect("a setjmp defines a result");
+                collector.shadow[executing].producers[dst.index()] = None;
+            }
+            Undo::Longjmp => {
+                let dst = info.dst.expect("a longjmp resumes a setjmp");
+                collector.shadow[executing - info.discarded].producers[dst.index()] = None;
+            }
             _ => {}
         }
         assert_eq!(words.len(), info.words.len(), "every journal word gets a role");
@@ -995,6 +1069,10 @@ impl Executor<'_> {
             }
             Undo::Return => {
                 collector.shadow.pop().expect("a return pops a shadow frame");
+            }
+            Undo::Longjmp => {
+                let kept = collector.shadow.len() - info.discarded;
+                collector.shadow.truncate(kept);
             }
             _ => {}
         }
@@ -1092,13 +1170,25 @@ impl Executor<'_> {
             SitePos::Inst(index) => Some(&self.function(site.func).block(site.block).insts[index]),
             SitePos::Entry | SitePos::Term => None,
         };
-        let dst = inst.and_then(Inst::result);
-        let dst_new = dst.map(|slot| self.slots[pending.frame.base + slot.index()]);
+        let discarded = if kind == Undo::Longjmp { words[words.len() - 2] as usize } else { 0 };
+        let dst = if kind == Undo::Longjmp {
+            // The jump resumed the top frame just after its `setjmp`.
+            let top = *self.top();
+            self.function(top.func).block(top.block).insts[top.inst - 1].result()
+        } else {
+            inst.and_then(Inst::result)
+        };
+        let dst_frame = if kind == Undo::Longjmp { *self.top() } else { pending.frame };
+        let dst_new = dst.map(|slot| self.slots[dst_frame.base + slot.index()]);
         let (store_range, store_new) = match inst {
             Some(Inst::Store { width, address, .. }) => {
                 let range = self.memory_range(self.read_word(address), *width).expect("a store that ran is in bounds");
                 let new = self.read_bytes(range.clone());
                 (Some(range), Some(new))
+            }
+            Some(Inst::Setjmp { buffer, .. }) => {
+                let range = self.jump_record_range(self.read_word(buffer)).expect("a setjmp that ran is in bounds");
+                (Some(range), None)
             }
             _ => (None, None),
         };
@@ -1128,7 +1218,7 @@ impl Executor<'_> {
             (None, None)
         };
         let mut live = std::mem::take(&mut collector.live);
-        self.live_sources(kind, &collector.shadow, &mut live);
+        self.live_sources(kind, discarded, &collector.shadow, &mut live);
         collector.live = live;
         StepInfo {
             kind,
@@ -1142,6 +1232,7 @@ impl Executor<'_> {
             jump_params,
             return_dst,
             return_dst_new,
+            discarded,
         }
     }
 
@@ -1150,10 +1241,11 @@ impl Executor<'_> {
     /// which is cleared first. For a `Call`, the new frame is already pushed but has no shadow yet
     /// (its words are all first writes, which need no scan); for a `Return`, the callee frame is
     /// already popped and is left out.
-    fn live_sources(&self, kind: Undo, shadow: &[ShadowFrame], live: &mut Vec<(LiveSource, u128)>) {
+    fn live_sources(&self, kind: Undo, discarded: usize, shadow: &[ShadowFrame], live: &mut Vec<(LiveSource, u128)>) {
         live.clear();
         let paired = match kind {
             Undo::Return => shadow.len() - 1,
+            Undo::Longjmp => shadow.len() - discarded,
             _ => shadow.len(),
         };
         let start = self.frames.len() - paired - usize::from(kind == Undo::Call);

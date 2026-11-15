@@ -9,7 +9,7 @@ use crate::{
 };
 
 /// The mnemonics that end a block.
-const TERMINATORS: [&str; 5] = ["br", "switch", "ret", "exit", "fault"];
+const TERMINATORS: [&str; 6] = ["br", "switch", "ret", "exit", "longjmp", "fault"];
 
 /// One line of a block body.
 pub(super) enum Statement {
@@ -77,6 +77,7 @@ impl<'s> Parser<'s> {
                 line.no_result("stackrestore")?;
                 Inst::StackRestore { pointer: self.operand(scope, Width::WORD)? }
             }
+            "setjmp" => Inst::Setjmp { dst: line.result("setjmp")?, buffer: self.operand(scope, Width::WORD)? },
             "call" => {
                 let callee = self.function_use()?;
                 Inst::Call { callee, args: self.arguments(scope)?, dst: line.dst }
@@ -130,6 +131,11 @@ impl<'s> Parser<'s> {
             "switch" => self.switch(scope),
             "ret" => self.ret(scope),
             "exit" => Ok(Terminator::Exit(self.typed_operand(scope)?)),
+            "longjmp" => {
+                let buffer = self.operand(scope, Width::WORD)?;
+                self.cursor.expect(Token::Comma, "`,`")?;
+                Ok(Terminator::Longjmp { buffer, value: self.operand(scope, Width::JUMP_VALUE)? })
+            }
             _ => {
                 let offset = self.cursor.offset();
                 let name = self.cursor.word("a fault name")?;

@@ -36,7 +36,7 @@ A module is a list of functions, an initial memory image and a memory size.
   `stackrestore` to a stack pointer `stacksave` gave, which is how a variable-length array in a loop is freed); direct `call`;
   **`call_indirect` through a function address** and `faddr @f` to take one; `ret`; `br`, conditional `br`, `switch`;
   `fault code`; `effect` (console byte output for now); `exit v` (a terminator finishing the whole run with the
-  entry-return outcome, even from a nested call).
+  entry-return outcome, even from a nested call); `setjmp` and the terminator `longjmp` (non-local jumps, below).
 - **Every operation is total.** A shift by at least the width gives 0. Division by zero, an out-of-bounds access, a
   bad indirect target, `unreachable` and an exhausted budget are *named faults*: part of the result, never a crash.
 - **Quantum instructions**, allowed in ordinary control code: `qalloc w`, `qfree`, single-qubit gates
@@ -249,6 +249,63 @@ Two things the first C programs taught:
   dirty discard needs a *variable* that outlives the computation.
 - "The operands are still there" is not enough to uncompute; they must be unchanged. A value read from a qubit
   before a gate and used after it cannot be uncomputed, and is refused.
+
+## Non-local jumps (`setjmp`, `longjmp`)
+
+C's `setjmp` saves "the calling environment" and `longjmp` returns to it, from any depth. On a machine with
+registers that environment is the callee-saved registers, the stack pointer and the return address, which is
+what musl's x86-64 assembly saves. The device has no registers: a frame's state is its slots, its position
+and the stack pointer, all in the executor. So the musl assembly is not the route, and no C routine can be:
+`setjmp` must capture its caller's frame, and `longjmp` must discard frames, which no ordinary device
+instruction can do. The device has one instruction and one terminator for it, as it has `exit` for leaving
+from any depth:
+
+- **`%r = setjmp %buf`** writes a 32-byte jump record at `%buf` (`docs/SYNTAX.md`): the frame's depth and
+  function, the position of this `setjmp`, the frame's entry stack pointer and the current stack pointer; and
+  gives the `i32` 0. The record is in program memory, so a `jmp_buf` can be copied like any other bytes, and it
+  fits the smallest buffer C has for this, `__builtin_setjmp`'s five words.
+- **`longjmp %buf, %v`** checks the record against the live frames: a frame of the run (inside a coherent
+  region: of the region) at that depth, of that function and entry stack pointer, a `setjmp` at that position,
+  and a stack pointer within that frame's allocations, at or above where they stand now. Anything else is the
+  named fault `bad_indirect`, never a jump somewhere else: a jump to a function that has returned (undefined in
+  C) faults unless another activation of the same function stands at the same depth and stack address, which is
+  where native code would land too. Then it discards the frames above, sets the stack pointer back to where the
+  `setjmp` left it (freeing what `alloca` and variable-length arrays took since, as native `longjmp` does), and
+  resumes after the `setjmp`, which now gives `%v`.
+- **Locals** follow from this: the frame resumes with its slots as they are, and memory as it is. An object in
+  memory (every `volatile` local, every global) has its latest value, as C requires; a value the optimiser
+  kept in a slot has its latest value too, which is one of the values C allows for a non-volatile local changed
+  between `setjmp` and `longjmp` (indeterminate in C; natively it depends on register allocation, so tests
+  observe only what C defines).
+- **Un-run**: `setjmp` journals the bytes it overwrote and the result slot; `longjmp` journals every
+  discarded frame (its position and entry stack pointer, two words), the target's old position, the stack
+  pointer, the count and the result slot. The discarded frames' slots need no journal: nothing overwrites them
+  before the jump is undone (every later write to them is journalled and undone first). So un-running through
+  jumps restores the state exactly, checked step by step (`crates/exec/tests/setjmp.rs`). A `rewind` un-runs
+  jumps like any other step; when it checks that its mark belongs to the running activation, a jump counts as
+  the returns of the frames it discarded (the journal keeps those counts beside its marks).
+- **In a coherent region** a jump within the region works on every branch, the record living in the
+  region's private memory; a jump to a frame outside the region is `bad_indirect` on every branch. From C,
+  though, a function that uses `setjmp` is not run coherently: LLVM must treat `setjmp` as an opaque call that
+  may write any memory (a second return can follow any write), so the front sees a function that writes memory
+  and refuses a qubit-dependent call of it by name. A debt, with its route: the front decides what may run
+  coherently from its own summary in which `setjmp` writes only its buffer and `longjmp` only reads it (the
+  device region discards private writes anyway), without giving that summary to LLVM's optimiser.
+
+The front (`Jumps.h`), after the optimiser, so that LLVM sees the C library's `returns_twice` calls as a native
+compile does: calls of the undefined library functions `setjmp`, `_setjmp` become `setjmp`; `longjmp`,
+`_longjmp`, `siglongjmp`, `__longjmp_chk` become `longjmp` with C's value (0 becomes 1); `sigsetjmp` and glibc's
+`__sigsetjmp(buf, savemask)` become `setjmp` followed, where `savemask` is not 0, by the C library's
+`__sigsetjmp_tail(buf, result)` on both returns, exactly as musl's x86-64 `sigsetjmp` does (it saves the
+signal mask on the first return and restores it after a jump; musl's own C, linked by `rt/musl/link.py`; without
+the library it is refused as a call with no definition). clang's `__builtin_setjmp`/`__builtin_longjmp`
+(`llvm.eh.sjlj.setjmp`/`longjmp`) become the same instructions with the value 1; the frame address clang stores
+in the buffer, `llvm.frameaddress(0)`, is the stack pointer at the function's entry (a caller's frame address is
+refused by name). The address of a library `setjmp` or `longjmp`, a call through another prototype and an
+`invoke` are refused by name. The fault is `bad_indirect`, which already named a control transfer through a
+value that names no valid target (`call_indirect`): the 4-bit fault code space is full (`bad_rewind` took 15),
+and a code of its own needs every fault register one qubit wider (a question for the maintainer,
+`HANDOFF.md`).
 
 ## Decided in code
 

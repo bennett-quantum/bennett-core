@@ -29,6 +29,7 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | stackrestore operand                       ; back to a saved stack pointer; else fault bad_stack_restore
             | [%d =] call @f(typed, ...)
             | [%d =] call_indirect fn(type, ...) [-> type] operand(typed, ...)
+            | %d = setjmp operand                        ; i32 0; writes a jump record at the i64 address
             | %d = faddr @f
             | effect operand                             ; one i8 to the console
             | %d = qalloc N
@@ -44,6 +45,7 @@ terminator := br label[(typed, ...)]
             | switch iN operand, INT: target, ..., default: target
             | ret [operand]
             | exit typed                                 ; finish the whole run, even from a nested call
+            | longjmp operand, operand                   ; jump record address (i64), i32 value
             | fault NAME                                 ; budget, unreachable, ... (bennett_ir::Fault)
 ```
 
@@ -132,3 +134,13 @@ because the enclosing function need not return that type. When executed, its typ
 entry function's result type exactly, otherwise the named fault is `exit_type_mismatch`. A void entry cannot
 use `exit`. A successful exit has precisely the entry-return outcome, keeps output and memory, and is
 journalled for reversal. Inside `apply` it always faults with `exit_in_region`, before checking the entry type.
+
+## Non-local jumps
+
+`%r = setjmp %buf` has an `i32` result and an `i64` address; `longjmp %buf, %v` is a terminator with an `i64`
+address and an `i32` value. `setjmp` writes 32 bytes at `%buf`, four little-endian 64-bit words: the frame's
+depth from 0 (low 32 bits) and function index (high 32 bits); the `setjmp`'s block index (low) and instruction
+index in the block (high); the frame's entry stack pointer; the stack pointer when `setjmp` ran. A record or
+buffer outside memory is `out_of_bounds`; a record `longjmp` cannot match to a live frame and `setjmp` is
+`bad_indirect` (`docs/DESIGN.md`, "Non-local jumps"). The value is passed as it is: C's rule that 0 becomes 1
+is the front's.

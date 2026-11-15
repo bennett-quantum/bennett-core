@@ -8,7 +8,8 @@ test programs, and why are programs refused?
 Measured twice on 2026-11-13, a third time on 2026-11-15 after floating point, a fourth time on 2026-11-15
 with the C library linked (musl 1.2.5, `rt/musl`), and a fifth time with the library linked at `b961292`, after
 the 128-bit conversions and the complex helpers, and a sixth at `8bbb56c`, which returns a small aggregate as one
-integer; the newest section comes first.
+integer; the newest section comes first. After that only the four programs that waited on `setjmp` and
+`longjmp` were run again, alone.
 First at commit `4b65247` (tree clean when the binaries were copied): `bennett-front` and `bennett` were built
 once (`cargo build --release`, `front/test.sh`, all tests passing), then copied to `.tmp/c-corpus/bin/`, and
 only those copies were used. File and line references in the sections on the
@@ -73,6 +74,23 @@ error. **wrong**: the device reaches `abort()`/`exit(≠0)`, or `main` returns a
 exits other than 0 or 3, `bennett check` rejects its output, or `bennett run` exits other than 0, 1 or 2. **budget**:
 the 10^8-step budget ran out. **skipped**: no native reference, as above.
 
+## The programs that waited on `setjmp` and `longjmp` (2026-11-15)
+
+After `setjmp` and `longjmp` became device instructions (`docs/DESIGN.md`, "Non-local jumps"), only the four
+GCC programs refused on them were run again, with `run-one.sh` one at a time (binaries built from the job's
+tree and copied), with musl linked (`MUSL_LIBDIR`) and without the library (`rt.c`):
+
+| program | before (`8bbb56c`) | with musl | without the library |
+|---|---|---|---|
+| `20210505-1` | refused: `longjmp` has no definition | agrees (2,059 steps) | agrees (10 steps) |
+| `pr56982` | refused: `_setjmp` (with musl: `setjmp`) has no definition | agrees (2,074 steps) | agrees, `exit(0)` (33 steps) |
+| `built-in-setjmp` | refused: `llvm.eh.sjlj.longjmp` | agrees (2,161 steps) | agrees, `exit(0)` (130 steps) |
+| `pr84521` | refused: `llvm.eh.sjlj.longjmp` | agrees (2,122 steps) | agrees (73 steps) |
+
+The same with `OPTNONE=1` (the test's functions as clang -O0 wrote them): all four agree. With nothing else
+changed, GCC with musl would be 1,564 agree and 5 refused (`llvm.returnaddress` 3, inline assembly 1, an
+over-aligned variadic argument 1).
+
 ## The three corpora at `8bbb56c`, with the C library linked (2026-11-15)
 
 Same method as the next section, at `8bbb56c`: `6418e6b` (fresh names and debug locations without rescanning) and
@@ -136,8 +154,8 @@ What still does not run, per reason:
 | corpus | refused or faulted | programs |
 |---|---|---:|
 | GCC | `llvm.returnaddress` (`20030323-1`, `20030811-1`, `pr17377`) | 3 |
-| GCC | `llvm.eh.sjlj.longjmp` (`built-in-setjmp`, `pr84521`) | 2 |
-| GCC | `longjmp` (`20210505-1`), `setjmp` (`pr56982`): musl's are x86-64 assembly, not built | 2 |
+| GCC | `llvm.eh.sjlj.longjmp` (`built-in-setjmp`, `pr84521`); agree since, run alone (section above) | 2 |
+| GCC | `longjmp` (`20210505-1`), `setjmp` (`pr56982`): musl's are x86-64 assembly, not built; agree since, run alone | 2 |
 | GCC | inline assembly (`990413-2`) | 1 |
 | GCC | a variadic argument aligned to more than 16 bytes (`pr92904`) | 1 |
 | GCC | named fault `unreachable`: no file system (`printf-2`, `user-printf`, `fprintf-2`, `loop-2f`, `loop-2g`) | 5 |

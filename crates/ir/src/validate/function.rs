@@ -160,6 +160,7 @@ impl<'a> Checker<'a> {
                 Some(Type::Int(*width))
             }
             Inst::Compare { .. } => Some(Type::Int(Width::BIT)),
+            Inst::Setjmp { .. } => Some(Type::Int(Width::JUMP_VALUE)),
             Inst::Cast { to, .. } => Some(Type::Int(*to)),
             Inst::Alloca { .. } | Inst::FuncAddr { .. } | Inst::StackSave { .. } | Inst::Mark { .. } => {
                 Some(Type::Int(Width::WORD))
@@ -237,6 +238,7 @@ impl<'a> Checker<'a> {
                 }
             }
             Inst::Load { address, .. }
+            | Inst::Setjmp { buffer: address, .. }
             | Inst::Alloca { size: address, .. }
             | Inst::StackRestore { pointer: address } => {
                 self.expect(site, *address, Type::Int(Width::WORD));
@@ -370,6 +372,10 @@ impl<'a> Checker<'a> {
                 if let Some(Type::Qreg(_)) = self.type_of(*value) {
                     self.error(site, Problem::ExitOperand);
                 }
+            }
+            Terminator::Longjmp { buffer, value } => {
+                self.expect(site, *buffer, Type::Int(Width::WORD));
+                self.expect(site, *value, Type::Int(Width::JUMP_VALUE));
             }
             Terminator::Jump(_) | Terminator::Fault(_) => {}
         }

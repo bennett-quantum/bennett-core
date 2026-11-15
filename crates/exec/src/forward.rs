@@ -1,7 +1,9 @@
 //! Forward execution of one step. Every step either faults without changing anything, or changes the
 //! state and journals exactly what it overwrote.
 
-use bennett_ir::{Fault, FuncId, Gate, Inst, Operand, Qubit, Slot, Target, Terminator, Type, Width};
+use bennett_ir::{
+    BlockId, Fault, FuncId, Gate, Inst, JUMP_RECORD_BYTES, Operand, Qubit, Slot, Target, Terminator, Type, Width,
+};
 
 use crate::executor::{Executor, Frame, Halt, Outcome, SLOT_BYTES};
 use crate::gates;
@@ -54,6 +56,7 @@ impl<'m> Executor<'m> {
                 let callee = callee.filter(|&f| self.function(f).has_signature(signature)).ok_or(Fault::BadIndirect)?;
                 self.call(callee, args)?;
             }
+            Inst::Setjmp { dst, buffer } => self.setjmp(*dst, self.read_word(buffer))?,
             Inst::Effect { byte } => {
                 if self.in_region {
                     return Err(Fault::EffectInRegion.into());
@@ -126,8 +129,98 @@ impl<'m> Executor<'m> {
                 // Like an outer return, finishing changes only the outcome. Keep all frames for reversal.
                 self.record(Undo::Finish);
             }
+            Terminator::Longjmp { buffer, value } => self.longjmp(self.read_word(buffer), self.read(value))?,
             Terminator::Fault(fault) => return Err((*fault).into()),
         }
+        Ok(())
+    }
+
+    /// The memory range of a jump record at `address`.
+    pub(crate) fn jump_record_range(&self, address: u64) -> Result<std::ops::Range<usize>, Fault> {
+        let end = address.checked_add(JUMP_RECORD_BYTES).filter(|&end| end <= self.memory.len() as u64);
+        let end = end.ok_or(Fault::OutOfBounds)?;
+        Ok(address as usize..end as usize)
+    }
+
+    /// Writes a jump record naming the top frame and this `setjmp` at `buffer`, and gives 0.
+    fn setjmp(&mut self, dst: Slot, buffer: u64) -> Result<(), Fault> {
+        let range = self.jump_record_range(buffer)?;
+        let frame = *self.top();
+        // Depth and instruction index fit 32 bits: more frames or a longer block would need more memory than
+        // a host has.
+        let depth = (self.frames.len() - 1) as u64;
+        let words = [
+            depth | u64::from(frame.func.0) << 32,
+            u64::from(frame.block.0) | (frame.inst as u64) << 32,
+            frame.entry_stack_pointer,
+            self.stack_pointer,
+        ];
+        let mut record = [0u8; JUMP_RECORD_BYTES as usize];
+        for (chunk, word) in record.as_chunks_mut::<8>().0.iter_mut().zip(words) {
+            *chunk = word.to_le_bytes();
+        }
+        let (low, high) = (range.start..range.start + 16, range.start + 16..range.end);
+        self.record_word(self.read_bytes(low));
+        self.record_word(self.read_bytes(high));
+        self.memory[range].copy_from_slice(&record);
+        self.write_slot(dst, 0);
+        self.record(Undo::Setjmp);
+        self.advance();
+        Ok(())
+    }
+
+    /// Resumes the frame and `setjmp` the record at `buffer` names, with `value` as the `setjmp`'s
+    /// result: discards the frames above it and sets the stack pointer back to where the `setjmp` left it.
+    /// Every field is checked against the live frames, so a record that names no live frame of this run
+    /// (a frame that returned, or one outside a coherent region) faults instead of jumping.
+    fn longjmp(&mut self, buffer: u64, value: u128) -> Result<(), Fault> {
+        let range = self.jump_record_range(buffer)?;
+        let mut words = [0u64; 4];
+        for (word, chunk) in words.iter_mut().zip(self.memory[range].as_chunks::<8>().0) {
+            *word = u64::from_le_bytes(*chunk);
+        }
+        let [frame_word, position, entry_stack_pointer, stack_pointer] = words;
+        let depth = (frame_word & u64::from(u32::MAX)) as usize;
+        let (func, block, inst) =
+            (FuncId((frame_word >> 32) as u32), BlockId(position as u32), (position >> 32) as usize);
+        if depth < self.base_depth || depth >= self.frames.len() {
+            return Err(Fault::BadIndirect);
+        }
+        let target = self.frames[depth];
+        if target.func != func || target.entry_stack_pointer != entry_stack_pointer {
+            return Err(Fault::BadIndirect);
+        }
+        let function = self.function(func);
+        let dst = match function.blocks.get(block.0 as usize).and_then(|b| b.insts.get(inst)) {
+            Some(Inst::Setjmp { dst, .. }) => *dst,
+            _ => return Err(Fault::BadIndirect),
+        };
+        // Within the target frame's allocations, at or above where its allocations stand now.
+        let allocations_top = target.entry_stack_pointer - function.slot_count() as u64 * SLOT_BYTES;
+        let lowest = self.frames.get(depth + 1).map_or(self.stack_pointer, |frame| frame.entry_stack_pointer);
+        if stack_pointer < lowest || stack_pointer > allocations_top {
+            return Err(Fault::BadIndirect);
+        }
+        let discarded = self.frames.len() - depth - 1;
+        for index in (depth + 1..self.frames.len()).rev() {
+            let frame = self.frames[index];
+            self.record_word(pack_position(frame.func, frame.block, frame.inst));
+            self.record_word(u128::from(frame.entry_stack_pointer));
+        }
+        self.record_word(pack_position(target.func, target.block, target.inst));
+        self.record_word(u128::from(self.stack_pointer));
+        self.record_word(discarded as u128);
+        self.frames.truncate(depth + 1);
+        self.stack_pointer = stack_pointer;
+        let top = self.top_mut();
+        top.block = block;
+        top.inst = inst;
+        self.write_slot(dst, value);
+        if let Some(journal) = &mut self.journal {
+            journal.push_jump(discarded);
+        }
+        self.record(Undo::Longjmp);
+        self.advance();
         Ok(())
     }
 
@@ -298,4 +391,14 @@ impl<'m> Executor<'m> {
     fn qubit(&self, qubit: &Qubit) -> Result<QubitRef, Fault> {
         Ok(QubitRef { column: self.quantum.resolve(self.handle(qubit.register))?, bit: qubit.bit })
     }
+}
+
+/// A frame's position in one journal word: function, block and instruction index.
+pub(crate) fn pack_position(func: FuncId, block: BlockId, inst: usize) -> u128 {
+    u128::from(func.0) | u128::from(block.0) << 32 | (inst as u128) << 64
+}
+
+/// The function, block and instruction index of a packed position.
+pub(crate) fn unpack_position(word: u128) -> (FuncId, BlockId, usize) {
+    (FuncId(word as u32), BlockId((word >> 32) as u32), (word >> 64) as usize)
 }

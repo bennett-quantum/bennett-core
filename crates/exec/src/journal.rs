@@ -43,6 +43,12 @@ pub enum Undo {
     /// A `rewind`, undone by running the rewound steps again from the mark and XORing the kept values
     /// again. Words: the block and position the mark left the frame at, packed.
     Rewind,
+    /// A `setjmp`. Words: the record's old bytes (two words, low half first), then the old result slot.
+    Setjmp,
+    /// A `longjmp`. Words: for each discarded frame from the top down, its packed position and its entry
+    /// stack pointer; then the target frame's packed position and the stack pointer before the jump, the
+    /// number of discarded frames, and the old value of the `setjmp`'s result slot.
+    Longjmp,
 }
 
 /// A stack of undo records.
@@ -52,6 +58,9 @@ pub(crate) struct Journal {
     words: Vec<u128>,
     /// One entry per `Mark` record, in order: what a `rewind` to it needs.
     marks: Vec<MarkEntry>,
+    /// One entry per `Longjmp` record, in order: the number of frames it discarded, which a `rewind`
+    /// counts as returns when it checks that its mark belongs to the running activation.
+    jumps: Vec<usize>,
 }
 
 /// What the journal keeps about a `mark` besides its record.
@@ -72,6 +81,21 @@ impl Journal {
     /// Removes the last mark entry, when its record is undone.
     pub(crate) fn pop_mark(&mut self) {
         self.marks.pop().expect("a mark record has an entry");
+    }
+
+    /// Appends a `Longjmp` record's count of discarded frames; the record itself is pushed as usual.
+    pub(crate) fn push_jump(&mut self, discarded: usize) {
+        self.jumps.push(discarded);
+    }
+
+    /// Removes the last `Longjmp` entry, when its record is undone.
+    pub(crate) fn pop_jump(&mut self) {
+        self.jumps.pop().expect("a longjmp record has an entry");
+    }
+
+    /// The discarded-frame counts of the `Longjmp` records, in order.
+    pub(crate) fn jumps(&self) -> &[usize] {
+        &self.jumps
     }
 
     /// Every mark entry, in order.
@@ -111,12 +135,14 @@ impl Journal {
         self.kinds.len() * size_of::<Undo>()
             + self.words.len() * size_of::<u128>()
             + self.marks.len() * size_of::<MarkEntry>()
+            + self.jumps.len() * size_of::<usize>()
     }
 
     pub(crate) fn clear(&mut self) {
         self.kinds.clear();
         self.words.clear();
         self.marks.clear();
+        self.jumps.clear();
     }
 
     /// The number of records.

@@ -4,6 +4,7 @@
 use bennett_ir::{BlockId, FuncId, Inst, Slot, Type};
 
 use crate::executor::{Executor, Frame};
+use crate::forward::unpack_position;
 use crate::gates;
 use crate::journal::Undo;
 
@@ -59,6 +60,16 @@ impl<'m> Executor<'m> {
                 // A coherent region is its own inverse.
                 self.apply(*callee, args, *out, *fault, budget).expect("an apply that ran forward runs again");
             }
+            Undo::Setjmp => {
+                let Inst::Setjmp { buffer, .. } = self.retreat() else { unreachable!("a setjmp record") };
+                let range = self.jump_record_range(self.read_word(buffer)).expect("a setjmp that ran is in bounds");
+                self.restore_result();
+                let high = self.pop_word();
+                let low = self.pop_word();
+                self.write_bytes(range.start..range.start + 16, low);
+                self.write_bytes(range.start + 16..range.end, high);
+            }
+            Undo::Longjmp => self.undo_longjmp(),
             Undo::Measure => unreachable!("reversal stops before a measurement"),
         }
     }
@@ -123,6 +134,25 @@ impl<'m> Executor<'m> {
         };
         self.frames.push(frame);
         self.stack_pointer = callee_stack_pointer;
+    }
+
+    /// Puts back the frames a `longjmp` discarded, and the target frame's position and stack pointer.
+    fn undo_longjmp(&mut self) {
+        self.journal.as_mut().expect("undoing needs a journal").pop_jump();
+        self.retreat();
+        self.restore_result();
+        let discarded = self.pop_word() as usize;
+        self.stack_pointer = self.pop_word() as u64;
+        let (_, block, inst) = unpack_position(self.pop_word());
+        let top = self.top_mut();
+        top.block = block;
+        top.inst = inst;
+        for _ in 0..discarded {
+            let entry_stack_pointer = self.pop_word() as u64;
+            let (func, block, inst) = unpack_position(self.pop_word());
+            let base = self.live_top();
+            self.frames.push(Frame { func, block, inst, base, entry_stack_pointer });
+        }
     }
 
     /// Steps the top frame back onto the instruction being undone, and returns it.

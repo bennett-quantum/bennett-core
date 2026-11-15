@@ -1,6 +1,7 @@
 #include "Emit.h"
 
 #include "Diagnostic.h"
+#include "Jumps.h"
 #include "Markers.h"
 
 #include <llvm/ADT/MapVector.h>
@@ -645,8 +646,10 @@ void BodyWriter::body(const Function &function) {
       } else {
         instruction(inst);
         if (const auto *call = dyn_cast<CallBase>(&inst);
-            call && call->getCalledFunction() && call->getCalledFunction()->getName() == "__bennett_exit") {
-          break; // `exit` is the device terminator; LLVM follows a noreturn call with unreachable.
+            call && call->getCalledFunction() &&
+            (call->getCalledFunction()->getName() == "__bennett_exit" ||
+             call->getCalledFunction()->getName() == deviceLongjmp)) {
+          break; // `exit` and `longjmp` are device terminators; LLVM follows a noreturn call with unreachable.
         }
       }
     }
@@ -790,6 +793,14 @@ void BodyWriter::call(const Instruction &inst) {
   }
   if (const auto *callee = call.getCalledFunction(); callee && callee->getName() == "__bennett_effect") {
     line("effect " + operand(call.getArgOperand(0)));
+    return;
+  }
+  if (const auto *callee = call.getCalledFunction(); callee && callee->getName() == deviceSetjmp) {
+    line(slot(&inst) + " = setjmp " + operand(call.getArgOperand(0)));
+    return;
+  }
+  if (const auto *callee = call.getCalledFunction(); callee && callee->getName() == deviceLongjmp) {
+    line("longjmp " + operand(call.getArgOperand(0)) + ", " + operand(call.getArgOperand(1)));
     return;
   }
   if (const auto *callee = dyn_cast<Function>(call.getCalledOperand()); callee && callee->isDeclaration()) {

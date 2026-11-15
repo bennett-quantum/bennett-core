@@ -209,6 +209,12 @@ pub struct Qubit {
     pub bit: u8,
 }
 
+/// The bytes a `setjmp` writes at its buffer: four little-endian 64-bit words, the target frame's depth
+/// (low half) and function (high half), the `setjmp`'s block (low half) and instruction index (high half),
+/// the frame's entry stack pointer, and the stack pointer when `setjmp` ran. It fits the smallest buffer
+/// C provides for this, the five words of `__builtin_setjmp`.
+pub const JUMP_RECORD_BYTES: u64 = 32;
+
 /// A non-terminating instruction.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Inst {
@@ -300,6 +306,15 @@ pub enum Inst {
     StackRestore {
         /// The `i64` stack pointer, as `stacksave` gave it.
         pointer: Operand,
+    },
+    /// `dst = setjmp buffer`: writes a jump record of [`JUMP_RECORD_BYTES`] bytes at `buffer` naming this
+    /// instruction in the current frame, and gives the `i32` 0. A later `longjmp` through the record
+    /// resumes here, giving its value instead. See `docs/DESIGN.md`.
+    Setjmp {
+        /// The `i32` result: 0, or the value of the `longjmp` that resumed here.
+        dst: Slot,
+        /// The `i64` address of the record.
+        buffer: Operand,
     },
     /// `[dst =] call @callee(args)`.
     Call {
@@ -412,6 +427,7 @@ impl Inst {
             | Inst::Load { dst, .. }
             | Inst::Alloca { dst, .. }
             | Inst::StackSave { dst }
+            | Inst::Setjmp { dst, .. }
             | Inst::FuncAddr { dst, .. }
             | Inst::Qalloc { dst, .. }
             | Inst::Measure { dst, .. }
@@ -452,6 +468,7 @@ impl Inst {
             }
             Inst::Alloca { size, .. } => operand(size),
             Inst::StackRestore { pointer } => operand(pointer),
+            Inst::Setjmp { buffer, .. } => operand(buffer),
             Inst::Call { args, .. } => args.iter().for_each(operand),
             Inst::CallIndirect { target, args, .. } => {
                 operand(target);
@@ -528,6 +545,14 @@ pub enum Terminator {
     Return(Option<Operand>),
     /// `exit value`: finishes the whole run as an entry return, even from a nested call.
     Exit(Operand),
+    /// `longjmp buffer, value`: resumes the frame and `setjmp` named by the jump record at `buffer`,
+    /// discarding the frames above it, with the `i32` `value` as the `setjmp`'s result.
+    Longjmp {
+        /// The `i64` address of the jump record.
+        buffer: Operand,
+        /// The `i32` result the `setjmp` gives.
+        value: Operand,
+    },
     /// `fault name`: ends execution with the named fault.
     Fault(Fault),
 }
@@ -545,7 +570,7 @@ impl Terminator {
                 cases.iter().for_each(|case| visit(&case.target));
                 visit(default);
             }
-            Terminator::Return(_) | Terminator::Exit(_) | Terminator::Fault(_) => {}
+            Terminator::Return(_) | Terminator::Exit(_) | Terminator::Longjmp { .. } | Terminator::Fault(_) => {}
         }
     }
 
@@ -561,7 +586,7 @@ impl Terminator {
                 cases.iter_mut().for_each(|case| visit(&mut case.target));
                 visit(default);
             }
-            Terminator::Return(_) | Terminator::Exit(_) | Terminator::Fault(_) => {}
+            Terminator::Return(_) | Terminator::Exit(_) | Terminator::Longjmp { .. } | Terminator::Fault(_) => {}
         }
     }
 
@@ -576,6 +601,10 @@ impl Terminator {
             Terminator::Branch { cond, .. } => operand(cond),
             Terminator::Switch { value, .. } => operand(value),
             Terminator::Return(Some(value)) | Terminator::Exit(value) => operand(value),
+            Terminator::Longjmp { buffer, value } => {
+                operand(buffer);
+                operand(value);
+            }
             Terminator::Jump(_) | Terminator::Return(None) | Terminator::Fault(_) => {}
         }
         self.visit_targets(|target| target.args.iter().for_each(&mut operand));

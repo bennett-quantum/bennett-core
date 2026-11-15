@@ -11,6 +11,8 @@ impl Width {
     pub const BIT: Width = Width(1);
     /// Eight bits: the width of a console byte.
     pub const BYTE: Width = Width(8);
+    /// Thirty-two bits: the width of a `setjmp` result and a `longjmp` value (C's `int`).
+    pub const JUMP_VALUE: Width = Width(32);
     /// Sixty-four bits: the width of addresses, allocation sizes and budgets.
     pub const WORD: Width = Width(64);
 

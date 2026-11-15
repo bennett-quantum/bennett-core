@@ -34,7 +34,9 @@ faults! {
     DivideByZero = 2 "divide_by_zero",
     /// A load or store outside memory.
     OutOfBounds = 3 "out_of_bounds",
-    /// `call_indirect` through a value that is not the address of a function of the expected signature.
+    /// `call_indirect` through a value that is not the address of a function of the expected signature, or
+    /// `longjmp` through a buffer that holds no jump record to a live frame of the current run (inside a
+    /// coherent region: of the region): a control transfer through a value that names no valid target.
     BadIndirect = 4 "bad_indirect",
     /// Control reached code marked unreachable.
     Unreachable = 5 "unreachable",

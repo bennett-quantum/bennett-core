@@ -338,6 +338,7 @@ impl<'a> Oracle<'a> {
                         End::Exit(read(&slots, *v).int())
                     });
                 }
+                T::Longjmp { .. } => panic!("unsupported oracle terminator longjmp"),
                 T::Jump(t) => t,
                 T::Branch { cond, if_true, if_false } => {
                     if read(&slots, *cond).int() != 0 {

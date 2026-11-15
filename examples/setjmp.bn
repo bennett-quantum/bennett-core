@@ -1,0 +1,52 @@
+; setjmp and longjmp: a jump back across two frames, three times, with a counter in memory.
+; Each jump resumes @main just after its setjmp with the jump's value; the frames of @outer and @inner
+; are discarded and the stack pointer returns to where setjmp left it. The counter is 4 (once per
+; return of setjmp) and the last value 30: returns 430.
+memory 512
+
+func @inner(i64 %buf, i32 %v) {
+entry:
+    %p = alloca 64                         ; discarded with the frame
+    store i64 7, %p
+    longjmp %buf, %v
+}
+
+func @outer(i64 %buf, i32 %v) {
+entry:
+    call @inner(%buf, %v)
+    ret
+}
+
+func @main() -> i32 {
+entry:
+    %buf = alloca 32
+    %count = alloca 8
+    store i32 0, %count
+    %r = setjmp %buf
+    %c = load i32 %count
+    %c1 = add i32 %c, 1
+    store i32 %c1, %count
+    %first = icmp eq i32 %r, 0
+    br %first, jump(i32 10), again
+again:
+    %done = icmp eq i32 %r, 30
+    %next = add i32 %r, 10
+    br %done, finish, jump(%next)
+jump(i32 %v):
+    %extra = alloca 16                     ; freed by the jump: setjmp's stack pointer comes back
+    call @outer(%buf, %v)
+    ret 0
+finish:
+    %n = load i32 %count
+    %hundreds = mul i32 %n, 100
+    %sum = add i32 %hundreds, %r
+    %sp = stacksave
+    %sp32 = trunc i64 %sp to i32
+    %expected = trunc i64 %count to i32
+    %same = icmp eq i32 %sp32, %expected   ; nothing below %count is still allocated
+    br %same, ok, wrong
+ok:
+    ret %sum
+wrong:
+    fault unreachable
+}

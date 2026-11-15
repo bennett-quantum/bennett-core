@@ -7,6 +7,7 @@
 #include "Complex.h"
 #include "Diagnostic.h"
 #include "Emit.h"
+#include "Jumps.h"
 #include "Markers.h"
 #include "Normalise.h"
 #include "Outline.h"
@@ -156,6 +157,8 @@ int main(int argc, char **argv) {
   bennett::lowerParameterAttributes(*module);
   bennett::scalarise(*module);
   bennett::lowerEmptyAssembly(*module);
+  bennett::lowerJumps(*module);
+  verify(*module, "after lowering setjmp and longjmp");
   bennett::lowerIntrinsics(*module, /*keepBijections=*/true);
 
   std::set<const Function *> control = bennett::controlFunctions(*module);

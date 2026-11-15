@@ -27,6 +27,7 @@ add_executable(bennett-front
   src/Startup.cpp
   src/SoftFloat.cpp
   src/Complex.cpp
+  src/Jumps.cpp
 )
 target_include_directories(bennett-front SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_compile_definitions(bennett-front PRIVATE ${LLVM_DEFINITIONS})

@@ -30,7 +30,7 @@ def main():
     # tests/regress: witnesses of the independent testing pass, each self-checking (status 0 natively).
     regressions = sorted(f"regress/{path.stem}" for path in (HERE / "tests/regress").glob("*.c"))
     for name in ["library", "exit", "arena", "unimplemented", "stderr", "heap", "signals", "abort", "stdin",
-                 "brk", "fenv", "fenv-mode", "fenv-flags", "complex", *regressions]:
+                 "brk", "fenv", "fenv-mode", "fenv-flags", "complex", "setjmp", *regressions]:
         source = HERE / "tests" / f"{name}.c"
         program = args.out / f"{name.replace('/', '-')}.bn"
         command = ["python3", HERE / "link.py", source, "--libdir", args.libdir, "--front", args.front,

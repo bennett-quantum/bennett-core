@@ -107,6 +107,7 @@ impl Writer<'_> {
             Inst::Alloca { size, .. } => write!(self.out, "alloca {}", op(size)),
             Inst::StackSave { .. } => write!(self.out, "stacksave"),
             Inst::StackRestore { pointer } => write!(self.out, "stackrestore {}", op(pointer)),
+            Inst::Setjmp { buffer, .. } => write!(self.out, "setjmp {}", op(buffer)),
             Inst::Call { callee, args, .. } => {
                 write!(self.out, "call @{}", self.module.function(*callee).name)?;
                 write_args(self.out, f, args)
@@ -184,6 +185,7 @@ impl Writer<'_> {
             Terminator::Exit(value) => {
                 write!(self.out, "exit {}", OperandText { function: f, operand: *value, typed: true })
             }
+            Terminator::Longjmp { buffer, value } => write!(self.out, "longjmp {}, {}", op(buffer), op(value)),
             Terminator::Fault(fault) => write!(self.out, "fault {fault}"),
         }
     }
