@@ -40,7 +40,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `31f5138` | `setjmp`/`longjmp` (library and built-in forms, `sigsetjmp` with musl): a device `setjmp` instruction and `longjmp` terminator, journalled (`docs/DESIGN.md`, "Non-local jumps") |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (161 tests, about 4 s, no LLVM needed) and `front/test.sh` (138 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (170 tests and 1 heavy reference run ignored, about 5 s, no LLVM needed) and `front/test.sh` (138 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check that needs `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -262,6 +262,14 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
    a rewind reached again in a loop replayed to its first visit; a rewind's record now keeps how many steps it
    un-ran and exactly that many run again. Costs of every other history test unchanged; rewinding one mark
    again doubles the work (n rewinds of one mark in a loop: 3 * 2^(n-1) - 2 steps un-run).
+   A second independent oracle for the next step (`0ca2480`, sol, written from the documents without reading the
+   worlds work): a whole-world reference model (`crates/exec/tests/oracle_support/worlds.rs`; a superposition is a
+   map from whole classical machine states, memory as an overlay over a classical base, to amplitudes), agreeing
+   with today's executor on 3,357 runs (28,123 instructions; every history, rewind and jump test program) and on
+   1,280 whole-state bijection cases. Where worlds leave the documents silent it asks: how far collision
+   detection must reach and which history a coherent fault keeps; whether a fault in one world stops all worlds;
+   how marks, rewinds and replays align when worlds' histories differ in shape; what one measurement event is
+   when worlds reach it at different places; whether dead slots count in world equality.
    The implementer's order for the rest: worlds (a superposition of whole machine states, split where a call passes
    a register as an integer, merged where equal), the memory overlay, address-taking gates, then `apply` as mark,
    call, rewind-keep shown equal on every example and test.
