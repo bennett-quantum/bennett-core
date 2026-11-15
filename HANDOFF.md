@@ -89,8 +89,16 @@ before floating point landed (`experiments/libc-probe/README.md`). The two have 
   with musl was started, so the prediction in next step 1 is untested); the refusal tables; the complex-number
   helpers. To resume: check out `wip/rt-musl`, rebase on `main`, finish the audit, run the three corpora from a
   clean commit with copied binaries, reduce every wrong result or crash, then land.
-- **Control schedules on the SQLite traces** (`experiments/sqlite-footprint/schedule.py`; being finished now). Unfinished and unchecked;
-  one workload completed. The preliminary table and the open points are at the end of that directory's README.
+- **Control schedules on the SQLite traces: measured** (`08d7799`; `experiments/sqlite-footprint/README.md`, all
+  eight workloads, independently recomputed by `check_schedule.py`). What a superposed program counter costs in
+  provided IR instructions against one mean run (a trace-derived model, not gates): exact structural alignment
+  (call path, loop iteration, block; its key order is acyclic, so it is also a valid waiting schedule) costs
+  1.07-1.18x for arith and like_name, 4.85x for like_note, 3.0-3.1x for scan; padding loops to their observed
+  maxima costs 10-77x; every reached block at every step 366-2,940x. The greedy waiting schedule's 7.96x was the
+  greedy heuristic, far from that optimum; the 2.04x in `docs/AUDITION.md` is not reproduced (its merge details
+  are not recorded). Held-out halves of the input show learned bounds are not sound: exact structure misses
+  75-333 held-out scan rows. Every family still depends on observed runs; what a compiler could build without
+  them is tabulated there.
 - **Journal content: measured** (`9817fe0`, `c17bde9`; `experiments/journal-content/README.md`). A hook in the
   executor, off by default and shown to change nothing, classifies every journal word of a coherent region as the
   same on every branch, recoverable from live state, or irreducible, under two alignments. Answer for these
@@ -125,8 +133,9 @@ before floating point landed (`experiments/libc-probe/README.md`). The two have 
    `__mulsc3`, `__divsc3`, `fopen`, `qsort`, `isprint`, `longjmp`, `_setjmp`), 66 of 68 on c-testsuite and all
    9 on `ieee/` (`signal` 3, `sqrt`, `sin`, `ilogb`, `ilogbl`, `sprintf`, `__divsc3`); floating-point programs
    that wait on it: 8 GCC, 2 c-testsuite, 5 `ieee/`.
-2. **Finish the control-schedule measurement** (in flight). The journal-content one is done ("Stopped in flight"):
-   a constant factor, as far as copies go; the recompute witness is its next measurement.
+2. **The two stopped measurements are done** ("Stopped in flight"). Journal content: a constant factor as far as
+   copies go; the recompute witness is its next measurement. Control schedules: exact structure costs about 1-5x a
+   run on these traces, but only from observed runs.
 3. **Build the journalled machine in the executor** and run the experiments listed in `docs/DESIGN.md` as it is
    built: every journalled step is a permutation; `apply` equals mark, call, rewind-keep; un-running through gates
    equals the conjugated operation.
