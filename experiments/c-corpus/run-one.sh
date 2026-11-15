@@ -23,8 +23,11 @@ capped() {
 }
 
 emit() { # outcome detail [steps]
+  if [ "$1" = agrees ] && [ "${console:-}" != "${expected_console:-}" ]; then
+    set -- wrong "console differs from native stdout" "${3:-}"
+  fi
   printf '%s\t%s\t%s\t%s\n' "$name" "$1" "$2" "${3:-}" | tee result.tsv
-  if [ "${KEEP:-1}" = 0 ]; then
+  if [ "${KEEP:-1}" = 0 ] && [ "$1" != wrong ] && [ "$1" != crash ]; then
     find . -mindepth 1 ! -name result.tsv -delete
   fi
   exit 0
@@ -57,13 +60,15 @@ for level in O0 O2; do
   if ! capped "$CLANG" -$level $common "$src" -o native-$level -lm >native-$level.log 2>&1; then
     emit skipped "clang does not compile it natively"
   fi
-  capped ./native-$level >/dev/null 2>&1 </dev/null
+  capped ./native-$level >native-$level.out 2>native-$level.err </dev/null
   echo $? >native-$level.status
 done
 s0=$(cat native-O0.status)
 s2=$(cat native-O2.status)
 [ "$s0" = "$s2" ] || emit skipped "native -O0 and -O2 disagree ($s0 vs $s2)"
 [ "$s0" = 0 ] || emit skipped "native run does not pass (status $s0)"
+cmp -s native-O0.out native-O2.out || emit skipped "native -O0 and -O2 disagree on stdout"
+expected_console=$(python3 "$here/../libc-probe/escape.py" native-O0.out)
 
 # Device: the README's flags, plus the same dialect flags. With OPTNONE=1 the bitcode keeps clang's `optnone`,
 # so LLVM's pipeline inside bennett-front leaves the test's functions as clang -O0 wrote them (a stress mode:
@@ -78,6 +83,23 @@ fi
 
 # Builds variant $1 (A or B) into prog-$1.bn; on failure emits the outcome.
 build() {
+  if [ -n "${MUSL_LIBDIR:-}" ]; then
+    set --
+    for flag in $common; do set -- "$@" "--clang-flag=$flag"; done
+    capped python3 "$here/../../rt/musl/link.py" "$src" --libdir "$MUSL_LIBDIR" --front "$BIN/bennett-front" \
+      --stack-bytes "$STACK" -o "prog-$variant.bn" "$@" >front-$variant.log 2>&1
+    status=$?
+    if [ "$status" != 0 ]; then
+      if grep -q '^not handled yet: ' front-$variant.log; then
+        emit refused "$(grep -m 1 '^not handled yet: ' front-$variant.log)"
+      fi
+      emit crash "product link failed: $(grep -m 1 . front-$variant.log)"
+    fi
+    if ! capped "$BIN/bennett" check "prog-$variant.bn" >check-$variant.log 2>&1; then
+      emit crash "invalid device program: $(grep -m 1 . check-$variant.log)"
+    fi
+    return
+  fi
   rt=$RT_A
   [ "$1" = B ] && rt=$RT_B
   if ! "$LLVM_LINK" "$rt" --override prog.bc -o linked-$1.bc >link-$1.log 2>&1; then
@@ -107,9 +129,11 @@ device_run() {
   *,*) set -- --arg 1 --arg 0 ;;
   *) set -- --arg 1 ;;
   esac
+  [ -n "${MUSL_LIBDIR:-}" ] && set -- --entry __bennett_entry
   capped "$BIN/bennett" run --budget "$BUDGET" "$@" "prog-$variant.bn" >run-$variant.log 2>&1
   status=$?
   steps=$(sed -n 's/^steps: //p' run-$variant.log)
+  console=$(sed -n 's/^console: //p' run-$variant.log)
   first=$(grep -m 1 -E '^(result|fault|stopped|error):' run-$variant.log)
   case "$status:$first" in
   0:result:*) kind=result value=$(echo "$first" | sed 's/^result: \([0-9a-z]*\).*/\1/') ;;

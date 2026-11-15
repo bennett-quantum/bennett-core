@@ -26,6 +26,19 @@ target/front/bennett-front prog.bc -o prog.bn --region-budget 100000 --stack-byt
 cargo run -p bennett -- run prog.bn
 ```
 
+For a program using the C library, build musl once and use its member resolver (LLVM/clang 18, GNU make,
+Python 3; no network):
+
+```sh
+python3 rt/musl/build.py
+python3 rt/musl/link.py prog.c -o prog.bn
+cargo run -p bennett -- run prog.bn --entry __bennett_entry --budget 100000000
+python3 rt/musl/test.py                 # library integration tests, separate from the fast suites
+```
+
+The startup enters musl's own start and exit code. Limits and options, including the arena size and the
+explicit stderr fault, are in [rt/musl/README.md](rt/musl/README.md).
+
 `bennett-front` runs its own O2 pipeline, so the input need not be optimised (it must not be vectorised).
 `float`, `double` and `long double` become calls of the floating-point runtime, `target/front/float-runtime.bc` by default
 (`--float-runtime file.bc` takes any bitcode defining the libgcc soft-float names).
