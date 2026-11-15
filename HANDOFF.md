@@ -41,7 +41,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (207 tests; ignored: 4 heavy reference or generated runs, 1 heavy recomputation check, 2 witnesses of wrong results; about 5 s, no LLVM needed) and `front/test.sh` (142 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (213 tests; ignored: 4 heavy reference or generated runs, the memory-cost report, 1 heavy recomputation check, 2 witnesses of wrong results; about 8 s, no LLVM needed) and `front/test.sh` (142 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check that needs `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -309,7 +309,7 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
    success with (q, out) = (1, 1) (`worlds_independent.rs`, ignored witness; read checks are switched off below
    the later split point). The two earlier differences from the reference are decided by `docs/DESIGN.md`
    ("Worlds") in the executor's favour.
-   **Third step: memory as an overlay** (`docs/DESIGN.md`, "Memory as an overlay"; `crates/exec/src/memory.rs`).
+   **Third step: memory as an overlay** (`7c34bf5`; `docs/DESIGN.md`, "Memory as an overlay"; `crates/exec/src/memory.rs`).
    Memory is a classical base shared by every world plus, per world, a normal overlay of the bytes where its
    memory differs from the base; a split copies the overlay, never the memory. With one world the machine
    writes the base as before; when one world is left its overlay is folded in. Worlds compare memory by

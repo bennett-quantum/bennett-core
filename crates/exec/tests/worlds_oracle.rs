@@ -267,7 +267,7 @@ fn three_gate_read_mismatches_match_the_independent_dense_operator() {
         for b in MIDDLE {
             for c in MIDDLE {
                 let middle = [a, b, c];
-                let module = bennett_ir::load(&program(&middle)).expect("valid");
+                let module = bennett_ir::load(&program(&middle, false)).expect("valid");
                 let options = Options { budget: Some(10000), reversible: true, ..Options::default() };
                 let (outcome, executor) = run(&module, options);
                 if let Some(dense) = expected(&module) {

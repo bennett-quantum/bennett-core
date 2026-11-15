@@ -292,7 +292,7 @@ ret
                         for _ in 0..3 {
                             assert_eq!(e.step(), None);
                         }
-                        e.memory[16] = byte;
+                        e.memory.write(16, &[byte]);
                         if dirty {
                             let j = e.journal.as_mut().expect("journal");
                             j.push_word(0xdead);
