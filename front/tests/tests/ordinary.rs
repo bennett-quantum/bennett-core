@@ -66,3 +66,8 @@ fn variable_length_arrays_in_loops_free_their_stack_each_pass() {
 fn a_one_element_vector_constant_is_the_integer_it_holds() {
     assert_agrees_with_native("vector_of_address", 0);
 }
+
+#[test]
+fn structs_of_floats_reach_a_variadic_function_in_vector_registers_and_on_the_stack() {
+    assert_agrees_with_native("variadic_floats", 0);
+}

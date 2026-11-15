@@ -79,7 +79,11 @@ public:
       }
       return stack(16, 16);
     }
-    if (type->isFloatTy() || type->isDoubleTy()) {
+    // An eightbyte of class SSE: a float, a double, or two floats of a struct as `<2 x float>`, which is how
+    // clang passes `struct { float a[3]; }` (with a second, plain float).
+    auto *vectorType = dyn_cast<FixedVectorType>(type);
+    bool twoFloats = vectorType && vectorType->getNumElements() == 2 && vectorType->getElementType()->isFloatTy();
+    if (type->isFloatTy() || type->isDoubleTy() || twoFloats) {
       if (vector < vectorRegisters) {
         return {Place::Vector, generalRegisters * generalBytes + vectorBytes * vector++};
       }
