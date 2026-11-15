@@ -117,6 +117,7 @@ int main(int argc, char **argv) {
   verify(*module, "after lowering calls and computed goto");
   bennett::floatsToIntegers(*module);
   verify(*module, "after rewriting floating-point values as integers");
+  bennett::checkNoFloatingPoint(*module, "after rewriting floating-point values as integers");
   bennett::lowerParameterAttributes(*module);
   // LLVM's optimiser has bugs of its own. A crash inside it is reported by name; no device program is written.
   CrashRecoveryContext::Enable();

@@ -10,7 +10,7 @@ runs classically, reversibly or coherently. Each piece of plumbing exists once, 
 | `cli` | `bennett run`, `bennett check` | step 2 |
 | `front` | `bennett-front` (C++, LLVM 18): bitcode with marker calls to `ir` text; taint, outlining, lowering | step 3 |
 | `opt` | optimiser and cost model | not started |
-| `rt` | runtime and arithmetic bitcode | not started |
+| `rt` | runtime bitcode: floating point (Berkeley SoftFloat 3e under the libgcc names), built with `front` | step 3 |
 
 ```sh
 cargo test                                   # the Rust crates, in seconds; needs no LLVM
@@ -27,6 +27,8 @@ cargo run -p bennett -- run prog.bn
 ```
 
 `bennett-front` runs its own O2 pipeline, so the input need not be optimised (it must not be vectorised).
+`float` and `double` become calls of the floating-point runtime, `target/front/float-runtime.bc` by default
+(`--float-runtime file.bc` takes any bitcode defining the libgcc soft-float names).
 The budget is the step budget of every coherent region; the stack is the memory above static data.
 
 The design, and what is deliberately left open, is in `docs/DESIGN.md`. It is a working note, not a contract.

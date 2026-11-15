@@ -816,17 +816,9 @@ public:
     return map(constant);
   }
 
-  Constant *map(Constant *constant) {
-    if (isa<GlobalValue>(constant)) {
-      return constant;
-    }
-    if (auto found = done.find(constant); found != done.end()) {
-      return found->second;
-    }
-    Constant *mapped = mapNew(constant);
-    done[constant] = mapped;
-    return mapped;
-  }
+  // Not cached here: replacing a global destroys the constants that use it and makes new ones, possibly
+  // at the same addresses (the ValueMapper's own map is kept up to date by value handles).
+  Constant *map(Constant *constant) { return isa<GlobalValue>(constant) ? constant : mapNew(constant); }
 
 private:
   Constant *mapNew(Constant *constant) {
@@ -873,6 +865,11 @@ private:
       if (expression->getOpcode() == Instruction::BitCast && operands[0]->getType() == type) {
         return operands[0];
       }
+      if (auto *gep = dyn_cast<GEPOperator>(constant)) {
+        // getWithOperands returns the expression itself when only the source element type changed.
+        return ConstantExpr::getGetElementPtr(source, operands[0], ArrayRef<Constant *>(operands).drop_front(),
+                                              gep->isInBounds(), gep->getInRangeIndex());
+      }
       return expression->getWithOperands(operands, type, false, source);
     }
     if (isa<ConstantStruct>(constant)) {
@@ -888,7 +885,6 @@ private:
   }
 
   FloatBits &types;
-  std::map<Constant *, Constant *> done;
 };
 
 // Attributes with the types they name rewritten, and without `nofpclass`, which only floating-point

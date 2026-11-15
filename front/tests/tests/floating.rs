@@ -314,3 +314,21 @@ fn a_program_without_floating_point_operations_links_no_runtime() {
     let thesis = lower_text(&c_dir().join("thesis.c"), "float_thesis", CLANG_FLAGS, &[]).expect("thesis.c");
     assert!(!thesis.contains("bennett.float"));
 }
+
+/// An address into a global of floating-point type, as a constant (`v.f[1]` of a union of a vector and an
+/// array of floats), is rewritten with the integer type: LLVM's getWithOperands keeps a GEP whose only
+/// change is its source element type, which once left `[4 x float]` behind (GCC's 20050604-1).
+#[test]
+fn a_constant_address_into_a_global_of_floats_is_rewritten() {
+    let source = write_c(
+        "float_constant_address",
+        "typedef float v4sf __attribute__((vector_size(16)));\nunion { v4sf v; float f[4]; } v;\n\
+         int main(void) {\n  v.v += (v4sf){18.0f, 20.0f, 22.0f};\n  v.f[1] += 0.5f;\n  \
+         return v.f[0] != 18.0f || v.f[1] != 20.5f || v.f[2] != 22.0f || v.f[3] != 0.0f;\n}\n",
+    );
+    assert_eq!(native_exit_status(&source, "float_constant_address"), 0);
+    for flags in [CLANG_FLAGS, CLANG_O2_FLAGS] {
+        let module = lower(&source, "float_constant_address", flags, &[]);
+        assert_eq!(run(&module, "main", &[], 0), Outcome::Returned(Some(0)), "{flags:?}");
+    }
+}
