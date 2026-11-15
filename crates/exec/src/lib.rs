@@ -18,6 +18,8 @@ mod measure;
 #[cfg(test)]
 mod permutation_tests;
 mod quantum;
+#[cfg(test)]
+mod recompute_independent_tests;
 mod region;
 mod snapshot;
 mod worlds;
