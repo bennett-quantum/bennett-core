@@ -309,7 +309,25 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
    success with (q, out) = (1, 1) (`worlds_independent.rs`, ignored witness; read checks are switched off below
    the later split point). The two earlier differences from the reference are decided by `docs/DESIGN.md`
    ("Worlds") in the executor's favour.
-   The implementer's order for the rest (done: 1 mark/rewind, 2 worlds): worlds (a superposition of whole machine states, split where a call passes
+   **Third step: memory as an overlay** (`docs/DESIGN.md`, "Memory as an overlay"; `crates/exec/src/memory.rs`).
+   Memory is a classical base shared by every world plus, per world, a normal overlay of the bytes where its
+   memory differs from the base; a split copies the overlay, never the memory. With one world the machine
+   writes the base as before; when one world is left its overlay is folded in. Worlds compare memory by
+   their overlays: normal overlays over one base are equal exactly when the memories are, and the ordered
+   map compares and hashes in address order, so the order of writes does not matter. Measured: the
+   bijection checks with memory owned and as an overlay over two bases (115,080 single steps, 24,576
+   rewinds, 384 reading calls and 384 merging rewinds, representation included); 400 pairs of worlds
+   written in random orders merge exactly when their memories are equal; the gate programs with each
+   world also writing memory agree with the dense calculation and the whole-world reference (150 equal,
+   32 refused where the calculation says); eight worlds writing `n` bytes each copy `4n` bytes at splits
+   and hold at most `8n`, at 16 KiB, 1 MiB and 4 MiB alike (a full copy: 7 times the memory size). In a
+   release build at 16 MiB of memory the peak resident size went from 134 MB to 19.7 MB and the time
+   from about 90 ms to 7 ms; at 1 MiB, 11.5 MB to 4.4 MB. On the existing tests that split (1,234 runs,
+   5,640 splits) splits copied 7.5 MB of memory before and 0 bytes now. What a split still copies is the
+   journal, which grows with steps run (2.77 MB after 4,096 bytes written per world, against 16 KiB of
+   overlay); sharing its common prefix is the route if it matters. `Stats` and `--stats` report the
+   overlay bytes copied and held and the journal bytes copied.
+   The implementer's order for the rest (done: 1 mark/rewind, 2 worlds, 3 the memory overlay): worlds (a superposition of whole machine states, split where a call passes
    a register as an integer, merged where equal), the memory overlay, address-taking gates, then `apply` as mark,
    call, rewind-keep shown equal on every example and test.
 4. **The front's fallback**: the program almost verbatim under marks, the documented coherent class recognised by
@@ -383,8 +401,8 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
   exact; what breaks unitarity is un-running a read whose register changed; detected exactly, `bad_rewind`; rule
   4's warning is the route (keeping `v XOR q` as history, with channels). (W3) Should a fault in some worlds stop
   the whole run by default? (W4) Is observing which world at a measurement, and sampling one at the end, the
-  intended reading of rule 1? (Counted in `Stats::observations` for step 4's warning.) (W5) Every split copies
-  the whole memory until the overlay (next step).
+  intended reading of rule 1? (Counted in `Stats::observations` for step 4's warning.) (W5) Answered by the memory
+  overlay: a split copies the bytes the world wrote, not the memory; it still copies the world's journal.
 - **Return addresses** (`2bf0b69`): the outermost frame gives `0xFFFF_FFFF_0000_0000` (natively an address in the C
   library's startup) and a level beyond it 0 (natively unspecified). Keep? Levels above 0 follow the device's
   frames, which natively needs frame pointers kept and sibling calls off (plain native `-O2` crashed at level 1).
