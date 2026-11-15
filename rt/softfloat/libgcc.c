@@ -233,29 +233,26 @@ ROUND(roundeven, softfloat_round_near_even)
 ROUND(rint, softfloat_round_near_even)
 ROUND(nearbyint, softfloat_round_near_even)
 
-/* fmin and fmax: a NaN operand gives the other operand (a NaN if both are), and -0 is taken as less
- * than +0 (C allows either zero; this is IEEE 754-2019 minimumNumber and maximumNumber). */
-static bool less32(float32_t a, float32_t b) {
-  return f32_lt_quiet(a, b) || (f32_eq(a, b) && (a.v >> 31) > (b.v >> 31));
-}
-static bool less64(float64_t a, float64_t b) {
-  return f64_lt_quiet(a, b) || (f64_eq(a, b) && (a.v >> 63) > (b.v >> 63));
-}
+/* fmin and fmax (`llvm.minnum`, `llvm.maxnum`): what clang's x86-64 code computes for them, which is not a
+ * call but SSE's minsd/maxsd with a NaN test (X86ISelLowering's combineFMinNumFMaxNum): fmin(x, y) is
+ * `isnan(x) ? y : y < x ? y : x`, and fmax the same with `>`. So a NaN operand gives the other operand, and of
+ * two equal operands (+0 and -0 among them) the first. C allows either zero; this is the one the native
+ * program gives. (The C library's own fmin, called only under -fno-builtin, keeps the second.) */
 float fminf(float x, float y) {
   float32_t a = f32_of(x), b = f32_of(y);
-  return nan32(a) ? y : nan32(b) ? x : less32(b, a) ? y : x;
+  return nan32(a) ? y : f32_lt_quiet(b, a) ? y : x;
 }
 float fmaxf(float x, float y) {
   float32_t a = f32_of(x), b = f32_of(y);
-  return nan32(a) ? y : nan32(b) ? x : less32(a, b) ? y : x;
+  return nan32(a) ? y : f32_lt_quiet(a, b) ? y : x;
 }
 double fmin(double x, double y) {
   float64_t a = f64_of(x), b = f64_of(y);
-  return nan64(a) ? y : nan64(b) ? x : less64(b, a) ? y : x;
+  return nan64(a) ? y : f64_lt_quiet(b, a) ? y : x;
 }
 double fmax(double x, double y) {
   float64_t a = f64_of(x), b = f64_of(y);
-  return nan64(a) ? y : nan64(b) ? x : less64(a, b) ? y : x;
+  return nan64(a) ? y : f64_lt_quiet(a, b) ? y : x;
 }
 
 /* fminl and fmaxl: on x86-64 the native program calls the C library's (LLVM has no inline expansion for

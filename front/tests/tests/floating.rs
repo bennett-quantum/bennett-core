@@ -398,3 +398,8 @@ fn a_constant_address_into_a_global_of_floats_is_rewritten() {
         assert_eq!(run(&module, "main", &[], 0), Outcome::Returned(Some(0)), "{flags:?}");
     }
 }
+
+#[test]
+fn fmin_and_fmax_give_the_zero_native_code_gives() {
+    bennett_front_tests::assert_agrees_with_native("float_minmax_zeros", 0);
+}
