@@ -89,7 +89,11 @@ programs in parallel. The baseline is the same snapshot without the library. Wal
 GCC 321 s, c-testsuite 49 s, `ieee/` 14 s (baseline 276 s, 18 s, 8 s, measured before `zero N`). Two earlier
 runs of this work, before it moved onto the constructor-order change and `zero N`, gave the same outcome and
 detail for every program: one before the `fenv` change (which no corpus program uses) and one after it, whose
-step counts are also unchanged now (its wall time was GCC 492 s, c-testsuite 66 s, `ieee/` 18 s).
+step counts are also unchanged now (its wall time was GCC 492 s, c-testsuite 66 s, `ieee/` 18 s). A run
+after the init/fini bounds were kept undefined through the optimiser (`docs/DESIGN.md`) gave the same
+totals and the same refusal and fault detail (GCC 323 s, c-testsuite 53 s, `ieee/` 21 s); the one GCC program
+with a constructor (`20001229-1`) and a musl `printf` hello world (3,718 steps) lower to the same device text
+as before it.
 
 | outcome | GCC: baseline | with musl | c-testsuite: baseline | with musl | GCC `ieee/`: baseline | with musl |
 |---|---:|---:|---:|---:|---:|---:|
