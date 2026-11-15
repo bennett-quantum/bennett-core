@@ -156,24 +156,27 @@ and utilities where they exist (`Abi.h`, `Normalise.h`):
   operation becomes a call of the compiler runtime-call interface, the libgcc names (`__adddf3`, `__ltsf2`,
   `__fixdfsi`, `__mulxf3`, `__extenddfxf2`, ...) and for the rest the C library names of LLVM's
   RuntimeLibcalls.def (`sqrt`, `fma`, `floor`, `fmin`, `sqrtl`, ...); comparisons follow
-  `softenSetCCOperands`; a conversion to a narrow integer goes through the narrowest integer LLVM's x86-64
-  back end would convert to (x87 has 16 bits, SSE 32), which decides what an out-of-range value gives. The routines a program needs are linked from a runtime bitcode
-  with LinkOnlyNeeded, renamed so that a program's own function of the same name is never redirected, and
-  internal, so the optimiser inlines and folds them; then every floating-point type becomes the integer of
-  its width (`x86_fp80` is `i80`), and the front checks with the data layout that no size, alignment or
-  struct field offset moves. `fneg`, `fabs`, `copysign` and `is.fpclass` are bit operations; `fmuladd` is unfused, as
-  x86-64 without FMA computes it natively; `fma` is fused. The default runtime is Berkeley SoftFloat 3e
-  with the x86 SSE specialisation (`rt/softfloat`), so results are bit for bit those of the native build
-  (`long double` at x87's full 64-bit precision, and `fminl` and `fmaxl` as glibc's, which the native
-  program calls);
-  `--float-runtime` swaps it at link time. Its global state: the rounding mode is never written and folds
-  to round-to-nearest-even; the exception flags are never read (C reads them only through `<fenv.h>`, the
-  C library's), its `softfloat_raiseFlags` does nothing, and the optimiser deletes them, so the routines
-  write no memory and run under qubit control. Runtime calls on constants are evaluated after the
-  optimiser, so a rotation's angle may be computed. Refused by name: `frem` and the C library's functions
-  (`sin`, `pow`, `strtod`, and `sqrt` under the default `-fmath-errno`, since errno is the C library's);
-  `fmal` (SoftFloat has no 80-bit fused multiply-add); operations on `_Float16`, `__bf16`, `__float128`
-  (moving them is fine); conversions to and from 128-bit integers; `#pragma STDC FENV_ACCESS`.
+  `softenSetCCOperands`. The routines a program needs are linked from a runtime bitcode with LinkOnlyNeeded,
+  renamed so that a program's own function of the same name is never redirected, and internal, so the
+  optimiser inlines and folds them; then every floating-point type becomes the integer of its width
+  (`x86_fp80` is `i80`), and the front checks with the data layout that no size, alignment or struct field
+  offset moves. `fneg`, `fabs`, `copysign` and `is.fpclass` are bit operations; `fmuladd` is unfused, as
+  x86-64 without FMA computes it natively; `fma` is fused.
+- **Where C leaves a choice, the native program's** is taken: `fmin`/`fmax` are clang's x86-64 expansion
+  (`isnan(x) ? y : y < x ? y : x`, so of two equal zeros the first), `fminl`/`fmaxl` are glibc's, which the
+  native program calls; an out-of-range conversion to an integer goes through the integer LLVM's x86-64 back
+  end converts to (SSE 32 or 64 bits, x87 16 or 64), so it gives what native code gives.
+- **The default runtime** is Berkeley SoftFloat 3e with the x86 SSE specialisation (`rt/softfloat`, measured
+  in `rt/softfloat/README.md`); `long double` is computed at x87's full 64-bit precision. `--float-runtime`
+  swaps the runtime at link time. Its global state: the rounding mode is never written and folds to
+  round-to-nearest-even; the exception flags are never read (C reads them only through `<fenv.h>`, the C
+  library's), its `softfloat_raiseFlags` does nothing, and the optimiser deletes them, so the routines write
+  no memory and run under qubit control. Runtime calls on constants are evaluated after the optimiser, so a
+  rotation's angle may be computed.
+- **Refused by name**: `frem` and the C library's functions (`sin`, `pow`, `strtod`, and `sqrt` under the
+  default `-fmath-errno`, since errno is the C library's); `fmal` (SoftFloat has no 80-bit fused
+  multiply-add); operations on `_Float16`, `__bf16`, `__float128` (moving them is fine); conversions to and
+  from 128-bit integers; `#pragma STDC FENV_ACCESS`.
 
 Two things the first C programs taught:
 

@@ -5,12 +5,13 @@ design rule is that `bennett-front` either handles a program correctly, refuses 
 in a named fault; never a silent wrong result, a crash or a hang. How true is that on a few thousand real self-checking
 test programs, and why are programs refused?
 
-Measured twice on 2026-11-13. First at commit `4b65247` (tree clean when the binaries were copied):
-`bennett-front` and `bennett` were built once (`cargo build --release`, `front/test.sh`, all tests passing), then
-copied to `.tmp/c-corpus/bin/`, and only those copies were used. File and line references in the sections on the
+Measured twice on 2026-11-13, and a third time on 2026-11-15 after floating point (its section comes first).
+First at commit `4b65247` (tree clean when the binaries were copied): `bennett-front` and `bennett` were built
+once (`cargo build --release`, `front/test.sh`, all tests passing), then copied to `.tmp/c-corpus/bin/`, and
+only those copies were used. File and line references in the sections on the
 first measurement are at `4b65247`. Then again for step 5, which widened the C the front handles, with the same
 harness: at `b5ffb85` before the step, and at `b5ffb85` plus the step's changes (not yet committed; binaries
-copied to `.tmp/c-corpus/s5-r5/bin/`). Its results come first, below.
+copied to `.tmp/c-corpus/s5-r5/bin/`). Its results follow the floating-point section.
 
 ## Method
 
@@ -68,6 +69,63 @@ bytes, not the old block's size. A harness self-test (`.tmp/c-corpus/selftest`) 
 error. **wrong**: the device reaches `abort()`/`exit(≠0)`, or `main` returns a value ≢ 0. **crash**: `bennett-front`
 exits other than 0 or 3, `bennett check` rejects its output, or `bennett run` exits other than 0, 1 or 2. **budget**:
 the 10^8-step budget ran out. **skipped**: no native reference, as above.
+
+## Results after floating point (2026-11-15)
+
+`float`, `double` and `long double` now run as calls of Berkeley SoftFloat 3e (`rt/softfloat/README.md`,
+`docs/DESIGN.md`). Measured with the same harness, binaries built once from clean commits and copied: before at
+`b875989` (it reproduces the step-5 numbers below exactly), after at `167bafe`. New in the harness:
+`EXTRA_FLAGS` (options for every test of a corpus), a test's `.x` file may add `-fno-trapping-math`, and `KEEP=0`
+deletes each program's outputs once its result line is written. GCC's `gcc.c-torture/execute/ieee/` directory
+(68 programs, fetched with the same sparse checkout) is added as a floating-point corpus and run with
+`EXTRA_FLAGS=-fno-inline`, as its `ieee.exp` does.
+
+| outcome | GCC: before | after | GCC, `OPTNONE=1`: before | after | c-testsuite: before | after | GCC `ieee/`: before | after |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| agrees | 1,402 | **1,521** | 1,407 | **1,523** | 149 | **151** | 12 | **58** |
+| refused by name | 172 | 53 | 168 | 52 | 70 | 68 | 55 | 9 |
+| named fault (native passed) | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
+| **wrong** | **0** | **0** | **0** | **0** | **0** | **0** | **0** | **0** |
+| crash | 1 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
+| budget | 0 | 0 | 0 | 0 | 1 | 1 | 0 | 0 |
+| skipped | 80 | 80 | 80 | 80 | 0 | 0 | 1 | 1 |
+
+(The `OPTNONE=1` "before" column is the step-5 measurement, of the same code.) The crash, the named fault and
+the budget case are the ones described below. GCC: 120 programs moved from refused to agrees, one from agrees to
+refused, none in any other direction. Of the 120, 13 take fewer than 10 device steps, 44 take 10–99, 37 take
+100–999, 25 take 10^3–10^5 and one (`pr28982b`) 1.6·10^6. `ieee/`: 46 moved from refused to agrees (5, 9, 17
+and 15 in the same step ranges). The one that moved the other way, `990413-2`, uses x87 inline assembly
+(`fpatan`, `fsqrt`) inside its own static `asin`. It agreed before only because LLVM took that function for the
+C library's `asin` and folded the whole program away; once its signature is integers that no longer happens,
+and the assembly is refused by name, as any non-empty assembly is.
+
+**Where the 127 floating-point refusals of GCC went.** 119 agree. 8 are refused for another reason: 5 wait on
+the C library (`sprintf` 3, `puts`, `pow`), 2 on the complex multiply and divide helpers `__mulsc3`/`__divsc3`
+(libgcc names, but their Annex G recovery needs the C library's `logb` and `scalbn`), and 1 converts a `float`
+to `__int128` (SoftFloat has no 128-bit integer conversions). c-testsuite: of 4, 2 agree and 2 wait on
+`printf`. `ieee/`: of 50, 45 agree and 5 wait on the C library (`sqrt` called as a function under the default
+`-fmath-errno`, `sin`, `ilogb`, `ilogbl`, `sprintf`); its other 4 refusals are `signal` (3) and `__divsc3`.
+No refusal in any corpus is "floating point" in general.
+
+**Wrong results during the work: none on the corpora.** The tests and one independent testing pass (by a
+different model family, aimed only at wrong answers: differential runs against native on random operands for
+every operation and conversion, and programs mixing floats with variadics, structs by value, unions, function
+pointers, vectors, in-place updates and coherent regions) found two, both fixed with regression tests: an
+out-of-range conversion of a `double` or `float` to `unsigned char` or `unsigned short` (1e10 gave 0xe400, native
+0), and `fmin(+0, -0)`, which was -0 on the device and +0 natively. Both are cases where C leaves the result
+open and the toolchain follows the native program.
+
+### Refusal reasons after floating point (GCC, README pipeline, 53 refusals)
+
+| count | family |
+|---:|---|
+| 44 | library not provided: `printf`-family 29 (`printf` 15, `sprintf` 9, `vprintf` 2, `snprintf`, `puts` 2), `stdout`/`stderr` 5, `open` 2, `pow`, `__mulsc3`, `__divsc3`, `fopen`, `qsort`, `isprint`, `longjmp`, `_setjmp` |
+| 3 | `llvm.returnaddress` |
+| 2 | `llvm.eh.sjlj.longjmp` |
+| 1 | x87 inline assembly (`990413-2`) |
+| 1 | a conversion from `float` to `i128` (`pr49218`) |
+| 1 | a variadic argument aligned to more than 16 bytes (`pr92904`) |
+| 1 | a call with variadic arguments through a pointer, where no variadic function is defined (`930513-1`) |
 
 ## Results after step 5
 

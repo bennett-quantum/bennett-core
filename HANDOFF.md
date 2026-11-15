@@ -1,6 +1,6 @@
 # HANDOFF
 
-State on 2026-11-13, about 14:00 UTC. Work is paused at the maintainer's request. Nothing is running.
+State on 2026-11-15, about 13:30 UTC, after the floating-point job (below). Nothing of it is running.
 
 ## What this repository is
 
@@ -22,11 +22,13 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `9ca6db3` | Controlled gates and in-place updates in C; Grover over a plain C predicate on 8 bits |
 | `b5ffb85` | Three more refusals by name (mismatched prototype, an LLVM optimiser crash, a bit a type lacks) |
 | `8dfc289` | Variadic calls, 128-bit integers, struct and vector values, intrinsics, computed goto |
+| `b9f504d`..`167bafe` | `float`, `double`, `long double` over Berkeley SoftFloat 3e (`rt/softfloat`), checked bit for bit against the hardware; GCC's `ieee/` tests |
 
-Check it: `cargo test` (44 tests, about 2 s, no LLVM needed) and `front/test.sh` (58 tests, about 26 s with the
-build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
+Check it: `cargo test` (44 tests, about 2 s, no LLVM needed) and `front/test.sh` (75 tests, about 30 s with a
+clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
-On GCC's C torture tests 1,402 of 1,576 runnable programs agree with native, 172 are refused by name, none is wrong
+On GCC's C torture tests 1,521 of 1,576 runnable programs agree with native, 53 are refused by name, none is wrong;
+on its floating-point tests (`ieee/`) 58 of 67, 9 refused (C library calls), none wrong
 (`experiments/c-corpus/README.md`). The corpus compares exit status only.
 
 ## Decisions the maintainer took on 2026-11-13
@@ -45,7 +47,7 @@ On GCC's C torture tests 1,402 of 1,576 runnable programs agree with native, 172
 - **Floating point is a low concern** (superseded on 2026-11-15, below). **The refused C library calls are a
   concern** and come first.
 
-## Decision the maintainer took on 2026-11-15
+## Decision the maintainer took on 2026-11-15: floating point
 
 - **Floating point is Berkeley SoftFloat 3e** behind the compiler runtime-call interface (the libgcc names),
   swappable at link time, for `float`, `double` and `long double` (x87 80-bit): it covers f32 and the 80-bit
@@ -81,6 +83,10 @@ On GCC's C torture tests 1,402 of 1,576 runnable programs agree with native, 172
    owns them. Compile musl to bitcode with the probe's overlays and generic C substitutions, implement the supported
    system calls with console effects and a fixed arena, and trap by name for the rest. Keep musl's startup and exit
    code responsible for constructors, destructors, atexit handlers and flushing. The product runtime is the next slice.
+   It removes 44 of the 53 refusals on the GCC corpus (`printf`-family 29, `stdout`/`stderr` 5, `open` 2, `pow`,
+   `__mulsc3`, `__divsc3`, `fopen`, `qsort`, `isprint`, `longjmp`, `_setjmp`), 66 of 68 on c-testsuite and all
+   9 on `ieee/` (`signal` 3, `sqrt`, `sin`, `ilogb`, `ilogbl`, `sprintf`, `__divsc3`); floating-point programs
+   that wait on it: 8 GCC, 2 c-testsuite, 5 `ieee/`.
 2. **Finish the two stopped measurements.**
 3. **Build the journalled machine in the executor** and run the experiments listed in `docs/DESIGN.md` as it is
    built: every journalled step is a permutation; `apply` equals mark, call, rewind-keep; un-running through gates
@@ -88,15 +94,18 @@ On GCC's C torture tests 1,402 of 1,576 runnable programs agree with native, 172
 4. **The front's fallback**: the program almost verbatim under marks, the documented coherent class recognised by
    its form, and the two warnings (history still entangled at a measurement or at the end; an un-run that meets a
    state its history does not match).
-5. **Floating point** over Berkeley SoftFloat 3e (decided 2026-11-15; in progress); then `setjmp`/`longjmp`
-   and the remaining intrinsics.
+5. **Floating point** is done over Berkeley SoftFloat 3e (decided 2026-11-15; `rt/softfloat/README.md`). Left:
+   the complex multiply/divide helpers (`__mulsc3`, ...; need the C library's `logb`/`scalbn`), `fmal`
+   (SoftFloat has no 80-bit fused multiply-add), conversions to and from 128-bit integers, `_Float16`,
+   `__bf16`, `__float128`. Then `setjmp`/`longjmp` and the remaining intrinsics.
 6. **A SQL query as an oracle.**
 
 ## What is still refused, and what removes it
 
 | Refused today | What removes it |
 |---|---|
-| Floating point; C library calls; `setjmp`; return address | Steps 1 and 5 above |
+| C library calls (and with them `sin`, `pow`, `printf("%f")`, `sqrt` under errno); `setjmp`; return address | Step 1 above |
+| `fmal`; 128-bit integer conversions of floats; `_Float16`, `__bf16`, `__float128`; `#pragma STDC FENV_ACCESS` | Step 5 above |
 | A store under qubit control; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control | The journalled machine (step 3) |
 | A qubit-dependent value used by ordinary code or printed; measurement under control; a dirty discard | Channels |
 | Non-empty inline assembly; code without source | An emulator of the real machine, compiled as an ordinary program |
@@ -110,6 +119,10 @@ On GCC's C torture tests 1,402 of 1,576 runnable programs agree with native, 172
 - Variadic calls follow the x86-64 System V convention and clang's inline `va_arg`.
 - A function that uses `stackrestore` cannot run coherently yet.
 - A null dereference does not fault.
+- Floating point: which NaN comes back when several operands are NaNs is unspecified; `long double` encodings no
+  arithmetic produces (pseudo-denormals, unnormals) differ from x87; a `volatile` vector is refused. Where C
+  leaves a result open (`fmin` of two zeros, out-of-range conversions) the device follows the native x86-64
+  program, so a different native target would disagree there.
 - The numbers in `docs/AUDITION.md` are each proposal's own and were not recomputed.
 - The implementers' mutation checks found blind spots more than once (a Hadamard-prepared state hid a missing
   negation). A passing suite here is evidence, not proof.
