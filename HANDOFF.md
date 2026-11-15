@@ -41,7 +41,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (196 tests and 1 heavy reference run ignored, about 5 s, no LLVM needed) and `front/test.sh` (142 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (199 tests; ignored: 1 heavy reference run, 1 heavy recomputation check, 1 witness of a measurement gap; about 5 s, no LLVM needed) and `front/test.sh` (142 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check that needs `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -231,6 +231,14 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
    producer-alignment restrictions, so this is not evidence of unavoidable linear information loss; guarded
    producer/call replay and global pebbling/cleanup costs remain open. Control schedules:
    exact structure costs about 1-5x a run on these traces, but only from observed runs.
+   Independent check of both recomputation measurements (`b1454ec`, Opus): every credited word recovers on every
+   branch (hand cases, 200 random programs, all four C lookups at every repetition count, 2.65 M journal
+   records); the tables reproduce byte for byte; the hook off changes nothing. One completeness gap: a position
+   where some branch already has a cheap copy witness is never tried by the chain search, even when one common
+   circuit recovers every branch. Corrected by the checker (both alignments): tape slopes 0.308/0.033/0.331/0.347
+   (published 0.434/0.109/0.444/0.500) for binary search, hash, B-tree, writes; linear growth still survives,
+   but the README's diagnostics of what remains ("different producer", "no producer") are mostly this gap.
+   Witness ignored (`chains_credit_a_common_live_copy_across_mixed_copy_witnesses`); fix and README update next.
 3. **Build the journalled machine in the executor** and run the experiments listed in `docs/DESIGN.md` as it is
    built: every journalled step is a permutation; `apply` equals mark, call, rewind-keep; un-running through gates
    equals the conjugated operation.
