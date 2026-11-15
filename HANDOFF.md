@@ -2,9 +2,9 @@
 
 State on 2026-11-15, evening (work resumed at about 18:45 UTC). Landed since: the musl runtime, validated on the
 three corpora with no wrong result; `zero N`; the journal-content and control-schedule measurements; the salvage
-survey; testing passes of `exit`, constructors, `zero N` and the musl boundary. In flight: a fix for constructors
+survey; testing passes of `exit`, constructors, `zero N`, the musl boundary and the journal measurement. In flight: a fix for constructors
 that run twice when a bound read is folded ("Stopped in flight"), the remaining floating-point conversions, and
-an independent check of the journal-content measurement.
+the complex-number helpers.
 
 ## What this repository is
 
@@ -35,8 +35,8 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `d8050df`..`b464c0b` | The C library: musl 1.2.5 at the system-call boundary, running its own startup and exit; signals a program sends itself; stdin at end of file; an honest `fenv` |
 | `9817fe0`, `c17bde9`, `08d7799` | Measurements: journal content in coherent regions; control schedules on the SQLite traces |
 
-Check it: `cargo test` (77 tests, about 2 s, no LLVM needed) and `front/test.sh` (111 tests; ignored by default: the full journal-content measurement and two known wrong
-results below, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
+Check it: `cargo test` (79 tests, about 2 s, no LLVM needed) and `front/test.sh` (112 tests; ignored by default: the full journal-content measurement and its sensitivity check,
+and two known wrong results below, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 With musl linked, standard output and exit status compared with native (`experiments/c-corpus/README.md`):
 GCC's C torture tests 1,557 agree, 12 refused by name, 6 named faults (programs that open files), none wrong;
@@ -113,8 +113,11 @@ refused, none wrong. Without the library the same snapshot gives 1,521 / 52 refu
   share is 37/50/59/64 % for binary search, 36/46/51/53 % for a B-tree, 0/5.5/17/23 % for a hash table; of 67
   other coherent runs, 49 have none. It is an upper bound: only values that can be copied are credited, not
   values that could be recomputed. Not measured yet: whether the linear growth survives a recompute witness, and
-  global-memory writes inside a region (refused until the journalled machine exists). An independent check is
-  in flight.
+  global-memory writes inside a region (refused until the journalled machine exists). The independent check
+  (`5d41748`, sol) reproduced every table and showed the hook off, the hook on and the executor before the hook
+  give identical journals, outcomes and step counts on 127 tests; it found the classifier could lose a common
+  live copy (unsorted lists under a binary search; no published number changes) and one slope rounded twice;
+  both fixed in `613b925`.
 
 - **Constructor startup, after its independent testing pass** (`40b04b4`, Muse; `exit` and the console call held
   under every probe). It found two wrong results, both fixed in `e13a6c8` and now regression tests: at equal
