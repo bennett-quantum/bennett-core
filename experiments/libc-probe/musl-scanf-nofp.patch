@@ -1,0 +1,36 @@
+--- a/src/stdio/vfscanf.c
++++ b/src/stdio/vfscanf.c
+@@ -1,3 +1,4 @@
++#define BENNETT_SCANF_NOFP 1 /* the probe's patch: integer-only scanf */
+ #include <stdlib.h>
+ #include <stdarg.h>
+ #include <ctype.h>
+@@ -68,7 +69,9 @@
+ 	int invert;
+ 	int matches=0;
+ 	unsigned long long x;
++#ifndef BENNETT_SCANF_NOFP
+ 	long double y;
++#endif
+ 	off_t pos = 0;
+ 	unsigned char scanset[257];
+ 	size_t i, k;
+@@ -302,6 +305,10 @@
+ 		case 'e': case 'E':
+ 		case 'f': case 'F':
+ 		case 'g': case 'G':
++#ifdef BENNETT_SCANF_NOFP
++			/* No floating point: a floating-point conversion ends the run in the named fault `unreachable`. */
++			__builtin_trap();
++#else
+ 			y = __floatscan(f, size, 0);
+ 			if (!shcnt(f)) goto match_fail;
+ 			if (dest) switch (size) {
+@@ -316,6 +323,7 @@
+ 				break;
+ 			}
+ 			break;
++#endif
+ 		}
+ 
+ 		pos += shcnt(f);
