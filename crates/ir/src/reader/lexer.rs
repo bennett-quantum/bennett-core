@@ -24,7 +24,7 @@ pub(super) enum Token<'s> {
     #[regex(r"-?(0x[0-9a-fA-F]+|[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?)", |lex| lex.slice())]
     Number(&'s str),
     /// A string literal; the payload is the text between the quotes, escapes not yet decoded.
-    #[regex(r#""([^"\\\n]|\\[^\n])*""#, |lex| { let s = lex.slice(); &s[1..s.len() - 1] })]
+    #[token("\"", string_token)]
     Str(&'s str),
     #[token("=")]
     Equals,
@@ -46,6 +46,24 @@ pub(super) enum Token<'s> {
     RBrace,
     #[token("->")]
     Arrow,
+}
+
+// Logos generates mutually recursive states for a repeated escaped character. In a debug build a
+// large data string exhausts the host stack. Keep Logos for tokenization and scan this token iteratively.
+fn string_token<'s>(lex: &mut logos::Lexer<'s, Token<'s>>) -> Option<&'s str> {
+    let mut escaped = false;
+    for (offset, byte) in lex.remainder().bytes().enumerate() {
+        if byte == b'\n' {
+            return None;
+        }
+        if byte == b'"' && !escaped {
+            lex.bump(offset + 1);
+            let text = lex.slice();
+            return Some(&text[1..text.len() - 1]);
+        }
+        escaped = byte == b'\\' && !escaped;
+    }
+    None
 }
 
 impl Token<'_> {
@@ -121,5 +139,24 @@ mod tests {
     #[test]
     fn reports_the_offset_of_a_stray_character() {
         assert_eq!(tokenize("ret $").err(), Some(4));
+    }
+}
+
+#[cfg(test)]
+mod large_strings {
+    #[test]
+    fn repeated_escapes_use_constant_stack_space() {
+        let bytes = 1 << 20;
+        let text = format!("memory {}\ndata 16 = \"{}\"\n", bytes + 16, "\\0".repeat(bytes));
+        let module = crate::read(&text).expect("a large data string reads on the test thread's small stack");
+        assert_eq!(module.data[0].items, [crate::DataItem::Bytes(vec![0; bytes])]);
+    }
+
+    #[test]
+    fn unterminated_strings_and_escaped_newlines_are_errors() {
+        for text in ["\"unfinished", "\"line\nend\"", "\"escape\\\nend\"", "\"backslash\\"] {
+            assert_eq!(super::tokenize(text).err(), Some(0));
+        }
+        assert_eq!(super::tokenize(r#""a\\""#).expect("escaped backslash")[0].0, super::Token::Str(r"a\\"));
     }
 }
