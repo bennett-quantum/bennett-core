@@ -3,8 +3,10 @@
 State on 2026-11-15, evening (work resumed at about 18:45 UTC). Landed since: the musl runtime, validated on the
 three corpora with no wrong result; `zero N`; the journal-content and control-schedule measurements; the salvage
 survey; testing passes of `exit`, constructors, `zero N`, the musl boundary and the journal measurement. The complex-number helpers (`cd2d920`).
-In flight: an independent testing pass of today's floating-point work, two small fixes from a review audit, and
-one corpus run with musl linked on the final tree.
+Two review-audit findings fixed (`fe5e057`: `bennett run` printed a negative result wider than 64 bits as
+`(signed 0)`; `8b7f56c`: tests that kill the 15 executor mutants that had survived, 10 of which the front's tests
+missed too). In flight: an independent testing pass of today's floating-point work and one corpus run with musl
+linked on the final tree.
 
 ## What this repository is
 
@@ -37,7 +39,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `9817fe0`, `c17bde9`, `08d7799` | Measurements: journal content in coherent regions; control schedules on the SQLite traces |
 | `cd2d920` | The complex multiply and divide helpers: compiler-rt 18.1.8 vendored unmodified (`rt/compiler-rt`), linked by the front where a program calls them; bit for bit with the same helpers on the hardware, NaN bits aside |
 
-Check it: `cargo test` (79 tests, about 2 s, no LLVM needed) and `front/test.sh` (123 tests; ignored by default: the full journal-content measurement and its sensitivity check, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
+Check it: `cargo test` (83 tests, about 2 s, no LLVM needed) and `front/test.sh` (123 tests; ignored by default: the full journal-content measurement and its sensitivity check, about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 With musl linked, standard output and exit status compared with native (`experiments/c-corpus/README.md`):
 GCC's C torture tests 1,557 agree, 12 refused by name, 6 named faults (programs that open files), none wrong;
@@ -241,6 +243,7 @@ alone, not as a whole corpus): GCC 1,559 agree and 10 refused with musl, if noth
 - Variadic calls follow the x86-64 System V convention and clang's inline `va_arg`.
 - A function that uses `stackrestore` cannot run coherently yet.
 - A null dereference does not fault.
+- `bennett run --arg` refuses arguments for parameters wider than 64 bits (`Executor::new` takes `u64`).
 - Floating point: which NaN comes back when several operands are NaNs is unspecified; `long double` encodings no
   arithmetic produces (pseudo-denormals, unnormals) differ from x87; a `volatile` vector is refused. Where C
   leaves a result open (`fmin` of two zeros, out-of-range conversions) the device follows the native x86-64
