@@ -1,4 +1,4 @@
-# Derived journal-content measurements; producer-chain modes, 2026-11-15.
+# Derived journal-content measurements; producer-chain modes, corrected 2026-11-16.
 # chain = live-state DAG; tape = DAG plus earlier counted Same/retained words.
 # *-workload: group,label,alignment,applies,branches,mean_steps,max_words,positions,same,copy_recoverable,irreducible,partial,control_only,irreducible_instance_pct,irreducible_over_max_pct,same_instance_pct,same_plus_copy_instance_pct,recomputed,recomputed_instance_pct
 # *-time: group,label,alignment,total_evaluations,recovered_instances,evaluations_per_recovered_instance,max_evaluations,max_depth,residual_positions_with_individual_recipes_on_every_present_branch,evaluations_per_branch
@@ -6,68 +6,44 @@
 # *-time-slope: workload,alignment,evaluations_per_branch_per_original_step
 # *-role: group,alignment,role,instances,same_pct,copy_pct,irreducible_pct,positions,irreducible_positions,control_only,recomputed_positions,recomputed_pct
 # *-blocker: group,label,alignment,positions,measured_origin_or_barrier (overlapping counts); branch: prefixes individual-branch failures
-chain-workload	lookups	jc_binary_search reps=1	A	1	256	216.0	246	246	136	19	36	0	0	14.6	14.6	55.3	63.0	55	22.4
-chain-time	lookups	jc_binary_search reps=1	A	605440	14080	43.000	85	61	36	2365.000000
-chain-blocker	lookups	jc_binary_search reps=1	A	14	jc_binary_search/Jump/param: different-producer across branches
-chain-blocker	lookups	jc_binary_search reps=1	A	14	jc_binary_search/Jump/param: no-producer for journal role
-chain-blocker	lookups	jc_binary_search reps=1	A	22	jc_binary_search/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_binary_search reps=1	A	22	jc_binary_search/Slot/Slot: no-producer for journal role
-chain-workload	lookups	jc_binary_search reps=1	B	1	256	216.0	246	246	136	19	36	0	0	14.6	14.6	55.3	63.0	55	22.4
-chain-time	lookups	jc_binary_search reps=1	B	605440	14080	43.000	85	61	36	2365.000000
-chain-blocker	lookups	jc_binary_search reps=1	B	14	jc_binary_search/Jump/param: different-producer across branches
-chain-blocker	lookups	jc_binary_search reps=1	B	14	jc_binary_search/Jump/param: no-producer for journal role
-chain-blocker	lookups	jc_binary_search reps=1	B	22	jc_binary_search/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_binary_search reps=1	B	22	jc_binary_search/Slot/Slot: no-producer for journal role
-chain-workload	lookups	jc_binary_search reps=2	A	1	256	365.6	441	450	145	79	100	172	27	22.2	22.7	34.8	49.8	126	28.0
-chain-time	lookups	jc_binary_search reps=2	A	1266839	29854	42.434	106	78	82	4948.589844
+chain-workload	lookups	jc_binary_search reps=1	A	1	256	216.0	246	246	136	19	0	0	0	0.0	0.0	55.3	63.0	91	37.0
+chain-time	lookups	jc_binary_search reps=1	A	762880	23296	32.747	85	61	0	2980.000000
+chain-workload	lookups	jc_binary_search reps=1	B	1	256	216.0	246	246	136	19	0	0	0	0.0	0.0	55.3	63.0	91	37.0
+chain-time	lookups	jc_binary_search reps=1	B	762880	23296	32.747	85	61	0	2980.000000
+chain-workload	lookups	jc_binary_search reps=2	A	1	256	365.6	441	450	145	79	18	172	18	3.7	4.1	34.8	49.8	208	46.5
+chain-time	lookups	jc_binary_search reps=2	A	1675773	49646	33.754	107	79	0	6545.988281
 chain-blocker	lookups	jc_binary_search reps=2	A	18	jc_binary_search/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	lookups	jc_binary_search reps=2	A	18	jc_binary_search/Jump/JumpSource: control presence needs replay
-chain-blocker	lookups	jc_binary_search reps=2	A	28	jc_binary_search/Jump/param: different-producer across branches
-chain-blocker	lookups	jc_binary_search reps=2	A	28	jc_binary_search/Jump/param: no-producer for journal role
-chain-blocker	lookups	jc_binary_search reps=2	A	54	jc_binary_search/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_binary_search reps=2	A	54	jc_binary_search/Slot/Slot: no-producer for journal role
-chain-workload	lookups	jc_binary_search reps=2	B	1	256	365.6	441	450	145	79	100	172	27	22.2	22.7	34.8	49.8	126	28.0
-chain-time	lookups	jc_binary_search reps=2	B	1266839	29854	42.434	106	78	82	4948.589844
+chain-workload	lookups	jc_binary_search reps=2	B	1	256	365.6	441	450	145	79	18	172	18	3.7	4.1	34.8	49.8	208	46.5
+chain-time	lookups	jc_binary_search reps=2	B	1675773	49646	33.754	107	79	0	6545.988281
 chain-blocker	lookups	jc_binary_search reps=2	B	18	jc_binary_search/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	lookups	jc_binary_search reps=2	B	18	jc_binary_search/Jump/JumpSource: control presence needs replay
-chain-blocker	lookups	jc_binary_search reps=2	B	28	jc_binary_search/Jump/param: different-producer across branches
-chain-blocker	lookups	jc_binary_search reps=2	B	28	jc_binary_search/Jump/param: no-producer for journal role
-chain-blocker	lookups	jc_binary_search reps=2	B	54	jc_binary_search/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_binary_search reps=2	B	54	jc_binary_search/Slot/Slot: no-producer for journal role
-chain-workload	lookups	jc_binary_search reps=4	A	1	256	671.9	831	858	208	151	418	282	36	49.1	50.3	27.1	41.4	81	9.6
-chain-time	lookups	jc_binary_search reps=4	A	636036	18764	33.897	96	69	390	2484.515625
+chain-workload	lookups	jc_binary_search reps=4	A	1	256	671.9	831	858	208	151	353	282	28	41.7	42.5	27.1	41.4	146	16.9
+chain-time	lookups	jc_binary_search reps=4	A	796756	33219	23.985	96	69	325	3112.328125
 chain-blocker	lookups	jc_binary_search reps=4	A	28	jc_binary_search/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	lookups	jc_binary_search reps=4	A	28	jc_binary_search/Jump/JumpSource: control presence needs replay
-chain-blocker	lookups	jc_binary_search reps=4	A	67	jc_binary_search/Jump/param: different-producer across branches
-chain-blocker	lookups	jc_binary_search reps=4	A	66	jc_binary_search/Jump/param: no-producer for journal role
-chain-blocker	lookups	jc_binary_search reps=4	A	323	jc_binary_search/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_binary_search reps=4	A	135	jc_binary_search/Slot/Slot: no-producer for journal role
-chain-workload	lookups	jc_binary_search reps=4	B	1	256	671.9	831	858	208	151	418	282	36	49.1	50.3	27.1	41.4	81	9.6
-chain-time	lookups	jc_binary_search reps=4	B	636036	18764	33.897	96	69	390	2484.515625
+chain-blocker	lookups	jc_binary_search reps=4	A	53	jc_binary_search/Jump/param: different-producer across branches
+chain-blocker	lookups	jc_binary_search reps=4	A	272	jc_binary_search/Slot/Slot: different-producer across branches
+chain-workload	lookups	jc_binary_search reps=4	B	1	256	671.9	831	858	208	151	353	282	28	41.7	42.5	27.1	41.4	146	16.9
+chain-time	lookups	jc_binary_search reps=4	B	796756	33219	23.985	96	69	325	3112.328125
 chain-blocker	lookups	jc_binary_search reps=4	B	28	jc_binary_search/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	lookups	jc_binary_search reps=4	B	28	jc_binary_search/Jump/JumpSource: control presence needs replay
-chain-blocker	lookups	jc_binary_search reps=4	B	67	jc_binary_search/Jump/param: different-producer across branches
-chain-blocker	lookups	jc_binary_search reps=4	B	66	jc_binary_search/Jump/param: no-producer for journal role
-chain-blocker	lookups	jc_binary_search reps=4	B	323	jc_binary_search/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_binary_search reps=4	B	135	jc_binary_search/Slot/Slot: no-producer for journal role
-chain-workload	lookups	jc_binary_search reps=8	A	1	256	1295.1	1575	1636	316	297	937	428	47	58.0	59.5	21.4	36.3	86	5.7
-chain-time	lookups	jc_binary_search reps=8	A	638029	21581	29.564	85	61	897	2492.300781
+chain-blocker	lookups	jc_binary_search reps=4	B	53	jc_binary_search/Jump/param: different-producer across branches
+chain-blocker	lookups	jc_binary_search reps=4	B	272	jc_binary_search/Slot/Slot: different-producer across branches
+chain-workload	lookups	jc_binary_search reps=8	A	1	256	1295.1	1575	1636	316	297	872	428	40	54.5	55.4	21.4	36.3	151	9.2
+chain-time	lookups	jc_binary_search reps=8	A	795904	34944	22.777	85	61	832	3109.000000
 chain-blocker	lookups	jc_binary_search reps=8	A	40	jc_binary_search/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	lookups	jc_binary_search reps=8	A	40	jc_binary_search/Jump/JumpSource: control presence needs replay
-chain-blocker	lookups	jc_binary_search reps=8	A	141	jc_binary_search/Jump/param: different-producer across branches
-chain-blocker	lookups	jc_binary_search reps=8	A	136	jc_binary_search/Jump/param: no-producer for journal role
-chain-blocker	lookups	jc_binary_search reps=8	A	756	jc_binary_search/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_binary_search reps=8	A	286	jc_binary_search/Slot/Slot: no-producer for journal role
-chain-workload	lookups	jc_binary_search reps=8	B	1	256	1295.1	1575	1636	316	297	937	428	47	58.0	59.5	21.4	36.3	86	5.7
-chain-time	lookups	jc_binary_search reps=8	B	638029	21581	29.564	85	61	897	2492.300781
+chain-blocker	lookups	jc_binary_search reps=8	A	127	jc_binary_search/Jump/param: different-producer across branches
+chain-blocker	lookups	jc_binary_search reps=8	A	705	jc_binary_search/Slot/Slot: different-producer across branches
+chain-workload	lookups	jc_binary_search reps=8	B	1	256	1295.1	1575	1636	316	297	872	428	40	54.5	55.4	21.4	36.3	151	9.2
+chain-time	lookups	jc_binary_search reps=8	B	795904	34944	22.777	85	61	832	3109.000000
 chain-blocker	lookups	jc_binary_search reps=8	B	40	jc_binary_search/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	lookups	jc_binary_search reps=8	B	40	jc_binary_search/Jump/JumpSource: control presence needs replay
-chain-blocker	lookups	jc_binary_search reps=8	B	141	jc_binary_search/Jump/param: different-producer across branches
-chain-blocker	lookups	jc_binary_search reps=8	B	136	jc_binary_search/Jump/param: no-producer for journal role
-chain-blocker	lookups	jc_binary_search reps=8	B	756	jc_binary_search/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_binary_search reps=8	B	286	jc_binary_search/Slot/Slot: no-producer for journal role
-chain-time-slope	jc_binary_search	A	-0.895616
-chain-time-slope	jc_binary_search	B	-0.895616
+chain-blocker	lookups	jc_binary_search reps=8	B	127	jc_binary_search/Jump/param: different-producer across branches
+chain-blocker	lookups	jc_binary_search reps=8	B	705	jc_binary_search/Slot/Slot: different-producer across branches
+chain-time-slope	jc_binary_search	A	-1.282671
+chain-time-slope	jc_binary_search	B	-1.282671
 chain-workload	lookups	jc_hash_lookup reps=1	A	1	256	75.0	89	89	89	0	0	0	0	0.0	0.0	100.0	100.0	0	0.0
 chain-time	lookups	jc_hash_lookup reps=1	A	0	0	0.000	0	0	0	0.000000
 chain-workload	lookups	jc_hash_lookup reps=1	B	1	256	75.0	89	89	89	0	0	0	0	0.0	0.0	100.0	100.0	0	0.0
@@ -80,304 +56,254 @@ chain-workload	lookups	jc_hash_lookup reps=2	B	1	256	105.0	127	127	101	19	3	0	0	
 chain-time	lookups	jc_hash_lookup reps=2	B	2304	1024	2.250	4	4	0	9.000000
 chain-blocker	lookups	jc_hash_lookup reps=2	B	3	jc_hash_lookup/Slot/Slot: branch: missing-origin @jc_hash_lookup/%call
 chain-blocker	lookups	jc_hash_lookup reps=2	B	3	jc_hash_lookup/Slot/Slot: missing-origin @jc_hash_lookup/%call
-chain-workload	lookups	jc_hash_lookup reps=4	A	1	256	165.0	203	203	121	48	29	0	0	14.3	14.3	59.6	83.3	5	2.5
-chain-time	lookups	jc_hash_lookup reps=4	A	2560	1280	2.000	4	4	4	10.000000
+chain-workload	lookups	jc_hash_lookup reps=4	A	1	256	165.0	203	203	121	48	25	0	0	12.3	12.3	59.6	83.3	9	4.4
+chain-time	lookups	jc_hash_lookup reps=4	A	2304	2304	1.000	4	4	0	9.000000
 chain-blocker	lookups	jc_hash_lookup reps=4	A	2	jc_hash_lookup/Jump/param: branch: missing-origin @jc_hash_lookup/%call
 chain-blocker	lookups	jc_hash_lookup reps=4	A	2	jc_hash_lookup/Jump/param: missing-origin @jc_hash_lookup/%call
 chain-blocker	lookups	jc_hash_lookup reps=4	A	23	jc_hash_lookup/Slot/Slot: branch: missing-origin @jc_hash_lookup/%call
-chain-blocker	lookups	jc_hash_lookup reps=4	A	11	jc_hash_lookup/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_hash_lookup reps=4	A	15	jc_hash_lookup/Slot/Slot: missing-origin @jc_hash_lookup/%call
-chain-blocker	lookups	jc_hash_lookup reps=4	A	11	jc_hash_lookup/Slot/Slot: no-producer for journal role
-chain-blocker	lookups	jc_hash_lookup reps=4	A	1	jc_hash_slot/Return/ReturnResult: no-producer for journal role
-chain-workload	lookups	jc_hash_lookup reps=4	B	1	256	165.0	203	203	121	48	29	0	0	14.3	14.3	59.6	83.3	5	2.5
-chain-time	lookups	jc_hash_lookup reps=4	B	2560	1280	2.000	4	4	4	10.000000
+chain-blocker	lookups	jc_hash_lookup reps=4	A	23	jc_hash_lookup/Slot/Slot: missing-origin @jc_hash_lookup/%call
+chain-workload	lookups	jc_hash_lookup reps=4	B	1	256	165.0	203	203	121	48	25	0	0	12.3	12.3	59.6	83.3	9	4.4
+chain-time	lookups	jc_hash_lookup reps=4	B	2304	2304	1.000	4	4	0	9.000000
 chain-blocker	lookups	jc_hash_lookup reps=4	B	2	jc_hash_lookup/Jump/param: branch: missing-origin @jc_hash_lookup/%call
 chain-blocker	lookups	jc_hash_lookup reps=4	B	2	jc_hash_lookup/Jump/param: missing-origin @jc_hash_lookup/%call
 chain-blocker	lookups	jc_hash_lookup reps=4	B	23	jc_hash_lookup/Slot/Slot: branch: missing-origin @jc_hash_lookup/%call
-chain-blocker	lookups	jc_hash_lookup reps=4	B	11	jc_hash_lookup/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_hash_lookup reps=4	B	15	jc_hash_lookup/Slot/Slot: missing-origin @jc_hash_lookup/%call
-chain-blocker	lookups	jc_hash_lookup reps=4	B	11	jc_hash_lookup/Slot/Slot: no-producer for journal role
-chain-blocker	lookups	jc_hash_lookup reps=4	B	1	jc_hash_slot/Return/ReturnResult: no-producer for journal role
-chain-workload	lookups	jc_hash_lookup reps=8	A	1	256	285.0	355	355	161	111	77	0	0	21.7	21.7	45.4	76.6	6	1.7
-chain-time	lookups	jc_hash_lookup reps=8	A	2816	1536	1.833	4	4	8	11.000000
+chain-blocker	lookups	jc_hash_lookup reps=4	B	23	jc_hash_lookup/Slot/Slot: missing-origin @jc_hash_lookup/%call
+chain-workload	lookups	jc_hash_lookup reps=8	A	1	256	285.0	355	355	161	111	69	0	0	19.4	19.4	45.4	76.6	14	3.9
+chain-time	lookups	jc_hash_lookup reps=8	A	2304	3584	0.643	4	4	0	9.000000
 chain-blocker	lookups	jc_hash_lookup reps=8	A	6	jc_hash_lookup/Jump/param: branch: missing-origin @jc_hash_lookup/%call
 chain-blocker	lookups	jc_hash_lookup reps=8	A	6	jc_hash_lookup/Jump/param: missing-origin @jc_hash_lookup/%call
 chain-blocker	lookups	jc_hash_lookup reps=8	A	63	jc_hash_lookup/Slot/Slot: branch: missing-origin @jc_hash_lookup/%call
-chain-blocker	lookups	jc_hash_lookup reps=8	A	23	jc_hash_lookup/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_hash_lookup reps=8	A	46	jc_hash_lookup/Slot/Slot: missing-origin @jc_hash_lookup/%call
-chain-blocker	lookups	jc_hash_lookup reps=8	A	23	jc_hash_lookup/Slot/Slot: no-producer for journal role
-chain-blocker	lookups	jc_hash_lookup reps=8	A	2	jc_hash_slot/Return/ReturnResult: no-producer for journal role
-chain-workload	lookups	jc_hash_lookup reps=8	B	1	256	285.0	355	355	161	111	77	0	0	21.7	21.7	45.4	76.6	6	1.7
-chain-time	lookups	jc_hash_lookup reps=8	B	2816	1536	1.833	4	4	8	11.000000
+chain-blocker	lookups	jc_hash_lookup reps=8	A	63	jc_hash_lookup/Slot/Slot: missing-origin @jc_hash_lookup/%call
+chain-workload	lookups	jc_hash_lookup reps=8	B	1	256	285.0	355	355	161	111	69	0	0	19.4	19.4	45.4	76.6	14	3.9
+chain-time	lookups	jc_hash_lookup reps=8	B	2304	3584	0.643	4	4	0	9.000000
 chain-blocker	lookups	jc_hash_lookup reps=8	B	6	jc_hash_lookup/Jump/param: branch: missing-origin @jc_hash_lookup/%call
 chain-blocker	lookups	jc_hash_lookup reps=8	B	6	jc_hash_lookup/Jump/param: missing-origin @jc_hash_lookup/%call
 chain-blocker	lookups	jc_hash_lookup reps=8	B	63	jc_hash_lookup/Slot/Slot: branch: missing-origin @jc_hash_lookup/%call
-chain-blocker	lookups	jc_hash_lookup reps=8	B	23	jc_hash_lookup/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_hash_lookup reps=8	B	46	jc_hash_lookup/Slot/Slot: missing-origin @jc_hash_lookup/%call
-chain-blocker	lookups	jc_hash_lookup reps=8	B	23	jc_hash_lookup/Slot/Slot: no-producer for journal role
-chain-blocker	lookups	jc_hash_lookup reps=8	B	2	jc_hash_slot/Return/ReturnResult: no-producer for journal role
-chain-time-slope	jc_hash_lookup	A	0.038841
-chain-time-slope	jc_hash_lookup	B	0.038841
-chain-workload	lookups	jc_btree_lookup reps=1	A	1	256	327.7	456	463	203	60	169	177	39	29.8	37.1	53.5	64.4	31	5.8
-chain-time	lookups	jc_btree_lookup reps=1	A	18574	5642	3.292	8	8	139	72.554688
+chain-blocker	lookups	jc_hash_lookup reps=8	B	63	jc_hash_lookup/Slot/Slot: missing-origin @jc_hash_lookup/%call
+chain-time-slope	jc_hash_lookup	A	0.028696
+chain-time-slope	jc_hash_lookup	B	0.028696
+chain-workload	lookups	jc_btree_lookup reps=1	A	1	256	327.7	456	463	203	60	151	177	30	26.5	33.1	53.5	64.4	49	9.1
+chain-time	lookups	jc_btree_lookup reps=1	A	26780	8840	3.029	9	9	121	104.609375
 chain-blocker	lookups	jc_btree_lookup reps=1	A	30	jc_btree_lookup/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	lookups	jc_btree_lookup reps=1	A	30	jc_btree_lookup/Jump/JumpSource: control presence needs replay
-chain-blocker	lookups	jc_btree_lookup reps=1	A	24	jc_btree_lookup/Jump/param: different-producer across branches
-chain-blocker	lookups	jc_btree_lookup reps=1	A	13	jc_btree_lookup/Jump/param: no-producer for journal role
-chain-blocker	lookups	jc_btree_lookup reps=1	A	115	jc_btree_lookup/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_btree_lookup reps=1	A	54	jc_btree_lookup/Slot/Slot: no-producer for journal role
-chain-workload	lookups	jc_btree_lookup reps=1	B	1	256	327.7	456	463	203	60	169	177	39	29.8	37.1	53.5	64.4	31	5.8
-chain-time	lookups	jc_btree_lookup reps=1	B	18574	5642	3.292	8	8	139	72.554688
+chain-blocker	lookups	jc_btree_lookup reps=1	A	23	jc_btree_lookup/Jump/param: different-producer across branches
+chain-blocker	lookups	jc_btree_lookup reps=1	A	3	jc_btree_lookup/Jump/param: no-producer for journal role
+chain-blocker	lookups	jc_btree_lookup reps=1	A	98	jc_btree_lookup/Slot/Slot: different-producer across branches
+chain-workload	lookups	jc_btree_lookup reps=1	B	1	256	327.7	456	463	203	60	151	177	30	26.5	33.1	53.5	64.4	49	9.1
+chain-time	lookups	jc_btree_lookup reps=1	B	26780	8840	3.029	9	9	121	104.609375
 chain-blocker	lookups	jc_btree_lookup reps=1	B	30	jc_btree_lookup/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	lookups	jc_btree_lookup reps=1	B	30	jc_btree_lookup/Jump/JumpSource: control presence needs replay
-chain-blocker	lookups	jc_btree_lookup reps=1	B	24	jc_btree_lookup/Jump/param: different-producer across branches
-chain-blocker	lookups	jc_btree_lookup reps=1	B	13	jc_btree_lookup/Jump/param: no-producer for journal role
-chain-blocker	lookups	jc_btree_lookup reps=1	B	115	jc_btree_lookup/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_btree_lookup reps=1	B	54	jc_btree_lookup/Slot/Slot: no-producer for journal role
-chain-workload	lookups	jc_btree_lookup reps=2	A	1	256	604.1	837	845	292	117	378	322	61	38.8	45.2	41.6	54.2	58	7.0
-chain-time	lookups	jc_btree_lookup reps=2	A	42500	12542	3.389	10	10	324	166.015625
+chain-blocker	lookups	jc_btree_lookup reps=1	B	23	jc_btree_lookup/Jump/param: different-producer across branches
+chain-blocker	lookups	jc_btree_lookup reps=1	B	3	jc_btree_lookup/Jump/param: no-producer for journal role
+chain-blocker	lookups	jc_btree_lookup reps=1	B	98	jc_btree_lookup/Slot/Slot: different-producer across branches
+chain-workload	lookups	jc_btree_lookup reps=2	A	1	256	604.1	837	845	292	117	350	322	54	35.5	41.8	41.6	54.2	86	10.3
+chain-time	lookups	jc_btree_lookup reps=2	A	62988	18467	3.411	15	11	296	246.046875
 chain-blocker	lookups	jc_btree_lookup reps=2	A	54	jc_btree_lookup/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	lookups	jc_btree_lookup reps=2	A	54	jc_btree_lookup/Jump/JumpSource: control presence needs replay
-chain-blocker	lookups	jc_btree_lookup reps=2	A	50	jc_btree_lookup/Jump/param: different-producer across branches
-chain-blocker	lookups	jc_btree_lookup reps=2	A	36	jc_btree_lookup/Jump/param: no-producer for journal role
-chain-blocker	lookups	jc_btree_lookup reps=2	A	274	jc_btree_lookup/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_btree_lookup reps=2	A	156	jc_btree_lookup/Slot/Slot: no-producer for journal role
-chain-workload	lookups	jc_btree_lookup reps=2	B	1	256	604.1	837	845	292	117	378	322	61	38.8	45.2	41.6	54.2	58	7.0
-chain-time	lookups	jc_btree_lookup reps=2	B	42500	12542	3.389	10	10	324	166.015625
+chain-blocker	lookups	jc_btree_lookup reps=2	A	46	jc_btree_lookup/Jump/param: different-producer across branches
+chain-blocker	lookups	jc_btree_lookup reps=2	A	3	jc_btree_lookup/Jump/param: no-producer for journal role
+chain-blocker	lookups	jc_btree_lookup reps=2	A	250	jc_btree_lookup/Slot/Slot: different-producer across branches
+chain-workload	lookups	jc_btree_lookup reps=2	B	1	256	604.1	837	845	292	117	350	322	54	35.5	41.8	41.6	54.2	86	10.3
+chain-time	lookups	jc_btree_lookup reps=2	B	62988	18467	3.411	15	11	296	246.046875
 chain-blocker	lookups	jc_btree_lookup reps=2	B	54	jc_btree_lookup/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	lookups	jc_btree_lookup reps=2	B	54	jc_btree_lookup/Jump/JumpSource: control presence needs replay
-chain-blocker	lookups	jc_btree_lookup reps=2	B	50	jc_btree_lookup/Jump/param: different-producer across branches
-chain-blocker	lookups	jc_btree_lookup reps=2	B	36	jc_btree_lookup/Jump/param: no-producer for journal role
-chain-blocker	lookups	jc_btree_lookup reps=2	B	274	jc_btree_lookup/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_btree_lookup reps=2	B	156	jc_btree_lookup/Slot/Slot: no-producer for journal role
-chain-workload	lookups	jc_btree_lookup reps=4	A	1	256	1148.2	1539	1549	473	209	756	498	86	43.6	49.1	35.4	48.8	111	7.5
-chain-time	lookups	jc_btree_lookup reps=4	A	78342	25750	3.042	9	9	674	306.023438
+chain-blocker	lookups	jc_btree_lookup reps=2	B	46	jc_btree_lookup/Jump/param: different-producer across branches
+chain-blocker	lookups	jc_btree_lookup reps=2	B	3	jc_btree_lookup/Jump/param: no-producer for journal role
+chain-blocker	lookups	jc_btree_lookup reps=2	B	250	jc_btree_lookup/Slot/Slot: different-producer across branches
+chain-workload	lookups	jc_btree_lookup reps=4	A	1	256	1148.2	1539	1549	473	209	704	498	82	40.1	45.7	35.4	48.8	163	11.1
+chain-time	lookups	jc_btree_lookup reps=4	A	112261	37897	2.962	13	9	622	438.519531
 chain-blocker	lookups	jc_btree_lookup reps=4	A	82	jc_btree_lookup/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	lookups	jc_btree_lookup reps=4	A	82	jc_btree_lookup/Jump/JumpSource: control presence needs replay
-chain-blocker	lookups	jc_btree_lookup reps=4	A	104	jc_btree_lookup/Jump/param: different-producer across branches
-chain-blocker	lookups	jc_btree_lookup reps=4	A	72	jc_btree_lookup/Jump/param: no-producer for journal role
-chain-blocker	lookups	jc_btree_lookup reps=4	A	570	jc_btree_lookup/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_btree_lookup reps=4	A	349	jc_btree_lookup/Slot/Slot: no-producer for journal role
-chain-workload	lookups	jc_btree_lookup reps=4	B	1	256	1148.2	1539	1549	473	209	756	498	86	43.6	49.1	35.4	48.8	111	7.5
-chain-time	lookups	jc_btree_lookup reps=4	B	78342	25750	3.042	9	9	674	306.023438
+chain-blocker	lookups	jc_btree_lookup reps=4	A	94	jc_btree_lookup/Jump/param: different-producer across branches
+chain-blocker	lookups	jc_btree_lookup reps=4	A	3	jc_btree_lookup/Jump/param: no-producer for journal role
+chain-blocker	lookups	jc_btree_lookup reps=4	A	528	jc_btree_lookup/Slot/Slot: different-producer across branches
+chain-workload	lookups	jc_btree_lookup reps=4	B	1	256	1148.2	1539	1549	473	209	704	498	82	40.1	45.7	35.4	48.8	163	11.1
+chain-time	lookups	jc_btree_lookup reps=4	B	112261	37897	2.962	13	9	622	438.519531
 chain-blocker	lookups	jc_btree_lookup reps=4	B	82	jc_btree_lookup/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	lookups	jc_btree_lookup reps=4	B	82	jc_btree_lookup/Jump/JumpSource: control presence needs replay
-chain-blocker	lookups	jc_btree_lookup reps=4	B	104	jc_btree_lookup/Jump/param: different-producer across branches
-chain-blocker	lookups	jc_btree_lookup reps=4	B	72	jc_btree_lookup/Jump/param: no-producer for journal role
-chain-blocker	lookups	jc_btree_lookup reps=4	B	570	jc_btree_lookup/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_btree_lookup reps=4	B	349	jc_btree_lookup/Slot/Slot: no-producer for journal role
-chain-workload	lookups	jc_btree_lookup reps=8	A	1	256	2251.7	2918	2929	859	420	1431	657	106	45.5	49.0	32.7	46.7	219	7.8
-chain-time	lookups	jc_btree_lookup reps=8	A	165425	52520	3.150	10	10	1328	646.191406
+chain-blocker	lookups	jc_btree_lookup reps=4	B	94	jc_btree_lookup/Jump/param: different-producer across branches
+chain-blocker	lookups	jc_btree_lookup reps=4	B	3	jc_btree_lookup/Jump/param: no-producer for journal role
+chain-blocker	lookups	jc_btree_lookup reps=4	B	528	jc_btree_lookup/Slot/Slot: different-producer across branches
+chain-workload	lookups	jc_btree_lookup reps=8	A	1	256	2251.7	2918	2929	859	420	1326	657	103	41.7	45.4	32.7	46.7	324	11.6
+chain-time	lookups	jc_btree_lookup reps=8	A	230933	77659	2.974	15	11	1223	902.082031
 chain-blocker	lookups	jc_btree_lookup reps=8	A	103	jc_btree_lookup/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	lookups	jc_btree_lookup reps=8	A	103	jc_btree_lookup/Jump/JumpSource: control presence needs replay
-chain-blocker	lookups	jc_btree_lookup reps=8	A	212	jc_btree_lookup/Jump/param: different-producer across branches
-chain-blocker	lookups	jc_btree_lookup reps=8	A	150	jc_btree_lookup/Jump/param: no-producer for journal role
-chain-blocker	lookups	jc_btree_lookup reps=8	A	1116	jc_btree_lookup/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_btree_lookup reps=8	A	697	jc_btree_lookup/Slot/Slot: no-producer for journal role
-chain-workload	lookups	jc_btree_lookup reps=8	B	1	256	2251.7	2918	2929	859	420	1431	657	106	45.5	49.0	32.7	46.7	219	7.8
-chain-time	lookups	jc_btree_lookup reps=8	B	165425	52520	3.150	10	10	1328	646.191406
+chain-blocker	lookups	jc_btree_lookup reps=8	A	190	jc_btree_lookup/Jump/param: different-producer across branches
+chain-blocker	lookups	jc_btree_lookup reps=8	A	3	jc_btree_lookup/Jump/param: no-producer for journal role
+chain-blocker	lookups	jc_btree_lookup reps=8	A	1033	jc_btree_lookup/Slot/Slot: different-producer across branches
+chain-workload	lookups	jc_btree_lookup reps=8	B	1	256	2251.7	2918	2929	859	420	1326	657	103	41.7	45.4	32.7	46.7	324	11.6
+chain-time	lookups	jc_btree_lookup reps=8	B	230933	77659	2.974	15	11	1223	902.082031
 chain-blocker	lookups	jc_btree_lookup reps=8	B	103	jc_btree_lookup/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	lookups	jc_btree_lookup reps=8	B	103	jc_btree_lookup/Jump/JumpSource: control presence needs replay
-chain-blocker	lookups	jc_btree_lookup reps=8	B	212	jc_btree_lookup/Jump/param: different-producer across branches
-chain-blocker	lookups	jc_btree_lookup reps=8	B	150	jc_btree_lookup/Jump/param: no-producer for journal role
-chain-blocker	lookups	jc_btree_lookup reps=8	B	1116	jc_btree_lookup/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_btree_lookup reps=8	B	697	jc_btree_lookup/Slot/Slot: no-producer for journal role
-chain-time-slope	jc_btree_lookup	A	0.295371
-chain-time-slope	jc_btree_lookup	B	0.295371
+chain-blocker	lookups	jc_btree_lookup reps=8	B	190	jc_btree_lookup/Jump/param: different-producer across branches
+chain-blocker	lookups	jc_btree_lookup reps=8	B	3	jc_btree_lookup/Jump/param: no-producer for journal role
+chain-blocker	lookups	jc_btree_lookup reps=8	B	1033	jc_btree_lookup/Slot/Slot: different-producer across branches
+chain-time-slope	jc_btree_lookup	A	0.408368
+chain-time-slope	jc_btree_lookup	B	0.408368
 chain-workload	lookups	jc_write_lookup reps=1	A	1	256	494.0	576	576	576	0	0	0	0	0.0	0.0	100.0	100.0	0	0.0
 chain-time	lookups	jc_write_lookup reps=1	A	0	0	0.000	0	0	0	0.000000
 chain-workload	lookups	jc_write_lookup reps=1	B	1	256	494.0	576	576	576	0	0	0	0	0.0	0.0	100.0	100.0	0	0.0
 chain-time	lookups	jc_write_lookup reps=1	B	0	0	0.000	0	0	0	0.000000
-chain-workload	lookups	jc_write_lookup reps=2	A	1	256	564.0	660	661	617	28	11	8	1	1.6	1.7	93.9	97.6	5	0.8
-chain-time	lookups	jc_write_lookup reps=2	A	2560	1280	2.000	4	4	4	10.000000
+chain-workload	lookups	jc_write_lookup reps=2	A	1	256	564.0	660	661	617	28	8	8	1	1.1	1.2	93.9	97.6	8	1.2
+chain-time	lookups	jc_write_lookup reps=2	A	2560	2048	1.250	4	4	1	10.000000
 chain-blocker	lookups	jc_write_lookup reps=2	A	1	jc_write_lookup/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	lookups	jc_write_lookup reps=2	A	1	jc_write_lookup/Jump/JumpSource: control presence needs replay
 chain-blocker	lookups	jc_write_lookup reps=2	A	6	jc_write_lookup/Slot/Slot: branch: missing-origin @jc_write_lookup/%call
-chain-blocker	lookups	jc_write_lookup reps=2	A	6	jc_write_lookup/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_write_lookup reps=2	A	3	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
-chain-blocker	lookups	jc_write_lookup reps=2	A	6	jc_write_lookup/Slot/Slot: no-producer for journal role
+chain-blocker	lookups	jc_write_lookup reps=2	A	6	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
 chain-blocker	lookups	jc_write_lookup reps=2	A	1	jc_write_lookup/Store/Store: different-producer across branches
 chain-blocker	lookups	jc_write_lookup reps=2	A	1	jc_write_lookup/Store/Store: no-producer for journal role
-chain-workload	lookups	jc_write_lookup reps=2	B	1	256	564.0	660	661	617	28	11	8	1	1.6	1.7	93.9	97.6	5	0.8
-chain-time	lookups	jc_write_lookup reps=2	B	2560	1280	2.000	4	4	4	10.000000
+chain-workload	lookups	jc_write_lookup reps=2	B	1	256	564.0	660	661	617	28	8	8	1	1.1	1.2	93.9	97.6	8	1.2
+chain-time	lookups	jc_write_lookup reps=2	B	2560	2048	1.250	4	4	1	10.000000
 chain-blocker	lookups	jc_write_lookup reps=2	B	1	jc_write_lookup/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	lookups	jc_write_lookup reps=2	B	1	jc_write_lookup/Jump/JumpSource: control presence needs replay
 chain-blocker	lookups	jc_write_lookup reps=2	B	6	jc_write_lookup/Slot/Slot: branch: missing-origin @jc_write_lookup/%call
-chain-blocker	lookups	jc_write_lookup reps=2	B	6	jc_write_lookup/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_write_lookup reps=2	B	3	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
-chain-blocker	lookups	jc_write_lookup reps=2	B	6	jc_write_lookup/Slot/Slot: no-producer for journal role
+chain-blocker	lookups	jc_write_lookup reps=2	B	6	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
 chain-blocker	lookups	jc_write_lookup reps=2	B	1	jc_write_lookup/Store/Store: different-producer across branches
 chain-blocker	lookups	jc_write_lookup reps=2	B	1	jc_write_lookup/Store/Store: no-producer for journal role
-chain-workload	lookups	jc_write_lookup reps=4	A	1	256	726.0	870	876	676	80	101	69	11	9.9	11.6	80.2	88.2	19	1.8
-chain-time	lookups	jc_write_lookup reps=4	A	13826	3946	3.504	10	10	53	54.007812
+chain-workload	lookups	jc_write_lookup reps=4	A	1	256	726.0	870	876	676	80	86	69	9	8.5	9.9	80.2	88.2	34	3.2
+chain-time	lookups	jc_write_lookup reps=4	A	13488	6924	1.948	10	10	38	52.687500
 chain-blocker	lookups	jc_write_lookup reps=4	A	9	jc_write_lookup/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	lookups	jc_write_lookup reps=4	A	9	jc_write_lookup/Jump/JumpSource: control presence needs replay
 chain-blocker	lookups	jc_write_lookup reps=4	A	1	jc_write_lookup/Jump/param: branch: current-memory-or-stack differs
 chain-blocker	lookups	jc_write_lookup reps=4	A	1	jc_write_lookup/Jump/param: branch: missing-origin @jc_write_lookup/%call
 chain-blocker	lookups	jc_write_lookup reps=4	A	1	jc_write_lookup/Jump/param: current-memory-or-stack differs
-chain-blocker	lookups	jc_write_lookup reps=4	A	9	jc_write_lookup/Jump/param: different-producer across branches
+chain-blocker	lookups	jc_write_lookup reps=4	A	6	jc_write_lookup/Jump/param: different-producer across branches
 chain-blocker	lookups	jc_write_lookup reps=4	A	1	jc_write_lookup/Jump/param: missing-origin @jc_write_lookup/%call
-chain-blocker	lookups	jc_write_lookup reps=4	A	6	jc_write_lookup/Jump/param: no-producer for journal role
 chain-blocker	lookups	jc_write_lookup reps=4	A	10	jc_write_lookup/Slot/Slot: branch: current-memory-or-stack differs
 chain-blocker	lookups	jc_write_lookup reps=4	A	32	jc_write_lookup/Slot/Slot: branch: missing-origin @jc_write_lookup/%call
-chain-blocker	lookups	jc_write_lookup reps=4	A	12	jc_write_lookup/Slot/Slot: current-memory-or-stack differs
-chain-blocker	lookups	jc_write_lookup reps=4	A	52	jc_write_lookup/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_write_lookup reps=4	A	23	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
-chain-blocker	lookups	jc_write_lookup reps=4	A	41	jc_write_lookup/Slot/Slot: no-producer for journal role
+chain-blocker	lookups	jc_write_lookup reps=4	A	22	jc_write_lookup/Slot/Slot: current-memory-or-stack differs
+chain-blocker	lookups	jc_write_lookup reps=4	A	20	jc_write_lookup/Slot/Slot: different-producer across branches
+chain-blocker	lookups	jc_write_lookup reps=4	A	35	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
 chain-blocker	lookups	jc_write_lookup reps=4	A	4	jc_write_lookup/Store/Store: branch: current-memory-or-stack differs
 chain-blocker	lookups	jc_write_lookup reps=4	A	3	jc_write_lookup/Store/Store: branch: missing-origin @jc_write_lookup/%call
 chain-blocker	lookups	jc_write_lookup reps=4	A	7	jc_write_lookup/Store/Store: different-producer across branches
 chain-blocker	lookups	jc_write_lookup reps=4	A	6	jc_write_lookup/Store/Store: no-producer for journal role
-chain-workload	lookups	jc_write_lookup reps=4	B	1	256	726.0	870	876	676	80	101	69	11	9.9	11.6	80.2	88.2	19	1.8
-chain-time	lookups	jc_write_lookup reps=4	B	13826	3946	3.504	10	10	53	54.007812
+chain-workload	lookups	jc_write_lookup reps=4	B	1	256	726.0	870	876	676	80	86	69	9	8.5	9.9	80.2	88.2	34	3.2
+chain-time	lookups	jc_write_lookup reps=4	B	13488	6924	1.948	10	10	38	52.687500
 chain-blocker	lookups	jc_write_lookup reps=4	B	9	jc_write_lookup/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	lookups	jc_write_lookup reps=4	B	9	jc_write_lookup/Jump/JumpSource: control presence needs replay
 chain-blocker	lookups	jc_write_lookup reps=4	B	1	jc_write_lookup/Jump/param: branch: current-memory-or-stack differs
 chain-blocker	lookups	jc_write_lookup reps=4	B	1	jc_write_lookup/Jump/param: branch: missing-origin @jc_write_lookup/%call
 chain-blocker	lookups	jc_write_lookup reps=4	B	1	jc_write_lookup/Jump/param: current-memory-or-stack differs
-chain-blocker	lookups	jc_write_lookup reps=4	B	9	jc_write_lookup/Jump/param: different-producer across branches
+chain-blocker	lookups	jc_write_lookup reps=4	B	6	jc_write_lookup/Jump/param: different-producer across branches
 chain-blocker	lookups	jc_write_lookup reps=4	B	1	jc_write_lookup/Jump/param: missing-origin @jc_write_lookup/%call
-chain-blocker	lookups	jc_write_lookup reps=4	B	6	jc_write_lookup/Jump/param: no-producer for journal role
 chain-blocker	lookups	jc_write_lookup reps=4	B	10	jc_write_lookup/Slot/Slot: branch: current-memory-or-stack differs
 chain-blocker	lookups	jc_write_lookup reps=4	B	32	jc_write_lookup/Slot/Slot: branch: missing-origin @jc_write_lookup/%call
-chain-blocker	lookups	jc_write_lookup reps=4	B	12	jc_write_lookup/Slot/Slot: current-memory-or-stack differs
-chain-blocker	lookups	jc_write_lookup reps=4	B	52	jc_write_lookup/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_write_lookup reps=4	B	23	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
-chain-blocker	lookups	jc_write_lookup reps=4	B	41	jc_write_lookup/Slot/Slot: no-producer for journal role
+chain-blocker	lookups	jc_write_lookup reps=4	B	22	jc_write_lookup/Slot/Slot: current-memory-or-stack differs
+chain-blocker	lookups	jc_write_lookup reps=4	B	20	jc_write_lookup/Slot/Slot: different-producer across branches
+chain-blocker	lookups	jc_write_lookup reps=4	B	35	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
 chain-blocker	lookups	jc_write_lookup reps=4	B	4	jc_write_lookup/Store/Store: branch: current-memory-or-stack differs
 chain-blocker	lookups	jc_write_lookup reps=4	B	3	jc_write_lookup/Store/Store: branch: missing-origin @jc_write_lookup/%call
 chain-blocker	lookups	jc_write_lookup reps=4	B	7	jc_write_lookup/Store/Store: different-producer across branches
 chain-blocker	lookups	jc_write_lookup reps=4	B	6	jc_write_lookup/Store/Store: no-producer for journal role
-chain-workload	lookups	jc_write_lookup reps=8	A	1	256	1131.2	1440	1463	786	178	462	313	51	27.3	32.1	60.4	71.0	37	1.7
-chain-time	lookups	jc_write_lookup reps=8	A	15072	5653	2.666	10	10	273	58.875000
-chain-blocker	lookups	jc_write_lookup reps=8	A	4	jc_hash_slot/Return/ReturnResult: no-producer for journal role
+chain-workload	lookups	jc_write_lookup reps=8	A	1	256	1131.2	1440	1463	786	178	393	313	43	24.0	27.3	60.4	71.0	106	4.9
+chain-time	lookups	jc_write_lookup reps=8	A	13792	16400	0.841	10	10	204	53.875000
 chain-blocker	lookups	jc_write_lookup reps=8	A	41	jc_write_lookup/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	lookups	jc_write_lookup reps=8	A	41	jc_write_lookup/Jump/JumpSource: control presence needs replay
 chain-blocker	lookups	jc_write_lookup reps=8	A	5	jc_write_lookup/Jump/param: branch: current-memory-or-stack differs
 chain-blocker	lookups	jc_write_lookup reps=8	A	5	jc_write_lookup/Jump/param: branch: missing-origin @jc_write_lookup/%call
 chain-blocker	lookups	jc_write_lookup reps=8	A	5	jc_write_lookup/Jump/param: current-memory-or-stack differs
-chain-blocker	lookups	jc_write_lookup reps=8	A	52	jc_write_lookup/Jump/param: different-producer across branches
+chain-blocker	lookups	jc_write_lookup reps=8	A	28	jc_write_lookup/Jump/param: different-producer across branches
 chain-blocker	lookups	jc_write_lookup reps=8	A	5	jc_write_lookup/Jump/param: missing-origin @jc_write_lookup/%call
-chain-blocker	lookups	jc_write_lookup reps=8	A	43	jc_write_lookup/Jump/param: no-producer for journal role
 chain-blocker	lookups	jc_write_lookup reps=8	A	63	jc_write_lookup/Slot/Slot: branch: current-memory-or-stack differs
 chain-blocker	lookups	jc_write_lookup reps=8	A	92	jc_write_lookup/Slot/Slot: branch: missing-origin @jc_write_lookup/%call
-chain-blocker	lookups	jc_write_lookup reps=8	A	31	jc_write_lookup/Slot/Slot: current-memory-or-stack differs
-chain-blocker	lookups	jc_write_lookup reps=8	A	287	jc_write_lookup/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_write_lookup reps=8	A	39	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
-chain-blocker	lookups	jc_write_lookup reps=8	A	186	jc_write_lookup/Slot/Slot: no-producer for journal role
+chain-blocker	lookups	jc_write_lookup reps=8	A	100	jc_write_lookup/Slot/Slot: current-memory-or-stack differs
+chain-blocker	lookups	jc_write_lookup reps=8	A	139	jc_write_lookup/Slot/Slot: different-producer across branches
+chain-blocker	lookups	jc_write_lookup reps=8	A	113	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
 chain-blocker	lookups	jc_write_lookup reps=8	A	27	jc_write_lookup/Store/Store: branch: current-memory-or-stack differs
 chain-blocker	lookups	jc_write_lookup reps=8	A	27	jc_write_lookup/Store/Store: branch: missing-origin @jc_write_lookup/%call
 chain-blocker	lookups	jc_write_lookup reps=8	A	2	jc_write_lookup/Store/Store: current-memory-or-stack differs
 chain-blocker	lookups	jc_write_lookup reps=8	A	28	jc_write_lookup/Store/Store: different-producer across branches
 chain-blocker	lookups	jc_write_lookup reps=8	A	1	jc_write_lookup/Store/Store: missing-origin @jc_write_lookup/%call
 chain-blocker	lookups	jc_write_lookup reps=8	A	25	jc_write_lookup/Store/Store: no-producer for journal role
-chain-workload	lookups	jc_write_lookup reps=8	B	1	256	1131.2	1440	1463	786	178	462	313	51	27.3	32.1	60.4	71.0	37	1.7
-chain-time	lookups	jc_write_lookup reps=8	B	15072	5653	2.666	10	10	273	58.875000
-chain-blocker	lookups	jc_write_lookup reps=8	B	4	jc_hash_slot/Return/ReturnResult: no-producer for journal role
+chain-workload	lookups	jc_write_lookup reps=8	B	1	256	1131.2	1440	1463	786	178	393	313	43	24.0	27.3	60.4	71.0	106	4.9
+chain-time	lookups	jc_write_lookup reps=8	B	13792	16400	0.841	10	10	204	53.875000
 chain-blocker	lookups	jc_write_lookup reps=8	B	41	jc_write_lookup/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	lookups	jc_write_lookup reps=8	B	41	jc_write_lookup/Jump/JumpSource: control presence needs replay
 chain-blocker	lookups	jc_write_lookup reps=8	B	5	jc_write_lookup/Jump/param: branch: current-memory-or-stack differs
 chain-blocker	lookups	jc_write_lookup reps=8	B	5	jc_write_lookup/Jump/param: branch: missing-origin @jc_write_lookup/%call
 chain-blocker	lookups	jc_write_lookup reps=8	B	5	jc_write_lookup/Jump/param: current-memory-or-stack differs
-chain-blocker	lookups	jc_write_lookup reps=8	B	52	jc_write_lookup/Jump/param: different-producer across branches
+chain-blocker	lookups	jc_write_lookup reps=8	B	28	jc_write_lookup/Jump/param: different-producer across branches
 chain-blocker	lookups	jc_write_lookup reps=8	B	5	jc_write_lookup/Jump/param: missing-origin @jc_write_lookup/%call
-chain-blocker	lookups	jc_write_lookup reps=8	B	43	jc_write_lookup/Jump/param: no-producer for journal role
 chain-blocker	lookups	jc_write_lookup reps=8	B	63	jc_write_lookup/Slot/Slot: branch: current-memory-or-stack differs
 chain-blocker	lookups	jc_write_lookup reps=8	B	92	jc_write_lookup/Slot/Slot: branch: missing-origin @jc_write_lookup/%call
-chain-blocker	lookups	jc_write_lookup reps=8	B	31	jc_write_lookup/Slot/Slot: current-memory-or-stack differs
-chain-blocker	lookups	jc_write_lookup reps=8	B	287	jc_write_lookup/Slot/Slot: different-producer across branches
-chain-blocker	lookups	jc_write_lookup reps=8	B	39	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
-chain-blocker	lookups	jc_write_lookup reps=8	B	186	jc_write_lookup/Slot/Slot: no-producer for journal role
+chain-blocker	lookups	jc_write_lookup reps=8	B	100	jc_write_lookup/Slot/Slot: current-memory-or-stack differs
+chain-blocker	lookups	jc_write_lookup reps=8	B	139	jc_write_lookup/Slot/Slot: different-producer across branches
+chain-blocker	lookups	jc_write_lookup reps=8	B	113	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
 chain-blocker	lookups	jc_write_lookup reps=8	B	27	jc_write_lookup/Store/Store: branch: current-memory-or-stack differs
 chain-blocker	lookups	jc_write_lookup reps=8	B	27	jc_write_lookup/Store/Store: branch: missing-origin @jc_write_lookup/%call
 chain-blocker	lookups	jc_write_lookup reps=8	B	2	jc_write_lookup/Store/Store: current-memory-or-stack differs
 chain-blocker	lookups	jc_write_lookup reps=8	B	28	jc_write_lookup/Store/Store: different-producer across branches
 chain-blocker	lookups	jc_write_lookup reps=8	B	1	jc_write_lookup/Store/Store: missing-origin @jc_write_lookup/%call
 chain-blocker	lookups	jc_write_lookup reps=8	B	25	jc_write_lookup/Store/Store: no-producer for journal role
-chain-time-slope	jc_write_lookup	A	0.089650
-chain-time-slope	jc_write_lookup	B	0.089650
+chain-time-slope	jc_write_lookup	A	0.081427
+chain-time-slope	jc_write_lookup	B	0.081427
 chain-role	lookups	A	Alloca/AllocaSlot	2048	100.0	0.0	0.0	8	0	0	0	0.0
 chain-role	lookups	A	Alloca/AllocaStack	2048	100.0	0.0	0.0	8	0	0	0	0.0
 chain-role	lookups	A	Call/param	35840	68.6	31.4	0.0	140	0	0	0	0.0
 chain-role	lookups	A	Jump/JumpSource	365420	83.4	0.0	16.6	1597	406	406	0	0.0
-chain-role	lookups	A	Jump/param	376525	41.7	13.6	41.6	1709	715	0	53	3.1
+chain-role	lookups	A	Jump/param	376525	41.7	13.6	34.3	1709	581	0	187	10.4
 chain-role	lookups	A	Return/ReturnPacked	19456	100.0	0.0	0.0	76	0	0	0	0.0
-chain-role	lookups	A	Return/ReturnResult	19456	42.1	48.7	9.2	76	7	0	0	0.0
+chain-role	lookups	A	Return/ReturnResult	19456	42.1	48.7	0.0	76	0	0	7	9.2
 chain-role	lookups	A	Return/ReturnStack	19456	100.0	0.0	0.0	76	0	0	0	0.0
-chain-role	lookups	A	Slot/Slot	2180809	39.8	14.1	37.6	9318	3741	57	790	8.4
+chain-role	lookups	A	Slot/Slot	2180809	39.8	14.1	33.4	9318	3332	0	1199	12.6
 chain-role	lookups	A	Store/Store	77648	87.4	4.1	8.5	318	39	2	0	0.0
 chain-role	lookups	B	Alloca/AllocaSlot	2048	100.0	0.0	0.0	8	0	0	0	0.0
 chain-role	lookups	B	Alloca/AllocaStack	2048	100.0	0.0	0.0	8	0	0	0	0.0
 chain-role	lookups	B	Call/param	35840	68.6	31.4	0.0	140	0	0	0	0.0
 chain-role	lookups	B	Jump/JumpSource	365420	83.4	0.0	16.6	1597	406	406	0	0.0
-chain-role	lookups	B	Jump/param	376525	41.7	13.6	41.6	1709	715	0	53	3.1
+chain-role	lookups	B	Jump/param	376525	41.7	13.6	34.3	1709	581	0	187	10.4
 chain-role	lookups	B	Return/ReturnPacked	19456	100.0	0.0	0.0	76	0	0	0	0.0
-chain-role	lookups	B	Return/ReturnResult	19456	42.1	48.7	9.2	76	7	0	0	0.0
+chain-role	lookups	B	Return/ReturnResult	19456	42.1	48.7	0.0	76	0	0	7	9.2
 chain-role	lookups	B	Return/ReturnStack	19456	100.0	0.0	0.0	76	0	0	0	0.0
-chain-role	lookups	B	Slot/Slot	2180809	39.8	14.1	37.6	9318	3741	57	790	8.4
+chain-role	lookups	B	Slot/Slot	2180809	39.8	14.1	33.4	9318	3332	0	1199	12.6
 chain-role	lookups	B	Store/Store	77648	87.4	4.1	8.5	318	39	2	0	0.0
-chain-slope	jc_binary_search	A	1.228	0.859	Call/param=0.000 Jump/JumpSource=0.033 Jump/param=0.119 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.707
-chain-slope	jc_binary_search	B	1.228	0.859	Call/param=0.000 Jump/JumpSource=0.033 Jump/param=0.119 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.707
-chain-slope	jc_hash_lookup	A	1.267	0.382	Call/param=0.000 Jump/JumpSource=0.000 Jump/param=0.030 Return/ReturnPacked=0.000 Return/ReturnResult=0.010 Return/ReturnStack=0.000 Slot/Slot=0.341
-chain-slope	jc_hash_lookup	B	1.267	0.382	Call/param=0.000 Jump/JumpSource=0.000 Jump/param=0.030 Return/ReturnPacked=0.000 Return/ReturnResult=0.010 Return/ReturnStack=0.000 Slot/Slot=0.341
-chain-slope	jc_btree_lookup	A	1.275	0.651	Call/param=0.000 Jump/JumpSource=0.036 Jump/param=0.098 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.518
-chain-slope	jc_btree_lookup	B	1.275	0.651	Call/param=0.000 Jump/JumpSource=0.036 Jump/param=0.098 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.518
-chain-slope	jc_write_lookup	A	1.364	0.753	Alloca/AllocaSlot=0.000 Alloca/AllocaStack=0.000 Call/param=0.000 Jump/JumpSource=0.067 Jump/param=0.094 Return/ReturnPacked=0.000 Return/ReturnResult=0.007 Return/ReturnStack=0.000 Slot/Slot=0.535 Store/Store=0.050
-chain-slope	jc_write_lookup	B	1.364	0.753	Alloca/AllocaSlot=0.000 Alloca/AllocaStack=0.000 Call/param=0.000 Jump/JumpSource=0.067 Jump/param=0.094 Return/ReturnPacked=0.000 Return/ReturnResult=0.007 Return/ReturnStack=0.000 Slot/Slot=0.535 Store/Store=0.050
-tape-workload	lookups	jc_binary_search reps=1	A	1	256	216.0	246	246	136	19	22	0	0	8.9	8.9	55.3	63.0	69	28.0
-tape-time	lookups	jc_binary_search reps=1	A	61440	17664	3.478	12	12	22	240.000000
-tape-blocker	lookups	jc_binary_search reps=1	A	22	jc_binary_search/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_binary_search reps=1	A	22	jc_binary_search/Slot/Slot: no-producer for journal role
-tape-workload	lookups	jc_binary_search reps=1	B	1	256	216.0	246	246	136	19	22	0	0	8.9	8.9	55.3	63.0	69	28.0
-tape-time	lookups	jc_binary_search reps=1	B	61440	17664	3.478	12	12	22	240.000000
-tape-blocker	lookups	jc_binary_search reps=1	B	22	jc_binary_search/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_binary_search reps=1	B	22	jc_binary_search/Slot/Slot: no-producer for journal role
-tape-workload	lookups	jc_binary_search reps=2	A	1	256	365.6	441	450	145	79	62	172	18	13.7	14.1	34.8	49.8	164	36.4
-tape-time	lookups	jc_binary_search reps=2	A	111090	38896	2.856	12	12	44	433.945312
+chain-slope	jc_binary_search	A	1.228	0.848	Call/param=0.000 Jump/JumpSource=0.033 Jump/param=0.125 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.691
+chain-slope	jc_binary_search	B	1.228	0.848	Call/param=0.000 Jump/JumpSource=0.033 Jump/param=0.125 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.691
+chain-slope	jc_hash_lookup	A	1.267	0.341	Call/param=0.000 Jump/JumpSource=0.000 Jump/param=0.030 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.311
+chain-slope	jc_hash_lookup	B	1.267	0.341	Call/param=0.000 Jump/JumpSource=0.000 Jump/param=0.030 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.311
+chain-slope	jc_btree_lookup	A	1.275	0.606	Call/param=0.000 Jump/JumpSource=0.036 Jump/param=0.087 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.483
+chain-slope	jc_btree_lookup	B	1.275	0.606	Call/param=0.000 Jump/JumpSource=0.036 Jump/param=0.087 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.483
+chain-slope	jc_write_lookup	A	1.364	0.641	Alloca/AllocaSlot=0.000 Alloca/AllocaStack=0.000 Call/param=0.000 Jump/JumpSource=0.067 Jump/param=0.054 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.470 Store/Store=0.050
+chain-slope	jc_write_lookup	B	1.364	0.641	Alloca/AllocaSlot=0.000 Alloca/AllocaStack=0.000 Call/param=0.000 Jump/JumpSource=0.067 Jump/param=0.054 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.470 Store/Store=0.050
+tape-workload	lookups	jc_binary_search reps=1	A	1	256	216.0	246	246	136	19	0	0	0	0.0	0.0	55.3	63.0	91	37.0
+tape-time	lookups	jc_binary_search reps=1	A	708096	23296	30.396	82	59	0	2766.000000
+tape-workload	lookups	jc_binary_search reps=1	B	1	256	216.0	246	246	136	19	0	0	0	0.0	0.0	55.3	63.0	91	37.0
+tape-time	lookups	jc_binary_search reps=1	B	708096	23296	30.396	82	59	0	2766.000000
+tape-workload	lookups	jc_binary_search reps=2	A	1	256	365.6	441	450	145	79	18	172	18	3.7	4.1	34.8	49.8	208	46.5
+tape-time	lookups	jc_binary_search reps=2	A	1453518	49646	29.278	97	71	0	5677.804688
 tape-blocker	lookups	jc_binary_search reps=2	A	18	jc_binary_search/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	lookups	jc_binary_search reps=2	A	18	jc_binary_search/Jump/JumpSource: control presence needs replay
-tape-blocker	lookups	jc_binary_search reps=2	A	44	jc_binary_search/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_binary_search reps=2	A	44	jc_binary_search/Slot/Slot: no-producer for journal role
-tape-workload	lookups	jc_binary_search reps=2	B	1	256	365.6	441	450	145	79	62	172	18	13.7	14.1	34.8	49.8	164	36.4
-tape-time	lookups	jc_binary_search reps=2	B	111090	38896	2.856	12	12	44	433.945312
+tape-workload	lookups	jc_binary_search reps=2	B	1	256	365.6	441	450	145	79	18	172	18	3.7	4.1	34.8	49.8	208	46.5
+tape-time	lookups	jc_binary_search reps=2	B	1453518	49646	29.278	97	71	0	5677.804688
 tape-blocker	lookups	jc_binary_search reps=2	B	18	jc_binary_search/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	lookups	jc_binary_search reps=2	B	18	jc_binary_search/Jump/JumpSource: control presence needs replay
-tape-blocker	lookups	jc_binary_search reps=2	B	44	jc_binary_search/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_binary_search reps=2	B	44	jc_binary_search/Slot/Slot: no-producer for journal role
-tape-workload	lookups	jc_binary_search reps=4	A	1	256	671.9	831	858	208	151	206	282	28	24.9	24.8	27.1	41.4	293	33.7
-tape-time	lookups	jc_binary_search reps=4	A	226267	66230	3.416	18	12	178	883.855469
+tape-workload	lookups	jc_binary_search reps=4	A	1	256	671.9	831	858	208	151	123	282	28	15.1	14.8	27.1	41.4	376	43.6
+tape-time	lookups	jc_binary_search reps=4	A	1402475	85512	16.401	105	77	95	5478.417969
 tape-blocker	lookups	jc_binary_search reps=4	A	28	jc_binary_search/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	lookups	jc_binary_search reps=4	A	28	jc_binary_search/Jump/JumpSource: control presence needs replay
-tape-blocker	lookups	jc_binary_search reps=4	A	36	jc_binary_search/Jump/param: different-producer across branches
-tape-blocker	lookups	jc_binary_search reps=4	A	36	jc_binary_search/Jump/param: no-producer for journal role
-tape-blocker	lookups	jc_binary_search reps=4	A	142	jc_binary_search/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_binary_search reps=4	A	123	jc_binary_search/Slot/Slot: no-producer for journal role
-tape-workload	lookups	jc_binary_search reps=4	B	1	256	671.9	831	858	208	151	206	282	28	24.9	24.8	27.1	41.4	293	33.7
-tape-time	lookups	jc_binary_search reps=4	B	226267	66230	3.416	18	12	178	883.855469
+tape-blocker	lookups	jc_binary_search reps=4	A	38	jc_binary_search/Jump/param: different-producer across branches
+tape-blocker	lookups	jc_binary_search reps=4	A	57	jc_binary_search/Slot/Slot: different-producer across branches
+tape-workload	lookups	jc_binary_search reps=4	B	1	256	671.9	831	858	208	151	123	282	28	15.1	14.8	27.1	41.4	376	43.6
+tape-time	lookups	jc_binary_search reps=4	B	1402475	85512	16.401	105	77	95	5478.417969
 tape-blocker	lookups	jc_binary_search reps=4	B	28	jc_binary_search/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	lookups	jc_binary_search reps=4	B	28	jc_binary_search/Jump/JumpSource: control presence needs replay
-tape-blocker	lookups	jc_binary_search reps=4	B	36	jc_binary_search/Jump/param: different-producer across branches
-tape-blocker	lookups	jc_binary_search reps=4	B	36	jc_binary_search/Jump/param: no-producer for journal role
-tape-blocker	lookups	jc_binary_search reps=4	B	142	jc_binary_search/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_binary_search reps=4	B	123	jc_binary_search/Slot/Slot: no-producer for journal role
-tape-workload	lookups	jc_binary_search reps=8	A	1	256	1295.1	1575	1636	316	297	481	428	40	30.5	30.5	21.4	36.3	542	33.2
-tape-time	lookups	jc_binary_search reps=8	A	489555	125578	3.898	38	23	441	1912.324219
+tape-blocker	lookups	jc_binary_search reps=4	B	38	jc_binary_search/Jump/param: different-producer across branches
+tape-blocker	lookups	jc_binary_search reps=4	B	57	jc_binary_search/Slot/Slot: different-producer across branches
+tape-workload	lookups	jc_binary_search reps=8	A	1	256	1295.1	1575	1636	316	297	322	428	40	20.8	20.4	21.4	36.3	701	42.9
+tape-time	lookups	jc_binary_search reps=8	A	1506782	162384	9.279	105	77	282	5885.867188
 tape-blocker	lookups	jc_binary_search reps=8	A	40	jc_binary_search/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	lookups	jc_binary_search reps=8	A	40	jc_binary_search/Jump/JumpSource: control presence needs replay
-tape-blocker	lookups	jc_binary_search reps=8	A	106	jc_binary_search/Jump/param: different-producer across branches
-tape-blocker	lookups	jc_binary_search reps=8	A	106	jc_binary_search/Jump/param: no-producer for journal role
-tape-blocker	lookups	jc_binary_search reps=8	A	335	jc_binary_search/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_binary_search reps=8	A	274	jc_binary_search/Slot/Slot: no-producer for journal role
-tape-workload	lookups	jc_binary_search reps=8	B	1	256	1295.1	1575	1636	316	297	481	428	40	30.5	30.5	21.4	36.3	542	33.2
-tape-time	lookups	jc_binary_search reps=8	B	489555	125578	3.898	38	23	441	1912.324219
+tape-blocker	lookups	jc_binary_search reps=8	A	108	jc_binary_search/Jump/param: different-producer across branches
+tape-blocker	lookups	jc_binary_search reps=8	A	174	jc_binary_search/Slot/Slot: different-producer across branches
+tape-workload	lookups	jc_binary_search reps=8	B	1	256	1295.1	1575	1636	316	297	322	428	40	20.8	20.4	21.4	36.3	701	42.9
+tape-time	lookups	jc_binary_search reps=8	B	1506782	162384	9.279	105	77	282	5885.867188
 tape-blocker	lookups	jc_binary_search reps=8	B	40	jc_binary_search/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	lookups	jc_binary_search reps=8	B	40	jc_binary_search/Jump/JumpSource: control presence needs replay
-tape-blocker	lookups	jc_binary_search reps=8	B	106	jc_binary_search/Jump/param: different-producer across branches
-tape-blocker	lookups	jc_binary_search reps=8	B	106	jc_binary_search/Jump/param: no-producer for journal role
-tape-blocker	lookups	jc_binary_search reps=8	B	335	jc_binary_search/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_binary_search reps=8	B	274	jc_binary_search/Slot/Slot: no-producer for journal role
-tape-time-slope	jc_binary_search	A	1.561523
-tape-time-slope	jc_binary_search	B	1.561523
+tape-blocker	lookups	jc_binary_search reps=8	B	108	jc_binary_search/Jump/param: different-producer across branches
+tape-blocker	lookups	jc_binary_search reps=8	B	174	jc_binary_search/Slot/Slot: different-producer across branches
+tape-time-slope	jc_binary_search	A	1.979172
+tape-time-slope	jc_binary_search	B	1.979172
 tape-workload	lookups	jc_hash_lookup reps=1	A	1	256	75.0	89	89	89	0	0	0	0	0.0	0.0	100.0	100.0	0	0.0
 tape-time	lookups	jc_hash_lookup reps=1	A	0	0	0.000	0	0	0	0.000000
 tape-workload	lookups	jc_hash_lookup reps=1	B	1	256	75.0	89	89	89	0	0	0	0	0.0	0.0	100.0	100.0	0	0.0
@@ -390,214 +316,182 @@ tape-workload	lookups	jc_hash_lookup reps=2	B	1	256	105.0	127	127	101	19	1	0	0	0
 tape-time	lookups	jc_hash_lookup reps=2	B	3328	1536	2.167	4	4	0	13.000000
 tape-blocker	lookups	jc_hash_lookup reps=2	B	1	jc_hash_lookup/Slot/Slot: branch: missing-origin @jc_hash_lookup/%call
 tape-blocker	lookups	jc_hash_lookup reps=2	B	1	jc_hash_lookup/Slot/Slot: missing-origin @jc_hash_lookup/%call
-tape-workload	lookups	jc_hash_lookup reps=4	A	1	256	165.0	203	203	121	48	10	0	0	4.9	4.9	59.6	83.3	24	11.8
-tape-time	lookups	jc_hash_lookup reps=4	A	29440	6144	4.792	14	13	8	115.000000
-tape-blocker	lookups	jc_hash_lookup reps=4	A	2	jc_hash_lookup/Slot/Slot: branch: missing-origin @jc_hash_lookup/%call
-tape-blocker	lookups	jc_hash_lookup reps=4	A	7	jc_hash_lookup/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_hash_lookup reps=4	A	2	jc_hash_lookup/Slot/Slot: missing-origin @jc_hash_lookup/%call
-tape-blocker	lookups	jc_hash_lookup reps=4	A	7	jc_hash_lookup/Slot/Slot: no-producer for journal role
-tape-blocker	lookups	jc_hash_lookup reps=4	A	1	jc_hash_slot/Return/ReturnResult: no-producer for journal role
-tape-workload	lookups	jc_hash_lookup reps=4	B	1	256	165.0	203	203	121	48	10	0	0	4.9	4.9	59.6	83.3	24	11.8
-tape-time	lookups	jc_hash_lookup reps=4	B	29440	6144	4.792	14	13	8	115.000000
-tape-blocker	lookups	jc_hash_lookup reps=4	B	2	jc_hash_lookup/Slot/Slot: branch: missing-origin @jc_hash_lookup/%call
-tape-blocker	lookups	jc_hash_lookup reps=4	B	7	jc_hash_lookup/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_hash_lookup reps=4	B	2	jc_hash_lookup/Slot/Slot: missing-origin @jc_hash_lookup/%call
-tape-blocker	lookups	jc_hash_lookup reps=4	B	7	jc_hash_lookup/Slot/Slot: no-producer for journal role
-tape-blocker	lookups	jc_hash_lookup reps=4	B	1	jc_hash_slot/Return/ReturnResult: no-producer for journal role
-tape-workload	lookups	jc_hash_lookup reps=8	A	1	256	285.0	355	355	161	111	22	0	0	6.2	6.2	45.4	76.6	61	17.2
-tape-time	lookups	jc_hash_lookup reps=8	A	201728	15616	12.918	40	28	17	788.000000
-tape-blocker	lookups	jc_hash_lookup reps=8	A	5	jc_hash_lookup/Slot/Slot: branch: missing-origin @jc_hash_lookup/%call
-tape-blocker	lookups	jc_hash_lookup reps=8	A	15	jc_hash_lookup/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_hash_lookup reps=8	A	5	jc_hash_lookup/Slot/Slot: missing-origin @jc_hash_lookup/%call
-tape-blocker	lookups	jc_hash_lookup reps=8	A	15	jc_hash_lookup/Slot/Slot: no-producer for journal role
-tape-blocker	lookups	jc_hash_lookup reps=8	A	2	jc_hash_slot/Return/ReturnResult: no-producer for journal role
-tape-workload	lookups	jc_hash_lookup reps=8	B	1	256	285.0	355	355	161	111	22	0	0	6.2	6.2	45.4	76.6	61	17.2
-tape-time	lookups	jc_hash_lookup reps=8	B	201728	15616	12.918	40	28	17	788.000000
-tape-blocker	lookups	jc_hash_lookup reps=8	B	5	jc_hash_lookup/Slot/Slot: branch: missing-origin @jc_hash_lookup/%call
-tape-blocker	lookups	jc_hash_lookup reps=8	B	15	jc_hash_lookup/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_hash_lookup reps=8	B	5	jc_hash_lookup/Slot/Slot: missing-origin @jc_hash_lookup/%call
-tape-blocker	lookups	jc_hash_lookup reps=8	B	15	jc_hash_lookup/Slot/Slot: no-producer for journal role
-tape-blocker	lookups	jc_hash_lookup reps=8	B	2	jc_hash_slot/Return/ReturnResult: no-producer for journal role
-tape-time-slope	jc_hash_lookup	A	3.889855
-tape-time-slope	jc_hash_lookup	B	3.889855
-tape-workload	lookups	jc_btree_lookup reps=1	A	1	256	327.7	456	463	203	60	112	177	30	20.5	24.6	53.5	64.4	88	15.0
-tape-time	lookups	jc_btree_lookup reps=1	A	30409	14593	2.084	9	9	82	118.785156
+tape-workload	lookups	jc_hash_lookup reps=4	A	1	256	165.0	203	203	121	48	3	0	0	1.5	1.5	59.6	83.3	31	15.3
+tape-time	lookups	jc_hash_lookup reps=4	A	57600	7936	7.258	23	16	0	225.000000
+tape-blocker	lookups	jc_hash_lookup reps=4	A	3	jc_hash_lookup/Slot/Slot: branch: missing-origin @jc_hash_lookup/%call
+tape-blocker	lookups	jc_hash_lookup reps=4	A	3	jc_hash_lookup/Slot/Slot: missing-origin @jc_hash_lookup/%call
+tape-workload	lookups	jc_hash_lookup reps=4	B	1	256	165.0	203	203	121	48	3	0	0	1.5	1.5	59.6	83.3	31	15.3
+tape-time	lookups	jc_hash_lookup reps=4	B	57600	7936	7.258	23	16	0	225.000000
+tape-blocker	lookups	jc_hash_lookup reps=4	B	3	jc_hash_lookup/Slot/Slot: branch: missing-origin @jc_hash_lookup/%call
+tape-blocker	lookups	jc_hash_lookup reps=4	B	3	jc_hash_lookup/Slot/Slot: missing-origin @jc_hash_lookup/%call
+tape-workload	lookups	jc_hash_lookup reps=8	A	1	256	285.0	355	355	161	111	7	0	0	2.0	2.0	45.4	76.6	76	21.4
+tape-time	lookups	jc_hash_lookup reps=8	A	362752	19456	18.645	63	28	0	1417.000000
+tape-blocker	lookups	jc_hash_lookup reps=8	A	7	jc_hash_lookup/Slot/Slot: branch: missing-origin @jc_hash_lookup/%call
+tape-blocker	lookups	jc_hash_lookup reps=8	A	7	jc_hash_lookup/Slot/Slot: missing-origin @jc_hash_lookup/%call
+tape-workload	lookups	jc_hash_lookup reps=8	B	1	256	285.0	355	355	161	111	7	0	0	2.0	2.0	45.4	76.6	76	21.4
+tape-time	lookups	jc_hash_lookup reps=8	B	362752	19456	18.645	63	28	0	1417.000000
+tape-blocker	lookups	jc_hash_lookup reps=8	B	7	jc_hash_lookup/Slot/Slot: branch: missing-origin @jc_hash_lookup/%call
+tape-blocker	lookups	jc_hash_lookup reps=8	B	7	jc_hash_lookup/Slot/Slot: missing-origin @jc_hash_lookup/%call
+tape-time-slope	jc_hash_lookup	A	7.021159
+tape-time-slope	jc_hash_lookup	B	7.021159
+tape-workload	lookups	jc_btree_lookup reps=1	A	1	256	327.7	456	463	203	60	80	177	30	13.3	17.5	53.5	64.4	120	22.3
+tape-time	lookups	jc_btree_lookup reps=1	A	56271	21663	2.598	11	10	50	219.808594
 tape-blocker	lookups	jc_btree_lookup reps=1	A	30	jc_btree_lookup/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	lookups	jc_btree_lookup reps=1	A	30	jc_btree_lookup/Jump/JumpSource: control presence needs replay
-tape-blocker	lookups	jc_btree_lookup reps=1	A	23	jc_btree_lookup/Jump/param: different-producer across branches
-tape-blocker	lookups	jc_btree_lookup reps=1	A	13	jc_btree_lookup/Jump/param: no-producer for journal role
-tape-blocker	lookups	jc_btree_lookup reps=1	A	59	jc_btree_lookup/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_btree_lookup reps=1	A	45	jc_btree_lookup/Slot/Slot: no-producer for journal role
-tape-workload	lookups	jc_btree_lookup reps=1	B	1	256	327.7	456	463	203	60	112	177	30	20.5	24.6	53.5	64.4	88	15.0
-tape-time	lookups	jc_btree_lookup reps=1	B	30409	14593	2.084	9	9	82	118.785156
+tape-blocker	lookups	jc_btree_lookup reps=1	A	22	jc_btree_lookup/Jump/param: different-producer across branches
+tape-blocker	lookups	jc_btree_lookup reps=1	A	3	jc_btree_lookup/Jump/param: no-producer for journal role
+tape-blocker	lookups	jc_btree_lookup reps=1	A	28	jc_btree_lookup/Slot/Slot: different-producer across branches
+tape-workload	lookups	jc_btree_lookup reps=1	B	1	256	327.7	456	463	203	60	80	177	30	13.3	17.5	53.5	64.4	120	22.3
+tape-time	lookups	jc_btree_lookup reps=1	B	56271	21663	2.598	11	10	50	219.808594
 tape-blocker	lookups	jc_btree_lookup reps=1	B	30	jc_btree_lookup/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	lookups	jc_btree_lookup reps=1	B	30	jc_btree_lookup/Jump/JumpSource: control presence needs replay
-tape-blocker	lookups	jc_btree_lookup reps=1	B	23	jc_btree_lookup/Jump/param: different-producer across branches
-tape-blocker	lookups	jc_btree_lookup reps=1	B	13	jc_btree_lookup/Jump/param: no-producer for journal role
-tape-blocker	lookups	jc_btree_lookup reps=1	B	59	jc_btree_lookup/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_btree_lookup reps=1	B	45	jc_btree_lookup/Slot/Slot: no-producer for journal role
-tape-workload	lookups	jc_btree_lookup reps=2	A	1	256	604.1	837	845	292	117	263	322	54	27.4	31.4	41.6	54.2	173	18.4
-tape-time	lookups	jc_btree_lookup reps=2	A	112977	33049	3.418	23	23	209	441.316406
+tape-blocker	lookups	jc_btree_lookup reps=1	B	22	jc_btree_lookup/Jump/param: different-producer across branches
+tape-blocker	lookups	jc_btree_lookup reps=1	B	3	jc_btree_lookup/Jump/param: no-producer for journal role
+tape-blocker	lookups	jc_btree_lookup reps=1	B	28	jc_btree_lookup/Slot/Slot: different-producer across branches
+tape-workload	lookups	jc_btree_lookup reps=2	A	1	256	604.1	837	845	292	117	198	322	54	20.0	23.7	41.6	54.2	238	25.8
+tape-time	lookups	jc_btree_lookup reps=2	A	167533	46287	3.619	26	24	144	654.425781
 tape-blocker	lookups	jc_btree_lookup reps=2	A	54	jc_btree_lookup/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	lookups	jc_btree_lookup reps=2	A	54	jc_btree_lookup/Jump/JumpSource: control presence needs replay
-tape-blocker	lookups	jc_btree_lookup reps=2	A	46	jc_btree_lookup/Jump/param: different-producer across branches
-tape-blocker	lookups	jc_btree_lookup reps=2	A	36	jc_btree_lookup/Jump/param: no-producer for journal role
-tape-blocker	lookups	jc_btree_lookup reps=2	A	163	jc_btree_lookup/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_btree_lookup reps=2	A	148	jc_btree_lookup/Slot/Slot: no-producer for journal role
-tape-workload	lookups	jc_btree_lookup reps=2	B	1	256	604.1	837	845	292	117	263	322	54	27.4	31.4	41.6	54.2	173	18.4
-tape-time	lookups	jc_btree_lookup reps=2	B	112977	33049	3.418	23	23	209	441.316406
+tape-blocker	lookups	jc_btree_lookup reps=2	A	42	jc_btree_lookup/Jump/param: different-producer across branches
+tape-blocker	lookups	jc_btree_lookup reps=2	A	3	jc_btree_lookup/Jump/param: no-producer for journal role
+tape-blocker	lookups	jc_btree_lookup reps=2	A	102	jc_btree_lookup/Slot/Slot: different-producer across branches
+tape-workload	lookups	jc_btree_lookup reps=2	B	1	256	604.1	837	845	292	117	198	322	54	20.0	23.7	41.6	54.2	238	25.8
+tape-time	lookups	jc_btree_lookup reps=2	B	167533	46287	3.619	26	24	144	654.425781
 tape-blocker	lookups	jc_btree_lookup reps=2	B	54	jc_btree_lookup/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	lookups	jc_btree_lookup reps=2	B	54	jc_btree_lookup/Jump/JumpSource: control presence needs replay
-tape-blocker	lookups	jc_btree_lookup reps=2	B	46	jc_btree_lookup/Jump/param: different-producer across branches
-tape-blocker	lookups	jc_btree_lookup reps=2	B	36	jc_btree_lookup/Jump/param: no-producer for journal role
-tape-blocker	lookups	jc_btree_lookup reps=2	B	163	jc_btree_lookup/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_btree_lookup reps=2	B	148	jc_btree_lookup/Slot/Slot: no-producer for journal role
-tape-workload	lookups	jc_btree_lookup reps=4	A	1	256	1148.2	1539	1549	473	209	517	498	82	30.5	33.6	35.4	48.8	350	20.7
-tape-time	lookups	jc_btree_lookup reps=4	A	230405	70882	3.251	23	23	435	900.019531
+tape-blocker	lookups	jc_btree_lookup reps=2	B	42	jc_btree_lookup/Jump/param: different-producer across branches
+tape-blocker	lookups	jc_btree_lookup reps=2	B	3	jc_btree_lookup/Jump/param: no-producer for journal role
+tape-blocker	lookups	jc_btree_lookup reps=2	B	102	jc_btree_lookup/Slot/Slot: different-producer across branches
+tape-workload	lookups	jc_btree_lookup reps=4	A	1	256	1148.2	1539	1549	473	209	392	498	82	22.3	25.5	35.4	48.8	475	28.9
+tape-time	lookups	jc_btree_lookup reps=4	A	406184	98839	4.110	26	24	310	1586.656250
 tape-blocker	lookups	jc_btree_lookup reps=4	A	82	jc_btree_lookup/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	lookups	jc_btree_lookup reps=4	A	82	jc_btree_lookup/Jump/JumpSource: control presence needs replay
-tape-blocker	lookups	jc_btree_lookup reps=4	A	92	jc_btree_lookup/Jump/param: different-producer across branches
-tape-blocker	lookups	jc_btree_lookup reps=4	A	71	jc_btree_lookup/Jump/param: no-producer for journal role
-tape-blocker	lookups	jc_btree_lookup reps=4	A	343	jc_btree_lookup/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_btree_lookup reps=4	A	335	jc_btree_lookup/Slot/Slot: no-producer for journal role
-tape-workload	lookups	jc_btree_lookup reps=4	B	1	256	1148.2	1539	1549	473	209	517	498	82	30.5	33.6	35.4	48.8	350	20.7
-tape-time	lookups	jc_btree_lookup reps=4	B	230405	70882	3.251	23	23	435	900.019531
+tape-blocker	lookups	jc_btree_lookup reps=4	A	81	jc_btree_lookup/Jump/param: different-producer across branches
+tape-blocker	lookups	jc_btree_lookup reps=4	A	3	jc_btree_lookup/Jump/param: no-producer for journal role
+tape-blocker	lookups	jc_btree_lookup reps=4	A	229	jc_btree_lookup/Slot/Slot: different-producer across branches
+tape-workload	lookups	jc_btree_lookup reps=4	B	1	256	1148.2	1539	1549	473	209	392	498	82	22.3	25.5	35.4	48.8	475	28.9
+tape-time	lookups	jc_btree_lookup reps=4	B	406184	98839	4.110	26	24	310	1586.656250
 tape-blocker	lookups	jc_btree_lookup reps=4	B	82	jc_btree_lookup/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	lookups	jc_btree_lookup reps=4	B	82	jc_btree_lookup/Jump/JumpSource: control presence needs replay
-tape-blocker	lookups	jc_btree_lookup reps=4	B	92	jc_btree_lookup/Jump/param: different-producer across branches
-tape-blocker	lookups	jc_btree_lookup reps=4	B	71	jc_btree_lookup/Jump/param: no-producer for journal role
-tape-blocker	lookups	jc_btree_lookup reps=4	B	343	jc_btree_lookup/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_btree_lookup reps=4	B	335	jc_btree_lookup/Slot/Slot: no-producer for journal role
-tape-workload	lookups	jc_btree_lookup reps=8	A	1	256	2251.7	2918	2929	859	420	976	657	103	30.9	33.4	32.7	46.7	674	22.4
-tape-time	lookups	jc_btree_lookup reps=8	A	531648	150496	3.533	23	23	873	2076.750000
+tape-blocker	lookups	jc_btree_lookup reps=4	B	81	jc_btree_lookup/Jump/param: different-producer across branches
+tape-blocker	lookups	jc_btree_lookup reps=4	B	3	jc_btree_lookup/Jump/param: no-producer for journal role
+tape-blocker	lookups	jc_btree_lookup reps=4	B	229	jc_btree_lookup/Slot/Slot: different-producer across branches
+tape-workload	lookups	jc_btree_lookup reps=8	A	1	256	2251.7	2918	2929	859	420	725	657	103	22.3	24.8	32.7	46.7	925	31.0
+tape-time	lookups	jc_btree_lookup reps=8	A	1020248	208374	4.896	41	24	622	3985.343750
 tape-blocker	lookups	jc_btree_lookup reps=8	A	103	jc_btree_lookup/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	lookups	jc_btree_lookup reps=8	A	103	jc_btree_lookup/Jump/JumpSource: control presence needs replay
-tape-blocker	lookups	jc_btree_lookup reps=8	A	186	jc_btree_lookup/Jump/param: different-producer across branches
-tape-blocker	lookups	jc_btree_lookup reps=8	A	147	jc_btree_lookup/Jump/param: no-producer for journal role
-tape-blocker	lookups	jc_btree_lookup reps=8	A	687	jc_btree_lookup/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_btree_lookup reps=8	A	678	jc_btree_lookup/Slot/Slot: no-producer for journal role
-tape-workload	lookups	jc_btree_lookup reps=8	B	1	256	2251.7	2918	2929	859	420	976	657	103	30.9	33.4	32.7	46.7	674	22.4
-tape-time	lookups	jc_btree_lookup reps=8	B	531648	150496	3.533	23	23	873	2076.750000
+tape-blocker	lookups	jc_btree_lookup reps=8	A	161	jc_btree_lookup/Jump/param: different-producer across branches
+tape-blocker	lookups	jc_btree_lookup reps=8	A	3	jc_btree_lookup/Jump/param: no-producer for journal role
+tape-blocker	lookups	jc_btree_lookup reps=8	A	461	jc_btree_lookup/Slot/Slot: different-producer across branches
+tape-workload	lookups	jc_btree_lookup reps=8	B	1	256	2251.7	2918	2929	859	420	725	657	103	22.3	24.8	32.7	46.7	925	31.0
+tape-time	lookups	jc_btree_lookup reps=8	B	1020248	208374	4.896	41	24	622	3985.343750
 tape-blocker	lookups	jc_btree_lookup reps=8	B	103	jc_btree_lookup/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	lookups	jc_btree_lookup reps=8	B	103	jc_btree_lookup/Jump/JumpSource: control presence needs replay
-tape-blocker	lookups	jc_btree_lookup reps=8	B	186	jc_btree_lookup/Jump/param: different-producer across branches
-tape-blocker	lookups	jc_btree_lookup reps=8	B	147	jc_btree_lookup/Jump/param: no-producer for journal role
-tape-blocker	lookups	jc_btree_lookup reps=8	B	687	jc_btree_lookup/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_btree_lookup reps=8	B	678	jc_btree_lookup/Slot/Slot: no-producer for journal role
-tape-time-slope	jc_btree_lookup	A	1.006925
-tape-time-slope	jc_btree_lookup	B	1.006925
+tape-blocker	lookups	jc_btree_lookup reps=8	B	161	jc_btree_lookup/Jump/param: different-producer across branches
+tape-blocker	lookups	jc_btree_lookup reps=8	B	3	jc_btree_lookup/Jump/param: no-producer for journal role
+tape-blocker	lookups	jc_btree_lookup reps=8	B	461	jc_btree_lookup/Slot/Slot: different-producer across branches
+tape-time-slope	jc_btree_lookup	A	1.973392
+tape-time-slope	jc_btree_lookup	B	1.973392
 tape-workload	lookups	jc_write_lookup reps=1	A	1	256	494.0	576	576	576	0	0	0	0	0.0	0.0	100.0	100.0	0	0.0
 tape-time	lookups	jc_write_lookup reps=1	A	0	0	0.000	0	0	0	0.000000
 tape-workload	lookups	jc_write_lookup reps=1	B	1	256	494.0	576	576	576	0	0	0	0	0.0	0.0	100.0	100.0	0	0.0
 tape-time	lookups	jc_write_lookup reps=1	B	0	0	0.000	0	0	0	0.000000
-tape-workload	lookups	jc_write_lookup reps=2	A	1	256	564.0	660	661	617	28	7	8	1	1.0	1.1	93.9	97.6	9	1.4
-tape-time	lookups	jc_write_lookup reps=2	A	3584	2304	1.556	4	4	5	14.000000
+tape-workload	lookups	jc_write_lookup reps=2	A	1	256	564.0	660	661	617	28	3	8	1	0.4	0.5	93.9	97.6	13	2.0
+tape-time	lookups	jc_write_lookup reps=2	A	6144	3328	1.846	5	5	1	24.000000
 tape-blocker	lookups	jc_write_lookup reps=2	A	1	jc_write_lookup/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	lookups	jc_write_lookup reps=2	A	1	jc_write_lookup/Jump/JumpSource: control presence needs replay
 tape-blocker	lookups	jc_write_lookup reps=2	A	1	jc_write_lookup/Slot/Slot: branch: missing-origin @jc_write_lookup/%call
-tape-blocker	lookups	jc_write_lookup reps=2	A	4	jc_write_lookup/Slot/Slot: different-producer across branches
 tape-blocker	lookups	jc_write_lookup reps=2	A	1	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
-tape-blocker	lookups	jc_write_lookup reps=2	A	4	jc_write_lookup/Slot/Slot: no-producer for journal role
 tape-blocker	lookups	jc_write_lookup reps=2	A	1	jc_write_lookup/Store/Store: different-producer across branches
 tape-blocker	lookups	jc_write_lookup reps=2	A	1	jc_write_lookup/Store/Store: no-producer for journal role
-tape-workload	lookups	jc_write_lookup reps=2	B	1	256	564.0	660	661	617	28	7	8	1	1.0	1.1	93.9	97.6	9	1.4
-tape-time	lookups	jc_write_lookup reps=2	B	3584	2304	1.556	4	4	5	14.000000
+tape-workload	lookups	jc_write_lookup reps=2	B	1	256	564.0	660	661	617	28	3	8	1	0.4	0.5	93.9	97.6	13	2.0
+tape-time	lookups	jc_write_lookup reps=2	B	6144	3328	1.846	5	5	1	24.000000
 tape-blocker	lookups	jc_write_lookup reps=2	B	1	jc_write_lookup/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	lookups	jc_write_lookup reps=2	B	1	jc_write_lookup/Jump/JumpSource: control presence needs replay
 tape-blocker	lookups	jc_write_lookup reps=2	B	1	jc_write_lookup/Slot/Slot: branch: missing-origin @jc_write_lookup/%call
-tape-blocker	lookups	jc_write_lookup reps=2	B	4	jc_write_lookup/Slot/Slot: different-producer across branches
 tape-blocker	lookups	jc_write_lookup reps=2	B	1	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
-tape-blocker	lookups	jc_write_lookup reps=2	B	4	jc_write_lookup/Slot/Slot: no-producer for journal role
 tape-blocker	lookups	jc_write_lookup reps=2	B	1	jc_write_lookup/Store/Store: different-producer across branches
 tape-blocker	lookups	jc_write_lookup reps=2	B	1	jc_write_lookup/Store/Store: no-producer for journal role
-tape-workload	lookups	jc_write_lookup reps=4	A	1	256	726.0	870	876	676	80	61	69	9	5.7	7.0	80.2	88.2	59	6.0
-tape-time	lookups	jc_write_lookup reps=4	A	68836	13007	5.292	22	15	48	268.890625
+tape-workload	lookups	jc_write_lookup reps=4	A	1	256	726.0	870	876	676	80	40	69	9	3.5	4.6	80.2	88.2	80	8.2
+tape-time	lookups	jc_write_lookup reps=4	A	83077	17725	4.687	23	15	27	324.519531
 tape-blocker	lookups	jc_write_lookup reps=4	A	9	jc_write_lookup/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	lookups	jc_write_lookup reps=4	A	9	jc_write_lookup/Jump/JumpSource: control presence needs replay
-tape-blocker	lookups	jc_write_lookup reps=4	A	9	jc_write_lookup/Jump/param: different-producer across branches
-tape-blocker	lookups	jc_write_lookup reps=4	A	6	jc_write_lookup/Jump/param: no-producer for journal role
+tape-blocker	lookups	jc_write_lookup reps=4	A	6	jc_write_lookup/Jump/param: different-producer across branches
 tape-blocker	lookups	jc_write_lookup reps=4	A	1	jc_write_lookup/Slot/Slot: branch: current-memory-or-stack differs
 tape-blocker	lookups	jc_write_lookup reps=4	A	3	jc_write_lookup/Slot/Slot: branch: missing-origin @jc_write_lookup/%call
-tape-blocker	lookups	jc_write_lookup reps=4	A	33	jc_write_lookup/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_write_lookup reps=4	A	3	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
-tape-blocker	lookups	jc_write_lookup reps=4	A	30	jc_write_lookup/Slot/Slot: no-producer for journal role
+tape-blocker	lookups	jc_write_lookup reps=4	A	6	jc_write_lookup/Slot/Slot: current-memory-or-stack differs
+tape-blocker	lookups	jc_write_lookup reps=4	A	7	jc_write_lookup/Slot/Slot: different-producer across branches
+tape-blocker	lookups	jc_write_lookup reps=4	A	5	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
 tape-blocker	lookups	jc_write_lookup reps=4	A	7	jc_write_lookup/Store/Store: different-producer across branches
 tape-blocker	lookups	jc_write_lookup reps=4	A	6	jc_write_lookup/Store/Store: no-producer for journal role
-tape-workload	lookups	jc_write_lookup reps=4	B	1	256	726.0	870	876	676	80	61	69	9	5.7	7.0	80.2	88.2	59	6.0
-tape-time	lookups	jc_write_lookup reps=4	B	68836	13007	5.292	22	15	48	268.890625
+tape-workload	lookups	jc_write_lookup reps=4	B	1	256	726.0	870	876	676	80	40	69	9	3.5	4.6	80.2	88.2	80	8.2
+tape-time	lookups	jc_write_lookup reps=4	B	83077	17725	4.687	23	15	27	324.519531
 tape-blocker	lookups	jc_write_lookup reps=4	B	9	jc_write_lookup/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	lookups	jc_write_lookup reps=4	B	9	jc_write_lookup/Jump/JumpSource: control presence needs replay
-tape-blocker	lookups	jc_write_lookup reps=4	B	9	jc_write_lookup/Jump/param: different-producer across branches
-tape-blocker	lookups	jc_write_lookup reps=4	B	6	jc_write_lookup/Jump/param: no-producer for journal role
+tape-blocker	lookups	jc_write_lookup reps=4	B	6	jc_write_lookup/Jump/param: different-producer across branches
 tape-blocker	lookups	jc_write_lookup reps=4	B	1	jc_write_lookup/Slot/Slot: branch: current-memory-or-stack differs
 tape-blocker	lookups	jc_write_lookup reps=4	B	3	jc_write_lookup/Slot/Slot: branch: missing-origin @jc_write_lookup/%call
-tape-blocker	lookups	jc_write_lookup reps=4	B	33	jc_write_lookup/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_write_lookup reps=4	B	3	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
-tape-blocker	lookups	jc_write_lookup reps=4	B	30	jc_write_lookup/Slot/Slot: no-producer for journal role
+tape-blocker	lookups	jc_write_lookup reps=4	B	6	jc_write_lookup/Slot/Slot: current-memory-or-stack differs
+tape-blocker	lookups	jc_write_lookup reps=4	B	7	jc_write_lookup/Slot/Slot: different-producer across branches
+tape-blocker	lookups	jc_write_lookup reps=4	B	5	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
 tape-blocker	lookups	jc_write_lookup reps=4	B	7	jc_write_lookup/Store/Store: different-producer across branches
 tape-blocker	lookups	jc_write_lookup reps=4	B	6	jc_write_lookup/Store/Store: no-producer for journal role
-tape-workload	lookups	jc_write_lookup reps=8	A	1	256	1131.2	1440	1463	786	178	307	313	41	17.7	21.3	60.4	71.0	192	11.2
-tape-time	lookups	jc_write_lookup reps=8	A	214986	37467	5.738	39	31	252	839.789062
-tape-blocker	lookups	jc_write_lookup reps=8	A	4	jc_hash_slot/Return/ReturnResult: no-producer for journal role
+tape-workload	lookups	jc_write_lookup reps=8	A	1	256	1131.2	1440	1463	786	178	212	313	41	12.0	14.7	60.4	71.0	287	17.0
+tape-time	lookups	jc_write_lookup reps=8	A	572976	56558	10.131	75	35	150	2238.187500
 tape-blocker	lookups	jc_write_lookup reps=8	A	41	jc_write_lookup/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	lookups	jc_write_lookup reps=8	A	41	jc_write_lookup/Jump/JumpSource: control presence needs replay
-tape-blocker	lookups	jc_write_lookup reps=8	A	52	jc_write_lookup/Jump/param: different-producer across branches
-tape-blocker	lookups	jc_write_lookup reps=8	A	43	jc_write_lookup/Jump/param: no-producer for journal role
-tape-blocker	lookups	jc_write_lookup reps=8	A	2	jc_write_lookup/Slot/Slot: branch: current-memory-or-stack differs
-tape-blocker	lookups	jc_write_lookup reps=8	A	3	jc_write_lookup/Slot/Slot: branch: missing-origin @jc_write_lookup/%call
-tape-blocker	lookups	jc_write_lookup reps=8	A	3	jc_write_lookup/Slot/Slot: current-memory-or-stack differs
-tape-blocker	lookups	jc_write_lookup reps=8	A	176	jc_write_lookup/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_write_lookup reps=8	A	3	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
-tape-blocker	lookups	jc_write_lookup reps=8	A	141	jc_write_lookup/Slot/Slot: no-producer for journal role
-tape-blocker	lookups	jc_write_lookup reps=8	A	9	jc_write_lookup/Store/Store: branch: missing-origin @jc_write_lookup/%call
+tape-blocker	lookups	jc_write_lookup reps=8	A	28	jc_write_lookup/Jump/param: different-producer across branches
+tape-blocker	lookups	jc_write_lookup reps=8	A	4	jc_write_lookup/Slot/Slot: branch: current-memory-or-stack differs
+tape-blocker	lookups	jc_write_lookup reps=8	A	7	jc_write_lookup/Slot/Slot: branch: missing-origin @jc_write_lookup/%call
+tape-blocker	lookups	jc_write_lookup reps=8	A	31	jc_write_lookup/Slot/Slot: current-memory-or-stack differs
+tape-blocker	lookups	jc_write_lookup reps=8	A	57	jc_write_lookup/Slot/Slot: different-producer across branches
+tape-blocker	lookups	jc_write_lookup reps=8	A	27	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
+tape-blocker	lookups	jc_write_lookup reps=8	A	10	jc_write_lookup/Store/Store: branch: missing-origin @jc_write_lookup/%call
 tape-blocker	lookups	jc_write_lookup reps=8	A	28	jc_write_lookup/Store/Store: different-producer across branches
 tape-blocker	lookups	jc_write_lookup reps=8	A	25	jc_write_lookup/Store/Store: no-producer for journal role
-tape-workload	lookups	jc_write_lookup reps=8	B	1	256	1131.2	1440	1463	786	178	307	313	41	17.7	21.3	60.4	71.0	192	11.2
-tape-time	lookups	jc_write_lookup reps=8	B	214986	37467	5.738	39	31	252	839.789062
-tape-blocker	lookups	jc_write_lookup reps=8	B	4	jc_hash_slot/Return/ReturnResult: no-producer for journal role
+tape-workload	lookups	jc_write_lookup reps=8	B	1	256	1131.2	1440	1463	786	178	212	313	41	12.0	14.7	60.4	71.0	287	17.0
+tape-time	lookups	jc_write_lookup reps=8	B	572976	56558	10.131	75	35	150	2238.187500
 tape-blocker	lookups	jc_write_lookup reps=8	B	41	jc_write_lookup/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	lookups	jc_write_lookup reps=8	B	41	jc_write_lookup/Jump/JumpSource: control presence needs replay
-tape-blocker	lookups	jc_write_lookup reps=8	B	52	jc_write_lookup/Jump/param: different-producer across branches
-tape-blocker	lookups	jc_write_lookup reps=8	B	43	jc_write_lookup/Jump/param: no-producer for journal role
-tape-blocker	lookups	jc_write_lookup reps=8	B	2	jc_write_lookup/Slot/Slot: branch: current-memory-or-stack differs
-tape-blocker	lookups	jc_write_lookup reps=8	B	3	jc_write_lookup/Slot/Slot: branch: missing-origin @jc_write_lookup/%call
-tape-blocker	lookups	jc_write_lookup reps=8	B	3	jc_write_lookup/Slot/Slot: current-memory-or-stack differs
-tape-blocker	lookups	jc_write_lookup reps=8	B	176	jc_write_lookup/Slot/Slot: different-producer across branches
-tape-blocker	lookups	jc_write_lookup reps=8	B	3	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
-tape-blocker	lookups	jc_write_lookup reps=8	B	141	jc_write_lookup/Slot/Slot: no-producer for journal role
-tape-blocker	lookups	jc_write_lookup reps=8	B	9	jc_write_lookup/Store/Store: branch: missing-origin @jc_write_lookup/%call
+tape-blocker	lookups	jc_write_lookup reps=8	B	28	jc_write_lookup/Jump/param: different-producer across branches
+tape-blocker	lookups	jc_write_lookup reps=8	B	4	jc_write_lookup/Slot/Slot: branch: current-memory-or-stack differs
+tape-blocker	lookups	jc_write_lookup reps=8	B	7	jc_write_lookup/Slot/Slot: branch: missing-origin @jc_write_lookup/%call
+tape-blocker	lookups	jc_write_lookup reps=8	B	31	jc_write_lookup/Slot/Slot: current-memory-or-stack differs
+tape-blocker	lookups	jc_write_lookup reps=8	B	57	jc_write_lookup/Slot/Slot: different-producer across branches
+tape-blocker	lookups	jc_write_lookup reps=8	B	27	jc_write_lookup/Slot/Slot: missing-origin @jc_write_lookup/%call
+tape-blocker	lookups	jc_write_lookup reps=8	B	10	jc_write_lookup/Store/Store: branch: missing-origin @jc_write_lookup/%call
 tape-blocker	lookups	jc_write_lookup reps=8	B	28	jc_write_lookup/Store/Store: different-producer across branches
 tape-blocker	lookups	jc_write_lookup reps=8	B	25	jc_write_lookup/Store/Store: no-producer for journal role
-tape-time-slope	jc_write_lookup	A	1.371280
-tape-time-slope	jc_write_lookup	B	1.371280
+tape-time-slope	jc_write_lookup	A	3.668150
+tape-time-slope	jc_write_lookup	B	3.668150
 tape-role	lookups	A	Alloca/AllocaSlot	2048	100.0	0.0	0.0	8	0	0	0	0.0
 tape-role	lookups	A	Alloca/AllocaStack	2048	100.0	0.0	0.0	8	0	0	0	0.0
 tape-role	lookups	A	Call/param	35840	68.6	31.4	0.0	140	0	0	0	0.0
 tape-role	lookups	A	Jump/JumpSource	365420	83.4	0.0	16.6	1597	406	406	0	0.0
-tape-role	lookups	A	Jump/param	376525	41.7	13.6	31.7	1709	550	0	218	13.0
+tape-role	lookups	A	Jump/param	376525	41.7	13.6	29.1	1709	486	0	282	15.6
 tape-role	lookups	A	Return/ReturnPacked	19456	100.0	0.0	0.0	76	0	0	0	0.0
-tape-role	lookups	A	Return/ReturnResult	19456	42.1	48.7	9.2	76	7	0	0	0.0
+tape-role	lookups	A	Return/ReturnResult	19456	42.1	48.7	0.0	76	0	0	7	9.2
 tape-role	lookups	A	Return/ReturnStack	19456	100.0	0.0	0.0	76	0	0	0	0.0
-tape-role	lookups	A	Slot/Slot	2180809	39.8	14.1	21.0	9318	2048	0	2483	25.0
+tape-role	lookups	A	Slot/Slot	2180809	39.8	14.1	12.0	9318	1196	0	3335	34.0
 tape-role	lookups	A	Store/Store	77648	87.4	4.1	8.5	318	36	0	3	0.0
 tape-role	lookups	B	Alloca/AllocaSlot	2048	100.0	0.0	0.0	8	0	0	0	0.0
 tape-role	lookups	B	Alloca/AllocaStack	2048	100.0	0.0	0.0	8	0	0	0	0.0
 tape-role	lookups	B	Call/param	35840	68.6	31.4	0.0	140	0	0	0	0.0
 tape-role	lookups	B	Jump/JumpSource	365420	83.4	0.0	16.6	1597	406	406	0	0.0
-tape-role	lookups	B	Jump/param	376525	41.7	13.6	31.7	1709	550	0	218	13.0
+tape-role	lookups	B	Jump/param	376525	41.7	13.6	29.1	1709	486	0	282	15.6
 tape-role	lookups	B	Return/ReturnPacked	19456	100.0	0.0	0.0	76	0	0	0	0.0
-tape-role	lookups	B	Return/ReturnResult	19456	42.1	48.7	9.2	76	7	0	0	0.0
+tape-role	lookups	B	Return/ReturnResult	19456	42.1	48.7	0.0	76	0	0	7	9.2
 tape-role	lookups	B	Return/ReturnStack	19456	100.0	0.0	0.0	76	0	0	0	0.0
-tape-role	lookups	B	Slot/Slot	2180809	39.8	14.1	21.0	9318	2048	0	2483	25.0
+tape-role	lookups	B	Slot/Slot	2180809	39.8	14.1	12.0	9318	1196	0	3335	34.0
 tape-role	lookups	B	Store/Store	77648	87.4	4.1	8.5	318	36	0	3	0.0
-tape-slope	jc_binary_search	A	1.228	0.434	Call/param=0.000 Jump/JumpSource=0.033 Jump/param=0.104 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.298
-tape-slope	jc_binary_search	B	1.228	0.434	Call/param=0.000 Jump/JumpSource=0.033 Jump/param=0.104 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.298
-tape-slope	jc_hash_lookup	A	1.267	0.109	Call/param=0.000 Jump/JumpSource=0.000 Jump/param=0.000 Return/ReturnPacked=0.000 Return/ReturnResult=0.010 Return/ReturnStack=0.000 Slot/Slot=0.099
-tape-slope	jc_hash_lookup	B	1.267	0.109	Call/param=0.000 Jump/JumpSource=0.000 Jump/param=0.000 Return/ReturnPacked=0.000 Return/ReturnResult=0.010 Return/ReturnStack=0.000 Slot/Slot=0.099
-tape-slope	jc_btree_lookup	A	1.275	0.444	Call/param=0.000 Jump/JumpSource=0.036 Jump/param=0.085 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.324
-tape-slope	jc_btree_lookup	B	1.275	0.444	Call/param=0.000 Jump/JumpSource=0.036 Jump/param=0.085 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.324
-tape-slope	jc_write_lookup	A	1.364	0.500	Alloca/AllocaSlot=0.000 Alloca/AllocaStack=0.000 Call/param=0.000 Jump/JumpSource=0.067 Jump/param=0.086 Return/ReturnPacked=0.000 Return/ReturnResult=0.007 Return/ReturnStack=0.000 Slot/Slot=0.296 Store/Store=0.045
-tape-slope	jc_write_lookup	B	1.364	0.500	Alloca/AllocaSlot=0.000 Alloca/AllocaStack=0.000 Call/param=0.000 Jump/JumpSource=0.067 Jump/param=0.086 Return/ReturnPacked=0.000 Return/ReturnResult=0.007 Return/ReturnStack=0.000 Slot/Slot=0.296 Store/Store=0.045
+tape-slope	jc_binary_search	A	1.228	0.308	Call/param=0.000 Jump/JumpSource=0.033 Jump/param=0.106 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.170
+tape-slope	jc_binary_search	B	1.228	0.308	Call/param=0.000 Jump/JumpSource=0.033 Jump/param=0.106 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.170
+tape-slope	jc_hash_lookup	A	1.267	0.033	Call/param=0.000 Jump/JumpSource=0.000 Jump/param=0.000 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.033
+tape-slope	jc_hash_lookup	B	1.267	0.033	Call/param=0.000 Jump/JumpSource=0.000 Jump/param=0.000 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.033
+tape-slope	jc_btree_lookup	A	1.275	0.331	Call/param=0.000 Jump/JumpSource=0.036 Jump/param=0.072 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.223
+tape-slope	jc_btree_lookup	B	1.275	0.331	Call/param=0.000 Jump/JumpSource=0.036 Jump/param=0.072 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.223
+tape-slope	jc_write_lookup	A	1.364	0.347	Alloca/AllocaSlot=0.000 Alloca/AllocaStack=0.000 Call/param=0.000 Jump/JumpSource=0.067 Jump/param=0.046 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.189 Store/Store=0.045
+tape-slope	jc_write_lookup	B	1.364	0.347	Alloca/AllocaSlot=0.000 Alloca/AllocaStack=0.000 Call/param=0.000 Jump/JumpSource=0.067 Jump/param=0.046 Return/ReturnPacked=0.000 Return/ReturnResult=0.000 Return/ReturnStack=0.000 Slot/Slot=0.189 Store/Store=0.045
 chain-workload	thesis	main	A	1	1	1.0	1	1	1	0	0	0	0	0.0	0.0	100.0	100.0	0	0.0
 chain-time	thesis	main	A	0	0	0.000	0	0	0	0.000000
 chain-workload	thesis	main	B	1	1	1.0	1	1	1	0	0	0	0	0.0	0.0	100.0	100.0	0	0.0
@@ -718,34 +612,22 @@ tape-workload	grover	search_one_solution	A	5	1025	9.0	49	49	45	4	0	0	0	0.0	0.0	9
 tape-time	grover	search_one_solution	A	0	0	0.000	0	0	0	0.000000
 tape-workload	grover	search_one_solution	B	5	1025	9.0	49	49	45	4	0	0	0	0.0	0.0	91.7	100.0	0	0.0
 tape-time	grover	search_one_solution	B	0	0	0.000	0	0	0	0.000000
-chain-workload	grover	search_digit_sum_12	A	5	907	18.8	101	103	37	38	16	62	10	15.0	15.8	36.5	73.7	12	11.3
-chain-time	grover	search_digit_sum_12	A	2904	2592	1.120	2	2	6	3.201764
+chain-workload	grover	search_digit_sum_12	A	5	907	18.8	101	103	37	38	10	62	10	10.2	9.9	36.5	73.7	18	16.1
+chain-time	grover	search_digit_sum_12	A	4236	3708	1.142	5	5	0	4.670342
 chain-blocker	grover	search_digit_sum_12	A	10	digit_sum_12/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	grover	search_digit_sum_12	A	10	digit_sum_12/Jump/JumpSource: control presence needs replay
-chain-blocker	grover	search_digit_sum_12	A	2	digit_sum_12/Jump/param: different-producer across branches
-chain-blocker	grover	search_digit_sum_12	A	2	digit_sum_12/Jump/param: no-producer for journal role
-chain-blocker	grover	search_digit_sum_12	A	4	digit_sum_12/Slot/Slot: different-producer across branches
-chain-blocker	grover	search_digit_sum_12	A	4	digit_sum_12/Slot/Slot: no-producer for journal role
-chain-workload	grover	search_digit_sum_12	B	5	907	18.8	101	103	37	38	16	62	10	15.0	15.8	36.5	73.7	12	11.3
-chain-time	grover	search_digit_sum_12	B	2904	2592	1.120	2	2	6	3.201764
+chain-workload	grover	search_digit_sum_12	B	5	907	18.8	101	103	37	38	10	62	10	10.2	9.9	36.5	73.7	18	16.1
+chain-time	grover	search_digit_sum_12	B	4236	3708	1.142	5	5	0	4.670342
 chain-blocker	grover	search_digit_sum_12	B	10	digit_sum_12/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	grover	search_digit_sum_12	B	10	digit_sum_12/Jump/JumpSource: control presence needs replay
-chain-blocker	grover	search_digit_sum_12	B	2	digit_sum_12/Jump/param: different-producer across branches
-chain-blocker	grover	search_digit_sum_12	B	2	digit_sum_12/Jump/param: no-producer for journal role
-chain-blocker	grover	search_digit_sum_12	B	4	digit_sum_12/Slot/Slot: different-producer across branches
-chain-blocker	grover	search_digit_sum_12	B	4	digit_sum_12/Slot/Slot: no-producer for journal role
-tape-workload	grover	search_digit_sum_12	A	5	907	18.8	101	103	37	38	14	62	10	13.7	13.9	36.5	73.7	14	12.6
-tape-time	grover	search_digit_sum_12	A	1428	2904	0.492	2	2	4	1.574421
+tape-workload	grover	search_digit_sum_12	A	5	907	18.8	101	103	37	38	10	62	10	10.2	9.9	36.5	73.7	18	16.1
+tape-time	grover	search_digit_sum_12	A	4236	3708	1.142	5	5	0	4.670342
 tape-blocker	grover	search_digit_sum_12	A	10	digit_sum_12/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	grover	search_digit_sum_12	A	10	digit_sum_12/Jump/JumpSource: control presence needs replay
-tape-blocker	grover	search_digit_sum_12	A	4	digit_sum_12/Slot/Slot: different-producer across branches
-tape-blocker	grover	search_digit_sum_12	A	4	digit_sum_12/Slot/Slot: no-producer for journal role
-tape-workload	grover	search_digit_sum_12	B	5	907	18.8	101	103	37	38	14	62	10	13.7	13.9	36.5	73.7	14	12.6
-tape-time	grover	search_digit_sum_12	B	1428	2904	0.492	2	2	4	1.574421
+tape-workload	grover	search_digit_sum_12	B	5	907	18.8	101	103	37	38	10	62	10	10.2	9.9	36.5	73.7	18	16.1
+tape-time	grover	search_digit_sum_12	B	4236	3708	1.142	5	5	0	4.670342
 tape-blocker	grover	search_digit_sum_12	B	10	digit_sum_12/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	grover	search_digit_sum_12	B	10	digit_sum_12/Jump/JumpSource: control presence needs replay
-tape-blocker	grover	search_digit_sum_12	B	4	digit_sum_12/Slot/Slot: different-producer across branches
-tape-blocker	grover	search_digit_sum_12	B	4	digit_sum_12/Slot/Slot: no-producer for journal role
 chain-workload	inplace	add	A	8	262148	2.0	14	14	14	0	0	0	0	0.0	0.0	100.0	100.0	0	0.0
 chain-time	inplace	add	A	0	0	0.000	0	0	0	0.000000
 chain-workload	inplace	add	B	8	262148	2.0	14	14	14	0	0	0	0	0.0	0.0	100.0	100.0	0	0.0
@@ -1186,76 +1068,60 @@ tape-workload	coherent	coherent_square_plus_one	A	3	258	42.7	48	48	48	0	0	0	0	0.
 tape-time	coherent	coherent_square_plus_one	A	0	0	0.000	0	0	0	0.000000
 tape-workload	coherent	coherent_square_plus_one	B	3	258	42.7	48	48	48	0	0	0	0	0.0	0.0	100.0	100.0	0	0.0
 tape-time	coherent	coherent_square_plus_one	B	0	0	0.000	0	0	0	0.000000
-chain-workload	coherent	coherent_collatz_steps	A	3	258	445.1	1447	1448	47	333	445	1401	132	30.6	30.8	8.3	28.7	623	40.7
-chain-time	coherent	coherent_collatz_steps	A	12096918	56495	214.124	779	490	317	46887.279070
+chain-workload	coherent	coherent_collatz_steps	A	3	258	445.1	1447	1448	47	333	207	1401	128	14.4	14.3	8.3	28.7	861	56.9
+chain-time	coherent	coherent_collatz_steps	A	18041919	78949	228.526	779	490	79	69929.918605
 chain-blocker	coherent	coherent_collatz_steps	A	128	collatz_steps/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	coherent	coherent_collatz_steps	A	128	collatz_steps/Jump/JumpSource: control presence needs replay
-chain-blocker	coherent	coherent_collatz_steps	A	81	collatz_steps/Jump/param: different-producer across branches
-chain-blocker	coherent	coherent_collatz_steps	A	81	collatz_steps/Jump/param: no-producer for journal role
-chain-blocker	coherent	coherent_collatz_steps	A	236	collatz_steps/Slot/Slot: different-producer across branches
-chain-blocker	coherent	coherent_collatz_steps	A	236	collatz_steps/Slot/Slot: no-producer for journal role
-chain-workload	coherent	coherent_collatz_steps	B	3	258	445.1	1447	1448	47	333	445	1401	132	30.6	30.8	8.3	28.7	623	40.7
-chain-time	coherent	coherent_collatz_steps	B	12096918	56495	214.124	779	490	317	46887.279070
+chain-blocker	coherent	coherent_collatz_steps	A	79	collatz_steps/Jump/param: different-producer across branches
+chain-blocker	coherent	coherent_collatz_steps	A	79	collatz_steps/Jump/param: no-producer for journal role
+chain-workload	coherent	coherent_collatz_steps	B	3	258	445.1	1447	1448	47	333	207	1401	128	14.4	14.3	8.3	28.7	861	56.9
+chain-time	coherent	coherent_collatz_steps	B	18041919	78949	228.526	779	490	79	69929.918605
 chain-blocker	coherent	coherent_collatz_steps	B	128	collatz_steps/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	coherent	coherent_collatz_steps	B	128	collatz_steps/Jump/JumpSource: control presence needs replay
-chain-blocker	coherent	coherent_collatz_steps	B	81	collatz_steps/Jump/param: different-producer across branches
-chain-blocker	coherent	coherent_collatz_steps	B	81	collatz_steps/Jump/param: no-producer for journal role
-chain-blocker	coherent	coherent_collatz_steps	B	236	collatz_steps/Slot/Slot: different-producer across branches
-chain-blocker	coherent	coherent_collatz_steps	B	236	collatz_steps/Slot/Slot: no-producer for journal role
-tape-workload	coherent	coherent_collatz_steps	A	3	258	445.1	1447	1448	47	333	432	1401	128	30.4	29.9	8.3	28.7	636	40.9
-tape-time	coherent	coherent_collatz_steps	A	8654162	56844	152.244	612	490	304	33543.263566
+chain-blocker	coherent	coherent_collatz_steps	B	79	collatz_steps/Jump/param: different-producer across branches
+chain-blocker	coherent	coherent_collatz_steps	B	79	collatz_steps/Jump/param: no-producer for journal role
+tape-workload	coherent	coherent_collatz_steps	A	3	258	445.1	1447	1448	47	333	207	1401	128	14.4	14.3	8.3	28.7	861	56.9
+tape-time	coherent	coherent_collatz_steps	A	17921715	78949	227.004	779	490	79	69464.011628
 tape-blocker	coherent	coherent_collatz_steps	A	128	collatz_steps/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	coherent	coherent_collatz_steps	A	128	collatz_steps/Jump/JumpSource: control presence needs replay
-tape-blocker	coherent	coherent_collatz_steps	A	80	collatz_steps/Jump/param: different-producer across branches
-tape-blocker	coherent	coherent_collatz_steps	A	80	collatz_steps/Jump/param: no-producer for journal role
-tape-blocker	coherent	coherent_collatz_steps	A	224	collatz_steps/Slot/Slot: different-producer across branches
-tape-blocker	coherent	coherent_collatz_steps	A	224	collatz_steps/Slot/Slot: no-producer for journal role
-tape-workload	coherent	coherent_collatz_steps	B	3	258	445.1	1447	1448	47	333	432	1401	128	30.4	29.9	8.3	28.7	636	40.9
-tape-time	coherent	coherent_collatz_steps	B	8654162	56844	152.244	612	490	304	33543.263566
+tape-blocker	coherent	coherent_collatz_steps	A	79	collatz_steps/Jump/param: different-producer across branches
+tape-blocker	coherent	coherent_collatz_steps	A	79	collatz_steps/Jump/param: no-producer for journal role
+tape-workload	coherent	coherent_collatz_steps	B	3	258	445.1	1447	1448	47	333	207	1401	128	14.4	14.3	8.3	28.7	861	56.9
+tape-time	coherent	coherent_collatz_steps	B	17921715	78949	227.004	779	490	79	69464.011628
 tape-blocker	coherent	coherent_collatz_steps	B	128	collatz_steps/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	coherent	coherent_collatz_steps	B	128	collatz_steps/Jump/JumpSource: control presence needs replay
-tape-blocker	coherent	coherent_collatz_steps	B	80	collatz_steps/Jump/param: different-producer across branches
-tape-blocker	coherent	coherent_collatz_steps	B	80	collatz_steps/Jump/param: no-producer for journal role
-tape-blocker	coherent	coherent_collatz_steps	B	224	collatz_steps/Slot/Slot: different-producer across branches
-tape-blocker	coherent	coherent_collatz_steps	B	224	collatz_steps/Slot/Slot: no-producer for journal role
-chain-workload	coherent	coherent_bit_count	A	3	258	78.4	106	107	47	18	36	60	14	32.6	34.0	46.4	61.3	6	6.1
-chain-time	coherent	coherent_bit_count	A	1520	1520	1.000	1	1	27	5.891473
+tape-blocker	coherent	coherent_collatz_steps	B	79	collatz_steps/Jump/param: different-producer across branches
+tape-blocker	coherent	coherent_collatz_steps	B	79	collatz_steps/Jump/param: no-producer for journal role
+chain-workload	coherent	coherent_bit_count	A	3	258	78.4	106	107	47	18	16	60	9	14.9	15.1	46.4	61.3	26	23.7
+chain-time	coherent	coherent_bit_count	A	13008	5896	2.206	22	13	7	50.418605
 chain-blocker	coherent	coherent_bit_count	A	9	bit_count/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	coherent	coherent_bit_count	A	9	bit_count/Jump/JumpSource: control presence needs replay
-chain-blocker	coherent	coherent_bit_count	A	12	bit_count/Jump/param: different-producer across branches
-chain-blocker	coherent	coherent_bit_count	A	12	bit_count/Jump/param: no-producer for journal role
-chain-blocker	coherent	coherent_bit_count	A	15	bit_count/Slot/Slot: different-producer across branches
-chain-blocker	coherent	coherent_bit_count	A	15	bit_count/Slot/Slot: no-producer for journal role
-chain-workload	coherent	coherent_bit_count	B	3	258	78.4	106	107	47	18	36	60	14	32.6	34.0	46.4	61.3	6	6.1
-chain-time	coherent	coherent_bit_count	B	1520	1520	1.000	1	1	27	5.891473
+chain-blocker	coherent	coherent_bit_count	A	7	bit_count/Jump/param: different-producer across branches
+chain-blocker	coherent	coherent_bit_count	A	7	bit_count/Jump/param: no-producer for journal role
+chain-workload	coherent	coherent_bit_count	B	3	258	78.4	106	107	47	18	16	60	9	14.9	15.1	46.4	61.3	26	23.7
+chain-time	coherent	coherent_bit_count	B	13008	5896	2.206	22	13	7	50.418605
 chain-blocker	coherent	coherent_bit_count	B	9	bit_count/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	coherent	coherent_bit_count	B	9	bit_count/Jump/JumpSource: control presence needs replay
-chain-blocker	coherent	coherent_bit_count	B	12	bit_count/Jump/param: different-producer across branches
-chain-blocker	coherent	coherent_bit_count	B	12	bit_count/Jump/param: no-producer for journal role
-chain-blocker	coherent	coherent_bit_count	B	15	bit_count/Slot/Slot: different-producer across branches
-chain-blocker	coherent	coherent_bit_count	B	15	bit_count/Slot/Slot: no-producer for journal role
-tape-workload	coherent	coherent_bit_count	A	3	258	78.4	106	107	47	18	27	60	9	24.8	25.5	46.4	61.3	15	13.9
-tape-time	coherent	coherent_bit_count	A	1012	3460	0.292	1	1	18	3.922481
+chain-blocker	coherent	coherent_bit_count	B	7	bit_count/Jump/param: different-producer across branches
+chain-blocker	coherent	coherent_bit_count	B	7	bit_count/Jump/param: no-producer for journal role
+tape-workload	coherent	coherent_bit_count	A	3	258	78.4	106	107	47	18	16	60	9	14.9	15.1	46.4	61.3	26	23.7
+tape-time	coherent	coherent_bit_count	A	6480	5896	1.099	12	10	7	25.116279
 tape-blocker	coherent	coherent_bit_count	A	9	bit_count/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	coherent	coherent_bit_count	A	9	bit_count/Jump/JumpSource: control presence needs replay
-tape-blocker	coherent	coherent_bit_count	A	8	bit_count/Jump/param: different-producer across branches
-tape-blocker	coherent	coherent_bit_count	A	8	bit_count/Jump/param: no-producer for journal role
-tape-blocker	coherent	coherent_bit_count	A	10	bit_count/Slot/Slot: different-producer across branches
-tape-blocker	coherent	coherent_bit_count	A	10	bit_count/Slot/Slot: no-producer for journal role
-tape-workload	coherent	coherent_bit_count	B	3	258	78.4	106	107	47	18	27	60	9	24.8	25.5	46.4	61.3	15	13.9
-tape-time	coherent	coherent_bit_count	B	1012	3460	0.292	1	1	18	3.922481
+tape-blocker	coherent	coherent_bit_count	A	7	bit_count/Jump/param: different-producer across branches
+tape-blocker	coherent	coherent_bit_count	A	7	bit_count/Jump/param: no-producer for journal role
+tape-workload	coherent	coherent_bit_count	B	3	258	78.4	106	107	47	18	16	60	9	14.9	15.1	46.4	61.3	26	23.7
+tape-time	coherent	coherent_bit_count	B	6480	5896	1.099	12	10	7	25.116279
 tape-blocker	coherent	coherent_bit_count	B	9	bit_count/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	coherent	coherent_bit_count	B	9	bit_count/Jump/JumpSource: control presence needs replay
-tape-blocker	coherent	coherent_bit_count	B	8	bit_count/Jump/param: different-producer across branches
-tape-blocker	coherent	coherent_bit_count	B	8	bit_count/Jump/param: no-producer for journal role
-tape-blocker	coherent	coherent_bit_count	B	10	bit_count/Slot/Slot: different-producer across branches
-tape-blocker	coherent	coherent_bit_count	B	10	bit_count/Slot/Slot: no-producer for journal role
+tape-blocker	coherent	coherent_bit_count	B	7	bit_count/Jump/param: different-producer across branches
+tape-blocker	coherent	coherent_bit_count	B	7	bit_count/Jump/param: no-producer for journal role
 chain-workload	coherent	coherent_gcd_with_60	A	3	258	53.2	87	87	52	16	7	35	7	4.5	8.0	77.7	88.2	12	7.3
-chain-time	coherent	coherent_gcd_with_60	A	2991	1209	2.474	16	12	0	11.593023
+chain-time	coherent	coherent_gcd_with_60	A	2265	1209	1.873	16	12	0	8.779070
 chain-blocker	coherent	coherent_gcd_with_60	A	7	gcd_with_60/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	coherent	coherent_gcd_with_60	A	7	gcd_with_60/Jump/JumpSource: control presence needs replay
 chain-workload	coherent	coherent_gcd_with_60	B	3	258	53.2	87	87	52	16	7	35	7	4.5	8.0	77.7	88.2	12	7.3
-chain-time	coherent	coherent_gcd_with_60	B	2991	1209	2.474	16	12	0	11.593023
+chain-time	coherent	coherent_gcd_with_60	B	2265	1209	1.873	16	12	0	8.779070
 chain-blocker	coherent	coherent_gcd_with_60	B	7	gcd_with_60/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	coherent	coherent_gcd_with_60	B	7	gcd_with_60/Jump/JumpSource: control presence needs replay
 tape-workload	coherent	coherent_gcd_with_60	A	3	258	53.2	87	87	52	16	7	35	7	4.5	8.0	77.7	88.2	12	7.3
@@ -1354,29 +1220,29 @@ tape-workload	coherent	coherent_switch_on_residue	B	3	258	44.2	52	64	48	11	5	16	
 tape-time	coherent	coherent_switch_on_residue	B	0	0	0.000	0	0	0	0.000000
 tape-blocker	coherent	coherent_switch_on_residue	B	5	switch_on_residue/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	coherent	coherent_switch_on_residue	B	5	switch_on_residue/Jump/JumpSource: control presence needs replay
-chain-workload	coherent	coherent_fibonacci_mod	A	3	258	675.2	2089	2089	49	917	509	2040	256	23.9	24.4	4.4	48.0	614	28.1
-chain-time	coherent	coherent_fibonacci_mod	A	6915398	76890	89.939	982	743	254	26803.868217
+chain-workload	coherent	coherent_fibonacci_mod	A	3	258	675.2	2089	2089	49	917	508	2040	255	23.8	24.3	4.4	48.0	615	28.2
+chain-time	coherent	coherent_fibonacci_mod	A	6883014	77145	89.222	982	743	253	26678.348837
 chain-blocker	coherent	coherent_fibonacci_mod	A	255	fibonacci_mod/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	coherent	coherent_fibonacci_mod	A	255	fibonacci_mod/Jump/JumpSource: control presence needs replay
 chain-blocker	coherent	coherent_fibonacci_mod	A	253	fibonacci_mod/Jump/param: different-producer across branches
-chain-blocker	coherent	coherent_fibonacci_mod	A	254	fibonacci_mod/Jump/param: no-producer for journal role
-chain-workload	coherent	coherent_fibonacci_mod	B	3	258	675.2	2089	2089	49	917	509	2040	256	23.9	24.4	4.4	48.0	614	28.1
-chain-time	coherent	coherent_fibonacci_mod	B	6915398	76890	89.939	982	743	254	26803.868217
+chain-blocker	coherent	coherent_fibonacci_mod	A	253	fibonacci_mod/Jump/param: no-producer for journal role
+chain-workload	coherent	coherent_fibonacci_mod	B	3	258	675.2	2089	2089	49	917	508	2040	255	23.8	24.3	4.4	48.0	615	28.2
+chain-time	coherent	coherent_fibonacci_mod	B	6883014	77145	89.222	982	743	253	26678.348837
 chain-blocker	coherent	coherent_fibonacci_mod	B	255	fibonacci_mod/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	coherent	coherent_fibonacci_mod	B	255	fibonacci_mod/Jump/JumpSource: control presence needs replay
 chain-blocker	coherent	coherent_fibonacci_mod	B	253	fibonacci_mod/Jump/param: different-producer across branches
-chain-blocker	coherent	coherent_fibonacci_mod	B	254	fibonacci_mod/Jump/param: no-producer for journal role
+chain-blocker	coherent	coherent_fibonacci_mod	B	253	fibonacci_mod/Jump/param: no-producer for journal role
 tape-workload	coherent	coherent_fibonacci_mod	A	3	258	675.2	2089	2089	49	917	508	2040	255	23.8	24.3	4.4	48.0	615	28.2
 tape-time	coherent	coherent_fibonacci_mod	A	246578	77145	3.196	34	34	253	955.728682
 tape-blocker	coherent	coherent_fibonacci_mod	A	255	fibonacci_mod/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	coherent	coherent_fibonacci_mod	A	255	fibonacci_mod/Jump/JumpSource: control presence needs replay
-tape-blocker	coherent	coherent_fibonacci_mod	A	252	fibonacci_mod/Jump/param: different-producer across branches
+tape-blocker	coherent	coherent_fibonacci_mod	A	253	fibonacci_mod/Jump/param: different-producer across branches
 tape-blocker	coherent	coherent_fibonacci_mod	A	253	fibonacci_mod/Jump/param: no-producer for journal role
 tape-workload	coherent	coherent_fibonacci_mod	B	3	258	675.2	2089	2089	49	917	508	2040	255	23.8	24.3	4.4	48.0	615	28.2
 tape-time	coherent	coherent_fibonacci_mod	B	246578	77145	3.196	34	34	253	955.728682
 tape-blocker	coherent	coherent_fibonacci_mod	B	255	fibonacci_mod/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	coherent	coherent_fibonacci_mod	B	255	fibonacci_mod/Jump/JumpSource: control presence needs replay
-tape-blocker	coherent	coherent_fibonacci_mod	B	252	fibonacci_mod/Jump/param: different-producer across branches
+tape-blocker	coherent	coherent_fibonacci_mod	B	253	fibonacci_mod/Jump/param: different-producer across branches
 tape-blocker	coherent	coherent_fibonacci_mod	B	253	fibonacci_mod/Jump/param: no-producer for journal role
 chain-workload	coherent	coherent_calls_helper	A	3	258	53.6	63	63	59	4	0	0	0	0.0	0.0	93.4	100.0	0	0.0
 chain-time	coherent	coherent_calls_helper	A	0	0	0.000	0	0	0	0.000000
@@ -1386,8 +1252,8 @@ tape-workload	coherent	coherent_calls_helper	A	3	258	53.6	63	63	59	4	0	0	0	0.0	0
 tape-time	coherent	coherent_calls_helper	A	0	0	0.000	0	0	0	0.000000
 tape-workload	coherent	coherent_calls_helper	B	3	258	53.6	63	63	59	4	0	0	0	0.0	0.0	93.4	100.0	0	0.0
 tape-time	coherent	coherent_calls_helper	B	0	0	0.000	0	0	0	0.000000
-chain-workload	coherent	coherent_recursive_split	A	3	258	520.2	1272	1272	55	381	830	1216	351	67.2	65.3	7.1	32.7	6	0.1
-chain-time	coherent	coherent_recursive_split	A	1240	240	5.167	8	8	315	4.806202
+chain-workload	coherent	coherent_recursive_split	A	3	258	520.2	1272	1272	55	381	816	1216	345	66.1	64.2	7.1	32.7	20	1.2
+chain-time	coherent	coherent_recursive_split	A	1240	2338	0.530	8	8	301	4.806202
 chain-blocker	coherent	coherent_recursive_split	A	256	split/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	coherent	coherent_recursive_split	A	256	split/Jump/JumpSource: control presence needs replay
 chain-blocker	coherent	coherent_recursive_split	A	51	split/Jump/param: branch: missing-origin @split/%call
@@ -1400,11 +1266,11 @@ chain-blocker	coherent	coherent_recursive_split	A	51	split/Return/ReturnResult: 
 chain-blocker	coherent	coherent_recursive_split	A	65	split/Return/ReturnStack: branch: no-producer for journal role
 chain-blocker	coherent	coherent_recursive_split	A	65	split/Return/ReturnStack: no-producer for journal role
 chain-blocker	coherent	coherent_recursive_split	A	28	split/Slot/Slot: branch: missing-origin @split/%call
-chain-blocker	coherent	coherent_recursive_split	A	277	split/Slot/Slot: different-producer across branches
+chain-blocker	coherent	coherent_recursive_split	A	271	split/Slot/Slot: different-producer across branches
 chain-blocker	coherent	coherent_recursive_split	A	4	split/Slot/Slot: missing-origin @split/%call
-chain-blocker	coherent	coherent_recursive_split	A	273	split/Slot/Slot: no-producer for journal role
-chain-workload	coherent	coherent_recursive_split	B	3	258	520.2	1272	1272	56	704	456	1216	408	35.2	35.8	7.2	59.3	56	5.5
-chain-time	coherent	coherent_recursive_split	B	21586	10538	2.048	8	8	11	83.666667
+chain-blocker	coherent	coherent_recursive_split	A	259	split/Slot/Slot: no-producer for journal role
+chain-workload	coherent	coherent_recursive_split	B	3	258	520.2	1272	1272	56	704	445	1216	397	34.0	35.0	7.2	59.3	67	6.7
+chain-time	coherent	coherent_recursive_split	B	18072	12904	1.400	8	8	0	70.046512
 chain-blocker	coherent	coherent_recursive_split	B	256	split/Jump/JumpSource: branch: control presence needs replay
 chain-blocker	coherent	coherent_recursive_split	B	256	split/Jump/JumpSource: control presence needs replay
 chain-blocker	coherent	coherent_recursive_split	B	26	split/Jump/param: branch: missing-origin @split/%call
@@ -1416,11 +1282,9 @@ chain-blocker	coherent	coherent_recursive_split	B	25	split/Return/ReturnResult: 
 chain-blocker	coherent	coherent_recursive_split	B	64	split/Return/ReturnStack: branch: no-producer for journal role
 chain-blocker	coherent	coherent_recursive_split	B	64	split/Return/ReturnStack: no-producer for journal role
 chain-blocker	coherent	coherent_recursive_split	B	10	split/Slot/Slot: branch: missing-origin @split/%call
-chain-blocker	coherent	coherent_recursive_split	B	11	split/Slot/Slot: different-producer across branches
 chain-blocker	coherent	coherent_recursive_split	B	10	split/Slot/Slot: missing-origin @split/%call
-chain-blocker	coherent	coherent_recursive_split	B	11	split/Slot/Slot: no-producer for journal role
-tape-workload	coherent	coherent_recursive_split	A	3	258	520.2	1272	1272	55	381	709	1216	325	59.9	55.7	7.1	32.7	127	7.4
-tape-time	coherent	coherent_recursive_split	A	1800	14262	0.126	10	9	344	6.976744
+tape-workload	coherent	coherent_recursive_split	A	3	258	520.2	1272	1272	55	381	708	1216	325	59.8	55.7	7.1	32.7	128	7.5
+tape-time	coherent	coherent_recursive_split	A	1800	14512	0.124	10	9	343	6.976744
 tape-blocker	coherent	coherent_recursive_split	A	256	split/Jump/JumpSource: branch: control presence needs replay
 tape-blocker	coherent	coherent_recursive_split	A	256	split/Jump/JumpSource: control presence needs replay
 tape-blocker	coherent	coherent_recursive_split	A	85	split/Jump/param: different-producer across branches
@@ -1430,8 +1294,8 @@ tape-blocker	coherent	coherent_recursive_split	A	23	split/Return/ReturnResult: b
 tape-blocker	coherent	coherent_recursive_split	A	45	split/Return/ReturnResult: no-producer for journal role
 tape-blocker	coherent	coherent_recursive_split	A	22	split/Return/ReturnStack: branch: no-producer for journal role
 tape-blocker	coherent	coherent_recursive_split	A	47	split/Return/ReturnStack: no-producer for journal role
-tape-blocker	coherent	coherent_recursive_split	A	210	split/Slot/Slot: different-producer across branches
-tape-blocker	coherent	coherent_recursive_split	A	205	split/Slot/Slot: no-producer for journal role
+tape-blocker	coherent	coherent_recursive_split	A	211	split/Slot/Slot: different-producer across branches
+tape-blocker	coherent	coherent_recursive_split	A	204	split/Slot/Slot: no-producer for journal role
 tape-workload	coherent	coherent_recursive_split	B	3	258	520.2	1272	1272	56	704	340	1216	328	26.4	26.7	7.2	59.3	172	14.2
 tape-time	coherent	coherent_recursive_split	B	36918	27346	1.350	12	9	1	143.093023
 tape-blocker	coherent	coherent_recursive_split	B	256	split/Jump/JumpSource: branch: control presence needs replay
@@ -1534,39 +1398,39 @@ chain-role	rest	A	Alloca/AllocaSlot	256	100.0	0.0	0.0	1	0	0	0	0.0
 chain-role	rest	A	Alloca/AllocaStack	256	100.0	0.0	0.0	1	0	0	0	0.0
 chain-role	rest	A	Call/param	9203090	99.9	0.1	0.0	548	0	0	0	0.0
 chain-role	rest	A	Jump/JumpSource	92234	3.9	0.0	96.1	867	786	786	0	0.0
-chain-role	rest	A	Jump/param	170704	0.9	35.9	35.8	1536	454	6	431	27.3
+chain-role	rest	A	Jump/param	170704	0.9	35.9	34.6	1536	444	4	441	28.6
 chain-role	rest	A	Return/ReturnPacked	17575	43.3	0.0	56.7	145	75	75	0	0.0
 chain-role	rest	A	Return/ReturnResult	17575	43.3	11.7	45.0	145	51	4	0	0.0
 chain-role	rest	A	Return/ReturnStack	17575	41.6	0.0	58.4	145	78	24	0	0.0
-chain-role	rest	A	Slot/Slot	18083076	98.2	0.9	0.4	4926	544	18	842	0.5
+chain-role	rest	A	Slot/Slot	18083076	98.2	0.9	0.3	4926	275	4	1111	0.7
 chain-role	rest	A	Store/Store	2048	100.0	0.0	0.0	8	0	0	0	0.0
 chain-role	rest	B	Alloca/AllocaSlot	256	100.0	0.0	0.0	1	0	0	0	0.0
 chain-role	rest	B	Alloca/AllocaStack	256	100.0	0.0	0.0	1	0	0	0	0.0
 chain-role	rest	B	Call/param	9203090	99.9	0.1	0.0	548	0	0	0	0.0
 chain-role	rest	B	Jump/JumpSource	92234	3.9	0.0	96.1	867	786	786	0	0.0
-chain-role	rest	B	Jump/param	170704	0.9	41.5	28.3	1536	375	8	448	29.3
+chain-role	rest	B	Jump/param	170704	0.9	41.5	27.0	1536	365	6	458	30.5
 chain-role	rest	B	Return/ReturnPacked	17575	43.3	0.0	56.7	145	75	75	0	0.0
 chain-role	rest	B	Return/ReturnResult	17575	43.3	35.5	21.3	145	25	5	0	0.0
 chain-role	rest	B	Return/ReturnStack	17575	43.3	0.0	56.7	145	75	75	0	0.0
-chain-role	rest	B	Slot/Slot	18083076	98.2	1.1	0.2	4926	276	21	875	0.5
+chain-role	rest	B	Slot/Slot	18083076	98.2	1.1	0.0	4926	10	2	1141	0.7
 chain-role	rest	B	Store/Store	2048	100.0	0.0	0.0	8	0	0	0	0.0
 tape-role	rest	A	Alloca/AllocaSlot	256	100.0	0.0	0.0	1	0	0	0	0.0
 tape-role	rest	A	Alloca/AllocaStack	256	100.0	0.0	0.0	1	0	0	0	0.0
 tape-role	rest	A	Call/param	9203090	99.9	0.1	0.0	548	0	0	0	0.0
 tape-role	rest	A	Jump/JumpSource	92234	3.9	0.0	96.1	867	786	786	0	0.0
-tape-role	rest	A	Jump/param	170704	0.9	35.9	33.6	1536	426	0	459	29.6
+tape-role	rest	A	Jump/param	170704	0.9	35.9	33.3	1536	424	0	461	29.9
 tape-role	rest	A	Return/ReturnPacked	17575	43.3	0.0	56.7	145	75	75	0	0.0
 tape-role	rest	A	Return/ReturnResult	17575	43.3	11.7	43.1	145	45	1	6	1.9
 tape-role	rest	A	Return/ReturnStack	17575	41.6	0.0	49.4	145	60	14	18	8.9
-tape-role	rest	A	Slot/Slot	18083076	98.2	0.9	0.3	4926	450	1	936	0.6
+tape-role	rest	A	Slot/Slot	18083076	98.2	0.9	0.2	4926	211	1	1175	0.7
 tape-role	rest	A	Store/Store	2048	100.0	0.0	0.0	8	0	0	0	0.0
 tape-role	rest	B	Alloca/AllocaSlot	256	100.0	0.0	0.0	1	0	0	0	0.0
 tape-role	rest	B	Alloca/AllocaStack	256	100.0	0.0	0.0	1	0	0	0	0.0
 tape-role	rest	B	Call/param	9203090	99.9	0.1	0.0	548	0	0	0	0.0
 tape-role	rest	B	Jump/JumpSource	92234	3.9	0.0	96.1	867	786	786	0	0.0
-tape-role	rest	B	Jump/param	170704	0.9	41.5	25.1	1536	341	0	482	32.5
+tape-role	rest	B	Jump/param	170704	0.9	41.5	24.8	1536	339	0	484	32.8
 tape-role	rest	B	Return/ReturnPacked	17575	43.3	0.0	56.7	145	75	75	0	0.0
 tape-role	rest	B	Return/ReturnResult	17575	43.3	35.5	13.4	145	13	1	12	7.9
 tape-role	rest	B	Return/ReturnStack	17575	43.3	0.0	12.0	145	18	18	57	44.7
-tape-role	rest	B	Slot/Slot	18083076	98.2	1.1	0.1	4926	238	0	913	0.6
+tape-role	rest	B	Slot/Slot	18083076	98.2	1.1	0.0	4926	0	0	1151	0.7
 tape-role	rest	B	Store/Store	2048	100.0	0.0	0.0	8	0	0	0	0.0

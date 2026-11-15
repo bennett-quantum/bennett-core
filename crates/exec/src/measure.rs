@@ -1069,11 +1069,10 @@ impl Executor<'_> {
                 _ => None,
             };
             word.recompute = producer.and_then(|p| self.recompute_witness(p, word.value, live));
-            // First writes and unchanged/base words already have zero-cost copy witnesses.
-            // Other words retain a post-step context, never historical values as free inputs.
-            if collector.keep_raw
-                && !matches!(word.witness, WordWitness::FirstWrite | WordWitness::Unchanged | WordWitness::StoreBase)
-            {
+            // A cheap copy witness may differ across branches. Keep every instance's post-step
+            // context so chains can still find one common live/tape leaf or producer DAG for the
+            // aligned position. Historical values never become free recovery inputs.
+            if collector.keep_raw {
                 word.chain = Some(ChainContext {
                     node: producer.and_then(|p| p.node),
                     live: Arc::clone(&context_live),

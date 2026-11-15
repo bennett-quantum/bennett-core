@@ -130,20 +130,25 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
   from live copies of its operands removes 199 Slot positions and 42 Jump parameters across the lookups; no
   additional Store positions. Copy-only and depth-one classification remain available, with all 428 old data
   rows reproduced exactly. **Unbounded producer chains and forward instruction time now measured**, on all
-  83 workloads and both alignments. Live-state DAG slopes are 0.859/0.382/0.651/0.753; adding earlier already
-  counted classical/retained journal words gives 0.434/0.109/0.444/0.500. At 8 reps that costs
-  489555/201728/531648/214986 re-evaluated instructions across 256 branches, averaging
-  3.898/12.918/3.533/5.738 per recovered word. This is a greedy local tape with one common producer/source
-  circuit per position, not optimal replay. Important qualification from measured failures: 441 of 481 binary
-  and 873 of 976 B-tree residual positions at 8 reps have individual-branch recipes; the others are control
-  presence words needing replay. Their remaining data history reflects the common-circuit restriction. Hashing has five residual positions with missing `%call` origins;
-  stack writes have changed-memory and missing-call origins. Linear growth survives the measured witness,
-  but unavoidable linear information loss is not established. Guarded producer/call replay, global pebbling,
-  DAG scratch/cleanup cost and global-memory writes remain open. Tables and exact rules:
+  83 workloads and both alignments. Corrected live-state DAG slopes are 0.848/0.341/0.606/0.641; adding
+  earlier already counted classical/retained journal words gives 0.308/0.033/0.331/0.347. At 8 reps that costs
+  1506782/362752/1020248/572976 re-evaluated instructions across 256 branches, averaging
+  9.279/18.645/4.896/10.131 per recovered word. This is a greedy local tape with one common producer/source
+  circuit per position, not optimal replay. After fixing the independent check's completeness gap, all corrected
+  lookup counts and slopes agree with its greedy rerun, both alignments. Raw step words keep chain context even when an
+  instance has a first-write, unchanged or first-store witness; a common circuit can still recover the
+  whole position. Copy-only and depth-one are unchanged. At reps 8 tape retains 322/7/725/212 positions;
+  282/0/622/150 have individual recipes. Binary/B-tree's other 40/103 words need control-presence replay;
+  all seven hash residuals hit missing `%call` origins. Writes also have changed-memory, missing-call and
+  unavailable whole-word origins. These corrected diagnostics replace the inflated counts that mixed
+  missing context with real producer restrictions. Linear growth survives the measured common-circuit
+  witness, but unavoidable linear information loss is not established. Guarded producer/call replay,
+  global pebbling, DAG scratch/cleanup cost and global-memory writes remain open. Tables and exact rules:
   `experiments/journal-content/README.md`, `chains.tsv`. All 49 zero-copy-Irreducible other runs stay so;
   46 are entirely Same, three also use copies (corrected from the older prose using the unchanged tables).
   Heavy chain measurements are ignored by default. After integrating the observer with `setjmp`/`longjmp`
-  on base `ff338cb`, all 1,992 data rows reproduce exactly (428 copy/depth-one, 1,564 chain/tape). Jump
+  on base `ff338cb`, all 1,992 then-published data rows reproduced exactly; the later completeness fix
+  changes only the chain/tape rows (now 1,428), with all 428 copy/depth-one rows unchanged. Jump
   words have distinct indexed roles; all 32 bytes of each `setjmp` write are tracked for current-memory
   checks, and `longjmp` control words remain opaque to scalar aliases. Executor regressions cover these
   rules and raw/counts-only observer state/statistics equivalence. The independent check of the original copy observer
@@ -227,18 +232,20 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
    and the two questions below. `setjmp`/`longjmp` are done (`31f5138`).
 2. **The two stopped measurements are done** ("Stopped in flight"). Journal content: a constant factor as far as
    copies, depth-one and unbounded common-producer chains go. The journal-assisted fitted slopes are
-   0.434/0.109/0.444/0.500 words/step, with measured forward recomputation time. Remaining counts include
+   0.308/0.033/0.331/0.347 words/step, with measured forward recomputation time. Remaining counts include
    producer-alignment restrictions, so this is not evidence of unavoidable linear information loss; guarded
    producer/call replay and global pebbling/cleanup costs remain open. Control schedules:
    exact structure costs about 1-5x a run on these traces, but only from observed runs.
-   Independent check of both recomputation measurements (`b1454ec`, Opus): every credited word recovers on every
-   branch (hand cases, 200 random programs, all four C lookups at every repetition count, 2.65 M journal
-   records); the tables reproduce byte for byte; the hook off changes nothing. One completeness gap: a position
-   where some branch already has a cheap copy witness is never tried by the chain search, even when one common
-   circuit recovers every branch. Corrected by the checker (both alignments): tape slopes 0.308/0.033/0.331/0.347
-   (published 0.434/0.109/0.444/0.500) for binary search, hash, B-tree, writes; linear growth still survives,
-   but the README's diagnostics of what remains ("different producer", "no producer") are mostly this gap.
-   Witness ignored (`chains_credit_a_common_live_copy_across_mixed_copy_witnesses`); fix and README update next.
+   Independent check of both recomputation measurements (`b1454ec`, Opus) found every credited word
+   sound and one completeness gap: a branch's cheap copy witness suppressed its chain context, so a
+   common circuit was never tried for mixed-witness positions. **Fixed and remeasured**: context is now
+   retained for every step word in raw mode, and the formerly ignored mixed-copy witness runs normally
+   with both alignment keys checked. The corrected live slopes are 0.848/0.341/0.606/0.641 and tape slopes
+   0.308/0.033/0.331/0.347 (binary search/hash/B-tree/writes), exactly the checker's independent rerun.
+   All 428 copy/depth-one rows are unchanged. The fresh independent hand/random/C-lookup replay has no
+   unsound credits or missed recoveries; the hook on/off step-by-step state and journal checks pass.
+   README and `chains.tsv` now report the corrected retained tape, time costs and measured residuals.
+   Linear growth remains a property of this common-circuit witness, not a lower bound on information loss.
 3. **Build the journalled machine in the executor** and run the experiments listed in `docs/DESIGN.md` as it is
    built: every journalled step is a permutation; `apply` equals mark, call, rewind-keep; un-running through gates
    equals the conjugated operation.

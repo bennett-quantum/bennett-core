@@ -16,8 +16,8 @@
 //!   of the stated kind (same producer site, call path and output on every branch; live leaves or literal
 //!   operands; for the tape, Same/retained words of earlier records processed earlier) are counted, and
 //!   the greedy tape is re-run with that search to give the Irreducible counts the stated rules imply.
-//!   Every miss found so far has an instance with a copy witness (first write, unchanged, store base),
-//!   for which the observer keeps no chain context; see `COPY_WITNESS_GAP`.
+//!   No misses are allowed on these fixtures. `COPY_WITNESS_GAP` pins the former gap where instances
+//!   with a copy witness (first write, unchanged, store base) carried no chain context.
 //! - The observer on and off: the same state and outer journal after every step of every random program.
 //!
 //! The C lookups run here too (`c_lookups_recompute_soundly`, ignored: minutes and the lowered program).
@@ -1201,11 +1201,8 @@ fn random_programs_recompute_soundly() {
             total.irreducible_total[k] += report.irreducible_total[k];
             total.irreducible_rerun[k] += report.irreducible_rerun[k];
         }
-        // The re-run differs from the classifier only by the misses: none, none removed elsewhere.
-        assert_eq!(report.irreducible_rerun[0], report.irreducible_total[0] - report.live_missed, "seed {seed}");
-        if report.tape_missed == 0 {
-            assert_eq!(report.irreducible_rerun[1], report.irreducible_total[1], "seed {seed}: the greedy tape");
-        }
+        assert_eq!((report.depth_one_missed, report.live_missed, report.tape_missed), (0, 0, 0), "seed {seed}");
+        assert_eq!(report.irreducible_rerun, report.irreducible_total, "seed {seed}: the greedy tape");
         for k in 0..3 {
             total.irreducible_scalar[k] += report.irreducible_scalar[k];
         }
@@ -1252,14 +1249,16 @@ fn c_lookups_recompute_soundly() {
             eprintln!("jc-example\t{run}\t{example}");
         }
         assert_sound(run, &report);
+        assert_eq!((report.depth_one_missed, report.live_missed, report.tape_missed), (0, 0, 0), "{run}");
+        assert_eq!(report.irreducible_rerun, report.irreducible_total, "{run}: the greedy tape");
     }
 }
 
 /// The smallest program of the completeness gap: the second `%v = call @id(%a)` overwrites 7 with 7
 /// on branch 0 (Unchanged) and 8 with 9 on branch 1, and `%w` holds the old value on both branches,
-/// so one common copy from `%w` recovers the position. The classifiers never try it: an instance with
-/// a copy witness (first write, unchanged, store base) carries no chain context, and the copy-only
-/// rule refuses mixed witnesses, so the position stays Irreducible in all three modes.
+/// so one common copy from `%w` recovers the position. Originally an instance with a cheap copy
+/// witness carried no chain context, hiding that common copy from both chain modes. Copy-only
+/// and depth-one still refuse the mixed witnesses; chains must recover the position.
 const COPY_WITNESS_GAP: &str = "memory 1024
 func @id(i8 %x) -> i8 {
 entry:
@@ -1293,21 +1292,20 @@ entry:
 ";
 
 /// The witness itself, checked independently: the second call's old result is 7 / 8, `%w` holds it on
-/// both branches, and the classifiers leave it Irreducible. Passes today; it pins the witness.
+/// both branches. The independent search and both chain classifiers must agree on that recovery.
 #[test]
-fn a_common_live_copy_is_missed_when_some_instance_has_a_copy_witness() {
+fn a_common_live_copy_recovers_mixed_copy_witnesses_independently() {
     let module = load(COPY_WITNESS_GAP);
     let report = check(&module, "main", &[]);
     assert_sound("copy-witness gap", &report);
-    // Both alignments: the one position, missed by the live and the tape mode alike.
-    assert_eq!((report.live_missed, report.tape_missed), (2, 2), "{report:#?}");
-    assert_eq!(report.missed_with_copy_witness, [2, 2], "{report:#?}");
+    assert_eq!((report.live_missed, report.tape_missed), (0, 0), "{report:#?}");
+    assert_eq!(report.missed_with_copy_witness, [0, 0], "{report:#?}");
+    assert_eq!(report.irreducible_rerun, report.irreducible_total, "{report:#?}");
 }
 
 /// What the stated chain rule implies for the witness: a common live leaf is a zero-instruction
 /// recovery DAG, so the position should be Recomputed by `classify_with_chains`.
 #[test]
-#[ignore = "completeness gap: a common live copy is not tried when some instance has a copy witness"]
 fn chains_credit_a_common_live_copy_across_mixed_copy_witnesses() {
     let module = load(COPY_WITNESS_GAP);
     let main = module.function_named("main").expect("main");
@@ -1315,14 +1313,23 @@ fn chains_credit_a_common_live_copy_across_mixed_copy_witnesses() {
     executor.measure_journal_content(true);
     executor.run();
     let m = executor.take_journal_measurement().expect("on");
+    let record = m.applies[0].branches[0]
+        .entries
+        .iter()
+        .filter(|r| r.words.iter().any(|w| w.role == WordRole::ReturnResult))
+        .nth(1)
+        .expect("the second call's return record");
     for tape in [false, true] {
         let classes = classify_with_chains(&m, tape);
-        for positions in [&classes[0].site_count, &classes[0].call_path] {
+        for (positions, path, k) in
+            [(&classes[0].site_count, None, record.a_k), (&classes[0].call_path, Some(record.call_path), record.b_k)]
+        {
             let second = positions
                 .iter()
-                .find(|p| p.role == WordRole::ReturnResult && p.k == 1)
+                .find(|p| p.role == WordRole::ReturnResult && p.site == record.site && p.call_path == path && p.k == k)
                 .expect("the second call's result");
             assert_eq!(second.class, WordClass::Recomputed, "tape={tape}: {second:?}");
+            assert_eq!(second.chain.as_ref().expect("common leaf").instructions, 0);
         }
     }
 }
