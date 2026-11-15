@@ -16,10 +16,13 @@ inline constexpr const char *deviceLongjmp = "__bennett.longjmp";
 // Rewrites, after the optimiser:
 // - calls of the undefined C library functions `setjmp`, `_setjmp` into `__bennett.setjmp`, and `longjmp`,
 //   `_longjmp`, `siglongjmp`, `__longjmp_chk` into `__bennett.longjmp` with C's value (0 becomes 1);
-// - `sigsetjmp`/`__sigsetjmp(buf, savemask)` into `__bennett.setjmp`, followed where `savemask` is not 0 by
-//   the C library's `__sigsetjmp_tail(buf, result)`, as musl's x86-64 `sigsetjmp` does: it saves the signal
-//   mask on the first return and restores it on a jump (musl provides it; without it the call is refused as
-//   a call with no definition, which `rt/musl/link.py` resolves);
+// - `sigsetjmp`/`__sigsetjmp(buf, savemask)` into `__bennett.setjmp`. Where some `savemask` is not constant 0,
+//   every library environment carries its mask state in its buffer, written before the device `setjmp`: the
+//   flag word at offset 64 (savemask not 0; `setjmp` writes 0) and, when set, the signal mask saved by the C
+//   library's `__sigsetjmp_tail(buf, 0)`; every library `longjmp` restores its own target's mask with
+//   `__sigsetjmp_tail(buf, 1)` when that flag is set, before it jumps. So the mask travels with the buffer
+//   through copies and revisits of a call site (musl provides `__sigsetjmp_tail`; without it the call is
+//   refused as a call with no definition, which `rt/musl/link.py` resolves);
 // - clang's `llvm.eh.sjlj.setjmp(buf)` into `__bennett.setjmp` and `llvm.eh.sjlj.longjmp(buf)` into
 //   `__bennett.longjmp(buf, 1)`;
 // - `llvm.frameaddress(0)` into the stack pointer at the function's entry (one per frame and constant

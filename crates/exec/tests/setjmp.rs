@@ -361,3 +361,146 @@ fn a_rewind_un_runs_a_jump_and_keeps_its_value() {
         assert_eq!(assert_reverses(&module, "unmeasured", &[x], bounded()), Outcome::Returned(Some(0)), "x = {x}");
     }
 }
+
+/// The front's `sigsetjmp` and `siglongjmp` as they are lowered (`front/src/Jumps.cpp`), with a memory word for
+/// the signal mask and `@tail` for musl's `__sigsetjmp_tail`: before its `setjmp` each visit writes the buffer's
+/// flag (here the run-time savemask, `i == 0`) and saves the mask at `buf + 72`; a jump restores the mask from
+/// its target when the target's flag says so. One call site is visited twice, for buffer 0 (mask 1, saved) then
+/// buffer 1 (mask 2, not saved), and buffer 0 is copied to buffer 2 between the visits. The jump from mask 9 to
+/// buffer `t` lands with mask 1, 9, 1: what the target saved, not what the site's latest visit had. Around it a
+/// `rewind` keeps that mask and un-runs everything else: the mask word and all three buffers are zero again.
+const SIGSETJMP: &str = r#"
+memory 2048
+func @tail(i64 %buf, i32 %ret, i64 %mask) {
+entry:
+    %ss = add i64 %buf, 72
+    %save = icmp eq i32 %ret, 0
+    br %save, save, restore
+save:
+    %m = load i64 %mask
+    store i64 %m, %ss
+    ret
+restore:
+    %s = load i64 %ss
+    store i64 %s, %mask
+    ret
+}
+func @siglongjmp(i64 %buf, i32 %v, i64 %mask) {
+entry:
+    %flagp = add i64 %buf, 64
+    %flag = load i64 %flagp
+    %saved = icmp ne i64 %flag, 0
+    br %saved, restore, go
+restore:
+    call @tail(%buf, i32 1, %mask)
+    br go
+go:
+    longjmp %buf, %v
+}
+func @copy(i64 %to, i64 %from) {
+entry:
+    br word(i64 0)
+word(i64 %at):
+    %src = add i64 %from, %at
+    %dst = add i64 %to, %at
+    %w = load i64 %src
+    store i64 %w, %dst
+    %next = add i64 %at, 8
+    %more = icmp ult i64 %next, 200
+    br %more, word(%next), done
+done:
+    ret
+}
+func @visits(i64 %bufs, i64 %mask, i64 %t) -> i64 {
+entry:
+    br visit(i64 0)
+visit(i64 %i):
+    %m = add i64 %i, 1
+    store i64 %m, %mask
+    %off = mul i64 %i, 200
+    %buf = add i64 %bufs, %off
+    %first_visit = icmp eq i64 %i, 0
+    %saves = zext i1 %first_visit to i64
+    %flagp = add i64 %buf, 64
+    store i64 %saves, %flagp
+    br %first_visit, save, site
+save:
+    call @tail(%buf, i32 0, %mask)
+    br site
+site:
+    %r = setjmp %buf
+    %again = icmp eq i32 %r, 0
+    br %again, next, landed
+next:
+    br %first_visit, copied, more
+copied:
+    %copy = add i64 %bufs, 400
+    call @copy(%copy, %buf)
+    br visit(i64 1)
+more:
+    store i64 9, %mask
+    %toff = mul i64 %t, 200
+    %target = add i64 %bufs, %toff
+    call @siglongjmp(%target, i32 1, %mask)
+    ret 0
+landed:
+    %got = load i64 %mask
+    ret %got
+}
+func @kept(q8 %out, i64 %t) -> i64 {
+entry:
+    %bufs = alloca 600
+    %mask = alloca 8
+    %h = mark
+    %got = call @visits(%bufs, %mask, %t)
+    %g8 = trunc i64 %got to i8
+    rewind %h keep (%g8 -> %out)
+    %end = add i64 %bufs, 600
+    %left = load i64 %mask
+    br sum(%bufs, %left)
+sum(i64 %at, i64 %acc):
+    %w = load i64 %at
+    %acc1 = or i64 %acc, %w
+    %next = add i64 %at, 8
+    %more = icmp ult i64 %next, %end
+    br %more, sum(%next, %acc1), done
+done:
+    ret %acc1
+}
+func @main(i64 %t) -> i8 {
+entry:
+    %out = qalloc 8
+    %clean = call @kept(%out, %t)
+    %zero = icmp eq i64 %clean, 0
+    br %zero, ok, bad
+ok:
+    %m = measure %out
+    ret %m
+bad:
+    fault unreachable
+}
+func @unmeasured(i64 %t) -> i64 {
+entry:
+    %out = qalloc 8
+    %clean = call @kept(%out, %t)
+    ret %clean
+}
+"#;
+
+#[test]
+fn a_lowered_sigsetjmp_restores_its_targets_mask_and_rewinds_exactly() {
+    let module = load(SIGSETJMP);
+    for (t, mask) in [(0u64, 1u128), (1, 9), (2, 1)] {
+        assert_eq!(run(&module, "main", &[t], bounded()).0, Outcome::Returned(Some(mask)), "target {t}");
+        assert_eq!(assert_reverses(&module, "unmeasured", &[t], bounded()), Outcome::Returned(Some(0)), "target {t}");
+        let mut executor = executor(&module, "unmeasured", &[t], Options { reversible: true, ..bounded() });
+        let mut before = vec![executor.snapshot()];
+        while executor.step().is_none() {
+            before.push(executor.snapshot());
+        }
+        while let Some(expected) = before.pop() {
+            assert!(executor.step_back().expect("reversible"));
+            assert_same_state(&executor.snapshot(), &expected, &format!("target {t}, undoing step {}", before.len()));
+        }
+    }
+}

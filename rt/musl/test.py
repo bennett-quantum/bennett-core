@@ -29,17 +29,24 @@ def main():
     started = time.monotonic()
     # tests/regress: witnesses of the independent testing pass, each self-checking (status 0 natively).
     regressions = sorted(f"regress/{path.stem}" for path in (HERE / "tests/regress").glob("*.c"))
-    for name in ["library", "exit", "arena", "unimplemented", "stderr", "heap", "signals", "abort", "stdin",
-                 "brk", "fenv", "fenv-mode", "fenv-flags", "complex", "setjmp", "setjmp-independent", *regressions]:
+    names = ["library", "exit", "arena", "unimplemented", "stderr", "heap", "signals", "abort", "stdin", "brk",
+             "fenv", "fenv-mode", "fenv-flags", "complex", "setjmp", "setjmp-independent", "setjmp-masks", *regressions]
+    # Non-local jumps are lowered after the optimiser, so they are also checked from -O2 (against the same
+    # native output); the small ones are also un-run to their entry state.
+    jumps = [name for name in names if "setjmp" in name]
+    for name, level in [(name, "-O0") for name in names] + [(name, "-O2") for name in jumps]:
         source = HERE / "tests" / f"{name}.c"
-        program = args.out / f"{name.replace('/', '-')}.bn"
+        program = args.out / f"{name.replace('/', '-')}{'' if level == '-O0' else level}.bn"
         command = ["python3", HERE / "link.py", source, "--libdir", args.libdir, "--front", args.front,
-                   "--arena-bytes", 16384 if name == "arena" else 1048576, "-o", program]
+                   "--arena-bytes", 16384 if name == "arena" else 1048576, f"--clang-flag={level}", "-o", program]
         linked = run(command)
         assert linked.returncode == 0, linked.stderr
         checked = run([args.executor, "check", program])
         assert checked.returncode == 0, checked.stderr
-        result = run([args.executor, "run", "--entry", "__bennett_entry", "--budget", 100000000, program])
+        reverse = ["--reverse"] if name in jumps and name != "setjmp-masks" else []
+        result = run([args.executor, "run", "--entry", "__bennett_entry", "--budget", 1000000000, *reverse, program])
+        if reverse:
+            assert "returned to entry: classical state identical" in result.stdout, (name, level, result)
         if name in ["unimplemented", "stderr", "fenv-mode", "fenv-flags"]:
             assert result.returncode == 1 and "fault: unreachable" in result.stdout, (name, result)
         else:
@@ -57,7 +64,7 @@ def main():
             console = next((line.removeprefix("console: ") for line in result.stdout.splitlines()
                             if line.startswith("console: ")), "")
             assert console == escaped(output), (name, console, output)
-        print(f"{name}: passed ({program.stat().st_size} text bytes)", flush=True)
+        print(f"{name} {level}: passed ({program.stat().st_size} text bytes)", flush=True)
     print(f"library tests: {time.monotonic() - started:.2f}s", flush=True)
 
 

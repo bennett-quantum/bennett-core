@@ -111,6 +111,12 @@ public:
       }
     }
     for (auto [call, kind] : calls) {
+      if (kind == Kind::Sigsetjmp) {
+        const auto *constant = dyn_cast<ConstantInt>(call->getArgOperand(1));
+        masks = masks || !constant || !constant->isZero();
+      }
+    }
+    for (auto [call, kind] : calls) {
       lower(*cast<CallInst>(call), kind);
     }
   }
@@ -119,6 +125,21 @@ private:
   Module &module;
   LLVMContext &context;
   std::map<Function *, Value *> frameAddresses;
+  // Whether some `sigsetjmp` may save the mask. Only then does a library environment carry its flag, so a
+  // program without one is lowered as before and needs no C library.
+  bool masks = false;
+
+  // The flag of the environment at `buffer`: 1 when its `sigsetjmp` saved the mask. It is the word C libraries
+  // keep it in (`__fl` in musl's `jmp_buf`; glibc's `__mask_was_saved`), after the device record's 32 bytes and
+  // before the saved mask, `__ss`, which `__sigsetjmp_tail` reads and writes.
+  static Value *maskFlag(IRBuilder<> &b, Value *buffer) {
+    return b.CreateConstInBoundsGEP1_64(b.getInt8Ty(), buffer, 64);
+  }
+
+  FunctionCallee sigsetjmpTail(IRBuilder<> &b, Value *buffer) {
+    auto *type = FunctionType::get(b.getInt32Ty(), {buffer->getType(), b.getInt32Ty()}, false);
+    return module.getOrInsertFunction("__sigsetjmp_tail", type);
+  }
 
   Function *setjmpFunction() {
     auto *type = FunctionType::get(Type::getInt32Ty(context), {PointerType::get(context, 0)}, false);
@@ -160,49 +181,61 @@ private:
     IRBuilder<> b(&call);
     b.SetCurrentDebugLocation(call.getDebugLoc());
     switch (kind) {
-    case Kind::Setjmp:
     case Kind::BuiltinSetjmp: {
       CallInst *setjmp = callSetjmp(b, call.getArgOperand(0));
       call.replaceAllUsesWith(setjmp);
       call.eraseFromParent();
       return;
     }
+    case Kind::Setjmp:
     case Kind::Sigsetjmp: {
+      // Everything an environment needs is written into its buffer before the device `setjmp`, never after
+      // it: after a jump the frame resumes with the slots of its latest visit of this call, which may have
+      // been for another buffer or another savemask. With a nonzero savemask, C's sigsetjmp saves the mask
+      // (musl's `__sigsetjmp_tail(buf, 0)`), and the flag says so; a jump restores it from its own target
+      // (below, as glibc's longjmp does), so the mask travels with the buffer through copies and revisits.
       Value *buffer = call.getArgOperand(0);
-      Value *saveMask = call.getArgOperand(1);
-      CallInst *setjmp = callSetjmp(b, buffer);
-      Value *result = setjmp;
-      const auto *constant = dyn_cast<ConstantInt>(saveMask);
-      if (!constant || !constant->isZero()) {
-        // musl's x86-64 sigsetjmp: with a nonzero mask argument, the result goes through
-        // __sigsetjmp_tail(buf, result) on both returns: it saves the mask on the first and restores it on
-        // a jump. The mask argument is a value set before the first return, so it is the same on both.
-        auto *tailType = FunctionType::get(b.getInt32Ty(), {buffer->getType(), b.getInt32Ty()}, false);
-        FunctionCallee tail = module.getOrInsertFunction("__sigsetjmp_tail", tailType);
-        if (constant) {
-          result = b.CreateCall(tail, {buffer, setjmp});
-        } else {
-          Value *saves = b.CreateICmpNE(saveMask, b.getInt32(0));
-          Instruction *then = SplitBlockAndInsertIfThen(saves, &call, false);
-          IRBuilder<> t(then);
-          t.SetCurrentDebugLocation(call.getDebugLoc());
-          Value *restored = t.CreateCall(tail, {buffer, setjmp});
-          b.SetInsertPoint(&call);
-          PHINode *phi = b.CreatePHI(b.getInt32Ty(), 2);
-          phi->addIncoming(setjmp, setjmp->getParent());
-          phi->addIncoming(restored, then->getParent());
-          result = phi;
+      if (masks) {
+        Value *saves = b.getInt64(0);
+        if (kind == Kind::Sigsetjmp) {
+          Value *saveMask = call.getArgOperand(1);
+          const auto *constant = dyn_cast<ConstantInt>(saveMask);
+          if (constant && !constant->isZero()) {
+            saves = b.getInt64(1);
+            b.CreateCall(sigsetjmpTail(b, buffer), {buffer, b.getInt32(0)});
+          } else if (!constant) {
+            Value *nonzero = b.CreateICmpNE(saveMask, b.getInt32(0));
+            saves = b.CreateZExt(nonzero, b.getInt64Ty());
+            Instruction *then = SplitBlockAndInsertIfThen(nonzero, &call, false);
+            IRBuilder<> t(then);
+            t.SetCurrentDebugLocation(call.getDebugLoc());
+            t.CreateCall(sigsetjmpTail(t, buffer), {buffer, t.getInt32(0)});
+            b.SetInsertPoint(&call);
+          }
         }
+        b.CreateStore(saves, maskFlag(b, buffer));
       }
-      call.replaceAllUsesWith(result);
+      CallInst *setjmp = callSetjmp(b, buffer);
+      call.replaceAllUsesWith(setjmp);
       call.eraseFromParent();
       return;
     }
     case Kind::Longjmp: {
       // C: a longjmp with value 0 makes setjmp return 1.
+      Value *buffer = call.getArgOperand(0);
       Value *value = call.getArgOperand(1);
       Value *isZero = b.CreateICmpEQ(value, b.getInt32(0));
-      jump(call, call.getArgOperand(0), b.CreateSelect(isZero, b.getInt32(1), value));
+      Value *nonzero = b.CreateSelect(isZero, b.getInt32(1), value);
+      if (masks) {
+        // The target's saved mask, if it saved one, restored before the jump (glibc's order; musl restores it
+        // on arrival, through the same buffer).
+        Value *saved = b.CreateICmpNE(b.CreateLoad(b.getInt64Ty(), maskFlag(b, buffer)), b.getInt64(0));
+        Instruction *then = SplitBlockAndInsertIfThen(saved, &call, false);
+        IRBuilder<> t(then);
+        t.SetCurrentDebugLocation(call.getDebugLoc());
+        t.CreateCall(sigsetjmpTail(t, buffer), {buffer, t.getInt32(1)});
+      }
+      jump(call, buffer, nonzero);
       return;
     }
     case Kind::BuiltinLongjmp:

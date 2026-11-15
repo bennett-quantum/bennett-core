@@ -1,5 +1,6 @@
-// F2: siglongjmp must restore the target buffer's mask, not the last buffer passed at this call site.
-// docs/DESIGN.md, "Non-local jumps": sigsetjmp saves on first return and restores after a jump.
+/* F2 of the testing pass of setjmp, found as a wrong result and fixed: siglongjmp restores the target
+ * buffer's mask, not the last buffer passed at this call site. Self-checking, returns 0 natively.
+ * docs/DESIGN.md, "Non-local jumps": sigsetjmp saves on first return and restores after a jump. */
 #include <setjmp.h>
 #include <signal.h>
 

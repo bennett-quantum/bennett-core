@@ -314,10 +314,18 @@ from any depth:
 The front (`Jumps.h`), after the optimiser, so that LLVM sees the C library's `returns_twice` calls as a native
 compile does: calls of the undefined library functions `setjmp`, `_setjmp` become `setjmp`; `longjmp`,
 `_longjmp`, `siglongjmp`, `__longjmp_chk` become `longjmp` with C's value (0 becomes 1); `sigsetjmp` and glibc's
-`__sigsetjmp(buf, savemask)` become `setjmp` followed, where `savemask` is not 0, by the C library's
-`__sigsetjmp_tail(buf, result)` on both returns, exactly as musl's x86-64 `sigsetjmp` does (it saves the
-signal mask on the first return and restores it after a jump; musl's own C, linked by `rt/musl/link.py`; without
-the library it is refused as a call with no definition). clang's `__builtin_setjmp`/`__builtin_longjmp`
+`__sigsetjmp(buf, savemask)` become `setjmp`. The signal mask is state of the environment, so it lives in the
+buffer and never in the frame's slots: after a jump the frame resumes with the slots of its latest visit of
+that call, which may have been for another buffer, or with another `savemask`. Where some `savemask` is not
+constant 0, every library `setjmp` and `sigsetjmp` writes, before the device `setjmp`, the buffer's flag word
+(offset 64, where C libraries keep it: `savemask` not 0) and, when it is set, saves the mask into the buffer
+with the C library's `__sigsetjmp_tail(buf, 0)`; every library `longjmp`, `siglongjmp` among them, restores the
+mask from its own target with `__sigsetjmp_tail(buf, 1)` when that target's flag is set, and then jumps. A copied
+buffer carries its mask with it, any number of buffers can share a call site, and the mask is restored before
+the jump, as glibc does (musl restores it on arrival, finding the buffer through a register its assembly saved
+in it). musl's own C is linked by `rt/musl/link.py`; without the library a mask-saving `sigsetjmp` is refused as
+a call with no definition, and a program without one is lowered without the flag. The jump record itself is
+the rest of the environment and is all in the buffer too. clang's `__builtin_setjmp`/`__builtin_longjmp`
 (`llvm.eh.sjlj.setjmp`/`longjmp`) become the same instructions with the value 1; the frame address clang stores
 in the buffer, `llvm.frameaddress(0)`, is the stack pointer at the function's entry (a caller's frame address is
 refused by name). The address of a library `setjmp` or `longjmp`, a call through another prototype and an
