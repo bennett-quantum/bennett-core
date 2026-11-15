@@ -1,5 +1,5 @@
 /* float_long_double.c: long double (the x87 80-bit format) on directed values: arithmetic, square roots,
- * unfused multiply-adds, every comparison, the classes, conversions to and from float, double and every
+ * unfused and fused multiply-adds, every comparison, the classes, conversions to and from float, double and every
  * integer width (out of range included: undefined in C, and compared with what the native program's x87
  * code gives), rounding, fmin and fmax, powers. Values are written as their sign-and-exponent and
  * significand (with the explicit integer bit), the order of x87's memory format. result(i) is the bit
@@ -235,6 +235,16 @@ static U unary(unsigned k, unsigned i) {
   }
 }
 
+/* The fused multiply-add (fmal, glibc's natively): every pair of directed values, with a third as the
+ * addend, and with the negated rounded product as the addend, which leaves the product's rounding error. A
+ * NaN result of two NaNs, or of a NaN product negated (whose sign LLVM does not keep), is "a NaN". */
+static U fused(unsigned i, unsigned j, int cancel) {
+  long double a = X(i), b = X(j), c = cancel ? -(a * b) : X((i * 7 + j * 3) % NX);
+  U bits = lbits(__builtin_fmal(a, b, c));
+  int nans = lnan(lbits(a)) + lnan(lbits(b)) + lnan(lbits(c));
+  return lnan(bits) && (nans >= 2 || (cancel && lnan(lbits(c)))) ? 1 : bits;
+}
+
 /* fmin and fmax on the cases glibc decides: zeros of either sign, NaNs against numbers and NaNs, equal
  * values. */
 #define NM2 10
@@ -253,9 +263,10 @@ static const unsigned MINMAX[NM2][2] = {{0, 1}, {1, 0}, {16, 2}, {2, 16}, {15, 2
 #define FROM_INT (8 * NI)
 #define INTRINSIC (UNARY * NX)
 #define MINMAX_ (2 * NM2)
+#define FUSED (2 * NX * NX)
 
 static unsigned count(void) {
-  return ARITH + SQRT + FMA + COMPARE + CLASS + NARROW + WIDEN + TO_INT + FROM_INT + INTRINSIC + MINMAX_;
+  return ARITH + SQRT + FMA + COMPARE + CLASS + NARROW + WIDEN + TO_INT + FROM_INT + INTRINSIC + MINMAX_ + FUSED;
 }
 
 static U value(unsigned i) {
@@ -311,8 +322,12 @@ static U value(unsigned i) {
     return unary(i / NX, i % NX);
   }
   i -= INTRINSIC;
-  long double x = X(MINMAX[i % NM2][0]), y = X(MINMAX[i % NM2][1]);
-  return lbits(i < NM2 ? __builtin_fminl(x, y) : __builtin_fmaxl(x, y));
+  if (i < MINMAX_) {
+    long double x = X(MINMAX[i % NM2][0]), y = X(MINMAX[i % NM2][1]);
+    return lbits(i < NM2 ? __builtin_fminl(x, y) : __builtin_fmaxl(x, y));
+  }
+  i -= MINMAX_;
+  return fused(i / NX % NX, i % NX, i >= NX * NX);
 }
 
 unsigned results(void) { return 2 * count(); }

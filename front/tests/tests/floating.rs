@@ -87,7 +87,7 @@ fn arithmetic_square_roots_multiply_adds_and_conversions_agree_with_native_on_di
 }
 
 /// long double, the x87 80-bit format, over SoftFloat's extF80: every operation, comparison, class and
-/// conversion on directed values (`float_long_double.c`).
+/// conversion on directed values, and the fused multiply-add (`fmal`) against glibc's (`float_long_double.c`).
 #[test]
 fn long_double_arithmetic_comparisons_and_conversions_agree_with_native_on_directed_values() {
     assert_results_agree("float_long_double", &[]);
@@ -224,7 +224,7 @@ fn assert_refused(name: &str, text: &str, clang_flags: &[&str], front_flags: &[&
 /// What has no soft-float routine yet, and the C library's functions, are refused by name.
 #[test]
 fn what_the_runtime_does_not_compute_is_refused_by_name() {
-    let cases: [(&str, &str, &[&str], &str); 11] = [
+    let cases: [(&str, &str, &[&str], &str); 10] = [
         (
             "float_frem",
             "volatile double a = 5.5, b = 2;\nint main(void) { return (int)__builtin_fmod(a, b); }\n",
@@ -249,13 +249,6 @@ fn what_the_runtime_does_not_compute_is_refused_by_name() {
             "double strtod(const char *, char **);\nint main(void) { return (int)strtod(\"1.5\", 0); }\n",
             &[],
             "a call to @strtod, which has no definition",
-        ),
-        (
-            "float_fmal",
-            "volatile long double a = 5.5;\nint main(void) { return (int)__builtin_fmal(a, a, a); }\n",
-            &[NO_ERRNO],
-            "the fused multiply-add of `x86_fp80` (long double) values (`fmal`, @llvm.fma.f80): Berkeley SoftFloat \
-             3e has none for the 80-bit format",
         ),
         (
             "float_from_i200",

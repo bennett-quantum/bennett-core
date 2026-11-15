@@ -46,8 +46,10 @@ every 32-bit input of each conversion from `float`.
 | `__floattisf`, `__floattidf`, `__floattixf` and the unsigned `__floatunti*` | the magnitude's top 64 bits, the rest jammed into the lowest bit (extF80 keeps it as its extra word), rounded by SoftFloat's `softfloat_roundPackTo*` | none (ties and sticky bits at each format's precision, every power of two ±2) |
 | `__fixsfti`, `__fixdfti`, `__fixxfti` and the unsigned `__fixunss*ti` | libgcc2.c's algorithm, which libgcc's routines are on x86-64, step for step over SoftFloat: the high word from x / 2^64, the low word from what is left, each through GCC's 64-bit unsigned conversion; negative values through their negation. Out of range and NaN (undefined in C) give what libgcc gives, e.g. 2^127 + 2^63 for a NaN | none, out of range included; long double encodings x87 rejects differ, as above |
 
-`front/tests/tests/softfloat.rs` repeats this with 2·10^4 random operands per operation in well under a
-second. Integers from 65 to 128 bits wide go through the 128-bit routine of their signedness and are
+| `fmal` (SoftFloat has no extF80 fused multiply-add) | the exact 128-bit product of the significands and the addend's aligned in a 256-bit window, the bits shifted out jammed into the lowest one, added or subtracted, normalised, rounded once by `softfloat_roundPackToExtF80`; glibc's special cases (an infinite or NaN operand, a zero factor or addend) computed as glibc computes them, with SoftFloat's extF80 operations, which match x87's | none, NaN bits included, against glibc's `fmal`: the cross product of the directed values (830,584 triples) and 10^8 random triples (`float_runtime_exact 100000000 3 0 fma`, 52 s), steered to cancellation (the addend near or minus the product), subnormal results and overflow; only encodings x87 rejects differ |
+
+`front/tests/tests/softfloat.rs` repeats this with 2·10^4 random operands per operation (and the directed
+triples of `fmal`) in under a second. Integers from 65 to 128 bits wide go through the 128-bit routine of their signedness and are
 truncated, as LLVM's x86-64 back end does (a `_BitInt(100)` included); a 128-bit integer crosses the interface
 as C passes it on x86-64 (two 64-bit arguments, a pair of 64-bit results), as clang writes it in the runtime's
 IR. Wider integers are refused by name.
@@ -56,6 +58,9 @@ IR. Wider integers are refused by name.
 
 Device steps of one operation, after the front's optimiser, on normal / subnormal / NaN operands (the steps of
 moving the operands taken off), and the routine's size in device instructions including the helpers it calls.
+The rows for long double `fma` and below the table for the routines added since were measured on 2026-11-15
+by lowering a function of the operands' bits at clang `-O2` and subtracting a function that only moves them
+(the same measurement gives 412 instructions and 63 / 18 / 39 steps for the f64 add).
 
 | operation | f32 size | f32 steps | f64 size | f64 steps | f80 size | f80 steps |
 |---|---:|---|---:|---|---:|---|
@@ -64,7 +69,7 @@ moving the operands taken off), and the routine's size in device instructions in
 | mul | 199 | 59 / 145 / 33 | 218 | 55 / 167 / 29 | 249 | 72 / 164 / 45 |
 | div | 198 | 56 / 138 / 33 | 252 | 73 / 178 / 29 | 363 | 139 / 219 / 45 |
 | sqrt | 162 | 92 / 142 / 23 | 184 | 114 / 161 / 22 | 251 | 131 / 184 / 21 |
-| fma | 439 | 108 / 228 / 61 | 476 | 106 / 262 / 50 | refused | |
+| fma | 439 | 108 / 228 / 61 | 476 | 106 / 262 / 50 | 1198 | 299 / 261 / 119 |
 | `<` | | | 43 | 30 / 37 / 9 | 67 | 48 / 51 / 20 |
 | `==` | | | 22 | 22 / 22 / 9 | | |
 

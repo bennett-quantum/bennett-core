@@ -47,6 +47,7 @@ double rt___floattidf(S);
 double rt___floatuntidf(U);
 long double rt___floattixf(S);
 long double rt___floatuntixf(U);
+long double rt_fmal(long double, long double, long double);
 
 /* ---- formats and bits --------------------------------------------------------------------------- */
 
@@ -121,6 +122,10 @@ UNARY(u128_f64, of64((double)a), of64(rt___floatuntidf(a)))
 UNARY(i128_x80, of80((long double)(S)a), of80(rt___floattixf((S)a)))
 UNARY(u128_x80, of80((long double)a), of80(rt___floatuntixf(a)))
 
+/* The fused multiply-add of long double: glibc's fmal, which the native program calls. */
+static NOINLINE U h_x80_fma(U a, U b, U c) { return of80(fmal(x80(a), x80(b), x80(c))); }
+static NOINLINE U s_x80_fma(U a, U b, U c) { return of80(rt_fmal(x80(a), x80(b), x80(c))); }
+
 typedef struct {
     const char *name;
     int arity, in, out;
@@ -133,6 +138,7 @@ static const Op ops[] = {
     OP(f64_u128, 1, F64, U128), OP(x80_i128, 1, X80, I128), OP(x80_u128, 1, X80, U128),
     OP(i128_f32, 1, I128, F32), OP(u128_f32, 1, U128, F32), OP(i128_f64, 1, I128, F64),
     OP(u128_f64, 1, U128, F64), OP(i128_x80, 1, I128, X80), OP(u128_x80, 1, U128, X80),
+    OP(x80_fma, 3, X80, X80),
 };
 #define NOPS ((int)(sizeof ops / sizeof ops[0]))
 
@@ -244,6 +250,50 @@ static U random_float(int f, u64 *s) {
 
 static U random_operand(int f, u64 *s) { return f >= I128 ? random_int(s) : random_float(f, s); }
 
+static unsigned exp80(U v) { return (unsigned)(v >> 64) & 0x7FFF; }
+static U with_exp80(U v, int e) {
+    if (e < 1) e = 1;
+    if (e > 0x7FFE) e = 0x7FFE;
+    return (U)((unsigned)(v >> 64 & 0x8000) | (unsigned)e) << 64 | ((u64)v | 0x8000000000000000);
+}
+
+/* Operands of a * b + c: the product's exponent sometimes steered to the subnormal range or to overflow, the
+ * addend near the product (cancellation), its negated rounding a few ulps off (cancellation of nearly every
+ * bit), or anything. */
+static void random_fma(u64 *s, U *a, U *b, U *c) {
+    u64 r = next(s);
+    *a = random_float(X80, s);
+    *b = random_float(X80, s);
+    switch ((r >> 4) % 4) {
+    case 0: { /* product near the subnormal range */
+        int ea = 1 + (int)((r >> 8) % 0x3FFF);
+        *a = with_exp80(*a, ea);
+        *b = with_exp80(*b, 0x3FFF - ea + (int)((r >> 24) % 140) - 70);
+        break;
+    }
+    case 1: { /* product near overflow */
+        int ea = 0x3FFF + (int)((r >> 8) % 0x3FFF);
+        *a = with_exp80(*a, ea);
+        *b = with_exp80(*b, 0x7FFE + 0x3FFF - ea - (int)((r >> 24) % 4));
+        break;
+    }
+    default: break;
+    }
+    int pe = (int)exp80(*a) + (int)exp80(*b) - 0x3FFF;
+    switch ((r >> 32) % 6) {
+    case 0: *c = random_float(X80, s); break;
+    case 1: case 2: *c = with_exp80(random_float(X80, s), pe + (int)((r >> 40) % 141) - 70); break;
+    case 3: case 4: { /* minus the rounded product, a few ulps off, maybe a few binades lower */
+        U p = of80(x80(*a) * x80(*b));
+        U q = (p ^ ((U)0x8000 << 64)) + (U)((r >> 40) % 9) - 4;
+        if ((r >> 48) & 1) q = with_exp80(q, (int)exp80(q) - (int)((r >> 50) % 66));
+        *c = noncanonical(X80, q) ? p : q;
+        break;
+    }
+    default: *c = random_float(X80, s); *c = (U)(*c >> 64 & 0x8000) << 64; break; /* a zero */
+    }
+}
+
 /* ---- comparison and bookkeeping --------------------------------------------------------------- */
 
 enum { VALUE, NONCANONICAL, NCLASSES };
@@ -349,6 +399,7 @@ static void *random_worker(void *p) {
         U a = random_operand(op->in, &s), b = 0, c = 0;
         if (op->arity > 1) b = random_operand(op->in, &s);
         if (op->arity > 2) c = random_operand(op->in, &s);
+        if (op->arity == 3 && op->in == X80) random_fma(&s, &a, &b, &c);
         check(job->k, &l, a, b, c);
     }
     merge(job->k, 1, &l);

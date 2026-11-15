@@ -642,11 +642,6 @@ private:
       replacement = unary("nearbyint");
       break;
     case Intrinsic::fma:
-      if (type->isX86_FP80Ty()) {
-        notHandled("the fused multiply-add of " + described(type) + " values (`fmal`, @" + name +
-                       "): Berkeley SoftFloat 3e has none for the 80-bit format",
-                   call);
-      }
       replacement = this->call(b, "fma" + libm(type), type, {x, call->getArgOperand(1), call->getArgOperand(2)}, call);
       break;
     case Intrinsic::fmuladd: {

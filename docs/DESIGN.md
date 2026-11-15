@@ -175,11 +175,12 @@ and utilities where they exist (`Abi.h`, `Normalise.h`):
   no memory and run under qubit control. Runtime calls on constants are evaluated after the optimiser, so a
   rotation's angle may be computed.
 - **Refused by name**: `frem` and the C library's functions (`sin`, `pow`, `strtod`, and `sqrt` under the
-  default `-fmath-errno`, since errno is the C library's); `fmal` (SoftFloat has no 80-bit fused
-  multiply-add); operations on `_Float16`, `__bf16`, `__float128` (moving them is fine); conversions to and
-  from integers wider than 128 bits; `#pragma STDC FENV_ACCESS`. Conversions to and from 128-bit integers
-  are libgcc's routines on x86-64, followed step for step, so out of range they give what the native
-  program gives.
+  default `-fmath-errno`, since errno is the C library's); operations on `_Float16`, `__bf16`, `__float128`
+  (moving them is fine); conversions to and from integers wider than 128 bits; `#pragma STDC FENV_ACCESS`.
+- **Beyond SoftFloat**: conversions to and from 128-bit integers follow libgcc's routines on x86-64 step for
+  step, so out of range they give what the native program gives; `fmal`, which SoftFloat lacks for the
+  80-bit format, is written over SoftFloat's primitives and rounded once by its own rounding, and agrees
+  with glibc's (`rt/softfloat/README.md`).
 
 Two things the first C programs taught:
 

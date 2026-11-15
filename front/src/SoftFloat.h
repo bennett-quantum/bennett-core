@@ -29,8 +29,7 @@
 //    stack, and lowerValuesInMemory.
 //
 // Refused by name: `frem` (fmod) and the intrinsics of C library functions (sin, exp, pow, ...), which
-// come with the C library; the fused multiply-add of long double (`fmal`, `llvm.fma.f80`: SoftFloat has
-// none for the 80-bit format); operations on `half`, `bfloat`, `fp128` and `ppc_fp128` values (moving
+// come with the C library; operations on `half`, `bfloat`, `fp128` and `ppc_fp128` values (moving
 // them is fine); conversions between floating point and integers wider than 128 bits; constrained
 // intrinsics; atomic floating-point updates. A program without floating point is unchanged and no
 // runtime is linked.

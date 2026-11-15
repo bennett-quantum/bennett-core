@@ -312,7 +312,96 @@ double sqrt(double a) { return of_f64(f64_sqrt(f64_of(a))); }
 float fmaf(float a, float b, float c) { return of_f32(f32_mulAdd(f32_of(a), f32_of(b), f32_of(c))); }
 double fma(double a, double b, double c) { return of_f64(f64_mulAdd(f64_of(a), f64_of(b), f64_of(c))); }
 long double sqrtl(long double a) { return of_x80(extF80_sqrt(x80_of(a))); }
-/* No fmal: SoftFloat has no extF80 fused multiply-add. */
+
+/* fmal: SoftFloat has no extF80 fused multiply-add, so it is written here over SoftFloat's primitives and
+ * rounded once by its softfloat_roundPackToExtF80. The native program calls glibc's (ldbl-96 s_fmal.c), whose
+ * special cases are computed with x87 operations, which SoftFloat's extF80 operations match: an infinite or
+ * NaN addend with finite factors gives (z + x) + y; a zero addend with nonzero factors x * y; an infinite or
+ * NaN operand or a zero factor x * y + z. Otherwise the exact product of the two 64-bit significands (128
+ * bits) and the addend's are aligned in a window of 256 bits, the smaller shifted right with the bits it
+ * loses jammed into the lowest one, added or subtracted, normalised, and the top 64 bits rounded with the
+ * next 64 (and the rest jammed) as the extra word. A jammed bit stays far below the rounding position: a
+ * subtraction cancels more than one leading bit only when the exponents differ by at most one, and then no
+ * bit was shifted out. */
+static bool special80(extFloat80_t x) { return (x.signExp & 0x7FFF) == 0x7FFF; }
+static bool zero80(extFloat80_t x) { return !special80(x) && !x.signif; }
+/* A finite nonzero x as a significand with bit 63 set and its exponent (subnormals normalised). */
+static struct exp32_sig64 unpacked80(extFloat80_t x) {
+  struct exp32_sig64 r = {x.signExp & 0x7FFF, x.signif};
+  if (!r.exp) r.exp = 1;
+  if (!(r.sig >> 63)) {
+    struct exp32_sig64 n = softfloat_normSubnormalExtF80Sig(r.sig);
+    r.exp += n.exp;
+    r.sig = n.sig;
+  }
+  return r;
+}
+long double fmal(long double a, long double b, long double c) {
+  extFloat80_t x = x80_of(a), y = x80_of(b), z = x80_of(c);
+  if (special80(z) && !special80(x) && !special80(y)) return of_x80(extF80_add(extF80_add(z, x), y));
+  if (zero80(z) && !zero80(x) && !zero80(y)) return of_x80(extF80_mul(x, y));
+  if (special80(x) || special80(y) || special80(z) || zero80(x) || zero80(y))
+    return of_x80(extF80_add(extF80_mul(x, y), z));
+  struct exp32_sig64 ux = unpacked80(x), uy = unpacked80(y), uz = unpacked80(z);
+  bool signP = (x.signExp ^ y.signExp) >> 15, signZ = z.signExp >> 15;
+  /* A significand of 128 bits with bit 127 set and exponent e stands for sig * 2^(e - 0x3FFF - 127). */
+  uti_t p = (uti_t)ux.sig * uy.sig, q = (uti_t)uz.sig << 64;
+  int_fast32_t expP = ux.exp + uy.exp - 0x3FFE, expZ = uz.exp;
+  if (!(p >> 127)) {
+    p <<= 1;
+    --expP;
+  }
+  bool pFirst = expP > expZ || (expP == expZ && p >= q);
+  uti_t big = pFirst ? p : q, small = pFirst ? q : p;
+  int_fast32_t exp = pFirst ? expP : expZ, shift = pFirst ? expP - expZ : expZ - expP;
+  bool sign = pFirst ? signP : signZ;
+  /* The window: high and low 128 bits. */
+  uti_t smallHigh, smallLow;
+  if (shift == 0) {
+    smallHigh = small;
+    smallLow = 0;
+  } else if (shift < 128) {
+    smallHigh = small >> shift;
+    smallLow = small << (128 - shift);
+  } else if (shift == 128) {
+    smallHigh = 0;
+    smallLow = small;
+  } else if (shift < 256) {
+    smallHigh = 0;
+    smallLow = small >> (shift - 128) | (small << (256 - shift) != 0);
+  } else {
+    smallHigh = 0;
+    smallLow = 1;
+  }
+  uti_t high, low;
+  if (signP == signZ) {
+    low = smallLow;
+    high = big + smallHigh;
+    if (high < big) { /* a carry out: one place right, keeping what falls off */
+      low = low >> 1 | high << 127 | (low & 1);
+      high = high >> 1 | (uti_t)1 << 127;
+      ++exp;
+    }
+  } else {
+    low = -smallLow;
+    high = big - smallHigh - (smallLow != 0);
+    if (!high && !low) return of_x80((extFloat80_t){0, 0}); /* exact cancellation: +0 to nearest */
+    if (!high) {
+      high = low;
+      low = 0;
+      exp -= 128;
+    }
+    uint64_t top = (uint64_t)(high >> 64);
+    int_fast32_t n = top ? softfloat_countLeadingZeros64(top) : 64 + softfloat_countLeadingZeros64((uint64_t)high);
+    if (n) {
+      high = high << n | low >> (128 - n);
+      low <<= n;
+      exp -= n;
+    }
+  }
+  return of_x80(softfloat_roundPackToExtF80(sign, exp, (uint64_t)(high >> 64), (uint64_t)high | (low != 0),
+                                            extF80_roundingPrecision));
+}
 
 /* Rounding to an integral value: rint and nearbyint in the current mode, which is always to nearest. */
 #define ROUND(name, mode)                                                                                  \
