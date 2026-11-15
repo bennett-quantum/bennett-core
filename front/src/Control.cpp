@@ -275,12 +275,12 @@ void ControlWriter::marker(const CallBase &call, const Marker &marker) {
     controlledGate(call, target, marker.mnemonic + " " + qubit);
     return;
   case MarkerKind::Rotation: {
-    const auto *angle = dyn_cast<ConstantFP>(call.getArgOperand(1));
-    if (!angle || !std::isfinite(angle->getValueAPF().convertToDouble())) {
+    std::optional<double> angle = rotationAngle(call);
+    if (!angle || !std::isfinite(*angle)) {
       notHandled("a rotation by an angle that is not a finite constant", &call);
     }
     char text[64];
-    std::snprintf(text, sizeof text, "%.17g", angle->getValueAPF().convertToDouble());
+    std::snprintf(text, sizeof text, "%.17g", *angle);
     controlledGate(call, target, marker.mnemonic + "(" + text + ") " + qubit);
     return;
   }

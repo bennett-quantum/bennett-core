@@ -24,6 +24,7 @@ add_executable(bennett-front
   src/Control.cpp
   src/Predicate.cpp
   src/InPlace.cpp
+  src/SoftFloat.cpp
 )
 target_include_directories(bennett-front SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_compile_definitions(bennett-front PRIVATE ${LLVM_DEFINITIONS})
@@ -34,3 +35,54 @@ else()
   llvm_map_components_to_libnames(llvm_libs core irreader bitreader passes transformsutils analysis codegen)
   target_link_libraries(bennett-front PRIVATE ${llvm_libs})
 endif()
+
+# The default floating-point runtime, `float-runtime.bc` next to bennett-front: Berkeley SoftFloat 3e
+# (rt/softfloat, vendored unmodified) under the compiler runtime-call names of rt/softfloat/libgcc.c,
+# compiled to bitcode by clang 18 and linked into one file. The SoftFloat files are those its own
+# Linux-x86_64-GCC Makefile lists, with its options, except softfloat_raiseFlags.c: libgcc.c has its own.
+# clang is $CLANG if set, as for the tests, else the one next to LLVM's tools, else on the path.
+if(DEFINED ENV{CLANG})
+  set(BENNETT_CLANG "$ENV{CLANG}")
+else()
+  find_program(BENNETT_CLANG NAMES clang clang-18 HINTS "${LLVM_TOOLS_BINARY_DIR}" REQUIRED)
+endif()
+find_program(BENNETT_LLVM_LINK NAMES llvm-link llvm-link-18 HINTS "${LLVM_TOOLS_BINARY_DIR}" REQUIRED)
+
+set(softfloat "${CMAKE_CURRENT_SOURCE_DIR}/../rt/softfloat")
+set(softfloat_source "${softfloat}/berkeley-softfloat-3e/source")
+set(softfloat_build "${softfloat}/berkeley-softfloat-3e/build/Linux-x86_64-GCC")
+file(READ "${softfloat_build}/Makefile" softfloat_makefile)
+string(REGEX MATCHALL "\n  [A-Za-z0-9_]+\\$\\(OBJ\\)" softfloat_objects "${softfloat_makefile}")
+set(softfloat_flags
+  -O2 -fno-vectorize -fno-slp-vectorize -ffreestanding -fno-builtin -Werror-implicit-function-declaration
+  -emit-llvm -c
+  -DSOFTFLOAT_FAST_INT64 -DSOFTFLOAT_ROUND_ODD -DINLINE_LEVEL=5 -DSOFTFLOAT_FAST_DIV32TO16
+  -DSOFTFLOAT_FAST_DIV64TO32
+  -I "${softfloat_build}" -I "${softfloat_source}/8086-SSE" -I "${softfloat_source}/include")
+set(softfloat_bitcode)
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/softfloat")
+foreach(line IN LISTS softfloat_objects)
+  string(REGEX REPLACE "^\n  ([A-Za-z0-9_]+).*" "\\1" name "${line}")
+  if(name STREQUAL "softfloat_raiseFlags")
+    continue()
+  endif()
+  if(EXISTS "${softfloat_source}/8086-SSE/${name}.c")
+    set(file "${softfloat_source}/8086-SSE/${name}.c")
+  else()
+    set(file "${softfloat_source}/${name}.c")
+  endif()
+  set(bitcode "${CMAKE_CURRENT_BINARY_DIR}/softfloat/${name}.bc")
+  add_custom_command(OUTPUT "${bitcode}"
+    COMMAND "${BENNETT_CLANG}" ${softfloat_flags} "${file}" -o "${bitcode}"
+    DEPENDS "${file}" VERBATIM)
+  list(APPEND softfloat_bitcode "${bitcode}")
+endforeach()
+set(interface_bitcode "${CMAKE_CURRENT_BINARY_DIR}/softfloat/libgcc.bc")
+add_custom_command(OUTPUT "${interface_bitcode}"
+  COMMAND "${BENNETT_CLANG}" ${softfloat_flags} "${softfloat}/libgcc.c" -o "${interface_bitcode}"
+  DEPENDS "${softfloat}/libgcc.c" VERBATIM)
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/float-runtime.bc"
+  COMMAND "${BENNETT_LLVM_LINK}" "${interface_bitcode}" ${softfloat_bitcode}
+          -o "${CMAKE_CURRENT_BINARY_DIR}/float-runtime.bc"
+  DEPENDS "${interface_bitcode}" ${softfloat_bitcode} VERBATIM)
+add_custom_target(float-runtime ALL DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/float-runtime.bc")

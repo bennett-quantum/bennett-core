@@ -1,6 +1,7 @@
 // bennett-front: reads LLVM bitcode (or text IR) and writes a Bennett device program.
 //
 //   bennett-front input.bc -o output.bn --region-budget N --stack-bytes N [--taint-all] [--emit-llvm file.ll]
+//                 [--float-runtime file.bc]
 
 #include "Abi.h"
 #include "Diagnostic.h"
@@ -8,6 +9,7 @@
 #include "Markers.h"
 #include "Normalise.h"
 #include "Outline.h"
+#include "SoftFloat.h"
 
 #include <llvm/Analysis/AliasAnalysis.h>
 #include <llvm/IR/LLVMContext.h>
@@ -19,6 +21,7 @@
 #include <llvm/Support/CrashRecoveryContext.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/InitLLVM.h>
+#include <llvm/Support/Path.h>
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/raw_ostream.h>
 
@@ -40,6 +43,19 @@ cl::opt<bool> taintAll("taint-all",
                        cl::cat(category));
 cl::opt<std::string> emitLLVM("emit-llvm", cl::desc("Also write the LLVM IR as lowered, for inspection"),
                               cl::cat(category));
+cl::opt<std::string> floatRuntime("float-runtime",
+                                  cl::desc("Bitcode defining the floating-point runtime-call interface (default: "
+                                           "float-runtime.bc next to bennett-front, Berkeley SoftFloat 3e)"),
+                                  cl::cat(category));
+
+// float-runtime.bc in the directory of this executable.
+std::string defaultFloatRuntime(const char *argv0) {
+  static int anchor;
+  SmallString<256> path(sys::fs::getMainExecutable(argv0, &anchor));
+  sys::path::remove_filename(path);
+  sys::path::append(path, "float-runtime.bc");
+  return std::string(path);
+}
 
 // Runs the module pipeline `pipeline` with fresh analyses.
 void runPipeline(Module &module, const std::string &pipeline, bool optimise) {
@@ -92,10 +108,15 @@ int main(int argc, char **argv) {
   }
   verify(*module, "on input");
   bennett::checkMarkers(*module);
+  bool softFloat =
+      bennett::lowerFloatOperations(*module, floatRuntime.empty() ? defaultFloatRuntime(argv[0]) : floatRuntime);
+  verify(*module, "after lowering floating-point operations");
   bennett::lowerVariadics(*module);
   bennett::lowerValuesInMemory(*module);
   bennett::lowerIndirectBranches(*module);
   verify(*module, "after lowering calls and computed goto");
+  bennett::floatsToIntegers(*module);
+  verify(*module, "after rewriting floating-point values as integers");
   bennett::lowerParameterAttributes(*module);
   // LLVM's optimiser has bugs of its own. A crash inside it is reported by name; no device program is written.
   CrashRecoveryContext::Enable();
@@ -104,7 +125,17 @@ int main(int argc, char **argv) {
     bennett::fail("LLVM's optimiser crashed on this module (a bug in LLVM); no device program was written");
   }
   CrashRecoveryContext::Disable();
-  bennett::checkMarkers(*module);
+  bennett::checkNoFloatingPoint(*module, "after the optimiser");
+  // The optimiser deletes the runtime's exception flags, which nothing reads, after it has inferred that
+  // the runtime writes them: the memory effects are inferred again, or no runtime call could run
+  // coherently. Then runtime calls on constants are evaluated (a rotation's angle must be a constant).
+  if (softFloat) {
+    runPipeline(*module, "cgscc(function-attrs)", false);
+    if (bennett::foldConstantCalls(*module)) {
+      runPipeline(*module, "globaldce,cgscc(function-attrs)", false);
+    }
+  }
+  bennett::checkMarkers(*module, /*floatsAreBits=*/true);
   bennett::lowerParameterAttributes(*module);
   bennett::scalarise(*module);
   bennett::lowerEmptyAssembly(*module);

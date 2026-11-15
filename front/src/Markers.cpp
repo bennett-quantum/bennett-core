@@ -2,6 +2,7 @@
 
 #include "Diagnostic.h"
 
+#include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Module.h>
@@ -48,6 +49,14 @@ bool isGateCall(const Value *value) {
   return marker && (marker->kind == MarkerKind::Gate || marker->kind == MarkerKind::Rotation);
 }
 
+std::optional<double> rotationAngle(const CallBase &call) {
+  const auto *bits = dyn_cast<ConstantInt>(call.getArgOperand(1));
+  if (!bits || bits->getBitWidth() != 64) {
+    return std::nullopt;
+  }
+  return bits->getValue().bitsToDouble();
+}
+
 std::optional<Marker> markerCall(const Value *value) {
   const auto *call = dyn_cast_or_null<CallBase>(value);
   if (!call) {
@@ -56,7 +65,7 @@ std::optional<Marker> markerCall(const Value *value) {
   return markerOf(call->getCalledFunction());
 }
 
-void checkMarkers(const Module &module) {
+void checkMarkers(const Module &module, bool floatsAreBits) {
   for (const Function &function : module) {
     if (!function.getName().starts_with(prefix)) {
       continue;
@@ -78,7 +87,7 @@ void checkMarkers(const Module &module) {
       break;
     case MarkerKind::Rotation:
       shape = type->getReturnType()->isVoidTy() && type->getNumParams() == 2 && pointerFirst &&
-              type->getParamType(1)->isDoubleTy();
+              (floatsAreBits ? type->getParamType(1)->isIntegerTy(64) : type->getParamType(1)->isDoubleTy());
       break;
     case MarkerKind::Measure:
       shape = type->getReturnType()->isIntegerTy(64) && type->getNumParams() == 1 && pointerFirst;

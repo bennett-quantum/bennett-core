@@ -106,6 +106,14 @@ pub fn lower_text_with_budget(
     Ok(std::fs::read_to_string(&program).unwrap_or_else(|e| panic!("cannot read {program:?}: {e}")))
 }
 
+/// Compiles `source` to bitcode with `clang_flags` and returns the file, named after `name`.
+pub fn bitcode(source: &Path, name: &str, clang_flags: &[&str]) -> PathBuf {
+    let output = out_dir().join(format!("{name}.bc"));
+    run_tool(Command::new(clang()).args(clang_flags).args(["-emit-llvm", "-c"]).arg(source).arg("-o").arg(&output))
+        .unwrap_or_else(|e| panic!("clang failed on {source:?}:\n{e}"));
+    output
+}
+
 /// Lowers `source` and loads the device program, which must be valid.
 pub fn lower(source: &Path, name: &str, clang_flags: &[&str], front_flags: &[&str]) -> ValidModule {
     let text = lower_text(source, name, clang_flags, front_flags).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -268,8 +276,13 @@ pub fn column(columns: &[String], register: &str) -> usize {
 
 /// Compiles the C program `source` natively (`clang -O2` and `flags`) and returns the executable.
 pub fn native_build(source: &Path, name: &str, flags: &[&str]) -> PathBuf {
+    native_build_with(source, name, flags, &[])
+}
+
+/// [`native_build`], linked with `libraries` (`-lm`) after the source.
+pub fn native_build_with(source: &Path, name: &str, flags: &[&str], libraries: &[&str]) -> PathBuf {
     let executable = out_dir().join(format!("{name}.native"));
-    run_tool(Command::new(clang()).arg("-O2").args(flags).arg(source).arg("-o").arg(&executable))
+    run_tool(Command::new(clang()).arg("-O2").args(flags).arg(source).arg("-o").arg(&executable).args(libraries))
         .unwrap_or_else(|e| panic!("cannot compile {source:?} natively:\n{e}"));
     executable
 }

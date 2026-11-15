@@ -40,7 +40,12 @@ bool isGateCall(const llvm::Value *value);
 inline constexpr const char *controlBundle = "bennett.control";
 
 // Checks every function named bennett_*: it must be a known marker, only declared, with the marker's
-// signature, and without attributes that would let LLVM delete, merge or speculate its calls.
-void checkMarkers(const llvm::Module &module);
+// signature, and without attributes that would let LLVM delete, merge or speculate its calls. With
+// `floatsAreBits` (after floatsToIntegers, SoftFloat.h) a rotation's angle is the `i64` of its bits.
+void checkMarkers(const llvm::Module &module, bool floatsAreBits = false);
+
+// The angle of a rotation marker call, if it is a constant: the bits of a double, as floatsToIntegers
+// wrote it.
+std::optional<double> rotationAngle(const llvm::CallBase &call);
 
 } // namespace bennett

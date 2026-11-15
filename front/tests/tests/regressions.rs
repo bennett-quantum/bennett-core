@@ -182,21 +182,14 @@ fn initialisers_are_written_in_full() {
     }
 }
 
-/// Floating-point arithmetic and the other things this version cannot lower are refused by name.
+/// Calls of the C library, which is not linked yet, are refused by name.
 #[test]
-fn floating_point_arithmetic_and_library_calls_are_refused() {
-    let cases = [
-        ("float_arithmetic", "volatile double a = 1.5;\nint main(void) { return (int)(a * 3.0); }\n", "double"),
-        (
-            "printf",
-            "int printf(const char *, ...);\nint main(int n, char **v) { (void)v; return printf(\"%d\", n); }\n",
-            "printf",
-        ),
-    ];
-    for (name, text, expected) in cases {
-        let source = write_c(name, text);
-        assert_refused(&source, name, expected);
-    }
+fn library_calls_are_refused() {
+    let source = write_c(
+        "printf",
+        "int printf(const char *, ...);\nint main(int n, char **v) { (void)v; return printf(\"%d\", n); }\n",
+    );
+    assert_refused(&source, "printf", "printf");
 }
 
 #[test]
