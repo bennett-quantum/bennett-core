@@ -107,8 +107,11 @@ const char *predicateMnemonic(CmpInst::Predicate pred) {
 std::string Namer::fresh(const std::string &hint) {
   std::string base = sanitize(hint);
   std::string name = base;
-  for (unsigned n = 1; used.count(name); ++n) {
-    name = base + "." + std::to_string(n);
+  // Names are never released, so every suffix below the one last given for this base is still taken: the
+  // search resumes there, and a hint repeated k times costs k probes in all, not k * k / 2.
+  unsigned &n = next[base];
+  while (used.count(name)) {
+    name = base + "." + std::to_string(++n);
   }
   used.insert(name);
   return name;

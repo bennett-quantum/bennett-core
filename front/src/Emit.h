@@ -36,6 +36,7 @@ public:
 
 private:
   std::set<std::string> used;
+  std::map<std::string, unsigned> next; // the last suffix given for each base
 };
 
 class ModuleWriter {

@@ -2,6 +2,7 @@
 
 #include "Diagnostic.h"
 
+#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/Analysis/TargetTransformInfo.h>
 #include <llvm/CodeGen/IntrinsicLowering.h>
 #include <llvm/IR/AttributeMask.h>
@@ -260,17 +261,49 @@ Value *bitReverse(IRBuilder<> &b, Value *x) {
   return result;
 }
 
-// Runs `expand`, then gives every instruction it added that has no debug location the location `at`, so
-// that diagnostics about the expansion point at the source.
-void locate(Function &function, const DebugLoc &at, const std::function<void()> &expand) {
-  std::set<const Instruction *> before;
-  for (const Instruction &inst : instructions(function)) {
-    before.insert(&inst);
+// Runs `expand` on the intrinsic call `call`, then gives every instruction it added that has no debug
+// location the call's location, so that diagnostics about the expansion point at the source. An expansion
+// adds instructions only in the call's block and, if it `addsBlocks`, in blocks it creates (splitting the
+// call's block moves that block's own instructions into a new one), so only those are looked at: looking
+// at the whole function each time made a function with n intrinsic calls cost n times its size.
+void locate(Instruction *call, bool addsBlocks, const std::function<void()> &expand) {
+  DebugLoc at = call->getDebugLoc();
+  BasicBlock *home = call->getParent();
+  Function &function = *home->getParent();
+  SmallPtrSet<const BasicBlock *, 32> blocks;
+  if (addsBlocks) {
+    for (const BasicBlock &block : function) {
+      blocks.insert(&block);
+    }
+  }
+  // The call's block's instructions that have no location; a handle forgets one the expansion deletes,
+  // whose address a new instruction may then reuse.
+  std::vector<WeakVH> unlocated;
+  for (Instruction &inst : *home) {
+    if (!inst.getDebugLoc()) {
+      unlocated.emplace_back(&inst);
+    }
   }
   expand();
-  for (Instruction &inst : instructions(function)) {
-    if (!before.count(&inst) && !inst.getDebugLoc()) {
-      inst.setDebugLoc(at);
+  SmallPtrSet<const Value *, 32> old;
+  for (const WeakVH &inst : unlocated) {
+    if (inst) {
+      old.insert(inst);
+    }
+  }
+  auto locateIn = [&](BasicBlock &block) {
+    for (Instruction &inst : block) {
+      if (!inst.getDebugLoc() && !old.count(&inst)) {
+        inst.setDebugLoc(at);
+      }
+    }
+  };
+  locateIn(*home);
+  if (addsBlocks) {
+    for (BasicBlock &block : function) {
+      if (!blocks.count(&block)) {
+        locateIn(block);
+      }
     }
   }
 }
@@ -549,7 +582,7 @@ void lowerIntrinsics(Module &module, bool keepBijections) {
       case Intrinsic::expect:
       case Intrinsic::invariant_start:
       case Intrinsic::invariant_end:
-        locate(function, call->getDebugLoc(), [&] { generic.LowerIntrinsicCall(call); });
+        locate(call, false, [&] { generic.LowerIntrinsicCall(call); });
         continue;
       case Intrinsic::sadd_with_overflow:
       case Intrinsic::uadd_with_overflow:
@@ -567,7 +600,7 @@ void lowerIntrinsics(Module &module, bool keepBijections) {
             id == Intrinsic::sadd_with_overflow || id == Intrinsic::uadd_with_overflow   ? Instruction::Add
             : id == Intrinsic::ssub_with_overflow || id == Intrinsic::usub_with_overflow ? Instruction::Sub
                                                                                          : Instruction::Mul;
-        locate(function, call->getDebugLoc(), [&] { withOverflow(call, op, isSigned); });
+        locate(call, false, [&] { withOverflow(call, op, isSigned); });
         continue;
       }
       case Intrinsic::sadd_sat:
@@ -629,19 +662,19 @@ void lowerIntrinsics(Module &module, bool keepBijections) {
       case Intrinsic::ctpop:
       case Intrinsic::ctlz:
       case Intrinsic::cttz:
-        locate(function, call->getDebugLoc(), [&] { generic.LowerIntrinsicCall(call); });
+        locate(call, false, [&] { generic.LowerIntrinsicCall(call); });
         continue;
       case Intrinsic::memset:
-        locate(function, call->getDebugLoc(), [&] { expandMemSetAsLoop(cast<MemSetInst>(call)); });
+        locate(call, true, [&] { expandMemSetAsLoop(cast<MemSetInst>(call)); });
         call->eraseFromParent();
         continue;
       case Intrinsic::memcpy:
-        locate(function, call->getDebugLoc(), [&] { expandMemCpyAsLoop(cast<MemCpyInst>(call), costs); });
+        locate(call, true, [&] { expandMemCpyAsLoop(cast<MemCpyInst>(call), costs); });
         call->eraseFromParent();
         continue;
       case Intrinsic::memmove: {
         bool expanded = false;
-        locate(function, call->getDebugLoc(),
+        locate(call, true,
                [&] { expanded = expandMemMoveAsLoop(cast<MemMoveInst>(call), costs); });
         if (expanded) {
           call->eraseFromParent();
