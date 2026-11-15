@@ -38,9 +38,10 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `9817fe0`, `c17bde9`, `08d7799` | Measurements: journal content in coherent regions; control schedules on the SQLite traces |
 | `cd2d920` | The complex multiply and divide helpers: compiler-rt 18.1.8 vendored unmodified (`rt/compiler-rt`), linked by the front where a program calls them; bit for bit with the same helpers on the hardware, NaN bits aside |
 | `31f5138` | `setjmp`/`longjmp` (library and built-in forms, `sigsetjmp` with musl): a device `setjmp` instruction and `longjmp` terminator, journalled (`docs/DESIGN.md`, "Non-local jumps") |
+| `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (191 tests and 1 heavy reference run ignored, about 5 s, no LLVM needed) and `front/test.sh` (138 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (196 tests and 1 heavy reference run ignored, about 5 s, no LLVM needed) and `front/test.sh` (142 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check that needs `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -368,6 +369,9 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
   the whole run by default? (W4) Is observing which world at a measurement, and sampling one at the end, the
   intended reading of rule 1? (Counted in `Stats::observations` for step 4's warning.) (W5) Every split copies
   the whole memory until the overlay (next step).
+- **Return addresses** (`2bf0b69`): the outermost frame gives `0xFFFF_FFFF_0000_0000` (natively an address in the C
+  library's startup) and a level beyond it 0 (natively unspecified). Keep? Levels above 0 follow the device's
+  frames, which natively needs frame pointers kept and sibling calls off (plain native `-O2` crashed at level 1).
 - **`setjmp`/`longjmp`.** (1) `docs/DESIGN.md` ("Non-local jumps") lets a stale jump record succeed when a later
   call of the same function sits at the same depth and stack address (C leaves it undefined; the testing pass's
   probe returned 77). Keep that, or fault by name? (2) Since `595339c` a copied `sigjmp_buf` carries its own saved
