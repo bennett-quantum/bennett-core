@@ -17,7 +17,7 @@
 //! arguments: `softfloat_exact <random-per-op> <threads> 1`.
 //!
 //! The runtime's own routines, those that are more than a call of SoftFloat (conversions to and from 128-bit
-//! integers, ...), are checked the same way against the native program's: `front/tests/c/float_runtime_exact.c`
+//! integers, `fmal`, `_Float16` and `__bf16` conversions), are checked the same way against the native program's: `front/tests/c/float_runtime_exact.c`
 //! with the device's runtime, `float-runtime.bc`, compiled natively and every symbol prefixed `rt_`. It takes
 //! the same arguments.
 
@@ -193,7 +193,10 @@ fn the_runtime_routines_beyond_softfloat_are_bit_exact_against_native() {
             .find(|line| line.split_whitespace().next() == Some(op))
             .unwrap_or_else(|| panic!("no line for {op}:\n{report}"))
     };
-    for op in ["f32_i128", "f64_u128", "i128_f32", "u128_f64", "i128_x80", "u128_x80"] {
+    for op in [
+        "f32_i128", "f64_u128", "i128_f32", "u128_f64", "i128_x80", "u128_x80", "f16_f32", "f32_f16", "f16_i128",
+        "u128_f16", "f32_bf16", "f64_bf16",
+    ] {
         assert!(line(op).ends_with(" ok"), "{op}: {}", line(op));
     }
     // Non-canonical long double encodings, which x87 rejects, are still the only difference.

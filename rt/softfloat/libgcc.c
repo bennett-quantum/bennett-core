@@ -275,6 +275,77 @@ ti_t __fixxfti(long double a) {
 }
 uti_t __fixunsxfti(long double a) { return uti_of_x80(x80_of(a)); }
 
+/* _Float16 and __bf16. The native program computes them as LLVM's x86-64 back end does without
+ * half-precision hardware: every operation in float, rounded back after each, through these conversions.
+ * For _Float16 they are SoftFloat's (one rounding each); __fixhfti and friends follow libgcc's soft-fp
+ * routines, which saturate: an infinity or a NaN gives the largest or least integer by its sign, and the
+ * unsigned conversion of a negative value 0. A _Float16 never needs more than 17 integer bits, so the 64-bit
+ * conversions do the rest; a 128-bit integer of 2^64 or more is beyond its range and rounds to infinity. */
+static float16_t f16_of(_Float16 x) {
+  float16_t r;
+  __builtin_memcpy(&r, &x, sizeof r);
+  return r;
+}
+static _Float16 of_f16(float16_t x) {
+  _Float16 r;
+  __builtin_memcpy(&r, &x, sizeof r);
+  return r;
+}
+float __extendhfsf2(_Float16 a) { return of_f32(f16_to_f32(f16_of(a))); }
+long double __extendhfxf2(_Float16 a) { return of_x80(f16_to_extF80(f16_of(a))); }
+_Float16 __truncsfhf2(float a) { return of_f16(f32_to_f16(f32_of(a))); }
+_Float16 __truncdfhf2(double a) { return of_f16(f64_to_f16(f64_of(a))); }
+_Float16 __truncxfhf2(long double a) { return of_f16(extF80_to_f16(x80_of(a))); }
+ti_t __fixhfti(_Float16 a) {
+  float16_t x = f16_of(a);
+  if ((x.v & 0x7C00) == 0x7C00) return x.v >> 15 ? (ti_t)((uti_t)1 << 127) : (ti_t)(~(uti_t)0 >> 1);
+  return f16_to_i64_r_minMag(x, false);
+}
+uti_t __fixunshfti(_Float16 a) {
+  float16_t x = f16_of(a);
+  if (x.v >> 15) return 0;
+  if ((x.v & 0x7C00) == 0x7C00) return ~(uti_t)0;
+  return f16_to_ui64_r_minMag(x, false);
+}
+_Float16 __floattihf(ti_t a) {
+  float16_t inf = {(uint16_t)(a < 0 ? 0xFC00 : 0x7C00)};
+  return of_f16(a == (int64_t)a ? i64_to_f16((int64_t)a) : inf);
+}
+_Float16 __floatuntihf(uti_t a) {
+  float16_t inf = {0x7C00};
+  return of_f16(a >> 64 ? inf : ui64_to_f16((uint64_t)a));
+}
+
+/* __bf16 is the top half of a float, which is all an extension does (the front writes it inline). SoftFloat
+ * has no bfloat16, so the roundings to it are written here: from float, to nearest even on the bits (a carry
+ * runs into the exponent, which is right up to infinity), and a NaN quiet with the top of its payload, as
+ * libgcc's __truncsfbf2. From double and long double: rounded to float to odd (a float that is inexact is
+ * made odd towards the exact value, overflow giving the largest finite float), then to __bf16, which is one
+ * correct rounding because float keeps at least two bits more than __bf16 everywhere, subnormals included
+ * (the exponent ranges are the same). */
+static __bf16 bf16_of_bits(uint32_t u) {
+  uint16_t r = (u & 0x7FFFFFFF) > 0x7F800000 ? (uint16_t)(u >> 16 | 0x0040) : (uint16_t)((u + 0x7FFF + (u >> 16 & 1)) >> 16);
+  __bf16 b;
+  __builtin_memcpy(&b, &r, sizeof b);
+  return b;
+}
+static uint32_t odd_step(float32_t r, bool inexact, bool below) {
+  return inexact && !(r.v & 1) ? (below ? r.v + 1 : r.v - 1) : r.v;
+}
+__bf16 __truncsfbf2(float a) { return bf16_of_bits(f32_of(a).v); }
+__bf16 __truncdfbf2(double a) {
+  float64_t x = f64_of(a), ax = {x.v & UINT64_C(0x7FFFFFFFFFFFFFFF)};
+  float32_t r = f64_to_f32(x);
+  float64_t back = f32_to_f64(r), ab = {back.v & UINT64_C(0x7FFFFFFFFFFFFFFF)};
+  return bf16_of_bits(odd_step(r, !nan64(x) && !f64_eq(back, x), f64_lt_quiet(ab, ax)));
+}
+__bf16 __truncxfbf2(long double a) {
+  extFloat80_t x = x80_of(a), ax = {x.signif, (uint16_t)(x.signExp & 0x7FFF)};
+  float32_t r = extF80_to_f32(x);
+  extFloat80_t back = f32_to_extF80(r), ab = {back.signif, (uint16_t)(back.signExp & 0x7FFF)};
+  return bf16_of_bits(odd_step(r, !nan80(x) && !extF80_eq(back, x), extF80_lt_quiet(ab, ax)));
+}
+
 /* x to the power m by repeated squaring, as libgcc2.c computes it (`__builtin_powi`). */
 float __powisf2(float x, int m) {
   unsigned n = m < 0 ? -(unsigned)m : (unsigned)m;

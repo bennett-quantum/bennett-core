@@ -1,7 +1,7 @@
 # rt/softfloat: floating point as library code
 
-The device program has no floating-point values. `bennett-front` rewrites every `float`, `double` and
-`long double` operation into a call of the compiler runtime-call interface (the libgcc names, `__adddf3`,
+The device program has no floating-point values. `bennett-front` rewrites every `float`, `double`,
+`long double`, `_Float16` and `__bf16` operation into a call of the compiler runtime-call interface (the libgcc names, `__adddf3`,
 `__ltsf2`, `__fixdfsi`, `__mulxf3`, ..., and for the rest the C library names of LLVM's RuntimeLibcalls.def,
 `sqrt`, `fma`, `floor`, `fmin`, ...), and links the routines from a runtime bitcode (`front/src/SoftFloat.h`).
 This directory is the default runtime: Berkeley SoftFloat 3e, vendored unmodified (`VENDOR.md`), with the
@@ -48,8 +48,26 @@ every 32-bit input of each conversion from `float`.
 
 | `fmal` (SoftFloat has no extF80 fused multiply-add) | the exact 128-bit product of the significands and the addend's aligned in a 256-bit window, the bits shifted out jammed into the lowest one, added or subtracted, normalised, rounded once by `softfloat_roundPackToExtF80`; glibc's special cases (an infinite or NaN operand, a zero factor or addend) computed as glibc computes them, with SoftFloat's extF80 operations, which match x87's | none, NaN bits included, against glibc's `fmal`: the cross product of the directed values (830,584 triples) and 10^8 random triples (`float_runtime_exact 100000000 3 0 fma`, 52 s), steered to cancellation (the addend near or minus the product), subnormal results and overflow; only encodings x87 rejects differ |
 
-`front/tests/tests/softfloat.rs` repeats this with 2·10^4 random operands per operation (and the directed
-triples of `fmal`) in under a second. Integers from 65 to 128 bits wide go through the 128-bit routine of their signedness and are
+| `_Float16`: `__extendhfsf2`, `__extendhfxf2`, `__truncsfhf2`, `__truncdfhf2`, `__truncxfhf2` | SoftFloat's `f16` conversions, one rounding each | none, NaN bits included: every 16-bit input, every 32-bit `float` input, 10^7 random `double` and `long double` operands (steered to `_Float16`'s and `float`'s subnormal ranges) |
+| `__fixhfti`, `__fixunshfti`, `__floattihf`, `__floatuntihf` | as libgcc's soft-fp routines: saturating (an infinity or NaN gives the largest or least integer by its sign; unsigned, a negative value 0), and an integer of 2^64 or more is an infinity | none: every 16-bit input; 10^7 random integers |
+| `__bf16`: `__truncsfbf2`, `__truncdfbf2`, `__truncxfbf2` | from `float` to nearest even on the bits, a NaN quiet with the top of its payload; from `double` and `long double` rounded to `float` to odd (an inexact `float` made odd towards the exact value), then to `__bf16`: one correct rounding, since `float` keeps at least two more bits everywhere | none, NaN bits included: every 32-bit `float` input, 10^7 random `double` and `long double` operands, against libgcc (`__truncxfbf2` called directly: clang 18's back end cannot compile `long double` to `__bf16`) |
+
+The whole set, measured on 2026-11-15 with `float_runtime_exact 10000000 3 1` (6 min, 3 threads): 0 mismatches
+on all 26 routines; only long double encodings x87 rejects differ. `front/tests/tests/softfloat.rs` repeats
+it with 2·10^4 random operands per operation (and every 16-bit input, and the directed triples of `fmal`) in
+under a second.
+
+### _Float16 and __bf16 on the device
+
+The front computes them as LLVM's x86-64 back end does without half-precision hardware (measured from its
+output): every operation in `float`, the result rounded back to the type after each one, `-x` and `fabs`
+included (so a signalling NaN comes out quiet); `copysign` and the class tests are bit operations. `__bf16`
+to `float` is the top half of the bits. A conversion from an integer to `__bf16` goes through `float` and so
+is rounded twice, as natively; `_Float16` has libgcc's 128-bit routines, `__bf16` the `float` ones. `powi` on
+them is refused by name (the back end calls the C library's `powf`). Between `_Float16` and `__bf16` clang 18
+writes IR that LLVM rejects (neither type is the wider), so a program converts through `float`.
+`front/tests/c/float_half.c` checks 5,320 directed results of both types on the device against the native
+program at `-O0` and `-O2`. Integers from 65 to 128 bits wide go through the 128-bit routine of their signedness and are
 truncated, as LLVM's x86-64 back end does (a `_BitInt(100)` included); a 128-bit integer crosses the interface
 as C passes it on x86-64 (two 64-bit arguments, a pair of 64-bit results), as clang writes it in the runtime's
 IR. Wider integers are refused by name.
@@ -72,6 +90,15 @@ by lowering a function of the operands' bits at clang `-O2` and subtracting a fu
 | fma | 439 | 108 / 228 / 61 | 476 | 106 / 262 / 50 | 1198 | 299 / 261 / 119 |
 | `<` | | | 43 | 30 / 37 / 9 | 67 | 48 / 51 / 20 |
 | `==` | | | 22 | 22 / 22 / 9 | | |
+
+Added on 2026-11-15, by the measurement above (instructions; steps on normal / subnormal / NaN operands, or
+three integers): `double` to `__int128` 757, 339 / 290 / 209 and to `unsigned __int128` 713, 328 / 279 / 198
+(libgcc's two-word algorithm: two multiplications, a subtraction, three conversions); `__int128` to `double`
+118, 118 steps; `long double` to `__int128` 3173, 257 / 265 / 142 (the extF80 operations it uses return
+structures and are inlined); `__int128` to `long double` 125, 116–125 steps. `_Float16`: add 536, 139 / 235 /
+96; mul 360, 134 / 190 / 85; `<` 122, 67 / 158 / 45; from `float` 84, 46 / 60 / 20; to `float` 79, 20 / 62 /
+19. `__bf16`: add 393, 77 / 39 / 54; mul 217, 72 / 127 / 43; from `float` 17, 11–14 steps; from `double` 217,
+113 / 168 / 57; to `float` 2 and 2.
 
 Conversions (f64): to i32/i64/u64 21–27 instructions, 10–21 steps; i32 to f64 53 and 53; i64/u64 to f64 131/140,
 67–82 steps; f32 to f64 77, 13–60 steps; f64 to f32 85, 22–45 steps; f64 to f80 80, 21–68 steps; f80 to f64 95,

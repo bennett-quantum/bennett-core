@@ -79,6 +79,12 @@ bool hasFloat(const Type *type) {
 // A floating-point type the runtime computes on: float, double and x86_fp80 (long double).
 bool computable(const Type *type) { return type->isFloatTy() || type->isDoubleTy() || type->isX86_FP80Ty(); }
 
+// A 16-bit floating-point type, `half` (_Float16) or `bfloat` (__bf16), computed in float.
+bool promoted(const Type *type) {
+  type = type->getScalarType();
+  return type->isHalfTy() || type->isBFloatTy();
+}
+
 // The C name of a floating-point type that is not computed on yet.
 std::string described(const Type *type) {
   type = type->getScalarType();
@@ -99,7 +105,8 @@ std::string described(const Type *type) {
 }
 
 [[noreturn]] void refuseType(const Type *type, const Value *at) {
-  notHandled("an operation on " + described(type) + " values (only float, double and long double are computed on yet)",
+  notHandled("an operation on " + described(type) +
+                 " values (only float, double, long double, _Float16 and __bf16 are computed on yet)",
              at);
 }
 
@@ -603,7 +610,21 @@ private:
     }
     Value *x = call->arg_size() > 0 ? call->getArgOperand(0) : nullptr;
     Type *type = x && x->getType()->isFloatingPointTy() ? x->getType() : call->getType();
-    if (type->isFloatingPointTy() && !computable(type)) {
+    if (promoted(type)) {
+      switch (id) {
+      case Intrinsic::copysign:
+      case Intrinsic::is_fpclass:
+      case Intrinsic::arithmetic_fence:
+      case Intrinsic::fmuladd: // two operations, each rounded to the type
+        break;
+      case Intrinsic::powi:
+        notHandled("the intrinsic @" + name + " on " + described(type) +
+                       " values, which LLVM's x86-64 back end computes with the C library's powf",
+                   call);
+      default:
+        return promoteIntrinsic(call);
+      }
+    } else if (type->isFloatingPointTy() && !computable(type)) {
       refuseType(type, call);
     }
     auto unary = [&](const char *base) { return this->call(b, base + libm(type), type, {x}, call); };
@@ -703,10 +724,152 @@ private:
     return replacement;
   }
 
+  // A conversion between floating-point types of which one is _Float16 or __bf16, as the native program
+  // converts: __bf16 to float is the top half of its bits; _Float16 to float, and float, double and long
+  // double to either, are libgcc's routines, each one rounding (`__extendhfsf2`, `__truncdfhf2`,
+  // `__truncxfbf2`, ...); _Float16 to long double has a routine of its own; the rest goes through float,
+  // exactly. (Between _Float16 and __bf16 LLVM has no valid conversion: neither type is the wider.)
+  Value *convert(IRBuilder<> &b, Value *x, Type *to, const Instruction *at) {
+    Type *from = x->getType();
+    Type *single = b.getFloatTy();
+    if (from == to) {
+      return x;
+    }
+    for (Type *type : {from, to}) {
+      if (!computable(type) && !promoted(type)) {
+        refuseType(type, at);
+      }
+    }
+    if (from->isBFloatTy()) {
+      Value *high = b.CreateShl(b.CreateZExt(b.CreateBitCast(x, b.getInt16Ty()), b.getInt32Ty()), 16);
+      return convert(b, b.CreateBitCast(high, single), to, at);
+    }
+    if (from->isHalfTy()) {
+      if (to->isX86_FP80Ty()) {
+        return call(b, "__extendhfxf2", to, {x}, at);
+      }
+      return convert(b, call(b, "__extendhfsf2", single, {x}, at), to, at);
+    }
+    if (promoted(to)) {
+      return call(b, "__trunc" + mode(from) + (to->isHalfTy() ? "hf" : "bf") + "2", to, {x}, at);
+    }
+    bool wider = from->getPrimitiveSizeInBits() < to->getPrimitiveSizeInBits();
+    return lowerMade(wider ? b.CreateFPExt(x, to) : b.CreateFPTrunc(x, to));
+  }
+
+  // An operation on _Float16 or __bf16 values, as LLVM's x86-64 back end computes it without half-precision
+  // hardware: in float, rounded back to the type after each operation (negation and fabs included, which
+  // quiets a signalling NaN; copysign and the class tests are bit operations, as for any type). Conversions
+  // to and from 128-bit integers are libgcc's `_Float16` routines (`__fixhfti`, `__floattihf`, ...); of
+  // __bf16 they go through float, as the back end does, and so are rounded twice from an integer. Returns
+  // what replaces `inst`, or null if it is not such an operation.
+  Value *promote(Instruction *inst) {
+    IRBuilder<> b(inst);
+    Type *single = b.getFloatTy();
+    auto widened = [&](Instruction *made) {
+      for (Use &operand : made->operands()) {
+        operand.set(convert(b, operand.get(), single, inst));
+      }
+      b.Insert(made);
+      return lowerMade(made);
+    };
+    switch (inst->getOpcode()) {
+    case Instruction::FPExt:
+    case Instruction::FPTrunc:
+      if (!promoted(inst->getType()) && !promoted(inst->getOperand(0)->getType())) {
+        return nullptr;
+      }
+      return convert(b, inst->getOperand(0), inst->getType(), inst);
+    case Instruction::FNeg:
+    case Instruction::FAdd:
+    case Instruction::FSub:
+    case Instruction::FMul:
+    case Instruction::FDiv:
+    case Instruction::FRem: {
+      if (!promoted(inst->getType())) {
+        return nullptr;
+      }
+      Instruction *made = inst->clone();
+      made->mutateType(single);
+      return convert(b, widened(made), inst->getType(), inst);
+    }
+    case Instruction::FCmp:
+      return promoted(inst->getOperand(0)->getType()) ? widened(inst->clone()) : nullptr;
+    case Instruction::FPToSI:
+    case Instruction::FPToUI: {
+      Value *x = inst->getOperand(0);
+      if (!promoted(x->getType())) {
+        return nullptr;
+      }
+      auto *to = cast<IntegerType>(inst->getType());
+      bool isSigned = inst->getOpcode() == Instruction::FPToSI;
+      if (to->getBitWidth() > 128) {
+        notHandled("a conversion from " + described(x->getType()) + " to `" + printedType(to) + "`", inst);
+      }
+      if (x->getType()->isHalfTy() && to->getBitWidth() > 64) {
+        Type *pair = StructType::get(b.getInt64Ty(), b.getInt64Ty());
+        return b.CreateTrunc(joined(b, call(b, isSigned ? "__fixhfti" : "__fixunshfti", pair, {x}, inst)), to);
+      }
+      return toInteger(b, convert(b, x, single, inst), to, isSigned, inst);
+    }
+    case Instruction::SIToFP:
+    case Instruction::UIToFP: {
+      Value *x = inst->getOperand(0);
+      Type *to = inst->getType();
+      if (!promoted(to)) {
+        return nullptr;
+      }
+      bool isSigned = inst->getOpcode() == Instruction::SIToFP;
+      unsigned width = x->getType()->getIntegerBitWidth();
+      if (width > 128) {
+        notHandled("a conversion from `" + printedType(x->getType()) + "` to " + described(to), inst);
+      }
+      if (to->isHalfTy() && width > 64) {
+        Value *extended = isSigned ? b.CreateSExt(x, b.getInt128Ty()) : b.CreateZExt(x, b.getInt128Ty());
+        Value *low = b.CreateTrunc(extended, b.getInt64Ty());
+        Value *high = b.CreateTrunc(b.CreateLShr(extended, 64), b.getInt64Ty());
+        return call(b, isSigned ? "__floattihf" : "__floatuntihf", to, {low, high}, inst);
+      }
+      return convert(b, fromInteger(b, x, single, isSigned, inst), to, inst);
+    }
+    default:
+      return nullptr;
+    }
+  }
+
+  // An intrinsic on _Float16 or __bf16 values: the same intrinsic on float, its result rounded back.
+  Value *promoteIntrinsic(IntrinsicInst *intrinsic) {
+    SmallVector<Type *, 4> overloads;
+    if (!Intrinsic::getIntrinsicSignature(intrinsic->getCalledFunction(), overloads)) {
+      fail("internal: the signature of @" + intrinsic->getCalledFunction()->getName().str());
+    }
+    IRBuilder<> b(intrinsic);
+    for (Type *&type : overloads) {
+      if (promoted(type)) {
+        type = b.getFloatTy();
+      }
+    }
+    Function *callee = Intrinsic::getDeclaration(&module, intrinsic->getIntrinsicID(), overloads);
+    std::vector<Value *> args;
+    for (Value *arg : intrinsic->args()) {
+      args.push_back(promoted(arg->getType()) ? convert(b, arg, b.getFloatTy(), intrinsic) : arg);
+    }
+    Value *result = lowerMade(b.CreateCall(callee, args));
+    if (promoted(intrinsic->getType())) {
+      result = convert(b, result, intrinsic->getType(), intrinsic);
+    }
+    replace(intrinsic, result);
+    return result;
+  }
+
   // Lowers `inst` and returns what replaces it (itself if nothing does).
   Value *lower(Instruction *inst) {
     if (vectorOperation(*inst)) {
       return scalarise(inst);
+    }
+    if (Value *replacement = promote(inst)) {
+      replace(inst, replacement);
+      return replacement;
     }
     IRBuilder<> b(inst);
     Value *replacement = nullptr;

@@ -12,7 +12,10 @@
 //    are compared with 0. `fneg`, `fabs`, `copysign` and `is.fpclass` are bit operations, written
 //    inline; `fmuladd` is a multiplication and an addition, unfused, as x86-64 without FMA computes it
 //    natively; `minimum`, `maximum`, `lrint` and `lround` are compositions. Vector operations are done
-//    element by element.
+//    element by element. `half` (_Float16) and `bfloat` (__bf16) are computed as LLVM's x86-64 back end
+//    computes them without half-precision hardware: each operation in float, rounded back to the type
+//    after it (`fneg` and `fabs` included; `copysign` and `is.fpclass` stay bit operations), through
+//    libgcc's conversion routines (`__extendhfsf2`, `__truncdfbf2`, ...); `bfloat` to float is a shift.
 // 2. The runtime functions the program needs are linked from a bitcode file that defines the interface
 //    (by default `float-runtime.bc` next to bennett-front: Berkeley SoftFloat 3e, `rt/softfloat`), with
 //    LinkOnlyNeeded. Every definition of the runtime is renamed `bennett.float.<name>` first and is
@@ -29,10 +32,10 @@
 //    stack, and lowerValuesInMemory.
 //
 // Refused by name: `frem` (fmod) and the intrinsics of C library functions (sin, exp, pow, ...), which
-// come with the C library; operations on `half`, `bfloat`, `fp128` and `ppc_fp128` values (moving
-// them is fine); conversions between floating point and integers wider than 128 bits; constrained
-// intrinsics; atomic floating-point updates. A program without floating point is unchanged and no
-// runtime is linked.
+// come with the C library, and `powi` on `half` and `bfloat` (the back end calls powf); operations on
+// `fp128` and `ppc_fp128` values (moving them is fine); conversions between floating point and integers
+// wider than 128 bits; constrained intrinsics; atomic floating-point updates. A program without floating
+// point is unchanged and no runtime is linked.
 #pragma once
 
 #include <string>

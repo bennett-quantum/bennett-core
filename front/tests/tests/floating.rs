@@ -109,6 +109,14 @@ fn conversions_to_and_from_128_bit_integers_agree_with_native() {
     assert_results_agree("float_wide_integers", &[]);
 }
 
+/// `_Float16` and `__bf16`, computed in float and rounded back as the native program computes them:
+/// arithmetic, comparisons, classes, the rounding functions, conversions to and from every format and
+/// integer width (`float_half.c`).
+#[test]
+fn half_and_bfloat_agree_with_native_on_directed_values() {
+    assert_results_agree("float_half", &[]);
+}
+
 #[test]
 fn every_comparison_and_classification_agrees_with_native_on_nans_zeros_and_infinities() {
     assert_results_agree("float_compare", &[]);
@@ -209,12 +217,11 @@ fn long_doubles_compute_under_quantum_control() {
     }
 }
 
-/// The routines beyond SoftFloat under quantum control (`float_leftovers_controlled.c`): `fmal` and a
-/// conversion to and from a 128-bit integer, applied coherently to a superposition, against the values the
-/// native build computes. They return aggregates inside, which the front inlines: through memory, a result
-/// could not come back under qubit control.
+/// The routines beyond SoftFloat under quantum control (`float_leftovers_controlled.c`): `fmal`, a
+/// conversion to and from a 128-bit integer, `_Float16` and `__bf16` arithmetic, applied coherently to a
+/// superposition, against the values the native build computes.
 #[test]
-fn fmal_and_wide_conversions_compute_under_quantum_control() {
+fn fmal_wide_conversions_and_half_precision_compute_under_quantum_control() {
     let source = c_dir().join("float_leftovers_controlled.c");
     let include = format!("-I{}", root().join("front/include").display());
     let executable = native_build_with(&source, "float_leftovers_controlled", &["-DNATIVE", &include], &["-lm"]);
@@ -227,7 +234,7 @@ fn fmal_and_wide_conversions_compute_under_quantum_control() {
             let values: Vec<u64> =
                 line.split(' ').map(|v| v.parse().unwrap_or_else(|e| panic!("{line:?}: {e}"))).collect();
             let q = (0..4).map(|i| (k as u64 >> i & 1) << (8 * i)).sum();
-            (vec![q, values[0], values[1]], 0.25)
+            (vec![q, values[0], values[1], values[2]], 0.25)
         })
         .collect();
     assert_eq!(expected.len(), 16);
@@ -257,7 +264,7 @@ fn assert_refused(name: &str, text: &str, clang_flags: &[&str], front_flags: &[&
 /// What has no soft-float routine yet, and the C library's functions, are refused by name.
 #[test]
 fn what_the_runtime_does_not_compute_is_refused_by_name() {
-    let cases: [(&str, &str, &[&str], &str); 10] = [
+    let cases: [(&str, &str, &[&str], &str); 8] = [
         (
             "float_frem",
             "volatile double a = 5.5, b = 2;\nint main(void) { return (int)__builtin_fmod(a, b); }\n",
@@ -288,18 +295,6 @@ fn what_the_runtime_does_not_compute_is_refused_by_name() {
             "volatile _BitInt(200) a = 5;\nint main(void) { return (int)(double)a; }\n",
             &[],
             "a conversion from `i200` to `double`",
-        ),
-        (
-            "float_bfloat",
-            "volatile __bf16 a = 5.5;\nint main(void) { return (int)(float)a; }\n",
-            &[],
-            "an operation on `bfloat` (__bf16) values",
-        ),
-        (
-            "float_half",
-            "volatile _Float16 a = 5.5;\nint main(void) { return (int)(a * a); }\n",
-            &[],
-            "an operation on `half` (_Float16) values",
         ),
         (
             "float_quad",

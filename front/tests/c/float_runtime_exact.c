@@ -6,14 +6,13 @@
  *
  * The native side is the C operation compiled by clang 18 for x86-64: a call of libgcc's routine (GCC 13's
  * libgcc, which clang links), of glibc's (fmal), or SSE and x87 instructions. Where clang 18 cannot compile
- * the operation (it stops with "Unsupported library call operation" for long double to __bf16, and "Do not
- * know how to soft promote" between _Float16 and __bf16), the native side is the libgcc routine a GCC build
- * calls, called directly.
+ * the operation (its back end stops with "Unsupported library call operation" for long double to __bf16),
+ * the native side is the libgcc routine a GCC build calls, called directly.
  *
  * Usage: float_runtime_exact [random-per-op [threads [exhaustive [name-filter]]]]
  *   The defaults (a fixed-seed sample, one thread) are the regression test; with exhaustive set, every
  *   32-bit input of each operation from float is tried as well. Every 16-bit input of each operation from
- *   _Float16 or __bf16 is always tried.
+ *   _Float16 is always tried.
  *
  * A mismatch is `value` unless an operand is an extF80 encoding that x87 does not accept or reads otherwise
  * (pseudo-denormal, unnormal, pseudo-infinity, pseudo-NaN), which no arithmetic produces and which is
@@ -48,11 +47,30 @@ double rt___floatuntidf(U);
 long double rt___floattixf(S);
 long double rt___floatuntixf(U);
 long double rt_fmal(long double, long double, long double);
+float rt___extendhfsf2(_Float16);
+long double rt___extendhfxf2(_Float16);
+_Float16 rt___truncsfhf2(float);
+_Float16 rt___truncdfhf2(double);
+_Float16 rt___truncxfhf2(long double);
+S rt___fixhfti(_Float16);
+U rt___fixunshfti(_Float16);
+_Float16 rt___floattihf(S);
+_Float16 rt___floatuntihf(U);
+__bf16 rt___truncsfbf2(float);
+__bf16 rt___truncdfbf2(double);
+__bf16 rt___truncxfbf2(long double);
+/* What a GCC build calls where clang 18 cannot compile the operation. */
+__bf16 __truncxfbf2(long double);
 
 /* ---- formats and bits --------------------------------------------------------------------------- */
 
-enum fmt { F32, F64, X80, I128, U128 };
-static const char *const fmt_names[] = {"f32", "f64", "f80", "i128", "u128"};
+enum fmt { F16, BF16, F32, F64, X80, I128, U128 };
+static const char *const fmt_names[] = {"f16", "bf16", "f32", "f64", "f80", "i128", "u128"};
+
+static _Float16 h16(U v) { unsigned short u = (unsigned short)v; _Float16 f; memcpy(&f, &u, 2); return f; }
+static __bf16 b16(U v) { unsigned short u = (unsigned short)v; __bf16 f; memcpy(&f, &u, 2); return f; }
+static U ofh16(_Float16 f) { unsigned short u; memcpy(&u, &f, 2); return u; }
+static U ofb16(__bf16 f) { unsigned short u; memcpy(&u, &f, 2); return u; }
 
 static float f32(U v) { unsigned u = (unsigned)v; float f; memcpy(&f, &u, 4); return f; }
 static double f64(U v) { u64 u = (u64)v; double d; memcpy(&d, &u, 8); return d; }
@@ -83,6 +101,7 @@ static int noncanonical(int f, U v) { return f == X80 && (pseudo_denormal(v) || 
 
 static U mask(int f, U v) {
     switch (f) {
+    case F16: case BF16: return (unsigned short)v;
     case F32: return (unsigned)v;
     case F64: return (u64)v;
     case X80: return v & (((U)1 << 80) - 1);
@@ -92,6 +111,7 @@ static U mask(int f, U v) {
 
 static void show(char *out, size_t n, int f, U v) {
     switch (f) {
+    case F16: case BF16: snprintf(out, n, "%04x", (unsigned)(unsigned short)v); break;
     case F32: snprintf(out, n, "%08x", (unsigned)v); break;
     case F64: snprintf(out, n, "%016llx", (u64)v); break;
     case X80: snprintf(out, n, "%04x:%016llx", (unsigned)(v >> 64 & 0xFFFF), (u64)v); break;
@@ -126,6 +146,20 @@ UNARY(u128_x80, of80((long double)a), of80(rt___floatuntixf(a)))
 static NOINLINE U h_x80_fma(U a, U b, U c) { return of80(fmal(x80(a), x80(b), x80(c))); }
 static NOINLINE U s_x80_fma(U a, U b, U c) { return of80(rt_fmal(x80(a), x80(b), x80(c))); }
 
+/* _Float16 and __bf16. */
+UNARY(f16_f32, of32((float)h16(a)), of32(rt___extendhfsf2(h16(a))))
+UNARY(f16_x80, of80((long double)h16(a)), of80(rt___extendhfxf2(h16(a))))
+UNARY(f32_f16, ofh16((_Float16)f32(a)), ofh16(rt___truncsfhf2(f32(a))))
+UNARY(f64_f16, ofh16((_Float16)f64(a)), ofh16(rt___truncdfhf2(f64(a))))
+UNARY(x80_f16, ofh16((_Float16)x80(a)), ofh16(rt___truncxfhf2(x80(a))))
+UNARY(f16_i128, (U)(S)h16(a), (U)rt___fixhfti(h16(a)))
+UNARY(f16_u128, (U)h16(a), rt___fixunshfti(h16(a)))
+UNARY(i128_f16, ofh16((_Float16)(S)a), ofh16(rt___floattihf((S)a)))
+UNARY(u128_f16, ofh16((_Float16)a), ofh16(rt___floatuntihf(a)))
+UNARY(f32_bf16, ofb16((__bf16)f32(a)), ofb16(rt___truncsfbf2(f32(a))))
+UNARY(f64_bf16, ofb16((__bf16)f64(a)), ofb16(rt___truncdfbf2(f64(a))))
+UNARY(x80_bf16, ofb16(__truncxfbf2(x80(a))), ofb16(rt___truncxfbf2(x80(a))))
+
 typedef struct {
     const char *name;
     int arity, in, out;
@@ -139,6 +173,10 @@ static const Op ops[] = {
     OP(i128_f32, 1, I128, F32), OP(u128_f32, 1, U128, F32), OP(i128_f64, 1, I128, F64),
     OP(u128_f64, 1, U128, F64), OP(i128_x80, 1, I128, X80), OP(u128_x80, 1, U128, X80),
     OP(x80_fma, 3, X80, X80),
+    OP(f16_f32, 1, F16, F32), OP(f16_x80, 1, F16, X80), OP(f32_f16, 1, F32, F16), OP(f64_f16, 1, F64, F16),
+    OP(x80_f16, 1, X80, F16), OP(f16_i128, 1, F16, I128), OP(f16_u128, 1, F16, U128),
+    OP(i128_f16, 1, I128, F16), OP(u128_f16, 1, U128, F16),
+    OP(f32_bf16, 1, F32, BF16), OP(f64_bf16, 1, F64, BF16), OP(x80_bf16, 1, X80, BF16),
 };
 #define NOPS ((int)(sizeof ops / sizeof ops[0]))
 
@@ -152,7 +190,7 @@ static inline u64 next(u64 *s) { /* splitmix64 */
 }
 
 /* Field widths: significand bits stored, exponent bits. */
-static const int sig_bits[] = {23, 52, 64}, exp_bits[] = {8, 11, 15};
+static const int sig_bits[] = {10, 7, 23, 52, 64}, exp_bits[] = {5, 8, 8, 11, 15};
 static int bias(int f) { return (1 << (exp_bits[f] - 1)) - 1; }
 
 static U pack(int f, unsigned sign, unsigned exp, u64 sig) {
@@ -165,8 +203,8 @@ static U pack(int f, unsigned sign, unsigned exp, u64 sig) {
 }
 
 #define MAXD 200
-static U directed[3][MAXD];
-static int ndirected[3];
+static U directed[5][MAXD];
+static int ndirected[5];
 static void add(int f, U v) { if (ndirected[f] < MAXD) directed[f][ndirected[f]++] = v; }
 
 /* Values at the edges of the 64- and 128-bit ranges, and the usual specials, of every format. */
@@ -231,6 +269,7 @@ static U random_int(u64 *s) {
 
 static U random_float(int f, u64 *s) {
     u64 r = next(s), sig = next(s);
+    if (f <= BF16) return (unsigned short)r;
     unsigned emax = (1u << exp_bits[f]) - 1, sign = (unsigned)(r & 1);
     switch ((r >> 8) % 8) {
     case 0: /* uniform bits (for extF80: a canonical encoding) */
@@ -243,6 +282,9 @@ static U random_float(int f, u64 *s) {
         return pack(f, sign, (unsigned)((r >> 16) % (unsigned)(sig_bits[f] + 3)), sig);
     case 5: /* near overflow */
         return pack(f, sign, emax - 1 - (unsigned)((r >> 16) % 4), sig);
+    case 6: /* 2^-170 to 2^20: the ranges of _Float16 and float, subnormals included */
+        if (f != F32) return pack(f, sign, (unsigned)(bias(f) - 170 + (int)((r >> 16) % 191)), sig);
+        return pack(f, sign, (unsigned)((r >> 16) % 148), sig);
     default: /* a directed value, a few ulps off */
         return mask(f, directed[f][(r >> 16) % (unsigned)ndirected[f]] + (U)((r >> 24) % 5) - 2);
     }
@@ -372,7 +414,9 @@ static void run_directed(int k) {
         return;
     }
     int f = op->in, n = ndirected[f];
-    if (op->arity == 1)
+    if (f <= BF16) /* every input */
+        for (U x = 0; x < 0x10000; x++) check(k, &l, x, 0, 0);
+    else if (op->arity == 1)
         for (int i = 0; i < n; i++) check(k, &l, directed[f][i], 0, 0);
     else if (op->arity == 2)
         for (int i = 0; i < n; i++)
