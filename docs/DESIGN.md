@@ -211,6 +211,22 @@ history, and that history is entangled with the data unless the program un-runs 
 Consequences: a test may assert a quantum state only for the documented class or after an un-run; an optimiser is
 free to choose what history to keep (a planned tape, recomputation) without changing any promised behaviour.
 
+## Floating point (decided 2026-11-15)
+
+Decided by the maintainer on 2026-11-15: floating point is Berkeley SoftFloat 3e behind the compiler runtime-call
+interface (the libgcc names), swappable at link time, for `float`, `double` and the x87 80-bit `long double`.
+The reason: it covers `float` and the 80-bit format, it is a verified reference, and it needs no hand port. The
+original Bennett.jl's branch-free routines are kept as a later, cheaper alternative for the optimiser, to be
+checked bit for bit against SoftFloat. Mathematics functions (`sin`, `exp`, `pow`, ...) come from the C
+library's own code; `sqrt` and `fma` from SoftFloat.
+
+What is promised: every result that is not a NaN is bit for bit what the native x86-64 build computes; a NaN
+result is a NaN. Which NaN, when several operands are NaNs, is unspecified, as in LLVM, whose optimiser commutes
+operands, and on the hardware, where it depends on the instruction form. Measured against this machine's SSE
+and x87 (`front/tests/tests/softfloat.rs`): no other difference in any operation or conversion, NaN bits
+included, except for `long double` encodings no arithmetic produces and out-of-range conversions, which C
+leaves undefined.
+
 ## The next extension: code that is not a clean function (decided, not built)
 
 Decided by the maintainer on 2026-11-13 after five independent proposals (`docs/AUDITION.md`). Nothing below is

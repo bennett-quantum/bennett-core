@@ -42,8 +42,15 @@ On GCC's C torture tests 1,402 of 1,576 runnable programs agree with native, 172
   `qalloc` and `qfree` stay until the new instructions pass every existing test. Decided, not built.
 - **Channels** (partial trace, measurement by effects, noise) belong to the finished Bennett. The first working
   version is unitaries and clean discard, and nothing built now may make channels impossible to add.
-- **Floating point is a low concern**: the original Bennett.jl has soft-float versions of every LLVM floating-point
-  operation, to be carried over. **The refused C library calls are a concern** and come first.
+- **Floating point is a low concern** (superseded on 2026-11-15, below). **The refused C library calls are a
+  concern** and come first.
+
+## Decision the maintainer took on 2026-11-15
+
+- **Floating point is Berkeley SoftFloat 3e** behind the compiler runtime-call interface (the libgcc names),
+  swappable at link time, for `float`, `double` and `long double` (x87 80-bit): it covers f32 and the 80-bit
+  format, it is a verified reference, and it needs no hand port. Bennett.jl's branch-free routines are kept as
+  a later, cheaper alternative for the optimiser, checked bit for bit against it (`docs/DESIGN.md`).
 
 ## Stopped in flight
 
@@ -71,8 +78,8 @@ On GCC's C torture tests 1,402 of 1,576 runnable programs agree with native, 172
 4. **The front's fallback**: the program almost verbatim under marks, the documented coherent class recognised by
    its form, and the two warnings (history still entangled at a measurement or at the end; an un-run that meets a
    state its history does not match).
-5. **Floating point**, by carrying over Bennett.jl's soft-float; then `setjmp`/`longjmp` and the remaining
-   intrinsics.
+5. **Floating point** over Berkeley SoftFloat 3e (decided 2026-11-15; in progress); then `setjmp`/`longjmp`
+   and the remaining intrinsics.
 6. **A SQL query as an oracle.**
 
 ## What is still refused, and what removes it
