@@ -39,7 +39,10 @@ https://archive.ubuntu.com/ubuntu/pool/main/g/gcc-13/gcc-13_13.3.0-6ubuntu2~24.0
 and its `gcc-13_13.3.0-6ubuntu2~24.04.1.debian.tar.xz`.
 The latter's SHA-256 is
 `5523658f272ad6d15a83b6e26d178fbd5cb7709ec7ce2ca52b0c843e19c228e3`, matching the .dsc.
-Searching the entire extracted `debian/patches` and packaging rules finds no changes
+The .dsc's original archive (`gcc-13_13.3.0.orig.tar.gz`, SHA-256
+`3b85d91bf38d1b858d9d01134f4046b3359731968ed4e6e912d29717a35d1a46`)
+contains the upstream GCC archive; its libgcc2.c and libgcc2.h compare byte for byte
+with the GNU files vendored here. Searching the entire extracted `debian/patches` and packaging rules finds no changes
 to `libgcc2.c`, `libgcc2.h` or `libgcc/config/i386`; none of the six helper algorithms
 is distribution-patched. The native archive remains the execution oracle, including
 compiler optimization choices (especially NaN operand selection).

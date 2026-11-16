@@ -31,7 +31,7 @@ def main():
         run([out / 'native'], stdout=f)
     run(['clang-18', *flags, '-Xclang', '-disable-O0-optnone', '-fno-vectorize', '-fno-slp-vectorize',
          '-emit-llvm', '-c', source, '-o', out / 'program.bc'])
-    run([ROOT / 'target/front/bennett-front', out / 'program.bc', '--stack-bytes', '1048576', '-o', out / 'program.bn'])
+    run([ROOT / 'target/front/bennett-front', out / 'program.bc', '--region-budget', '100000', '--stack-bytes', '1048576', '-o', out / 'program.bn'])
     start = time.monotonic()
     with (out / 'device.out').open('w') as f:
         run([ROOT / 'target/release/bennett', 'run', out / 'program.bn', '--budget', '100000000000'], stdout=f)
@@ -41,8 +41,8 @@ def main():
     (out / 'device.txt').write_text(console.removeprefix('console: "').removesuffix('"'))
     print(f'device wall seconds: {time.monotonic() - start:.3f}', flush=True)
     print('\n'.join(line for line in raw.splitlines() if not line.startswith('console:')), flush=True)
+    print(f'outputs: {out.relative_to(ROOT)}', flush=True)
     run(['python3', '-I', HERE / 'compare.py', out / 'device.txt', out / 'native.txt', args.random])
-    print(f'outputs: {out.relative_to(ROOT)}')
 
 
 if __name__ == '__main__':

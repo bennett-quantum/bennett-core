@@ -566,7 +566,7 @@ copied with the others. With it copied, those two were run again with the same b
 
 ## The programs that waited on the complex helpers (2026-11-15)
 
-After compiler-rt's complex multiply and divide helpers were vendored (`rt/compiler-rt`), only the programs
+After compiler-rt's complex multiply and divide helpers were vendored (since replaced by libgcc; `rt/libgcc`), only the programs
 refused for want of them were run again, with `run-all.sh` on a directory holding just them, 3 at a time,
 with musl linked (`MUSL_LIBDIR`) and without:
 
@@ -580,7 +580,7 @@ with musl linked (`MUSL_LIBDIR`) and without:
 The three `cdivchk` programs call `ilogb` themselves. Given a test-only `ilogb` computed from the bits, all
 three abort on the device (status 134), as they do natively when built with `clang --rtlib=compiler-rt`:
 compiler-rt's division misses their accuracy bound, libgcc's (the native reference here) meets it
-(`rt/compiler-rt/README.md`, "Not libgcc").
+(historical compiler-rt experiment; current libgcc results: `rt/libgcc/README.md`).
 
 ## Results with the C library linked (musl 1.2.5, 2026-11-15)
 

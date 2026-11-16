@@ -102,8 +102,8 @@ and what removes it:
 |---|---:|---|
 | files: `open`, `fopen`, `freopen` trap by name | 6 | a file model at this boundary |
 | `setjmp`, `_setjmp`, `longjmp`: no definition (musl's are x86-64 assembly, not built) | 2 | removed: the device's own `setjmp` and `longjmp` (`docs/DESIGN.md`, "Non-local jumps"); both agree, run alone |
-| `__mulsc3`, `__divsc3`: no definition | 2 GCC | removed: compiler-rt's helpers (`rt/compiler-rt`); both agree at `b961292` |
-| musl's `ilogb`, `ilogbl` (and ten other math files) under `#pragma STDC FENV_ACCESS ON`: constrained operations refused by the front | 3 `ieee/` (`cdivchkf` was counted at `__divsc3` before the helpers) | lowering constrained operations in the device's fixed environment (to nearest, no readable flags), which `fenv` here already enforces; the same refusal stops `__divxc3` (musl's `logbl` calls `ilogbl`). These three then meet compiler-rt's division, which fails them natively too (`rt/compiler-rt/README.md`) |
+| `__mulsc3`, `__divsc3`: no definition | 2 GCC | removed: complex helpers (now libgcc, `rt/libgcc`); both agreed at `b961292` |
+| musl's `ilogb`, `ilogbl` (and ten other math files) under `#pragma STDC FENV_ACCESS ON`: constrained operations refused by the front | 3 `ieee/` (`cdivchkf` was counted at `__divsc3` before the helpers) | lowering constrained operations in the device's fixed environment (to nearest, no readable flags), which `fenv` here already enforces. The six helpers now come from libgcc (`rt/libgcc`), including self-contained `__divxc3`; the corpus programs' own `ilogb`/`ilogbl` calls still need this fallback |
 | a program's own `int strlen(char *)` against the library's (c-testsuite `00025`) | 1 | a call through a mismatched prototype, a front refusal |
 | not library calls: `llvm.returnaddress`, inline assembly, an over-aligned variadic argument, an unprototyped call with an extra argument (`bad_indirect`), a run past the step budget (`float` to `i128` was one; it agrees since the 128-bit conversions) | 7 (9 before `llvm.eh.sjlj.longjmp` became the device's `longjmp`) | the front's own debts (`HANDOFF.md`) |
 
@@ -118,7 +118,7 @@ stdout/status for floating-point printf/strtod/sqrt/sin/pow, for constructors, a
 nested exit, for `malloc`/`realloc`/`calloc`/`free`, for signals raised, blocked, ignored and handled, for
 `abort` after a handler returns, for reads of the empty stdin through `scanf`, `getchar` and `fgets`, and for
 a break that shrinks and grows again, for the default floating-point environment, and for complex products,
-quotients and `cexp` (`complex.c`, over compiler-rt's helpers), and for `setjmp`/`longjmp` across frames, `sigsetjmp` with
+quotients and `cexp` (`complex.c`, over libgcc's helpers), and for `setjmp`/`longjmp` across frames, `sigsetjmp` with
 and without the signal mask (musl's `__sigsetjmp_tail`) and jumps out of signal handlers (`setjmp.c`); they check arena
 exhaustion and named faults for stderr, an unimplemented syscall, another rounding mode and a flag test.
 `tests/regress/` holds the self-checking witnesses of the independent testing pass of this boundary (each

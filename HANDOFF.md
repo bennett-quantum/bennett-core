@@ -44,7 +44,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `d8050df`..`b464c0b` | The C library: musl 1.2.5 at the system-call boundary, running its own startup and exit; signals a program sends itself; stdin at end of file; an honest `fenv` |
 | `663e9fb`..`caaac7a` | Conversions between floats and 128-bit integers, `fmal`, `_Float16` and `__bf16`, each bit for bit against native (`rt/softfloat/README.md`) |
 | `9817fe0`, `c17bde9`, `08d7799` | Measurements: journal content in coherent regions; control schedules on the SQLite traces |
-| `cd2d920` | The complex multiply and divide helpers: compiler-rt 18.1.8 vendored unmodified (`rt/compiler-rt`), linked by the front where a program calls them; bit for bit with the same helpers on the hardware, NaN bits aside |
+| `cd2d920` | The complex multiply and divide helpers: compiler-rt 18.1.8 vendored unmodified (since replaced by libgcc; `rt/libgcc`), linked by the front where a program calls them; bit for bit with the same helpers on the hardware, NaN bits aside |
 | `31f5138` | `setjmp`/`longjmp` (library and built-in forms, `sigsetjmp` with musl): a device `setjmp` instruction and `longjmp` terminator, journalled (`docs/DESIGN.md`, "Non-local jumps") |
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
@@ -224,20 +224,21 @@ explicitly after the separate musl build.
   live copy (unsorted lists under a binary search; no published number changes) and one slope rounded twice;
   both fixed in `613b925`.
 
-- **The complex helpers: landed** (`rt/compiler-rt/README.md`, `VENDOR.md`). compiler-rt 18.1.8's `__mulsc3`,
-  `__divsc3`, `__muldc3`, `__divdc3`, `__mulxc3`, `__divxc3`, vendored unmodified, compiled to
-  `complex-runtime.bc`, linked by the front before floating point is lowered, where the program calls them
-  without defining them (`--complex-runtime` replaces them). The `float` and `double` helpers and `__mulxc3` are
-  self-contained; `__divxc3` calls the C library's `logbl` and `scalbnl`, and musl's `logbl` calls `ilogbl`,
-  whose `FENV_ACCESS` pragma the front refuses: `__divxc3` stays refused by name (a debt, removed with the
-  constrained operations). 491,520 directed and random tuples on the device against the helpers compiled
-  natively: every non-NaN result identical; NaN results differ only in sign and payload, which LLVM leaves
-  open. Corpora (only the programs that waited): GCC `20070614-1` and `complex-5` now agree, with musl and
-  without; `ieee/` `cdivchkf`, `cdivchkd`, `cdivchkld` are still refused, at their own `ilogb`/`ilogbl` (musl's
-  `FENV_ACCESS`). Found: those three **abort natively when built with clang's own runtime**
-  (`--rtlib=compiler-rt`) and pass with libgcc, whose division is a different algorithm (it differs from
-  compiler-rt's on 12-17 % of the division tuples, last bit and sign of zeros); on the device with a test-only
-  `ilogb` they abort as well. See the question below.
+- **The complex helpers now follow libgcc** (`rt/libgcc/README.md`, `VENDOR.md`; decision C below).
+  GCC 13.3.0's six helpers are vendored unmodified with GPL 3 and the GCC Runtime Library Exception;
+  the official GNU archive's checksum and signature are verified. The corpus's clang native link pulls
+  all six members from GCC 13.3's static libgcc.a; the installed GCC 14 shared libgcc is not its reference.
+  Distribution patches do not touch these helpers. The front builds the original libgcc2.c six times,
+  links only needed helpers and lowers them over SoftFloat. **All six are self-contained, including
+  `__divxc3`**, so long-double division no longer needs musl's `logbl`/`ilogbl`, and works without musl.
+  The obsolete compiler-rt tree has no remaining build/test consumer and is removed.
+  The exact sweep and corpus measurements are documented in `rt/libgcc/README.md`.
+  **Remaining corpus debt:** `cdivchkf`, `cdivchkd`, `cdivchkld` call `ilogb`/`ilogbl` themselves;
+  musl's `FENV_ACCESS` still stops the normal route. Route: the front's fallback must implement constrained
+  floating-point operations and their observable environment; the maintainer keeps the named refusal
+  until then. A diagnostic that removes only those pragmas in scratch copies checks helper accuracy,
+  and does not count as a production corpus pass. This supersedes the 2026-11-15 compiler-rt experiment,
+  whose divisions failed these checks even natively; libgcc is now the reference for all six helpers.
 - **Constructor startup, after its independent testing pass** (`40b04b4`, Muse; `exit` and the console call held
   under every probe). It found two wrong results, both fixed in `e13a6c8` and now regression tests: at equal
   priority the device ran explicit `.init_array`/`.fini_array` contributions after the special-array entries
@@ -505,8 +506,8 @@ explicitly after the separate musl build.
    its form, and the two warnings (history still entangled at a measurement or at the end; an un-run that meets a
    state its history does not match).
 5. **Floating point** is done over Berkeley SoftFloat 3e (decided 2026-11-15; `rt/softfloat/README.md`), the
-   complex helpers over compiler-rt (`rt/compiler-rt/README.md`). Left: `__divxc3` (musl's `ilogbl`, under
-   `FENV_ACCESS`) and `__float128`.
+   complex helpers over libgcc (`rt/libgcc/README.md`), including `__divxc3`. Left: `__float128` and
+   constrained operations (`FENV_ACCESS`, including the corpus checks' own musl `ilogb`/`ilogbl`).
    Done on 2026-11-15: conversions to and from 128-bit integers (and `_BitInt` up to 128), `fmal` (over
    SoftFloat's primitives, rounding once), `_Float16` and `__bf16` (computed in `float` as the x86-64 back end
    does). Checked: every 16-bit input, all 2^32 `float` inputs of the conversions from `float`, 10^7 random
@@ -552,7 +553,8 @@ explicitly after the separate musl build.
 - **The complex-number helpers (`__mulsc3`, `__divsc3` and the double and long double versions): vendor
   compiler-rt's sources unmodified**, as SoftFloat was, after the musl runtime has landed so that any `logb` or
   `scalbn` they need comes from musl; checked bit for bit against native. Built in `cd2d920`: self-contained except the `long double` divide,
-  which calls `logbl` and `scalbnl` (and through musl's `ilogbl` a `FENV_ACCESS` pragma, so it stays refused).
+  which called `logbl` and `scalbnl` (and through musl's `ilogbl` a `FENV_ACCESS` pragma).
+  **Superseded on 2026-11-16:** libgcc replaces all six; its `__divxc3` has no library dependency.
 
 ## Decisions the maintainer took on 2026-11-16
 
@@ -588,7 +590,8 @@ C:
 
 - **Complex division follows libgcc**: all six complex helpers come from libgcc (GPL with the GCC runtime library
   exception), replacing compiler-rt's, so that the device equals the corpus's native reference. This supersedes
-  the 2026-11-15 choice of compiler-rt.
+  the 2026-11-15 choice of compiler-rt. Built from verified GCC 13.3.0 (`rt/libgcc`); all six,
+  including `__divxc3`, are self-contained. See the measured state above.
 - **Calls through function pointers keep the full check.**
 - **A stale `setjmp` record** keeps today's behaviour, as a known weak spot.
 - **A copied `sigjmp_buf` follows glibc.**
@@ -681,7 +684,7 @@ How work is done:
   accuracy checks natively, which pass with libgcc, the runtime of the corpus's native reference. When the
   `FENV_ACCESS` refusal goes they will be counted as wrong results. Keep compiler-rt and compare those against
   a `--rtlib=compiler-rt` native build, or vendor libgcc's division (GPL with the GCC runtime exception), or
-  something else? (`rt/compiler-rt/README.md`, "Not libgcc".)
+  something else? (historical compiler-rt experiment, since superseded by the decision above and `rt/libgcc`.)
 
 - **Floating-point environment**: keep the named fault for non-default rounding modes and flags, or make them real
   through SoftFloat's state? (The float runtime lets the optimiser delete its flags today.)
@@ -705,7 +708,7 @@ How work is done:
 | Files, clocks and the other unimplemented system calls (named faults) | Step 1 above |
 | A call through another prototype where x86-64 does not determine what is read: the upper half of a 32-bit value, a missing argument that is read, an integer from a floating-point register, a variadic floating-point argument without `%al`, a narrow argument that is not the extension the callee relies on (named fault `unreachable` when the call runs); a direct call whose argument differs from its parameter only in register class (native -O0 and -O2 disagree) | Nothing to remove: the native result is not determined (`docs/DESIGN.md`, "Calls through a prototype"). Conservative, removable by a finer model where named: a variadic floating-point argument after an unread named one, a call whose result is used only by dead code before the optimiser, values in memory read at another place |
 | A qubit-dependent call of a function that uses `setjmp` | The front's own effect summary of `setjmp` (writes only its buffer) when deciding what runs coherently (`docs/DESIGN.md`, "Non-local jumps") |
-| `__float128`; `powi` on `_Float16`/`__bf16`; `#pragma STDC FENV_ACCESS` (with it musl's `ilogb`, and so `__divxc3`, the `long double` complex division); non-default rounding modes and floating-point flags | Step 5 above |
+| `__float128`; `powi` on `_Float16`/`__bf16`; `#pragma STDC FENV_ACCESS` (with it musl's `ilogb`/`ilogbl` in the corpus accuracy checks; libgcc's `__divxc3` itself works); non-default rounding modes and floating-point flags | Step 5 above |
 | A store under qubit control; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control | The journalled machine (step 3; the device holds qubits at any address since `56b2c0b`, the front's fallback, step 4, is what uses it) |
 | A qubit-dependent value used by ordinary code or printed; measurement under control; a dirty discard | Channels |
 | Non-empty inline assembly; code without source | An emulator of the real machine, compiled as an ordinary program |
