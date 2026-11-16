@@ -41,7 +41,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (224 tests; ignored: 5 heavy reference or generated runs, the memory-cost report, 1 heavy recomputation check, 1 witness of a wrong result; about 8 s, no LLVM needed) and `front/test.sh` (143 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (224 tests; ignored: 5 heavy reference or generated runs, the memory-cost report, 1 heavy recomputation check, 1 witness of a wrong result; about 8 s, no LLVM needed) and `front/test.sh` (146 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check that needs `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -53,7 +53,9 @@ from refused to agreeing). Without the library an earlier snapshot gives 1,521 /
 the complex helpers, the two GCC programs that waited on them agree too, with and without the library (run
 alone, not as a whole corpus): GCC 1,559 agree and 10 refused with musl, if nothing else moved. Since
 `setjmp`/`longjmp` (`31f5138`), the four GCC programs that waited on them agree too, with musl and without (run
-alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
+alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved. Since variadic arguments aligned to
+more than 16 bytes are placed where clang's `va_arg` reads them, GCC `pr92904` agrees too, with musl and without
+(run alone): GCC 1,565 agree and 4 refused with musl, if nothing else moved.
 
 ## Decisions the maintainer took on 2026-11-13
 
@@ -470,7 +472,14 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
 - A `_Bool` qubit costs 8 qubits.
 - Some acceptance decisions in the front rest on one LLVM pass proving an identity; when it cannot, the front
   refuses, which is safe but brittle.
-- Variadic calls follow the x86-64 System V convention and clang's inline `va_arg`.
+- Variadic calls follow the x86-64 System V convention and clang's inline `va_arg`, for every alignment up to
+  LLVM's limit of 2^14 bytes. Above it clang 18 itself writes invalid IR (a `byval` with `align 1048576`; the
+  native build crashes) and `bennett-front` aborts in LLVM's bitcode reader instead of naming the cause (route:
+  a fatal-error handler around reading the input that reports invalid input by name).
+- A struct passed by value from a call clang marked `tail` lost the stores that fill its copy once `byval` was
+  dropped (a silent wrong result at `-O2` when the callee is not inlined; fixed with the over-aligned variadic
+  work, `front/tests/c/byval_tail_call.c`). The front's other lowerings that pass a copy by address (the variadic
+  area, values in memory) already cleared the mark.
 - A function that uses `stackrestore` cannot run coherently yet.
 - A null dereference does not fault.
 - `bennett run --arg` refuses arguments for parameters wider than 64 bits (`Executor::new` takes `u64`).

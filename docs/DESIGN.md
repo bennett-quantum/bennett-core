@@ -297,7 +297,10 @@ and utilities where they exist (`Abi.h`, `Normalise.h`):
   registers of the named arguments. Putting everything on the stack is not enough: clang passes a
   16-byte-aligned struct that fits in two registers as two plain `i64`s and reads it back at a 16-byte boundary
   from the stack. Where LLVM's backend and the psABI disagree (an `i128` when one register is left) the front
-  follows the psABI, which is what the callee's `va_arg` reads.
+  follows the psABI, which is what the callee's `va_arg` reads. An argument aligned to more than 16 bytes (a
+  struct with `aligned(32)`, a 32- or 64-byte vector) is read at the next multiple of its alignment in memory,
+  not in the area, so the area is aligned to its widest argument and the argument placed at that boundary.
+  A 16-byte vector takes one vector register; a wider one, passed directly under AVX, goes to the stack.
 - **Aggregate results of at most 128 bits of integer and floating-point fields** (`{ i64, i64 }`, how
   clang returns a small struct in two registers; SoftFloat's `extFloat80_t`) come back as one integer, the
   fields side by side, so code under a qubit branch can call such a function. **Other aggregate and vector

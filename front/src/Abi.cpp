@@ -56,11 +56,8 @@ public:
   // Assigns the argument `arg` of `call` (or the parameter of type `type` with `byval` type `byval`).
   Place assign(Type *type, Type *byval, MaybeAlign align, const DataLayout &layout, const Value *at) {
     if (byval) {
-      uint64_t a = std::max<uint64_t>(slotBytes, align.valueOrOne().value());
-      if (a > stackAlign) {
-        notHandled("a variadic argument aligned to more than " + std::to_string(stackAlign) + " bytes", at);
-      }
-      return stack(layout.getTypeAllocSize(byval).getFixedValue(), a);
+      return stack(layout.getTypeAllocSize(byval).getFixedValue(),
+                   std::max<uint64_t>(slotBytes, align.valueOrOne().value()));
     }
     if (type->isPointerTy() || (type->isIntegerTy() && type->getIntegerBitWidth() <= 64)) {
       if (general < generalRegisters) {
@@ -92,6 +89,21 @@ public:
     if (type->isX86_FP80Ty()) {
       return stack(16, 16);
     }
+    // A vector of 16 bytes (`__m128`, `vector_size(16)`) is one eightbyte of class SSE and one of SSEUP: a whole
+    // vector register, or 16 bytes of stack. A wider one (`__m256`, `__m512` under AVX) goes to the stack at its
+    // own alignment when it is variadic, in LLVM's CC_X86_64_C as in clang's va_arg, which reads it from memory.
+    if (vectorType) {
+      uint64_t size = layout.getTypeAllocSize(vectorType).getFixedValue();
+      if (size == vectorBytes) {
+        if (vector < vectorRegisters) {
+          return {Place::Vector, generalRegisters * generalBytes + vectorBytes * vector++};
+        }
+        return stack(size, vectorBytes);
+      }
+      if (size > vectorBytes && layout.getTypeSizeInBits(vectorType) == size * 8) {
+        return stack(size, std::max<uint64_t>(slotBytes, layout.getABITypeAlign(vectorType).value()));
+      }
+    }
     std::string text;
     raw_string_ostream out(text);
     type->print(out);
@@ -101,12 +113,17 @@ public:
   uint64_t general = 0;
   uint64_t vector = 0;
   uint64_t stackBytes = 0;
+  uint64_t align = stackAlign; // the alignment the area needs
 
 private:
-  Place stack(uint64_t size, uint64_t align) {
-    uint64_t at = roundUp(stackBytes, align);
-    stackBytes = at + roundUp(size, slotBytes);
-    return {Place::Stack, saveAreaBytes + at};
+  // clang's va_arg rounds the address of an argument aligned to more than 8 bytes up to its alignment, so the
+  // offset is rounded within the area, which is aligned to its widest argument (`align`). The save area is a
+  // multiple of 16 bytes, so up to 16 this is the offset on the stack, as the psABI counts it.
+  Place stack(uint64_t size, uint64_t alignment) {
+    uint64_t at = roundUp(saveAreaBytes + stackBytes, alignment);
+    stackBytes = at - saveAreaBytes + roundUp(size, slotBytes);
+    align = std::max(align, alignment);
+    return {Place::Stack, at};
   }
 };
 
@@ -178,7 +195,7 @@ void lowerCall(CallInst *call, const DataLayout &layout) {
   entry.SetCurrentDebugLocation(call->getDebugLoc());
   uint64_t bytes = saveAreaBytes + roundUp(assigner.stackBytes, stackAlign);
   AllocaInst *area = entry.CreateAlloca(ArrayType::get(entry.getInt8Ty(), bytes), nullptr, "va.area");
-  area->setAlignment(Align(stackAlign));
+  area->setAlignment(Align(assigner.align));
 
   IRBuilder<> b(call);
   for (unsigned i = named; i < call->arg_size(); ++i) {

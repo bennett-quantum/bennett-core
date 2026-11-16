@@ -74,6 +74,18 @@ error. **wrong**: the device reaches `abort()`/`exit(≠0)`, or `main` returns a
 exits other than 0 or 3, `bennett check` rejects its output, or `bennett run` exits other than 0, 1 or 2. **budget**:
 the 10^8-step budget ran out. **skipped**: no native reference, as above.
 
+## The program that waited on over-aligned variadic arguments (2026-11-16)
+
+After variadic arguments aligned to more than 16 bytes were placed where clang's `va_arg` reads them
+(`docs/DESIGN.md`, "Variadic functions"), only GCC `pr92904` was run again, with `run-one.sh` (binaries built
+from the job's tree and copied), with musl linked (`MUSL_LIBDIR`) and without the library (`rt.c`):
+
+| program | before (`8bbb56c`) | with musl | without the library |
+|---|---|---|---|
+| `pr92904` | refused: a variadic argument aligned to more than 16 bytes | agrees (67,967 steps) | agrees (65,918 steps) |
+
+The same with `OPTNONE=1`: agrees (without the library in 28,385 steps). Natively it passes at `-O0` and `-O2`.
+
 ## The programs that waited on the return address (2026-11-15)
 
 After `llvm.returnaddress` became the device's `retaddr` (`docs/DESIGN.md`, "Return addresses"), only the
@@ -175,7 +187,7 @@ What still does not run, per reason:
 | GCC | `llvm.eh.sjlj.longjmp` (`built-in-setjmp`, `pr84521`); agree since, run alone (section above) | 2 |
 | GCC | `longjmp` (`20210505-1`), `setjmp` (`pr56982`): musl's are x86-64 assembly, not built; agree since, run alone | 2 |
 | GCC | inline assembly (`990413-2`) | 1 |
-| GCC | a variadic argument aligned to more than 16 bytes (`pr92904`) | 1 |
+| GCC | a variadic argument aligned to more than 16 bytes (`pr92904`); agrees since, run alone (section above) | 1 |
 | GCC | named fault `unreachable`: no file system (`printf-2`, `user-printf`, `fprintf-2`, `loop-2f`, `loop-2g`) | 5 |
 | GCC | named fault `bad_indirect`: unprototyped call with an extra argument (`pr67037`) | 1 |
 | c-testsuite | a call through a mismatched prototype of `strlen` (`00025`) | 1 |

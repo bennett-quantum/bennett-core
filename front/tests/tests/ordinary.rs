@@ -3,7 +3,9 @@
 //! natively and on the device, from unoptimised and from optimised clang output.
 
 use bennett_exec::Outcome;
-use bennett_front_tests::{CLANG_FLAGS, CLANG_O2_FLAGS, assert_agrees_with_native, lower, run, write_c};
+use bennett_front_tests::{
+    CLANG_FLAGS, CLANG_O2_FLAGS, assert_agrees_with_native, c_dir, exit_status, lower, run, write_c,
+};
 use bennett_ir::Fault;
 
 #[test]
@@ -70,4 +72,25 @@ fn a_one_element_vector_constant_is_the_integer_it_holds() {
 #[test]
 fn structs_of_floats_reach_a_variadic_function_in_vector_registers_and_on_the_stack() {
     assert_agrees_with_native("variadic_floats", 0);
+}
+
+/// GCC `pr92904`: arguments aligned to more than 16 bytes, and vectors, sit where clang's `va_arg` rounds to.
+#[test]
+fn variadic_arguments_aligned_beyond_16_bytes_are_read_at_their_alignment() {
+    assert_agrees_with_native("variadic_aligned", 0);
+}
+
+/// With AVX the 32- and 64-byte vectors are passed as vectors, not through memory: a variadic one still goes on
+/// the stack at its own alignment. The program checks itself, so no native build (it may lack AVX-512) is needed.
+#[test]
+fn variadic_vectors_under_avx_go_on_the_stack_at_their_alignment() {
+    let source = c_dir().join("variadic_aligned.c");
+    for (level, flags) in [("o0", CLANG_FLAGS), ("o2", CLANG_O2_FLAGS)] {
+        for avx in ["-mavx2", "-mavx512f"] {
+            let clang_flags: Vec<&str> = flags.iter().copied().chain([avx, "-Wno-psabi"]).collect();
+            let module = lower(&source, &format!("variadic_aligned.{level}{avx}"), &clang_flags, &[]);
+            let context = format!("variadic_aligned.c {clang_flags:?}");
+            assert_eq!(exit_status(run(&module, "main", &[], 0), &context), 0, "{context}");
+        }
+    }
 }
