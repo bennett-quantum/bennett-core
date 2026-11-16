@@ -303,7 +303,6 @@ entry:
 /// The callee's frame cannot fit; apply must XOR stack_overflow into fault, and
 /// so must its call-budget expansion (DESIGN, "The call with a fault value").
 #[test]
-#[ignore = "defect: call-budget entry stack overflow ends the world instead of returning its code"]
 fn a_callee_frame_that_does_not_fit_returns_a_call_fault() {
     let module = load(
         "memory 128

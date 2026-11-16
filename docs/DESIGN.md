@@ -265,7 +265,10 @@ arguments and reads of registers included, with the region's rules attached to i
   every step back. A failed rewind running forward again what it un-ran counts nothing.
 - **A fault inside** (any named fault: the callee's, a budget spent) does not end the world: the frames from
   the callee's up are discarded (a `Catch` record keeps them), the stack pointer is the callee's entry one, and
-  the caller goes on with `%y` = 0 and `%c` = the fault's code; a return gives `%c` = 0. The innermost call
+  the caller goes on with `%y` = 0 and `%c` = the fault's code; a return gives `%c` = 0. A callee whose frame
+  does not fit is such a fault, `stack_overflow` with no frame to discard, as for an applied function (it
+  ended the world until 2026-11-16: `a_callee_frame_that_does_not_fit_returns_a_call_fault`, against
+  `apply` in all three ways of computing it). The innermost call
   with a budget takes the fault. The simulator's checks never become a code: strict mode's stop when a world
   faults while others go on applies to these faults too, and the run's limits stop the run as before. On the
   machine (`Options::machine_meaning`) each world gets its own code.

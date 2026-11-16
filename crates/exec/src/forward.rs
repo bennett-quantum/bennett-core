@@ -82,6 +82,15 @@ impl<'m> Executor<'m> {
     /// fault while other worlds go on stops the run instead, as a world's fault does: the simulator's
     /// checks are never delivered to a program as a fault code.
     fn catch(&mut self, depth: usize, fault: Fault) -> Result<(), Halt> {
+        self.deliver_fault(depth, fault)?;
+        self.count_guards(depth, 1, false);
+        Ok(())
+    }
+
+    /// The catch of a fault at `depth` (`catch`), but for counting its step: the frames from `depth` up are
+    /// discarded (none, for a callee whose frame did not fit), and the call with a budget at the top frame's
+    /// position gets the code.
+    fn deliver_fault(&mut self, depth: usize, fault: Fault) -> Result<(), Halt> {
         if !self.in_region && !self.allow_region_faults && self.others_go_on() {
             return Err(Halt::Stop(RunError::WorldFault { fault, worlds: self.worlds.len() }));
         }
@@ -94,8 +103,10 @@ impl<'m> Executor<'m> {
         }
         self.record_word(u128::from(self.stack_pointer));
         self.record_word(discarded as u128);
-        self.stack_pointer = self.frames[depth].entry_stack_pointer;
-        self.frames.truncate(depth);
+        if discarded > 0 {
+            self.stack_pointer = self.frames[depth].entry_stack_pointer;
+            self.frames.truncate(depth);
+        }
         let caller = *self.top();
         let Inst::CallBudget { dst, fault: code, .. } =
             &self.function(caller.func).block(caller.block).insts[caller.inst]
@@ -111,7 +122,6 @@ impl<'m> Executor<'m> {
         }
         self.record(Undo::Catch);
         self.advance();
-        self.count_guards(depth, 1, false);
         Ok(())
     }
 
@@ -150,7 +160,14 @@ impl<'m> Executor<'m> {
             Inst::ReturnAddress { dst, level } => self.produce(*dst, u128::from(self.return_address(*level))),
             Inst::StackRestore { pointer } => self.stack_restore(self.read_word(pointer))?,
             Inst::Call { callee, args, .. } => self.call(*callee, args, None)?,
-            Inst::CallBudget { callee, args, budget, .. } => self.call(*callee, args, Some(self.read_word(budget)))?,
+            Inst::CallBudget { callee, args, budget, .. } => {
+                // A callee whose frame does not fit faults inside the call, as an applied function's does: the
+                // code is the call's, in every world alike (the frame is tried before any read splits).
+                match self.call(*callee, args, Some(self.read_word(budget))) {
+                    Err(Fault::StackOverflow) => return self.deliver_fault(self.frames.len(), Fault::StackOverflow),
+                    entered => entered?,
+                }
+            }
             Inst::CallIndirect { signature, target, args, .. } => {
                 let callee = self.module.function_at(self.read_word(target));
                 let callee = callee.filter(|&f| self.function(f).has_signature(signature)).ok_or(Fault::BadIndirect)?;
