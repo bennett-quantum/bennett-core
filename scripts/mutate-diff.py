@@ -30,14 +30,24 @@ def main():
         sys.exit('no changed lines: select the base of the step')
     metadata = json.loads(run('cargo', 'metadata', '--no-deps', '--format-version', '1', cwd=root))
     members = metadata['workspace_default_members']
-    packages = [p['name'] for p in metadata['packages'] if p['id'] in members]
+    changed_rust = [root / name for name in run('git', 'diff', '--name-only', base, head).splitlines()
+                    if name.endswith('.rs')]
+    selected = [p for p in metadata['packages'] if p['id'] in members or any(
+        file.is_relative_to(Path(p['manifest_path']).parent) for file in changed_rust)]
+    packages = [p['name'] for p in selected]
     # The tool defaults gitignore off; source-local scratch must not copy itself.
-    command = ['cargo', 'mutants', '--in-diff', str(diff), '--output', str(output),
+    command = ['cargo', 'mutants', '--workspace', '--in-diff', str(diff), '--output', str(output),
                '--gitignore', 'true', '--jobs', '1', '--jobserver-tasks', os.environ.get('CARGO_BUILD_JOBS', '2')]
     for name in packages:
         command.extend(['--test-package', name])
     print(f'mutation step {base}..{head}; results {output.relative_to(root)}', flush=True)
     env = os.environ | {'TMPDIR': str(output)}
+    front_tests = root / 'front/tests'
+    if any(Path(p['manifest_path']).parent == front_tests for p in selected):
+        front = Path(env.get('BENNETT_FRONT', root / 'target/front/bennett-front')).resolve()
+        if not args.list and not front.is_file():
+            sys.exit('run front/test.sh at this revision before mutating the front harness')
+        env['BENNETT_FRONT'] = str(front)
     candidates = json.loads(run(*command, '--list', '--json', cwd=root, env=env))
     if not candidates:
         sys.exit('no generated Rust mutants in this diff: record explicit seeded edits for unsupported changes')
