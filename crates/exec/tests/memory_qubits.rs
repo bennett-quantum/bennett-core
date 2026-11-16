@@ -595,7 +595,7 @@ entry:
     x [16]
     %z = add i8 0, 0
     rewind %h keep (i1 1 -> [16])
-    ret %z
+    ret 0
 }
 func @classical() -> i8 {
 entry:
@@ -609,7 +609,7 @@ entry:
     %h = mark
     %v = load i8 16
     rewind %h keep (i8 1 -> [16])
-    ret %v
+    ret 0
 }
 func @carried() -> i8 {
 entry:

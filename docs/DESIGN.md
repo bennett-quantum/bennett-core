@@ -134,8 +134,14 @@ step ("Worlds", below).
      exactly where the calculation leaves the temporary nonzero (156), runs with the calculated state
      elsewhere (1,064; 556 fault at the free going forward), and every run reverses.
   4. The frame continues after the rewind, wherever the mark was. Every slot holds its value at the
-     mark: a slot defined between the mark and the rewind reads, after it, as it did at the mark, so a
-     program should not use one there. The validator does not check that.
+     mark: a slot defined between the mark and the rewind reads, after it, as it did at the mark (a
+     register allocated since is gone). Since 2026-11-16 the validator rejects such a use
+     (`RewoundUse`, the maintainer's decision, `HANDOFF.md` [(4)]): a forward dataflow over the
+     function finds, on some path, a definition after the mark's latest run, then a rewind of it, then
+     the use, with no new definition between the rewind and the use. A path is a path of the
+     control-flow graph, and a `longjmp` (in the function, or in any callee: every call) may resume
+     after any `setjmp` of the function; a rewind's effect on the other marks' sets is not narrowed,
+     so the check may refuse a use that no run reaches (conservative, never the other way).
 - **Marks nest**, and a rewind un-runs every mark and rewind inside its region. Rewinding the same mark
   twice is allowed; the second un-runs the first, its keep included.
 - **In a coherent region** (`apply`) a rewind runs, but may not keep: registers are quantum

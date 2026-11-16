@@ -128,7 +128,9 @@ first XORs each value into its register, in order. `%h` must be the result of a 
 function (the validator's `NotAMark`), not a value derived from one or passed through a block parameter.
 A handle is opaque (decided 2026-11-16): the validator refuses every use of it but as the handle a `rewind`
 names (`HandleUse`), so it is never computed with, compared, stored, passed, returned, kept or branched on,
-and no result of a program depends on its value.
+and no result of a program depends on its value. A value defined between a mark and a rewind of it holds,
+after the rewind, its value at the mark; a use of it there, on any path, is refused (`RewoundUse`): define
+it again after the rewind, or keep it into a register.
 Each kept value is an integer exactly as wide as its register (a typed constant names its width); keeping
 a register's value is not accepted. `keep` with an empty list is not accepted: write `rewind %h`. The
 meaning, and when a rewind faults (`bad_rewind`), is in `docs/DESIGN.md`, "History: `mark` and `rewind`".

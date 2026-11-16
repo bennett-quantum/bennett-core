@@ -2,7 +2,7 @@
 mod common;
 
 use bennett_exec::{Executor, Options, Outcome, ReverseError, Snapshot};
-use bennett_ir::{Fault, Inst};
+use bennett_ir::{Fault, Inst, Problem};
 use common::{assert_reverses, assert_same_state, bounded, executor, load};
 use num_complex::Complex64 as C;
 
@@ -360,6 +360,10 @@ fn nested_replay_ignores_configuration_and_step_limits_but_restores_them_afterwa
     assert_same_state(&e.snapshot(), &start, "limited replay");
 }
 
+/// A stale inner handle, and one whose slot held another activation's handle, faulted `bad_rewind` without a
+/// partial keep. Since 2026-11-16 the validator refuses both programs (`RewoundUse`: the handle is a value
+/// defined between the outer mark and its rewind), so the executor's check is no longer reached by a
+/// validated program.
 #[test]
 fn stale_inner_and_returned_activation_marks_fail_without_partial_keeps() {
     let source = r#"
@@ -395,26 +399,18 @@ entry:
     ret
 }
 "#;
-    let module = load(source);
-    for name in ["main", "stale"] {
-        let mut e = executor(&module, name, &[], options());
-        at_rewind(&mut e, &module);
-        assert_eq!(e.step(), None);
-        at_rewind(&mut e, &module);
-        let before = e.snapshot();
-        if name == "main" {
-            let base = before.classical.frames.last().expect("new activation").base;
-            assert_eq!(
-                before.classical.slots[base + 2],
-                4,
-                "foreign handle names old activation's still-journalled mark"
-            );
+    refused(source, &["b", "b"]);
+}
+
+/// The problems a program is refused for: each a `RewoundUse` of the named value, in order.
+fn refused(source: &str, names: &[&str]) {
+    match bennett_ir::load(source) {
+        Err(bennett_ir::LoadError::Invalid(errors)) => {
+            let found: Vec<_> = errors.0.into_iter().map(|e| e.problem).collect();
+            let expected: Vec<_> = names.iter().map(|&n| Problem::RewoundUse(n.into())).collect();
+            assert_eq!(found, expected, "{source}");
         }
-        assert_eq!(e.step(), Some(Outcome::Faulted(Fault::BadRewind)), "{name}");
-        let mut after = e.snapshot();
-        after.classical.outcome = None;
-        assert_same_state(&after, &before, name);
-        assert_reverses(&module, name, &[], options());
+        other => panic!("expected a refusal, got {other:?}\n{source}"),
     }
 }
 
@@ -644,9 +640,13 @@ entry:
     assert_eq!(after, before);
 }
 
+/// Replaying an inner rewind's second visit forked a world that rewound `%parent` and so staled `%inner`; the
+/// replay faulted at the first visit and the outer rewind was refused. Since 2026-11-16 the validator refuses
+/// the program: `%inner` is used, by the rewind in `keep`, after `rewind %parent` un-ran its mark
+/// (`RewoundUse`), so the executor's check is no longer reached by a validated program.
 #[test]
 fn a_replay_fault_at_an_earlier_visit_still_refuses_the_outer_rewind() {
-    let module = load(
+    refused(
         "memory 1024
 func @id(i1 %x) -> i1 {
 entry:
@@ -679,20 +679,8 @@ done:
     ret
 }
 ",
+        &["inner"],
     );
-    let mut executor = executor(&module, "main", &[], options());
-    for _ in 0..2 {
-        at_rewind(&mut executor, &module);
-        assert_eq!(executor.step(), None);
-    }
-    at_rewind(&mut executor, &module);
-    let before = executor.snapshot();
-    // Replaying visit two splits. The fork invalidates %inner and faults at visit one of the same
-    // instruction; merely being back at that instruction is not a successful replay of visit two.
-    assert_eq!(executor.step(), Some(Outcome::Faulted(Fault::BadRewind)));
-    let mut after = executor.snapshot();
-    after.classical.outcome = None;
-    assert_eq!(after, before);
 }
 
 #[test]

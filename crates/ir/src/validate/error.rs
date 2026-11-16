@@ -220,6 +220,12 @@ pub enum Problem {
     /// A mark's handle used other than as the handle a `rewind` names: handles are opaque.
     #[error("`%{0}` is a mark's handle, which only `rewind` may use")]
     HandleUse(String),
+    /// A use, after a `rewind`, of a value defined between its mark and the rewind: the rewind restored the
+    /// value to what it was at the mark.
+    #[error(
+        "`%{0}` is used after a `rewind` that un-ran its definition (it was defined between the mark and the rewind)"
+    )]
+    RewoundUse(String),
     /// A memory qubit's bit index at or above `MEMORY_QUBIT_BITS`.
     #[error("bit {0} of a memory qubit is not below 128")]
     MemoryBitOutOfRange(u8),

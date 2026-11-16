@@ -22,6 +22,7 @@ pub(super) fn check(module: &Module, function: &Function, errors: &mut Vec<Valid
     checker.operand_types();
     checker.handle_uses();
     checker.dominance();
+    checker.rewound_uses();
     checker.types.into_iter().map(|ty| ty.unwrap_or(Type::Int(Width::WORD))).collect()
 }
 
@@ -559,6 +560,19 @@ impl<'a> Checker<'a> {
             Operand::Const(value) => format!("constant {}", value.value()),
         };
         self.error(site, Problem::TypeMismatch { operand, expected, found });
+    }
+
+    /// Reports the first use of each value a rewind restored: defined between a mark and a rewind of it, and
+    /// used after the rewind on some path (`super::rewound`).
+    fn rewound_uses(&mut self) {
+        for (b, position, slot) in super::rewound::rewound_uses(self.function) {
+            let site = match position {
+                Some(i) => Site::Inst(b, i),
+                None => Site::Terminator(b),
+            };
+            let name = self.slot_name(slot);
+            self.error(site, Problem::RewoundUse(name));
+        }
     }
 
     /// Reports every use, in a reachable block, that its definition does not dominate.

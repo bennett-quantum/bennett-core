@@ -110,7 +110,7 @@ done(i2 %v):
     store i8 %w, 24
     effect %w
     rewind %g
-    %x = mul i2 %v, 3
+    %x = mul i2 %a, 3
     ret %x
 }
 

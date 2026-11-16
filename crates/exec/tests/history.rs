@@ -7,7 +7,7 @@ mod common;
 use std::f64::consts::FRAC_1_SQRT_2;
 
 use bennett_exec::{Options, Outcome, ReverseError, Stats};
-use bennett_ir::Fault;
+use bennett_ir::{Fault, Problem};
 use common::{TOLERANCE, assert_reverses, assert_same_state, bounded, executor, executor as executor_of, load, run};
 use num_complex::Complex64;
 
@@ -268,7 +268,11 @@ fn a_run_that_is_not_reversible_rewinds_but_does_not_reverse() {
     assert_eq!(reversible, Outcome::Returned(Some(22 << 8)));
 }
 
-const FAULTS: &str = r#"
+// A handle an outer rewind restored to what it held before its mark, named by a later rewind: the
+// executor faults such a rewind with `bad_rewind`, changing nothing, but since 2026-11-16 the validator
+// refuses the program (`RewoundUse`, the maintainer's decision [(4)]: the handle is a value defined between
+// a mark and its rewind), so no validated program reaches that fault.
+const STALE_HANDLES: &str = r#"
 memory 256
 
 ; The second rewind's handle is stale: the outer rewind restored %h2 to what it held before its mark (0).
@@ -278,25 +282,6 @@ entry:
     %h2 = mark
     rewind %h
     rewind %h2
-    ret
-}
-
-; A measurement since the mark cannot be un-run.
-func @measured() {
-entry:
-    %q = qalloc 1
-    %h = mark
-    %m = measure %q
-    rewind %h
-    ret
-}
-
-; The kept value would go into a register allocated after the mark, whose allocation the rewind undoes.
-func @young() {
-entry:
-    %h = mark
-    %r = qalloc 2
-    rewind %h keep (i2 1 -> %r)
     ret
 }
 
@@ -317,11 +302,38 @@ entry:
     rewind %h
     ret
 }
+"#;
 
-func @other() {
+#[test]
+fn a_rewind_of_a_handle_an_outer_rewind_restored_is_refused() {
+    match bennett_ir::load(STALE_HANDLES) {
+        Err(bennett_ir::LoadError::Invalid(errors)) => {
+            let found: Vec<_> = errors.0.into_iter().map(|e| e.problem).collect();
+            assert_eq!(found, [Problem::RewoundUse("h2".into()), Problem::RewoundUse("h".into())]);
+        }
+        other => panic!("expected the stale handles refused, got {other:?}"),
+    }
+}
+
+const FAULTS: &str = r#"
+memory 256
+
+; A measurement since the mark cannot be un-run.
+func @measured() {
 entry:
-    call @k()
-    call @m()
+    %q = qalloc 1
+    %h = mark
+    %m = measure %q
+    rewind %h
+    ret
+}
+
+; The kept value would go into a register allocated after the mark, whose allocation the rewind undoes.
+func @young() {
+entry:
+    %h = mark
+    %r = qalloc 2
+    rewind %h keep (i2 1 -> %r)
     ret
 }
 
@@ -349,13 +361,9 @@ entry:
 #[test]
 fn rewinds_that_cannot_un_run_fault_and_change_nothing() {
     let module = load(FAULTS);
-    for (name, fault) in [
-        ("stale", Fault::BadRewind),
-        ("measured", Fault::BadRewind),
-        ("young", Fault::BadRewind),
-        ("other", Fault::BadRewind),
-        ("dangling", Fault::DanglingRegister),
-    ] {
+    for (name, fault) in
+        [("measured", Fault::BadRewind), ("young", Fault::BadRewind), ("dangling", Fault::DanglingRegister)]
+    {
         let mut executor = executor(&module, name, &[], Options { reversible: true, ..bounded() });
         let mut before;
         let outcome = loop {

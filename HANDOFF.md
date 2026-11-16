@@ -700,7 +700,12 @@ The machine:
 - **A `longjmp` whose record is held in qubits that disagree** [M3] stays a fault; a debt.
 - **A rewind across a measurement** [(3)] stays a fault.
 - **A use, after the rewind, of a value defined between a mark and its rewind** [(4)] is rejected by the
-  validator.
+  validator. Built: `RewoundUse`, a forward dataflow over every path of the function, `longjmp`
+  resumptions included (`crates/ir/src/validate/rewound.rs`); conservative where paths are. A mark's
+  handle that an outer rewind un-ran is such a value, so a rewind naming it is refused too: the executor's
+  own `bad_rewind` for a stale handle stays as defence in depth but no validated program reaches it any
+  more (the four tests that drove it assert the refusal). Question: exempt a rewind's handle, keeping that
+  path reachable, or keep the refusal?
 
 C:
 

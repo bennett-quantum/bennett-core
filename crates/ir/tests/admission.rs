@@ -37,6 +37,8 @@ fn malformed_programs_have_the_expected_validation_problem() {
         ("%v = add i64 0, 0\nrewind %v\nret 0", Problem::NotAMark("v".into())),
         // Mark handles are opaque (2026-11-16): only a rewind may use one.
         ("%m = mark\n%v = add i64 %m, 1\nrewind %m\nret 0", Problem::HandleUse("m".into())),
+        // A value defined between a mark and its rewind is not used after the rewind (2026-11-16).
+        ("%m = mark\n%v = add i8 1, 2\nrewind %m\nret %v", Problem::RewoundUse("v".into())),
     ] {
         for prefix in ["", "func @main() -> i8 {\nentry:\nret 0\n}\n"] {
             let text = format!("{prefix}{}", program(body));
