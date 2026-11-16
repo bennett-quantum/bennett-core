@@ -415,3 +415,330 @@ entry:
         assert_reverses(&module, name, &[], options());
     }
 }
+
+#[test]
+fn a_failed_rewind_in_one_world_does_not_disable_checks_in_another() {
+    let delay: String = (0..12).map(|i| format!(" %delay{i} = add i8 0, 0\n")).collect();
+    let module = load(&format!(
+        "memory 1024
+func @id(i1 %x) -> i1 {{
+entry:
+    ret %x
+}}
+func @main() {{
+entry:
+    %s = qalloc 1
+    %out = qalloc 1
+    %q = qalloc 1
+    h %s
+    %branch = call @id(%s)
+    br %branch, later, early
+early:
+    %early = mark
+    %temporary = qalloc 1
+    x %temporary ctrl %out
+    rewind %early keep (i1 1 -> %out)
+    ret
+later:
+{delay}    %later = mark
+    call @id(%q)
+    x %q ctrl %out
+    h %q
+    call @id(%q)
+    rewind %later keep (i1 1 -> %out)
+    ret
+}}
+"
+    ));
+    // The early world rolls back an unfaithful allocation; the delayed world's changed read must
+    // still fail its deferred check. Allowing world faults lets both cases finish before observation.
+    for seed in 0..8 {
+        let mut executor = executor(&module, "main", &[], Options { seed, allow_region_faults: true, ..options() });
+        assert_eq!(executor.run(), Outcome::Faulted(Fault::BadRewind), "seed {seed}");
+    }
+}
+
+#[test]
+fn failed_rewind_work_counts_the_steps_undone_and_replayed_for_restoration() {
+    for extra_gates in 0..3 {
+        let gates = " z %out\n".repeat(extra_gates);
+        let module = load(&format!(
+            "memory 512\nfunc @main() {{\nentry:\n %out = qalloc 1\n %m = mark\n \
+             %temporary = qalloc 1\n x %temporary ctrl %out\n{gates} \
+             rewind %m keep (i1 1 -> %out)\n ret\n}}\n"
+        ));
+        let mut executor = executor(&module, "main", &[], options());
+        at_rewind(&mut executor, &module);
+        let before = executor.snapshot();
+        let work = (executor.stats().rewound_steps, executor.stats().rerun_steps);
+        assert_eq!(executor.step(), Some(Outcome::Faulted(Fault::BadRewind)));
+        let stats = executor.stats();
+        assert_eq!(stats.rewound_steps - work.0, extra_gates as u64 + 1);
+        assert_eq!(stats.rerun_steps - work.1, extra_gates as u64 + 1);
+        let mut after = executor.snapshot();
+        after.classical.outcome = None;
+        assert_eq!(after, before, "restoration includes the phases from the undone Z gates");
+    }
+}
+
+#[test]
+#[ignore = "a fault in a forked replay panics before the outer rewind restores its saved world"]
+fn a_fault_in_a_forked_replay_refuses_the_outer_rewind_without_changing_it() {
+    let module = load(
+        "memory 512
+func @f(i1 %x) {
+entry:
+    br %x, bad, done
+bad:
+    fault unreachable
+done:
+    ret
+}
+func @main() {
+entry:
+    %q = qalloc 1
+    %out = qalloc 1
+    %outer = mark
+    ry(0.7) %q ctrl %out
+    %inner = mark
+    call @f(%q)
+    rewind %inner
+    ry(-0.7) %q ctrl %out
+    rewind %outer keep (i1 1 -> %out)
+    ret
+}
+",
+    );
+    let mut executor = executor(&module, "main", &[], options());
+    at_rewind(&mut executor, &module);
+    assert_eq!(executor.step(), None); // The forward inner rewind succeeds on the definite input 0.
+    at_rewind(&mut executor, &module);
+    let before = executor.snapshot();
+    assert_eq!(executor.step(), Some(Outcome::Faulted(Fault::BadRewind)));
+    let mut after = executor.snapshot();
+    after.classical.outcome = None;
+    assert_same_state(&after, &before, "a replay fault restores the whole outer rewind");
+    assert_eq!(after.worlds, before.worlds);
+}
+
+#[test]
+#[ignore = "a new replay measurement reaches the reversal barrier and panics"]
+fn a_measurement_newly_reached_during_replay_refuses_without_observation() {
+    let module = load(
+        "memory 512
+func @f(i1 %x, q1 %q) {
+entry:
+    br %x, observe, done
+observe:
+    %measured = measure %q
+    ret
+done:
+    ret
+}
+func @main() {
+entry:
+    %q = qalloc 1
+    %out = qalloc 1
+    %outer = mark
+    ry(0.7) %q ctrl %out
+    %inner = mark
+    call @f(%q, %q)
+    rewind %inner
+    ry(-0.7) %q ctrl %out
+    rewind %outer keep (i1 1 -> %out)
+    ret
+}
+",
+    );
+    let mut executor = executor(&module, "main", &[], options());
+    at_rewind(&mut executor, &module);
+    assert_eq!(executor.step(), None);
+    at_rewind(&mut executor, &module);
+    let before = executor.snapshot();
+    assert_eq!(executor.step(), Some(Outcome::Faulted(Fault::BadRewind)));
+    let mut after = executor.snapshot();
+    after.classical.outcome = None;
+    assert_same_state(&after, &before, "a new measurement cannot make a rewind observe a world");
+    assert_eq!(after.worlds, before.worlds);
+}
+
+#[test]
+fn a_fault_in_the_retained_replay_part_restores_the_outer_rewind() {
+    let module = load(
+        "memory 512
+func @f(i1 %x) {
+entry:
+    br %x, done, bad
+bad:
+    fault unreachable
+done:
+    ret
+}
+func @main() {
+entry:
+    %q = qalloc 1
+    %out = qalloc 1
+    x %q
+    %outer = mark
+    ry(0.7) %q ctrl %out
+    %inner = mark
+    call @f(%q)
+    rewind %inner
+    ry(-0.7) %q ctrl %out
+    rewind %outer keep (i1 1 -> %out)
+    ret
+}
+",
+    );
+    let mut executor = executor(&module, "main", &[], options());
+    at_rewind(&mut executor, &module);
+    assert_eq!(executor.step(), None);
+    at_rewind(&mut executor, &module);
+    let before = executor.snapshot();
+    assert_eq!(executor.step(), Some(Outcome::Faulted(Fault::BadRewind)));
+    let mut after = executor.snapshot();
+    after.classical.outcome = None;
+    assert_eq!(after, before, "both the retained part and its successful fork are restored");
+}
+
+#[test]
+fn a_non_splitting_replay_fault_counts_undo_cleanup_and_restoration() {
+    let module = load(
+        "memory 512
+func @f(i1 %x) {
+entry:
+    br %x, bad, done
+bad:
+    fault unreachable
+done:
+    ret
+}
+func @main() {
+entry:
+    %q = qalloc 1
+    %out = qalloc 1
+    %outer = mark
+    x %q ctrl %out
+    %inner = mark
+    call @f(%q)
+    rewind %inner
+    x %q ctrl %out
+    rewind %outer keep (i1 1 -> %out)
+    ret
+}
+",
+    );
+    let mut executor = executor(&module, "main", &[], options());
+    at_rewind(&mut executor, &module);
+    assert_eq!(executor.step(), None);
+    at_rewind(&mut executor, &module);
+    let before = executor.snapshot();
+    let work = (executor.stats().rewound_steps, executor.stats().rerun_steps);
+    assert_eq!(executor.step(), Some(Outcome::Faulted(Fault::BadRewind)));
+    // Undo the final X; replay the call and its branch before faulting; undo those two steps;
+    // replay the final X for restoration. The faulting instruction itself did no work.
+    assert_eq!(executor.stats().rewound_steps - work.0, 3);
+    assert_eq!(executor.stats().rerun_steps - work.1, 3);
+    let mut after = executor.snapshot();
+    after.classical.outcome = None;
+    assert_eq!(after, before);
+}
+
+#[test]
+fn a_replay_fault_at_an_earlier_visit_still_refuses_the_outer_rewind() {
+    let module = load(
+        "memory 1024
+func @id(i1 %x) -> i1 {
+entry:
+    ret %x
+}
+func @main() {
+entry:
+    %q = qalloc 1
+    %out = qalloc 1
+    %control = qalloc 1
+    %outer = mark
+    ry(0.7) %q ctrl %control
+    %parent = mark
+    %inner = mark
+    br loop(i1 0)
+loop(i1 %i):
+    %value = call @id(%q)
+    %inverted = xor i1 %i, 1
+    br %value, reset, keep(%inverted)
+reset:
+    rewind %parent
+    br keep(i1 0)
+keep(i1 %k):
+    rewind %inner keep (%k -> %out)
+    %again = call @id(%out)
+    br %again, loop(i1 1), done
+done:
+    ry(-0.7) %q ctrl %control
+    rewind %outer keep (i1 1 -> %control)
+    ret
+}
+",
+    );
+    let mut executor = executor(&module, "main", &[], options());
+    for _ in 0..2 {
+        at_rewind(&mut executor, &module);
+        assert_eq!(executor.step(), None);
+    }
+    at_rewind(&mut executor, &module);
+    let before = executor.snapshot();
+    // Replaying visit two splits. The fork invalidates %inner and faults at visit one of the same
+    // instruction; merely being back at that instruction is not a successful replay of visit two.
+    assert_eq!(executor.step(), Some(Outcome::Faulted(Fault::BadRewind)));
+    let mut after = executor.snapshot();
+    after.classical.outcome = None;
+    assert_eq!(after, before);
+}
+
+#[test]
+fn a_fault_while_unwinding_a_replayed_fork_restores_all_parts() {
+    let module = load(
+        "memory 1024
+func @f(i1 %q, i1 %control) {
+entry:
+    br %q, check, done
+check:
+    br %control, bad, done
+bad:
+    fault unreachable
+done:
+    ret
+}
+func @id(i1 %q) -> i1 {
+entry:
+    ret %q
+}
+func @main() {
+entry:
+    %q = qalloc 1
+    %control = qalloc 1
+    h %q
+    %outer = mark
+    %first = mark
+    call @f(%q, %control)
+    rewind %first
+    %second = mark
+    call @id(%q)
+    rewind %second
+    rewind %outer keep (i1 1 -> %control)
+    ret
+}
+",
+    );
+    let mut executor = executor(&module, "main", &[], options());
+    for _ in 0..2 {
+        at_rewind(&mut executor, &module);
+        assert_eq!(executor.step(), None);
+    }
+    at_rewind(&mut executor, &module);
+    let before = executor.snapshot();
+    assert_eq!(executor.step(), Some(Outcome::Faulted(Fault::BadRewind)));
+    let mut after = executor.snapshot();
+    after.classical.outcome = None;
+    assert_eq!(after, before);
+}

@@ -932,3 +932,31 @@ entry:
     assert_eq!(quantum.amplitudes.len(), 1);
     assert!((quantum.amplitude(&[0]) - C::new(1.0, 0.0)).norm() < EPS);
 }
+
+#[test]
+fn memory_keeps_xor_every_little_endian_byte_at_every_integer_width() {
+    for bits in 1..=128 {
+        let width = bennett_ir::Width::new(bits).expect("integer width");
+        let value = 0x8102_0304_0506_0708_090a_0b0c_0d0e_0f13_u128 & width.mask();
+        let promotions: String = (0..width.bytes()).map(|offset| format!(" z [{}]\n", 32 + offset)).collect();
+        let module = bennett_ir::load(&format!(
+            "memory 256\nfunc @main() -> i{bits} {{\nentry:\n{promotions} %m = mark\n \
+             rewind %m keep (i{bits} {value} -> [32])\n %result = load i{bits} 32\n ret %result\n}}\n"
+        ))
+        .expect("valid");
+        let mut executor = start(&module, "main", true);
+        let before = executor.snapshot();
+        assert_eq!(executor.run(), Outcome::Returned(Some(value)), "i{bits}");
+        let quantum = executor.snapshot().quantum;
+        assert_eq!(quantum.amplitudes.len(), 1);
+        assert_eq!(quantum.amplitudes[0].1, C::new(1.0, 0.0), "i{bits}: phase is preserved");
+        assert_eq!(quantum.cells.len() as u64, width.bytes());
+        let bytes = value.to_le_bytes();
+        for (offset, &(address, column)) in quantum.cells.iter().enumerate() {
+            assert_eq!(address, 32 + offset as u64);
+            assert_eq!(quantum.amplitudes[0].0[column], u64::from(bytes[offset]), "i{bits}, byte {offset}");
+        }
+        executor.reverse().expect("the byte-wise keep reverses");
+        assert_eq!(executor.snapshot(), before, "i{bits}: full reversal");
+    }
+}
