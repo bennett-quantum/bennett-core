@@ -742,3 +742,48 @@ entry:
     after.classical.outcome = None;
     assert_eq!(after, before);
 }
+
+#[test]
+fn a_forked_replay_failure_does_not_run_cleanup_on_only_one_part() {
+    let module = load(
+        "memory 1024
+func @f(i1 %q, i1 %control) {
+entry:
+    br %q, done, check
+check:
+    br %control, bad, done
+bad:
+    fault unreachable
+done:
+    ret
+}
+func @main() {
+entry:
+    %q = qalloc 1
+    %control = qalloc 1
+    x %q
+    %outer = mark
+    %inner = mark
+    %cleanup = mark
+    call @f(%q, i1 1)
+    rewind %cleanup
+    h %q ctrl %control
+    call @f(%q, %control)
+    rewind %inner
+    rewind %outer keep (i1 1 -> %control)
+    ret
+}
+",
+    );
+    let mut executor = executor(&module, "main", &[], options());
+    for _ in 0..2 {
+        at_rewind(&mut executor, &module);
+        assert_eq!(executor.step(), None);
+    }
+    at_rewind(&mut executor, &module);
+    let before = executor.snapshot();
+    assert_eq!(executor.step(), Some(Outcome::Faulted(Fault::BadRewind)));
+    let mut after = executor.snapshot();
+    after.classical.outcome = None;
+    assert_eq!(after, before, "a failed replay restores all parts from the outer copy");
+}
