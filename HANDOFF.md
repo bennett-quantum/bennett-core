@@ -554,7 +554,67 @@ explicitly after the separate musl build.
   `scalbn` they need comes from musl; checked bit for bit against native. Built in `cd2d920`: self-contained except the `long double` divide,
   which calls `logbl` and `scalbnl` (and through musl's `ilogbl` a `FENV_ACCESS` pragma, so it stays refused).
 
-## Questions for the maintainer (2026-11-15, evening)
+## Decisions the maintainer took on 2026-11-16
+
+Every question in the next section is answered. The labels in brackets are that section's.
+
+The machine:
+
+- **Time and randomness on the device**: the clock is a start value given to the run plus the number of clock
+  reads so far; entropy is a seeded byte image given to the run. Both are inputs of the run and journalled like
+  any other state. This unblocks files and clocks (step 1).
+- **A rewind that meets a state its history does not describe** [(1), W2] stays the fault `bad_rewind`, changing
+  nothing, until channels exist; the warning of "What is promised when history is left behind" is the target
+  then. This postpones that part of the 2026-11-13 decision, knowingly.
+- **A fault in some worlds** [W3] stops the run by default; `--allow-region-faults` stays.
+- **Measurement and the end of a run with several worlds** [W4]: observing which world, and handing the host one
+  world sampled by weight at the end, is the intended reading.
+- **Time is not part of the machine state** [W1]: no clock; worlds are compared when all have stopped.
+- **A call form that gives the fault code as a value and takes a budget** [A1] is added (for example
+  `%y, %c = call @f(args) budget B`), with the region's rules attached to it. `apply`, `qalloc` and `qfree` are
+  retired once every existing test passes without them.
+- **`measure` takes an address** [M2].
+- **Fault codes widen to 5 bits** [(2), "The fault code space is full"], now; an invalid jump record gets its own
+  code.
+- **Inside a region the worlds run one after another and merge at its end** [A2]: kept.
+- **Mark handles are opaque** [A3]: the validator refuses any use of a handle but `rewind`.
+- **A keep into memory needs bytes that hold qubits since before the mark** [M1]: kept.
+- **A `longjmp` whose record is held in qubits that disagree** [M3] stays a fault; a debt.
+- **A rewind across a measurement** [(3)] stays a fault.
+- **A use, after the rewind, of a value defined between a mark and its rewind** [(4)] is rejected by the
+  validator.
+
+C:
+
+- **Complex division follows libgcc**: all six complex helpers come from libgcc (GPL with the GCC runtime library
+  exception), replacing compiler-rt's, so that the device equals the corpus's native reference. This supersedes
+  the 2026-11-15 choice of compiler-rt.
+- **Calls through function pointers keep the full check.**
+- **A stale `setjmp` record** keeps today's behaviour, as a known weak spot.
+- **A copied `sigjmp_buf` follows glibc.**
+- **Return-address values** at and beyond the outermost frame: kept.
+- **The floating-point environment** stays a named fault until the front's fallback is built; then rounding modes
+  and flags become real through SoftFloat's state.
+- **The exit status is not masked on the device.**
+- **Equal-priority constructor order across separately compiled objects** is a debt; route: lowering startup per
+  unit before linking.
+- **`front/include/bennett.h` is made includable from C++.**
+
+How work is done:
+
+- **Ten automatic checks are built**: mutation testing of the changed lines before a step lands; a test that
+  clang and LLVM are the pinned versions; a table of well-formed and malformed device programs the validator
+  must accept or reject; automatic discovery of the example programs; a classification of every LLVM attribute
+  kind in the front; a pre-push check of the exact revision being pushed; a guard against host paths, logs and
+  stray files in the tree; no work-in-progress commits on `main`; a lint against catch-all match arms in library
+  code; a flag on bare time constants in scripts.
+- **Test-writing rules** drawn from past findings go into `docs/DESIGN.md`, "Tests".
+- **Order of the next work**: fix the two replay panics and the canceled-keeps refusal ("Known weak spots");
+  the decisions above that change the device program and the executor; the front's fallback (step 4); files and
+  clocks; the checks; then growing the SQL oracle (a cost at a large size needs a cost model, a design question
+  of its own).
+
+## Questions the maintainer answered on 2026-11-16 (kept for their detail)
 
 - **The journalled machine (step 3), from its first step.** (1) Once worlds differ (its next step), keeping a
   result into a register the region read can make two worlds equal after the un-run, so their amplitudes add:
