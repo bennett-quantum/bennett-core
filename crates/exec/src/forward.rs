@@ -78,6 +78,10 @@ impl<'m> Executor<'m> {
             }
             Inst::Qfree { register } => {
                 let id = self.quantum.resolve(self.handle(*register))?;
+                if self.partial {
+                    let nonzero = self.quantum.failing(|config| config[id] != 0);
+                    self.defer(Undo::Qfree, nonzero);
+                }
                 self.quantum.free(id, !self.partial)?;
                 self.record(Undo::Qfree);
                 self.advance();
@@ -350,9 +354,11 @@ impl<'m> Executor<'m> {
         values.clear();
         values.extend(args.iter().map(|arg| self.read(arg)));
         if !reads.is_empty() {
-            let config = self.quantum.amplitudes().keys().next().expect("a state has a configuration");
+            // A world's part that a deferred check emptied (`Executor::defer`) reads zero: it carries no
+            // amplitude, and its sum with the other parts decides.
+            let config = self.quantum.amplitudes().keys().next();
             for &(index, column, slot) in &reads {
-                values[index] = u128::from(config[column]);
+                values[index] = config.map_or(0, |config| u128::from(config[column]));
                 if let Some(journal) = &mut self.journal {
                     journal.push_read(column, slot, split);
                 }

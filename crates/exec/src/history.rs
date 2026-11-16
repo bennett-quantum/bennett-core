@@ -15,9 +15,11 @@
 //!
 //! With worlds (`docs/DESIGN.md`, "Worlds"), a world un-runs its own history down to where it split from
 //! others, then its *part* of the history they share. A part need not hold the value its shared history
-//! read, nor be zero where a register was allocated: the parts sum to a state that does. Below a world's
-//! split point those checks are therefore off (`partial`), and the norm is checked where the worlds merge
-//! and stop (`worlds.rs`).
+//! read, nor be zero where a register was allocated: only the sum of the parts must. Below a world's split
+//! point (`partial`) each of those checks is therefore deferred: the part notes the configurations that
+//! fail it (`Executor::defer`), and once every world that rewound has done so, the noted parts of each
+//! check are summed, which must be zero; if not, every such world is put back from a copy kept before its
+//! rewind, and faults `bad_rewind` (`worlds.rs`).
 
 use bennett_ir::{BlockId, Fault, Inst, Keep, Slot};
 
@@ -64,7 +66,12 @@ impl<'m> Executor<'m> {
         // Worlds can split off only where an earlier rewind's region runs again. If one does and the un-run
         // then fails, running forward again cannot join them, so keep a copy to restore.
         let rewinds_inside = (entry.position..journal.records()).any(|index| journal.kind_at(index) == Undo::Rewind);
-        let backup = (changes && rewinds_inside).then(|| self.clone_world(None));
+        // A rewind taken as a step that may un-run past a read where its world split defers the checks below
+        // that point to the sum of the worlds' parts (`worlds.rs`); if that sum fails them, this world is put
+        // back from a copy. A rewind inside another's un-run or run-again belongs to that one's copy.
+        let step = self.rewinding == 0 && self.rerunning == 0;
+        let defers = step && (rewinds_inside || reads.iter().any(|read| read.split));
+        let backup = (rewinds_inside && (changes || self.deferring) || defers).then(|| self.clone_world(None));
         let counters = (self.rewound_steps, self.rerun_steps, self.mismatches, self.splits);
         for &(column, value) in &kept {
             self.quantum.xor_register(column, value);
@@ -72,15 +79,20 @@ impl<'m> Executor<'m> {
         let site = *self.top();
         let outer_partial = std::mem::replace(&mut self.partial, false);
         let saved = std::mem::replace(&mut self.allow_region_faults, true);
+        let deferred = self.deferred.len();
+        self.deferring |= defers;
         self.rewinding += 1;
         let from = self.forked.len();
         let result = self.unwind_to_mark(entry.position, (site.block, site.inst), 0, 0);
         self.rewinding -= 1;
+        if step {
+            self.deferring = false;
+        }
         self.allow_region_faults = saved;
         let forked = self.forked.len() > from || self.splits != counters.3;
         if result.is_err() || self.mismatches != counters.2 {
             match backup {
-                Some(mut backup) if forked => {
+                Some(mut backup) if forked || self.partial => {
                     self.forked.truncate(from);
                     self.swap_world(&mut backup);
                     (self.rewound_steps, self.rerun_steps, self.mismatches, self.splits) = counters;
@@ -93,6 +105,7 @@ impl<'m> Executor<'m> {
                     for &(column, value) in &kept {
                         self.quantum.xor_register(column, value);
                     }
+                    self.deferred.truncate(deferred);
                 }
             }
             self.partial = outer_partial;
@@ -100,6 +113,14 @@ impl<'m> Executor<'m> {
         }
         self.partial = outer_partial;
         self.for_forks(from, &|executor| executor.partial = outer_partial);
+        // Every world this rewind made waits for its deferred checks, holding the copy to restore.
+        if let Some(backup) =
+            backup.filter(|_| defers && (self.pending || self.forked[from..].iter().any(|world| world.pending)))
+        {
+            self.pending = true;
+            self.forked[from..].iter_mut().for_each(|world| world.pending = true);
+            self.backups.push(backup);
+        }
         Ok(())
     }
 

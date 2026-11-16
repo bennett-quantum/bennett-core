@@ -10,7 +10,7 @@ use crate::measure::Collector;
 use crate::memory::Memory;
 use crate::quantum::QuantumState;
 use crate::snapshot::{ClassicalSnapshot, QuantumSnapshot, Snapshot};
-use crate::worlds::{Status, World};
+use crate::worlds::{Defect, Status, World};
 
 /// How to run.
 #[derive(Clone, Copy, Debug, Default)]
@@ -88,7 +88,8 @@ pub enum RunError {
     Unaligned,
     /// When every world had stopped (to measure, or at the end), their summed squared amplitudes were not
     /// 1: a step that un-ran shared history in one world's part was not unitary on the whole state (it
-    /// freed or un-allocated a register that was not zero there). The state is kept as it is.
+    /// freed or un-allocated a register that was not zero there). A rewind's deferred checks refuse such an
+    /// un-run first (`bad_rewind`); this is the backstop. The state is kept as it is.
     #[error("the worlds' summed probability is {0} parts per billion away from 1: an un-run step was not unitary")]
     NormLost(u64),
 }
@@ -315,6 +316,15 @@ pub struct Executor<'m> {
     pub(crate) partial: bool,
     /// Whether the world being made by a split is running its first step.
     pub(crate) splitting: bool,
+    /// Whether a rewind taken as a step (not run again or un-run by another) is un-running: below a split
+    /// point its checks are then deferred to the sum of the worlds' parts (`worlds.rs`).
+    pub(crate) deferring: bool,
+    /// The current world's checks deferred below its split point, not yet made on the sum.
+    pub(crate) deferred: Vec<Defect>,
+    /// Copies of worlds as they were before rewinds whose deferred checks are not yet made.
+    pub(crate) backups: Vec<World>,
+    /// Whether the current world is the result of a rewind whose deferred checks are not yet made.
+    pub(crate) pending: bool,
 }
 
 impl<'m> Executor<'m> {
@@ -372,6 +382,10 @@ impl<'m> Executor<'m> {
             rewinding: 0,
             partial: false,
             splitting: false,
+            deferring: false,
+            deferred: Vec::new(),
+            backups: Vec::new(),
+            pending: false,
         };
         let args: Vec<u128> = args.iter().map(|&arg| u128::from(arg)).collect();
         if let Err(fault) = executor.push_frame(entry, &args) {

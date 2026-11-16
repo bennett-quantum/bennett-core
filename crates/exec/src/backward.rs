@@ -8,6 +8,7 @@ use crate::forward::unpack_position;
 use crate::gates;
 use crate::history::Mismatch;
 use crate::journal::{Journal, Undo};
+use crate::quantum::Amplitudes;
 
 impl<'m> Executor<'m> {
     /// Pops the most recent journal record and undoes its step, which the run took from this state.
@@ -22,16 +23,22 @@ impl<'m> Executor<'m> {
     /// refuses whenever running its region again faults.
     ///
     /// Un-running a call that read registers as integers also refuses, checked, if a register no longer
-    /// holds the value the call read. Below a world's split point the checks are off (`partial`, see
+    /// holds the value the call read. Below a world's split point these two checks are made on the sum of
+    /// the worlds' parts instead: this world's part only notes what fails them (`Executor::defer`, see
     /// `history.rs`).
     pub(crate) fn unrun_last(&mut self, checked: bool) -> Result<(), Mismatch> {
+        let deferred = checked && self.partial;
         let checked = checked && !self.partial;
         let last = self.journal.as_ref().and_then(Journal::last).expect("a record to undo");
-        if checked && last == Undo::Qalloc && !self.allocation_undone_is_zero() {
-            return Err(Mismatch);
-        }
-        if checked && last == Undo::Call && !self.reads_still_hold() {
-            return Err(Mismatch);
+        if (checked || deferred) && matches!(last, Undo::Qalloc | Undo::Call) {
+            let failing =
+                if last == Undo::Qalloc { self.allocation_undone_nonzero() } else { self.reads_no_longer_held() };
+            if checked && !failing.is_empty() {
+                return Err(Mismatch);
+            }
+            if deferred {
+                self.defer(last, failing);
+            }
         }
         let undo = self.journal.as_mut().and_then(|journal| journal.pop()).expect("a record to undo");
         match undo {
@@ -102,14 +109,14 @@ impl<'m> Executor<'m> {
         Ok(())
     }
 
-    /// Whether the register that the `qalloc` of the last record allocated is zero in every
-    /// configuration. The top frame is just after that `qalloc`.
-    fn allocation_undone_is_zero(&self) -> bool {
+    /// The configurations where the register that the `qalloc` of the last record allocated is not zero.
+    /// The top frame is just after that `qalloc`.
+    fn allocation_undone_nonzero(&self) -> Amplitudes {
         let frame = *self.top();
         let inst = &self.function(frame.func).block(frame.block).insts[frame.inst - 1];
         let dst = inst.result().expect("qalloc defines its handle");
         let id = self.quantum.resolve(self.handle(dst)).expect("an allocation being undone is live");
-        self.quantum.is_zero(id)
+        self.quantum.failing(|config| config[id] != 0)
     }
 
     /// Undoes every record in the journal.
@@ -135,14 +142,19 @@ impl<'m> Executor<'m> {
         self.write_bytes(range, old);
     }
 
-    /// Whether every register the call of the last record read as an integer still holds the value it
-    /// read, in every configuration. The top frame is the callee's.
-    fn reads_still_hold(&self) -> bool {
+    /// The configurations where a register the call of the last record read as an integer no longer holds
+    /// the value it read. The top frame is the callee's.
+    fn reads_no_longer_held(&self) -> Amplitudes {
         let journal = self.journal.as_ref().expect("undoing needs a journal");
         let record = journal.records() - 1;
         let base = self.top().base;
         let reads = journal.reads_from(record);
-        reads.iter().all(|read| self.quantum.holds(read.column, self.slots[base + read.slot.index()] as u64))
+        if reads.is_empty() {
+            return Amplitudes::new();
+        }
+        let values: Vec<(usize, u64)> =
+            reads.iter().map(|read| (read.column, self.slots[base + read.slot.index()] as u64)).collect();
+        self.quantum.failing(|config| values.iter().any(|&(column, value)| config[column] != value))
     }
 
     fn undo_call(&mut self) {
@@ -152,6 +164,7 @@ impl<'m> Executor<'m> {
         while let Some(read) = journal.pop_read_of(record) {
             if read.split && self.rewinding > 0 {
                 self.partial = true;
+                self.pending |= self.deferring;
             }
         }
         let frame = self.frames.pop().expect("a pushed frame");

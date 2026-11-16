@@ -16,8 +16,11 @@
 //!
 //! A rewind un-runs a world's own part of history the worlds share (from the mark to where they split)
 //! in that world alone. Every step undone there is linear, so the parts sum to the right state once they
-//! merge; un-allocating a register keeps the part where it is zero, which is not norm-preserving for a
-//! part although it is for the sum. The norm is therefore checked where every world has stopped.
+//! merge, but the checks of the un-run (a read still holds its value, a register un-allocated is zero) hold
+//! only for the sum: each part notes what fails them (`Defect`), and where no world runs, the worlds that
+//! rewound last (`pending`) add their notes per check, which must cancel (`make_deferred_checks`). If they
+//! do not, those worlds are put back from copies kept before their rewinds and fault `bad_rewind`. The norm
+//! is still checked where every world has stopped.
 
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -28,7 +31,7 @@ use rand::Rng;
 use crate::executor::{Executor, Frame, Halt, Outcome, ReverseError, RunError};
 use crate::journal::{Journal, Undo};
 use crate::memory::Memory;
-use crate::quantum::QuantumState;
+use crate::quantum::{Amplitudes, QuantumState};
 
 /// How far the worlds' summed squared amplitudes may be from 1 where every world has stopped. Rounding
 /// over the few hundred gates of a test program is of order 1e-14, far below this.
@@ -75,6 +78,18 @@ pub(crate) struct World {
     pub(crate) outcome: Option<Outcome>,
     pub(crate) status: Status,
     pub(crate) partial: bool,
+    pub(crate) deferred: Vec<Defect>,
+    pub(crate) backups: Vec<World>,
+    pub(crate) pending: bool,
+}
+
+/// A check of a rewind's un-run below a world's split point, deferred to the sum of the worlds' parts: the
+/// configurations of this world's part that fail it, keyed by the classical machine state where it was
+/// made. Parts of the same state add, as their worlds would if they were there together.
+#[derive(Clone, Debug)]
+pub(crate) struct Defect {
+    key: u64,
+    amplitudes: Amplitudes,
 }
 
 impl World {
@@ -90,6 +105,9 @@ impl World {
             outcome: None,
             status: Status::Running,
             partial: false,
+            deferred: Vec::new(),
+            backups: Vec::new(),
+            pending: false,
         }
     }
 
@@ -115,6 +133,9 @@ impl<'m> Executor<'m> {
         std::mem::swap(&mut self.outcome, &mut world.outcome);
         std::mem::swap(&mut self.status, &mut world.status);
         std::mem::swap(&mut self.partial, &mut world.partial);
+        std::mem::swap(&mut self.deferred, &mut world.deferred);
+        std::mem::swap(&mut self.backups, &mut world.backups);
+        std::mem::swap(&mut self.pending, &mut world.pending);
     }
 
     /// A copy of the current world, with `amplitudes` in place of its own if given.
@@ -133,6 +154,9 @@ impl<'m> Executor<'m> {
             outcome: self.outcome,
             status: self.status,
             partial: self.partial,
+            deferred: self.deferred.clone(),
+            backups: self.backups.clone(),
+            pending: self.pending,
         }
     }
 
@@ -143,7 +167,8 @@ impl<'m> Executor<'m> {
     /// Returns whether it split.
     pub(crate) fn split(&mut self, columns: &[usize], step: &dyn Fn(&mut Self) -> Result<(), Fault>) -> bool {
         let parts = self.quantum.partition(columns);
-        if parts.len() == 1 {
+        // A part with no configuration left (`Executor::defer`) has nothing to split.
+        if parts.len() <= 1 {
             return false;
         }
         self.journal.get_or_insert_with(Journal::default);
@@ -151,6 +176,8 @@ impl<'m> Executor<'m> {
         let (_, first) = parts.next().expect("a state has a configuration");
         for (_, amplitudes) in parts {
             let mut world = self.clone_world(Some(amplitudes));
+            // What this world's part failed before it split stays noted once, here.
+            world.deferred.clear();
             self.splits += 1;
             self.split_memory_bytes += self.memory.overlay_len() as u64;
             self.split_journal_bytes += self.journal.as_ref().map_or(0, Journal::bytes) as u64;
@@ -272,7 +299,7 @@ impl<'m> Executor<'m> {
     pub(crate) fn step_alone(&mut self) -> Option<Outcome> {
         let was_rewind = self.next_is_rewind();
         let outcome = self.step_world();
-        if !self.forked.is_empty() {
+        if !self.forked.is_empty() || self.pending {
             self.world_steps += self.forked.len() as u64;
             self.adopt_forks(if was_rewind { Status::Parked } else { Status::Running });
             if was_rewind {
@@ -354,6 +381,11 @@ impl<'m> Executor<'m> {
         let mut worlds = self.take_worlds();
         worlds.retain(World::live);
         self.merge_equal(&mut worlds, |status| status == Status::Parked);
+        if !worlds.iter().any(|world| matches!(world.status, Status::Running | Status::Measuring))
+            && let Some(error) = self.make_deferred_checks(&mut worlds)
+        {
+            return self.stop_worlds(worlds, error);
+        }
         if worlds.len() == 1
             && let Err(error) = self.check_norm(&worlds)
         {
@@ -478,7 +510,14 @@ impl<'m> Executor<'m> {
                         continue;
                     }
                     let quantum = std::mem::take(&mut worlds[from].quantum);
-                    worlds[into].quantum.absorb(quantum);
+                    let deferred = std::mem::take(&mut worlds[from].deferred);
+                    let backups = std::mem::take(&mut worlds[from].backups);
+                    let pending = worlds[from].pending;
+                    let world = &mut worlds[into];
+                    world.quantum.absorb(quantum);
+                    world.deferred.extend(deferred);
+                    world.backups.extend(backups);
+                    world.pending |= pending;
                     gone[from] = true;
                     self.merges += 1;
                 }
@@ -524,6 +563,83 @@ impl<'m> Executor<'m> {
         state.finish()
     }
 
+    /// Notes a check deferred below the current world's split point (`history.rs`): `failing`, the
+    /// configurations of this world's part that fail it, keyed by the check (`kind`, the record it undoes
+    /// or the step it runs again) and the classical machine state here, which is what worlds share where
+    /// their parts add. Nothing is noted outside a rewind taken as a step, or if nothing fails.
+    pub(crate) fn defer(&mut self, kind: Undo, failing: Amplitudes) {
+        if !self.deferring || failing.is_empty() {
+            return;
+        }
+        let mut state = DefaultHasher::new();
+        kind.hash(&mut state);
+        self.stack_pointer.hash(&mut state);
+        self.frames.hash(&mut state);
+        self.outcome.is_some().hash(&mut state);
+        written_slots(&self.slots).hash(&mut state);
+        self.tape.hash(&mut state);
+        self.journal.hash(&mut state);
+        self.quantum.hash_registers(&mut state);
+        self.memory.hash_overlay(&mut state);
+        self.deferred.push(Defect { key: state.finish(), amplitudes: failing });
+    }
+
+    /// Makes the checks the worlds that rewound last deferred, where no world runs: those worlds (`pending`,
+    /// parked with the longest history) are every part that is summed at those checks, as a rewind joins
+    /// every world at it. The parts' failing configurations at each check add; if any sum is not zero (its
+    /// weight above the norm tolerance), every one of those worlds is put back as it was before its rewind,
+    /// which faults `bad_rewind`, changing nothing. Returns the stop if such a fault stops the run (some
+    /// other world goes on and region faults are not allowed).
+    fn make_deferred_checks(&mut self, worlds: &mut Vec<World>) -> Option<RunError> {
+        loop {
+            let deepest = worlds.iter().filter(|world| world.status == Status::Parked).map(World::records).max()?;
+            let joined = |world: &World| world.status == Status::Parked && world.records() == deepest && world.pending;
+            if !worlds.iter().any(joined) {
+                return None;
+            }
+            let mut sums = HashMap::<u64, Amplitudes>::new();
+            for world in worlds.iter_mut().filter(|world| joined(world)) {
+                for defect in std::mem::take(&mut world.deferred) {
+                    let sum = sums.entry(defect.key).or_default();
+                    for (config, amplitude) in defect.amplitudes {
+                        *sum.entry(config).or_default() += amplitude;
+                    }
+                }
+            }
+            let weight = |sum: &Amplitudes| sum.values().map(|amplitude| amplitude.norm_sqr()).sum::<f64>();
+            if sums.values().all(|sum| weight(sum) <= NORM_TOLERANCE) {
+                // A part that a deferred check emptied held only what other parts cancelled.
+                worlds.retain_mut(|world| {
+                    if !joined(world) {
+                        return true;
+                    }
+                    world.pending = false;
+                    world.backups.clear();
+                    !world.quantum.amplitudes().is_empty()
+                });
+                return None;
+            }
+            let mut restored = Vec::new();
+            worlds.retain_mut(|world| {
+                let keep = !joined(world);
+                if !keep {
+                    restored.append(&mut world.backups);
+                }
+                keep
+            });
+            for mut world in restored {
+                world.status = Status::Ended;
+                world.outcome = Some(Outcome::Faulted(Fault::BadRewind));
+                worlds.push(world);
+            }
+            if !self.allow_region_faults
+                && worlds.iter().any(|world| !matches!(world.status, Status::Ended | Status::Discarded))
+            {
+                return Some(RunError::WorldFault { fault: Fault::BadRewind, worlds: worlds.len() });
+            }
+        }
+    }
+
     /// A measurement in the current world while other worlds exist. The machine is observed to be in this
     /// world at this measurement, or not: with probability equal to this world's weight it is, and every
     /// other world is dropped; otherwise this world is dropped (`Halt::Discard`) and the others keep their
@@ -553,6 +669,18 @@ impl<'m> Executor<'m> {
     /// again. Worlds that split apart have the same history up to the split, so the longer ones come back
     /// to it first and the worlds merge there before any of them un-runs what they share.
     pub(crate) fn step_back_worlds(&mut self) -> Result<bool, ReverseError> {
+        // A rewind whose deferred checks were never made (the run stopped first) is taken back from its
+        // copies: its parts need not sum to a state its history describes.
+        if self.pending || self.worlds.iter().flatten().any(|world| world.pending) {
+            let mut worlds = self.take_worlds();
+            let mut restored = Vec::new();
+            worlds.retain_mut(|world| {
+                restored.append(&mut world.backups);
+                !world.pending
+            });
+            worlds.append(&mut restored);
+            self.put_worlds(worlds);
+        }
         let records: Vec<usize> = self.journals().iter().map(|journal| journal.map_or(0, Journal::records)).collect();
         let longest = records.iter().copied().max().unwrap_or(0);
         let count = self.worlds.len();

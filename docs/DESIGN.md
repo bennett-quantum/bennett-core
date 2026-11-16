@@ -190,16 +190,34 @@ configuration. With one world the machine is exactly the machine above.
   rule 4 of "What is promised" makes it a warning in the end, so it is a debt). A nonzero keep into a
   register read since the mark is refused before un-running; anything else is found while un-running,
   and the rewind runs forward again what it un-ran, as for the other mismatches above, or, if worlds
-  split off during its un-run (running an earlier merging rewind again), restores a copy of the world
-  it took first. Summing the parts of worlds whose
+  split off during its un-run (running an earlier merging rewind again) or it un-ran past its split
+  point, restores a copy of the world it took first. Below a world's split point the check is made on
+  the sum of the worlds' parts (next paragraph). Summing the parts of worlds whose
   un-runs were faithful is exactly the linear map: `h q; mark; read q; rewind; h q` measures 0 every time.
-- **Shared history is un-run part by part.** Below the read where a world split from others, its rewind
-  un-runs its *part* of the state the worlds shared. Every undo there is linear, but a part need not hold
-  what the shared history read, nor be zero where it allocated a register: the parts sum to a state that
-  is. So those checks are off below a world's split point, un-allocating keeps a part's zero
-  configurations (the adjoint of allocating), and steps run again there do not check `qfree`. The norm is
-  checked where every world has stopped (a run stops with `RunError::NormLost` if the worlds' weights do
-  not sum to 1 there).
+- **Shared history is un-run part by part, and checked on the sum.** Below the read where a world split
+  from others, its rewind un-runs its *part* of the state the worlds shared. Every undo there is linear,
+  but a part need not hold what the shared history read, nor be zero where it allocated a register (or
+  freed one, in steps run again): only the sum of the parts must. So below a world's split point each
+  of those checks is made on the sum. The part notes the configurations that fail it, keyed by the
+  classical machine state where it is made (parts of the same state add, as their worlds would if they
+  were there together); un-allocating keeps a part's zero configurations (the adjoint of allocating), and
+  steps run again there do not refuse a `qfree`. When no world runs, the parked worlds with the longest
+  history that un-ran such parts are all the parts summed there, as a rewind joins every world at it:
+  their notes are added check by check, and a sum whose weight is above the norm tolerance (1e-9) fails.
+  Then each of those worlds is put back as it was before its rewind, from a copy it kept, and faults
+  `bad_rewind`, changing nothing (`RunError::WorldFault` if other worlds go on and region faults are not
+  allowed). A part a check left with no configuration reads 0 and is dropped once the checks pass. A
+  stop before the checks are made (a budget) keeps the copies, and reversal starts from them. The norm is
+  still checked where every world has stopped (a run stops with `RunError::NormLost` if the worlds'
+  weights do not sum to 1 there), as a backstop. Until 2026-11-16 these checks were off below a split
+  point, so a later split hid an earlier changed read (F1 of the testing pass, `worlds_independent.rs`).
+  Checked against the whole-world reference and an independent dense calculation of this meaning
+  (`worlds_independent.rs`, `shared_history_class`): every order of up to three events among reads
+  (one through a callee whose length depends on the value), six gates (one carries a keep into the read
+  register), a temporary entangled with a kept register, and a nested merging rewind, under four
+  preparations and four keeps: 12,816 programs, 11,106 run to the reference's state and reverse, 1,710
+  refuse (1,376 of them run in the regular tests); four events, 134,264 programs, also agree. The
+  executor before this fix returned instead of refusing on 336 of the 12,816 and panicked on 15.
 - **Scheduling.** Worlds run in lockstep: one tick steps every running world once, and `steps` and the
   budget count ticks (`Stats::world_steps` counts the steps of all worlds). A world that has just rewound
   **parks** while another world runs, because that world may still rewind the same mark to the same state
@@ -233,7 +251,10 @@ configuration. With one world the machine is exactly the machine above.
   and rewind costs c(d) = 2 c(d - 1) + 47 steps of all worlds, un-run and run again (22,481 at `d` = 8),
   against 48 more per level (430 at `d` = 8) when only the outermost level rewinds; two worlds throughout.
   The apply idiom in a loop on a superposed qubit costs 31 steps of work and about 135 journal bytes per
-  iteration at 50 and at 1,500 iterations.
+  iteration at 50 and at 1,500 iterations. A rewind taken as a step whose region holds a split read or an
+  inner rewind copies its world until its checks are made (above): steps and journal bytes are
+  unchanged, and that loop's test takes about a third longer (0.26 s to 0.35 s, median of 15; all of it
+  the copy, measured by leaving it out). Copying only the journal above the mark would remove most of it.
 - **Checked.** Every split and merge is the linear extension of bijections
   (`permutation_tests.rs`): a reading call and a merging rewind from 128 starts each (four values of two
   arguments, two memory bytes, clean and dirty history), each on all 16 basis configurations of two 2-bit

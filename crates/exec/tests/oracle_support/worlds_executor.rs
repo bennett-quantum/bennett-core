@@ -34,6 +34,21 @@ pub fn assert_worlds(model: &Model<'_>, state: &Superposition, snapshot: &bennet
     }
 }
 
+/// Whether `snapshot` is one of the complete world groups of `state`, renormalised: the world a host
+/// observes when a run ends with several.
+pub fn observed_one_of(model: &Model<'_>, state: &Superposition, snapshot: &bennett_exec::Snapshot) -> bool {
+    let mut groups = BTreeMap::<_, Superposition>::new();
+    for (w, &a) in state {
+        groups.entry((w.classical.clone(), w.history.clone())).or_default().insert(w.clone(), a);
+    }
+    snapshot.worlds.is_empty()
+        && groups.into_values().any(|group| {
+            let norm = group.values().map(|a| a.norm_sqr()).sum::<f64>().sqrt();
+            let group = group.into_iter().map(|(w, a)| (w, a / norm)).collect();
+            matches_group(model, &group, snapshot)
+        })
+}
+
 fn matches_group(model: &Model<'_>, state: &Superposition, snapshot: &bennett_exec::Snapshot) -> bool {
     let w = state.keys().next().expect("world group");
     let c = &w.classical;

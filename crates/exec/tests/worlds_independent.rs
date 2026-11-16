@@ -5,7 +5,7 @@ mod oracle_support;
 use bennett_exec::{Executor, Options, Outcome, ReverseError, RunError};
 use bennett_ir::{Fault, ValidModule};
 use oracle_support::worlds::{Finish, Model, Superposition, basis};
-use oracle_support::worlds_executor::assert_worlds;
+use oracle_support::worlds_executor::{assert_worlds, observed_one_of};
 use std::collections::BTreeMap;
 
 fn options() -> Options {
@@ -292,9 +292,8 @@ fn documented_stops_fault_scope_and_tick_budget_boundaries() {
     }
 }
 
-/// cargo test -p bennett-exec --test worlds_independent shared_history_read -- --ignored --nocapture
+/// F1 of the testing pass: a later split hid a changed earlier read, and the rewind returned (1, 1).
 #[test]
-#[ignore = "F1: a later split hides a changed earlier read; returns success instead of bad_rewind"]
 fn shared_history_read_must_still_match_after_world_contributions_are_summed() {
     // DESIGN.md Worlds, “A read the state no longer matches”: bad_rewind changes nothing.
     let p = bennett_ir::load(
@@ -458,4 +457,324 @@ fn existing_executor_programs_extended() {
         .status()
         .expect("extended executor/reference pass");
     assert!(status.success());
+}
+
+/// A read whose worlds take paths of different lengths: the world that read 1 rewinds later.
+const SLOW: &str = "func @slow(i1 %x)->i1 {\nentry:\nbr %x, long, short\nlong:\n%a = add i1 %x, 1\n%b = add i1 %a, 1\nret %x\nshort:\nret %x\n}\n";
+
+/// The class of F1: reads of `%q` (one world per value where they split; `S` reads through a callee whose
+/// length depends on the value), gates between them (one carries a
+/// keep into `%o` over to `%q`), a temporary allocated and entangled inside the region, and nested rewinds,
+/// in every order up to `events` long, under four preparations and four keeps. Every case is compared with
+/// the whole-world reference; cases without nesting also with an independent dense calculation of the
+/// documents' meaning (`dense_meaning`). Returns (faithful, refused, nested) counts.
+fn shared_history_class(events: usize, stride: usize) -> (usize, usize, usize) {
+    const EVENTS: [&str; 10] = [
+        "R",
+        "S",
+        "h %q",
+        "x %q ctrl %o",
+        "x %o ctrl %q",
+        "ry(0.4) %q",
+        "h %o",
+        "x %q ctrl %r",
+        "%t = qalloc 1\nx %t ctrl %o",
+        "N",
+    ];
+    const PREPARATIONS: [&str; 4] = ["h %q", "ry(1.1) %q\nrx(0.3) %o", "", "h %q\nh %r"];
+    let mut sequences: Vec<Vec<usize>> = vec![Vec::new()];
+    for length in 1..=events {
+        let mut next = Vec::new();
+        for sequence in sequences.iter().filter(|s| s.len() == length - 1) {
+            for event in 0..EVENTS.len() {
+                let mut longer = sequence.clone();
+                longer.push(event);
+                next.push(longer);
+            }
+        }
+        sequences.extend(next);
+    }
+    // One temporary per region: the text names it `%t`.
+    sequences.retain(|s| s.iter().filter(|&&e| e == 8).count() <= 1);
+    let (mut faithful, mut refused, mut nested) = (0, 0, 0);
+    for sequence in sequences.iter().step_by(stride) {
+        let reads = sequence.iter().filter(|&&e| e <= 1).count();
+        let mut keeps = vec![String::new(), " keep (i1 1 -> %o)".to_string()];
+        if reads > 0 {
+            keeps.push(" keep (%v1 -> %o)".to_string());
+            keeps.push(format!(" keep (%v{reads} -> %r)"));
+        }
+        for prep in PREPARATIONS {
+            for keep in &keeps {
+                let (mut read, mut inner) = (0, 0);
+                let body: Vec<String> = sequence
+                    .iter()
+                    .map(|&e| match EVENTS[e] {
+                        "R" | "S" => {
+                            read += 1;
+                            let callee = if EVENTS[e] == "R" { "id" } else { "slow" };
+                            format!("%v{read} = call @{callee}(%q)")
+                        }
+                        "N" => {
+                            inner += 1;
+                            format!("%n{inner} = mark\n%w{inner} = call @id(%q)\nh %q\nrewind %n{inner} keep (%w{inner} -> %r)")
+                        }
+                        gate => gate.to_string(),
+                    })
+                    .collect();
+                let text = format!(
+                    "memory 512\nfunc @id(i1 %x)->i1 {{\nentry:\nret %x\n}}\n{SLOW}func @main() {{\nentry:\n%q = qalloc 1\n%o = qalloc 1\n%r = qalloc 1\n{prep}\n%m = mark\n{}\nrewind %m{keep}\nret\n}}\n",
+                    body.join("\n")
+                );
+                let p = bennett_ir::load(&text).expect("valid generated class program");
+                let model = Model::new(&p, "main");
+                let reference = model.run_joined(basis(model.initial("main", &[])), 4000);
+                let reference_refuses =
+                    reference.keys().any(|w| w.classical.finish == Some(Finish::Faulted(Fault::BadRewind)));
+                let mut e = executor(&p, "main", 0);
+                let start = e.snapshot();
+                let out = e.run();
+                let dense = (!sequence.contains(&9)).then(|| dense_meaning(sequence, prep, keep));
+                if let Some(dense) = &dense {
+                    assert_eq!(dense.is_none(), reference_refuses, "dense and reference disagree:\n{text}");
+                } else {
+                    nested += 1;
+                }
+                if reference_refuses {
+                    assert!(
+                        matches!(
+                            out,
+                            Outcome::Faulted(Fault::BadRewind)
+                                | Outcome::Stopped(RunError::WorldFault { fault: Fault::BadRewind, .. })
+                        ),
+                        "must refuse: {out:?}\n{text}"
+                    );
+                    if out == Outcome::Faulted(Fault::BadRewind) {
+                        // Changed nothing: the world observed is one the reference keeps before the rewind.
+                        assert!(observed_one_of(&model, &reference, &e.snapshot()), "{:?}\n{text}", e.snapshot());
+                    }
+                    refused += 1;
+                } else {
+                    assert_eq!(out, Outcome::Returned(None), "must run:\n{text}");
+                    assert_worlds(&model, &reference, &e.snapshot());
+                    if let Some(Some(dense)) = &dense {
+                        let snapshot = e.snapshot();
+                        for (basis, &want) in dense.iter().enumerate() {
+                            let basis = basis as u64;
+                            let got = snapshot.quantum.amplitude(&[basis & 1, basis >> 1 & 1, basis >> 2 & 1]);
+                            assert!((got - want).norm() < 1e-10, "basis {basis}: {got} {want}\n{text}");
+                        }
+                    }
+                    e.reverse().expect("a faithful rewind reverses");
+                    assert_eq!(e.snapshot().classical, start.classical, "{text}");
+                    assert!(e.snapshot().quantum.distance(&start.quantum).is_some_and(|d| d < 1e-11), "{text}");
+                    faithful += 1;
+                }
+            }
+        }
+    }
+    (faithful, refused, nested)
+}
+
+/// The documents' meaning of `prep; mark; events; rewind keep`, written densely over q, o, r and the
+/// temporary t (bits 0..3), without nesting: going forward, each read splits every part by q's value;
+/// the keep XORs into each part; un-running goes back event by event, and at a read the parts that differ
+/// only in later reads are summed and must hold the value read, at the temporary's allocation the sum must
+/// have t = 0. `None` where a check fails (the rewind refuses); else the state over q, o, r after it.
+fn dense_meaning(sequence: &[usize], prep: &str, keep: &str) -> Option<Vec<num_complex::Complex64>> {
+    use num_complex::Complex64 as C;
+    use oracle_support::dense::gate_matrix;
+    type State = Vec<C>;
+    let matrix = |name: &str| {
+        use bennett_ir::{FixedGate, Gate, Rotation};
+        gate_matrix(match name {
+            "h" => Gate::Fixed(FixedGate::H),
+            "x" => Gate::Fixed(FixedGate::X),
+            "ry(0.4)" => Gate::Rotate(Rotation::Ry, 0.4),
+            "ry(1.1)" => Gate::Rotate(Rotation::Ry, 1.1),
+            "rx(0.3)" => Gate::Rotate(Rotation::Rx, 0.3),
+            other => panic!("gate {other}"),
+        })
+    };
+    let bit = |register: &str| match register {
+        "%q" => 0,
+        "%o" => 1,
+        "%r" => 2,
+        "%t" => 3,
+        other => panic!("register {other}"),
+    };
+    // A gate line: name, target, optional control.
+    let gate = |state: &mut State, line: &str, adjoint: bool| {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let m = if adjoint { matrix(words[0]).adjoint() } else { matrix(words[0]) };
+        let target = 1usize << bit(words[1]);
+        let control = if words.len() == 4 { 1usize << bit(words[3]) } else { 0 };
+        for low in 0..16 {
+            if low & target == 0 && low & control == control {
+                let (a, b) = (state[low], state[low | target]);
+                state[low] = m[(0, 0)] * a + m[(0, 1)] * b;
+                state[low | target] = m[(1, 0)] * a + m[(1, 1)] * b;
+            }
+        }
+    };
+    let weight = |state: &State, wrong: &dyn Fn(usize) -> bool| -> f64 {
+        (0..16).filter(|&b| wrong(b)).map(|b| state[b].norm_sqr()).sum()
+    };
+    let mut start = vec![C::new(0.0, 0.0); 16];
+    start[0] = C::new(1.0, 0.0);
+    for line in prep.lines() {
+        gate(&mut start, line, false);
+    }
+    const EVENTS: [&str; 9] =
+        ["R", "R", "h %q", "x %q ctrl %o", "x %o ctrl %q", "ry(0.4) %q", "h %o", "x %q ctrl %r", "ALLOC"];
+    let mut parts: BTreeMap<Vec<u64>, State> = BTreeMap::from([(Vec::new(), start)]);
+    for &e in sequence {
+        match EVENTS[e] {
+            "R" => {
+                let mut next = BTreeMap::new();
+                for (label, state) in parts {
+                    for value in 0..2u64 {
+                        let part: State = (0..16)
+                            .map(|b| if (b & 1) as u64 == value { state[b] } else { C::new(0.0, 0.0) })
+                            .collect();
+                        if part.iter().map(|a| a.norm_sqr()).sum::<f64>() > 1e-24 {
+                            let mut longer = label.clone();
+                            longer.push(value);
+                            next.insert(longer, part);
+                        }
+                    }
+                }
+                parts = next;
+            }
+            "ALLOC" => parts.values_mut().for_each(|s| gate(s, "x %t ctrl %o", false)),
+            line => parts.values_mut().for_each(|s| gate(s, line, false)),
+        }
+    }
+    for (label, state) in parts.iter_mut() {
+        let (value, register) = match keep {
+            "" => (0, 0),
+            " keep (i1 1 -> %o)" => (1, 1),
+            " keep (%v1 -> %o)" => (label[0], 1),
+            _ => (*label.last().expect("a read"), 2),
+        };
+        if value == 1 {
+            let flip = 1usize << register;
+            let old = state.clone();
+            for b in 0..16 {
+                state[b ^ flip] = old[b];
+            }
+        }
+    }
+    for &e in sequence.iter().rev() {
+        match EVENTS[e] {
+            "R" => {
+                let mut merged = BTreeMap::<Vec<u64>, State>::new();
+                for (mut label, state) in parts {
+                    let value = label.pop().expect("a read's value") as usize;
+                    if weight(&state, &|b| b & 1 != value) > 1e-20 {
+                        return None;
+                    }
+                    let sum = merged.entry(label).or_insert_with(|| vec![C::new(0.0, 0.0); 16]);
+                    for b in 0..16 {
+                        sum[b] += state[b];
+                    }
+                }
+                parts = merged;
+            }
+            "ALLOC" => {
+                for state in parts.values_mut() {
+                    gate(state, "x %t ctrl %o", true);
+                    if weight(state, &|b| b & 8 != 0) > 1e-20 {
+                        return None;
+                    }
+                }
+            }
+            line => parts.values_mut().for_each(|s| gate(s, line, true)),
+        }
+    }
+    let state = parts.remove(&Vec::new()).expect("every part is back at the mark");
+    Some(state[..8].to_vec())
+}
+
+#[test]
+fn reads_keeps_gates_temporaries_and_nesting_in_every_order_match_dense_and_reference() {
+    let (faithful, refused, nested) = shared_history_class(2, 1);
+    println!("{faithful} faithful, {refused} refused ({nested} nested, reference only)");
+    assert!(faithful > 0 && refused > 0 && nested > 0);
+}
+
+/// cargo test --release -p bennett-exec --test worlds_independent shared_history_class_extended -- --ignored --nocapture
+/// (`CLASS_EVENTS=4` for every order of four events; `CLASS_STRIDE=n` takes every n-th order.)
+#[test]
+#[ignore = "every order of three events: 12,816 programs against dense and reference"]
+fn shared_history_class_extended() {
+    let number = |name: &str, default: usize| std::env::var(name).map_or(default, |n| n.parse().expect("a number"));
+    let (faithful, refused, nested) = shared_history_class(number("CLASS_EVENTS", 3), number("CLASS_STRIDE", 1));
+    println!("{faithful} faithful, {refused} refused ({nested} nested, reference only)");
+}
+
+/// A budget that stops the run while some worlds have rewound and wait for the checks they deferred, and
+/// others still run (`@slow` takes longer where it read 1): reversal from every stop gets back to the start,
+/// for a rewind whose parts sum to what their history describes and for two whose sums do not (the keep
+/// into `%o` is carried into `%q`, which the first read read, or into a temporary allocated since the mark).
+#[test]
+fn a_stop_before_deferred_checks_are_made_reverses_exactly() {
+    for (gate, keep, refuses) in [
+        ("x %o ctrl %q", "", false),
+        ("x %q ctrl %o", " keep (i1 1 -> %o)", true),
+        ("%t = qalloc 1\nx %t ctrl %o", " keep (i1 1 -> %o)", true),
+    ] {
+        let ret = 9 + gate.lines().count() - 1;
+        let text = format!(
+            "memory 512\nfunc @id(i1 %x)->i1 {{\nentry:\nret %x\n}}\n{SLOW}func @main() {{\nentry:\n%q = qalloc 1\n%o = qalloc 1\nh %q\n%m = mark\n%v1 = call @id(%q)\n{gate}\nh %q\n%v2 = call @slow(%q)\nrewind %m{keep}\nret\n}}\n"
+        );
+        let p = bennett_ir::load(&text).expect("valid");
+        let mut full = executor(&p, "main", 0);
+        let end = full.run();
+        assert_eq!(end, if refuses { Outcome::Faulted(Fault::BadRewind) } else { Outcome::Returned(None) });
+        let ticks = full.stats().steps;
+        let mut parked = 0;
+        for budget in 0..ticks {
+            let mut e = Executor::new(
+                &p,
+                p.function_named("main").expect("entry"),
+                &[],
+                Options { budget: Some(budget), ..options() },
+            )
+            .expect("start");
+            let start = e.snapshot();
+            assert_eq!(e.run(), Outcome::Faulted(Fault::Budget));
+            // Some worlds have finished their rewind (at `ret`) while others have not.
+            let snapshot = e.snapshot();
+            let at_ret = std::iter::once(&snapshot)
+                .chain(&snapshot.worlds)
+                .filter(|s| s.classical.frames.last().is_some_and(|f| f.inst == ret))
+                .count();
+            parked += usize::from(at_ret > 0 && !snapshot.worlds.is_empty());
+            e.reverse().expect("a budget stop reverses");
+            assert_eq!(e.snapshot().classical, start.classical, "budget {budget}\n{text}");
+            assert!(
+                e.snapshot().quantum.distance(&start.quantum).is_some_and(|d| d < 1e-12),
+                "budget {budget}\n{text}"
+            );
+        }
+        assert!(parked > 0, "some stop falls while checks wait");
+    }
+}
+
+/// Found by the four-event class pass: the world that read 0 rewinds the inner mark early and waits; the
+/// one that read 1 (`@slow`) rewinds both marks first, and its parts of the outer rewind, emptied by the
+/// temporary its keep dirtied, must wait for their own checks while the first world's inner checks pass.
+#[test]
+fn emptied_parts_wait_for_their_own_checks_while_a_deeper_rewind_passes() {
+    let text = format!(
+        "memory 512\nfunc @id(i1 %x)->i1 {{\nentry:\nret %x\n}}\n{SLOW}func @main() {{\nentry:\n%q = qalloc 1\n%o = qalloc 1\n%r = qalloc 1\nh %q\n%m = mark\n%v1 = call @slow(%q)\nh %q\n%t = qalloc 1\nx %t ctrl %o\n%n1 = mark\n%w1 = call @id(%q)\nh %q\nrewind %n1 keep (%w1 -> %r)\nrewind %m keep (i1 1 -> %o)\nret\n}}\n"
+    );
+    let p = bennett_ir::load(&text).expect("valid");
+    let model = Model::new(&p, "main");
+    let reference = model.run_joined(basis(model.initial("main", &[])), 4000);
+    assert!(reference.keys().all(|w| w.classical.finish == Some(Finish::Faulted(Fault::BadRewind))));
+    let mut e = executor(&p, "main", 0);
+    assert_eq!(e.run(), Outcome::Faulted(Fault::BadRewind));
+    assert!(observed_one_of(&model, &reference, &e.snapshot()));
 }

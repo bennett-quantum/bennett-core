@@ -103,9 +103,9 @@ impl QuantumState {
 
     /// Undoes `allocate`: the register's column is dropped and the id gets its previous generation.
     /// Configurations where the register is not zero are dropped: in a whole state they can only be
-    /// rounding residue (a rewind's un-run, which could find it otherwise, checks `is_zero` first,
-    /// `history.rs`); in one world's part of a state shared by several, they cancel once the parts merge
-    /// again (dropping them is the adjoint of allocating, a linear map).
+    /// rounding residue (a rewind's un-run, which could find it otherwise, checks for them first,
+    /// `history.rs`); in one world's part of a state shared by several, dropping them is the adjoint of
+    /// allocating, a linear map, and the rewind checks that they cancel across the parts (`worlds.rs`).
     pub(crate) fn unallocate(&mut self, handle: u64) {
         let id = self.resolve(handle).expect("an allocation being undone is live");
         self.amplitudes.retain(|config, _| config[id] == 0);
@@ -130,7 +130,7 @@ impl QuantumState {
     ///
     /// Unchecked (`checked` false), it keeps only the configurations where the register is zero: the
     /// adjoint of allocating it, a linear map. Steps run again to undo a rewind use it where they run on
-    /// one world's part of a state that was zero only summed over worlds.
+    /// one world's part of a state that need be zero only summed over worlds, which the rewind checks.
     pub(crate) fn free(&mut self, id: usize, checked: bool) -> Result<(), Fault> {
         if checked && !self.is_zero(id) {
             return Err(Fault::DirtyFree);
@@ -310,9 +310,10 @@ impl QuantumState {
         parts.into_iter().collect()
     }
 
-    /// Whether register `column` holds `value` in every configuration.
-    pub(crate) fn holds(&self, column: usize, value: u64) -> bool {
-        self.amplitudes.keys().all(|config| config[column] == value)
+    /// The configurations, with their amplitudes, for which `fails` holds: what a check that `fails` names
+    /// finds wrong in this state.
+    pub(crate) fn failing(&self, fails: impl Fn(&[u64]) -> bool) -> Amplitudes {
+        self.amplitudes.iter().filter(|(config, _)| fails(config)).map(|(config, &a)| (config.clone(), a)).collect()
     }
 
     /// The summed squared amplitude: the probability of this world among all.
