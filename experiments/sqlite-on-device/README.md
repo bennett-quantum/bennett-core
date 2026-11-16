@@ -446,7 +446,9 @@ python3 experiments/sqlite-on-device/summarize.py target/sqlite-on-device/oracle
 Each child has an explicit default 300-second timeout and 4,096 MiB virtual-address-space limit
 (`--seconds`, `--memory-mib`); reports retain process status, timeout state, stderr, stdout, wall time
 and `/usr/bin/time` peak RSS. A stopped child fails the run, and its limits remain in the report.
-These are shared-host experiment limits, not claimed physical limits. Forward/reverse phase
+These are shared-host experiment limits, not claimed physical limits. The entry has a
+1,000,000,000-outer-step budget, each region run has a 100,000,000-step budget, and the
+configuration bound is 2N (row times the kick bit). Region faults stop the run. Forward/reverse phase
 seconds exclude module parsing and include the observer work in that phase (setup estimation,
 snapshot checks and dense comparisons). Wall time also includes module loading and process startup.
 

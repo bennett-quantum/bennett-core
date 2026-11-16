@@ -181,6 +181,12 @@ def main():
                 item = measured([args.harness.resolve(), path, 'scale', mode,
                                  entry, ''.join(map(str, bits)), prep], output/f'{shape}-{mode}-{prep}',
                                 args.seconds, args.memory_mib)
+                if item['passed'] and mode in ['coherent', 'grover']:
+                    calls = len(re.findall(r'^oracle \d+ ', item['stdout'], re.M))
+                    expected_calls = k if mode == 'grover' else 2
+                    if calls != expected_calls:
+                        item['passed'] = False
+                        item['stderr'] += f'expected {expected_calls} oracle calls, observed {calls}\n'
                 item.update(shape=shape, mode=mode, prep=prep, marked=sum(bits),
                             iterations=k if mode == 'grover' else None)
                 results['cases'].append(item)
