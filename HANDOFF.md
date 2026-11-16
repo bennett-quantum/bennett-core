@@ -1,20 +1,19 @@
 # HANDOFF
 
-State on 2026-11-16: stopped at 14:26 UTC by the maintainer's wind-down order, resumed at 15:30 UTC: the landing
-stack, the checks job and machine decisions a to d are on `main` (see "Stopped in flight on 2026-11-16" for what is
-still in flight). Landed today on `main`: an independent oracle for the front's fallback and its testing pass's
-fixes (`27265ba`, `40c84d4`); a failed rewind made atomic, the two replay panics and the canceled-keeps refusal
-fixed (`145a72c`); the six complex helpers from libgcc 13.3, unmodified, replacing compiler-rt
-(`e89c98f`..`df429d7`); a Rust scalar probe (`c906fad`); files, clock and entropy for the musl runtime and the SQL
-oracle grown to five query shapes through 256 rows with Grover at 512 (`a3f4de5`); test commits of the journal
-mutation job (`623d9e4`); then the landing stack: C evidence for North Star rungs 1 to 3, the entry-frame fault
-returned instead of a panic, replay probes, the libgcc and files testing passes with their fixes, IR and CLI
-mutation tests (`8cae924`..`e2320fe`); the checks job: the ten automatic checks, the test-writing rules and
-`bennett.h` for C++ (`2ab9ebf`..`83ae722`), with `0e1b00d` so that the libgcc scripts find the front's build through
-`BENNETT_FRONT` as the mutation run needs; machine decisions a to d (`209d3c6`..`ba6ddb5`). Still in flight: see
-"Stopped in flight on 2026-11-16". The design audition of the same day has its own section; the maintainer then
-answered every open question and decided on the audition's findings ("Decisions the maintainer took on 2026-11-16,
-in the afternoon"), so no question is open.
+State on 2026-11-16, night (from 20:40 UTC): machine step e is on `main` (`229d3b9`..`a1b516e`: running
+again charged to the run's budget, strict mode named, un-run regardless over a nonzero allocation, the mark's
+budget, the budget required after a read of a qubit, the call with a fault value and a budget, the NaN payload
+rule), then the IR reader refusing an infinite angle (`3206433`), the front naming invalid LLVM input instead of
+aborting (`bd0fc2f`) and the Lua probe (`1e06f2f`, `experiments/lua-probe/`). In flight: see "Stopped in flight on
+2026-11-16". Questions opened tonight are under "Questions for the maintainer"; the maintainer withdrew the
+retirement of `apply`, `qalloc` and `qfree` ("Decision the maintainer took on 2026-11-16, in the evening").
+Earlier on 2026-11-16: an independent oracle for the front's fallback and its testing pass's fixes (`27265ba`,
+`40c84d4`); a failed rewind made atomic, the two replay panics and the canceled-keeps refusal fixed (`145a72c`);
+the six complex helpers from libgcc 13.3 (`e89c98f`..`df429d7`); a Rust scalar probe (`c906fad`); files, clock and
+entropy for the musl runtime and the SQL oracle at five query shapes (`a3f4de5`); test commits of the journal
+mutation job (`623d9e4`); the landing stack (`8cae924`..`e2320fe`); the checks job (`2ab9ebf`..`83ae722`,
+`0e1b00d`); machine decisions a to d (`209d3c6`..`ba6ddb5`); the design audition and the maintainer's afternoon
+decisions on it.
 Earlier: the night session (the journalled machine in the executor, all five steps of its order, with two
 independent oracles; journal content; `setjmp`/`longjmp`, return addresses and calls through another prototype in
 the front). The last corpus run (`64571ac`, musl linked) has GCC 1,569 agree, c-testsuite 218, `ieee/` 64, none
@@ -57,7 +56,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 | Lua probe | Unmodified Lua 5.4.9 through musl: seven native stdout/status comparisons and exact reversals; a Lua predicate under hand-written `apply`, dense-checked Grover at N=4/8 (`experiments/lua-probe`) |
 
-Check it: `cargo test` (384 tests; 19 ignored: heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks, the scratch mutation matrix, the region-copy-cost witness and the infinite-angle round-trip witness; about 9 s, no LLVM needed) and `front/test.sh` (176 tests; 27 ignored by default: the nine fallback acceptance tests waiting for step 4, the five C North Star ladder runs (explicit experiments, `experiments/northstar-ladder/README.md`), the noncanonical x87 compare witness, a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
+Check it: `cargo test` (413 tests; 18 ignored: heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks, the scratch mutation matrix and the region-copy-cost witness; about 9 s, no LLVM needed) and `front/test.sh` (178 tests; 27 ignored by default: the nine fallback acceptance tests waiting for step 4, the five C North Star ladder runs (explicit experiments, `experiments/northstar-ladder/README.md`), the noncanonical x87 compare witness, a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
 musl-linked ABI check and two independent variadic checks that need `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"); needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -140,9 +139,9 @@ commit) after the four checks passed on it.
 - **Machine decisions a to d**: landed one by one, the four checks passing on each (`209d3c6` a, 5-bit fault
   codes and `bad_longjmp`; `84d6fd4` b, opaque mark handles; `24a4169` c, no use after a rewind of a value
   defined since its mark; `ba6ddb5` d, `measure iN [ADDR]`). Main's newer tests were migrated in the step that
-  needs it. The changed-line mutation run over a to d (110 mutants) is running. Step e (the call form with a
-  fault value and a budget, with the afternoon's decisions) is in progress on `wip/machine-e`, in small
-  steps each landed alone: e1, running again charged to the run's budget (`Stats::replay_charged`; a
+  needs it. The changed-line mutation run over a to d: 110 mutants, 83 caught, 18 unviable, 5 timeouts, 4
+  missed; tests for the missed ones are in progress on `wip/p0-fixes`. Step e (the call form with a fault
+  value and a budget, with the afternoon's decisions), in small steps each landed alone: e1, running again charged to the run's budget (`Stats::replay_charged`; a
   rewind whose running again would pass the budget faults `budget`, changing nothing), is built; e2, strict
   mode named (`Options::machine_meaning`, `--machine-meaning`: no region or world stops, a dirty `qfree`
   leaves its qubits over, `docs/DESIGN.md`, "Strict mode"), is built; e3, a rewind's un-run that meets a
@@ -155,14 +154,26 @@ commit) after the four checks passed on it.
   (`%y, %c = call @f(args) budget B`, the region's rules attached, `apply` equal to mark, this call and
   rewind-keep; `docs/DESIGN.md`, "The call with a fault value"), is built; e7, the NaN payload rule in the
   raw libgcc sweep (`rt/libgcc/exact/compare.py`; both caller levels exit 0, every one of the 50,952
-  NaN-only tuples agreeing by the rule, nothing else differing; `rt/libgcc/README.md`), is built. Next:
-  the retirement of `apply`, `qalloc` and `qfree` once every test passes without them (not this job's). The panic reported for a
+  NaN-only tuples agreeing by the rule, nothing else differing; `rt/libgcc/README.md`), is built. All landed
+  on `main`, the four checks passing on each. The retirement of `apply`, `qalloc` and `qfree` is withdrawn
+  ("Decision the maintainer took on 2026-11-16, in the evening"). The panic reported for a
   `measure_memory` fixture in 64 bytes of memory was not the executor's: it returns `stack_overflow` before
   the first step (since `5515ae8`); the independent whole-world reference panicked at its own start
   (`expect("entry fits memory")`). The reference now models the fault, and
   `an_entry_frame_that_does_not_fit_faults_in_both_machines` steps every fixture in 64 bytes in both.
-- **Testing passes owed:** machine-decisions a-d (by sol, Opus built it); sql-oracle, checks and entry-fix (by
-  Opus, sol built them). Done today: fix-replay (sol, no wrong result), fallback oracle (Opus, four accepted
+- **In flight tonight**, each pushing checked steps to its `wip/` branch, landed one by one:
+  `wip/machine-finish` (the journal-content observer named instead of a panic, a false `RewoundUse` after
+  `setjmp`, deferred checks compared on a hash match, then the testing passes' and the design seam's findings
+  below, then `apply` computed as mark, call and keep, compared on every test); `wip/p0-fixes` (the missed
+  mutants of a to d, noncanonical x87 operands); `wip/sol-reference` (the whole-world reference modelling the
+  mark's budget and the call form); a changed-line mutation run over step e (about 300 mutants).
+- **Testing passes:** machine decisions a to d (sol, tonight): one false refusal (`RewoundUse` after `setjmp`),
+  fixed on `wip/machine-finish`; 18 probes kept. Step e (sol, tonight): three executor defects (a panic when a
+  mark's budget and an outer call's budget end at the same step; the call form giving `bad_rewind` where `apply`
+  succeeds; a callee frame that does not fit ending the world instead of giving its code) and one in the NaN
+  rule (a signalling output accepted), each with an ignored witness, given to `wip/machine-finish`; it also
+  turned the audition's witnesses into executor tests. Still owed: sql-oracle, checks and entry-fix (by Opus,
+  sol built them). Done earlier: fix-replay (sol, no wrong result), fallback oracle (Opus, four accepted
   wrong results fixed), libgcc (Opus, none on canonical inputs; a noncanonical x87 compare witness), files
   and clocks (Opus, 18 wrong results fixed, landed).
 - **The fallback** (next step 4): not started. Ready for it: the landed oracle (`front/tests/c/fallback_oracle/`)
@@ -719,8 +730,9 @@ The machine:
   world sampled by weight at the end, is the intended reading.
 - **Time is not part of the machine state** [W1]: no clock; worlds are compared when all have stopped.
 - **A call form that gives the fault code as a value and takes a budget** [A1] is added (for example
-  `%y, %c = call @f(args) budget B`), with the region's rules attached to it. `apply`, `qalloc` and `qfree` are
-  retired once every existing test passes without them.
+  `%y, %c = call @f(args) budget B`), with the region's rules attached to it. `apply`, `qalloc` and `qfree` were to be
+  retired once every existing test passed without them; withdrawn in the evening (see "Decision the maintainer
+  took on 2026-11-16, in the evening").
 - **`measure` takes an address** [M2]. Built: `%d = measure iN [ADDR]` reads the `N` bits from bit 0 of the
   integer at the address as a load does; the bits of bytes that hold qubits, only those, are sampled jointly
   and collapse; other bytes give the memory's bits (`docs/DESIGN.md`, "Qubits in memory";
@@ -811,6 +823,14 @@ and it is the later one that holds.
 
 These join "the decisions above that change the device program and the executor" in the order of the next work,
 before the front's fallback (the advisor's placement). The work on `wip/machine-decisions` predates them.
+## Decision the maintainer took on 2026-11-16, in the evening
+
+- **`apply`, `qalloc` and `qfree` are not retired** until the maintainer decides otherwise: the forms may suit
+  front ends for other LLVM languages. They stay first-class forms of the device program, with their tests,
+  examples and documentation, and the front may keep emitting them. The work that remains of "finish the
+  machine" is to compute `apply` as a mark with a budget, the call form and a rewind's keep, show the two equal
+  on every test, and show that the new forms can express everything the old ones do.
+
 ## Automatic checks (implementation)
 
 The ten checks and test-writing rules are implemented in `docs/CHECKS.md`, `docs/DESIGN.md` ("Tests"),
@@ -970,7 +990,43 @@ earlier decisions: "Decisions the maintainer took on 2026-11-16, in the afternoo
   measured (each lowering of the idiomatic source against a hand-built circuit on the same backend) and each
   part of it tied to a named compiler step.
 
+
+The seam (2026-11-16, night): the executor at `a1b516e` compared with an ideal circuit model row by row, on
+amplitudes (the table and its witnesses are private to the design work, as the audition's prototypes are).
+Result: 25 behaviours realisable, 8 realisable at a stated cost, 2 diagnostic only, 6 not established, and 5 in
+the machine's meaning (strict mode off) that no device can have. Of the five, three contradict recorded decisions
+and are being fixed (`bad_longjmp` delivered as a code through the call form when a jump record held in qubits
+disagrees; the barrier after a leftover deciding an outer rewind by inspecting the state; `bad_rewind` with the
+restore when a read register changed on some configurations only); the other two are questions (V3, V4 under
+"Questions for the maintainer"). The six rows not established: a measurement by one world inside a marked region;
+console output on a branch that is later un-run; a gate at an address that depends on a qubit; the call with a
+fault value reading a qubit with other code between mark and rewind; the `Unaligned` stop; instructions the
+prototype has no rows for (`sdiv`, `srem`, `ashr`, `stacksave`/`stackrestore`, `call_indirect`, `faddr`, `retaddr`,
+recursion).
 ## Questions for the maintainer
+
+- **From the design seam (the machine compared with an ideal circuit model, at `a1b516e`; see "Design audition
+  of 2026-11-16").** Three behaviours of the machine's meaning (strict mode off) that no device can have and
+  that the recorded decisions do not settle. Taken meanwhile for each: unchanged.
+  (V3) The run's step budget ends the whole run with the fault `budget` while a world of weight 0.5 has already
+  returned. Possibly a limit of the simulator rather than behaviour of the machine; candidate rule: the host
+  observes which world, as at the end of a run.
+  (V4) A `longjmp` whose record is in a superposition of two valid records faults the world (recorded as a debt
+  on 2026-11-16, [M3]). Candidate rule: each branch jumps, or faults, for itself.
+  (V5) `mark budget -1` meets "a budget is required where a rewind follows a read of a qubit" and bounds
+  nothing: the executor waits for every world, however long. Since the seam, no new code, test or front output
+  uses an unbounded budget where a rewind follows a read; where a real bound is not yet known, the budget
+  source the front uses for `apply` regions is used, or a debt is recorded. The existing uses stay until this
+  is decided: the tests migrated in step e5, in `crates/exec/src/` (`atomic_rewind_tests.rs`,
+  `deferred_independent_tests.rs`, `history.rs`, `independent_history_tests.rs`, `permutation_tests.rs`),
+  `crates/exec/tests/` (`apply_independent.rs`, `history_independent.rs`, `measure_memory.rs`,
+  `memory_address_independent.rs`, `memory_independent.rs`, `memory_overlay.rs`, `memory_qubits.rs`,
+  `replay_generated.rs`, `worlds.rs`, `worlds_independent.rs`, `worlds_oracle.rs`, `worlds_reference.rs`),
+  `front/tests/tests/fallback_oracle.rs`, `front/tests/tests/journal_global.rs`, and the examples in
+  `docs/DESIGN.md` and `docs/SYNTAX.md`.
+  Seen beside these: a mark's budget outlives its frame (a mark left open in a callee faults `budget` later in
+  the caller's loop). Recommendation on all four: wait for the council's reading of the seam, which the advisor
+  brings with these questions.
 
 - **A rewind naming a mark that an outer rewind un-ran** (from building [(4)]). Read literally, such a handle
   is a value defined between the outer mark and its rewind, so the validator refuses the inner rewind
