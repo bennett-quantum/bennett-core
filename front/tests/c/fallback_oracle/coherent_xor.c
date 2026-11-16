@@ -1,5 +1,5 @@
 #include "fixture.h"
-/* A macro keeps the update at its C call site in both builds, so the front
- * sees the original Boolean loads, rather than an inlined pointer parameter. */
+/* Keep the literal documented Boolean XOR at its C call site. The inventory
+ * records today's named refusal even though the update belongs to that class. */
 #define update(q, r, yp) (*(yp) ^= (q) && !(r))
 #include "driver.h"

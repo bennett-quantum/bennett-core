@@ -506,18 +506,26 @@ explicitly after the separate musl build.
    state its history does not match).
    Independent oracle prepared before the fallback (`front/tests/tests/fallback_oracle.rs`,
    `front/tests/tests/fallback_support/native.rs`, fixtures and explanation in
-   `front/tests/c/fallback_oracle/`): host clang executes the same C update once per basis input;
-   expected amplitudes use only those native images and documented gate/keep/un-run rules. The
-   original dense oracle is a second check, imported read-only. Coherent XOR/nested controls are
-   checked as complex vectors; stores, memcpy/memset/pointer-writing calls, nested writes, a
-   variable-trip loop and a destructive overwrite outside the coherent class have explicit
-   waiting acceptance tests and a regular inventory that prints each refusal and checks any
-   newly accepted case immediately. Outside-class assertions are immediate measurement
-   probabilities plus a warning, never a private-history or phase promise. A test-only device
-   mark/call/rewind-keep envelope around lowered ordinary C checks native kept values, phases
-   and exact memory restoration; it is not C fallback acceptance. No C mark/rewind interface is
-   documented yet; warning delivery and a named-address adapter if C qubits move into memory
-   remain integration details. Measured results are recorded with the oracle once validated.
+   `front/tests/c/fallback_oracle/`): host clang executes each shared C update once per basis input,
+   without device code in the reference. Ten programs, 160 host O0/O2 basis runs; 63 C complex
+   vectors agree with native expectations and independently written compact circuits run by the
+   original dense oracle and device; 520 measured outcomes agree. The compact witnesses avoid
+   the dense oracle's 13-qubit cap (the C front allocates 36 including bytes and cleanup faults);
+   the actual C snapshot still checks all unused bits/workspace. Six lowered ordinary C functions
+   under a test-only mark/call/rewind-keep envelope give 54 native keep/un-run comparisons with
+   exact memory restoration and phases; those same C functions also agree under apply in the
+   original dense interpreter and device, plus a dense matrix conjugation. This envelope is not
+   C fallback acceptance: no C mark/rewind interface is documented yet. Regular inventory checks
+   every accepted program and names every refusal: one mode accepted (nested Boolean XOR at O2),
+   26 refused (ordinary stores/writing calls/loops/overwrite, Boolean expression XOR, nested XOR
+   at O0/taint). Nine explicit ignored acceptance tests preserve those debts. No accepted wrong
+   result found. Outside-class assertions require immediate measurement probabilities and a
+   warning, never an unspecified private-history/phase layout; warning checks remain waiting
+   with the refused programs. Runtime warning delivery and a named-address adapter if C qubits
+   move into memory are still integration details. Four checks pass: cargo test 292/19 ignored,
+   front/test.sh 162/21 ignored, clippy and fmt clean; front-specific clippy also clean.
+   Details and oracle risks: fixture README.
+
 5. **Floating point** is done over Berkeley SoftFloat 3e (decided 2026-11-15; `rt/softfloat/README.md`), the
    complex helpers over compiler-rt (`rt/compiler-rt/README.md`). Left: `__divxc3` (musl's `ilogbl`, under
    `FENV_ACCESS`) and `__float128`.
