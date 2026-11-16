@@ -64,6 +64,15 @@ entry:
     %m = measure i4 [17]
     ret %m
 }
+; The width ends inside a byte that holds qubits and is not the first: of byte 17 (0xAB, promoted) bits 0 to
+; 3 are measured, 0xA00 or 0xB00, and bits 4 to 7 keep their superposition.
+func @partial_high() -> i12 {
+entry:
+    h [17:0]
+    h [17:4]
+    %m = measure i12 [16]
+    ret %m
+}
 func @bounds(i64 %p) -> i16 {
 entry:
     %m = measure i16 [%p]
@@ -186,6 +195,24 @@ fn bits_not_measured_keep_their_superposition() {
 }
 
 #[test]
+fn bits_past_the_width_in_a_later_byte_keep_their_superposition() {
+    let module = module();
+    let mut seen = BTreeSet::new();
+    for (value, e) in outcomes(&module, "partial_high") {
+        assert!(value == 0xA00 || value == 0xB00, "{value:#x}");
+        let measured = 0xA0 | (value >> 8) as u64;
+        let cell = cell(&e, 17);
+        assert_eq!(cell.keys().copied().collect::<Vec<_>>(), vec![measured, measured | 0x10], "{cell:?}");
+        // Equal amplitudes of weight one half; bit 0 started at 1, so after a 1 is measured both carry -1.
+        let amplitudes: Vec<C> = cell.values().copied().collect();
+        assert!((amplitudes[0] - amplitudes[1]).norm() < 1e-12, "{cell:?}");
+        assert!((amplitudes[0].norm() - 0.5f64.sqrt()).abs() < 1e-12, "{cell:?}");
+        seen.insert(value);
+    }
+    assert_eq!(seen.len(), 2);
+}
+
+#[test]
 fn memory_without_qubits_is_read_and_still_cannot_be_reversed_past() {
     let module = module();
     for (value, mut e) in outcomes(&module, "classical") {
@@ -260,7 +287,7 @@ fn every_fixture_matches_the_independent_world_machine() {
             }
         }
     }
-    assert_eq!((stepped, ended), (10, 96));
+    assert_eq!((stepped, ended), (11, 104));
 }
 
 /// The fixtures in 64 bytes of memory, 36 of them stack above the data: `@observe`'s entry frame (five

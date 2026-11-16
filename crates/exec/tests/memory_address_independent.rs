@@ -196,14 +196,17 @@ fn four_staggered_worlds_check_the_sum_and_reverse_at_every_budget_stop() {
 fn disagreeing_longjmp_record_is_the_documented_bad_longjmp_debt() {
     let p = bennett_ir::load("memory 512\nfunc @main() {\nentry:\n%j = setjmp 64\nh [64]\nlongjmp 64, 1\n}\n")
         .expect("valid");
+    // The same step bound as the reference: a jump that wrongly succeeds goes back before the `h` and would
+    // loop for ever without it.
+    let steps = 100;
     let m = Model::new(&p, "main");
-    let expected = m.run_joined(basis(m.initial("main", &[])), 100);
+    let expected = m.run_joined(basis(m.initial("main", &[])), steps);
     assert!(expected.keys().all(|w| w.classical.finish == Some(Finish::Faulted(Fault::BadLongjmp))));
     let mut e = Executor::new(
         &p,
         p.function_named("main").expect("main"),
         &[],
-        Options { reversible: true, ..Options::default() },
+        Options { reversible: true, budget: Some(steps as u64), ..Options::default() },
     )
     .expect("starts");
     assert_eq!(e.run(), Outcome::Faulted(Fault::BadLongjmp));

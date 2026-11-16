@@ -140,8 +140,8 @@ commit) after the four checks passed on it.
   codes and `bad_longjmp`; `84d6fd4` b, opaque mark handles; `24a4169` c, no use after a rewind of a value
   defined since its mark; `ba6ddb5` d, `measure iN [ADDR]`). Main's newer tests were migrated in the step that
   needs it. The changed-line mutation run over a to d: 110 mutants, 83 caught, 18 unviable, 5 timeouts, 4
-  missed; tests for the missed ones are in progress on `wip/p0-fixes`. Step e (the call form with a fault
-  value and a budget, with the afternoon's decisions), in small steps each landed alone: e1, running again charged to the run's budget (`Stats::replay_charged`; a
+  missed; every outcome is now caught or explained ("Automatic checks (implementation)"). Step e (the call
+  form with a fault value and a budget, with the afternoon's decisions), in small steps each landed alone: e1, running again charged to the run's budget (`Stats::replay_charged`; a
   rewind whose running again would pass the budget faults `budget`, changing nothing), is built; e2, strict
   mode named (`Options::machine_meaning`, `--machine-meaning`: no region or world stops, a dirty `qfree`
   leaves its qubits over, `docs/DESIGN.md`, "Strict mode"), is built; e3, a rewind's un-run that meets a
@@ -860,6 +860,42 @@ live-source scan. Since caught: `a_longjmp_result_witness_names_the_frames_left_
 the frame and by naming call path 2 instead of 0 for a jump from a callee, and passes on the code. The
 first attempt's unmutated baseline failed because the libgcc scripts read `target/front` directly instead of
 following `BENNETT_FRONT` (fixed in `0e1b00d`).
+
+The changed-line mutation run over machine decisions a to d (`python3 scripts/mutate-diff.py 7127b8e` at
+`ba6ddb5`, 2026-11-16): 110 mutants, 83 caught, 18 unviable, 5 timeouts, 4 missed. Each missed mutant now
+has a test that fails with the mutant applied by hand and passes without (lines as of the run):
+
+- `crates/exec/src/forward.rs:345` and `:346`, `measure_memory`: `* 8` to `/ 8` in the bit offset of a byte
+  that holds qubits, and `bits - low` to `bits + low` in its mask. Both measure all eight bits of a byte the
+  width ends inside, when that byte is not the first; no fixture had such a byte. Caught by
+  `bits_past_the_width_in_a_later_byte_keep_their_superposition` (`crates/exec/tests/measure_memory.rs`,
+  `measure i12` of a byte whose bits 4 to 7 must stay superposed) and by the whole-world comparison of the
+  same fixture.
+- `crates/exec/src/quantum.rs:303`, `measure_bits`: `threshold < probability` to `<=`. A draw exactly on
+  the boundary between two outcomes then goes to the first: the outcomes no longer own half-open intervals
+  of their exact weights. Caught by `a_draw_on_the_boundary_between_two_outcomes_belongs_to_the_second`
+  (`crates/exec/src/measure_sampling_tests.rs`, a generator that draws exactly one half).
+- `crates/ir/src/validate/rewound.rs:125`, `fixpoint`: `&&` to `||` queues every block with a `setjmp`,
+  reached or not, when the analysis goes round again; an unreached one panics the validator. Caught by
+  `a_setjmp_in_a_block_no_path_reaches_is_not_resumed` (`crates/ir/tests/history_rules.rs`).
+
+The timeouts:
+
+- `rewound.rs:115` (`changed && !work.contains` to `||`) and `rewound.rs:120` (`seen_jumps == jumps` to
+  `!=`) make the fixpoint loop for ever: the first requeues the target of every edge round any cycle, the
+  second never returns when the jump states are already stable. Caught by the timeout, as a fixpoint that
+  never ends is; `history_rules` does not finish under either.
+- `rewound.rs:108` (`*state != before` to `==`) requeues a block whose entry did not change, which loops for
+  ever round a stable cycle, and drops one whose entry grew, which loses a refusal. Now also caught fast by
+  `a_use_reached_round_a_loop_after_the_rewind_is_refused` (the mutant accepts that program).
+- `forward.rs:226` (`> 1` to `< 1` in `longjmp`): a jump record in qubits that disagree is no longer
+  refused. `a_jump_record_in_qubits_jumps_only_where_they_agree` (`memory_qubits.rs`) fails at once, but
+  `disagreeing_longjmp_record_is_the_documented_bad_longjmp_debt` (`memory_address_independent.rs`) jumped
+  back before its `h` without end, having no budget. It now runs with its reference's bound of 100 steps
+  and fails at once (`budget` instead of `bad_longjmp`).
+- `forward.rs:29` (`execute_inst` replaced by `Ok(())`): no instruction does anything, so a loop's condition
+  never changes; 7 of the 31 executor test binaries do not finish (programs with loops run without a step
+  budget), the rest fail. Caught by the timeout.
 
 ## Questions the maintainer answered on 2026-11-16 (kept for their detail)
 

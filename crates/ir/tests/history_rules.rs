@@ -173,6 +173,26 @@ fn a_jump_back_after_a_rewind_is_a_path_too() {
     }
 }
 
+/// A use the rewind reaches only round a loop is refused: the first time through the loop head the value is
+/// the one defined before it, the second time, after the back edge, it is the one the rewind restored, and
+/// that fact must flow on through the head to the use after the loop.
+#[test]
+fn a_use_reached_round_a_loop_after_the_rewind_is_refused() {
+    let blocks = "entry:\n %h = mark\n %y = add i8 %v, 1\n br again\nagain:\n br %c, back, out\n\
+                  back:\n rewind %h\n br again\nout:\n ret %y";
+    assert_eq!(problems(&program(blocks)), rewound("y"), "{blocks}");
+}
+
+/// A block no path reaches is not analysed, also when it holds a `setjmp` and the jumps of the function
+/// have to be followed again: only reached blocks with a `setjmp` resume (a block that is never entered has
+/// no state to resume from). Here the call after the rewind makes the analysis go round a second time.
+#[test]
+fn a_setjmp_in_a_block_no_path_reaches_is_not_resumed() {
+    let blocks = "entry:\n %buf = alloca 32\n %h = mark\n %y = add i8 %v, 1\n %s = setjmp %buf\n rewind %h\n \
+                  call @jump(%buf)\n ret 0\nunreached:\n %t = setjmp %buf\n ret 1";
+    assert!(load(&program(blocks)).is_ok(), "{blocks}");
+}
+
 /// The refusal says what is wrong.
 #[test]
 fn the_rewound_use_message_names_the_value() {
