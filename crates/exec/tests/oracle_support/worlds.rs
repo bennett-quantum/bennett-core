@@ -46,6 +46,8 @@ pub struct Register {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Mark {
     pub handle: usize,
+    /// Private snapshot boundary, distinct from the public journal-record count.
+    pub history_position: usize,
     pub activation: u64,
     pub valid: bool,
 }
@@ -69,6 +71,10 @@ pub struct Classical {
     /// DESIGN, Qubits in memory: cells are part of the register table.
     pub cells: BTreeMap<u64, usize>,
     pub marks: Vec<Mark>,
+    /// DESIGN, History: one record per journalled step, including calls, marks and rewinds.
+    /// Register/cell reads annotate that step; they do not add another instruction record.
+    /// This count is meaning, not the length or layout of our private snapshot history.
+    pub journal_records: usize,
     pub next_activation: u64,
     pub finish: Option<Finish>,
 }
@@ -116,6 +122,15 @@ pub struct World {
 }
 
 impl World {
+    fn mark_position(&self, handle: usize) -> Result<usize, Fault> {
+        self.classical
+            .marks
+            .iter()
+            .find(|m| m.handle == handle && m.valid && m.activation == self.frame().activation)
+            .map(|m| m.history_position)
+            .ok_or(Fault::BadRewind)
+    }
+
     pub fn frame(&self) -> &Frame {
         self.classical.frames.last().expect("active frame")
     }
@@ -221,6 +236,7 @@ impl<'a> Model<'a> {
                 registers: Vec::new(),
                 cells: BTreeMap::new(),
                 marks: Vec::new(),
+                journal_records: 0,
                 next_activation: 0,
                 finish: None,
             },
@@ -583,6 +599,7 @@ impl<'a> Model<'a> {
                     }
                     let args = args.iter().map(|a| w.read(*a)).collect();
                     self.call(&mut w, *callee, args, *dst)?;
+                    w.classical.journal_records += 1;
                     w.history.push(Record { before, action });
                     return Ok(basis(w));
                 }
@@ -606,6 +623,7 @@ impl<'a> Model<'a> {
                     }
                     let args = args.iter().map(|a| w.read(*a)).collect();
                     self.call(&mut w, FuncId(index as u32), args, *dst)?;
+                    w.classical.journal_records += 1;
                     w.history.push(Record { before, action });
                     return Ok(basis(w));
                 }
@@ -665,9 +683,14 @@ impl<'a> Model<'a> {
                 }
                 Inst::Apply { .. } => action = Action::Apply,
                 Inst::Mark { .. } => {
-                    let handle = w.history.len() + 1;
+                    let handle = w.classical.journal_records + 1;
                     result = Some(Value::Int(handle as u128));
-                    w.classical.marks.push(Mark { handle, activation: w.frame().activation, valid: true });
+                    w.classical.marks.push(Mark {
+                        handle,
+                        history_position: w.history.len() + 1,
+                        activation: w.frame().activation,
+                        valid: true,
+                    });
                     action = Action::Mark;
                 }
                 Inst::Measure { .. } | Inst::Rewind { .. } => unreachable!(),
@@ -730,6 +753,7 @@ impl<'a> Model<'a> {
         let record = Record { before, action };
         let mut state = self.quantum_action(w, &record, false)?;
         for (mut world, a) in std::mem::take(&mut state) {
+            world.classical.journal_records += 1;
             world.history.push(record.clone());
             add(&mut state, world, a);
         }
@@ -856,6 +880,13 @@ impl<'a> Model<'a> {
                 let budget = w.integer(*budget)? as usize;
                 let mut region = w.clone();
                 region.history.clear();
+                // The basis-state definition evaluates a private region with a fresh journal.
+                // Entering @f is a call: it contributes one public record, even though this
+                // reference never needs to undo that entry and stores no snapshot for it.
+                // DESIGN's later caller-journal idiom leaves the absolute origin in tension
+                // with apply's self-inverse law (F1). Cross-mode tests use differences of marks;
+                // absolute-number comparisons here are explicitly scoped to fresh enumeration.
+                region.classical.journal_records = 1;
                 let cells: Vec<_> =
                     region.classical.cells.iter().map(|(&a, &id)| (a, region.quantum[id] as u8)).collect();
                 region.classical.cells.clear();
@@ -899,9 +930,9 @@ impl<'a> Model<'a> {
             return Err(Fault::QuantumInRegion);
         }
         let first = inputs.keys().next().expect("nonempty rewind");
-        let h = first.integer(Operand::Slot(mark))? as usize;
-        if !first.classical.marks.iter().any(|m| m.handle == h && m.activation == first.frame().activation && m.valid)
-            || h == 0
+        let handle = first.integer(Operand::Slot(mark))? as usize;
+        let h = first.mark_position(handle)?;
+        if h == 0
             || h > first.history.len()
             || first.history[h - 1].action != Action::Mark
             || first.history[h..].iter().any(|r| r.action == Action::Measurement)
@@ -930,6 +961,7 @@ impl<'a> Model<'a> {
             site.frames.last_mut().expect("frame").instruction = f.instruction;
             w.frame_mut().block = f.block;
             w.frame_mut().instruction = f.instruction + 1;
+            w.classical.journal_records += 1;
             w.history.push(Record { before: site, action: Action::Rewind { start, count } });
             add(&mut result, w, a);
         }
@@ -1050,7 +1082,8 @@ impl<'a> Model<'a> {
     // Local mismatches above a split fault that original world; a shared-history mismatch
     // faults the surviving rewind cohort. Inspect unique history before summing shares, using
     // exact records and full states rather than production ticks or 64-bit check hashes.
-    fn joined_rewind(&self, inputs: &Superposition, h: usize) -> Result<Superposition, Fault> {
+    fn joined_rewind(&self, inputs: &Superposition, handle: usize) -> Result<Superposition, Fault> {
+        let h = inputs.keys().next().expect("rewind inputs").mark_position(handle)?;
         let mut groups = BTreeMap::<_, Superposition>::new();
         for (w, &a) in inputs {
             groups.entry((w.classical.clone(), w.history.clone())).or_default().insert(w.clone(), a);
@@ -1108,7 +1141,7 @@ impl<'a> Model<'a> {
             }
         }
         if !survivors.is_empty() {
-            match self.joined_rewind_checked(&survivors, h) {
+            match self.joined_rewind_checked(&survivors, handle) {
                 Ok(result) => {
                     for (w, a) in result {
                         add(&mut faults, w, a);
@@ -1125,8 +1158,9 @@ impl<'a> Model<'a> {
         Ok(faults)
     }
 
-    fn joined_rewind_checked(&self, inputs: &Superposition, h: usize) -> Result<Superposition, Fault> {
+    fn joined_rewind_checked(&self, inputs: &Superposition, handle: usize) -> Result<Superposition, Fault> {
         let first = inputs.keys().next().expect("rewind inputs");
+        let h = first.mark_position(handle)?;
         let site = first.frame().clone();
         let mut state = BTreeMap::new();
         let mut visit = 1;
@@ -1136,9 +1170,9 @@ impl<'a> Model<'a> {
             if h == 0
                 || h > w.history.len()
                 || w.history[h - 1].action != Action::Mark
-                || !w.classical.marks.iter().any(|m| m.handle == h && m.valid && m.activation == w.frame().activation)
+                || w.mark_position(handle)? != h
                 || w.history[h..].iter().any(|r| r.action == Action::Measurement)
-                || w.integer(Operand::Slot(*mark))? != h as u128
+                || w.integer(Operand::Slot(*mark))? != handle as u128
             {
                 return Err(Fault::BadRewind);
             }
@@ -1192,6 +1226,7 @@ impl<'a> Model<'a> {
             let f = before.frames.last_mut().expect("frame");
             (f.block, f.instruction) = (site.block, site.instruction);
             (w.frame_mut().block, w.frame_mut().instruction) = (site.block, site.instruction + 1);
+            w.classical.journal_records += 1;
             w.history.push(Record { before, action: Action::JoinedRewind { start, visit } });
             add(&mut result, w, a);
         }
@@ -1335,6 +1370,7 @@ impl<'a> Model<'a> {
             w.classical.finish = None;
             w.put(*dst, Value::Int(value.into()));
             w.frame_mut().instruction += 1;
+            w.classical.journal_records += 1;
             w.history.push(Record { before, action: Action::Measurement });
             add(&mut result, w, a);
         }

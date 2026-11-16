@@ -86,6 +86,68 @@ fn initial_worlds_split_classical_calls_and_keep_history_distinct() {
 }
 
 #[test]
+fn public_marks_count_reading_calls_once_even_with_repeated_register_arguments() {
+    for call in ["call @read(%q, %q)", "call_indirect fn(i1, i1) -> i64 %p(%q, %q)"] {
+        let text = format!(
+            r#"
+memory 512
+func @read(i1 %a, i1 %b) -> i64 {{
+entry:
+    %h = mark
+    ret %h
+}}
+func @identity(i64 %v) -> i64 {{
+entry:
+    ret %v
+}}
+func @main() -> i64 {{
+entry:
+    %q = qalloc 1
+    h %q
+    %p = faddr @read
+    %out = qalloc 64
+    %m = mark
+    %r = {call}
+    store i64 %r, 0
+    %n = mark
+    %span = sub i64 %n, %m
+    rewind %m keep (%span -> %out)
+    %result = call @identity(%out)
+    ret %result
+}}
+"#
+        );
+        let p = bennett_ir::load(&text).expect("public mark fixture");
+        let model = Model::new(&p, "main");
+        let initial = basis(model.initial("main", &[]));
+        let mut prefix = initial.clone();
+        for _ in 0..11 {
+            prefix = model.step(&prefix);
+        }
+        for w in prefix.keys() {
+            // Five caller steps, call, callee mark = 7. Both read annotations belong to
+            // that one call step; call/mark/ret/store/mark gives a span of five records.
+            assert_eq!(&model.memory(w)[..8], &7_u64.to_le_bytes());
+        }
+        let state = model.run_joined(initial.clone(), 30);
+        for w in state.keys() {
+            assert_eq!(w.classical.finish, Some(Finish::Returned(Some(5))));
+            assert_eq!(model.memory(w)[0], 0, "rewind restores the store");
+            assert_eq!(w.quantum[1], 5);
+        }
+        let mut reversed = state;
+        while reversed.keys().any(|w| !w.history.is_empty()) {
+            reversed = model.undo_state(&reversed).expect("reading calls reverse");
+        }
+        assert_eq!(reversed.keys().collect::<Vec<_>>(), initial.keys().collect::<Vec<_>>());
+        for (w, a) in &reversed {
+            assert!((*a - initial[w]).norm() < 1e-12, "full reference reversal, including public positions");
+        }
+        compare(&p, "main", &[], 30, false);
+    }
+}
+
+#[test]
 fn every_small_whole_state_step_is_bijective_on_dirty_history_and_restores_its_input() {
     let p=bennett_ir::load("memory 128\nfunc @main(i2 %x) -> i2 {\nentry:\n%h = mark\nstore i2 %x, 0\n%y = load i2 0\n%z = add i2 %y, 1\nret %z\n}").expect("valid reference fixture or inverse");
     let model = Model::new(&p, "main");
@@ -105,13 +167,19 @@ fn every_small_whole_state_step_is_bijective_on_dirty_history_and_restores_its_i
             let mut garbage = w.classical.clone();
             garbage.tape = vec![fields[3] as u8];
             w.history.push(Record { before: garbage, action: Action::Classical });
+            w.classical.journal_records = 1;
             w.classical.frames[0].instruction = pc;
             let mut out = w.clone();
             let before = w.classical.clone();
             let action = match pc {
                 0 => {
                     out.classical.slots[1] = Value::Int(2);
-                    out.classical.marks.push(oracle_support::worlds::Mark { handle: 2, activation: 1, valid: true });
+                    out.classical.marks.push(oracle_support::worlds::Mark {
+                        handle: 2,
+                        history_position: 2,
+                        activation: 1,
+                        valid: true,
+                    });
                     Action::Mark
                 }
                 1 => {
@@ -133,6 +201,7 @@ fn every_small_whole_state_step_is_bijective_on_dirty_history_and_restores_its_i
                 _ => unreachable!(),
             };
             out.classical.frames[0].instruction += 1;
+            out.classical.journal_records += 1;
             out.history.push(Record { before, action });
             inputs.push(w);
             outputs.push(out);
@@ -276,6 +345,7 @@ fn nested_mark_rewind_composite_is_a_whole_state_bijection_including_dirty_prefi
         let mut expected = at_mark.clone();
         expected.quantum[0] ^= fields[0];
         expected.classical.frames[0].instruction = 6;
+        expected.classical.journal_records += 1;
         let start = Box::new(at_mark.classical.clone());
         let mut site = at_mark.classical.clone();
         site.frames[0].instruction = 5;

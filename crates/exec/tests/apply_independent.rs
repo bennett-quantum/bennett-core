@@ -421,10 +421,10 @@ fn apply_through_an_ordinary_call_keeps_the_real_caller_frames() {
     }
 }
 
-// The reference uses a distinct private history representation, but a mark's integer value is a
-// public observable (DESIGN.md "History"). Its apply currently omits the entry call's record.
+// DESIGN "History": marks count journal records including their own. This checks the fresh
+// private journal used by enumeration, not the unresolved caller-journal origin of history apply
+// (F1). One entry-call record plus the mark gives 2, regardless of reference snapshot layout.
 #[test]
-#[ignore = "reference apply returns mark 1 while branch enumeration returns 2: entry call history omitted"]
 fn reference_apply_mark_value_matches_branch_enumeration() {
     let p = load(MARK_VALUE);
     let model = oracle_support::worlds::Model::new(&p, "main");
@@ -437,4 +437,102 @@ fn reference_apply_mark_value_matches_branch_enumeration() {
     for w in reference.keys() {
         assert_eq!(w.quantum[0], branch_value, "reference's public result must equal enumeration");
     }
+}
+
+// All assertions inspect ordinary results and the entire public world, including memory, slots,
+// amplitudes and frames. The reference's private snapshots are never compared with executor records.
+fn mark_observation_case(body: &str, expected: [u64; 4], modes: &[ApplyMode]) -> usize {
+    use oracle_support::worlds::{Model, basis};
+    use oracle_support::worlds_executor::assert_worlds;
+    let mut runs = 0;
+    for repetitions in [1, 2] {
+        let applies = "    apply @f(%x) -> %o, %e budget 100\n".repeat(repetitions);
+        let text = format!(
+            r#"
+memory 2048
+func @leaf(i2 %x) -> i64 {{
+entry:
+    %m = mark
+    ret %m
+}}
+func @f(i2 %x) -> i64 {{
+entry:
+{body}
+}}
+func @main() {{
+entry:
+    %x = qalloc 2
+    h %x[0]
+    ry(0.7) %x[1]
+    s %x[0]
+    %o = qalloc 64
+    x %o[4]
+    %e = qalloc 4
+{applies}
+    ret
+}}
+"#
+        );
+        let p = load(&text);
+        let model = Model::new(&p, "main");
+        let reference = model.run_joined(basis(model.initial("main", &[])), 100);
+        for w in reference.keys() {
+            let x = w.quantum[0] as usize;
+            let answer = if repetitions == 1 { expected[x] ^ 16 } else { 16 };
+            assert_eq!(w.quantum[1..], [answer, 0], "analytic result for x={x}, repeats={repetitions}: {body}");
+        }
+        for reversible in [false, true] {
+            for &mode in modes {
+                let mut e = executor(&p, "main", &[], Options { reversible, ..bounded() });
+                e.set_apply_mode(mode);
+                let initial = e.snapshot();
+                assert_eq!(e.run(), Outcome::Returned(None));
+                assert_worlds(&model, &reference, &e.snapshot());
+                if reversible {
+                    e.reverse().expect("mark-observing apply reverses");
+                    assert_same_state(&e.snapshot(), &initial, "mark-observing apply full reverse");
+                }
+                runs += 1;
+            }
+        }
+    }
+    runs
+}
+
+#[test]
+fn fresh_region_mark_numbers_can_be_returned_stored_branched_on_and_called() {
+    // These absolute numbers select the private fresh-journal definition, just like the F4
+    // witness above. They do not decide F1's unresolved origin for History/Compare.
+    let cases = [
+        ("%m = mark\nret %m", 2),
+        ("%m = mark\nstore i64 %m, 0\n%r = load i64 0\nret %r", 2),
+        ("%m = mark\n%ok = icmp eq i64 %m, 2\nbr %ok, yes, no\nyes:\nret 37\nno:\nret 99", 37),
+        ("%r = call @leaf(%x)\nret %r", 3),
+    ];
+    let runs: usize =
+        cases.into_iter().map(|(body, n)| mark_observation_case(body, [n; 4], &[ApplyMode::Branches])).sum();
+    assert_eq!(runs, 16);
+    println!("{runs} fresh-journal mark observations, four configurations each, with analytic answers and reversal");
+}
+
+#[test]
+fn relative_region_mark_numbers_match_all_modes_through_rewind_and_replay() {
+    // DESIGN History/Worlds: calls, returns, jumps, marks and rewinds are journalled steps.
+    // Subtract marks so the caller's journal origin cancels. Rewinding retains the mark and
+    // replaces everything after it with one rewind record; undoing an inner rewind replays it.
+    let cases = [
+        ("%m = mark\nstore i2 %x, 0\nrewind %m\n%n = mark\n%d = sub i64 %n, %m\nret %d", [2; 4]),
+        ("%m = mark\n%n = mark\nrewind %n\nrewind %m\n%p = mark\n%d = sub i64 %p, %m\nret %d", [2; 4]),
+        ("%m = mark\nrewind %m\nrewind %m\n%n = mark\n%d = sub i64 %n, %m\nret %d", [2; 4]),
+        ("%m = mark\n%n = call @leaf(%x)\n%d = sub i64 %n, %m\nret %d", [2; 4]),
+        ("%p = faddr @leaf\n%m = mark\n%n = call_indirect fn(i2) -> i64 %p(%x)\n%d = sub i64 %n, %m\nret %d", [2; 4]),
+        (
+            "%m = mark\n%zero = icmp eq i2 %x, 0\nbr %zero, short, long\nshort:\nbr join\nlong:\nstore i2 %x, 0\nbr join\njoin:\n%n = mark\n%d = sub i64 %n, %m\nret %d",
+            [4, 5, 5, 5],
+        ),
+    ];
+    let modes = [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare];
+    let runs: usize = cases.into_iter().map(|(body, expected)| mark_observation_case(body, expected, &modes)).sum();
+    assert_eq!(runs, 72);
+    println!("{runs} origin-independent mark observations, four configurations each, all apply modes and reversal");
 }
