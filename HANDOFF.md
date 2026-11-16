@@ -134,8 +134,8 @@ replay-test, libgcc-test, files-test, mutants-ir) landed on `main` (`8cae924`..`
 commit) after the four checks passed on it.
 
 - **Checks job**: landed (`2ab9ebf`..`83ae722`, then `0e1b00d`). Its changed-line mutation run on the job's own
-  diff: 22 mutants, 16 caught, 5 unviable, 1 missed (see "Automatic checks (implementation)"). Next: a test
-  that catches the missed mutant.
+  diff: 22 mutants, 16 caught, 5 unviable, 1 missed (see "Automatic checks (implementation)"), since caught
+  by a test of its own.
 - **Machine decisions a to d**: landed one by one, the four checks passing on each (`209d3c6` a, 5-bit fault
   codes and `bad_longjmp`; `84d6fd4` b, opaque mark handles; `24a4169` c, no use after a rewind of a value
   defined since its mark; `ba6ddb5` d, `measure iN [ADDR]`). Main's newer tests were migrated in the step that
@@ -802,8 +802,10 @@ new conventions. No attribute-name list is maintained independently of the compi
 The changed-line mutation run on the job's own diff (`python3 scripts/mutate-diff.py 2142238` at `0e1b00d`, 2026-11-16):
 22 mutants, 16 caught, 5 unviable, 0 timeouts, 1 missed: `crates/exec/src/measure.rs`, `live_sources`,
 `Undo::Longjmp => shadow.len() - discarded` with `-` replaced by `/`. The line predates the job; it is in the
-diff because the job named every alternative of that match. No test drives a `longjmp` undo through the
-live-source scan with a frame count that tells the two apart. Route: such a test, as a small follow-up. The
+diff because the job named every alternative of that match. No test drove a `longjmp` undo through the
+live-source scan. Since caught: `a_longjmp_result_witness_names_the_frames_left_after_the_jump`
+(`crates/exec/tests/journal_content.rs`) fails on the mutant twice over, by a division by zero for a jump in
+the frame and by naming call path 2 instead of 0 for a jump from a callee, and passes on the code. The
 first attempt's unmutated baseline failed because the libgcc scripts read `target/front` directly instead of
 following `BENNETT_FRONT` (fixed in `0e1b00d`).
 

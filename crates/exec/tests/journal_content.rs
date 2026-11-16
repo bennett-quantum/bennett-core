@@ -598,3 +598,74 @@ entry:
         }
     }
 }
+
+/// The witness of a `longjmp`'s result word names the live frames left after the jump, each by its own
+/// call path. `@f` copies 23130 into `%copy`, takes a `setjmp`, jumps back to it with 23130, then again
+/// with 99: the second jump overwrites the result slot's 23130, still held by `%copy` in `@f`'s frame,
+/// the region's root (call path 0). Once the jump is in `@f` itself (no frame discarded) and once from
+/// a callee `@g` (one frame of two discarded); in both the one live copy is `@f`'s slot at path 0.
+/// Pairing the live frames with the wrong shadows (for example counting `len / discarded` frames
+/// instead of `len - discarded`) names a wrong path or function, or fails outright.
+#[test]
+fn a_longjmp_result_witness_names_the_frames_left_after_the_jump() {
+    for (name, jump_first, jump_second) in [
+        ("in the frame", "longjmp %buf, 23130", "longjmp %buf, 99"),
+        ("from a callee", "call @g(%buf, i32 23130)\n    ret 0", "call @g(%buf, i32 99)\n    ret 0"),
+    ] {
+        let text = format!(
+            "memory 1024
+func @g(i64 %buf, i32 %v) {{
+entry:
+    longjmp %buf, %v
+}}
+func @f(i1 %b) -> i32 {{
+entry:
+    %buf = alloca 32
+    %copy = add i32 0, 23130
+    %r = setjmp %buf
+    %first = icmp eq i32 %r, 0
+    br %first, one, after
+one:
+    {jump_first}
+after:
+    %again = icmp eq i32 %r, 23130
+    br %again, two, done
+two:
+    {jump_second}
+done:
+    ret %r
+}}
+func @main() -> i32 {{
+entry:
+    %q = qalloc 1
+    h %q
+    %out = qalloc 32
+    %fault = qalloc 5
+    apply @f(%q) -> %out, %fault budget 100
+    %m = measure %out
+    ret %m
+}}"
+        );
+        let module = load(&text);
+        let f = common::entry(&module, "f");
+        let executor = measured(&module, "main", &[], true);
+        let apply = &executor.journal_measurement().expect("on").applies[0];
+        assert_eq!(apply.branches.len(), 2, "{name}");
+        for branch in &apply.branches {
+            assert_eq!(branch.outcome, Outcome::Returned(Some(99)), "{name}");
+            let jumps: Vec<_> = branch.entries.iter().filter(|r| r.kind == Undo::Longjmp).collect();
+            assert_eq!(jumps.len(), 2, "{name}");
+            let result = jumps[1].words.last().expect("the result word");
+            assert_eq!((result.role, result.value), (WordRole::LongjmpResult, 23130), "{name}");
+            let bennett_exec::WordWitness::LiveCopy(sources) = &result.witness else {
+                panic!("{name}: expected a live copy, got {:?}", result.witness);
+            };
+            assert_eq!(sources.len(), 1, "{name}: {sources:?}");
+            assert_eq!(
+                (sources[0].call_path, sources[0].func, sources[0].kind),
+                (0, Some(f), bennett_exec::SourceKind::Slot),
+                "{name}"
+            );
+        }
+    }
+}
