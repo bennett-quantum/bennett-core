@@ -41,7 +41,8 @@ A module is a list of functions, an initial memory image and a memory size.
   bad indirect target, `unreachable` and an exhausted budget are *named faults*: part of the result, never a crash.
 - **Quantum instructions**, allowed in ordinary control code: `qalloc w`, `qfree`, single-qubit gates
   (`x h z s sdg t tdg rx ry rz`) with an optional list of control qubits, each qubit in a register or at a
-  bit of memory ("Qubits in memory", below), `measure`, and `apply` (below).
+  bit of memory ("Qubits in memory", below), `measure` of a register or of bits at an address, and `apply`
+  (below).
 - **History instructions:** `mark` and `rewind ... keep` (below).
 
 There is one instruction set for every tier. A tier is a way of running code, not a different language.
@@ -62,8 +63,8 @@ There is one instruction set for every tier. A tier is a way of running code, no
   one of the independent checks in the defence in depth.
 - **Quantum state** is a sparse map from basis configuration (the values of all live registers) to a complex
   amplitude. Gates act on amplitudes. This is numerical (f64), and is evidence, not proof.
-- **`measure`** samples with a seeded generator and collapses. Reversal past a measurement is refused with a named
-  error.
+- **`measure`** samples with a seeded generator and collapses. It names a register, or `N` bits at an address
+  (`measure iN [ADDR]`, "Qubits in memory"). Reversal past a measurement is refused with a named error.
 
 ### `apply`: a coherent region
 
@@ -575,7 +576,8 @@ The front writes `retaddr N` for every `llvm.returnaddress(N)` in the default ad
   fault register is at least that wide, so every fault register of a program is a `q5` or wider. Sixteen of
   the 31 nonzero codes are used, the last `bad_longjmp` (16).
 - `qfree` requires the register to be zero in every configuration, otherwise the named fault `dirty_free`.
-- `measure` reads a whole register. Amplitudes at or below `f64::EPSILON` are dropped.
+- `measure` reads a whole register, or the `N` bits from bit 0 of the integer at an address. Amplitudes at or
+  below `f64::EPSILON` are dropped.
 - Bounds of the simulator (steps, number of basis configurations) are parameters of a run. Exceeding the
   configuration limit stops the run with a named error; it is not a program fault.
 
@@ -673,11 +675,26 @@ qubits among others; with one world and no qubit in memory the machine is exactl
   (rule 4 of "What is promised"). A keep into a classical byte would need every load and store since the
   mark to journal its address to find the same (a question, `HANDOFF.md`); to keep into a byte, promote it
   first (`z [ADDR]` changes nothing else).
+- **Measurement at an address** (the maintainer's decision of 2026-11-16, [M2] in `HANDOFF.md`):
+  `%d = measure iN [ADDR]` reads the `N` bits from bit 0 of the integer at the `i64` address, little-endian,
+  as `load iN` reads them, and gives an `iN`. The bits of bytes that hold qubits, and only those bits, are
+  sampled jointly, in one draw, and the state collapses onto the values found: the other bits of a cell
+  keep their superposition, and cells that are correlated stay correlated. The bits of other bytes are the
+  memory's, with nothing to sample. Everything else is as for a register: with several worlds the
+  measurement waits for them and observes which world first ("Observation" under "Worlds"); inside a
+  coherent region it faults `quantum_in_region`; one reached while running again is refused before it
+  samples; a rewind across it faults `bad_rewind` and reversal stops before it, also when no byte held
+  qubits. An address whose `N` bits do not fit in memory faults `out_of_bounds`. The register form stays
+  while registers do (`qalloc` retires with the call form that gives a fault value, decision [A1]).
+  Checked (`crates/exec/tests/measure_memory.rs`): outcomes, collapse and the bits left in superposition
+  written out by hand, and every fixture against the whole-world reference (`oracle_support::worlds`,
+  which reads a measurement's bits as its loads do): step by step where the worlds stay in step, and the
+  final machine for 8 seeds of each. Grover with x in memory measured at its address gives the register
+  form's answer for every seed (`memory_qubits.rs`); a replay that newly reaches one is refused unchanged
+  (`atomic_rewind_tests.rs`).
 - **Not yet, each a debt with its route.** A `longjmp` whose record is held in cells that disagree is
   `bad_longjmp` (kept a fault by the maintainer on 2026-11-16), where it would split worlds that may then
-  fault separately (route: let the worlds of a split fault on their own, as other worlds do). `measure` takes a register only: a qubit in memory is
-  read by a load, which splits worlds, and observed where a measurement or the end of the run observes
-  the worlds (a question, `HANDOFF.md`). A cell is a whole byte, so a qubit in memory holds 8 qubits in
+  fault separately (route: let the worlds of a split fault on their own, as other worlds do). A cell is a whole byte, so a qubit in memory holds 8 qubits in
   the simulator (route: cells of single bits, if the count matters).
 - **Channels** stay open as before: a cell is a register column of a world, so a mixture of worlds holds
   qubits in memory as it holds registers.

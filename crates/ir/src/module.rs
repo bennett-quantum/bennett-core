@@ -428,12 +428,13 @@ pub enum Inst {
         /// The control qubits.
         controls: Vec<Place>,
     },
-    /// `dst = measure register`: samples the register's value and collapses the state.
+    /// `dst = measure register` or `dst = measure iN [address]`: samples the qubits' value and collapses
+    /// the state.
     Measure {
-        /// The measured value, an integer of the register's width.
+        /// The measured value, an integer of the register's width or of `N`.
         dst: Slot,
-        /// The register handle.
-        register: Slot,
+        /// The qubits measured.
+        source: MeasureSource,
     },
     /// `apply @callee(args) -> out, fault budget b`: runs `callee` coherently, on each basis
     /// configuration separately. See `docs/DESIGN.md`.
@@ -473,6 +474,21 @@ pub struct Keep {
     pub value: Operand,
     /// Where the value is XORed in.
     pub target: KeepTarget,
+}
+
+/// What a `measure` reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeasureSource {
+    /// Every qubit of a register, by its handle.
+    Register(Slot),
+    /// The `width` bits from bit 0 of the integer at this `i64` address, little-endian, as `load` sees them
+    /// (`docs/DESIGN.md`, "Qubits in memory"): qubits where the bytes hold qubits, else the memory's bits.
+    Memory {
+        /// The number of bits, and the result's width.
+        width: Width,
+        /// The address.
+        address: Operand,
+    },
 }
 
 /// Where a `rewind` keeps a value.
@@ -551,7 +567,10 @@ impl Inst {
             | Inst::StackSave { .. }
             | Inst::ReturnAddress { .. }
             | Inst::Mark { .. } => {}
-            Inst::Qfree { register } | Inst::Measure { register, .. } => operand(&Operand::Slot(*register)),
+            Inst::Qfree { register } | Inst::Measure { source: MeasureSource::Register(register), .. } => {
+                operand(&Operand::Slot(*register))
+            }
+            Inst::Measure { source: MeasureSource::Memory { address, .. }, .. } => operand(address),
             Inst::Gate { target, controls, .. } => {
                 operand(&Operand::Slot(target.register));
                 controls.iter().for_each(|c| operand(&Operand::Slot(c.register)));

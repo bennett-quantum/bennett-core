@@ -141,21 +141,22 @@ pub fn compare(program: &ValidModule, entry: &str, args: &[u64], limit: usize, m
         }
         let w = state.keys().next().expect("normalized state");
         let f = w.frame();
-        let measured = if let Some(Inst::Measure { register, .. }) =
+        let measured = if let Some(Inst::Measure { dst, .. }) =
             program.function(f.function).block(f.block).insts.get(f.instruction)
         {
-            w.register(*register).ok()
+            model.measurement_at(w).map(|_| f.base + dst.index())
         } else {
             None
         };
-        if let Some(id) = measured {
+        if let Some(slot) = measured {
             if !measure {
                 return step;
             }
             let branches = model.measurement_branches(&state);
             assert!((branches.values().map(|(p, _)| p).sum::<f64>() - 1.0).abs() < 1e-12);
             actual.step();
-            let value = actual.snapshot().quantum.amplitudes[0].0[id];
+            // The sampled value as the program sees it, in the measurement's result slot.
+            let value = actual.snapshot().classical.slots[slot];
             assert!(branches[&value].0 > 0.0, "sample has independent positive Born probability");
             state = model.collapse(&state, value);
         } else {

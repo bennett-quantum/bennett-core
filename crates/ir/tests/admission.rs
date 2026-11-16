@@ -1,5 +1,10 @@
 //! Admission boundary table: the validator must check unreachable functions too.
-use bennett_ir::{LoadError, Problem, load, read, write};
+use bennett_ir::{Expected, LoadError, Problem, Type, Width, load, read, write};
+
+const WORD: Width = Width::WORD;
+const I8: Width = Width::new(8).expect("a width");
+const I16: Width = Width::new(16).expect("a width");
+const I32: Width = Width::new(32).expect("a width");
 
 fn program(body: &str) -> String {
     format!("memory 256\nfunc @subject() -> i8 {{\nentry:\n{body}\n}}\n")
@@ -18,6 +23,9 @@ fn well_formed_programs_are_accepted() {
         "br done(i8 0)\ndone(i8 %x):\nret %x",
         "exit i8 0",
         "%m = mark\nrewind %m\nret 0",
+        "%q = qalloc 8\n%m = measure %q\nret %m",
+        "%m = measure i8 [16]\nret %m",
+        "%a = add i64 16, 0\n%m = measure i1 [%a]\n%w = zext i1 %m to i8\nret %w",
     ] {
         let text = program(body);
         load(&text).unwrap_or_else(|e| panic!("{body}: {e}"));
@@ -39,6 +47,23 @@ fn malformed_programs_have_the_expected_validation_problem() {
         ("%m = mark\n%v = add i64 %m, 1\nrewind %m\nret 0", Problem::HandleUse("m".into())),
         // A value defined between a mark and its rewind is not used after the rewind (2026-11-16).
         ("%m = mark\n%v = add i8 1, 2\nrewind %m\nret %v", Problem::RewoundUse("v".into())),
+        // `measure iN [ADDR]` takes an i64 address and gives an iN (2026-11-16).
+        (
+            "%a = add i32 16, 0\n%m = measure i8 [%a]\nret %m",
+            Problem::TypeMismatch {
+                operand: "`%a`".into(),
+                expected: Expected::Type(Type::Int(WORD)),
+                found: Type::Int(I32),
+            },
+        ),
+        (
+            "%m = measure i16 [16]\nret %m",
+            Problem::TypeMismatch {
+                operand: "`%m`".into(),
+                expected: Expected::Type(Type::Int(I8)),
+                found: Type::Int(I16),
+            },
+        ),
     ] {
         for prefix in ["", "func @main() -> i8 {\nentry:\nret 0\n}\n"] {
             let text = format!("{prefix}{}", program(body));

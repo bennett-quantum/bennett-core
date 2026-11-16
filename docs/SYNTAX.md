@@ -38,7 +38,8 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | qfree %r
             | GATE qubit [ctrl qubit {, qubit}]          ; x h z s sdg t tdg
             | (rx | ry | rz)(ANGLE) qubit [ctrl ...]     ; radians
-            | %d = measure %r
+            | %d = measure %r                            ; every qubit of the register
+            | %d = measure iN "[" operand "]"            ; N bits from bit 0 of the integer at the i64 address
             | apply @f(typed, ...) -> %out, %fault budget operand  ; %fault: a register of 5 qubits or more
             | %d = mark                                  ; an opaque i64 handle: only rewind may use it
             | rewind %h [keep (typed -> kept {, typed -> kept})]  ; XOR each value in, un-run since %h

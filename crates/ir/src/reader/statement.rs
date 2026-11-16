@@ -4,8 +4,8 @@ use super::error::{Failure, ReadErrorKind};
 use super::lexer::Token;
 use super::{Parser, Scope};
 use crate::{
-    BinOp, BlockId, CastOp, Fault, FixedGate, FuncId, Gate, Inst, Keep, KeepTarget, Operand, Place, Predicate, Qubit,
-    Rotation, Signature, Slot, SwitchCase, Target, Terminator, Type, Width,
+    BinOp, BlockId, CastOp, Fault, FixedGate, FuncId, Gate, Inst, Keep, KeepTarget, MeasureSource, Operand, Place,
+    Predicate, Qubit, Rotation, Signature, Slot, SwitchCase, Target, Terminator, Type, Width,
 };
 
 /// The mnemonics that end a block.
@@ -100,7 +100,20 @@ impl<'s> Parser<'s> {
                 line.no_result("qfree")?;
                 Inst::Qfree { register: self.slot_use(scope, "a register")? }
             }
-            "measure" => Inst::Measure { dst: line.result("measure")?, register: self.slot_use(scope, "a register")? },
+            "measure" => {
+                let dst = line.result("measure")?;
+                // `measure iN [ADDRESS]` names qubits in memory; `measure %r` a register.
+                let source = if matches!(self.cursor.peek(), Some(Token::Word(_))) {
+                    let width = self.int_type("an integer type or a register")?;
+                    self.cursor.expect(Token::LBracket, "`[`")?;
+                    let address = self.operand(scope, Width::WORD)?;
+                    self.cursor.expect(Token::RBracket, "`]`")?;
+                    MeasureSource::Memory { width, address }
+                } else {
+                    MeasureSource::Register(self.slot_use(scope, "a register or an integer type")?)
+                };
+                Inst::Measure { dst, source }
+            }
             "apply" => {
                 line.no_result("apply")?;
                 self.apply(scope)?

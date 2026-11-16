@@ -4,8 +4,8 @@
 use std::fmt::{self, Write};
 
 use crate::{
-    Block, DataItem, DataSegment, Function, Gate, Inst, KeepTarget, Module, Operand, Param, Place, Qubit, Signature,
-    Slot, Target, Terminator, Type,
+    Block, DataItem, DataSegment, Function, Gate, Inst, KeepTarget, MeasureSource, Module, Operand, Param, Place,
+    Qubit, Signature, Slot, Target, Terminator, Type,
 };
 
 /// Writes a module in its text form.
@@ -128,7 +128,12 @@ impl Writer<'_> {
                 self.gate(f, *gate, Place::Register(*target), &controls)
             }
             Inst::GateAt { gate, target, controls } => self.gate(f, *gate, *target, controls),
-            Inst::Measure { register, .. } => write!(self.out, "measure {}", name(register)),
+            Inst::Measure { source: MeasureSource::Register(register), .. } => {
+                write!(self.out, "measure {}", name(register))
+            }
+            Inst::Measure { source: MeasureSource::Memory { width, address }, .. } => {
+                write!(self.out, "measure i{} [{}]", width.bits(), op(address))
+            }
             Inst::Apply { callee, args, out, fault, budget } => {
                 write!(self.out, "apply @{}", self.module.function(*callee).name)?;
                 write_args(self.out, f, args)?;

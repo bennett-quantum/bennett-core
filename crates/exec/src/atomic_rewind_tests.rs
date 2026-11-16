@@ -241,11 +241,14 @@ fn a_measurement_newly_reached_by_a_replay_samples_and_observes_nothing() {
         ("observe", "done", false, "the world of value 1 reaches the measurement"),
         ("done", "observe", true, "the world of value 0 reaches the measurement"),
     ] {
-        let callee = format!(
-            "func @f(i1 %x, q1 %q) {{\nentry:\n    br %x, {first}, {second}\nobserve:\n    \
-             %measured = measure %q\n    ret\ndone:\n    ret\n}}"
-        );
-        refuses_unchanged(&replay_split(&callee, true, one), context);
+        // The register form, and the address form (on a byte without qubits, so only the rule refuses it).
+        for measure in ["measure %q", "measure i8 [16]"] {
+            let callee = format!(
+                "func @f(i1 %x, q1 %q) {{\nentry:\n    br %x, {first}, {second}\nobserve:\n    \
+                 %measured = {measure}\n    ret\ndone:\n    ret\n}}"
+            );
+            refuses_unchanged(&replay_split(&callee, true, one), &format!("{context}: {measure}"));
+        }
     }
 }
 

@@ -2,8 +2,8 @@
 //! state and journals exactly what it overwrote.
 
 use bennett_ir::{
-    BlockId, ENTRY_RETURN_ADDRESS, Fault, FuncId, Gate, Inst, JUMP_RECORD_BYTES, Operand, Qubit, Slot, Target,
-    Terminator, Type, Width,
+    BlockId, ENTRY_RETURN_ADDRESS, Fault, FuncId, Gate, Inst, JUMP_RECORD_BYTES, MeasureSource, Operand, Qubit, Slot,
+    Target, Terminator, Type, Width,
 };
 
 use crate::executor::{Executor, Frame, Halt, Outcome, SLOT_BYTES};
@@ -93,7 +93,21 @@ impl<'m> Executor<'m> {
                 let limit = self.max_configurations.map(|limit| limit.saturating_sub(self.others_configurations));
                 self.gate_at(*gate, target, controls, limit)?;
             }
-            Inst::Measure { dst, register } => {
+            Inst::Measure { dst, source: MeasureSource::Memory { width, address } } => {
+                let range = self.memory_range(self.read_word(address), *width)?;
+                // As for a register: a measurement reached while running again is refused (below).
+                if self.rerunning > 0 {
+                    return Err(Fault::BadRewind.into());
+                }
+                if self.has_worlds() {
+                    self.observe_world()?;
+                }
+                let value = self.measure_memory(range, *width);
+                self.write_slot(*dst, value);
+                self.record(Undo::Measure);
+                self.advance();
+            }
+            Inst::Measure { dst, source: MeasureSource::Register(register) } => {
                 let id = self.quantum.resolve(self.handle(*register))?;
                 // Steps run again to undo a rewind ran before without a measurement (a rewind refuses
                 // across one), so one reached now is on a path the history does not describe: refuse it
@@ -313,6 +327,32 @@ impl<'m> Executor<'m> {
 
     pub(crate) fn write_bytes(&mut self, range: std::ops::Range<usize>, value: u128) {
         self.memory.write(range.start, &value.to_le_bytes()[..range.len()]);
+    }
+
+    /// Measures the `width` bits from bit 0 of the integer at `range` (its bytes, little-endian): the bits
+    /// of bytes that hold qubits are sampled jointly and the state collapsed onto them, only those bits;
+    /// the bits of other bytes are the memory's, as a load reads them, with nothing to sample. Called with
+    /// one world (`observe_world` first).
+    fn measure_memory(&mut self, range: std::ops::Range<usize>, width: Width) -> u128 {
+        let mut bytes = [0u8; 16];
+        self.memory.read_into(range.clone(), &mut bytes[..range.len()]);
+        let cells = self.quantum.cells_in(range.start as u64..range.end as u64);
+        if !cells.is_empty() {
+            let bits = u64::from(width.bits());
+            let picks: Vec<(usize, u64)> = cells
+                .iter()
+                .map(|&(address, column)| {
+                    let low = (address - range.start as u64) * 8;
+                    let mask = if bits >= low + 8 { 0xff } else { (1u64 << (bits - low)) - 1 };
+                    (column, mask)
+                })
+                .collect();
+            let values = self.quantum.measure_bits(&picks, &mut self.rng);
+            for (&(address, _), value) in cells.iter().zip(values) {
+                bytes[address as usize - range.start] = value as u8;
+            }
+        }
+        u128::from_le_bytes(bytes) & width.mask()
     }
 
     /// `dst = load width address`. Bytes that hold qubits are read as a register is read (`cells.rs`).

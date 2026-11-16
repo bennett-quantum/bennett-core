@@ -5,8 +5,8 @@ use petgraph::graph::{DiGraph, NodeIndex};
 
 use super::error::{Expected, Location, Problem, ValidationError};
 use crate::{
-    CastOp, Fault, Function, Gate, Inst, KeepTarget, MEMORY_QUBIT_BITS, Module, Operand, Place, Slot, Terminator, Type,
-    Width,
+    CastOp, Fault, Function, Gate, Inst, KeepTarget, MEMORY_QUBIT_BITS, MeasureSource, Module, Operand, Place, Slot,
+    Terminator, Type, Width,
 };
 
 /// Checks `function`, appending what is wrong to `errors`, and returns the type of every slot. The types
@@ -131,7 +131,7 @@ impl<'a> Checker<'a> {
                 let site = Site::Inst(b, i);
                 let ty = self.result_type(site, inst);
                 self.define(site, dst, ty, Def { block: b, position: i + 1 });
-                if let Inst::Measure { dst, register } = inst {
+                if let Inst::Measure { dst, source: MeasureSource::Register(register) } = inst {
                     measured.push((*dst, *register));
                 }
             }
@@ -167,6 +167,7 @@ impl<'a> Checker<'a> {
             Inst::Compare { .. } => Some(Type::Int(Width::BIT)),
             Inst::Setjmp { .. } => Some(Type::Int(Width::JUMP_VALUE)),
             Inst::Cast { to, .. } => Some(Type::Int(*to)),
+            Inst::Measure { source: MeasureSource::Memory { width, .. }, .. } => Some(Type::Int(*width)),
             Inst::Alloca { .. }
             | Inst::FuncAddr { .. }
             | Inst::StackSave { .. }
@@ -175,7 +176,7 @@ impl<'a> Checker<'a> {
             Inst::Qalloc { width, .. } => Some(Type::Qreg(*width)),
             Inst::Call { callee, .. } => self.call_result(site, self.module.function(*callee).result),
             Inst::CallIndirect { signature, .. } => self.call_result(site, signature.result),
-            Inst::Measure { .. }
+            Inst::Measure { source: MeasureSource::Register(_), .. }
             | Inst::Store { .. }
             | Inst::Effect { .. }
             | Inst::StackRestore { .. }
@@ -264,8 +265,11 @@ impl<'a> Checker<'a> {
                 self.call_arguments(site, args, signature.params.iter().copied());
             }
             Inst::Effect { byte } => self.expect(site, *byte, Type::Int(Width::BYTE)),
-            Inst::Qfree { register } | Inst::Measure { register, .. } => {
+            Inst::Qfree { register } | Inst::Measure { source: MeasureSource::Register(register), .. } => {
                 self.register_width(site, *register);
+            }
+            Inst::Measure { source: MeasureSource::Memory { address, .. }, .. } => {
+                self.expect(site, *address, Type::Int(Width::WORD));
             }
             Inst::Gate { gate, target, controls } => {
                 let places: Vec<Place> =

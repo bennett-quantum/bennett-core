@@ -470,6 +470,39 @@ fn memory_qubits_cost_the_register_forms_worlds_and_a_byte_per_cell() {
     }
 }
 
+/// Grover measured where x lives: `measure %x` in registers, `measure i4 [64]` in memory (x is the low four
+/// bits of byte 64; its upper four stay 0). Both sample the same distribution, ordered the same way, with one
+/// draw, so every seed gives the same answer. The predicate's solutions are 2 and 13 (x*x + x = 6 mod 16);
+/// with two of 16, one iteration finds one with probability sin²(3θ) = 0.78 and two with sin²(5θ) = 0.95
+/// (sin²θ = 1/8).
+#[test]
+fn grover_measured_at_its_address_agrees_with_the_register_form_for_every_seed() {
+    let measured = |memory: bool, iterations: u8| {
+        let measure = if memory { "    %m = measure i4 [64]\n" } else { "    %m = measure %x\n" };
+        let text = grover(memory, iterations)
+            .replace("func @main() {", "func @main() -> i4 {")
+            .replace("finish:\n    ret\n", &format!("finish:\n{measure}    ret %m\n"));
+        bennett_ir::load(&text).expect("valid")
+    };
+    for iterations in [1u8, 2] {
+        let (registers, memory) = (measured(false, iterations), measured(true, iterations));
+        let (mut seen, mut hits) = (std::collections::BTreeSet::new(), Vec::new());
+        for seed in 0..64 {
+            let options = Options { seed, budget: Some(100_000), ..Options::default() };
+            let (a, _) = run(&registers, options);
+            let (b, _) = run(&memory, options);
+            assert_eq!(a, b, "k={iterations} seed {seed}");
+            let Outcome::Returned(Some(x)) = a else { panic!("{a:?}") };
+            seen.insert(x);
+            hits.push(x);
+        }
+        let hits = hits.iter().filter(|&&x| x == 2 || x == 13).count();
+        assert!(seen.contains(&2) && seen.contains(&13), "k={iterations}: {seen:?}");
+        // Expected 50 and 61 of 64; the bounds sit several binomial standard deviations below.
+        assert!(hits >= [40, 50][usize::from(iterations - 1)], "k={iterations}: {hits} of 64");
+    }
+}
+
 fn start<'m>(module: &'m ValidModule, entry: &str, reversible: bool) -> Executor<'m> {
     let options = Options { reversible, budget: Some(10_000), ..Options::default() };
     Executor::new(module, module.function_named(entry).expect("entry"), &[], options).expect("starts")

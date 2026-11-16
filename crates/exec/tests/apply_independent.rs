@@ -221,6 +221,8 @@ fn quantum_instructions_reached_through_calls_fault_inside_the_region() {
     // reach it. Effects and exit reached through the same call boundary have their own codes.
     for (body, fault) in [
         ("%q = qalloc 1", Fault::QuantumInRegion),
+        // A measurement at an address is a quantum instruction like a register's, whatever the bytes hold.
+        ("%m = measure i8 [16]", Fault::QuantumInRegion),
         ("effect 65", Fault::EffectInRegion),
         ("exit i1 0", Fault::ExitInRegion),
     ] {

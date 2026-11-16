@@ -283,23 +283,32 @@ impl QuantumState {
 
     /// Samples the value of register `id` and collapses the state onto it.
     pub(crate) fn measure(&mut self, id: usize, rng: &mut impl Rng) -> u64 {
-        let mut probabilities = BTreeMap::<u64, f64>::new();
+        self.measure_bits(&[(id, u64::MAX)], rng)[0]
+    }
+
+    /// Samples, jointly, the bits `mask` of each column `column` in `picks` and collapses the state onto the
+    /// values found, one per pick: one draw, the values in the order of the picks compared as a sequence (for
+    /// one whole column, the order of its values, as `measure` always had). Other bits keep their
+    /// superposition.
+    pub(crate) fn measure_bits(&mut self, picks: &[(usize, u64)], rng: &mut impl Rng) -> Vec<u64> {
+        let key = |config: &[u64]| -> Vec<u64> { picks.iter().map(|&(column, mask)| config[column] & mask).collect() };
+        let mut probabilities = BTreeMap::<Vec<u64>, f64>::new();
         for (config, amplitude) in &self.amplitudes {
-            *probabilities.entry(config[id]).or_default() += amplitude.norm_sqr();
+            *probabilities.entry(key(config)).or_default() += amplitude.norm_sqr();
         }
         let total: f64 = probabilities.values().sum();
         let mut threshold = rng.random::<f64>() * total;
-        let mut outcome = probabilities.last_key_value().map_or((0, 1.0), |(&v, &p)| (v, p));
-        for (&value, &probability) in &probabilities {
+        let mut outcome = probabilities.last_key_value().map_or((vec![0; picks.len()], 1.0), |(v, &p)| (v.clone(), p));
+        for (value, &probability) in &probabilities {
             if threshold < probability {
-                outcome = (value, probability);
+                outcome = (value.clone(), probability);
                 break;
             }
             threshold -= probability;
         }
         let (value, probability) = outcome;
         let scale = probability.sqrt().recip();
-        self.amplitudes.retain(|config, _| config[id] == value);
+        self.amplitudes.retain(|config, _| key(config) == value);
         self.amplitudes.values_mut().for_each(|amplitude| *amplitude *= scale);
         value
     }

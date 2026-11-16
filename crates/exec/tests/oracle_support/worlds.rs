@@ -9,8 +9,8 @@
 use std::collections::BTreeMap;
 
 use bennett_ir::{
-    BlockId, CastOp, DataItem, Fault, FuncId, Inst, Keep, KeepTarget, Operand, Place, Slot, Target, Terminator, Type,
-    ValidModule,
+    BlockId, CastOp, DataItem, Fault, FuncId, Inst, Keep, KeepTarget, MeasureSource, Operand, Place, Slot, Target,
+    Terminator, Type, ValidModule,
 };
 use num_complex::Complex64 as C;
 
@@ -388,6 +388,27 @@ impl<'a> Model<'a> {
         Ok(())
     }
 
+    /// DESIGN, `measure`: a register's value, or the `width` bits from bit 0 of the integer at an address,
+    /// read as a load reads them (cells' bytes from their registers, other bytes from memory).
+    fn measured(&self, w: &World, source: &MeasureSource) -> Result<u128, Fault> {
+        match *source {
+            MeasureSource::Register(register) => Ok(w.quantum[w.register(register)?].into()),
+            MeasureSource::Memory { width, address } => {
+                let bytes = self.read_memory(w, w.integer(address)? as u64, width.bytes() as usize)?;
+                let mut n = [0; 16];
+                n[..bytes.len()].copy_from_slice(&bytes);
+                Ok(u128::from_le_bytes(n) & width.mask())
+            }
+        }
+    }
+
+    /// The value the `measure` at `w`'s position would see in this basis world, or `None` when the next
+    /// step is not a measurement or faults.
+    pub fn measurement_at(&self, w: &World) -> Option<u128> {
+        let Some(Inst::Measure { source, .. }) = self.instruction(&w.classical) else { return None };
+        self.measured(w, source).ok()
+    }
+
     fn instruction(&self, classical: &Classical) -> Option<&Inst> {
         let f = classical.frames.last()?;
         self.program.function(f.function).block(f.block).insts.get(f.instruction)
@@ -487,8 +508,8 @@ impl<'a> Model<'a> {
             {
                 return Err(Fault::QuantumInRegion);
             }
-            if let Inst::Measure { register, .. } = inst {
-                w.register(*register)?;
+            if let Inst::Measure { source, .. } = inst {
+                self.measured(&w, source)?;
                 w.classical.finish = Some(Finish::BeforeMeasurement);
                 return Ok(basis(w));
             }
@@ -1360,7 +1381,7 @@ impl<'a> Model<'a> {
 
     /// Condition on an observed outcome after checking its Born weight separately. This does not
     /// assume that two implementations consume the same pseudorandom numbers.
-    pub fn collapse(&self, state: &Superposition, value: u64) -> Superposition {
+    pub fn collapse(&self, state: &Superposition, value: u128) -> Superposition {
         let (_, selected) = self.measurement_branches(state).remove(&value).expect("nonzero Born weight");
         let mut result = BTreeMap::new();
         for (mut w, a) in selected {
@@ -1368,7 +1389,7 @@ impl<'a> Model<'a> {
             let mut before = w.classical.clone();
             before.finish = None;
             w.classical.finish = None;
-            w.put(*dst, Value::Int(value.into()));
+            w.put(*dst, Value::Int(value));
             w.frame_mut().instruction += 1;
             w.classical.journal_records += 1;
             w.history.push(Record { before, action: Action::Measurement });
@@ -1378,14 +1399,14 @@ impl<'a> Model<'a> {
     }
 
     /// Born weights and normalized full-world post-measurement states. No arbitrary RNG sequence.
-    pub fn measurement_branches(&self, state: &Superposition) -> BTreeMap<u64, (f64, Superposition)> {
-        let mut branches: BTreeMap<u64, (f64, Superposition)> = BTreeMap::new();
+    pub fn measurement_branches(&self, state: &Superposition) -> BTreeMap<u128, (f64, Superposition)> {
+        let mut branches: BTreeMap<u128, (f64, Superposition)> = BTreeMap::new();
         for (w, &a) in state {
-            let Some(Inst::Measure { register, .. }) = self.instruction(&w.classical) else {
+            let Some(Inst::Measure { source, .. }) = self.instruction(&w.classical) else {
                 panic!("measurement boundary")
             };
-            let id = w.register(*register).expect("live measured register");
-            let entry = branches.entry(w.quantum[id]).or_default();
+            let value = self.measured(w, source).expect("a measurement that does not fault");
+            let entry = branches.entry(value).or_default();
             entry.0 += a.norm_sqr();
             add(&mut entry.1, w.clone(), a);
         }

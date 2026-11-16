@@ -135,12 +135,14 @@ commit) after the four checks passed on it.
 - **Checks job**: landed (`2ab9ebf`..`83ae722`, then `0e1b00d`). Its changed-line mutation run
   (`python3 scripts/mutate-diff.py 2142238`, 22 mutants on the job's own diff) is running; its result is
   recorded under "Automatic checks (implementation)" when it ends. A surviving mutant becomes a small follow-up.
-- **Machine decisions** `wip/machine-decisions` (`299022f`): step a (5-bit fault codes, `bad_longjmp`,
-  `6f8460d`) and step b (opaque mark handles, `64d8e22`) checked (cargo 311, front 171, clippy and fmt clean);
-  step c (no use after a rewind of a value defined since its mark, `a955997`) committed, unchecked; step d
-  (`measure` takes an address, `299022f`) does not compile: three errors in the test oracles, which still name
-  `measure`'s old `register` field. Step e (the call form with a fault value and a budget) not started.
-  Next: finish d, check c and d, land a-d one by one; then e.
+- **Machine decisions** `wip/machine-decisions`: steps a to d done, rebased on `main` after the checks job,
+  one commit each: (a) 5-bit fault codes and `bad_longjmp`; (b) opaque mark handles (`HandleUse`); (c) no use
+  after a rewind of a value defined since its mark (`RewoundUse`); (d) `measure iN [ADDR]`. Main's newer tests
+  were migrated in the step that needs it (fault registers `q5` and `bad_longjmp` in a; admission rows in b,
+  c and d; every alternative named where b and c matched instructions with a catch-all arm, which the
+  checks job's lint refuses). The four checks passed on c before the rebase and on the rebased d. Not
+  run: the changed-line mutation sweep (`scripts/mutate-diff.py`). Step e (the call form with a fault value
+  and a budget) not started. Next: the sweep and landing a to d one by one; the testing pass (sol); then e.
 - **Testing passes owed:** machine-decisions a-d (by sol, Opus built it); sql-oracle, checks and entry-fix (by
   Opus, sol built them). Done today: fix-replay (sol, no wrong result), fallback oracle (Opus, four accepted
   wrong results fixed), libgcc (Opus, none on canonical inputs; a noncanonical x87 compare witness), files
@@ -539,7 +541,8 @@ its vendor; at most two sol jobs at once.
    and gives exactly the enumeration's state. As forms, no, and nothing is removed: the text idiom (`mark`,
    `call`, `rewind keep`) has no fault register and no region budget, so a program cannot write a region
    that faults on some branch or spends a budget without `apply` (question A1 below); `qalloc` and `qfree`
-   were not re-expressed, and cannot be yet: `measure` takes a register only (question M2), an `apply`'s
+   were not re-expressed, and cannot be yet: `measure` took a register only (question M2; it takes an
+   address since 2026-11-16), an `apply`'s
    `out` and `fault` and a call's register argument are registers, and a qubit in memory costs a whole byte
    (8 qubits) in the simulator; Grover with its qubits in memory (`memory_qubits.rs`) is the one measured
    program. The maintainer decides.
@@ -688,7 +691,11 @@ The machine:
 - **A call form that gives the fault code as a value and takes a budget** [A1] is added (for example
   `%y, %c = call @f(args) budget B`), with the region's rules attached to it. `apply`, `qalloc` and `qfree` are
   retired once every existing test passes without them.
-- **`measure` takes an address** [M2].
+- **`measure` takes an address** [M2]. Built: `%d = measure iN [ADDR]` reads the `N` bits from bit 0 of the
+  integer at the address as a load does; the bits of bytes that hold qubits, only those, are sampled jointly
+  and collapse; other bytes give the memory's bits (`docs/DESIGN.md`, "Qubits in memory";
+  `crates/exec/tests/measure_memory.rs`, against the whole-world reference). The register form stays while
+  registers do.
 - **Fault codes widen to 5 bits** [(2), "The fault code space is full"], now; an invalid jump record gets its own
   code. Built: `Fault::CODE_WIDTH` is 5, every fault register a `q5` (the front's included), and every
   `longjmp` that finds no valid record, also one held in qubits that disagree [M3], is `bad_longjmp` (16);
@@ -704,8 +711,8 @@ The machine:
   resumptions included (`crates/ir/src/validate/rewound.rs`); conservative where paths are. A mark's
   handle that an outer rewind un-ran is such a value, so a rewind naming it is refused too: the executor's
   own `bad_rewind` for a stale handle stays as defence in depth but no validated program reaches it any
-  more (the four tests that drove it assert the refusal). Question: exempt a rewind's handle, keeping that
-  path reachable, or keep the refusal?
+  more (the four tests that drove it assert the refusal). Whether to keep that: "Questions for the
+  maintainer".
 
 C:
 
@@ -925,7 +932,13 @@ earlier decisions: "Decisions the maintainer took on 2026-11-16, in the afternoo
 
 ## Questions for the maintainer
 
-None open.
+- **A rewind naming a mark that an outer rewind un-ran** (from building [(4)]). Read literally, such a handle
+  is a value defined between the outer mark and its rewind, so the validator refuses the inner rewind
+  (`RewoundUse`), and the executor's own `bad_rewind` for a stale handle is no longer reachable from a
+  validated program. Exempt a rewind's handle operand, so that path stays reachable and the case is a fault
+  at run time, or keep the refusal? Recommendation: keep the refusal; the program can never mean anything
+  by it, and relaxing a validator rule later breaks no program. Taken meanwhile: the refusal, with the
+  run-time check kept as defence in depth.
 
 ## Questions the maintainer answered on 2026-11-16, in the afternoon (kept for their detail)
 

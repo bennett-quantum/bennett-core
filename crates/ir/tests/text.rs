@@ -367,3 +367,44 @@ fn gates_at_addresses_read_write_and_validate() {
     let errors = validate(module).expect_err("invalid").0;
     assert_eq!(errors.iter().map(|e| e.problem.clone()).collect::<Vec<_>>(), vec![Problem::GateAtWithoutMemory]);
 }
+
+/// `measure` takes a register or an address (`docs/SYNTAX.md`; decision M2 of 2026-11-16): `measure iN [ADDR]`
+/// gives an `iN`, the address an `i64`. A bit offset, a missing type or bracket, or a register type is refused.
+#[test]
+fn measure_at_an_address_reads_writes_and_validates() {
+    use bennett_ir::{Inst, MeasureSource, Width};
+    let text = "memory 64\nfunc @f(q3 %r, i64 %p) -> i16 {\nentry:\n %a = measure %r\n %b = measure i16 [%p]\n \
+                %c = measure i1 [40]\n %w = zext i3 %a to i16\n %x = zext i1 %c to i16\n %y = add i16 %w, %b\n \
+                %z = add i16 %y, %x\n ret %z\n}\n";
+    let module = read(text).expect("reads");
+    let insts = &module.functions[0].blocks[0].insts;
+    assert!(matches!(&insts[0], Inst::Measure { source: MeasureSource::Register(_), .. }));
+    assert!(
+        matches!(&insts[1], Inst::Measure { source: MeasureSource::Memory { width, .. }, .. } if *width == Width::new(16).expect("a width"))
+    );
+    let written = write(&module);
+    for line in ["%a = measure %r\n", "%b = measure i16 [%p]\n", "%c = measure i1 [40]\n"] {
+        assert!(written.contains(line), "{line}: {written}");
+    }
+    assert_eq!(read(&written).as_ref(), Ok(&module));
+    validate(module).expect("valid");
+    for statement in [
+        "%m = measure i8 [%p:3]",
+        "%m = measure i8 %p",
+        "%m = measure [%p]",
+        "%m = measure i8 [%p",
+        "%m = measure i8 []",
+        "%m = measure q8 [%p]",
+        "%m = measure i129 [%p]",
+        "measure i8 [%p]",
+    ] {
+        let text = format!("func @f(i64 %p) {{\nentry:\n {statement}\n ret\n}}\n");
+        assert!(read(&text).is_err(), "accepted {statement}");
+    }
+    let body = |statements: &str| format!("func @f(q8 %r, i32 %n, i64 %p) -> i8 {{\nentry:\n{statements}\n}}\n");
+    // The address is an `i64`; the result has the width named, not the address's.
+    assert!(matches!(problems(&body(" %m = measure i8 [%n]\n ret %m")).as_slice(), [Problem::TypeMismatch { .. }]));
+    assert!(matches!(problems(&body(" %m = measure i8 [%r]\n ret %m")).as_slice(), [Problem::TypeMismatch { .. }]));
+    assert!(matches!(problems(&body(" %m = measure i16 [%p]\n ret %m")).as_slice(), [Problem::TypeMismatch { .. }]));
+    assert!(load(&body(" %m = measure i8 [%p]\n ret %m")).is_ok());
+}
