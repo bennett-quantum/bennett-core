@@ -513,6 +513,145 @@ The other 67 runs: 49 have no copy-Irreducible positions, of which 46 are entire
 | examples / thesis.bn main | A=B | 4 | 4 | 0 | 0 |
 | examples / thesis.bn entangled | A=B | 2 | 2 | 0 | 0 |
 
+## Global-memory writes on the worlds machine
+
+The front still refuses these coherent writes. The new experiment lowers **ordinary C functions**
+from `front/tests/c/journal_global.c` with the normal `CLANG_FLAGS` and front pipeline, then appends
+hand-written device drivers (`front/tests/tests/journal_global.rs`). It measures seven functions at
+1/2/4/8 repetitions and all 256 eight-bit inputs: a global log append, global open-addressed hash
+insertion, global degree-four B-tree insertion, and the four existing lookup/stack-write functions.
+The hash starts half full (1,024 of 2,048 slots); the tree starts with 256 keys and inserts, replaces,
+and splits root/child nodes. A noinline recursive insertion gives genuinely different A/B alignments.
+The exported hash-value array keeps both key and value stores in the optimized device program;
+a regular test pins 16 executed global byte writes for two inserts. The first trial's static value
+array was eliminated by optimization, and its preliminary hash numbers are not used here.
+
+**Coverage boundary:** these classifications are the existing observer's **`apply` callee journals**,
+used as a proxy for the ordinary computation in the worlds driver. The hook is still guarded by
+`in_region`: it does not follow ordinary worlds, their splits, merging, or rewinds. The extension
+here is a read-only executed-byte-write query, not a claim to have implemented a worlds observer.
+The real worlds driver's total journal and overlay costs are measured separately using `Stats`.
+In particular, its outer mark, register-read metadata, root return to the driver, keep, and rewind
+record are **not classified** by these tables. `apply`'s root finishes as a region outcome instead
+of returning to the ordinary driver. No byte-for-byte equality of the two journals is asserted.
+
+`jg_setup` runs once classically to construct the tables. The harness copies only its initialized
+static bytes into a fresh module data image, with a clean stack; initialization is outside every
+measured run. The driver allocates `%q` (8), `%out` (32), and a spare `%r` (1), Hadamards all eight
+bits of `%q`, and runs:
+
+```text
+%m = mark
+%v = call @work(%q, %reps)
+rewind %m keep (%v -> %out)
+```
+
+The comparison driver instead allocates a four-bit fault register and runs
+`apply @work(%q, %reps) -> %out, %fault budget 100000`. Every branch's result agrees with a fresh native
+`clang -O2 -DJG_NATIVE` execution of the same C source (7,168 results). Every worlds run agrees with
+the `apply` driver's complete final amplitudes (including phases) and memory, restores all global
+and stack bytes, merges to one world without observation, and reverses to the full initial snapshot.
+The regular seven-function check also compares observer off/on snapshots and all `Stats` fields
+for both drivers; ordinary-world observation correctly produces an empty collection.
+
+Reproduce the new experiment separately; all heavy runs remain ignored by default:
+
+```sh
+CARGO_BUILD_JOBS=3 CMAKE_BUILD_PARALLEL_LEVEL=3 front/test.sh --test journal_global -- --include-ignored --nocapture --test-threads=1 > .tmp/global-final.txt
+python3 experiments/journal-content/global-tables.py .tmp/global-final.txt
+```
+
+Create `.tmp` first. The derived [global.tsv](global.tsv) contains 224 classification rows (all four
+modes and both alignments), 28 actual worlds-cost rows, 36 overlay-copy rows, and 56 fits. Means count
+executed steps or byte writes per callee branch; repeated writes count repeatedly. `mean_all_bytes`
+includes stack writes; `mean_global_bytes` counts writes below the static-data end. Each raw write
+range is counted from the observer's actual memory-write trace, including partial overlaps, with no
+new executor instrumentation. Its 256-branch means are reconstructed as exact multiples of 1/256
+before fitting with Python's `statistics.linear_regression`.
+
+At eight repetitions, the global-write position counts are:
+
+| Function | alignment | max words/branch | Same | copy-Recoverable | depth-one I | live-chain I | tape Recomputed | tape I | tape Store I |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| log append | A=B | 180 | 115 | 9 | 54 | 0 | 56 | 0 | 0 |
+| hash insert | A=B | 385 | 93 | 77 | 222 | 156 | 134 | 91 | 12 |
+| B-tree insert | A | 5,141 | 323 | 1,048 | 4,252 | 4,152 | 1,003 | 3,344 | 5 |
+| B-tree insert | B | 5,141 | 326 | 2,404 | 3,288 | 2,970 | 2,473 | 1,167 | 2 |
+
+Tape-I instance shares are 0%, 19.42%, 61.73% (tree A), and 16.77% (tree B), respectively;
+position counts and instance shares answer different questions. The maximum journal, alignment union,
+and number of instances must not be interchanged. All counts and control-only components are in the TSV.
+Four-point least-squares growth (positions per executed callee step) is:
+
+| Function | alignment | max words/step | copy I/step | depth-one I/step | live I/step | tape I/step | tape I/global byte written |
+|---|---|---:|---:|---:|---:|---:|---:|
+| log append | A=B | 1.167 | 0.462 | 0.448 | 0.000 | 0.000 | 0.000 |
+| hash insert | A=B | 1.475 | 1.010 | 1.007 | 0.705 | 0.407 | 1.560 |
+| B-tree insert | A | 1.343 | 1.228 | 1.213 | 1.197 | 0.992 | 47.537 |
+| B-tree insert | B | 1.343 | 0.992 | 0.897 | 0.814 | 0.295 | 15.030 |
+
+Thus **global writes do not themselves force a growing retained tape**: the log's chain/tape residual
+is zero at every point. Hash and tree residuals grow under the measured common-circuit rules, with a
+large alignment effect for recursion. B-tree global writes average 26.28/42.38/71.47/87.47 bytes at
+1/2/4/8 reps: later repetitions increasingly replace existing keys, so a fit against bytes is not an
+asymptotic law or a causal per-byte cost. At eight reps, tape forward evaluations across all branches
+are 116,224 (log), 266,914 (hash), 7,011 (tree A), and 770,075 (tree B). Fewer common recoveries under
+A also means fewer evaluations credited; this does not demonstrate a cheaper way to recover the same
+words. Clearing temporaries, peak scratch storage, gates, and address-lookup costs remain unmeasured.
+
+Actual 256-world driver costs at eight repetitions:
+
+| Function | global bytes/branch | peak journal bytes, summed worlds | peak overlay bytes | copied overlay bytes | rewind steps, summed worlds |
+|---|---:|---:|---:|---:|---:|
+| log append | 36 | 818,688 | 5,976 | 0 | 39,424 |
+| hash insert | 64 | 1,159,024 | 11,374 | 0 | 65,317 |
+| B-tree insert | 87.47 | 12,503,757 | 6,188 | 0 | 941,736 |
+
+Every run ends with zero overlay, one world, no observation and zero rerun steps. Splitting copies
+23,460 journal bytes in each of these runs: the identical driver prefix, before any branch writes.
+Copied overlay is zero because that first read precedes the writes; it does **not** imply that later
+splits are free. Rewind performs exactly one undo per callee step plus the entering call on each
+branch (e.g. tree `256 * (3677.65625 + 1) = 941736`), with no nested-rewind exponential here.
+These are semantic work counters, not elapsed rewind times or a reversible circuit's gate counts.
+The journal bytes count record/word payload and metadata, not Rust container allocation/RSS; overlay
+bytes count differing byte payload, excluding map-node/address overhead. Their peaks need not occur
+on the same tick.
+
+The second cost sweep prepares only two bits of `%q`, Hadamards `%r`, and inserts `call @jg_id(%r)`
+after the update and before the rewind: four initial worlds each split again after writing. It measures
+all three update functions at the same four repetition counts, with 0/1 MiB/4 MiB extra classical memory.
+Every cost counter is exactly independent of that extra memory. Splits and merges are seven each;
+unequal C paths can merge a pair before the last world splits, so peak worlds need not be eight.
+At eight repetitions the late-split measurements are:
+
+| Function | peak worlds | peak overlay bytes | copied overlay bytes | copied journal bytes | peak journal bytes |
+|---|---:|---:|---:|---:|---:|
+| log append | 8 | 142 | 71 | 13,033 | 26,136 |
+| hash insert | 5 | 229 | 215 | 21,563 | 23,005 |
+| B-tree insert | 5 | 35 | 28 | 231,301 | 237,044 |
+
+These smaller-input paths need not be representative of the 256-world run. Held/copy counters are
+not monotonically increasing with repetition count: tree copied overlay is 33 bytes at four reps,
+28 at eight, although its copied journal grows from 120,829 to 231,301 bytes. Normal overlays retain
+only current differences, while the journal retains overwritten values. The TSV gives all 36 points.
+The complete new three-test measurement passed in 269.29 s on the shared laptop.
+
+The existing classification implementation and [chains.tsv](chains.tsv) are unchanged. The small
+preprocessor guard allowing ordinary-only inclusion produces **byte-identical 34,382-byte device
+text** for the original lookup C under the same flags. The existing full measurement passed all four
+tests (314.48 s on the shared laptop), with **all 1,428 published chain/tape rows exactly equal**.
+The standalone-function controls in this new
+experiment have a different caller, initial slot residue and device lowering than the historical
+coherent wrappers, so their rows supplement rather than replace the old tables.
+
+**Remaining route:** put the collector's branch-local shadow frames, producer DAG, write trace and
+alignment counters into each world, fork/swap them with the world, share call-path interning across
+its siblings, and finish captures before each world's rewind. Then classify outer read/control and
+nested/multiple-region histories too. A proxy validated by final-state equality does not establish
+identical histories. Guarded producer/call replay, optimal retained tapes, packing branch-exclusive
+positions, global recovery schedules, and full reversible cleanup cost remain open; residual counts
+are upper bounds for richer recovery witnesses. These are small finite workloads, not SQLite traces.
+
 ## Reading against the audition's falsifiers
 
 - **B** ("share of entries whose old value differs between branches; refuted if near 1"): the share that is not
@@ -546,9 +685,10 @@ The other 67 runs: 49 have no copy-Irreducible positions, of which 46 are entire
 - **Layout.** An irreducible position is counted once however many branches reach it. Packing positions that
   no branch reaches together into one register, and the cost of the circuits that recover a word (a first
   store needs a lookup of classical memory at a superposed address), are not measured.
-- **Memory writes.** The write workload writes only its own stack: the front refuses a coherent call to a
-  function that writes memory outside its frame, so a global hash-table insert could not be measured. Route:
-  the journalled machine (next step 3 in `HANDOFF.md`) lets coherent code write memory; rerun then.
+- **Memory writes.** The original write workload writes only its own stack. Global writes are now measured
+  separately above using ordinary lowered functions and hand-written drivers. Callee journals are classified
+  through `apply`; actual worlds overlay/journal/rewind costs are measured, with the explicit observer gap above.
+  The front still needs its worlds fallback before these coherent C calls can be expressed through markers.
 - **Scale.** 8-bit superpositions (256 branches), 1,024 keys, at most 8 repetitions; slopes are fitted on four
   points. Runs other than the lookups take one argument value each (every argument 1).
 - **The code measured** is the device program the front makes from `-O0` C through its own pipeline, not the

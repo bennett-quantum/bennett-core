@@ -212,7 +212,7 @@ int main(void) {
   return 0;
 }
 
-#else
+#elif !defined(JC_ORDINARY_ONLY)
 #include "bennett.h"
 
 #define COHERENT(f)                                                                                          \

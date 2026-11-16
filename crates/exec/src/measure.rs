@@ -248,6 +248,17 @@ pub struct BranchJournal {
     memory_writes: Vec<MemoryWrite>,
 }
 
+impl BranchJournal {
+    /// Bytes written below `end`, counting repeated writes separately. Requires raw observation;
+    /// covers stores and setjmp buffers. Use the module's static end to exclude stack writes.
+    pub fn bytes_written_below(&self, end: u64) -> u64 {
+        self.memory_writes
+            .iter()
+            .map(|write| (write.range.end as u64).min(end).saturating_sub(write.range.start as u64))
+            .sum()
+    }
+}
+
 /// Every branch of one dynamic `apply` execution, in configuration order.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ApplyJournal {

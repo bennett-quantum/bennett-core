@@ -42,7 +42,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (242 tests; ignored: 6 heavy reference or generated runs, the memory-cost report, 1 heavy recomputation check; about 8 s, no LLVM needed) and `front/test.sh` (155 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (242 tests; ignored: 6 heavy reference or generated runs, the memory-cost report, 1 heavy recomputation check; about 8 s, no LLVM needed) and `front/test.sh` (156 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check and two independent variadic checks that need `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"); needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -159,9 +159,23 @@ explicitly after the separate musl build.
   unavailable whole-word origins. These corrected diagnostics replace the inflated counts that mixed
   missing context with real producer restrictions. Linear growth survives the measured common-circuit
   witness, but unavoidable linear information loss is not established. Guarded producer/call replay,
-  global pebbling, DAG scratch/cleanup cost and global-memory writes remain open. Tables and exact rules:
+  global pebbling and DAG scratch/cleanup cost remain open. Global-memory writes are measured below. Tables and exact rules:
   `experiments/journal-content/README.md`, `chains.tsv`. All 49 zero-copy-Irreducible other runs stay so;
   46 are entirely Same, three also use copies (corrected from the older prose using the unchanged tables).
+  **Global writes measured on the worlds machine** (`front/tests/tests/journal_global.rs`,
+  `experiments/journal-content/global.tsv`): ordinary lowered C log/hash/B-tree updates plus the four existing
+  lookups, 256 inputs, 1/2/4/8 reps, all four classifiers and both alignments. The hook still follows only
+  `apply`: its callee journal is the explicitly qualified proxy; real mark/call/rewind driver journal,
+  overlay and rewind costs use Stats. Outer mark/read/root-return/rewind history is not classified;
+  per-world provenance/collector forking and capture at rewind barriers is the route. At 8 reps log tape I=0
+  (copy I=56), hash=91, B-tree A/B=3344/1167; fitted tape I/step 0/.407/.992(A) or .295(B).
+  Global writes alone do not imply a growing retained tape; the positive residuals are common-circuit
+  witness limits, not information lower bounds. Actual 256-world peak journal/overlay bytes at 8 reps:
+  log 818688/5976, hash 1159024/11374, tree 12503757/6188. Rewind work 39424/65317/941736 steps, no reruns.
+  A late-split eight-configuration sweep compares copied overlays/journals at three classical memory sizes; counters
+  are independent of extra memory. Native results, final apply/world amplitudes and memory, full reversal,
+  off/on state/Stats and byte-retention checks pass. Old lookup C lowers byte-identically and all 1428
+  published chain/tape rows reproduce exactly; old tables/classifiers are unchanged.
   Heavy chain measurements are ignored by default. After integrating the observer with `setjmp`/`longjmp`
   on base `ff338cb`, all 1,992 then-published data rows reproduced exactly; the later completeness fix
   changes only the chain/tape rows (now 1,428), with all 428 copy/depth-one rows unchanged. Jump
@@ -262,6 +276,10 @@ explicitly after the separate musl build.
    unsound credits or missed recoveries; the hook on/off step-by-step state and journal checks pass.
    README and `chains.tsv` now report the corrected retained tape, time costs and measured residuals.
    Linear growth remains a property of this common-circuit witness, not a lower bound on information loss.
+   Global-write extension: log/hash/B-tree insertion measured with hand-written worlds and `apply` drivers;
+   log tape residual is zero, hash/tree positive (A/B matter for recursive insertion). Actual world journal
+   payload is much larger than overlay payload on these runs. See the journal-content README/global.tsv;
+   classification of outer worlds/read/rewind history remains a documented observer gap with an explicit route.
 3. **Build the journalled machine in the executor** and run the experiments listed in `docs/DESIGN.md` as it is
    built: every journalled step is a permutation; `apply` equals mark, call, rewind-keep; un-running through gates
    equals the conjugated operation.
