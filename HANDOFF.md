@@ -320,9 +320,9 @@ explicitly after the separate musl build.
 
 ## Next steps, in order
 
-1. **The musl runtime is done** ("Stopped in flight"). Left on it: files and clocks (`docs/SALVAGE.md` names the
-   earlier workspace's device models; what time and randomness mean on the device must be decided first)
-   and the two questions below. `setjmp`/`longjmp` are done (`31f5138`).
+1. **The musl runtime is done** ("Stopped in flight"). Files, clocks and entropy now use the carried models
+   (`rt/musl/README.md`, `docs/DESIGN.md`, "Files, clock and entropy at the musl boundary"). The remaining
+   runtime debts and routes are listed below. `setjmp`/`longjmp` are done (`31f5138`).
 2. **The two stopped measurements are done** ("Stopped in flight"). Journal content: a constant factor as far as
    copies, depth-one and unbounded common-producer chains go. The journal-assisted fitted slopes are
    0.308/0.033/0.331/0.347 words/step, with measured forward recomputation time. Remaining counts include
@@ -786,7 +786,7 @@ How work is done:
 
 | Refused today | What removes it |
 |---|---|
-| Files, clocks and the other unimplemented system calls (named faults) | Step 1 above |
+| Remaining runtime operations (locks, links, directory enumeration, block transport, permissions/metadata, image loader and allocation exhaustion) | Runtime debts below; step 1 above |
 | A call through another prototype where x86-64 does not determine what is read: the upper half of a 32-bit value, a missing argument that is read, an integer from a floating-point register, a variadic floating-point argument without `%al`, a narrow argument that is not the extension the callee relies on (named fault `unreachable` when the call runs); a direct call whose argument differs from its parameter only in register class (native -O0 and -O2 disagree) | Nothing to remove: the native result is not determined (`docs/DESIGN.md`, "Calls through a prototype"). Conservative, removable by a finer model where named: a variadic floating-point argument after an unread named one, a call whose result is used only by dead code before the optimiser, values in memory read at another place |
 | A qubit-dependent call of a function that uses `setjmp` | The front's own effect summary of `setjmp` (writes only its buffer) when deciding what runs coherently (`docs/DESIGN.md`, "Non-local jumps") |
 | `__float128`; `powi` on `_Float16`/`__bf16`; `#pragma STDC FENV_ACCESS` (with it musl's `ilogb`/`ilogbl` in the corpus accuracy checks; libgcc's `__divxc3` itself works); non-default rounding modes and floating-point flags | Step 5 above |
@@ -887,3 +887,37 @@ How work is done:
   repository, runs `cargo test`, clippy, fmt and `front/test.sh`, rebases on `main` and pushes each finished step
   to `main`; unfinished work goes to a `wip/` branch, never to `main`. A persistent advisor holds the picture and
   launches one job per goal; launches stop when the quota's pace is reached.
+
+## Files, clocks and entropy: implementation and remaining debts (2026-11-16)
+
+The carried `bennett-runtimes` VFS, syscall dispatch and clock/entropy models now run through musl on
+this device (`rt/musl/vfs.c`, `devices.c`, `models.c`). No executor change. Inputs enter the run image
+with `link.py --clock-start N --entropy-image bytes.bin --file-image files.json`; defaults zero/empty.
+The clock is unsigned nanoseconds, start plus read count modulo 2^64. Entropy is the exact byte tape,
+shared across getrandom/getentropy/random device files, with exhaustion before mutation. File image
+installation, file state and both consumption counters are ordinary memory and reverse with the run.
+`test-devices.py` compares determined native file results and an independent native clock/tape oracle,
+including wrap, and checks exact reset after full executor reversal. Existing musl integration tests pass.
+
+Debts, with routes (the goal is not narrowed to the present surface):
+
+- **Separate per-invocation inputs**: images are supplied while linking the run image. Add a symbol/relocation
+  map plus an initial-memory loader, with mutable input bindings and before-optimisation preservation, to
+  rebind images without relinking. Keep the same clock/tape semantics and reset tests.
+- **File operations not carried**: locks, hard/symbolic links, directory enumeration, extended attributes,
+  renameat/linkat variants and other unmapped calls trap. Extend this boundary over ordinary memory and
+  compare each operation and error path with native. A lock owner/table must be real state, not an accepted
+  no-op; a directory iterator needs stable entries/cookies; symlinks need component-wise resolution.
+- **Namespace and metadata**: the model has root ownership, a fixed device identity, zero timestamps and
+  no credential/ACL checks. Carry explicit credentials and metadata inputs, and update inode times from
+  the input clock under a documented rule. Complete Linux component/error ordering, removed-directory
+  and open-directory rename lifetime semantics with native differentials. Directory links, size, sparse
+  pages, file modes/umask, append and descriptor offsets already have native comparisons.
+- **Allocation exhaustion and reclamation**: allocations use the existing finite musl arena. VFS allocation
+  failure is a named fault; syscall-wide ENOMEM rollback and reclaiming unlinked/closed names/inodes/open
+  descriptions remain. Stage allocations before publication, maintain inode/description references, and
+  compare failure state byte for byte. Full un-run already restores all allocation and filesystem state.
+- **Block transport and sleeping**: the archive block backend is not carried without an image consumer;
+  no block nodes claim to exist. Carry its preserved image/sparse sector overlay with an explicit input.
+  nanosleep/timers still trap; define sleep against the input clock (whose advance is currently reads only)
+  before adding it. No host time or random source is read by the device.

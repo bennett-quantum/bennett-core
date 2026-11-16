@@ -67,9 +67,51 @@ handlers, with `SA_SIGINFO` (a `siginfo_t` with the signal number and `SI_TKILL`
 signal number without flushing stdio (`abort` gives 134), or ignores `SIGCHLD`, `SIGCONT`, `SIGURG` and
 `SIGWINCH`; stop signals trap. A second real-time signal raised while one is pending traps (it would queue).
 Hardware signals have no counterpart: a division by zero is the device's named fault, not `SIGFPE`.
-Process and thread ids are 1. Opening files and every unimplemented system call trap as `unreachable`.
-Threads, clocks, file I/O and dynamic loading are not implemented. No unsupported operation is turned into a
+Process and thread ids are 1. Every unimplemented system call traps as `unreachable`.
+Threads and dynamic loading are not implemented. No unsupported operation is turned into a
 successful no-op with an observable result.
+
+## Files and deterministic inputs
+
+The carried archive models run as C on the device, with no host IO. File bytes, sparse 4096-byte
+pages, names, inodes, descriptor flags, shared open-description offsets, cwd and umask are ordinary
+journalled memory (`CARRIED.md` gives provenance). Regular files support open/openat/creat,
+read/write/readv/writev, pread/pwrite, seek, dup/dup2/dup3, stat, descriptor/status fcntl flags,
+truncate/ftruncate, mkdir/rmdir, chdir/fchdir/getcwd, rename/unlink, chmod/umask and sync.
+The initial namespace has `/`, `/tmp` (mode 01777), `/dev`, `/dev/random`, `/dev/urandom`, `/dev/null`, `/dev/zero` and
+`/dev/console`. Duplication preserves the explicit stderr fault; fd 2 may be redirected to a file.
+
+Supply the run's inputs when constructing its image:
+
+```sh
+python3 rt/musl/link.py program.c -o program.bn --clock-start 1234999999998 \
+  --entropy-image entropy.bin --file-image files.json
+bennett run program.bn --entry __bennett_entry --reverse --stats
+```
+
+`files.json` maps canonical absolute paths to hex byte strings, for example
+`{"/fixtures/input":"610062ff63"}`. Parent directories are created automatically. Installation occurs
+before the first device syscall, including those called by constructors, and is itself journalled.
+The defaults are no user files, clock start zero and an empty entropy image. These are inputs of
+the run image; to use another image currently relink. Host paths are read only by the image builder.
+
+A clock read returns the unsigned 64-bit start plus the number of earlier clock reads, in nanoseconds,
+wrapping modulo 2^64. Accepted clock ids share that counter. `clock_gettime`, `gettimeofday` and `time`
+consume one read when they request a value; `clock_getres` returns 1 ns without consuming a read.
+This is independent of the number of executed instructions. `getrandom`/`getentropy` and both random
+devices consume the same exact byte image. It is a seeded input, not a host entropy source or a PRNG.
+Exhaustion traps as `unreachable` before writing any bytes, including on a multi-element readv.
+Empty reads consume none. Undo restores both counters, destinations and all filesystem state.
+
+Metadata uses root ownership, a model inode/device identity, and zero timestamps. Unsupported
+operations and flags trap by name instead of claiming success. The remaining debts and their routes
+are in `HANDOFF.md`, including locks, links, directory enumeration, per-invocation image loading,
+permissions/metadata, and transactional allocation exhaustion. The existing finite arena bounds the
+filesystem as well as the application heap.
+
+```sh
+python3 rt/musl/test-devices.py   # native file/image comparisons, arithmetic clock oracle, tape, reversal
+```
 
 ## Floating point
 
@@ -100,7 +142,7 @@ and what removes it:
 
 | refused or faulted | programs | what removes it |
 |---|---:|---|
-| files: `open`, `fopen`, `freopen` trap by name | 6 | a file model at this boundary |
+| files: `open`, `fopen`, `freopen` previously trapped by name | 6 | carried file model at this boundary; targeted rerun results below |
 | `setjmp`, `_setjmp`, `longjmp`: no definition (musl's are x86-64 assembly, not built) | 2 | removed: the device's own `setjmp` and `longjmp` (`docs/DESIGN.md`, "Non-local jumps"); both agree, run alone |
 | `__mulsc3`, `__divsc3`: no definition | 2 GCC | removed: complex helpers (now libgcc, `rt/libgcc`); both agreed at `b961292` |
 | musl's `ilogb`, `ilogbl` (and ten other math files) under `#pragma STDC FENV_ACCESS ON`: constrained operations refused by the front | 3 `ieee/` (`cdivchkf` was counted at `__divsc3` before the helpers) | lowering constrained operations in the device's fixed environment (to nearest, no readable flags), which `fenv` here already enforces. The six helpers now come from libgcc (`rt/libgcc`), including self-contained `__divxc3`; the corpus programs' own `ilogb`/`ilogbl` calls still need this fallback |

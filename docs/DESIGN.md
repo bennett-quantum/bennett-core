@@ -889,3 +889,47 @@ recomputation shared between conditions (each predicated operation computes and 
 - **Integers wider than 128 bits.** The device program has integers up to 128 bits (decided 2026-11-13: Rust's
   `u128` gives their semantics; splitting them in the front would need a type legaliser, which LLVM has only in
   SelectionDAG). Wider ones are refused by name.
+
+### Files, clock and entropy at the musl boundary
+
+`rt/musl/vfs.c`, `devices.c` and `models.c` carry the earlier workspace's ordinary C models
+(`docs/SALVAGE.md`, section 1; provenance and retained licence: `rt/musl/CARRIED.md`). They run on
+the device; they never call host files, host time or a host random generator. There is no executor
+special case: namespace entries, inodes, sparse 4096-byte pages, open descriptions, shared offsets,
+descriptor flags, cwd, umask, the clock's read count and entropy's byte position are ordinary memory.
+Stores and allocator changes are journalled by the existing machine. Un-running a read restores its
+buffer and consumption position; un-running a write restores file bytes, length and offset.
+
+The maintainer's 2026-11-16 decision fixes the inputs: unsigned 64-bit clock start (nanoseconds), and
+an exact seeded entropy byte image. Reading the clock returns `(start + reads_so_far) mod 2^64` and
+increments the count once. The clock is not execution time: no instruction or scheduler tick advances
+it. The clock ids accepted by the model share this counter. `clock_getres` reports one nanosecond and
+consumes no read; invalid ids consume none. `gettimeofday` divides nanoseconds into seconds and
+microseconds, `time` into seconds. Entropy is a finite tape shared by `getrandom`, `getentropy`,
+`/dev/random` and `/dev/urandom`. Exhaustion is a named `unreachable` fault before any destination or
+position changes; readv preflights the whole tape request. This is an input image, not a PRNG or a
+claim of cryptographic entropy. The measurement seed remains independent.
+
+`rt/musl/link.py --clock-start N --entropy-image bytes.bin --file-image files.json` supplies a run
+image. The JSON maps canonical absolute regular-file names to hex bytes, with parent directories
+created automatically. Defaults are clock zero, empty entropy, and no user files. Images currently
+enter at link time; changing them requires relinking. They are inputs even if LLVM specialises a
+constant load. A future separate image loader can preserve these semantics with a symbol/relocation
+map and mutable input bindings; it needs no change to clock or file semantics. Initial file installation
+is lazy at the first device syscall, guarded by ordinary memory, so constructors see the supplied files
+and full reversal restores the reset image including its initialisation guard.
+
+The VFS supplies open/openat/creat, close/dup, scalar and vectored IO, positional IO, seeks, stat,
+fcntl descriptor/status flags, truncation, directories/cwd, rename/unlink, chmod/umask and sync over
+memory. `/dev/null` and `/dev/zero` are present. Standard fd 0 is empty, fd 1 is the existing journalled
+console, and fd 2 retains its explicit nonempty-write fault even through duplication. Closing a standard
+fd makes its number reusable. There is no disk backend without a use for one; block devices, locks,
+links/symlinks, directory enumeration and unmapped system calls remain named faults, with the route
+for each in `HANDOFF.md`. Metadata uses a model device/inode identity, root ownership and zero
+timestamps, rather than borrowing host-dependent values. This does not implement all Linux filesystem
+semantics; allocation failure, permissions, metadata and namespace lifetime debts are recorded there.
+
+`rt/musl/test-devices.py` is separate from the fast suites. It compares determined file results with
+native from the same byte image, clock conversion/wrap and tape consumption with an independent
+native C arithmetic oracle, and runs each device fixture forward and back against the executor's entry
+snapshot. Runtime-specific tests are compiled without vectorization, as the front's C input requires.

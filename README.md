@@ -10,7 +10,7 @@ runs classically, reversibly or coherently. Each piece of plumbing exists once, 
 | `cli` | `bennett run`, `bennett check` | step 2 |
 | `front` | `bennett-front` (C++, LLVM 18): bitcode with marker calls to `ir` text; taint, outlining, lowering | step 3 |
 | `opt` | optimiser and cost model | not started |
-| `rt` | runtime bitcode: floating point (Berkeley SoftFloat 3e under the libgcc names), the complex helpers (libgcc 13.3.0), built with `front`; the C library (musl) | step 3 |
+| `rt` | runtime bitcode: floating point (Berkeley SoftFloat 3e under the libgcc names), the complex helpers (libgcc 13.3.0), built with `front`; the C library (musl) with journalled files, input clock and entropy images | step 3 |
 
 ```sh
 cargo test                                   # the Rust crates, in seconds; needs no LLVM

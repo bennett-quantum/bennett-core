@@ -11,6 +11,7 @@
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
+#include "devices.h"
 
 #ifndef BENNETT_ARENA_BYTES
 #define BENNETT_ARENA_BYTES (1 << 20)
@@ -30,12 +31,6 @@ int __set_thread_area(void *pointer)
 
 static unsigned char arena[BENNETT_ARENA_BYTES] __attribute__((aligned(PAGE)));
 static size_t brk_used, mmap_used;
-static unsigned open_fds = 7;
-
-static int open_fd(long fd)
-{
-    return fd >= 0 && fd <= 2 && (open_fds & (1u << fd));
-}
 
 static size_t page_up(size_t n)
 {
@@ -45,33 +40,6 @@ static size_t page_up(size_t n)
 static void zero(unsigned char *p, size_t n)
 {
     for (size_t i = 0; i < n; ++i) p[i] = 0;
-}
-
-/* Checks a write before any byte of it reaches the console, as the kernel does. */
-static long check_write(long fd, size_t length)
-{
-    if (!open_fd(fd) || fd == 0) return -EBADF; /* stdin is read-only */
-    if (length > LONG_MAX) return -EINVAL;
-    /* There is one console. stderr is explicitly unsupported, never silently discarded. */
-    if (fd == 2 && length) __builtin_trap();
-    return 0;
-}
-
-static void write_console(const void *buffer, size_t length)
-{
-    for (size_t i = 0; i < length; ++i) __bennett_effect(((const char *)buffer)[i]);
-}
-
-/* Sums an iovec array as readv and writev do; negative on an invalid count or an overflowing total. */
-static long iov_total(const struct iovec *iov, long count)
-{
-    if (count < 0 || count > IOV_MAX) return -EINVAL;
-    size_t total = 0;
-    for (long i = 0; i < count; ++i) {
-        if (iov[i].iov_len > (size_t)LONG_MAX - total) return -EINVAL;
-        total += iov[i].iov_len;
-    }
-    return total;
 }
 
 /* The arena: brk grows from the bottom, anonymous mappings from the top; nothing is reused. */
@@ -247,40 +215,18 @@ long __bennett_syscall(long number, long a1, long a2, long a3, long a4, long a5,
     (void)a5;
     (void)a6;
     switch (number) {
-    case SYS_write: {
-        long status = check_write(a1, a3);
-        if (status) return status;
-        write_console((const void *)a2, a3);
-        return a3;
-    }
-    case SYS_writev: {
-        const struct iovec *iov = (const void *)a2;
-        long total = iov_total(iov, a3);
-        if (total < 0) return total;
-        long status = check_write(a1, total);
-        if (status) return status;
-        for (long i = 0; i < a3; ++i) write_console(iov[i].iov_base, iov[i].iov_len);
-        return total;
-    }
-    case SYS_read:
-    case SYS_readv: {
-        if (number == SYS_readv) {
-            long total = iov_total((const void *)a2, a3);
-            if (total < 0) return total;
-        }
-        return a1 == 0 && open_fd(0) ? 0 : -EBADF; /* Empty stdin; stdout and stderr are write-only. */
-    }
-    case SYS_ioctl:
-        return open_fd(a1) ? -ENOTTY : -EBADF; /* Fully buffered stdout, as for a native pipe. */
-    case SYS_open:
-    case SYS_openat:
-        __builtin_trap(); /* No filesystem. */
-    case SYS_close:
-        if (!open_fd(a1)) return -EBADF;
-        open_fds &= ~(1u << a1);
-        return 0;
-    case SYS_lseek:
-        return open_fd(a1) ? -ESPIPE : -EBADF;
+    case SYS_read: case SYS_write: case SYS_readv: case SYS_writev:
+    case SYS_open: case SYS_openat: case SYS_creat: case SYS_close:
+    case SYS_dup: case SYS_dup2: case SYS_dup3: case SYS_lseek: case SYS_ioctl:
+    case SYS_pread64: case SYS_pwrite64:
+    case SYS_stat: case SYS_fstat: case SYS_lstat: case SYS_access:
+    case SYS_fcntl: case SYS_fsync: case SYS_fdatasync: case SYS_truncate: case SYS_ftruncate:
+    case SYS_getcwd: case SYS_chdir: case SYS_fchdir: case SYS_rename: case SYS_mkdir:
+    case SYS_rmdir: case SYS_unlink: case SYS_chmod: case SYS_mkdirat:
+    case SYS_umask: case SYS_newfstatat: case SYS_unlinkat: case SYS_faccessat:
+    case SYS_clock_gettime: case SYS_clock_getres: case SYS_gettimeofday: case SYS_time:
+    case SYS_getrandom:
+        return __bennett_device_syscall(number, a1, a2, a3, a4, a5, a6);
     case SYS_brk:
         return set_break(a1);
     case SYS_mmap:
