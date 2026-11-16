@@ -119,13 +119,14 @@ explicitly after the separate musl build.
 
 ## Stopped in flight
 
-- **Rust scalar probe, first results** (`experiments/rust-probe/README.md`): Rust 1.99.1/LLVM 23.1.1
+- **Rust scalar probe** (`experiments/rust-probe/README.md`): Rust 1.99.1/LLVM 23.1.1
   textual IR reaches LLVM 18 with fixture-specific compatibility edits (range/nocreateundeforpoison,
   branch prediction metadata; debug also trunc nuw). All five C-ABI scalar functions agree with native
   on 197,120 exhaustive inputs and reverse to their full start snapshots. Four non-panicking debug
   functions add 131,584 native comparisons and exact reversals; ordinary checked addition is refused
-  at the missing core panic definition. A matching LLVM 18 producer and linked panic boundary are
-  still being measured. No front or executor changes.
+  at the missing core panic definition. A matching LLVM 18 producer removes the format edits;
+  matching core bitcode and a panic handler/abort boundary are the next runtime steps, unmeasured.
+  No front or executor changes.
 
 - **SQLite on the device, all three stages measured** (`experiments/sqlite-on-device/README.md`): unmodified 3.54.1,
   musl linked, OS_OTHER no-files VFS, all four footprint query shapes at N=4/8/16 agree with native on

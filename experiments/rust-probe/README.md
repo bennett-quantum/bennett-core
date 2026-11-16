@@ -1,35 +1,45 @@
 # Rust scalar probe
 
-Work in progress. This standalone experiment asks whether ordinary scalar Rust reaches
-LLVM 18, `bennett-front`, and the executor, without changing the front.
+**Yes, for these scalar functions.** Rust 1.99.1's LLVM 23 textual IR, with
+explicit fixture-specific compatibility edits, assembles with LLVM 18 and runs
+through the unchanged front and executor. **328,704 exhaustive native
+comparisons and full entry-snapshot reversals pass**, with no wrong result or
+unexpected device fault. Debug ordinary addition stops at a missing Rust core
+panic definition, identified below; that refused function has no device runs.
 
 `scalars.rs` has five exported C-ABI functions: two-argument wrapping arithmetic,
 a one-argument branch, a one-argument data-dependent loop (0–255 iterations),
 checked-add with a wrapping fallback, and ordinary `u8` addition, which panics on
-overflow with checks enabled. `native.rs` includes the same source. The harness
-compares native results on all 256 unary inputs and all 65,536 binary inputs,
-then reverses every executed device run and compares the entire entry snapshot.
+overflow with checks enabled. `native.rs` includes the same source. The standalone
+harness compares every return byte on all 256 unary inputs and all 65,536 binary
+inputs, then reverses each accepted device run and compares the entire snapshot
+(memory, frames, slots, stack, tape, outcome, steps, quantum state and worlds).
+It runs outside the fast `cargo test` suite.
 
-Rust 1.81.0 is chosen because its upstream release uses LLVM 18, the last Rust
-release in that LLVM series, rather than trying to downgrade newer IR by editing it.
-See Rust's [LLVM compatibility table](https://doc.rust-lang.org/rustc/linker-plugin-lto.html)
-and the [LLVM 18 announcement](https://blog.rust-lang.org/2024/05/02/Rust-1.78.0/).
-The compiler version is also checked locally. The repository itself and harness
-use the current toolchain; only the probe sources use Rust 1.81.0.
-
-From the repository root (LLVM/clang 18, CMake, Python 3 and rustup required):
+From the repository root (the measured compiler is Rust 1.99.1/LLVM 23.1.1;
+LLVM/clang 18.1.3, CMake and Python 3 are required):
 
 ```sh
-rustup toolchain install 1.81.0 --profile minimal
 CARGO_BUILD_JOBS=2 CMAKE_BUILD_PARALLEL_LEVEL=2 experiments/rust-probe/run.sh
 ```
 
-On a shared machine, wrap the install and the full script with its heavy-job
-limiter. The script writes build products, native outputs, input/lowered IR,
-front diagnostics and result tables to ignored `.tmp/rust-probe/`. It runs four
-configurations: Rust `-C opt-level=0/2` × `-C overflow-checks=off/on`, all with
-`-C panic=abort`, `no_std`, one codegen unit and vectorisation disabled. Front
-optimisation remains its normal O2 pipeline. No device or compiler changes.
+On a shared machine, wrap this command with its build/test limiter. It writes
+build products, native bytes, input/lowered IR and result tables under ignored
+`.tmp/rust-probe/`. The two configurations are opt-level 2/checks off and
+opt-level 0/checks on, both with `no_std` and `panic=abort` on the bitcode input.
+The native oracle uses std for output and the same scalar source and flags.
+The front always uses its normal O2 pipeline. No front/executor changes, no
+host toolchain defaults changed, and no Rust runtime was linked into the device module.
+
+The chosen route is a measured, restricted text-IR conversion, not unmodified
+LLVM 23 bitcode. A matching compiler is another route: Rust's
+[LLVM compatibility table](https://doc.rust-lang.org/rustc/linker-plugin-lto.html)
+lists 1.78–1.81 as LLVM 18 (see the
+[LLVM 18 announcement](https://blog.rust-lang.org/2024/05/02/Rust-1.78.0/)).
+For example, `rustup toolchain install 1.81.0 --profile minimal`, then explicit
+`rustc +1.81.0`, avoids newer IR syntax without changing the default toolchain.
+That producer route was not measured in this experiment; the text route below
+is the one demonstrated end to end.
 
 ## Measured compatibility stops
 
@@ -52,9 +62,9 @@ does not bridge this version gap. Dropping those two attributes next reaches
 another verifier failure: `Wrong number of operands` on
 `!{!"branch_weights", !"expected", i32 1, i32 2000}`. LLVM 18 does not accept the
 new `!"expected"` prediction operand. A newer reader or a validated IR downgrade
-would be needed; the experiment uses a matching compiler instead.
+is needed; this experiment validates the restricted downgrade below.
 
-## First device result: LLVM 23 textual IR with three compatibility edits
+## Device result: LLVM 23 textual IR with three compatibility edits
 
 With the host compiler above, `current-text.sh` removes exactly the two call
 argument `range` attributes, `nocreateundeforpoison` on the funnel-shift intrinsic,
@@ -70,7 +80,7 @@ cmake --build target/front --parallel 2
 CARGO_BUILD_JOBS=2 experiments/rust-probe/current-text.sh
 ```
 
-Measured on base `27265ba`: **197,120 native comparisons, 197,120 full-state
+Measured on base `27265ba` (2026-11-16): **197,120 native comparisons, 197,120 full-state
 reversals, zero wrong results or device faults**. The compiler is opt-level 2,
 overflow checks off; the front uses its normal O2 pipeline.
 
@@ -111,4 +121,31 @@ takes 6 steps with a peak journal of 86 bytes. The loop takes 3–2,298 steps,
 294,528 in total, peak journal 47,226 bytes. This route uses the same source and
 normal front O2 pipeline; native compilation is opt-level 0, checks on.
 
-The LLVM 18 producer and linked panic-boundary measurements are still pending.
+## Scope and follow-up
+
+The release configuration covers all five functions (197,120 inputs); the debug
+configuration covers four (131,584). `ordinary_add` wraps on all release inputs;
+with debug checks its input IR contains a panic arm for the 32,640 pairs whose
+sum exceeds 255. Its whole module is refused before execution, including the
+32,896 non-overflowing pairs. The native abort sample verifies the panic boundary;
+it is not an exhaustive native panic sweep or a device/native panic comparison.
+
+The missing definition needs matching `core` bitcode and a panic handler plus
+its abort/effect boundary linked into the module, or a separately validated
+lowering of Rust panic calls. `panic=abort` alone does not perform that link.
+Those are necessary next steps, not claimed tested solutions. Unwinding, std,
+allocation, Rust ABI aggregates, coherent calling and a general LLVM downgrade
+are outside this scalar experiment. A matching LLVM 18 producer would remove
+the format-compatibility edits; it would still need its panic dependencies.
+
+The compatibility helpers deliberately touch only this fixture's known constructs.
+The release helper checks exact occurrence counts. Both helpers assemble/verify
+with LLVM 18, and the harness checks all accepted inputs; they are not a tool for
+arbitrary newer Rust IR. Run the repository checks separately:
+
+```sh
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+front/test.sh
+```
