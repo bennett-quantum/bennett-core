@@ -122,9 +122,27 @@ VFS was not tested: no claim is made about which syscall it would encounter firs
 
 ## Stage 2: forward then back
 
-Not run yet. Use `run.py BUILD --reverse`; the CLI takes an entry snapshot, runs forward, reverses,
-and compares memory, slots, frames, stack, tape and amplitudes with that snapshot. The script requires
-classical identity and zero amplitude distance, as well as native stdout/status equality.
+**Pass**, the same three complete drivers, native stdout/status still equal. Run:
+
+```sh
+python3 experiments/sqlite-on-device/run.py target/sqlite-on-device/n4 --reverse
+# Repeat for n8 and n16.
+```
+
+| N | steps forward and separately backward | journal bytes | journal u128 words | words per forward step | restored classical state / amplitude distance |
+|---|---:|---:|---:|---:|---|
+| 4 | 957,295 | 19,086,335 | 1,133,065 | 1.183611 | identical / 0 |
+| 8 | 1,200,929 | 23,956,769 | 1,422,240 | 1.184283 | identical / 0 |
+| 16 | 1,841,474 | 36,573,538 | 2,170,754 | 1.178813 | identical / 0 |
+
+The existing CLI snapshot check compares memory, slots, frames, stack, tape and amplitudes with
+its entry snapshot. The script requires exact classical equality and zero amplitude distance.
+These runs have one world and no quantum registers. Journal words are derived from the executor's
+representation: one one-byte Undo tag per step plus 16 bytes per word, hence `(bytes - steps)/16`.
+There are no mark, qubit-read, jump-environment or cell side tables in these executed runs. These are
+128-bit journal words, not 64-bit words; about 19.9 total journal bytes per executed step. This measures
+the whole process including setup/printing/cleanup, not just the SQL region. No fault, wrong result
+or crash occurred in these successful forward/backward runs.
 
 ## Stage 3: a query under a qubit
 
