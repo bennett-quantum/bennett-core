@@ -55,8 +55,21 @@ pub fn float_runtime() -> PathBuf {
     front().with_file_name("float-runtime.bc")
 }
 
-fn clang() -> PathBuf {
-    std::env::var_os("CLANG").map_or_else(|| PathBuf::from("clang"), PathBuf::from)
+/// The pinned clang, checked against the LLVM linked into the actual front binary.
+pub fn clang() -> PathBuf {
+    static CHECK: Once = Once::new();
+    let clang = std::env::var_os("CLANG").map_or_else(|| PathBuf::from("clang"), PathBuf::from);
+    CHECK.call_once(|| {
+        let major = include_str!("../../llvm-major.txt").trim();
+        for tool in [&clang, &front()] {
+            let version = run_tool(Command::new(tool).arg("--version")).unwrap_or_else(|e| panic!("{e}"));
+            assert!(
+                version.contains(&format!("version {major}.")),
+                "{tool:?}: expected pinned major {major}: {version}"
+            );
+        }
+    });
+    clang
 }
 
 fn run_tool(command: &mut Command) -> Result<String, String> {

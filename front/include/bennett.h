@@ -12,22 +12,25 @@
 
 #ifdef __cplusplus
 extern "C" {
+#define BENNETT_BOOL bool
+#else
+#define BENNETT_BOOL _Bool
 #endif
 
-void bennett_x(_Bool *qubit);
-void bennett_h(_Bool *qubit);
-void bennett_z(_Bool *qubit);
-void bennett_s(_Bool *qubit);
-void bennett_sdg(_Bool *qubit);
-void bennett_t(_Bool *qubit);
-void bennett_tdg(_Bool *qubit);
-void bennett_rx(_Bool *qubit, double theta);
-void bennett_ry(_Bool *qubit, double theta);
-void bennett_rz(_Bool *qubit, double theta);
+void bennett_x(BENNETT_BOOL *qubit);
+void bennett_h(BENNETT_BOOL *qubit);
+void bennett_z(BENNETT_BOOL *qubit);
+void bennett_s(BENNETT_BOOL *qubit);
+void bennett_sdg(BENNETT_BOOL *qubit);
+void bennett_t(BENNETT_BOOL *qubit);
+void bennett_tdg(BENNETT_BOOL *qubit);
+void bennett_rx(BENNETT_BOOL *qubit, double theta);
+void bennett_ry(BENNETT_BOOL *qubit, double theta);
+void bennett_rz(BENNETT_BOOL *qubit, double theta);
 
 /* The qubit of bit `bit` (a constant) of the qubit variable `variable` points to, for the gates above:
  * bennett_h(bennett_bit(&x, 3)) is a Hadamard on bit 3 of x. Its result may only be given to a gate. */
-_Bool *bennett_bit(void *variable, unsigned bit);
+BENNETT_BOOL *bennett_bit(void *variable, unsigned bit);
 
 /* Measures the whole qubit variable `variable` points to and returns its value, zero-extended. */
 unsigned long long bennett_measure(const void *variable);
@@ -46,4 +49,5 @@ _Noreturn void __bennett_exit(int status);
 }
 #endif
 
+#undef BENNETT_BOOL
 #endif

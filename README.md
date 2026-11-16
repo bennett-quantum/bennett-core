@@ -13,7 +13,7 @@ runs classically, reversibly or coherently. Each piece of plumbing exists once, 
 | `rt` | runtime bitcode: floating point (Berkeley SoftFloat 3e under the libgcc names), the complex helpers (libgcc 13.3.0), built with `front`; the C library (musl) with journalled files, input clock and entropy images | step 3 |
 
 ```sh
-cargo test                                   # the Rust crates, in seconds; needs no LLVM
+cargo test                                   # Rust + guard witnesses, in seconds; Python 3, no LLVM
 cargo run -p bennett -- run examples/thesis.bn
 front/test.sh                                # builds bennett-front, runs its tests (LLVM 18, clang 18, CMake)
 ```
@@ -57,3 +57,5 @@ The [SQLite device experiment](experiments/sqlite-on-device/README.md#larger-sql
 unmodified SQLite as a SQL oracle: native truth tables, exact classical reversal, independent dense
 amplitudes and Grover for LIKE, integer equality, text ordering, a two-condition WHERE and a range
 aggregate. Larger sizes, measured limits and reproducible commands are recorded with the experiment.
+
+Repository checks and the optional exact-revision pre-push hook: [docs/CHECKS.md](docs/CHECKS.md).

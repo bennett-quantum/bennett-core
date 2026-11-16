@@ -695,6 +695,26 @@ How work is done:
   clocks; the checks; then growing the SQL oracle (a cost at a large size needs a cost model, a design question
   of its own).
 
+## Automatic checks (implementation)
+
+The ten checks and test-writing rules are implemented in `docs/CHECKS.md`, `docs/DESIGN.md` ("Tests"),
+`scripts/`, `.githooks/`, the IR tests and the front checks. `bennett.h` compiles as C++ with bool pointers.
+The hook is opt-in (`git config --local core.hooksPath .githooks`), checks every pushed nondeleted SHA in
+an isolated archive, and rejects incoming WIP ancestors on main. It runs all four repository checks.
+The pin is LLVM/clang major 18, as before; patch releases are compatible. Attribute classification is
+exhaustive for LLVM enum kinds and records conditional ABI handling; open-ended string attributes
+still need semantic review/native comparisons.
+
+Debts and their routes: (1) automated changed-line mutation generation is Rust-only (cargo-mutants);
+C++/script changes currently use recorded seeded edits. Route: integrate an established C++/script
+mutation engine with diff selection and the existing suites, then demonstrate surviving-defect rejection.
+(2) Whole-step mutation and isolated cold pre-push builds do not have a seconds-long total-time guarantee;
+work scales with diff size and compilation. Route: measure/cache exact dependency artifacts and select
+proven relevant tests, retaining complete changed-line mutation scope; no timeout or percentage gate.
+The default tests and small guard witnesses stay fast. (3) Enum classification records scope rather than
+proving every attribute placement; expand native ABI matrices and enforce/refine policies when lowering
+new conventions. No attribute-name list is maintained independently of the compiler-exhaustive switch.
+
 ## Questions the maintainer answered on 2026-11-16 (kept for their detail)
 
 - **The journalled machine (step 3), from its first step.** (1) Once worlds differ (its next step), keeping a

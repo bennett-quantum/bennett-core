@@ -2,22 +2,27 @@
 
 use bennett_ir::{DataItem, LoadError, NameKind, Problem, ReadErrorKind, load, read, validate, write};
 
-const EXAMPLES: [(&str, &str); 6] = [
-    ("sum", include_str!("../../../examples/sum.bn")),
-    ("calls", include_str!("../../../examples/calls.bn")),
-    ("thesis", include_str!("../../../examples/thesis.bn")),
-    ("fault", include_str!("../../../examples/fault.bn")),
-    ("grover", include_str!("../../../examples/grover.bn")),
-    ("history", include_str!("../../../examples/history.bn")),
-];
-
 #[test]
 fn examples_are_valid_and_survive_a_round_trip_through_the_writer() {
-    for (name, text) in EXAMPLES {
-        let module = read(text).unwrap_or_else(|e| panic!("{name}: {e}"));
-        let written = write(&module);
-        assert_eq!(read(&written).as_ref(), Ok(&module), "{name}:\n{written}");
-        validate(module).unwrap_or_else(|e| panic!("{name}: {e}"));
+    fn discover(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("examples directory") {
+            let path = entry.expect("example entry").path();
+            if path.is_dir() {
+                discover(&path, files);
+            } else if path.extension().is_some_and(|ext| ext == "bn") {
+                files.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    discover(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples"), &mut files);
+    files.sort();
+    assert!(!files.is_empty(), "no device examples discovered");
+    for path in files {
+        let text = std::fs::read_to_string(&path).expect("example text");
+        let module = read(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        assert_eq!(read(&write(&module)), Ok(module.clone()), "{}", path.display());
+        validate(module).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     }
 }
 
