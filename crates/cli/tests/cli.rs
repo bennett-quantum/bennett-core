@@ -111,3 +111,133 @@ fn history_example_reports_the_executed_unrun_and_replay_counts() {
     assert!(text.contains("result: 3\n"), "{text}");
     assert!(text.contains("history: 2 steps un-run by rewind, 0 run again"), "{text}");
 }
+
+#[test]
+fn an_entry_frame_overflow_is_reported_and_reverses_without_a_step() {
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/entry-overflow.bn");
+    for reverse in [false, true] {
+        for budget in [None, Some("0")] {
+            let mut args = vec!["run", fixture, "--stats"];
+            if reverse {
+                args.push("--reverse");
+            }
+            if let Some(budget) = budget {
+                args.extend(["--budget", budget]);
+            }
+            let output = bennett(&args);
+            let text = stdout(&output);
+            assert_eq!(output.status.code(), Some(1), "{text}");
+            assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
+            assert!(text.contains("fault: stack_overflow (code 6)\n"), "{text}");
+            assert!(text.contains("steps: 0\n"), "{text}");
+            if reverse {
+                assert!(
+                    text.contains("reverse: undid 0 steps; returned to entry: classical state identical"),
+                    "{text}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn zero_budget_and_first_step_faults_report_the_named_fault_and_reverse() {
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/startup.bn");
+    for (entry, budget, fault) in [
+        ("main", Some("0"), "budget (code 1)"),
+        ("empty", Some("0"), "budget (code 1)"),
+        ("fault", None, "unreachable (code 5)"),
+        ("divide", None, "divide_by_zero (code 2)"),
+    ] {
+        for reverse in [false, true] {
+            let mut args = vec!["run", fixture, "--entry", entry];
+            if let Some(budget) = budget {
+                args.extend(["--budget", budget]);
+            }
+            if reverse {
+                args.push("--reverse");
+            }
+            let output = bennett(&args);
+            let text = stdout(&output);
+            assert_eq!(output.status.code(), Some(1), "@{entry}: {text}");
+            assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
+            assert!(text.contains(&format!("fault: {fault}\n")), "{text}");
+            assert!(text.contains("steps: 0\n"), "{text}");
+            if reverse {
+                assert!(
+                    text.contains("reverse: undid 0 steps; returned to entry: classical state identical"),
+                    "{text}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_terminator_only_entry_returns_and_reverses() {
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/startup.bn");
+    let output = bennett(&["run", fixture, "--entry", "empty", "--reverse"]);
+    let text = stdout(&output);
+    assert_eq!(output.status.code(), Some(0), "{text}");
+    assert!(text.contains("result: none\n"), "{text}");
+    assert!(text.contains("reverse: undid 1 steps; returned to entry: classical state identical"), "{text}");
+}
+
+#[test]
+fn missing_or_invalid_entries_report_an_error_before_execution() {
+    for (fixture, entry, error) in [
+        ("startup.bn", "missing", "no function @missing"),
+        ("empty-module.bn", "main", "no function @main"),
+        ("empty-function.bn", "main", "a function needs at least one block"),
+        ("missing-terminator.bn", "main", "terminator"),
+        ("unallocatable-memory.bn", "main", "cannot allocate 18446744073709551615 bytes of memory"),
+    ] {
+        let fixture = format!("{}/tests/fixtures/{fixture}", env!("CARGO_MANIFEST_DIR"));
+        for reverse in [false, true] {
+            let mut args = vec!["run", &fixture, "--entry", entry];
+            if reverse {
+                args.push("--reverse");
+            }
+            let output = bennett(&args);
+            assert_eq!(output.status.code(), Some(2));
+            let text = String::from_utf8_lossy(&output.stderr);
+            assert!(text.contains(error), "{text}");
+            assert!(!text.contains("panicked"), "{text}");
+        }
+    }
+}
+
+#[test]
+fn invalid_entry_arguments_report_a_start_error() {
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/startup.bn");
+    for (entry, value, error) in [
+        ("argument", None, "@argument takes 1 arguments, 0 given"),
+        ("argument", Some("256"), "argument 0 (256) does not fit in i8"),
+        ("register", Some("0"), "parameter 0 of @register is a register"),
+    ] {
+        let mut args = vec!["run", fixture, "--entry", entry, "--reverse"];
+        if let Some(value) = value {
+            args.extend(["--arg", value]);
+        }
+        let output = bennett(&args);
+        assert_eq!(output.status.code(), Some(2));
+        let text = String::from_utf8_lossy(&output.stderr);
+        assert!(text.contains(error), "{text}");
+        assert!(!text.contains("panicked"), "{text}");
+    }
+}
+
+#[test]
+fn a_configuration_limit_on_the_first_gate_reports_a_stop_and_reverses() {
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/startup.bn");
+    let output = bennett(&["run", fixture, "--entry", "gate", "--max-configurations", "1", "--reverse"]);
+    let text = stdout(&output);
+    assert_eq!(output.status.code(), Some(2), "{text}");
+    assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        text.contains("stopped: a gate would raise the number of basis configurations above the limit of 1"),
+        "{text}"
+    );
+    assert!(text.contains("steps: 0\n"), "{text}");
+    assert!(text.contains("reverse: undid 0 steps; returned to entry: classical state identical"), "{text}");
+}

@@ -1,0 +1,6 @@
+memory 1
+func @main() -> i32 {
+entry:
+    %v = add i32 1, 2
+    ret %v
+}
