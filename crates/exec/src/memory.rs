@@ -216,3 +216,7 @@ mod tests {
         assert_eq!(out, [1, 7]);
     }
 }
+
+#[cfg(test)]
+#[path = "memory_independent_tests.rs"]
+mod independent_tests;

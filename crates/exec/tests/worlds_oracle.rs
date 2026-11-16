@@ -260,16 +260,33 @@ fn the_whole_world_reference_agrees_where_worlds_stay_in_step() {
 
 /// cargo test -p bennett-exec --test worlds_oracle three_gate -- --ignored --nocapture
 #[test]
-#[ignore = "729 dense conjugation probes beyond the fast two-gate pass"]
+#[ignore = "1458 dense conjugation probes, half with overlays and the whole-world reference"]
 fn three_gate_read_mismatches_match_the_independent_dense_operator() {
+    three_gate(false);
+    three_gate(true);
+}
+
+fn three_gate(memory: bool) {
     let mut counts = [0, 0];
     for a in MIDDLE {
         for b in MIDDLE {
             for c in MIDDLE {
                 let middle = [a, b, c];
-                let module = bennett_ir::load(&program(&middle, false)).expect("valid");
+                let module = bennett_ir::load(&program(&middle, memory)).expect("valid");
                 let options = Options { budget: Some(10000), reversible: true, ..Options::default() };
                 let (outcome, executor) = run(&module, options);
+                if memory {
+                    let model = oracle_support::worlds::Model::new(&module, "main");
+                    let reference = model.run_joined(oracle_support::worlds::basis(model.initial("main", &[])), 1000);
+                    if matches!(outcome, Outcome::Returned(_)) {
+                        oracle_support::worlds_executor::assert_snapshot(&model, &reference, &executor);
+                    } else {
+                        assert!(
+                            reference.keys().any(|w| w.classical.finish
+                                == Some(oracle_support::worlds::Finish::Faulted(Fault::BadRewind)))
+                        );
+                    }
+                }
                 if let Some(dense) = expected(&module) {
                     assert_eq!(outcome, Outcome::Returned(None), "{middle:?}");
                     assert!(executor.snapshot().worlds.is_empty());
@@ -292,5 +309,5 @@ fn three_gate_read_mismatches_match_the_independent_dense_operator() {
             }
         }
     }
-    println!("729 dense three-gate cases: {} faithful, {} refused", counts[0], counts[1]);
+    println!("729 dense three-gate cases (memory={memory}): {} faithful, {} refused", counts[0], counts[1]);
 }

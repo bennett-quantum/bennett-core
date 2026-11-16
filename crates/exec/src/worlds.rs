@@ -712,4 +712,52 @@ mod tests {
         }
         assert_eq!((merged, apart), (200, 200));
     }
+
+    /// Equal complete worlds after overlapping stores have been un-run: only their memory can
+    /// differ. All 256 pairs of four-byte targets are enumerated, including the unchanged base.
+    #[test]
+    fn independent_memory_only_worlds_merge_after_overlapping_writes_are_un_run() {
+        let p = bennett_ir::load("memory 128\ndata 0 = i32 151521030\nfunc @main() {\nentry:\nstore i32 305419896, 0\nstore i16 48879, 1\nret\n}\n").expect("valid");
+        let mut e = Executor::new(
+            &p,
+            p.function_named("main").expect("main"),
+            &[],
+            Options { reversible: true, ..Options::default() },
+        )
+        .expect("start");
+        let base = e.memory.to_vec();
+        let mut counts = [0, 0];
+        for a in 0_u8..16 {
+            for b in 0_u8..16 {
+                let mut worlds = vec![e.clone_world(None), e.clone_world(None)];
+                for (i, (w, target)) in worlds.iter_mut().zip([a, b]).enumerate() {
+                    let order: Vec<_> = if i == 0 { (0..4).collect() } else { (0..4).rev().collect() };
+                    w.memory.write(0, &[255; 4]);
+                    for address in order {
+                        w.memory.write(address, &[base[address] ^ if target & (1 << address) != 0 { 128 } else { 0 }]);
+                    }
+                    let bytes = w.memory.to_vec();
+                    let overlay = w.memory.overlay();
+                    let journal = w.journal.clone();
+                    let frames = w.frames.clone();
+                    e.swap_world(w);
+                    assert_eq!(e.step_world(), None);
+                    assert_eq!(e.step_world(), None);
+                    e.undo_last();
+                    e.undo_last();
+                    assert_eq!(e.memory.to_vec(), bytes);
+                    assert_eq!(e.memory.overlay(), overlay);
+                    assert_eq!(e.journal, journal);
+                    assert_eq!(e.frames, frames);
+                    e.swap_world(w);
+                }
+                e.merge_equal(&mut worlds, |_| true);
+                assert_eq!(worlds.len(), if a == b { 1 } else { 2 }, "targets {a}/{b}");
+                counts[usize::from(a != b)] += 1;
+                assert_eq!(e.memory.to_vec(), base, "base held by the template stays unchanged");
+            }
+        }
+        assert_eq!(counts, [16, 240]);
+        println!("256 complete world pairs after store undo: 16 equal merge, 240 unequal stay apart");
+    }
 }
