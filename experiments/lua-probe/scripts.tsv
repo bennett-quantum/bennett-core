@@ -1,0 +1,8 @@
+script	native_status	device_status	steps	journal_bytes	stdout_equal	entry_restored
+arithmetic	0	0	759889	14706593	True	True
+closures	0	0	810786	15685218	True	True
+coroutines	0	0	835707	16201155	True	True
+errors	0	0	839108	16218516	True	True
+format	0	0	820153	15926297	True	True
+strings	0	0	757628	14653004	True	True
+tables	0	0	784748	15195388	True	True

@@ -1,0 +1,14 @@
+[package]
+name = "lua-probe-harness"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+bennett-ir = { path = "../../../crates/ir" }
+bennett-exec = { path = "../../../crates/exec" }
+
+[profile.dev.package.bennett-exec]
+opt-level = 3

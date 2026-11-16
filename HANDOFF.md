@@ -55,6 +55,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `31f5138` | `setjmp`/`longjmp` (library and built-in forms, `sigsetjmp` with musl): a device `setjmp` instruction and `longjmp` terminator, journalled (`docs/DESIGN.md`, "Non-local jumps") |
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
+| Lua probe | Unmodified Lua 5.4.9 through musl: seven native stdout/status comparisons and exact reversals; a Lua predicate under hand-written `apply`, dense-checked Grover at N=4/8 (`experiments/lua-probe`) |
 
 Check it: `cargo test` (384 tests; 19 ignored: heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks, the scratch mutation matrix, the region-copy-cost witness and the infinite-angle round-trip witness; about 9 s, no LLVM needed) and `front/test.sh` (176 tests; 27 ignored by default: the nine fallback acceptance tests waiting for step 4, the five C North Star ladder runs (explicit experiments, `experiments/northstar-ladder/README.md`), the noncanonical x87 compare witness, a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
 musl-linked ABI check and two independent variadic checks that need `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
@@ -174,6 +175,18 @@ Quota rule in force: work to pace on Claude and on Codex; launch a job only whil
 its vendor; at most two sol jobs at once.
 
 ## Stopped in flight
+
+- **Lua probe, all three stages measured** (`experiments/lua-probe/README.md`): unmodified PUC-Rio
+  5.4.9 (verified upstream archive), all 32 library C sources through clang 18/musl with no front or
+  executor change. Seven scripts (arithmetic, strings, tables, closures, coroutines, protected errors,
+  integer/float formatting) agree on native stdout/status and restore the full entry snapshot exactly.
+  Forward steps 757,628–839,108; journals 14,653,004–16,218,516 bytes. A Lua polynomial predicate
+  agrees on every N=4 basis input and in superposition, including dirty output and interference;
+  uniform apply 6,018 region steps / 12,040 work, largest branch journal/overlay 31,072/45 bytes.
+  Grover N=4/8, k=0..3 passes every amplitude against independent dense matrices (error <=8.89e-16),
+  all 15 entries reverse, and both apply implementations compare equal. The separate C-marker
+  attempt is refused by name at its memory-writing Lua call; the front fallback is the route past it.
+  Full resource minima, arbitrary scripts, coherent fault boundaries and larger sizes are unmeasured.
 
 - **Rust scalar probe** (`experiments/rust-probe/README.md`): Rust 1.99.1/LLVM 23.1.1
   textual IR reaches LLVM 18 with fixture-specific compatibility edits (range/nocreateundeforpoison,
@@ -1073,6 +1086,12 @@ stages also pass. The measured 118-second scalar sweep is explicit experiment wo
 the ordinary frontend run without changing its domain or assertions.
 
 ## Known weak spots
+
+- The changed-line mutation scope preview can crash on a diff without generated workspace Rust
+  mutants: `python3 scripts/mutate-diff.py origin/main --list` on the Lua probe reports
+  `No mutants to filter` then `JSONDecodeError`, because cargo-mutants emits empty stdout.
+  Route: handle that output before JSON parsing; standalone experiment workspaces still need their
+  own mutation checks (`experiments/lua-probe/README.md`). No mutation pass is claimed for it.
 
 - `Stats::region_cost.copied_bytes` omits callee-frame growth before a memory split: adding eight
   callee slots adds 128 copied bytes but leaves the report unchanged. Ignored witness:
