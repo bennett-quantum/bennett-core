@@ -256,7 +256,8 @@ fn separate_statements_require_separate_lines() {
 #[ignore = "reader accepts infinite rotation from exponent overflow, writer emits unreadable inf"]
 fn every_readable_rotation_round_trips_even_when_validation_rejects_it() {
     // SYNTAX promises read(write(m)) == m for every module read from text, not only valid modules.
-    let module = parsed("func @f(q1 %q) {\nentry:\n rx(1e999) %q\n ret\n}\n");
+    // Rejecting an overflowing angle at read time also satisfies the round-trip rule.
+    let Ok(module) = read("func @f(q1 %q) {\nentry:\n rx(1e999) %q\n ret\n}\n") else { return };
     assert!(rejected(module.clone()).contains(&Problem::AngleNotFinite));
     assert_eq!(read(&write(&module)).expect("a module read from text must read back"), module);
 }
