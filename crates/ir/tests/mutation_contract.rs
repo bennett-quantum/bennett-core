@@ -136,6 +136,61 @@ fn all_byte_values_round_trip_and_malformed_escapes_fail() {
         assert!(read(&format!("data 0 = \"{escape}\"\n")).is_err(), "{escape}");
     }
     assert_eq!(parsed("data 0 = \"éλ\"\n").data[0].encode(), "éλ".as_bytes());
+    assert_eq!(parsed(r#"data 0 = "\n\t\r\0\\\"\x41""#).data[0].encode(), b"\n\t\r\0\\\"A");
+}
+
+#[test]
+fn data_emptiness_is_about_byte_extent() {
+    for (text, empty) in [
+        ("data 0 = \"\"", true),
+        ("data 0 = zero 0", true),
+        ("data 0 = \"x\"", false),
+        ("data 0 = zero 1", false),
+        ("data 0 = i1 0", false),
+    ] {
+        let module = parsed(text);
+        assert_eq!(module.data[0].is_empty(), empty, "{text}");
+        assert_eq!(module.data[0].items[0].is_empty(), empty, "{text}");
+        assert_eq!(module.data[0].encode().is_empty(), empty, "{text}");
+    }
+}
+
+#[test]
+fn validation_locations_count_instructions_from_one() {
+    let module =
+        parsed("func @f(i8 %x, i16 %y) -> i8 {\nentry:\n %a = add i8 %x, 1\n %b = add i8 %x, %y\n ret %a\n}\n");
+    let errors = validate(module).expect_err("second instruction has a mismatched operand");
+    assert_eq!(errors.0.len(), 1);
+    assert_eq!(
+        errors.0[0].location,
+        bennett_ir::Location::Inst { function: "f".into(), block: "entry".into(), number: 2 }
+    );
+    assert!(matches!(errors.0[0].problem, Problem::TypeMismatch { .. }));
+}
+
+#[test]
+fn regions_check_argument_counts_widths_and_all_alias_roles() {
+    let bits = bennett_ir::Fault::CODE_WIDTH.bits();
+    let short = bits - 1;
+    let body = |apply: &str| {
+        format!(
+            "func @g(i{bits} %x) -> i{bits} {{\nentry:\n ret %x\n}}\nfunc @f(q{bits} %q, q{bits} %o, q{bits} %e, q{short} %short) {{\nentry:\n {apply}\n ret\n}}\n"
+        )
+    };
+    assert!(load(&body("apply @g(%q) -> %o, %e budget 5")).is_ok());
+    for apply in [
+        "apply @g() -> %o, %e budget 5".to_owned(),
+        format!("apply @g(%q, i{bits} 0) -> %o, %e budget 5"),
+        "apply @g(%short) -> %o, %e budget 5".to_owned(),
+        format!("apply @g(i{short} 0) -> %o, %e budget 5"),
+    ] {
+        assert!(load(&body(&apply)).is_err(), "accepted {apply}");
+    }
+    for apply in
+        ["apply @g(%q) -> %o, %o budget 5", "apply @g(%o) -> %o, %e budget 5", "apply @g(%e) -> %o, %e budget 5"]
+    {
+        assert!(rejected(parsed(&body(apply))).iter().any(|p| matches!(p, Problem::RegionAlias(_))), "{apply}");
+    }
 }
 
 #[test]
