@@ -55,7 +55,7 @@ cl::opt<std::string> floatRuntime("float-runtime",
 
 cl::opt<std::string> complexRuntime("complex-runtime",
                                     cl::desc("Bitcode defining the complex multiply and divide helpers (default: "
-                                             "complex-runtime.bc next to bennett-front, compiler-rt's)"),
+                                             "complex-runtime.bc next to bennett-front, libgcc's)"),
                                     cl::cat(category));
 
 // `name` in the directory of this executable.
