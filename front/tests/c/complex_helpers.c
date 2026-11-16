@@ -1,12 +1,11 @@
-/* complex_helpers.c: compiler-rt's complex multiply and divide helpers (rt/compiler-rt), called directly and
+/* complex_helpers.c: libgcc's complex multiply and divide helpers (rt/libgcc), called directly and
  * through C's `*` and `/` on _Complex values (clang computes inline and calls the helper when both parts of
  * the inline result are NaN). Operands: the cross product of eight directed values per format, with the
  * cases of C Annex G (zeros of both signs, infinities, NaNs) and the scaling cases (the smallest subnormal,
  * the largest finite value). result(i) is a hash of the bits of the 64 results of group i (one routine, one
  * a, one b, every c and d), with every NaN written as one NaN: which NaN a NaN result is, is not promised
- * (rt/compiler-rt/README.md). Built natively with -DNATIVE and the vendored compiler-rt sources, it prints
- * results() lines. __divxc3 needs the C library's logbl and is left out (the front refuses it by name
- * without a library). */
+ * (rt/libgcc/README.md). Built natively with -DNATIVE with the default compiler runtime, it prints
+ * results() lines. All six helpers are self-contained. */
 typedef unsigned long long u64;
 typedef unsigned int u32;
 typedef unsigned short u16;
@@ -17,6 +16,7 @@ float _Complex __divsc3(float, float, float, float);
 double _Complex __muldc3(double, double, double, double);
 double _Complex __divdc3(double, double, double, double);
 long double _Complex __mulxc3(long double, long double, long double, long double);
+long double _Complex __divxc3(long double, long double, long double, long double);
 
 #define ND 8
 static volatile u32 DF[ND] = {0x00000000, 0x80000000, 0x3f800000, 0xc0400000,
@@ -63,7 +63,7 @@ static u64 hx(u64 h, long double x) {
   return mix(mix(h, m), e);
 }
 
-#define ROUTINES 10
+#define ROUTINES 12
 #define GROUPS (ND * ND)
 
 /* The hash of routine r on a = value p, b = value q, every c and d. */
@@ -87,7 +87,7 @@ NOINLINE u64 group(int r, int p, int q) {
         long double a = x_of(p), b = x_of(q), c = x_of(s), d = x_of(t);
         long double _Complex x, y;
         __real__ x = a; __imag__ x = b; __real__ y = c; __imag__ y = d;
-        long double _Complex z = r == 8 ? __mulxc3(a, b, c, d) : x * y;
+        long double _Complex z = r == 8 ? __mulxc3(a, b, c, d) : r == 9 ? __divxc3(a, b, c, d) : r == 10 ? x * y : x / y;
         h = hx(hx(h, __real__ z), __imag__ z);
       }
     }

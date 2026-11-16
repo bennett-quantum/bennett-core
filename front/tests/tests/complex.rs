@@ -1,36 +1,25 @@
 //! The complex multiply and divide helpers (`__mulsc3`, `__divsc3`, `__muldc3`, `__divdc3`, `__mulxc3`,
-//! `__divxc3`): compiler-rt's sources (`rt/compiler-rt`, vendored unmodified), linked into the program by
+//! `__divxc3`): libgcc's sources (`rt/libgcc`, vendored unmodified), linked into the program by
 //! `bennett-front` when it calls them (`front/src/Complex.h`) and lowered with its floating point.
 //!
-//! The reference is the same sources compiled natively, on this machine's floating-point hardware. A
-//! native build with the system's default compiler runtime (libgcc) is not the reference: its division
-//! is a different algorithm and differs in the last bit and in the sign of zeros
-//! (`rt/compiler-rt/README.md`).
+//! The reference is the host's default libgcc, exactly as in the C corpus. Raw NaN bits are measured
+//! separately by `rt/libgcc/exact`; these fast grouped checks normalize NaNs as the float contract permits.
 
 #![cfg(target_arch = "x86_64")]
 
-use std::path::PathBuf;
 use std::process::Command;
 
 use bennett_exec::Outcome;
 use bennett_front_tests::{
-    CLANG_FLAGS, CLANG_O2_FLAGS, bitcode, c_dir, lower, lower_text, native_build_with, root, run, write_c,
+    CLANG_FLAGS, CLANG_O2_FLAGS, bitcode, c_dir, lower, lower_text, native_build_with, run, write_c,
 };
-
-/// The vendored helpers natively needed by `complex_helpers.c`.
-fn helper_sources() -> Vec<PathBuf> {
-    let dir = root().join("rt/compiler-rt/compiler-rt-18.1.8/lib/builtins");
-    ["mulsc3.c", "divsc3.c", "muldc3.c", "divdc3.c", "mulxc3.c"].iter().map(|name| dir.join(name)).collect()
-}
 
 /// What `complex_helpers.c` prints natively at `-O0` and at `-O2`, which must agree.
 fn native_hashes() -> Vec<u64> {
     let source = c_dir().join("complex_helpers.c");
-    let helpers: Vec<String> = helper_sources().iter().map(|p| p.to_string_lossy().into_owned()).collect();
     let mut outputs = Vec::new();
     for level in ["-O0", "-O2"] {
-        let mut flags = vec!["-DNATIVE", level];
-        flags.extend(helpers.iter().map(String::as_str));
+        let flags = ["-DNATIVE", level];
         let executable = native_build_with(&source, &format!("complex_helpers{level}"), &flags, &[]);
         let output = Command::new(&executable).output().unwrap_or_else(|e| panic!("cannot run {executable:?}: {e}"));
         assert!(output.status.success(), "native complex_helpers {level} failed");
@@ -48,7 +37,7 @@ fn native_hashes() -> Vec<u64> {
 /// directed values (zeros, infinities, NaNs, the smallest subnormal, the largest finite value), agrees with
 /// the natively compiled helpers, NaNs counted as one value.
 #[test]
-fn complex_products_and_quotients_agree_with_compiler_rt_on_annex_g_cases() {
+fn complex_products_and_quotients_agree_with_libgcc_on_annex_g_cases() {
     let expected = native_hashes();
     let source = c_dir().join("complex_helpers.c");
     for (flags, suffix) in [(CLANG_FLAGS, ""), (CLANG_O2_FLAGS, ".o2")] {
@@ -65,22 +54,18 @@ fn complex_products_and_quotients_agree_with_compiler_rt_on_annex_g_cases() {
     }
 }
 
-/// `__divxc3` calls the C library's `logbl` and `scalbnl`: without a library it is refused by name, in
-/// `__divxc3`. A program that defines a helper itself keeps its own, and one that calls none links none.
+/// All six libgcc helpers are self-contained, including long-double division. A program defining a
+/// helper keeps its own; a program calling none links none.
 #[test]
 fn the_helpers_are_linked_only_where_the_program_calls_them_without_defining_them() {
     let source = write_c(
         "complex_long_double_divide",
         "volatile long double a = 1, b = 2, c = 3, d = 4;\n\
          int main(void) {\n  long double _Complex x, y;\n  __real__ x = a; __imag__ x = b;\n  \
-         __real__ y = c; __imag__ y = d;\n  return (int)__real__ (x / y);\n}\n",
+         __real__ y = c; __imag__ y = d;\n  return (int)(100 * __real__ (x / y));\n}\n",
     );
-    let message = lower_text(&source, "complex_long_double_divide", CLANG_FLAGS, &[]).expect_err("accepted");
-    assert!(
-        message.starts_with("not handled yet: a call to @logbl, which has no definition")
-            && message.contains("in @__divxc3"),
-        "{message}"
-    );
+    let module = lower(&source, "complex_long_double_divide", CLANG_FLAGS, &[]);
+    assert_eq!(run(&module, "main", &[], 0), Outcome::Returned(Some(44)));
 
     let source = write_c(
         "complex_own_mulsc3",
@@ -122,7 +107,7 @@ fn the_complex_runtime_is_replaceable_at_link_time() {
     let source = write_c("complex_with_other_runtime", &program("mul"));
     let module = lower(&source, "complex_with_other_runtime", CLANG_FLAGS, &[&option]);
     assert_eq!(run(&module, "main", &[], 0), Outcome::Returned(Some(17)));
-    let module = lower(&source, "complex_with_compiler_rt", CLANG_FLAGS, &[]);
+    let module = lower(&source, "complex_with_libgcc", CLANG_FLAGS, &[]);
     assert_eq!(run(&module, "main", &[], 0), Outcome::Returned(Some(5)), "1*3 - 2*4 + 10");
     let source = write_c("complex_wrong_type", &program("div"));
     let message = lower_text(&source, "complex_wrong_type", CLANG_FLAGS, &[&option]).expect_err("accepted");
