@@ -1,0 +1,32 @@
+memory 64
+func @main() -> i8 {
+entry:
+    %v = add i8 1, 2
+    ret %v
+}
+func @empty() {
+entry:
+    ret
+}
+func @fault() {
+entry:
+    fault unreachable
+}
+func @divide() {
+entry:
+    %v = udiv i8 1, 0
+    ret
+}
+func @argument(i8 %v) {
+entry:
+    ret
+}
+func @register(q1 %q) {
+entry:
+    ret
+}
+func @gate() {
+entry:
+    h [0]
+    ret
+}
