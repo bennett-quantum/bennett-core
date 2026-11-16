@@ -765,6 +765,14 @@ How work is done:
   replay work to the run's budget and fault atomically when it is spent? Recommendation: yes. Taken meanwhile:
   the hang stays a recorded weak spot.
 
+- **Controlled updates of ordinary memory and the coherent class.** The fallback oracle's testing pass asks whether a
+  controlled in-place update of ordinary memory (`cells[0] += 2` under a qubit, as in its `nested` and `loop`
+  programs) belongs to the documented coherent class; `docs/DESIGN.md` and `docs/MARKERS.md` limit the class to
+  qubit variables. If the class grows, the oracle's weight-only checks would also accept a fallback that
+  collapses such updates, so its checks must grow with it. Recommendation: keep the class as documented for the
+  first fallback steps; such updates run under marks with their history and the warning. Taken meanwhile: as
+  documented.
+
 ## What is still refused, and what removes it
 
 | Refused today | What removes it |
@@ -778,6 +786,10 @@ How work is done:
 | Non-empty inline assembly; code without source | An emulator of the real machine, compiled as an ordinary program |
 
 ## Known weak spots
+
+- The fallback oracle compares the four `cells` bytes and the qubit variables only: a stray write just past
+  the array would go unseen by both its native and device sides. Route: compare the whole fixture image
+  (guard bytes around `cells`) on both sides before the fallback's first step lands.
 
 - A stale `setjmp` record (its frame returned) can match another activation of the same function at the same
   depth and stack address and jump into it (C leaves this undefined; decided 2026-11-16: today's behaviour kept).
