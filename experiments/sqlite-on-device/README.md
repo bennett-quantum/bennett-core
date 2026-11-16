@@ -209,7 +209,8 @@ The same 256 KiB SQLite heap, 4 KiB libc arena and 1 MiB stack suffice.
 An 11,048-step region budget passes; **11,047 faults `budget` only on row 3**, with inputs preserved,
 other fault bits zero and weight 1/4. Budget 1,000 faults all four rows with weight 1. Raising the
 budget removes those faults. Budget probes allow region faults explicitly so their registers can be
-inspected. There is no resource obstacle at this size; no larger coherent database was tested.
+inspected. There is no resource obstacle at this size; stage 3 did not test a larger coherent
+database (N=8 Grover below does).
 
 ### C front boundary, measured separately
 
@@ -313,6 +314,37 @@ Probabilities slightly above one are unrenormalised floating-point sums, reporte
 clamped. The seeded measurement returns the marked row in every singleton case; pair/no-match
 runs sample row 2. The full amplitude comparison, not these single samples, checks the distribution.
 
+### N=8 results
+
+Use the existing N=8 ordinary build with `grover.py target/sqlite-on-device/n8 --n 8`;
+set `SQLITE_DIR` as above. The same command with `BENNETT_APPLY=compare` checks every apply
+against branch enumeration. Both modes pass. The observer allows 16 configurations (the
+minus qubit doubles the eight row values); peak live qubits are eight, and only three row
+qubits remain before measurement. The database is prepared by the same classical SQL
+updates, and native bits are `[0,0,0,1,0,0,0,0]` or `[1,0,0,1,0,0,0,0]`.
+
+| N | marked indices | iterations | theoretical success | measured success | largest amplitude deviation |
+|---|---|---:|---:|---:|---:|
+| 8 | 3 | 1 | 25/32 = 0.78125 | 0.7812500000000004 | 2.22e-16 |
+| 8 | 3 | 2 | 121/128 = 0.9453125 | 0.9453125000000014 | 7.77e-16 |
+| 8 | 0,3 | 1 | 1 | 1.0000000000000004 | 2.22e-16 |
+
+Every measured amplitude follows; every imaginary part is exactly zero. The expectations are
+the closed forms worked above, including **negative** unmarked amplitudes after two singleton
+iterations. The two-match case has amplitude `1/sqrt(2)` on rows 0 and 3, zero elsewhere.
+All three seeded measurements return row 3, but the observer checks the state before collapse.
+
+| row index | one match, k=1 | one match, k=2 | two matches, k=1 |
+|---:|---:|---:|---:|
+| 0 | 0.17677669529663692 | -0.08838834764831856 | 0.7071067811865477 |
+| 1 | 0.17677669529663692 | -0.08838834764831856 | 0 |
+| 2 | 0.1767766952966369 | -0.08838834764831868 | 0 |
+| 3 | 0.8838834764831847 | 0.9722718241315036 | 0.7071067811865477 |
+| 4 | 0.17677669529663692 | -0.08838834764831854 | 0 |
+| 5 | 0.17677669529663692 | -0.08838834764831854 | 0 |
+| 6 | 0.17677669529663692 | -0.08838834764831854 | 0 |
+| 7 | 0.17677669529663692 | -0.08838834764831854 | 0 |
+
 ### Costs and repeated oracles
 
 `region_steps` counts forward instructions **per configuration**. The minus qubit gives 2N
@@ -332,13 +364,31 @@ glue and measurement, but exclude region work. Whole-run region totals are also 
 | 4 | 0,3 | 2 | 1,099,334 | 153,772 | 153,780 | 1,506,942 | 2,424 |
 | 4 | 0,3 | 3 | 1,099,345 | 230,658 | 230,670 | 2,260,413 | 3,636 |
 | 4 | none | 1 | 898,078 | 76,466 | 76,470 | 749,229 | 1,206 |
+| 8 | 3 | 1 | 1,103,863 | 148,070 | 148,078 | 1,453,019 | 2,271 |
+| 8 | 3 | 2 | 1,103,878 | 296,140 | 296,156 | 2,906,038 | 4,542 |
+| 8 | 0,3 | 1 | 1,204,632 | 148,280 | 148,288 | 1,455,140 | 2,292 |
 
-Every two-match call costs exactly 76,886 region steps, 76,890 work steps, 753,471 journal
+At N=4 every two-match call costs exactly 76,886 region steps, 76,890 work steps, 753,471 journal
 bytes and 1,212 overlay bytes: the cumulative counters are exactly linear in 1/2/3 calls.
 After **every** call retained outer journal is absent, overlay bytes zero, worlds one,
 memory qubit bytes zero, and live qubits seven (two row, one kick, four fault); the peak is
 also seven, with eight configurations. After clean frees only two row qubits remain.
 Nothing accumulates across iterations. Copied bytes and outer splits/merges are zero.
+
+At N=8 each measured singleton oracle costs exactly 148,070 region steps (74,035 actual forward),
+148,078 work steps, 1,453,019 journal bytes and 2,271 overlay bytes: two calls double every
+region counter. The two-match call costs 148,280 steps (74,140 actual forward), 148,288 work,
+1,455,140 journal and 2,292 overlay bytes. At every call boundary the retained journal is
+absent, overlay zero, worlds one, memory qubit bytes zero and live/peak qubits eight.
+Extra iterations add only 15 outer instructions each. This observed linearity is for fixed
+nonzero row support; sparse simulation can cost less after exact cancellations. It is not
+a circuit cost claim. No N=8 case failed, faulted or exceeded a resource limit.
+
+The four required repository checks pass (274 Rust tests, 158 front tests, clippy and fmt),
+as do the standalone observer's clippy/fmt checks. Raw generated programs and full reports
+are ignored build artifacts, `grover.bn`, `grover-report.txt` and `grover.json`; the JSON
+contains every complex amplitude and per-call cost line, including the premeasurement and
+whole-run statistics. Run the two apply modes sequentially because they write the same names.
 
 These are tiny N numerical simulations, with branch enumeration as the independent comparison
 and history mode grouping equal row arguments. They do not establish an efficient SQL quantum
