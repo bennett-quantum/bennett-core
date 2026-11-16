@@ -36,26 +36,46 @@ impl<'m> Executor<'m> {
         let before = self.frames.len();
         let last = self.journal.as_ref().and_then(Journal::last);
         let result = self.unrun_record(checked);
-        if result.is_ok() && self.any_guard && self.counting && self.rewinding == 0 && last != Some(Undo::Rewind) {
+        let rewind = matches!(last, Some(Undo::Rewind | Undo::LeftBehind));
+        if result.is_ok() && self.any_guard && self.counting && self.rewinding == 0 && !rewind {
             self.count_guards(if last == Some(Undo::Catch) { before } else { self.frames.len() }, 1, true);
         }
         result
     }
 
     fn unrun_record(&mut self, checked: bool) -> Result<(), Mismatch> {
+        let last = self.journal.as_ref().and_then(Journal::last).expect("a record to undo");
+        // A rewind that left registers over: undone with its `Rewind` record below, taking them back where
+        // its steps run again (`leftover.rs`).
+        if last == Undo::LeftBehind {
+            let made = self.pop_leftovers();
+            self.taking_back = made.clone();
+            let result = self.unrun_record(checked);
+            let left = std::mem::take(&mut self.taking_back);
+            if result.is_err() {
+                self.record_leftovers(&made);
+            } else {
+                assert!(left.is_empty(), "running a rewind's steps again takes back everything it left over");
+            }
+            return result;
+        }
         let deferred = checked && self.partial;
         let checked = checked && !self.partial;
-        let last = self.journal.as_ref().and_then(Journal::last).expect("a record to undo");
         if (checked || deferred) && matches!(last, Undo::Qalloc | Undo::Call) {
             let failing =
                 if last == Undo::Qalloc { self.allocation_undone_nonzero() } else { self.reads_no_longer_held() };
             if checked && !failing.is_empty() {
-                // Outside strict mode a rewind's own un-run runs regardless: the register is left over.
+                // Outside strict mode a rewind's own un-run runs regardless: the register is left over, or the
+                // wire of each read whose register changed (`leftover.rs`).
                 if last == Undo::Qalloc && self.runs_regardless() {
                     self.leave_allocation_over();
                     return Ok(());
                 }
-                return Err(Mismatch);
+                if last == Undo::Call && self.runs_regardless() && !self.reads_split() {
+                    self.leave_reads_over();
+                } else {
+                    return Err(Mismatch);
+                }
             }
             if deferred {
                 self.defer(last, failing);
@@ -152,17 +172,17 @@ impl<'m> Executor<'m> {
             Undo::Longjmp => self.undo_longjmp(),
             Undo::Catch => self.undo_catch(),
             Undo::Measure => unreachable!("reversal stops before a measurement"),
-            Undo::LeftBehind => unreachable!("reversal and rewinds stop before a rewind that left history behind"),
+            Undo::LeftBehind => unreachable!("a rewind's leftovers are undone with it, above"),
             Undo::GateAt | Undo::GateAtPromoted => unreachable!("a GateAt record is un-run before it is popped"),
         }
         Ok(())
     }
 
     /// Whether an un-run that meets a state its history does not describe runs regardless: outside strict
-    /// mode, in the un-run of a rewind taken as a step, not while running steps again (which must find the
-    /// path the history describes) and not on one world's part of a shared state (checked on the sum).
-    fn runs_regardless(&self) -> bool {
-        !self.strict && self.rewinding == 1 && self.rerunning == 0 && !self.partial
+    /// mode, in the un-run of a rewind (one taken as a step, or one run again: from the same state it leaves
+    /// the same registers over), and not on one world's part of a shared state (checked on the sum; a debt).
+    pub(crate) fn runs_regardless(&self) -> bool {
+        !self.strict && self.rewinding >= 1 && !self.partial
     }
 
     /// Un-runs the `qalloc` of the last record whose register is not zero: the register is left over, its
@@ -170,12 +190,20 @@ impl<'m> Executor<'m> {
     fn leave_allocation_over(&mut self) {
         self.journal.as_mut().and_then(Journal::pop).expect("a qalloc record");
         self.pop_cell_entries();
+        let record = self.next_record();
         let inst = self.retreat();
         let dst = inst.result().expect("qalloc defines its handle");
         let id = self.quantum.resolve(self.handle(dst)).expect("an allocation being undone is live");
-        self.quantum.leave(id);
+        self.quantum.leave_allocation(id);
         self.restore_result();
-        self.left_behind = true;
+        self.leftovers_made.push(crate::leftover::TakeBack { record, id, kind: crate::leftover::Leftover::Allocation });
+    }
+
+    /// Whether a read of the `Call` record on top split the world: its un-run is where worlds' parts meet, not
+    /// built to run regardless (a debt, `HANDOFF.md`).
+    fn reads_split(&self) -> bool {
+        let journal = self.journal.as_ref().expect("undoing needs a journal");
+        journal.reads_from(journal.records() - 1).iter().any(|read| read.split)
     }
 
     /// The configurations where the register that the `qalloc` of the last record allocated is not zero.

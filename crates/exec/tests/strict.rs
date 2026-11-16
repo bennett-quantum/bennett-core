@@ -199,8 +199,8 @@ fn a_region_fault_is_a_fault_code_on_the_machine() {
 /// that is not zero. `%q` = |+>, `%t` = `%q` copied, keep 1 into `%q`: (|00> + |11>)/sqrt 2 becomes
 /// (|10> + |01>)/sqrt 2 (columns `%q`, `%t`); un-running `x %t ctrl %q` gives (|11> + |01>)/sqrt 2, `%t` = 1
 /// in both. Strict mode faults `bad_rewind`, changing nothing; the machine runs the un-run regardless and
-/// leaves `%t` over holding 1, `%q` = |+> again; the history is left behind, so reversal stops there and a
-/// rewind of an outer mark faults `bad_rewind` (a classical cause, as a measurement since the mark is).
+/// leaves `%t` over holding 1, `%q` = |+> again. Undoing the rewind (reversal, or a rewind of an outer mark)
+/// takes `%t` back where its `qalloc` runs again.
 #[test]
 fn an_un_run_that_meets_a_nonzero_allocation_runs_regardless_on_the_machine() {
     let text = "memory 64
@@ -228,6 +228,7 @@ entry:
     assert_same_state(&after, &before, "strict: nothing changed");
 
     let mut e = executor(&module, "main", &[], machine());
+    let at_entry = e.snapshot();
     assert_eq!(e.run(), Outcome::Returned(Some(5)));
     let stats = e.stats();
     assert_eq!((stats.leftover_qubits, stats.live_qubits, stats.rewound_steps), (1, 2, 2));
@@ -243,13 +244,25 @@ entry:
         assert_eq!(config, want);
         assert!((amplitude - C::new(*re, 0.0)).norm() < 1e-12);
     }
-    // Reversal undoes the return and the rewind's barrier stops it.
-    assert_eq!(e.reverse(), Err(bennett_exec::ReverseError::PastLeftBehind));
+    // Reversal takes the leftover back where the rewind's region runs again: back to the entry.
+    e.reverse().expect("reverses through the rewind that left a register over");
+    assert_same_state(&e.snapshot(), &at_entry, "back to the entry");
 
+    // An outer rewind undoes the inner one, taking `%t` back (holding 1): its region runs again, `t ^= q` gives
+    // (|01> + |10>)/sqrt 2 and the keep XORed out (|11> + |00>)/sqrt 2, the state before the inner rewind; then
+    // the outer un-run gives `t ^= q` = 0 and frees `%t` clean: `%q` = |+>, nothing left over. Until the design seam's V1 was fixed the leftover was a
+    // barrier and this rewind faulted `bad_rewind`.
     let module = load(&text.replace("OUTER", "rewind %outer"));
     let mut e = executor(&module, "main", &[], machine());
-    assert_eq!(e.run(), Outcome::Faulted(Fault::BadRewind));
-    assert_eq!(e.stats().leftover_qubits, 1);
+    assert_eq!(e.run(), Outcome::Returned(Some(5)));
+    assert_eq!(e.stats().leftover_qubits, 0);
+    let quantum = e.snapshot().quantum;
+    let expected = [(vec![0], half), (vec![1], half)];
+    assert_eq!(quantum.amplitudes.len(), 2);
+    for ((config, amplitude), (want, re)) in quantum.amplitudes.iter().zip(&expected) {
+        assert_eq!(config, want);
+        assert!((amplitude - C::new(*re, 0.0)).norm() < 1e-12);
+    }
 }
 
 /// With the keep 0 nothing changes what the region read: the un-run is faithful in both modes, nothing is

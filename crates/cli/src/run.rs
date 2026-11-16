@@ -116,7 +116,7 @@ fn reverse_and_report(executor: &mut Executor<'_>, entry_state: &Snapshot, stats
             }
             Some(Timed { steps, time })
         }
-        Err(error @ (ReverseError::PastMeasurement | ReverseError::PastLeftBehind)) => {
+        Err(error @ ReverseError::PastMeasurement) => {
             println!("reverse: stopped after undoing {} steps: {error}", stats.steps - executor.stats().steps);
             None
         }

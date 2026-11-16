@@ -100,8 +100,8 @@ impl<'m> Executor<'m> {
         let defers = step && (rewinds_inside || split_read);
         // Outside strict mode an un-run may leave a register over and then fail elsewhere; running forward
         // again could not take it back, so a copy is kept.
-        let backup = (rewinds_inside && (changes || self.deferring) || defers || !self.strict && step)
-            .then(|| self.clone_world(None));
+        let backup =
+            (rewinds_inside && (changes || self.deferring) || defers || !self.strict).then(|| self.clone_world(None));
         let counters = (self.rewound_steps, self.rerun_steps, self.mismatches, self.splits);
         for &(column, value) in &kept {
             self.quantum.xor_register(column, value);
@@ -117,8 +117,9 @@ impl<'m> Executor<'m> {
         if step {
             self.charging = true;
             self.budget_spent = false;
-            self.left_behind = false;
         }
+        // What this rewind's own un-run leaves over; a rewind run again inside it keeps its own.
+        let outer_made = std::mem::take(&mut self.leftovers_made);
         self.rewinding += 1;
         let from = self.forked.len();
         let result = self.unwind_to_mark(entry.position, (site.block, site.inst), 0, 0);
@@ -129,7 +130,8 @@ impl<'m> Executor<'m> {
         }
         self.allow_region_faults = saved;
         let forked = self.forked.len() > from || self.splits != counters.3;
-        let left_behind = step && std::mem::take(&mut self.left_behind);
+        let made = std::mem::replace(&mut self.leftovers_made, outer_made);
+        let left_behind = !made.is_empty();
         // Running regardless where worlds split off during the un-run is not built (a debt, `HANDOFF.md`):
         // that rewind refuses as in strict mode.
         if result.is_err() || self.mismatches != counters.2 || left_behind && forked {
@@ -161,9 +163,10 @@ impl<'m> Executor<'m> {
         }
         self.partial = outer_partial;
         self.for_forks(from, &|executor| executor.partial = outer_partial);
-        // Ran regardless over a state its history does not describe: a barrier after the rewind's record.
+        // Ran regardless over a state its history does not describe: what it left over is journalled after the
+        // rewind's record, for undoing the rewind to take back (`leftover.rs`).
         if left_behind {
-            self.record(Undo::LeftBehind);
+            self.record_leftovers(&made);
         }
         // Where the rewind follows a read of a qubit, the cost of a rewind of a mark with an open budget is the
         // budget, whatever the work since the mark: the world's clock goes on to the mark's plus the budget
@@ -236,9 +239,11 @@ impl<'m> Executor<'m> {
     ) -> Result<(), (u64, Mismatch)> {
         let depth = self.frames.len();
         while self.journal.as_ref().is_some_and(|journal| journal.records() > position) {
-            let at_site = self.journal.as_ref().and_then(Journal::last) == Some(Undo::Rewind)
-                && self.frames.len() == depth
-                && (self.top().block, self.top().inst) == (site.0, site.1 + 1);
+            // A rewind's record, or its leftovers' record above it (undone together).
+            let at_site =
+                matches!(self.journal.as_ref().and_then(Journal::last), Some(Undo::Rewind | Undo::LeftBehind))
+                    && self.frames.len() == depth
+                    && (self.top().block, self.top().inst) == (site.0, site.1 + 1);
             let from = self.forked.len();
             self.unrun_last(true).map_err(|mismatch| (undone, mismatch))?;
             undone += 1;
@@ -287,7 +292,7 @@ impl<'m> Executor<'m> {
                 Undo::Return => depth += 1,
                 Undo::Longjmp | Undo::Catch => depth += jumps.next().expect("a longjmp or catch record has an entry"),
                 Undo::Call => depth = depth.checked_sub(1)?,
-                Undo::Measure | Undo::Finish | Undo::LeftBehind => return None,
+                Undo::Measure | Undo::Finish => return None,
                 Undo::Slot
                 | Undo::Store
                 | Undo::Alloca
@@ -301,6 +306,7 @@ impl<'m> Executor<'m> {
                 | Undo::Apply
                 | Undo::Mark
                 | Undo::Rewind
+                | Undo::LeftBehind
                 | Undo::Setjmp
                 | Undo::GateAt
                 | Undo::GateAtPromoted => {}

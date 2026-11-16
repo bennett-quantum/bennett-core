@@ -26,6 +26,7 @@ use crate::executor::{Executor, Halt};
 use crate::gates;
 use crate::history::Mismatch;
 use crate::journal::{Journal, Undo};
+use crate::leftover::Leftover;
 use crate::quantum::QubitRef;
 
 /// A qubit of a gate, resolved: a register qubit, or a bit of a memory byte.
@@ -66,7 +67,14 @@ impl<'m> Executor<'m> {
     fn promote(&mut self, address: u64) -> u8 {
         let mut old = [0];
         self.memory.read_into(address as usize..address as usize + 1, &mut old);
-        let handle = self.quantum.allocate(Width::BYTE);
+        // Running again a promotion whose un-run left the byte's register over takes the register back.
+        let record = self.next_record();
+        let handle = match self
+            .take_back_at(record, |kind| matches!(kind, Leftover::Promotion { address: a, .. } if a == address))
+        {
+            Some(take) => self.quantum.reclaim_allocation(take.id),
+            None => self.quantum.allocate(Width::BYTE),
+        };
         let column = self.quantum.resolve(handle).expect("a fresh register is live");
         self.quantum.xor_register(column, u64::from(old[0]));
         self.memory.write(address as usize, &[0]);
@@ -147,13 +155,18 @@ impl<'m> Executor<'m> {
             .map(|depth| journal.word_from_top(depth))
             .map(|word| ((word >> 8) as u64, word as u8))
             .collect();
+        let record = journal.records() - 1;
+        let mut regardless = false;
         if (checked || deferred) && !promoted.is_empty() {
             let expected: Vec<(usize, u64)> = promoted
                 .iter()
                 .map(|&(byte, old)| (self.quantum.cell(byte).expect("a promoted byte is a cell"), u64::from(old)))
                 .collect();
             let failing = self.quantum.failing(|config| expected.iter().any(|&(column, old)| config[column] != old));
-            if checked && !failing.is_empty() {
+            // Outside strict mode a rewind's own un-run runs regardless: a byte whose qubits do not hold its old
+            // value leaves its register over (`leftover.rs`).
+            regardless = checked && !failing.is_empty() && self.runs_regardless();
+            if checked && !failing.is_empty() && !regardless {
                 let forward = gates::matrix(*gate);
                 self.quantum.apply_gate(&forward, qubits[0], &qubits[1..], None).expect("no limit");
                 self.advance();
@@ -173,7 +186,12 @@ impl<'m> Executor<'m> {
         }
         // `promoted` lists the latest promotion first.
         for &(byte, old) in &promoted {
-            self.unpromote(byte, old);
+            let column = self.quantum.cell(byte).expect("a promoted byte is a cell");
+            if regardless && !self.quantum.failing(|config| config[column] != u64::from(old)).is_empty() {
+                self.leave_promotion_over(record, byte, old);
+            } else {
+                self.unpromote(byte, old);
+            }
         }
         Ok(())
     }

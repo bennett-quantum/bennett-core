@@ -973,8 +973,29 @@ diagnostics of the simulator's **strict mode**, as a sanitizer's are, and strict
 | An `apply` faulting on some branches | the run stops, `RunError::RegionFault` | the fault code in the fault register, the program's to measure (as `allow_region_faults`) |
 | A world faulting while others go on | the run stops, `RunError::WorldFault` | the world ends with its fault; the others go on |
 | `qfree` of a register that is not zero | fault `dirty_free` | its qubits are **left over**: kept, never released; the handle is stale (its generation moves on, so a use faults `dangling_register`) and the id is not reused. `Stats::leftover_qubits` counts them, the toolchain's warning (`bennett run` prints it). Undoing the step (reversal, a rewind) takes the register back; running it again leaves it over again |
-| A rewind whose un-run meets a register allocated since the mark that is not zero | fault `bad_rewind`, nothing changed | the un-run runs regardless: the register is left over, holding what it holds, and the un-run goes on. The rewind's record is followed by a barrier record (`LeftBehind`): reversal stops there (`ReverseError::PastLeftBehind`) and a rewind of an outer mark faults `bad_rewind`, as at a measurement |
-| The other state-dependent causes of `bad_rewind`: a register or memory qubit read since the mark that no longer holds the value read, a check deferred to the sum of worlds' parts that fails, an inner region run again that faults, a leftover where worlds split off during the un-run | fault `bad_rewind`, nothing changed | not built yet: `bad_rewind` as in strict mode (debts with their routes in `HANDOFF.md`, "Known weak spots") |
+| A rewind whose un-run meets a register allocated since the mark that is not zero | fault `bad_rewind`, nothing changed | the un-run runs regardless: the register is left over, holding what it holds, and the un-run goes on |
+| ... a register read as an integer since the mark that no longer holds the value read | fault `bad_rewind`, nothing changed | the read's wire is left over: un-reading XORs the register into the copy the call took, so a fresh register holds the value read XOR the register, per configuration |
+| ... a byte promoted to qubits since the mark whose qubits do not hold its old byte at the un-promotion | fault `bad_rewind`, nothing changed | the old byte is XORed out and the cell's register is left over; the byte is memory again |
+| ... an inner region run again whose `qfree` is dirty | fault `bad_rewind`, nothing changed | the `qfree` leaves its register over, as going forward, and the outer rewind goes on |
+| The other state-dependent causes: a memory qubit read or written since the mark that no longer holds its value; a check deferred to the sum of the worlds' parts (a read where worlds split, below a split point); an inner region run again that reaches a measurement or leaves the rewind's frame; a leftover where worlds split off during the un-run | fault `bad_rewind`, nothing changed | not built yet: `bad_rewind` as in strict mode, never a call's fault code (P0 debts with their routes in `HANDOFF.md`, "Known weak spots") |
+
+**Leftovers are taken back** (built on 2026-11-16, the design seam's V1 and V2; `crates/exec/src/leftover.rs`).
+What a rewind's un-run left over is journalled with the rewind (its `LeftBehind` record: for each leftover the
+record of the step whose un-run left it, the register, and its kind), so nothing later decides anything from
+whether a register was left over: undoing the rewind, by reversal or by an outer rewind, runs its region again
+and takes each one back where its step runs again (a `qalloc` gets its register back, a call reads the value
+from the wire XOR the register and un-allocates the wire, a promotion gets its cell's register back), which
+restores the state before the rewind exactly. Until then the record was a barrier: reversal stopped there and
+an outer rewind faulted `bad_rewind` where the inner un-run had left a register over and not where it had not,
+a fault decided by whether a register was zero in every configuration. A rewind run again (inside an outer
+un-run or a reversal) runs regardless as a rewind taken as a step does, and leaves the same registers over from
+the same state; outside strict mode every rewind keeps a copy to restore if its un-run still fails. A leftover
+takes no allocation number of the program's (a left-over allocation gives its number back, and gets one again
+where it is taken back), so the registers allocated again in between get their old numbers. Checked
+(`crates/exec/tests/leftover_wires.rs`): each built site on |0>, |+> and |1>, the amplitudes and leftovers worked by
+hand as the program's circuit gives them, with an outer rewind and without, every run reversed to its entry;
+strict mode unchanged at each. The three sites built here failed on the previous code (`bad_rewind` for |+> and
+|1>); the dirty `qfree` run again already ran regardless.
 
 `bad_rewind` for its classical causes (a handle that names no live mark of this activation, a measurement
 since the mark, a keep into a register allocated since) stays a fault in both. On one world's part of a state
@@ -982,18 +1003,19 @@ several worlds share, a `qfree`'s check is deferred to the sum of the parts as b
 or not, that path is unchanged. The simulator's checks are never delivered to a program as fault codes. The
 result of an un-run that ran regardless is unspecified by the ruling of 2026-11-13 ("What is promised",
 rule 4): what is built keeps every step a bijection of the whole machine with its leftovers, so no channel
-is needed, and the barrier marks where the history no longer describes the state.
+is needed, and the leftovers' record lets undoing the rewind take them back.
 The independent whole-world reference also models dirty-free leftovers, stale generations, the
-nonzero-allocation un-run and its barrier, and reports strict-only diagnostics separately from program
-fault values (`worlds_budgets_independent.rs`). It does not prescribe production scheduling at a
+nonzero-allocation un-run, and reports strict-only diagnostics separately from program fault values
+(`worlds_budgets_independent.rs`); it still models the earlier barrier after a leftover, so on the machine it
+is compared up to the inner rewind only (route: model the take-back there). It does not prescribe production scheduling at a
 sibling-return/catch boundary or invent the unspecified state of an unfaithful inverse.
 Measured in `crates/exec/tests/strict.rs`, each expected state by hand: a dirty `qfree` faults in strict
 mode and leaves two qubits of a Bell pair over on the machine, the next allocation in a new column, reversal
 back to the entry; a rewind takes back what a dirty `qfree` in its region left over; a fault in one of two
 worlds and an `apply` out of budget stop strict mode and give, seed by seed, what `allow_region_faults` gives
 on the machine; a keep that reaches a temporary through a gate faults `bad_rewind` unchanged in strict mode
-and leaves the temporary over holding 1 on the machine (`%q` = |+> again), reversal stopping at the
-barrier and an outer rewind faulting `bad_rewind`; a faithful un-run is the same in both modes.
+and leaves the temporary over holding 1 on the machine (`%q` = |+> again), reversal and an outer rewind
+taking it back (`%q` = |+>, nothing left over); a faithful un-run is the same in both modes.
 
 ## What is promised when history is left behind
 

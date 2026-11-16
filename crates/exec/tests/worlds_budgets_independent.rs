@@ -249,8 +249,13 @@ fn strict_and_machine_meaning_dirty_frees_and_stale_handles() {
     );
 }
 
+/// Since the design seam's V1 was fixed (2026-11-16, machine-finish 0d) the leftover is no barrier on the
+/// machine: undoing the rewind takes it back (`crates/exec/tests/leftover_wires.rs`, each state worked by
+/// hand). This reference still models the earlier barrier, so on the machine it is compared up to the
+/// inner rewind only; the outer rewind and reversal are checked against the hand-worked states there. Route:
+/// model the take-back in `oracle_support::worlds`.
 #[test]
-fn nonzero_allocation_left_behind_is_a_barrier() {
+fn nonzero_allocation_left_over_and_the_outer_rewind() {
     for outer in ["", "rewind %outer"] {
         let text = format!(
             "memory 256\nfunc @main() {{\nentry:\n%q = qalloc 1\nh %q\n%outer = mark\n%h = mark\n%t = qalloc 1\nx %t ctrl %q\nrewind %h keep (i1 1 -> %q)\n{outer}\nret\n}}"
@@ -267,25 +272,19 @@ fn nonzero_allocation_left_behind_is_a_barrier() {
                 Options { machine_meaning: machine, reversible: true, ..common::bounded() },
             )
             .expect("starts");
+            let entry = e.snapshot();
             e.run();
             if machine {
-                // The unfaithful inverse's quantum result is unspecified. Compare only the
-                // promised leftover, completion/fault and barrier, without pinning amplitudes.
-                assert_eq!(e.stats().leftover_qubits, 1);
-                let expected =
-                    if outer.is_empty() { Outcome::Returned(None) } else { Outcome::Faulted(Fault::BadRewind) };
-                assert_eq!(e.outcome(), Some(expected));
-                assert!(state.keys().all(|w| w.classical.time.leftovers.len() == 1));
-                assert_eq!(e.reverse(), Err(bennett_exec::ReverseError::PastLeftBehind));
-                let mut reference = state;
-                while reference.keys().all(|w| {
-                    w.history
-                        .last()
-                        .is_some_and(|r| !matches!(r.action, common::oracle_support::worlds::Action::LeftBehind))
-                }) {
-                    reference = m.undo_state(&reference).expect("steps after barrier reverse");
+                // The unfaithful inverse's quantum result is unspecified. Compare only the promised
+                // leftover and completion, without pinning amplitudes; then the run reverses to its entry.
+                let expected_leftovers = if outer.is_empty() { 1 } else { 0 };
+                assert_eq!(e.stats().leftover_qubits, expected_leftovers);
+                assert_eq!(e.outcome(), Some(Outcome::Returned(None)));
+                if outer.is_empty() {
+                    assert!(state.keys().all(|w| w.classical.time.leftovers.len() == 1));
                 }
-                assert_eq!(m.undo_state(&reference), Err(Fault::BadRewind));
+                e.reverse().expect("the leftover is taken back on the way");
+                common::assert_same_state(&e.snapshot(), &entry, "back to the entry");
             } else {
                 assert_snapshot(&m, &state, &e);
                 e.reverse().expect("strict refusal reverses");

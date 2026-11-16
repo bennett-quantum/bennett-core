@@ -1096,8 +1096,8 @@ Audition coverage now in the tree:
   repeated rewinds of one mark under 64 call budgets terminate and reverse. `machine_e_oracles.rs`
   compares recursive replay at 20 input/run-budget combinations with the whole-world reference, and
   compares a completed coherent region with its joined evaluation. Forty generated mark/call text
-  variants round-trip and validate. The reference still does not model finite mark budgets or the call
-  form. The NaN probe independently constructs allowed and disallowed payloads in all three formats.
+  variants round-trip and validate. (The reference has since modelled finite mark budgets and the
+  call form, `a70e01b`.) The NaN probe independently constructs allowed and disallowed payloads in all three formats.
 
 Still supported only by the private circuit prototypes, not by these executor tests: the audition's
 primitive gate counts, physical padding wires and allocation schedule, dispatch/QROM/multi-control cost
@@ -1385,19 +1385,25 @@ the ordinary frontend run without changing its domain or assertions.
   run with no budget can still loop there, as any forward loop can. A path that faults, measures, returns
   from the rewind's frame or ends the run stays refused atomically with `bad_rewind`.
 
-- **Running regardless, outside strict mode, is built only for an allocation** (machine step e3). Still
-  `bad_rewind` there, each a debt with its route: (1) a register read as an integer since the mark that no
-  longer holds the value read: un-run the read into a leftover register of the read's width holding the
-  value read XOR the register, in every world that un-runs that read, decided on the sum of the parts when
-  the read is below a split point; (2) a memory qubit read or written since the mark that no longer holds
-  its value, and a promotion of memory to qubits whose byte is not classical again at its un-run: the same
-  with a leftover cell; (3) a check deferred to the sum of the worlds' parts that fails: run (1) and (2) on
-  the parts once the sum is known, instead of restoring; (4) an inner region run again that faults (a
-  measurement, leaving the rewind's frame, an inner `bad_rewind`): running again must reach the inner
-  rewind, so these stay refusals of the path until channels; (5) a leftover where worlds split off during
-  the same un-run: carry the leftover into every world split off. And the barrier: reversal and outer
-  rewinds stop at a rewind that left history behind; route: journal the leftovers it made, so undoing the
-  rewind takes them back as the registers its replayed allocations allocate.
+- **Running regardless, outside strict mode** (machine step e3; machine-finish 0d, the design seam's V1 and
+  V2): built for a nonzero allocation, a changed register read where the read did not split the world, an
+  un-promotion whose cell changed, and an inner region whose `qfree` is dirty when run again; leftovers are
+  journalled with the rewind and taken back where its region runs again, so the barrier is gone
+  (`docs/DESIGN.md`, "Strict mode"; `crates/exec/tests/leftover_wires.rs`). Still `bad_rewind` outside
+  strict mode, each a P0 debt with its route: (1) a memory qubit read or written since the mark that no
+  longer holds its value (witness `a_memory_qubit_read_that_changed_leaves_its_wire_over`, ignored): leave
+  the access's wire over as for a register read, and where the access runs again read the value from the
+  wire XOR the cell instead of splitting on the cell; (2) a check deferred to the sum of the worlds' parts,
+  and a read where the world split (witness
+  `a_deferred_check_that_fails_on_one_part_leaves_the_wire_over_in_every_part`, ignored; also
+  `a_changed_read_is_a_strict_diagnostic_and_machine_execution_continues` in `audition_machine.rs`): leave
+  the wire over in every part that un-runs the read, whether its own part is faithful or not, so that the
+  parts' register tables agree and their sum is the circuit's (deciding per part would keep a faithful
+  part apart from an unfaithful one); (3) an inner region run again that reaches a measurement or leaves
+  the rewind's frame on a path the keeps changed: run the changed path as the circuit would (the
+  measurement a channel), so until channels these stay refusals; (4) a leftover where worlds split off
+  during the same un-run, and a call run again whose wire is taken back while another of its reads splits
+  the world: carry the leftover into every world split off. None of these is ever a call's fault code.
 
 - The journal-content observer (`crates/exec/src/measure.rs`) does not follow a `rewind` or a call with a
   budget inside a region. It panicked there (an `assert!` on valid programs) until 2026-11-16; it now stops

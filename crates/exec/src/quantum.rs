@@ -200,12 +200,69 @@ impl QuantumState {
         self.leftovers.push(id);
     }
 
-    /// Undoes `leave`: the register's handle is live again.
-    pub(crate) fn take_back(&mut self, handle: u64) {
-        let id = handle_id(handle);
-        assert_eq!(self.leftovers.pop(), Some(id), "the last register left over is taken back");
+    /// Takes back the register left over last, `id`: its handle is live again. Returns the handle.
+    pub(crate) fn reclaim(&mut self, id: usize) -> u64 {
+        assert_eq!(self.leftovers.pop(), Some(id), "leftovers are taken back latest first");
         let register = &mut self.registers[id];
         register.generation = register.generation.wrapping_sub(1);
+        u64::from(register.generation) << 32 | id as u64
+    }
+
+    /// Leaves over a register whose allocation a rewind's un-run undoes: as `leave`, and its allocation is
+    /// un-numbered as `unallocate` would, so that the allocations made again before it get their numbers.
+    pub(crate) fn leave_allocation(&mut self, id: usize) {
+        self.allocations -= 1;
+        self.allocation_numbers[id].pop();
+        self.leave(id);
+    }
+
+    /// Undoes `leave_allocation` where the allocation runs again: the register is taken back, numbered as the
+    /// allocation numbers it. Returns the handle.
+    pub(crate) fn reclaim_allocation(&mut self, id: usize) -> u64 {
+        self.allocations += 1;
+        self.allocation_numbers[id].push(self.allocations);
+        self.reclaim(id)
+    }
+
+    /// A fresh register of `width` qubits in |0>, for a wire a rewind's un-run leaves over (`leftover.rs`): it
+    /// is no allocation of the program, so it takes no allocation number. Returns its id.
+    pub(crate) fn allocate_wire(&mut self, width: Width) -> usize {
+        let handle = self.allocate(width);
+        let id = handle_id(handle);
+        self.allocations -= 1;
+        self.allocation_numbers[id].pop();
+        id
+    }
+
+    /// Undoes `allocate_wire` of the register `id`, zero in every configuration.
+    pub(crate) fn discard_wire(&mut self, id: usize) {
+        self.allocations += 1;
+        self.allocation_numbers[id].push(self.allocations);
+        let handle = u64::from(self.registers[id].generation) << 32 | id as u64;
+        self.unallocate(handle);
+    }
+
+    /// The width of the live or left-over register in `column`.
+    pub(crate) fn width_of(&self, column: usize) -> Width {
+        self.registers[column].width.expect("a register in use has a width")
+    }
+
+    /// XORs register `src`, and `constant`, into register `dst` in every configuration: a CNOT from each qubit
+    /// of `src` to `dst`'s, then X where `constant` has ones. A permutation of configurations.
+    pub(crate) fn xor_column(&mut self, dst: usize, src: usize, constant: u64) {
+        let amplitudes = std::mem::take(&mut self.amplitudes);
+        self.amplitudes = amplitudes
+            .into_iter()
+            .map(|(mut config, amplitude)| {
+                config[dst] ^= config[src] ^ constant;
+                (config, amplitude)
+            })
+            .collect();
+    }
+
+    /// Undoes `leave`: the register's handle is live again.
+    pub(crate) fn take_back(&mut self, handle: u64) {
+        self.reclaim(handle_id(handle));
     }
 
     /// The qubits of registers left over.

@@ -9,6 +9,7 @@ use bennett_ir::{
 use crate::executor::{Executor, Frame, Halt, Outcome, RunError, SLOT_BYTES};
 use crate::gates;
 use crate::journal::Undo;
+use crate::leftover::Leftover;
 use crate::quantum::QubitRef;
 
 /// `alloca` results are aligned to this many bytes, the size of the widest value.
@@ -207,7 +208,11 @@ impl<'m> Executor<'m> {
             Inst::Rewind { mark, keep } => self.rewind(*mark, keep)?,
             _ if self.in_region || self.guarded() => return Err(Fault::QuantumInRegion.into()),
             Inst::Qalloc { dst, width } => {
-                let handle = self.quantum.allocate(*width);
+                // Running again a `qalloc` whose un-run left its register over takes the register back.
+                let handle = match self.take_back_at(self.next_record(), |kind| kind == Leftover::Allocation) {
+                    Some(take) => self.quantum.reclaim_allocation(take.id),
+                    None => self.quantum.allocate(*width),
+                };
                 self.write_slot(*dst, u128::from(handle));
                 self.record(Undo::Qalloc);
                 self.advance();
@@ -596,6 +601,38 @@ impl<'m> Executor<'m> {
                 reads.push((index, self.quantum.resolve(self.handle(*slot))?, param.slot));
             }
         }
+        // Running again a call whose un-run left the wire of a read over takes the wire back: the read's value
+        // is the wire XOR the register, the same in every configuration, and splits nothing (`leftover.rs`).
+        let mut taken: Vec<(usize, usize, bennett_ir::Slot, usize)> = Vec::new();
+        if !self.taking_back.is_empty() {
+            let record = self.next_record();
+            let leftover = |column| {
+                move |take: &crate::leftover::TakeBack| take.record == record && take.kind == Leftover::Read { column }
+            };
+            let wired: Vec<bool> =
+                reads.iter().map(|&(_, column, _)| self.taking_back.iter().any(leftover(column))).collect();
+            if wired.contains(&true) {
+                self.frame_fits(callee)?;
+                // Where the other reads of the call would split the world as well, each world would take the
+                // wire back alone: not built (a debt, `HANDOFF.md`), so running again fails here.
+                let columns: Vec<usize> =
+                    reads.iter().zip(&wired).filter(|&(_, &w)| !w).map(|(&(_, column, _), _)| column).collect();
+                if self.quantum.partition(&columns).len() > 1 {
+                    return Err(Fault::BadRewind);
+                }
+                let mut kept = Vec::with_capacity(reads.len());
+                for (&(arg, column, slot), &w) in reads.iter().zip(&wired) {
+                    if w {
+                        let take = self.take_back_at(record, |kind| kind == Leftover::Read { column });
+                        let take = take.expect("a wire was found for this read");
+                        taken.push((arg, column, slot, take.id));
+                    } else {
+                        kept.push((arg, column, slot));
+                    }
+                }
+                reads = kept;
+            }
+        }
         let mut split = false;
         if !reads.is_empty() {
             // A call that cannot enter faults in every world alike, before any splits.
@@ -606,15 +643,25 @@ impl<'m> Executor<'m> {
         let mut values = std::mem::take(&mut self.scratch);
         values.clear();
         values.extend(args.iter().map(|arg| self.read(arg)));
+        // The reads, in the order of the arguments, as the journal noted them the first time.
+        let mut noted: Vec<(usize, usize, bennett_ir::Slot, bool)> = Vec::with_capacity(reads.len() + taken.len());
         if !reads.is_empty() {
             // A world's part that a deferred check emptied (`Executor::defer`) reads zero: it carries no
             // amplitude, and its sum with the other parts decides.
             let config = self.quantum.amplitudes().keys().next();
             for &(index, column, slot) in &reads {
                 values[index] = config.map_or(0, |config| u128::from(config[column]));
-                if let Some(journal) = &mut self.journal {
-                    journal.push_read(column, slot, split);
-                }
+                noted.push((index, column, slot, split));
+            }
+        }
+        for &(index, column, slot, wire) in &taken {
+            values[index] = self.take_read_back(wire, column);
+            noted.push((index, column, slot, false));
+        }
+        noted.sort_unstable_by_key(|&(index, ..)| index);
+        if let Some(journal) = &mut self.journal {
+            for (_, column, slot, split) in noted {
+                journal.push_read(column, slot, split);
             }
         }
         let pushed = self.push_frame(callee, &values);
