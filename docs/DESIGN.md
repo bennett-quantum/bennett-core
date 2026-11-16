@@ -239,8 +239,10 @@ the call); built as machine step e4. `%h = mark budget B` gives the mark a budge
 - **Cost of the representation**: each mark's entry in the journal's side table grows from 16 to 48 bytes
   (the budget and the deadline), measured in `memory_independent.rs`.
 
-Not yet: the independent whole-world reference does not model the mark's budget (it reads it; the programs
-it runs give `budget -1`, which bounds nothing). Route: give its worlds a clock and compare `Stats::clock`.
+The independent whole-world reference now gives each world a clock, enforces finite deadlines, closes a
+rewound mark's budget, requires a budget after register/cell reads and waits to the deadline where a read
+occurred. Time stays out of its world equality. `worlds_budgets_independent.rs` compares finite bounds,
+nested deadlines, successful clocks (`Stats::clock`), and exact public states through reversal.
 
 ### The call with a fault value
 
@@ -275,9 +277,19 @@ arguments and reads of registers included, with the region's rules attached to i
   (the call, B steps, the catch); each rule; nested budgets (the inner or the outer ends, at 15 and 14); a
   rewinding callee gets `budget` after exactly B steps; every step of four programs reverses exactly. Seeded
   defects caught: no give-back on reversal; no noted un-run count.
-- **Not yet** (debts): the independent whole-world reference does not model the form (it says so); the
-  journal-content observer does not follow it; a `call_indirect` with a budget; the front does not emit it.
-  `apply`, `qalloc` and `qfree` are retired only once every test passes without them (a later step).
+- **Independent reference:** the snapshot-based whole-world model interprets the guarded frame, its
+  remaining steps, returns and catches itself. It compares small finite budgets, nested calls, faults,
+  jumps within/across calls, rewinds inside calls, and compute/copy/uncompute of both result and fault
+  code, with phases and reversal (`worlds_budgets_independent.rs`). Replaying seeks the recorded dynamic
+  visit and is bounded while it executes, including a path newly entering an endless loop. A live
+  guard's remaining steps remain distinct after an internal rewind of unequal paths; the un-run
+  preserves consumption and inverse replay starts with the original counts. The matrix includes a
+  memory-qubit read inside the callee (budgets 5 to 11, only the longer path exhausting at 7 and 8).
+  Clock composition of a padded rewind inside a guarded call with a narrow caller mark remains a
+  specification question: its ignored witness and the alternatives are in `HANDOFF.md`.
+- **Not yet** (debts): the journal-content observer does not follow the form; a `call_indirect` with a
+  budget; the front does not emit it. `apply`, `qalloc` and `qfree` remain first-class forms (the
+  maintainer's decision of the evening of 2026-11-16).
 
 ### Worlds
 
@@ -925,6 +937,10 @@ or not, that path is unchanged. The simulator's checks are never delivered to a 
 result of an un-run that ran regardless is unspecified by the ruling of 2026-11-13 ("What is promised",
 rule 4): what is built keeps every step a bijection of the whole machine with its leftovers, so no channel
 is needed, and the barrier marks where the history no longer describes the state.
+The independent whole-world reference also models dirty-free leftovers, stale generations, the
+nonzero-allocation un-run and its barrier, and reports strict-only diagnostics separately from program
+fault values (`worlds_budgets_independent.rs`). It does not prescribe production scheduling at a
+sibling-return/catch boundary or invent the unspecified state of an unfaithful inverse.
 Measured in `crates/exec/tests/strict.rs`, each expected state by hand: a dirty `qfree` faults in strict
 mode and leaves two qubits of a Bell pair over on the machine, the next allocation in a new column, reversal
 back to the entry; a rewind takes back what a dirty `qfree` in its region left over; a fault in one of two

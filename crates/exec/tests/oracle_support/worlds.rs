@@ -6,8 +6,15 @@
 //! Measurement is a boundary (all outcomes are available via `measurement_branches`); seeded RNG
 //! trajectories and configuration-limit policy are not part of the unitary reference meaning.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+
+#[path = "worlds_replay.rs"]
+mod replay;
+#[path = "worlds_time.rs"]
+mod time;
 use std::collections::BTreeMap;
+use time::MarkBudget;
+pub use time::{Diagnostic, Timing};
 
 use bennett_ir::{
     BlockId, CastOp, DataItem, Fault, FuncId, Inst, Keep, KeepTarget, MeasureSource, Operand, Place, Slot, Target,
@@ -35,6 +42,7 @@ pub struct Frame {
     pub entry_sp: u64,
     pub activation: u64,
     pub result: Option<Slot>,
+    pub fault: Option<Slot>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -62,6 +70,7 @@ pub enum Finish {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Classical {
+    pub time: Timing,
     pub overlay: BTreeMap<u64, u8>,
     pub frames: Vec<Frame>,
     /// Includes dead slots, since a later activation may reuse them.
@@ -87,6 +96,9 @@ pub enum Action {
     Measurement,
     Allocate(usize),
     Free(usize),
+    LeftoverFree(usize),
+    LeftBehind,
+    Catch(Fault),
     /// The operation is read from the program position in `before`.
     Gate,
     /// Resolved sites and first-gate moves; no quantum values are saved by a gate.
@@ -180,7 +192,13 @@ impl World {
 }
 
 fn add(state: &mut Superposition, world: World, amplitude: C) {
-    *state.entry(world).or_default() += amplitude;
+    // Time does not distinguish worlds. A merged world's clock is the later clock.
+    if let Some((mut existing, a)) = state.remove_entry(&world) {
+        existing.classical.time.clock = existing.classical.time.clock.max(world.classical.time.clock);
+        state.insert(existing, a + amplitude);
+    } else {
+        state.insert(world, amplitude);
+    }
 }
 
 fn clean(state: &mut Superposition) {
@@ -193,6 +211,8 @@ pub fn basis(world: World) -> Superposition {
 
 pub struct Model<'a> {
     pub program: &'a ValidModule,
+    pub machine_meaning: bool,
+    pub diagnostics: RefCell<Vec<Diagnostic>>,
     pub base: Vec<u8>,
     entry_result: Option<Type>,
     region: bool,
@@ -202,6 +222,9 @@ pub struct Model<'a> {
     replayed: Cell<u64>,
     unrunning: Cell<u32>,
     checking: Cell<u32>,
+    replaying: Cell<u32>,
+    replay_left: Cell<Option<u64>>,
+    replay_exhausted: Cell<bool>,
 }
 
 impl<'a> Model<'a> {
@@ -224,6 +247,8 @@ impl<'a> Model<'a> {
         }
         Self {
             program,
+            machine_meaning: false,
+            diagnostics: RefCell::new(Vec::new()),
             base,
             entry_result: program.function(program.function_named(entry).expect("entry")).result,
             region: false,
@@ -231,6 +256,9 @@ impl<'a> Model<'a> {
             replayed: Cell::new(0),
             unrunning: Cell::new(0),
             checking: Cell::new(0),
+            replaying: Cell::new(0),
+            replay_left: Cell::new(None),
+            replay_exhausted: Cell::new(false),
         }
     }
 
@@ -246,7 +274,7 @@ impl<'a> Model<'a> {
         let (mut rounds, mut charged) = (0u64, 0u64);
         while !state.keys().all(|w| w.classical.finish.is_some()) && rounds + charged < budget as u64 {
             let before = self.replayed();
-            let next = self.step(&state);
+            let next = self.step_with_replay_budget(&state, budget as u64 - rounds - charged - 1);
             let charge = self.replayed() - before;
             if rounds + charged + charge + 1 > budget as u64 {
                 break;
@@ -265,6 +293,7 @@ impl<'a> Model<'a> {
     pub fn initial(&self, entry: &str, args: &[u128]) -> World {
         let mut world = World {
             classical: Classical {
+                time: Timing::default(),
                 overlay: BTreeMap::new(),
                 frames: Vec::new(),
                 slots: Vec::new(),
@@ -419,6 +448,7 @@ impl<'a> Model<'a> {
             entry_sp,
             activation: w.classical.next_activation,
             result,
+            fault: None,
         });
         w.classical.sp = sp;
         for (param, value) in function.params.iter().zip(values) {
@@ -456,6 +486,9 @@ impl<'a> Model<'a> {
     /// One documented instruction on EVERY world. Finished worlds wait unchanged. A dirty free or
     /// failed inverse is atomic across the participating superposition, as on today's machine.
     pub fn step(&self, state: &Superposition) -> Superposition {
+        if self.replaying.get() == 0 && self.checking.get() == 0 {
+            self.diagnostics.borrow_mut().clear();
+        }
         let mut groups = BTreeMap::<_, Superposition>::new();
         for (w, &a) in state {
             add(groups.entry((w.classical.clone(), w.history.clone())).or_default(), w.clone(), a);
@@ -469,7 +502,15 @@ impl<'a> Model<'a> {
                     }
                 }
                 Err(fault) => {
+                    self.diagnostics.borrow_mut().push(Diagnostic::World(fault));
                     for (mut w, a) in group {
+                        if fault != Fault::Budget
+                            && self.replaying.get() == 0
+                            && self.unrunning.get() == 0
+                            && self.checking.get() == 0
+                        {
+                            w.classical.time.clock = w.classical.time.clock.saturating_add(1);
+                        }
                         w.classical.finish = Some(Finish::Faulted(fault));
                         add(&mut next, w, a);
                     }
@@ -480,8 +521,15 @@ impl<'a> Model<'a> {
         next
     }
 
-    fn step_group(&self, state: &Superposition) -> Result<Superposition, Fault> {
+    fn step_group_raw(&self, state: &Superposition) -> Result<Superposition, Fault> {
         if self.unrunning.get() > 0 && self.checking.get() == 0 {
+            if let Some(left) = self.replay_left.get() {
+                if left == 0 {
+                    self.replay_exhausted.set(true);
+                    return Err(Fault::Budget);
+                }
+                self.replay_left.set(Some(left - 1));
+            }
             self.replayed.set(self.replayed.get() + 1);
         }
         let first = state.keys().next().expect("nonempty group");
@@ -501,6 +549,28 @@ impl<'a> Model<'a> {
             let bytes = self.read_memory(first, address, 32)?;
             if state.keys().any(|w| self.read_memory(w, address, 32).as_ref() != Ok(&bytes)) {
                 return Err(Fault::BadLongjmp);
+            }
+        }
+        if let Some(Inst::Qfree { register }) = self.instruction(&first.classical)
+            && !self.region
+            && !first.classical.frames.iter().any(|f| f.fault.is_some())
+        {
+            let id = first.register(*register)?;
+            if state.keys().any(|w| w.quantum[id] != 0) {
+                if !self.machine_meaning {
+                    return Err(Fault::DirtyFree);
+                }
+                let mut next = BTreeMap::new();
+                for (w, &a) in state {
+                    let mut out = w.clone();
+                    out.classical.registers[id].generation += 1;
+                    out.classical.time.leftovers.insert(id);
+                    out.frame_mut().instruction += 1;
+                    out.classical.journal_records += 1;
+                    out.history.push(Record { before: w.classical.clone(), action: Action::LeftoverFree(id) });
+                    add(&mut next, out, a);
+                }
+                return Ok(next);
             }
         }
         let mut next = BTreeMap::new();
@@ -537,7 +607,7 @@ impl<'a> Model<'a> {
         }
         let before = w.classical.clone();
         let action = if let Some(inst) = self.instruction(&before) {
-            if self.region
+            if (self.region || w.classical.frames.iter().any(|f| f.fault.is_some()))
                 && matches!(
                     inst,
                     Inst::Qalloc { .. }
@@ -648,10 +718,7 @@ impl<'a> Model<'a> {
                         Action::Cells(cells.into_iter().map(|(id, old, _)| (id, old, w.quantum[id] as u8)).collect());
                     result = Some(Value::Int(0));
                 }
-                Inst::CallBudget { .. } => {
-                    unimplemented!("the whole-world reference does not model a call with a budget (a debt)")
-                }
-                Inst::Call { callee, args, dst } => {
+                Inst::Call { callee, args, dst } | Inst::CallBudget { callee, args, dst, .. } => {
                     let reads = args
                         .iter()
                         .zip(&self.program.function(*callee).params)
@@ -664,7 +731,16 @@ impl<'a> Model<'a> {
                         action = Action::Read(reads);
                     }
                     let args = args.iter().map(|a| w.read(*a)).collect();
+                    let guard = if let Inst::CallBudget { fault, budget, .. } = inst {
+                        Some((*fault, w.integer(*budget)? as u64))
+                    } else {
+                        None
+                    };
                     self.call(&mut w, *callee, args, *dst)?;
+                    if let Some((fault, budget)) = guard {
+                        w.frame_mut().fault = Some(fault);
+                        w.classical.time.guards.insert(w.frame().activation, budget);
+                    }
                     w.classical.journal_records += 1;
                     w.history.push(Record { before, action });
                     return Ok(basis(w));
@@ -695,7 +771,7 @@ impl<'a> Model<'a> {
                 }
                 Inst::FuncAddr { func, .. } => result = Some(Value::Int(u128::from(func.0) + 1)),
                 Inst::Effect { byte } => {
-                    if self.region {
+                    if self.region || w.classical.frames.iter().any(|f| f.fault.is_some()) {
                         return Err(Fault::EffectInRegion);
                     }
                     w.classical.tape.push(w.integer(*byte)? as u8);
@@ -721,11 +797,17 @@ impl<'a> Model<'a> {
                 }
                 Inst::Qfree { register } => {
                     let id = w.register(*register)?;
-                    if w.quantum[id] != 0 {
-                        return Err(Fault::DirtyFree);
+                    if w.quantum[id] != 0 && self.machine_meaning {
+                        w.classical.registers[id].generation += 1;
+                        w.classical.time.leftovers.insert(id);
+                        action = Action::LeftoverFree(id);
+                    } else {
+                        if w.quantum[id] != 0 {
+                            return Err(Fault::DirtyFree);
+                        }
+                        w.classical.registers[id].width = None;
+                        action = Action::Free(id);
                     }
-                    w.classical.registers[id].width = None;
-                    action = Action::Free(id);
                 }
                 Inst::Gate { .. } => action = Action::Gate,
                 Inst::GateAt { target, controls, .. } => {
@@ -748,7 +830,8 @@ impl<'a> Model<'a> {
                     action = Action::MemoryGate { target: sites[0], controls: sites[1..].to_vec(), promoted };
                 }
                 Inst::Apply { .. } => action = Action::Apply,
-                Inst::Mark { .. } => {
+                Inst::Mark { budget, .. } => {
+                    let limit = budget.map(|b| w.integer(b).map(|b| b as u64)).transpose()?;
                     let handle = w.classical.journal_records + 1;
                     result = Some(Value::Int(handle as u128));
                     w.classical.marks.push(Mark {
@@ -757,6 +840,19 @@ impl<'a> Model<'a> {
                         activation: w.frame().activation,
                         valid: true,
                     });
+                    w.classical.time.marks.insert(
+                        handle,
+                        match limit {
+                            None => MarkBudget::Unbudgeted,
+                            Some(b) => w
+                                .classical
+                                .time
+                                .clock
+                                .saturating_add(1)
+                                .checked_add(b)
+                                .map_or(MarkBudget::Unbounded, MarkBudget::Deadline),
+                        },
+                    );
                     action = Action::Mark;
                 }
                 Inst::Measure { .. } | Inst::Rewind { .. } => unreachable!(),
@@ -791,10 +887,14 @@ impl<'a> Model<'a> {
                         if let (Some(dst), Some(n)) = (frame.result, value) {
                             w.put(dst, Value::Int(n));
                         }
+                        if let Some(fault) = frame.fault {
+                            w.put(fault, Value::Int(0));
+                        }
+                        w.classical.time.guards.remove(&frame.activation);
                     }
                 }
                 Terminator::Exit(value) => {
-                    if self.region {
+                    if self.region || w.classical.frames.iter().any(|f| f.fault.is_some()) {
                         return Err(Fault::ExitInRegion);
                     }
                     let ty = match value {
@@ -851,7 +951,9 @@ impl<'a> Model<'a> {
         let func = FuncId((words[0] >> 32) as u32);
         let block = BlockId(words[1] as u32);
         let inst = (words[1] >> 32) as usize;
-        if depth < self.region_depth {
+        if depth < self.region_depth
+            || w.classical.frames.iter().enumerate().any(|(i, f)| f.fault.is_some() && depth < i)
+        {
             return Err(Fault::BadLongjmp);
         }
         let frame = w.classical.frames.get(depth).ok_or(Fault::BadLongjmp)?;
@@ -982,7 +1084,12 @@ impl<'a> Model<'a> {
                 match result {
                     Finish::Returned(Some(n)) => w.quantum[out] ^= n as u64,
                     Finish::Returned(None) => {}
-                    Finish::Faulted(f) => w.quantum[fault] ^= f.code(),
+                    Finish::Faulted(f) => {
+                        if self.replaying.get() == 0 && self.checking.get() == 0 && self.unrunning.get() == 0 {
+                            self.diagnostics.borrow_mut().push(Diagnostic::Region(f));
+                        }
+                        w.quantum[fault] ^= f.code();
+                    }
                     Finish::BeforeMeasurement => unreachable!("quantum region faults first"),
                 }
                 Ok(basis(w))
@@ -992,16 +1099,19 @@ impl<'a> Model<'a> {
     }
 
     fn rewind_group(&self, inputs: &Superposition, mark: Slot, keep: &[Keep]) -> Result<Superposition, Fault> {
-        if self.region && !keep.is_empty() {
+        if (self.region || inputs.keys().next().is_some_and(|w| w.classical.frames.iter().any(|f| f.fault.is_some())))
+            && !keep.is_empty()
+        {
             return Err(Fault::QuantumInRegion);
         }
         let first = inputs.keys().next().expect("nonempty rewind");
         let handle = first.integer(Operand::Slot(mark))? as usize;
         let h = first.mark_position(handle)?;
+        self.rewind_time(first, handle, h)?;
         if h == 0
             || h > first.history.len()
             || first.history[h - 1].action != Action::Mark
-            || first.history[h..].iter().any(|r| r.action == Action::Measurement)
+            || first.history[h..].iter().any(|r| matches!(r.action, Action::Measurement | Action::LeftBehind))
         {
             return Err(Fault::BadRewind);
         }
@@ -1017,7 +1127,9 @@ impl<'a> Model<'a> {
         self.unrunning.set(self.unrunning.get() + 1);
         let unrun = (|| {
             while state.keys().any(|w| w.history.len() > h) {
-                state = self.undo_state(&state).map_err(|_| Fault::BadRewind)?;
+                state = self
+                    .undo_state(&state)
+                    .map_err(|_| if self.replay_exhausted.get() { Fault::Budget } else { Fault::BadRewind })?;
                 count += 1;
             }
             Ok(())
@@ -1026,7 +1138,19 @@ impl<'a> Model<'a> {
         unrun?;
         let mut result = BTreeMap::new();
         for (mut w, a) in state {
-            let start = Box::new(w.classical.clone());
+            let mut start = Box::new(w.classical.clone());
+            start.time.guards = first
+                .history
+                .get(h)
+                .map_or_else(|| first.classical.time.guards.clone(), |r| r.before.time.guards.clone());
+            let clock = self.rewind_time(first, handle, h)?;
+            let leftovers = w.classical.time.leftovers.clone();
+            w.classical.time = first.classical.time.clone();
+            w.classical.time.leftovers.extend(leftovers);
+            w.classical.time.clock = clock;
+            if first.classical.time.marks.get(&handle).is_some_and(|b| !matches!(b, MarkBudget::Unbudgeted)) {
+                w.classical.time.marks.insert(handle, MarkBudget::Unbounded);
+            }
             let mut site = (*start).clone();
             let f = first.frame();
             site.frames.last_mut().expect("frame").block = f.block;
@@ -1034,8 +1158,28 @@ impl<'a> Model<'a> {
             w.frame_mut().block = f.block;
             w.frame_mut().instruction = f.instruction + 1;
             w.classical.journal_records += 1;
+            site.time = first.classical.time.clone();
+            site.time.rewind_visit = 1 + first.history[h..]
+                .iter()
+                .filter(|r| {
+                    let f = r.before.frames.last().expect("record frame");
+                    matches!(r.action, Action::Rewind { .. })
+                        && (f.activation, f.block, f.instruction)
+                            == (first.frame().activation, first.frame().block, first.frame().instruction)
+                })
+                .map(|r| r.before.time.rewind_visit)
+                .max()
+                .unwrap_or(0);
             w.history.push(Record { before: site, action: Action::Rewind { start, count } });
             add(&mut result, w, a);
+        }
+        if result.keys().any(|w| w.classical.time.leftovers != first.classical.time.leftovers) {
+            let mut barrier = BTreeMap::new();
+            for (mut w, a) in result {
+                w.history.push(Record { before: w.classical.clone(), action: Action::LeftBehind });
+                add(&mut barrier, w, a);
+            }
+            return Ok(barrier);
         }
         // Interim HANDOFF rule: a rewind must have an inverse on the state its history describes.
         // This also catches changed classical reads when worlds differ, without merging histories
@@ -1184,7 +1328,12 @@ impl<'a> Model<'a> {
                 .unwrap_or(h)
                 .max(h);
             let Some(Inst::Rewind { keep, .. }) = self.instruction(&first.classical) else { unreachable!() };
+            self.checking.set(self.checking.get() + 1);
             let preflight = (|| -> Result<(), Fault> {
+                if self.replaying.get() == 0 && self.deadline_spent(first) {
+                    return Err(Fault::Budget);
+                }
+                self.rewind_time(first, handle, h)?;
                 let mut state = BTreeMap::new();
                 for (w, &a) in group {
                     let mut w = w.clone();
@@ -1205,10 +1354,11 @@ impl<'a> Model<'a> {
                 }
                 Ok(())
             })();
+            self.checking.set(self.checking.get() - 1);
             for (w, &a) in group {
                 let mut w = w.clone();
-                if preflight.is_err() {
-                    w.classical.finish = Some(Finish::Faulted(Fault::BadRewind));
+                if let Err(fault) = preflight {
+                    w.classical.finish = Some(Finish::Faulted(fault));
                     add(&mut faults, w, a);
                 } else {
                     add(&mut survivors, w, a);
@@ -1241,12 +1391,13 @@ impl<'a> Model<'a> {
         let mut visit = 1;
         for (w, &a) in inputs {
             let Some(Inst::Rewind { mark, keep }) = self.instruction(&w.classical) else { unreachable!() };
+            self.rewind_time(w, handle, h)?;
             // Reuse validation, including liveness and mark ownership, independently of the inverse.
             if h == 0
                 || h > w.history.len()
                 || w.history[h - 1].action != Action::Mark
                 || w.mark_position(handle)? != h
-                || w.history[h..].iter().any(|r| r.action == Action::Measurement)
+                || w.history[h..].iter().any(|r| matches!(r.action, Action::Measurement | Action::LeftBehind))
                 || w.integer(Operand::Slot(*mark))? != handle as u128
             {
                 return Err(Fault::BadRewind);
@@ -1273,164 +1424,81 @@ impl<'a> Model<'a> {
             }
             add(&mut state, out, a);
         }
-        // Longest histories first: all shares meet before their common allocation/gates
-        // are undone, so the ordinary exact zero check applies to the summed state.
-        loop {
-            let longest = state.keys().map(|w| w.history.len()).max().expect("state");
-            if longest <= h {
-                break;
-            }
-            let (mut active, mut waiting) = (BTreeMap::new(), BTreeMap::new());
-            for (w, a) in state {
-                if w.history.len() == longest {
-                    add(&mut active, w, a);
-                } else {
+        // All shares meet before their common allocation/gates are undone. A forward
+        // rewind preserves the budget consumed by each path, including at the shared prefix.
+        self.unrunning.set(self.unrunning.get() + 1);
+        let unrun = (|| {
+            loop {
+                let longest = state.keys().map(|w| w.history.len()).max().expect("state");
+                if longest <= h {
+                    break;
+                }
+                let (mut active, mut waiting) = (BTreeMap::new(), BTreeMap::new());
+                for (w, a) in state {
+                    if w.history.len() == longest {
+                        add(&mut active, w, a);
+                    } else {
+                        add(&mut waiting, w, a);
+                    }
+                }
+                for (w, a) in self.undo_state(&active)? {
                     add(&mut waiting, w, a);
                 }
+                state = waiting;
+                clean(&mut state);
             }
-            for (w, a) in self.undo_state(&active)? {
-                add(&mut waiting, w, a);
-            }
-            state = waiting;
-            clean(&mut state);
-        }
+            Ok::<_, Fault>(state)
+        })();
+        self.unrunning.set(self.unrunning.get() - 1);
+        let state = unrun?;
         let mut result = BTreeMap::new();
         for (mut w, a) in state {
-            let start = Box::new(w.classical.clone());
+            let mut start = Box::new(w.classical.clone());
+            start.time.guards = first
+                .history
+                .get(h)
+                .map_or_else(|| first.classical.time.guards.clone(), |r| r.before.time.guards.clone());
             let mut before = w.classical.clone();
             let f = before.frames.last_mut().expect("frame");
             (f.block, f.instruction) = (site.block, site.instruction);
             (w.frame_mut().block, w.frame_mut().instruction) = (site.block, site.instruction + 1);
             w.classical.journal_records += 1;
+            let guards = w.classical.time.guards.clone();
+            before.time = first.classical.time.clone();
+            before.time.guards = guards.clone();
+            w.classical.time = first.classical.time.clone();
+            w.classical.time.guards = guards;
+            let clock = inputs
+                .keys()
+                .map(|input| {
+                    self.rewind_time(input, handle, h).map(|c| c.max(input.classical.time.clock.saturating_add(1)))
+                })
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .max()
+                .expect("cohort");
+            if self.replaying.get() == 0 {
+                w.classical.time.clock = clock;
+            }
+            if first.classical.time.marks.get(&handle).is_some_and(|b| !matches!(b, MarkBudget::Unbudgeted)) {
+                w.classical.time.marks.insert(handle, MarkBudget::Unbounded);
+            }
+            for left in w.classical.time.guards.values_mut() {
+                *left = left.saturating_sub(1);
+            }
             w.history.push(Record { before, action: Action::JoinedRewind { start, visit } });
             add(&mut result, w, a);
         }
-        let restored = self.undo_state(&result)?;
+        self.checking.set(self.checking.get() + 1);
+        let restored = self.undo_state(&result);
+        self.checking.set(self.checking.get() - 1);
+        let restored = restored?;
         if inputs.keys().chain(restored.keys()).any(|w| {
             (inputs.get(w).copied().unwrap_or_default() - restored.get(w).copied().unwrap_or_default()).norm() > 1e-11
         }) {
             return Err(Fault::BadRewind);
         }
         Ok(result)
-    }
-
-    /// Undo a complete superposition, combining inverse-gate paths BEFORE testing clean discard.
-    /// A per-input check would incorrectly reject paths whose temporary amplitudes cancel.
-    pub fn undo_state(&self, inputs: &Superposition) -> Result<Superposition, Fault> {
-        let mut groups = BTreeMap::<_, Superposition>::new();
-        for (w, &a) in inputs {
-            let record = w.history.last().ok_or(Fault::BadRewind)?;
-            add(groups.entry(record.clone()).or_default(), w.clone(), a);
-        }
-        let mut result = BTreeMap::new();
-        for (record, group) in groups {
-            let mut state = BTreeMap::new();
-            for (mut w, a) in group {
-                w.history.pop();
-                add(&mut state, w, a);
-            }
-            if let Action::JoinedRewind { start, visit } = &record.action {
-                let site = record.before.frames.last().expect("rewind site");
-                let mut reset = BTreeMap::new();
-                for (mut w, a) in state {
-                    w.classical = (**start).clone();
-                    add(&mut reset, w, a);
-                }
-                let mut completed = self.joined_until(reset, 4096, Some(site));
-                for _ in 1..*visit {
-                    let w = completed.keys().next().expect("replay");
-                    let Some(Inst::Rewind { mark, .. }) = self.instruction(&w.classical) else {
-                        return Err(Fault::BadRewind);
-                    };
-                    let h = w.integer(Operand::Slot(*mark))? as usize;
-                    completed = self.joined_rewind(&completed, h)?;
-                    completed = self.joined_until(completed, 4096, Some(site));
-                }
-                if completed.keys().any(|w| w.classical.finish.is_some()) {
-                    return Err(Fault::BadRewind);
-                }
-                let Some(Inst::Rewind { keep, .. }) = self.instruction(&record.before) else { unreachable!() };
-                for (mut w, a) in completed {
-                    for (r, n) in self.keeps(&w, keep, None)? {
-                        w.quantum[r] ^= n;
-                    }
-                    add(&mut result, w, a);
-                }
-                continue;
-            }
-            if let Action::Rewind { start, count } = &record.action {
-                let mut reset = BTreeMap::new();
-                for (mut w, a) in state {
-                    w.classical = (**start).clone();
-                    add(&mut reset, w, a);
-                }
-                state = reset;
-                for _ in 0..*count {
-                    state = self.step_group(&state)?;
-                }
-                for (mut w, a) in state {
-                    if w.classical.finish.is_some() {
-                        return Err(Fault::BadRewind);
-                    }
-                    let Some(Inst::Rewind { keep, .. }) = self.instruction(&record.before) else { unreachable!() };
-                    for (r, n) in self.keeps(&w, keep, None)? {
-                        w.quantum[r] ^= n;
-                    }
-                    add(&mut result, w, a);
-                }
-                continue;
-            }
-            let mut undone = BTreeMap::new();
-            for (mut w, a) in state {
-                match &record.action {
-                    Action::Measurement => return Err(Fault::BadRewind),
-                    Action::Allocate(id) => {
-                        if w.quantum[*id] != 0 {
-                            return Err(Fault::BadRewind);
-                        }
-                        w.quantum.truncate(record.before.registers.len());
-                    }
-                    Action::Free(id) => w.quantum[*id] = 0,
-                    Action::Read(reads) => {
-                        if reads.iter().any(|&(id, value)| w.quantum[id] != value) {
-                            return Err(Fault::BadRewind);
-                        }
-                    }
-                    Action::Cells(cells) => {
-                        for &(id, old, new) in cells {
-                            if w.quantum[id] != u64::from(new) {
-                                return Err(Fault::BadRewind);
-                            }
-                            w.quantum[id] = u64::from(old);
-                        }
-                    }
-                    _ => {}
-                }
-                for (out, b) in self.quantum_action(w, &record, true)? {
-                    add(&mut undone, out, a * b);
-                }
-            }
-            clean(&mut undone);
-            for (mut out, a) in undone {
-                if let Action::MemoryGate { promoted, .. } = &record.action {
-                    for &(_, id, old) in promoted {
-                        if out.quantum[id] != u64::from(old) {
-                            return Err(Fault::BadRewind);
-                        }
-                        out.quantum[id] = 0;
-                    }
-                    out.quantum.truncate(record.before.registers.len());
-                }
-                out.classical = record.before.clone();
-                add(&mut result, out, a);
-            }
-        }
-        clean(&mut result);
-        Ok(result)
-    }
-
-    pub fn undo(&self, w: World) -> Result<Superposition, Fault> {
-        self.undo_state(&basis(w))
     }
 
     /// Condition on an observed outcome after checking its Born weight separately. This does not

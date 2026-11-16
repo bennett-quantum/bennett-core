@@ -1090,6 +1090,26 @@ defects of the prototype, not of the machine.
   an `i8` code would survive a further widening of the codes, at the cost of a `trunc` before a keep into a
   `q5`.
 
+- **Reference-only clock/diagnostic boundaries:** the documents define successful forward clocks and
+  budget deadlines, but not the time of a faulting attempt or the ordering of a caught fault and a
+  sibling return in one simulator round. Taken for the reference: count an attempted named fault as
+  one clock unit, except an already-spent deadline; do not assert fault clocks or the simultaneous
+  strict-stop boundary. Recommendation: leave these as simulator conventions until time is observable
+  to a program. The reference's strict diagnostic report is separate from the machine state.
+
+- **A budgeted callee's padded clock and its caller's mark:** does an internal rewind after a memory
+  qubit read spend its mark's whole budget against an enclosing caller mark, or does the call have a
+  region-local clock and charge only its forward steps to the caller? "The mark's budget" says nested
+  marks cover inner waits, but also excludes callers' marks inside a coherent region; "The call with a
+  fault value" attaches region rules without saying how these clocks compose. Witness:
+  `caller_mark_and_padded_callee_clock_need_a_composition_rule` in
+  `crates/exec/tests/worlds_budgets_independent.rs` (ignored as a specification question, not a defect).
+  With a call budget of 5, an internal `mark budget 10` and caller `mark budget 8`, the reference's
+  shared clock leaves one world with `budget` whereas the executor completes uncomputation. Taken:
+  keep the shared per-world clock in the reference; compare this combined form with an ample caller
+  budget, leaving this narrow boundary unasserted. Recommendation: state explicitly which clock and
+  deadline the call uses, then enable the witness or correct the reference to that rule.
+
 - **The NaN payload rule and the default NaN** (e7). Taken: two NaN results agree when each carries the
   payload of one of the tuple's NaN operands or the default NaN's, the sign free. The default NaN is not an
   operand of the helper, but it is an operand of the inner operation whose operand order differs (an inner
@@ -1170,6 +1190,28 @@ the ordinary frontend run without changing its domain or assertions.
   `No mutants to filter` then `JSONDecodeError`, because cargo-mutants emits empty stdout.
   Route: handle that output before JSON parsing; standalone experiment workspaces still need their
   own mutation checks (`experiments/lua-probe/README.md`). No mutation pass is claimed for it.
+
+- **Independent whole-world reference, extended on 2026-11-16:** finite mark budgets now bound each
+  world's clock, close on rewind and charge the deadline after a register/cell read; an unbudgeted
+  rewind after such a read faults. The reference interprets `CallBudget` (nested guarded frames,
+  remaining steps, returns/catches, faults, region rules and longjmp boundaries), including in `apply`.
+  Live guards retain their branch-local consumption through an internal rewind of a memory-qubit
+  read; inverse replay retains the original counts. The default matrix has 16 tests / 638 executor
+  runs, plus an ignored specification witness for the clock-composition question above.
+  Its replay resource limit is incremental, so a newly endless replay ends atomically with `budget`;
+  replay seeks a dynamic visit rather than a fixed instruction count. It models strict/machine dirty
+  frees and stale handles, nonzero-allocation leftovers and barriers. New comparisons:
+  `crates/exec/tests/worlds_budgets_independent.rs`, public states and guard counts each step, finite
+  budget boundaries, fault codes, complex amplitudes after uncomputation, observable successful clocks,
+  Born support and reversal. No executor implementation was used to derive it (only public snapshot
+  declarations for the adapter). Remaining scope limits: snapshots expose the latest world's clock
+  only, so individual parked-world clocks cannot be checked through them; exact strict-stop ordering
+  when a sibling return and a caught fault coincide is unspecified and not asserted; padded clocks
+  inside a budgeted callee versus its caller's mark need a composition rule (question above); the
+  lifetime of a deadline after its callee returns is the existing seam question (this reference
+  invalidates the callee's marks and does not compare that open case); no new quantum
+  state guarantee is asserted for unfaithful inverses. The reference keeps the previously recorded
+  deferred-check cohort limitation below. Large snapshot histories remain slow (rung 2 above).
 
 - `Stats::region_cost.copied_bytes` omits callee-frame growth before a memory split: adding eight
   callee slots adds 128 copied bytes but leaves the report unchanged. Ignored witness:

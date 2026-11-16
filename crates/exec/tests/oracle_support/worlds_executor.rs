@@ -62,6 +62,9 @@ fn matches_group(model: &Model<'_>, state: &Superposition, snapshot: &bennett_ex
         return false;
     }
     for (f, a) in c.frames.iter().zip(&snapshot.classical.frames) {
+        if f.fault.and_then(|_| c.time.guards.get(&f.activation).copied()) != a.guard {
+            return false;
+        }
         if (f.function, f.block, f.instruction, f.base, f.entry_sp)
             != (a.func, a.block, a.inst, a.base, a.entry_stack_pointer)
         {
@@ -166,7 +169,7 @@ pub fn compare(program: &ValidModule, entry: &str, args: &[u64], limit: usize, m
             state = model.collapse(&state, value);
         } else {
             let before = model.replayed();
-            let next = model.step(&state);
+            let next = model.step_with_replay_budget(&state, limit as u64 - step as u64 - charged - 1);
             if next.len() > 64 {
                 eprintln!("reference prefix stopped before more than 64 complete basis states at round {step}");
                 return step;
@@ -243,7 +246,7 @@ pub fn compare_world_entry(program: &ValidModule, entry: &str, args: &[u64]) -> 
         f.blocks.iter().any(|b| {
             b.insts.iter().any(|inst| {
                 let (args, params): (_, Vec<_>) = match inst {
-                    Inst::Call { callee, args, .. } => {
+                    Inst::Call { callee, args, .. } | Inst::CallBudget { callee, args, .. } => {
                         (args, program.function(*callee).params.iter().map(|p| p.ty).collect())
                     }
                     Inst::CallIndirect { signature, args, .. } => (args, signature.params.clone()),
