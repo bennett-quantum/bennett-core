@@ -49,8 +49,10 @@ python3 scripts/mutate-diff.py origin/main --list
 python3 scripts/mutate-diff.py origin/main
 ```
 
-The script checks a clean revision, uses its merge-base diff, rejects an empty mutation set, runs one mutant at a time, and tests all
-workspace default packages rather than just the mutated crate. Results and the input diff go under
+The script checks a clean revision, uses its merge-base diff, rejects an empty mutation set, runs one mutant at a time, and generates mutations across the workspace. It tests the workspace default packages plus every
+changed Rust package, discovered through Cargo metadata, rather than just the mutated crate. For
+front-harness changes, run `front/test.sh` first; the runner supplies the built front to isolated test
+copies through `BENNETT_FRONT`. Results and the input diff go under
 `.tmp/mutation/`. Fix every real surviving mutant with a regression test; examine unviable mutants and
 timeouts rather than relabeling them as caught. Do not lower a score threshold or exclude a survivor to
 land. For unsupported forms, seed a semantic edit by hand and run the relevant existing suite.
