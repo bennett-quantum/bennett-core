@@ -1,13 +1,13 @@
 # HANDOFF
 
-State on 2026-11-16, 10:16 UTC, morning session (jobs running; this paragraph is kept current as work lands).
-Landed this morning: an independent oracle for the front's fallback, written before the fallback (`27265ba`); a
+State on 2026-11-16: stopped at 14:26 UTC by the maintainer's wind-down order; nothing is running. Landed today
+on `main`: an independent oracle for the front's fallback and its testing pass's fixes (`27265ba`, `40c84d4`); a
 failed rewind made atomic, the two replay panics and the canceled-keeps refusal fixed (`145a72c`); the six complex
-helpers from libgcc 13.3, unmodified, replacing compiler-rt (`e89c98f`..`df429d7`). In flight: the decided changes
-to the device program, the automatic checks, the SQL oracle's growth, the North Star rungs as worded,
-mutation testing of the IR and CLI, a Rust probe. Files and clocks are implemented on their job branch:
-16 native/reset cases and all six file-blocked corpus programs pass; independent testing follows (runtime
-section below). New questions are in "Questions for the maintainer".
+helpers from libgcc 13.3, unmodified, replacing compiler-rt (`e89c98f`..`df429d7`); a Rust scalar probe
+(`c906fad`); files, clock and entropy for the musl runtime and the SQL oracle grown to five query shapes through
+256 rows with Grover at 512 (`a3f4de5`); test commits of the journal mutation job (`623d9e4`). Finished but not
+landed, because their checks were interrupted: see "Stopped in flight on 2026-11-16". New questions are in
+"Questions for the maintainer"; the design audition of the same day is recorded before them.
 Earlier: the night session (the journalled machine in the executor, all five steps of its order, with two
 independent oracles; journal content; `setjmp`/`longjmp`, return addresses and calls through another prototype in
 the front). The last corpus run (`64571ac`, musl linked) has GCC 1,569 agree, c-testsuite 218, `ieee/` 64, none
@@ -118,6 +118,39 @@ explicitly after the separate musl build.
   by device effects, an arena and `exit`; everything not implemented traps by name. Chosen over picolibc for scope,
   because the goal is unmodified real programs. No design audition: the two libraries gave matching outcomes in the
   probe (`experiments/libc-probe/README.md`).
+
+## Stopped in flight on 2026-11-16
+
+Stopped at 14:26 UTC with nothing running. Every piece of work is on a `wip/` branch of the public repository;
+nothing unchecked is on `main`.
+
+- **Landing stack** `wip/land-stack` (`a67fd71`): 22 commits on `623d9e4` (ladder, entry-fix, replay-test,
+  libgcc-test, files-test, mutants-ir) plus a hand-merged HANDOFF commit. Each job passed the four checks on its
+  own base; the four checks on the stack were interrupted. Next: run the four checks on the stack (fill the
+  `Check it` counts from that run), then fast-forward `main` to it.
+- **Checks job** `wip/checks-rebased` (`33b97f0`; the job's own head before my rebase is `wip/checks`,
+  `364ee49`): the ten automatic checks, the test rules, `bennett.h` for C++. The four checks and the hygiene
+  scan passed on `33b97f0`; its changed-line mutation sweep (`python3 scripts/mutate-diff.py origin/main`, 22
+  mutants) was interrupted after the baseline. Next: rebase on `main` after the stack, rerun the four checks,
+  run the sweep, land.
+- **Machine decisions** `wip/machine-decisions` (`299022f`): step a (5-bit fault codes, `bad_longjmp`,
+  `6f8460d`) and step b (opaque mark handles, `64d8e22`) checked (cargo 311, front 171, clippy and fmt clean);
+  step c (no use after a rewind of a value defined since its mark, `a955997`) committed, unchecked; step d
+  (`measure` takes an address, `299022f`) does not compile: three errors in the test oracles, which still name
+  `measure`'s old `register` field. Step e (the call form with a fault value and a budget) not started.
+  Next: finish d, check c and d, land a-d one by one; then e.
+- **Testing passes owed:** machine-decisions a-d (by sol, Opus built it); sql-oracle, checks and entry-fix (by
+  Opus, sol built them). Done today: fix-replay (sol, no wrong result), fallback oracle (Opus, four accepted
+  wrong results fixed), libgcc (Opus, none on canonical inputs; a noncanonical x87 compare witness), files
+  and clocks (Opus, 18 wrong results fixed, on the stack).
+- **The fallback** (next step 4): not started. Ready for it: the landed oracle (`front/tests/c/fallback_oracle/`)
+  and a second, independent plan for its order of steps, kept privately for the implementer to compare with
+  its own. Starts after step e.
+- **Journal mutation job** `wip/mutants-journal` (`623d9e4`, landed): told to finish its last batch and report;
+  its test commits are on `main`.
+
+Quota rule in force: work to pace on Claude and on Codex; launch a job only while `quota` says "behind" for
+its vendor; at most two sol jobs at once.
 
 ## Stopped in flight
 
@@ -778,6 +811,50 @@ How work is done:
 - **Equal-priority constructor order across separately compiled objects** follows a native build of the linked
   module, not separately linked objects (C leaves it unspecified). Record as a debt, with the route of lowering
   startup per unit before linking?
+
+## Design audition of 2026-11-16: the device on an ideal circuit-model quantum computer
+
+The maintainer asked for a prototype VM whose quantum state lives only behind a backend interface (an ideal
+quantum circuit with ideal logical qubits, plus dynamic allocation of wires), with a classical core and a
+reversible core, "to smoke out any unphysical assumptions that lead to exponential overheads or violations of
+quantum mechanics". Two independent designs with small working prototypes were made (Claude Fable, GPT Astra);
+they agree on the findings below. The prototypes are private and not in this tree; merging them into one was
+started and is unfinished. The maintainer has decided nothing on these findings yet.
+
+- **Checks that inspect the state cannot be device behaviour.** `dirty_free`, the state-dependent causes of
+  `bad_rewind` with its restore, and "stop the run when some world faults" need to know something about every
+  branch with certainty, which no device can (it would tell non-orthogonal states apart). They can stay as
+  simulator diagnostics. On a device a release is a promise, a broken promise is a silent partial trace, and a
+  fault is a code in qubits. This bears on the decisions of 2026-11-16 about (1)/W2, W3 and the call form
+  that returns a fault code [A1], which would let a program observe such a check.
+- **"Until every world has stopped", parking after an un-run, and time not being part of the state [W1] are
+  not realisable as scheduled.** Every stretch of code that depends on a qubit needs a classical step budget,
+  and a rewind after a read has to be: wait at the rewind, keep, then run the same steps backwards on every
+  branch together. Witness: with two branches of 1 and 3 steps, un-run-then-park gives the final measurement 0
+  with probability 0.5 where waiting at the rewind gives 1.
+- **Exponential costs.** Cleaning up at every nesting level: 3·2^d − 2 gates measured, against 2(d + 1) when
+  inner history stays open until the outer rewind. A coherent region inside code that itself runs on a qubit
+  multiplies the budget at every level (a factor of 40 per level in one prototype's witness).
+- **Anything whose number depends on a qubit needs a classical bound and padding**: allocations, frames, the
+  length of the history, loop trips. Allocation is always a classical decision.
+- **Polynomial but large.** With the program position in qubits every step pays for every instruction;
+  memory at an address in superposition pays for every reachable byte on each access (the overlay saves the
+  simulator's memory, not gates); many-controlled gates are not unit cost (30k − 45 elementary gates for k
+  controls in one decomposition).
+- **Found sound on small cases**, with states equal to this executor's: the thesis program, the
+  mark/call/rewind-keep idiom, promotion of a byte, Grover with an arithmetic oracle, and Shor's period
+  finding for 15 with the modular exponentiation as ordinary code (683,469 gates and 1,649 wires in the
+  general, unoptimised lowering).
+- **From C today.** Shor's period finding for 15 (base 7, 8 exponent qubits) compiles through clang and
+  `bennett-front` and runs on the executor, returning 0, 64, 128, 192, with an idiomatic `powmod` (a loop,
+  `*`, `%`) applied to a qubit variable by `fx ^= powmod(7, x, 15)`. The Fourier transform had to be written
+  over separately named `_Bool` variables, because the front refuses: a qubit variable passed to a function,
+  `bennett_bit` with an index that is not a compile-time constant, and a gate on one bit controlled by another
+  bit of the same variable. These three are what stand between an idiomatic, modular Shor in C and running
+  code.
+- **The bar the maintainer set**: idiomatic C in, circuits matching hand-optimised ones out. The gap is to be
+  measured (each lowering of the idiomatic source against a hand-built circuit on the same backend) and each
+  part of it tied to a named compiler step.
 
 ## Questions for the maintainer
 
