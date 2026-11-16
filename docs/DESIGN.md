@@ -1092,7 +1092,9 @@ code with dirty targets in all three apply modes, all 256 single-bit jump-record
 in agreeing/disagreeing cells, and jumps across marked activations. Whole-world reference checks and
 captured snapshots cross-check outcomes and reversal. Admission probes permute definitions and
 rewinds, diamond block order and non-local continuations, and refuse forged/transferred handles.
-The ignored stale-buffer resumption witness records one false refusal (HANDOFF, "Known weak spots").
+Their stale-buffer resumption witness found one false refusal, since fixed: the rewound-use analysis
+joined the facts of `longjmp` resumptions before the `setjmp`'s own operand uses, although a resumption
+continues after the instruction and reads none of them (`crates/ir/src/validate/rewound.rs`).
 
 Tests constrain behavior, with witnesses that would fail for the intended defect:
 

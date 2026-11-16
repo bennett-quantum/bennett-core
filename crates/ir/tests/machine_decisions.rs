@@ -145,7 +145,6 @@ fn all_measurement_widths_and_extreme_addresses_round_trip() {
 /// `%buf` is restored away, but no continuation instruction reads it. Rebuild the four-word record
 /// with constants after the rewind so that the jump itself is valid too (SYNTAX, "Non-local jumps").
 #[test]
-#[ignore = "defect: setjmp resumption spuriously reads a buffer operand restored by rewind"]
 fn resuming_after_setjmp_does_not_read_its_stale_buffer_operand() {
     let text = include_str!("fixtures/rewound_setjmp.bn");
     // Four slots reserve 32 bytes, so the saved SP is 480; setjmp is entry instruction 2.

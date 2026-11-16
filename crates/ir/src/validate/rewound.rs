@@ -144,10 +144,12 @@ impl Analysis<'_> {
             state.define(param.slot);
         }
         for (i, inst) in block.insts.iter().enumerate() {
+            inst.visit_uses(|slot| uses(Some(i), &state, slot));
+            // A resumption by a `longjmp` continues after the `setjmp`, defining its result: it does not
+            // read the `setjmp`'s operands, so they are read in the state of the path that runs it.
             if let Inst::Setjmp { .. } = inst {
                 state.union_with(jumps);
             }
-            inst.visit_uses(|slot| uses(Some(i), &state, slot));
             match inst {
                 Inst::Call { .. } | Inst::CallBudget { .. } | Inst::CallIndirect { .. } => sources.union_with(&state),
                 Inst::Rewind { mark, .. } => {
