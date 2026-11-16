@@ -482,7 +482,6 @@ fn failed_rewind_work_counts_the_steps_undone_and_replayed_for_restoration() {
 }
 
 #[test]
-#[ignore = "a fault in a forked replay panics before the outer rewind restores its saved world"]
 fn a_fault_in_a_forked_replay_refuses_the_outer_rewind_without_changing_it() {
     let module = load(
         "memory 512
@@ -522,7 +521,6 @@ entry:
 }
 
 #[test]
-#[ignore = "a new replay measurement reaches the reversal barrier and panics"]
 fn a_measurement_newly_reached_during_replay_refuses_without_observation() {
     let module = load(
         "memory 512

@@ -9,6 +9,8 @@
 //! is kept as a comparison (`ApplyMode`).
 
 mod arith;
+#[cfg(test)]
+mod atomic_rewind_tests;
 mod backward;
 mod cells;
 #[cfg(test)]

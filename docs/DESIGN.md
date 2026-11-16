@@ -144,9 +144,15 @@ step ("Worlds", below).
   (The first fix kept the number of steps un-run; worlds that took paths of different lengths would then
   never be equal again, so the visit is kept instead.) The steps ran before from the same classical
   state, so they run again identically; budget, configuration limit and region-fault checks are not
-  repeated. Under an outer rewind's keeps one may still fault (step 3), and then is undone again. An
-  `apply` un-run or run again by a rewind may fault on some branches without stopping the run: it is a
-  permutation either way, and the strict check is for running forward.
+  repeated. Under an outer rewind's keeps one may still fault (step 3), in its own world or in one
+  that split off while it ran, and then is undone again: the outer rewind faults `bad_rewind` with
+  every world exactly as before it (since 2026-11-16 also when the failing world split off, which
+  panicked before). A `measure` reached while running again is such a fault, refused before it samples
+  or observes: no rewound region held one, so it lies on a path the history does not describe.
+  `crates/exec/src/atomic_rewind_tests.rs` compares the whole machine (every world's journal, slots,
+  register table and kept copies, the generator, observations) before and after each way a rewind
+  fails. An `apply` un-run or run again by a rewind may fault on some branches without stopping the
+  run: it is a permutation either way, and the strict check is for running forward.
 - **Cost.** A rewind counts as one step and `steps` never goes back, so the budget bounds a loop of
   rewinds. The work of un-running is counted apart (`Stats::rewound_steps`, `Stats::rerun_steps`). The
   known exponential is measured (`crates/exec/tests/history.rs`): a chain of `d` levels that each mark,
@@ -194,8 +200,9 @@ configuration. With one world the machine is exactly the machine above.
   and the rewind (`x %q ctrl %o` carries a keep into `o` over to `q`). The un-run of each read checks
   that the register still holds the value read, in every configuration; if not, the rewind faults
   `bad_rewind` and changes nothing (the orchestrator's interim decision until the maintainer answers;
-  rule 4 of "What is promised" makes it a warning in the end, so it is a debt). A nonzero keep into a
-  register read since the mark is refused before un-running; anything else is found while un-running,
+  rule 4 of "What is promised" makes it a warning in the end, so it is a debt). Keeps whose net change
+  (their XOR, per register or memory byte) to a register read since the mark is not zero are refused
+  before un-running; two equal keeps into it change nothing and are not; anything else is found while un-running,
   and the rewind runs forward again what it un-ran, as for the other mismatches above, or, if worlds
   split off during its un-run (running an earlier merging rewind again) or it un-ran past its split
   point, restores a copy of the world it took first. Below a world's split point the check is made on

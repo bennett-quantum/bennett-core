@@ -9,7 +9,8 @@
 //! The keeps change registers the region may have read, so its un-run can meet a state its history does
 //! not describe: a register read as an integer that no longer holds the value read, a register allocated
 //! since the mark that is not zero when its allocation is un-run, or an inner rewind whose region faults
-//! when it is run again. The rewind then faults with `bad_rewind`, having changed nothing: it runs forward
+//! when it is run again (a fault, or a `measure` reached on a new path, in any world split off on the way).
+//! The rewind then faults with `bad_rewind`, having changed nothing: it runs forward
 //! again the steps it un-ran and XORs the keeps out, or, if worlds split off during its un-run, restores a
 //! copy it took first.
 //!
@@ -56,12 +57,21 @@ impl<'m> Executor<'m> {
             return Err(Fault::BadRewind.into());
         }
         let journal = self.journal.as_ref().expect("an open mark is in the journal");
-        let changes = kept.iter().any(|&(_, value)| value != 0);
-        // A kept value into a register or memory qubit read since the mark: un-running the read would find
-        // it changed.
+        // What the keeps change, per column: keeps into the same register or memory byte XOR together, so
+        // two equal keeps change nothing.
+        let mut net: Vec<(usize, u64)> = Vec::with_capacity(kept.len());
+        for &(column, value) in &kept {
+            match net.iter_mut().find(|(seen, _)| *seen == column) {
+                Some((_, sum)) => *sum ^= value,
+                None => net.push((column, value)),
+            }
+        }
+        let changes = net.iter().any(|&(_, value)| value != 0);
+        // A net change to a register or memory qubit read since the mark: un-running the read would find it
+        // changed.
         let reads = journal.reads_from(entry.position);
         let cells = journal.cells_from(entry.position);
-        if kept.iter().any(|&(column, value)| {
+        if net.iter().any(|&(column, value)| {
             value != 0
                 && (reads.iter().any(|read| read.column == column) || cells.iter().any(|cell| cell.column == column))
         }) {
@@ -228,8 +238,9 @@ impl<'m> Executor<'m> {
     /// the rewound steps again from where the mark left the frame until the frame reaches the rewind for
     /// the visit the word names, so a rewind reached again in a loop is restored at the visit being
     /// undone; then XORs the kept values again. Running them again may split the world as it did the first
-    /// time; every part XORs its kept values. If running again faults (`run_again`), the frame is put back
-    /// on the rewind and nothing else has changed.
+    /// time; every part XORs its kept values. If running again faults in any world (`run_again`), the
+    /// frame is put back on the rewind and, unless worlds split off (then the rewind that un-runs this
+    /// restores its copy), nothing else has changed.
     pub(crate) fn undo_rewind(&mut self, rewind: &'m Inst, word: u128) -> Result<(), Mismatch> {
         let Inst::Rewind { keep, .. } = rewind else { unreachable!("a rewind record") };
         let stop = *self.top();
@@ -260,19 +271,23 @@ impl<'m> Executor<'m> {
     /// Runs steps again until the frame at `depth` is at `site` for the `visit`-th time. They ran before
     /// from the same classical state, so limits and checks that they passed then are not applied again,
     /// and the step count is left as it was. Under a rewind's keeps a step can still fault (a `qfree` of a
-    /// register that is not zero, an inner `bad_rewind`): then the steps run so far are undone, and the
-    /// state is as it was. (If worlds split off first, the fault is counted as a mismatch instead, and the
-    /// rewind that ran this restores its copy.)
+    /// register that is not zero, an inner `bad_rewind`, a `measure`, which no rewound region holds, a
+    /// return from the rewind's frame or the end of the run, which it did not reach before): then
+    /// the steps run so far are undone, and the state is as it was. If worlds split off first, the fault,
+    /// in this world or in one that split off, is counted as a mismatch instead and fails the whole run
+    /// again: no world's kept values are XORed, and the rewind that ran this restores its copy.
     pub(crate) fn run_again(&mut self, depth: usize, site: (BlockId, usize), visit: u64) -> Result<(), Mismatch> {
         let max_configurations = self.max_configurations.take();
         let measurement = self.journal_measurement.take();
         let allow_region_faults = std::mem::replace(&mut self.allow_region_faults, true);
         let records = self.journal.as_ref().map_or(0, Journal::records);
         let from = self.forked.len();
+        let mismatches = self.mismatches;
         self.rerunning += 1;
         let mut result = self.run_again_to(depth, site, visit);
         self.rerunning -= 1;
-        if result.is_err() {
+        // A world that split off and then faulted fails the whole run again, as this one faulting would.
+        if result.is_err() || self.mismatches != mismatches {
             if self.forked.len() > from {
                 self.mismatches += 1;
             } else {
@@ -293,6 +308,11 @@ impl<'m> Executor<'m> {
 
     fn run_again_to(&mut self, depth: usize, site: (BlockId, usize), mut visits: u64) -> Result<(), Mismatch> {
         loop {
+            // A path that leaves the rewind's activation never reaches the rewind: the region ran to it
+            // before, so the history does not describe this path.
+            if self.frames.len() < depth {
+                return Err(Mismatch);
+            }
             if self.frames.len() == depth && (self.top().block, self.top().inst) == site {
                 visits -= 1;
                 if visits == 0 {
@@ -302,6 +322,11 @@ impl<'m> Executor<'m> {
             let from = self.forked.len();
             self.execute().map_err(|_| Mismatch)?;
             self.rerun_steps += 1;
+            // Nor does a path that finishes the run (a return from the outermost frame, an `exit`). The
+            // outcome itself may be set already: unwinding a run that faulted runs rewound regions again.
+            if self.journal.as_ref().and_then(Journal::last) == Some(Undo::Finish) {
+                return Err(Mismatch);
+            }
             self.for_forks(from, &|executor| {
                 if executor.run_again_to(depth, site, visits).is_err() {
                     executor.mismatches += 1;

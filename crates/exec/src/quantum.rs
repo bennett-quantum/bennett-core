@@ -406,6 +406,26 @@ impl QuantumState {
     }
 }
 
+#[cfg(test)]
+impl QuantumState {
+    /// Whether `other` is this state: the register table, cells and allocation history exactly, every
+    /// amplitude within `tolerance` (an un-run and its run again round). The peaks are statistics.
+    pub(crate) fn same_state(&self, other: &QuantumState, tolerance: f64) -> bool {
+        let exact = (self.registers == other.registers)
+            && self.columns == other.columns
+            && self.allocations == other.allocations
+            && self.allocation_numbers == other.allocation_numbers
+            && self.cells == other.cells;
+        let zero = Complex64::new(0.0, 0.0);
+        let configs = self.amplitudes.keys().chain(other.amplitudes.keys());
+        exact
+            && configs.into_iter().all(|config| {
+                let (a, b) = (self.amplitudes.get(config), other.amplitudes.get(config));
+                (a.copied().unwrap_or(zero) - b.copied().unwrap_or(zero)).norm() <= tolerance
+            })
+    }
+}
+
 fn handle_id(handle: u64) -> usize {
     (handle & u64::from(u32::MAX)) as usize
 }

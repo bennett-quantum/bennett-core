@@ -908,7 +908,6 @@ entry:
 }
 
 #[test]
-#[ignore = "read-target precheck rejects two XOR keeps whose net change is zero"]
 fn canceled_memory_keeps_preserve_a_read_and_its_interference() {
     let module = bennett_ir::load(
         "memory 64

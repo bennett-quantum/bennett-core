@@ -49,7 +49,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (292 tests; ignored: heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks, the scratch mutation matrix, the canceled memory keep refusal witness and two replay panic witnesses; about 9 s, no LLVM needed) and `front/test.sh` (158 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
+Check it: `cargo test` (306 tests; ignored: heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks, the scratch mutation matrix, about 9 s, no LLVM needed) and `front/test.sh` (158 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
 musl-linked ABI check and two independent variadic checks that need `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"); needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -631,7 +631,9 @@ How work is done:
   stray files in the tree; no work-in-progress commits on `main`; a lint against catch-all match arms in library
   code; a flag on bare time constants in scripts.
 - **Test-writing rules** drawn from past findings go into `docs/DESIGN.md`, "Tests".
-- **Order of the next work**: fix the two replay panics and the canceled-keeps refusal ("Known weak spots");
+- **Order of the next work**: fix the two replay panics and the canceled-keeps refusal ("Known weak spots";
+  done on 2026-11-16: a failed rewind is atomic on every path, compared on the whole machine in
+  `crates/exec/src/atomic_rewind_tests.rs`, and keeps are refused by their net XOR);
   the decisions above that change the device program and the executor; the front's fallback (step 4); files and
   clocks; the checks; then growing the SQL oracle (a cost at a large size needs a cost model, a design question
   of its own).
@@ -734,13 +736,15 @@ How work is done:
 
 ## Known weak spots
 
-- An outer rewind whose keep makes an inner rewind replay split and fault can panic before restoring
-  its saved world. A newly reached measurement during that replay can also panic at the reversal barrier.
-  Both have ignored witnesses in `crates/exec/tests/history_independent.rs`; they require atomic `bad_rewind`.
-
-- Two equal XOR keeps into a memory cell read since the mark cancel, but the early read-target check
-  still refuses them with `bad_rewind` (`canceled_memory_keeps_preserve_a_read_and_its_interference`,
-  ignored in `crates/exec/tests/memory_qubits.rs`). The check considers each keep rather than their net XOR.
+- A rewind whose un-run runs an inner rewind's region again, on a path the original run never took
+  under the outer keeps, can loop for ever: running again stops only at the inner rewind, and budget and
+  limits are not applied there (`docs/DESIGN.md`, "History"). A path that faults, measures, returns from
+  the rewind's frame or ends the run is refused atomically with `bad_rewind` since 2026-11-16 (the
+  return and the end looped for ever before, and a return followed by a second call of the same function
+  reached its rewind in the other activation and was taken as success, a silent wrong result); an
+  endless loop is not detected. Route: charge the work of running again to the run's budget, faulting
+  atomically when it is spent (a decision: today the budget counts ticks, and nested rewinds already do
+  exponential work within a small budget, `docs/DESIGN.md`, "Cost").
 
 - Worlds' deferred un-run checks (`d6036a1`) are matched across worlds by a 64-bit hash of the classical state; a
   collision would add two different checks (route: compare the states on a hash match). The copy each world saves

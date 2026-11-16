@@ -95,6 +95,12 @@ impl<'m> Executor<'m> {
             }
             Inst::Measure { dst, register } => {
                 let id = self.quantum.resolve(self.handle(*register))?;
+                // Steps run again to undo a rewind ran before without a measurement (a rewind refuses
+                // across one), so one reached now is on a path the history does not describe: refuse it
+                // before anything is sampled or observed.
+                if self.rerunning > 0 {
+                    return Err(Fault::BadRewind.into());
+                }
                 if self.has_worlds() {
                     self.observe_world()?;
                 }
