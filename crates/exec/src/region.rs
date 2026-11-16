@@ -124,7 +124,7 @@ impl Executor<'_> {
             Operand::Slot(slot) if matches!(self.slot_type(*slot), Type::Qreg(_)) => {
                 Ok(Input::Register(self.quantum.resolve(self.handle(*slot))?))
             }
-            _ => Ok(Input::Value(self.read(arg))),
+            Operand::Slot(_) | Operand::Const(_) => Ok(Input::Value(self.read(arg))),
         }
     }
 
@@ -466,7 +466,7 @@ impl Executor<'_> {
             .zip(&outcomes)
             .filter_map(|((config, amplitude), outcome)| match *outcome {
                 Outcome::Faulted(code) => Some((config, amplitude.norm_sqr(), code)),
-                _ => None,
+                Outcome::Returned(_) | Outcome::Stopped(_) => None,
             })
             .collect();
         if let Some(error) = self.count_region_faults(callee, &faulting, original.len()) {

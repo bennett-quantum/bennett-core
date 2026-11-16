@@ -810,7 +810,7 @@ impl Executor<'_> {
                 Terminator::Switch { value, cases, .. } => {
                     Some(cases.iter().position(|case| case.value == self.read(value)).unwrap_or(cases.len()))
                 }
-                _ => None,
+                Terminator::Return(_) | Terminator::Exit(_) | Terminator::Longjmp { .. } | Terminator::Fault(_) => None,
             };
             let mut index = 0;
             block.term.visit_targets(|edge| {
@@ -1083,7 +1083,14 @@ impl Executor<'_> {
                     info.return_dst.and_then(|dst| collector.shadow[executing - 1].producers[dst.index()].as_ref())
                 }
                 WordRole::Store => info.store_range.as_ref().and_then(|r| collector.stores.get(&(r.start, r.end))),
-                _ => None,
+                WordRole::AllocaStack
+                | WordRole::StackRestore
+                | WordRole::CallParam(_)
+                | WordRole::JumpSource
+                | WordRole::ReturnPacked
+                | WordRole::ReturnStack
+                | WordRole::JumpRecord(_)
+                | WordRole::LongjmpControl(_) => None,
             };
             word.recompute = producer.and_then(|p| self.recompute_witness(p, word.value, live));
             // A cheap copy witness may differ across branches. Keep every instance's post-step
@@ -1127,10 +1134,31 @@ impl Executor<'_> {
                                     };
                                     Some((address as usize, width.bytes() as usize))
                                 }
-                                _ => None,
+                                Inst::Binary { .. }
+                                | Inst::Compare { .. }
+                                | Inst::Select { .. }
+                                | Inst::Cast { .. }
+                                | Inst::Store { .. }
+                                | Inst::Alloca { .. }
+                                | Inst::StackSave { .. }
+                                | Inst::StackRestore { .. }
+                                | Inst::Setjmp { .. }
+                                | Inst::ReturnAddress { .. }
+                                | Inst::Call { .. }
+                                | Inst::CallIndirect { .. }
+                                | Inst::FuncAddr { .. }
+                                | Inst::Effect { .. }
+                                | Inst::Qalloc { .. }
+                                | Inst::Qfree { .. }
+                                | Inst::Gate { .. }
+                                | Inst::GateAt { .. }
+                                | Inst::Measure { .. }
+                                | Inst::Apply { .. }
+                                | Inst::Mark { .. }
+                                | Inst::Rewind { .. } => None,
                             }
                         }
-                        _ => None,
+                        SitePos::Entry | SitePos::Term => None,
                     };
                     let id = collector.history.len();
                     let mut node =
@@ -1192,7 +1220,19 @@ impl Executor<'_> {
                 let dst = info.dst.expect("a longjmp resumes a setjmp");
                 collector.shadow[executing - info.discarded].producers[dst.index()] = None;
             }
-            _ => {}
+            Undo::StackRestore
+            | Undo::Effect
+            | Undo::Call
+            | Undo::Finish
+            | Undo::Gate
+            | Undo::Qalloc
+            | Undo::Qfree
+            | Undo::Measure
+            | Undo::Apply
+            | Undo::Mark
+            | Undo::Rewind
+            | Undo::GateAt
+            | Undo::GateAtPromoted => {}
         }
         assert_eq!(words.len(), info.words.len(), "every journal word gets a role");
         collector.live = live_scratch;
@@ -1220,7 +1260,23 @@ impl Executor<'_> {
                 let kept = collector.shadow.len() - info.discarded;
                 collector.shadow.truncate(kept);
             }
-            _ => {}
+            Undo::Slot
+            | Undo::Store
+            | Undo::Alloca
+            | Undo::StackRestore
+            | Undo::Effect
+            | Undo::Jump
+            | Undo::Finish
+            | Undo::Gate
+            | Undo::Qalloc
+            | Undo::Qfree
+            | Undo::Measure
+            | Undo::Apply
+            | Undo::Mark
+            | Undo::Rewind
+            | Undo::Setjmp
+            | Undo::GateAt
+            | Undo::GateAtPromoted => {}
         }
     }
 
@@ -1235,7 +1291,21 @@ impl Executor<'_> {
                 Inst::Cast { value, .. } | Inst::Store { value, .. } => vec![*value],
                 Inst::Load { address, .. } => vec![*address],
                 Inst::FuncAddr { .. } | Inst::StackSave { .. } => vec![],
-                _ => return None,
+                Inst::Alloca { .. }
+                | Inst::StackRestore { .. }
+                | Inst::Setjmp { .. }
+                | Inst::ReturnAddress { .. }
+                | Inst::Call { .. }
+                | Inst::CallIndirect { .. }
+                | Inst::Effect { .. }
+                | Inst::Qalloc { .. }
+                | Inst::Qfree { .. }
+                | Inst::Gate { .. }
+                | Inst::GateAt { .. }
+                | Inst::Measure { .. }
+                | Inst::Apply { .. }
+                | Inst::Mark { .. }
+                | Inst::Rewind { .. } => return None,
             }),
             (SitePos::Term, ProducerOutput::JumpArgument { target, argument }) => {
                 let mut operand = None;
@@ -1291,7 +1361,21 @@ impl Executor<'_> {
                 Inst::FuncAddr { func, .. } => Some(u128::from(func.address())),
                 Inst::StackSave { .. } => Some(u128::from(self.stack_pointer)),
                 Inst::Store { value, .. } => Some(read(value)),
-                _ => None,
+                Inst::Alloca { .. }
+                | Inst::StackRestore { .. }
+                | Inst::Setjmp { .. }
+                | Inst::ReturnAddress { .. }
+                | Inst::Call { .. }
+                | Inst::CallIndirect { .. }
+                | Inst::Effect { .. }
+                | Inst::Qalloc { .. }
+                | Inst::Qfree { .. }
+                | Inst::Gate { .. }
+                | Inst::GateAt { .. }
+                | Inst::Measure { .. }
+                | Inst::Apply { .. }
+                | Inst::Mark { .. }
+                | Inst::Rewind { .. } => None,
             },
             (SitePos::Term, ProducerOutput::JumpArgument { .. }) => {
                 self.producer_operands(producer.site, producer.output).map(|operands| read(&operands[0]))
@@ -1392,7 +1476,24 @@ impl Executor<'_> {
         let paired = match kind {
             Undo::Return => shadow.len() - 1,
             Undo::Longjmp => shadow.len() - discarded,
-            _ => shadow.len(),
+            Undo::Slot
+            | Undo::Store
+            | Undo::Alloca
+            | Undo::StackRestore
+            | Undo::Effect
+            | Undo::Call
+            | Undo::Jump
+            | Undo::Finish
+            | Undo::Gate
+            | Undo::Qalloc
+            | Undo::Qfree
+            | Undo::Measure
+            | Undo::Apply
+            | Undo::Mark
+            | Undo::Rewind
+            | Undo::Setjmp
+            | Undo::GateAt
+            | Undo::GateAtPromoted => shadow.len(),
         };
         let start = self.frames.len() - paired - usize::from(kind == Undo::Call);
         for (frame, shadow) in self.frames[start..start + paired].iter().zip(shadow) {
