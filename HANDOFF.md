@@ -1287,6 +1287,22 @@ the ordinary frontend run without changing its domain or assertions.
 
 ## Known weak spots
 
+- Independent conformance testing of the noncanonical x87/input fixes: `front/tests/tests/p0_independent.rs`
+  has ignored defect witnesses for `powi(x, 1)` changing pseudo-denormal/unsupported raw encodings,
+  `roundevenl` of a tiny unnormal giving NaN instead of glibc's zero, and `isfinite`/`isnan` differing at
+  clang `-O0` (the same classification witnesses pass at `-O2`). Routes: preserve a `powi` argument on the
+  exponent-1 path; follow glibc's software encoding tests for `roundevenl`; make the front's classification
+  follow the native x87 comparison where clang emits one. The already documented `roundl` and half/bfloat
+  software conversion differences now have minimal ignored witnesses too. All witnesses were run and failed.
+  Exact coverage and excluded cases: `rt/softfloat/README.md`, "Independent conformance pass".
+- Front input admission still has three gaps (`front/tests/tests/p0_invalid_input.rs`, ignored witnesses,
+  each run and observed failing): ordinary syntax errors exit 2 but omit "the input is not valid LLVM IR";
+  an empty input exits 0 and writes an empty device module (LLVM considers it a syntactically valid module,
+  but the requested front contract calls for refusal); and a 44-byte bitcode module with dangling
+  subprogram type metadata segfaults inside LLVM's metadata reader. Routes: name ordinary parse failures;
+  settle/check executable entry admission for empty modules; contain signals while reading, as well as
+  fatal errors. The metadata case is a crash, not a verifier failure caught by the new fatal-error handler.
+
 - The changed-line mutation scope preview can crash on a diff without generated workspace Rust
   mutants: `python3 scripts/mutate-diff.py origin/main --list` on the Lua probe reports
   `No mutants to filter` then `JSONDecodeError`, because cargo-mutants emits empty stdout.

@@ -113,6 +113,77 @@ long-double tests, every result unchanged: `float_long_double.c` (9,268 results)
 at `-O0` (+10.0%) and 1,649,392 to 1,842,776 at `-O2` (+11.7%); `float_long_double_programs.c` 75,851 to
 84,573 (+11.5%) and 73,166 to 81,703 (+11.7%).
 
+## Independent conformance pass
+
+`front/tests/tests/p0_independent.rs` independently tests the noncanonical operand fix at clang `-O0`
+and `-O2`. Its reference is native x86-64 C (volatile raw operands, no copied normalization algorithm).
+The large matrix compiles the actual device runtime bitcode natively with renamed symbols, as the existing
+runtime tests do; the smaller pipeline tests go through clang, the front and the executor. Result comparisons
+are exact, including NaN bits and excluding the six ABI padding bytes.
+
+- `p0_x87_matrix.c`: 354 inputs, a Cartesian sign/exponent/significand set plus fixed random raw and
+  canonical encodings. All classes meet every other class on both sides. **2,388,054 checks per level**:
+  add/sub/mul/div, their results fed to addition, all six comparisons and unordered, `fminl`/`fmaxl` and
+  their results fed to arithmetic, sqrt/floor/ceil/trunc/rint/nearbyint, and conversions to/from float,
+  double and signed/unsigned 32/64/128-bit integers. Canonical cases also cover round/roundeven/fma and
+  half/bfloat truncation. **3,771 powers** per level (exponents -17,-4,-3,-2,-1,0,1,2,3,4,17, excluding
+  the separately witnessed noncanonical exponent-1 defect), **120 integer boundary conversions**, and
+  **139,264 floating-source conversions** (every half/bfloat encoding; double samples in every exponent).
+- `p0_x87_pipeline.c`: **4,640 results per level**, including negation/fabs/copysign, narrow integers,
+  lrint/llrint, all ordered/unordered comparison combinations, classification masks and arithmetic after
+  min/max/add. At O0, only the two witnessed predicate bits are excluded in fourteen noncanonical aggregate
+  classification cases; the other predicate bits are checked. Ten noncanonical half-conversion cases are
+  excluded by explicit operation/operand identity and have a minimal witness. Twelve undefined NaN/unsupported
+  to-u64 cases at O2 are measured separately: native gives 2^63, the device gives 0 (the native O0 result).
+  This is recorded target behavior, not counted as conformance or as a defined-C defect.
+- Generated `_BitInt` probe: **1,024 native/device results per level** across every supported integer
+  width 1..128, both signednesses (signed starts at 2), in both directions and with result reuse.
+  Floating-to-integer values here are representable after truncation. One MiB of stack accommodates
+  the generated dispatch function's SSA frame.
+
+All passing comparisons agree. The new ignored witnesses below were explicitly run and failed on the
+tested implementation; their native witnesses return 0. `witness()` reports both optimization levels
+before asserting, so a failure at the first level does not hide the second.
+
+| Witness in `p0_independent.rs` | Difference | Severity |
+|---|---|---|
+| `powi_one_preserves_a_pseudo_denormal_encoding` | `powi(x,1)`: native preserves exponent 0, runtime changes it to 1 | Medium; observable raw-bit result |
+| `powi_one_preserves_an_unsupported_encoding` | Native returns the unsupported argument unchanged; runtime replaces it with indefinite | Medium; observable raw-bit result |
+| `roundeven_of_an_unnormal_matches_native_software` | For exponent 1/significand 1, glibc returns +0, runtime NaN; adding 1 preserves the difference | Medium; wrong numerical result, O0/O2 |
+| `a_pseudo_denormal_is_finite` | Native true, device false at O0; O2 agrees | Medium; wrong branch predicate |
+| `an_unsupported_encoding_is_nan` | Native true, device false at O0; O2 agrees | Medium; wrong branch predicate |
+
+The expected `powi` bits follow native libgcc's exponent-1 path, which returns without arithmetic.
+`roundevenl` examines the encoding in software, as `roundl` does. Native aggregate classification uses
+x87 comparisons at O0 where the front's bit classification has different answers. The individual
+`is.fpclass` masks and `fpclassify` are retained as passing probes, not conflated with those C predicates.
+The already documented `roundl`, half and bfloat software differences each now have a minimal ignored
+witness too (`round_of_an_unnormal_matches_native_software`, `half_conversion_of_an_unnormal_matches_native_software`,
+`bfloat_conversion_of_an_unnormal_matches_native_software`): exponent 1/significand 1 becomes zero
+natively and NaN on the device, at both levels. `fmal`'s previously documented noncanonical differences
+remain covered by the existing runtime sweep; this pass's canonical fma probes agree.
+
+The same pass's `crates/ir/tests/p0_angles.rs` checks all three axes in four register/memory/control
+forms: 16 nonfinite/overflow spellings, 384 additional generated overflows naming the literal, 4,105 finite
+spellings per axis (every binary64 exponent, boundary rounding, signed zero, subnormals and underflow),
+and 256 generated readable modules with varying integer widths, function order, escapes and deliberately
+invalid validation properties. Reading/writing preserves angle bits and module equality. No reader defect
+was found. `front/tests/tests/p0_invalid_input.rs` checks textual syntax failures, malformed signatures,
+eight truncations of real bitcode, PHI/dominance verifier failures and valid input execution. Three ignored
+front witnesses fail: ordinary parse failures omit the named invalid-input message (status 2 already right,
+low severity); empty input emits an empty module and exits 0 (LLVM accepts an empty module syntactically,
+but this misses the requested admission contract, low severity); malformed subprogram metadata in a
+44-byte bitcode file segfaults in LLVM's reader instead of returning 2 (medium severity, compiler crash).
+The existing over-aligned-byval test continues to cover debug-reader fatal errors and ordinary verification.
+
+Reproduce with `front/test.sh --test p0_independent --test p0_invalid_input -- --nocapture` and
+`cargo test -p bennett-ir --test p0_angles`. Add `--ignored` after the final `--` to run the failing
+witnesses. Default checks leave those witnesses ignored.
+
+Not measured: exhaustive 80-bit inputs or all binary64 angles, every integer value, all fma triples,
+every LLVM bitstream corruption, nondefault rounding/flags/traps, other native C libraries or CPUs,
+coherent superpositions or reversal of these probes. No production implementation changed.
+
 ## Cost on the device
 
 Device steps of one operation, after the front's optimiser, on normal / subnormal / NaN operands (the steps of
