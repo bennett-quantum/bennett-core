@@ -943,3 +943,39 @@ to agree, the call runs, which is ABI-faithful.
   configuration. `summarize.py <results.tsv>`: the tables. `reduced/`: the two hand-written reduced programs.
 - Per-program outputs (logs, `.bn`, native binaries) are in `.tmp/c-corpus/<work dir>/out/<test>/`. The final GCC
   table is `.tmp/c-corpus/gcc/results-final.tsv` (the full run plus the option-fix rerun in `gcc-opts/`).
+
+## Files and clocks: the six blocked programs (2026-11-16)
+
+Only the six file-system faults recorded above were rerun, using the musl file/clock models
+(`rt/musl/README.md`); no whole corpus was rerun. **All six agree with native on status and stdout**,
+with no wrong result, crash or remaining fault in these cases. No additional clock-blocked program was
+named in the recorded refusals; musl's temporary-name generation exercises the new clock route here.
+
+| corpus | case | outcome | device steps |
+|---|---|---|---:|
+| GCC | `printf-2` | agrees, main returned 0 | 58,353 |
+| GCC | `user-printf` | agrees, main returned 0 | 58,416 |
+| GCC | `fprintf-2` | agrees, main returned 0 | 57,717 |
+| GCC | `loop-2f` | agrees, main returned 0 | 35,235 |
+| GCC | `loop-2g` | agrees, main returned 0 | 35,235 |
+| c-testsuite | `00187` | agrees, main returned 0 | 102,998 |
+
+Native references are clang 18 at `-O0` and `-O2` (same status/stdout), empty stdin and a fresh working
+directory. Device: musl linked, 1 MiB stack, 100,000,000-step budget, the existing 2 GiB process cap,
+clock start zero and empty entropy. The two loop programs read `/dev/zero`. Temporary-file contents
+are checked by the programs themselves; generated native/device temporary names need not be equal.
+Commands use the existing `run-one.sh` with `MUSL_LIBDIR`, `BIN`, `WORK`, `CLANG`, `STACK` and `BUDGET`,
+one source at a time. GCC's `gcc_tmpnam.h` companion header is required alongside its three sources.
+Scratch reports and device texts: `.tmp/files-corpus/` in the implementation checkout.
+
+The first three completed cases (`00187`, `loop-2f`, `loop-2g`) were measured on the file implementation
+before the temporary-name route was added; their retained device texts supply the steps above.
+The final three were rerun at `9194605`, after discovering that musl's `tmpnam` probes candidate names
+with `readlink`: missing paths now return `ENOENT`, existing non-symlinks `EINVAL` (also `readlinkat`).
+Before that fix these three still faulted `unreachable` at 2,403 / 2,424 / 2,420 steps respectively.
+The new native/undo temporary-file fixture passes at both optimization levels, including `tmpfile`.
+The final three targeted cases used a build slot with the maintainer's explicit exception after the
+shared heavy-slot wait; memory/step limits and `CARGO_BUILD_JOBS=2` stayed in force.
+
+These are targeted outcomes, not newly measured totals for any whole corpus. The remaining Linux
+filesystem/runtime debts and their removal routes are in `HANDOFF.md`.

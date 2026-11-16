@@ -905,6 +905,11 @@ Existing musl integration tests pass (37 comparisons). The targeted GCC temporar
 `tmpnam`'s use of `readlink` to check a missing name; readlink/readlinkat now return ENOENT for a missing
 path and EINVAL for a non-symlink. A native/undo temporary-file regression passes at 63,073 steps /
 1,266,897 journal bytes, including anonymous tmpfile and its descriptor flags.
+All six previously file-blocked corpus programs now agree with native (`experiments/c-corpus/README.md`):
+GCC `printf-2` / `user-printf` / `fprintf-2` 58,353 / 58,416 / 57,717 steps at `9194605`; the earlier
+file implementation already passed `loop-2f` / `loop-2g` at 35,235 each and c-testsuite `00187` at 102,998.
+No whole corpus was rerun. Four checks pass after rebasing on `3418e51`: cargo 292 tests, front 158,
+clippy all targets with warnings denied, formatting clean.
 
 Debts, with routes (the goal is not narrowed to the present surface):
 
@@ -912,9 +917,12 @@ Debts, with routes (the goal is not narrowed to the present surface):
   map plus an initial-memory loader, with mutable input bindings and before-optimisation preservation, to
   rebind images without relinking. Keep the same clock/tape semantics and reset tests.
 - **File operations not carried**: locks, hard/symbolic links, directory enumeration, extended attributes,
-  renameat/linkat variants and other unmapped calls trap. Extend this boundary over ordinary memory and
+  renameat/linkat variants, file-backed/shared mmap and other unmapped calls trap. Extend this boundary over
+  ordinary memory and
   compare each operation and error path with native. A lock owner/table must be real state, not an accepted
   no-op; a directory iterator needs stable entries/cookies; symlinks need component-wise resolution.
+  File mappings need inode-backed pages and address aliases with a journalled mapping table, checked by
+  writing through each alias and through file descriptors before/after unmapping.
 - **Namespace and metadata**: the model has root ownership, a fixed device identity, zero timestamps and
   no credential/ACL checks. Carry explicit credentials and metadata inputs, and update inode times from
   the input clock under a documented rule. Complete Linux component/error ordering, removed-directory

@@ -198,3 +198,10 @@ an expected named fault, and is also fully reversed. Representative `-O0` costs:
 The integration suite remains separate from fast `cargo test` and `front/test.sh`; it requires the
 explicit musl build. Unsupported operations and finite tape exhaustion have not been counted as
 successful native random or wall-clock calls.
+
+Targeted corpus confirmation: **all six prior file-system faults now agree with native**
+(`experiments/c-corpus/README.md`, "Files and clocks"). `printf-2` / `user-printf` / `fprintf-2` take
+58,353 / 58,416 / 57,717 steps at `9194605`; `/dev/zero` loops `loop-2f` / `loop-2g` and c-testsuite
+`00187` agreed earlier on the file implementation at 35,235 / 35,235 / 102,998 steps. The temporary-name
+cases found musl's `readlink` probe, now routed correctly for the current non-symlink namespace.
+No whole corpus was rerun and no global corpus total is inferred from these six outcomes.
