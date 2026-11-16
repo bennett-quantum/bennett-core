@@ -521,25 +521,33 @@ impl<'a> Model<'a> {
         next
     }
 
+    /// M3's collective refusal is a simulator check, not a fault a guarded call may catch.
+    /// A uniform record or an invalid address still takes the ordinary named-fault path below.
+    fn collective_jump_disagrees(&self, state: &Superposition) -> bool {
+        let first = state.keys().next().expect("group");
+        if self.instruction(&first.classical).is_some() {
+            return false;
+        }
+        let Terminator::Longjmp { buffer, .. } =
+            self.program.function(first.frame().function).block(first.frame().block).term
+        else {
+            return false;
+        };
+        let Ok(address) = first.integer(buffer) else {
+            return false;
+        };
+        let Ok(bytes) = self.read_memory(first, address as u64, 32) else {
+            return false;
+        };
+        state.keys().any(|w| self.read_memory(w, address as u64, 32).as_ref() != Ok(&bytes))
+    }
+
     fn step_group_raw(&self, state: &Superposition) -> Result<Superposition, Fault> {
         let first = state.keys().next().expect("nonempty group");
         if first.classical.finish.is_none()
             && let Some(Inst::Rewind { mark, keep }) = self.instruction(&first.classical)
         {
             return self.rewind_group(state, *mark, keep);
-        }
-        // DESIGN's explicit debt: unlike a load, longjmp over disagreeing record cells
-        // currently faults bad_longjmp for the entire world rather than splitting it.
-        if first.classical.finish.is_none()
-            && self.instruction(&first.classical).is_none()
-            && let Terminator::Longjmp { buffer, .. } =
-                self.program.function(first.frame().function).block(first.frame().block).term
-        {
-            let address = first.integer(buffer)? as u64;
-            let bytes = self.read_memory(first, address, 32)?;
-            if state.keys().any(|w| self.read_memory(w, address, 32).as_ref() != Ok(&bytes)) {
-                return Err(Fault::BadLongjmp);
-            }
         }
         if let Some(Inst::Qfree { register }) = self.instruction(&first.classical)
             && !self.region

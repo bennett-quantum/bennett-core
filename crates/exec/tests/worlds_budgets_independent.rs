@@ -587,3 +587,71 @@ fn replay_charges_a_guard_budget_catch_as_a_step() {
         assert_snapshot(&m, &initial, &e);
     }
 }
+
+const COLLECTIVE_JUMP: &str = "memory 512
+func @save(i1 %prepare) -> i5 {
+entry:
+ br %prepare, save, jump
+save:
+ %r = setjmp 0
+ ret 0
+jump:
+ longjmp 0, 1
+}
+func @main() -> i5 {
+entry:
+ call @save(i1 1)
+ h [0]
+ %value, %code = call @save(i1 0) budget 8
+ ret %code
+}
+";
+
+#[test]
+fn a_collective_jump_diagnostic_never_becomes_a_program_fault_value() {
+    // The old record can match this activation (the documented stale-record behaviour).
+    // Depth is 0 or 1: one record names the caller, the other the guarded callee itself.
+    // M3 keeps the collective refusal for now; the afternoon's e6 never delivers it as a code.
+    for (gate, code) in [("z [0]", 0), ("x [0]", Fault::BadLongjmp.code())] {
+        let text = COLLECTIVE_JUMP.replace("h [0]", gate);
+        let p = common::load(&text);
+        let m = Model::new(&p, "main");
+        let result = m.run(basis(m.initial("main", &[])), 32);
+        assert!(result.keys().all(|w| w.classical.finish == Some(Finish::Returned(Some(code.into())))));
+        exact(&text, "main", &[], false);
+    }
+    let p = common::load(COLLECTIVE_JUMP);
+    let m = Model::new(&p, "main");
+    let initial = basis(m.initial("main", &[]));
+    let expected = m.run(initial.clone(), 32);
+    assert!(expected.keys().all(|w| w.classical.finish == Some(Finish::Faulted(Fault::BadLongjmp))));
+    let reversed = m.reverse_joined(expected).expect("diagnostic boundary reverses");
+    assert_eq!(reversed.keys().collect::<Vec<_>>(), initial.keys().collect::<Vec<_>>());
+    for (w, a) in reversed {
+        assert!((a - initial[&w]).norm() < 1e-12);
+    }
+}
+
+/// The collective check inspects all configurations. Named bad_longjmp faults may be caught;
+/// this simulator diagnostic must not become code 16, even in strict mode (HANDOFF, V4b).
+/// cargo test -p bennett-exec --test worlds_budgets_independent collective_jump -- --ignored --nocapture
+#[test]
+#[ignore = "defect: a collective longjmp-record check becomes a budgeted call's fault value"]
+fn collective_jump_diagnostic_is_not_delivered_by_a_budgeted_call() {
+    let p = common::load(COLLECTIVE_JUMP);
+    let m = Model::new(&p, "main");
+    let expected = m.run(basis(m.initial("main", &[])), 32);
+    assert!(expected.keys().all(|w| w.classical.finish == Some(Finish::Faulted(Fault::BadLongjmp))));
+    let mut e = Executor::new(
+        &p,
+        p.function_named("main").expect("entry"),
+        &[],
+        Options { reversible: true, ..common::bounded() },
+    )
+    .expect("starts");
+    let initial = e.snapshot();
+    let actual = e.run();
+    e.reverse().expect("the diagnostic's precursor reverses");
+    common::assert_same_state(&e.snapshot(), &initial, "collective check reverse");
+    assert!(!matches!(actual, Outcome::Returned(_)), "collective diagnostic became a program value: {actual:?}");
+}

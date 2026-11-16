@@ -311,6 +311,10 @@ arguments and reads of registers included, with the region's rules attached to i
   memory-qubit read inside the callee (budgets 5 to 11, only the longer path exhausting at 7 and 8).
   A joined rewind checks a spent guard before un-running, as any step does; replay charges a budget
   catch as a step too (run budgets 0 to 12 compare the success and atomic failure boundaries).
+  Collective jump-record diagnostics bypass the reference's call catch; uniformly invalid records
+  still give ordinary named faults. The strict no-program-value property is compared separately
+  from the still-open per-branch jump meaning (HANDOFF V4/V4b); an ignored executor witness records
+  code 16 being delivered where only a simulator diagnostic is determined.
   Clock composition of a padded rewind inside a guarded call with a narrow caller mark remains a
   specification question: its ignored witness and the alternatives are in `HANDOFF.md`.
 - **Not yet** (debts): the journal-content observer does not follow the form nor a `rewind` in a region: at

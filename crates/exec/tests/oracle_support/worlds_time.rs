@@ -133,6 +133,11 @@ impl Model<'_> {
             } else if let Some(depth) = spent_guard {
                 Ok(self.catch(inputs, depth, Fault::Budget))
             } else {
+                // The check sees all configurations; e6 forbids turning it into a program value.
+                // Keep the M3 host fault until the per-branch jump rule is decided.
+                if self.collective_jump_disagrees(inputs) {
+                    return Err(Fault::BadLongjmp);
+                }
                 self.step_group_raw(inputs)
             };
         let outputs = match attempt {
