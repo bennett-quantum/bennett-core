@@ -242,6 +242,43 @@ the call); built as machine step e4. `%h = mark budget B` gives the mark a budge
 Not yet: the independent whole-world reference does not model the mark's budget (it reads it; the programs
 it runs give `budget -1`, which bounds nothing). Route: give its worlds a clock and compare `Stats::clock`.
 
+### The call with a fault value
+
+Decided by the maintainer on 2026-11-16 ([A1], refined in the afternoon); built as machine step e6.
+`%y, %c = call @f(args) budget B` (`%c = ...` alone for a function that returns nothing) is an ordinary call,
+arguments and reads of registers included, with the region's rules attached to it:
+
+- **The rules.** While the callee's frame is live, an effect, an `exit` or a quantum instruction faults
+  (`effect_in_region`, `exit_in_region`, `quantum_in_region`; a `rewind` may not keep), and a `longjmp`
+  whose record names a frame below the callee's faults `bad_longjmp`, as in a region.
+- **The budget** is held in the callee's frame (`Frame::guard`) as the steps it has left: every step taken
+  while it is live counts, its own return included, so `B` steps fit as in an `apply`. A step with none left
+  ends the call with `budget`; with nested calls the outermost spent one ends. A rewind inside the callee
+  gives no steps back (an applied function's steps never go back either): its un-run keeps their count, and
+  each rewind notes how many it un-ran (`Journal::rewind_costs`, left out of equality like time) so that
+  undoing it gives them back before running them again, which then counts exactly as it did. Reversal gives
+  every step back. A failed rewind running forward again what it un-ran counts nothing.
+- **A fault inside** (any named fault: the callee's, a budget spent) does not end the world: the frames from
+  the callee's up are discarded (a `Catch` record keeps them), the stack pointer is the callee's entry one, and
+  the caller goes on with `%y` = 0 and `%c` = the fault's code; a return gives `%c` = 0. The innermost call
+  with a budget takes the fault. The simulator's checks never become a code: strict mode's stop when a world
+  faults while others go on applies to these faults too, and the run's limits stop the run as before. On the
+  machine (`Options::machine_meaning`) each world gets its own code.
+- **`apply` as this form.** `apply @f(%q) -> %out, %fault budget B` gives the same state as
+  `%h = mark budget B + 3`, `%y, %c = call @f(%q) budget B`, `rewind %h keep (%y -> %out, %c -> %fault)` (the
+  mark's budget counts the call, `B` steps, a catch and the rewind): `crates/exec/tests/call_budget.rs`, a
+  callee that divides by its argument and loops by it, budgets 8 to 20, every basis value and all at once,
+  dirty output and fault registers, 30 comparisons on the machine; in strict mode both stop where only some
+  branches fault. Inside an applied function a call with a budget agrees both ways (compare mode).
+- **Checked** (`call_budget.rs`, by hand): text read, written and typed; a return and a fault; for
+  `@count(n)` of 3n + 5 steps every n < 5 and budget < 25 gives the value or `budget` with the steps exact
+  (the call, B steps, the catch); each rule; nested budgets (the inner or the outer ends, at 15 and 14); a
+  rewinding callee gets `budget` after exactly B steps; every step of four programs reverses exactly. Seeded
+  defects caught: no give-back on reversal; no noted un-run count.
+- **Not yet** (debts): the independent whole-world reference does not model the form (it says so); the
+  journal-content observer does not follow it; a `call_indirect` with a budget; the front does not emit it.
+  `apply`, `qalloc` and `qfree` are retired only once every test passes without them (a later step).
+
 ### Worlds
 
 Built on 2026-11-15 as the second step of the next extension: the quantum state is a superposition of
@@ -838,9 +875,9 @@ It stays one step of the run that executes it, journalled as one record and undo
   ways and each is caught. `BENNETT_APPLY_TALLY=file` appends each comparison's costs. The journal-content observer classifies the
   enumeration's branches, so it computes `apply` by enumeration.
 - **The text idiom** (`%h = mark budget B'`, `%y = call @f(args)`, `rewind %h keep (%y -> out)`, with
-  `B'` the region's `B` plus 2 for the call and the rewind) still has no fault register: a fault ends the
-  world (strict mode stops the run, as a region fault does). The call form with a fault value, decided on
-  2026-11-16, is the form a program can write (a later step).
+  `B'` the region's `B` plus 2 for the call and the rewind) has no fault register: a fault ends the world
+  (strict mode stops the run, as a region fault does). With the call with a fault value ("The call with a
+  fault value", above) the idiom has one and gives the `apply`'s state.
 - **Checked.** In compare mode every `apply` of `cargo test` (107,687 executions in 46 tests, among them the
   bijection checks, the exhaustive harness, faults, budgets, effects, `exit`, jumps, return addresses, qubits
   in memory and inner rewinds; 325 of them strict region-fault stops) and of `front/test.sh` (21,866

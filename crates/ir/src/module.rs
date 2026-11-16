@@ -374,6 +374,23 @@ pub enum Inst {
         /// The result; allowed only when the callee returns a value, which may be ignored.
         dst: Option<Slot>,
     },
+    /// `[dst,] fault = call @callee(args) budget b`: a call with the region's rules attached
+    /// (`docs/DESIGN.md`, "The call with a fault value"): `callee` runs for at most `b` steps of the world's
+    /// clock, may not reach an effect, an `exit` or a quantum instruction, nor jump below its own frame; a
+    /// fault inside it returns to the caller with `dst` 0 and `fault` the fault's code, a return with
+    /// `fault` 0.
+    CallBudget {
+        /// The function called.
+        callee: FuncId,
+        /// The arguments, as for `call`.
+        args: Vec<Operand>,
+        /// The result; allowed only when the callee returns a value, which may be ignored.
+        dst: Option<Slot>,
+        /// The fault code, an integer of [`Fault::CODE_WIDTH`](crate::Fault::CODE_WIDTH) bits: 0 on a return.
+        fault: Slot,
+        /// The `i64` step budget.
+        budget: Operand,
+    },
     /// `[dst =] call_indirect fn(params) [-> result] target(args)`.
     CallIndirect {
         /// The signature the target must have.
@@ -522,7 +539,7 @@ impl Inst {
             | Inst::Qalloc { dst, .. }
             | Inst::Measure { dst, .. }
             | Inst::Mark { dst, .. } => Some(*dst),
-            Inst::Call { dst, .. } | Inst::CallIndirect { dst, .. } => *dst,
+            Inst::Call { dst, .. } | Inst::CallIndirect { dst, .. } | Inst::CallBudget { dst, .. } => *dst,
             Inst::Store { .. }
             | Inst::StackRestore { .. }
             | Inst::Effect { .. }
@@ -532,6 +549,41 @@ impl Inst {
             | Inst::Apply { .. }
             | Inst::Rewind { .. } => None,
         }
+    }
+
+    /// The fault code a call with a budget defines besides its result, if the instruction is one.
+    pub fn fault_result(&self) -> Option<Slot> {
+        match self {
+            Inst::CallBudget { fault, .. } => Some(*fault),
+            Inst::Binary { .. }
+            | Inst::Compare { .. }
+            | Inst::Select { .. }
+            | Inst::Cast { .. }
+            | Inst::Load { .. }
+            | Inst::Store { .. }
+            | Inst::Alloca { .. }
+            | Inst::StackSave { .. }
+            | Inst::StackRestore { .. }
+            | Inst::Setjmp { .. }
+            | Inst::ReturnAddress { .. }
+            | Inst::Call { .. }
+            | Inst::CallIndirect { .. }
+            | Inst::FuncAddr { .. }
+            | Inst::Effect { .. }
+            | Inst::Qalloc { .. }
+            | Inst::Qfree { .. }
+            | Inst::Gate { .. }
+            | Inst::GateAt { .. }
+            | Inst::Measure { .. }
+            | Inst::Apply { .. }
+            | Inst::Mark { .. }
+            | Inst::Rewind { .. } => None,
+        }
+    }
+
+    /// Every slot the instruction defines: its result, then a call with a budget's fault code.
+    pub fn results(&self) -> impl Iterator<Item = Slot> {
+        self.result().into_iter().chain(self.fault_result())
     }
 
     /// Calls `visit` with every slot the instruction reads.
@@ -561,6 +613,10 @@ impl Inst {
             Inst::StackRestore { pointer } => operand(pointer),
             Inst::Setjmp { buffer, .. } => operand(buffer),
             Inst::Call { args, .. } => args.iter().for_each(operand),
+            Inst::CallBudget { args, budget, .. } => {
+                args.iter().for_each(&mut operand);
+                operand(budget);
+            }
             Inst::CallIndirect { target, args, .. } => {
                 operand(target);
                 args.iter().for_each(operand);

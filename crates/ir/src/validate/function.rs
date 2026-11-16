@@ -88,10 +88,12 @@ impl<'a> Checker<'a> {
             }
             for (i, inst) in block.insts.iter().enumerate() {
                 let site = Site::Inst(b, i);
-                inst.result().into_iter().for_each(|slot| self.slot_in_range(site, slot));
+                inst.results().for_each(|slot| self.slot_in_range(site, slot));
                 inst.visit_uses(|slot| self.slot_in_range(site, slot));
-                if let Inst::Call { callee: func, .. } | Inst::Apply { callee: func, .. } | Inst::FuncAddr { func, .. } =
-                    inst
+                if let Inst::Call { callee: func, .. }
+                | Inst::CallBudget { callee: func, .. }
+                | Inst::Apply { callee: func, .. }
+                | Inst::FuncAddr { func, .. } = inst
                     && func.index() >= self.module.functions.len()
                 {
                     self.error(site, Problem::UnknownFunction(func.0));
@@ -127,8 +129,16 @@ impl<'a> Checker<'a> {
                 self.define(Site::Block(b), param.slot, Some(param.ty), Def { block: b, position: 0 });
             }
             for (i, inst) in block.insts.iter().enumerate() {
-                let Some(dst) = inst.result() else { continue };
                 let site = Site::Inst(b, i);
+                if let Some(fault) = inst.fault_result() {
+                    self.define(
+                        site,
+                        fault,
+                        Some(Type::Int(crate::Fault::CODE_WIDTH)),
+                        Def { block: b, position: i + 1 },
+                    );
+                }
+                let Some(dst) = inst.result() else { continue };
                 let ty = self.result_type(site, inst);
                 self.define(site, dst, ty, Def { block: b, position: i + 1 });
                 if let Inst::Measure { dst, source: MeasureSource::Register(register) } = inst {
@@ -174,7 +184,9 @@ impl<'a> Checker<'a> {
             | Inst::ReturnAddress { .. }
             | Inst::Mark { .. } => Some(Type::Int(Width::WORD)),
             Inst::Qalloc { width, .. } => Some(Type::Qreg(*width)),
-            Inst::Call { callee, .. } => self.call_result(site, self.module.function(*callee).result),
+            Inst::Call { callee, .. } | Inst::CallBudget { callee, .. } => {
+                self.call_result(site, self.module.function(*callee).result)
+            }
             Inst::CallIndirect { signature, .. } => self.call_result(site, signature.result),
             Inst::Measure { source: MeasureSource::Register(_), .. }
             | Inst::Store { .. }
@@ -259,6 +271,11 @@ impl<'a> Checker<'a> {
             Inst::Call { callee, args, .. } => {
                 let params = self.module.function(*callee).params.iter().map(|p| p.ty);
                 self.call_arguments(site, args, params);
+            }
+            Inst::CallBudget { callee, args, budget, .. } => {
+                let params = self.module.function(*callee).params.iter().map(|p| p.ty);
+                self.call_arguments(site, args, params);
+                self.expect(site, *budget, Type::Int(Width::WORD));
             }
             Inst::CallIndirect { signature, target, args, .. } => {
                 self.expect(site, *target, Type::Int(Width::WORD));
@@ -354,6 +371,7 @@ impl<'a> Checker<'a> {
                     | Inst::Setjmp { .. }
                     | Inst::ReturnAddress { .. }
                     | Inst::Call { .. }
+                    | Inst::CallBudget { .. }
                     | Inst::CallIndirect { .. }
                     | Inst::FuncAddr { .. }
                     | Inst::Effect { .. }

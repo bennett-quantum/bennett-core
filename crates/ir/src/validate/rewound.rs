@@ -149,7 +149,7 @@ impl Analysis<'_> {
             }
             inst.visit_uses(|slot| uses(Some(i), &state, slot));
             match inst {
-                Inst::Call { .. } | Inst::CallIndirect { .. } => sources.union_with(&state),
+                Inst::Call { .. } | Inst::CallBudget { .. } | Inst::CallIndirect { .. } => sources.union_with(&state),
                 Inst::Rewind { mark, .. } => {
                     if let Some(k) = self.mark_of[mark.index()] {
                         let restored = state.since[k].clone();
@@ -178,7 +178,7 @@ impl Analysis<'_> {
                 | Inst::Apply { .. }
                 | Inst::Mark { .. } => {}
             }
-            if let Some(dst) = inst.result() {
+            for dst in inst.results() {
                 state.define(dst);
             }
             if let Inst::Mark { dst, .. } = inst

@@ -49,7 +49,7 @@ impl<'m> Executor<'m> {
     /// mark, and continues after the rewind. Faults without changing anything if it cannot. Worlds that
     /// split off during the un-run (it runs earlier rewinds again) finish the rewind too.
     pub(crate) fn rewind(&mut self, mark: Slot, keep: &'m [Keep]) -> Result<(), Halt> {
-        if self.in_region && !keep.is_empty() {
+        if (self.in_region || self.guarded()) && !keep.is_empty() {
             return Err(Fault::QuantumInRegion.into());
         }
         let entry = self.open_mark(self.slot(mark)).ok_or(Fault::BadRewind)?;
@@ -248,6 +248,13 @@ impl<'m> Executor<'m> {
             });
         }
         self.finish_rewind(site, visits + 1);
+        // Inside a call with a budget the steps un-run keep their count (a budget counts steps that never go
+        // back, as a region's does); undoing the rewind gives them back before it runs them again.
+        if self.any_guard
+            && let Some(journal) = &mut self.journal
+        {
+            journal.push_rewind_cost(undone);
+        }
         Ok(())
     }
 
@@ -275,7 +282,7 @@ impl<'m> Executor<'m> {
         for index in (entry.position..journal.records()).rev() {
             match journal.kind_at(index) {
                 Undo::Return => depth += 1,
-                Undo::Longjmp => depth += jumps.next().expect("a longjmp record has an entry"),
+                Undo::Longjmp | Undo::Catch => depth += jumps.next().expect("a longjmp or catch record has an entry"),
                 Undo::Call => depth = depth.checked_sub(1)?,
                 Undo::Measure | Undo::Finish | Undo::LeftBehind => return None,
                 Undo::Slot
@@ -313,10 +320,36 @@ impl<'m> Executor<'m> {
         let frame = self.top_mut();
         (frame.block, frame.inst) = (BlockId((word >> 32) as u32), word as u32 as usize);
         let from = self.forked.len();
+        // The budgets of calls with a budget as they were at the mark: the rewind's own step and the steps it
+        // un-ran given back, so that running them again counts as they did. Inside another rewind's un-run,
+        // which gives no time back, they are put back afterwards.
+        let index = self.journal.as_ref().map_or(0, Journal::records);
+        let cost = self.journal.as_mut().map_or(0, |journal| journal.take_rewind_cost(index));
+        let saved: Vec<Option<u64>> =
+            if self.any_guard { self.frames[..depth].iter().map(|frame| frame.guard).collect() } else { Vec::new() };
+        if self.any_guard {
+            self.count_guards(depth, cost + 1, true);
+        }
+        let restore = |executor: &mut Self| {
+            for (frame, &guard) in executor.frames.iter_mut().zip(&saved) {
+                frame.guard = guard;
+            }
+        };
         if let Err(mismatch) = self.run_again(depth, (stop.block, stop.inst), (word >> 64) as u64) {
             let frame = self.top_mut();
             (frame.block, frame.inst) = (stop.block, stop.inst);
+            restore(self);
+            if self.any_guard
+                && let Some(journal) = &mut self.journal
+            {
+                // The record is pushed back by the caller; its count goes back with it.
+                journal.rewind_costs_restore(index, cost);
+            }
             return Err(mismatch);
+        }
+        if self.rewinding > 0 {
+            restore(self);
+            self.for_forks(from, &restore);
         }
         let xor_kept = |executor: &mut Self| {
             assert!(
@@ -420,6 +453,7 @@ impl<'m> Executor<'m> {
         let max_configurations = self.max_configurations.take();
         let allow_region_faults = std::mem::replace(&mut self.allow_region_faults, true);
         let charging = std::mem::replace(&mut self.charging, false);
+        let counting = std::mem::replace(&mut self.counting, false);
         self.rerunning += 1;
         for _ in 0..steps {
             let from = self.forked.len();
@@ -431,6 +465,7 @@ impl<'m> Executor<'m> {
         }
         self.rerunning -= 1;
         self.charging = charging;
+        self.counting = counting;
         self.allow_region_faults = allow_region_faults;
         self.max_configurations = max_configurations;
     }

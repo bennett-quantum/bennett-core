@@ -271,6 +271,10 @@ pub struct Frame {
     pub base: usize,
     /// The stack pointer when the frame was entered, restored when it returns.
     pub entry_stack_pointer: u64,
+    /// For the frame of a function entered by a call with a budget (`CallBudget`): the steps it has left.
+    /// Every step taken while it is live counts, every step undone gives its count back
+    /// (`docs/DESIGN.md`, "The call with a fault value").
+    pub guard: Option<u64>,
 }
 
 /// Bytes of stack a frame reserves per slot. A slot holds a value of up to 128 bits, but nearly all are
@@ -299,6 +303,11 @@ pub struct Executor<'m> {
     pub(crate) charged: u64,
     /// Whether a rewind taken as a step is un-running, so that the steps run again are charged.
     pub(crate) charging: bool,
+    /// Whether a call with a budget has run: only then are the frames' budgets counted.
+    pub(crate) any_guard: bool,
+    /// Whether steps count in the frames' budgets: not while a failed rewind runs forward again what it
+    /// un-ran, which gave nothing back.
+    pub(crate) counting: bool,
     /// Whether running again under `charging` would have passed the budget: the rewind faults `budget`.
     pub(crate) budget_spent: bool,
     pub(crate) budget: Option<u64>,
@@ -414,6 +423,8 @@ impl<'m> Executor<'m> {
             charged: 0,
             charging: false,
             budget_spent: false,
+            any_guard: false,
+            counting: true,
             budget: options.budget,
             max_configurations: options.max_configurations,
             base_depth: 0,

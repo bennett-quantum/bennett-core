@@ -82,8 +82,12 @@ impl Writer<'_> {
     }
 
     fn inst(&mut self, f: &Function, inst: &Inst) -> fmt::Result {
-        if let Some(dst) = inst.result() {
-            write!(self.out, "%{} = ", f.slot_names[dst.index()])?;
+        for (i, dst) in inst.results().enumerate() {
+            let separator = if i == 0 { "" } else { ", " };
+            write!(self.out, "{separator}%{}", f.slot_names[dst.index()])?;
+        }
+        if inst.results().next().is_some() {
+            self.out.push_str(" = ");
         }
         let op = |operand: &Operand| OperandText { function: f, operand: *operand, typed: false };
         let name = |slot: &Slot| SlotText(f, *slot);
@@ -112,6 +116,11 @@ impl Writer<'_> {
             Inst::Call { callee, args, .. } => {
                 write!(self.out, "call @{}", self.module.function(*callee).name)?;
                 write_args(self.out, f, args)
+            }
+            Inst::CallBudget { callee, args, budget, .. } => {
+                write!(self.out, "call @{}", self.module.function(*callee).name)?;
+                write_args(self.out, f, args)?;
+                write!(self.out, " budget {}", op(budget))
             }
             Inst::CallIndirect { signature, target, args, .. } => {
                 self.out.push_str("call_indirect ");

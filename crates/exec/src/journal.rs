@@ -60,6 +60,11 @@ pub enum Undo {
     /// them. Words: for each byte it promoted, in order, the address (shifted left by 8) and the byte's
     /// old value (the low 8 bits); then the number of bytes promoted.
     GateAtPromoted,
+    /// A fault inside a call with a budget, returned to its caller as a fault code. Words: for each discarded
+    /// frame from the top down, its packed position, its entry stack pointer and its steps left (0 for none,
+    /// else one more than the count); then the stack pointer before, the number of discarded frames, and
+    /// the old values of the call's result slot, if it names one, and of its fault slot.
+    Catch,
     /// A `longjmp`. Words: for each discarded frame from the top down, its packed position and its entry
     /// stack pointer; then the target frame's packed position and the stack pointer before the jump, the
     /// number of discarded frames, and the old value of the `setjmp`'s result slot.
@@ -67,19 +72,48 @@ pub enum Undo {
 }
 
 /// A stack of undo records.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Journal {
     kinds: Vec<Undo>,
     words: Vec<u128>,
     /// One entry per `Mark` record, in order: what a `rewind` to it needs.
     marks: Vec<MarkEntry>,
-    /// One entry per `Longjmp` record, in order: the number of frames it discarded, which a `rewind`
-    /// counts as returns when it checks that its mark belongs to the running activation.
+    /// One entry per `Longjmp` or `Catch` record, in order: the number of frames it discarded, which a
+    /// `rewind` counts as returns when it checks that its mark belongs to the running activation.
     jumps: Vec<usize>,
     /// One entry per register a `Call` record's call read as an integer, in order.
     reads: Vec<ReadEntry>,
     /// One entry per memory byte holding qubits that a step's ordinary access touched, in order.
     cells: Vec<CellEntry>,
+    /// For a `Rewind` record pushed while a call with a budget had run, its index and the number of records
+    /// its un-run popped: what undoing it gives back to the budgets before running its steps again
+    /// (`history.rs`). A count of time, so equality, hashing and the byte count leave it out: inside a call
+    /// with a budget worlds that differ in it differ in their frames' budgets anyway.
+    rewind_costs: Vec<(usize, u64)>,
+}
+
+impl PartialEq for Journal {
+    fn eq(&self, other: &Self) -> bool {
+        self.kinds == other.kinds
+            && self.words == other.words
+            && self.marks == other.marks
+            && self.jumps == other.jumps
+            && self.reads == other.reads
+            && self.cells == other.cells
+    }
+}
+
+impl Eq for Journal {}
+
+impl std::hash::Hash for Journal {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.kinds.hash(state);
+        self.words.hash(state);
+        self.marks.hash(state);
+        self.jumps.hash(state);
+        self.reads.hash(state);
+        self.cells.hash(state);
+    }
 }
 
 /// A memory byte holding qubits (a cell) that ordinary code read or wrote: what un-running the step must
@@ -268,7 +302,31 @@ impl Journal {
             + self.cells.len() * size_of::<CellEntry>()
     }
 
+    /// Notes the un-run count of the `Rewind` record just pushed (`rewind_costs`).
+    pub(crate) fn push_rewind_cost(&mut self, undone: u64) {
+        self.rewind_costs.push((self.kinds.len() - 1, undone));
+    }
+
+    /// Removes and returns the un-run count noted for the record at `index`, just popped: 0 if none was.
+    pub(crate) fn take_rewind_cost(&mut self, index: usize) -> u64 {
+        match self.rewind_costs.last() {
+            Some(&(at, undone)) if at == index => {
+                self.rewind_costs.pop();
+                undone
+            }
+            Some(_) | None => 0,
+        }
+    }
+
+    /// Puts back an un-run count taken for the record at `index`, which is pushed back.
+    pub(crate) fn rewind_costs_restore(&mut self, index: usize, undone: u64) {
+        if undone > 0 {
+            self.rewind_costs.push((index, undone));
+        }
+    }
+
     pub(crate) fn clear(&mut self) {
+        self.rewind_costs.clear();
         self.kinds.clear();
         self.words.clear();
         self.marks.clear();

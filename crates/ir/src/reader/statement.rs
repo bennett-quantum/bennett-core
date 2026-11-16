@@ -20,8 +20,9 @@ pub(super) enum Statement {
 impl<'s> Parser<'s> {
     /// `[%name =] MNEMONIC ...` up to the end of the line.
     pub(super) fn statement(&mut self, scope: &mut Scope<'s>) -> Result<Statement, Failure> {
-        let dst = match (self.cursor.peek(), self.cursor.peek_nth(1)) {
-            (Some(Token::Local(name)), Some(Token::Equals)) => {
+        // `%a, %b = call ... budget B` defines two values: the result and the fault code.
+        let pair = match (self.cursor.peek(), self.cursor.peek_nth(1), self.cursor.peek_nth(2)) {
+            (Some(Token::Local(name)), Some(Token::Comma), Some(Token::Local(_))) => {
                 let offset = self.cursor.offset();
                 self.cursor.advance();
                 self.cursor.advance();
@@ -29,9 +30,29 @@ impl<'s> Parser<'s> {
             }
             _ => None,
         };
+        let dst = match (self.cursor.peek(), self.cursor.peek_nth(1)) {
+            (Some(Token::Local(name)), Some(Token::Equals)) => {
+                let offset = self.cursor.offset();
+                self.cursor.advance();
+                self.cursor.advance();
+                Some(Slot(scope.slots.define(name, offset)?))
+            }
+            _ if pair.is_some() => return Err(unexpected_word(self.cursor.offset(), "`%name =`", "a pair")),
+            _ => None,
+        };
         let offset = self.cursor.offset();
         let mnemonic = self.cursor.word("an instruction")?;
         let line = Line { dst, offset };
+        if let Some(first) = pair {
+            // Only a call with a budget defines two values.
+            let callee = (mnemonic == "call").then(|| self.function_use()).transpose()?;
+            let Some(callee) = callee else { return Err(unexpected_word(offset, "`call`", mnemonic)) };
+            let args = self.arguments(scope)?;
+            self.cursor.expect(Token::Word("budget"), "`budget`")?;
+            let budget = self.operand(scope, Width::WORD)?;
+            let fault = line.result("call")?;
+            return Ok(Statement::Inst(Inst::CallBudget { callee, args, dst: Some(first), fault, budget }));
+        }
         let statement = self.statement_body(scope, mnemonic, line)?;
         self.cursor.end_of_line()?;
         Ok(statement)
@@ -87,7 +108,13 @@ impl<'s> Parser<'s> {
             "setjmp" => Inst::Setjmp { dst: line.result("setjmp")?, buffer: self.operand(scope, Width::WORD)? },
             "call" => {
                 let callee = self.function_use()?;
-                Inst::Call { callee, args: self.arguments(scope)?, dst: line.dst }
+                let args = self.arguments(scope)?;
+                if self.cursor.eat(Token::Word("budget")) {
+                    let budget = self.operand(scope, Width::WORD)?;
+                    Inst::CallBudget { callee, args, dst: None, fault: line.result("call")?, budget }
+                } else {
+                    Inst::Call { callee, args, dst: line.dst }
+                }
             }
             "call_indirect" => self.call_indirect(scope, line.dst)?,
             "faddr" => Inst::FuncAddr { dst: line.result("faddr")?, func: self.function_use()? },

@@ -27,6 +27,22 @@ impl<'m> Executor<'m> {
     /// the worlds' parts instead: this world's part only notes what fails them (`Executor::defer`, see
     /// `history.rs`).
     pub(crate) fn unrun_last(&mut self, checked: bool) -> Result<(), Mismatch> {
+        // Undoing a step gives its count back to the budgets of the calls with a budget that stayed live
+        // through it (`Executor::execute`).
+        // The frames live before the step: all of them after its undo, but those a catch discarded, which its
+        // step did not count.
+        // A rewind's un-run gives no time back (a budget counts steps that never go back); reversal does. An
+        // undone rewind gives its count back itself, before running its steps again (`history.rs`).
+        let before = self.frames.len();
+        let last = self.journal.as_ref().and_then(Journal::last);
+        let result = self.unrun_record(checked);
+        if result.is_ok() && self.any_guard && self.counting && self.rewinding == 0 && last != Some(Undo::Rewind) {
+            self.count_guards(if last == Some(Undo::Catch) { before } else { self.frames.len() }, 1, true);
+        }
+        result
+    }
+
+    fn unrun_record(&mut self, checked: bool) -> Result<(), Mismatch> {
         let deferred = checked && self.partial;
         let checked = checked && !self.partial;
         let last = self.journal.as_ref().and_then(Journal::last).expect("a record to undo");
@@ -134,6 +150,7 @@ impl<'m> Executor<'m> {
                 }
             }
             Undo::Longjmp => self.undo_longjmp(),
+            Undo::Catch => self.undo_catch(),
             Undo::Measure => unreachable!("reversal stops before a measurement"),
             Undo::LeftBehind => unreachable!("reversal and rewinds stop before a rewind that left history behind"),
             Undo::GateAt | Undo::GateAtPromoted => unreachable!("a GateAt record is un-run before it is popped"),
@@ -255,9 +272,13 @@ impl<'m> Executor<'m> {
 
     fn undo_return(&mut self) {
         let call = self.retreat();
+        if let Some(code) = call.fault_result() {
+            self.restore_slot(code);
+        }
         if call.result().is_some() {
             self.restore_result();
         }
+        let guard = call.fault_result().map(|_| self.pop_word() as u64);
         let callee_stack_pointer = self.pop_word() as u64;
         let packed = self.pop_word() as u64;
         let (func, block) = (FuncId((packed >> 32) as u32), BlockId(packed as u32));
@@ -267,6 +288,7 @@ impl<'m> Executor<'m> {
             inst: self.function(func).block(block).insts.len(),
             base: self.live_top(),
             entry_stack_pointer: self.stack_pointer,
+            guard,
         };
         self.frames.push(frame);
         self.stack_pointer = callee_stack_pointer;
@@ -287,8 +309,37 @@ impl<'m> Executor<'m> {
             let entry_stack_pointer = self.pop_word() as u64;
             let (func, block, inst) = unpack_position(self.pop_word());
             let base = self.live_top();
-            self.frames.push(Frame { func, block, inst, base, entry_stack_pointer });
+            self.frames.push(Frame { func, block, inst, base, entry_stack_pointer, guard: None });
         }
+    }
+
+    /// Puts back the frames a fault inside a call with a budget discarded, and the caller's result and fault
+    /// slots.
+    fn undo_catch(&mut self) {
+        self.journal.as_mut().expect("undoing needs a journal").pop_jump();
+        let call = self.retreat();
+        if let Some(code) = call.fault_result() {
+            self.restore_slot(code);
+        }
+        if call.result().is_some() {
+            self.restore_result();
+        }
+        let discarded = self.pop_word() as usize;
+        self.stack_pointer = self.pop_word() as u64;
+        for _ in 0..discarded {
+            let guard = self.pop_word();
+            let guard = guard.checked_sub(1).map(|left| left as u64);
+            let entry_stack_pointer = self.pop_word() as u64;
+            let (func, block, inst) = unpack_position(self.pop_word());
+            let base = self.live_top();
+            self.frames.push(Frame { func, block, inst, base, entry_stack_pointer, guard });
+        }
+    }
+
+    /// Restores `slot` of the top frame from the journal.
+    fn restore_slot(&mut self, slot: Slot) {
+        let frame = *self.top();
+        self.slots[frame.base + slot.index()] = self.pop_word();
     }
 
     /// Steps the top frame back onto the instruction being undone, and returns it.

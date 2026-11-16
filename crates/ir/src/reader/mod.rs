@@ -274,7 +274,10 @@ fn renumber_functions(module: &mut Module, order: &[u32]) {
     let insts = module.functions.iter_mut().flat_map(|f| &mut f.blocks).flat_map(|block| &mut block.insts);
     for inst in insts {
         match inst {
-            Inst::Call { callee: func, .. } | Inst::Apply { callee: func, .. } | Inst::FuncAddr { func, .. } => {
+            Inst::Call { callee: func, .. }
+            | Inst::CallBudget { callee: func, .. }
+            | Inst::Apply { callee: func, .. }
+            | Inst::FuncAddr { func, .. } => {
                 renumber(func);
             }
             Inst::Binary { .. }

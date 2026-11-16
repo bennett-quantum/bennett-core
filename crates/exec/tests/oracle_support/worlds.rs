@@ -648,6 +648,9 @@ impl<'a> Model<'a> {
                         Action::Cells(cells.into_iter().map(|(id, old, _)| (id, old, w.quantum[id] as u8)).collect());
                     result = Some(Value::Int(0));
                 }
+                Inst::CallBudget { .. } => {
+                    unimplemented!("the whole-world reference does not model a call with a budget (a debt)")
+                }
                 Inst::Call { callee, args, dst } => {
                     let reads = args
                         .iter()

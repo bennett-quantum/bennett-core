@@ -29,6 +29,7 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | %d = stacksave                             ; the stack pointer, as an i64
             | stackrestore operand                       ; back to a saved stack pointer; else fault bad_stack_restore
             | [%d =] call @f(typed, ...)                  ; a qN argument to an iN parameter reads the register
+            | [%d,] %c = call @f(typed, ...) budget operand ; the region's rules; %c: the i5 fault code, 0 on return
             | [%d =] call_indirect fn(type, ...) [-> type] operand(typed, ...)
             | %d = setjmp operand                        ; i32 0; writes a jump record at the i64 address
             | %d = retaddr N                             ; i64 code address the frame N levels down returns to
@@ -156,6 +157,15 @@ and an address that is not an `i64`.
 `rewind %h keep (%v -> [%p])` XORs `%v`, of any integer width N, into the N qubits from bit 0 of the byte
 at `%p` on, little-endian; every byte it reaches must hold qubits since before the mark. The meaning, and
 what loads and stores of such bytes do, is in `docs/DESIGN.md`, "Qubits in memory".
+
+## The call with a fault value
+
+`%y, %c = call @f(args) budget B` calls `@f` as `call` does, with the region's rules attached: at most `B`
+(an `i64`) steps, no effect, `exit` or quantum instruction, no jump below its own frame. A return gives the
+value in `%y` and 0 in `%c`; a fault inside gives 0 in `%y` and the fault's code in `%c`, an `i5`
+(`bennett_ir::Fault`'s 5-bit codes). `%c = call @f(args) budget B` names only the code: for a function that
+returns nothing, or to ignore the value. Only a call with a budget defines two values. The meaning is in
+`docs/DESIGN.md`, "The call with a fault value".
 
 ## Reading a register
 

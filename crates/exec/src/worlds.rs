@@ -376,7 +376,7 @@ impl<'m> Executor<'m> {
     }
 
     /// Whether a world other than the current one has not ended.
-    fn others_go_on(&self) -> bool {
+    pub(crate) fn others_go_on(&self) -> bool {
         self.worlds.iter().flatten().any(|world| !matches!(world.status, Status::Ended | Status::Discarded))
     }
 

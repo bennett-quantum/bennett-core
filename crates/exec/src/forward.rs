@@ -6,7 +6,7 @@ use bennett_ir::{
     Target, Terminator, Type, Width,
 };
 
-use crate::executor::{Executor, Frame, Halt, Outcome, SLOT_BYTES};
+use crate::executor::{Executor, Frame, Halt, Outcome, RunError, SLOT_BYTES};
 use crate::gates;
 use crate::journal::Undo;
 use crate::quantum::QubitRef;
@@ -21,10 +21,102 @@ impl<'m> Executor<'m> {
         if self.rerunning == 0 && self.rewinding == 0 {
             let deadline = self.journal.as_ref().and_then(|journal| journal.mark_deadline(self.region_records));
             if deadline.is_some_and(|deadline| self.clock >= deadline) {
-                return Err(Fault::Budget.into());
+                return self.fault_or_catch(Fault::Budget);
             }
             self.clock += 1;
         }
+        if !self.any_guard || !self.counting {
+            return self.execute_step();
+        }
+        // Inside calls with a budget: the outermost whose budget is spent ends with `budget`; a fault returns
+        // to the innermost; every frame live before the step counts it (a callee's return included).
+        let spent = self.guards().find(|&depth| self.frames[depth].guard == Some(0));
+        if let Some(depth) = spent {
+            return self.catch(depth, Fault::Budget);
+        }
+        let before = self.frames.len();
+        self.count_guards(before, 1, false);
+        match self.execute_step() {
+            Ok(()) => Ok(()),
+            Err(halt) => {
+                // The step changed nothing; nor does its count.
+                self.count_guards(before, 1, true);
+                match halt {
+                    Halt::Fault(fault) => self.fault_or_catch(fault),
+                    Halt::Stop(_) | Halt::Discard => Err(halt),
+                }
+            }
+        }
+    }
+
+    /// The indices of the live frames of callees of calls with a budget, outermost first.
+    pub(crate) fn guards(&self) -> impl Iterator<Item = usize> + '_ {
+        (self.base_depth..self.frames.len()).filter(|&depth| self.frames[depth].guard.is_some())
+    }
+
+    /// Whether the current step runs inside a call with a budget: the region's rules apply.
+    pub(crate) fn guarded(&self) -> bool {
+        self.any_guard && self.guards().next().is_some()
+    }
+
+    /// Counts `steps` (or, undoing, gives them back) in the budgets of the frames below `live`.
+    pub(crate) fn count_guards(&mut self, live: usize, steps: u64, back: bool) {
+        let live = live.min(self.frames.len());
+        for frame in &mut self.frames[self.base_depth.min(live)..live] {
+            if let Some(left) = &mut frame.guard {
+                *left = if back { *left + steps } else { *left - steps };
+            }
+        }
+    }
+
+    /// A fault: returned to the innermost call with a budget as its code, else the step's fault.
+    fn fault_or_catch(&mut self, fault: Fault) -> Result<(), Halt> {
+        match self.guards().last() {
+            Some(depth) if self.any_guard => self.catch(depth, fault),
+            Some(_) | None => Err(fault.into()),
+        }
+    }
+
+    /// Ends the call with a budget whose callee's frame is at `depth` with `fault`: its frames are discarded,
+    /// the caller's result is 0 and its fault code the fault's. A step of the frames below. In strict mode a
+    /// fault while other worlds go on stops the run instead, as a world's fault does: the simulator's
+    /// checks are never delivered to a program as a fault code.
+    fn catch(&mut self, depth: usize, fault: Fault) -> Result<(), Halt> {
+        if !self.in_region && !self.allow_region_faults && self.others_go_on() {
+            return Err(Halt::Stop(RunError::WorldFault { fault, worlds: self.worlds.len() }));
+        }
+        let discarded = self.frames.len() - depth;
+        for index in (depth..self.frames.len()).rev() {
+            let frame = self.frames[index];
+            self.record_word(pack_position(frame.func, frame.block, frame.inst));
+            self.record_word(u128::from(frame.entry_stack_pointer));
+            self.record_word(frame.guard.map_or(0, |left| u128::from(left) + 1));
+        }
+        self.record_word(u128::from(self.stack_pointer));
+        self.record_word(discarded as u128);
+        self.stack_pointer = self.frames[depth].entry_stack_pointer;
+        self.frames.truncate(depth);
+        let caller = *self.top();
+        let Inst::CallBudget { dst, fault: code, .. } =
+            &self.function(caller.func).block(caller.block).insts[caller.inst]
+        else {
+            unreachable!("a frame with a budget was entered by a call with a budget")
+        };
+        if let Some(dst) = dst {
+            self.write_slot(*dst, 0);
+        }
+        self.write_slot(*code, u128::from(fault.code()));
+        if let Some(journal) = &mut self.journal {
+            journal.push_jump(discarded);
+        }
+        self.record(Undo::Catch);
+        self.advance();
+        self.count_guards(depth, 1, false);
+        Ok(())
+    }
+
+    /// Executes the step at the top frame's position.
+    fn execute_step(&mut self) -> Result<(), Halt> {
         let frame = *self.top();
         let block = self.function(frame.func).block(frame.block);
         match block.insts.get(frame.inst) {
@@ -57,15 +149,16 @@ impl<'m> Executor<'m> {
             Inst::StackSave { dst } => self.produce(*dst, u128::from(self.stack_pointer)),
             Inst::ReturnAddress { dst, level } => self.produce(*dst, u128::from(self.return_address(*level))),
             Inst::StackRestore { pointer } => self.stack_restore(self.read_word(pointer))?,
-            Inst::Call { callee, args, .. } => self.call(*callee, args)?,
+            Inst::Call { callee, args, .. } => self.call(*callee, args, None)?,
+            Inst::CallBudget { callee, args, budget, .. } => self.call(*callee, args, Some(self.read_word(budget)))?,
             Inst::CallIndirect { signature, target, args, .. } => {
                 let callee = self.module.function_at(self.read_word(target));
                 let callee = callee.filter(|&f| self.function(f).has_signature(signature)).ok_or(Fault::BadIndirect)?;
-                self.call(callee, args)?;
+                self.call(callee, args, None)?;
             }
             Inst::Setjmp { dst, buffer } => self.setjmp(*dst, self.read_word(buffer))?,
             Inst::Effect { byte } => {
-                if self.in_region {
+                if self.in_region || self.guarded() {
                     return Err(Fault::EffectInRegion.into());
                 }
                 self.tape.push(self.read(byte) as u8);
@@ -74,7 +167,7 @@ impl<'m> Executor<'m> {
             }
             Inst::Mark { dst, budget } => self.mark(*dst, budget.as_ref()),
             Inst::Rewind { mark, keep } => self.rewind(*mark, keep)?,
-            _ if self.in_region => return Err(Fault::QuantumInRegion.into()),
+            _ if self.in_region || self.guarded() => return Err(Fault::QuantumInRegion.into()),
             Inst::Qalloc { dst, width } => {
                 let handle = self.quantum.allocate(*width);
                 self.write_slot(*dst, u128::from(handle));
@@ -161,7 +254,7 @@ impl<'m> Executor<'m> {
             }
             Terminator::Return(value) => self.ret(value.map(|value| self.read(&value))),
             Terminator::Exit(value) => {
-                if self.in_region {
+                if self.in_region || self.guarded() {
                     return Err(Fault::ExitInRegion.into());
                 }
                 let ty = match value {
@@ -251,7 +344,9 @@ impl<'m> Executor<'m> {
         let depth = (frame_word & u64::from(u32::MAX)) as usize;
         let (func, block, inst) =
             (FuncId((frame_word >> 32) as u32), BlockId(position as u32), (position >> 32) as usize);
-        if depth < self.base_depth || depth >= self.frames.len() {
+        // Inside a call with a budget a jump may not leave its callee's frame.
+        let floor = self.guards().last().unwrap_or(self.base_depth);
+        if depth < floor || depth >= self.frames.len() {
             return Err(Fault::BadLongjmp);
         }
         let target = self.frames[depth];
@@ -435,7 +530,9 @@ impl<'m> Executor<'m> {
     /// as an integer: if the world's configurations disagree on its value, the world splits into one world
     /// per value first (`docs/DESIGN.md`, "Worlds"), and the journal notes the read, which un-running the
     /// call checks.
-    fn call(&mut self, callee: FuncId, args: &'m [Operand]) -> Result<(), Fault> {
+    /// With a `guard`, the callee's frame gets that budget (a call with a budget): in every world, those
+    /// that split off at its read included.
+    fn call(&mut self, callee: FuncId, args: &'m [Operand], guard: Option<u64>) -> Result<(), Fault> {
         let function = self.function(callee);
         let mut reads = Vec::new();
         for (index, (arg, param)) in args.iter().zip(&function.params).enumerate() {
@@ -450,7 +547,7 @@ impl<'m> Executor<'m> {
             // A call that cannot enter faults in every world alike, before any splits.
             self.frame_fits(callee)?;
             let columns: Vec<usize> = reads.iter().map(|&(_, column, _)| column).collect();
-            split = self.split(&columns, &|executor| executor.call(callee, args)) || self.splitting;
+            split = self.split(&columns, &|executor| executor.call(callee, args, guard)) || self.splitting;
         }
         let mut values = std::mem::take(&mut self.scratch);
         values.clear();
@@ -468,6 +565,10 @@ impl<'m> Executor<'m> {
         }
         let pushed = self.push_frame(callee, &values);
         self.scratch = values;
+        if pushed.is_ok() && guard.is_some() {
+            self.any_guard = true;
+            self.top_mut().guard = guard;
+        }
         pushed
     }
 
@@ -493,7 +594,14 @@ impl<'m> Executor<'m> {
             self.record_word(old);
         }
         let entry_stack_pointer = std::mem::replace(&mut self.stack_pointer, new_sp);
-        self.frames.push(Frame { func, block: bennett_ir::BlockId(0), inst: 0, base, entry_stack_pointer });
+        self.frames.push(Frame {
+            func,
+            block: bennett_ir::BlockId(0),
+            inst: 0,
+            base,
+            entry_stack_pointer,
+            guard: None,
+        });
         self.record(Undo::Call);
         Ok(())
     }
@@ -526,12 +634,19 @@ impl<'m> Executor<'m> {
         let callee = self.frames.pop().expect("a returning frame exists");
         self.record_word(u128::from(callee.func.0) << 32 | u128::from(callee.block.0));
         self.record_word(u128::from(self.stack_pointer));
+        if let Some(left) = callee.guard {
+            self.record_word(u128::from(left));
+        }
         self.stack_pointer = callee.entry_stack_pointer;
         let caller = *self.top();
         let call = &self.function(caller.func).block(caller.block).insts[caller.inst];
         if let Some(dst) = call.result() {
             let value = value.expect("the validator lets a call name a result only if the callee returns one");
             self.write_slot(dst, value);
+        }
+        // A call with a budget gives the fault code 0 on a return.
+        if let Some(code) = call.fault_result() {
+            self.write_slot(code, 0);
         }
         self.record(Undo::Return);
         self.advance();

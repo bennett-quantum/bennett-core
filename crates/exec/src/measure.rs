@@ -794,10 +794,11 @@ impl Executor<'_> {
         let frame = *self.top();
         let block = self.function(frame.func).block(frame.block);
         let pos = if frame.inst < block.insts.len() { SitePos::Inst(frame.inst) } else { SitePos::Term };
-        // A rewind pops records the measurement has already classified; it does not model that.
+        // A rewind pops records the measurement has already classified; it does not model that. Nor does it
+        // model a call with a budget, whose fault discards frames (a debt).
         assert!(
-            !matches!(block.insts.get(frame.inst), Some(Inst::Rewind { .. })),
-            "the journal-content measurement does not follow `rewind`"
+            !matches!(block.insts.get(frame.inst), Some(Inst::Rewind { .. } | Inst::CallBudget { .. })),
+            "the journal-content measurement does not follow `rewind` or a call with a budget"
         );
         let journal = self.journal.as_ref().expect("a region runs with a journal");
         let site = Site { func: frame.func, block: frame.block, pos };
@@ -1066,7 +1067,9 @@ impl Executor<'_> {
             | Undo::Leftover
             | Undo::LeftBehind
             | Undo::Apply => Vec::new(),
-            Undo::Rewind => unreachable!("the measurement stops before a rewind"),
+            Undo::Rewind | Undo::Catch => {
+                unreachable!("the measurement stops before a rewind or a call with a budget")
+            }
         };
         // Check original operand values against live state; captured values alone never suffice.
         let context_live = Arc::new(if collector.keep_raw { live.to_vec() } else { Vec::new() });
@@ -1147,6 +1150,7 @@ impl Executor<'_> {
                                 | Inst::Setjmp { .. }
                                 | Inst::ReturnAddress { .. }
                                 | Inst::Call { .. }
+                                | Inst::CallBudget { .. }
                                 | Inst::CallIndirect { .. }
                                 | Inst::FuncAddr { .. }
                                 | Inst::Effect { .. }
@@ -1232,6 +1236,7 @@ impl Executor<'_> {
             | Undo::Leftover
             | Undo::Measure
             | Undo::LeftBehind
+            | Undo::Catch
             | Undo::Apply
             | Undo::Mark
             | Undo::Rewind
@@ -1277,6 +1282,7 @@ impl Executor<'_> {
             | Undo::Leftover
             | Undo::Measure
             | Undo::LeftBehind
+            | Undo::Catch
             | Undo::Apply
             | Undo::Mark
             | Undo::Rewind
@@ -1302,6 +1308,7 @@ impl Executor<'_> {
                 | Inst::Setjmp { .. }
                 | Inst::ReturnAddress { .. }
                 | Inst::Call { .. }
+                | Inst::CallBudget { .. }
                 | Inst::CallIndirect { .. }
                 | Inst::Effect { .. }
                 | Inst::Qalloc { .. }
@@ -1372,6 +1379,7 @@ impl Executor<'_> {
                 | Inst::Setjmp { .. }
                 | Inst::ReturnAddress { .. }
                 | Inst::Call { .. }
+                | Inst::CallBudget { .. }
                 | Inst::CallIndirect { .. }
                 | Inst::Effect { .. }
                 | Inst::Qalloc { .. }
@@ -1481,7 +1489,7 @@ impl Executor<'_> {
         live.clear();
         let paired = match kind {
             Undo::Return => shadow.len() - 1,
-            Undo::Longjmp => shadow.len() - discarded,
+            Undo::Longjmp | Undo::Catch => shadow.len() - discarded,
             Undo::Slot
             | Undo::Store
             | Undo::Alloca

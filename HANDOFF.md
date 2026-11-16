@@ -150,7 +150,10 @@ commit) after the four checks passed on it.
   budget (`%h = mark budget B`: a per-world bound from the mark to its rewind, and a rewind costs `B` of
   the machine's time, `Stats::clock`; `docs/DESIGN.md`, "The mark's budget"), is built; e5, the budget
   required where a rewind follows a read of a qubit (else `bad_rewind`; the older tests' marks migrated to
-  `budget -1`, which bounds nothing), is built. Next: the call form with a fault value and a budget. The panic reported for a
+  `budget -1`, which bounds nothing), is built; e6, the call with a fault value and a budget
+  (`%y, %c = call @f(args) budget B`, the region's rules attached, `apply` equal to mark, this call and
+  rewind-keep; `docs/DESIGN.md`, "The call with a fault value"), is built. Next: the NaN payload rule, then
+  the retirement of `apply`, `qalloc` and `qfree` once every test passes without them. The panic reported for a
   `measure_memory` fixture in 64 bytes of memory was not the executor's: it returns `stack_overflow` before
   the first step (since `5515ae8`); the independent whole-world reference panicked at its own start
   (`expect("entry fits memory")`). The reference now models the fault, and
@@ -986,6 +989,13 @@ earlier decisions: "Decisions the maintainer took on 2026-11-16, in the afternoo
   fit the clock (`budget -1`) meets the rule and bounds nothing, which is what the tests written before the
   rule use. The alternatives: a new fault code instead of `bad_rewind`, or every mark costing its budget.
   Recommendation: keep; a validator rule for calls that read registers can be added beside it.
+
+- **The call with a fault value** (e6). Taken: the code is an `i5` (the fault code width, as the fault
+  registers); `%c = call ... budget B` names the code alone; the budget lives in the callee's frame as steps
+  left, counted for every step while it is live and never given back by a rewind inside (as an applied
+  function's), and the innermost call takes a fault, the outermost spent one a budget. Recommendation: keep;
+  an `i8` code would survive a further widening of the codes, at the cost of a `trunc` before a keep into a
+  `q5`.
 
 ## Questions the maintainer answered on 2026-11-16, in the afternoon (kept for their detail)
 

@@ -224,6 +224,7 @@ pub fn registers(module: &ValidModule, name: &str) -> Vec<String> {
             | Inst::Setjmp { .. }
             | Inst::ReturnAddress { .. }
             | Inst::Call { .. }
+            | Inst::CallBudget { .. }
             | Inst::CallIndirect { .. }
             | Inst::FuncAddr { .. }
             | Inst::Effect { .. }
