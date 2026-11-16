@@ -787,7 +787,10 @@ How work is done:
   archive in 50,952 results, all in which input NaN's payload the result carries; nothing else differs, and both
   x87 helpers match completely. Measured cause: native code generation commutes `fadd`/`fmul` operands, and SSE
   propagates its destination operand's NaN; run natively in LLVM's operand order, every bit matches the device
-  (`rt/libgcc/README.md`). C does not promise which input NaN's payload a result carries. Accept payload
+  (`rt/libgcc/README.md`); the independent testing pass showed the other half: the same IR with one fixed
+  operand order per instruction reproduces the archive on every tuple, and the host's GCC rebuilds the
+  archive's six members exactly from the vendored source (`exact/commute.py`, `exact/archive.py`).
+  C does not promise which input NaN's payload a result carries. Accept payload
   differences of this kind as agreement? Recommendation: yes, compared by a rule that allows exactly this. Taken
   meanwhile (easiest to reverse): the bit-for-bit requirement stays, recorded as a debt with its route (preserve
   the archive's per-operation operand order through helper compilation and SoftFloat lowering).

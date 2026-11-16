@@ -12,6 +12,9 @@ All six are self-contained; long-double division works without a C library.
 `front/tests/tests/complex.rs` compares all six helpers and ordinary C products/quotients
 against the default native libgcc at `-O0` and `-O2`, including Annex G special values.
 The grouped regression checks normalize NaNs according to the floating-point contract.
+`complex_boundaries.c` compares raw result bits (only NaN bits may differ) at the helpers' scaling
+thresholds, product overflow and subnormal edges, through the helpers and `*`/`/` at both levels;
+at 20,000 tuples per format (480,000 results per level) it found no other difference.
 For a raw-bit comparison, build the front and release executor, then run:
 
 ```sh
@@ -121,6 +124,18 @@ retains its scratch IR and objects. This isolates native operand choice as the c
 all measured device-vs-same-IR differences; it does not substitute a new correctness oracle.
 No arithmetic lowering defect is demonstrated by this sample.
 
+The other half is checked against the archive itself (`exact/commute.py`, native only, about 3 s;
+front test `the_archive_nan_choices_are_operand_orders_of_the_production_ir`). It routes every
+`float`/`double` `fadd`/`fmul` of the production helper IR through an SSE wrapper whose operand order
+is chosen per instruction, then searches for **one fixed order per helper**, as a compiled program has.
+For each of the four helpers one exists, and with it the production IR reproduces the GCC archive's
+raw bits, NaNs included, on **all 422,144 tuples**: swapped instructions `0x18` of 12 (`__mulsc3`,
+`__muldc3`), `0x47` of 24 (`__divsc3`; any of its lowest three may be swapped: two squares and the
+denominator, whose NaN never reaches a result) and `0xe300048000` of 56 (`__divdc3`), numbered in IR order.
+For `__mulsc3` the two swapped instructions are the IR's `b*c` and `bc+ad`; GCC's archive computes
+`c*b` and `ad+bc` (`mulss %xmm1,%xmm11`, `addss %xmm11,%xmm5`). Together with the operand-order
+diagnostic above, every one of the 50,952 differences is an operand order and nothing else.
+
 Small executed witnesses are in `exact/nan_witness.c`. For example, for
 `__divdc3(0, 0, 0, +qNaN)` (directed tuple 9), GCC's archive and Clang `-O2` hardware
 return `fff8000000000000` in both components; Clang `-O0` hardware, the device and the
@@ -156,6 +171,24 @@ and normalization of operand encodings at the operation boundary; the latter req
 SoftFloat state and constrained-operation lowering. They are debts, not coverage proved by
 this canonical-input sweep.
 
+Measured by the independent testing pass (2026-11-16): 800 tuples per class and helper, one
+noncanonical operand at each position among canonical ones, `-O0` caller, raw bits against the archive.
+Columns: identical / only NaN bits differ / other difference.
+
+| operand class | `__mulxc3` | `__divxc3` |
+|---|---|---|
+| unnormal | 159 / 52 / 589 | 206 / 47 / 547 |
+| unnormal zero (exponent ≠ 0, significand 0) | 240 / 66 / 494 | 334 / 43 / 423 |
+| pseudo-denormal | 800 / 0 / 0 | 788 / 0 / 12 |
+| pseudo-infinity | 104 / 17 / 679 | 334 / 58 / 408 |
+| pseudo-NaN | 405 / 395 / 0 | 117 / 679 / 4 |
+
+x87 refuses unnormals, pseudo-infinities and pseudo-NaNs as invalid operands (a default NaN, and an
+unordered comparison); the device computes with them, giving finite or infinite values where x87 gives
+NaN, and zeros of the other sign. A pseudo-denormal has x87's value, but compares below the smallest
+normal on the device, so `__divxc3` can take the other Smith branch: one ulp apart. One witness per
+class is the ignored front test `noncanonical_x87_operands_agree_with_the_hardware`.
+
 ## Verification snapshot
 
 All four repository checks passed after rebasing onto `3418e51` on 2026-11-16:
@@ -164,6 +197,9 @@ All four repository checks passed after rebasing onto `3418e51` on 2026-11-16:
 These green checks do not replace the strict raw sweep's exit 1 or the normal corpus
 route's three environment refusals. The large raw sweep used an `-O0` caller with the
 production `-O2` helper bitcode; both caller levels are covered by the fast complex suite.
+The independent testing pass then ran the same sweep with an `-O2` caller
+(`run.py --random 262144 --level O2`): the same counts as the table above, no other difference,
+2,272,217,960 steps (strict exit 1 for the NaN bits, as above).
 The end-to-end NaN diagnostic also passes: every full-sample operand-order hardware
 result matches the device, and the five small device witnesses match in **4,120 steps**.
 That diagnostic success is a cause check, not an archive-exactness pass.

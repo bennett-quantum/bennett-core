@@ -47,6 +47,19 @@ to `libgcc2.c`, `libgcc2.h` or `libgcc/config/i386`; none of the six helper algo
 is distribution-patched. The native archive remains the execution oracle, including
 compiler optimization choices (especially NaN operand selection).
 
+The independent testing pass (2026-11-16) fetched the release again (gcc.gnu.org and a sourceware
+mirror): the same SHA-256, the SHA-512 of gcc.gnu.org's `sha512.sum`, the same good signature with that
+fingerprint, and all ten vendored files byte-identical to the archive's.
+
+Rebuild check (same pass): the host's GCC 13.3.0 compiling the vendored
+`libgcc2.c` with **only** `config/` (no `-fbuilding-libgcc`) and `-O2 -g0 -fno-omit-frame-pointer
+-ffreestanding -fno-builtin -Werror` reproduces all six `libgcc.a` members the native link takes:
+identical disassembly with relocations and identical read-only data. (Ubuntu 24.04 builds with frame
+pointers; with `-fomit-frame-pointer` four members differ, the negative control.) So the native reference
+is this source with this configuration, not merely the same package version. Repeat with
+`python3 rt/libgcc/exact/archive.py`; the front test
+`the_native_reference_archive_is_the_vendored_libgcc_source` runs it.
+
 ## Building unchanged source with clang
 
 `front/CMakeLists.txt` compiles **the original libgcc2.c six times**, selecting each
