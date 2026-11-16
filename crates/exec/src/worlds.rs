@@ -297,6 +297,10 @@ impl<'m> Executor<'m> {
     /// One step of a single world, outside any coherent region; worlds may fork off during it. Returns
     /// the outcome once the run has ended.
     pub(crate) fn step_alone(&mut self) -> Option<Outcome> {
+        // Construction may have faulted before allocating the entry frame.
+        if self.outcome.is_some() {
+            return self.outcome;
+        }
         let was_rewind = self.next_is_rewind();
         let outcome = self.step_world();
         if !self.forked.is_empty() || self.pending {

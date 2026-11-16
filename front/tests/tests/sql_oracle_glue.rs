@@ -110,7 +110,6 @@ fn generated_sql_entries_preserve_memory_reverse_and_match_grover_amplitudes() {
 }
 
 #[test]
-#[ignore = "entry frame exhaustion panics in next_is_rewind; executor fix belongs to the executor job"]
 fn an_entry_frame_that_does_not_fit_returns_stack_overflow() {
     let module =
         bennett_ir::load("memory 1\nfunc @main() -> i32 {\nentry:\n %v = add i32 1, 2\n ret %v\n}\n").expect("valid");

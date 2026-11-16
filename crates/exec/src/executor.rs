@@ -119,6 +119,9 @@ impl From<RunError> for Halt {
 /// Why a run could not start.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum StartError {
+    /// The requested entry function is not in the module.
+    #[error("there is no entry function {0}")]
+    InvalidEntry(u32),
     /// The module's memory cannot be allocated on this host.
     #[error("cannot allocate {0} bytes of memory")]
     MemoryTooLarge(u64),
@@ -354,7 +357,8 @@ impl<'m> Executor<'m> {
     /// Prepares to run `entry` on `args`: memory holds the data image and the entry frame is pushed. If
     /// the entry frame does not fit on the stack the run has already faulted.
     pub fn new(module: &'m ValidModule, entry: FuncId, args: &[u64], options: Options) -> Result<Self, StartError> {
-        check_arguments(module.function(entry), args)?;
+        let function = module.functions.get(entry.index()).ok_or(StartError::InvalidEntry(entry.0))?;
+        check_arguments(function, args)?;
         let mut executor = Executor {
             module,
             memory: initial_memory(module)?,
