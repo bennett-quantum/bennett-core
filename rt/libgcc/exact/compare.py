@@ -17,6 +17,9 @@ for name, w in ops:
     size = N * 2 * w
     x, y = a[pos:pos + size], b[pos:pos + size]
     pos += size
+    if x == y:
+        print(f"{name}: {N} tuples, {N} identical, 0 differ only in NaN bits, 0 differ otherwise")
+        continue
     exact = payload = other = 0
     shown = nan_shown = 0
     for i in range(N):

@@ -232,7 +232,24 @@ explicitly after the separate musl build.
   links only needed helpers and lowers them over SoftFloat. **All six are self-contained, including
   `__divxc3`**, so long-double division no longer needs musl's `logbl`/`ilogbl`, and works without musl.
   The obsolete compiler-rt tree has no remaining build/test consumer and is removed.
-  The exact sweep and corpus measurements are documented in `rt/libgcc/README.md`.
+  Raw comparison: 422,144 tuples/helper (160,000 directed + 262,144 random), 2,532,864 total,
+  2,898,176,872 steps: **no non-NaN difference**, both x87 helpers exact including NaN bits.
+  **Remaining raw-bit debt:** 50,952 float/double results differ only in NaN sign/payload;
+  the strict sweep fails, so complete requested bit equality is not claimed. **Cause measured:**
+  the same unchanged source on hardware also differs with GCC/Clang and Clang `-O0`/`-O2`.
+  The apparent additional device division gap is native SSE `fadd`/`fmul` operand commutation:
+  executing the production IR on hardware with those two operations' operand order fixed
+  matches **all 2,532,864 device results, every NaN bit included**. Quiet-NaN witnesses and
+  C/LLVM latitude are recorded in `rt/libgcc/exact/nan_witness.c` and the README. No arithmetic
+  lowering defect demonstrated by this sample. If archive-identical NaNs are still required,
+  route: preserve that archive's individual arithmetic operand choices through compilation and
+  SoftFloat lowering, with upstream source unchanged. Neither using Clang as the oracle nor
+  switching to `-O0` removes the debt. Counts by helper and reproduction:
+  `rt/libgcc/README.md`. The sweep uses canonical x87 encodings: the existing noncanonical
+  long-double debt (unnormals/pseudo-denormals/infinities/NaNs from raw memory) still needs
+  x87-compatible operand validation/normalization at the float-operation boundary; non-default
+  rounding and readable flags still need the environment fallback. `__divxc3` itself needs no
+  further library helper or build step in the default environment.
   **Remaining corpus debt:** `cdivchkf`, `cdivchkd`, `cdivchkld` call `ilogb`/`ilogbl` themselves;
   musl's `FENV_ACCESS` still stops the normal route. Route: the front's fallback must implement constrained
   floating-point operations and their observable environment; the maintainer keeps the named refusal
