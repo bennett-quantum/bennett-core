@@ -70,7 +70,7 @@ entry:
     h %q[0]
     qfree %q
     %o = qalloc 2
-    %e = qalloc 4
+    %e = qalloc 5
     apply @inc(%a) -> %o, %e budget 10
     %h = mark
     br %c, left(%s), right(%u)
@@ -807,7 +807,7 @@ func @cells(i2 %a, i2 %b) -> i2 {
 entry:
     %q = qalloc 2
     %o = qalloc 8
-    %e = qalloc 4
+    %e = qalloc 5
     %p = zext i2 %a to i64
     %addr = add i64 %p, 16
     %far = mul i64 %p, 120

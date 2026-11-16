@@ -125,7 +125,7 @@ entry:
     %q = qalloc 1
     h %q
     %out = qalloc 1
-    %fault = qalloc 4
+    %fault = qalloc 5
     apply @where(%q) -> %out, %fault budget 100
     %m = measure %out
     ret %m

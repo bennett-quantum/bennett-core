@@ -90,7 +90,7 @@ fn a_jump_to_a_returned_function_is_a_named_fault() {
     );
     for flags in [CLANG_FLAGS, CLANG_O2_FLAGS] {
         let module = lower(&source, "setjmp_returned", flags, &[]);
-        assert_eq!(run(&module, "main", &[], 0), Outcome::Faulted(bennett_ir::Fault::BadIndirect), "{flags:?}");
+        assert_eq!(run(&module, "main", &[], 0), Outcome::Faulted(bennett_ir::Fault::BadLongjmp), "{flags:?}");
     }
 }
 

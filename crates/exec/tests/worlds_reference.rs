@@ -375,7 +375,7 @@ fn nested_mark_rewind_composite_is_a_whole_state_bijection_including_dirty_prefi
 #[test]
 fn repeated_read_only_apply_arguments_are_preserved_and_only_destinations_must_be_disjoint() {
     // DESIGN.md permits repeated read-only arguments; out/fault may not occur among them.
-    let p=bennett_ir::load("memory 256\nfunc @f(i1 %a, i1 %b) -> i1 {\nentry:\n%r = xor i1 %a, %b\nret %r\n}\nfunc @main() {\nentry:\n%q = qalloc 1\nh %q\n%out = qalloc 1\n%fault = qalloc 4\napply @f(%q, %q) -> %out, %fault budget 8\nret\n}").expect("valid duplicate read-only inputs");
+    let p=bennett_ir::load("memory 256\nfunc @f(i1 %a, i1 %b) -> i1 {\nentry:\n%r = xor i1 %a, %b\nret %r\n}\nfunc @main() {\nentry:\n%q = qalloc 1\nh %q\n%out = qalloc 1\n%fault = qalloc 5\napply @f(%q, %q) -> %out, %fault budget 8\nret\n}").expect("valid duplicate read-only inputs");
     compare(&p, "main", &[], 20, false);
     let model = Model::new(&p, "main");
     let state = model.run(basis(model.initial("main", &[])), 20);
@@ -403,7 +403,7 @@ fn measurement_checks_liveness_before_becoming_a_born_boundary() {
 fn an_applied_setjmp_record_keeps_the_callers_physical_frame_depth() {
     // DESIGN.md Non-local jumps: the buffer stores frame depth. Private memory
     // does not remove the caller's physical activation while the function runs.
-    let p=bennett_ir::load("memory 256\nfunc @f(i1 %x)->i8 {\nentry:\n%buf = alloca 32\n%r = setjmp %buf\n%depth = load i8 %buf\nret %depth\n}\nfunc @main() {\nentry:\n%q = qalloc 1\nh %q\n%out = qalloc 8\n%fault = qalloc 4\napply @f(%q) -> %out, %fault budget 16\nret\n}").expect("physical-depth fixture");
+    let p=bennett_ir::load("memory 256\nfunc @f(i1 %x)->i8 {\nentry:\n%buf = alloca 32\n%r = setjmp %buf\n%depth = load i8 %buf\nret %depth\n}\nfunc @main() {\nentry:\n%q = qalloc 1\nh %q\n%out = qalloc 8\n%fault = qalloc 5\napply @f(%q) -> %out, %fault budget 16\nret\n}").expect("physical-depth fixture");
     compare(&p, "main", &[], 16, false);
     let model = Model::new(&p, "main");
     let state = model.run(basis(model.initial("main", &[])), 16);

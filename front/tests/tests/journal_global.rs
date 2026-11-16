@@ -56,7 +56,7 @@ entry:
     %q = qalloc 8
 {h}    %out = qalloc 32
     %r = qalloc 1
-{prepare_r}    %fault = qalloc 4
+{prepare_r}    %fault = qalloc 5
     apply @{work}(%q, %reps) -> %out, %fault budget 100000
     ret
 }}",

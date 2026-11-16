@@ -46,7 +46,7 @@ namespace bennett {
 namespace {
 
 // The fault register is as wide as the device program's fault codes (bennett_ir::Fault::CODE_WIDTH).
-constexpr unsigned faultCodeBits = 4;
+constexpr unsigned faultCodeBits = 5;
 
 // The C name of a qubit variable, for suggestions in messages.
 std::string plainName(const Storage &storage) {

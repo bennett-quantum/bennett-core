@@ -17,7 +17,7 @@ entry:
 func @main() {
 entry:
     %o = qalloc 1
-    %e = qalloc 4
+    %e = qalloc 5
     apply @f() -> %o, %e budget 4
     ret
 }";
@@ -116,7 +116,7 @@ func @main() {
 entry:
 %q = qalloc 1
 %o = qalloc 1
-%e = qalloc 4
+%e = qalloc 5
 h %q
 %read = call @id(%q)
 apply @f() -> %o, %e budget 4

@@ -39,7 +39,7 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | GATE qubit [ctrl qubit {, qubit}]          ; x h z s sdg t tdg
             | (rx | ry | rz)(ANGLE) qubit [ctrl ...]     ; radians
             | %d = measure %r
-            | apply @f(typed, ...) -> %out, %fault budget operand
+            | apply @f(typed, ...) -> %out, %fault budget operand  ; %fault: a register of 5 qubits or more
             | %d = mark                                  ; an i64 handle for rewind
             | rewind %h [keep (typed -> kept {, typed -> kept})]  ; XOR each value in, un-run since %h
 kept       := %r | "[" operand "]"                ; a register, or memory qubits from bit 0 of the address
@@ -49,7 +49,7 @@ terminator := br label[(typed, ...)]
             | ret [operand]
             | exit typed                                 ; finish the whole run, even from a nested call
             | longjmp operand, operand                   ; jump record address (i64), i32 value
-            | fault NAME                                 ; budget, unreachable, ... (bennett_ir::Fault)
+            | fault NAME                                 ; budget, unreachable, ... (bennett_ir::Fault; 5-bit codes)
 ```
 
 Integers are decimal or `0x` hex and may be negative (two's complement at the type's width). Strings
@@ -176,5 +176,5 @@ address and an `i32` value. `setjmp` writes 32 bytes at `%buf`, four little-endi
 depth from 0 (low 32 bits) and function index (high 32 bits); the `setjmp`'s block index (low) and instruction
 index in the block (high); the frame's entry stack pointer; the stack pointer when `setjmp` ran. A record or
 buffer outside memory is `out_of_bounds`; a record `longjmp` cannot match to a live frame and `setjmp` is
-`bad_indirect` (`docs/DESIGN.md`, "Non-local jumps"). The value is passed as it is: C's rule that 0 becomes 1
+`bad_longjmp` (`docs/DESIGN.md`, "Non-local jumps"). The value is passed as it is: C's rule that 0 becomes 1
 is the front's.

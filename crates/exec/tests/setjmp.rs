@@ -55,10 +55,22 @@ entry:
 }
 "#;
 
+/// An invalid jump record and an invalid call target are told apart since fault codes are 5 bits wide: the
+/// same garbage word as a jump record is `bad_longjmp`, as a call target `bad_indirect`.
+#[test]
+fn an_invalid_jump_record_is_not_a_bad_call_target() {
+    let text = "memory 256\nfunc @g() {\nentry:\n ret\n}\nfunc @main(i1 %jump) {\nentry:\n store i64 77, 64\n \
+                br %jump, jump, call\njump:\n longjmp 64, 1\ncall:\n %t = load i64 64\n call_indirect fn() %t()\n ret\n}\n";
+    let module = load(text);
+    assert_eq!(run(&module, "main", &[1], bounded()).0, Outcome::Faulted(Fault::BadLongjmp));
+    assert_eq!(run(&module, "main", &[0], bounded()).0, Outcome::Faulted(Fault::BadIndirect));
+    assert_reverses(&module, "main", &[1], bounded());
+}
+
 #[test]
 fn a_jump_to_a_frame_that_returned_faults() {
     let module = load(STALE);
-    assert_eq!(run(&module, "main", &[], bounded()).0, Outcome::Faulted(Fault::BadIndirect));
+    assert_eq!(run(&module, "main", &[], bounded()).0, Outcome::Faulted(Fault::BadLongjmp));
     assert_reverses(&module, "main", &[], bounded());
 }
 
@@ -91,12 +103,12 @@ fn every_field_of_the_record_is_checked() {
     // Depth, function, block, instruction, entry stack pointer: any change names no setjmp of a live frame.
     for (field, delta) in [(0, 1), (0, 1 << 32), (1, 1), (1, 1 << 32), (1, u64::MAX << 32), (2, 8), (2, u64::MAX)] {
         let (outcome, _) = run(&module, "main", &[field, delta], bounded());
-        assert_eq!(outcome, Outcome::Faulted(Fault::BadIndirect), "word {field} + {delta:#x}");
+        assert_eq!(outcome, Outcome::Faulted(Fault::BadLongjmp), "word {field} + {delta:#x}");
     }
     // The stack pointer may not leave the frame's allocations: above them, or below where they stand.
     for delta in [40, 1 << 20, u64::MAX - 7] {
         let (outcome, _) = run(&module, "main", &[3, delta], bounded());
-        assert_eq!(outcome, Outcome::Faulted(Fault::BadIndirect), "stack pointer + {delta:#x}");
+        assert_eq!(outcome, Outcome::Faulted(Fault::BadLongjmp), "stack pointer + {delta:#x}");
     }
     assert_reverses(&module, "main", &[3, 40], bounded());
 }
@@ -138,7 +150,7 @@ entry:
     h %q[0]
     h %q[1]
     %out = qalloc 2
-    %fault = qalloc 4
+    %fault = qalloc 5
     apply @jumpy(%q) -> %out, %fault budget 100
     apply @jumpy(%q) -> %out, %fault budget 100
     qfree %out
@@ -181,7 +193,7 @@ go:
     %q = qalloc 1
     h %q
     %out = qalloc 1
-    %fault = qalloc 4
+    %fault = qalloc 5
     apply @escape(%q) -> %out, %fault budget 100
     ret 0
 back:
@@ -194,11 +206,11 @@ fn a_jump_out_of_a_region_faults_on_every_branch() {
     let module = load(ESCAPE);
     let (outcome, _) = run(&module, "main", &[], bounded());
     let escape = common::entry(&module, "escape");
-    let expected = RunError::RegionFault { callee: escape, fault: Fault::BadIndirect, branches: 2, configurations: 2 };
+    let expected = RunError::RegionFault { callee: escape, fault: Fault::BadLongjmp, branches: 2, configurations: 2 };
     assert_eq!(outcome, Outcome::Stopped(expected));
     let (outcome, executor) = run(&module, "main", &[], allowing_region_faults());
     assert_eq!(outcome, Outcome::Returned(Some(0)));
-    assert!(executor.snapshot().quantum.amplitudes.iter().all(|(basis, _)| basis[2] == Fault::BadIndirect.code()));
+    assert!(executor.snapshot().quantum.amplitudes.iter().all(|(basis, _)| basis[2] == Fault::BadLongjmp.code()));
 }
 
 #[test]

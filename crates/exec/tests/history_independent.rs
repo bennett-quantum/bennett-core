@@ -161,7 +161,7 @@ fn faults_and_effects_inside_applied_marked_regions_leave_no_trace() {
         ("%d = udiv i2 3, 0\nret %d", Fault::DivideByZero),
     ] {
         let module = load(&format!(
-            "memory 1024\nfunc @f() -> i2 {{\nentry:\n%h = mark\nstore i8 27, 16\n{body}\n}}\nfunc @main() {{\nentry:\n%out = qalloc 2\n%e = qalloc 4\n%h = mark\napply @f() -> %out, %e budget 20\nrewind %h keep (i2 2 -> %out)\nret\n}}"
+            "memory 1024\nfunc @f() -> i2 {{\nentry:\n%h = mark\nstore i8 27, 16\n{body}\n}}\nfunc @main() {{\nentry:\n%out = qalloc 2\n%e = qalloc 5\n%h = mark\napply @f() -> %out, %e budget 20\nrewind %h keep (i2 2 -> %out)\nret\n}}"
         ));
         let opts = Options { allow_region_faults: true, ..options() };
         let mut e = executor(&module, "main", &[], opts);
@@ -217,7 +217,7 @@ fn a_rewind_has_finite_budget_even_in_an_infinite_loop() {
 
 #[test]
 fn journal_content_refuses_rewind_in_a_region_but_observes_marks() {
-    let source = "memory 512\nfunc @f() -> i2 {\nentry:\n%h = mark\nREWIND\nret 3\n}\nfunc @main() {\nentry:\n%q = qalloc 2\n%e = qalloc 4\napply @f() -> %q, %e budget 10\nret\n}";
+    let source = "memory 512\nfunc @f() -> i2 {\nentry:\n%h = mark\nREWIND\nret 3\n}\nfunc @main() {\nentry:\n%q = qalloc 2\n%e = qalloc 5\napply @f() -> %q, %e budget 10\nret\n}";
     for raw in [false, true] {
         let module = load(&source.replace("REWIND", ""));
         let mut observed = executor(&module, "main", &[], options());
@@ -325,7 +325,7 @@ fn strict_apply_checks_are_suspended_only_during_unrun_and_replay() {
     // The kept value changes an input of @f. No specific interference is promised by rule 4;
     // the documented apply permutation still defines its unrun even on newly faulting branches.
     let module = load(
-        "memory 1024\nfunc @f(i1 %x) -> i1 {\nentry:\n%v = udiv i1 1, %x\nret %v\n}\nfunc @main() {\nentry:\n%x = qalloc 1\n%y = qalloc 1\n%e = qalloc 4\n%h = mark\nx %x\napply @f(%x) -> %y, %e budget 2\nrewind %h keep (i1 1 -> %x)\nret\n}",
+        "memory 1024\nfunc @f(i1 %x) -> i1 {\nentry:\n%v = udiv i1 1, %x\nret %v\n}\nfunc @main() {\nentry:\n%x = qalloc 1\n%y = qalloc 1\n%e = qalloc 5\n%h = mark\nx %x\napply @f(%x) -> %y, %e budget 2\nrewind %h keep (i1 1 -> %x)\nret\n}",
     );
     let mut e = executor(&module, "main", &[], options());
     let initial = e.snapshot();

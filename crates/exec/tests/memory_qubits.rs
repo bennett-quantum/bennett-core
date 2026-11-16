@@ -527,7 +527,7 @@ entry:
 func @main() {
 entry:
     %o = qalloc 8
-    %e = qalloc 4
+    %e = qalloc 5
     h [16:0]
     h [16:1]
     apply @peek() -> %o, %e budget 10
@@ -645,7 +645,7 @@ entry:
     assert!(after.quantum.distance(&before.quantum).is_some_and(|d| d <= 1e-12));
 }
 
-/// A jump record held in qubits jumps where they agree, and is `bad_indirect` where they do not: worlds
+/// A jump record held in qubits jumps where they agree, and is `bad_longjmp` where they do not: worlds
 /// that jumped to different places, some faulting, are a debt.
 #[test]
 fn a_jump_record_in_qubits_jumps_only_where_they_agree() {
@@ -668,7 +668,7 @@ done:
     let agreeing = bennett_ir::load(&text("    x [64:3]\n    x [64:3]\n")).expect("valid");
     assert_eq!(start(&agreeing, "main", true).run(), Outcome::Returned(Some(7)));
     let superposed = bennett_ir::load(&text("    h [64:3]\n")).expect("valid");
-    assert_eq!(start(&superposed, "main", true).run(), Outcome::Faulted(Fault::BadIndirect));
+    assert_eq!(start(&superposed, "main", true).run(), Outcome::Faulted(Fault::BadLongjmp));
 }
 
 /// A rewind un-runs a promotion the worlds shared before a read split them: below the split each world

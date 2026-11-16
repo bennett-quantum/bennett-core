@@ -359,7 +359,7 @@ entry:
     %q = qalloc 1
     h %q
     %y = qalloc 8
-    %e = qalloc 4
+    %e = qalloc 5
     apply @f(%q) -> %y, %e budget 100
     %m = measure %y
     ret %m

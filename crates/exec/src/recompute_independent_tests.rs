@@ -1142,7 +1142,7 @@ fn random_program(seed: u64) -> String {
     ));
     text.push_str(&body);
     text.push_str(
-        "func @main() -> i8 {\nentry:\n    %q = qalloc 3\n    h %q[0]\n    h %q[1]\n    h %q[2]\n    %y = qalloc 8\n    %e = qalloc 4\n    apply @f(%q) -> %y, %e budget 5000\n    ret 0\n}\n",
+        "func @main() -> i8 {\nentry:\n    %q = qalloc 3\n    h %q[0]\n    h %q[1]\n    h %q[2]\n    %y = qalloc 8\n    %e = qalloc 5\n    apply @f(%q) -> %y, %e budget 5000\n    ret 0\n}\n",
     );
     text
 }
@@ -1289,7 +1289,7 @@ entry:
     %q = qalloc 1
     h %q
     %y = qalloc 8
-    %e = qalloc 4
+    %e = qalloc 5
     apply @f(%q) -> %y, %e budget 100
     %m = measure %y
     ret %m
@@ -1363,7 +1363,7 @@ entry:
     %q = qalloc 8
 {h}    %out = qalloc 32
     %r = qalloc 1
-    %fault = qalloc 4
+    %fault = qalloc 5
     apply @{work}(%q, %reps) -> %out, %fault budget 100000
     ret
 }}"

@@ -64,7 +64,7 @@ entry:
     %q = qalloc 1
     h %q
     %y = qalloc 8
-    %e = qalloc 4
+    %e = qalloc 5
     apply @f(%q) -> %y, %e budget 100
     %m = measure %y
     ret %m
@@ -75,7 +75,7 @@ entry:
     %q = qalloc 1
     h %q
     %y = qalloc 8
-    %e = qalloc 4
+    %e = qalloc 5
     apply @g(%q) -> %y, %e budget 100
     %m = measure %y
     ret %m
@@ -307,7 +307,7 @@ entry:
     %q = qalloc 1
     h %q
     %y = qalloc 8
-    %e = qalloc 4
+    %e = qalloc 5
     apply @f(%q) -> %y, %e budget 100
     %m = measure %y
     ret %m
@@ -564,7 +564,7 @@ entry:
     %q = qalloc 1
     h %q
     %out = qalloc 8
-    %fault = qalloc 4
+    %fault = qalloc 5
     apply @f(%q) -> %out, %fault budget 100
     ret 0
 }}"

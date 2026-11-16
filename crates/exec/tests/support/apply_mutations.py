@@ -24,7 +24,7 @@ probe = SCRATCH / 'crates/exec/tests/comparison_probe.rs'
 probe.write_text('''use bennett_exec::{ApplyMode, Executor, Options, Outcome};
 #[test]
 fn comparison_probe() {
- let p = bennett_ir::load("memory 512\\nfunc @f() -> i1 {\\nentry:\\nret 1\\n}\\nfunc @main() {\\nentry:\\n%o = qalloc 1\\n%e = qalloc 4\\napply @f() -> %o, %e budget 4\\nret\\n}").expect("program");
+ let p = bennett_ir::load("memory 512\\nfunc @f() -> i1 {\\nentry:\\nret 1\\n}\\nfunc @main() {\\nentry:\\n%o = qalloc 1\\n%e = qalloc 5\\napply @f() -> %o, %e budget 4\\nret\\n}").expect("program");
  let mut e = Executor::new(&p,p.function_named("main").expect("main"),&[],Options {reversible:true,..Options::default()}).expect("entry");
  e.set_apply_mode(ApplyMode::Compare);
  // Test only the apply: a later instruction must not be the mutation detector.

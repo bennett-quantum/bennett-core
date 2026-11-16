@@ -60,7 +60,7 @@ func @coherent() {
 entry:
     %q = qalloc 3
     %out = qalloc 8
-    %fault = qalloc 4
+    %fault = qalloc 5
     h %q[0]
     h %q[1]
     h %q[2]
@@ -172,7 +172,7 @@ entry:
     %r = setjmp 16
     %q = qalloc 1
     %out = qalloc 8
-    %fault = qalloc 4
+    %fault = qalloc 5
     h %q
     apply @escape(%q) -> %out, %fault budget 100
     ret
@@ -188,7 +188,7 @@ entry:
         exec.step(),
         Some(Outcome::Stopped(RunError::RegionFault {
             callee: common::entry(&module, "escape"),
-            fault: Fault::BadIndirect,
+            fault: Fault::BadLongjmp,
             branches: 1,
             configurations: 2,
         }))
@@ -202,5 +202,5 @@ entry:
     let quantum = exec.snapshot().quantum;
     let h = std::f64::consts::FRAC_1_SQRT_2;
     assert!((quantum.amplitude(&[0, 42, 0]).re - h).abs() < 1e-12);
-    assert!((quantum.amplitude(&[1, 0, Fault::BadIndirect.code()]).re - h).abs() < 1e-12);
+    assert!((quantum.amplitude(&[1, 0, Fault::BadLongjmp.code()]).re - h).abs() < 1e-12);
 }

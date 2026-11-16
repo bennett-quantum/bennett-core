@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def entry(name, row=None, out=0, budget=100000, twice=False):
     lines = [f'func @{name}() -> i32 {{', 'entry:',
              ' %s = call @experiment_setup()', ' %row = qalloc 2',
-             ' %out = qalloc 1', ' %fault = qalloc 4']
+             ' %out = qalloc 1', ' %fault = qalloc 5']
     for bit in range(2):
         if row is None:
             lines.append(f' h %row[{bit}]')

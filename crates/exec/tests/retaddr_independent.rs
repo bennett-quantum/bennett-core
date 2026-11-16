@@ -80,7 +80,7 @@ func @inner() {
 entry:
 %q = qalloc 1
 %out = qalloc 64
-%fault = qalloc 4
+%fault = qalloc 5
 h %q
 apply @work(%q) -> %out, %fault budget 100
 ret

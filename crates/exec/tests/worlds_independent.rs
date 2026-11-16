@@ -378,7 +378,7 @@ ret %z
                     format!("ry({}) %a[0]\nrx({}) %b[1]\ns %b[0]", 0.31 * phase as f64, 0.7 * phase as f64)
                 };
                 let entry = format!(
-                    "func @main() {{\nentry:\n%a = qalloc 2\n%b = qalloc 2\n%out = qalloc 2\n%fault = qalloc 4\n{}{}{}{}\n{prep}\nOP\nret\n}}\n",
+                    "func @main() {{\nentry:\n%a = qalloc 2\n%b = qalloc 2\n%out = qalloc 2\n%fault = qalloc 5\n{}{}{}{}\n{prep}\nOP\nret\n}}\n",
                     if a & 1 != 0 { "x %a[0]\n" } else { "" },
                     if a & 2 != 0 { "x %a[1]\n" } else { "" },
                     if b & 1 != 0 { "x %b[0]\n" } else { "" },

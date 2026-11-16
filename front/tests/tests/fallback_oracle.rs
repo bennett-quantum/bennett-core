@@ -516,7 +516,7 @@ fn check_region(name: &str, region: &str, after: &str) {
         // This independently checks native C against its scalar evaluator,
         // as well as checking the conjugation with matrix primitives below.
         let apply_text = format!(
-            "{region}\nfunc @dense_c_adapter() {{\nentry:\n%q = qalloc 2\n%y = qalloc 1\n%e = qalloc 4\n{prep}s %y\napply @bit(%q) -> %y, %e budget 100000\nsdg %y\n%m = measure %q\nret\n}}\n"
+            "{region}\nfunc @dense_c_adapter() {{\nentry:\n%q = qalloc 2\n%y = qalloc 1\n%e = qalloc 5\n{prep}s %y\napply @bit(%q) -> %y, %e budget 100000\nsdg %y\n%m = measure %q\nret\n}}\n"
         );
         let apply_module = bennett_ir::load(&apply_text).expect("dense C apply adapter");
         let mut interpreted = dense::Oracle::new(&apply_module);
@@ -554,7 +554,7 @@ fn check_region(name: &str, region: &str, after: &str) {
     // 13-qubit cap): q in uniform superposition, each nibble kept into o.
     for which in 0..8 {
         let text = format!(
-            "{region}\nfunc @dense_nibble() {{\nentry:\n%q = qalloc 2\n%o = qalloc 4\n%e = qalloc 4\nh %q[0]\nh %q[1]\napply @nibble(%q, i3 {which}) -> %o, %e budget 100000\n%m = measure %q\nret\n}}\n"
+            "{region}\nfunc @dense_nibble() {{\nentry:\n%q = qalloc 2\n%o = qalloc 4\n%e = qalloc 5\nh %q[0]\nh %q[1]\napply @nibble(%q, i3 {which}) -> %o, %e budget 100000\n%m = measure %q\nret\n}}\n"
         );
         let module = bennett_ir::load(&text).expect("dense nibble adapter");
         let mut interpreted = dense::Oracle::new(&module);

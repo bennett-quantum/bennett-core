@@ -125,16 +125,17 @@ const COPY: &str = "func @copy(i1 %x) -> i1 {\nentry:\nret %x\n}\n";
 
 #[test]
 fn unrunning_a_region_through_phase_gates_is_matrix_conjugation() {
-    // U = A† G A with A: (x,y,e)->(x,y XOR x,e). All 64 columns, INCLUDING dirty
-    // out/fault registers. A is derived from the documented XOR meaning, not by running @copy.
-    let a = DMatrix::from_fn(64, 64, |row, col| C::new(f64::from(row == (col ^ ((col & 1) << 1))), 0.0));
+    // U = A† G A with A: (x,y,e)->(x,y XOR x,e). All 128 columns, INCLUDING dirty
+    // out/fault registers (a 5-qubit fault register). A is derived from the documented XOR meaning, not by
+    // running @copy.
+    let a = DMatrix::from_fn(128, 128, |row, col| C::new(f64::from(row == (col ^ ((col & 1) << 1))), 0.0));
     let g = DMatrix::from_diagonal(&DVector::from_iterator(
-        64,
-        (0..64).map(|b| if b & 2 == 0 { C::new(1.0, 0.0) } else { C::new(0.0, 1.0) }),
+        128,
+        (0..128).map(|b| if b & 2 == 0 { C::new(1.0, 0.0) } else { C::new(0.0, 1.0) }),
     ));
     let conjugated = a.adjoint() * g * a;
-    for basis in 0..64 {
-        let prepare: String = (0..6)
+    for basis in 0..128 {
+        let prepare: String = (0..7)
             .filter(|bit| basis & (1 << bit) != 0)
             .map(|bit| {
                 if bit == 0 {
@@ -147,19 +148,19 @@ fn unrunning_a_region_through_phase_gates_is_matrix_conjugation() {
             })
             .collect();
         let text = format!(
-            "memory 256\n{COPY}func @main() {{\nentry:\n%x = qalloc 1\n%y = qalloc 1\n%e = qalloc 4\n{prepare}apply @copy(%x) -> %y, %e budget 2\ns %y\napply @copy(%x) -> %y, %e budget 2\nret\n}}\n"
+            "memory 256\n{COPY}func @main() {{\nentry:\n%x = qalloc 1\n%y = qalloc 1\n%e = qalloc 5\n{prepare}apply @copy(%x) -> %y, %e budget 2\ns %y\napply @copy(%x) -> %y, %e budget 2\nret\n}}\n"
         );
         compare_prefix(&text, "main", &[]);
         let module = load(&text);
         let mut actual = executor(&module, "main", &[]);
         assert_eq!(actual.run(), Outcome::Returned(None));
-        let expected = Dense { widths: vec![1, 1, 4], state: conjugated.column(basis).into_owned() };
+        let expected = Dense { widths: vec![1, 1, 5], state: conjugated.column(basis).into_owned() };
         assert_dense(&actual.snapshot().quantum, &expected, &format!("A† G A column {basis}"));
     }
     // A coherent input probes the relative phases as well as every matrix column.
     compare_prefix(
         &format!(
-            "memory 256\n{COPY}func @main() {{\nentry:\n%x = qalloc 1\n%y = qalloc 1\n%e = qalloc 4\nh %x\nh %y\napply @copy(%x) -> %y, %e budget 2\ns %y\napply @copy(%x) -> %y, %e budget 2\nret\n}}"
+            "memory 256\n{COPY}func @main() {{\nentry:\n%x = qalloc 1\n%y = qalloc 1\n%e = qalloc 5\nh %x\nh %y\napply @copy(%x) -> %y, %e budget 2\ns %y\napply @copy(%x) -> %y, %e budget 2\nret\n}}"
         ),
         "main",
         &[],
@@ -204,9 +205,9 @@ fn region_program(width: u32, body: &str, budget: u64) -> String {
     };
     // widths start at 2 so the explicit truncations above are always narrowing.
     format!(
-        "memory 512\nfunc @f(i{width} %a) -> i{width} {{\nentry:\n{body}\n}}\nfunc @main(i{width} %a, i{width} %o, i4 %e0) {{\nentry:\n%x = qalloc {width}\n%y = qalloc {width}\n%e = qalloc 4\n{copies}{}{}apply @f(%x) -> %y, %e budget {budget}\nret\n}}",
+        "memory 512\nfunc @f(i{width} %a) -> i{width} {{\nentry:\n{body}\n}}\nfunc @main(i{width} %a, i{width} %o, i5 %e0) {{\nentry:\n%x = qalloc {width}\n%y = qalloc {width}\n%e = qalloc 5\n{copies}{}{}apply @f(%x) -> %y, %e budget {budget}\nret\n}}",
         prepare("y", "o", width),
-        prepare("e", "e0", 4)
+        prepare("e", "e0", 5)
     )
 }
 
@@ -223,10 +224,10 @@ fn apply_is_exhaustively_the_claimed_permutation_with_history_spectators() {
             let module = load(&region_program(width, &body, budget));
             // Complete argument/out/fault space, not only zero out/fault. Include one opaque
             // history word, both clean and every dirty encoding; apply must preserve that prefix.
-            let domain = words(&[width, width, 4, 2]);
+            let domain = words(&[width, width, 5, 2]);
             let mut images = std::collections::BTreeMap::new();
             let mut expectations = std::collections::BTreeMap::new();
-            for input in words(&[width, width, 4]) {
+            for input in words(&[width, width, 5]) {
                 let mut direct = Oracle::new(&module);
                 let expected = direct.classical("f", &[input[0]], budget);
                 let mut actual = executor(&module, "main", &input);
@@ -257,8 +258,8 @@ fn apply_is_exhaustively_the_claimed_permutation_with_history_spectators() {
             }
         }
     }
-    assert_eq!(checked, 20_480);
-    println!("exhausted {checked} apply states (5,120 executor runs; four histories per run)");
+    assert_eq!(checked, 40_960);
+    println!("exhausted {checked} apply states (10,240 executor runs; four histories per run)");
 }
 
 #[test]
@@ -280,7 +281,7 @@ fn generated_region_circuits_match_dense_vectors() {
             _ => "store i2 %a, 0\n%r = load i2 0\n%v = call @g(%r)\nret %v",
         };
         let text = format!(
-            "memory 512\nfunc @g(i2 %a) -> i2 {{\nentry:\n%r = add i2 %a, 1\nret %r\n}}\nfunc @f(i2 %a) -> i2 {{\nentry:\n{body}\n}}\nfunc @main() {{\nentry:\n%x = qalloc 2\n%y = qalloc 2\n%e = qalloc 4\n{circuit}ret\n}}"
+            "memory 512\nfunc @g(i2 %a) -> i2 {{\nentry:\n%r = add i2 %a, 1\nret %r\n}}\nfunc @f(i2 %a) -> i2 {{\nentry:\n{body}\n}}\nfunc @main() {{\nentry:\n%x = qalloc 2\n%y = qalloc 2\n%e = qalloc 5\n{circuit}ret\n}}"
         );
         compare_prefix(&text, "main", &[]);
     }
@@ -297,7 +298,7 @@ fn apply_step_preserves_and_restores_an_existing_journal_prefix() {
         let text = region_program(2, "%r = mul i2 %a, %a\nret %r", 8)
             .replace("%x = qalloc 2", &format!("{prefix}%x = qalloc 2"));
         let module = load(&text);
-        for input in words(&[2, 2, 4]) {
+        for input in words(&[2, 2, 5]) {
             let mut actual = executor(&module, "main", &input);
             loop {
                 let snapshot = actual.snapshot();

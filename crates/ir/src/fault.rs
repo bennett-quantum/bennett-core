@@ -34,9 +34,8 @@ faults! {
     DivideByZero = 2 "divide_by_zero",
     /// A load or store outside memory.
     OutOfBounds = 3 "out_of_bounds",
-    /// `call_indirect` through a value that is not the address of a function of the expected signature, or
-    /// `longjmp` through a buffer that holds no jump record to a live frame of the current run (inside a
-    /// coherent region: of the region): a control transfer through a value that names no valid target.
+    /// `call_indirect` through a value that is not the address of a function of the expected signature: a
+    /// call through a value that names no valid target. (An invalid jump record is `bad_longjmp`.)
     BadIndirect = 4 "bad_indirect",
     /// Control reached code marked unreachable.
     Unreachable = 5 "unreachable",
@@ -63,11 +62,14 @@ faults! {
     /// the un-run meets a state its history does not describe (a register read as an integer since the
     /// mark that no longer holds the value read, a register allocated since that is not zero).
     BadRewind = 15 "bad_rewind",
+    /// `longjmp` through a buffer that holds no jump record to a live frame of the current run (inside a
+    /// coherent region: of the region), or whose record is held in qubits that disagree on it.
+    BadLongjmp = 16 "bad_longjmp",
 }
 
 impl Fault {
     /// The width of every fault code. A fault register must be at least this wide.
-    pub const CODE_WIDTH: Width = Width(4);
+    pub const CODE_WIDTH: Width = Width(5);
 
     /// The stable numeric code.
     pub fn code(self) -> u64 {
@@ -104,5 +106,16 @@ mod tests {
             assert_eq!(Fault::from_name(fault.name()), Some(*fault));
             assert!(Fault::ALL[..i].iter().all(|other| other.name() != fault.name()));
         }
+    }
+
+    /// The decision of 2026-11-16: codes are 5 bits wide and an invalid jump record has a code of its own,
+    /// one that a 4-bit register could not hold.
+    #[test]
+    fn an_invalid_jump_record_has_its_own_five_bit_code() {
+        assert_eq!(Fault::CODE_WIDTH, Width(5));
+        assert_eq!(Fault::from_name("bad_longjmp"), Some(Fault::BadLongjmp));
+        assert_eq!(Fault::BadLongjmp.code(), 16);
+        assert_ne!(Fault::BadLongjmp, Fault::BadIndirect);
+        assert!(u128::from(Fault::BadLongjmp.code()) > Width(4).mask());
     }
 }

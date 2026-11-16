@@ -60,7 +60,8 @@ impl Dense {
     fn allocate(&mut self, width: u32) -> usize {
         let handle = self.widths.len();
         self.widths.push(width);
-        assert!(self.widths.iter().sum::<u32>() <= 13, "dense oracle is for a few qubits only");
+        // 14: the thesis example holds 1 + 8 qubits and a 5-qubit fault register.
+        assert!(self.widths.iter().sum::<u32>() <= 14, "dense oracle is for a few qubits only");
         self.state = self.state.clone().resize_vertically(self.state.len() << width, C::new(0.0, 0.0));
         handle
     }

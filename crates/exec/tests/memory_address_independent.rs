@@ -97,7 +97,7 @@ fn generated(seed: usize, width: u32) -> String {
     ][(seed / 16) % 6];
     let keep = if seed & 128 == 0 { "%wide -> [128]" } else { "%b -> %o" };
     format!(
-        "memory 2048\ndata 64 = i8 0x34, i8 0x52, i8 0xa7\nfunc @f(i16 %a)->i8 {{\nentry:\n%x = load i8 65\nstore i8 99, 65\n%r = xor i8 %x, 42\nret %r\n}}\nfunc @main() {{\nentry:\n%o = qalloc 8\n%fault = qalloc 4\n{promotions}{prep}\n%m = mark\n{read}%b = trunc i16 %v to i8\n%wide = zext i8 %b to i{width}\napply @f(%v) -> %o, %fault budget 100\n{middle}\nrewind %m keep ({keep})\nret\n}}\n"
+        "memory 2048\ndata 64 = i8 0x34, i8 0x52, i8 0xa7\nfunc @f(i16 %a)->i8 {{\nentry:\n%x = load i8 65\nstore i8 99, 65\n%r = xor i8 %x, 42\nret %r\n}}\nfunc @main() {{\nentry:\n%o = qalloc 8\n%fault = qalloc 5\n{promotions}{prep}\n%m = mark\n{read}%b = trunc i16 %v to i8\n%wide = zext i8 %b to i{width}\napply @f(%v) -> %o, %fault budget 100\n{middle}\nrewind %m keep ({keep})\nret\n}}\n"
     )
 }
 
@@ -193,12 +193,12 @@ fn four_staggered_worlds_check_the_sum_and_reverse_at_every_budget_stop() {
 }
 
 #[test]
-fn disagreeing_longjmp_record_is_the_documented_bad_indirect_debt() {
+fn disagreeing_longjmp_record_is_the_documented_bad_longjmp_debt() {
     let p = bennett_ir::load("memory 512\nfunc @main() {\nentry:\n%j = setjmp 64\nh [64]\nlongjmp 64, 1\n}\n")
         .expect("valid");
     let m = Model::new(&p, "main");
     let expected = m.run_joined(basis(m.initial("main", &[])), 100);
-    assert!(expected.keys().all(|w| w.classical.finish == Some(Finish::Faulted(Fault::BadIndirect))));
+    assert!(expected.keys().all(|w| w.classical.finish == Some(Finish::Faulted(Fault::BadLongjmp))));
     let mut e = Executor::new(
         &p,
         p.function_named("main").expect("main"),
@@ -206,7 +206,7 @@ fn disagreeing_longjmp_record_is_the_documented_bad_indirect_debt() {
         Options { reversible: true, ..Options::default() },
     )
     .expect("starts");
-    assert_eq!(e.run(), Outcome::Faulted(Fault::BadIndirect));
+    assert_eq!(e.run(), Outcome::Faulted(Fault::BadLongjmp));
     assert_worlds(&m, &expected, &e.snapshot());
     e.reverse().expect("fault reverses");
 }

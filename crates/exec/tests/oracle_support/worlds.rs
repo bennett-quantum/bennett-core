@@ -428,7 +428,7 @@ impl<'a> Model<'a> {
             return self.rewind_group(state, *mark, keep);
         }
         // DESIGN's explicit debt: unlike a load, longjmp over disagreeing record cells
-        // currently faults bad_indirect for the entire world rather than splitting it.
+        // currently faults bad_longjmp for the entire world rather than splitting it.
         if first.classical.finish.is_none()
             && self.instruction(&first.classical).is_none()
             && let Terminator::Longjmp { buffer, .. } =
@@ -437,7 +437,7 @@ impl<'a> Model<'a> {
             let address = first.integer(buffer)? as u64;
             let bytes = self.read_memory(first, address, 32)?;
             if state.keys().any(|w| self.read_memory(w, address, 32).as_ref() != Ok(&bytes)) {
-                return Err(Fault::BadIndirect);
+                return Err(Fault::BadLongjmp);
             }
         }
         let mut next = BTreeMap::new();
@@ -786,21 +786,21 @@ impl<'a> Model<'a> {
         let block = BlockId(words[1] as u32);
         let inst = (words[1] >> 32) as usize;
         if depth < self.region_depth {
-            return Err(Fault::BadIndirect);
+            return Err(Fault::BadLongjmp);
         }
-        let frame = w.classical.frames.get(depth).ok_or(Fault::BadIndirect)?;
+        let frame = w.classical.frames.get(depth).ok_or(Fault::BadLongjmp)?;
         if frame.function != func || frame.entry_sp != words[2] {
-            return Err(Fault::BadIndirect);
+            return Err(Fault::BadLongjmp);
         }
         let Some(Inst::Setjmp { dst, .. }) =
             self.program.function(func).blocks.get(block.index()).and_then(|b| b.insts.get(inst))
         else {
-            return Err(Fault::BadIndirect);
+            return Err(Fault::BadLongjmp);
         };
         let ceiling = frame.entry_sp - 8 * self.program.function(func).slot_count() as u64;
         let floor = w.classical.frames.get(depth + 1).map_or(w.classical.sp, |f| f.entry_sp);
         if words[3] < floor || words[3] > ceiling {
-            return Err(Fault::BadIndirect);
+            return Err(Fault::BadLongjmp);
         }
         let n = w.integer(value)?;
         while w.classical.frames.len() > depth + 1 {

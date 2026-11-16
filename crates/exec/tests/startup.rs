@@ -148,7 +148,7 @@ fn a_first_call_can_overflow_without_entering_the_callee() {
 fn invalid_first_terminators_stop_without_a_successful_step() {
     for (term, fault) in [
         ("longjmp 64, 1", Fault::OutOfBounds),
-        ("longjmp 0, 1", Fault::BadIndirect),
+        ("longjmp 0, 1", Fault::BadLongjmp),
         ("exit i32 1", Fault::ExitTypeMismatch),
     ] {
         let module = load(&format!("memory 64\nfunc @main() {{\nentry:\n {term}\n}}\n"));

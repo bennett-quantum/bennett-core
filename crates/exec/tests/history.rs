@@ -197,7 +197,7 @@ entry:
 func @region() -> i8 {
 entry:
     %out = qalloc 8
-    %e = qalloc 4
+    %e = qalloc 5
     apply @inner(i8 4) -> %out, %e budget 100
     %m = measure %out
     ret %m
@@ -214,10 +214,10 @@ entry:
 func @keep_in_region() -> i8 {
 entry:
     %out = qalloc 8
-    %e = qalloc 4
+    %e = qalloc 5
     apply @keep_in_region_body(i8 4) -> %out, %e budget 100
     %m = measure %e
-    %wide = zext i4 %m to i8
+    %wide = zext i5 %m to i8
     ret %wide
 }
 "#;

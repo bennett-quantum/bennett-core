@@ -102,13 +102,18 @@ fn apply_needs_an_integer_function_and_distinct_registers_of_the_right_widths() 
              {apply}\n    ret\n}}\n"
         )
     };
-    assert!(load(&caller("apply @g(%x) -> %y, %e budget 10", 4)).is_ok());
-    assert!(matches!(problems(&caller("apply @g(%x) -> %x, %e budget 10", 4)).as_slice(), [Problem::RegionAlias(_)]));
-    assert!(matches!(
-        problems(&caller("apply @g(%x) -> %y, %e budget 10", 3)).as_slice(),
-        [Problem::TypeMismatch { .. }]
-    ));
-    assert!(matches!(problems(&caller("apply @g(%x) -> %e, %y budget 10", 4)).as_slice(), [_, _]));
+    // Fault codes are 5 bits wide (`Fault::CODE_WIDTH`): a fault register of 5 qubits or more is accepted, one
+    // of 4 (the width before 2026-11-16) is not.
+    assert!(load(&caller("apply @g(%x) -> %y, %e budget 10", 5)).is_ok());
+    assert!(load(&caller("apply @g(%x) -> %y, %e budget 10", 6)).is_ok());
+    assert!(matches!(problems(&caller("apply @g(%x) -> %x, %e budget 10", 5)).as_slice(), [Problem::RegionAlias(_)]));
+    for narrow in [1, 3, 4] {
+        assert!(matches!(
+            problems(&caller("apply @g(%x) -> %y, %e budget 10", narrow)).as_slice(),
+            [Problem::TypeMismatch { expected: bennett_ir::Expected::RegisterOfAtLeast(5), .. }]
+        ));
+    }
+    assert!(matches!(problems(&caller("apply @g(%x) -> %e, %y budget 10", 5)).as_slice(), [_, _]));
 }
 
 #[test]

@@ -70,7 +70,7 @@ entry:
         cursor += len(sql.encode()) + 1
         lines = [f'func @{name}() -> i32 {{', 'entry:',
                  f' %s = call @{name}_setup()', f' %row = qalloc {width}',
-                 ' %out = qalloc 1', ' %fault = qalloc 4']
+                 ' %out = qalloc 1', ' %fault = qalloc 5']
         lines += [f' h %row[{b}]' for b in range(width)]
         lines += [' x %out', ' h %out']
         for _ in range(iterations):

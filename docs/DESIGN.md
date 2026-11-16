@@ -440,7 +440,7 @@ from any depth:
 - **`longjmp %buf, %v`** checks the record against the live frames: a frame of the run (inside a coherent
   region: of the region) at that depth, of that function and entry stack pointer, a `setjmp` at that position,
   and a stack pointer within that frame's allocations, at or above where they stand now. Anything else is the
-  named fault `bad_indirect`, never a jump somewhere else: a jump to a function that has returned (undefined in
+  named fault `bad_longjmp`, never a jump somewhere else: a jump to a function that has returned (undefined in
   C) faults unless another activation of the same function stands at the same depth and stack address, which is
   where native code would land too. Then it discards the frames above, sets the stack pointer back to where the
   `setjmp` left it (freeing what `alloca` and variable-length arrays took since, as native `longjmp` does), and
@@ -458,7 +458,7 @@ from any depth:
   jumps like any other step; when it checks that its mark belongs to the running activation, a jump counts as
   the returns of the frames it discarded (the journal keeps those counts beside its marks).
 - **In a coherent region** a jump within the region works on every branch, the record living in the
-  region's private memory; a jump to a frame outside the region is `bad_indirect` on every branch. From C,
+  region's private memory; a jump to a frame outside the region is `bad_longjmp` on every branch. From C,
   though, a function that uses `setjmp` is not run coherently: LLVM must treat `setjmp` as an opaque call that
   may write any memory (a second return can follow any write), so the front sees a function that writes memory
   and refuses a qubit-dependent call of it by name. A debt, with its route: the front decides what may run
@@ -483,10 +483,9 @@ the rest of the environment and is all in the buffer too. clang's `__builtin_set
 (`llvm.eh.sjlj.setjmp`/`longjmp`) become the same instructions with the value 1; the frame address clang stores
 in the buffer, `llvm.frameaddress(0)`, is the stack pointer at the function's entry (a caller's frame address is
 refused by name). The address of a library `setjmp` or `longjmp`, a call through another prototype and an
-`invoke` are refused by name. The fault is `bad_indirect`, which already named a control transfer through a
-value that names no valid target (`call_indirect`): the 4-bit fault code space is full (`bad_rewind` took 15),
-and a code of its own needs every fault register one qubit wider (a question for the maintainer,
-`HANDOFF.md`).
+`invoke` are refused by name. The fault is `bad_longjmp` (16), a code of its own since the maintainer widened
+fault codes to 5 bits on 2026-11-16; before, it shared `bad_indirect` (4) with `call_indirect`, because the
+4-bit code space was full.
 
 ## Return addresses (`__builtin_return_address`)
 
@@ -563,8 +562,9 @@ The front writes `retaddr N` for every `llvm.returnaddress(N)` in the default ad
   Success changes only the outcome, journals the same finish record as an outer return, and leaves active
   frames in place for reversal. C's `_Noreturn void __bennett_exit(int)` lowers to it; like
   `void __bennett_effect(char)`, it is an ordinary device call, not a quantum marker.
-- Fault codes fit in 4 bits; a fault register is at least that wide. All fifteen codes are used since
-  `bad_rewind` (15).
+- Fault codes fit in 5 bits (`Fault::CODE_WIDTH`, widened from 4 on 2026-11-16, the maintainer's decision); a
+  fault register is at least that wide, so every fault register of a program is a `q5` or wider. Sixteen of
+  the 31 nonzero codes are used, the last `bad_longjmp` (16).
 - `qfree` requires the register to be zero in every configuration, otherwise the named fault `dirty_free`.
 - `measure` reads a whole register. Amplitudes at or below `f64::EPSILON` are dropped.
 - Bounds of the simulator (steps, number of basis configurations) are parameters of a run. Exceeding the
@@ -665,8 +665,8 @@ qubits among others; with one world and no qubit in memory the machine is exactl
   mark to journal its address to find the same (a question, `HANDOFF.md`); to keep into a byte, promote it
   first (`z [ADDR]` changes nothing else).
 - **Not yet, each a debt with its route.** A `longjmp` whose record is held in cells that disagree is
-  `bad_indirect`, where it would split worlds that may then fault separately (route: let the worlds of a
-  split fault on their own, as other worlds do). `measure` takes a register only: a qubit in memory is
+  `bad_longjmp` (kept a fault by the maintainer on 2026-11-16), where it would split worlds that may then
+  fault separately (route: let the worlds of a split fault on their own, as other worlds do). `measure` takes a register only: a qubit in memory is
   read by a load, which splits worlds, and observed where a measurement or the end of the run observes
   the worlds (a question, `HANDOFF.md`). A cell is a whole byte, so a qubit in memory holds 8 qubits in
   the simulator (route: cells of single bits, if the count matters).
@@ -715,7 +715,7 @@ It stays one step of the run that executes it, journalled as one record and undo
 - **Run, under the region's rules.** Each world runs `@f` to its end: a return, or a fault. An `effect`,
   `exit` or quantum instruction faults (`effect_in_region`, `exit_in_region`, `quantum_in_region`; a rewind
   in it runs but may not keep), a `longjmp` or return address sees the frames below as the same on every
-  branch, and a jump record naming them faults `bad_indirect`, as before. The budget `B` counts each world's
+  branch, and a jump record naming them faults `bad_longjmp`, as before. The budget `B` counts each world's
   own steps, a world split off inside the region (a load of qubits in memory) starting from the steps it
   shares with the world it split from: exactly what one enumerated branch of each of its configurations
   takes, so the same inputs fault `budget`. Ordinary code in the region reads qubits in memory as anywhere

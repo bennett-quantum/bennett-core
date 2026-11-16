@@ -210,7 +210,7 @@ impl<'m> Executor<'m> {
         let cells =
             if self.materialised { Vec::new() } else { self.quantum.cells_in(range.start as u64..range.end as u64) };
         if cells.iter().any(|&(_, column)| self.quantum.partition(&[column]).len() > 1) {
-            return Err(Fault::BadIndirect);
+            return Err(Fault::BadLongjmp);
         }
         self.read_view(range.clone(), &cells, &mut record);
         let mut words = [0u64; 4];
@@ -222,22 +222,22 @@ impl<'m> Executor<'m> {
         let (func, block, inst) =
             (FuncId((frame_word >> 32) as u32), BlockId(position as u32), (position >> 32) as usize);
         if depth < self.base_depth || depth >= self.frames.len() {
-            return Err(Fault::BadIndirect);
+            return Err(Fault::BadLongjmp);
         }
         let target = self.frames[depth];
         if target.func != func || target.entry_stack_pointer != entry_stack_pointer {
-            return Err(Fault::BadIndirect);
+            return Err(Fault::BadLongjmp);
         }
         let function = self.function(func);
         let dst = match function.blocks.get(block.0 as usize).and_then(|b| b.insts.get(inst)) {
             Some(Inst::Setjmp { dst, .. }) => *dst,
-            _ => return Err(Fault::BadIndirect),
+            _ => return Err(Fault::BadLongjmp),
         };
         // Within the target frame's allocations, at or above where its allocations stand now.
         let allocations_top = target.entry_stack_pointer - function.slot_count() as u64 * SLOT_BYTES;
         let lowest = self.frames.get(depth + 1).map_or(self.stack_pointer, |frame| frame.entry_stack_pointer);
         if stack_pointer < lowest || stack_pointer > allocations_top {
-            return Err(Fault::BadIndirect);
+            return Err(Fault::BadLongjmp);
         }
         let discarded = self.frames.len() - depth - 1;
         for index in (depth + 1..self.frames.len()).rev() {

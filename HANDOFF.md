@@ -323,11 +323,11 @@ its vendor; at most two sol jobs at once.
   device has no registers, so not musl's assembly: `%r = setjmp %buf` writes a 32-byte jump record (frame
   depth and function, position, entry and current stack pointer) into program memory and gives 0; the
   terminator `longjmp %buf, %v` checks the record against the live frames (otherwise the named fault
-  `bad_indirect`, shared with `call_indirect`: the 4-bit code space is full), discards the frames above, restores the stack pointer and resumes after the
+  `bad_longjmp`, its own code since the fault codes widened to 5 bits on 2026-11-16; `bad_indirect` before), discards the frames above, restores the stack pointer and resumes after the
   `setjmp` with `%v`. Both are journalled: un-running through jumps restores the state exactly, checked
   step by step, and by a `rewind` (a jump counts as the returns of the frames it discards when a rewind
   checks its mark's activation). In a coherent region a jump within the region works on every branch; out
-  of it, `bad_indirect`. The front lowers the C library's names (`setjmp`, `_setjmp`, `longjmp`, `_longjmp`,
+  of it, `bad_longjmp`. The front lowers the C library's names (`setjmp`, `_setjmp`, `longjmp`, `_longjmp`,
   `siglongjmp`, `__longjmp_chk`; `sigsetjmp` saving the mask through musl's own `__sigsetjmp_tail`, as
   musl's assembly does), clang's `__builtin_setjmp`/`__builtin_longjmp` and `llvm.frameaddress(0)`.
   Executor changes (rebased onto `mark`/`rewind`, `0513c5e`): `Undo::Setjmp`/`Undo::Longjmp` and their
@@ -690,7 +690,9 @@ The machine:
   retired once every existing test passes without them.
 - **`measure` takes an address** [M2].
 - **Fault codes widen to 5 bits** [(2), "The fault code space is full"], now; an invalid jump record gets its own
-  code.
+  code. Built: `Fault::CODE_WIDTH` is 5, every fault register a `q5` (the front's included), and every
+  `longjmp` that finds no valid record, also one held in qubits that disagree [M3], is `bad_longjmp` (16);
+  `bad_indirect` (4) is a call target again.
 - **Inside a region the worlds run one after another and merge at its end** [A2]: kept.
 - **Mark handles are opaque** [A3]: the validator refuses any use of a handle but `rewind`.
 - **A keep into memory needs bytes that hold qubits since before the mark** [M1]: kept.

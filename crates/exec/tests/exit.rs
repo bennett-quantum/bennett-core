@@ -22,14 +22,14 @@ entry:
     store i8 99, 16
     exit %n
 }
-func @main() -> i4 {
+func @main() -> i5 {
 entry:
     %q = qalloc 2
     h %q[0]
     h %q[1]
     %out = qalloc 2
     x %out[0]
-    %fault = qalloc 4
+    %fault = qalloc 5
     apply @stop(%q) -> %out, %fault budget 100
     %code = measure %fault
     ret %code
@@ -89,7 +89,7 @@ entry:
     h %q[0]
     h %q[1]
     %out = qalloc 2
-    %fault = qalloc 4
+    %fault = qalloc 5
     apply @stop(%q) -> %out, %fault budget 100
     ret 0
 }
@@ -121,7 +121,7 @@ fn conditional_exit_faults_only_on_the_exiting_branch() {
 fn an_exiting_helper_inside_a_region_faults_before_the_entry_type_is_checked() {
     // The helper's i8 exit would also mismatch the i64 entry; inside a region the region fault wins.
     let module = load(
-        "memory 256\nfunc @helper() {\nentry:\n exit i8 3\n}\nfunc @callee(i2 %n) -> i2 {\nentry:\n call @helper()\n ret %n\n}\nfunc @main() -> i64 {\nentry:\n %q = qalloc 2\n %out = qalloc 2\n %fault = qalloc 4\n apply @callee(%q) -> %out, %fault budget 100\n %code = measure %fault\n %wide = zext i4 %code to i64\n ret %wide\n}\n",
+        "memory 256\nfunc @helper() {\nentry:\n exit i8 3\n}\nfunc @callee(i2 %n) -> i2 {\nentry:\n call @helper()\n ret %n\n}\nfunc @main() -> i64 {\nentry:\n %q = qalloc 2\n %out = qalloc 2\n %fault = qalloc 5\n apply @callee(%q) -> %out, %fault budget 100\n %code = measure %fault\n %wide = zext i5 %code to i64\n ret %wide\n}\n",
     );
     assert_eq!(
         run(&module, "main", &[], allowing_region_faults()).0,

@@ -141,7 +141,7 @@ entry:
     h %x[1]
     h %s[0]
     %out = qalloc 8
-    %e = qalloc 4
+    %e = qalloc 5
     apply @region_clean(%x, %d) -> %out, %e budget 100000000
     ret
 }
@@ -154,7 +154,7 @@ entry:
     h %x[1]
     h %s[0]
     %out = qalloc 8
-    %e = qalloc 4
+    %e = qalloc 5
     apply @region_open(%x, %d) -> %out, %e budget 100000000
     ret
 }
@@ -214,7 +214,7 @@ fn environment_selects_each_apply_mode_and_compare_appends_its_tally() {
         assert_eq!(ApplyMode::from_env(), expected);
         if mode == "compare" {
             let module = load(
-                "memory 128\nfunc @f() -> i1 {\nentry:\nret 1\n}\nfunc @main() {\nentry:\n%o = qalloc 1\n%e = qalloc 4\napply @f() -> %o, %e budget 4\nret\n}",
+                "memory 128\nfunc @f() -> i1 {\nentry:\nret 1\n}\nfunc @main() {\nentry:\n%o = qalloc 1\n%e = qalloc 5\napply @f() -> %o, %e budget 4\nret\n}",
             );
             assert_eq!(run_in(&module, "main", &[], bounded(), ApplyMode::Compare).0, Outcome::Returned(None));
         }

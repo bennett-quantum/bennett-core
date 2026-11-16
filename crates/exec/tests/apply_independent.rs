@@ -24,7 +24,7 @@ func @main() {
 entry:
     h [0:0]
     %o = qalloc 1
-    %e = qalloc 4
+    %e = qalloc 5
     apply @f() -> %o, %e budget 100
     ret
 }
@@ -58,7 +58,7 @@ entry:
 func @main() {
 entry:
     %o = qalloc 64
-    %e = qalloc 4
+    %e = qalloc 5
     apply @f() -> %o, %e budget 10
     ret
 }
@@ -131,7 +131,7 @@ entry:
     s %s
     %o = qalloc 8
     x %o[2]
-    %e = qalloc 4
+    %e = qalloc 5
     x %e[3]
     apply @f(%x) -> %o, %e budget %budget
     ret
@@ -180,14 +180,14 @@ entry:
 func @outer() -> i1 {
 entry:
     %q = qalloc 1
-    %e = qalloc 4
+    %e = qalloc 5
     apply @inner() -> %q, %e budget 3
     ret 0
 }
 func @main() {
 entry:
     %q = qalloc 1
-    %e = qalloc 4
+    %e = qalloc 5
     apply @outer() -> %q, %e budget 10
     ret
 }
@@ -237,7 +237,7 @@ entry:
     h %x[0]
     h %x[1]
     %o = qalloc 2
-    %e = qalloc 4
+    %e = qalloc 5
     apply @f(%x) -> %o, %e budget 2
     ret
 }}
@@ -365,7 +365,7 @@ entry:
     h %x[0]
     h %x[1]
     %o = qalloc 2
-    %e = qalloc 4
+    %e = qalloc 5
     apply @f(%x) -> %o, %e budget 100
     ret
 }
@@ -452,7 +452,7 @@ entry:
     s %x[0]
     %o = qalloc 64
     x %o[4]
-    %e = qalloc 4
+    %e = qalloc 5
 {applies}
     ret
 }}
@@ -575,9 +575,9 @@ entry:
     h %x[0]
     h %x[1]
     %t = qalloc 1
-    %te = qalloc 4
+    %te = qalloc 5
     %o = qalloc 64
-    %e = qalloc 4
+    %e = qalloc 5
 {prefix}{applies}    ret
 }}
 "
@@ -698,7 +698,7 @@ entry:
     h [0:1]
     h [1:0]
     %o = qalloc 1
-    %e = qalloc 4
+    %e = qalloc 5
     apply @f() -> %o, %e budget 100
     ret
 }}
@@ -776,7 +776,7 @@ fn split_copy_cost(
     let params = (0..caller_slots).map(|n| format!("i8 %parameter{n}")).collect::<Vec<_>>().join(", ");
     let tail = (0..callee_slots).map(|n| format!("%unused{n} = add i8 0, 0\n")).collect::<String>();
     let module = load(&format!(
-        "memory 1024\nfunc @f() -> i8 {{\nentry:\n%v = load i8 0\n{tail}ret %v\n}}\nfunc @main({params}) {{\nentry:\nh [0:0]\ns [0:0]\n%o = qalloc 8\n%e = qalloc 4\napply @f() -> %o, %e budget 32\nret\n}}\n"
+        "memory 1024\nfunc @f() -> i8 {{\nentry:\n%v = load i8 0\n{tail}ret %v\n}}\nfunc @main({params}) {{\nentry:\nh [0:0]\ns [0:0]\n%o = qalloc 8\n%e = qalloc 5\napply @f() -> %o, %e budget 32\nret\n}}\n"
     ));
     let mut e = executor(&module, "main", &vec![0; caller_slots], bounded());
     e.set_apply_mode(ApplyMode::History);
@@ -819,7 +819,7 @@ entry:
 %q = qalloc 1
 %r = qalloc 1
 %o = qalloc 1
-%e = qalloc 4
+%e = qalloc 5
 h %q
 s %q
 h %r
@@ -862,7 +862,7 @@ fault unreachable
 }
 func @main() {
 entry:
-%e = qalloc 4
+%e = qalloc 5
 %q = qalloc 1
 %o = qalloc 1
 h %q

@@ -321,12 +321,12 @@ entry:
 }
 
 ; Applies @noisy or @quantum to |+⟩ and returns the fault register.
-func @main(i1 %which) -> i4 {
+func @main(i1 %which) -> i5 {
 entry:
     %q = qalloc 1
     h %q
     %out = qalloc 1
-    %e = qalloc 4
+    %e = qalloc 5
     br %which, quantum, noisy
 noisy:
     apply @noisy(%q) -> %out, %e budget 10
@@ -343,7 +343,7 @@ finish:
 func @alias() {
 entry:
     %out = qalloc 1
-    %e = qalloc 4
+    %e = qalloc 5
     br copy(%out)
 copy(q1 %same_register):
     apply @same(%same_register) -> %out, %e budget 10
@@ -359,7 +359,7 @@ fn effects_and_quantum_instructions_inside_a_region_are_faults() {
     assert!(executor.tape().is_empty(), "the effect never happened");
     let (outcome, executor) = run(&module, "main", &[1], allowing_region_faults());
     assert_eq!(outcome, Outcome::Returned(Some(u128::from(Fault::QuantumInRegion.code()))));
-    assert_eq!(executor.stats().peak_live_qubits, 6, "the region allocated nothing");
+    assert_eq!(executor.stats().peak_live_qubits, 7, "the region allocated nothing: 1 + 1 + a 5-qubit fault register");
     // By default the faulting apply stops the run.
     let (outcome, executor) = run(&module, "main", &[0], bounded());
     let callee = module.function_named("noisy").expect("@noisy");
@@ -386,13 +386,13 @@ good:
 
 ; Computes check(q) into t, then uncomputes it, with one fault register for both: on the branch q = 0
 ; both applications fault and their codes cancel in %e. The program cannot see that anything happened.
-func @main() -> i4 {
+func @main() -> i5 {
 entry:
     %q = qalloc 2
     h %q[0]
     h %q[1]
     %t = qalloc 1
-    %e = qalloc 4
+    %e = qalloc 5
     apply @check(%q) -> %t, %e budget 10
     apply @check(%q) -> %t, %e budget 10
     %code = measure %e
