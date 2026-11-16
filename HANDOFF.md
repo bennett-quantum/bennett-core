@@ -1047,6 +1047,65 @@ call form with caller work on both sides; the `Unaligned` stop; instructions the
 step machine covers several rewind sites and loops at polynomial cost. The seam's own comparison was found too
 weak (it did not compare returned values or console output) and its cheaper lowering misreads memory qubits:
 defects of the prototype, not of the machine.
+
+## Independent testing of machine step e and the audition (2026-11-16)
+
+Requirements for this pass are the two sections above: "Design audition of 2026-11-16" and
+"Decisions the maintainer took on 2026-11-16, in the afternoon". Tests were written independently;
+no production code changed. `apply`, `qalloc` and `qfree` remain first-class forms in these tests.
+
+New failing witnesses, each run explicitly and ignored with a `defect:` reason:
+
+| Witness | What differs from the documented meaning | Severity and route |
+|---|---|---|
+| `simultaneous_mark_and_outer_call_expiry_returns_budget` (`call_budget_independent.rs`) | A zero-budget inner mark and spent outer call reach a nested catch: unsigned subtraction panics instead of returning `budget` to the outermost spent call | High: check spent call guards before a mark-deadline catch; do not charge a zero outer guard |
+| `call_budget_covers_an_inner_unbudgeted_quantum_read_like_apply` (same file) | `apply` returns 7 with code 0, but its documented call-budget expansion returns 0 with `bad_rewind` when an inner unbudgeted mark reads a memory qubit | High: let the call's enclosing budget cover this region, as apply's does |
+| `a_callee_frame_that_does_not_fit_returns_a_call_fault` (same file) | `apply` delivers `stack_overflow` in its fault register; the expansion ends the world before delivering a code, with identical caller slots and memory | Medium: handle failure to enter a budgeted callee at the call site |
+| `a_signalling_output_is_not_accepted_as_another_quiet_nan_payload` (`front/tests/tests/nan_rule_independent.rs`) | The raw comparator accepts a differing signalling output as a quiet NaN payload choice; its exact rule requires quiet outputs | Medium: check output quiet bits before normalising operand payloads |
+
+An additional ignored witness, `a_changed_read_is_a_strict_diagnostic_and_machine_execution_continues`
+(`audition_machine.rs`), reproduces the already documented running-regardless debt for a kept value
+that changes a register read: machine mode still refuses. Only continuation is required; the ruling
+leaves the resulting state unspecified. No stronger coherence requirement is added.
+
+Audition coverage now in the tree:
+
+- **Waiting at the rewind:** `unequal_arms_wait_at_the_rewind_and_preserve_interference`, in
+  `crates/exec/tests/audition_machine.rs`, has arms of one and three instructions. The hand calculation
+  gives final bit 1 with probability 1, versus 1/2 with orthogonal arrival records; four finite budgets,
+  eight seeds each, and both individual arms have the same clock (budget plus nine).
+- **Classical refusals:** `classical_missing_budget_and_unaligned_still_stop` keeps the missing-budget
+  fault and `Unaligned` in both modes. **Leftovers:** `dirty_release_keeps_a_purification_with_the_dense_partial_trace`
+  checks all four complex amplitudes against an independent dense calculation and 1,024 measurements
+  against its partial trace; strict mode still diagnoses `dirty_free`.
+- **Coherent faults:** `a_branch_fault_is_coherent_data_and_is_measurable`, in
+  `crates/exec/tests/call_budget_independent.rs`, checks all amplitudes, including relative phases, for
+  one fault among four branches, under apply and the call expansion, history and compare modes; 256
+  measurements per form follow the hand-calculated fault weight 1/4. Strict mode stops without a value.
+- **Diagnostic separation:** the same strict-stop checks and
+  `quantum_operations_under_a_call_cannot_deliver_simulator_diagnostics` check that a guarded qfree,
+  rewind-keep and apply return the documented `quantum_in_region`, never a state-dependent diagnostic.
+  These operations are forbidden before `dirty_free`, a changed-read check or a nested region stop can
+  actually execute under the call. This does **not** establish the general non-delivery property for
+  future permitted quantum operations; genuine changed-read continuation remains the ignored debt above.
+- **Bounds on branch-dependent counts:** `branch_dependent_frames_allocations_history_and_loop_trips_are_bounded`
+  checks recursion, stack allocations, history-growing stores and loops at B-1/B/B+1, preserving the
+  other branch's exact amplitude; `a_quantum_dependent_allocation_count_is_bounded_on_every_branch`
+  checks qalloc under finite mark budgets (the call form forbids qalloc).
+- **Replay and calls:** longjmp across an ordinary frame retains its budget and reverses exactly;
+  repeated rewinds of one mark under 64 call budgets terminate and reverse. `machine_e_oracles.rs`
+  compares recursive replay at 20 input/run-budget combinations with the whole-world reference, and
+  compares a completed coherent region with its joined evaluation. Forty generated mark/call text
+  variants round-trip and validate. The reference still does not model finite mark budgets or the call
+  form. The NaN probe independently constructs allowed and disallowed payloads in all three formats.
+
+Still supported only by the private circuit prototypes, not by these executor tests: the audition's
+primitive gate counts, physical padding wires and allocation schedule, dispatch/QROM/multi-control cost
+scaling, the nesting cost factor on that backend, Shor-15's circuit cost and the C-to-hand-circuit gap.
+This pass did not rerun the C corpus, a full raw libgcc sweep or heavy ignored tests; it did not test
+all remaining state-dependent rewind causes, arbitrary recursion depths or channels. Existing thesis,
+promotion and Grover tests remain; they are not new circuit-backend comparisons here.
+
 ## Questions for the maintainer
 
 - **From the design seam and its council (2026-11-16, night; see "Design audition of 2026-11-16").** Rules of

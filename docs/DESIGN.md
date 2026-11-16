@@ -297,6 +297,14 @@ arguments and reads of registers included, with the region's rules attached to i
   `call_indirect` with a budget; the front does not emit it. `apply`, `qalloc` and `qfree` remain
   first-class forms (the maintainer's decision of the evening of 2026-11-16).
 
+Independent testing found three exceptions still to fix (`crates/exec/tests/call_budget_independent.rs`,
+ignored `defect:` witnesses): a mark deadline expiring with an outer call can underflow that call's guard;
+a quantum read under an inner unbudgeted mark is covered by apply's budget but not by the call form's;
+a callee frame that cannot fit gives apply a fault code but ends the call expansion's world instead.
+These are implementation debts against the meaning above, not additional restrictions on programs.
+The audition coverage and remaining measurements are recorded in `HANDOFF.md`, "Independent testing of
+machine step e and the audition".
+
 ### Worlds
 
 Built on 2026-11-15 as the second step of the next extension: the quantum state is a superposition of
