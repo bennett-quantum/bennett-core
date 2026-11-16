@@ -42,7 +42,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (252 tests; ignored: 9 heavy reference, generated or hash-sample runs, the memory-cost report, 1 heavy recomputation check; about 8 s, no LLVM needed) and `front/test.sh` (158 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs and two heavy global-write runs, an extended float sweep, a
+Check it: `cargo test` (255 tests; ignored: 9 heavy reference, generated or hash-sample runs, the memory-cost report, 1 heavy recomputation check; about 9 s, no LLVM needed) and `front/test.sh` (158 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs and two heavy global-write runs, an extended float sweep, a
 musl-linked ABI check and two independent variadic checks that need `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"); needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -405,7 +405,7 @@ explicitly after the separate musl build.
    stops between a rewind and its checks reversed exactly. The 64-bit key: 1,048,576 distinct states, no
    collision; a birthday search would need about 5 x 10^9 states (about 81 GB), so a constructed collision is
    practical and the equality-on-match route stays a debt.
-   **Fifth step: `apply` as mark, call, rewind-keep** (`docs/DESIGN.md`, "`apply` as mark, call, rewind-keep";
+   **Fifth step: `apply` as mark, call, rewind-keep** (`78ea062`; `docs/DESIGN.md`, "`apply` as mark, call, rewind-keep";
    `crates/exec/src/region.rs`). The executor now computes every `apply` as the idiom on worlds, the region's
    rules on the call: mark the journal, call `@f` reading the argument registers as integers (one world per
    value), run each world to its end with effects, `exit` and quantum instructions faulting and the budget

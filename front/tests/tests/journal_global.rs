@@ -131,6 +131,11 @@ fn global_drivers_restore_memory_and_observation_changes_nothing() {
         assert_eq!((a.clone(), sa, ja), (b, sb, jb));
         let (o, so, _) = oracle(&m, 2, false);
         let (p, sp, measurement) = oracle(&m, 2, true);
+        // With the observer on, `apply` is computed by branch enumeration (the observer classifies branches),
+        // so only `region_cost`, which reports how the region was computed, may differ.
+        let (mut so, mut sp) = (so, sp);
+        so.region_cost = Default::default();
+        sp.region_cost = Default::default();
         assert_eq!((o.clone(), so), (p, sp));
         let measured = measurement.expect("observed");
         assert_eq!(measured.applies[0].branches.len(), 8);
