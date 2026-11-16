@@ -121,6 +121,13 @@ explicitly after the separate musl build.
 
 ## Stopped in flight
 
+- **SQLite on the device, stage 1 measured** (`experiments/sqlite-on-device/README.md`): unmodified 3.54.1,
+  musl linked, OS_OTHER no-files VFS, all four footprint query shapes at N=4/8/16 agree with native on
+  stdout/status and all 112 fresh-setup results. Full runs 957,295/1,200,929/1,841,474 steps;
+  device text about 9.06 MB, final lowering 19.50–24.09 s. SQLite live/peak 101,632/107,264 bytes;
+  256 KiB SQLite heap, 4 KiB libc arena, N=4 stack minimum 155,099 bytes (one less: `stack_overflow`).
+  No wrong result or crash. Reversal and a coherent query are next.
+
 - **The musl runtime: landed** (`d8050df`..`b464c0b`; `rt/musl/README.md`). musl 1.2.5's own startup and exit run
   on the device; its system calls are answered at one boundary function by console effects, an arena and `exit`;
   everything else traps by name. The audit, with each case run against native, found and fixed: `malloc` faulted
@@ -506,7 +513,8 @@ explicitly after the separate musl build.
    wrong answer. `powi` on the two
    short formats is refused by name (it calls `powf` natively). `setjmp`/`longjmp` are done (`31f5138`); then the
    remaining intrinsics.
-6. **A SQL query as an oracle.**
+6. **A SQL query as an oracle.** Ordinary SQLite now runs (stage 1 above); next measure full reversal,
+   then the N=4/8 query with the row id in superposition, via the existing device `apply` or history idiom.
 
 ## What the earlier workspace offers
 
