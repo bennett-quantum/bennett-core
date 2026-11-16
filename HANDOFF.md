@@ -941,7 +941,11 @@ Each recommendation was taken ("Decisions the maintainer took on 2026-11-16, in 
 Int8 functions and 258-line hashtable, provenance pinned to committed Git blobs. Scalar checks cover
 131,840 source-input tuples per compiler input on the production executor and independent whole-world
 model, with each reversing its own history. Table domain is the unchanged native harness's ten cases.
-Both are queued for measurement. **Rung 3 passes as worded** in the first short check: musl hello's
+The exhaustive scalar and independent table checks are queued. The production table check passes all
+ten cases, both compiler inputs and both modes (40 full i64 results), with two exact full-memory resets:
+O0/O2 at 803,856/803,263 steps, 15,987,376/15,992,591 journal bytes and 2,108,000/2,108,016 memory
+bytes. This alone does not establish rung 2's two-executor clause. **Rung 3 passes as worded** in the
+first short check: musl hello's
 13 output bytes and status equal native, clang O0/O2 at 3,227/2,698 steps, 65,131/53,722 journal bytes;
 three same-executor replays each and four full exact resets (2,106,920/2,104,192 memory bytes).
 The full runner will repeat it from the committed source. No rung 1/2 pass is claimed yet; tests and

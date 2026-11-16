@@ -60,5 +60,6 @@ aggregate. Larger sizes, measured limits and reproducible commands are recorded 
 
 C North Star ladder checks are in [experiments/northstar-ladder](experiments/northstar-ladder/README.md).
 Rung 3 (musl hello) passes native output, exact reset and deterministic tape replay at clang O0/O2;
-rungs 1–2 have their full-domain tests implemented and await measurement. The independent interpreter
+rung 2's ten-case production runs match native and reverse exactly, with its independent check still pending.
+Rung 1's full Int8 checks are queued. The independent interpreter
 is used explicitly, so two modes of one executor do not count as two implementations.

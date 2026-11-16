@@ -25,8 +25,8 @@ ISA interpreter accepts a different ISA and cannot consume these `.bn`
 programs. Two modes alone cannot satisfy the two-implementation clause.
 
 Rung 3 passes its acceptance test in the first measured run below; the
-full runner will repeat it from the committed source. Rungs 1–2 await their
-queued measurement. No semantic failure has yet been observed. Rust and
+full runner will repeat it from the committed source. Rung 1 and rung 2's independent interpreter await their queued measurement.
+Rung 2's production runs pass native agreement and exact reversal below. No semantic failure has yet been observed. Rust and
 Julia are outside this C-only run.
 
 ## Measurements on 2026-11-16
@@ -47,6 +47,27 @@ Both native and device exit status: 0. All memory, frames, slots, stack,
 console, outcome, steps, registers and worlds return exactly to the
 pre-startup entry snapshot, with empty history. The complete five-stage
 run is still queued; its report will supersede this early receipt.
+
+Short production table check, 19.02 seconds including native builds and
+musl linking: all ten original outputs (195 console bytes) agree with
+native O2 and O0/ASan/UBSan. Both modes, both clang inputs: **40 complete
+i64 comparisons**, zero faults, two full reset checks.
+
+| Table input | Steps per run, either mode | Reversible journal bytes | Full reset memory bytes |
+|---|---:|---:|---:|
+| clang O0 | 803,856 | 15,987,376 | 2,108,000 |
+| clang O2 | 803,263 | 15,992,591 | 2,108,016 |
+
+Forward/reversible-and-reset wall times: O0 0.515/0.584 seconds,
+O2 0.236/0.427 seconds (loaded shared host, not performance gates).
+The ten native checksums in harness order are
+`0, 23131069394, 138063414195, 1083288249908, 54380828142828`
+for basic, and
+`4, 23131069404, 138063414247, 1083288250354, 54380828149874`
+for grow. As with the short hello check, this used the earlier compiled
+binary whose tested function body is unchanged; the full queued runner
+will confirm current source and attempt the independent table stage.
+**No rung 2 pass is claimed until that stage also completes.**
 
 ## Domain and checks
 
