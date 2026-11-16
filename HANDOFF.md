@@ -712,6 +712,13 @@ How work is done:
 
 ## Known weak spots
 
+- The IR reader accepts a rotation such as `rx(1e999)` as an infinite angle; validation rejects it,
+  but the writer emits `inf`, which the reader cannot parse. This breaks SYNTAX's round-trip rule for
+  every module read from text, including invalid modules. Ignored witness:
+  `every_readable_rotation_round_trips_even_when_validation_rejects_it` in
+  `crates/ir/tests/mutation_contract.rs` (explicitly fails on `3418e51` production code). Route: reject
+  overflowing angles during reading, or preserve a readable spelling when writing them.
+
 - An outer rewind whose keep makes an inner rewind replay split and fault can panic before restoring
   its saved world. A newly reached measurement during that replay can also panic at the reversal barrier.
   Both have ignored witnesses in `crates/exec/tests/history_independent.rs`; they require atomic `bad_rewind`.
