@@ -22,6 +22,7 @@ front="$root/target/front/bennett-front"
 for opt in 0 2; do
     for checks in off on; do
         tag="o${opt}-${checks}"
+        mkdir -p "$out/$tag"
         cfg=()
         if [[ $checks == on ]]; then cfg=(--cfg overflow_checks_probe); fi
         flags=(--edition 2021 -A unused-attributes -C "opt-level=$opt" -C "overflow-checks=$checks" -C panic=abort -C codegen-units=1 -C no-vectorize-loops -C no-vectorize-slp)

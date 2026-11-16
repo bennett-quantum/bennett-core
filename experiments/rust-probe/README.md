@@ -48,7 +48,38 @@ LLVM23.1.1, reader LLVM18.1.3). LLVM's [bitcode attribute enum](https://llvm.org
 names 105 `NO_CREATE_UNDEF_OR_POISON`; the textual IR has `nocreateundeforpoison`
 on `llvm.fshl.i8`. The text assembler exits 1 with `expected value token` at
 `i8 range(i8 37, 0) %a`, a call argument in `branchy`. Emitting text alone
-does not bridge this version gap. A newer reader or a validated IR downgrade
+does not bridge this version gap. Dropping those two attributes next reaches
+another verifier failure: `Wrong number of operands` on
+`!{!"branch_weights", !"expected", i32 1, i32 2000}`. LLVM 18 does not accept the
+new `!"expected"` prediction operand. A newer reader or a validated IR downgrade
 would be needed; the experiment uses a matching compiler instead.
 
-Device measurements and remaining blockers will be recorded after execution.
+## First device result: LLVM 23 textual IR with three compatibility edits
+
+With the host compiler above, `current-text.sh` removes exactly the two call
+argument `range` attributes, `nocreateundeforpoison` on the funnel-shift intrinsic,
+and the `!"expected"` branch-prediction operand, then assembles with LLVM 18.
+These drop optimizer promises/prediction information, not executable arithmetic.
+This is a deliberately fixture-specific bridge, not a general LLVM downgrade.
+It asserts the known attribute occurrence counts before changing the IR.
+
+```sh
+# Build bennett-front first (run.sh does this too).
+cmake -S front -B target/front
+cmake --build target/front --parallel 2
+CARGO_BUILD_JOBS=2 experiments/rust-probe/current-text.sh
+```
+
+Measured on base `27265ba`: **197,120 native comparisons, 197,120 full-state
+reversals, zero wrong results or device faults**. The compiler is opt-level 2,
+overflow checks off; the front uses its normal O2 pipeline.
+
+| Function | Inputs / returns / reversals | Steps min–max | Total steps | Peak journal bytes |
+|---|---:|---:|---:|---:|
+| arithmetic | 65,536 | 8–8 | 524,288 | 120 |
+| branchy | 256 | 5–12 | 2,373 | 204 |
+| counted_loop | 256 | 3–1,933 | 248,937 | 35,053 |
+| checked | 65,536 | 6–6 | 393,216 | 102 |
+| ordinary_add | 65,536 | 2–2 | 131,072 | 18 |
+
+The remaining LLVM 18 compiler and debug-panic measurements are pending.
