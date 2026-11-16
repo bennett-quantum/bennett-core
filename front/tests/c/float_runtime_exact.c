@@ -15,8 +15,10 @@
  *   _Float16 is always tried.
  *
  * A mismatch is `value` unless an operand is an extF80 encoding that x87 does not accept or reads otherwise
- * (pseudo-denormal, unnormal, pseudo-infinity, pseudo-NaN), which no arithmetic produces and which is
- * expected to differ (`noncanonical`). The exit status is the number of unexpected classes, capped at 100. */
+ * (pseudo-denormal, unnormal, pseudo-infinity, pseudo-NaN), which no arithmetic produces (`noncanonical`).
+ * The runtime reads those as x87 does, so they must agree where the native side runs x87 instructions; they
+ * are expected to differ only where the native side is software reading them at face value (`software`
+ * below). The exit status is the number of unexpected classes, capped at 100. */
 
 #include <math.h>
 #include <pthread.h>
@@ -164,19 +166,24 @@ typedef struct {
     const char *name;
     int arity, in, out;
     fn h, s;
+    /* The native side is software that reads long double encodings at face value (glibc's fmal, libgcc's
+     * truncations to _Float16 and __bf16), where the runtime reads them as x87 does: noncanonical operands
+     * are expected to differ. Elsewhere the native side runs x87 instructions and they must agree. */
+    int software;
 } Op;
 
-#define OP(NAME, AR, IN, OUT) {#NAME, AR, IN, OUT, h_##NAME, s_##NAME}
+#define OP(NAME, AR, IN, OUT) {#NAME, AR, IN, OUT, h_##NAME, s_##NAME, 0}
+#define SOFTWARE_OP(NAME, AR, IN, OUT) {#NAME, AR, IN, OUT, h_##NAME, s_##NAME, 1}
 static const Op ops[] = {
     OP(f32_i128, 1, F32, I128), OP(f32_u128, 1, F32, U128), OP(f64_i128, 1, F64, I128),
     OP(f64_u128, 1, F64, U128), OP(x80_i128, 1, X80, I128), OP(x80_u128, 1, X80, U128),
     OP(i128_f32, 1, I128, F32), OP(u128_f32, 1, U128, F32), OP(i128_f64, 1, I128, F64),
     OP(u128_f64, 1, U128, F64), OP(i128_x80, 1, I128, X80), OP(u128_x80, 1, U128, X80),
-    OP(x80_fma, 3, X80, X80),
+    SOFTWARE_OP(x80_fma, 3, X80, X80),
     OP(f16_f32, 1, F16, F32), OP(f16_x80, 1, F16, X80), OP(f32_f16, 1, F32, F16), OP(f64_f16, 1, F64, F16),
-    OP(x80_f16, 1, X80, F16), OP(f16_i128, 1, F16, I128), OP(f16_u128, 1, F16, U128),
+    SOFTWARE_OP(x80_f16, 1, X80, F16), OP(f16_i128, 1, F16, I128), OP(f16_u128, 1, F16, U128),
     OP(i128_f16, 1, I128, F16), OP(u128_f16, 1, U128, F16),
-    OP(f32_bf16, 1, F32, BF16), OP(f64_bf16, 1, F64, BF16), OP(x80_bf16, 1, X80, BF16),
+    OP(f32_bf16, 1, F32, BF16), OP(f64_bf16, 1, F64, BF16), SOFTWARE_OP(x80_bf16, 1, X80, BF16),
 };
 #define NOPS ((int)(sizeof ops / sizeof ops[0]))
 
@@ -340,7 +347,6 @@ static void random_fma(u64 *s, U *a, U *b, U *c) {
 
 enum { VALUE, NONCANONICAL, NCLASSES };
 static const char *const class_names[] = {"value", "noncanonical"};
-static const int expected_class[] = {0, 1};
 
 typedef struct {
     atomic_ulong compared[3]; /* directed, random, exhaustive */
@@ -497,8 +503,9 @@ int main(int argc, char **argv) {
         for (int c = 0; c < NCLASSES; c++) {
             unsigned long n0 = st->count[0][c], n1 = st->count[1][c], n2 = st->count[2][c];
             if (!(n0 | n1 | n2)) continue;
-            unexpected += !expected_class[c];
-            printf(" %s%s=%lu/%lu/%lu", expected_class[c] ? "" : "UNEXPECTED:", class_names[c], n0, n1, n2);
+            int expected = c == NONCANONICAL && ops[k].software;
+            unexpected += !expected;
+            printf(" %s%s=%lu/%lu/%lu", expected ? "" : "UNEXPECTED:", class_names[c], n0, n1, n2);
             any = 1;
         }
         printf("%s\n", any ? "" : " ok");

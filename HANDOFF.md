@@ -332,10 +332,10 @@ its vendor; at most two sol jobs at once.
   route: preserve that archive's individual arithmetic operand choices through compilation and
   SoftFloat lowering, with upstream source unchanged. Neither using Clang as the oracle nor
   switching to `-O0` removes the debt. Counts by helper and reproduction:
-  `rt/libgcc/README.md`. The sweep uses canonical x87 encodings: the existing noncanonical
-  long-double debt (unnormals/pseudo-denormals/infinities/NaNs from raw memory) still needs
-  x87-compatible operand validation/normalization at the float-operation boundary; non-default
-  rounding and readable flags still need the environment fallback. `__divxc3` itself needs no
+  `rt/libgcc/README.md`. The sweep uses canonical x87 encodings; noncanonical ones (unnormals,
+  pseudo-denormals/infinities/NaNs from raw memory) are read as x87 reads them since 2026-11-16
+  (`rt/softfloat/README.md`); non-default rounding and readable flags still need the environment
+  fallback. `__divxc3` itself needs no
   further library helper or build step in the default environment.
   **Remaining corpus debt:** `cdivchkf`, `cdivchkd`, `cdivchkld` call `ilogb`/`ilogbl` themselves;
   musl's `FENV_ACCESS` still stops the normal route. Route: the front's fallback must implement constrained
@@ -1344,8 +1344,12 @@ the ordinary frontend run without changing its domain or assertions.
 - A function that uses `stackrestore` cannot run coherently yet.
 - A null dereference does not fault.
 - `bennett run --arg` refuses arguments for parameters wider than 64 bits (`Executor::new` takes `u64`).
-- Floating point: which NaN comes back when several operands are NaNs is unspecified; `long double` encodings no
-  arithmetic produces (pseudo-denormals, unnormals) differ from x87; a `volatile` vector is refused. Where C
+- Floating point: which NaN comes back when several operands are NaNs is unspecified; a `volatile` vector is
+  refused. `long double` encodings no arithmetic produces (pseudo-denormals, unnormals, pseudo-infinities,
+  pseudo-NaNs) are read as x87 reads them in every operation since 2026-11-16, at 4 to 5 device steps per
+  operand (+10.0% to +11.7% steps on the long-double tests, `rt/softfloat/README.md`); glibc's `fmal` and
+  `roundl` and libgcc's truncations to `_Float16`/`__bf16`, software natively, read them at face value and
+  still differ there (route if that matters: follow each routine's bit tests on such operands). Where C
   leaves a result open (`fmin` of two zeros, out-of-range conversions) the device follows the native x86-64
   program, so a different native target would disagree there.
 - The vendored musl archive was checked byte for byte against the copy in the earlier workspace; its checksum

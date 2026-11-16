@@ -154,11 +154,10 @@ fn objcopy() -> PathBuf {
     std::env::var_os("OBJCOPY").map_or_else(|| PathBuf::from("objcopy"), PathBuf::from)
 }
 
-/// The device's floating-point runtime, compiled natively, against what the native program calls.
-#[test]
-fn the_runtime_routines_beyond_softfloat_are_bit_exact_against_native() {
-    let dir = out_dir().join("float-runtime-native");
-    std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("cannot create {dir:?}: {e}"));
+/// The device's floating-point runtime, `float-runtime.bc`, compiled natively in `dir` with every symbol
+/// prefixed `rt_`, so that a native program can call it beside the native routines of the same names.
+fn prefixed_runtime(dir: &Path) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap_or_else(|e| panic!("cannot create {dir:?}: {e}"));
     let object = dir.join("float-runtime.o");
     let prefixed = dir.join("float-runtime-prefixed.o");
     run_tool(Command::new(clang()).args(["-c", "-O2"]).arg(float_runtime()).arg("-o").arg(&object));
@@ -169,7 +168,43 @@ fn the_runtime_routines_beyond_softfloat_are_bit_exact_against_native() {
         "the runtime needs symbols it does not define:\n{}",
         String::from_utf8_lossy(&undefined)
     );
+    prefixed
+}
 
+/// Noncanonical x87 operands (pseudo-denormals, unnormals, unnormal zeros, pseudo-infinities, pseudo-NaNs)
+/// read as x87 reads them in every long double operation of the runtime: each result bit equals the native
+/// program's wherever that runs x87 instructions (`float_noncanonical_x87.c`). glibc's `fmal` and `roundl` and
+/// libgcc's `__truncxfhf2` are software natively and read the encodings at face value; they still differ, and
+/// the test notices if that changes.
+#[test]
+fn noncanonical_long_double_operands_read_as_x87_reads_them() {
+    let dir = out_dir().join("float-noncanonical-x87");
+    let prefixed = prefixed_runtime(&dir);
+    let program = dir.join("float_noncanonical_x87");
+    run_tool(
+        Command::new(clang())
+            .args(["-O2", "-ffp-contract=off", "-fno-fast-math", "-fno-builtin-fminl", "-fno-builtin-fmaxl"])
+            .arg(c_dir().join("float_noncanonical_x87.c"))
+            .arg(&prefixed)
+            .args(["-lm", "-o"])
+            .arg(&program),
+    );
+    let output = Command::new(&program).output().unwrap_or_else(|e| panic!("cannot run {program:?}: {e}"));
+    let report = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "noncanonical operands differ from x87:\n{report}");
+    assert!(report.contains("unexpected mismatches: 0"), "{report}");
+    for op in ["fmal-yyx", "roundl", "to-f16"] {
+        let line =
+            report.lines().find(|line| line.starts_with(&format!("{op} "))).unwrap_or_else(|| panic!("{report}"));
+        assert!(line.ends_with(" library") && line.split(' ').any(|n| n.split('/').next() != Some("0")), "{line}");
+    }
+}
+
+/// The device's floating-point runtime, compiled natively, against what the native program calls.
+#[test]
+fn the_runtime_routines_beyond_softfloat_are_bit_exact_against_native() {
+    let dir = out_dir().join("float-runtime-native");
+    let prefixed = prefixed_runtime(&dir);
     let program = dir.join("float_runtime_exact");
     run_tool(
         Command::new(clang())
@@ -191,10 +226,13 @@ fn the_runtime_routines_beyond_softfloat_are_bit_exact_against_native() {
     };
     for op in [
         "f32_i128", "f64_u128", "i128_f32", "u128_f64", "i128_x80", "u128_x80", "f16_f32", "f32_f16", "f16_i128",
-        "u128_f16", "f32_bf16", "f64_bf16",
+        "u128_f16", "f32_bf16", "f64_bf16", "x80_i128", "x80_u128",
     ] {
         assert!(line(op).ends_with(" ok"), "{op}: {}", line(op));
     }
-    // Non-canonical long double encodings, which x87 rejects, are still the only difference.
-    assert!(line("x80_i128").contains("noncanonical="), "{}", line("x80_i128"));
+    // Noncanonical long double encodings still differ where the native side is software reading them at
+    // face value, and only there.
+    for op in ["x80_fma", "x80_f16", "x80_bf16"] {
+        assert!(line(op).contains("noncanonical="), "{}", line(op));
+    }
 }

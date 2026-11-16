@@ -189,7 +189,6 @@ fn the_archive_nan_choices_are_operand_orders_of_the_production_ir() {
 /// validation and normalization of long-double operand encodings at the operation boundary of the
 /// floating-point lowering (`rt/libgcc/README.md`).
 #[test]
-#[ignore = "debt: noncanonical x87 encodings are not validated by the long-double lowering (rt/libgcc/README.md)"]
 fn noncanonical_x87_operands_agree_with_the_hardware() {
     let source = c_dir().join("complex_noncanonical_x87.c");
     let executable = native_build_with(&source, "complex_noncanonical_x87", &["-DNATIVE"], &[]);

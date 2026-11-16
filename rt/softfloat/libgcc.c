@@ -24,6 +24,7 @@
 
 #include "platform.h"
 #include "softfloat.h"
+#include "specialize.h" /* the default NaN */
 #include "internals.h" /* SoftFloat's own rounding (softfloat_roundPackTo...) for the routines it has no entry for */
 
 /* What a comparison returns: libgcc's CMPtype, a machine word on x86-64, and compiler-rt's CMP_RESULT. */
@@ -52,11 +53,49 @@ static double of_f64(float64_t x) {
 
 /* A long double is the x87 80-bit format in the low 10 of its 16 bytes: the significand with its explicit
  * integer bit, then the sign and exponent. Only those 10 bytes are copied: the rest is padding. */
-static extFloat80_t x80_of(long double x) {
+static extFloat80_t x80_bits(long double x) {
   extFloat80_t r;
   __builtin_memcpy(&r.signif, &x, 8);
   __builtin_memcpy(&r.signExp, (const char *)&x + 8, 2);
   return r;
+}
+
+/* x87 checks every operand's encoding before it computes (Intel SDM vol. 1, 8.2.2, unsupported encodings
+ * and pseudo-denormals), and so does every operation here, through `x80_operand`. SoftFloat takes encodings
+ * at face value: it orders a pseudo-denormal below the smallest normal and computes with an unnormal as with
+ * a number. No arithmetic produces these encodings; only a write of the bytes does.
+ *
+ * An unsupported encoding (an exponent other than 0 with the integer bit clear: an unnormal, an unnormal
+ * zero, a pseudo-infinity, a pseudo-NaN) is an invalid operand: the invalid flag is raised and the result is
+ * the default NaN, x87's indefinite, even beside a NaN operand. */
+static const extFloat80_t indefinite80 = {.signif = defaultNaNExtF80UI0, .signExp = defaultNaNExtF80UI64};
+static bool unsupported80(extFloat80_t x) { return (x.signExp & 0x7FFF) && !(x.signif >> 63); }
+
+/* Whether x87 reads `x` otherwise than SoftFloat would: an unsupported encoding, or a pseudo-denormal
+ * (exponent 0, integer bit set). Exactly the encodings whose integer bit equals "the exponent is 0"; one
+ * test, so that canonical operands, all that arithmetic produces, pay only for it. */
+static bool noncanonical80(extFloat80_t x) { return (x.signif >> 63) == !(x.signExp & 0x7FFF); }
+
+/* A noncanonical operand as x87 reads it, `*invalid` set if it is an unsupported encoding (which reads as
+ * the indefinite). A pseudo-denormal reads as the denormal of the same value: the normal number with
+ * exponent 1 and the same significand. */
+static extFloat80_t x80_canonical(extFloat80_t r, bool *invalid) {
+  if (unsupported80(r)) {
+    softfloat_raiseFlags(softfloat_flag_invalid);
+    *invalid = true;
+    return indefinite80;
+  }
+  r.signExp |= 1;
+  return r;
+}
+static extFloat80_t x80_operand(long double x, bool *invalid) {
+  extFloat80_t r = x80_bits(x);
+  return __builtin_expect(noncanonical80(r), 0) ? x80_canonical(r, invalid) : r;
+}
+/* One operand, where the indefinite it reads as for an unsupported encoding is already the result. */
+static extFloat80_t x80_of(long double x) {
+  bool invalid = false;
+  return x80_operand(x, &invalid);
 }
 static long double of_x80(extFloat80_t x) {
   long double r;
@@ -85,10 +124,15 @@ double __muldf3(double a, double b) { return of_f64(f64_mul(f64_of(a), f64_of(b)
 double __divdf3(double a, double b) { return of_f64(f64_div(f64_of(a), f64_of(b))); }
 /* long double rounds to the full 64-bit significand: extF80_roundingPrecision is never written and stays
  * 80 (x87 on Linux computes so by default). */
-long double __addxf3(long double a, long double b) { return of_x80(extF80_add(x80_of(a), x80_of(b))); }
-long double __subxf3(long double a, long double b) { return of_x80(extF80_sub(x80_of(a), x80_of(b))); }
-long double __mulxf3(long double a, long double b) { return of_x80(extF80_mul(x80_of(a), x80_of(b))); }
-long double __divxf3(long double a, long double b) { return of_x80(extF80_div(x80_of(a), x80_of(b))); }
+static long double arith80(extFloat80_t (*op)(extFloat80_t, extFloat80_t), long double a, long double b) {
+  bool invalid = false;
+  extFloat80_t x = x80_operand(a, &invalid), y = x80_operand(b, &invalid);
+  return of_x80(invalid ? indefinite80 : op(x, y));
+}
+long double __addxf3(long double a, long double b) { return arith80(extF80_add, a, b); }
+long double __subxf3(long double a, long double b) { return arith80(extF80_sub, a, b); }
+long double __mulxf3(long double a, long double b) { return arith80(extF80_mul, a, b); }
+long double __divxf3(long double a, long double b) { return arith80(extF80_div, a, b); }
 
 /* Comparisons, as libgcc defines them: eq and ne return 0 exactly when a == b; lt and le return a
  * negative number, 0 or a positive number as a < b, a == b or a > b, and 1 when either is a NaN; gt and
@@ -511,13 +555,16 @@ double fmax(double x, double y) {
 
 /* fminl and fmaxl: on x86-64 the native program calls the C library's (LLVM has no inline expansion for
  * long double), and these are glibc's (sysdeps/x86_64/fpu/s_fminl.S and s_fmaxl.S, x87 code): of equal
- * operands, fminl gives the first and fmaxl the second; a NaN operand gives the other operand, unless
- * both are NaNs or either is signalling, which gives their sum (a quiet NaN, by x87's rules). */
+ * operands, fminl gives the first and fmaxl the second. When the operands are unordered (a NaN or an
+ * unsupported encoding, which x87 compares as unordered), glibc's code gives the other operand, unchanged,
+ * if exactly one is unordered with itself and bit 62 of that one's significand is set (a quiet NaN's quiet
+ * bit, read from memory, so also a pseudo-NaN's or an unnormal's), and otherwise their sum: a quiet NaN by
+ * x87's rules, the indefinite for an unsupported encoding. */
 static long double unordered80(long double x, long double y) {
-  extFloat80_t a = x80_of(x), b = x80_of(y);
-  if (extF80_isSignalingNaN(a) || extF80_isSignalingNaN(b) || (nan80(a) && nan80(b)))
-    return of_x80(extF80_add(a, b));
-  return nan80(a) ? y : x;
+  bool x_quiet_bit = x80_bits(x).signif >> 62 & 1, y_quiet_bit = x80_bits(y).signif >> 62 & 1;
+  if (!nan80(x80_of(y))) return x_quiet_bit ? y : __addxf3(x, y);
+  if (!nan80(x80_of(x))) return y_quiet_bit ? x : __addxf3(x, y);
+  return __addxf3(x, y);
 }
 long double fminl(long double x, long double y) {
   extFloat80_t a = x80_of(x), b = x80_of(y);

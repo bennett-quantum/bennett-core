@@ -1024,8 +1024,12 @@ What is promised: every result that is not a NaN is bit for bit what the native 
 result is a NaN. Which NaN, when several operands are NaNs, is unspecified, as in LLVM, whose optimiser commutes
 operands, and on the hardware, where it depends on the instruction form. Measured against this machine's SSE
 and x87 (`front/tests/tests/softfloat.rs`): no other difference in any operation or conversion, NaN bits
-included, except for `long double` encodings no arithmetic produces and out-of-range conversions, which C
-leaves undefined.
+included, except for out-of-range conversions, which C leaves undefined. `long double` encodings no arithmetic
+produces (pseudo-denormals, unnormals, pseudo-infinities, pseudo-NaNs, written through memory) are read as x87
+reads every operand: a pseudo-denormal as the denormal of the same value, the others as invalid operands
+giving x87's indefinite (`rt/softfloat/README.md`, "Noncanonical long double operands"). Where the native
+program calls software rather than x87 instructions (glibc's `fmal` and `roundl`, libgcc's truncations to
+`_Float16` and `__bf16`), that software reads such encodings at face value, and the device differs there.
 
 ## The next extension: code that is not a clean function (decided; `mark`, `rewind`, worlds, the memory overlay, gates at addresses and `apply` as the idiom built)
 

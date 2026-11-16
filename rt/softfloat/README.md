@@ -24,7 +24,7 @@ operation and of the 32-bit integer conversions.
 | f32, f64: add, sub, mul, div, sqrt, neg, fabs, trunc, floor, ceil, round, roundeven, rint, lrint, lround, all 14 fcmp predicates, conversions among f32/f64/f80 and to and from i32/i64/u32/u64 | none, NaN bits included |
 | f32, f64: fma | which NaN, only: for `fma(0, inf, NaN)` x86 returns the NaN operand, SoftFloat the default NaN; of several NaN operands x86's choice depends on the instruction form the compiler picks |
 | extF80, canonical encodings: the same operations | none, NaN bits included (SoftFloat follows x87: the larger significand wins) |
-| extF80: pseudo-denormals, unnormals, pseudo-infinities, pseudo-NaNs | differ (x87 reads or rejects them otherwise); no arithmetic produces them, only `memcpy` |
+| extF80: pseudo-denormals, unnormals, pseudo-infinities, pseudo-NaNs | SoftFloat's own operations differ (x87 reads or rejects them otherwise); no arithmetic produces them, only `memcpy`. The runtime reads them as x87 does ("Noncanonical long double operands") |
 | out-of-range conversions to integers (undefined in C) | SoftFloat saturates; `libgcc.c` gives what clang's x86-64 code gives instead |
 
 `front/tests/tests/softfloat.rs` repeats the directed set and a fixed random sample in about 1.5 s and checks
@@ -53,7 +53,9 @@ calls, called directly.
 The whole set, measured on 2026-11-15 with `float_runtime_exact 10000000 3 1` (7.5 min, 3 threads): directed
 values, 10^7 random operands per operation and every 32-bit input of each conversion from `float`: 0 mismatches
 on all 25 operations, NaN bits included; only long double encodings x87 rejects (unnormals, pseudo-denormals,
-pseudo-infinities, pseudo-NaNs, which no arithmetic produces) differ. `front/tests/tests/softfloat.rs` repeats
+pseudo-infinities, pseudo-NaNs, which no arithmetic produces) differ. Since the runtime reads those as x87 does
+(next section), they differ only where the native side is software reading them at face value: glibc's `fmal`
+and libgcc's truncations to `_Float16` and `__bf16`. `front/tests/tests/softfloat.rs` repeats
 it with 2·10^4 random operands per operation, every 16-bit input and the directed triples of `fmal`, in under a
 second.
 
@@ -73,6 +75,43 @@ them is refused by name (the back end calls the C library's `powf`). Between `_F
 writes IR that LLVM rejects (neither type is the wider), so a program converts through `float`.
 `front/tests/c/float_half.c` checks 5,320 directed results of both types on the device against the native
 program at `-O0` and `-O2`.
+
+## Noncanonical long double operands (2026-11-16)
+
+x87 checks every operand's encoding before it computes; SoftFloat takes encodings at face value. The
+encodings no arithmetic produces, only a write of the bytes, measured on this machine (Zen 2) against x87
+instructions and glibc's x87 `fminl`/`fmaxl`:
+
+- a **pseudo-denormal** (exponent 0, integer bit set) is the denormal of the same value. SoftFloat computes
+  its products and quotients right but orders it below the smallest normal, and some sums differ;
+- an **unsupported encoding** (an exponent other than 0 with the integer bit clear: an unnormal, an unnormal
+  zero, a pseudo-infinity, a pseudo-NaN) is an invalid operand: the result is the indefinite (sign set,
+  exponent all ones, significand `0xC000000000000000`), also beside a NaN operand, comparisons are
+  unordered, and a conversion converts the indefinite. SoftFloat computes with it as with a number or a NaN.
+
+`libgcc.c` reads every long double operand as x87 does (`x80_operand`): one test finds the noncanonical
+encodings (exactly those whose integer bit equals "the exponent is 0"), a pseudo-denormal becomes the
+normal number with exponent 1 and the same significand, an unsupported encoding becomes the indefinite and
+the invalid flag is raised, and a two-operand operation with an unsupported operand gives the indefinite.
+glibc's `fminl`/`fmaxl` are followed instruction by instruction (an unordered pair gives the other operand
+when exactly one is unordered with itself and its significand's bit 62 is set, otherwise the sum).
+
+`front/tests/c/float_noncanonical_x87.c` (run by `front/tests/tests/softfloat.rs`) puts 14 noncanonical
+encodings, every class, against 14 canonical partners on both sides of each operation: arithmetic, the six
+comparisons and `unordered`, conversions to `float`, `double`, every integer width up to 128 bits, `sqrtl`,
+`floorl`, `ceill`, `truncl`, `rintl`, `nearbyintl`, `fminl`, `fmaxl`, `powi`. Every result bit agrees with
+the native program, NaNs included; with the runtime before this check, 2,198 of those results differed.
+Three routines are software natively and read the encodings at face value, so they still differ, by design: glibc's
+`fmal` and `roundl` and libgcc's truncations to `_Float16` and `__bf16` (there is no x87 instruction for
+them). `float_runtime_exact.c` now expects noncanonical differences only for those.
+
+Cost, device steps of one operation on normal operands at `-O2` (whole probe: operand loads and the
+result's bits included): add 89 to 101, mul 77 to 89, div 144 to 156, `<` 52 to 62, `==` 28 to 38, to
+`double` 42 to 47, to `long long` 20 to 24, `sqrtl` 160 to 165, `floorl` 47 to 51: 4 to 5 steps per
+operand. A first version that LLVM made branch-free with selects cost 10 per operand. On the existing
+long-double tests, every result unchanged: `float_long_double.c` (9,268 results) 1,927,170 to 2,119,358 steps
+at `-O0` (+10.0%) and 1,649,392 to 1,842,776 at `-O2` (+11.7%); `float_long_double_programs.c` 75,851 to
+84,573 (+11.5%) and 73,166 to 81,703 (+11.7%).
 
 ## Cost on the device
 

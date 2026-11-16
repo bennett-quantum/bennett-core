@@ -170,13 +170,12 @@ Here that latitude is supported by executed native witnesses and by the full
 operand-order comparison, not assumed from the mere presence of NaNs.
 
 `__divxc3` needs no additional helper, C library function or build step for canonical x87
-inputs in the default environment. Remaining long-double limitations belong to floating-point
-lowering as a whole: noncanonical encodings created through raw memory (unnormals,
-pseudo-denormals/infinities/NaNs) still differ from x87, and non-default rounding/observable
-flags need the front's environment fallback. The former requires x87-compatible validation
-and normalization of operand encodings at the operation boundary; the latter requires real
-SoftFloat state and constrained-operation lowering. They are debts, not coverage proved by
-this canonical-input sweep.
+inputs in the default environment. Noncanonical encodings created through raw memory (unnormals,
+pseudo-denormals/infinities/NaNs) are read as x87 reads them since 2026-11-16, by the floating-point
+runtime at every operation's operands (`rt/softfloat/README.md`, "Noncanonical long double operands").
+The remaining limitation belongs to floating-point lowering as a whole: non-default rounding and
+observable flags need the front's environment fallback, real SoftFloat state and constrained-operation
+lowering. That is a debt, not coverage proved by this canonical-input sweep.
 
 Measured by the independent testing pass (2026-11-16): 800 tuples per class and helper, one
 noncanonical operand at each position among canonical ones, `-O0` caller, raw bits against the archive.
@@ -191,10 +190,12 @@ Columns: identical / only NaN bits differ / other difference.
 | pseudo-NaN | 405 / 395 / 0 | 117 / 679 / 4 |
 
 x87 refuses unnormals, pseudo-infinities and pseudo-NaNs as invalid operands (a default NaN, and an
-unordered comparison); the device computes with them, giving finite or infinite values where x87 gives
-NaN, and zeros of the other sign. A pseudo-denormal has x87's value, but compares below the smallest
-normal on the device, so `__divxc3` can take the other Smith branch: one ulp apart. One witness per
-class is the ignored front test `noncanonical_x87_operands_agree_with_the_hardware`.
+unordered comparison); the device computed with them, giving finite or infinite values where x87 gives
+NaN, and zeros of the other sign. A pseudo-denormal has x87's value, but compared below the smallest
+normal on the device, so `__divxc3` could take the other Smith branch: one ulp apart. The cause was not
+in the helpers: SoftFloat takes encodings at face value. Since the runtime checks every operand as x87
+does, the front test `noncanonical_x87_operands_agree_with_the_hardware`, one witness per class, runs by
+default and agrees in all 20 result words at `-O0` and `-O2` (16 differed before).
 
 ## Verification snapshot
 
