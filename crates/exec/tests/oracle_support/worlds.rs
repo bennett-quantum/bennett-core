@@ -243,13 +243,15 @@ impl<'a> Model<'a> {
             quantum: Vec::new(),
             history: Vec::new(),
         };
-        self.call(
+        // An entry frame that does not fit ends the run before its first step, with no frame.
+        if let Err(fault) = self.call(
             &mut world,
             self.program.function_named(entry).expect("entry"),
             args.iter().copied().map(Value::Int).collect(),
             None,
-        )
-        .expect("entry fits memory");
+        ) {
+            world.classical.finish = Some(Finish::Faulted(fault));
+        }
         world
     }
 

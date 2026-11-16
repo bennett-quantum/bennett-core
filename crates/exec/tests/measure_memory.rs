@@ -262,3 +262,34 @@ fn every_fixture_matches_the_independent_world_machine() {
     }
     assert_eq!((stepped, ended), (10, 96));
 }
+
+/// The fixtures in 64 bytes of memory, 36 of them stack above the data: `@observe`'s entry frame (five
+/// slots, 40 bytes) does not fit, and the run is the fault `stack_overflow` before its first step, with
+/// nothing to reverse; the others fit. Both machines agree on every fixture: the executor here, stepped
+/// against the whole-world reference, whose own start panicked on a frame that did not fit until it
+/// modelled the fault too.
+#[test]
+fn an_entry_frame_that_does_not_fit_faults_in_both_machines() {
+    let module = bennett_ir::load(&FIXTURES.replacen("memory 256", "memory 64", 1)).expect("valid");
+    let mut overflowed = Vec::new();
+    for f in &module.functions {
+        let args: Vec<u64> = if f.params.is_empty() { vec![] } else { vec![20] };
+        let mut e = executor(&module, &f.name, &args, 0);
+        if e.outcome() == Some(Outcome::Faulted(Fault::StackOverflow)) {
+            overflowed.push(f.name.clone());
+            assert_eq!(f.slot_count() * 8, 40);
+            assert_eq!(e.run(), Outcome::Faulted(Fault::StackOverflow));
+            assert_eq!((e.stats().steps, e.reverse()), (0, Ok(0)));
+        }
+        if !["interfere", "observe"].contains(&f.name.as_str()) || overflowed.contains(&f.name) {
+            compare(&module, &f.name, &args, 256, true);
+        }
+        let model = Model::new(&module, &f.name);
+        let args128: Vec<u128> = args.iter().map(|&n| n.into()).collect();
+        let reference = observed_reference(&model, basis(model.initial(&f.name, &args128)), 256);
+        let mut e = executor(&module, &f.name, &args, 0);
+        e.run();
+        assert!(observed_one_of(&model, &reference, &e.snapshot()), "@{}", f.name);
+    }
+    assert_eq!(overflowed, ["observe"]);
+}

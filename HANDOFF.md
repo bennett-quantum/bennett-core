@@ -140,7 +140,11 @@ commit) after the four checks passed on it.
   codes and `bad_longjmp`; `84d6fd4` b, opaque mark handles; `24a4169` c, no use after a rewind of a value
   defined since its mark; `ba6ddb5` d, `measure iN [ADDR]`). Main's newer tests were migrated in the step that
   needs it. The changed-line mutation run over a to d (110 mutants) is running. Step e (the call form with a
-  fault value and a budget, with the afternoon's decisions) is next.
+  fault value and a budget, with the afternoon's decisions) is next. The panic reported for a
+  `measure_memory` fixture in 64 bytes of memory was not the executor's: it returns `stack_overflow` before
+  the first step (since `5515ae8`); the independent whole-world reference panicked at its own start
+  (`expect("entry fits memory")`). The reference now models the fault, and
+  `an_entry_frame_that_does_not_fit_faults_in_both_machines` steps every fixture in 64 bytes in both.
 - **Testing passes owed:** machine-decisions a-d (by sol, Opus built it); sql-oracle, checks and entry-fix (by
   Opus, sol built them). Done today: fix-replay (sol, no wrong result), fallback oracle (Opus, four accepted
   wrong results fixed), libgcc (Opus, none on canonical inputs; a noncanonical x87 compare witness), files
