@@ -39,6 +39,7 @@ fn direct_modules_check_indices_before_using_them() {
 
 #[test]
 fn direct_modules_check_definitions_and_register_widths() {
+    assert!(load("func @f(q64 %q) {\nentry:\n ret\n}\n").is_ok(), "64 qubits is allowed");
     let base = parsed("func @f(i8 %x) -> i8 {\nentry:\n ret %x\n}\n");
     let mut undefined = base.clone();
     undefined.functions[0].params.clear();
@@ -216,6 +217,28 @@ fn void_calls_cannot_define_a_result() {
         );
         assert!(rejected(parsed(&text)).contains(&Problem::NoResult), "{call}");
     }
+}
+
+#[test]
+fn stack_selection_indirect_calls_and_return_addresses_round_trip() {
+    let text = "memory 256\nfunc @g(i8 %x) -> i8 {\nentry:\n ret %x\n}\nfunc @f(i1 %c, i8 %x) -> i8 {\nentry:\n %s = select i8 %c, %x, 1\n %sp = stacksave\n stackrestore %sp\n %ra = retaddr 0\n %buf = alloca 32\n %jump = setjmp %buf\n %ptr = faddr @g\n %v = call_indirect fn(i8) -> i8 %ptr(%s)\n ret %v\n}\nfunc @jump(i64 %buffer, i32 %value) {\nentry:\n longjmp %buffer, %value\n}\n";
+    let module = parsed(text);
+    validate(module.clone()).expect("well typed classical instructions");
+    assert_eq!(read(&write(&module)).expect("round trip"), module);
+}
+
+#[test]
+fn return_addresses_count_instructions_and_terminators_in_prior_blocks() {
+    let module = parsed(
+        "func @f(i8 %x) -> i8 {\nentry:\n %a = add i8 %x, 1\n %b = add i8 %a, 1\n br middle\nmiddle:\n br last\nlast:\n %c = add i8 %b, 1\n %d = add i8 %c, 1\n ret %d\n}\n",
+    );
+    validate(module.clone()).expect("valid control flow");
+    let function = &module.functions[0];
+    // entry occupies positions 0,1,2; middle's terminator is 3; last starts at 4.
+    for (block, inst, position_after) in [(0, 0, 1), (0, 1, 2), (2, 0, 5), (2, 1, 6)] {
+        assert_eq!(function.code_address_after(FuncId(0), BlockId(block), inst), 4_294_967_296 + position_after);
+    }
+    assert_eq!(bennett_ir::code_address(FuncId(17), 7), 77_309_411_335);
 }
 
 #[test]
