@@ -107,6 +107,94 @@ Conversions (f64): to i32/i64/u64 21–27 instructions, 10–21 steps; i32 to f6
 24–61 steps. A program with one `double` addition grows from 6 to 418 device instructions. The routines branch
 (SoftFloat is ordinary C); under qubit control each branch configuration runs its own path.
 
+## The long-double step increase, measured (2026-11-16)
+
+This is the remaining debt after the aggregate-inlining fix, not a floating-point accuracy change.
+Identical musl-linked input bitcode, 1 MiB stack, clang/LLVM 18.1.3 and the same release executor were
+used with freshly rebuilt historical fronts and their own floating-point runtimes. The historical
+sources must get fresh modification times when reusing a CMake build directory: `git archive` preserves
+old times and otherwise a nominal rebuild can reuse a newer object file. Successful executed-site
+counters were checked against uninstrumented totals. All completed cases below return 0 and match native
+stdout; no wrong result was found.
+
+**Bisection:** `72807c5` and `e8a9a95` (immediately before `a9ce585`) give 3,863 / 4,145 steps for
+`960215-1` / `regstack-1`; the inlining-era midpoint `cd2d920` gives 3,673 / 3,954; `6418e6b`, the parent
+of `8bbb56c`, still gives 3,673 / 3,954; **`8bbb56c` first gives 4,052 / 4,354**. This isolates the increase
+to the packed aggregate-result ABI, rather than the fresh-name change or the later prototype-call checks.
+The following remeasures every long-double/formatting case in the earlier corpus comparison, including
+its two non-increases. `gcc` denotes torture `execute`, `ieee` its `-fno-inline` subcorpus, `cts` c-testsuite.
+
+| program | before inlining (`e8a9a95`) | packed result (`8bbb56c`) | extra steps | change |
+|---|---:|---:|---:|---:|
+| cts `00174` | 50,015 | 50,744 | +729 | +1.4576% |
+| cts `00175` | 23,608 | 23,638 | +30 | +0.1271% |
+| cts `00195` | 7,603 | 7,769 | +166 | +2.1833% |
+| cts `00204` | 1,068,923 | 1,089,594 | +20,671 | +1.9338% |
+| gcc `20020413-1` | 3,298 | 3,298 | +0 | +0.0000% |
+| gcc `20030914-1` | 4,411 | 4,555 | +144 | +3.2646% |
+| gcc `920501-8` | 13,270 | 13,276 | +6 | +0.0452% |
+| gcc `930513-1` | 5,238 | 5,244 | +6 | +0.1145% |
+| gcc `960215-1` | 3,863 | 4,052 | +189 | +4.8926% |
+| gcc `960513-1` | 2,671 | 2,776 | +105 | +3.9311% |
+| gcc `regstack-1` | 4,145 | 4,354 | +209 | +5.0422% |
+| gcc `stdarg-2` | 2,754 | 2,763 | +9 | +0.3268% |
+| gcc `struct-ret-1` | 29,112 | 29,610 | +498 | +1.7106% |
+| ieee `20010226-1` | 2,229 | 2,239 | +10 | +0.4486% |
+| ieee `920810-1` | 5,001 | 4,990 | -11 | -0.2200% |
+
+The baseline is held at one exact commit, rather than the earlier mixed snapshot with the startup fix
+applied: hence `20030914-1` is 4,411 here, rather than the previously recorded 4,427. Startup/exit counters
+are unchanged in these endpoint pairs. The newly supported complex-helper case `20070614-1` has no
+successful pre-inlining baseline and is not called a long-double regression.
+
+**Instructions, measured rather than inferred from the source diff.** A probe loads volatile
+`long double a=1.25L, b=0.75L`, computes one operation and returns the low 64 result bits XOR the high
+16 bits (padding masked out). It is lowered from clang `-O0 -Xclang -disable-O0-optnone
+-fno-math-errno`; the entry takes no arguments. For example:
+
+```c
+volatile long double a = 1.25L, b = 0.75L;
+unsigned long op(void) {
+    union { long double f; unsigned long w[2]; } u;
+    u.f = a + b; /* also a-b, a*b, a/b, __builtin_sqrtl(a) */
+    return u.w[0] ^ (u.w[1] & 65535);
+}
+```
+
+All five result words equal native. Counts include the
+common operand loads and bit extraction, so they are whole-probe counts, not replacement values for the
+operation-cost table above.
+
+| operation | old steps | new steps | executed instruction delta |
+|---|---:|---:|---|
+| add | 70 | 79 | +3 casts, +3 binary, +1 select, +1 call, +1 return = **+9** |
+| sub | 117 | 127 | +3 casts, +4 binary, +1 jump, +1 call, +1 return = **+10** |
+| mul | 67 | 67 | 0 |
+| div | 134 | 134 | 0 |
+| sqrt | 148 | 148 | 0 |
+
+The device text shows the cause: an extF80 result crosses a surviving helper boundary as `i80`.
+Packing two fields uses two `zext`, a `shl` and an `or`; extraction uses `trunc`, `lshr`, `trunc`.
+LLVM also leaves `softfloat_roundPackToExtF80` out of line after this ABI change, where it was previously
+inlined. The probes' added call/return pair and bit operations occur at that boundary; the add/sub
+control-flow differences account for the remaining select/jump and arithmetic. This depends on operands
+and inlining: it is not a fixed surcharge for every long-double operation.
+
+The complete corpus profiles reconcile the larger counts too. For `960215-1`, +131 casts, +96 binary,
++21 calls, +21 returns, +8 jumps, +6 comparisons and +5 selects, less 34 allocas, 31 loads and 34 stores,
+sum to **+189**. For `regstack-1`, +137 casts, +103 binary, +23 calls/returns each, +10 jumps, +6 comparisons,
++6 selects, less the same 34/31/34 memory operations, sum to **+209**. Its newly separate round-pack
+routine executes 23 times (299 steps); `960215-1` calls it 21 times (273 steps). In `00204`, round-pack
+executes 2,372 times (31,749 steps); the net **+20,671** includes savings elsewhere, chiefly `fmt_fp` and
+`__mulxf3` (-3,729 each), rather than being 20,671 extra arithmetic operations. The counting helper is
+`experiments/c-corpus/profile-counts.py`.
+
+**What it buys:** small aggregate results no longer write a return buffer, so these routines can be
+called under qubit control; it also avoids `a9ce585`'s code duplication and stack blow-up. The transfer
+work is a cost of that chosen ABI. Repacking and less favorable LLVM inlining are optimization debts,
+not additional accuracy or rounding guarantees. These are classical executed device steps on these
+inputs, not native cycles, gates, or a proof that this cost is necessary.
+
 ## Global state
 
 SoftFloat keeps the rounding mode, the tininess rule, the 80-bit rounding precision and the exception flags in

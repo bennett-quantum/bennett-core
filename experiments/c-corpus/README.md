@@ -75,6 +75,151 @@ error. **wrong**: the device reaches `abort()`/`exit(≠0)`, or `main` returns a
 exits other than 0 or 3, `bennett check` rejects its output, or `bennett run` exits other than 0, 1 or 2. **budget**:
 the 10^8-step budget ran out. **skipped**: no native reference, as above.
 
+## Three open cost debts, measured (2026-11-16)
+
+No compiler/runtime behavior changed for this measurement and no wrong result was found. The long-double
+bisection, full endpoint table and executed instruction accounting are in `rt/softfloat/README.md`.
+The measurements here use the retained `64571ac` device texts and paired `eeff78d`/`64571ac` site profiles.
+A fresh lowering at `9992a99` reproduces the five pointer-cost totals exactly. Native references are the
+harness's clang 18 `-O0` and `-O2` executables; stdout is compared as bytes, not just exit status.
+
+### c-testsuite `00040`: the budget measures a large search
+
+With musl linked and the usual 1 MiB stack, the 8-queens program returns **0 after 489,693,622 steps**
+with empty stdout, equal to both native builds. Budget **489,693,622 passes**; **489,693,621 faults**.
+A first run at 10^9 and a separately instrumented run at the exact boundary agree on the total. The
+older non-musl measurement of 489,692,701 is a different device program, not the current passing budget.
+
+| counted work | instructions / steps |
+|---|---:|
+| whole native `-O2` process, mean of 5 | 391,839,420 |
+| whole native `-O0` process, mean of 3 | 873,504,691 |
+| device total | 489,693,622 |
+| device `chk` | 476,365,846 (97.28%) |
+| device `go` | 13,325,288 (2.72%) |
+| everything else, including startup, allocation and exit | 2,488 |
+
+Native counts are retired user-mode x86 instructions, `perf stat -e cpu_atom/instructions/u -x , -r N`,
+pinned to one efficient core with `taskset -c 4` on a hybrid x86-64 laptop. No multiplexing (100% counter
+running time); perf reports 0.00% relative variation at its displayed precision. They include loader and
+libc, omit kernel instructions, and are not cycles. Device counts are successfully executed instructions
+and terminators; they are not instructions used by the Rust simulator to execute them.
+
+The device/native `-O2` ratio is **1.2497**, and against `-O0` **0.5606**. The search calls `chk`
+**1,043,102 times** and enters `go` **118,969 times**. Each `chk` scans all eight board coordinates,
+adding row, column and diagonal cells: **456.68 device steps per call on average**. The loop body is visited **8,344,816 times**, exactly eight per call,
+with no lowering-generated extra search. Library/runtime work is only 2,488
+steps; the budget exhaustion is the program's repeated board scan, with no anomalous library routine.
+
+For context, the **16 largest completed programs by device steps** in GCC/c-testsuite at `64571ac`
+were also measured with the same native `-O2` counter (three repeats each). Their ratios range
+**0.5990–13.3496** (median **1.8678**): 1.2497 is ordinary in this measured sample.
+This is not a native-instruction census of the whole corpus. The README pipeline keeps `noinline` where
+native `-O2` does not, and native glibc may use vector/assembly string routines; these differences explain
+why such ratios cannot by themselves diagnose a lowering fault or be read as simulation slowdown.
+
+| program | device steps | native `-O2` instructions | ratio |
+|---|---:|---:|---:|
+| gcc `strncmp-1` | 34,165,339 | 3,166,554 | 10.7894 |
+| gcc `vla-dealloc-1` | 20,002,081 | 24,676,920 | 0.8106 |
+| gcc `20040811-1` | 20,002,081 | 24,676,918 | 0.8106 |
+| gcc `pr43220` | 19,002,081 | 21,676,909 | 0.8766 |
+| gcc `strcmp-1` | 12,610,651 | 1,693,236 | 7.4477 |
+| gcc `memcpy-2` | 11,257,347 | 5,884,141 | 1.9132 |
+| gcc `strcpy-1` | 10,735,772 | 5,891,024 | 1.8224 |
+| gcc `memcpy-1` | 9,091,144 | 1,562,402 | 5.8187 |
+| gcc `arith-rand-ll` | 4,052,427 | 3,322,525 | 1.2197 |
+| gcc `pr91137` | 3,496,580 | 1,123,044 | 3.1135 |
+| gcc `pr20621-1` | 2,361,399 | 176,889 | 13.3496 |
+| cts `00041` | 1,639,509 | 2,737,137 | 0.5990 |
+| gcc `pr28982b` | 1,586,831 | 178,416 | 8.8940 |
+| gcc `pr51581-2` | 1,435,740 | 1,066,868 | 1.3458 |
+| gcc `memset-1` | 1,393,212 | 677,642 | 2.0560 |
+| gcc `pr51581-1` | 1,386,588 | 832,882 | 1.6648 |
+
+### Full pointer-call checking: the worst five GCC relative increases
+
+Ranked by `(new-old)/old`, unchanged successful outcomes only. Paired site-counter sums equal Stats and
+the uninstrumented totals in every case. The table gives **extra executed instructions**, not static code
+size. The branch column includes constant-condition `br 0, ...` dispatch; a one-target `br` counts as a jump.
+
+| program | old → new steps | change | compare | branch | jump | binary | select |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `bcp-1` | 2,118 → 2,580 | +462 / 21.8130% | 146 | 123 | 22 | 55 | 116 |
+| `20021118-2` | 2,301 → 2,432 | +131 / 5.6932% | 43 | 62 | 13 | 5 | 8 |
+| `pr101188` | 2,083 → 2,166 | +83 / 3.9846% | 13 | 51 | 11 | 0 | 8 |
+| `941014-2` | 2,277 → 2,353 | +76 / 3.3377% | 10 | 44 | 9 | 0 | 13 |
+| `pr34768-2` | 2,066 → 2,133 | +67 / 3.2430% | 6 | 44 | 9 | 0 | 8 |
+
+Each row sums to its step delta, with no increase in executed indirect calls. In `bcp-1`, **238** extra
+steps are in `main`, **224** in musl; `20021118-2` has 36 in `t1`, 51 in `t2`, 44 in musl;
+`pr101188` has 24 in `testfn`, 59 in musl; `941014-2` has 3 in `f`, 3 in `default_malloc`, 70 in startup/exit;
+`pr34768-2` has all 67 in musl. The cause is target dispatch against address-taken functions with other
+prototypes, plus control/select scaffolding that survives when emission folds an alias comparison to false.
+
+**Per call, comparisons versus candidates.** `N × C/K` means N executed calls, C executed compare
+instructions each, K distinct address-taken candidates tested by the lowered guard. K comes from the
+front's `--emit-llvm` pointer comparisons (including constant expressions); C comes from executed device
+sites. This excludes unexecuted constructor/destructor-array loops and signal dispatch, which have static
+guards but no visits in these runs. It includes musl aliases which end up at constant function addresses,
+and the guarded, eventually direct call of `libc_start_main_stage2`.
+
+| program | application / allocator calls: N × C/K | startup/exit calls: N × C/K |
+|---|---|---|
+| `bcp-1` | 9 × 4/4; 3 × 14/14; 2 × 17/17 | 2 × 0/23; 1 × 18/18; 1 × 16/16; 6 × 0/17 |
+| `20021118-2` | 2 × 9/9; 2 × 8/8; 1 × 7/7 | 2 × 0/7; 2 × 1/1; 6 × 0/3 |
+| `pr101188` | 1 × 9/9; 1 × 2/2 | 2 × 0/8; 2 × 1/1; 6 × 0/5 |
+| `941014-2` | 2 × 0/2 (`malloc` aliases) | 2 × 0/14; 2 × 5/5; 5 × 0/3 |
+| `pr34768-2` | 1 × 0/0 (correctly typed `test` call) | 2 × 0/8; 2 × 3/3; 6 × 0/5 |
+
+For example, `bcp-1`'s application calls test 112 candidates in 112 comparisons; the complete run visits
+294 candidate checks but executes only 146 compares. Constant-address equality tests become literal 0
+in the emitter, leaving `br 0` and chains such as `select i1 0, 1, 0` in the device text. Thus a call with
+zero compare steps can still pay many dispatch steps. In `__init_libc`, two 23-candidate guards cost
+48 extra steps with **zero** executed compares. This is missed by counting `icmp` alone.
+
+**The two cheaper schemes are counting models, not implemented compilers.** Retain the full current
+guard only for unprototyped (LLVM variadic-type) pointer calls, removing typed guards and doing no new
+optimization: these runs retain only the guard on the `__stdio_exit` alias (18/4/6/0/6 extra steps).
+The destructor-array unprototyped calls have zero visits; `941014-2` resolves stdio exit directly.
+`linked.ll` records which calls are unprototyped before lowering, so the designation is not guessed from
+the device's erased signature. This is the same kind of restricted policy as the handoff's earlier +11
+experiment, with different candidate sets. It leaves typed calls through incompatible widths at
+`bad_indirect` and is not full native ABI coverage.
+
+The uniform-signature wrapper proposal can remove target comparisons. Its measurable payload is a
+store plus load for every 64-bit argument/result word, and one extra call/return pair per surviving
+indirect call if each wrapper calls its target. N/A/R below are executed indirect calls / supplied
+argument words / declared result words, counted from the old device profiles. All those widths fit one
+word in these five programs. Constant known direct calls (including stage2) are kept direct in this model.
+
+| program | unprototyped-only: extra / modeled total steps | wrapper N/A/R | argument/result store+load steps: 2(A+R) | extra wrapper call+return: 2N |
+|---|---:|---:|---:|---:|
+| `bcp-1` | 18 / 2,136 | 23 / 10 / 15 | 50 | 46 |
+| `20021118-2` | 4 / 2,305 | 14 / 12 / 1 | 26 | 28 |
+| `pr101188` | 6 / 2,089 | 11 / 8 / 2 | 20 | 22 |
+| `941014-2` | 0 / 2,277 | 10 / 7 / 3 | 20 | 20 |
+| `pr34768-2` | 6 / 2,072 | 10 / 5 / 2 | 14 | 20 |
+
+These wrapper columns are **traffic and call counts under an explicit model, not measured end-to-end
+step totals or guaranteed savings**. They omit address arithmetic, register-image allocation, alignment,
+argument/result casts, checks for undetermined ABI bits and effects of reoptimization. Unused result
+transfers could disappear; some calls could fold to direct calls. A reusable image must also survive
+nested/recursive calls. Today memory writes constrain coherent calls, so this model does not establish
+that the proposed ABI is usable there. No policy is selected here.
+
+### Reproducing the counting
+
+`profile-counts.py after.profile.tsv --before before.profile.tsv --llvm lowered.ll` prints instruction
+deltas by function and distinct static candidate groups. Without `--before` it reports absolute counts,
+including indirect-call argument/result words. Its input TSV columns are `function`, `block`, `site`,
+`count`, `operation`: sites are zero-based, with the terminator after the block's instructions. The
+scratch corpus profiler samples the active function/block/site before `Executor::step`, increments only
+when Stats.steps advances, and checks the sum against Stats. It is for these classical runs with no
+world splits, quantum operations, reversal or region execution. Do not interpret static candidate groups
+as executed calls: use the site counters and inspect the device text for folded alias tests. The script
+reads the artifacts only; no front or executor change is required to analyze them.
+
 ## The three corpora at `64571ac`, with musl linked (2026-11-16)
 
 Frozen front, floating-point/complex runtimes and release executor built at **`64571ac`**, with musl

@@ -638,20 +638,20 @@ explicitly after the separate musl build.
   the mark). When a sum fails, every waiting world of the group that rewound last faults; the reference model
   faults every world at that rewind (no generated program differs).
 
-- Since `8bbb56c` some `long double` programs take more steps than before `a9ce585` (GCC `960215-1` 3,863 to
-  4,052, `regstack-1` 4,145 to 4,354, c-testsuite `00204` 1,068,923 to 1,089,594; 25 other programs got
-  cheaper). The cause is not measured.
+- The `long double` increase is bisected to `8bbb56c`: packed `i80` results and changed round-pack inlining
+  add 189/209/20,671 steps in `960215-1`/`regstack-1`/`00204` (normal add/sub probes +9/+10); this buys
+  memory-free aggregate returns under qubit control (`rt/softfloat/README.md`).
+- c-testsuite `00040` passes at exactly 489,693,622 steps with native output; 97.28% is its repeated `chk`
+  board scan, versus 391,839,420 native `-O2` user instructions (1.2497x; `experiments/c-corpus/README.md`).
 - A small aggregate result that contains a pointer is still returned through memory, so it is refused under qubit
   control at `-O2` (route: pack it too, after measuring what turning a pointer into an integer costs LLVM's alias
   analysis). A packed struct of 129 bits of bitfields becomes an `i136` and is refused (route: split memory
   operations LLVM widens past 128 bits before emission).
 
-- Calls through pointers compare the target with each address-taken function a device call would not reach
-  as natively, also when the prototype is right: on the musl tests 107 to 353 more steps (0.06% to 5%) and 5%
-  to 16% more device code; 30 to 54 steps on GCC programs (musl's startup and exit). A cheaper policy measured
-  +11 steps but left prototyped calls of functions of other widths at `bad_indirect`. Route if it matters:
-  one uniform device signature for address-taken functions (a wrapper reading its arguments from a register
-  image, as the variadic area does), which needs memory writes per call (refused under qubit control today).
+- Pointer-call checks: the worst five GCC increases are +462/+131/+83/+76/+67 steps, of which
+  146/43/13/10/6 are compares; the rest is branch/select scaffolding, including folded constant-alias checks.
+  `experiments/c-corpus/README.md` counts candidates per call and models unprototyped-only checks and uniform
+  wrappers; neither cheaper policy is selected (typed mismatches lose coverage; wrappers write memory).
 
 - The region budget counts device instructions, not the source-fixed unit the North Star asks for.
 - A `_Bool` qubit costs 8 qubits.
