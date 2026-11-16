@@ -16,8 +16,8 @@ mutation job (`623d9e4`); the landing stack (`8cae924`..`e2320fe`); the checks j
 decisions on it.
 Earlier: the night session (the journalled machine in the executor, all five steps of its order, with two
 independent oracles; journal content; `setjmp`/`longjmp`, return addresses and calls through another prototype in
-the front). The last corpus run (`64571ac`, musl linked) has GCC 1,569 agree, c-testsuite 218, `ieee/` 64, none
-wrong or crashing.
+the front). The night corpus run (`1e06f2f`, musl linked) has GCC 1,574 agree, c-testsuite 219, `ieee/` 64, none
+wrong or crashing; all six former file-related faults now agree with native.
 Earlier: the evening session of 2026-11-15 (the musl runtime, `zero N`, the floating-point leftovers, the complex
 helpers, constructor startup, the first journal-content and control-schedule measurements, the salvage survey).
 
@@ -61,24 +61,24 @@ musl-linked ABI check and two independent variadic checks that need `rt/musl/bui
 129-bit bitfield struct; see "Known weak spots"); needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 With musl linked, standard output and exit status compared with native (`experiments/c-corpus/README.md`):
-GCC's C torture tests **1,569 agree, 1 refused by name, 5 named faults**, 81 skipped;
-c-testsuite **218 agree, 1 named fault, 1 over the step budget**;
-GCC's `ieee/` **64 agree, 3 refused**, 1 skipped; **none wrong or crashing** (`64571ac`, 2026-11-16).
-All 1,944 programs compared per program with `eeff78d`: only GCC `pr67037` (`bad_indirect` → agree,
-2,139 steps) and c-testsuite `00025` (mismatched `strlen` refusal → agree, 2,084 steps) change outcome,
-both from the new prototype-call lowering. Every other outcome and normalized reason is unchanged.
-On 1,856 unchanged-outcome rows with steps: **1,855 increase, none decrease, one unchanged** (8-queens
-still at the 10^8-step budget). Median extra steps / relative increase: GCC **43 / 2.0408%**, c-testsuite
-**30 / 1.4648%**, `ieee/` **43 / 1.8150%**. Largest relative: GCC `bcp-1`, 2,118 → 2,580 (**21.8130%**).
-Measured cause: the prototype-call pass's checks, including musl startup/exit dispatch. In `bcp-1`,
-the same 14 table calls add 238 instructions in `main` and 224 in runtime dispatch; largest absolute
-increase is c-testsuite `00186`, +846 (740 in `vfprintf`). Old-front/current-executor replay reproduces
-all 1,944 old outcomes/reasons/steps exactly; paired site counters account for every numeric step delta.
-`00025`'s accepted `main` folds to `ret 0`; it is compilation coverage, not an executed `strlen` check.
-Three workers maximum, musl linked, 1 MiB stack, 10^8-step budget; wall times GCC 602.85 s, c-testsuite
-80.52 s, `ieee/` 29.32 s. Report and each moved case: `experiments/c-corpus/README.md`; ignored results,
-frozen binaries, complete comparisons and per-program step attribution: `.tmp/corpus-2/results-64571ac/`
-in the testing checkout; paired old/new site profiles: `.tmp/corpus-2/replay-eeff78d/`. Without the library
+GCC's C torture tests **1,574 agree, 1 refused by name**, 81 skipped;
+c-testsuite **219 agree, 1 over the step budget**;
+GCC's `ieee/` **64 agree, 3 refused**, 1 skipped; **none wrong or crashing** (`1e06f2f`, 2026-11-16, night).
+All 1,944 programs compared by name with `64571ac`: exactly six `unreachable` faults become agreement
+(GCC `fprintf-2`, `printf-2`, `user-printf`, `loop-2f`, `loop-2g`; c-testsuite `00187`); every other outcome
+and normalized reason is unchanged. The file/clock runtime supplies the previously missing operations. The
+old fault frames identify `clock_gettime` (228) in the three temporary-name programs and `open` (2) in
+the other three. All 3,716 cross-executor replays (both directions for the 1,858 numeric programs) reproduce
+outcome, status, console and exact steps; the executor changes cause none of these classical deltas.
+The two loop cases open `/dev/zero` then return on this 64-bit host; their mapping/loop paths are not measured.
+Three workers maximum, sequential runs under the shared heavy slot, musl linked, 1 MiB stack,
+10^8-step budget, `ieee/` with `-fno-inline`; wall times GCC 1,715.70 s, c-testsuite 252.67 s, `ieee/` 74.57 s
+(queue excluded; shared machine, not a throughput comparison). Unchanged-outcome numeric pairs:
+1,850 up, one down (`complex-5`, 3,305 → 3,258), one unchanged (8-queens at the budget); medians extra steps /
+relative increase: GCC 8 / 0.3800%, c-testsuite 21 / 1.0106%, `ieee/` 8 / 0.3616%.
+Report and every moved case: `experiments/c-corpus/README.md`; ignored frozen binaries, complete native/device
+artifacts and comparisons: `.tmp/corpus-night/results-1e06f2f/` in the testing checkout. Previous prototype-call
+cost attribution and the `eeff78d` comparisons remain in the README's `64571ac` section. Without the library
 an earlier snapshot gives 1,521 / 52 refused, 151 / 68, 58 / 9.
 
 Independent testing of `cee23f8` and `eeff78d` (`front_call_independent.rs`): 3,240 exact native/device by-value

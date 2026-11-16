@@ -10,7 +10,8 @@ with the C library linked (musl 1.2.5, `rt/musl`), and a fifth time with the lib
 the 128-bit conversions and the complex helpers, and a sixth at `8bbb56c`, which returns a small aggregate as one
 integer; and a seventh at `eeff78d` after jumps, return addresses, the tail-mark fix and over-aligned
 variadics; and an eighth at `64571ac` after calls through another prototype, address gates and deferred
-un-run checks. The newest measurements come first.
+un-run checks; and a ninth at `1e06f2f`, after machine step e, with the file/clock runtime and libgcc
+complex helpers. The newest measurements come first.
 First at commit `4b65247` (tree clean when the binaries were copied): `bennett-front` and `bennett` were built
 once (`cargo build --release`, `front/test.sh`, all tests passing), then copied to `.tmp/c-corpus/bin/`, and
 only those copies were used. File and line references in the sections on the
@@ -74,6 +75,123 @@ bytes, not the old block's size. A harness self-test (`.tmp/c-corpus/selftest`) 
 error. **wrong**: the device reaches `abort()`/`exit(≠0)`, or `main` returns a value ≢ 0. **crash**: `bennett-front`
 exits other than 0 or 3, `bennett check` rejects its output, or `bennett run` exits other than 0, 1 or 2. **budget**:
 the 10^8-step budget ran out. **skipped**: no native reference, as above.
+
+## The three corpora at `1e06f2f`, with musl linked (2026-11-16, night)
+
+The front, floating-point/complex runtimes and release executor were built from this checkout at
+**`1e06f2f`**, then frozen with SHA256 hashes. Musl 1.2.5 was built locally with three jobs:
+**1,345 C members, no assembly omitted**. The earlier fetched GCC `04696df0` and c-testsuite
+`5c727565` sources and `results-64571ac` stayed read-only. Same flags, native `-O0`/`-O2` oracle,
+stdout/status comparison, 1 MiB stack, 10^8-step budget and per-process 2 GiB/no-swap cap;
+`ieee/` uses `EXTRA_FLAGS=-fno-inline`. `run-all.sh` ran the three corpora sequentially, each
+inside `slot.sh heavy`, **three workers** maximum. No front or executor source was changed.
+
+Wall times inside the heavy slot, excluding its queue: GCC **1,715.70 s**, c-testsuite **252.67 s**,
+`ieee/` **74.57 s**. These are shared-machine elapsed times, not a throughput comparison with the
+previous run. The documentation branch was subsequently rebased on `16f71a8` (HANDOFF-only updates;
+identical implementation).
+
+| outcome | GCC | c-testsuite | GCC `ieee/` |
+|---|---:|---:|---:|
+| agrees | 1574 | 219 | 64 |
+| refused by name | 1 | 0 | 3 |
+| named fault (native passed) | 0 | 0 | 0 |
+| **wrong** | 0 | 0 | 0 |
+| crash | 0 | 0 | 0 |
+| budget | 0 | 1 | 0 |
+| skipped | 81 | 0 | 1 |
+
+All **1,944 programs** were compared by name with `results-64571ac` using `compare.py`, including
+normalized reasons and steps. Exactly **six outcome changes**, all `unreachable` faults becoming
+agreement; **every other outcome and normalized reason is unchanged**. The remaining refusals are
+GCC `990413-2` (inline assembly) and `ieee/` `cdivchkf`, `cdivchkd`, `cdivchkld` (their own
+`ilogb`/`ilogbl` constrained floating-point operations). c-testsuite `00040` still reaches the
+100,000,000-step budget. There is no new wrong-result or crash witness.
+
+| program | old fault steps | new agreeing steps | exercised route |
+|---|---:|---:|---|
+| GCC `fprintf-2` | 2,309 | 58,439 | temporary name, regular-file output and reopen |
+| GCC `printf-2` | 2,292 | 59,082 | temporary name, stdout redirection to a file and reopen |
+| GCC `user-printf` | 2,313 | 59,145 | temporary name and file-backed formatted output |
+| GCC `loop-2f` | 2,075 | 35,286 | open `/dev/zero`; then the source returns on this 64-bit host |
+| GCC `loop-2g` | 2,075 | 35,286 | open `/dev/zero`; then the source returns on this 64-bit host |
+| c-testsuite `00187` | 2,278 | 103,398 | create/write/close/reopen/read `fred.txt`, including printed output |
+
+Both native optimization levels pass each moved program and agree on stdout; the new device output
+and masked exit status match. The loop cases do not measure their subsequent mapping/loop paths.
+
+**The former stopping operation was measured on all six retained old programs**, using the current
+executor and a scratch harness of its public Snapshot API. Each reproduces its old `unreachable`
+and exact old step count. The final `__bennett_syscall` frame contains **228 (`clock_gettime`, clock
+id 0)** for `fprintf-2`, `printf-2` and `user-printf`, and **2 (`open`)** for `loop-2f`, `loop-2g` and
+`00187`. The old boundary traps on `open` and has no clock case. The new C runtime supplies the
+arithmetic clock used by musl's temporary-name generation, the `readlink` probe's namespace errors,
+and regular files/descriptors. The new stdout/status comparisons complete the evidence for each
+change; this is a runtime change, with no corpus-specific patch.
+
+**Cross-executor check:** every one of the **1,858 programs with numeric steps** was run in both
+directions: old emitted program/current frozen executor, and new emitted program/old frozen executor.
+All **3,716 replays** reproduce their originating run's outcome, exit status, console and exact step count.
+Thus the executor changes between these commits account for none of the observed classical-program
+outcome or step deltas; those changes are in the emitted programs and their linked runtimes.
+
+### Device steps against `64571ac`
+
+Unchanged outcomes with numeric steps (the six newly agreeing rows are separate):
+
+| corpus | comparable | up | down | unchanged | median extra steps | median relative change |
+|---|---:|---:|---:|---:|---:|---:|
+| GCC | 1,569 | 1,568 | 1 | 0 | 8 | 0.3800% |
+| c-testsuite | 219 | 218 | 0 | 1 | 21 | 1.0106% |
+| `ieee/` | 64 | 64 | 0 | 0 | 8 | 0.3616% |
+
+Together: **1,850 up, one down, one unchanged** across 1,852 pairs. The decrease is GCC `complex-5`,
+3,305 → 3,258 (-47); the unchanged row is `00040` at its budget. Largest relative increase:
+GCC `pr15262-1`, 2,286 → 28,731 (+26,445, +1,156.8241%). Largest absolute increase:
+c-testsuite `00216`, 769,434 → 801,995 (+32,561, +4.2318%).
+
+**Representative execution counts**, measured with the same current executor on old and new
+programs: each per-function sum equals the uninstrumented step count, and every per-function delta
+sums to the program delta. The ten profiles cover GCC `20000113-1`, `20000914-1`, `pr15262-1`,
+`complex-5` and c-testsuite `00186`.
+
+- `20000113-1` is 2,101 → 2,109: **+4 in `__init_libc`, +4 in `__libc_start_main`**; other
+  count differences merely rename generated helpers and cancel. This is the startup dispatch
+  overhead, with `main` unchanged.
+- The allocation cases now execute musl's **mallocng** rather than `__simple_malloc`. The file runtime
+  references `free`; that archive member needs `__malloc_context`, whose member also defines the
+  strong `__libc_malloc_impl`, replacing lite_malloc's weak fallback (member symbol tables checked).
+  In `pr15262-1`, **24,579 of the +26,445 steps are the runtime's `zero`**: mallocng's `MAP_FIXED`
+  guard-page mapping clears 4 KiB, with the remaining allocator/bookkeeping deltas summing to **+1,866**.
+  `alloc_group` adds 903, `enframe` 224 and `__malloc_alloc_meta` 124; `__simple_malloc` loses its
+  old 80 steps. `20000914-1` similarly adds **26,322**, of which **24,579** is `zero`.
+  This cost is not the corpus's own loop or file IO.
+- `complex-5` decreases **55 steps in the complex division/helper bodies**, offset by **+8 startup**,
+  exactly **-47** overall. The libgcc helper uses double-precision multiply/divide paths where the
+  compiler-rt helper used single-precision ones; the retained profiles show the changed helper
+  counts. Both emitted programs still pass the native oracle.
+
+- c-testsuite `00186` increases **542**, 84,808 → 85,350. Its syscall sequence is unchanged
+  (one ioctl, two writev, set_tid_address and exit_group). `vfprintf` adds 240, device dispatch 256;
+  console `transfer` adds 1,038 while the old `write_console` loses 992. The remaining per-function
+  deltas, including descriptor checks, sum to zero, giving exactly **542**.
+
+These are measured representative attributions, not a claim of per-site attribution for every
+changed step row. Complete per-program step differences remain in `*.cmp.tsv`.
+
+Verification at the measured implementation: **`cargo test` 413 passed / 18 ignored**;
+**`front/test.sh` 178 passed / 27 ignored**; clippy all targets with warnings denied, formatting and
+the tree guards clean. The first front-check command received SIGTERM (143) without a failed
+assertion; its log is retained, and a full warmed rerun restricted to three CPUs passed. All three
+requested corpora ran; LLVM SingleSource, extended budgets and whole-corpus reversal were not run.
+No new implementation, regression test, design choice or policy change was needed.
+
+Results stay in the testing checkout's ignored **`.tmp/corpus-night/results-1e06f2f/`**:
+frozen binaries/hashes, source hashes, full `{gcc,cts,ieee}/results.tsv`, retained native/device artifacts,
+complete `*.cmp.tsv` comparisons, six fault-frame probes and ten function profiles (`diagnostics/`),
+and all cross-executor replay logs (`replay-old-programs/`). The diagnostic/profiling batch took 84.40 s;
+the 3,716 replays took 91.11 s (both inside a heavy slot). Build/check logs and scratch tools stay in
+`.tmp/corpus-night/`. No large results or fetched sources are committed.
 
 ## Complex helpers switched to libgcc (2026-11-16)
 
