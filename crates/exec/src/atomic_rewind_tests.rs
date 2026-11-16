@@ -87,6 +87,7 @@ struct Machine {
     deferring: bool,
     rewinding: u32,
     rerunning: u32,
+    controls: (Option<u64>, Option<usize>, bool, bool, bool, usize, usize, bool),
 }
 
 impl Machine {
@@ -117,6 +118,16 @@ impl Machine {
             deferring: e.deferring,
             rewinding: e.rewinding,
             rerunning: e.rerunning,
+            controls: (
+                e.budget,
+                e.max_configurations,
+                e.allow_region_faults,
+                e.in_region,
+                e.materialised,
+                e.base_depth,
+                e.region_records,
+                e.splitting,
+            ),
         }
     }
 
@@ -130,6 +141,7 @@ impl Machine {
         assert_eq!(scalars(self), scalars(other), "{context}: run state");
         let nested = |m: &Machine| (m.splits, m.merges, m.mismatches, m.deferring, m.rewinding, m.rerunning);
         assert_eq!(nested(self), nested(other), "{context}: un-run state");
+        assert_eq!(self.controls, other.controls, "{context}: limits and execution controls");
         assert_eq!(self.rng, other.rng, "{context}: the generator measurements sample with");
     }
 }
@@ -553,5 +565,179 @@ entry:
 }
 ",
         "the world of value 1 returns from @g and calls it again",
+    );
+}
+
+/// Independent replay-test family. HANDOFF's 2026-11-16 decision requires every new path here to
+/// refuse atomically: a fault, measurement, leaving the marked activation, exit, or dirty free.
+/// Four input values make the replay split twice; each forbidden value can be the retained part or
+/// a fork. The input and the keep target independently live in registers or memory bytes.
+fn generated_replay_failure(layout: u8, depth: usize, initial: u8, bad: u8, action: &str, rotation: bool) -> String {
+    let input_memory = layout & 1 != 0;
+    let output_memory = layout & 2 != 0;
+    let q = |bit| if input_memory { format!("[16:{bit}]") } else { format!("%q[{bit}]") };
+    let control = if output_memory { "[20:0]" } else { "%out[0]" };
+    let target = if output_memory { "[20]" } else { "%out" };
+    let prepare: String = (0..2).filter(|bit| initial & (1 << bit) != 0).map(|bit| format!("x {}\n", q(bit))).collect();
+    let (forward, inverse) = if rotation { ("ry(0.7)", "ry(-0.7)") } else { ("x", "x") };
+    let gates = |gate| -> String { (0..2).map(|bit| format!("{gate} {} ctrl {control}\n", q(bit))).collect() };
+    let read = if input_memory { "%byte = load i8 16\n%v = trunc i8 %byte to i2" } else { "%v = call @read(%q)" };
+    let mut callees = format!(
+        "func @read(i2 %x) -> i2 {{\nentry:\nret %x\n}}\n\
+         func @g0(q2 %q) {{\nentry:\n%inner = mark\n{read}\n\
+         %bad = icmp eq i2 %v, {bad}\nbr %bad, bad, stay\n\
+         bad:\neffect 88\n%p = alloca 8\nstore i8 73, %p\n{action}\n\
+         stay:\nrewind %inner\nret\n}}\n"
+    );
+    for d in 1..=depth {
+        callees
+            .push_str(&format!("func @g{d}(q2 %q) {{\nentry:\n%m = mark\ncall @g{}(%q)\nrewind %m\nret\n}}\n", d - 1));
+    }
+    format!(
+        "memory 512\n{callees}\nfunc @main() -> i8 {{\nentry:\n\
+         %q = qalloc 2\n%out = qalloc 2\nz [16]\nz [20]\n{prepare}\n\
+         %outer = mark\n{forward}call @g{depth}(%q)\ncall @g{depth}(%q)\n{inverse}\
+         rewind %outer keep (i2 1 -> {target}, i2 2 -> {target}, i2 2 -> {target})\nret 0\n}}\n",
+        forward = gates(forward),
+        inverse = gates(inverse)
+    )
+}
+
+#[test]
+fn generated_replay_failures_restore_every_private_machine_field() {
+    let mut count = 0;
+    for layout in 0..4 {
+        for depth in 0..3 {
+            for initial in 0..4 {
+                for bad in (0..4).filter(|&v| v != initial) {
+                    for rotation in [false, true] {
+                        // X reaches only initial^3; rotations reach every input value.
+                        if !rotation && bad != initial ^ 3 {
+                            continue;
+                        }
+                        for action in [
+                            "fault unreachable",
+                            "%m = measure %q\nret",
+                            "ret",
+                            "exit i8 7",
+                            "%t = qalloc 1\nx %t\nqfree %t\nret",
+                        ] {
+                            let context = format!(
+                                "layout {layout}, depth {depth}, initial {initial}, bad {bad}, rotation {rotation}, {action}"
+                            );
+                            refuses_unchanged(
+                                &generated_replay_failure(layout, depth, initial, bad, action, rotation),
+                                &context,
+                            );
+                            count += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    println!("{count} generated replay refusals: full private machine unchanged, then reversed");
+}
+
+#[test]
+fn generated_nonzero_net_keeps_refuse_before_mutating_any_world() {
+    let mut count = 0;
+    for targets in 0..8 {
+        for values in 0..64 {
+            let mut net = [0; 2];
+            let keep: Vec<_> = (0..3)
+                .map(|i| {
+                    let value = (values >> (2 * i)) & 3;
+                    let target = (targets >> i) & 1;
+                    net[target] ^= value;
+                    format!("i2 {value} -> {}", ["%q", "%out"][target])
+                })
+                .collect();
+            if net[0] == 0 {
+                continue;
+            }
+            let p = load(&format!(
+                "memory 128\nfunc @id(i2 %v) -> i2 {{\nentry:\nret %v\n}}\n\
+                 func @main() {{\nentry:\n%q = qalloc 2\n%out = qalloc 2\nh %q[0]\nh %q[1]\n\
+                 %mark = mark\n%v = call @id(%q)\nrewind %mark keep ({})\nret\n}}\n",
+                keep.join(", ")
+            ));
+            let mut e = start(&p, Options::default());
+            at_last_rewind(&mut e, &p);
+            let before = Machine::of(&e);
+            assert_eq!(before.worlds.len(), 4);
+            // execute rather than step: compare the instruction itself before the scheduler marks a
+            // faulted world Ended or stops the run. All other worlds must remain byte-for-byte intact.
+            assert!(matches!(e.execute(), Err(crate::executor::Halt::Fault(Fault::BadRewind))));
+            Machine::of(&e).assert_same(&before, &format!("targets {targets}, values {values}"));
+            count += 1;
+        }
+    }
+    println!("{count} nonzero-net three-keep refusals: all four worlds and executor fields unchanged");
+}
+
+#[test]
+fn generated_replay_failures_among_four_worlds_preserve_the_failed_worlds() {
+    let mut count = 0;
+    for layout in 0..4 {
+        for depth in 0..3 {
+            for action in ["fault unreachable", "%m = measure %q\nret", "ret", "exit i8 7"] {
+                let text = generated_replay_failure(layout, depth, 0, 3, action, true)
+                    .replace("%outer = mark", "%s = qalloc 2\nh %s[0]\nh %s[1]\n%k = call @read(%s)\n%outer = mark")
+                    .replace("i2 1 ->", "%k ->");
+                let p = load(&text);
+                let mut e = start(&p, Options { allow_region_faults: true, ..Options::default() });
+                at_last_rewind(&mut e, &p);
+                let before = Machine::of(&e);
+                assert_eq!(before.worlds.len(), 4);
+                assert_eq!(e.step(), None);
+                let after = Machine::of(&e);
+                assert_eq!(after.worlds.len(), 4, "{text}");
+                let mut failures = 0;
+                for failed in after.worlds.iter().filter(|w| w.outcome == Some(Outcome::Faulted(Fault::BadRewind))) {
+                    let mut restored = clone_state(failed);
+                    restored.outcome = None;
+                    restored.status = Status::Running;
+                    assert_eq!(before.worlds.iter().filter(|w| w.same(&restored)).count(), 1, "{text}");
+                    failures += 1;
+                }
+                assert_eq!(failures, 2, "{text}");
+                assert_eq!(before.rng, after.rng);
+                assert_eq!((after.observed, after.observations), (false, 0));
+                assert_eq!(
+                    (before.splits, before.merges, before.mismatches),
+                    (after.splits, after.merges, after.mismatches)
+                );
+                count += 1;
+            }
+        }
+    }
+    println!("{count} four-world programs: two replay failures restored and two successful rewinds retained");
+}
+
+#[test]
+fn a_deferred_failure_after_replaying_a_split_restores_the_whole_machine() {
+    refuses_unchanged(
+        "memory 512
+func @id(i1 %x) -> i1 {
+entry:
+    ret %x
+}
+func @main() {
+entry:
+    %q = qalloc 1
+    %out = qalloc 1
+    h %q
+    %outer = mark
+    %temporary = qalloc 1
+    x %temporary ctrl %out
+    %inner = mark
+    %v = call @id(%q)
+    rewind %inner
+    rewind %outer keep (i1 1 -> %out)
+    ret
+}
+",
+        "a replayed split precedes a failing deferred allocation check",
     );
 }
