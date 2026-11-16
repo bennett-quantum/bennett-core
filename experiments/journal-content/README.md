@@ -636,6 +636,29 @@ not monotonically increasing with repetition count: tree copied overlay is 33 by
 only current differences, while the journal retains overwritten values. The TSV gives all 36 points.
 The complete new three-test measurement passed in 269.29 s on the shared laptop.
 
+**Independent check** (`c_globals_check_independently` in `crates/exec/src/recompute_independent_tests.rs`,
+all 28 runs; it needs the image `front/test.sh --test journal_global_check -- --ignored` writes):
+
+```sh
+BENNETT_JG_BN="$PWD/target/front-tests/journal_global_base.bn" BENNETT_JG_RUNS=jg_log:8,jg_btree_insert:8 \
+CARGO_BUILD_JOBS=3 cargo test --release -p bennett-exec --lib c_globals_check_independently -- --ignored --nocapture
+```
+
+Every credited depth-one, live and tape word re-evaluates to its journal word on every branch from the
+replayed state, with no missed recovery, and the live/tape Irreducible counts equal the TSV on all 28 runs.
+Each world's actual journal from its `mark` to its `rewind` has the same records, kinds and words as the
+`apply` branch with the same input, except: stack addresses differ by one constant per word role (8 or 16
+bytes: the driver's frame), never mixed within a position, so no class changes; the root ends in `Return`
+(three words, one value on all worlds) instead of `Finish`; the call adds one register-read entry; and the
+92-byte shared prefix precedes the mark. So for these drivers the proxy is the world's call history. Peak
+overlay recomputed from the memory itself, peak journal, and rewound steps (the records after each mark,
+summed) equal `Stats` and the TSV. Of the global writes' old bytes, the log's are all Same on every branch
+(it appends at a branch-independent index over zeros: 9 Store positions at eight reps, none Irreducible);
+the hash's are 12 Irreducible of 16 in copy-only and tape alike, the tree's (A) 9 copy-only and 5 tape of 57.
+The log's zero residual is therefore a global write that destroys nothing branch-dependent; in the two
+workloads whose global writes destroy branch-dependent bytes (hash, tree) the tape residual grows, mostly
+in slots (hash: 12 of its 91 tape-Irreducible positions are stores).
+
 The existing classification implementation and [chains.tsv](chains.tsv) are unchanged. The small
 preprocessor guard allowing ordinary-only inclusion produces **byte-identical 34,382-byte device
 text** for the original lookup C under the same flags. The existing full measurement passed all four
