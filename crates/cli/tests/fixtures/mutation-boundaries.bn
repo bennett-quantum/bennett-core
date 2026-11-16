@@ -1,0 +1,39 @@
+memory 256
+
+func @main(i8 %value) -> i8 {
+entry:
+ ret %value
+}
+
+func @bit(i1 %value) -> i1 {
+entry:
+ ret %value
+}
+
+func @word(i64 %value) -> i64 {
+entry:
+ ret %value
+}
+
+func @register(q1 %value) {
+entry:
+ ret
+}
+
+func @void() {
+entry:
+ ret
+}
+
+func @wide_positive() -> i128 {
+entry:
+ ret 18446744073709551616
+}
+
+func @measure() -> i1 {
+entry:
+ %q = qalloc 1
+ h %q
+ %value = measure %q
+ ret %value
+}
