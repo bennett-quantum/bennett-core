@@ -42,7 +42,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (242 tests; ignored: 6 heavy reference or generated runs, the memory-cost report, 1 heavy recomputation check; about 8 s, no LLVM needed) and `front/test.sh` (151 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (242 tests; ignored: 6 heavy reference or generated runs, the memory-cost report, 1 heavy recomputation check; about 8 s, no LLVM needed) and `front/test.sh` (155 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check and two independent variadic checks that need `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"); needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -471,6 +471,11 @@ explicitly after the separate musl build.
 - **Return addresses** (`2bf0b69`): the outermost frame gives `0xFFFF_FFFF_0000_0000` (natively an address in the C
   library's startup) and a level beyond it 0 (natively unspecified). Keep? Levels above 0 follow the device's
   frames, which natively needs frame pointers kept and sibling calls off (plain native `-O2` crashed at level 1).
+- **Calls through another prototype** (`329ef7a`): every call through a function pointer now compares its target with
+  the address-taken functions the device would call wrongly (musl tests: 107 to 353 more steps, 0.06 % to 5 %, and
+  5 % to 16 % more device code). Cheaper: compare only for unprototyped pointer calls (about 11 steps), leaving a
+  typed pointer call to a function with other argument or result sizes a `bad_indirect` fault instead of agreeing
+  with native. Keep full coverage?
 - **`setjmp`/`longjmp`.** (1) `docs/DESIGN.md` ("Non-local jumps") lets a stale jump record succeed when a later
   call of the same function sits at the same depth and stack address (C leaves it undefined; the testing pass's
   probe returned 77). Keep that, or fault by name? (2) Since `595339c` a copied `sigjmp_buf` carries its own saved
