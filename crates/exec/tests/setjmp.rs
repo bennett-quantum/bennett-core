@@ -507,3 +507,68 @@ fn a_lowered_sigsetjmp_restores_its_targets_mask_and_rewinds_exactly() {
         }
     }
 }
+
+#[test]
+fn rewinding_a_same_frame_longjmp_does_not_count_a_return() {
+    let module = load(
+        "memory 256
+func @main() -> i32 {
+entry:
+    %m = mark
+    %value = setjmp 64
+    %first = icmp eq i32 %value, 0
+    br %first, jump, done
+jump:
+    longjmp 64, 1
+done:
+    rewind %m
+    ret 0
+}
+",
+    );
+    assert_eq!(run(&module, "main", &[], bounded()).0, Outcome::Returned(Some(0)));
+    assert_eq!(assert_reverses(&module, "main", &[], bounded()), Outcome::Returned(Some(0)));
+}
+
+#[test]
+fn journal_cost_counts_read_cells_and_zero_frame_jump_metadata() {
+    fn step_cost(executor: &mut bennett_exec::Executor<'_>) -> usize {
+        let before = executor.stats().journal_bytes.expect("reversible journal");
+        assert_eq!(executor.step(), None);
+        executor.stats().journal_bytes.expect("reversible journal").checked_sub(before).expect("history grows")
+    }
+    let module = load(
+        "memory 256
+func @main() -> i32 {
+entry:
+    z [16]
+    z [16]
+    %plain = load i8 17
+    %cell = load i8 16
+    %value = setjmp 64
+    %first = icmp eq i32 %value, 0
+    br %first, jump, done
+jump:
+    longjmp 64, 1
+done:
+    ret 0
+}
+",
+    );
+    let mut executor = executor(&module, "main", &[], Options { reversible: true, ..bounded() });
+    step_cost(&mut executor); // First gate promotes; the next one adds only a gate record.
+    let record = step_cost(&mut executor);
+    let slot = step_cost(&mut executor);
+    let cell = step_cost(&mut executor);
+    assert!(cell > slot, "a cell read keeps its byte beside the ordinary load's overwritten slot");
+    let word = slot.checked_sub(record).expect("an overwritten slot adds a word");
+    assert!(word > 0);
+    for _ in 0..3 {
+        step_cost(&mut executor); // setjmp, comparison, branch
+    }
+    let jump = step_cost(&mut executor);
+    // DESIGN's non-local-jump journal: target position, stack pointer, count, old result slot;
+    // even zero discarded frames have a count beside the marks. No struct sizes/padding are pinned.
+    assert!(jump > record + 4 * word, "the discarded-frame side entry also occupies journal space");
+    assert_eq!(executor.run(), Outcome::Returned(Some(0)));
+}

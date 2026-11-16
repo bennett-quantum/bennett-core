@@ -882,3 +882,53 @@ fn a_gate_at_the_first_byte_past_memory_faults_without_promoting_it() {
         assert_eq!(executor.stats().journal_bytes, journal);
     }
 }
+
+#[test]
+fn a_memory_keep_does_not_recheck_cell_reads_before_its_mark() {
+    let module = bennett_ir::load(
+        "memory 64
+func @main() -> i8 {
+entry:
+    z [16]
+    %old = load i8 16
+    %m = mark
+    rewind %m keep (i8 1 -> [16])
+    %result = load i8 16
+    ret %result
+}
+",
+    )
+    .expect("valid");
+    let mut executor = start(&module, "main", true);
+    let before = executor.snapshot();
+    assert_eq!(executor.run(), Outcome::Returned(Some(1)));
+    assert_eq!(executor.snapshot().quantum.amplitudes, vec![(vec![1], C::new(1.0, 0.0))]);
+    executor.reverse().expect("a read outside the rewound region is restored too");
+    assert_eq!(executor.snapshot(), before);
+}
+
+#[test]
+#[ignore = "read-target precheck rejects two XOR keeps whose net change is zero"]
+fn canceled_memory_keeps_preserve_a_read_and_its_interference() {
+    let module = bennett_ir::load(
+        "memory 64
+func @main() -> i8 {
+entry:
+    h [16]
+    %m = mark
+    %value = load i8 16
+    rewind %m keep (i8 1 -> [16], i8 1 -> [16])
+    h [16]
+    %result = load i8 16
+    ret %result
+}
+",
+    )
+    .expect("valid");
+    let mut executor = start(&module, "main", true);
+    // The two copies XOR to zero before anything is un-run: the read still holds its value.
+    assert_eq!(executor.run(), Outcome::Returned(Some(0)));
+    let quantum = executor.snapshot().quantum;
+    assert_eq!(quantum.amplitudes.len(), 1);
+    assert!((quantum.amplitude(&[0]) - C::new(1.0, 0.0)).norm() < EPS);
+}
