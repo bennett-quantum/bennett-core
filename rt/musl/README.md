@@ -173,3 +173,27 @@ line, not a megabyte of explicit zeros. Measured at `6da7ef6` with `link.py` and
 hello world is 215,785 bytes of device text, and the library example (`tests/library.c`, with
 floating-point `printf`, `strtod`, `sqrt`, `sin` and `pow`) 652,468 bytes, of which 26 `zero` items reserve
 1,054,135 zero bytes; the same example was about 4.8 MB before `zero N`.
+
+### Files/clock/entropy checks (2026-11-16)
+
+`test-devices.py`: **14 passes** (`-O0` and non-vectorized `-O2`), 96.07 s on the shared machine.
+Files and constructor-loaded byte images agree with native stdout/status. Clock arithmetic and seed
+bytes agree with a separate native C arithmetic oracle, including start `2^64-2` wrapping through zero.
+`getentropy`, random-device reads and vectored tape consumption additionally check each expected byte.
+All 14 forward runs un-run to the identical entry snapshot (including buffers, both consumption counters,
+filesystem/allocator state and the lazy image guard); amplitude error zero. Empty-image exhaustion is
+an expected named fault, and is also fully reversed. Representative `-O0` costs:
+
+| fixture | steps | journal bytes |
+|---|---:|---:|
+| files: sparse/truncate/append/shared offsets/dup/vector IO | 75,561 | 1,557,913 |
+| file errors, modes, links, umask, cwd/rename | 60,504 | 1,245,032 |
+| supplied file bytes read in constructor and main | 40,495 | 817,391 |
+| clock start 1,234,999,999,998 and 16 entropy bytes | 30,758 | 670,118 |
+| clock start `2^64-2`, wrap, same entropy bytes | 31,167 | 679,087 |
+| getentropy plus random-device/readv byte checks | 42,067 | 832,979 |
+| empty entropy image, expected fault | 2,101 | 41,781 |
+
+The integration suite remains separate from fast `cargo test` and `front/test.sh`; it requires the
+explicit musl build. Unsupported operations and finite tape exhaustion have not been counted as
+successful native random or wall-clock calls.

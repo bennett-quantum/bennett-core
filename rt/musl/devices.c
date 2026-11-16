@@ -1,5 +1,5 @@
-/* Ordinary libc device/descriptor dispatch. Only the named device operations
- * use tier-specific transports; filesystem state never reaches host Linux. */
+/* Adapted from bennett-runtimes src/musl/syscall.c; see CARRIED.md.
+ * Ordinary libc device/descriptor dispatch; no operation reaches host Linux. */
 #define _GNU_SOURCE
 #include <stdint.h>
 #include <stddef.h>
@@ -20,8 +20,7 @@ static long transfer(long fd,void *p,uint64_t n,int writing,uint64_t offset,int 
     if(n && !p) return -EFAULT;
     if(positional && (file->kind==BRT_CONSOLE || file->kind==BRT_ERROR || file->kind==BRT_INPUT)) return -ESPIPE;
     if(positional && offset>LONG_MAX) return -EINVAL;
-    if(file->kind==BRT_CONSOLE || file->kind==BRT_ERROR)
-        {
+    if(file->kind==BRT_CONSOLE || file->kind==BRT_ERROR) {
         if(file->kind==BRT_ERROR && n) __builtin_trap();
         for(uint64_t i=0;i<n;++i) __bennett_effect(((const char *)p)[i]);
         return n;

@@ -63,12 +63,17 @@ def main():
         parser.error("--file-image must be an object mapping absolute paths to hex strings")
     contents = []
     for path, data in files.items():
-        if not path.startswith("/") or "\0" in path or path.endswith("/") or any(x in ("", ".", "..") for x in path[1:].split("/")):
+        if not isinstance(path, str) or not path.startswith("/") or "\0" in path or path.endswith("/") or any(x in ("", ".", "..") for x in path[1:].split("/")):
             parser.error("file-image paths must be canonical absolute regular-file paths")
         try:
             contents.append((path, bytes.fromhex(data)))
         except (ValueError, TypeError):
             parser.error("file-image values must be hex strings")
+    file_paths = {path for path, _ in contents}
+    if file_paths & {"/dev", "/tmp", "/dev/null", "/dev/zero", "/dev/random", "/dev/urandom", "/dev/console"}:
+        parser.error("file-image paths must not replace built-in namespace entries")
+    if any(str(parent) in file_paths for path in file_paths for parent in Path(path).parents):
+        parser.error("a file-image path cannot be another file's parent directory")
     def cbytes(data):
         return '"' + ''.join(f"\\x{x:02x}" for x in data) + '"'
     inputs_c = ['#include <stdint.h>', '#include <fcntl.h>', '#include <unistd.h>', '#include <sys/stat.h>',

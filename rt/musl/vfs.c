@@ -1,5 +1,6 @@
-/* A data-image filesystem: namespace, inodes, sparse pages and descriptors
- * are ordinary program data. No host file, hidden cache or fixed file cap. */
+/* Adapted from bennett-runtimes src/musl/vfs.c; see CARRIED.md.
+ * A data-image filesystem: namespace, inodes, sparse pages and descriptors
+ * are ordinary program data. The musl arena bounds allocations; no host files. */
 #define _GNU_SOURCE
 #include "vfs.h"
 #include "devices.h"

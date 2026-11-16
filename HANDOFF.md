@@ -590,8 +590,9 @@ explicitly after the separate musl build.
 
 - **The salvage survey** (`docs/SALVAGE.md`, ordered by the next step that would
   use each piece, with what was re-run and what was only read). The one direct code carry is for step 1:
-  `bennett-runtimes`' clock and entropy models, file system and system-call dispatch (about 550 lines of ordinary
-  C) fill the traps of the musl runtime, once what time and randomness mean on the device is decided. For step 5,
+  `bennett-runtimes`' clock and entropy models, file system and system-call dispatch now run in `rt/musl`
+  (provenance: `CARRIED.md`), following the 2026-11-16 clock/tape input decision. Remaining runtime debts
+  and their routes are below. For step 5,
   `bennett-arith`'s bitcode uses integers far wider than the device's 128 bits, so only its test oracles carry;
   Bennett.jl's branch-free routines remain the cheap port. For step 6 no lifted SQLite oracle ever existed; the
   measured findings and the acceptance shape carry. Steps 2 and 3 carry designs and test shapes, not code.
@@ -897,7 +898,10 @@ The clock is unsigned nanoseconds, start plus read count modulo 2^64. Entropy is
 shared across getrandom/getentropy/random device files, with exhaustion before mutation. File image
 installation, file state and both consumption counters are ordinary memory and reverse with the run.
 `test-devices.py` compares determined native file results and an independent native clock/tape oracle,
-including wrap, and checks exact reset after full executor reversal. Existing musl integration tests pass.
+including wrap, and checks exact reset after full executor reversal: all 14 O0/O2 runs pass (96.07 s).
+Representative costs: files 75,561 steps / 1,557,913 journal bytes; constructor image 40,495 / 817,391;
+clock and tape 30,758 / 670,118; exhausted empty tape 2,101 / 41,781 (a fully reversed named fault).
+Existing musl integration tests pass.
 
 Debts, with routes (the goal is not narrowed to the present surface):
 

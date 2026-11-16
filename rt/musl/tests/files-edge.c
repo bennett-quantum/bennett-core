@@ -27,7 +27,9 @@ int main(void) {
     fd=open("/dev/zero",O_RDONLY); CHECK(fd==3);
     CHECK(pread(fd,b,8,123)==8 && !memcmp(b,"\0\0\0\0\0\0\0\0",8));
     CHECK(lseek(fd,123,SEEK_SET)==0 && close(fd)==0);
-    CHECK(mkdir("outer",0700)==0 && mkdir("outer/child",0700)==0);
+    CHECK(mkdir("outer",0777)==0);
+    CHECK(stat("outer",&st)==0 && st.st_nlink==2 && (st.st_mode&0777)==0750);
+    CHECK(mkdir("outer/child",0700)==0 && stat("outer",&st)==0 && st.st_nlink==3);
     CHECK(chdir("outer/child")==0 && rename("../../outer","../../renamed")==0);
     CHECK(chdir("../..")==0 && rmdir("renamed/child")==0 && rmdir("renamed")==0);
     return 0;
