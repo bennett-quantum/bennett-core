@@ -992,41 +992,63 @@ earlier decisions: "Decisions the maintainer took on 2026-11-16, in the afternoo
 
 
 The seam (2026-11-16, night): the executor at `a1b516e` compared with an ideal circuit model row by row, on
-amplitudes (the table and its witnesses are private to the design work, as the audition's prototypes are).
-Result: 25 behaviours realisable, 8 realisable at a stated cost, 2 diagnostic only, 6 not established, and 5 in
-the machine's meaning (strict mode off) that no device can have. Of the five, three contradict recorded decisions
-and are being fixed (`bad_longjmp` delivered as a code through the call form when a jump record held in qubits
-disagrees; the barrier after a leftover deciding an outer rewind by inspecting the state; `bad_rewind` with the
-restore when a read register changed on some configurations only); the other two are questions (V3, V4 under
-"Questions for the maintainer"). The six rows not established: a measurement by one world inside a marked region;
-console output on a branch that is later un-run; a gate at an address that depends on a qubit; the call with a
-fault value reading a qubit with other code between mark and rewind; the `Unaligned` stop; instructions the
-prototype has no rows for (`sdiv`, `srem`, `ashr`, `stacksave`/`stackrestore`, `call_indirect`, `faddr`, `retaddr`,
-recursion).
+amplitudes (the table, its witnesses and the council's reviews are private to the design work, as the audition's
+prototypes are). Result: 25 behaviours realisable, 8 realisable at a stated cost, 2 diagnostic only, 6 not
+established, and 5 in the machine's meaning (strict mode off) that no device can have.
+
+The council on the seam (three seats, one round, no disagreement on findings): no violation of quantum mechanics
+in the project's aim (ordinary code read by and un-run around qubits, with exact classical results). The executor
+at `a1b516e` is not yet a physical machine definition: each violation is a rule whose result depends on which
+configurations of a world have nonzero amplitude, on other worlds or on a run-wide counter, and for each a
+realisable per-branch rule exists. V1 (the barrier after a leftover decided by inspecting the state), V2
+(`bad_rewind` with the restore when a read changed on some configurations only, at six check sites) and V4b (a
+state-inspecting check reaching a program as the code 16 through the call form, in strict mode too) contradict
+recorded decisions and are being fixed; V3, V3', V4 and N1 are questions ("Questions for the maintainer"); V5 is a
+defect of the specification. Not established: a measurement by one world inside a marked region with a later
+interference test; console output on a branch later un-run; a gate at an address that depends on a qubit; the
+call form with caller work on both sides; the `Unaligned` stop; instructions the prototype has no rows for
+(`sdiv`, `srem`, `ashr`, `stacksave`/`stackrestore`, `call_indirect`, `faddr`, `retaddr`, recursion); that one flat
+step machine covers several rewind sites and loops at polynomial cost. The seam's own comparison was found too
+weak (it did not compare returned values or console output) and its cheaper lowering misreads memory qubits:
+defects of the prototype, not of the machine.
 ## Questions for the maintainer
 
-- **From the design seam (the machine compared with an ideal circuit model, at `a1b516e`; see "Design audition
-  of 2026-11-16").** Three behaviours of the machine's meaning (strict mode off) that no device can have and
-  that the recorded decisions do not settle. Taken meanwhile for each: unchanged.
-  (V3) The run's step budget ends the whole run with the fault `budget` while a world of weight 0.5 has already
-  returned. Possibly a limit of the simulator rather than behaviour of the machine; candidate rule: the host
-  observes which world, as at the end of a run.
-  (V4) A `longjmp` whose record is in a superposition of two valid records faults the world (recorded as a debt
-  on 2026-11-16, [M3]). Candidate rule: each branch jumps, or faults, for itself.
+- **From the design seam and its council (2026-11-16, night; see "Design audition of 2026-11-16").** Rules of
+  the machine's meaning whose result depends on other worlds or on a run-wide counter, where a device can only
+  decide per branch, and which the recorded decisions do not settle. Taken meanwhile for each: unchanged; ignored
+  witness tests ("awaits the maintainer's decision") are being added on `wip/machine-finish`.
+  (V3) The run's step budget reports `budget` for the whole run while a world of weight 0.5 has already
+  returned; and the same budget, spent by the replay charge, reaches a program as the code 1 through the call
+  form, the replay charge being one counter for all worlds. Options: (i) the run's budget is a per-branch
+  deadline: a branch still running at the allowance ends `budget` for itself, finished branches keep their
+  result, the replay charge is counted per world; (ii) the run's budget is a stop of the simulator, never a
+  fault and never a code a program sees, with "running again is charged to the run's budget" re-expressed.
+  The council prefers (i), two seats to one.
+  (V4) A `longjmp` whose record is in a superposition of two valid records faults the world (a debt since
+  [M3]). Option, all seats: each branch jumps, or faults, for itself.
   (V5) `mark budget -1` meets "a budget is required where a rewind follows a read of a qubit" and bounds
-  nothing: the executor waits for every world, however long. Since the seam, no new code, test or front output
-  uses an unbounded budget where a rewind follows a read; where a real bound is not yet known, the budget
-  source the front uses for `apply` regions is used, or a debt is recorded. The existing uses stay until this
-  is decided: the tests migrated in step e5, in `crates/exec/src/` (`atomic_rewind_tests.rs`,
-  `deferred_independent_tests.rs`, `history.rs`, `independent_history_tests.rs`, `permutation_tests.rs`),
-  `crates/exec/tests/` (`apply_independent.rs`, `history_independent.rs`, `measure_memory.rs`,
-  `memory_address_independent.rs`, `memory_independent.rs`, `memory_overlay.rs`, `memory_qubits.rs`,
-  `replay_generated.rs`, `worlds.rs`, `worlds_independent.rs`, `worlds_oracle.rs`, `worlds_reference.rs`),
-  `front/tests/tests/fallback_oracle.rs`, `front/tests/tests/journal_global.rs`, and the examples in
-  `docs/DESIGN.md` and `docs/SYNTAX.md`.
-  Seen beside these: a mark's budget outlives its frame (a mark left open in a callee faults `budget` later in
-  the caller's loop). Recommendation on all four: wait for the council's reading of the seam, which the advisor
-  brings with these questions.
+  nothing. Not a violation of quantum mechanics but a defect of the specification: the program states no
+  bound and no uniform lowering can supply one. Option, all seats: refuse it wherever a rewind follows a read,
+  as a mark without a budget is refused, and migrate the tests that use it: in `crates/exec/src/`
+  (`atomic_rewind_tests.rs`, `deferred_independent_tests.rs`, `history.rs`, `independent_history_tests.rs`,
+  `permutation_tests.rs`), `crates/exec/tests/` (`apply_independent.rs`, `history_independent.rs`,
+  `measure_memory.rs`, `memory_address_independent.rs`, `memory_independent.rs`, `memory_overlay.rs`,
+  `memory_qubits.rs`, `replay_generated.rs`, `worlds.rs`, `worlds_independent.rs`, `worlds_oracle.rs`,
+  `worlds_reference.rs`), `front/tests/tests/fallback_oracle.rs`, `front/tests/tests/journal_global.rs`, and
+  the examples in `docs/DESIGN.md` and `docs/SYNTAX.md`.
+  (N1) A second rewind of one budgeted mark: the mark's deadline is cleared at its first rewind, the second
+  pass ends with different clocks on different configurations, merging takes the largest, and a still-open
+  outer deadline then faults `budget` with certainty on some basis inputs and not on others, with finite
+  budgets and no measurement. Options: (i) every rewind of a budgeted mark is scheduled against the bound
+  (the budget re-armed at each rewind); (ii) clocks held in wires and budgets tested per configuration (no
+  interference while timing records remain); (iii) a budgeted mark may be rewound once after a read.
+  Recommendation (the advisor): (i).
+  Also open: a mark's budget outlives its frame (a mark left open in a callee faults `budget` later in the
+  caller's loop).
+  Until these are decided, no new code, test or front output uses an unbounded budget where a rewind follows a
+  read of a qubit (where no real bound is known yet, the budget source the front uses for `apply` regions, or a
+  debt with its route), rewinds one budgeted mark twice after a read, or lets a program observe a world's
+  clock, the replay charge or the rewind costs.
 
 - **A rewind naming a mark that an outer rewind un-ran** (from building [(4)]). Read literally, such a handle
   is a value defined between the outer mark and its rewind, so the validator refuses the inner rewind
