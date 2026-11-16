@@ -149,3 +149,14 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 front/test.sh
 ```
+
+
+## Validation
+
+2026-11-16, using the commands above: `cargo test` **292 passed, 19 ignored**;
+`front/test.sh` **162 passed, 21 ignored**; `cargo clippy --all-targets -- -D warnings`
+and `cargo fmt --check` pass. The standalone harness also passes Clippy with
+warnings denied and its formatting check. A final `run.sh` replay reproduces
+all nine result rows above: **328,704 matching native results, 328,704 exact
+reversals, 2,514,291 forward steps**, zero wrong results or unexpected faults,
+and the expected native debug abort sample and named front refusal.

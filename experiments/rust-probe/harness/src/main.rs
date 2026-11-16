@@ -24,8 +24,8 @@ fn main() {
         let mut journal_peak = 0;
         let mut returned = 0;
         let mut faulted = 0;
-        for (index, word) in expected.chunks_exact(2).enumerate() {
-            let want = u16::from_le_bytes([word[0], word[1]]);
+        for (index, word) in expected.as_chunks::<2>().0.iter().enumerate() {
+            let want = u16::from_le_bytes(*word);
             let (a, b) = if unary { (index as u64, 0) } else { ((index / 256) as u64, (index % 256) as u64) };
             let values = if unary { vec![a] } else { vec![a, b] };
             let mut exec = Executor::new(
