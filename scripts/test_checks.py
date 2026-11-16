@@ -43,12 +43,12 @@ class Checks(unittest.TestCase):
 
     def test_bare_times_reject_literals_and_accept_named_units(self):
         for name, bad, good in [
-            ('run.sh', 'timeout 60 ./program\nsleep 2\n', 'timeout "$RUN_SECONDS" ./program\n'),
+            ('run.sh', 'timeout 60 ./program\nsleep .5\ntimeout \\\n  2 ./program\n', 'timeout "$RUN_SECONDS" ./program\n'),
             ('run.py', 'import time\ntime.sleep(2)\nf(timeout=3 * 10)\n',
              'import time\ntime.sleep(WAIT_SECONDS)\nf(timeout=RUN_SECONDS)\n'),
         ]:
             (self.root / name).write_text(bad)
-            self.assertEqual(len(checks.bare_times(self.root, [Path(name)])), 2)
+            self.assertEqual(len(checks.bare_times(self.root, [Path(name)])), 3 if name.endswith(".sh") else 2)
             (self.root / name).write_text(good)
             self.assertEqual(checks.bare_times(self.root, [Path(name)]), [])
 
