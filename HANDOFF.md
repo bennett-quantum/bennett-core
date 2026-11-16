@@ -132,6 +132,10 @@ explicitly after the separate musl build.
   7 qubits, 4 configurations, fault zero; 36,056 region steps, 72,116 with uncomputation, largest
   per-world journal/overlay 215,617/416 bytes. C markers still refuse the memory-writing query call;
   no compiler/runtime changes. The 11,048-step region budget passes, one less faults only row 3.
+  Grover with the unchanged LIKE query passes N=4 for every singleton, two matches and none,
+  amplitude error at most 2.23e-16 (two matches stay at success 1/2, including k=1/2/3).
+  Repeated two-match calls cost 76,886 region steps and 753,471 journal bytes each, retaining
+  no journal/overlay or extra qubits; native and independent apply comparison agree.
 
 - **The musl runtime: landed** (`d8050df`..`b464c0b`; `rt/musl/README.md`). musl 1.2.5's own startup and exit run
   on the device; its system calls are answered at one boundary function by console effects, an arena and `exit`;
@@ -519,8 +523,8 @@ explicitly after the separate musl build.
    short formats is refused by name (it calls `powf` natively). `setjmp`/`longjmp` are done (`31f5138`); then the
    remaining intrinsics.
 6. **A SQL query as an oracle.** SQLite runs, reverses and acts as a checked N=4 coherent oracle
-   (experiment above). Next: grow the size/query range and run Grover; the C front's memory-writing
-   fallback remains necessary to remove the hand-written device entry.
+   (experiment above), and Grover passes N=4. Next: measure N=8 Grover and grow the query range;
+   the C front's memory-writing fallback remains necessary to remove the hand-written device entry.
 
 ## What the earlier workspace offers
 

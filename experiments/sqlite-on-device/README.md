@@ -239,6 +239,113 @@ Whole-driver minima N=4/8/16: **155,099 / 155,163 / 155,211 bytes**, all stopped
 same indirect `xParseCell` call in `btreeParseCell`. These are execution measurements, not a general
 static stack bound.
 
+## Grover
+
+Expected states, before comparing with the device: let `s` be uniform on N rows, `O` negate
+the marked rows and `D = 2|s><s| - I`. After the oracle the mean amplitude is
+`(N-2M)/(N sqrt(N))`; diffusion sends each amplitude `a` to `2 mean - a`.
+For N=4 and M=1 this gives +1 on the marked row and zero elsewhere. For M=2 the mean
+is zero, so the marked amplitudes are +1/2 and unmarked amplitudes -1/2: **all four
+probabilities remain 1/4**, not support only on the nonmatches. With M=0 the state stays `s`.
+For N=8, M=1 and `theta = asin(1/sqrt(8))`, after k iterations each marked amplitude is
+`sin((2k+1) theta)` and each unmarked amplitude is `cos((2k+1) theta)/sqrt(7)`.
+Thus k=1 gives `5/(2 sqrt(8))`, `1/(2 sqrt(8))`, success 25/32; k=2 gives
+`11/(4 sqrt(8))`, `-1/(4 sqrt(8))`, success 121/128. For M=2,N=8,k=1 the
+marked amplitudes are `1/sqrt(2)` and all others zero (success 1).
+
+### Method and N=4 results
+
+```sh
+cargo build -j 4 --offline --manifest-path experiments/sqlite-on-device/harness/Cargo.toml --target-dir target
+SQLITE_DIR=<amalgamation directory> python3 experiments/sqlite-on-device/grover.py target/sqlite-on-device/n4 --n 4
+# Independent apply implementation, same amplitude/native/memory assertions:
+SQLITE_DIR=<amalgamation directory> BENNETT_APPLY=compare python3 experiments/sqlite-on-device/grover.py target/sqlite-on-device/n4 --n 4
+```
+
+No rebuild of musl, SQLite or the lowered module is needed. `grover.py` retains every original
+function and static data segment from `program.bn`. Hand-written device text: extra SQL strings,
+an entry/setup adapter calling the original `experiment_setup`, a load of its database pointer,
+`sqlite3_exec` and `sod_check`, the row-width adapter calling unchanged `experiment_query(2,row)`,
+qubit allocation, gates, `apply`, diffusion, clean frees and measurement/return. All SQLite,
+musl, allocator, VFS and query-driver instructions are unchanged. The extra SQL constants are
+placed above the original memory extent, with a fresh 1 MiB stack above them; the original
+static image and its addresses stay intact. This reserves about 2.46 MB rather than 1.41 MB;
+it is an uncomplicated append-only harness layout, not a measured minimum.
+
+Row indices here are zero-based, SQL ids are index+1. Singleton index 3 uses the original
+database, unmodified even classically. For the other cases, before allocating qubits,
+SQL `UPDATE t SET note=replace(lower(note),'zq','xx')` removes existing matches and
+`UPDATE t SET note=note||'zq' WHERE id IN (...)` appends a marker to the selected rows.
+The generated note contents are retained except for those replacements; lengths remain the
+same except for the two appended characters. No shorter replacement notes or substitute
+predicates are used. Native SQLite 3.54.1, compiled with the original flags/driver and a
+small generated native main, executes the same SQL updates and original LIKE query to check
+every row's expected bit. The quantum oracle still executes the real bind, step, column,
+reset and API checks of the unchanged prepared `SELECT note LIKE '%zq%' FROM t WHERE id=?1`.
+Preparation/warmup, updates and the database are classical and fixed before the quantum search.
+
+The output qubit starts in `|->`. Each `apply` gives phase kickback, followed by diffusion
+on the row register. `H X controlled-Z X H` implements `-D`; an X on the unchanged `|->`
+qubit supplies the global minus sign, so the comparison checks **D**, including the phase.
+After the last iteration H then X resets the kick qubit; both it and the fault register
+are freed cleanly before the observer inspects the entire state and the program measures
+the row. Tolerance is the stage-3 observer's 1e-12. The observer asserts every byte of
+classical memory (database included), stack, live slots and tape is unchanged at every
+`apply`, and memory/stack/tape still match classical setup just before measurement.
+Only the row register remains live, so no workspace or fault entanglement is hidden.
+
+Measured 2026-11-16, normal history mode; compare mode also passes all cases. All amplitudes
+are real, with exactly zero imaginary parts. The vectors below list every row in index order;
+`u = 0.5000000000000001`, `v = 1.0000000000000002`. No wrong result, device fault or resource refusal.
+
+| N | marked indices | iterations | expected state | measured state | theoretical / measured success | largest amplitude deviation |
+|---|---|---:|---|---|---|---:|
+| 4 | 0 | 1 | (1,0,0,0) | (v,0,0,0) | 1 / 1.0000000000000004 | 2.22e-16 |
+| 4 | 1 | 1 | (0,1,0,0) | (0,v,0,0) | 1 / 1.0000000000000004 | 2.22e-16 |
+| 4 | 2 | 1 | (0,0,1,0) | (0,0,v,0) | 1 / 1.0000000000000004 | 2.22e-16 |
+| 4 | 3 (original) | 1 | (0,0,0,1) | (0,0,0,v) | 1 / 1.0000000000000004 | 2.22e-16 |
+| 4 | 0,3 | 1 | (1,-1,-1,1)/2 | (u,-u,-u,u) | 1/2 / 0.5000000000000002 | 1.11e-16 |
+| 4 | 0,3 | 2 | (-1,-1,-1,-1)/2 | (-u,-u,-u,-u) | 1/2 / 0.5000000000000002 | 1.11e-16 |
+| 4 | 0,3 | 3 | (-1,1,1,-1)/2 | (-u,u,u,-u) | 1/2 / 0.5000000000000002 | 1.11e-16 |
+| 4 | none | 1 | (1,1,1,1)/2 | (u,u,u,u) | 0 / 0 | 1.11e-16 |
+
+Probabilities slightly above one are unrenormalised floating-point sums, reported rather than
+clamped. The seeded measurement returns the marked row in every singleton case; pair/no-match
+runs sample row 2. The full amplitude comparison, not these single samples, checks the distribution.
+
+### Costs and repeated oracles
+
+`region_steps` counts forward instructions **per configuration**. The minus qubit gives 2N
+configurations, while history mode runs only N distinct row arguments; actual forward work is
+half of `region_steps`, and `region_cost.work` includes that work and uncomputation plus call
+overhead. Region journal/overlay bytes are **sums of each run's high-water values**, not peak
+simultaneous storage or retained storage. Whole-run outer steps include setup/updates, quantum
+glue and measurement, but exclude region work. Whole-run region totals are also shown.
+
+| N | marked | k | outer steps | region steps total | region work total | journal bytes total | overlay bytes total |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 4 | 0 | 1 | 988,920 | 76,676 | 76,680 | 751,350 | 1,199 |
+| 4 | 1 | 1 | 992,527 | 76,676 | 76,680 | 751,350 | 1,199 |
+| 4 | 2 | 1 | 991,616 | 76,676 | 76,680 | 751,350 | 1,199 |
+| 4 | 3 (original) | 1 | 746,147 | 72,112 | 72,116 | 707,644 | 1,115 |
+| 4 | 0,3 | 1 | 1,099,323 | 76,886 | 76,890 | 753,471 | 1,212 |
+| 4 | 0,3 | 2 | 1,099,334 | 153,772 | 153,780 | 1,506,942 | 2,424 |
+| 4 | 0,3 | 3 | 1,099,345 | 230,658 | 230,670 | 2,260,413 | 3,636 |
+| 4 | none | 1 | 898,078 | 76,466 | 76,470 | 749,229 | 1,206 |
+
+Every two-match call costs exactly 76,886 region steps, 76,890 work steps, 753,471 journal
+bytes and 1,212 overlay bytes: the cumulative counters are exactly linear in 1/2/3 calls.
+After **every** call retained outer journal is absent, overlay bytes zero, worlds one,
+memory qubit bytes zero, and live qubits seven (two row, one kick, four fault); the peak is
+also seven, with eight configurations. After clean frees only two row qubits remain.
+Nothing accumulates across iterations. Copied bytes and outer splits/merges are zero.
+
+These are tiny N numerical simulations, with branch enumeration as the independent comparison
+and history mode grouping equal row arguments. They do not establish an efficient SQL quantum
+circuit, scaling, hardware speedup or gate counts. The entry, phase and diffusion glue is
+hand-written device text; the C marker front still refuses the program at the memory-writing
+query boundary described above. No compiler, executor or runtime changes are made.
+
 ## What the numbers do not show
 
 These are numerical simulation and compilation evidence, not proofs, gate counts, hardware runtime,
