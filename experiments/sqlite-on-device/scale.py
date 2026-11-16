@@ -19,6 +19,10 @@ import time
 from grover import diffusion
 
 ROOT = Path(__file__).resolve().parents[2]
+# Per-child bounds are experiment limits on a shared host, not performance gates.
+DEFAULT_RUN_SECONDS = 300
+TERMINATION_GRACE_SECONDS = 5
+PARENT_TIMEOUT_GRACE_SECONDS = 15
 SHAPES = {'like_note': 2, 'int_eq': 4, 'text_order': 5, 'two_where': 6, 'range_agg': 7}
 
 
@@ -81,12 +85,12 @@ def measured(cmd, stem, seconds, memory_mib):
         resource.setrlimit(resource.RLIMIT_AS, (memory_mib << 20, memory_mib << 20))
     with stem.with_suffix('.stdout').open('w') as out, stem.with_suffix('.stderr').open('w') as err:
         child = subprocess.Popen(['/usr/bin/time', '-f', '%e %M', '-o', str(stem.with_suffix('.time')),
-                                  'timeout', '--signal=TERM', '--kill-after=5', str(seconds),
+                                  'timeout', '--signal=TERM', f'--kill-after={TERMINATION_GRACE_SECONDS}', str(seconds),
                                   *map(str, cmd)], stdout=out, stderr=err,
                                  start_new_session=True, preexec_fn=limits)
         timed_out = False
         try:
-            code = child.wait(timeout=seconds + 15)
+            code = child.wait(timeout=seconds + PARENT_TIMEOUT_GRACE_SECONDS)
             timed_out = code == 124
         except subprocess.TimeoutExpired:
             timed_out = True
@@ -116,7 +120,7 @@ def main():
     ap.add_argument('--shapes', nargs='+', choices=list(SHAPES), default=list(SHAPES))
     ap.add_argument('--modes', nargs='+', choices=['forward', 'reverse', 'coherent', 'grover'],
                     default=['forward', 'reverse', 'coherent', 'grover'])
-    ap.add_argument('--seconds', type=int, default=300)
+    ap.add_argument('--seconds', type=int, default=DEFAULT_RUN_SECONDS)
     ap.add_argument('--memory-mib', type=int, default=4096)
     ap.add_argument('--harness', type=Path, default=ROOT/'target/release/sqlite-on-device-harness')
     ap.add_argument('--apply', choices=['history', 'compare', 'branches'], default='history')

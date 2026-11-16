@@ -46,7 +46,7 @@ def main():
                        peak_configurations=match(r'peak_configurations: (\d+)', stdout),
                        dense_error=match(r'dense_deviation (\S+)', stdout),
                        success=match(r'success (\S+)', stdout), theory=match(r'theory (\S+)', stdout))
-            writer.writerow(row)
+            writer.writerow({k: "NA" if v is None or v == "" else v for k, v in row.items()})
 
 
 if __name__ == '__main__':

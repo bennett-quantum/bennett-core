@@ -399,7 +399,7 @@ query boundary described above. No compiler, executor or runtime changes are mad
 ## What the numbers do not show
 
 These are numerical simulation and compilation evidence, not proofs, gate counts, hardware runtime,
-or evidence of scaling to large databases. These first 16 rows have no long-note overflow case (notes are 49–366 bytes); they do not expose
+or evidence of scaling to large databases. The original N=4/8/16 runs have no long-note overflow case (notes are 49–366 bytes); they do not expose
 the overflow tail seen at N=256/1024 in `sqlite-footprint`. The complete SQL engine is present, but this workload does
 not exercise most of its features. The flags and VFS intentionally remove OS services rather than
 implementing a host filesystem. Build and execution wall times are observations on a shared laptop,
@@ -426,6 +426,7 @@ The aggregate searches candidate values of `a`, rather than looking up the candi
 The constants 3, 8, 500 and `'m'` stay fixed at every size. Prepared statements are warmed at setup;
 SQLite performs the actual query at every oracle call.
 
+The larger harness also needs Linux, GNU `time` at `/usr/bin/time`, and GNU `timeout`.
 Build the ordinary prerequisites above, then the optimized standalone observer and each size:
 
 ```sh
@@ -433,6 +434,9 @@ CARGO_BUILD_JOBS=2 cargo build --release --manifest-path experiments/sqlite-on-d
 SQLITE_DIR=<amalgamation directory> SQL_ORACLE=1 NROWS=16 OUT=target/sqlite-on-device/oracle16 experiments/sqlite-on-device/build.sh
 python3 experiments/sqlite-on-device/scale.py target/sqlite-on-device/oracle16 --n 16
 # Repeat with NROWS=32, etc. Run heavy commands sequentially on shared machines.
+# Larger heap after retaining the N=128 original-heap refusal:
+SQLITE_DIR=<amalgamation directory> SQL_ORACLE=1 NROWS=128 HEAP_BYTES=1048576 OUT=target/sqlite-on-device/oracle128-h1m experiments/sqlite-on-device/build.sh
+python3 experiments/sqlite-on-device/scale.py target/sqlite-on-device/oracle128-h1m --n 128
 # Independent history-versus-branches comparison, with the same strict checks:
 python3 experiments/sqlite-on-device/scale.py target/sqlite-on-device/oracle16 --n 16 --modes coherent grover --apply compare
 # Portable tabular report from the raw, ignored JSON:
@@ -442,8 +446,9 @@ python3 experiments/sqlite-on-device/summarize.py target/sqlite-on-device/oracle
 Each child has an explicit default 300-second timeout and 4,096 MiB virtual-address-space limit
 (`--seconds`, `--memory-mib`); reports retain process status, timeout state, stderr, stdout, wall time
 and `/usr/bin/time` peak RSS. A stopped child fails the run, and its limits remain in the report.
-These are shared-host experiment limits, not claimed physical limits. Executor forward/reverse
-seconds exclude module parsing; wall time includes parsing, snapshot checks and dense comparisons.
+These are shared-host experiment limits, not claimed physical limits. Forward/reverse phase
+seconds exclude module parsing and include the observer work in that phase (setup estimation,
+snapshot checks and dense comparisons). Wall time also includes module loading and process startup.
 
 For each size/shape the complete native/device driver output and status are checked, then a separate
 entry checks every row against the native truth table. The same entry in reversible mode restores the
@@ -472,7 +477,9 @@ N=256. Real SQLite execution remains an explicit experiment and does not slow `c
 
 ### Size and shape measurements
 
-Measured 2026-11-16 with the optimized observer. All checks pass for every row below. The table
+Measured 2026-11-16 with the optimized observer. All checks pass for every row below. N=16/32/64
+use the original 256 KiB SQLite heap; N=128 uses 1 MiB. History-versus-branches compare mode also
+passes every coherent/Grover entry at N=16/32/64 (its timings are separate rows in the TSV). The table
 uses one classical entry per shape, executing setup followed by all N queries. Classical journal
 is the full retained history before reversal. Grover region steps count configurations; region
 journal is the **sum of per-run high-water bytes**, not simultaneous storage. These differ from
@@ -496,16 +503,23 @@ seconds, wall time, peak RSS, qubits, configurations and amplitude errors: [meas
 | 64 | text_order | 26 | 3,274,129 | 63,933,489 | 1 | 744,222 | 7,481,167 | 0.768066406 |
 | 64 | two_where | 2 | 3,265,129 | 63,820,105 | 4 | 2,904,888 | 29,471,132 | 0.999182316 |
 | 64 | range_agg | 51 | 7,814,231 | 148,894,839 | 1 | 9,824,426 | 92,442,517 | 0.0280151367 |
+| 128 | like_note | 29 | 7,220,882 | 139,907,746 | 1 | 3,665,436 | 35,597,486 | 0.993202209 |
+| 128 | int_eq | 0 | 6,061,397 | 117,902,165 | 1 | 1,345,786 | 13,586,125 | -0 |
+| 128 | text_order | 52 | 6,136,969 | 119,369,625 | 1 | 1,496,930 | 15,053,585 | 0.768066406 |
+| 128 | two_where | 4 | 6,119,063 | 119,144,151 | 4 | 5,844,472 | 59,312,444 | 0.999182316 |
+| 128 | range_agg | 104 | 24,307,405 | 459,283,133 | 1 | 37,837,802 | 354,967,093 | 0.05078125 |
 
 Wall times below include parsing and checks; each range spans all shapes (and both initial outputs
 for coherent mode). RSS is the maximum among all four modes. Every individual measurement is in
-the TSV, including executor-only forward and reverse times. These are observations on a shared host.
+the TSV, including forward and reverse phase times. Stats are sampled before full reversal;
+reverse phase time includes replay of the coherent calls. These are observations on a shared host.
 
 | N | forward wall s | reverse wall s | coherent wall s | Grover wall s | max RSS KiB |
 |---:|---:|---:|---:|---:|---:|
 | 16 | 0.827–1.083 | 0.880–1.225 | 1.548–2.868 | 0.621–1.945 | 178,636 |
 | 32 | 0.675–2.854 | 0.881–2.439 | 2.642–7.057 | 0.836–2.007 | 197,588 |
 | 64 | 0.576–1.645 | 0.924–2.634 | 4.827–10.002 | 1.334–2.720 | 252,548 |
+| 128 | 1.376–2.279 | 1.583–7.319 | 17.103–90.278 | 2.424–5.242 | 558,348 |
 
 
 ### Measured limits and remaining work
@@ -515,7 +529,9 @@ executes `like_note` at row index 24. Native exits 2 and the device returns 2 af
 steps, with exactly identical output through the refusal. Its last printed SQLite allocation
 counts are 232,704 live / 242,432 high-water bytes. Native wall/RSS: 0.011509 s / 3,024 KiB;
 device wall/RSS: 7.568937 s / 180,268 KiB. It is an allocation refusal in the configured SQLite
-heap, not a host-memory, dense-vector or qubit limit. The 1 MiB heap retry is measured separately.
+heap, not a host-memory, dense-vector or qubit limit. The 1 MiB heap retry passes all five shapes and all checks at N=128. Its largest dense amplitude
+deviation is 3.14e-16. N=128 has 13 live qubits at each oracle boundary; the dense vector is only
+8,192 complex doubles, about 128 KiB. The larger sweep continues with the same checks and limits.
 
 The fast fixture also exposed an executor defect independent of SQL: when the entry's slot frame
 does not fit, `Executor::new` records `stack_overflow`, but `run` panics in `next_is_rewind` before

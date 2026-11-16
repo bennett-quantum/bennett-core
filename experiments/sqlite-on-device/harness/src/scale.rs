@@ -93,6 +93,7 @@ pub fn run(module: &ValidModule, args: &[String]) {
     .expect("start");
     let before = exec.snapshot();
     let start = Instant::now();
+    println!("phase forward mode {mode}");
     if mode == "forward" || mode == "reverse" {
         assert_eq!(exec.run(), Outcome::Returned(Some(0)));
         assert_eq!(exec.tape(), args[2].as_bytes(), "native truth table");
@@ -103,6 +104,7 @@ pub fn run(module: &ValidModule, args: &[String]) {
         for _ in 0..estimate.stats().steps + 1 {
             assert!(exec.step().is_none(), "setup stopped");
         }
+        println!("phase quantum setup_steps {}", estimate.stats().steps);
         let fixed = exec.snapshot();
         let prep = &args[3];
         let mut expected = initial(bits.len(), prep);
@@ -116,6 +118,7 @@ pub fn run(module: &ValidModule, args: &[String]) {
             match block.insts.get(frame.inst) {
                 Some(Inst::Apply { .. }) => {
                     let stats = exec.stats();
+                    println!("phase apply {} outer_steps {}", calls + 1, stats.steps);
                     assert!(exec.step().is_none(), "SQL apply stopped");
                     let new = exec.snapshot();
                     assert_eq!(new.classical.memory, old.classical.memory);
@@ -194,6 +197,7 @@ pub fn run(module: &ValidModule, args: &[String]) {
     println!("forward_seconds {:.6}", start.elapsed().as_secs_f64());
     println!("stats {:?}", exec.stats());
     if reversible {
+        println!("phase reverse");
         let start = Instant::now();
         exec.reverse().expect("reverse");
         let restored = exec.snapshot();
