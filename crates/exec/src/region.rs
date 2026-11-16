@@ -198,7 +198,7 @@ impl Executor<'_> {
                     self.enter_region(callee, &inputs, split).expect("the frame fits");
                     self.run_region_world(budget, Pending::current(), &mut queue, bases)
                 }
-                Err(code) => Ran { outcome: Outcome::Faulted(code), steps: 0, rewound: 0, rerun: 0 },
+                Err(code) => Ran { outcome: Outcome::Faulted(code), inspected: false, steps: 0, rewound: 0, rerun: 0 },
             };
             self.close_region_world(&run, (out, fault), position, &start, &mut done);
             // Worlds split off inside the region (a load of qubits in memory), each in turn.
@@ -213,6 +213,16 @@ impl Executor<'_> {
         }
         drop(start);
 
+        // A fault found by inspecting the state is no fault code: the `apply` itself faults, changing nothing.
+        if let Some(code) = done.inspected {
+            self.quantum.replace_amplitudes(original);
+            self.memory.fold();
+            self.region_cost.copied_bytes += slot_bytes * (self.splits - outer.counters.splits - (done.parts - 1));
+            self.rewound_steps = outer.counters.rewound_steps + done.rewound;
+            self.rerun_steps = outer.counters.rerun_steps + done.rerun;
+            self.end_history_region(outer);
+            return Err(Halt::Inspected(code));
+        }
         // Faults are counted in configuration order, as the branches were enumerated.
         done.faulting.sort_by(|a, b| a.0.cmp(&b.0));
         let faulting: Vec<(&Config, f64, Fault)> = done.faulting.iter().map(|(c, w, f)| (c, *w, *f)).collect();
@@ -253,6 +263,9 @@ impl Executor<'_> {
     ) {
         let weight = self.quantum.amplitudes().len() as u64;
         self.region_steps += run.steps * weight;
+        if let (true, Outcome::Faulted(code)) = (run.inspected, run.outcome) {
+            done.inspected.get_or_insert(code);
+        }
         let (column, value) = match run.outcome {
             // The validator made the result as wide as the register, at most 64 bits.
             Outcome::Returned(result) => (out, result.expect("a region callee returns an integer") as u64),
@@ -323,6 +336,7 @@ impl Executor<'_> {
         self.run_overlay_peak = self.memory.overlay_len();
         let (rewound, rerun) = (self.rewound_steps, self.rerun_steps);
         let steps = self.steps;
+        self.inspected = false;
         let outcome = loop {
             if let Some(outcome) = self.step_world() {
                 break outcome;
@@ -342,7 +356,14 @@ impl Executor<'_> {
         self.region_cost.work += self.steps - steps + own_rewound + own_rerun;
         self.region_cost.journal_bytes += self.run_journal_peak.saturating_sub(journal_base) as u64;
         self.region_cost.overlay_bytes += self.run_overlay_peak.saturating_sub(overlay_base) as u64;
-        Ran { outcome, steps: self.steps, rewound: pending.rewound + own_rewound, rerun: pending.rerun + own_rerun }
+        let inspected = std::mem::take(&mut self.inspected);
+        Ran {
+            outcome,
+            inspected,
+            steps: self.steps,
+            rewound: pending.rewound + own_rewound,
+            rerun: pending.rerun + own_rerun,
+        }
     }
 
     /// A `rewind` inside a region that un-ran past a read where its world split defers its checks to the
@@ -874,6 +895,8 @@ impl Pending {
 /// How a world of a region ended.
 struct Ran {
     outcome: Outcome,
+    /// Whether the outcome is a fault found by inspecting the state (`Halt::Inspected`).
+    inspected: bool,
     /// Its steps, those it shares with the world it split from included: what one branch of the
     /// enumeration on each of its configurations takes.
     steps: u64,
@@ -887,6 +910,9 @@ struct Ran {
 #[derive(Default)]
 struct Done {
     parts: u64,
+    /// A fault some world ended with that the simulator found by inspecting the state (`Halt::Inspected`):
+    /// never the region's fault code.
+    inspected: Option<Fault>,
     amplitudes: Vec<(Config, num_complex::Complex64)>,
     faulting: Vec<(Config, f64, Fault)>,
     rewound: u64,

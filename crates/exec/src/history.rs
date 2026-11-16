@@ -155,7 +155,9 @@ impl<'m> Executor<'m> {
             // Running again stopped because the budget was spent, not because the history did not describe
             // the path: the rewind faults `budget`, having changed nothing.
             let spent = step && std::mem::take(&mut self.budget_spent);
-            return Err(if spent { Fault::Budget } else { Fault::BadRewind }.into());
+            // Otherwise the un-run met a state its history does not describe, found by looking at every
+            // configuration: never a call's fault code (`Halt::Inspected`).
+            return Err(if spent { Halt::Fault(Fault::Budget) } else { Halt::Inspected(Fault::BadRewind) });
         }
         self.partial = outer_partial;
         self.for_forks(from, &|executor| executor.partial = outer_partial);

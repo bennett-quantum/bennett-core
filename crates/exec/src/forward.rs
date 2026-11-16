@@ -47,7 +47,8 @@ impl<'m> Executor<'m> {
                 self.count_guards(before, 1, true);
                 match halt {
                     Halt::Fault(fault) => self.fault_or_catch(fault),
-                    Halt::Stop(_) | Halt::Discard => Err(halt),
+                    // A fault the simulator found by inspecting the state is never a call's fault code.
+                    Halt::Stop(_) | Halt::Discard | Halt::Inspected(_) => Err(halt),
                 }
             }
         }
@@ -306,7 +307,13 @@ impl<'m> Executor<'m> {
                 // Like an outer return, finishing changes only the outcome. Keep all frames for reversal.
                 self.record(Undo::Finish);
             }
-            Terminator::Longjmp { buffer, value } => self.longjmp(self.read_word(buffer), self.read(value))?,
+            Terminator::Longjmp { buffer, value } => {
+                let buffer = self.read_word(buffer);
+                if self.jump_record_disagrees(buffer) {
+                    return Err(Halt::Inspected(Fault::BadLongjmp));
+                }
+                self.longjmp(buffer, self.read(value))?;
+            }
             Terminator::Fault(fault) => return Err((*fault).into()),
         }
         Ok(())
@@ -361,17 +368,26 @@ impl<'m> Executor<'m> {
     /// result: discards the frames above it and sets the stack pointer back to where the `setjmp` left it.
     /// Every field is checked against the live frames, so a record that names no live frame of this run
     /// (a frame that returned, or one outside a coherent region) faults instead of jumping.
+    /// Whether the jump record at `buffer` is held in bytes holding qubits whose configurations disagree. A
+    /// record in such bytes is read without splitting: worlds that disagreed on it would jump to different
+    /// targets, and some could fault while others go on (a debt, `docs/DESIGN.md`, "Qubits in memory").
+    /// Where the configurations disagree it names no single target, and the `longjmp` faults
+    /// `bad_longjmp`: a fault found by looking at every configuration at once ([`Halt::Inspected`]).
+    fn jump_record_disagrees(&self, buffer: u64) -> bool {
+        let Ok(range) = self.jump_record_range(buffer) else { return false };
+        !self.materialised
+            && self
+                .quantum
+                .cells_in(range.start as u64..range.end as u64)
+                .iter()
+                .any(|&(_, column)| self.quantum.partition(&[column]).len() > 1)
+    }
+
     fn longjmp(&mut self, buffer: u64, value: u128) -> Result<(), Fault> {
         let range = self.jump_record_range(buffer)?;
         let mut record = [0u8; JUMP_RECORD_BYTES as usize];
-        // A record in bytes that hold qubits is read without splitting: worlds that disagreed on it would
-        // jump to different targets, and some could fault while others go on (a debt, `docs/DESIGN.md`,
-        // "Qubits in memory"). Where the configurations disagree it names no single target.
         let cells =
             if self.materialised { Vec::new() } else { self.quantum.cells_in(range.start as u64..range.end as u64) };
-        if cells.iter().any(|&(_, column)| self.quantum.partition(&[column]).len() > 1) {
-            return Err(Fault::BadLongjmp);
-        }
         self.read_view(range.clone(), &cells, &mut record);
         let mut words = [0u64; 4];
         for (word, chunk) in words.iter_mut().zip(record.as_chunks::<8>().0) {

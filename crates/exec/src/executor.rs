@@ -107,6 +107,12 @@ pub enum RunError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Halt {
     Fault(Fault),
+    /// A fault the simulator found by looking at every configuration of the state at once (a `longjmp` whose
+    /// record is held in qubits that disagree). No device can make such a check, so it is never delivered to a
+    /// program as a fault code: no call with a budget catches it and no `apply` XORs it into its fault
+    /// register. It ends the world with the fault (the debt of `docs/DESIGN.md`, "Qubits in memory", "Not
+    /// yet"); in strict mode, with other worlds going on, it stops the run as any world's fault does.
+    Inspected(Fault),
     Stop(RunError),
     /// The world was observed not to be there and is dropped (a measurement in another world).
     Discard,
@@ -339,6 +345,9 @@ pub struct Executor<'m> {
     pub(crate) strict: bool,
     /// Whether the rewind un-running now ran regardless over a state its history does not describe.
     pub(crate) left_behind: bool,
+    /// Whether the current world's last step ended it with a fault found by inspecting the state
+    /// ([`Halt::Inspected`]): read by a region, which must not make it a fault code.
+    pub(crate) inspected: bool,
     pub(crate) region_faults: u64,
     pub(crate) region_fault_weight: f64,
     pub(crate) region_fault_max_weight: f64,
@@ -442,6 +451,7 @@ impl<'m> Executor<'m> {
             allow_region_faults: options.allow_region_faults || options.machine_meaning,
             strict: !options.machine_meaning,
             left_behind: false,
+            inspected: false,
             region_faults: 0,
             region_fault_weight: 0.0,
             region_fault_max_weight: 0.0,
@@ -523,6 +533,10 @@ impl<'m> Executor<'m> {
                 }
             }
             Err(Halt::Fault(fault)) => self.outcome = Some(Outcome::Faulted(fault)),
+            Err(Halt::Inspected(fault)) => {
+                self.inspected = true;
+                self.outcome = Some(Outcome::Faulted(fault));
+            }
             Err(Halt::Stop(error)) => self.outcome = Some(Outcome::Stopped(error)),
             Err(Halt::Discard) => unreachable!("a single world is never observed away"),
         }

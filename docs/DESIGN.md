@@ -279,7 +279,17 @@ arguments and reads of registers included, with the region's rules attached to i
   `apply` in all three ways of computing it). The innermost call
   with a budget takes the fault. The simulator's checks never become a code: strict mode's stop when a world
   faults while others go on applies to these faults too, and the run's limits stop the run as before. On the
-  machine (`Options::machine_meaning`) each world gets its own code.
+  machine (`Options::machine_meaning`) each world gets its own code. A fault the simulator finds by looking
+  at every configuration of one world at once is not caught either, however many worlds there are: a
+  `longjmp` whose record is held in qubits that disagree (`bad_longjmp`), and a rewind whose un-run meets a
+  state its history does not describe (`bad_rewind` for its state-dependent causes). Each ends the world, as
+  outside a call; nor does an `apply` computed as worlds XOR one into its fault register (the `apply`
+  itself faults, changing nothing). Until 2026-11-16 the catch withheld such a fault only where another world
+  went on, so one world holding both records of a jump got `%c` = 16 with certainty, though each record alone
+  jumps (`crates/exec/tests/inspected_faults.rs`, the design seam's V4b). The other simulator checks cannot
+  arise in a call's callee: a `qfree`, a rewind that keeps, and an `apply` are quantum instructions there
+  (`quantum_in_region`), and nothing else in it changes what its history read. The run's own budget spent by
+  running again (`budget`) is still a code: a question for the maintainer (the seam's V3').
 - **`apply` as this form.** `apply @f(%q) -> %out, %fault budget B` gives the same state as
   `%h = mark budget B + 3`, `%y, %c = call @f(%q) budget B`, `rewind %h keep (%y -> %out, %c -> %fault)` (the
   mark's budget counts the call, `B` steps, a catch and the rewind): `crates/exec/tests/call_budget.rs`, a
@@ -832,7 +842,10 @@ qubits among others; with one world and no qubit in memory the machine is exactl
   (`atomic_rewind_tests.rs`).
 - **Not yet, each a debt with its route.** A `longjmp` whose record is held in cells that disagree is
   `bad_longjmp` (kept a fault by the maintainer on 2026-11-16), where it would split worlds that may then
-  fault separately (route: let the worlds of a split fault on their own, as other worlds do). A cell is a whole byte, so a qubit in memory holds 8 qubits in
+  fault separately (route: let the worlds of a split fault on their own, as other worlds do). The fault is
+  never a program's fault code ("The call with a fault value"); under `apply` computed as worlds the `apply`
+  faults, where branch enumeration jumps on each branch's record (the two ways differ there until the route
+  is built). A cell is a whole byte, so a qubit in memory holds 8 qubits in
   the simulator (route: cells of single bits, if the count matters).
 - **Channels** stay open as before: a cell is a register column of a world, so a mixture of worlds holds
   qubits in memory as it holds registers.

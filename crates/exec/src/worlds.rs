@@ -393,7 +393,7 @@ impl<'m> Executor<'m> {
                     let status = self.status;
                     self.adopt_forks(status);
                 }
-                Err(Halt::Fault(fault)) => {
+                Err(Halt::Fault(fault) | Halt::Inspected(fault)) => {
                     if !self.allow_region_faults && self.others_go_on() {
                         let worlds = self.worlds.len();
                         self.run_outcome = Some(Outcome::Stopped(RunError::WorldFault { fault, worlds }));
