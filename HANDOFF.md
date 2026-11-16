@@ -1,17 +1,15 @@
 # HANDOFF
 
-State on 2026-11-16, 03:20 UTC, end of the night session (nothing is running). Landed overnight: **the journalled
-machine in the executor, all five steps of its order** (`mark`/`rewind keep`, worlds, memory as an overlay, gates
-that take addresses, `apply` computed as mark, call, rewind-keep), each with its experiments and an independent
-testing pass by another model family, and every wrong result those passes found fixed as a regression test (next
-step 3); two independent oracles for it (a dense matrix calculation and a whole-world reference model); the
-recompute witness and recovery chains for journal content, a completeness gap in them found by an independent
-check and fixed, and journal content with global-memory writes (next step 2); `setjmp`/`longjmp`, return
-addresses, over-aligned variadic arguments and calls through another prototype in the front, each with its testing
-pass, and a silent wrong result already on `main` found on the way (by-value arguments and clang's `tail` mark).
-The last corpus run (`64571ac`, musl linked, 2026-11-16) has GCC 1,569 agree, c-testsuite 218, `ieee/` 64, none
-wrong or crashing. New questions for the maintainer are in "Questions for the maintainer" (worlds W1-W5, qubits in
-memory M1-M3, `apply` A1-A3, non-local jumps, return addresses, pointer-call cost); the earlier ones are still open.
+State on 2026-11-16, 10:16 UTC, morning session (jobs running; this paragraph is kept current as work lands).
+Landed this morning: an independent oracle for the front's fallback, written before the fallback (`27265ba`); a
+failed rewind made atomic, the two replay panics and the canceled-keeps refusal fixed (`145a72c`); the six complex
+helpers from libgcc 13.3, unmodified, replacing compiler-rt (`e89c98f`..`df429d7`). In flight: the decided changes
+to the device program, files and clocks, the automatic checks, the SQL oracle's growth, the North Star rungs as
+worded, mutation testing of the IR and CLI, a Rust probe. New questions are in "Questions for the maintainer".
+Earlier: the night session (the journalled machine in the executor, all five steps of its order, with two
+independent oracles; journal content; `setjmp`/`longjmp`, return addresses and calls through another prototype in
+the front). The last corpus run (`64571ac`, musl linked) has GCC 1,569 agree, c-testsuite 218, `ieee/` 64, none
+wrong or crashing.
 Earlier: the evening session of 2026-11-15 (the musl runtime, `zero N`, the floating-point leftovers, the complex
 helpers, constructor startup, the first journal-content and control-schedule measurements, the salvage survey).
 
@@ -49,7 +47,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (306 tests; ignored: heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks, the scratch mutation matrix, about 9 s, no LLVM needed) and `front/test.sh` (158 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
+Check it: `cargo test` (306 tests; ignored: heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks, the scratch mutation matrix, about 9 s, no LLVM needed) and `front/test.sh` (162 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
 musl-linked ABI check and two independent variadic checks that need `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"); needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -743,6 +741,20 @@ How work is done:
   module, not separately linked objects (C leaves it unspecified). Record as a debt, with the route of lowering
   startup per unit before linking?
 
+## Questions for the maintainer
+
+- **NaN payloads of the complex helpers.** Over 2,532,864 inputs the device's libgcc helpers differ from the native
+  archive in 50,952 results, all in which input NaN's payload the result carries; nothing else differs, and both
+  x87 helpers match completely. Measured cause: native code generation commutes `fadd`/`fmul` operands, and SSE
+  propagates its destination operand's NaN; run natively in LLVM's operand order, every bit matches the device
+  (`rt/libgcc/README.md`). C does not promise which input NaN's payload a result carries. Accept payload
+  differences of this kind as agreement? Recommendation: yes, compared by a rule that allows exactly this. Taken
+  meanwhile (easiest to reverse): the bit-for-bit requirement stays, recorded as a debt with its route (preserve
+  the archive's per-operation operand order through helper compilation and SoftFloat lowering).
+- **A budget for running again.** A replay that newly reaches an endless loop hangs ("Known weak spots"). Charge
+  replay work to the run's budget and fault atomically when it is spent? Recommendation: yes. Taken meanwhile:
+  the hang stays a recorded weak spot.
+
 ## What is still refused, and what removes it
 
 | Refused today | What removes it |
@@ -756,6 +768,23 @@ How work is done:
 | Non-empty inline assembly; code without source | An emulator of the real machine, compiled as an ordinary program |
 
 ## Known weak spots
+
+- A stale `setjmp` record (its frame returned) can match another activation of the same function at the same
+  depth and stack address and jump into it (C leaves this undefined; decided 2026-11-16: today's behaviour kept).
+  Route if it is ever to fault: an activation counter in the jump record.
+
+- A copied `sigjmp_buf` is to follow glibc (decided 2026-11-16); whether the device's behaviour matches glibc's
+  on every way to copy and jump is not yet compared. Route: the native comparison of the `sigsetjmp` testing pass,
+  run against glibc as well as musl.
+
+- Return-address values at and beyond the outermost frame (`0xFFFF_FFFF_0000_0000`, then 0) are kept as they are
+  (decided 2026-11-16); native gives other values there, so a program printing them differs from native.
+
+- The exit status is not masked on the device (decided 2026-11-16); native masks it to 8 bits, so corpus
+  comparisons compare the masked value.
+
+- Debt: equal-priority constructor order across separately compiled objects follows a native build of the linked
+  module, not separately linked objects (C leaves it unspecified). Route: lower startup per unit before linking.
 
 - A rewind whose un-run runs an inner rewind's region again, on a path the original run never took
   under the outer keeps, can loop for ever: running again stops only at the inner rewind, and budget and
