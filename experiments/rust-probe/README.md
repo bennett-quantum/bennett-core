@@ -31,4 +31,24 @@ configurations: Rust `-C opt-level=0/2` × `-C overflow-checks=off/on`, all with
 `-C panic=abort`, `no_std`, one codegen unit and vectorisation disabled. Front
 optimisation remains its normal O2 pipeline. No device or compiler changes.
 
-Measurements and remaining blockers will be recorded here after execution.
+## Measured compatibility stops
+
+The initial host compiler reports `rustc 1.99.1` / `LLVM 23.1.1`. On the
+wrapping (`opt-level=2`, overflow checks off) fixture, both routes fail:
+
+```sh
+rustc --edition 2021 --crate-type lib -C panic=abort -C opt-level=2 \
+  --emit=llvm-bc,llvm-ir experiments/rust-probe/scalars.rs --out-dir .tmp/rust-probe/current
+llvm-dis-18 .tmp/rust-probe/current/scalars.bc -o /dev/null
+llvm-as-18 .tmp/rust-probe/current/scalars.ll -o /dev/null
+```
+
+The bitcode reader exits 1 with `Unknown attribute kind (105)` (producer
+LLVM23.1.1, reader LLVM18.1.3). LLVM's [bitcode attribute enum](https://llvm.org/doxygen/LLVMBitCodes_8h_source.html)
+names 105 `NO_CREATE_UNDEF_OR_POISON`; the textual IR has `nocreateundeforpoison`
+on `llvm.fshl.i8`. The text assembler exits 1 with `expected value token` at
+`i8 range(i8 37, 0) %a`, a call argument in `branchy`. Emitting text alone
+does not bridge this version gap. A newer reader or a validated IR downgrade
+would be needed; the experiment uses a matching compiler instead.
+
+Device measurements and remaining blockers will be recorded after execution.

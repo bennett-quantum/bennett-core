@@ -28,11 +28,13 @@ fn main() {
             let want = u16::from_le_bytes([word[0], word[1]]);
             let (a, b) = if unary { (index as u64, 0) } else { ((index / 256) as u64, (index % 256) as u64) };
             let values = if unary { vec![a] } else { vec![a, b] };
-            let mut exec = Executor::new(&module, entry, &values, Options {
-                reversible: true,
-                budget: Some(100_000),
-                ..Options::default()
-            }).expect("start");
+            let mut exec = Executor::new(
+                &module,
+                entry,
+                &values,
+                Options { reversible: true, budget: Some(100_000), ..Options::default() },
+            )
+            .expect("start");
             let before = exec.snapshot();
             let got = exec.run();
             if want == 256 {

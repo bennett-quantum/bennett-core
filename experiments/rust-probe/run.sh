@@ -30,6 +30,9 @@ for opt in 0 2; do
         llvm-as-18 "$out/$tag/scalars.ll" -o "$out/$tag/text-roundtrip.bc"
         rustc +"$toolchain" "${flags[@]}" "${cfg[@]}" "$probe/native.rs" -o "$out/$tag/native"
         "$out/$tag/native" > "$out/$tag/native.bin"
+        if [[ $checks == on ]]; then
+            python3 "$probe/check-panics.py" "$out/$tag/native" | tee "$out/$tag/native-panics.tsv"
+        fi
         if "$front" "$out/$tag/scalars.bc" -o "$out/$tag/scalars.bn" --region-budget 100000 --stack-bytes 4096 --emit-llvm "$out/$tag/lowered.ll" > "$out/$tag/front.stdout" 2> "$out/$tag/front.stderr"; then
             mode=all
         else
