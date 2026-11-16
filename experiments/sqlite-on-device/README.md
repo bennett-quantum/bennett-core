@@ -478,7 +478,7 @@ N=256. Real SQLite execution remains an explicit experiment and does not slow `c
 ### Size and shape measurements
 
 Measured 2026-11-16 with the optimized observer. All checks pass for every row below. N=16/32/64
-use the original 256 KiB SQLite heap; N=128 uses 1 MiB. History-versus-branches compare mode also
+use the original 256 KiB SQLite heap; N=128/256 use 1 MiB. History-versus-branches compare mode also
 passes every coherent/Grover entry at N=16/32/64 (its timings are separate rows in the TSV). The table
 uses one classical entry per shape, executing setup followed by all N queries. Classical journal
 is the full retained history before reversal. Grover region steps count configurations; region
@@ -508,6 +508,11 @@ seconds, wall time, peak RSS, qubits, configurations and amplitude errors: [meas
 | 128 | text_order | 52 | 6,136,969 | 119,369,625 | 1 | 1,496,930 | 15,053,585 | 0.768066406 |
 | 128 | two_where | 4 | 6,119,063 | 119,144,151 | 4 | 5,844,472 | 59,312,444 | 0.999182316 |
 | 128 | range_agg | 104 | 24,307,405 | 459,283,133 | 1 | 37,837,802 | 354,967,093 | 0.05078125 |
+| 256 | like_note | 55 | 12,749,962 | 246,874,522 | 1 | 7,241,046 | 70,379,371 | 0.984473228 |
+| 256 | int_eq | 0 | 10,492,868 | 204,001,364 | 1 | 2,725,426 | 27,494,041 | -0 |
+| 256 | text_order | 113 | 10,641,287 | 206,884,231 | 1 | 3,022,264 | 30,376,908 | 0.672562599 |
+| 256 | two_where | 5 | 10,606,851 | 206,456,019 | 5 | 14,766,960 | 149,743,480 | 0.999190766 |
+| 256 | range_agg | 226 | 83,577,537 | 1,569,840,049 | 1 | 148,894,764 | 1,393,332,726 | 0.249153137 |
 
 Wall times below include parsing and checks; each range spans all shapes (and both initial outputs
 for coherent mode). RSS is the maximum among all four modes. Every individual measurement is in
@@ -520,6 +525,7 @@ reverse phase time includes replay of the coherent calls. These are observations
 | 32 | 0.675–2.854 | 0.881–2.439 | 2.642–7.057 | 0.836–2.007 | 197,588 |
 | 64 | 0.576–1.645 | 0.924–2.634 | 4.827–10.002 | 1.334–2.720 | 252,548 |
 | 128 | 1.376–2.279 | 1.583–7.319 | 17.103–90.278 | 2.424–5.242 | 558,348 |
+| 256 | 3.332–10.583 | 5.433–24.282 | 135.460–202.439 | 5.282–22.153 | 1,642,764 |
 
 
 ### Measured limits and remaining work
@@ -529,9 +535,11 @@ executes `like_note` at row index 24. Native exits 2 and the device returns 2 af
 steps, with exactly identical output through the refusal. Its last printed SQLite allocation
 counts are 232,704 live / 242,432 high-water bytes. Native wall/RSS: 0.011509 s / 3,024 KiB;
 device wall/RSS: 7.568937 s / 180,268 KiB. It is an allocation refusal in the configured SQLite
-heap, not a host-memory, dense-vector or qubit limit. The 1 MiB heap retry passes all five shapes and all checks at N=128. Its largest dense amplitude
+heap, not a host-memory, dense-vector or qubit limit. The 1 MiB heap passes all five shapes and all checks at N=128 and N=256. Its largest dense amplitude
 deviation is 3.14e-16. N=128 has 13 live qubits at each oracle boundary; the dense vector is only
-8,192 complex doubles, about 128 KiB. The larger sweep continues with the same checks and limits.
+8,192 complex doubles, about 128 KiB. N=256 uses 14 live qubits at the oracle boundary; the dense vector occupies 256 KiB.
+Its largest dense amplitude deviation is 1.30e-16, and its largest process RSS is 1,642,764 KiB
+(the complete aggregate reversal). The larger sweep continues with the same checks and limits.
 
 The fast fixture also exposed an executor defect independent of SQL: when the entry's slot frame
 does not fit, `Executor::new` records `stack_overflow`, but `run` panics in `next_is_rewind` before

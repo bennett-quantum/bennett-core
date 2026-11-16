@@ -585,13 +585,13 @@ explicitly after the separate musl build.
    short formats is refused by name (it calls `powf` natively). `setjmp`/`longjmp` are done (`31f5138`); then the
    remaining intrinsics.
 6. **A SQL query as an oracle.** SQLite runs, reverses and acts as a checked N=4 coherent oracle
-   (experiment above), and Grover passes N=4/8. The opt-in larger experiment now checks N=16/32/64/128
+   (experiment above), and Grover passes N=4/8. The opt-in larger experiment now checks N=16/32/64/128/256
    for LIKE, integer equality, TEXT ordering, EXISTS with two WHERE conditions and a range aggregate:
    native forward, full byte-exact classical reversal, coherent output 0/1 against the independent
    dense matrices (and full reversal), and Grover with every amplitude checked. Per-mode steps,
    journal, wall time and peak RSS are in `experiments/sqlite-on-device/measurements.tsv`; commands
    and compact tables in its README. The original 256 KiB SQLite heap refuses N=128 at LIKE row24
-   with `SQLITE_NOMEM` identically native/device (7,893,757 steps); N=128 passes with 1 MiB heap.
+   with `SQLITE_NOMEM` identically native/device (7,893,757 steps); N=128/256 pass with 1 MiB heap.
    History-versus-branches comparison also passes N=16/32/64; the larger-heap sweep continues.
    The fast glue test exposed an entry-stack refusal panic; its minimal ignored witness is
    `sql_oracle_glue::an_entry_frame_that_does_not_fit_returns_stack_overflow`. The executor is not
