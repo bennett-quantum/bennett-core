@@ -28,7 +28,7 @@ def main():
     (OUT / "files.json").write_text(json.dumps({"/fixtures/input": "610062ff63"}))
     started = time.monotonic()
     rows = []
-    for name in ("files", "files-edge", "input-image", "clocks", "entropy", "entropy-exhaust"):
+    for name in ("files", "files-edge", "tempfiles", "input-image", "clocks", "entropy", "entropy-exhaust"):
         starts = (1234999999998, (1 << 64)-2) if name == "clocks" else (0,)
         for start in starts:
             for level in ("-O0", "-O2"):
@@ -49,7 +49,7 @@ def main():
                     assert result.returncode == 1 and "fault: unreachable" in result.stdout, result
                 else:
                     assert result.returncode == 0 and "result: 0\n" in result.stdout, result
-                if name in ("files", "files-edge", "input-image", "clocks"):
+                if name in ("files", "files-edge", "tempfiles", "input-image", "clocks"):
                     native = OUT / f"{name}.native"
                     extra = ["-DNATIVE_INPUTS", f"-DSTART={start}ULL"] if name == "clocks" else []
                     run(["clang-18", level, *extra, HERE / f"tests/{name}.c", "-o", native])

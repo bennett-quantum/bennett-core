@@ -220,6 +220,7 @@ long __bennett_syscall(long number, long a1, long a2, long a3, long a4, long a5,
     case SYS_dup: case SYS_dup2: case SYS_dup3: case SYS_lseek: case SYS_ioctl:
     case SYS_pread64: case SYS_pwrite64:
     case SYS_stat: case SYS_fstat: case SYS_lstat: case SYS_access:
+    case SYS_readlink: case SYS_readlinkat:
     case SYS_fcntl: case SYS_fsync: case SYS_fdatasync: case SYS_truncate: case SYS_ftruncate:
     case SYS_getcwd: case SYS_chdir: case SYS_fchdir: case SYS_rename: case SYS_mkdir:
     case SYS_rmdir: case SYS_unlink: case SYS_chmod: case SYS_mkdirat:

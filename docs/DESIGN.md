@@ -826,7 +826,8 @@ is lazy at the first device syscall, guarded by ordinary memory, so constructors
 and full reversal restores the reset image including its initialisation guard.
 
 The VFS supplies open/openat/creat, close/dup, scalar and vectored IO, positional IO, seeks, stat,
-fcntl descriptor/status flags, truncation, directories/cwd, rename/unlink, chmod/umask and sync over
+fcntl descriptor/status flags, truncation, readlink/readlinkat errors for the present non-symlink
+namespace, directories/cwd, rename/unlink, chmod/umask and sync over
 memory. `/dev/null` and `/dev/zero` are present. Standard fd 0 is empty, fd 1 is the existing journalled
 console, and fd 2 retains its explicit nonempty-write fault even through duplication. Closing a standard
 fd makes its number reusable. There is no disk backend without a use for one; block devices, locks,

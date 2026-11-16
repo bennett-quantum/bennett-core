@@ -107,7 +107,7 @@ long __bennett_device_syscall(long nr,long a,long b,long c,long d,long e,long f)
         }
         return -ENOTTY;
     }
-    if(nr==SYS_stat || nr==SYS_fstat || nr==SYS_lstat || nr==SYS_access || nr==SYS_fcntl || nr==SYS_fsync || nr==SYS_fdatasync || nr==SYS_truncate || nr==SYS_ftruncate ||
+    if(nr==SYS_readlink || nr==SYS_readlinkat || nr==SYS_stat || nr==SYS_fstat || nr==SYS_lstat || nr==SYS_access || nr==SYS_fcntl || nr==SYS_fsync || nr==SYS_fdatasync || nr==SYS_truncate || nr==SYS_ftruncate ||
        nr==SYS_getcwd || nr==SYS_chdir || nr==SYS_fchdir || nr==SYS_rename || nr==SYS_mkdir || nr==SYS_rmdir || nr==SYS_unlink || nr==SYS_chmod || nr==SYS_umask ||
        nr==SYS_mkdirat || nr==SYS_newfstatat || nr==SYS_unlinkat || nr==SYS_faccessat) return __bennett_rt_vfs_meta(nr,a,b,c,d,e);
     __builtin_trap();

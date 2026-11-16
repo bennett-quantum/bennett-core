@@ -898,10 +898,13 @@ The clock is unsigned nanoseconds, start plus read count modulo 2^64. Entropy is
 shared across getrandom/getentropy/random device files, with exhaustion before mutation. File image
 installation, file state and both consumption counters are ordinary memory and reverse with the run.
 `test-devices.py` compares determined native file results and an independent native clock/tape oracle,
-including wrap, and checks exact reset after full executor reversal: all 14 O0/O2 runs pass (96.07 s).
-Representative costs: files 75,561 steps / 1,557,913 journal bytes; constructor image 40,495 / 817,391;
+including wrap, and checks exact reset after full executor reversal: all 16 O0/O2 runs pass (62.76 s).
+Representative costs: files 75,617 steps / 1,558,865 journal bytes; constructor image 40,503 / 817,527;
 clock and tape 30,758 / 670,118; exhausted empty tape 2,101 / 41,781 (a fully reversed named fault).
-Existing musl integration tests pass.
+Existing musl integration tests pass (37 comparisons). The targeted GCC temporary-file cases exposed
+`tmpnam`'s use of `readlink` to check a missing name; readlink/readlinkat now return ENOENT for a missing
+path and EINVAL for a non-symlink. A native/undo temporary-file regression passes at 63,073 steps /
+1,266,897 journal bytes, including anonymous tmpfile and its descriptor flags.
 
 Debts, with routes (the goal is not narrowed to the present surface):
 

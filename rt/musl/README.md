@@ -77,7 +77,7 @@ The carried archive models run as C on the device, with no host IO. File bytes, 
 pages, names, inodes, descriptor flags, shared open-description offsets, cwd and umask are ordinary
 journalled memory (`CARRIED.md` gives provenance). Regular files support open/openat/creat,
 read/write/readv/writev, pread/pwrite, seek, dup/dup2/dup3, stat, descriptor/status fcntl flags,
-truncate/ftruncate, mkdir/rmdir, chdir/fchdir/getcwd, rename/unlink, chmod/umask and sync.
+truncate/ftruncate, readlink/readlinkat errors over the current non-symlink namespace, mkdir/rmdir, chdir/fchdir/getcwd, rename/unlink, chmod/umask and sync.
 The initial namespace has `/`, `/tmp` (mode 01777), `/dev`, `/dev/random`, `/dev/urandom`, `/dev/null`, `/dev/zero` and
 `/dev/console`. Duplication preserves the explicit stderr fault; fd 2 may be redirected to a file.
 
@@ -176,19 +176,20 @@ floating-point `printf`, `strtod`, `sqrt`, `sin` and `pow`) 652,468 bytes, of wh
 
 ### Files/clock/entropy checks (2026-11-16)
 
-`test-devices.py`: **14 passes** (`-O0` and non-vectorized `-O2`), 96.07 s on the shared machine.
+`test-devices.py`: **16 passes** (`-O0` and non-vectorized `-O2`), 62.76 s on the shared machine.
 Files and constructor-loaded byte images agree with native stdout/status. Clock arithmetic and seed
 bytes agree with a separate native C arithmetic oracle, including start `2^64-2` wrapping through zero.
 `getentropy`, random-device reads and vectored tape consumption additionally check each expected byte.
-All 14 forward runs un-run to the identical entry snapshot (including buffers, both consumption counters,
+All 16 forward runs un-run to the identical entry snapshot (including buffers, both consumption counters,
 filesystem/allocator state and the lazy image guard); amplitude error zero. Empty-image exhaustion is
 an expected named fault, and is also fully reversed. Representative `-O0` costs:
 
 | fixture | steps | journal bytes |
 |---|---:|---:|
-| files: sparse/truncate/append/shared offsets/dup/vector IO | 75,561 | 1,557,913 |
-| file errors, modes, links, umask, cwd/rename | 60,504 | 1,245,032 |
-| supplied file bytes read in constructor and main | 40,495 | 817,391 |
+| files: sparse/truncate/append/shared offsets/dup/vector IO | 75,617 | 1,558,865 |
+| file errors, modes, links, umask, cwd/rename | 60,600 | 1,246,664 |
+| temporary names/readlink/stdio/anonymous tmpfile | 63,073 | 1,266,897 |
+| supplied file bytes read in constructor and main | 40,503 | 817,527 |
 | clock start 1,234,999,999,998 and 16 entropy bytes | 30,758 | 670,118 |
 | clock start `2^64-2`, wrap, same entropy bytes | 31,167 | 679,087 |
 | getentropy plus random-device/readv byte checks | 42,067 | 832,979 |

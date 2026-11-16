@@ -180,7 +180,7 @@ long __bennett_rt_vfs_open(const char *path,int flags,unsigned mode,long at) {
         struct bennett_inode *i=checked_calloc(1,sizeof *i);
         i->kind=BRT_REGULAR; i->mode=S_IFREG|(mode&07777); i->number=next_inode++;
         struct bennett_file *f=checked_malloc(sizeof *f);
-        *f=(struct bennett_file){BRT_REGULAR,flags,0,0,i}; return install(f,0,0,!!(flags&O_CLOEXEC));
+        *f=(struct bennett_file){BRT_REGULAR,(flags&~(O_CREAT|O_EXCL|O_TRUNC|O_CLOEXEC|O_NOCTTY))|O_LARGEFILE,0,0,i}; return install(f,0,0,!!(flags&O_CLOEXEC));
     }
     if(!n) {
         if(!(flags&O_CREAT)) { free(full); return -ENOENT; }
@@ -278,9 +278,10 @@ long __bennett_rt_vfs_meta(long nr,long a,long b,long c,long d,long e) {
         for(struct name *n=names;n;n=n->next) if(n->inode==f->inode) { cwd=checked_strdup(n->path); return 0; }
         return -ENOENT;
     }
+    if((nr==SYS_readlink && c<=0) || (nr==SYS_readlinkat && d<=0)) return -EINVAL;
     if((nr==SYS_newfstatat && (d & ~AT_SYMLINK_NOFOLLOW)) || (nr==SYS_unlinkat && (c & ~AT_REMOVEDIR))) __builtin_trap();
     long at=AT_FDCWD; const char *path=(void *)a;
-    if(nr==SYS_openat || nr==SYS_newfstatat || nr==SYS_faccessat || nr==SYS_mkdirat || nr==SYS_unlinkat) { at=a; path=(void *)b; }
+    if(nr==SYS_readlinkat || nr==SYS_openat || nr==SYS_newfstatat || nr==SYS_faccessat || nr==SYS_mkdirat || nr==SYS_unlinkat) { at=a; path=(void *)b; }
     int error=0; char *full=canonical(path,at,&error); if(!full) return -error;
     struct name *n=lookup(full); long result=0;
     if(nr==SYS_mkdir || nr==SYS_mkdirat) {
@@ -289,6 +290,7 @@ long __bennett_rt_vfs_meta(long nr,long a,long b,long c,long d,long e) {
             create_name(full,S_IFDIR|((nr==SYS_mkdir?b:c)&07777&~creation_mask),BRT_DIRECTORY); full=0;
         }
     } else if(!n) result=-ENOENT;
+    else if(nr==SYS_readlink || nr==SYS_readlinkat) result=-EINVAL; /* no symlinks in this namespace yet */
     else if(nr==SYS_stat || nr==SYS_lstat || nr==SYS_newfstatat) result=fill_stat(n->inode,(void *)(nr==SYS_newfstatat?c:b));
     else if(nr==SYS_access || nr==SYS_faccessat) {
         long mode=nr==SYS_access?b:c;
