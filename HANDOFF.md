@@ -553,7 +553,9 @@ explicitly after the separate musl build.
   the address-taken functions the device would call wrongly (musl tests: 107 to 353 more steps, 0.06 % to 5 %, and
   5 % to 16 % more device code). Cheaper: compare only for unprototyped pointer calls (about 11 steps), leaving a
   typed pointer call to a function with other argument or result sizes a `bad_indirect` fault instead of agreeing
-  with native. Keep full coverage?
+  with native. On the musl corpora (`64571ac`) every program that agrees takes more steps (median 2.0 % GCC, 1.5 %
+  c-testsuite, 1.8 % `ieee/`; largest `bcp-1` +21.8 %), the dispatch in musl's own calls through pointers. Keep
+  full coverage?
 - **`setjmp`/`longjmp`.** (1) `docs/DESIGN.md` ("Non-local jumps") lets a stale jump record succeed when a later
   call of the same function sits at the same depth and stack address (C leaves it undefined; the testing pass's
   probe returned 77). Keep that, or fault by name? (2) Since `595339c` a copied `sigjmp_buf` carries its own saved
