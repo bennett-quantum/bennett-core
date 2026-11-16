@@ -1085,6 +1085,15 @@ negotiation. The exact syntax is whatever the single reader in `ir` accepts; `ex
 - Random programs, forward and back.
 - `cargo test` finishes in seconds. Throughput and journal bytes per step are *reported*, never gated on wall time.
 
+Independent machine-decision probes (`crates/exec/tests/machine_decisions/` and
+`crates/ir/tests/machine_decisions.rs`) cover every integer measurement width, partial-cell complex
+amplitudes at unaligned addresses, overlapping measurements, byte/end-overflow bounds, every fault
+code with dirty targets in all three apply modes, all 256 single-bit jump-record corruptions, records
+in agreeing/disagreeing cells, and jumps across marked activations. Whole-world reference checks and
+captured snapshots cross-check outcomes and reversal. Admission probes permute definitions and
+rewinds, diamond block order and non-local continuations, and refuse forged/transferred handles.
+The ignored stale-buffer resumption witness records one false refusal (HANDOFF, "Known weak spots").
+
 Tests constrain behavior, with witnesses that would fail for the intended defect:
 
 - Derive small expected results independently, by hand, a dense calculation, an exact arithmetic oracle,
