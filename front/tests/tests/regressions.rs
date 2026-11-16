@@ -295,3 +295,10 @@ fn a_variadic_int128_that_misses_the_last_register_leaves_it_to_the_next_argumen
         assert_eq!(run(&module, "main", &[], 0), Outcome::Returned(Some(0)), "{flags:?}");
     }
 }
+
+/// A by-value argument lowered to a plain pointer takes the call's `tail` mark away: with it, LLVM deleted the
+/// stores that filled the copy, and the callee read uninitialised memory.
+#[test]
+fn a_by_value_argument_is_filled_before_a_call_that_was_a_tail_call() {
+    assert_agrees_with_native("byval_tail_call", 0);
+}

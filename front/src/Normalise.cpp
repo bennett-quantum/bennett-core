@@ -354,6 +354,14 @@ void lowerParameterAttributes(Module &module) {
       if (byval && call->hasFnAttr(Attribute::Memory)) {
         call->setMemoryEffects(call->getMemoryEffects() | MemoryEffects::argMemOnly(ModRefInfo::Ref));
       }
+      // The callee now reads the caller's copy, so the call is no longer a tail call: a `tail` call
+      // promises not to touch the caller's allocas, and LLVM deletes the stores that fill the copy.
+      if (auto *plain = dyn_cast<CallInst>(call); byval && plain) {
+        if (plain->isMustTailCall()) {
+          notHandled("a `musttail` call with an argument passed by value", call);
+        }
+        plain->setTailCallKind(CallInst::TCK_None);
+      }
     }
     if (function.isDeclaration()) {
       continue;
