@@ -6,6 +6,7 @@
 //! Measurement is a boundary (all outcomes are available via `measurement_branches`); seeded RNG
 //! trajectories and configuration-limit policy are not part of the unitary reference meaning.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 
 use bennett_ir::{
@@ -196,6 +197,11 @@ pub struct Model<'a> {
     entry_result: Option<Type>,
     region: bool,
     region_depth: usize,
+    /// Rounds of worlds run again while un-running a rewind (nested ones included, this model's own check
+    /// that a rewind has an inverse excluded): the work charged to a budget (DESIGN, "History", Cost).
+    replayed: Cell<u64>,
+    unrunning: Cell<u32>,
+    checking: Cell<u32>,
 }
 
 impl<'a> Model<'a> {
@@ -222,7 +228,38 @@ impl<'a> Model<'a> {
             entry_result: program.function(program.function_named(entry).expect("entry")).result,
             region: false,
             region_depth: 0,
+            replayed: Cell::new(0),
+            unrunning: Cell::new(0),
+            checking: Cell::new(0),
         }
+    }
+
+    /// Rounds run again while un-running rewinds so far (`replayed`).
+    pub fn replayed(&self) -> u64 {
+        self.replayed.get()
+    }
+
+    /// As [`Model::run`], for a `budget` that bounds the rounds and the rounds run again together: a round
+    /// at the budget faults `budget`, and so does a rewind whose running again would pass it, leaving the
+    /// state as it was.
+    pub fn run_budgeted(&self, mut state: Superposition, budget: usize) -> Superposition {
+        let (mut rounds, mut charged) = (0u64, 0u64);
+        while !state.keys().all(|w| w.classical.finish.is_some()) && rounds + charged < budget as u64 {
+            let before = self.replayed();
+            let next = self.step(&state);
+            let charge = self.replayed() - before;
+            if rounds + charged + charge + 1 > budget as u64 {
+                break;
+            }
+            (rounds, charged, state) = (rounds + 1, charged + charge, next);
+        }
+        for (mut w, a) in std::mem::take(&mut state) {
+            if w.classical.finish.is_none() {
+                w.classical.finish = Some(Finish::Faulted(Fault::Budget));
+            }
+            add(&mut state, w, a);
+        }
+        state
     }
 
     pub fn initial(&self, entry: &str, args: &[u128]) -> World {
@@ -444,6 +481,9 @@ impl<'a> Model<'a> {
     }
 
     fn step_group(&self, state: &Superposition) -> Result<Superposition, Fault> {
+        if self.unrunning.get() > 0 && self.checking.get() == 0 {
+            self.replayed.set(self.replayed.get() + 1);
+        }
         let first = state.keys().next().expect("nonempty group");
         if first.classical.finish.is_none()
             && let Some(Inst::Rewind { mark, keep }) = self.instruction(&first.classical)
@@ -927,7 +967,7 @@ impl<'a> Model<'a> {
                 let result = match model.call(&mut region, *callee, values, None) {
                     Err(f) => Finish::Faulted(f),
                     Ok(()) => model
-                        .run(basis(region), budget)
+                        .run_budgeted(basis(region), budget)
                         .into_keys()
                         .next()
                         .expect("classical region")
@@ -971,10 +1011,16 @@ impl<'a> Model<'a> {
             add(&mut state, out, a);
         }
         let mut count = 0;
-        while state.keys().any(|w| w.history.len() > h) {
-            state = self.undo_state(&state).map_err(|_| Fault::BadRewind)?;
-            count += 1;
-        }
+        self.unrunning.set(self.unrunning.get() + 1);
+        let unrun = (|| {
+            while state.keys().any(|w| w.history.len() > h) {
+                state = self.undo_state(&state).map_err(|_| Fault::BadRewind)?;
+                count += 1;
+            }
+            Ok(())
+        })();
+        self.unrunning.set(self.unrunning.get() - 1);
+        unrun?;
         let mut result = BTreeMap::new();
         for (mut w, a) in state {
             let start = Box::new(w.classical.clone());
@@ -991,7 +1037,10 @@ impl<'a> Model<'a> {
         // Interim HANDOFF rule: a rewind must have an inverse on the state its history describes.
         // This also catches changed classical reads when worlds differ, without merging histories
         // and silently accepting norm loss/gain. No particular result is promised beyond this rule.
-        let restored = self.undo_state(&result).map_err(|_| Fault::BadRewind)?;
+        self.checking.set(self.checking.get() + 1);
+        let restored = self.undo_state(&result);
+        self.checking.set(self.checking.get() - 1);
+        let restored = restored.map_err(|_| Fault::BadRewind)?;
         let norm = |s: &Superposition| s.values().map(|a| a.norm_sqr()).sum::<f64>();
         if (norm(inputs) - norm(&result)).abs() > 1e-11
             || inputs.keys().chain(restored.keys()).any(|w| {

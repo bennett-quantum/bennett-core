@@ -259,14 +259,15 @@ fn assert_every_step_reverses(module: &ValidModule, budget: u64) {
     while e.step().is_none() {
         snapshots.push(e.snapshot());
     }
-    assert_eq!(e.stats().steps, budget, "the budget ends the loop");
+    // The budget ends the loop: at a step that reaches it, or at a rewind whose running again would pass it.
+    assert!(e.stats().steps + e.stats().replay_charged <= budget, "budget {budget}");
     assert_eq!(e.outcome(), Some(Outcome::Faulted(Fault::Budget)));
     for (index, expected) in snapshots[..snapshots.len() - 1].iter().enumerate().rev() {
         assert_eq!(e.step_back(), Ok(true), "budget {budget}, step {index}");
         assert_same_state(&e.snapshot(), expected, &format!("budget {budget}, back to step {index}"));
     }
     assert_eq!(e.step_back(), Ok(false));
-    assert_eq!(e.stats().steps, 0);
+    assert_eq!((e.stats().steps, e.stats().replay_charged), (0, 0));
 }
 
 /// jm-test1 F2: undoing a rewind reached the second (or nth) time in a loop restores the visit being
@@ -300,19 +301,28 @@ fn undoing_rewinds_reached_again_in_loops_restores_every_step() {
 
 /// Rewinding one mark again un-runs the previous rewind of it, so a loop of rewinds of one mark doubles
 /// the work per rewind (the same doubling as nested cleaning-up regions). Measured: n rewinds un-run
-/// 3 * 2^(n-1) - 2 steps; reversal runs again as many steps as it un-runs, and returns to step 0.
+/// 3 * 2^(n-1) - 2 steps; reversal runs again as many steps as it un-runs, and returns to step 0. Run
+/// without a budget, which since 2026-11-16 is charged with the work of running again and would end the
+/// loop sooner (`history_independent.rs`), for a number of steps.
 #[test]
 fn a_loop_of_rewinds_of_one_mark_doubles_the_work_per_rewind() {
     let module = load("memory 256\nfunc @main() {\nentry:\n%h = mark\nbr loop\nloop:\nrewind %h\nbr loop\n}");
-    for budget in [1u64, 2, 3, 4, 8, 16, 32] {
-        let mut e = executor(&module, "main", &[], Options { budget: Some(budget), ..options() });
-        assert_eq!(e.run(), Outcome::Faulted(Fault::Budget));
-        let rewinds = (budget - 1) / 2;
+    // The charges of the first rewinds, worked by hand in `history_independent.rs`: 0, 1, 4, 10, 22, ...
+    let charges = [0u64, 1, 4, 10, 22, 46, 94, 190, 382, 766, 1534, 3070, 6142, 12286, 24574];
+    for taken in [1u64, 2, 3, 4, 8, 16, 32] {
+        let mut e = executor(&module, "main", &[], Options { budget: None, ..options() });
+        for _ in 0..taken {
+            assert_eq!(e.step(), None);
+        }
+        let rewinds = (taken - 1) / 2;
         let rewound = if rewinds == 0 { 0 } else { 3 * (1 << (rewinds - 1)) - 2 };
-        assert_eq!(e.stats().rewound_steps, rewound, "budget {budget}");
-        assert_eq!(e.reverse(), Ok(budget));
+        assert_eq!(e.stats().rewound_steps, rewound, "{taken} steps");
+        // Without a budget the work is still counted: every step run again so far was a rewind's.
+        let charged: u64 = charges[..rewinds as usize].iter().sum();
+        assert_eq!((e.stats().replay_charged, e.stats().rerun_steps), (charged, charged), "{taken} steps");
+        assert_eq!(e.reverse(), Ok(taken));
         let stats = e.stats();
         assert_eq!(stats.steps, 0);
-        assert_eq!(stats.rerun_steps, stats.rewound_steps, "budget {budget}: every un-run step is run again");
+        assert_eq!(stats.rerun_steps, stats.rewound_steps, "{taken} steps: every un-run step is run again");
     }
 }

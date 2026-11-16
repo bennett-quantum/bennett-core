@@ -202,16 +202,55 @@ fn measuring_before_mark_is_allowed_but_after_mark_is_an_atomic_barrier() {
     assert_same_state(&after, &before, "measurement barrier");
 }
 
+/// `%h = mark; loop: rewind %h; br loop`, worked by hand. Every rewind un-runs back to the mark, so the
+/// region of the n-th rewind (n > 1) is the (n-1)-th rewind and a `br`, and the first one's is a `br`.
+/// Undoing the k-th rewind's record runs again from the mark to its k-th visit: k `br`s and the rewinds
+/// 1..k-1, each one step plus its own running again, so W(k) = k + sum over j < k of (1 + C(j)); the n-th
+/// rewind taken as a step undoes the records of rewinds n-1 down to 1 in turn, so its charge is
+/// C(n) = W(1) + ... + W(n-1): C = 0, 1, 4, 10, 22, ... A step faults `budget` once steps and charge reach
+/// the budget; a rewind faults it, changing nothing, if its charge would pass the budget after its step.
+fn loop_of_rewinds_by_hand(budget: u64) -> (u64, u64) {
+    let mut c: Vec<u64> = vec![0, 0];
+    for n in 2..64 {
+        let w = |k: usize| k as u64 + (1..k).map(|j| 1 + c[j]).sum::<u64>();
+        let charge = (1..n).map(w).sum();
+        c.push(charge);
+    }
+    let (mut steps, mut charged) = (0, 0);
+    if budget == 0 {
+        return (0, 0);
+    }
+    steps += 1; // mark
+    for &charge in &c[1..] {
+        if steps + charged >= budget {
+            break; // the br
+        }
+        steps += 1;
+        if steps + charged >= budget || (charge > 0 && steps + charged + charge + 1 > budget) {
+            break; // the rewind
+        }
+        (steps, charged) = (steps + 1, charged + charge);
+    }
+    (steps, charged)
+}
+
 #[test]
 fn a_rewind_has_finite_budget_even_in_an_infinite_loop() {
     let module = load("memory 256\nfunc @main() {\nentry:\n%h = mark\nbr loop\nloop:\nrewind %h\nbr loop\n}");
-    for budget in [1, 2, 3, 4, 8, 32] {
+    // By hand for the small budgets: the second rewind needs 6, the third 12, the fourth 24, the fifth 48.
+    assert_eq!(
+        [1, 2, 3, 4, 5, 6, 7, 8, 12, 32].map(loop_of_rewinds_by_hand),
+        [(1, 0), (2, 0), (3, 0), (4, 0), (4, 0), (5, 1), (6, 1), (6, 1), (7, 5), (10, 15)]
+    );
+    for budget in [1, 2, 3, 4, 5, 6, 7, 8, 12, 13, 23, 24, 25, 32, 48, 100, 1000] {
         let mut e = executor(&module, "main", &[], Options { budget: Some(budget), ..options() });
         assert_eq!(e.run(), Outcome::Faulted(Fault::Budget));
-        assert_eq!(e.stats().steps, budget);
+        let stats = e.stats();
+        assert_eq!((stats.steps, stats.replay_charged), loop_of_rewinds_by_hand(budget), "budget {budget}");
+        assert!(stats.steps + stats.replay_charged <= budget);
         // Repeated dynamic visits reverse fully (F2, fixed); their work is pinned in `history_unrun.rs`.
-        assert_eq!(e.reverse(), Ok(budget));
-        assert_eq!(e.stats().steps, 0);
+        assert_eq!(e.reverse(), Ok(stats.steps));
+        assert_eq!((e.stats().steps, e.stats().replay_charged), (0, 0));
     }
 }
 

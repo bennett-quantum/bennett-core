@@ -319,7 +319,7 @@ impl<'m> Executor<'m> {
         if self.run_outcome.is_some() {
             return self.run_outcome;
         }
-        if self.budget.is_some_and(|budget| self.steps >= budget) {
+        if self.budget_reached() {
             self.run_outcome = Some(Outcome::Faulted(Fault::Budget));
             return self.run_outcome;
         }
@@ -711,6 +711,10 @@ impl<'m> Executor<'m> {
         self.put_worlds(worlds);
         if longest > 0 {
             self.steps = self.steps.saturating_sub(1);
+        }
+        // Back at the start, the run's replay charge is gone with its history.
+        if longest <= 1 {
+            self.charged = 0;
         }
         Ok(longest > 0)
     }

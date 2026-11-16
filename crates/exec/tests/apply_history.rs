@@ -241,3 +241,66 @@ fn environment_selects_each_apply_mode_and_compare_appends_its_tally() {
         "each comparison appends its costs"
     );
 }
+
+/// Running again inside a region is charged to the region's budget in each world, as in each enumerated
+/// branch: a callee looping over rewinds of one mark (the n-th runs again 0, 1, 4, 10, ... steps,
+/// `history_independent.rs`) on a qubit in superposition and a spectator, at every budget up to 60.
+/// Compare mode stops at any difference between the two ways (results, region steps, every count); the
+/// fault is `budget` on every branch, and the region steps each branch took are the steps the hand count
+/// gives for that budget (a mark, then a `br` and a rewind per round, ending at a step that reaches the
+/// budget or at a rewind whose running again would pass it).
+#[test]
+fn running_again_in_a_region_is_charged_alike_both_ways() {
+    let text = "memory 256
+func @f(i1 %b) -> i8 {
+entry:
+    %h = mark
+    br loop
+loop:
+    rewind %h
+    br loop
+}
+func @main() -> i5 {
+entry:
+    %q = qalloc 1
+    %s = qalloc 1
+    h %q
+    h %s
+    %out = qalloc 8
+    %fault = qalloc 5
+    apply @f(%q) -> %out, %fault budget BUDGET
+    %m = measure %fault
+    ret %m
+}";
+    for budget in 1..=60u64 {
+        let module = load(&text.replace("BUDGET", &budget.to_string()));
+        let options = allowing_region_faults();
+        let (outcome, stats, _) = run_in(&module, "main", &[], options, ApplyMode::Compare);
+        assert_eq!(outcome, Outcome::Returned(Some(bennett_ir::Fault::Budget.code().into())), "budget {budget}");
+        // Two argument values, two spectator values: four configurations, each taking the same steps.
+        let steps = loop_steps_by_hand(budget);
+        assert_eq!(stats.region_steps, 4 * steps, "budget {budget}");
+    }
+}
+
+/// The steps a run of `mark; loop: rewind; br loop` takes within `budget`, the replay charge counted (the
+/// same hand count as `history_independent.rs`, which also pins the charge).
+fn loop_steps_by_hand(budget: u64) -> u64 {
+    let c = |n: u64| if n < 2 { 0 } else { 3 * (1 << (n - 2)) - 2 };
+    let (mut steps, mut charged) = (0, 0);
+    if budget == 0 {
+        return 0;
+    }
+    steps += 1;
+    for n in 1.. {
+        if steps + charged >= budget {
+            break;
+        }
+        steps += 1;
+        if steps + charged >= budget || (c(n) > 0 && steps + charged + c(n) + 1 > budget) {
+            break;
+        }
+        (steps, charged) = (steps + 1, charged + c(n));
+    }
+    steps
+}

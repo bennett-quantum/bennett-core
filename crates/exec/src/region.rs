@@ -316,6 +316,7 @@ impl Executor<'_> {
         (journal_base, overlay_base): (usize, usize),
     ) -> Ran {
         self.steps = pending.steps;
+        self.charged = pending.charged;
         self.budget = Some(budget);
         self.finish_region_rewind();
         self.run_journal_peak = self.journal.as_ref().map_or(0, Journal::bytes);
@@ -331,6 +332,7 @@ impl Executor<'_> {
             queue.extend(self.forked.drain(..).map(|world| Pending {
                 world,
                 steps: self.steps,
+                charged: self.charged,
                 rewound: shared.0,
                 rerun: shared.1,
             }));
@@ -381,6 +383,8 @@ impl Executor<'_> {
         HistoryRegion {
             outcome: self.outcome.take(),
             steps: std::mem::take(&mut self.steps),
+            charged: std::mem::take(&mut self.charged),
+            charging: std::mem::replace(&mut self.charging, false),
             budget: self.budget.take(),
             base_depth: std::mem::replace(&mut self.base_depth, base_depth),
             in_region: std::mem::replace(&mut self.in_region, true),
@@ -415,6 +419,8 @@ impl Executor<'_> {
         }
         self.outcome = outer.outcome;
         self.steps = outer.steps;
+        self.charged = outer.charged;
+        self.charging = outer.charging;
         self.budget = outer.budget;
         self.base_depth = outer.base_depth;
         self.in_region = outer.in_region;
@@ -494,6 +500,8 @@ impl Executor<'_> {
             journal: self.journal.replace(region_journal),
             outcome: self.outcome.take(),
             steps: std::mem::take(&mut self.steps),
+            charged: std::mem::take(&mut self.charged),
+            charging: std::mem::replace(&mut self.charging, false),
             budget: self.budget.replace(budget),
             base_depth: std::mem::replace(&mut self.base_depth, self.frames.len()),
             in_region: std::mem::replace(&mut self.in_region, true),
@@ -533,6 +541,8 @@ impl Executor<'_> {
         self.spare_journal = region_journal;
         self.outcome = outer.outcome;
         self.steps = outer.steps;
+        self.charged = outer.charged;
+        self.charging = outer.charging;
         self.budget = outer.budget;
         self.base_depth = outer.base_depth;
         self.in_region = outer.in_region;
@@ -720,6 +730,9 @@ struct Run {
 #[derive(Clone, Debug, PartialEq)]
 struct RunState {
     steps: u64,
+    charged: u64,
+    charging: bool,
+    budget_spent: bool,
     budget: Option<u64>,
     max_configurations: Option<usize>,
     base_depth: usize,
@@ -765,6 +778,9 @@ impl Run {
             counters: Counters::of(e),
             state: RunState {
                 steps: e.steps,
+                charged: e.charged,
+                charging: e.charging,
+                budget_spent: e.budget_spent,
                 budget: e.budget,
                 max_configurations: e.max_configurations,
                 base_depth: e.base_depth,
@@ -800,6 +816,9 @@ impl Run {
         self.counters.set(e);
         let s = self.state;
         e.steps = s.steps;
+        e.charged = s.charged;
+        e.charging = s.charging;
+        e.budget_spent = s.budget_spent;
         e.budget = s.budget;
         e.max_configurations = s.max_configurations;
         e.base_depth = s.base_depth;
@@ -835,6 +854,8 @@ impl Run {
 struct Pending {
     world: World,
     steps: u64,
+    /// The steps run again charged to the region's budget by then (`Executor::charged`).
+    charged: u64,
     rewound: u64,
     rerun: u64,
 }
@@ -842,7 +863,7 @@ struct Pending {
 impl Pending {
     /// The current world, which runs from the region's start.
     fn current() -> Self {
-        Pending { world: World::empty(), steps: 0, rewound: 0, rerun: 0 }
+        Pending { world: World::empty(), steps: 0, charged: 0, rewound: 0, rerun: 0 }
     }
 }
 
@@ -872,6 +893,8 @@ struct Done {
 struct HistoryRegion {
     outcome: Option<Outcome>,
     steps: u64,
+    charged: u64,
+    charging: bool,
     budget: Option<u64>,
     base_depth: usize,
     in_region: bool,
@@ -895,6 +918,8 @@ struct Saved {
     journal: Option<Journal>,
     outcome: Option<Outcome>,
     steps: u64,
+    charged: u64,
+    charging: bool,
     budget: Option<u64>,
     base_depth: usize,
     in_region: bool,

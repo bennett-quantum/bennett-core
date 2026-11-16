@@ -153,8 +153,9 @@ step ("Worlds", below).
   again in a loop is restored at the visit being undone, not the first one that reaches its position.
   (The first fix kept the number of steps un-run; worlds that took paths of different lengths would then
   never be equal again, so the visit is kept instead.) The steps ran before from the same classical
-  state, so they run again identically; budget, configuration limit and region-fault checks are not
-  repeated. Under an outer rewind's keeps one may still fault (step 3), in its own world or in one
+  state, so they run again identically; configuration limit and region-fault checks are not
+  repeated, and the budget is charged with them ("Cost", below). Under an outer rewind's keeps one may
+  still fault (step 3), in its own world or in one
   that split off while it ran, and then is undone again: the outer rewind faults `bad_rewind` with
   every world exactly as before it (since 2026-11-16 also when the failing world split off, which
   panicked before). A `measure` reached while running again is such a fault, refused before it samples
@@ -164,7 +165,24 @@ step ("Worlds", below).
   fails. An `apply` un-run or run again by a rewind may fault on some branches without stopping the
   run: it is a permutation either way, and the strict check is for running forward.
 - **Cost.** A rewind counts as one step and `steps` never goes back, so the budget bounds a loop of
-  rewinds. The work of un-running is counted apart (`Stats::rewound_steps`, `Stats::rerun_steps`). The
+  rewinds. The work of un-running is counted apart (`Stats::rewound_steps`, `Stats::rerun_steps`).
+  **Running again is charged to the run's budget** (the maintainer's decision of the afternoon of
+  2026-11-16): every step a rewind taken as a step of the run runs again, its nested rewinds' included,
+  is added to `Stats::replay_charged`, and the budget is spent when `steps + replay_charged` reaches it.
+  A rewind whose running again would pass the budget (its own step counted first) faults `budget`,
+  changing nothing, so a replay that newly reaches an endless loop under an outer rewind's keeps ends
+  (it ran for ever before: `a_replay_that_loops_for_ever_is_charged_to_the_budget_and_changes_nothing`,
+  `atomic_rewind_tests.rs`, whole machine compared). Undoing what a failed rewind ran, and running forward
+  again what it un-ran, restore, and are not charged; un-running is not charged either (it is bounded by
+  the history). Inside a coherent region each world charges the region's budget `B` in the same way, so
+  both ways of computing `apply` agree. A run with no budget has nothing to charge and can still loop, as
+  a forward loop can. The charge is a count of the run, like `steps`, not machine state (a journal holds
+  none of it, so worlds stay equal): reversal to the start sets it to 0 with `steps`, and a partial
+  reversal leaves it. Worked by hand for `mark; loop: rewind; br loop` (`history_independent.rs`): the
+  n-th rewind runs again C(n) = 0, 1, 4, 10, 22, ... = 3 * 2^(n-2) - 2 steps, so a budget of 32 ends the
+  loop after 5 rewinds (10 steps, 15 charged) where it took 15 before; the independent whole-world
+  reference counts its own rounds run again and its harness predicts every budget stop of the executor
+  it is compared with (`oracle_support/worlds_executor.rs`). The
   known exponential is measured (`crates/exec/tests/history.rs`): a chain of `d` levels that each mark,
   work, call the next level and rewind costs 19, 55, 127, 271, ... 36,847 steps in all at `d` = 0, 1, 2,
   3, ... 10, a factor tending to 2 per level, against 21 + 20 `d` (221 at `d` = 10) when only the

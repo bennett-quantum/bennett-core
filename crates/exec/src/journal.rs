@@ -41,8 +41,8 @@ pub enum Undo {
     /// A `mark`. Words: the old slot value. The mark is also listed in the journal's marks.
     Mark,
     /// A `rewind`, undone by running the rewound steps again from the mark and XORing the kept values
-    /// again. Words: the number of steps it un-ran (the high 64 bits), and the block and position the
-    /// mark left the frame at, packed in one word.
+    /// again. Words: which visit of the rewind in its frame since the mark it was (the high 64 bits), and
+    /// the block and position the mark left the frame at, packed in one word.
     Rewind,
     /// A `setjmp`. Words: the record's old bytes (two words, low half first), then the old result slot.
     Setjmp,

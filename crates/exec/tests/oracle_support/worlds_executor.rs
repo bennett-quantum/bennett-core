@@ -123,10 +123,15 @@ pub fn compare(program: &ValidModule, entry: &str, args: &[u64], limit: usize, m
         },
     )
     .expect("executor starts");
+    // The rounds the reference ran again while un-running rewinds: charged to the budget with the rounds.
+    let mut charged = 0u64;
     for step in 0..limit {
         assert_snapshot(&model, &state, &actual);
         if actual.outcome().is_some() {
             return step;
+        }
+        if step as u64 + charged >= limit as u64 {
+            break;
         }
         let work_limit = std::env::var("BENNETT_WORLDS_REPLAY_LIMIT")
             .ok()
@@ -160,11 +165,18 @@ pub fn compare(program: &ValidModule, entry: &str, args: &[u64], limit: usize, m
             assert!(branches[&value].0 > 0.0, "sample has independent positive Born probability");
             state = model.collapse(&state, value);
         } else {
+            let before = model.replayed();
             let next = model.step(&state);
             if next.len() > 64 {
                 eprintln!("reference prefix stopped before more than 64 complete basis states at round {step}");
                 return step;
             }
+            let charge = model.replayed() - before;
+            if step as u64 + charged + charge + 1 > limit as u64 {
+                // Running again would pass the budget: the rewind faults `budget`, changing nothing.
+                break;
+            }
+            charged += charge;
             state = next;
             actual.step();
         }

@@ -140,7 +140,9 @@ commit) after the four checks passed on it.
   codes and `bad_longjmp`; `84d6fd4` b, opaque mark handles; `24a4169` c, no use after a rewind of a value
   defined since its mark; `ba6ddb5` d, `measure iN [ADDR]`). Main's newer tests were migrated in the step that
   needs it. The changed-line mutation run over a to d (110 mutants) is running. Step e (the call form with a
-  fault value and a budget, with the afternoon's decisions) is next. The panic reported for a
+  fault value and a budget, with the afternoon's decisions) is in progress on `wip/machine-e`, in small
+  steps each landed alone: e1, running again charged to the run's budget (`Stats::replay_charged`; a
+  rewind whose running again would pass the budget faults `budget`, changing nothing), is built. The panic reported for a
   `measure_memory` fixture in 64 bytes of memory was not the executor's: it returns `stack_overflow` before
   the first step (since `5515ae8`); the independent whole-world reference panicked at its own start
   (`expect("entry fits memory")`). The reference now models the fault, and
@@ -1061,15 +1063,11 @@ the ordinary frontend run without changing its domain or assertions.
 - Debt: equal-priority constructor order across separately compiled objects follows a native build of the linked
   module, not separately linked objects (C leaves it unspecified). Route: lower startup per unit before linking.
 
-- A rewind whose un-run runs an inner rewind's region again, on a path the original run never took
-  under the outer keeps, can loop for ever: running again stops only at the inner rewind, and budget and
-  limits are not applied there (`docs/DESIGN.md`, "History"). A path that faults, measures, returns from
-  the rewind's frame or ends the run is refused atomically with `bad_rewind` since 2026-11-16 (the
-  return and the end looped for ever before, and a return followed by a second call of the same function
-  reached its rewind in the other activation and was taken as success, a silent wrong result); an
-  endless loop is not detected. Route: charge the work of running again to the run's budget, faulting
-  atomically when it is spent (a decision: today the budget counts ticks, and nested rewinds already do
-  exponential work within a small budget, `docs/DESIGN.md`, "Cost").
+- Removed on 2026-11-16 (machine step e1): a rewind whose un-run ran an inner rewind's region again on a
+  path that newly reaches an endless loop ran for ever. Running again is now charged to the run's budget
+  and such a rewind faults `budget`, changing nothing (`docs/DESIGN.md`, "History", Cost). What remains: a
+  run with no budget can still loop there, as any forward loop can. A path that faults, measures, returns
+  from the rewind's frame or ends the run stays refused atomically with `bad_rewind`.
 
 - Worlds' deferred un-run checks (`d6036a1`) are matched across worlds by a 64-bit hash of the classical state; a
   collision would add two different checks (route: compare the states on a hash match). The copy each world saves

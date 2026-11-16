@@ -96,12 +96,20 @@ impl<'m> Executor<'m> {
         let saved = std::mem::replace(&mut self.allow_region_faults, true);
         let deferred = self.deferred.len();
         self.deferring |= defers;
+        // Running again is charged to the run's budget, for a rewind taken as a step: nested ones are part
+        // of its work.
+        let charged = self.charged;
+        if step {
+            self.charging = true;
+            self.budget_spent = false;
+        }
         self.rewinding += 1;
         let from = self.forked.len();
         let result = self.unwind_to_mark(entry.position, (site.block, site.inst), 0, 0);
         self.rewinding -= 1;
         if step {
             self.deferring = false;
+            self.charging = false;
         }
         self.allow_region_faults = saved;
         let forked = self.forked.len() > from || self.splits != counters.3;
@@ -124,7 +132,11 @@ impl<'m> Executor<'m> {
                 }
             }
             self.partial = outer_partial;
-            return Err(Fault::BadRewind.into());
+            self.charged = charged;
+            // Running again stopped because the budget was spent, not because the history did not describe
+            // the path: the rewind faults `budget`, having changed nothing.
+            let spent = step && std::mem::take(&mut self.budget_spent);
+            return Err(if spent { Fault::Budget } else { Fault::BadRewind }.into());
         }
         self.partial = outer_partial;
         self.for_forks(from, &|executor| executor.partial = outer_partial);
@@ -284,7 +296,8 @@ impl<'m> Executor<'m> {
 
     /// Runs steps again until the frame at `depth` is at `site` for the `visit`-th time. They ran before
     /// from the same classical state, so limits and checks that they passed then are not applied again,
-    /// and the step count is left as it was. Under a rewind's keeps a step can still fault (a `qfree` of a
+    /// and the step count is left as it was; under a rewind taken as a step each is charged to the budget
+    /// (`charged`), and one that would pass it fails the run again. Under a rewind's keeps a step can still fault (a `qfree` of a
     /// register that is not zero, an inner `bad_rewind`, a `measure`, which no rewound region holds, a
     /// return from the rewind's frame or the end of the run, which it did not reach before): then
     /// the steps run so far are undone, and the state is as it was. If worlds split off first, the fault,
@@ -306,11 +319,14 @@ impl<'m> Executor<'m> {
                 self.mismatches += 1;
             } else {
                 // The steps run so far left records above `records` only: a rewind among them pops back
-                // to a mark at or above it.
+                // to a mark at or above it. Undoing them restores; it is not charged, and runs again only
+                // what just ran.
+                let charging = std::mem::replace(&mut self.charging, false);
                 while self.journal.as_ref().is_some_and(|journal| journal.records() > records) {
                     self.undo_last();
                     self.rewound_steps += 1;
                 }
+                self.charging = charging;
             }
             result = Err(Mismatch);
         }
@@ -333,9 +349,18 @@ impl<'m> Executor<'m> {
                     return Ok(());
                 }
             }
+            // Under a rewind taken as a step, each step run again is charged to the run's budget, after the
+            // rewind's own step: one that would pass it stops running again (the rewind faults `budget`).
+            if self.charging && self.budget.is_some_and(|budget| self.steps.saturating_add(self.charged) + 2 > budget) {
+                self.budget_spent = true;
+                return Err(Mismatch);
+            }
             let from = self.forked.len();
             self.execute().map_err(|_| Mismatch)?;
             self.rerun_steps += 1;
+            if self.charging {
+                self.charged += 1;
+            }
             // Nor does a path that finishes the run (a return from the outermost frame, an `exit`). The
             // outcome itself may be set already: unwinding a run that faulted runs rewound regions again.
             if self.journal.as_ref().and_then(Journal::last) == Some(Undo::Finish) {
@@ -350,10 +375,12 @@ impl<'m> Executor<'m> {
     }
 
     /// Runs `steps` steps forward again, after a rewind's un-run of them failed: they ran from this state
-    /// before, in one world, so they run again identically.
+    /// before, in one world, so they run again identically. This restores, so it is not charged to the
+    /// budget, even inside a rewind that is.
     fn run_forward(&mut self, steps: u64) {
         let max_configurations = self.max_configurations.take();
         let allow_region_faults = std::mem::replace(&mut self.allow_region_faults, true);
+        let charging = std::mem::replace(&mut self.charging, false);
         self.rerunning += 1;
         for _ in 0..steps {
             let from = self.forked.len();
@@ -364,6 +391,7 @@ impl<'m> Executor<'m> {
             self.rerun_steps += 1;
         }
         self.rerunning -= 1;
+        self.charging = charging;
         self.allow_region_faults = allow_region_faults;
         self.max_configurations = max_configurations;
     }

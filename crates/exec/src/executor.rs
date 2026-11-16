@@ -17,6 +17,7 @@ use crate::worlds::{Defect, Status, World};
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Options {
     /// The most steps the run may take; the next step faults with [`Fault::Budget`]. `None` is unbounded.
+    /// Steps a `rewind` runs again are charged to it too ([`Stats::replay_charged`]).
     pub budget: Option<u64>,
     /// The most basis configurations the quantum state may hold; a gate that would exceed it stops the run
     /// with [`RunError::ConfigurationLimit`]. `None` is unbounded. Each configuration costs memory and time
@@ -171,6 +172,12 @@ pub enum ReverseError {
 pub struct Stats {
     /// Steps taken by the run, not counting steps inside coherent regions.
     pub steps: u64,
+    /// Steps run again by `rewind`s taken as steps of the run, charged to its budget with `steps`: a step
+    /// faults with [`Fault::Budget`] once `steps + replay_charged` reaches the budget, and a rewind whose
+    /// running again would pass it faults with it, changing nothing (`docs/DESIGN.md`, "History", Cost).
+    /// Not counting coherent regions, whose worlds charge their own budgets. It never goes back but on a
+    /// reversal to the start.
+    pub replay_charged: u64,
     /// The run's step budget, if it has one.
     pub budget: Option<u64>,
     /// The run's limit on basis configurations, if it has one.
@@ -266,6 +273,12 @@ pub struct Executor<'m> {
     pub(crate) journal: Option<Journal>,
     pub(crate) outcome: Option<Outcome>,
     pub(crate) steps: u64,
+    /// Steps run again by rewinds taken as steps, charged to the budget (`Stats::replay_charged`).
+    pub(crate) charged: u64,
+    /// Whether a rewind taken as a step is un-running, so that the steps run again are charged.
+    pub(crate) charging: bool,
+    /// Whether running again under `charging` would have passed the budget: the rewind faults `budget`.
+    pub(crate) budget_spent: bool,
     pub(crate) budget: Option<u64>,
     pub(crate) max_configurations: Option<usize>,
     /// The depth of the frames belonging to whoever started the current run: 0 for the program, the
@@ -371,6 +384,9 @@ impl<'m> Executor<'m> {
             journal: None,
             outcome: None,
             steps: 0,
+            charged: 0,
+            charging: false,
+            budget_spent: false,
             budget: options.budget,
             max_configurations: options.max_configurations,
             base_depth: 0,
@@ -447,7 +463,7 @@ impl<'m> Executor<'m> {
         if self.outcome.is_some() {
             return self.outcome;
         }
-        if self.budget.is_some_and(|budget| self.steps >= budget) {
+        if self.budget_reached() {
             self.outcome = Some(Outcome::Faulted(Fault::Budget));
             return self.outcome;
         }
@@ -471,6 +487,11 @@ impl<'m> Executor<'m> {
             Err(Halt::Discard) => unreachable!("a single world is never observed away"),
         }
         self.outcome
+    }
+
+    /// Whether the budget is spent: the steps taken and the steps run again charged to it reach it.
+    pub(crate) fn budget_reached(&self) -> bool {
+        self.budget.is_some_and(|budget| self.steps.saturating_add(self.charged) >= budget)
     }
 
     /// Steps until the run ends.
@@ -509,6 +530,7 @@ impl<'m> Executor<'m> {
                 self.steps = self.steps.saturating_sub(1);
                 if self.journal.as_ref().is_some_and(|journal| journal.last().is_none()) {
                     self.steps = 0;
+                    self.charged = 0;
                 }
                 self.adopt_forks(Status::Running);
                 Ok(true)
@@ -567,6 +589,7 @@ impl<'m> Executor<'m> {
     pub fn stats(&self) -> Stats {
         Stats {
             steps: self.steps,
+            replay_charged: self.charged,
             budget: self.budget,
             max_configurations: self.max_configurations,
             region_steps: self.region_steps,

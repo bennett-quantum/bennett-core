@@ -87,6 +87,7 @@ struct Machine {
     deferring: bool,
     rewinding: u32,
     rerunning: u32,
+    charge: (u64, bool, bool),
     controls: (Option<u64>, Option<usize>, bool, bool, bool, usize, usize, bool),
 }
 
@@ -118,6 +119,7 @@ impl Machine {
             deferring: e.deferring,
             rewinding: e.rewinding,
             rerunning: e.rerunning,
+            charge: (e.charged, e.charging, e.budget_spent),
             controls: (
                 e.budget,
                 e.max_configurations,
@@ -139,7 +141,7 @@ impl Machine {
         let scalars =
             |m: &Machine| (m.current, m.forked, m.steps, m.run_outcome, m.departed.clone(), m.observed, m.observations);
         assert_eq!(scalars(self), scalars(other), "{context}: run state");
-        let nested = |m: &Machine| (m.splits, m.merges, m.mismatches, m.deferring, m.rewinding, m.rerunning);
+        let nested = |m: &Machine| (m.splits, m.merges, m.mismatches, m.deferring, m.rewinding, m.rerunning, m.charge);
         assert_eq!(nested(self), nested(other), "{context}: un-run state");
         assert_eq!(self.controls, other.controls, "{context}: limits and execution controls");
         assert_eq!(self.rng, other.rng, "{context}: the generator measurements sample with");
@@ -152,7 +154,12 @@ fn load(text: &str) -> ValidModule {
 
 fn start<'m>(module: &'m ValidModule, options: Options) -> Executor<'m> {
     let main = module.function_named("main").expect("main");
-    let options = Options { reversible: true, budget: Some(10_000), max_configurations: Some(1 << 12), ..options };
+    let options = Options {
+        reversible: true,
+        budget: options.budget.or(Some(10_000)),
+        max_configurations: Some(1 << 12),
+        ..options
+    };
     Executor::new(module, main, &[], options).expect("start")
 }
 
@@ -182,11 +189,19 @@ fn at_last_rewind(e: &mut Executor<'_>, module: &ValidModule) {
 /// Runs `text` to its last rewind, takes that step, and checks that it faults `bad_rewind` and changes
 /// nothing but the outcome.
 fn refuses_unchanged(text: &str, context: &str) {
+    refuses_unchanged_with(text, context, Options::default(), Fault::BadRewind);
+}
+
+/// As [`refuses_unchanged`], with `options` and the fault the last rewind must give; the run's step count and
+/// replay charge are unchanged as well.
+fn refuses_unchanged_with(text: &str, context: &str, options: Options, fault: Fault) {
     let module = load(text);
-    let mut e = start(&module, Options::default());
+    let mut e = start(&module, options);
     at_last_rewind(&mut e, &module);
     let before = Machine::of(&e);
-    assert_eq!(e.step(), Some(Outcome::Faulted(Fault::BadRewind)), "{context}");
+    let counts = (e.stats().steps, e.stats().replay_charged);
+    assert_eq!(e.step(), Some(Outcome::Faulted(fault)), "{context}");
+    assert_eq!((e.stats().steps, e.stats().replay_charged), counts, "{context}");
     let mut after = Machine::of(&e);
     after.worlds[0].outcome = None;
     after.assert_same(&before, context);
@@ -500,6 +515,62 @@ fn a_replay_that_leaves_the_rewinds_frame_or_ends_the_run_changes_nothing() {
     }
 }
 
+/// The weak spot removed by the decision of the afternoon of 2026-11-16: a replay that newly reaches an
+/// endless loop ran for ever. Running again is charged to the run's budget, so once it is spent the outer
+/// rewind faults `budget`, changing nothing, at every budget that lets the run reach it.
+#[test]
+fn a_replay_that_loops_for_ever_is_charged_to_the_budget_and_changes_nothing() {
+    for one in [false, true] {
+        for budget in [12, 13, 20, 100, 10_000] {
+            refuses_unchanged_with(
+                &replay_leaves("br leave", one),
+                &format!("value {}, budget {budget}", u8::from(!one)),
+                Options { budget: Some(budget), ..Options::default() },
+                Fault::Budget,
+            );
+        }
+    }
+}
+
+/// A budget spent deep inside nested running again: in a loop of rewinds of one mark every rewind runs
+/// the earlier ones again, and those their earlier ones. At every budget up to 100 the run ends either at
+/// an ordinary step or at a rewind that faults `budget`; there the whole machine is as before the rewind.
+#[test]
+fn a_budget_spent_inside_nested_running_again_changes_nothing() {
+    let module = load("memory 256\nfunc @main() {\nentry:\n%h = mark\nbr loop\nloop:\nrewind %h\nbr loop\n}");
+    let mut refused = Vec::new();
+    for budget in 1..=100 {
+        let mut e = start(&module, Options { budget: Some(budget), ..Options::default() });
+        loop {
+            let at_rewind = e.top().block == BlockId(1) && e.top().inst == 0;
+            let before = Machine::of(&e);
+            let charged = e.charged;
+            match e.step() {
+                None => continue,
+                Some(outcome) => {
+                    assert_eq!(outcome, Outcome::Faulted(Fault::Budget), "budget {budget}");
+                    assert!(e.steps + e.charged <= budget, "budget {budget}");
+                    if at_rewind && e.steps + charged < budget {
+                        refused.push(budget);
+                        let mut after = Machine::of(&e);
+                        after.worlds[0].outcome = None;
+                        after.assert_same(&before, &format!("budget {budget}"));
+                    }
+                    break;
+                }
+            }
+        }
+        e.outcome = None;
+        e.reverse().unwrap_or_else(|error| panic!("budget {budget}: reverses: {error}"));
+        assert_eq!((e.steps, e.charged), (0, 0), "budget {budget}");
+    }
+    // By the hand count of `history_independent.rs`, the n-th rewind is taken at steps 2n with the charge
+    // before it 0, 0, 1, 5, 15, 37, 83 and its own 0, 1, 4, 10, 22, 46, 94: it is refused where its step fits
+    // the budget but its running again does not.
+    let expected: Vec<u64> = [5..=5, 8..=11, 14..=23, 26..=47, 50..=95, 98..=100].into_iter().flatten().collect();
+    assert_eq!(refused, expected);
+}
+
 #[test]
 fn a_replay_that_returns_from_a_callee_before_its_rewind_changes_nothing() {
     refuses_unchanged(
@@ -762,9 +833,13 @@ entry:
     assert_eq!(after.steps, before.steps + 1);
     assert_eq!(after.splits, before.splits + 1);
     assert_eq!(after.merges, before.merges + 1);
+    // Running the inner region again is charged like the tick: the call, which splits, then each world's
+    // return.
+    assert_eq!(after.charge.0, before.charge.0 + 3);
     after.merges = before.merges;
     after.steps = before.steps;
     after.splits = before.splits;
+    after.charge.0 = before.charge.0;
     after.assert_same(&before, "deferred refusal restores the machine, charging the attempted work");
     e.reverse().expect("deferred failure reverses");
     let restored = e.snapshot();

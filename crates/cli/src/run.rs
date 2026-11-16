@@ -155,7 +155,10 @@ fn report_stats(stats: &Stats, forward: Timed, reverse: Option<Timed>) {
         println!("  reverse: {reverse}");
     }
     println!("  region steps: {}", stats.region_steps);
-    println!("  history: {} steps un-run by rewind, {} run again", stats.rewound_steps, stats.rerun_steps);
+    println!(
+        "  history: {} steps un-run by rewind, {} run again, {} of them charged to the budget",
+        stats.rewound_steps, stats.rerun_steps, stats.replay_charged
+    );
     println!(
         "  worlds: {} now, {} peak; {} splits, {} merges, {} observed; {} steps of all worlds",
         stats.worlds, stats.peak_worlds, stats.splits, stats.merges, stats.observations, stats.world_steps
