@@ -137,7 +137,8 @@ the independent table attempt. The latter refuses direct invocation without
 the runner's resource guard. Scratch and native
 binaries go to `.tmp/northstar-ladder`; scalar lowering products follow the
 front harness in `target/front-tests`. A failing test exits nonzero.
-`run.py` verifies fixture hashes, runs the selected tests, and writes
+`run.py` verifies fixture hashes, refreshes front and musl build products
+after acquiring its optional slot, runs the selected tests, and writes
 `.tmp/northstar-ladder/report.json` after each rung. Its default acceptance
 gate stays **nonzero** while any acceptance stage fails or remains unmeasured.
 `--rung 3` selects hello alone; `--slot SCRIPT` acquires a
