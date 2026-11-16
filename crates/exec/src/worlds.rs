@@ -33,6 +33,12 @@ use crate::journal::{Journal, Undo};
 use crate::memory::Memory;
 use crate::quantum::{Amplitudes, QuantumState};
 
+#[cfg(test)]
+thread_local! {
+    /// A test seam: every deferred check's key collides (`deferred_independent_tests.rs`).
+    pub(crate) static COLLIDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// How far the worlds' summed squared amplitudes may be from 1 where every world has stopped. Rounding
 /// over the few hundred gates of a test program is of order 1e-14, far below this.
 const NORM_TOLERANCE: f64 = 1e-9;
@@ -86,12 +92,45 @@ pub(crate) struct World {
 }
 
 /// A check of a rewind's un-run below a world's split point, deferred to the sum of the worlds' parts: the
-/// configurations of this world's part that fail it, keyed by the classical machine state where it was
-/// made. Parts of the same state add, as their worlds would if they were there together.
+/// configurations of this world's part that fail it, with the check and the classical machine state where
+/// it was made. Parts of the same check and state add, as their worlds would if they were there together.
+/// `key` is a hash of `state`, to find the notes to compare: two notes are added only if their states are
+/// equal, so a collision of keys adds nothing it should not.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Defect {
     key: u64,
+    state: Box<CheckState>,
     amplitudes: Amplitudes,
+}
+
+/// The check a deferred note belongs to and the classical machine state it was made in: what
+/// [`Executor::same_world`] compares, with the kind of record undone or step run again.
+#[derive(Clone, Debug)]
+pub(crate) struct CheckState {
+    kind: Undo,
+    stack_pointer: u64,
+    frames: Vec<Frame>,
+    finished: bool,
+    slots: Vec<u128>,
+    tape: Vec<u8>,
+    journal: Option<Journal>,
+    /// The register table; no amplitudes.
+    registers: QuantumState,
+    memory: Memory,
+}
+
+impl PartialEq for CheckState {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+            && self.stack_pointer == other.stack_pointer
+            && self.frames == other.frames
+            && self.finished == other.finished
+            && self.slots == other.slots
+            && self.tape == other.tape
+            && self.journal == other.journal
+            && self.registers.same_registers(&other.registers)
+            && self.memory.same(&other.memory)
+    }
 }
 
 impl World {
@@ -582,17 +621,38 @@ impl<'m> Executor<'m> {
         if !self.deferring || failing.is_empty() {
             return;
         }
-        let mut state = DefaultHasher::new();
-        kind.hash(&mut state);
-        self.stack_pointer.hash(&mut state);
-        self.frames.hash(&mut state);
-        self.outcome.is_some().hash(&mut state);
-        written_slots(&self.slots).hash(&mut state);
-        self.tape.hash(&mut state);
-        self.journal.hash(&mut state);
-        self.quantum.hash_registers(&mut state);
-        self.memory.hash_overlay(&mut state);
-        self.deferred.push(Defect { key: state.finish(), amplitudes: failing });
+        let state = self.check_state(kind);
+        let mut hasher = DefaultHasher::new();
+        state.kind.hash(&mut hasher);
+        state.stack_pointer.hash(&mut hasher);
+        state.frames.hash(&mut hasher);
+        state.finished.hash(&mut hasher);
+        state.slots.hash(&mut hasher);
+        state.tape.hash(&mut hasher);
+        state.journal.hash(&mut hasher);
+        state.registers.hash_registers(&mut hasher);
+        state.memory.hash_overlay(&mut hasher);
+        #[cfg(test)]
+        let key = if COLLIDE.get() { 0 } else { hasher.finish() };
+        #[cfg(not(test))]
+        let key = hasher.finish();
+        self.deferred.push(Defect { key, state: Box::new(state), amplitudes: failing });
+    }
+
+    /// The check `kind` and the classical machine state of the current world, for a deferred note. A note is
+    /// made only where a check fails on a part, so the copy of the journal it holds is rare.
+    pub(crate) fn check_state(&self, kind: Undo) -> CheckState {
+        CheckState {
+            kind,
+            stack_pointer: self.stack_pointer,
+            frames: self.frames.clone(),
+            finished: self.outcome.is_some(),
+            slots: written_slots(&self.slots).to_vec(),
+            tape: self.tape.clone(),
+            journal: self.journal.clone(),
+            registers: self.quantum.with_amplitudes(Amplitudes::new()),
+            memory: self.memory.clone(),
+        }
     }
 
     /// Makes the checks the worlds that rewound last deferred, where no world runs: those worlds (`pending`,
@@ -608,17 +668,26 @@ impl<'m> Executor<'m> {
             if !worlds.iter().any(joined) {
                 return None;
             }
-            let mut sums = HashMap::<u64, Amplitudes>::new();
+            // The notes of one check in one state add; a key is a hash, so the states are compared on a match.
+            let mut sums = HashMap::<u64, Vec<(Box<CheckState>, Amplitudes)>>::new();
             for world in worlds.iter_mut().filter(|world| joined(world)) {
                 for defect in std::mem::take(&mut world.deferred) {
-                    let sum = sums.entry(defect.key).or_default();
+                    let bucket = sums.entry(defect.key).or_default();
+                    let index = match bucket.iter().position(|(state, _)| **state == *defect.state) {
+                        Some(index) => index,
+                        None => {
+                            bucket.push((defect.state, Amplitudes::new()));
+                            bucket.len() - 1
+                        }
+                    };
+                    let sum = &mut bucket[index].1;
                     for (config, amplitude) in defect.amplitudes {
                         *sum.entry(config).or_default() += amplitude;
                     }
                 }
             }
             let weight = |sum: &Amplitudes| sum.values().map(|amplitude| amplitude.norm_sqr()).sum::<f64>();
-            if sums.values().all(|sum| weight(sum) <= NORM_TOLERANCE) {
+            if sums.values().flatten().all(|(_, sum)| weight(sum) <= NORM_TOLERANCE) {
                 // A part that a deferred check emptied held only what other parts cancelled.
                 worlds.retain_mut(|world| {
                     if !joined(world) {

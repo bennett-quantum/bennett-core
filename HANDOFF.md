@@ -1310,8 +1310,10 @@ the ordinary frontend run without changing its domain or assertions.
   observing and names the step (`JournalMeasurement::unsupported`), the run unchanged. Route: shadow the
   records a rewind pops (its history nodes and entries) and the frames a caught fault discards.
 
-- Worlds' deferred un-run checks (`d6036a1`) are matched across worlds by a 64-bit hash of the classical state; a
-  collision would add two different checks (route: compare the states on a hash match). The copy each world saves
+- Worlds' deferred un-run checks (`d6036a1`) were matched across worlds by a 64-bit hash of the classical state
+  alone, so a collision would have added two different checks; since 2026-11-16 a note keeps its state and the
+  states are compared on a hash match (`a_hash_collision_does_not_add_the_checks_of_different_states`, with a
+  test seam that forces every key to collide). The copy each world saves
   before a rewind makes the 1,500-iteration idiom loop about a third slower (route: copy only the journal above
   the mark). When a sum fails, every waiting world of the group that rewound last faults; the reference model
   faults every world at that rewind (no generated program differs).

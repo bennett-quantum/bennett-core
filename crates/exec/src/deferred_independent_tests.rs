@@ -1,6 +1,7 @@
 //! Tests of the documented sum and fault-group policy, with actual executed rewinds.
 use super::*;
 use crate::executor::Options;
+use crate::worlds::COLLIDE;
 use num_complex::Complex64 as C;
 use std::collections::BTreeMap;
 
@@ -73,6 +74,7 @@ fn empty_parts_are_dropped_only_after_checks_and_failure_restores_the_entire_dee
     // check bookkeeping and coefficients. This checks the check barrier, not program reachability.
     assert_eq!(e.step(), None);
     let template = e.clone_world(None);
+    let state = Box::new(e.check_state(crate::journal::Undo::Slot));
     let empty = template.quantum.with_amplitudes(Amplitudes::new());
     let failing = |a: f64| BTreeMap::from([(vec![1_u64].into_boxed_slice(), C::new(a, 0.0))]);
     let part = |a: f64| {
@@ -81,7 +83,7 @@ fn empty_parts_are_dropped_only_after_checks_and_failure_restores_the_entire_dee
         w.pending = true;
         w.backups.push(template.clone());
         w.quantum = empty.clone();
-        w.deferred.push(Defect { key: 17, amplitudes: failing(a) });
+        w.deferred.push(Defect { key: 17, state: state.clone(), amplitudes: failing(a) });
         w
     };
     let mut pass = vec![part(1.0), part(2.0), part(-3.0)];
@@ -103,6 +105,57 @@ fn empty_parts_are_dropped_only_after_checks_and_failure_restores_the_entire_dee
     assert_eq!(e.make_deferred_checks(&mut fail), Some(RunError::WorldFault { fault: Fault::BadRewind, worlds: 3 }));
     assert_eq!(fail.iter().filter(|w| w.outcome == Some(Outcome::Faulted(Fault::BadRewind))).count(), 2);
     assert_eq!(fail.iter().filter(|w| w.status == Status::Parked).count(), 1);
+}
+
+/// Deferred checks are summed per classical machine state. They are found by a 64-bit hash of it, so two
+/// different states whose hashes collide must still be told apart: their notes are not added. The seam
+/// forces every key to collide; two worlds whose notes at two different states cancel only when added
+/// must each fault `bad_rewind`, as they do without the collision.
+#[test]
+fn a_hash_collision_does_not_add_the_checks_of_different_states() {
+    let text = FOUR.replace("func @main()", "func @main(i64 %state)");
+    let p = bennett_ir::load(&text).expect("valid");
+    for collide in [false, true] {
+        let mut e = Executor::new(
+            &p,
+            p.function_named("main").expect("main"),
+            &[0],
+            Options { reversible: true, allow_region_faults: true, ..Options::default() },
+        )
+        .expect("starts");
+        assert_eq!(e.step(), None);
+        e.deferring = true;
+        let template = e.clone_world(None);
+        let failing = |a: f64| BTreeMap::from([(vec![1_u64].into_boxed_slice(), C::new(a, 0.0))]);
+        COLLIDE.set(collide);
+        let mut notes = Vec::new();
+        for (state, amplitude) in [(1, 0.5), (2, -0.5)] {
+            e.slots[0] = state;
+            e.defer(crate::journal::Undo::Slot, failing(amplitude));
+            notes.push(e.deferred.pop().expect("one note"));
+        }
+        COLLIDE.set(false);
+        assert_eq!(notes[0].key == notes[1].key, collide, "the seam forces the collision");
+        let empty = template.quantum.with_amplitudes(Amplitudes::new());
+        let mut worlds: Vec<World> = notes
+            .into_iter()
+            .map(|note| {
+                let mut w = template.clone();
+                w.status = Status::Parked;
+                w.pending = true;
+                w.backups.push(template.clone());
+                w.quantum = empty.clone();
+                w.deferred.push(note);
+                w
+            })
+            .collect();
+        assert_eq!(e.make_deferred_checks(&mut worlds), None, "region faults are allowed");
+        assert_eq!(worlds.len(), 2, "collide {collide}: both worlds are put back");
+        assert!(
+            worlds.iter().all(|w| w.outcome == Some(Outcome::Faulted(Fault::BadRewind))),
+            "collide {collide}: each state's sum is not zero, so each world faults"
+        );
+    }
 }
 
 /// CARGO_BUILD_JOBS=3 cargo test -p bennett-exec --lib deferred_hash_key_sample -- --ignored --nocapture

@@ -336,9 +336,10 @@ configuration. With one world the machine is exactly the machine above.
   from others, its rewind un-runs its *part* of the state the worlds shared. Every undo there is linear,
   but a part need not hold what the shared history read, nor be zero where it allocated a register (or
   freed one, in steps run again): only the sum of the parts must. So below a world's split point each
-  of those checks is made on the sum. The part notes the configurations that fail it, keyed by the
-  classical machine state where it is made (parts of the same state add, as their worlds would if they
-  were there together); un-allocating keeps a part's zero configurations (the adjoint of allocating), and
+  of those checks is made on the sum. The part notes the configurations that fail it, with the check and
+  the classical machine state where it is made (parts of the same state add, as their worlds would if they
+  were there together; a hash of the state finds the notes to compare, and the states are compared in
+  full, so a collision adds nothing); un-allocating keeps a part's zero configurations (the adjoint of allocating), and
   steps run again there do not refuse a `qfree`. When no world runs, the parked worlds with the longest
   history that un-ran such parts are all the parts summed there, as a rewind joins every world at it:
   their notes are added check by check, and a sum whose weight is above the norm tolerance (1e-9) fails.
