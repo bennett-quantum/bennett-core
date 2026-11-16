@@ -41,7 +41,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (214 tests; ignored: 4 heavy reference or generated runs, the memory-cost report, 1 heavy recomputation check, 1 witness of a wrong result; about 8 s, no LLVM needed) and `front/test.sh` (142 tests; ignored by default: the three heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (224 tests; ignored: 5 heavy reference or generated runs, the memory-cost report, 1 heavy recomputation check, 1 witness of a wrong result; about 8 s, no LLVM needed) and `front/test.sh` (143 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check that needs `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -334,6 +334,11 @@ alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved.
    journal, which grows with steps run (2.77 MB after 4,096 bytes written per world, against 16 KiB of
    overlay); sharing its common prefix is the route if it matters. `Stats` and `--stats` report the
    overlay bytes copied and held and the journal bytes copied.
+   The independent testing pass of the overlay and of return addresses (`948dc92`, sol) found no wrong result: 512
+   generated memory programs against the whole-world reference (writes restoring base bytes, overlapping and
+   unaligned writes of every width, folds then new splits, merges after different write orders and un-runs),
+   1,458 dense un-run cases (half with overlays), split statistics against independent counts; 63 device
+   return-address programs, 480 C comparisons with native and 320 musl-linked results.
    The implementer's order for the rest (done: 1 mark/rewind, 2 worlds, 3 the memory overlay): worlds (a superposition of whole machine states, split where a call passes
    a register as an integer, merged where equal), the memory overlay, address-taking gates, then `apply` as mark,
    call, rewind-keep shown equal on every example and test.
