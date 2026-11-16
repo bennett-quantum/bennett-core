@@ -164,6 +164,39 @@ pointers (every eighth match of a `grep` for them; two more are skipped natively
 front at `a155611`: no outcome changed, and each takes 30 to 54 more steps, the comparisons that musl's
 startup and exit now make at their calls through pointers.
 
+## Independent prototype-call testing pass (2026-11-16)
+
+Testing `329ef7a` on `aeaa0e4`, with clang 18 on x86-64 and executed native `-O0` and `-O2`
+references: **no new wrong answer found**. No implementation changes.
+
+- `front/tests/tests/proto_independent.rs`: **2,880 exact native/device result words**, 24 shapes,
+  eight inputs, five call paths (cast, volatile pointer, table, unprototyped pointer and correctly typed
+  control), from `-O0`, `-O2` and `--taint-all`. Includes 576 correctly typed controls, separate GP/SSE
+  register sequences with both spilling, missing unread arguments, signed/unsigned 8/16/32/64/128-bit
+  integers, by-value and memory results, `long double`, two-register and mixed-class results, packed
+  floats, variadic/fixed calls both ways, recursion and a K&R definition. All native modes agree with
+  the correctly typed control. The class-reordering shapes use pointers because direct same-size
+  class swaps have the documented native optimisation disagreement.
+- **72 coherent branch values and amplitudes** match native basis values, using a biased rotation,
+  for integer narrowing, a two-register result and recursion. An unknown indirect table's effects are
+  refused by name in all three modes, as ordinary indirect calls under qubit control are today.
+- Additional generated probes: **367 native-stable sources, 1,101 device runs** across the three modes:
+  988 matching results, 107 named faults, six named refusals; no wrong result or crash. Another 25 sources
+  excluded for native optimisation disagreements. Includes every integer width and signedness, negative
+  narrow extensions, stack arguments, five small-aggregate layouts at the GP/SSE register boundaries,
+  8/16/32-byte vectors, aliases and memory-layout mismatches. Undetermined reads are checked only for
+  a named stop; agreement of native builds alone does not establish that unset bits are determined.
+- A **27-program sample**, 20 GCC and seven c-testsuite, all agrees with musl linked; native status and
+  stdout checked at both optimisation levels. Includes `pr67037` (2,139 steps), `00025` (2,084),
+  `pr92904`, `va-arg-1/10/23`, struct returns, jumps and floating-point programs. No whole corpus run.
+- `rt/musl/tests/proto-independent.c`: libc result casts (`div`, `ldiv`, `strtol`), fixed prototypes
+  calling `snprintf`/`printf`, and `qsort` callbacks exchanging pointers/integers or omitting an unread
+  parameter. Native `-O0`/`-O2` both return 0 and print the same 74 bytes; both device builds agree.
+  The separate musl suite passes all 37 checks (102.46 s, shared host).
+
+The existing prototype matrix and named-refusal/fault tests also pass. These are sampled executed
+witnesses, not a claim to have exhausted the call space. The conservative refusals documented above remain.
+
 ## The program that waited on over-aligned variadic arguments (2026-11-16)
 
 After variadic arguments aligned to more than 16 bytes were placed where clang's `va_arg` reads them

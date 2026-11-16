@@ -30,13 +30,14 @@ def main():
     # tests/regress: witnesses of the independent testing pass, each self-checking (status 0 natively).
     regressions = sorted(f"regress/{path.stem}" for path in (HERE / "tests/regress").glob("*.c"))
     names = ["library", "exit", "arena", "unimplemented", "stderr", "heap", "signals", "abort", "stdin", "brk",
-             "fenv", "fenv-mode", "fenv-flags", "complex", "setjmp", "setjmp-independent", "setjmp-masks", "prototypes",
+             "fenv", "fenv-mode", "fenv-flags", "complex", "setjmp", "setjmp-independent", "setjmp-masks",
+             "prototypes", "proto-independent",
              *regressions]
     # Non-local jumps are lowered after the optimiser, so they are also checked from -O2 (against the same
     # native output); the small ones are also un-run to their entry state.
     jumps = [name for name in names if "setjmp" in name]
     # Calls through another prototype are lowered before the optimiser, which must not undo them.
-    optimised = jumps + ["prototypes"]
+    optimised = jumps + ["prototypes", "proto-independent"]
     for name, level in [(name, "-O0") for name in names] + [(name, "-O2") for name in optimised]:
         source = HERE / "tests" / f"{name}.c"
         program = args.out / f"{name.replace('/', '-')}{'' if level == '-O0' else level}.bn"
@@ -60,6 +61,12 @@ def main():
                 built = run(["clang-18", "-O0", source, "-lm", "-o", native])
                 assert built.returncode == 0, built.stderr
                 reference = subprocess.run([native], capture_output=True, stdin=subprocess.DEVNULL)
+                if name == "proto-independent":
+                    native_o2 = native.with_suffix(".native-O2")
+                    built = run(["clang-18", "-O2", source, "-o", native_o2])
+                    assert built.returncode == 0, built.stderr
+                    reference_o2 = subprocess.run([native_o2], capture_output=True, stdin=subprocess.DEVNULL)
+                    assert (reference.returncode, reference.stdout) == (reference_o2.returncode, reference_o2.stdout), name
                 # A process killed by a signal has the status a shell reports.
                 status = reference.returncode if reference.returncode >= 0 else 128 - reference.returncode
                 output = reference.stdout
