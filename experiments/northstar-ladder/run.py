@@ -59,6 +59,24 @@ def main():
         "scope": "C only, source-input entries; see README for domains and limitations",
         "rungs": {},
     }
+    # Main can advance while this runner waits for its slot. Refresh build
+    # products only after acquisition so measured source and binaries agree.
+    prerequisites = [
+        ["cmake", "-S", str(ROOT / "front"), "-B", str(ROOT / "target/front")],
+        ["cmake", "--build", str(ROOT / "target/front"), "--parallel", "2"],
+        [sys.executable, str(ROOT / "rt/musl/build.py"), "--jobs", "2"],
+    ]
+    report["prerequisites"] = []
+    with (out / "prerequisites.txt").open("wb") as log:
+        for command in prerequisites:
+            started = time.monotonic()
+            result = subprocess.run(command, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
+            report["prerequisites"].append({"command": command, "exit": result.returncode,
+                                             "seconds": time.monotonic() - started})
+            (out / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+            print(f"prerequisite {Path(command[0]).name}: exit {result.returncode}", flush=True)
+            if result.returncode:
+                return 1
     for rung in args.rung or TESTS:
         row = {"acceptance": "RUNNING", "stages": {}}
         report["rungs"][rung] = row
