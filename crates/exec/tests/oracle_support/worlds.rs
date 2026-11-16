@@ -9,13 +9,15 @@
 use std::collections::BTreeMap;
 
 use bennett_ir::{
-    BlockId, CastOp, DataItem, Fault, FuncId, Inst, Keep, Operand, Slot, Target, Terminator, Type, ValidModule,
+    BlockId, CastOp, DataItem, Fault, FuncId, Inst, Keep, KeepTarget, Operand, Place, Slot, Target, Terminator, Type,
+    ValidModule,
 };
 use num_complex::Complex64 as C;
 
 use super::dense::{binary, compare, gate_matrix, signed};
 
 pub type Superposition = BTreeMap<World, C>;
+type Promotion = (u64, usize, u8);
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Value {
@@ -64,6 +66,8 @@ pub struct Classical {
     pub sp: u64,
     pub tape: Vec<u8>,
     pub registers: Vec<Register>,
+    /// DESIGN, Qubits in memory: cells are part of the register table.
+    pub cells: BTreeMap<u64, usize>,
     pub marks: Vec<Mark>,
     pub next_activation: u64,
     pub finish: Option<Finish>,
@@ -78,6 +82,15 @@ pub enum Action {
     Free(usize),
     /// The operation is read from the program position in `before`.
     Gate,
+    /// Resolved sites and first-gate moves; no quantum values are saved by a gate.
+    MemoryGate {
+        target: (usize, u8),
+        controls: Vec<(usize, u8)>,
+        promoted: Vec<Promotion>,
+    },
+    /// Ordinary accesses retain the destroyed/read byte, independently for each basis world.
+    Cells(Vec<(usize, u8, u8)>),
+    Read(Vec<(usize, u64)>),
     Apply,
     JoinedRewind {
         start: Box<Classical>,
@@ -206,6 +219,7 @@ impl<'a> Model<'a> {
                 sp: self.program.memory_size,
                 tape: Vec::new(),
                 registers: Vec::new(),
+                cells: BTreeMap::new(),
                 marks: Vec::new(),
                 next_activation: 0,
                 finish: None,
@@ -236,13 +250,26 @@ impl<'a> Model<'a> {
         if end > self.program.memory_size {
             return Err(Fault::OutOfBounds);
         }
-        Ok((address..end).map(|a| world.classical.overlay.get(&a).copied().unwrap_or(self.base[a as usize])).collect())
+        Ok((address..end)
+            .map(|a| {
+                world.classical.cells.get(&a).map_or_else(
+                    || world.classical.overlay.get(&a).copied().unwrap_or(self.base[a as usize]),
+                    |&id| world.quantum[id] as u8,
+                )
+            })
+            .collect())
     }
 
     fn write_memory(&self, world: &mut World, address: u64, bytes: &[u8]) -> Result<(), Fault> {
         self.read_memory(world, address, bytes.len())?;
         for (offset, &byte) in bytes.iter().enumerate() {
             let address = address + offset as u64;
+            let byte = if let Some(&id) = world.classical.cells.get(&address) {
+                world.quantum[id] = u64::from(byte);
+                0
+            } else {
+                byte
+            };
             if byte == self.base[address as usize] {
                 world.classical.overlay.remove(&address);
             } else {
@@ -250,6 +277,63 @@ impl<'a> Model<'a> {
             }
         }
         Ok(())
+    }
+
+    // DESIGN: the first gate allocates an eight-qubit column and moves the old byte.
+    fn promote(&self, w: &mut World, address: u64) -> Result<(usize, Option<Promotion>), Fault> {
+        if let Some(&id) = w.classical.cells.get(&address) {
+            return Ok((id, None));
+        }
+        let old = self.read_memory(w, address, 1)?[0];
+        self.write_memory(w, address, &[0])?;
+        let id = w.classical.registers.iter().position(|r| r.width.is_none()).unwrap_or(w.classical.registers.len());
+        let generation = w.classical.registers.get(id).map_or(1, |r| r.generation + 1);
+        let info = Register { width: Some(8), generation, allocated_at: w.history.len() };
+        if id == w.classical.registers.len() {
+            w.classical.registers.push(info);
+            w.quantum.push(old.into());
+        } else {
+            w.classical.registers[id] = info;
+            w.quantum[id] = old.into();
+        }
+        w.classical.cells.insert(address, id);
+        Ok((id, Some((address, id, old))))
+    }
+
+    fn touched(&self, w: &World, address: u64, bytes: usize) -> Result<Vec<(usize, u8, u8)>, Fault> {
+        self.read_memory(w, address, bytes)?;
+        Ok(w.classical
+            .cells
+            .range(address..address + bytes as u64)
+            .map(|(_, &id)| (id, w.quantum[id] as u8, w.quantum[id] as u8))
+            .collect())
+    }
+
+    fn keeps(&self, w: &World, keep: &[Keep], mark: Option<usize>) -> Result<Vec<(usize, u64)>, Fault> {
+        let mut values = Vec::new();
+        for k in keep {
+            let value = w.integer(k.value)?;
+            match k.target {
+                KeepTarget::Register(r) => values.push((w.register(r)?, value as u64)),
+                KeepTarget::Memory(a) => {
+                    let a = w.integer(a)? as u64;
+                    let ty = match k.value {
+                        Operand::Const(c) => Type::Int(c.width()),
+                        Operand::Slot(s) => self.program.slot_type(w.frame().function, s),
+                    };
+                    let Type::Int(width) = ty else { unreachable!() };
+                    self.read_memory(w, a, width.bytes() as usize)?;
+                    for i in 0..width.bytes() {
+                        let id = *w.classical.cells.get(&(a + i)).ok_or(Fault::BadRewind)?;
+                        values.push((id, ((value >> (8 * i)) & 255) as u64));
+                    }
+                }
+            }
+        }
+        if values.iter().any(|&(id, _)| mark.is_some_and(|h| w.classical.registers[id].allocated_at >= h)) {
+            return Err(Fault::BadRewind);
+        }
+        Ok(values)
     }
 
     fn call(&self, w: &mut World, func: FuncId, args: Vec<Value>, result: Option<Slot>) -> Result<(), Fault> {
@@ -327,6 +411,19 @@ impl<'a> Model<'a> {
         {
             return self.rewind_group(state, *mark, keep);
         }
+        // DESIGN's explicit debt: unlike a load, longjmp over disagreeing record cells
+        // currently faults bad_indirect for the entire world rather than splitting it.
+        if first.classical.finish.is_none()
+            && self.instruction(&first.classical).is_none()
+            && let Terminator::Longjmp { buffer, .. } =
+                self.program.function(first.frame().function).block(first.frame().block).term
+        {
+            let address = first.integer(buffer)? as u64;
+            let bytes = self.read_memory(first, address, 32)?;
+            if state.keys().any(|w| self.read_memory(w, address, 32).as_ref() != Ok(&bytes)) {
+                return Err(Fault::BadIndirect);
+            }
+        }
         let mut next = BTreeMap::new();
         for (w, &a) in state {
             for (out, b) in self.forward(w.clone())? {
@@ -367,6 +464,7 @@ impl<'a> Model<'a> {
                     Inst::Qalloc { .. }
                         | Inst::Qfree { .. }
                         | Inst::Gate { .. }
+                        | Inst::GateAt { .. }
                         | Inst::Measure { .. }
                         | Inst::Apply { .. }
                 )
@@ -400,7 +498,9 @@ impl<'a> Model<'a> {
                     ));
                 }
                 Inst::Load { width, address, .. } => {
-                    let bytes = self.read_memory(&w, w.integer(*address)? as u64, width.bytes() as usize)?;
+                    let address = w.integer(*address)? as u64;
+                    action = Action::Cells(self.touched(&w, address, width.bytes() as usize)?);
+                    let bytes = self.read_memory(&w, address, width.bytes() as usize)?;
                     let mut n = [0; 16];
                     n[..bytes.len()].copy_from_slice(&bytes);
                     result = Some(Value::Int(u128::from_le_bytes(n) & width.mask()));
@@ -408,7 +508,10 @@ impl<'a> Model<'a> {
                 Inst::Store { width, address, value } => {
                     let a = w.integer(*address)? as u64;
                     let n = w.integer(*value)?.to_le_bytes();
+                    let cells = self.touched(&w, a, width.bytes() as usize)?;
                     self.write_memory(&mut w, a, &n[..width.bytes() as usize])?;
+                    action =
+                        Action::Cells(cells.into_iter().map(|(id, old, _)| (id, old, w.quantum[id] as u8)).collect());
                 }
                 Inst::Alloca { size, .. } => {
                     w.classical.sp = w
@@ -460,10 +563,24 @@ impl<'a> Model<'a> {
                     ];
                     let bytes: Vec<_> = words.into_iter().flat_map(u64::to_le_bytes).collect();
                     let address = w.integer(*buffer)? as u64;
+                    let cells = self.touched(&w, address, bytes.len())?;
                     self.write_memory(&mut w, address, &bytes)?;
+                    action =
+                        Action::Cells(cells.into_iter().map(|(id, old, _)| (id, old, w.quantum[id] as u8)).collect());
                     result = Some(Value::Int(0));
                 }
                 Inst::Call { callee, args, dst } => {
+                    let reads = args
+                        .iter()
+                        .zip(&self.program.function(*callee).params)
+                        .filter_map(|(a, p)| match (w.read(*a), p.ty) {
+                            (Value::Register(id, _), Type::Int(_)) => Some((id, w.quantum[id])),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    if !reads.is_empty() {
+                        action = Action::Read(reads);
+                    }
                     let args = args.iter().map(|a| w.read(*a)).collect();
                     self.call(&mut w, *callee, args, *dst)?;
                     w.history.push(Record { before, action });
@@ -475,6 +592,17 @@ impl<'a> Model<'a> {
                         address.checked_sub(1).and_then(|i| usize::try_from(i).ok()).ok_or(Fault::BadIndirect)?;
                     if !self.program.functions.get(index).is_some_and(|f| f.has_signature(signature)) {
                         return Err(Fault::BadIndirect);
+                    }
+                    let reads = args
+                        .iter()
+                        .zip(&self.program.functions[index].params)
+                        .filter_map(|(a, p)| match (w.read(*a), p.ty) {
+                            (Value::Register(id, _), Type::Int(_)) => Some((id, w.quantum[id])),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    if !reads.is_empty() {
+                        action = Action::Read(reads);
                     }
                     let args = args.iter().map(|a| w.read(*a)).collect();
                     self.call(&mut w, FuncId(index as u32), args, *dst)?;
@@ -516,7 +644,25 @@ impl<'a> Model<'a> {
                     action = Action::Free(id);
                 }
                 Inst::Gate { .. } => action = Action::Gate,
-                Inst::GateAt { .. } => panic!("the reference does not model qubits in memory"),
+                Inst::GateAt { target, controls, .. } => {
+                    let mut promoted = Vec::new();
+                    let mut sites = Vec::new();
+                    for place in std::iter::once(target).chain(controls) {
+                        let site = match *place {
+                            Place::Register(q) => (w.register(q.register)?, q.bit),
+                            Place::Memory { address, bit } => {
+                                let address = (w.integer(address)? as u64)
+                                    .checked_add(u64::from(bit / 8))
+                                    .ok_or(Fault::OutOfBounds)?;
+                                let (id, promotion) = self.promote(&mut w, address)?;
+                                promoted.extend(promotion);
+                                (id, bit % 8)
+                            }
+                        };
+                        sites.push(site);
+                    }
+                    action = Action::MemoryGate { target: sites[0], controls: sites[1..].to_vec(), promoted };
+                }
                 Inst::Apply { .. } => action = Action::Apply,
                 Inst::Mark { .. } => {
                     let handle = w.history.len() + 1;
@@ -533,6 +679,7 @@ impl<'a> Model<'a> {
             action
         } else {
             let term = &self.program.function(w.frame().function).block(w.frame().block).term;
+            let mut action = Action::Classical;
             match term {
                 Terminator::Jump(t) => self.jump(&mut w, t)?,
                 Terminator::Branch { cond, if_true, if_false } => {
@@ -570,11 +717,16 @@ impl<'a> Model<'a> {
                     }
                     w.classical.finish = Some(Finish::Returned(Some(w.integer(*value)?)));
                 }
-                Terminator::Longjmp { buffer, value } => self.longjmp(&mut w, *buffer, *value)?,
+                Terminator::Longjmp { buffer, value } => {
+                    let address = w.integer(*buffer)? as u64;
+                    action = Action::Cells(self.touched(&w, address, 32)?);
+                    self.longjmp(&mut w, *buffer, *value)?;
+                }
                 Terminator::Fault(f) => return Err(*f),
             }
-            Action::Classical
+            action
         };
+        let action = if matches!(&action, Action::Cells(c) if c.is_empty()) { Action::Classical } else { action };
         let record = Record { before, action };
         let mut state = self.quantum_action(w, &record, false)?;
         for (mut world, a) in std::mem::take(&mut state) {
@@ -640,16 +792,25 @@ impl<'a> Model<'a> {
 
     fn quantum_action(&self, mut w: World, record: &Record, inverse: bool) -> Result<Superposition, Fault> {
         match record.action {
-            Action::Gate => {
-                let Some(Inst::Gate { gate, target, controls }) = self.instruction(&record.before) else {
-                    unreachable!()
+            Action::Gate | Action::MemoryGate { .. } => {
+                let inst = self.instruction(&record.before).expect("gate");
+                let (gate, target, bits) = match (&record.action, inst) {
+                    (Action::MemoryGate { target, controls, .. }, Inst::GateAt { gate, .. }) => {
+                        (*gate, *target, std::iter::once(*target).chain(controls.iter().copied()).collect::<Vec<_>>())
+                    }
+                    (Action::Gate, Inst::Gate { gate, target, controls }) => {
+                        let current = std::mem::replace(&mut w.classical, record.before.clone());
+                        let target = (w.register(target.register)?, target.bit);
+                        let mut bits = vec![target];
+                        for c in controls {
+                            bits.push((w.register(c.register)?, c.bit));
+                        }
+                        w.classical = current;
+                        (*gate, target, bits)
+                    }
+                    _ => unreachable!(),
                 };
-                let current = std::mem::replace(&mut w.classical, record.before.clone());
-                let target_id = w.register(target.register)?;
-                let mut bits = vec![(target_id, target.bit)];
-                for c in controls {
-                    bits.push((w.register(c.register)?, c.bit));
-                }
+                let (target_id, target_bit) = target;
                 let mut distinct = bits.clone();
                 distinct.sort();
                 distinct.dedup();
@@ -657,18 +818,17 @@ impl<'a> Model<'a> {
                     return Err(Fault::QubitAlias);
                 }
                 let enabled = bits[1..].iter().all(|&(r, b)| w.quantum[r] >> b & 1 == 1);
-                w.classical = current;
                 if !enabled {
                     return Ok(basis(w));
                 }
-                let m = gate_matrix(*gate);
+                let m = gate_matrix(gate);
                 let m = if inverse { m.adjoint() } else { m };
-                let input = ((w.quantum[target_id] >> target.bit) & 1) as usize;
+                let input = ((w.quantum[target_id] >> target_bit) & 1) as usize;
                 let mut state = BTreeMap::new();
                 for output in 0..2 {
                     let mut out = w.clone();
                     out.quantum[target_id] =
-                        (out.quantum[target_id] & !(1 << target.bit)) | ((output as u64) << target.bit);
+                        (out.quantum[target_id] & !(1 << target_bit)) | ((output as u64) << target_bit);
                     add(&mut state, out, m[(output, input)]);
                 }
                 clean(&mut state);
@@ -696,6 +856,12 @@ impl<'a> Model<'a> {
                 let budget = w.integer(*budget)? as usize;
                 let mut region = w.clone();
                 region.history.clear();
+                let cells: Vec<_> =
+                    region.classical.cells.iter().map(|(&a, &id)| (a, region.quantum[id] as u8)).collect();
+                region.classical.cells.clear();
+                for (a, byte) in cells {
+                    self.write_memory(&mut region, a, &[byte])?;
+                }
                 region.quantum.clear();
                 region.classical.registers.clear();
                 region.classical.marks.clear();
@@ -745,15 +911,7 @@ impl<'a> Model<'a> {
         let mut state = BTreeMap::new();
         for (w, &a) in inputs {
             let mut out = w.clone();
-            let mut keeps = Vec::new();
-            for k in keep {
-                let id = w.register(keep_register(k))?;
-                if w.classical.registers[id].allocated_at >= h {
-                    return Err(Fault::BadRewind);
-                }
-                keeps.push((id, w.integer(k.value)? as u64));
-            }
-            for (r, n) in keeps {
+            for (r, n) in self.keeps(w, keep, Some(h))? {
                 out.quantum[r] ^= n;
             }
             add(&mut state, out, a);
@@ -889,7 +1047,85 @@ impl<'a> Model<'a> {
         panic!("joined reference exhausted {limit} rounds");
     }
 
+    // Local mismatches above a split fault that original world; a shared-history mismatch
+    // faults the surviving rewind cohort. Inspect unique history before summing shares, using
+    // exact records and full states rather than production ticks or 64-bit check hashes.
     fn joined_rewind(&self, inputs: &Superposition, h: usize) -> Result<Superposition, Fault> {
+        let mut groups = BTreeMap::<_, Superposition>::new();
+        for (w, &a) in inputs {
+            groups.entry((w.classical.clone(), w.history.clone())).or_default().insert(w.clone(), a);
+        }
+        let groups: Vec<_> = groups.into_values().collect();
+        let mut survivors = BTreeMap::new();
+        let mut faults = BTreeMap::new();
+        for (i, group) in groups.iter().enumerate() {
+            let first = group.keys().next().expect("group");
+            let shared = groups
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != i)
+                .map(|(_, other)| {
+                    first
+                        .history
+                        .iter()
+                        .zip(&other.keys().next().expect("group").history)
+                        .take_while(|(a, b)| a == b)
+                        .count()
+                })
+                .max()
+                .unwrap_or(h)
+                .max(h);
+            let Some(Inst::Rewind { keep, .. }) = self.instruction(&first.classical) else { unreachable!() };
+            let preflight = (|| -> Result<(), Fault> {
+                let mut state = BTreeMap::new();
+                for (w, &a) in group {
+                    let mut w = w.clone();
+                    for (id, n) in self.keeps(&w, keep, Some(h))? {
+                        w.quantum[id] ^= n;
+                    }
+                    add(&mut state, w, a);
+                }
+                while state.keys().any(|w| w.history.len() > shared) {
+                    state = self.undo_state(&state)?;
+                    // Replaying a merging inner rewind can split this part again. Checks below
+                    // that split belong to the joined sum, including checks of older reads.
+                    let worlds: std::collections::BTreeSet<_> =
+                        state.keys().map(|w| (&w.classical, &w.history)).collect();
+                    if worlds.len() > 1 {
+                        return Ok(());
+                    }
+                }
+                Ok(())
+            })();
+            for (w, &a) in group {
+                let mut w = w.clone();
+                if preflight.is_err() {
+                    w.classical.finish = Some(Finish::Faulted(Fault::BadRewind));
+                    add(&mut faults, w, a);
+                } else {
+                    add(&mut survivors, w, a);
+                }
+            }
+        }
+        if !survivors.is_empty() {
+            match self.joined_rewind_checked(&survivors, h) {
+                Ok(result) => {
+                    for (w, a) in result {
+                        add(&mut faults, w, a);
+                    }
+                }
+                Err(f) => {
+                    for (mut w, a) in survivors {
+                        w.classical.finish = Some(Finish::Faulted(f));
+                        add(&mut faults, w, a);
+                    }
+                }
+            }
+        }
+        Ok(faults)
+    }
+
+    fn joined_rewind_checked(&self, inputs: &Superposition, h: usize) -> Result<Superposition, Fault> {
         let first = inputs.keys().next().expect("rewind inputs");
         let site = first.frame().clone();
         let mut state = BTreeMap::new();
@@ -923,12 +1159,8 @@ impl<'a> Model<'a> {
                 .max()
                 .unwrap_or(0);
             let mut out = w.clone();
-            for k in keep {
-                let id = w.register(keep_register(k))?;
-                if w.classical.registers[id].allocated_at >= h {
-                    return Err(Fault::BadRewind);
-                }
-                out.quantum[id] ^= w.integer(k.value)? as u64;
+            for (id, n) in self.keeps(w, keep, Some(h))? {
+                out.quantum[id] ^= n;
             }
             add(&mut state, out, a);
         }
@@ -1004,13 +1236,12 @@ impl<'a> Model<'a> {
                     completed = self.joined_rewind(&completed, h)?;
                     completed = self.joined_until(completed, 4096, Some(site));
                 }
+                if completed.keys().any(|w| w.classical.finish.is_some()) {
+                    return Err(Fault::BadRewind);
+                }
                 let Some(Inst::Rewind { keep, .. }) = self.instruction(&record.before) else { unreachable!() };
                 for (mut w, a) in completed {
-                    let values = keep
-                        .iter()
-                        .map(|k| Ok((w.register(keep_register(k))?, w.integer(k.value)? as u64)))
-                        .collect::<Result<Vec<_>, Fault>>()?;
-                    for (r, n) in values {
+                    for (r, n) in self.keeps(&w, keep, None)? {
                         w.quantum[r] ^= n;
                     }
                     add(&mut result, w, a);
@@ -1032,33 +1263,56 @@ impl<'a> Model<'a> {
                         return Err(Fault::BadRewind);
                     }
                     let Some(Inst::Rewind { keep, .. }) = self.instruction(&record.before) else { unreachable!() };
-                    let keeps = keep
-                        .iter()
-                        .map(|k| Ok((w.register(keep_register(k))?, w.integer(k.value)? as u64)))
-                        .collect::<Result<Vec<_>, Fault>>()?;
-                    for (r, n) in keeps {
+                    for (r, n) in self.keeps(&w, keep, None)? {
                         w.quantum[r] ^= n;
                     }
                     add(&mut result, w, a);
                 }
                 continue;
             }
+            let mut undone = BTreeMap::new();
             for (mut w, a) in state {
-                match record.action {
+                match &record.action {
                     Action::Measurement => return Err(Fault::BadRewind),
                     Action::Allocate(id) => {
-                        if w.quantum[id] != 0 {
+                        if w.quantum[*id] != 0 {
                             return Err(Fault::BadRewind);
                         }
                         w.quantum.truncate(record.before.registers.len());
                     }
-                    Action::Free(id) => w.quantum[id] = 0,
+                    Action::Free(id) => w.quantum[*id] = 0,
+                    Action::Read(reads) => {
+                        if reads.iter().any(|&(id, value)| w.quantum[id] != value) {
+                            return Err(Fault::BadRewind);
+                        }
+                    }
+                    Action::Cells(cells) => {
+                        for &(id, old, new) in cells {
+                            if w.quantum[id] != u64::from(new) {
+                                return Err(Fault::BadRewind);
+                            }
+                            w.quantum[id] = u64::from(old);
+                        }
+                    }
                     _ => {}
                 }
-                for (mut out, b) in self.quantum_action(w, &record, true)? {
-                    out.classical = record.before.clone();
-                    add(&mut result, out, a * b);
+                for (out, b) in self.quantum_action(w, &record, true)? {
+                    add(&mut undone, out, a * b);
                 }
+            }
+            clean(&mut undone);
+            for (mut out, a) in undone {
+                if let Action::MemoryGate { promoted, .. } = &record.action {
+                    for &(_, id, old) in promoted {
+                        if out.quantum[id] != u64::from(old) {
+                            return Err(Fault::BadRewind);
+                        }
+                        out.quantum[id] = 0;
+                    }
+                    out.quantum.truncate(record.before.registers.len());
+                }
+                out.classical = record.before.clone();
+                add(&mut result, out, a);
             }
         }
         clean(&mut result);
@@ -1123,12 +1377,4 @@ pub fn execute(
             a.norm_sqr();
     }
     (state, outcomes)
-}
-
-/// The register a keep names; the reference does not model qubits in memory.
-fn keep_register(keep: &Keep) -> Slot {
-    match keep.target {
-        bennett_ir::KeepTarget::Register(register) => register,
-        bennett_ir::KeepTarget::Memory(_) => panic!("the reference does not model qubits in memory"),
-    }
 }

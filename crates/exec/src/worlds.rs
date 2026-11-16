@@ -889,3 +889,7 @@ mod tests {
         println!("256 complete world pairs after store undo: 16 equal merge, 240 unequal stay apart");
     }
 }
+
+#[cfg(test)]
+#[path = "deferred_independent_tests.rs"]
+mod deferred_independent_tests;

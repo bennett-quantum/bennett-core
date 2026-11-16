@@ -798,3 +798,38 @@ entry:
         }
     }
 }
+
+/// CARGO_BUILD_JOBS=3 cargo test -p bennett-exec --test memory_qubits direct_address_reference_extended -- --ignored --nocapture
+#[test]
+#[ignore = "182 dense witnesses in eight layouts interpreted directly as memory qubits"]
+fn direct_address_reference_extended() {
+    use oracle_support::worlds::{Finish, Model, basis};
+    use oracle_support::worlds_executor::assert_worlds;
+    let options =
+        Options { reversible: true, budget: Some(10_000), max_configurations: Some(1024), ..Options::default() };
+    let (mut agreed, mut refused) = (0, 0);
+    for (middle, writes) in cases() {
+        let registers = bennett_ir::load(&program(&middle, writes, [false; 3])).expect("valid");
+        let dense = expected(&registers);
+        for layout in layouts() {
+            let text = program(&middle, writes, layout);
+            let module = bennett_ir::load(&text).expect("valid");
+            let model = Model::new(&module, "main");
+            let reference = model.run_joined(basis(model.initial("main", &[])), 2000);
+            let refuses = reference.keys().any(|w| w.classical.finish == Some(Finish::Faulted(Fault::BadRewind)));
+            assert_eq!(refuses, dense.is_none(), "{text}");
+            let (outcome, e) = run(&module, options);
+            if refuses {
+                assert!(matches!(outcome, Outcome::Stopped(RunError::WorldFault { fault: Fault::BadRewind, .. })));
+                refused += 1;
+            } else {
+                assert_eq!(outcome, Outcome::Returned(None));
+                assert_worlds(&model, &reference, &e.snapshot());
+                assert_same(&logical(&e.snapshot(), layout), &dense_state(dense.as_ref().expect("faithful")), &text);
+                agreed += 1;
+            }
+        }
+    }
+    assert_eq!((agreed, refused), (1200, 256));
+    println!("{agreed} direct address/dense/full-world agreements; {refused} exact refusals");
+}

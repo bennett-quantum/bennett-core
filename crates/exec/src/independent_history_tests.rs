@@ -27,6 +27,7 @@ struct State {
     history: Vec<u128>,
     marks: Vec<(usize, u64)>,
     registers: Vec<(u32, Option<u32>)>,
+    cells: Vec<(u64, usize)>,
     columns: usize,
     allocations: u64,
     allocation_numbers: Vec<Vec<u64>>,
@@ -47,6 +48,7 @@ fn state(e: &Executor<'_>) -> State {
         history: j.words().to_vec(),
         marks: j.marks().iter().map(|m| (m.position, m.allocations)).collect(),
         registers: q.registers.iter().map(|r| (r.generation, r.width.map(|w| w.bits()))).collect(),
+        cells: q.cells.iter().map(|(&a, &id)| (a, id)).collect(),
         columns: q.columns,
         allocations: q.allocations,
         allocation_numbers: q.allocation_numbers.clone(),
@@ -220,6 +222,7 @@ struct WholeWorld {
     state: State,
     reads: Vec<(usize, usize, u32, bool)>,
     jumps: Vec<usize>,
+    cells: Vec<(usize, usize, u8, bool)>,
 }
 
 fn whole_worlds(e: &mut Executor<'_>) -> Vec<WholeWorld> {
@@ -238,6 +241,7 @@ fn whole_worlds(e: &mut Executor<'_>) -> Vec<WholeWorld> {
             state: s,
             reads: j.reads_from(0).iter().map(|r| (r.record, r.column, r.slot.0, r.split)).collect(),
             jumps: j.jumps().to_vec(),
+            cells: j.cell_entries().iter().map(|c| (c.record, c.column, c.value, c.split)).collect(),
         });
     }
     worlds.sort();
@@ -400,4 +404,91 @@ ret
     println!(
         "2048 full private split/merge images; 64 signed 32-basis superpositions; clean/dirty histories; exact inverses"
     );
+}
+
+#[test]
+fn independent_memory_composite_bijection_includes_cell_table_dead_slots_and_full_journal() {
+    use num_complex::Complex64 as C;
+    let p = bennett_ir::load("memory 512\nfunc @main() {\nentry:\n%q = qalloc 2\nz [40]\n%m = mark\n%l = load i8 40\n%r = trunc i8 %l to i2\nstore i8 3, 40\nh %q\nrewind %m keep (%r -> %q)\nret\n}\n").expect("valid");
+    let (mut starts, mut images, mut map) = (Vec::new(), Vec::new(), BTreeMap::new());
+    let mut linear = 0;
+    for dirty in [false, true] {
+        for byte in 0..4 {
+            let prepare = |configs: Vec<(Vec<u64>, C)>| {
+                let mut e = Executor::new(
+                    &p,
+                    p.function_named("main").expect("main"),
+                    &[],
+                    Options { reversible: true, ..Options::default() },
+                )
+                .expect("starts");
+                assert_eq!(e.step(), None);
+                assert_eq!(e.step(), None);
+                e.memory.write(41, &[byte]);
+                // A dead slot and every private journal coordinate survive the composite.
+                e.slots.push(0x1234 + u128::from(byte));
+                if dirty {
+                    let j = e.journal.as_mut().expect("journal");
+                    j.push_word(0xdead);
+                    j.push(Undo::Store);
+                    j.push_word(0xbeef);
+                    j.push(Undo::Jump);
+                }
+                e.quantum.replace_amplitudes(configs.into_iter().map(|(c, a)| (c.into_boxed_slice(), a)).collect());
+                e
+            };
+            let advance = |e: &mut Executor<'_>| {
+                for _ in 0..30 {
+                    if whole_worlds(e).iter().all(|w| w.state.frames[0].2 == 8) {
+                        return;
+                    }
+                    assert_eq!(e.step(), None);
+                }
+                panic!("rewind did not finish");
+            };
+            let mut basis_images = Vec::new();
+            for q in 0..4 {
+                for cell in 0..4 {
+                    let mut e = prepare(vec![(vec![q, cell], C::new(1.0, 0.0))]);
+                    let before = whole_worlds(&mut e);
+                    advance(&mut e);
+                    let after = whole_worlds(&mut e);
+                    assert_eq!(after.len(), 1);
+                    let phase = if q & cell & 1 == 1 { -1_000_000_000_000 } else { 1_000_000_000_000 };
+                    assert_eq!(after[0].state.amplitudes, vec![(vec![q ^ (cell & 2), cell], phase, 0)]);
+                    assert_eq!(after[0].state.cells, vec![(40, 1)]);
+                    assert_eq!(after[0].state.memory[40], 0);
+                    assert_eq!(after[0].state.memory[41], byte);
+                    starts.push(before.clone());
+                    images.push(after.clone());
+                    map.insert(before.clone(), after.clone());
+                    basis_images.push(after[0].clone());
+                    while e.has_worlds() || e.top().inst != 2 {
+                        assert_eq!(e.step_back(), Ok(true));
+                    }
+                    assert_eq!(whole_worlds(&mut e), before);
+                }
+            }
+            let configs =
+                (0..16).map(|k| (vec![k / 4, k % 4], C::new(if k & 2 == 0 { 0.25 } else { -0.25 }, 0.0))).collect();
+            let mut e = prepare(configs);
+            let before = whole_worlds(&mut e);
+            advance(&mut e);
+            let after = whole_worlds(&mut e);
+            let mut amplitudes = BTreeMap::new();
+            for (k, w) in basis_images.iter().enumerate() {
+                let (c, re, _) = &w.state.amplitudes[0];
+                amplitudes.insert(c.clone(), *re / 4 * if k & 2 == 0 { 1 } else { -1 });
+            }
+            assert_eq!(after.len(), 1);
+            assert_eq!(after[0].state.amplitudes, amplitudes.into_iter().map(|(c, re)| (c, re, 0)).collect::<Vec<_>>());
+            while e.has_worlds() || e.top().inst != 2 {
+                assert_eq!(e.step_back(), Ok(true));
+            }
+            assert_eq!(whole_worlds(&mut e), before);
+            linear += 1;
+        }
+    }
+    assert_eq!(check_bijection(&starts, &images, |s| map[s].clone()), Ok(128));
+    println!("128 complete memory composite images and {linear} signed 16-basis linear extensions invert exactly");
 }
