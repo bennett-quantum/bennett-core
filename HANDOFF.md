@@ -237,7 +237,8 @@ explicitly after the separate musl build.
   musl's `FENV_ACCESS` still stops the normal route. Route: the front's fallback must implement constrained
   floating-point operations and their observable environment; the maintainer keeps the named refusal
   until then. A diagnostic that removes only those pragmas in scratch copies checks helper accuracy,
-  and does not count as a production corpus pass. This supersedes the 2026-11-15 compiler-rt experiment,
+  and does not count as a production corpus pass: GCC 14.2 `cdivchkf`/`cdivchkd`/`cdivchkld`
+  return 0, empty stdout, in 7,045/7,262/9,238 steps; native `-O0`/`-O2` also pass. This supersedes the 2026-11-15 compiler-rt experiment,
   whose divisions failed these checks even natively; libgcc is now the reference for all six helpers.
 - **Constructor startup, after its independent testing pass** (`40b04b4`, Muse; `exit` and the console call held
   under every probe). It found two wrong results, both fixed in `e13a6c8` and now regression tests: at equal
