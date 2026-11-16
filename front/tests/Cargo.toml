@@ -10,5 +10,8 @@ bennett-ir.workspace = true
 bennett-exec.workspace = true
 num-complex.workspace = true
 
+[dev-dependencies]
+nalgebra = { version = "0.33", default-features = false, features = ["std"] }
+
 [lints]
 workspace = true

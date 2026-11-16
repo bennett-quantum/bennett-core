@@ -504,6 +504,20 @@ explicitly after the separate musl build.
 4. **The front's fallback**: the program almost verbatim under marks, the documented coherent class recognised by
    its form, and the two warnings (history still entangled at a measurement or at the end; an un-run that meets a
    state its history does not match).
+   Independent oracle prepared before the fallback (`front/tests/tests/fallback_oracle.rs`,
+   `front/tests/tests/fallback_support/native.rs`, fixtures and explanation in
+   `front/tests/c/fallback_oracle/`): host clang executes the same C update once per basis input;
+   expected amplitudes use only those native images and documented gate/keep/un-run rules. The
+   original dense oracle is a second check, imported read-only. Coherent XOR/nested controls are
+   checked as complex vectors; stores, memcpy/memset/pointer-writing calls, nested writes, a
+   variable-trip loop and a destructive overwrite outside the coherent class have explicit
+   waiting acceptance tests and a regular inventory that prints each refusal and checks any
+   newly accepted case immediately. Outside-class assertions are immediate measurement
+   probabilities plus a warning, never a private-history or phase promise. A test-only device
+   mark/call/rewind-keep envelope around lowered ordinary C checks native kept values, phases
+   and exact memory restoration; it is not C fallback acceptance. No C mark/rewind interface is
+   documented yet; warning delivery and a named-address adapter if C qubits move into memory
+   remain integration details. Measured results are recorded with the oracle once validated.
 5. **Floating point** is done over Berkeley SoftFloat 3e (decided 2026-11-15; `rt/softfloat/README.md`), the
    complex helpers over compiler-rt (`rt/compiler-rt/README.md`). Left: `__divxc3` (musl's `ilogbl`, under
    `FENV_ACCESS`) and `__float128`.
