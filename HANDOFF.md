@@ -405,10 +405,46 @@ explicitly after the separate musl build.
    stops between a rewind and its checks reversed exactly. The 64-bit key: 1,048,576 distinct states, no
    collision; a birthday search would need about 5 x 10^9 states (about 81 GB), so a constructed collision is
    practical and the equality-on-match route stays a debt.
-   The implementer's order for the rest (done: 1 mark/rewind, 2 worlds, 3 the memory overlay, 4 gates that
-   take addresses): worlds (a superposition of whole machine states, split where a call passes
-   a register as an integer, merged where equal), the memory overlay, address-taking gates, then `apply` as mark,
-   call, rewind-keep shown equal on every example and test.
+   **Fifth step: `apply` as mark, call, rewind-keep** (`docs/DESIGN.md`, "`apply` as mark, call, rewind-keep";
+   `crates/exec/src/region.rs`). The executor now computes every `apply` as the idiom on worlds, the region's
+   rules on the call: mark the journal, call `@f` reading the argument registers as integers (one world per
+   value), run each world to its end with effects, `exit` and quantum instructions faulting and the budget
+   counted on each world's own steps (a world split off inside the region by a load of qubits in memory
+   inherits its parent's count), keep the result into `out` or the fault code into `fault`, un-run to the mark
+   checked as a rewind checks, merge. Strict region faults un-run with no keep and stop with the same
+   `region fault`. It stays one step and one journal record of the calling run. Branch enumeration is kept
+   as the comparison (`Executor::set_apply_mode`, `BENNETT_APPLY=history|branches|compare`); compare mode
+   computes each `apply` both ways from the same state and panics at any difference in the result, the
+   world's machine state and journal, its amplitudes (exactly) or the promised counts (`steps`,
+   `region_steps`, region faults and weights, `rewound_steps`, `rerun_steps`, splits). The journal-content
+   observer still enumerates (it classifies branches). The front is untouched; the text form unchanged.
+   **Shown equal on every example and test that uses `apply`**, not a sample: with `BENNETT_APPLY=compare`,
+   `cargo test` compares 107,687 `apply` executions in 46 tests (325 strict region-fault stops),
+   `front/test.sh` 21,866 in 41 tests (13.9 million configurations; 76 strict stops), the ignored heavy runs
+   110,121 more (the whole-world reference's rerun of the suite among them); no difference. Both suites
+   pass with each way alone (`cargo test` 245, `front/test.sh` 155, in history, branches and compare mode).
+   Regular tests keep it checked: `apply.rs` (every basis state of the exhaustive harness, faulting ones
+   included, and the superposed arguments, strict and allowed, each reversed) and `apply_history.rs` (every
+   entry of the three examples over 16 seeds, strict and allowed, reversed; the known exponential).
+   **Cost** (`Stats::region_cost`, compare mode, summed; `docs/DESIGN.md` has the detail): over the front's
+   tests the idiom makes 5.57 million runs where enumeration makes 13.9 million (a world per argument
+   value), 0.80 times the work, 1.02 times the journal bytes, 1.46 times the time (45.1 s against 30.9 s);
+   over `cargo test` 0.90 the runs, 0.81 the work, 1.20 the journal bytes, 2.6 times the time (small
+   regions). The known exponential inside a region costs the same per run both ways (14,311 steps per run
+   at depth 8 cleaning up, 183 with the history open); the idiom needs half the runs there. A region holds
+   two copies of its amplitudes (0.89 GB against 0.43 GB on the 2^20-configuration in-place updates).
+   **Whether the new instructions now pass every existing test** (the documents' condition for `apply`,
+   `qalloc` and `qfree` to stop being needed as separate forms): for `apply`'s meaning, yes: every existing
+   test and example passes with `apply` computed by mark, call and rewind-keep, faults and budgets included,
+   and gives exactly the enumeration's state. As forms, no, and nothing is removed: the text idiom (`mark`,
+   `call`, `rewind keep`) has no fault register and no region budget, so a program cannot write a region
+   that faults on some branch or spends a budget without `apply` (question A1 below); `qalloc` and `qfree`
+   were not re-expressed, and cannot be yet: `measure` takes a register only (question M2), an `apply`'s
+   `out` and `fault` and a call's register argument are registers, and a qubit in memory costs a whole byte
+   (8 qubits) in the simulator; Grover with its qubits in memory (`memory_qubits.rs`) is the one measured
+   program. The maintainer decides.
+   The implementer's order is done: 1 mark/rewind, 2 worlds, 3 the memory overlay, 4 gates that take
+   addresses, 5 `apply` as mark, call, rewind-keep.
 4. **The front's fallback**: the program almost verbatim under marks, the documented coherent class recognised by
    its form, and the two warnings (history still entangled at a measurement or at the end; an un-run that meets a
    state its history does not match).
@@ -492,6 +528,16 @@ explicitly after the separate musl build.
   would collapse the cell's configurations, as for a register)? (M3) A `longjmp` whose record is held in
   qubits that disagree faults `bad_indirect` instead of splitting into worlds that jump apart and may fault
   separately: a debt, unless the maintainer prefers the split.
+- **`apply` as mark, call, rewind-keep (step 3's fifth step), with the reversible choice taken.** (A1) The text
+  idiom has no fault register and no budget: a fault in the called function ends the run (with several worlds, that
+  world, or a `WorldFault` stop), and its steps count against the run's budget. The executor's lowering of
+  `apply` has both, so `apply` stays the form that carries them. Route if `apply` is to go as a form: a
+  call form that gives the fault code as a value and takes a budget (for example `%y, %c = call @f(args)
+  budget B`, then `rewind %h keep (%y -> out, %c -> fault)`), with the region's rules (no effect, `exit` or
+  gate) attached to it. Add it, or keep `apply`? (A2) Inside a region the worlds run one after another and
+  merge only at its end, never in lockstep ticks: merging earlier would join configurations that have
+  spent different amounts of the budget, so the budget would make time part of the state (question W1).
+  Keep that as the region's rule?
 - **Return addresses** (`2bf0b69`): the outermost frame gives `0xFFFF_FFFF_0000_0000` (natively an address in the C
   library's startup) and a level beyond it 0 (natively unspecified). Keep? Levels above 0 follow the device's
   frames, which natively needs frame pointers kept and sibling calls off (plain native `-O2` crashed at level 1).

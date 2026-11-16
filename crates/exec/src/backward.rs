@@ -141,11 +141,14 @@ impl<'m> Executor<'m> {
         self.quantum.failing(|config| config[id] != 0)
     }
 
-    /// Undoes every record in the journal.
-    pub(crate) fn unwind(&mut self) {
+    /// Undoes every record in the journal; returns the records popped.
+    pub(crate) fn unwind(&mut self) -> u64 {
+        let mut undone = 0;
         while self.journal.as_ref().is_some_and(|journal| journal.last().is_some()) {
             self.undo_last();
+            undone += 1;
         }
+        undone
     }
 
     fn undo_definition(&mut self, undo: Undo) {
@@ -170,10 +173,10 @@ impl<'m> Executor<'m> {
         }
     }
 
-    /// The cells among the bytes of `range` that ordinary code touches: none inside a coherent region,
-    /// whose private memory holds the cells' values.
+    /// The cells among the bytes of `range` that ordinary code touches: none in a branch of a coherent
+    /// region enumerated on private memory, which holds the cells' values.
     fn ordinary_cells(&self, range: std::ops::Range<usize>) -> Vec<(u64, usize)> {
-        if self.in_region { Vec::new() } else { self.quantum.cells_in(range.start as u64..range.end as u64) }
+        if self.materialised { Vec::new() } else { self.quantum.cells_in(range.start as u64..range.end as u64) }
     }
 
     /// The configurations where a register the call of the last record read as an integer no longer holds

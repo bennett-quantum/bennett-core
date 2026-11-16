@@ -1152,6 +1152,8 @@ fn assert_observer_changes_nothing(module: &ValidModule, what: &str) {
         Options { budget: Some(10_000_000), reversible: true, allow_region_faults: true, ..Options::default() };
     let mut off = Executor::new(module, main, &[], options).expect("starts");
     let mut on = Executor::new(module, main, &[], options).expect("starts");
+    // The observer classifies the enumeration's branches, so it computes `apply` that way.
+    off.set_apply_mode(crate::ApplyMode::Branches);
     on.measure_journal_content(true);
     let journal = |e: &Executor<'_>| {
         let j = e.journal.as_ref().expect("reversible");

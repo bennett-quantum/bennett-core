@@ -93,7 +93,7 @@ pub(crate) struct Defect {
 }
 
 impl World {
-    fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         World {
             memory: Memory::default(),
             slots: Vec::new(),
@@ -539,7 +539,7 @@ impl<'m> Executor<'m> {
     /// Whether two worlds are the same machine state: everything but the amplitudes. The slots above the
     /// live frames count too: a returned callee's slots are kept there, unjournalled, for undoing the
     /// return, so they hold what the callee computed (a register value it read, for one).
-    fn same_world(&self, a: &World, b: &World) -> bool {
+    pub(crate) fn same_world(&self, a: &World, b: &World) -> bool {
         a.stack_pointer == b.stack_pointer
             && a.frames == b.frames
             && a.outcome == b.outcome

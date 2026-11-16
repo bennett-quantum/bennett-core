@@ -202,7 +202,7 @@ impl<'m> Executor<'m> {
         // jump to different targets, and some could fault while others go on (a debt, `docs/DESIGN.md`,
         // "Qubits in memory"). Where the configurations disagree it names no single target.
         let cells =
-            if self.in_region { Vec::new() } else { self.quantum.cells_in(range.start as u64..range.end as u64) };
+            if self.materialised { Vec::new() } else { self.quantum.cells_in(range.start as u64..range.end as u64) };
         if cells.iter().any(|&(_, column)| self.quantum.partition(&[column]).len() > 1) {
             return Err(Fault::BadIndirect);
         }
@@ -410,7 +410,7 @@ impl<'m> Executor<'m> {
     }
 
     /// The stack pointer below a new frame of `func`, if it fits on the stack.
-    fn frame_fits(&self, func: FuncId) -> Result<u64, Fault> {
+    pub(crate) fn frame_fits(&self, func: FuncId) -> Result<u64, Fault> {
         let frame_bytes = (self.function(func).slot_count() as u64).checked_mul(SLOT_BYTES);
         let lowered = frame_bytes.and_then(|bytes| self.stack_pointer.checked_sub(bytes));
         lowered.filter(|&sp| sp >= self.stack_floor).ok_or(Fault::StackOverflow)

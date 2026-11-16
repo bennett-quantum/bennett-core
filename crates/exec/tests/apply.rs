@@ -217,8 +217,8 @@ fn apply_equals_the_history_idiom_where_no_branch_faults() {
                 assert!(distance.is_some_and(|d| d <= 1e-12), "@{} superposed: {distance:?}", region.name);
                 assert_eq!(rewound.stats().peak_worlds, 1 << bits, "@{}: a world per argument value", region.name);
             }
-            // The idiom has no region budget (a debt: the budget as padding, `docs/DESIGN.md`), so where only
-            // the budget faults, it runs to the end.
+            // The text idiom has no region budget (the executor's own `apply` has it: `docs/DESIGN.md`,
+            // "`apply` as mark, call, rewind-keep"), so where only the budget faults, it runs to the end.
             Outcome::Stopped(RunError::RegionFault { fault: Fault::Budget, .. }) => {
                 assert_eq!(outcome, Outcome::Returned(None), "@{}", region.name);
             }
@@ -235,6 +235,60 @@ fn apply_equals_the_history_idiom_where_no_branch_faults() {
     // steps: n <= 3 of 8, times 8 outputs; divide: 12 nonzero divisors, times 4; private: 4 times 4;
     // dispatch: 3 valid table entries, times 4.
     assert_eq!(compared, 32 + 48 + 16 + 12, "basis states compared");
+}
+
+/// `apply` computed as mark, call, rewind-keep on worlds is branch enumeration, faults included
+/// (`docs/DESIGN.md`, "`apply` as mark, call, rewind-keep"): in compare mode the executor computes every
+/// `apply` both ways from the same state and stops at any difference in the result, the world's state and
+/// journal, the amplitudes or the promised counts. Here on every basis state of the exhaustive harness
+/// (faulting ones included), strict and allowing region faults, and on the arguments in uniform
+/// superposition; each run is then reversed, which applies the region again in compare mode.
+#[test]
+fn apply_by_history_equals_branch_enumeration_faults_and_budgets_included() {
+    let mut compared = 0;
+    for region in &REGION_CASES {
+        let text = format!("{REGIONS}\n{}", harness(region));
+        let module = load(&text);
+        let bits: u32 = region.params.iter().sum::<u32>() + region.result + Fault::CODE_WIDTH.bits();
+        let gates: String = (0..region.params.len())
+            .flat_map(|i| (0..region.params[i]).map(move |bit| format!("    h %r{i}[{bit}]\n")))
+            .collect();
+        let prepare = format!("prepare{bits}:\n");
+        let superposed = load(&text.replace(&prepare, &format!("{prepare}{gates}")));
+        let zeros = vec![0; region.params.len() + 2];
+        let mut cases: Vec<(&bennett_ir::ValidModule, Vec<u64>)> = vec![(&superposed, zeros)];
+        for args in all_values(region.params) {
+            for t in 0..1u64 << region.result {
+                cases.push((&module, [args.clone(), vec![t, 1]].concat()));
+            }
+        }
+        for (module, case) in cases {
+            for options in [bounded(), allowing_region_faults()] {
+                let mut compare = executor(module, "case", &case, Options { reversible: true, ..options });
+                compare.set_apply_mode(bennett_exec::ApplyMode::Compare);
+                let at_entry = compare.snapshot();
+                let outcome = compare.run();
+                let mut history = executor(module, "case", &case, options);
+                assert_eq!(history.run(), outcome, "@{}{case:?}", region.name);
+                let mut branches = executor(module, "case", &case, options);
+                branches.set_apply_mode(bennett_exec::ApplyMode::Branches);
+                assert_eq!(branches.run(), outcome, "@{}{case:?}", region.name);
+                let (h, b) = (history.stats(), branches.stats());
+                assert_eq!(
+                    (h.steps, h.region_steps, h.region_faults, h.region_fault_weight, h.splits, h.peak_worlds),
+                    (b.steps, b.region_steps, b.region_faults, b.region_fault_weight, b.splits, b.peak_worlds),
+                    "@{}{case:?}: the promised counts",
+                    region.name
+                );
+                common::assert_same_state(&history.snapshot(), &branches.snapshot(), &format!("@{}", region.name));
+                compare.reverse().unwrap_or_else(|error| panic!("@{}{case:?}: {error}", region.name));
+                common::assert_same_state(&compare.snapshot(), &at_entry, &format!("@{} reversed", region.name));
+                compared += 1;
+            }
+        }
+    }
+    // (8 x 8 + 16 x 4 + 4 x 4 + 4 x 4 basis states + 4 superposed) x 2 strictness.
+    assert_eq!(compared, (64 + 64 + 16 + 16 + 4) * 2);
 }
 
 #[test]

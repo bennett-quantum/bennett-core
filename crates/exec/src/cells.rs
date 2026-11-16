@@ -180,14 +180,14 @@ impl<'m> Executor<'m> {
 
     /// Reads the cells among the bytes of `range` before an ordinary access: splits the world by their
     /// values if its configurations disagree, every new world running `step` itself. Returns the cells
-    /// (address, column) and whether this world split from others here. A coherent region sees the cells'
-    /// values in its private memory instead, so it touches no cell.
+    /// (address, column) and whether this world split from others here. A coherent region's branch
+    /// enumerated on private memory sees the cells' values there instead, so it touches no cell.
     pub(crate) fn read_cells(
         &mut self,
         range: Range<usize>,
         step: &dyn Fn(&mut Self) -> Result<(), Fault>,
     ) -> (Vec<(u64, usize)>, bool) {
-        if self.in_region || !self.quantum.has_cells() {
+        if self.materialised || !self.quantum.has_cells() {
             return (Vec::new(), false);
         }
         let cells = self.quantum.cells_in(range.start as u64..range.end as u64);

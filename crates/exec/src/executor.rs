@@ -9,6 +9,7 @@ use crate::journal::{Journal, Undo};
 use crate::measure::Collector;
 use crate::memory::Memory;
 use crate::quantum::QuantumState;
+use crate::region::{ApplyMode, RegionCost};
 use crate::snapshot::{ClassicalSnapshot, QuantumSnapshot, Snapshot};
 use crate::worlds::{Defect, Status, World};
 
@@ -173,6 +174,9 @@ pub struct Stats {
     pub max_configurations: Option<usize>,
     /// Steps taken inside coherent regions, summed over every basis configuration they ran on.
     pub region_steps: u64,
+    /// What computing the coherent regions cost the executor, by whichever way it computed them
+    /// ([`ApplyMode`]): a report, not part of the meaning.
+    pub region_cost: RegionCost,
     /// Executions of `apply` (forward or, when reversing, backward) that faulted on at least one basis
     /// configuration. The configurations are those of nonzero amplitude: negligible ones are dropped.
     pub region_faults: u64,
@@ -265,6 +269,15 @@ pub struct Executor<'m> {
     /// caller's depth inside a coherent region.
     pub(crate) base_depth: usize,
     pub(crate) in_region: bool,
+    /// Whether the current run is one branch of a coherent region enumerated on private memory, which holds
+    /// the values its configuration gives the qubits in memory (`ApplyMode::Branches`).
+    pub(crate) materialised: bool,
+    /// How `apply` is computed.
+    pub(crate) apply_mode: ApplyMode,
+    /// What computing regions cost, and the most journal and overlay bytes the current region run held.
+    pub(crate) region_cost: RegionCost,
+    pub(crate) run_journal_peak: usize,
+    pub(crate) run_overlay_peak: usize,
     /// A journal kept for reuse by coherent regions, which always run reversibly.
     pub(crate) spare_journal: Journal,
     /// A buffer for argument values, kept to avoid allocating per call.
@@ -351,6 +364,11 @@ impl<'m> Executor<'m> {
             max_configurations: options.max_configurations,
             base_depth: 0,
             in_region: false,
+            materialised: false,
+            apply_mode: ApplyMode::from_env().unwrap_or_default(),
+            region_cost: RegionCost::default(),
+            run_journal_peak: 0,
+            run_overlay_peak: 0,
             spare_journal: Journal::default(),
             scratch: Vec::new(),
             rng: ChaCha8Rng::seed_from_u64(options.seed),
@@ -426,7 +444,11 @@ impl<'m> Executor<'m> {
                     self.measure_after_step(pending);
                 }
                 self.steps += 1;
-                if !self.in_region {
+                if self.in_region {
+                    let journal = self.journal.as_ref().map_or(0, Journal::bytes);
+                    self.run_journal_peak = self.run_journal_peak.max(journal);
+                    self.run_overlay_peak = self.run_overlay_peak.max(self.memory.overlay_len());
+                } else {
                     self.world_steps += 1;
                 }
             }
@@ -489,6 +511,13 @@ impl<'m> Executor<'m> {
         Ok(undone)
     }
 
+    /// Chooses how `apply` is computed from here on (`docs/DESIGN.md`, "`apply` as mark, call,
+    /// rewind-keep"). The default is [`ApplyMode::History`], or the mode the environment variable
+    /// `BENNETT_APPLY` names.
+    pub fn set_apply_mode(&mut self, mode: ApplyMode) {
+        self.apply_mode = mode;
+    }
+
     /// How the run ended, or `None` while it is running.
     pub fn outcome(&self) -> Option<Outcome> {
         if self.has_worlds() { self.run_outcome } else { self.outcome }
@@ -527,6 +556,7 @@ impl<'m> Executor<'m> {
             budget: self.budget,
             max_configurations: self.max_configurations,
             region_steps: self.region_steps,
+            region_cost: self.region_cost,
             region_faults: self.region_faults,
             region_fault_weight: self.region_fault_weight,
             region_fault_max_weight: self.region_fault_max_weight,

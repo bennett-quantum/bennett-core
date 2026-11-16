@@ -119,7 +119,9 @@ fn turning_the_measurement_on_changes_nothing() {
         (ALIAS, "main", &[][..]),
     ] {
         let module = load(text);
+        // The observer classifies the enumeration's branches, so it computes `apply` that way.
         let mut off = common::executor(&module, name, args, bounded());
+        off.set_apply_mode(bennett_exec::ApplyMode::Branches);
         let off_outcome = off.run();
         for keep_raw in [false, true] {
             let on = measured(&module, name, args, keep_raw);
@@ -265,7 +267,9 @@ fn the_hand_program_loop() {
 #[test]
 fn a_faulting_branch_is_measured_up_to_its_fault() {
     let module = load(FAULT);
+    // The observer classifies the enumeration's branches, so it computes `apply` that way.
     let mut off = common::executor(&module, "main", &[4], allowing_region_faults());
+    off.set_apply_mode(bennett_exec::ApplyMode::Branches);
     let off_outcome = off.run();
     let mut on = common::executor(&module, "main", &[4], allowing_region_faults());
     on.measure_journal_content(true);
