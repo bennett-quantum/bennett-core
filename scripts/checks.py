@@ -72,12 +72,17 @@ def bare_times(root, names):
                 if any(literal(arg) for arg in args):
                     issues.append(f'{name}:{node.lineno}: bare time constant; name it with its unit and purpose')
         else:
-            for n, line in enumerate(text.splitlines(), 1):
-                if line.lstrip().startswith(('#', '//')):
-                    continue
-                if re.search(r'\b(?:timeout|sleep)\s+(?:-[\w-]+\s+)*[\'\"]?\d|'
-                             r'\bset(?:Timeout|Interval)\s*\([^,]*,\s*\d', line):
-                    issues.append(f'{name}:{n}: bare time constant; name it with its unit and purpose')
+            # Keep physical newlines for diagnostics, but accept shell line continuations.
+            source = '\n'.join('' if line.lstrip().startswith(('#', '//')) else line
+                               for line in text.splitlines())
+            space = r'(?:[ \t]|\\\r?\n)+'
+            pattern = (r'\b(?:timeout|sleep)' + space + r'(?:--?[^ \t\n]+' + space + r')*'
+                       r'[\'\"]?[+-]?(?:\d|\.\d)|'
+                       r'\bset(?:Timeout|Interval)\s*\([^,]*,\s*(?:\d|\.\d)')
+            for match in re.finditer(pattern, source):
+                n = source.count('\n', 0, match.start()) + 1
+                issues.append(f'{name}:{n}: bare time constant; name it with its unit and purpose')
+
     return issues
 
 
