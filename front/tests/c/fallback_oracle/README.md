@@ -13,9 +13,10 @@ extracted from lowered IR. The controlled-X baseline gives X its ordinary C basi
 action (Boolean toggle); native runs do not execute preparation or phase gates.
 Unsigned byte operations and bounded, in-bounds loops avoid C undefined behavior.
 
-The common device driver prepares each basis column or a complex product state
-(Ry(0.7) q, S H r, T H y), runs the same body, then measures q/r/y and returns those
-bits together with the four bytes. The reference tabulates the preparation
+The common device driver prepares each basis column, a complex product state
+(preparation 8: Ry(0.7) q, S H r, T H y) or a real one whose eight Born weights all
+differ (preparation 9: Ry(0.7) q, Ry(1.3) r, Ry(2.2) y), runs the same body, then
+measures q/r/y and returns those bits together with the four bytes. The reference tabulates the preparation
 analytically. Its coherent operation is a native basis permutation applied to
 input amplitudes; its round trip is U-adjoint Z U then H q, with an explicit check
 that repeating the fixture's U implements its inverse. No global-phase quotient:
@@ -28,7 +29,10 @@ assertions only for the documented coherent class or after an un-run. Therefore:
 - `coherent_gate` exercises a documented controlled gate. It runs
   as a direct circuit and as a phase round trip, over all eight columns and the
   complex input, with O0, O2 and `--taint-all`. Native expectations are compared
-  with the full C device state. The front allocates three byte registers plus
+  with the full C device state, and the fixture's four cells must still hold their
+  initial bytes there (the coherent class writes no ordinary memory, so a leaked
+  write or a write whose un-run was missed is a wrong result). Every coherent
+  program also gets the measured checks below, in every mode. The front allocates three byte registers plus
   three cleanup-fault registers (36 qubits), beyond the existing dense oracle's
   13-qubit limit. Independently authored three-bit versions of these circuits
   are therefore run by both the original dense *interpreter* and the device,
@@ -39,7 +43,12 @@ assertions only for the documented coherent class or after an un-run. Therefore:
   ordinary memory. `outside_class` deliberately erases y. Only immediate Born
   probabilities and exact basis results are asserted; phases/history layout are
   unspecified. The expected distribution sums squared input amplitudes by native
-  measured result, rather than adding amplitudes across hidden histories. Once
+  measured result, rather than adding amplitudes across hidden histories. The
+  device's distribution is read **exactly** from its state just before the
+  measurements, for every column and both superposed preparations: each world's
+  weight on each configuration of q/r/y, keyed by that world's own cells, other
+  registers summed over (rule 1, branch by branch). Then 512 seeded runs check the
+  measurement path itself, and the eight columns are run to their exact results. Once
   accepted, each case must emit a history/coherence warning. Diagnostics from
   successful lowering are retained and tested, rather than lost by the usual
   lower-text helper. Values are checked **before** checking warnings.
@@ -47,12 +56,16 @@ assertions only for the documented coherent class or after an un-run. Therefore:
   ordinary memory-writing bodies without quantum markers, then adds a **test-only
   device IR** mark/call/rewind-keep envelope. The native result is bit 1 of cell 0;
   q/r remain, this bit is XOR-kept into y, and everything in the ordinary C region
-  is un-run. With S y inside the mark, the expected operation is S-adjoint X^f S,
+  is un-run; the whole four-cell image is kept as well into a 32-bit register, so
+  every write the region made is compared with native on every branch.
+  With S y inside the mark, the expected operation is S-adjoint X^f S,
   including its opposite imaginary signs on y=0 and y=1. Original dense matrix
   gates/permutations cross-check it, and all memory must be restored exactly.
   In addition, those **same lowered ordinary C functions** run in seven-qubit
   `apply` envelopes under both the original dense interpreter and the device,
-  compared to native results. Thus the original interpreter's arithmetic,
+  compared to native results, and the whole image runs through the dense
+  interpreter four bits at a time with q in uniform superposition (its 13-qubit
+  cap). Thus the original interpreter's arithmetic,
   memory, branch and call evaluation also cross-check the native reference,
   without hitting its allocation cap.
   This validates the oracle/adapter now; it does not claim the front accepts
@@ -98,6 +111,26 @@ unspecified surviving coherence, or pin the private history encoding. Outside-cl
 sampling uses 512 fixed seeds and an absolute tolerance of 0.075 per bin; exact
 basis runs catch wrong results independently of that statistical check.
 
+Native side: `native_reference_is_free_of_undefined_behaviour` builds every
+fixture with ASan and UBSan and requires the same eight images and no diagnostic.
+Native and device use the same clang, target, include path and fixture body; the
+native build only adds `-DNATIVE` (the `main` driver, and X as a Boolean toggle in
+`coherent_gate`).
+
+**Seeded wrong results** (`mod seeded`): a hand-written, fallback-shaped device
+program for `store.c` (a call reads q, the worlds split, the store runs verbatim)
+is accepted, and needs its warning; mutants of it and of the lowered programs
+must be rejected: a wrong weight and a swapped basis state that occur only in
+superposition, a leaked byte, a leftover ordinary write in a coherent program in
+all three modes, a wrong phase, a swapped state and a global phase in a coherent
+program, a wrong r-dependent write and a missed un-run in a marked region. An
+independent testing pass found that the first version of this harness accepted
+four of them: the 512-sample tolerance (0.075) exceeds every q = 1 branch's weight
+(0.0296), preparation 8 gives y equal weights so a swapped y is invisible to any
+measurement, the coherent projection ignored ordinary memory (and the measured
+check ran at O0 only), and the region kept one bit, the same for both values of r
+in four of the six regions. Each is now a regression test.
+
 Open integration details for step 4: no C mark/rewind marker is documented yet;
 the exact source and wording of the warning are not frozen. The current acceptance
 assertion requires a successful front diagnostic containing `warning` and
@@ -107,16 +140,19 @@ must not be mistaken for a user-facing warning. If the fallback places C variabl
 in memory, the coherent-state adapter must map their named addresses to snapshot
 cells; it deliberately fails rather than quietly dropping them today.
 
-Measured at the original 22a7cd5 base: ten native programs / 160 host basis runs;
-54 coherent baseline vectors plus nine accepted nested-O2 vectors; 520 measured
-outcomes; 54 ordinary-C region vectors, each checked under mark/rewind, under
-apply in the original dense interpreter and device, and by dense conjugation.
-The default oracle suite has four passing tests and nine intentionally ignored
-acceptance tests; inventory has one accepted mode and 26 named refusals. No
+Measured after the testing pass: ten native programs / 160 host basis runs plus 80
+sanitized; 54 coherent baseline vectors plus nine accepted nested-O2 vectors; four
+programs (coherent_gate in three modes, nested O2) each with 8 exact columns, 10
+exact Born tables and 512 sampled outcomes; 54 ordinary-C region vectors with the
+whole image kept, each checked under mark/rewind, under apply in the original
+dense interpreter and device, and by dense conjugation, plus 48 dense nibble
+runs. The default oracle suite has twelve passing tests (seven of them seeded
+wrong results) and nine intentionally ignored acceptance tests; inventory has
+one accepted mode and 26 named refusals. No
 accepted wrong result was found. Warning checks remain waiting with the refused
 outside-class programs; none has silently been counted as a tested warning.
 
-Required checks passed after the test-only 3418e51 rebase:
+Required checks passed after the testing pass:
 `cargo test` (292 passed, 19 ignored),
 `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, and
-`front/test.sh` (162 passed, 21 ignored). Front-specific clippy also passed.
+`front/test.sh` (170 passed, 21 ignored). Front-specific clippy also passed.
