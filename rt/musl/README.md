@@ -205,3 +205,9 @@ Targeted corpus confirmation: **all six prior file-system faults now agree with 
 `00187` agreed earlier on the file implementation at 35,235 / 35,235 / 102,998 steps. The temporary-name
 cases found musl's `readlink` probe, now routed correctly for the current non-symlink namespace.
 No whole corpus was rerun and no global corpus total is inferred from these six outcomes.
+
+Final combined-revision verification after rebasing on `40c84d4`: `cargo test` **306 passed**,
+`front/test.sh` **170 passed**, clippy all targets with warnings denied and formatting clean.
+The 16 focused cases passed again in **135.20 s** on the shared machine, with every step/journal count
+above unchanged and every entry snapshot restored exactly. This also checks the file/clock models
+against the upstream atomic-rewind fixes and libgcc runtime update.

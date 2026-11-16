@@ -4,8 +4,10 @@ State on 2026-11-16, 10:16 UTC, morning session (jobs running; this paragraph is
 Landed this morning: an independent oracle for the front's fallback, written before the fallback (`27265ba`); a
 failed rewind made atomic, the two replay panics and the canceled-keeps refusal fixed (`145a72c`); the six complex
 helpers from libgcc 13.3, unmodified, replacing compiler-rt (`e89c98f`..`df429d7`). In flight: the decided changes
-to the device program, files and clocks, the automatic checks, the SQL oracle's growth, the North Star rungs as
-worded, mutation testing of the IR and CLI, a Rust probe. New questions are in "Questions for the maintainer".
+to the device program, the automatic checks, the SQL oracle's growth, the North Star rungs as worded,
+mutation testing of the IR and CLI, a Rust probe. Files and clocks are implemented on their job branch:
+16 native/reset cases and all six file-blocked corpus programs pass; independent testing follows (runtime
+section below). New questions are in "Questions for the maintainer".
 Earlier: the night session (the journalled machine in the executor, all five steps of its order, with two
 independent oracles; journal content; `setjmp`/`longjmp`, return addresses and calls through another prototype in
 the front). The last corpus run (`64571ac`, musl linked) has GCC 1,569 agree, c-testsuite 218, `ieee/` 64, none
@@ -908,7 +910,7 @@ path and EINVAL for a non-symlink. A native/undo temporary-file regression passe
 All six previously file-blocked corpus programs now agree with native (`experiments/c-corpus/README.md`):
 GCC `printf-2` / `user-printf` / `fprintf-2` 58,353 / 58,416 / 57,717 steps at `9194605`; the earlier
 file implementation already passed `loop-2f` / `loop-2g` at 35,235 each and c-testsuite `00187` at 102,998.
-No whole corpus was rerun. Four checks pass after rebasing on `3418e51`: cargo 292 tests, front 158,
+No whole corpus was rerun. Four checks pass after rebasing on `40c84d4`: cargo 306 tests, front 170,
 clippy all targets with warnings denied, formatting clean.
 
 Debts, with routes (the goal is not narrowed to the present surface):
