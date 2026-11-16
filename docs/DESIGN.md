@@ -860,6 +860,48 @@ negotiation. The exact syntax is whatever the single reader in `ir` accepts; `ex
 - Random programs, forward and back.
 - `cargo test` finishes in seconds. Throughput and journal bytes per step are *reported*, never gated on wall time.
 
+Tests constrain behavior, with witnesses that would fail for the intended defect:
+
+- Derive small expected results independently, by hand, a dense calculation, an exact arithmetic oracle,
+  or native execution. Reusing the implementation's classifier, allocator, or producer as the oracle
+  only checks agreement with itself. Corrupt the purportedly verified input and require rejection.
+- Exercise admitted syntax end to end. Parsing, a variant name in a test, or one successful execution
+  does not prove the operation's result, refusal, or fault. Compare the complete expected outcome and
+  exact error kind, including unused functions and unreachable blocks when the contract covers them.
+- Vary every operand that should affect an answer. Include unequal, nonzero values and dirty output
+  and fault registers; repeated XOR can hide a wrong fault through cancellation. Prove that a seeded
+  defect is observable before trusting a test. Mutate changed Rust lines before a step lands, separately
+  from the fast suite (`docs/CHECKS.md`); retain regressions for real survivors.
+- At each reversible step compare complete independently captured state: memory, slots, frames, stack,
+  tape, worlds and amplitudes. Test forward/reverse/forward, nested regions, faults and failed rollback;
+  final return values alone miss corrupted state. Compare an applied function over every small input,
+  dirty output and fault value with direct evaluation and an independent state oracle.
+- Permute function and block order for semantic analyses; repeat calls and vary call paths. An analysis
+  must not inherit an answer from whichever function or predecessor happened to be visited first.
+- Exhaust small finite domains. At boundaries use below/at/above cases, zero and empty input, extreme
+  widths and alignment, aliasing, repeated uses, nested control flow and resource exhaustion. An empty
+  discovered test set or all-skipped run is not evidence of success. Large generated and corpus sweeps
+  stay separate from the seconds-long suite, with a small executed regression retained for each finding.
+- Check numerical boundaries against exact arithmetic or native bits, including signed zero, NaNs in
+  every operand position, infinities, subnormals, rounding ties and directed modes. An ulp tolerance can
+  hide a wrong rounding side. For numeric conversions/comparisons include values equal as f64 but
+  unequal exactly, including neighboring integers beyond 2^53. State any allowed NaN or phase equivalence.
+- Generate ABI matrices across scalar widths, vector shapes, mixed and homogeneous aggregates,
+  alignment, by-value copies and variadic/direct/indirect/prototype-mismatch calls. Compare actual
+  native bytes, statuses and output, with the pinned compiler; a hand-maintained list of familiar types
+  missed entire classes. Verify that input/output or argument aliases cannot silently change meaning.
+- For a checker, test both false acceptance and false rejection: broken certificates, stale artifacts,
+  a different pushed revision, malformed/empty maps, and adversarial tokens where lexical checks are
+  appropriate. A passing old log is never a check of new source. Keep documented numbers reproducible
+  from result data; distinguish skipped, refused, faulting, crashing and wrong-result runs.
+- Scale at least one parser/search witness beyond the usual small fixture when investigating recursion,
+  stack or asymptotic cost. Report throughput, work and memory separately from correctness; do not gate
+  correctness on noisy wall time. A measurement must exercise the path whose cost it claims.
+
+The ten automatic checks, their entry points, seeded witnesses, pin scope, and hook installation are in
+`docs/CHECKS.md`. Each uses exact expectations or source/compiler discovery, without a maintained
+example list, allowed-hit count, mutation percentage, or performance threshold. Gaps stay explicit debts.
+
 ## Not yet
 
 The optimiser, any cost beyond step and qubit counts, certificates, target descriptions, a binary

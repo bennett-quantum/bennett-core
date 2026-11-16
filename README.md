@@ -13,7 +13,7 @@ runs classically, reversibly or coherently. Each piece of plumbing exists once, 
 | `rt` | runtime bitcode: floating point (Berkeley SoftFloat 3e under the libgcc names), the complex helpers (libgcc 13.3.0), built with `front`; the C library (musl) | step 3 |
 
 ```sh
-cargo test                                   # the Rust crates, in seconds; needs no LLVM
+cargo test                                   # Rust + guard witnesses, in seconds; Python 3, no LLVM
 cargo run -p bennett -- run examples/thesis.bn
 front/test.sh                                # builds bennett-front, runs its tests (LLVM 18, clang 18, CMake)
 ```
@@ -52,3 +52,5 @@ array bounds owns startup instead; the front supplies those arrays for it.
 
 The design, and what is deliberately left open, is in `docs/DESIGN.md`. It is a working note, not a contract.
 The text form of the device program is in `docs/SYNTAX.md`; `examples/` has one program per feature.
+
+Repository checks and the optional exact-revision pre-push hook: [docs/CHECKS.md](docs/CHECKS.md).

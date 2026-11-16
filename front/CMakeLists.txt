@@ -5,6 +5,10 @@ cmake_minimum_required(VERSION 3.20)
 project(bennett-front LANGUAGES CXX)
 
 find_package(LLVM 18.1 REQUIRED CONFIG)
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/llvm-major.txt" BENNETT_LLVM_MAJOR)
+if(NOT LLVM_VERSION_MAJOR EQUAL BENNETT_LLVM_MAJOR)
+  message(FATAL_ERROR "Bennett requires pinned LLVM major ${BENNETT_LLVM_MAJOR}, found ${LLVM_PACKAGE_VERSION}")
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -50,6 +54,13 @@ else()
   find_program(BENNETT_CLANG NAMES clang clang-18 HINTS "${LLVM_TOOLS_BINARY_DIR}" REQUIRED)
 endif()
 find_program(BENNETT_LLVM_LINK NAMES llvm-link llvm-link-18 HINTS "${LLVM_TOOLS_BINARY_DIR}" REQUIRED)
+foreach(tool BENNETT_CLANG BENNETT_LLVM_LINK)
+  execute_process(COMMAND "${${tool}}" --version OUTPUT_VARIABLE tool_version RESULT_VARIABLE tool_status)
+  if(NOT tool_status EQUAL 0 OR NOT tool_version MATCHES "version ${BENNETT_LLVM_MAJOR}\\.")
+    message(FATAL_ERROR "${tool} is not pinned major ${BENNETT_LLVM_MAJOR}: ${tool_version}")
+  endif()
+endforeach()
+
 
 set(softfloat "${CMAKE_CURRENT_SOURCE_DIR}/../rt/softfloat")
 set(softfloat_source "${softfloat}/berkeley-softfloat-3e/source")
@@ -115,3 +126,14 @@ add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/complex-runtime.bc"
   COMMAND "${BENNETT_LLVM_LINK}" ${complex_bitcode} -o "${CMAKE_CURRENT_BINARY_DIR}/complex-runtime.bc"
   DEPENDS ${complex_bitcode} VERBATIM)
 add_custom_target(complex-runtime ALL DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/complex-runtime.bc")
+
+# Exhaustive attribute policy and the public header's C++ translation unit.
+add_executable(bennett-front-checks tests/checks.cpp)
+target_include_directories(bennett-front-checks PRIVATE include src)
+target_include_directories(bennett-front-checks SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+target_compile_options(bennett-front-checks PRIVATE -Wall -Wextra -Wswitch-enum -Werror)
+if(LLVM_LINK_LLVM_DYLIB)
+  target_link_libraries(bennett-front-checks PRIVATE LLVM)
+else()
+  target_link_libraries(bennett-front-checks PRIVATE ${llvm_libs})
+endif()

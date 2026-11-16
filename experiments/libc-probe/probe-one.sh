@@ -16,6 +16,8 @@
 # fault (a named fault native did not have), wrong (device output or status differs from native while the run
 # reports success), crash, budget, timeout (the front ran out of FRONT_TIMEOUT), skipped (no native reference).
 set -u
+# Native reference run cap, in seconds.
+NATIVE_TIMEOUT_SECONDS=60
 src=$1
 name=$(basename "$src" .c)
 here=$(cd "$(dirname "$0")" && pwd)
@@ -54,7 +56,7 @@ for level in O0 O2; do
   if ! capped "$CLANG" -$level $common "$src" -o native-$level -lm >native-$level.log 2>&1; then
     emit skipped "clang does not compile it natively"
   fi
-  capped timeout 60 ./native-$level >native-$level.out 2>/dev/null </dev/null
+  capped timeout "$NATIVE_TIMEOUT_SECONDS" ./native-$level >native-$level.out 2>/dev/null </dev/null
   echo $? >native-$level.status
 done
 s0=$(cat native-O0.status)
