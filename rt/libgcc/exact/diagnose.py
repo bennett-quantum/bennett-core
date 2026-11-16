@@ -35,13 +35,13 @@ def run(args, **kw):
 
 
 def compare(left, right, random, must_match=False):
-    result = subprocess.run(['python3', '-I', str(HERE / 'compare.py'), str(left), str(right), str(random)],
+    result = subprocess.run(['python3', '-I', str(HERE / 'compare.py'), '--raw', str(left), str(right), str(random)],
                             capture_output=True, text=True)
     print(result.stdout, end='', flush=True)
     assert not result.stderr, result.stderr
     assert all(f'{name}: ' in result.stdout for name in NAMES), result.stdout
     assert result.stdout.count(', 0 differ otherwise') == len(NAMES), result.stdout
-    # compare.py uses exit 1 for *any* mismatch. Other errors must never count as evidence.
+    # compare.py --raw uses exit 1 for *any* mismatch. Other errors must never count as evidence.
     assert result.returncode in (0, 1), result.returncode
     if must_match:
         assert result.returncode == 0, 'operand-order hardware diagnostic differs from device'

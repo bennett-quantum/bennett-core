@@ -2,7 +2,8 @@
 """Raw-bit sweep against native libgcc (build the front and release executor first).
 
 Run from anywhere: python3 rt/libgcc/exact/run.py [--random N] [--level O0|O2].
-Scratch output goes under .tmp/libgcc-exact; compare.py reports NaN bits separately.
+Scratch output goes under .tmp/libgcc-exact; compare.py counts NaN results that differ only in which NaN's
+payload they carry as agreement (the NaN payload rule) and reports them separately.
 """
 import argparse
 from pathlib import Path

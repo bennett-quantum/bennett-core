@@ -27,8 +27,15 @@ values (160,000 tuples, including signed zeros, infinities, quiet/signalling NaN
 normal/subnormal limits and large/small exponent ratios) and 262,144 mixed random tuples
 per helper. It compares with **the host's libgcc archive**, retaining the native link map.
 `long double` inputs use canonical x87 encodings, and output omits its six padding bytes.
-NaN sign/payload differences are counted separately, never hidden in an equality claim.
-Scratch output goes under `.tmp/libgcc-exact`; any raw-bit mismatch fails the runner (including NaN bits).
+Results are compared bit for bit, except by **the NaN payload rule** (the maintainer's decision of the
+afternoon of 2026-11-16): a result component that differs only in which NaN's payload it carries counts as
+agreement. Exactly: both components are NaNs, and each carries (quiet bit set, sign free) the payload of
+one of the tuple's NaN operands or of the format's default NaN, which an invalid operation inside the
+helper makes. `compare.py` regenerates every tuple's operands as `cplx_exact.c` draws them, counts such
+tuples separately, and fails the runner on any other difference; `compare.py --raw` keeps every raw-bit
+difference a failure, for the diagnostics below, and `compare.py --self-test` checks the rule on 14 cases
+worked by hand (front test `the_nan_payload_rule_allows_exactly_another_nans_payload`).
+Scratch output goes under `.tmp/libgcc-exact`.
 
 The GCC `cdivchk` programs separately call `ilogb`/`ilogbl`. Those musl routines contain
 `FENV_ACCESS` and currently require the front's constrained-operation fallback. This is
@@ -64,7 +71,7 @@ Each row is 160,000 directed tuples plus 262,144 random tuples (422,144 per help
 2,532,864 in all), from unoptimized but optimizable input. Every component is compared as
 bits, including NaN sign/payload; x87 padding bytes are excluded.
 
-| helper | identical complex results | differ only in NaN bits | any other difference |
+| helper | identical complex results | agree by the NaN payload rule | any other difference |
 |---|---:|---:|---:|
 | `__mulsc3` | 408,400 | 13,744 | 0 |
 | `__divsc3` | 417,674 | 4,470 | 0 |
@@ -79,17 +86,17 @@ output handling took **228.467 s** on the shared host. A separate directed-only 
 Both long-double helpers match every result bit, including NaNs, with **no test-only
 library function** and no musl link. All six match every non-NaN result and every zero sign.
 
-**The requested complete raw-bit agreement is not achieved:** 50,952 tuples differ in
-float/double NaN fields, and the strict sweep exits **1**. The fast suite's NaN-normalized
-agreement is the existing floating-point contract, not a replacement for that requirement.
-The executed diagnosis below attributes these differences to native code generation's
-NaN selection latitude. They are not unexplained arithmetic lowering failures. The strict
-archive-bit requirement is still recorded here rather than relabelled a full raw-bit pass.
-If archive-identical NaNs remain required beyond that latitude, the route is to preserve
-that archive's per-operation operand choices through helper compilation and SoftFloat
-lowering, with unchanged upstream source. Merely changing the global NaN priority would
-break other operations, and compiling helpers at `-O0` does not solve the problem. Using
-privately recompiled helpers as the oracle would hide part of it and is not a fix.
+The 50,952 float/double tuples that differ in raw bits all agree by the NaN payload rule, and
+the sweep exits **0**: measured again on 2026-11-16 (machine step e7) with an `-O0` and an `-O2`
+caller, 2,898,176,872 and 2,272,217,960 device steps, the same counts per helper at both levels, none
+differing otherwise. The rule needs the default NaN: without it 1,476 of 164,096 `__divdc3` tuples of a
+smaller sweep fail, the native result being the default NaN of an inner `0/0` where the device carries an
+input NaN (tuple 9 below); with a wrongly seeded operand generator 108 random tuples fail, so the rule is
+checked against the operands actually drawn. Raw-bit agreement (`--raw`) still fails on these tuples: the
+diagnosis below attributes them to native code generation's NaN selection latitude, which C and LLVM leave
+open. The bit-for-bit requirement is dropped by the same decision; were it ever wanted again, the route is
+to preserve the archive's per-operation operand choices through helper compilation and SoftFloat lowering,
+with unchanged upstream source.
 
 ## Executed NaN diagnosis
 

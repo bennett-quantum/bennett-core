@@ -141,6 +141,16 @@ fn libgcc_script(script: &str, args: &[&str]) -> String {
     stdout
 }
 
+/// The NaN payload rule of the raw sweep (`rt/libgcc/exact/compare.py`; the maintainer's decision of the
+/// afternoon of 2026-11-16), on 14 cases worked by hand: equal bits agree; two NaNs agree when each carries the
+/// payload of one of the tuple's NaN operands or the default NaN's, either sign, a signalling one quieted; a
+/// payload no operand carries, or a NaN against a number, does not, for float, double and x87 alike.
+#[test]
+fn the_nan_payload_rule_allows_exactly_another_nans_payload() {
+    let report = libgcc_script("compare.py", &["--self-test"]);
+    assert!(report.contains("14 cases agree with the rule"), "{report}");
+}
+
 /// The native reference is the vendored source: the six members the default clang link takes from the host's
 /// libgcc.a are what the host's GCC 13.3.0 builds from `rt/libgcc` with Bennett's `config/` alone
 /// (instructions, relocations and constants identical; `rt/libgcc/VENDOR.md`).

@@ -152,8 +152,10 @@ commit) after the four checks passed on it.
   required where a rewind follows a read of a qubit (else `bad_rewind`; the older tests' marks migrated to
   `budget -1`, which bounds nothing), is built; e6, the call with a fault value and a budget
   (`%y, %c = call @f(args) budget B`, the region's rules attached, `apply` equal to mark, this call and
-  rewind-keep; `docs/DESIGN.md`, "The call with a fault value"), is built. Next: the NaN payload rule, then
-  the retirement of `apply`, `qalloc` and `qfree` once every test passes without them. The panic reported for a
+  rewind-keep; `docs/DESIGN.md`, "The call with a fault value"), is built; e7, the NaN payload rule in the
+  raw libgcc sweep (`rt/libgcc/exact/compare.py`; both caller levels exit 0, every one of the 50,952
+  NaN-only tuples agreeing by the rule, nothing else differing; `rt/libgcc/README.md`), is built. Next:
+  the retirement of `apply`, `qalloc` and `qfree` once every test passes without them (not this job's). The panic reported for a
   `measure_memory` fixture in 64 bytes of memory was not the executor's: it returns `stack_overflow` before
   the first step (since `5515ae8`); the independent whole-world reference panicked at its own start
   (`expect("entry fits memory")`). The reference now models the fault, and
@@ -996,6 +998,13 @@ earlier decisions: "Decisions the maintainer took on 2026-11-16, in the afternoo
   function's), and the innermost call takes a fault, the outermost spent one a budget. Recommendation: keep;
   an `i8` code would survive a further widening of the codes, at the cost of a `trunc` before a keep into a
   `q5`.
+
+- **The NaN payload rule and the default NaN** (e7). Taken: two NaN results agree when each carries the
+  payload of one of the tuple's NaN operands or the default NaN's, the sign free. The default NaN is not an
+  operand of the helper, but it is an operand of the inner operation whose operand order differs (an inner
+  `0/0`); without it 1,476 of 164,096 `__divdc3` tuples fail. Recommendation: keep. The fast grouped checks
+  of `front/tests/tests/complex.rs` still count any two NaNs as equal (looser than the rule); route: give
+  their comparison the operands, as `compare.py` has them, and apply the same rule.
 
 ## Questions the maintainer answered on 2026-11-16, in the afternoon (kept for their detail)
 
