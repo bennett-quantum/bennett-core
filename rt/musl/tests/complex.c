@@ -1,5 +1,5 @@
 /* Complex arithmetic with the C library: products and quotients of float and double values through
- * compiler-rt's helpers (rt/compiler-rt), musl's cexp and conj, and an Annex G case (a nonzero value over
+ * libgcc's helpers (rt/libgcc), musl's cexp and conj, and an Annex G case (a nonzero value over
  * zero is infinite). The printed values are the same with libgcc's helpers and with compiler-rt's. */
 #include <complex.h>
 #include <stdio.h>

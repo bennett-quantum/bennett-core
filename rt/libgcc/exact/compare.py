@@ -18,7 +18,7 @@ for name, w in ops:
     x, y = a[pos:pos + size], b[pos:pos + size]
     pos += size
     exact = payload = other = 0
-    shown = 0
+    shown = nan_shown = 0
     for i in range(N):
         ra, ia = x[2*i*w:(2*i+1)*w], x[(2*i+1)*w:(2*i+2)*w]
         rb, ib = y[2*i*w:(2*i+1)*w], y[(2*i+1)*w:(2*i+2)*w]
@@ -26,14 +26,17 @@ for name, w in ops:
             exact += 1
         elif all(p == q or (nan(p, w) and nan(q, w)) for p, q in ((ra, rb), (ia, ib))):
             payload += 1
+            if nan_shown < 2:
+                nan_shown += 1
+                print(f"  {name} #{i} NaN bits: {ra} {ia} vs {rb} {ib}")
         else:
             other += 1
             if shown < 3:
                 shown += 1
                 print(f"  {name} #{i} ({'directed' if i < ND**4 else 'random'}): {ra} {ia} vs {rb} {ib}")
-    failures += other
+    failures += payload + other
     print(f"{name}: {N} tuples, {exact} identical, {payload} differ only in NaN bits, {other} differ otherwise")
 assert pos == len(a) == len(b), (pos, len(a), len(b))
 
-# NaN bit differences remain visible above; any other mismatch fails the run.
+# Exact means raw bits, including NaNs. The fast grouped suite tests the weaker FP contract.
 sys.exit(bool(failures))
