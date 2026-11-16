@@ -8,8 +8,8 @@ test programs, and why are programs refused?
 Measured twice on 2026-11-13, a third time on 2026-11-15 after floating point, a fourth time on 2026-11-15
 with the C library linked (musl 1.2.5, `rt/musl`), and a fifth time with the library linked at `b961292`, after
 the 128-bit conversions and the complex helpers, and a sixth at `8bbb56c`, which returns a small aggregate as one
-integer; the newest section comes first. After that only the four programs that waited on `setjmp` and
-`longjmp` were run again, alone.
+integer; and a seventh at `eeff78d` after jumps, return addresses, the tail-mark fix and over-aligned
+variadics. The newest measurements come first.
 First at commit `4b65247` (tree clean when the binaries were copied): `bennett-front` and `bennett` were built
 once (`cargo build --release`, `front/test.sh`, all tests passing), then copied to `.tmp/c-corpus/bin/`, and
 only those copies were used. File and line references in the sections on the
@@ -73,6 +73,79 @@ bytes, not the old block's size. A harness self-test (`.tmp/c-corpus/selftest`) 
 error. **wrong**: the device reaches `abort()`/`exit(≠0)`, or `main` returns a value ≢ 0. **crash**: `bennett-front`
 exits other than 0 or 3, `bennett check` rejects its output, or `bennett run` exits other than 0, 1 or 2. **budget**:
 the 10^8-step budget ran out. **skipped**: no native reference, as above.
+
+## The three corpora at `eeff78d`, with musl linked (2026-11-16)
+
+Frozen copies of `bennett-front`, both compiler runtimes and the release executor built at `eeff78d`, with
+musl 1.2.5 built locally from the same tree. The fetched sources and `results-8bbb56c` were read-only.
+`run-all.sh` ran each corpus with four workers, `MUSL_LIBDIR` set, the default 10^8-step budget and 1 MiB
+stack, and `EXTRA_FLAGS=-fno-inline` for `ieee/`. Wall times: GCC 486.69 s, c-testsuite 87.65 s, `ieee/`
+16.88 s. Results, frozen binary hashes and complete per-program comparisons are retained under
+`.tmp/front-test/results-eeff78d/`; `gcc-moved/` retains native/device outputs and programs for the eight
+changed cases. `KEEP=0` on the whole run keeps each classification and all wrong/crash artifacts.
+
+| outcome | GCC | c-testsuite | GCC `ieee/` |
+|---|---:|---:|---:|
+| agrees | **1,568** | **217** | **64** |
+| refused by name | 1 | 1 | 3 |
+| named fault (native passed) | 6 | 1 | 0 |
+| **wrong** | **0** | **0** | **0** |
+| crash | 0 | 0 | 0 |
+| budget | 0 | 1 | 0 |
+| skipped | 81 | 0 | 1 |
+
+Compared **every program**, including reasons and steps, with `8bbb56c` using `compare.py old/results.tsv
+new/results.tsv`; the comparison omits diagnostic source locations, which depend on the source root.
+Exactly eight GCC programs move, all refused to agreeing, and their retained reruns reproduce each result
+and step count:
+
+| program | measured old refusal | measured new steps | what the accepted program tests |
+|---|---|---:|---|
+| `20030323-1` | `llvm.returnaddress` | 2,048 | compilation of 100 `retaddr`s; `main` is `ret 0`, none executed |
+| `20030811-1` | `llvm.returnaddress` | 2,048 | compilation of 3 `retaddr`s; `main` is `ret 0`, none executed |
+| `pr17377` | `llvm.returnaddress` | 2,149 | the executed return-address check (one site across repeated calls) |
+| `20210505-1` | `longjmp` without a definition | 2,059 | library jump; generated program contains `setjmp` and `longjmp` |
+| `pr56982` | `setjmp` without a definition | 2,074 | library jump; generated program contains `setjmp` and `longjmp` |
+| `built-in-setjmp` | `llvm.eh.sjlj.longjmp` | 2,161 | built-in jump; generated program contains `setjmp` and `longjmp` |
+| `pr84521` | `llvm.eh.sjlj.longjmp` | 2,122 | built-in jump; generated program contains `setjmp` and `longjmp` |
+| `pr92904` | variadic argument aligned to more than 16 bytes | 67,967 | aligned variadic argument, now placed where clang reads it |
+
+All other **1,648 GCC, 220 c-testsuite and 68 `ieee/` rows are unchanged**, including steps. Thus the tail
+fix and the executor's mark/rewind, worlds and overlay changes introduce no measured corpus regression.
+The remaining refusals/faults are the same: GCC inline assembly (`990413-2`), five file-system faults and
+`pr67037`'s extra unprototyped argument; c-testsuite's mismatched `strlen` prototype, `fopen` fault and
+8-queens step budget; the three complex-division `ieee/` programs under `FENV_ACCESS`.
+
+## Independent by-value and variadic testing pass (2026-11-16)
+
+At `eeff78d` (the tail-mark fix `cee23f8` and over-aligned variadics `eeff78d`),
+`front/tests/tests/front_call_independent.rs` compares executed native C with the device:
+
+- **3,240 exact result words**: 27 struct layouts spanning the ABI size boundaries and alignments 1 through
+  16,384, eight inputs, direct/indirect/sibling/recursive calls and mutation of a local by-value copy, from
+  `-O0`, `-O2` and `--taint-all`. Only initialized fields are read; no padding or signed-overflow oracle.
+- **720 exact result words**: ten register prefixes, eight inputs, the same three lowering modes, baseline,
+  `-mavx2` and `-mavx512f`. Mixed 32/64/256/4096-aligned structs, 16/32/64-byte vectors, `long double`,
+  unsigned `__int128`, promoted floats and integers, an aligned named parameter, partial consumption followed
+  by `va_copy`, and lists passed on. Native `-O0` and `-O2` agree; native AVX2 agrees too. This CPU lacks
+  AVX512F, so AVX-512 device lowering is compared with the same C executed natively without AVX-512 instructions.
+- **240 additional exact words** at 16,384-byte variadic alignment (LLVM's largest valid alignment), across
+  the ten register prefixes, eight inputs and all three lowering modes.
+- **96 controlled branches and amplitudes**: four by-value shapes, eight inputs in superposition, all three
+  lowering modes; all accepted and equal to native values with the expected positive amplitudes.
+- With musl built, **480 identical printed words** from the variadic matrix (six builds, 2,660,362 steps at
+  `-O0`, 2,612,654 at `-O2`) and **12 identical stdout/status comparisons** passing a cursor on to
+  `vprintf`/`vsnprintf` after aligned objects (41,802 steps at `-O0`, 41,792 at `-O2`; both taint modes and
+  all three ISA settings). These two tests are ignored by default because they need the separate musl build.
+- `musttail` with a by-value argument is refused by name.
+
+No new wrong result. Sensitivity check: the same new by-value test against the saved `8bbb56c` front passes
+all 960 `-O0` words of the then-24-shape matrix, then fails at `-O2` on the 17-byte struct, direct call,
+input 0: device 0, native 6,046,364,335,294,611,224. The current front agrees on it. This is the already-fixed tail-mark bug, so its
+regression runs normally. The sources are `front_call_independent.c`, `front_vararg_independent.c`,
+`front_call_controlled.c` and `front_vararg_printf.c` in `front/tests/c/`. Run the extended musl checks with
+`cargo test -p bennett-front-tests --test front_call_independent -- --include-ignored` after
+`python3 rt/musl/build.py --jobs 3`.
 
 ## The program that waited on over-aligned variadic arguments (2026-11-16)
 

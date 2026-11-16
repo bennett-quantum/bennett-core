@@ -5,7 +5,8 @@ the musl runtime, validated on the three corpora with no wrong result; `zero N`;
 control-schedule measurements; the salvage survey; the floating-point leftovers (128-bit conversions, `fmal`,
 `_Float16`, `__bf16`) and the complex helpers; two constructor-startup fixes; small aggregates returned as one
 integer; two review-audit fixes; and an independent testing pass by another model family of each of these. The
-last corpus run (`8bbb56c`, musl linked) has GCC 1,560 agree, c-testsuite 217, `ieee/` 64, none wrong.
+last corpus run (`eeff78d`, musl linked, 2026-11-16) has GCC 1,568 agree, c-testsuite 217, `ieee/` 64,
+none wrong or crashing. The independent by-value/tail and aligned-vararg pass found no new wrong result.
 
 ## What this repository is
 
@@ -41,21 +42,34 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (224 tests; ignored: 5 heavy reference or generated runs, the memory-cost report, 1 heavy recomputation check, 1 witness of a wrong result; about 8 s, no LLVM needed) and `front/test.sh` (146 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, an extended float sweep, a
-musl-linked ABI check that needs `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
-129-bit bitfield struct; see "Known weak spots"), about 30 s with a clean build; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
+Check it: `cargo test` (224 tests; ignored: 5 heavy reference or generated runs, the memory-cost report, 1 heavy recomputation check, 1 witness of a wrong result; about 8 s, no LLVM needed) and `front/test.sh` (151 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, an extended float sweep, a
+musl-linked ABI check and two independent variadic checks that need `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
+129-bit bitfield struct; see "Known weak spots"); needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 With musl linked, standard output and exit status compared with native (`experiments/c-corpus/README.md`):
-GCC's C torture tests 1,560 agree, 9 refused by name, 6 named faults (programs that open files), none wrong;
-c-testsuite 217 agree, 1 refused, 1 named fault, 1 over the step budget, none wrong; GCC's `ieee/` 64 agree, 3
-refused, none wrong (`b961292`, after the complex helpers and the 128-bit conversions moved three GCC programs
-from refused to agreeing). Without the library an earlier snapshot gives 1,521 / 52 refused, 151 / 68, 58 / 9. Since
-the complex helpers, the two GCC programs that waited on them agree too, with and without the library (run
-alone, not as a whole corpus): GCC 1,559 agree and 10 refused with musl, if nothing else moved. Since
-`setjmp`/`longjmp` (`31f5138`), the four GCC programs that waited on them agree too, with musl and without (run
-alone): GCC 1,564 agree and 5 refused with musl, if nothing else moved. Since variadic arguments aligned to
-more than 16 bytes are placed where clang's `va_arg` reads them, GCC `pr92904` agrees too, with musl and without
-(run alone): GCC 1,565 agree and 4 refused with musl, if nothing else moved.
+GCC's C torture tests **1,568 agree, 1 refused by name, 6 named faults**, 81 skipped;
+c-testsuite **217 agree, 1 refused, 1 named fault, 1 over the step budget**;
+GCC's `ieee/` **64 agree, 3 refused**, 1 skipped; **none wrong or crashing** (`eeff78d`, 2026-11-16).
+Compared per program with the last whole run (`8bbb56c`): eight GCC refusals now agree (the three return-address
+programs, four `setjmp`/`longjmp` programs and `pr92904`'s over-aligned variadic argument). Every other outcome,
+reason and step count is identical, including all 220 c-testsuite and 68 `ieee/` programs. The first two
+return-address programs only need those functions to compile: their `main` is `ret 0`; `pr17377` executes the
+check. Each changed case was rerun with native/device artifacts retained. Four corpus workers, musl linked,
+1 MiB stack, 10^8-step budget; wall times GCC 486.69 s, c-testsuite 87.65 s, `ieee/` 16.88 s. Tables, each
+changed program and remaining reasons: `experiments/c-corpus/README.md`; ignored raw results and comparisons:
+`.tmp/front-test/results-eeff78d/` in the testing checkout. Without the library an earlier snapshot gives
+1,521 / 52 refused, 151 / 68, 58 / 9.
+
+Independent testing of `cee23f8` and `eeff78d` (`front_call_independent.rs`): 3,240 exact native/device by-value
+words over 27 layouts and direct/indirect/sibling/recursive/local-copy mutation paths; 720 mixed-vararg words
+across baseline/AVX2/AVX512 and 240 more at 16,384-byte variadic alignment; 96 controlled branch values and
+amplitudes; 480 musl-printed words and 12 forwarded `vprintf`/`vsnprintf` stdout/status comparisons.
+`-O0`, `-O2`, `--taint-all`; all valid power-of-two by-value alignments through 16,384. No new wrong result;
+`musttail` with a by-value argument is refused by name. The new test catches the old tail bug against the saved
+`8bbb56c` front (17-byte struct at `-O2`: 0 versus native 6,046,364,335,294,611,224), and passes at `eeff78d`.
+AVX512F is unavailable on this CPU: device AVX-512 lowering is compared with the same C executed natively without
+AVX-512 instructions; native AVX2 is also executed. The two musl tests are ignored by default and were run
+explicitly after the separate musl build.
 
 ## Decisions the maintainer took on 2026-11-13
 

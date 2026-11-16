@@ -11,9 +11,6 @@ use bennett_front_tests::{
 };
 use bennett_ir::ValidModule;
 
-/// Inputs each function runs on; `setjmp.c`'s native main prints the same range.
-const INPUTS: u64 = 32;
-
 /// `(function, input) -> result` from the native build.
 fn native() -> BTreeMap<(String, u64), i32> {
     let executable = native_build(&c_dir().join("setjmp.c"), "setjmp", &["-DNATIVE"]);

@@ -247,17 +247,17 @@ fn summarize(measurement: &JournalMeasurement, classes: &[ApplyClassification]) 
             let instances: usize = positions.iter().map(|p| p.instances).sum();
             assert_eq!(instances, apply.branches.iter().map(|b| b.words).sum::<usize>(), "alignment {alignment}");
             for position in positions {
-                if position.class == WordClass::Irreducible {
-                    if let Some(chain) = &position.chain {
-                        for blocker in &chain.blockers {
-                            *summary.blockers[alignment]
-                                .entry(format!(
-                                    "{}/{}: {blocker}",
-                                    position.site.func.0,
-                                    role_name(position.kind, position.role)
-                                ))
-                                .or_default() += 1;
-                        }
+                if position.class == WordClass::Irreducible
+                    && let Some(chain) = &position.chain
+                {
+                    for blocker in &chain.blockers {
+                        *summary.blockers[alignment]
+                            .entry(format!(
+                                "{}/{}: {blocker}",
+                                position.site.func.0,
+                                role_name(position.kind, position.role)
+                            ))
+                            .or_default() += 1;
                     }
                 }
                 summary.all[alignment].add(position);
