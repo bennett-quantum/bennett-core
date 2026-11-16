@@ -1,6 +1,7 @@
 #ifndef BENNETT_VFS_H
 #define BENNETT_VFS_H
 #include <stdint.h>
+#include <fcntl.h>
 enum bennett_file_kind { BRT_REGULAR, BRT_DIRECTORY, BRT_CONSOLE, BRT_INPUT,
                          BRT_ENTROPY, BRT_NULL, BRT_ZERO, BRT_ERROR };
 struct bennett_inode;
@@ -10,6 +11,13 @@ struct bennett_file {
     uint64_t pos, refs;
     struct bennett_inode *inode;
 };
+/* Linux's access modes: O_ACCMODE itself opens for neither reading nor writing. */
+static inline int __bennett_rt_readable(int flags) {
+    return !(flags&O_PATH) && ((flags&O_ACCMODE)==O_RDONLY || (flags&O_ACCMODE)==O_RDWR);
+}
+static inline int __bennett_rt_writable(int flags) {
+    return !(flags&O_PATH) && ((flags&O_ACCMODE)==O_WRONLY || (flags&O_ACCMODE)==O_RDWR);
+}
 struct bennett_file *__bennett_rt_vfs_file(long);
 long __bennett_rt_vfs_open(const char *,int,unsigned,long);
 long __bennett_rt_vfs_close(long);

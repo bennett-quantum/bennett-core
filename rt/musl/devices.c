@@ -13,13 +13,14 @@
 static unsigned inputs_prepared;
 
 static long transfer(long fd,void *p,uint64_t n,int writing,uint64_t offset,int positional) {
+    /* Linux's order: a negative position, the descriptor, a seekable file, then the access mode. */
+    if(positional && offset>LONG_MAX) return -EINVAL;
     struct bennett_file *file=__bennett_rt_vfs_file(fd);
     if(!file) return -EBADF;
-    if((file->flags&O_PATH) || (writing?(file->flags&O_ACCMODE)==O_RDONLY:(file->flags&O_ACCMODE)==O_WRONLY)) return -EBADF;
+    if(positional && (file->kind==BRT_CONSOLE || file->kind==BRT_ERROR || file->kind==BRT_INPUT)) return -ESPIPE;
+    if(writing?!__bennett_rt_writable(file->flags):!__bennett_rt_readable(file->flags)) return -EBADF;
     if(n>LONG_MAX) return -EINVAL;
     if(n && !p) return -EFAULT;
-    if(positional && (file->kind==BRT_CONSOLE || file->kind==BRT_ERROR || file->kind==BRT_INPUT)) return -ESPIPE;
-    if(positional && offset>LONG_MAX) return -EINVAL;
     if(file->kind==BRT_CONSOLE || file->kind==BRT_ERROR) {
         if(file->kind==BRT_ERROR && n) __builtin_trap();
         for(uint64_t i=0;i<n;++i) __bennett_effect(((const char *)p)[i]);
@@ -34,19 +35,26 @@ static long transfer(long fd,void *p,uint64_t n,int writing,uint64_t offset,int 
     }
     return __bennett_rt_vfs_io(file,p,n,writing,offset,positional);
 }
+/* Fixed clocks 0..11 (10 is unused), and the CPU-time clocks of the caller: Linux encodes a process or thread
+ * as ~id>>3 (0 is the caller; the device's only process and thread are 1) and rejects the clock kind 3. */
+static int clock_id(long id) {
+    if(id>=0) return id<=11 && id!=10;
+    long owner=~(id>>3);
+    return (id&3)!=3 && (owner==0 || owner==1);
+}
 long __bennett_device_syscall(long nr,long a,long b,long c,long d,long e,long f) {
     (void)f;
     /* Lazy preparation runs with musl's allocator ready, also before a constructor's first open.
      * The guard and the preparation itself are ordinary memory, undone with the run. */
     if(!inputs_prepared) { inputs_prepared=1; __bennett_input_files(); }
     if(nr==SYS_clock_gettime) {
-        if(a<0 || a>11 || a==10) return -EINVAL;
+        if(!clock_id(a)) return -EINVAL;
         if(!b) return -EFAULT;
         uint64_t value=__bennett_clock_read();
         long *ts=(void *)b; ts[0]=value/1000000000; ts[1]=value%1000000000; return 0;
     }
     if(nr==SYS_clock_getres) {
-        if(a<0 || a>11 || a==10) return -EINVAL;
+        if(!clock_id(a)) return -EINVAL;
         if(b) { long *ts=(void *)b; ts[0]=0; ts[1]=1; }
         return 0;
     }
@@ -88,8 +96,10 @@ long __bennett_device_syscall(long nr,long a,long b,long c,long d,long e,long f)
             total+=v[i].iov_len;
         }
         struct bennett_file *file=__bennett_rt_vfs_file(a);
-        if((file->flags&O_PATH) || (nr==SYS_writev?(file->flags&O_ACCMODE)==O_RDONLY:(file->flags&O_ACCMODE)==O_WRONLY)) return -EBADF;
-        for(long i=0;i<c;++i) if(v[i].iov_len && !v[i].iov_base) return -EFAULT;
+        if(nr==SYS_writev?!__bennett_rt_writable(file->flags):!__bennett_rt_readable(file->flags)) return -EBADF;
+        /* The console is checked whole before any effect; elsewhere a bad element ends a partial transfer, as on Linux. */
+        if(file->kind==BRT_CONSOLE || file->kind==BRT_ERROR)
+            for(long i=0;i<c;++i) if(v[i].iov_len && !v[i].iov_base) return -EFAULT;
         if(file->kind==BRT_ERROR && nr==SYS_writev && total) __builtin_trap();
         if(file->kind==BRT_ENTROPY && nr==SYS_readv) __bennett_entropy_check(total);
         uint64_t done=0;

@@ -980,6 +980,19 @@ file implementation already passed `loop-2f` / `loop-2g` at 35,235 each and c-te
 No whole corpus was rerun. Four checks pass after rebasing on `40c84d4`: cargo 306 tests, front 170,
 clippy all targets with warnings denied, formatting clean.
 
+Its independent testing pass (other model family, 2026-11-16) compared about 250 file, clock and entropy
+calls with native glibc on ext4 and found 18 divergences, all in the file model; clock and entropy values
+matched the decision in every probe. Wrong state: `rmdir(".")`/`rmdir("d/.")` removed the directory;
+`rename(".", x)` moved it; `rename(d, "/")` and `rename(d, "..")` replaced the root; `rename(file, "new/")`
+moved the file; `open(dir, O_RDONLY|O_TRUNC)` succeeded; a working directory removed and remade under its
+name took relative creates into the new directory. Refused where Linux succeeds: `fsync` of a directory,
+`O_ACCMODE` opens, `SEEK_DATA`/`SEEK_HOLE`, `fchdir` to a removed directory, the caller's CPU-time clock
+ids, and partial vectored IO with a bad later element. Wrong error: unenforced `NAME_MAX`/`PATH_MAX`, and the
+error order of `ftruncate`, `truncate`, `access`, `pread`/`pwrite`, `mkdir("file/")`, `open("missing/f/",
+O_CREAT)` and renames onto `.`. All fixed; 8 self-checking witnesses (`rt/musl/tests/devices-regress/`)
+return 0 natively, failed before, and un-run exactly from their end and three mid-run cuts. `test-devices.py`
+24 passes (147.31 s); the fixtures cost up to 6% more steps (files 79,057 / 1,632,977 journal bytes).
+
 Debts, with routes (the goal is not narrowed to the present surface):
 
 - **Separate per-invocation inputs**: images are supplied while linking the run image. Add a symbol/relocation
@@ -994,8 +1007,12 @@ Debts, with routes (the goal is not narrowed to the present surface):
   writing through each alias and through file descriptors before/after unmapping.
 - **Namespace and metadata**: the model has root ownership, a fixed device identity, zero timestamps and
   no credential/ACL checks. Carry explicit credentials and metadata inputs, and update inode times from
-  the input clock under a documented rule. Complete Linux component/error ordering, removed-directory
-  and open-directory rename lifetime semantics with native differentials. Directory links, size, sparse
+  the input clock under a documented rule. The independent testing pass (`rt/musl/tests/devices-regress/`)
+  fixed the ordering, dot-name, trailing-slash and working-directory lifetime results it found. Still open:
+  a removed working or descriptor directory names nothing, so `.`/`..` relative to it give `ENOENT` where
+  Linux still resolves them (route: resolve relative names from the inode, keeping a parent link per
+  directory inode); directory sizes are 0 (ext4 reports blocks); there is no descriptor limit (natively
+  `EMFILE` at `RLIMIT_NOFILE`, an environment input not yet modelled). Directory links, size, sparse
   pages, file modes/umask, append and descriptor offsets already have native comparisons.
 - **Allocation exhaustion and reclamation**: allocations use the existing finite musl arena. VFS allocation
   failure is a named fault; syscall-wide ENOMEM rollback and reclaiming unlinked/closed names/inodes/open

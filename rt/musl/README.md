@@ -81,6 +81,16 @@ truncate/ftruncate, readlink/readlinkat errors over the current non-symlink name
 The initial namespace has `/`, `/tmp` (mode 01777), `/dev`, `/dev/random`, `/dev/urandom`, `/dev/null`, `/dev/zero` and
 `/dev/console`. Duplication preserves the explicit stderr fault; fd 2 may be redirected to a file.
 
+Errors follow Linux's order of checks where several apply (arguments before the path walk, earlier
+components before later ones, a last component `.`, `..` or the root refused by kind before lookup), with
+`PATH_MAX` and `NAME_MAX` enforced. The working directory and directory descriptors are inodes: they follow
+renames, and once removed they name nothing (relative names then give `ENOENT`; Linux would still find `.`
+and `..` there, a recorded debt). `O_ACCMODE` opens for neither reading nor writing, directories accept
+`fsync`, and `SEEK_DATA`/`SEEK_HOLE` report the model's unwritten 4096-byte pages as holes, as ext4 and tmpfs
+with 4 KiB blocks do. A vector with a bad element after a good one transfers the good part, except on the
+console, which is checked whole. The CPU-time clocks of the caller (`clock_getcpuclockid`,
+`pthread_getcpuclockid`) share the clock's counter.
+
 Supply the run's inputs when constructing its image:
 
 ```sh
@@ -176,23 +186,34 @@ floating-point `printf`, `strtod`, `sqrt`, `sin` and `pow`) 652,468 bytes, of wh
 
 ### Files/clock/entropy checks (2026-11-16)
 
-`test-devices.py`: **16 passes** (`-O0` and non-vectorized `-O2`), 62.76 s on the shared machine.
+`test-devices.py`: **24 passes** (16 fixture runs at `-O0` and non-vectorized `-O2`, and the 8 witnesses of
+`tests/devices-regress/`), 147.31 s on the shared machine.
 Files and constructor-loaded byte images agree with native stdout/status. Clock arithmetic and seed
 bytes agree with a separate native C arithmetic oracle, including start `2^64-2` wrapping through zero.
 `getentropy`, random-device reads and vectored tape consumption additionally check each expected byte.
-All 16 forward runs un-run to the identical entry snapshot (including buffers, both consumption counters,
-filesystem/allocator state and the lazy image guard); amplitude error zero. Empty-image exhaustion is
+All forward runs un-run to the identical entry snapshot (including buffers, both consumption counters,
+filesystem/allocator state and the lazy image guard); amplitude error zero. The witnesses also un-run exactly
+from cuts at a quarter, half and three quarters of their run.
+
+`tests/devices-regress/` holds the self-checking witnesses of the independent testing pass of files, clocks
+and entropy: each returns 0 natively (ext4) and failed on the device before its fix. They cover removing or
+renaming `.`, `..` and the root (`rmdir(".")` removed the directory; `rename(d, "/")` replaced the root),
+trailing slashes (`rename(file, "new/")` moved the file), a working directory removed and remade under its
+name (a relative create landed in the new directory), `fchdir` to a removed directory, `O_TRUNC` on a
+directory, `O_ACCMODE`, `fsync` of a directory, the error order of `ftruncate`, `truncate`, `access`,
+`pread` and `pwrite`, `SEEK_DATA`/`SEEK_HOLE`, `NAME_MAX`/`PATH_MAX`, partial vectored IO, and the
+caller's CPU-time clock ids. Clock and entropy values matched the decided arithmetic in every probe. Empty-image exhaustion is
 an expected named fault, and is also fully reversed. Representative `-O0` costs:
 
 | fixture | steps | journal bytes |
 |---|---:|---:|
-| files: sparse/truncate/append/shared offsets/dup/vector IO | 75,617 | 1,558,865 |
-| file errors, modes, links, umask, cwd/rename | 60,600 | 1,246,664 |
-| temporary names/readlink/stdio/anonymous tmpfile | 63,073 | 1,266,897 |
-| supplied file bytes read in constructor and main | 40,503 | 817,527 |
-| clock start 1,234,999,999,998 and 16 entropy bytes | 30,758 | 670,118 |
-| clock start `2^64-2`, wrap, same entropy bytes | 31,167 | 679,087 |
-| getentropy plus random-device/readv byte checks | 42,067 | 832,979 |
+| files: sparse/truncate/append/shared offsets/dup/vector IO | 79,057 | 1,632,977 |
+| file errors, modes, links, umask, cwd/rename | 64,475 | 1,328,123 |
+| temporary names/readlink/stdio/anonymous tmpfile | 64,625 | 1,299,601 |
+| supplied file bytes read in constructor and main | 41,218 | 832,978 |
+| clock start 1,234,999,999,998 and 16 entropy bytes | 30,836 | 671,892 |
+| clock start `2^64-2`, wrap, same entropy bytes | 31,245 | 680,861 |
+| getentropy plus random-device/readv byte checks | 42,189 | 836,029 |
 | empty entropy image, expected fault | 2,101 | 41,781 |
 
 The integration suite remains separate from fast `cargo test` and `front/test.sh`; it requires the

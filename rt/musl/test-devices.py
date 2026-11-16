@@ -68,6 +68,33 @@ def main():
                 (OUT / "results.tsv").write_text("case\tclock_start\tlevel\tsteps\ttext_bytes\n" + "\n".join(rows) + "\n")
                 (bn.with_suffix(".run.txt")).write_text(result.stdout)
                 print(row, flush=True)
+    # tests/devices-regress: self-checking witnesses of the independent testing pass (each returns 0 natively and
+    # failed here before its fix). Each also un-runs exactly from its end and from cuts in the middle of its run.
+    for source in sorted((HERE / "tests/devices-regress").glob("*.c")):
+        bn = OUT / f"regress-{source.stem}.bn"
+        run(["python3", HERE / "link.py", source, "-o", bn, "--clang-flag=-O0",
+             "--clock-start", 1234999999998, "--entropy-image", OUT / "entropy.bin"])
+        run([ROOT / "target/debug/bennett", "check", bn])
+        native = OUT / f"regress-{source.stem}.native"
+        run(["clang-18", "-O0", source, "-o", native])
+        with tempfile.TemporaryDirectory(dir=OUT) as directory:
+            reference = subprocess.run([str(native)], cwd=directory, capture_output=True, stdin=subprocess.DEVNULL,
+                                       preexec_fn=lambda: os.umask(0o22))
+        assert (reference.returncode, reference.stdout) == (0, b""), (source.stem, reference)
+        result = subprocess.run([str(ROOT / "target/debug/bennett"), "run", str(bn), "--entry", "__bennett_entry",
+                                 "--reverse", "--budget", "10000000"], capture_output=True, text=True)
+        assert result.returncode == 0 and "result: 0\n" in result.stdout, (source.stem, result)
+        assert "returned to entry: classical state identical" in result.stdout, (source.stem, result)
+        steps = int(next(x[7:] for x in result.stdout.splitlines() if x.startswith("steps: ")))
+        for cut in (steps // 4, steps // 2, 3 * steps // 4):
+            middle = subprocess.run([str(ROOT / "target/debug/bennett"), "run", str(bn), "--entry", "__bennett_entry",
+                                     "--reverse", "--budget", str(cut)], capture_output=True, text=True)
+            assert "fault: budget" in middle.stdout, (source.stem, cut, middle)
+            assert "returned to entry: classical state identical" in middle.stdout, (source.stem, cut, middle)
+        row = f"regress/{source.stem}\t1234999999998\t-O0\t{steps}\t{bn.stat().st_size}"
+        rows.append(row)
+        (OUT / "results.tsv").write_text("case\tclock_start\tlevel\tsteps\ttext_bytes\n" + "\n".join(rows) + "\n")
+        print(row, flush=True)
     print(f"device tests: {len(rows)} runs, {time.monotonic()-started:.2f}s", flush=True)
 
 
