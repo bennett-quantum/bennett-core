@@ -447,7 +447,7 @@ Each child has an explicit default 300-second timeout and 4,096 MiB virtual-addr
 (`--seconds`, `--memory-mib`); reports retain process status, timeout state, stderr, stdout, wall time
 and `/usr/bin/time` peak RSS. A stopped child fails the run, and its limits remain in the report.
 These are shared-host experiment limits, not claimed physical limits. The entry has a
-1,000,000,000-outer-step budget, each region run has a 100,000,000-step budget, and the
+1,000,000,000-outer-step budget, each basis callee run has a 100,000,000-step budget, and the
 configuration bound is 2N (row times the kick bit). Region faults stop the run. Forward/reverse phase
 seconds exclude module parsing and include the observer work in that phase (setup estimation,
 snapshot checks and dense comparisons). Wall time also includes module loading and process startup.
@@ -581,7 +581,7 @@ of per-run high-water bytes.
 | int_eq | 0 | 1 | 5,519,150 | 55,644,807 | -0 | 0 | 16.114 | 179,976 |
 | text_order | 232 | 1 | 6,111,808 | 61,401,088 | 0.638977050781 | 4.86e-17 | 14.567 | 179,828 |
 | two_where | 6 | 7 | 41,803,202 | 423,634,673 | 0.996846047184 | 5e-16 | 16.861 | 180,152 |
-| range_agg | 447 | 1 | 592,747,662 | 5,540,593,543 | 0.211494326591 | 3.12e-17 | 88.223 | 180,008 |
+| range_agg | 447 | 1 | 592,747,662 | 5,540,593,543 | 0.211494326591 | 3.12e-17 | 129.377 | 179,692 |
 
 The first timeout is LIKE with output 0: both forward calls pass the dense comparison exactly,
 with zero region faults. Forward phase: 226.066654 s, 20,232,993 outer steps, 15,237,696 region
@@ -622,7 +622,18 @@ not relabelled as measurements of the updated implementation. No cost model is i
 
 After rebasing onto `fc47ab7`, the updated observer reran all five shapes and all modes at
 N=16/32, plus all five Grover shapes at N=512, against the same saved lowered modules and native
-executables. All 55 cases pass. Outer steps, region steps, region work/journal/overlay counters
+executables. Both complete aggregate coherent reversals at N=256 also pass (227.914 / 209.356 s,
+464,340 / 464,364 KiB peak RSS). All 57 cases pass. Outer steps, region steps, region work/journal/overlay counters
 and retained journal sizes match the baseline exactly. New wall/RSS observations are kept in
 [revalidation.tsv](revalidation.tsv), separate from the baseline table. This check exercises the
 new atomic-rewind implementation without changing SQLite or substituting a predicate.
+
+The final rebase onto `40c84d4` changes only fallback-oracle tests and handoff notes; its production
+executor is the one used for this revalidation. Baseline and revalidation tables retain their own
+wall/RSS observations, with identical device step and journal counters on all 57 rechecks.
+
+Final verification after the rebase: `cargo test` passes 306 tests (16 ignored),
+`front/test.sh` passes 171 (22 ignored), `cargo clippy --all-targets -- -D warnings` and
+`cargo fmt --check` pass. The standalone observer's clippy, format check and dense Grover
+unit test pass too. The ignored entry-frame exhaustion witness described above remains an
+explicit executor debt; this experiment changes no executor implementation files.

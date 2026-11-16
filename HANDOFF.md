@@ -597,7 +597,8 @@ explicitly after the separate musl build.
    reversal; other shapes during their second apply); aggregate classical reversal hits the 4 GiB address-space
    limit while building history (2,322,360 KiB peak RSS). These are shared-host experiment bounds,
    not physical qubit/RAM limits. The baseline sweep predates the atomic-rewind fixes; validation
-   on the rebased executor is recorded separately in the experiment.
+   on the rebased executor passes all 57 checks: full N=16/32, every N=512 Grover shape, and both
+   N=256 aggregate coherent reversals, with unchanged step/journal counters (separate table).
    The fast glue test exposed an entry-stack refusal panic; its minimal ignored witness is
    `sql_oracle_glue::an_entry_frame_that_does_not_fit_returns_stack_overflow`. The executor is not
    changed by this experiment. Next: larger process budgets remain unmeasured;
