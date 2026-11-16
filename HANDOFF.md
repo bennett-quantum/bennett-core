@@ -42,7 +42,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (242 tests; ignored: 6 heavy reference or generated runs, the memory-cost report, 1 heavy recomputation check; about 8 s, no LLVM needed) and `front/test.sh` (158 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs and two heavy global-write runs, an extended float sweep, a
+Check it: `cargo test` (252 tests; ignored: 9 heavy reference, generated or hash-sample runs, the memory-cost report, 1 heavy recomputation check; about 8 s, no LLVM needed) and `front/test.sh` (158 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs and two heavy global-write runs, an extended float sweep, a
 musl-linked ABI check and two independent variadic checks that need `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"); needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -399,6 +399,12 @@ explicitly after the separate musl build.
    configurations; steps +2(k - 1), world steps +32k - 2 (a load and a truncation read x), journal +30
    bytes whatever k, qubits held 16 against 5 (a cell is a whole byte). The checks of cell reads and
    un-promotions below a split point go through main's deferred checks (`d6036a1`), rebased on it.
+   The independent testing pass of address gates and of the deferred checks (`f262f54`, sol; the whole-world
+   reference extended to qubits in memory) found no wrong result: 1,456 dense placements, 384 generated mixed
+   register and memory programs, 12,816 deferred-check cases, sums that cancel only over four worlds, 63 budget
+   stops between a rewind and its checks reversed exactly. The 64-bit key: 1,048,576 distinct states, no
+   collision; a birthday search would need about 5 x 10^9 states (about 81 GB), so a constructed collision is
+   practical and the equality-on-match route stays a debt.
    The implementer's order for the rest (done: 1 mark/rewind, 2 worlds, 3 the memory overlay, 4 gates that
    take addresses): worlds (a superposition of whole machine states, split where a call passes
    a register as an integer, merged where equal), the memory overlay, address-taking gates, then `apply` as mark,
