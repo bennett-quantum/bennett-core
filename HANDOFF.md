@@ -42,7 +42,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (255 tests; ignored: 9 heavy reference, generated or hash-sample runs, the memory-cost report, 1 heavy recomputation check; about 9 s, no LLVM needed) and `front/test.sh` (158 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs and two heavy global-write runs, an extended float sweep, a
+Check it: `cargo test` (255 tests; ignored: 9 heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks; about 9 s, no LLVM needed) and `front/test.sh` (158 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
 musl-linked ABI check and two independent variadic checks that need `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"); needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -183,6 +183,11 @@ explicitly after the separate musl build.
   are independent of extra memory. Native results, final apply/world amplitudes and memory, full reversal,
   off/on state/Stats and byte-retention checks pass. Old lookup C lowers byte-identically and all 1428
   published chain/tape rows reproduce exactly; old tables/classifiers are unchanged.
+  Its independent check (`cce2bcc`, Opus) reproduced every number byte for byte, found every credited word sound and
+  none missed on all 28 runs, and found the `apply` callee journal record for record the worlds' own journal (words
+  differ only by a constant stack offset per kind). It qualifies the conclusion: it rests on the log, whose writes
+  destroy nothing branch-dependent; where global writes destroy branch-dependent bytes the residual stays (hash:
+  12 of 16 store positions irreducible; B-tree A: 9 of 57 copy-only, 5 with the tape).
   Heavy chain measurements are ignored by default. After integrating the observer with `setjmp`/`longjmp`
   on base `ff338cb`, all 1,992 then-published data rows reproduced exactly; the later completeness fix
   changes only the chain/tape rows (now 1,428), with all 428 copy/depth-one rows unchanged. Jump
