@@ -1032,3 +1032,94 @@ Debts, with routes (the goal is not narrowed to the present surface):
   no block nodes claim to exist. Carry its preserved image/sparse sector overlay with an explicit input.
   nanosleep/timers still trap; define sleep against the input clock (whose advance is currently reads only)
   before adding it. No host time or random source is read by the device.
+## IR and CLI mutation pass (2026-11-16)
+
+**Defect:** an overflowing rotation angle can be read but cannot be read back after writing; the ignored
+witness and both possible fix routes are recorded in "Known weak spots". It explicitly fails on the
+unchanged production code. No library fix is included.
+
+Production base `3418e51`, cargo-mutants 27.1.0; `crates/ir` excluding `fault.rs`, and `crates/cli`.
+Added 21 ordinary tests and one ignored witness in `crates/ir/tests/mutation_contract.rs` and
+`crates/cli/tests/mutation_contract.rs`, with a small CLI fixture. The original per-package screen gave
+362 caught, 88 missed, 70 unviable and 5 timeouts. New tests caught 75 of those misses; the remaining
+13 were checked against all default Rust packages, with two further diagnostic gaps caught: an alias
+error must identify the uniquely duplicated register, rather than blame an unrelated one. These are
+package-screen improvements, not a claim that all 77 were previously missed by the executor suite.
+
+Final: **439 caught, 11 equivalent survivors, 0 unexplained survivors, 70 unviable,
+5 timeouts**, 525 unique mutants. Repeated-stage trials are counted once by exact mutant name.
+The timeouts are non-progress loops: the memory/data/function parsers made no-ops, `Cursor::eat`
+always true, and its position update changed from addition to multiplication.
+
+| File (under `crates/`) | Caught | Survived* | Equivalent | Timeout | Unviable |
+|---|---:|---:|---:|---:|---:|
+| `cli/src/main.rs` | 2 | 0 | 0 | 0 | 1 |
+| `cli/src/run.rs` | 41 | 0 | 3 | 0 | 1 |
+| `ir/src/lib.rs` | 0 | 0 | 0 | 0 | 1 |
+| `ir/src/module.rs` | 59 | 0 | 1 | 0 | 5 |
+| `ir/src/reader/cursor.rs` | 46 | 0 | 0 | 2 | 4 |
+| `ir/src/reader/error.rs` | 8 | 0 | 1 | 0 | 1 |
+| `ir/src/reader/lexer.rs` | 17 | 0 | 0 | 0 | 7 |
+| `ir/src/reader/literal.rs` | 27 | 0 | 1 | 0 | 1 |
+| `ir/src/reader/mod.rs` | 12 | 0 | 0 | 3 | 9 |
+| `ir/src/reader/names.rs` | 12 | 0 | 0 | 0 | 0 |
+| `ir/src/reader/statement.rs` | 45 | 0 | 0 | 0 | 24 |
+| `ir/src/types.rs` | 20 | 0 | 0 | 0 | 2 |
+| `ir/src/validate/error.rs` | 0 | 0 | 2 | 0 | 0 |
+| `ir/src/validate/function.rs` | 99 | 0 | 1 | 0 | 10 |
+| `ir/src/validate/mod.rs` | 17 | 0 | 0 | 0 | 4 |
+| `ir/src/writer.rs` | 34 | 0 | 2 | 0 | 0 |
+| `ir/src/ops.rs` (macro definitions) | 0 | 0 | 0 | 0 | 0 |
+| **Total** | **439** | **0** | **11** | **5** | **70** |
+
+*Survived excludes the separately classified equivalents. `ops.rs` yielded no candidates: the tool
+does not expand its mnemonic macro. This is the tool's generated mutation set, not a claim of complete
+coverage of macro expansions. `fault.rs` belongs to the separate executor mutation pass.
+
+Reproduce the final test population and classifications from this test revision with:
+
+```sh
+for package in bennett-ir bennett; do
+  CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 cargo mutants -p "$package" \
+    --test-package "$package" --exclude crates/ir/src/fault.rs \
+    --jobs 2 --jobserver-tasks 2 --timeout 60 \
+    --output ".tmp/mutants-$package" \
+    --cargo-arg=--config=profile.dev.package.bennett-exec.opt-level=1 \
+    --cargo-arg=--config=profile.dev.debug=0
+done
+```
+
+With the final tests, this per-package loop reproduces the table. Exit 2 is expected for the listed
+equivalent survivors. For full-default-Rust qualification, select those exact names with `--re` and
+use `--test-package bennett-ir --test-package bennett --test-package bennett-exec`, executor opt-level 3
+and `--timeout 180`; the measured pass did so before classifying the remainder.
+
+The measured pass screened each package separately at executor opt-level 1, rechecked its misses with
+new tests, then qualified the remainder with all three default Rust packages at opt-level 3. Debug info
+was off, test threads 1, two persistent mutation workers; initial/recheck test timeouts 60 seconds,
+full qualification 180. The five timed-out mutants cannot advance their parser loops at either limit.
+
+Every remaining survivor (locations refer to the unchanged production base):
+
+- `crates/cli/src/run.rs:137:20: replace > with >= in <impl std::fmt::Display for Timed>::fmt`: Only an exact-zero elapsed duration changes rendering. Zero-duration throughput has no specified representation; execution, counters and every positive-duration report agree.
+- `crates/cli/src/run.rs:50:62: replace < with <= in entry_arguments`: Only zero changes its sign flag. Both literal conversions produce the same canonical zero.
+- `crates/cli/src/run.rs:65:37: replace | with ^ in report_outcome`: A canonical result has no bits above its width; the sign-extension bits and value bits are disjoint, so OR and XOR agree.
+- `crates/ir/src/module.rs:250:26: replace | with ^ in code_address`: The shifted function address and the masked low-32-bit position have disjoint bits, so OR and XOR agree.
+- `crates/ir/src/reader/error.rs:34:9: replace <impl fmt::Display for NameKind>::fmt -> fmt::Result with Ok(Default::default())`: Only the unspecified textual spelling of a name kind in a diagnostic disappears. Its structured kind, name, location and rejection are unchanged.
+- `crates/ir/src/reader/literal.rs:28:17: replace match guard digits.bytes().all(|b| b.is_ascii_digit()) with true in parse_integer`: The public lexer forbids an initial plus sign; standard integer parsing still rejects fraction/exponent tokens. Removing the decimal digit guard changes no readable integer.
+- `crates/ir/src/validate/error.rs:58:9: replace <impl fmt::Display for Location>::fmt -> fmt::Result with Ok(Default::default())`: Only unspecified diagnostic formatting changes; the structured location, problem and rejection remain identical.
+- `crates/ir/src/validate/error.rs:87:9: replace <impl fmt::Display for Expected>::fmt -> fmt::Result with Ok(Default::default())`: Only unspecified diagnostic formatting changes; the structured expected type, problem and rejection remain identical.
+- `crates/ir/src/validate/function.rs:452:17: delete match arm (Some(found @Type::Qreg(_)), Type::Int(width)) in Checker<'a>::call_arguments`: A wrong-width register still fails the ordinary integer-parameter check. The diagnostic gives the declared integer type rather than also listing its permitted register coercion; accepted calls are unchanged.
+- `crates/ir/src/writer.rs:247:13: delete match arm b'\n' in write_string`: The fallback emits the same newline byte as a hexadecimal escape. SYNTAX permits both spellings.
+- `crates/ir/src/writer.rs:248:13: delete match arm b'\t' in write_string`: The fallback emits the same tab byte as a hexadecimal escape. SYNTAX permits both spellings.
+
+These equivalences use the documented acceptance/text contract; they do not pin unspecified diagnostic
+prose or a zero-duration timing spelling. False diagnostic payloads are tested: the alias cases require
+the actual duplicated register. The CLI byte-per-step check uses a two-step program, since dividing
+and multiplying by one would otherwise agree. Numerical wall-clock throughput is not gated.
+
+Validation: `cargo test` **313 passed / 20 ignored**, `cargo clippy --all-targets -- -D warnings` and
+`cargo fmt --check` passed; `front/test.sh` **158 passed / 12 ignored**. The front result is retained
+from the unchanged production/frontend source; subsequent changes only added or refined IR/CLI tests.
+The ignored rotation witness was run explicitly and failed as expected. Region tests derive
+`Fault::CODE_WIDTH`; the register-measure CLI fixture must migrate with the planned address form.
