@@ -31,8 +31,9 @@ def main():
     metadata = json.loads(run('cargo', 'metadata', '--no-deps', '--format-version', '1', cwd=root))
     members = metadata['workspace_default_members']
     packages = [p['name'] for p in metadata['packages'] if p['id'] in members]
+    # The tool defaults gitignore off; source-local scratch must not copy itself.
     command = ['cargo', 'mutants', '--in-diff', str(diff), '--output', str(output),
-               '--jobs', '1', '--jobserver-tasks', os.environ.get('CARGO_BUILD_JOBS', '2')]
+               '--gitignore', 'true', '--jobs', '1', '--jobserver-tasks', os.environ.get('CARGO_BUILD_JOBS', '2')]
     for name in packages:
         command.extend(['--test-package', name])
     print(f'mutation step {base}..{head}; results {output.relative_to(root)}', flush=True)
