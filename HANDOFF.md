@@ -42,7 +42,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (228 tests; ignored: 6 heavy reference or generated runs, the memory-cost report, 1 heavy recomputation check; about 8 s, no LLVM needed) and `front/test.sh` (151 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (242 tests; ignored: 6 heavy reference or generated runs, the memory-cost report, 1 heavy recomputation check; about 8 s, no LLVM needed) and `front/test.sh` (151 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check and two independent variadic checks that need `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"); needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -361,7 +361,28 @@ explicitly after the separate musl build.
    unaligned writes of every width, folds then new splits, merges after different write orders and un-runs),
    1,458 dense un-run cases (half with overlays), split statistics against independent counts; 63 device
    return-address programs, 480 C comparisons with native and 320 musl-linked results.
-   The implementer's order for the rest (done: 1 mark/rewind, 2 worlds, 3 the memory overlay): worlds (a superposition of whole machine states, split where a call passes
+   **Fourth step: gates that take addresses** (`56b2c0b`; `docs/DESIGN.md`, "Qubits in memory";
+   `crates/exec/src/cells.rs`). A gate's qubit is `%r[i]` or `[ADDR:BIT]`, registers and memory mixed; a
+   keep may go into memory, `keep (v -> [ADDR])`. A byte that holds qubits is a cell: an 8-qubit register
+   bound to its address in the world's register table, the memory under it 0, the base never quantum. The
+   first gate at a byte promotes it (journalled); un-running the gate un-promotes, checked as the un-run of an
+   allocation. Loads, stores and jump records over cells read them as a register is read (the world splits
+   per value; un-running checks the cell still holds what the step read or wrote); a region's branch sees
+   its configuration's values in its private memory. Keeps into memory need the bytes to hold qubits since
+   before the mark. Registers, `qalloc`, `qfree`, register gates and `apply` are unchanged and the front is
+   untouched. Measured: 8,616 single steps (552 faulting) and 12,288 rewinds are bijections by brute force,
+   clean and dirty history, three memory modes; a splitting load and store and the merging rewind are the
+   linear extension of bijections (192 starts each); `worlds_oracle.rs`'s 182 programs in all 8
+   register/memory placements of q, r, o give the dense calculation's, the register run's and the
+   whole-world reference's state (the reference run on the register form: it does not model memory
+   qubits), 1,200 equal, 256 refused exactly where the calculation says; the worlds pass's F1 in memory
+   faults; 14 mutations caught but one (cells in world equality, implied by equal journals). Cost against
+   the register form (Grover in the history idiom, k = 1, 2, 8): the same worlds, splits, merges and
+   configurations; steps +2(k - 1), world steps +32k - 2 (a load and a truncation read x), journal +30
+   bytes whatever k, qubits held 16 against 5 (a cell is a whole byte). The checks of cell reads and
+   un-promotions below a split point go through main's deferred checks (`d6036a1`), rebased on it.
+   The implementer's order for the rest (done: 1 mark/rewind, 2 worlds, 3 the memory overlay, 4 gates that
+   take addresses): worlds (a superposition of whole machine states, split where a call passes
    a register as an integer, merged where equal), the memory overlay, address-taking gates, then `apply` as mark,
    call, rewind-keep shown equal on every example and test.
 4. **The front's fallback**: the program almost verbatim under marks, the documented coherent class recognised by
@@ -437,6 +458,16 @@ explicitly after the separate musl build.
   the whole run by default? (W4) Is observing which world at a measurement, and sampling one at the end, the
   intended reading of rule 1? (Counted in `Stats::observations` for step 4's warning.) (W5) Answered by the memory
   overlay: a split copies the bytes the world wrote, not the memory; it still copies the world's journal.
+- **Qubits in memory (step 3's fourth step), with the reversible choice taken.** (M1) A keep into memory
+  needs the bytes to hold qubits since before the mark, else `bad_rewind`, as a register kept into must be
+  allocated before it: only then is every access since the mark journalled with its value, so un-running
+  finds a keep that changed what the region read or wrote. Allowing a keep into a classical byte would need
+  every load and store to journal its address too. Keep the rule, or pay for addresses in the journal?
+  (M2) `measure` takes registers only; a qubit in memory is read by a load, which splits worlds, and
+  observed where a measurement or the end of the run observes them. Should `measure` take an address (it
+  would collapse the cell's configurations, as for a register)? (M3) A `longjmp` whose record is held in
+  qubits that disagree faults `bad_indirect` instead of splitting into worlds that jump apart and may fault
+  separately: a debt, unless the maintainer prefers the split.
 - **Return addresses** (`2bf0b69`): the outermost frame gives `0xFFFF_FFFF_0000_0000` (natively an address in the C
   library's startup) and a level beyond it 0 (natively unspecified). Keep? Levels above 0 follow the device's
   frames, which natively needs frame pointers kept and sibling calls off (plain native `-O2` crashed at level 1).
@@ -474,7 +505,7 @@ explicitly after the separate musl build.
 | Files, clocks and the other unimplemented system calls (named faults); a program that redeclares a library function incompatibly | Step 1 above |
 | A qubit-dependent call of a function that uses `setjmp` | The front's own effect summary of `setjmp` (writes only its buffer) when deciding what runs coherently (`docs/DESIGN.md`, "Non-local jumps") |
 | `__float128`; `powi` on `_Float16`/`__bf16`; `#pragma STDC FENV_ACCESS` (with it musl's `ilogb`, and so `__divxc3`, the `long double` complex division); non-default rounding modes and floating-point flags | Step 5 above |
-| A store under qubit control; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control | The journalled machine (step 3) |
+| A store under qubit control; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control | The journalled machine (step 3; the device holds qubits at any address since `56b2c0b`, the front's fallback, step 4, is what uses it) |
 | A qubit-dependent value used by ordinary code or printed; measurement under control; a dirty discard | Channels |
 | Non-empty inline assembly; code without source | An emulator of the real machine, compiled as an ordinary program |
 
@@ -496,6 +527,8 @@ explicitly after the separate musl build.
 
 - The region budget counts device instructions, not the source-fixed unit the North Star asks for.
 - A `_Bool` qubit costs 8 qubits.
+- A qubit in memory is held as a whole byte, 8 qubits in the simulator (`docs/DESIGN.md`, "Qubits in memory";
+  route: cells of single bits, if the count matters).
 - Some acceptance decisions in the front rest on one LLVM pass proving an identity; when it cannot, the front
   refuses, which is safe but brittle.
 - Variadic calls follow the x86-64 System V convention and clang's inline `va_arg`, for every alignment up to
