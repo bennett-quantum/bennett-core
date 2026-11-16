@@ -813,6 +813,19 @@ How work is done:
 | A qubit-dependent value used by ordinary code or printed; measurement under control; a dirty discard | Channels |
 | Non-empty inline assembly; code without source | An emulator of the real machine, compiled as an ordinary program |
 
+## C North Star rungs 1–3 (testing in progress)
+
+`experiments/northstar-ladder/README.md` and `front/tests/tests/ladder.rs`: unchanged archived five
+Int8 functions and 258-line hashtable, provenance pinned to committed Git blobs. Scalar checks cover
+131,840 source-input tuples per compiler input on the production executor and independent whole-world
+model, with each reversing its own history. Table domain is the unchanged native harness's ten cases.
+Both are queued for measurement. **Rung 3 passes as worded** in the first short check: musl hello's
+13 output bytes and status equal native, clang O0/O2 at 3,227/2,698 steps, 65,131/53,722 journal bytes;
+three same-executor replays each and four full exact resets (2,106,920/2,104,192 memory bytes).
+The full runner will repeat it from the committed source. No rung 1/2 pass is claimed yet; tests and
+measurements use the independent model explicitly rather than counting forward/reversible modes as
+two executors. Slow checks are ignored in the fast front suite and run explicitly by the experiment.
+
 ## Known weak spots
 
 - An entry frame that does not fit in memory: `Executor::new` records `stack_overflow`, but `run` then panics in
