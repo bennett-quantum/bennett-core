@@ -65,6 +65,13 @@ all three return 0 with empty stdout: `cdivchkf` **7,045**, `cdivchkd` **7,262**
 **9,238** steps. The old compiler-rt division failed even this diagnostic; libgcc passes it.
 This removes the helper-accuracy failure, while the ordinary corpus route remains a debt.
 
+Independent testing found an acceptance gap in the rule: differing signalling output NaNs are
+normalised to quiet NaNs before comparison and accepted. This violates the quiet-output condition
+above. Ignored witness `a_signalling_output_is_not_accepted_as_another_quiet_nan_payload` in
+`front/tests/tests/nan_rule_independent.rs`; route: require quiet output bits before comparing payloads.
+The independent passing test in that file constructs payload and sign choices for all three formats.
+This is a comparator defect; no helper output was found newly wrong by that probe.
+
 ## Raw results against the native archive (2026-11-16)
 
 Each row is 160,000 directed tuples plus 262,144 random tuples (422,144 per helper,
