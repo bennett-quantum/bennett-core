@@ -972,6 +972,16 @@ the ordinary frontend run without changing its domain or assertions.
 - `Stats::region_cost.copied_bytes` omits callee-frame growth before a memory split: adding eight
   callee slots adds 128 copied bytes but leaves the report unchanged. Ignored witness:
   `region_copy_cost_includes_slots_of_the_frame_where_memory_splits` in `crates/exec/tests/apply_independent.rs`.
+- The IR reader accepts a rotation such as `rx(1e999)` as an infinite angle; validation rejects it,
+  but the writer emits `inf`, which the reader cannot parse. This breaks SYNTAX's round-trip rule for
+  every module read from text, including invalid modules. Ignored witness:
+  `every_readable_rotation_round_trips_even_when_validation_rejects_it` in
+  `crates/ir/tests/mutation_contract.rs` (explicitly fails on `3418e51` production code). Route: reject
+  overflowing angles during reading, or preserve a readable spelling when writing them.
+
+- An outer rewind whose keep makes an inner rewind replay split and fault can panic before restoring
+  its saved world. A newly reached measurement during that replay can also panic at the reversal barrier.
+  Both have ignored witnesses in `crates/exec/tests/history_independent.rs`; they require atomic `bad_rewind`.
 
 - **C North Star rung 2, second-executor coverage is a testing debt.** The independent snapshot
   interpreter times out at the 120-second diagnostic limit; last checkpoint 2,048 steps/history records,
