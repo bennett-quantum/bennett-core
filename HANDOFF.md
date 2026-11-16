@@ -1,12 +1,19 @@
 # HANDOFF
 
-State on 2026-11-15, end of the evening session (work resumed at about 18:45 UTC; nothing is running). Landed:
-the musl runtime, validated on the three corpora with no wrong result; `zero N`; the journal-content and
-control-schedule measurements; the salvage survey; the floating-point leftovers (128-bit conversions, `fmal`,
-`_Float16`, `__bf16`) and the complex helpers; two constructor-startup fixes; small aggregates returned as one
-integer; two review-audit fixes; and an independent testing pass by another model family of each of these. The
-last corpus run (`64571ac`, musl linked, 2026-11-16) has GCC 1,569 agree, c-testsuite 218, `ieee/` 64,
-none wrong or crashing. The independent by-value/tail and aligned-vararg pass found no new wrong result.
+State on 2026-11-16, 03:20 UTC, end of the night session (nothing is running). Landed overnight: **the journalled
+machine in the executor, all five steps of its order** (`mark`/`rewind keep`, worlds, memory as an overlay, gates
+that take addresses, `apply` computed as mark, call, rewind-keep), each with its experiments and an independent
+testing pass by another model family, and every wrong result those passes found fixed as a regression test (next
+step 3); two independent oracles for it (a dense matrix calculation and a whole-world reference model); the
+recompute witness and recovery chains for journal content, a completeness gap in them found by an independent
+check and fixed, and journal content with global-memory writes (next step 2); `setjmp`/`longjmp`, return
+addresses, over-aligned variadic arguments and calls through another prototype in the front, each with its testing
+pass, and a silent wrong result already on `main` found on the way (by-value arguments and clang's `tail` mark).
+The last corpus run (`64571ac`, musl linked, 2026-11-16) has GCC 1,569 agree, c-testsuite 218, `ieee/` 64, none
+wrong or crashing. New questions for the maintainer are in "Questions for the maintainer" (worlds W1-W5, qubits in
+memory M1-M3, `apply` A1-A3, non-local jumps, return addresses, pointer-call cost); the earlier ones are still open.
+Earlier: the evening session of 2026-11-15 (the musl runtime, `zero N`, the floating-point leftovers, the complex
+helpers, constructor startup, the first journal-content and control-schedule measurements, the salvage survey).
 
 ## What this repository is
 
