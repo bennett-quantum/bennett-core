@@ -44,6 +44,9 @@ pub struct QuantumSnapshot {
     pub registers: Vec<RegisterState>,
     /// Each basis configuration (one value per register id in use) with its amplitude, in order.
     pub amplitudes: Vec<(Vec<u64>, Complex64)>,
+    /// The memory bytes that hold qubits, in address order, each with the register id holding its value
+    /// (`docs/DESIGN.md`, "Qubits in memory"); the classical memory holds 0 there.
+    pub cells: Vec<(u64, usize)>,
 }
 
 impl QuantumSnapshot {
@@ -51,6 +54,7 @@ impl QuantumSnapshot {
         QuantumSnapshot {
             registers: state.registers().to_vec(),
             amplitudes: state.amplitudes().iter().map(|(config, amplitude)| (config.to_vec(), *amplitude)).collect(),
+            cells: state.cells().iter().map(|(&address, &column)| (address, column)).collect(),
         }
     }
 
@@ -60,9 +64,10 @@ impl QuantumSnapshot {
         found.map_or(Complex64::new(0.0, 0.0), |index| self.amplitudes[index].1)
     }
 
-    /// The largest difference between corresponding amplitudes, or `None` if the register tables differ.
+    /// The largest difference between corresponding amplitudes, or `None` if the register tables (cells
+    /// included) differ.
     pub fn distance(&self, other: &QuantumSnapshot) -> Option<f64> {
-        if self.registers != other.registers {
+        if self.registers != other.registers || self.cells != other.cells {
             return None;
         }
         let configs = self.amplitudes.iter().chain(&other.amplitudes).map(|(config, _)| config);
@@ -79,6 +84,7 @@ mod tests {
         QuantumSnapshot {
             registers: vec![RegisterState { generation: 1, width: Width::new(2) }],
             amplitudes: amplitudes.iter().map(|&(config, amplitude)| (vec![config], amplitude)).collect(),
+            cells: Vec::new(),
         }
     }
 

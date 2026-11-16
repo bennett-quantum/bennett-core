@@ -173,6 +173,9 @@ fn report_stats(stats: &Stats, forward: Timed, reverse: Option<Timed>) {
         (Some(bytes), None) => println!("  journal: {bytes} bytes"),
         (None, _) => println!("  journal: off (run with --reverse to keep one)"),
     }
-    println!("  qubits: {} live, {} peak", stats.live_qubits, stats.peak_live_qubits);
+    println!(
+        "  qubits: {} live, {} peak; {} memory bytes hold qubits",
+        stats.live_qubits, stats.peak_live_qubits, stats.memory_qubit_bytes
+    );
     println!("  basis configurations: {} now, {} peak", stats.configurations, stats.peak_configurations);
 }

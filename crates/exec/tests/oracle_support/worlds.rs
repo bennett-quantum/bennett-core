@@ -516,6 +516,7 @@ impl<'a> Model<'a> {
                     action = Action::Free(id);
                 }
                 Inst::Gate { .. } => action = Action::Gate,
+                Inst::GateAt { .. } => panic!("the reference does not model qubits in memory"),
                 Inst::Apply { .. } => action = Action::Apply,
                 Inst::Mark { .. } => {
                     let handle = w.history.len() + 1;
@@ -746,7 +747,7 @@ impl<'a> Model<'a> {
             let mut out = w.clone();
             let mut keeps = Vec::new();
             for k in keep {
-                let id = w.register(k.register)?;
+                let id = w.register(keep_register(k))?;
                 if w.classical.registers[id].allocated_at >= h {
                     return Err(Fault::BadRewind);
                 }
@@ -923,7 +924,7 @@ impl<'a> Model<'a> {
                 .unwrap_or(0);
             let mut out = w.clone();
             for k in keep {
-                let id = w.register(k.register)?;
+                let id = w.register(keep_register(k))?;
                 if w.classical.registers[id].allocated_at >= h {
                     return Err(Fault::BadRewind);
                 }
@@ -1007,7 +1008,7 @@ impl<'a> Model<'a> {
                 for (mut w, a) in completed {
                     let values = keep
                         .iter()
-                        .map(|k| Ok((w.register(k.register)?, w.integer(k.value)? as u64)))
+                        .map(|k| Ok((w.register(keep_register(k))?, w.integer(k.value)? as u64)))
                         .collect::<Result<Vec<_>, Fault>>()?;
                     for (r, n) in values {
                         w.quantum[r] ^= n;
@@ -1033,7 +1034,7 @@ impl<'a> Model<'a> {
                     let Some(Inst::Rewind { keep, .. }) = self.instruction(&record.before) else { unreachable!() };
                     let keeps = keep
                         .iter()
-                        .map(|k| Ok((w.register(k.register)?, w.integer(k.value)? as u64)))
+                        .map(|k| Ok((w.register(keep_register(k))?, w.integer(k.value)? as u64)))
                         .collect::<Result<Vec<_>, Fault>>()?;
                     for (r, n) in keeps {
                         w.quantum[r] ^= n;
@@ -1122,4 +1123,12 @@ pub fn execute(
             a.norm_sqr();
     }
     (state, outcomes)
+}
+
+/// The register a keep names; the reference does not model qubits in memory.
+fn keep_register(keep: &Keep) -> Slot {
+    match keep.target {
+        bennett_ir::KeepTarget::Register(register) => register,
+        bennett_ir::KeepTarget::Memory(_) => panic!("the reference does not model qubits in memory"),
+    }
 }

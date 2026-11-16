@@ -40,7 +40,8 @@ A module is a list of functions, an initial memory image and a memory size.
 - **Every operation is total.** A shift by at least the width gives 0. Division by zero, an out-of-bounds access, a
   bad indirect target, `unreachable` and an exhausted budget are *named faults*: part of the result, never a crash.
 - **Quantum instructions**, allowed in ordinary control code: `qalloc w`, `qfree`, single-qubit gates
-  (`x h z s sdg t tdg rx ry rz`) with an optional list of control qubits, `measure`, and `apply` (below).
+  (`x h z s sdg t tdg rx ry rz`) with an optional list of control qubits, each qubit in a register or at a
+  bit of memory ("Qubits in memory", below), `measure`, and `apply` (below).
 - **History instructions:** `mark` and `rewind ... keep` (below).
 
 There is one instruction set for every tier. A tier is a way of running code, not a different language.
@@ -522,6 +523,13 @@ The front writes `retaddr N` for every `llvm.returnaddress(N)` in the default ad
   Success changes only the outcome, journals the same finish record as an outer return, and leaves active
   frames in place for reversal. C's `_Noreturn void __bennett_exit(int)` lowers to it; like
   `void __bennett_effect(char)`, it is an ordinary device call, not a quantum marker.
+- Fault codes fit in 4 bits; a fault register is at least that wide. All fifteen codes are used since
+  `bad_rewind` (15).
+- `qfree` requires the register to be zero in every configuration, otherwise the named fault `dirty_free`.
+- `measure` reads a whole register. Amplitudes at or below `f64::EPSILON` are dropped.
+- Bounds of the simulator (steps, number of basis configurations) are parameters of a run. Exceeding the
+  configuration limit stops the run with a named error; it is not a program fault.
+
 ### Memory as an overlay
 
 Built on 2026-11-16 as the third step of the next extension (`crates/exec/src/memory.rs`): memory is a
@@ -565,12 +573,91 @@ the memory's size.
   second splits after 4,096 bytes written each, against 16 KiB of overlay): sharing the journal's
   common prefix between worlds, as the base is shared, is the route if it matters.
 
-- Fault codes fit in 4 bits; a fault register is at least that wide. All fifteen codes are used since
-  `bad_rewind` (15).
-- `qfree` requires the register to be zero in every configuration, otherwise the named fault `dirty_free`.
-- `measure` reads a whole register. Amplitudes at or below `f64::EPSILON` are dropped.
-- Bounds of the simulator (steps, number of basis configurations) are parameters of a run. Exceeding the
-  configuration limit stops the run with a named error; it is not a program fault.
+
+### Qubits in memory
+
+Built on 2026-11-16 as the fourth step of the next extension (`crates/exec/src/cells.rs`): gates take
+addresses, so a qubit can live at any bit of memory. Registers stay as they are, one way of naming
+qubits among others; with one world and no qubit in memory the machine is exactly the machine above.
+
+- **Text** (`docs/SYNTAX.md`, "Qubits in memory"). A gate's qubit is `%r[i]` or `[ADDR:BIT]`: bit
+  `BIT % 8` of the byte at `ADDR + BIT / 8`, that is bit `BIT` of the little-endian integer at `ADDR`, as
+  `load` and `store` see it; `ADDR` is an `i64` value or constant, `BIT` below 128, `[ADDR]` is bit 0.
+  Registers and memory mix in one gate. A qubit outside memory is `out_of_bounds`; the same qubit twice
+  is `qubit_alias` (the validator reports the same address operand and bit twice); inside a coherent
+  region a gate is `quantum_in_region`, as before. `rewind %h keep (v -> [ADDR])` XORs `v` into the
+  qubits from bit 0 of `ADDR` on, as many as `v` is wide.
+- **What a qubit in memory is.** The memory of a basis state is the world's memory, except at the bytes
+  that hold qubits, whose values are the configuration's. Such a byte is a **cell**: an 8-qubit register
+  bound to the byte's address, part of the world's register table, so world equality and its hash
+  include the cells. The world's memory holds 0 under a cell. The first gate at a byte that is not a cell
+  **promotes** it: a register is allocated, the byte's value XORed into it and the memory byte set to 0;
+  the gate's journal record keeps the address and the old byte. A byte stays a cell until the gate that
+  promoted it is un-run, even where its qubits are classical again: that is how the state is held, not
+  what it means, and it keeps the cells a function of the history, so worlds that are the same machine
+  state hold the same cells.
+- **The classical base never becomes quantum.** A promotion writes 0 where any write would go (the base
+  while one world owns it, else the world's overlay, "Memory as an overlay") and puts the value into a
+  register; no amplitude ever lives in the base or in an overlay. A split copies the cells with the
+  register table; merging compares them.
+- **Ordinary code reads qubits in memory as it reads a register.** A `load` whose bytes include cells, a
+  `store` over cells (it first reads what it overwrites: that goes into the history), and a `setjmp`
+  writing its record over cells split the world into one world per value of those cells where the
+  configurations disagree, as a call passing a register to an integer parameter does ("Worlds"). Then a
+  load gives the cells' values, and a store XORs old and new into each cell, which stays a cell. The
+  journal notes each cell a step touched with the byte it holds after the step (the value read or
+  written); un-running the step checks that the cell still holds it, as for a register read: a keep, or a
+  gate carrying one, that changed it makes the rewind fault `bad_rewind`, changing nothing. Below a
+  world's split point the check is made on the sum of the worlds' parts, as every such check is.
+- **Coherent regions** see the cells' values: each branch of an `apply` runs on private memory holding
+  the values its configuration gives the cells. A region cannot gate, so it never changes a cell.
+- **Un-running.** A gate at addresses is undone by its inverse, then by un-promoting the bytes it
+  promoted: the old byte is XORed out of the register, the register un-allocated and the byte written
+  back. That is the un-run of an allocation, with its check: the register must hold the old byte in every
+  configuration (on the sum of the parts below a split point), else the rewind faults `bad_rewind`, the
+  interim rule for a register allocated since the mark and left nonzero. Un-running through gates at
+  addresses conjugates as through register gates: `h [16]; %h = mark; h [16]; rewind %h keep (i1 1 ->
+  [16]); h [16]` leaves the byte 1.
+- **Keeps into memory** need every target byte to hold qubits since before the mark, else `bad_rewind`,
+  as a register kept into must be allocated before the mark. Every access to such a byte since the mark
+  is journalled with its value, so un-running finds a keep that changed what the region read or wrote
+  (rule 4 of "What is promised"). A keep into a classical byte would need every load and store since the
+  mark to journal its address to find the same (a question, `HANDOFF.md`); to keep into a byte, promote it
+  first (`z [ADDR]` changes nothing else).
+- **Not yet, each a debt with its route.** A `longjmp` whose record is held in cells that disagree is
+  `bad_indirect`, where it would split worlds that may then fault separately (route: let the worlds of a
+  split fault on their own, as other worlds do). `measure` takes a register only: a qubit in memory is
+  read by a load, which splits worlds, and observed where a measurement or the end of the run observes
+  the worlds (a question, `HANDOFF.md`). A cell is a whole byte, so a qubit in memory holds 8 qubits in
+  the simulator (route: cells of single bits, if the count matters).
+- **Channels** stay open as before: a cell is a register column of a world, so a mixture of worlds holds
+  qubits in memory as it holds registers.
+- **Checked.** Every step at qubits in memory is a bijection by brute force (`permutation_tests.rs`):
+  gates that promote bytes at addresses that depend on an argument (in bounds, out of bounds, aliasing),
+  a coherent region over superposed cells, loads, stores and a jump record over cells, on clean and dirty
+  history and in the three memory modes: 8,616 single steps (552 faulting) and 12,288 rewinds from their
+  mark through a region that promotes; a load and a store that split by a cell and the rewind that
+  merges them, 192 starts each, every one on 16 basis states and their superposition (the linear
+  extension of the basis results, stepped back exactly). `worlds_oracle.rs`'s 182 programs with each of
+  q, r, o in a register or in memory (eight layouts; q read by a load where it is in memory, o kept into
+  with `keep (... -> [66])`): 1,200 equal to the independent dense calculation of the register program,
+  to the register program's own run and to the whole-world reference run on the register program (the
+  reference does not model qubits in memory; it is compared through the meaning above, a cell's byte as a
+  register's value), and 256 refused exactly where the dense calculation finds an unfaithful read; each
+  equal case reverses to its entry. The worlds testing pass's F1 (a later split hiding a changed read) in
+  all four placements of its two qubits faults `bad_rewind`; an un-promotion below a split is refused
+  exactly when the keep is nonzero. Fourteen deliberate mutations of this code (promotion, un-promotion
+  and its checks, cell reads, writes and their checks, regions, splits, deferral) are each caught but one:
+  dropping cells from world equality, which equal journals already imply.
+- **Measured** (`memory_qubits.rs`, exact counts). Grover over `examples/grover.bn`'s predicate in the
+  history idiom with x and the kick qubit in registers or in memory (k = 1, 2, 8 iterations): the same
+  state, splits, merges, worlds (16) and configurations (32); `steps` +2(k - 1) and world steps
+  +32k - 2 (no `qalloc`s, a load and a truncation per oracle in each of 16 worlds); journal +30 bytes
+  whatever k (two promotions instead of two `qalloc` records); qubits held 16 against 5 (two bytes). A
+  gate whose bytes already hold qubits journals no words, as a register gate; one that promotes
+  journals 16 bytes per byte promoted and a count. The eight layouts of one program: the same worlds and
+  splits; a register moved into memory is held as a whole byte (8 qubits in place of its 1 or 2) and
+  journals 15 bytes more (a promotion's 32 in place of a `qalloc` record's 17).
 
 ## What is promised when history is left behind
 
@@ -605,13 +692,13 @@ and x87 (`front/tests/tests/softfloat.rs`): no other difference in any operation
 included, except for `long double` encodings no arithmetic produces and out-of-range conversions, which C
 leaves undefined.
 
-## The next extension: code that is not a clean function (decided; `mark`, `rewind`, worlds and the memory overlay built)
+## The next extension: code that is not a clean function (decided; `mark`, `rewind`, worlds, the memory overlay and gates at addresses built)
 
 Decided by the maintainer on 2026-11-13 after five independent proposals (`docs/AUDITION.md`). Built so far:
 `mark` and `rewind ... keep` ("History: `mark` and `rewind`", above; the text form is `%h = mark`, a result
 like any other), worlds, a superposition of whole machine states ("Worlds", above), and memory as an
-overlay over a classical base ("Memory as an overlay", above). Gates that take addresses are not built
-yet.
+overlay over a classical base ("Memory as an overlay", above), and gates that take addresses ("Qubits in
+memory", above). Left: `apply` shown equal to mark, call, rewind-keep on every example and test.
 
 - **One layering.** A journalled machine defines meaning and is the fallback that needs no analysis: the quantum
   state is a superposition of whole machine states, and each step keeps what it destroys as history. Two

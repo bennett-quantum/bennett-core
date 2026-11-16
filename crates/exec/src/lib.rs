@@ -9,6 +9,7 @@
 
 mod arith;
 mod backward;
+mod cells;
 mod executor;
 mod forward;
 mod gates;

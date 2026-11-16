@@ -4,7 +4,9 @@ use petgraph::algo::dominators;
 use petgraph::graph::{DiGraph, NodeIndex};
 
 use super::error::{Expected, Location, Problem, ValidationError};
-use crate::{CastOp, Fault, Function, Gate, Inst, Module, Operand, Qubit, Slot, Terminator, Type, Width};
+use crate::{
+    CastOp, Fault, Function, Gate, Inst, MEMORY_QUBIT_BITS, Module, Operand, Place, Slot, Terminator, Type, Width,
+};
 
 /// Checks `function`, appending what is wrong to `errors`, and returns the type of every slot. The types
 /// are meaningful only when no error was found.
@@ -176,6 +178,7 @@ impl<'a> Checker<'a> {
             | Inst::StackRestore { .. }
             | Inst::Qfree { .. }
             | Inst::Gate { .. }
+            | Inst::GateAt { .. }
             | Inst::Apply { .. }
             | Inst::Rewind { .. } => None,
         }
@@ -261,7 +264,18 @@ impl<'a> Checker<'a> {
             Inst::Qfree { register } | Inst::Measure { register, .. } => {
                 self.register_width(site, *register);
             }
-            Inst::Gate { gate, target, controls } => self.gate(site, *gate, *target, controls),
+            Inst::Gate { gate, target, controls } => {
+                let places: Vec<Place> =
+                    std::iter::once(target).chain(controls).map(|&qubit| Place::Register(qubit)).collect();
+                self.gate(site, *gate, &places);
+            }
+            Inst::GateAt { gate, target, controls } => {
+                let places: Vec<Place> = std::iter::once(target).chain(controls).copied().collect();
+                if places.iter().all(|place| matches!(place, Place::Register(_))) {
+                    self.error(site, Problem::GateAtWithoutMemory);
+                }
+                self.gate(site, *gate, &places);
+            }
             Inst::Apply { callee, args, out, fault, budget } => {
                 self.apply(site, *callee, args, *out, *fault);
                 self.expect(site, *budget, Type::Int(Width::WORD));
@@ -269,8 +283,16 @@ impl<'a> Checker<'a> {
             Inst::Rewind { mark, keep } => {
                 self.rewind_mark(site, *mark);
                 for pair in keep {
-                    if let Some(width) = self.register_width(site, pair.register) {
-                        self.expect(site, pair.value, Type::Int(width));
+                    match pair.target {
+                        crate::KeepTarget::Register(register) => {
+                            if let Some(width) = self.register_width(site, register) {
+                                self.expect(site, pair.value, Type::Int(width));
+                            }
+                        }
+                        crate::KeepTarget::Memory(address) => {
+                            self.expect(site, address, Type::Int(Width::WORD));
+                            self.expect_integer(site, pair.value);
+                        }
                     }
                 }
             }
@@ -293,22 +315,37 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn gate(&mut self, site: Site, gate: Gate, target: Qubit, controls: &[Qubit]) {
+    /// Checks a gate's qubits, the target first. A memory qubit's address is an `i64`; the same address
+    /// operand and bit twice is reported here, other aliasing between memory qubits only at run time
+    /// (`qubit_alias`), since addresses are values.
+    fn gate(&mut self, site: Site, gate: Gate, places: &[Place]) {
         if let Gate::Rotate(_, angle) = gate
             && !angle.is_finite()
         {
             self.error(site, Problem::AngleNotFinite);
         }
-        let qubits: Vec<Qubit> = std::iter::once(target).chain(controls.iter().copied()).collect();
-        for (k, qubit) in qubits.iter().enumerate() {
-            if let Some(width) = self.register_width(site, qubit.register)
-                && u32::from(qubit.bit) >= width.bits()
-            {
-                self.error(site, Problem::QubitOutOfRange { bit: qubit.bit, bits: width.bits() });
-            }
-            if qubits[..k].contains(qubit) {
-                let name = self.slot_name(qubit.register);
-                self.error(site, Problem::RepeatedQubit(name, qubit.bit));
+        for (k, place) in places.iter().enumerate() {
+            match *place {
+                Place::Register(qubit) => {
+                    if let Some(width) = self.register_width(site, qubit.register)
+                        && u32::from(qubit.bit) >= width.bits()
+                    {
+                        self.error(site, Problem::QubitOutOfRange { bit: qubit.bit, bits: width.bits() });
+                    }
+                    if places[..k].contains(place) {
+                        let name = self.slot_name(qubit.register);
+                        self.error(site, Problem::RepeatedQubit(name, qubit.bit));
+                    }
+                }
+                Place::Memory { address, bit } => {
+                    self.expect(site, address, Type::Int(Width::WORD));
+                    if bit >= MEMORY_QUBIT_BITS {
+                        self.error(site, Problem::MemoryBitOutOfRange(bit));
+                    }
+                    if places[..k].contains(place) {
+                        self.error(site, Problem::RepeatedMemoryQubit(bit));
+                    }
+                }
             }
         }
     }
@@ -433,6 +470,13 @@ impl<'a> Checker<'a> {
             && found != expected
         {
             self.mismatch(site, operand, Expected::Type(expected), found);
+        }
+    }
+
+    /// Reports `operand` if it is a register: an integer of any width is expected.
+    fn expect_integer(&mut self, site: Site, operand: Operand) {
+        if let Some(found @ Type::Qreg(_)) = self.type_of(operand) {
+            self.mismatch(site, operand, Expected::AnyInteger, found);
         }
     }
 

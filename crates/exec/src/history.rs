@@ -21,7 +21,7 @@
 //! check are summed, which must be zero; if not, every such world is put back from a copy kept before its
 //! rewind, and faults `bad_rewind` (`worlds.rs`).
 
-use bennett_ir::{BlockId, Fault, Inst, Keep, Slot};
+use bennett_ir::{BlockId, Fault, Inst, Keep, KeepTarget, Operand, Slot, Type};
 
 use crate::executor::{Executor, Halt};
 use crate::journal::{Journal, MarkEntry, Undo};
@@ -47,20 +47,22 @@ impl<'m> Executor<'m> {
             return Err(Fault::QuantumInRegion.into());
         }
         let entry = self.open_mark(self.slot(mark)).ok_or(Fault::BadRewind)?;
-        let mut kept = Vec::with_capacity(keep.len());
-        for pair in keep {
-            let column = self.quantum.resolve(self.handle(pair.register))?;
-            // Un-running the allocation of a register that holds a kept value would discard the value.
-            if self.quantum.allocation_number(column) > entry.allocations {
-                return Err(Fault::BadRewind.into());
-            }
-            kept.push((column, self.read(&pair.value) as u64));
+        let kept = self.kept_values(keep)?;
+        // Un-running the allocation of a register (or the promotion of a memory byte to qubits) that holds
+        // a kept value would discard the value.
+        if kept.iter().any(|&(column, _)| self.quantum.allocation_number(column) > entry.allocations) {
+            return Err(Fault::BadRewind.into());
         }
         let journal = self.journal.as_ref().expect("an open mark is in the journal");
         let changes = kept.iter().any(|&(_, value)| value != 0);
-        // A kept value into a register read since the mark: un-running the read would find it changed.
+        // A kept value into a register or memory qubit read since the mark: un-running the read would find
+        // it changed.
         let reads = journal.reads_from(entry.position);
-        if kept.iter().any(|&(column, value)| value != 0 && reads.iter().any(|read| read.column == column)) {
+        let cells = journal.cells_from(entry.position);
+        if kept.iter().any(|&(column, value)| {
+            value != 0
+                && (reads.iter().any(|read| read.column == column) || cells.iter().any(|cell| cell.column == column))
+        }) {
             return Err(Fault::BadRewind.into());
         }
         // Worlds can split off only where an earlier rewind's region runs again. If one does and the un-run
@@ -70,7 +72,8 @@ impl<'m> Executor<'m> {
         // that point to the sum of the worlds' parts (`worlds.rs`); if that sum fails them, this world is put
         // back from a copy. A rewind inside another's un-run or run-again belongs to that one's copy.
         let step = self.rewinding == 0 && self.rerunning == 0;
-        let defers = step && (rewinds_inside || reads.iter().any(|read| read.split));
+        let split_read = reads.iter().any(|read| read.split) || cells.iter().any(|cell| cell.split);
+        let defers = step && (rewinds_inside || split_read);
         let backup = (rewinds_inside && (changes || self.deferring) || defers).then(|| self.clone_world(None));
         let counters = (self.rewound_steps, self.rerun_steps, self.mismatches, self.splits);
         for &(column, value) in &kept {
@@ -122,6 +125,37 @@ impl<'m> Executor<'m> {
             self.backups.push(backup);
         }
         Ok(())
+    }
+
+    /// The columns a rewind's keeps XOR into, each with its value: a register's, or for memory one per
+    /// byte, the byte's cell and the value's byte at its offset. A memory target whose bytes do not all
+    /// hold qubits faults `bad_rewind` (`docs/DESIGN.md`, "Qubits in memory"); one outside memory faults
+    /// `out_of_bounds`.
+    pub(crate) fn kept_values(&self, keep: &[Keep]) -> Result<Vec<(usize, u64)>, Fault> {
+        let mut kept = Vec::with_capacity(keep.len());
+        for pair in keep {
+            let value = self.read(&pair.value);
+            match pair.target {
+                KeepTarget::Register(register) => {
+                    kept.push((self.quantum.resolve(self.handle(register))?, value as u64));
+                }
+                KeepTarget::Memory(address) => {
+                    let width = match pair.value {
+                        Operand::Const(value) => value.width(),
+                        Operand::Slot(slot) => match self.slot_type(slot) {
+                            Type::Int(width) => width,
+                            Type::Qreg(_) => unreachable!("the validator keeps integers only"),
+                        },
+                    };
+                    let range = self.memory_range(self.read_word(&address), width)?;
+                    for (offset, address) in range.enumerate() {
+                        let column = self.quantum.cell(address as u64).ok_or(Fault::BadRewind)?;
+                        kept.push((column, (value >> (8 * offset) & 0xff) as u64));
+                    }
+                }
+            }
+        }
+        Ok(kept)
     }
 
     /// Un-runs this world's history back to the mark at `position`, then finishes the rewind at `site`;
@@ -212,10 +246,8 @@ impl<'m> Executor<'m> {
                     && (executor.top().block, executor.top().inst) == (stop.block, stop.inst),
                 "the steps of a rewound region run again to the rewind"
             );
-            for pair in keep {
-                let column =
-                    executor.quantum.resolve(executor.handle(pair.register)).expect("a kept register is live again");
-                executor.quantum.xor_register(column, executor.read(&pair.value) as u64);
+            for (column, value) in executor.kept_values(keep).expect("a kept register or memory qubit is live again") {
+                executor.quantum.xor_register(column, value);
             }
         };
         xor_kept(self);

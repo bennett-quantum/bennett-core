@@ -4,8 +4,8 @@
 use std::fmt::{self, Write};
 
 use crate::{
-    Block, DataItem, DataSegment, Function, Gate, Inst, Module, Operand, Param, Qubit, Signature, Slot, Target,
-    Terminator, Type,
+    Block, DataItem, DataSegment, Function, Gate, Inst, KeepTarget, Module, Operand, Param, Place, Qubit, Signature,
+    Slot, Target, Terminator, Type,
 };
 
 /// Writes a module in its text form.
@@ -123,7 +123,11 @@ impl Writer<'_> {
             Inst::Effect { byte } => write!(self.out, "effect {}", op(byte)),
             Inst::Qalloc { width, .. } => write!(self.out, "qalloc {}", width.bits()),
             Inst::Qfree { register } => write!(self.out, "qfree {}", name(register)),
-            Inst::Gate { gate, target, controls } => self.gate(f, *gate, *target, controls),
+            Inst::Gate { gate, target, controls } => {
+                let controls: Vec<Place> = controls.iter().map(|&qubit| Place::Register(qubit)).collect();
+                self.gate(f, *gate, Place::Register(*target), &controls)
+            }
+            Inst::GateAt { gate, target, controls } => self.gate(f, *gate, *target, controls),
             Inst::Measure { register, .. } => write!(self.out, "measure {}", name(register)),
             Inst::Apply { callee, args, out, fault, budget } => {
                 write!(self.out, "apply @{}", self.module.function(*callee).name)?;
@@ -136,7 +140,12 @@ impl Writer<'_> {
                 for (i, pair) in keep.iter().enumerate() {
                     let separator = if i == 0 { " keep (" } else { ", " };
                     let value = OperandText { function: f, operand: pair.value, typed: true };
-                    write!(self.out, "{separator}{value} -> {}", name(&pair.register))?;
+                    match pair.target {
+                        KeepTarget::Register(register) => {
+                            write!(self.out, "{separator}{value} -> {}", name(&register))?
+                        }
+                        KeepTarget::Memory(address) => write!(self.out, "{separator}{value} -> [{}]", op(&address))?,
+                    }
                 }
                 if !keep.is_empty() {
                     self.out.push(')');
@@ -146,7 +155,7 @@ impl Writer<'_> {
         }
     }
 
-    fn gate(&mut self, f: &Function, gate: Gate, target: Qubit, controls: &[Qubit]) -> fmt::Result {
+    fn gate(&mut self, f: &Function, gate: Gate, target: Place, controls: &[Place]) -> fmt::Result {
         match gate {
             Gate::Fixed(fixed) => self.out.push_str(fixed.mnemonic()),
             Gate::Rotate(axis, angle) => write!(self.out, "{}({angle:?})", axis.mnemonic())?,
@@ -254,13 +263,20 @@ impl fmt::Display for SlotText<'_> {
     }
 }
 
-struct QubitText<'a>(&'a Function, Qubit);
+struct QubitText<'a>(&'a Function, Place);
 
 impl fmt::Display for QubitText<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Qubit { register, bit } = self.1;
-        let name = SlotText(self.0, register);
-        if bit == 0 { write!(f, "{name}") } else { write!(f, "{name}[{bit}]") }
+        match self.1 {
+            Place::Register(Qubit { register, bit }) => {
+                let name = SlotText(self.0, register);
+                if bit == 0 { write!(f, "{name}") } else { write!(f, "{name}[{bit}]") }
+            }
+            Place::Memory { address, bit } => {
+                let address = OperandText { function: self.0, operand: address, typed: false };
+                if bit == 0 { write!(f, "[{address}]") } else { write!(f, "[{address}:{bit}]") }
+            }
+        }
     }
 }
 

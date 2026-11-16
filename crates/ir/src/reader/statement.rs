@@ -4,8 +4,8 @@ use super::error::{Failure, ReadErrorKind};
 use super::lexer::Token;
 use super::{Parser, Scope};
 use crate::{
-    BinOp, BlockId, CastOp, Fault, FixedGate, FuncId, Gate, Inst, Keep, Operand, Predicate, Qubit, Rotation, Signature,
-    Slot, SwitchCase, Target, Terminator, Type, Width,
+    BinOp, BlockId, CastOp, Fault, FixedGate, FuncId, Gate, Inst, Keep, KeepTarget, Operand, Place, Predicate, Qubit,
+    Rotation, Signature, Slot, SwitchCase, Target, Terminator, Type, Width,
 };
 
 /// The mnemonics that end a block.
@@ -202,17 +202,41 @@ impl<'s> Parser<'s> {
         Ok(Inst::CallIndirect { signature: Signature { params, result }, target, args, dst })
     }
 
-    /// `GATE target [ctrl qubit, ...]`, after the mnemonic and any angle.
+    /// `GATE target [ctrl qubit, ...]`, after the mnemonic and any angle. A gate whose qubits are all in
+    /// registers is `Gate`; one with a qubit in memory is `GateAt`.
     fn gate(&mut self, scope: &mut Scope<'s>, gate: Gate) -> Result<Inst, Failure> {
-        let target = self.qubit(scope)?;
+        let target = self.place(scope)?;
         let mut controls = Vec::new();
         if self.cursor.eat(Token::Word("ctrl")) {
-            controls.push(self.qubit(scope)?);
+            controls.push(self.place(scope)?);
             while self.cursor.eat(Token::Comma) {
-                controls.push(self.qubit(scope)?);
+                controls.push(self.place(scope)?);
             }
         }
-        Ok(Inst::Gate { gate, target, controls })
+        let register = |place: &Place| match place {
+            Place::Register(qubit) => Some(*qubit),
+            Place::Memory { .. } => None,
+        };
+        match (register(&target), controls.iter().map(register).collect::<Option<Vec<Qubit>>>()) {
+            (Some(target), Some(controls)) => Ok(Inst::Gate { gate, target, controls }),
+            _ => Ok(Inst::GateAt { gate, target, controls }),
+        }
+    }
+
+    /// A qubit in a register (`%register[BIT]`) or in memory: `[ADDRESS:BIT]`, the address an `i64`
+    /// value or constant; `[ADDRESS]` names bit 0.
+    fn place(&mut self, scope: &mut Scope<'s>) -> Result<Place, Failure> {
+        if !self.cursor.eat(Token::LBracket) {
+            return Ok(Place::Register(self.qubit(scope)?));
+        }
+        let address = self.operand(scope, Width::WORD)?;
+        let mut bit = 0;
+        if self.cursor.eat(Token::Colon) {
+            let (text, offset) = self.cursor.number("a bit index")?;
+            bit = text.parse().map_err(|_| Failure { offset, kind: ReadErrorKind::BadNumber(text.to_owned()) })?;
+        }
+        self.cursor.expect(Token::RBracket, "`]`")?;
+        Ok(Place::Memory { address, bit })
     }
 
     /// `(ANGLE)` in radians.
@@ -237,7 +261,7 @@ impl<'s> Parser<'s> {
         Ok(Inst::Apply { callee, args, out, fault, budget })
     }
 
-    /// `rewind %mark [keep (VALUE -> %register, ...)]`
+    /// `rewind %mark [keep (VALUE -> %register | [ADDRESS], ...)]`
     fn rewind(&mut self, scope: &mut Scope<'s>) -> Result<Inst, Failure> {
         let mark = self.slot_use(scope, "a mark")?;
         let mut keep = Vec::new();
@@ -246,7 +270,14 @@ impl<'s> Parser<'s> {
             loop {
                 let value = self.typed_operand(scope)?;
                 self.cursor.expect(Token::Arrow, "`->`")?;
-                keep.push(Keep { value, register: self.slot_use(scope, "a register")? });
+                let target = if self.cursor.eat(Token::LBracket) {
+                    let address = self.operand(scope, Width::WORD)?;
+                    self.cursor.expect(Token::RBracket, "`]`")?;
+                    KeepTarget::Memory(address)
+                } else {
+                    KeepTarget::Register(self.slot_use(scope, "a register or `[ADDRESS]`")?)
+                };
+                keep.push(Keep { value, target });
                 if self.cursor.eat(Token::RParen) {
                     break;
                 }

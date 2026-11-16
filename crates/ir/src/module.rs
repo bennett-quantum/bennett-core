@@ -216,6 +216,25 @@ pub struct Qubit {
     pub bit: u8,
 }
 
+/// Where a qubit of a gate lives: in a register, or at a bit of memory (`docs/DESIGN.md`, "Qubits in
+/// memory").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Place {
+    /// A qubit of a register.
+    Register(Qubit),
+    /// Bit `bit % 8` of the memory byte at `address + bit / 8`: bit `bit` of the little-endian integer at
+    /// `address`, as `load` and `store` read and write it.
+    Memory {
+        /// The `i64` address.
+        address: Operand,
+        /// The bit, below [`MEMORY_QUBIT_BITS`].
+        bit: u8,
+    },
+}
+
+/// A memory qubit's bit index is below this: the widest integer a value holds.
+pub const MEMORY_QUBIT_BITS: u8 = 128;
+
 /// The bytes a `setjmp` writes at its buffer: four little-endian 64-bit words, the target frame's depth
 /// (low half) and function (high half), the `setjmp`'s block (low half) and instruction index (high half),
 /// the frame's entry stack pointer, and the stack pointer when `setjmp` ran. It fits the smallest buffer
@@ -399,6 +418,16 @@ pub enum Inst {
         /// The control qubits.
         controls: Vec<Qubit>,
     },
+    /// `gate target [ctrl controls]` with at least one qubit in memory: as `Gate`, on qubits that may live
+    /// at memory addresses. A gate whose qubits are all in registers is always written as `Gate`.
+    GateAt {
+        /// The gate.
+        gate: Gate,
+        /// The qubit acted on.
+        target: Place,
+        /// The control qubits.
+        controls: Vec<Place>,
+    },
     /// `dst = measure register`: samples the register's value and collapses the state.
     Measure {
         /// The measured value, an integer of the register's width.
@@ -436,14 +465,24 @@ pub enum Inst {
     },
 }
 
-/// One `value -> register` pair of a `rewind`: the value is XORed into the register on every basis
+/// One `value -> target` pair of a `rewind`: the value is XORed into the target on every basis
 /// configuration.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Keep {
-    /// An integer as wide as the register.
+    /// An integer as wide as the register, or of any width for memory.
     pub value: Operand,
-    /// The register handle.
-    pub register: Slot,
+    /// Where the value is XORed in.
+    pub target: KeepTarget,
+}
+
+/// Where a `rewind` keeps a value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeepTarget {
+    /// A register handle.
+    Register(Slot),
+    /// The memory qubits from bit 0 of the byte at this `i64` address on, as many as the value is wide,
+    /// little-endian (`docs/DESIGN.md`, "Qubits in memory").
+    Memory(Operand),
 }
 
 impl Inst {
@@ -469,6 +508,7 @@ impl Inst {
             | Inst::Effect { .. }
             | Inst::Qfree { .. }
             | Inst::Gate { .. }
+            | Inst::GateAt { .. }
             | Inst::Apply { .. }
             | Inst::Rewind { .. } => None,
         }
@@ -516,6 +556,14 @@ impl Inst {
                 operand(&Operand::Slot(target.register));
                 controls.iter().for_each(|c| operand(&Operand::Slot(c.register)));
             }
+            Inst::GateAt { target, controls, .. } => {
+                for place in std::iter::once(target).chain(controls) {
+                    match place {
+                        Place::Register(qubit) => operand(&Operand::Slot(qubit.register)),
+                        Place::Memory { address, .. } => operand(address),
+                    }
+                }
+            }
             Inst::Apply { args, out, fault, budget, .. } => {
                 args.iter().for_each(&mut operand);
                 operand(&Operand::Slot(*out));
@@ -526,7 +574,10 @@ impl Inst {
                 operand(&Operand::Slot(*mark));
                 for pair in keep {
                     operand(&pair.value);
-                    operand(&Operand::Slot(pair.register));
+                    match pair.target {
+                        KeepTarget::Register(register) => operand(&Operand::Slot(register)),
+                        KeepTarget::Memory(address) => operand(&address),
+                    }
                 }
             }
         }

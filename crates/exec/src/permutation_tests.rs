@@ -144,6 +144,10 @@ struct Key {
     marks: Vec<(usize, u64)>,
     reads: Vec<(usize, usize, u32)>,
     registers: Vec<(u32, Option<u32>)>,
+    /// The memory bytes that hold qubits, and the journal's notes of cells that steps touched (without
+    /// whether the access split the world, which is how the state is held, as for `reads`).
+    cells: Vec<(u64, usize)>,
+    cell_entries: Vec<(usize, usize, u8)>,
     amplitudes: Vec<(Vec<u64>, i64, i64)>,
 }
 
@@ -165,6 +169,8 @@ fn key(executor: &Executor) -> Key {
         marks: journal.marks().iter().map(|entry| (entry.position, entry.allocations)).collect(),
         reads: journal.reads_from(0).iter().map(|read| (read.record, read.column, read.slot.0)).collect(),
         registers: executor.quantum.registers().iter().map(|r| (r.generation, r.width.map(|w| w.bits()))).collect(),
+        cells: executor.quantum.cells().iter().map(|(&address, &column)| (address, column)).collect(),
+        cell_entries: journal.cell_entries().iter().map(|e| (e.record, e.column, e.value)).collect(),
         amplitudes: executor
             .quantum
             .amplitudes()
@@ -259,7 +265,11 @@ fn assign(executor: &mut Executor, places: &[Place], values: &[u128]) {
                 let index = executor.frames[frame].base + slot.index();
                 executor.slots[index] = value;
             }
-            Place::Byte(address) => executor.memory.write(address, &[value as u8]),
+            // A byte that holds qubits is 0 in memory; its value is the cell's, which changes instead.
+            Place::Byte(address) => match executor.quantum.cell(address as u64) {
+                Some(column) => executor.quantum.xor_register(column, value as u64),
+                None => executor.memory.write(address, &[value as u8]),
+            },
         }
     }
 }
@@ -459,7 +469,10 @@ fn check_rewinds(fixture: &Fixture) -> usize {
             let kept: Vec<(usize, u64)> = keep
                 .iter()
                 .map(|pair| {
-                    let column = executor.quantum.resolve(executor.handle(pair.register)).expect("live");
+                    let bennett_ir::KeepTarget::Register(register) = pair.target else {
+                        unreachable!("the fixtures keep into registers")
+                    };
+                    let column = executor.quantum.resolve(executor.handle(register)).expect("live");
                     let value = match pair.value {
                         Operand::Slot(slot) => executor.slot(slot),
                         Operand::Const(value) => value.value(),
@@ -770,4 +783,204 @@ fn reading_a_register_and_merging_are_the_linear_extension_of_bijections() {
     // a, b, two bytes, clean and dirty, memory owned or an overlay over two bases: 192 starts each, every
     // one with 16 basis states and their sum.
     assert_eq!((reads, rewinds), (384, 384));
+}
+
+/// Qubits in memory (`docs/DESIGN.md`, "Qubits in memory"): gates at addresses that promote bytes to
+/// cells, at an address that depends on an argument (in bounds, out of bounds, aliasing another qubit), a
+/// coherent region reading superposed cells, loads, stores and a jump record over cells, and a rewind
+/// whose region promotes a byte. `assign` changes a cell's value where a varied byte holds qubits.
+const CELLS: &str = r#"
+memory 256
+data 16 = i8 3, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 5
+
+func @peek(i2 %x) -> i8 {
+entry:
+    %v = load i8 16
+    %w = load i8 24
+    %s = add i8 %v, %w
+    %e = zext i2 %x to i8
+    %t = xor i8 %s, %e
+    ret %t
+}
+
+func @cells(i2 %a, i2 %b) -> i2 {
+entry:
+    %q = qalloc 2
+    %o = qalloc 8
+    %e = qalloc 4
+    %p = zext i2 %a to i64
+    %addr = add i64 %p, 16
+    %far = mul i64 %p, 120
+    h [16:1]
+    x [%addr:0] ctrl [16:1]
+    x [%addr:1] ctrl [16:1]
+    x %q[0] ctrl [16:1]
+    s [24:3] ctrl %q[0]
+    t [%far:2]
+    apply @peek(%b) -> %o, %e budget 20
+    apply @peek(%b) -> %o, %e budget 20
+    tdg [%far:2]
+    sdg [24:3] ctrl %q[0]
+    x %q[0] ctrl [16:1]
+    x [%addr:1] ctrl [16:1]
+    x [%addr:0] ctrl [16:1]
+    h [16:1]
+    %l = load i16 16
+    %n = trunc i16 %l to i2
+    store i16 %l, 23
+    %j = setjmp 16
+    %h = mark
+    x [24:5]
+    h [40:0]
+    x [40:0] ctrl [24:5]
+    rewind %h keep (%n -> %q)
+    ret %n
+}
+"#;
+
+fn cell_fixtures(module: &ValidModule) -> Vec<Fixture<'_>> {
+    let entry = module.function_named("cells").expect("entry");
+    let mut fixtures = Vec::new();
+    for (dirty, shared) in [false, true].into_iter().flat_map(|dirty| SHARED.map(|shared| (dirty, shared))) {
+        // In bounds at two addresses; `[%addr:1]` aliasing `[16:1]` (a = 0); out of bounds (a = 3).
+        for args in [[1, 2], [2, 1], [0, 1], [3, 0]] {
+            fixtures.push(Fixture { module, entry, args: args.to_vec(), dirty, shared });
+        }
+    }
+    fixtures
+}
+
+#[test]
+fn every_step_at_memory_qubits_is_a_bijection_on_clean_and_dirty_history() {
+    let module = bennett_ir::load(CELLS).expect("valid");
+    let fixtures = cell_fixtures(&module);
+    let (checked, faults) =
+        fixtures.iter().map(check_single_steps).fold((0, 0), |(c, f), (checked, faults)| (c + checked, f + faults));
+    let rewinds: usize = fixtures.iter().map(check_rewinds).sum();
+    let mut kinds = std::collections::BTreeSet::new();
+    let mut outcomes = std::collections::BTreeSet::new();
+    for fixture in &fixtures {
+        let mut executor = fixture.at(0);
+        outcomes.insert(format!("{:?}", executor.run()));
+        let journal = executor.journal.as_ref().expect("reversible");
+        kinds.extend((0..journal.records()).map(|index| journal.kind_at(index)));
+    }
+    assert!(
+        kinds.contains(&Undo::GateAt)
+            && kinds.contains(&Undo::GateAtPromoted)
+            && kinds.contains(&Undo::Setjmp)
+            && kinds.contains(&Undo::Rewind)
+    );
+    assert!(outcomes.iter().any(|o| o.contains("QubitAlias")) && outcomes.iter().any(|o| o.contains("OutOfBounds")));
+    println!("memory qubits: {checked} single steps ({faults} faulting), {rewinds} rewinds; outcomes {outcomes:?}");
+    assert_eq!((checked, faults, rewinds), (8_616, 552, 12_288), "single steps, faulting ones, rewinds");
+}
+
+/// Reading a cell (a load, or a store over it) where the configurations disagree splits the world, and
+/// the rewind merges the worlds again: as for a register read, the linear extension of bijections. The
+/// register `%r` is column 0 and the cell at 40 column 1, so `weights` sets both.
+fn cell_worlds(first_access: &str) -> String {
+    format!(
+        r#"
+memory 256
+data 16 = i8 3, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 5
+
+func @pick(i2 %x, i2 %a) -> i2 {{
+entry:
+    %y = add i2 %x, %a
+    %c = icmp eq i2 %x, 2
+    br %c, two, other
+two:
+    %w = zext i2 %y to i8
+    store i8 %w, 24
+    ret %y
+other:
+    ret %a
+}}
+
+func @cellworlds(i2 %a, i2 %b) -> i2 {{
+entry:
+    %r = qalloc 2
+    z [40]
+    %m = mark
+{first_access}
+    %t = trunc i8 %l to i2
+    %s = call @pick(%t, %a)
+    %u = add i2 %s, %b
+    %w = zext i2 %u to i8
+    store i8 %w, 40
+    rewind %m keep (%u -> %r)
+    ret %a
+}}
+"#
+    )
+}
+
+#[test]
+fn reading_a_memory_qubit_and_merging_are_the_linear_extension_of_bijections() {
+    let accesses = [
+        "    %l = load i8 40",
+        // A store over the cell reads it first (its old value goes into the history), then the load.
+        "    %k = zext i2 %b to i8\n    store i8 %k, 40\n    %l = load i8 40",
+    ];
+    let (mut reads, mut rewinds) = (0, 0);
+    for access in accesses {
+        let text = cell_worlds(access);
+        let module = bennett_ir::load(&text).expect("valid");
+        let entry = module.function_named("cellworlds").expect("entry");
+        let first = if access.contains("store") { 4 } else { 3 };
+        let rewind = module.function(entry).blocks[0].insts.len() - 1;
+        for (dirty, shared) in [false, true].into_iter().flat_map(|dirty| SHARED.map(|shared| (dirty, shared))) {
+            let fixture = Fixture { module: &module, entry, args: vec![0, 0], dirty, shared };
+            for (start, through) in [(first, first), (2, rewind)] {
+                let mut outputs = HashMap::new();
+                for a in 0..4u128 {
+                    for b in 0..4u128 {
+                        let at = |configs: &[(Vec<u64>, (f64, f64))]| {
+                            let mut executor = fixture.at(start);
+                            let slots = executor.frames[0].base;
+                            executor.slots[slots] = a;
+                            executor.slots[slots + 1] = b;
+                            set_state(&mut executor, configs);
+                            executor
+                        };
+                        let mut basis = Vec::new();
+                        let mut before_basis = Vec::new();
+                        for (config, amplitude) in weights() {
+                            let mut executor = at(&[(config.clone(), (1.0, 0.0))]);
+                            let before = world_keys(&mut executor);
+                            advance(&mut executor, start, through);
+                            let after = world_keys(&mut executor);
+                            assert_eq!(after.len(), 1, "a basis state is one world");
+                            if let Some(other) = outputs.insert(after[0].clone(), (a, b, config.clone())) {
+                                panic!("{other:?} and {:?} step to the same state", (a, b, &config));
+                            }
+                            let mut back = executor;
+                            while back.frames.len() != 1 || back.top().inst != start {
+                                assert_eq!(back.step_back(), Ok(true));
+                            }
+                            assert_eq!(world_keys(&mut back), before, "{config:?}: not undone exactly");
+                            basis.push((after[0].clone(), amplitude));
+                            before_basis.push((before[0].clone(), amplitude));
+                        }
+                        let mut executor = at(&weights());
+                        let before = world_keys(&mut executor);
+                        assert_eq!(before, superposed(&before_basis), "the superposition is one world");
+                        advance(&mut executor, start, through);
+                        let after = world_keys(&mut executor);
+                        assert_eq!(after, superposed(&basis), "a={a} b={b}: not the linear extension");
+                        assert_eq!(after.len(), if through == first { 4 } else { 1 }, "a world per value read, merged");
+                        while executor.has_worlds() || executor.frames.len() != 1 || executor.top().inst != start {
+                            assert_eq!(executor.step_back(), Ok(true));
+                        }
+                        assert_eq!(world_keys(&mut executor), before, "the superposition is not restored");
+                        if through == first { reads += 1 } else { rewinds += 1 }
+                    }
+                }
+            }
+        }
+    }
+    // Two first accesses (a load, a store), a and b, clean and dirty, three memory modes: 96 starts each,
+    // every one with 16 basis states and their sum.
+    assert_eq!((reads, rewinds), (192, 192));
 }

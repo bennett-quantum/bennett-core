@@ -47,13 +47,17 @@ impl Executor<'_> {
         let original = self.quantum.take_amplitudes();
         self.measure_begin_apply(callee);
         let mut outcomes = Vec::with_capacity(original.len());
+        // The private memory of each branch holds the values its configuration gives the cells.
+        let cells = self.region_cells();
         for config in original.keys() {
             values.clear();
             values.extend(inputs.iter().map(|input| match *input {
                 Input::Register(column) => u128::from(config[column]),
                 Input::Value(value) => value,
             }));
+            self.materialise_cells(&cells, Some(config));
             outcomes.push(self.evaluate(callee, &values, budget));
+            self.materialise_cells(&cells, None);
         }
         let (mut branches, mut weight, mut first) = (0, 0.0, None);
         for (amplitude, outcome) in original.values().zip(&outcomes) {

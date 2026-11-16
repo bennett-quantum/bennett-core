@@ -42,10 +42,7 @@ impl<'m> Executor<'m> {
             Inst::Cast { op, from, to, dst, value } => {
                 self.produce(*dst, crate::arith::cast(*op, *from, *to, self.read(value)));
             }
-            Inst::Load { width, dst, address } => {
-                let value = self.load(self.read_word(address), *width)?;
-                self.produce(*dst, value);
-            }
+            Inst::Load { width, dst, address } => self.load(*dst, *width, address)?,
             Inst::FuncAddr { dst, func } => self.produce(*dst, u128::from(func.address())),
             Inst::Store { width, value, address } => self.store(*width, self.read(value), self.read_word(address))?,
             Inst::Alloca { dst, size } => self.alloca(*dst, self.read_word(size))?,
@@ -91,6 +88,10 @@ impl<'m> Executor<'m> {
                 self.gate(*gate, target, controls, limit)?;
                 self.record(Undo::Gate);
                 self.advance();
+            }
+            Inst::GateAt { gate, target, controls } => {
+                let limit = self.max_configurations.map(|limit| limit.saturating_sub(self.others_configurations));
+                self.gate_at(*gate, target, controls, limit)?;
             }
             Inst::Measure { dst, register } => {
                 let id = self.quantum.resolve(self.handle(*register))?;
@@ -152,9 +153,8 @@ impl<'m> Executor<'m> {
         Ok(address as usize..end as usize)
     }
 
-    /// Writes a jump record naming the top frame and this `setjmp` at `buffer`, and gives 0.
-    fn setjmp(&mut self, dst: Slot, buffer: u64) -> Result<(), Fault> {
-        let range = self.jump_record_range(buffer)?;
+    /// The jump record a `setjmp` at the top frame's position writes.
+    pub(crate) fn jump_record(&self) -> [u8; JUMP_RECORD_BYTES as usize] {
         let frame = *self.top();
         // Depth and instruction index fit 32 bits: more frames or a longer block would need more memory than
         // a host has.
@@ -169,10 +169,22 @@ impl<'m> Executor<'m> {
         for (chunk, word) in record.as_chunks_mut::<8>().0.iter_mut().zip(words) {
             *chunk = word.to_le_bytes();
         }
-        let (low, high) = (range.start..range.start + 16, range.start + 16..range.end);
-        self.record_word(self.read_bytes(low));
-        self.record_word(self.read_bytes(high));
-        self.memory.write(range.start, &record);
+        record
+    }
+
+    /// Writes a jump record naming the top frame and this `setjmp` at `buffer`, and gives 0. Bytes of the
+    /// buffer that hold qubits are read first (`cells.rs`).
+    fn setjmp(&mut self, dst: Slot, buffer: u64) -> Result<(), Fault> {
+        let range = self.jump_record_range(buffer)?;
+        let (cells, split) = self.read_cells(range.clone(), &|executor| executor.setjmp(dst, buffer));
+        let record = self.jump_record();
+        let mut old = [0u8; JUMP_RECORD_BYTES as usize];
+        self.read_view(range.clone(), &cells, &mut old);
+        let (low, high) = old.split_at(16);
+        self.record_word(u128::from_le_bytes(low.try_into().expect("16 bytes")));
+        self.record_word(u128::from_le_bytes(high.try_into().expect("16 bytes")));
+        self.write_view(range.start, &record, &old, &cells);
+        self.note_cells(&cells, range.start, &record, split);
         self.write_slot(dst, 0);
         self.record(Undo::Setjmp);
         self.advance();
@@ -186,7 +198,15 @@ impl<'m> Executor<'m> {
     fn longjmp(&mut self, buffer: u64, value: u128) -> Result<(), Fault> {
         let range = self.jump_record_range(buffer)?;
         let mut record = [0u8; JUMP_RECORD_BYTES as usize];
-        self.memory.read_into(range, &mut record);
+        // A record in bytes that hold qubits is read without splitting: worlds that disagreed on it would
+        // jump to different targets, and some could fault while others go on (a debt, `docs/DESIGN.md`,
+        // "Qubits in memory"). Where the configurations disagree it names no single target.
+        let cells =
+            if self.in_region { Vec::new() } else { self.quantum.cells_in(range.start as u64..range.end as u64) };
+        if cells.iter().any(|&(_, column)| self.quantum.partition(&[column]).len() > 1) {
+            return Err(Fault::BadIndirect);
+        }
+        self.read_view(range.clone(), &cells, &mut record);
         let mut words = [0u64; 4];
         for (word, chunk) in words.iter_mut().zip(record.as_chunks::<8>().0) {
             *word = u64::from_le_bytes(*chunk);
@@ -228,6 +248,7 @@ impl<'m> Executor<'m> {
         top.block = block;
         top.inst = inst;
         self.write_slot(dst, value);
+        self.note_cells(&cells, range.start, &record, false);
         if let Some(journal) = &mut self.journal {
             journal.push_jump(discarded);
         }
@@ -288,15 +309,34 @@ impl<'m> Executor<'m> {
         self.memory.write(range.start, &value.to_le_bytes()[..range.len()]);
     }
 
-    fn load(&self, address: u64, width: Width) -> Result<u128, Fault> {
-        Ok(self.read_bytes(self.memory_range(address, width)?) & width.mask())
+    /// `dst = load width address`. Bytes that hold qubits are read as a register is read (`cells.rs`).
+    fn load(&mut self, dst: Slot, width: Width, address: &'m Operand) -> Result<(), Fault> {
+        let range = self.memory_range(self.read_word(address), width)?;
+        let (cells, split) = self.read_cells(range.clone(), &|executor| executor.load(dst, width, address));
+        let mut bytes = [0; 16];
+        self.read_view(range.clone(), &cells, &mut bytes[..range.len()]);
+        self.note_cells(&cells, range.start, &bytes, split);
+        self.produce(dst, u128::from_le_bytes(bytes) & width.mask());
+        Ok(())
     }
 
+    /// `store width value, address`. Bytes that hold qubits are read first, then each gets the new value
+    /// XORed over the old one (`cells.rs`).
     fn store(&mut self, width: Width, value: u128, address: u64) -> Result<(), Fault> {
         let range = self.memory_range(address, width)?;
-        let old = self.read_bytes(range.clone());
-        self.write_bytes(range, value);
-        self.record_word(old);
+        let (cells, split) = self.read_cells(range.clone(), &|executor| executor.store(width, value, address));
+        if cells.is_empty() {
+            let old = self.read_bytes(range.clone());
+            self.write_bytes(range, value);
+            self.record_word(old);
+        } else {
+            let mut old = [0; 16];
+            self.read_view(range.clone(), &cells, &mut old[..range.len()]);
+            let new = value.to_le_bytes();
+            self.write_view(range.start, &new[..range.len()], &old[..range.len()], &cells);
+            self.record_word(u128::from_le_bytes(old));
+            self.note_cells(&cells, range.start, &new, split);
+        }
         self.record(Undo::Store);
         self.advance();
         Ok(())

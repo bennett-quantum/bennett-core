@@ -17,6 +17,7 @@ type       := iN | qN                                    ; iN: N from 1 to 128; 
 operand    := %name | INT          ; an INT takes its type from the instruction
 typed      := %name | iN INT       ; in argument lists, a constant names its type
 qubit      := %name ["[" INT "]"]  ; bare %q means %q[0]
+            | "[" operand [":" INT] "]"        ; a bit of memory: bit INT of the integer at the i64 address
 
 statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv urem srem and or xor shl lshr ashr
             | %d = icmp PRED iN operand, operand         ; eq ne ult ule ugt uge slt sle sgt sge
@@ -40,7 +41,8 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | %d = measure %r
             | apply @f(typed, ...) -> %out, %fault budget operand
             | %d = mark                                  ; an i64 handle for rewind
-            | rewind %h [keep (typed -> %r {, typed -> %r})]  ; XOR each value into its register, un-run since %h
+            | rewind %h [keep (typed -> kept {, typed -> kept})]  ; XOR each value in, un-run since %h
+kept       := %r | "[" operand "]"                ; a register, or memory qubits from bit 0 of the address
 terminator := br label[(typed, ...)]
             | br operand, target, target
             | switch iN operand, INT: target, ..., default: target
@@ -127,6 +129,22 @@ function (the validator's `NotAMark`), not a value derived from one or passed th
 Each kept value is an integer exactly as wide as its register (a typed constant names its width); keeping
 a register's value is not accepted. `keep` with an empty list is not accepted: write `rewind %h`. The
 meaning, and when a rewind faults (`bad_rewind`), is in `docs/DESIGN.md`, "History: `mark` and `rewind`".
+
+## Qubits in memory
+
+A gate's qubit is a register qubit, `%q[3]`, or a bit of memory, `[%p:3]`: bit `3 % 8` of the byte at
+`%p + 3 / 8`, so `[%p:BIT]` is bit BIT of the little-endian integer at `%p`, as `load` and `store` see it.
+The address is an `i64` value or a constant (`[64:0]`); the bit is a decimal from 0 to 127; `[%p]` is
+bit 0. One gate may mix them: `x [%p:1] ctrl %q[0], [16]`. A gate whose qubits are all in registers is
+`bennett_ir::Inst::Gate`, as before; one with a qubit in memory is `Inst::GateAt`, and the writer prints
+both in the same form, so reading what it wrote gives the same instruction. The validator reports a bit
+from 128 (`MemoryBitOutOfRange`), the same address operand and bit twice in one gate
+(`RepeatedMemoryQubit`; the same bit through different operands is the run-time fault `qubit_alias`),
+and an address that is not an `i64`.
+
+`rewind %h keep (%v -> [%p])` XORs `%v`, of any integer width N, into the N qubits from bit 0 of the byte
+at `%p` on, little-endian; every byte it reaches must hold qubits since before the mark. The meaning, and
+what loads and stores of such bytes do, is in `docs/DESIGN.md`, "Qubits in memory".
 
 ## Reading a register
 

@@ -299,3 +299,57 @@ fn a_call_reads_a_register_passed_to_an_integer_parameter() {
     let text = format!("{callee}func @f(q4 %q) {{\nentry:\n br next(%q)\nnext(i4 %x):\n ret\n}}\n");
     assert!(matches!(problems(&text).as_slice(), [Problem::TypeMismatch { .. }]));
 }
+
+#[test]
+fn gates_at_addresses_read_write_and_validate() {
+    use bennett_ir::{Inst, KeepTarget, Place};
+    let text = "memory 64\nfunc @f(q2 %q, i64 %p, i8 %v) {\nentry:\n h [%p:3]\n x %q[1] ctrl [16], %q[0]\n \
+                rz(0.5) [%p] ctrl [%p:9]\n x %q[1] ctrl %q[0]\n %h = mark\n rewind %h keep (%v -> [%p], i2 1 -> %q, \
+                i12 5 -> [40])\n ret\n}\n";
+    let module = read(text).expect("reads");
+    let insts = &module.functions[0].blocks[0].insts;
+    assert!(matches!(&insts[0], Inst::GateAt { target: Place::Memory { bit: 3, .. }, .. }));
+    assert!(matches!(&insts[1], Inst::GateAt { target: Place::Register(_), controls, .. } if controls.len() == 2));
+    // A gate whose qubits are all in registers is the register gate it always was.
+    assert!(matches!(&insts[3], Inst::Gate { .. }));
+    let Inst::Rewind { keep, .. } = &insts[5] else { panic!("a rewind") };
+    assert!(matches!(keep[0].target, KeepTarget::Memory(_)) && matches!(keep[1].target, KeepTarget::Register(_)));
+    let written = write(&module);
+    for line in ["h [%p:3]\n", "x %q[1] ctrl [16], %q\n", "rz(0.5) [%p] ctrl [%p:9]\n"] {
+        assert!(written.contains(line), "{line}: {written}");
+    }
+    assert!(written.contains("rewind %h keep (%v -> [%p], i2 1 -> %q, i12 5 -> [40])\n"), "{written}");
+    assert_eq!(read(&written).as_ref(), Ok(&module));
+    validate(module).expect("valid");
+    for statement in ["h [%p", "h [%p:]", "h [:3]", "h [%p:3:4]", "h [%p:256]", "h []", "rewind %h keep (%v -> [%p:1])"]
+    {
+        let text = format!("func @f(i64 %p, i8 %v) {{\nentry:\n %h = mark\n {statement}\n ret\n}}\n");
+        assert!(read(&text).is_err(), "accepted {statement}");
+    }
+    let body = |statements: &str| format!("func @f(q4 %s, i8 %v, i64 %n) {{\nentry:\n{statements}\n ret\n}}\n");
+    assert_eq!(problems(&body(" h [%n:128]")), vec![Problem::MemoryBitOutOfRange(128)]);
+    assert_eq!(problems(&body(" x [%n:2] ctrl [%n:2]")), vec![Problem::RepeatedMemoryQubit(2)]);
+    // The same bit through different address operands is a run-time alias (`qubit_alias`), not an error.
+    assert!(load(&body(" x [%n:2] ctrl [16:2]")).is_ok());
+    assert!(matches!(problems(&body(" h [%v]")).as_slice(), [Problem::TypeMismatch { .. }]));
+    assert!(matches!(
+        problems(&body(" %h = mark\n rewind %h keep (%s -> [%n])")).as_slice(),
+        [Problem::TypeMismatch { .. }]
+    ));
+    assert!(matches!(
+        problems(&body(" %h = mark\n rewind %h keep (%v -> [%v])")).as_slice(),
+        [Problem::TypeMismatch { .. }]
+    ));
+    // Built directly, a `GateAt` with no qubit in memory would be written and read back as a `Gate`.
+    let mut module = read(&body(" x %s[1] ctrl %s[0]")).expect("reads");
+    let Inst::Gate { gate, target, controls } = module.functions[0].blocks[0].insts[0].clone() else {
+        panic!("a gate")
+    };
+    module.functions[0].blocks[0].insts[0] = Inst::GateAt {
+        gate,
+        target: Place::Register(target),
+        controls: controls.into_iter().map(Place::Register).collect(),
+    };
+    let errors = validate(module).expect_err("invalid").0;
+    assert_eq!(errors.iter().map(|e| e.problem.clone()).collect::<Vec<_>>(), vec![Problem::GateAtWithoutMemory]);
+}

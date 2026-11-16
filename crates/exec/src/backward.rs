@@ -40,7 +40,21 @@ impl<'m> Executor<'m> {
                 self.defer(last, failing);
             }
         }
+        if matches!(last, Undo::GateAt | Undo::GateAtPromoted) {
+            return self.unrun_gate_at(checked, deferred, last == Undo::GateAtPromoted);
+        }
+        // A step that read or wrote memory qubits: they must still hold what it read or wrote.
+        if (checked || deferred) && self.journal.as_ref().is_some_and(Journal::top_has_cells) {
+            let failing = self.cells_no_longer_held();
+            if checked && !failing.is_empty() {
+                return Err(Mismatch);
+            }
+            if deferred {
+                self.defer(last, failing);
+            }
+        }
         let undo = self.journal.as_mut().and_then(|journal| journal.pop()).expect("a record to undo");
+        self.pop_cell_entries();
         match undo {
             Undo::Slot | Undo::Qalloc => self.undo_definition(undo),
             Undo::Mark => {
@@ -100,11 +114,19 @@ impl<'m> Executor<'m> {
                 self.restore_result();
                 let high = self.pop_word();
                 let low = self.pop_word();
-                self.write_bytes(range.start..range.start + 16, low);
-                self.write_bytes(range.start + 16..range.end, high);
+                let cells = self.ordinary_cells(range.clone());
+                if cells.is_empty() {
+                    self.write_bytes(range.start..range.start + 16, low);
+                    self.write_bytes(range.start + 16..range.end, high);
+                } else {
+                    let old = [low.to_le_bytes(), high.to_le_bytes()].concat();
+                    let record = self.jump_record();
+                    self.write_view(range.start, &old, &record, &cells);
+                }
             }
             Undo::Longjmp => self.undo_longjmp(),
             Undo::Measure => unreachable!("reversal stops before a measurement"),
+            Undo::GateAt | Undo::GateAtPromoted => unreachable!("a GateAt record is un-run before it is popped"),
         }
         Ok(())
     }
@@ -136,10 +158,22 @@ impl<'m> Executor<'m> {
     }
 
     fn undo_store(&mut self) {
-        let Inst::Store { width, address, .. } = self.retreat() else { unreachable!("a store record") };
+        let Inst::Store { width, address, value } = self.retreat() else { unreachable!("a store record") };
         let range = self.memory_range(self.read_word(address), *width).expect("a store that ran forward is in bounds");
         let old = self.pop_word();
-        self.write_bytes(range, old);
+        let cells = self.ordinary_cells(range.clone());
+        if cells.is_empty() {
+            self.write_bytes(range, old);
+        } else {
+            let (old, new) = (old.to_le_bytes(), self.read(value).to_le_bytes());
+            self.write_view(range.start, &old[..range.len()], &new[..range.len()], &cells);
+        }
+    }
+
+    /// The cells among the bytes of `range` that ordinary code touches: none inside a coherent region,
+    /// whose private memory holds the cells' values.
+    fn ordinary_cells(&self, range: std::ops::Range<usize>) -> Vec<(u64, usize)> {
+        if self.in_region { Vec::new() } else { self.quantum.cells_in(range.start as u64..range.end as u64) }
     }
 
     /// The configurations where a register the call of the last record read as an integer no longer holds
@@ -225,7 +259,7 @@ impl<'m> Executor<'m> {
     }
 
     /// Steps the top frame back onto the instruction being undone, and returns it.
-    fn retreat(&mut self) -> &'m Inst {
+    pub(crate) fn retreat(&mut self) -> &'m Inst {
         let top = self.top_mut();
         top.inst -= 1;
         let frame = *top;

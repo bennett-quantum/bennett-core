@@ -46,6 +46,13 @@ pub enum Undo {
     Rewind,
     /// A `setjmp`. Words: the record's old bytes (two words, low half first), then the old result slot.
     Setjmp,
+    /// A gate with a qubit in memory (`GateAt`) whose memory bytes all held qubits already, undone by its
+    /// inverse. No words.
+    GateAt,
+    /// A `GateAt` that promoted memory bytes to qubits, undone by its inverse and then by un-promoting
+    /// them. Words: for each byte it promoted, in order, the address (shifted left by 8) and the byte's
+    /// old value (the low 8 bits); then the number of bytes promoted.
+    GateAtPromoted,
     /// A `longjmp`. Words: for each discarded frame from the top down, its packed position and its entry
     /// stack pointer; then the target frame's packed position and the stack pointer before the jump, the
     /// number of discarded frames, and the old value of the `setjmp`'s result slot.
@@ -64,6 +71,22 @@ pub(crate) struct Journal {
     jumps: Vec<usize>,
     /// One entry per register a `Call` record's call read as an integer, in order.
     reads: Vec<ReadEntry>,
+    /// One entry per memory byte holding qubits that a step's ordinary access touched, in order.
+    cells: Vec<CellEntry>,
+}
+
+/// A memory byte holding qubits (a cell) that ordinary code read or wrote: what un-running the step must
+/// find there (`docs/DESIGN.md`, "Qubits in memory").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct CellEntry {
+    /// The index of the step's record.
+    pub(crate) record: usize,
+    /// The cell's column.
+    pub(crate) column: usize,
+    /// The byte the cell holds after the step: the value read, or the value written.
+    pub(crate) value: u8,
+    /// Whether the world split at this access: its configurations disagreed on the cells.
+    pub(crate) split: bool,
 }
 
 /// A register a call read as an integer: what un-running the call must find still there.
@@ -112,6 +135,40 @@ impl Journal {
     /// Notes that the call whose `Call` record is pushed next read a register.
     pub(crate) fn push_read(&mut self, column: usize, slot: bennett_ir::Slot, split: bool) {
         self.reads.push(ReadEntry { record: self.kinds.len(), column, slot, split });
+    }
+
+    /// Notes that the step whose record is pushed next touched a cell.
+    pub(crate) fn push_cell(&mut self, column: usize, value: u8, split: bool) {
+        self.cells.push(CellEntry { record: self.kinds.len(), column, value, split });
+    }
+
+    /// Removes and returns the last cell entry if it belongs to the record at `record`.
+    pub(crate) fn pop_cell_of(&mut self, record: usize) -> Option<CellEntry> {
+        self.cells.pop_if(|entry| entry.record == record)
+    }
+
+    /// The cell entries of the record at `record`.
+    pub(crate) fn cells_of(&self, record: usize) -> &[CellEntry] {
+        let start = self.cells.partition_point(|entry| entry.record < record);
+        let end = self.cells.partition_point(|entry| entry.record <= record);
+        &self.cells[start..end]
+    }
+
+    /// The cell entries of records at `record` or later.
+    pub(crate) fn cells_from(&self, record: usize) -> &[CellEntry] {
+        let start = self.cells.partition_point(|entry| entry.record < record);
+        &self.cells[start..]
+    }
+
+    /// Every cell entry, in order.
+    #[cfg(test)]
+    pub(crate) fn cell_entries(&self) -> &[CellEntry] {
+        &self.cells
+    }
+
+    /// The word `depth` places below the top of the word stack (0 is the top).
+    pub(crate) fn word_from_top(&self, depth: usize) -> u128 {
+        self.words[self.words.len() - 1 - depth]
     }
 
     /// Removes and returns the last read if it belongs to the `Call` record at `record`.
@@ -169,6 +226,7 @@ impl Journal {
             + self.marks.len() * size_of::<MarkEntry>()
             + self.jumps.len() * size_of::<usize>()
             + self.reads.len() * size_of::<ReadEntry>()
+            + self.cells.len() * size_of::<CellEntry>()
     }
 
     pub(crate) fn clear(&mut self) {
@@ -177,6 +235,7 @@ impl Journal {
         self.marks.clear();
         self.jumps.clear();
         self.reads.clear();
+        self.cells.clear();
     }
 
     /// The number of records.

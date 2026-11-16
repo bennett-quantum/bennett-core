@@ -212,6 +212,9 @@ pub struct Stats {
     /// Times the host or a measurement observed which of several worlds the machine is in: the history
     /// those worlds carried was still entangled (the warning of `docs/DESIGN.md`, "What is promised").
     pub observations: u64,
+    /// Memory bytes that hold qubits now, the most in any one world (`docs/DESIGN.md`, "Qubits in memory").
+    /// Each is an 8-qubit register, counted in `live_qubits` too.
+    pub memory_qubit_bytes: usize,
     /// Qubits allocated now.
     pub live_qubits: u32,
     /// The most qubits allocated at once.
@@ -540,6 +543,7 @@ impl<'m> Executor<'m> {
             split_journal_bytes: self.split_journal_bytes,
             overlay_bytes: self.overlay_bytes(),
             peak_overlay_bytes: self.peak_overlay_bytes.max(self.overlay_bytes()),
+            memory_qubit_bytes: self.quantum_states().iter().map(|q| q.cells().len()).max().unwrap_or(0),
             live_qubits: self.quantum_states().iter().map(|q| q.live_qubits()).max().unwrap_or(0),
             peak_live_qubits: self.quantum_states().iter().map(|q| q.peak_qubits()).max().unwrap_or(0),
             configurations: self.quantum_states().iter().map(|q| q.amplitudes().len()).sum(),

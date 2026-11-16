@@ -1046,7 +1046,13 @@ impl Executor<'_> {
                 });
                 words
             }
-            Undo::Effect | Undo::Finish | Undo::Gate | Undo::Qfree | Undo::Apply => Vec::new(),
+            Undo::Effect
+            | Undo::Finish
+            | Undo::Gate
+            | Undo::GateAt
+            | Undo::GateAtPromoted
+            | Undo::Qfree
+            | Undo::Apply => Vec::new(),
             Undo::Rewind => unreachable!("the measurement stops before a rewind"),
         };
         // Check original operand values against live state; captured values alone never suffice.

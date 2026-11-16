@@ -61,6 +61,9 @@ pub(crate) struct QuantumState {
     allocations: u64,
     /// For each register id, the numbers of its allocations that are not undone, latest last.
     allocation_numbers: Vec<Vec<u64>>,
+    /// The memory bytes that hold qubits ("cells", `docs/DESIGN.md`, "Qubits in memory"): byte address to
+    /// the column of the 8-qubit register that holds the byte's value. Part of the register table.
+    cells: BTreeMap<u64, usize>,
 }
 
 impl Default for QuantumState {
@@ -75,6 +78,7 @@ impl Default for QuantumState {
             peak_configurations: 1,
             allocations: 0,
             allocation_numbers: Vec::new(),
+            cells: BTreeMap::new(),
         }
     }
 }
@@ -119,6 +123,50 @@ impl QuantumState {
             self.registers.pop();
             self.allocation_numbers.pop();
         }
+    }
+
+    /// Undoes `allocate` of the live register in `column`, as `unallocate` does for its handle.
+    pub(crate) fn unallocate_column(&mut self, column: usize) {
+        let handle = u64::from(self.registers[column].generation) << 32 | column as u64;
+        self.unallocate(handle);
+    }
+
+    /// The column of the cell holding the memory byte at `address`, if the byte holds qubits.
+    pub(crate) fn cell(&self, address: u64) -> Option<usize> {
+        self.cells.get(&address).copied()
+    }
+
+    /// Whether any memory byte holds qubits.
+    pub(crate) fn has_cells(&self) -> bool {
+        !self.cells.is_empty()
+    }
+
+    /// The cells among the bytes of `range`, in address order.
+    pub(crate) fn cells_in(&self, range: std::ops::Range<u64>) -> Vec<(u64, usize)> {
+        if self.cells.is_empty() {
+            return Vec::new();
+        }
+        self.cells.range(range).map(|(&address, &column)| (address, column)).collect()
+    }
+
+    /// Every cell, in address order.
+    pub(crate) fn cells(&self) -> &BTreeMap<u64, usize> {
+        &self.cells
+    }
+
+    /// Binds the byte at `address` to register `column`, or unbinds it (`None`).
+    pub(crate) fn bind_cell(&mut self, address: u64, column: Option<usize>) {
+        match column {
+            Some(column) => self.cells.insert(address, column),
+            None => self.cells.remove(&address),
+        };
+    }
+
+    /// The value of register `column` in the first configuration: its value in every configuration, where
+    /// they agree. A world's part that a deferred check emptied (`Executor::defer`) reads 0: it carries no
+    /// amplitude, and its sum with the other parts decides.
+    pub(crate) fn first_value(&self, column: usize) -> u64 {
+        self.amplitudes.keys().next().map_or(0, |config| config[column])
     }
 
     /// Whether register `id` is zero in every configuration.
@@ -297,6 +345,7 @@ impl QuantumState {
             peak_configurations: self.peak_configurations,
             allocations: self.allocations,
             allocation_numbers: self.allocation_numbers.clone(),
+            cells: self.cells.clone(),
         }
     }
 
@@ -333,6 +382,7 @@ impl QuantumState {
             && self.columns == other.columns
             && self.allocations == other.allocations
             && self.allocation_numbers == other.allocation_numbers
+            && self.cells == other.cells
     }
 
     /// Feeds the classical part (the register table) to `state`.
@@ -342,6 +392,7 @@ impl QuantumState {
         self.columns.hash(state);
         self.allocations.hash(state);
         self.allocation_numbers.hash(state);
+        self.cells.hash(state);
     }
 
     /// Adds `other`'s amplitudes to this state's: two worlds that are the same machine state become one.
