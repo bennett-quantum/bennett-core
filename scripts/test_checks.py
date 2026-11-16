@@ -57,6 +57,8 @@ class Checks(unittest.TestCase):
 
     def init_repo(self):
         self.git('init', '-q', '-b', 'main')
+        self.git('config', 'core.hooksPath', '/dev/null')
+        self.git('config', 'commit.gpgsign', 'false')
         self.git('config', 'user.name', 'Check fixture')
         self.git('config', 'user.email', 'fixture@example.invalid')
         (self.root / '.gitignore').write_text('.tmp/\n')
