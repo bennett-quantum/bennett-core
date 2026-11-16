@@ -592,10 +592,15 @@ explicitly after the separate musl build.
    journal, wall time and peak RSS are in `experiments/sqlite-on-device/measurements.tsv`; commands
    and compact tables in its README. The original 256 KiB SQLite heap refuses N=128 at LIKE row24
    with `SQLITE_NOMEM` identically native/device (7,893,757 steps); N=128/256 pass with 1 MiB heap.
-   History-versus-branches comparison also passes N=16/32/64; the larger-heap sweep continues.
+   History-versus-branches comparison also passes N=16/32/64. All five Grover shapes pass N=512;
+   the full coherent checks there hit the declared 300 s process cap (LIKE during full
+   reversal; other shapes during their second apply); aggregate classical reversal hits the 4 GiB address-space
+   limit while building history (2,322,360 KiB peak RSS). These are shared-host experiment bounds,
+   not physical qubit/RAM limits. The baseline sweep predates the atomic-rewind fixes; validation
+   on the rebased executor is recorded separately in the experiment.
    The fast glue test exposed an entry-stack refusal panic; its minimal ignored witness is
    `sql_oracle_glue::an_entry_frame_that_does_not_fit_returns_stack_overflow`. The executor is not
-   changed by this experiment. Next: finish measuring larger sizes and their stops;
+   changed by this experiment. Next: larger process budgets remain unmeasured;
    the C front's memory-writing fallback remains necessary to remove the hand-written device entry.
 
 ## What the earlier workspace offers

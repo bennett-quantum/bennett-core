@@ -541,7 +541,7 @@ heap, not a host-memory, dense-vector or qubit limit. The 1 MiB heap passes all 
 deviation is 3.14e-16. N=128 has 13 live qubits at each oracle boundary; the dense vector is only
 8,192 complex doubles, about 128 KiB. N=256 uses 14 live qubits at the oracle boundary; the dense vector occupies 256 KiB.
 Its largest dense amplitude deviation is 1.30e-16, and its largest process RSS is 1,642,764 KiB
-(the complete aggregate reversal). The larger sweep continues with the same checks and limits.
+(the complete aggregate reversal). The next section records the first complete-matrix stopping size under the declared bounds.
 
 The fast fixture also exposed an executor defect independent of SQL: when the entry's slot frame
 does not fit, `Executor::new` records `stack_overflow`, but `run` panics in `next_is_rewind` before
@@ -554,3 +554,75 @@ cargo test -p bennett-front-tests --test sql_oracle_glue an_entry_frame_that_doe
 
 That explicit witness currently fails by panic. The repair belongs in the executor's stopped-entry
 handling; then enable the witness. The successful SQL cases use the original 1 MiB device stack.
+
+### N=512: complete-run limits and Grover
+
+At N=512 the complete native/device driver agrees (155.682 s, 179,844 KiB peak RSS).
+The matrix below retains unsuccessful checks. A timeout is the declared 300-second child limit;
+it is not a device fault, physical host-memory limit, or qubit limit. The dense vector has
+32,768 complex doubles (512 KiB), and the oracle boundary has 15 live register qubits.
+
+| shape | forward | classical reverse | coherent output 0 | coherent output 1 | Grover |
+|---|---|---|---|---|---|
+| like_note | pass | pass | timeout | timeout | pass |
+| int_eq | pass | pass | timeout | timeout | pass |
+| text_order | pass | pass | timeout | timeout | pass |
+| two_where | pass | pass | timeout | timeout | pass |
+| range_agg | pass | process 134 | timeout | timeout | pass |
+
+Grover checks native truth, every intermediate oracle amplitude and the final complete vector,
+closed-form success, byte preservation, and clean fault/kick frees. Its final measurement is
+not used to judge the distribution. Region counters below cover the complete Grover run; region journal is the cumulative sum
+of per-run high-water bytes.
+
+| shape | matches | k | region steps | region journal sum B | measured success | max amplitude error | wall s | peak RSS KiB |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| like_note | 115 | 1 | 15,237,696 | 147,821,936 | 0.992001891136 | 4.16e-17 | 11.327 | 180,132 |
+| int_eq | 0 | 1 | 5,519,150 | 55,644,807 | -0 | 0 | 16.114 | 179,976 |
+| text_order | 232 | 1 | 6,111,808 | 61,401,088 | 0.638977050781 | 4.86e-17 | 14.567 | 179,828 |
+| two_where | 6 | 7 | 41,803,202 | 423,634,673 | 0.996846047184 | 5e-16 | 16.861 | 180,152 |
+| range_agg | 447 | 1 | 592,747,662 | 5,540,593,543 | 0.211494326591 | 3.12e-17 | 88.223 | 180,008 |
+
+The first timeout is LIKE with output 0: both forward calls pass the dense comparison exactly,
+with zero region faults. Forward phase: 226.066654 s, 20,232,993 outer steps, 15,237,696 region
+steps, 30,476,416 region work, 295,643,872 cumulative region journal bytes and a 390,050,721-byte
+outer journal. The process stops during full reversal at 300.243 s, peak RSS 882,292 KiB.
+That full reversal is **not** counted as passing. No call count, native comparison, dense
+comparison, memory check or fault check is reduced to make the size pass.
+
+| failed check | wall s | peak RSS KiB | status | last phase | forward dense error |
+|---|---:|---:|---:|---|---:|
+| like_note / coherent / zero | 300.243 | 882,292 | 124 | reverse | 0e0 |
+| like_note / coherent / one | 300.264 | 882,260 | 124 | reverse | 0e0 |
+| int_eq / coherent / zero | 300.719 | 879,080 | 124 | apply 2 outer_steps 20232991 | NA |
+| int_eq / coherent / one | 301.109 | 879,408 | 124 | apply 2 outer_steps 20232992 | NA |
+| text_order / coherent / zero | 300.433 | 879,204 | 124 | apply 2 outer_steps 20232991 | NA |
+| text_order / coherent / one | 300.347 | 878,980 | 124 | apply 2 outer_steps 20232992 | NA |
+| two_where / coherent / zero | 300.316 | 878,772 | 124 | apply 2 outer_steps 20232991 | NA |
+| two_where / coherent / one | 300.308 | 879,040 | 124 | apply 2 outer_steps 20232992 | NA |
+| range_agg / reverse / classical | 73.983 | 2,322,360 | 134 | forward mode reverse | NA |
+| range_agg / coherent / zero | 300.434 | 889,744 | 124 | apply 2 outer_steps 20232991 | NA |
+| range_agg / coherent / one | 300.503 | 887,320 | 124 | apply 2 outer_steps 20232992 | NA |
+
+The aggregate's classical reverse check aborts while building its forward history, before reversal:
+`memory allocation of 4294967296 bytes failed`, process status 134, wall 73.983 s, peak RSS
+2,322,360 KiB. The requested allocation alone equals the configured 4 GiB address-space cap;
+this is a host allocation refusal under that cap, rather than `SQLITE_NOMEM`. Its exact-reversal
+assertion is not reached. The aggregate coherent checks time out in their second apply, after the first apply passes its
+dense and memory checks. The second apply, complete two-call forward check and full reversal
+do not finish. Integer equality, TEXT ordering and the two-condition WHERE stop at that same
+second-apply phase; only LIKE reaches full reversal before its timeout. The aggregate Grover run does complete all checks.
+
+This baseline sweep used the executor before the later atomic-rewind fixes (`22a7cd5` production
+code; intervening rebases added tests). Its observer used five fault bits. Updated-executor
+validation after rebasing onto `fc47ab7` is recorded separately; the saved baseline costs are
+not relabelled as measurements of the updated implementation. No cost model is inferred here.
+
+### Revalidation after the upstream executor changes
+
+After rebasing onto `fc47ab7`, the updated observer reran all five shapes and all modes at
+N=16/32, plus all five Grover shapes at N=512, against the same saved lowered modules and native
+executables. All 55 cases pass. Outer steps, region steps, region work/journal/overlay counters
+and retained journal sizes match the baseline exactly. New wall/RSS observations are kept in
+[revalidation.tsv](revalidation.tsv), separate from the baseline table. This check exercises the
+new atomic-rewind implementation without changing SQLite or substituting a predicate.
