@@ -211,7 +211,28 @@ pub fn registers(module: &ValidModule, name: &str) -> Vec<String> {
         .iter()
         .filter_map(|inst| match inst {
             Inst::Qalloc { dst, .. } => Some(function.slot_names[dst.index()].clone()),
-            _ => None,
+            Inst::Binary { .. }
+            | Inst::Compare { .. }
+            | Inst::Select { .. }
+            | Inst::Cast { .. }
+            | Inst::Load { .. }
+            | Inst::Store { .. }
+            | Inst::Alloca { .. }
+            | Inst::StackSave { .. }
+            | Inst::StackRestore { .. }
+            | Inst::Setjmp { .. }
+            | Inst::ReturnAddress { .. }
+            | Inst::Call { .. }
+            | Inst::CallIndirect { .. }
+            | Inst::FuncAddr { .. }
+            | Inst::Effect { .. }
+            | Inst::Qfree { .. }
+            | Inst::Gate { .. }
+            | Inst::GateAt { .. }
+            | Inst::Measure { .. }
+            | Inst::Apply { .. }
+            | Inst::Mark { .. }
+            | Inst::Rewind { .. } => None,
         })
         .collect()
 }
