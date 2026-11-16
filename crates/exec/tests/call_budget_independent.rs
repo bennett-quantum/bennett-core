@@ -260,7 +260,6 @@ entry:
 /// mark budget B+3; call budget B; rewind keep. Expected: byte 16 in |+>,
 /// output 7, fault 0, calculated by copy/uncompute with no changed read.
 #[test]
-#[ignore = "defect: call budget does not cover an inner unbudgeted quantum read as apply does"]
 fn call_budget_covers_an_inner_unbudgeted_quantum_read_like_apply() {
     let wrapper = |body: &str| {
         format!(

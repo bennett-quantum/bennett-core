@@ -82,11 +82,12 @@ impl<'m> Executor<'m> {
         }
         // A budget is required wherever a rewind follows a read of a qubit (the maintainer's decision of the
         // afternoon of 2026-11-16): a rewind taken as a step, outside a coherent region (whose `apply` has
-        // its budget), whose history since an unbudgeted mark read a register or touched a memory qubit
-        // faults, a classical cause, changing nothing.
+        // its budget) and outside a call with a budget (which bounds it as an `apply`'s does), whose history
+        // since an unbudgeted mark read a register or touched a memory qubit faults, a classical cause,
+        // changing nothing.
         let step = self.rewinding == 0 && self.rerunning == 0;
         let read = !(reads.is_empty() && cells.is_empty());
-        if step && !self.in_region && entry.budget.is_none() && read {
+        if step && !self.in_region && !self.guarded() && entry.budget.is_none() && read {
             return Err(Fault::BadRewind.into());
         }
         // Worlds can split off only where an earlier rewind's region runs again. If one does and the un-run

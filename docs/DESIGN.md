@@ -223,8 +223,11 @@ the call); built as machine step e4. `%h = mark budget B` gives the mark a budge
   for and the rewind costs its work. Budgets nest: an outer mark's budget must cover the inner budgets its
   region spends.
 - **Required where a rewind follows a read of a qubit** (machine step e5). A rewind taken as a step, outside
-  a coherent region (an `apply` has its own budget), whose history since a mark without a budget read a
-  register or touched a memory qubit faults `bad_rewind`, a classical cause, changing nothing. Where worlds
+  a coherent region (an `apply` has its own budget) and outside a call with a budget (whose budget bounds it
+  as an `apply`'s does; it gave `bad_rewind` there as the call's code until 2026-11-16, where the same
+  callee under `apply` succeeds: `call_budget_covers_an_inner_unbudgeted_quantum_read_like_apply`), whose
+  history since a mark without a budget read a register or touched a memory qubit faults `bad_rewind`, a
+  classical cause, changing nothing. Where worlds
   split, the first to reach the rewind faults, so strict mode stops the run. The tests written before the
   rule give their marks `budget -1` (2^64 - 1): a budget whose deadline does not fit the clock meets the
   rule and bounds nothing (and costs nothing); the text idiom of `apply` carries the region's budget plus 2
