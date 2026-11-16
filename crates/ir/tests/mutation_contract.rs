@@ -188,10 +188,13 @@ fn regions_check_argument_counts_widths_and_all_alias_roles() {
     ] {
         assert!(load(&body(&apply)).is_err(), "accepted {apply}");
     }
-    for apply in
-        ["apply @g(%q) -> %o, %o budget 5", "apply @g(%o) -> %o, %e budget 5", "apply @g(%e) -> %o, %e budget 5"]
-    {
-        assert!(rejected(parsed(&body(apply))).iter().any(|p| matches!(p, Problem::RegionAlias(_))), "{apply}");
+    for (apply, culprit) in [
+        ("apply @g(%q) -> %o, %o budget 5", "o"),
+        ("apply @g(%o) -> %o, %e budget 5", "o"),
+        ("apply @g(%e) -> %o, %e budget 5", "e"),
+    ] {
+        // Each case has exactly one duplicated register: naming another one is a false diagnosis.
+        assert!(rejected(parsed(&body(apply))).contains(&Problem::RegionAlias(culprit.into())), "{apply}");
     }
 }
 
