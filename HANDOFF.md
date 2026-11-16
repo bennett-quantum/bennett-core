@@ -489,7 +489,8 @@ explicitly after the separate musl build.
 - **Return addresses** (`2bf0b69`): the outermost frame gives `0xFFFF_FFFF_0000_0000` (natively an address in the C
   library's startup) and a level beyond it 0 (natively unspecified). Keep? Levels above 0 follow the device's
   frames, which natively needs frame pointers kept and sibling calls off (plain native `-O2` crashed at level 1).
-- **Calls through another prototype** (`329ef7a`): every call through a function pointer now compares its target with
+- **Calls through another prototype** (`329ef7a`; its independent testing pass `4409160`, sol: 2,880 native
+  comparisons, 72 coherent branches, 1,101 further runs and 27 corpus programs, no wrong result): every call through a function pointer now compares its target with
   the address-taken functions the device would call wrongly (musl tests: 107 to 353 more steps, 0.06 % to 5 %, and
   5 % to 16 % more device code). Cheaper: compare only for unprototyped pointer calls (about 11 steps), leaving a
   typed pointer call to a function with other argument or result sizes a `bad_indirect` fault instead of agreeing
