@@ -21,6 +21,7 @@ def run(args, **kw):
 def main():
     source_dir = Path(sys.argv[1]).resolve()
     OUT.mkdir(parents=True, exist_ok=True)
+    refused = 0
     for name in ['cdivchkf', 'cdivchkd', 'cdivchkld']:
         source = source_dir / f'{name}.c'
         for level in ['O0', 'O2']:
@@ -32,6 +33,7 @@ def main():
         result = run(['python3', MUSL / 'link.py', source, '-o', linked, '--clang-flag=-fno-inline'], capture_output=True, text=True)
         (OUT / f'{name}-normal.log').write_text(result.stdout + result.stderr)
         if result.returncode:
+            refused += 1
             assert 'constrained floating-point intrinsic' in result.stderr, result.stderr
             print(f'{name} normal route: REFUSED at musl FENV_ACCESS', flush=True)
         else:
@@ -58,7 +60,10 @@ def main():
         (OUT / f'{name}-diagnostic.out').write_text(actual.stdout)
         assert actual.stdout.startswith('result: 0\n') and 'console:' not in actual.stdout, actual.stdout
         print(f'{name} diagnostic (pragma removed): agrees, {actual.stdout.strip()}', flush=True)
+    if refused:
+        print(f'{refused} normal routes refused; diagnostic agreement is not a corpus pass.', flush=True)
+    return bool(refused)
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
