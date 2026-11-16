@@ -113,7 +113,7 @@ fn independent_checker_exhausts_mark_and_nested_rewind_on_clean_and_dirty_histor
                 for &word in &input[8..11] {
                     j.push_word(word.into());
                     j.push(Undo::Mark);
-                    j.push_mark(MarkEntry { position: j.records(), allocations: 1 });
+                    j.push_mark(MarkEntry { position: j.records(), allocations: 1, budget: None, deadline: None });
                 }
             }
             let before = state(&e);
@@ -194,7 +194,7 @@ fn independent_checker_includes_stale_handle_fault_states_without_erasing_histor
         )
         .expect("start");
         assert_eq!(e.step(), None);
-        let Inst::Mark { dst } = module.functions[0].blocks[0].insts[1] else { panic!("mark") };
+        let Inst::Mark { dst, .. } = module.functions[0].blocks[0].insts[1] else { panic!("mark") };
         e.slots[dst.index()] = 0; // stale: mark not run
         e.frames[0].inst = 6;
         e.memory.write(16, &[values[1] as u8]);

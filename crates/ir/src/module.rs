@@ -450,11 +450,15 @@ pub enum Inst {
         /// The `i64` step budget of each run of the callee.
         budget: Operand,
     },
-    /// `dst = mark`: remembers the current point of the history, as an `i64` handle for `rewind`. See
-    /// `docs/DESIGN.md`, "History: `mark` and `rewind`".
+    /// `dst = mark [budget b]`: remembers the current point of the history, as an `i64` handle for
+    /// `rewind`. With a budget, each world takes at most `b` steps from the mark while it is in the history,
+    /// and a rewind of it costs `b` (`docs/DESIGN.md`, "The mark's budget"). See `docs/DESIGN.md`, "History:
+    /// `mark` and `rewind`".
     Mark {
         /// The handle.
         dst: Slot,
+        /// The `i64` step budget, if the mark has one.
+        budget: Option<Operand>,
     },
     /// `rewind mark [keep (value -> register, ...)]`: XORs each kept value into its register, then un-runs
     /// every step since `mark`, and continues after the rewind.
@@ -517,7 +521,7 @@ impl Inst {
             | Inst::FuncAddr { dst, .. }
             | Inst::Qalloc { dst, .. }
             | Inst::Measure { dst, .. }
-            | Inst::Mark { dst } => Some(*dst),
+            | Inst::Mark { dst, .. } => Some(*dst),
             Inst::Call { dst, .. } | Inst::CallIndirect { dst, .. } => *dst,
             Inst::Store { .. }
             | Inst::StackRestore { .. }
@@ -562,11 +566,12 @@ impl Inst {
                 args.iter().for_each(operand);
             }
             Inst::Effect { byte } => operand(byte),
-            Inst::FuncAddr { .. }
-            | Inst::Qalloc { .. }
-            | Inst::StackSave { .. }
-            | Inst::ReturnAddress { .. }
-            | Inst::Mark { .. } => {}
+            Inst::Mark { budget, .. } => {
+                if let Some(budget) = budget {
+                    operand(budget);
+                }
+            }
+            Inst::FuncAddr { .. } | Inst::Qalloc { .. } | Inst::StackSave { .. } | Inst::ReturnAddress { .. } => {}
             Inst::Qfree { register } | Inst::Measure { source: MeasureSource::Register(register), .. } => {
                 operand(&Operand::Slot(*register))
             }

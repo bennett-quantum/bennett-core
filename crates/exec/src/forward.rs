@@ -15,8 +15,16 @@ use crate::quantum::QubitRef;
 const STACK_ALIGN: u64 = 8;
 
 impl<'m> Executor<'m> {
-    /// Executes the instruction or terminator at the top frame's position.
+    /// Executes the instruction or terminator at the top frame's position. Going forward (not running a
+    /// step again) the world's clock counts the step, and a mark's budget that is spent faults it first.
     pub(crate) fn execute(&mut self) -> Result<(), Halt> {
+        if self.rerunning == 0 && self.rewinding == 0 {
+            let deadline = self.journal.as_ref().and_then(|journal| journal.mark_deadline(self.region_records));
+            if deadline.is_some_and(|deadline| self.clock >= deadline) {
+                return Err(Fault::Budget.into());
+            }
+            self.clock += 1;
+        }
         let frame = *self.top();
         let block = self.function(frame.func).block(frame.block);
         match block.insts.get(frame.inst) {
@@ -64,7 +72,7 @@ impl<'m> Executor<'m> {
                 self.record(Undo::Effect);
                 self.advance();
             }
-            Inst::Mark { dst } => self.mark(*dst),
+            Inst::Mark { dst, budget } => self.mark(*dst, budget.as_ref()),
             Inst::Rewind { mark, keep } => self.rewind(*mark, keep)?,
             _ if self.in_region => return Err(Fault::QuantumInRegion.into()),
             Inst::Qalloc { dst, width } => {

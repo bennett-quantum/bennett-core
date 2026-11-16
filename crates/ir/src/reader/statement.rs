@@ -118,7 +118,16 @@ impl<'s> Parser<'s> {
                 line.no_result("apply")?;
                 self.apply(scope)?
             }
-            "mark" => Inst::Mark { dst: line.result("mark")? },
+            "mark" => {
+                let dst = line.result("mark")?;
+                let budget = if self.cursor.peek() == Some(Token::Word("budget")) {
+                    self.cursor.expect(Token::Word("budget"), "`budget`")?;
+                    Some(self.operand(scope, Width::WORD)?)
+                } else {
+                    None
+                };
+                Inst::Mark { dst, budget }
+            }
             "rewind" => {
                 line.no_result("rewind")?;
                 self.rewind(scope)?

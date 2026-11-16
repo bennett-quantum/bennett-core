@@ -54,7 +54,7 @@ pub(super) fn rewound_uses(function: &Function) -> Vec<(usize, Option<usize>, Sl
     let mut marks = 0;
     for block in &function.blocks {
         for inst in &block.insts {
-            if let Inst::Mark { dst } = inst {
+            if let Inst::Mark { dst, .. } = inst {
                 mark_of[dst.index()] = Some(marks);
                 marks += 1;
             }
@@ -181,7 +181,7 @@ impl Analysis<'_> {
             if let Some(dst) = inst.result() {
                 state.define(dst);
             }
-            if let Inst::Mark { dst } = inst
+            if let Inst::Mark { dst, .. } = inst
                 && let Some(k) = self.mark_of[dst.index()]
             {
                 state.since[k].clear();

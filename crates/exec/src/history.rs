@@ -32,11 +32,13 @@ impl<'m> Executor<'m> {
     /// run that keeps no journal starts one here. Inside a coherent region the records are counted from
     /// the region's start, as on a journal of its own whose first record is the call into the region's
     /// function, so a handle never depends on the caller's history (`docs/DESIGN.md`, "History").
-    pub(crate) fn mark(&mut self, dst: Slot) {
+    pub(crate) fn mark(&mut self, dst: Slot, budget: Option<&Operand>) {
         let allocations = self.quantum.allocations();
+        let budget = budget.map(|budget| self.read_word(budget));
+        let deadline = budget.map(|budget| self.clock.saturating_add(budget));
         let journal = self.journal.get_or_insert_with(Journal::default);
         let position = journal.records() + 1;
-        journal.push_mark(MarkEntry { position, allocations });
+        journal.push_mark(MarkEntry { position, allocations, budget, deadline });
         self.write_slot(dst, (position - self.region_records) as u128);
         self.record(Undo::Mark);
         self.advance();
@@ -150,6 +152,19 @@ impl<'m> Executor<'m> {
         // Ran regardless over a state its history does not describe: a barrier after the rewind's record.
         if left_behind {
             self.record(Undo::LeftBehind);
+        }
+        // The cost of a rewind of a mark with an open budget is the budget, whatever the work since the mark:
+        // the world's clock goes on to the mark's plus the budget (the rewind's own step is the last of it),
+        // and the rewind closes the budget. Running steps again takes no time.
+        if let Some(deadline) = entry.deadline.filter(|_| step) {
+            let close = |executor: &mut Self| {
+                executor.clock = executor.clock.max(deadline);
+                if let Some(journal) = &mut executor.journal {
+                    journal.close_mark(entry.position);
+                }
+            };
+            close(self);
+            self.for_forks(from, &close);
         }
         // Every world this rewind made waits for its deferred checks, holding the copy to restore.
         if let Some(backup) =

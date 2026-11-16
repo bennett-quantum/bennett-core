@@ -383,6 +383,7 @@ impl Executor<'_> {
         HistoryRegion {
             outcome: self.outcome.take(),
             steps: std::mem::take(&mut self.steps),
+            clock: self.clock,
             charged: std::mem::take(&mut self.charged),
             charging: std::mem::replace(&mut self.charging, false),
             budget: self.budget.take(),
@@ -419,6 +420,7 @@ impl Executor<'_> {
         }
         self.outcome = outer.outcome;
         self.steps = outer.steps;
+        self.clock = outer.clock;
         self.charged = outer.charged;
         self.charging = outer.charging;
         self.budget = outer.budget;
@@ -500,6 +502,7 @@ impl Executor<'_> {
             journal: self.journal.replace(region_journal),
             outcome: self.outcome.take(),
             steps: std::mem::take(&mut self.steps),
+            clock: self.clock,
             charged: std::mem::take(&mut self.charged),
             charging: std::mem::replace(&mut self.charging, false),
             budget: self.budget.replace(budget),
@@ -541,6 +544,7 @@ impl Executor<'_> {
         self.spare_journal = region_journal;
         self.outcome = outer.outcome;
         self.steps = outer.steps;
+        self.clock = outer.clock;
         self.charged = outer.charged;
         self.charging = outer.charging;
         self.budget = outer.budget;
@@ -893,6 +897,7 @@ struct Done {
 struct HistoryRegion {
     outcome: Option<Outcome>,
     steps: u64,
+    clock: u64,
     charged: u64,
     charging: bool,
     budget: Option<u64>,
@@ -918,6 +923,7 @@ struct Saved {
     journal: Option<Journal>,
     outcome: Option<Outcome>,
     steps: u64,
+    clock: u64,
     charged: u64,
     charging: bool,
     budget: Option<u64>,

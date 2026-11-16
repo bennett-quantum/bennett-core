@@ -110,12 +110,32 @@ pub(crate) struct ReadEntry {
 }
 
 /// What the journal keeps about a `mark` besides its record.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct MarkEntry {
     /// The number of records up to and including the mark's own: what a `rewind` pops back to.
     pub(crate) position: usize,
     /// How many registers had been allocated when the mark ran (`QuantumState::allocations`).
     pub(crate) allocations: u64,
+    /// The mark's budget, if it has one (`docs/DESIGN.md`, "The mark's budget").
+    pub(crate) budget: Option<u64>,
+    /// The world clock at which the budget is spent: the clock at the mark plus the budget, until a rewind
+    /// of the mark closes it (`None`, also without a budget). Time, not machine state: equality and hashing
+    /// leave it out, so that worlds that took different times stay one machine state.
+    pub(crate) deadline: Option<u64>,
+}
+
+impl PartialEq for MarkEntry {
+    fn eq(&self, other: &Self) -> bool {
+        (self.position, self.allocations, self.budget) == (other.position, other.allocations, other.budget)
+    }
+}
+
+impl Eq for MarkEntry {}
+
+impl std::hash::Hash for MarkEntry {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (self.position, self.allocations, self.budget).hash(state);
+    }
 }
 
 impl Journal {
@@ -198,6 +218,18 @@ impl Journal {
     #[cfg(test)]
     pub(crate) fn marks(&self) -> &[MarkEntry] {
         &self.marks
+    }
+
+    /// When the first open budget of the marks above the first `from` records is spent: the least deadline.
+    pub(crate) fn mark_deadline(&self, from: usize) -> Option<u64> {
+        let start = self.marks.partition_point(|entry| entry.position <= from);
+        self.marks[start..].iter().filter_map(|entry| entry.deadline).min()
+    }
+
+    /// Closes the budget of the mark at `position`: a rewind of it finished.
+    pub(crate) fn close_mark(&mut self, position: usize) {
+        let index = self.marks.binary_search_by_key(&position, |entry| entry.position).expect("a mark entry");
+        self.marks[index].deadline = None;
     }
 
     /// The mark whose record is the last of the first `position` records, if there is one.

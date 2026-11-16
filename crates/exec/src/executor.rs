@@ -189,6 +189,11 @@ pub struct Stats {
     /// Not counting coherent regions, whose worlds charge their own budgets. It never goes back but on a
     /// reversal to the start.
     pub replay_charged: u64,
+    /// The machine's time: the steps the current world (the latest, with several) took going forward, a
+    /// rewind of a mark with a budget counting the whole budget (`docs/DESIGN.md`, "The mark's budget").
+    /// Unlike `steps`, which counts the simulator's ticks, it does not tell branches apart that wait at
+    /// such a rewind. It never goes back but on a reversal to the start.
+    pub clock: u64,
     /// The run's step budget, if it has one.
     pub budget: Option<u64>,
     /// The run's limit on basis configurations, if it has one.
@@ -287,6 +292,9 @@ pub struct Executor<'m> {
     pub(crate) journal: Option<Journal>,
     pub(crate) outcome: Option<Outcome>,
     pub(crate) steps: u64,
+    /// The current world's clock: the steps it took going forward, a rewind of a mark with a budget
+    /// counting that budget. Time, not machine state (`docs/DESIGN.md`, "The mark's budget").
+    pub(crate) clock: u64,
     /// Steps run again by rewinds taken as steps, charged to the budget (`Stats::replay_charged`).
     pub(crate) charged: u64,
     /// Whether a rewind taken as a step is un-running, so that the steps run again are charged.
@@ -402,6 +410,7 @@ impl<'m> Executor<'m> {
             journal: None,
             outcome: None,
             steps: 0,
+            clock: 0,
             charged: 0,
             charging: false,
             budget_spent: false,
@@ -552,6 +561,7 @@ impl<'m> Executor<'m> {
                 if self.journal.as_ref().is_some_and(|journal| journal.last().is_none()) {
                     self.steps = 0;
                     self.charged = 0;
+                    self.clock = 0;
                 }
                 self.adopt_forks(Status::Running);
                 Ok(true)
@@ -611,6 +621,7 @@ impl<'m> Executor<'m> {
         Stats {
             steps: self.steps,
             replay_charged: self.charged,
+            clock: self.max_clock(),
             budget: self.budget,
             max_configurations: self.max_configurations,
             region_steps: self.region_steps,

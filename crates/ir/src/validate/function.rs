@@ -303,11 +303,12 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
-            Inst::FuncAddr { .. }
-            | Inst::Qalloc { .. }
-            | Inst::StackSave { .. }
-            | Inst::ReturnAddress { .. }
-            | Inst::Mark { .. } => {}
+            Inst::Mark { budget, .. } => {
+                if let Some(budget) = budget {
+                    self.expect(site, *budget, Type::Int(Width::WORD));
+                }
+            }
+            Inst::FuncAddr { .. } | Inst::Qalloc { .. } | Inst::StackSave { .. } | Inst::ReturnAddress { .. } => {}
         }
     }
 

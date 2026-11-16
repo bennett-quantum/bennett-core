@@ -139,7 +139,8 @@ impl Writer<'_> {
                 write_args(self.out, f, args)?;
                 write!(self.out, " -> {}, {} budget {}", name(out), name(fault), op(budget))
             }
-            Inst::Mark { .. } => write!(self.out, "mark"),
+            Inst::Mark { budget: None, .. } => write!(self.out, "mark"),
+            Inst::Mark { budget: Some(budget), .. } => write!(self.out, "mark budget {}", op(budget)),
             Inst::Rewind { mark, keep } => {
                 write!(self.out, "rewind {}", name(mark))?;
                 for (i, pair) in keep.iter().enumerate() {

@@ -203,6 +203,35 @@ step ("Worlds", below).
   values XORed and the program counter after the rewind, all distinct, and stepping back gives the state
   at the rewind exactly.
 
+### The mark's budget
+
+Decided by the maintainer on the afternoon of 2026-11-16 ("Time", and the budget on the mark as well as on
+the call); built as machine step e4. `%h = mark budget B` gives the mark a budget:
+
+- **A bound per world.** Each world has a **clock**: the steps it took going forward (`Executor::clock`,
+  `Stats::clock`, the latest world's). From the mark until a rewind of it, a world takes at most `B` steps,
+  the rewind included; the next one faults `budget` in that world (a world fault, so strict mode stops the
+  run while others go on; on the machine the world ends). Steps run again or un-run take no time and are not
+  bounded by it (running again is charged to the run's budget instead, "History", Cost).
+- **The cost is the budget.** A rewind of a mark whose budget is open sets the world's clock to the mark's
+  clock plus `B`, whatever the work since the mark, and closes the budget: the mark stays in the history
+  (it can be rewound again) but bounds nothing more. So every branch waits at the rewind and the time after
+  it does not tell branches apart: `crates/exec/tests/mark_budget.rs`, a callee that takes 3v + 6 steps
+  for v = 0, 1, 2 under `mark budget 20` gives the time 24 for |0>, |1>, |2> and |0> + |1>, where without
+  the budget it is 11, 14, 17 and 14.
+- **Time is not machine state** ([W1]): the clock and the deadline in a mark's entry are left out of the
+  worlds' equality and hashing, so worlds that took different times are one machine state again after the
+  rewind and merge (their clock is the later one). The simulator's `steps` stay its ticks, in which every
+  running world takes a step; the run's budget counts them. A reversal to the start resets the clock;
+  partial reversal leaves it, as time does not go back.
+- **In a coherent region** the marks of the region are bounded from the region's start, the caller's marks
+  not; both ways of computing `apply` agree (compare mode, budgets 1 to 12).
+- **Cost of the representation**: each mark's entry in the journal's side table grows from 16 to 48 bytes
+  (the budget and the deadline), measured in `memory_independent.rs`.
+
+Not yet: a budget required wherever a rewind follows a read of a qubit (the next step), and the
+independent whole-world reference does not model the mark's budget (it reads it; its programs give none).
+
 ### Worlds
 
 Built on 2026-11-15 as the second step of the next extension: the quantum state is a superposition of

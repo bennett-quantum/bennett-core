@@ -146,8 +146,10 @@ commit) after the four checks passed on it.
   mode named (`Options::machine_meaning`, `--machine-meaning`: no region or world stops, a dirty `qfree`
   leaves its qubits over, `docs/DESIGN.md`, "Strict mode"), is built; e3, a rewind's un-run that meets a
   nonzero allocation runs regardless outside strict mode (the register left over, a `LeftBehind` barrier
-  record), is built; the other state-dependent causes are debts ("Known weak spots"). Next: the mark's
-  budget. The panic reported for a
+  record), is built; the other state-dependent causes are debts ("Known weak spots"). e4, the mark's
+  budget (`%h = mark budget B`: a per-world bound from the mark to its rewind, and a rewind costs `B` of
+  the machine's time, `Stats::clock`; `docs/DESIGN.md`, "The mark's budget"), is built. Next: the budget
+  required where a rewind follows a read of a qubit. The panic reported for a
   `measure_memory` fixture in 64 bytes of memory was not the executor's: it returns `stack_overflow` before
   the first step (since `5515ae8`); the independent whole-world reference panicked at its own start
   (`expect("entry fits memory")`). The reference now models the fault, and
@@ -958,6 +960,24 @@ earlier decisions: "Decisions the maintainer took on 2026-11-16, in the afternoo
   at run time, or keep the refusal? Recommendation: keep the refusal; the program can never mean anything
   by it, and relaxing a validator rule later breaks no program. Taken meanwhile: the refusal, with the
   run-time check kept as defence in depth.
+
+- **Which fault a rewind gives when running again would pass the budget** (machine step e1). Taken:
+  `budget`, the state as before the rewind, since the run's budget is what ran out. The alternative is
+  `bad_rewind`. Recommendation: keep `budget`; it says what to raise.
+- **The name of the option for the machine's meaning** (e2): `Options::machine_meaning`,
+  `bennett run --machine-meaning`; strict mode stays the default and `--allow-region-faults` stays as the
+  one relaxation it was. Recommendation: keep; renaming is cheap while no program depends on it.
+- **A rewind that ran regardless is a barrier** (e3): reversal stops there and a rewind of an outer mark
+  faults `bad_rewind`, as at a measurement, because the history no longer describes the state. Taken as the
+  easiest to reverse; the route to lift it is in "Known weak spots". Recommendation: keep until channels.
+- **Time and the run's budget** (e4). Taken: the machine's time is a per-world clock (`Stats::clock`),
+  separate from the simulator's ticks (`Stats::steps`); a rewind of a budgeted mark moves the clock to the
+  mark's plus the budget and closes the mark's budget (the mark stays rewindable but bounds nothing more);
+  the run's budget keeps counting ticks plus the replay charge, not the clock. The alternatives: count the
+  run's budget in time (then the run's budget, too, would not tell branches apart, but a world's own work
+  would no longer bound the simulator's), or restart a mark's budget at each rewind of it (a loop that
+  marks each round would then fault, since its marks stay in the history). Recommendation: keep; revisit
+  when the front emits budgeted marks.
 
 ## Questions the maintainer answered on 2026-11-16, in the afternoon (kept for their detail)
 

@@ -41,7 +41,7 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | %d = measure %r                            ; every qubit of the register
             | %d = measure iN "[" operand "]"            ; N bits from bit 0 of the integer at the i64 address
             | apply @f(typed, ...) -> %out, %fault budget operand  ; %fault: a register of 5 qubits or more
-            | %d = mark                                  ; an opaque i64 handle: only rewind may use it
+            | %d = mark [budget operand]                 ; an opaque i64 handle: only rewind may use it
             | rewind %h [keep (typed -> kept {, typed -> kept})]  ; XOR each value in, un-run since %h
 kept       := %r | "[" operand "]"                ; a register, or memory qubits from bit 0 of the address
 terminator := br label[(typed, ...)]
@@ -123,7 +123,10 @@ done(i64 %sum):
 
 ## History: `mark` and `rewind`
 
-`%h = mark` defines an `i64` handle naming the current point of the history. `rewind %h` un-runs every
+`%h = mark` defines an `i64` handle naming the current point of the history. `%h = mark budget B`, with
+`B` an `i64` (a constant or a value), also bounds the steps from the mark to its rewind, the rewind
+included, and makes a rewind of it cost `B` (`docs/DESIGN.md`, "The mark's budget"); the writer prints
+`budget` only for a mark that has one. `rewind %h` un-runs every
 step since that point and the program continues after the rewind; `rewind %h keep (%v -> %r, i2 1 -> %s)`
 first XORs each value into its register, in order. `%h` must be the result of a `mark` in the same
 function (the validator's `NotAMark`), not a value derived from one or passed through a block parameter.

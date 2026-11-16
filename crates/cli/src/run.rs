@@ -159,6 +159,7 @@ fn report_stats(stats: &Stats, forward: Timed, reverse: Option<Timed>) {
         bound(stats.max_configurations.map(|m| m.to_string()))
     );
     println!("  forward: {forward}");
+    println!("  time: {} (the machine's clock: a rewind of a mark with a budget counts the budget)", stats.clock);
     if let Some(reverse) = reverse {
         println!("  reverse: {reverse}");
     }

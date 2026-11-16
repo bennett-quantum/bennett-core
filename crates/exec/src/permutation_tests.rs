@@ -408,7 +408,7 @@ fn check_rewinds(fixture: &Fixture) -> usize {
     let mut checked = 0;
     for (steps, position) in positions(fixture) {
         let probe = fixture.at(steps);
-        let Some(Inst::Mark { dst: handle }) = next_inst(&probe) else { continue };
+        let Some(Inst::Mark { dst: handle, .. }) = next_inst(&probe) else { continue };
         if !reaches_its_rewind(fixture.at(steps), *handle) {
             continue;
         }

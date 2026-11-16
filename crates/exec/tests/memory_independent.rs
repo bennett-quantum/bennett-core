@@ -300,7 +300,8 @@ fn unaligned_jump_records_and_discarded_allocations_live_in_the_worlds_overlay()
 }
 
 /// Count the journal payload independently: one byte per record, sixteen per destroyed word;
-/// the known mark/read side tables are two machine words / two machine words plus a slot and flag.
+/// the known mark/read side tables are two machine words and two optional ones (position, allocations, the
+/// budget, the deadline) / two machine words plus a slot and flag.
 /// The byte totals at the split are computed from preceding instructions, never from Stats itself.
 #[test]
 fn both_split_payload_counters_match_an_instruction_by_instruction_count() {
@@ -327,8 +328,8 @@ ret
     .expect("valid stats program");
     let mut e = Executor::new(&p, p.function_named("main").expect("main"), &[], options()).expect("start");
     // At the first call: two allocations (17 each), two gates (1 each), a mark (17),
-    // and its side table (two 64-bit fields). All of this is cloned once.
-    let mark_metadata = 2 * std::mem::size_of::<u64>();
+    // and its side table (two 64-bit fields and two optional ones). All of this is cloned once.
+    let mark_metadata = 2 * std::mem::size_of::<u64>() + 2 * std::mem::size_of::<Option<u64>>();
     let first = 2 * 17 + 2 + 17 + mark_metadata;
     for _ in 0..5 {
         assert_eq!(e.step(), None);

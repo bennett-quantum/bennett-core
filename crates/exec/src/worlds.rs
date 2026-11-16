@@ -81,6 +81,8 @@ pub(crate) struct World {
     pub(crate) deferred: Vec<Defect>,
     pub(crate) backups: Vec<World>,
     pub(crate) pending: bool,
+    /// The world's clock (`Executor::clock`): time, left out of equality.
+    pub(crate) clock: u64,
 }
 
 /// A check of a rewind's un-run below a world's split point, deferred to the sum of the worlds' parts: the
@@ -108,6 +110,7 @@ impl World {
             deferred: Vec::new(),
             backups: Vec::new(),
             pending: false,
+            clock: 0,
         }
     }
 
@@ -136,6 +139,7 @@ impl<'m> Executor<'m> {
         std::mem::swap(&mut self.deferred, &mut world.deferred);
         std::mem::swap(&mut self.backups, &mut world.backups);
         std::mem::swap(&mut self.pending, &mut world.pending);
+        std::mem::swap(&mut self.clock, &mut world.clock);
     }
 
     /// A copy of the current world, with `amplitudes` in place of its own if given.
@@ -157,6 +161,7 @@ impl<'m> Executor<'m> {
             deferred: self.deferred.clone(),
             backups: self.backups.clone(),
             pending: self.pending,
+            clock: self.clock,
         }
     }
 
@@ -517,7 +522,9 @@ impl<'m> Executor<'m> {
                     let deferred = std::mem::take(&mut worlds[from].deferred);
                     let backups = std::mem::take(&mut worlds[from].backups);
                     let pending = worlds[from].pending;
+                    let clock = worlds[from].clock;
                     let world = &mut worlds[into];
+                    world.clock = world.clock.max(clock);
                     world.quantum.absorb(quantum);
                     world.deferred.extend(deferred);
                     world.backups.extend(backups);
@@ -717,8 +724,14 @@ impl<'m> Executor<'m> {
         // Back at the start, the run's replay charge is gone with its history.
         if longest <= 1 {
             self.charged = 0;
+            self.clock = 0;
         }
         Ok(longest > 0)
+    }
+
+    /// The latest clock of any world (`Stats::clock`).
+    pub(crate) fn max_clock(&self) -> u64 {
+        self.worlds.iter().flatten().map(|world| world.clock).fold(self.clock, u64::max)
     }
 
     /// Every world, in order.
