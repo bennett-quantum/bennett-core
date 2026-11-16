@@ -5,7 +5,7 @@ the musl runtime, validated on the three corpora with no wrong result; `zero N`;
 control-schedule measurements; the salvage survey; the floating-point leftovers (128-bit conversions, `fmal`,
 `_Float16`, `__bf16`) and the complex helpers; two constructor-startup fixes; small aggregates returned as one
 integer; two review-audit fixes; and an independent testing pass by another model family of each of these. The
-last corpus run (`eeff78d`, musl linked, 2026-11-16) has GCC 1,568 agree, c-testsuite 217, `ieee/` 64,
+last corpus run (`64571ac`, musl linked, 2026-11-16) has GCC 1,569 agree, c-testsuite 218, `ieee/` 64,
 none wrong or crashing. The independent by-value/tail and aligned-vararg pass found no new wrong result.
 
 ## What this repository is
@@ -47,18 +47,25 @@ musl-linked ABI check and two independent variadic checks that need `rt/musl/bui
 129-bit bitfield struct; see "Known weak spots"); needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 With musl linked, standard output and exit status compared with native (`experiments/c-corpus/README.md`):
-GCC's C torture tests **1,568 agree, 1 refused by name, 6 named faults**, 81 skipped;
-c-testsuite **217 agree, 1 refused, 1 named fault, 1 over the step budget**;
-GCC's `ieee/` **64 agree, 3 refused**, 1 skipped; **none wrong or crashing** (`eeff78d`, 2026-11-16).
-Compared per program with the last whole run (`8bbb56c`): eight GCC refusals now agree (the three return-address
-programs, four `setjmp`/`longjmp` programs and `pr92904`'s over-aligned variadic argument). Every other outcome,
-reason and step count is identical, including all 220 c-testsuite and 68 `ieee/` programs. The first two
-return-address programs only need those functions to compile: their `main` is `ret 0`; `pr17377` executes the
-check. Each changed case was rerun with native/device artifacts retained. Four corpus workers, musl linked,
-1 MiB stack, 10^8-step budget; wall times GCC 486.69 s, c-testsuite 87.65 s, `ieee/` 16.88 s. Tables, each
-changed program and remaining reasons: `experiments/c-corpus/README.md`; ignored raw results and comparisons:
-`.tmp/front-test/results-eeff78d/` in the testing checkout. Without the library an earlier snapshot gives
-1,521 / 52 refused, 151 / 68, 58 / 9.
+GCC's C torture tests **1,569 agree, 1 refused by name, 5 named faults**, 81 skipped;
+c-testsuite **218 agree, 1 named fault, 1 over the step budget**;
+GCC's `ieee/` **64 agree, 3 refused**, 1 skipped; **none wrong or crashing** (`64571ac`, 2026-11-16).
+All 1,944 programs compared per program with `eeff78d`: only GCC `pr67037` (`bad_indirect` → agree,
+2,139 steps) and c-testsuite `00025` (mismatched `strlen` refusal → agree, 2,084 steps) change outcome,
+both from the new prototype-call lowering. Every other outcome and normalized reason is unchanged.
+On 1,856 unchanged-outcome rows with steps: **1,855 increase, none decrease, one unchanged** (8-queens
+still at the 10^8-step budget). Median extra steps / relative increase: GCC **43 / 2.0408%**, c-testsuite
+**30 / 1.4648%**, `ieee/` **43 / 1.8150%**. Largest relative: GCC `bcp-1`, 2,118 → 2,580 (**21.8130%**).
+Measured cause: the prototype-call pass's checks, including musl startup/exit dispatch. In `bcp-1`,
+the same 14 table calls add 238 instructions in `main` and 224 in runtime dispatch; largest absolute
+increase is c-testsuite `00186`, +846 (740 in `vfprintf`). Old-front/current-executor replay reproduces
+all 1,944 old outcomes/reasons/steps exactly; paired site counters account for every numeric step delta.
+`00025`'s accepted `main` folds to `ret 0`; it is compilation coverage, not an executed `strlen` check.
+Three workers maximum, musl linked, 1 MiB stack, 10^8-step budget; wall times GCC 602.85 s, c-testsuite
+80.52 s, `ieee/` 29.32 s. Report and each moved case: `experiments/c-corpus/README.md`; ignored results,
+frozen binaries, complete comparisons and per-program step attribution: `.tmp/corpus-2/results-64571ac/`
+in the testing checkout; paired old/new site profiles: `.tmp/corpus-2/replay-eeff78d/`. Without the library
+an earlier snapshot gives 1,521 / 52 refused, 151 / 68, 58 / 9.
 
 Independent testing of `cee23f8` and `eeff78d` (`front_call_independent.rs`): 3,240 exact native/device by-value
 words over 27 layouts and direct/indirect/sibling/recursive/local-copy mutation paths; 720 mixed-vararg words

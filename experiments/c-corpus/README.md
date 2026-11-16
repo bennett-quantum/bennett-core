@@ -9,7 +9,8 @@ Measured twice on 2026-11-13, a third time on 2026-11-15 after floating point, a
 with the C library linked (musl 1.2.5, `rt/musl`), and a fifth time with the library linked at `b961292`, after
 the 128-bit conversions and the complex helpers, and a sixth at `8bbb56c`, which returns a small aggregate as one
 integer; and a seventh at `eeff78d` after jumps, return addresses, the tail-mark fix and over-aligned
-variadics. The newest measurements come first.
+variadics; and an eighth at `64571ac` after calls through another prototype, address gates and deferred
+un-run checks. The newest measurements come first.
 First at commit `4b65247` (tree clean when the binaries were copied): `bennett-front` and `bennett` were built
 once (`cargo build --release`, `front/test.sh`, all tests passing), then copied to `.tmp/c-corpus/bin/`, and
 only those copies were used. File and line references in the sections on the
@@ -73,6 +74,102 @@ bytes, not the old block's size. A harness self-test (`.tmp/c-corpus/selftest`) 
 error. **wrong**: the device reaches `abort()`/`exit(≠0)`, or `main` returns a value ≢ 0. **crash**: `bennett-front`
 exits other than 0 or 3, `bennett check` rejects its output, or `bennett run` exits other than 0, 1 or 2. **budget**:
 the 10^8-step budget ran out. **skipped**: no native reference, as above.
+
+## The three corpora at `64571ac`, with musl linked (2026-11-16)
+
+Frozen front, floating-point/complex runtimes and release executor built at **`64571ac`**, with musl
+1.2.5 built locally (1,345 C members). Same read-only sources, flags, native `-O0`/`-O2` oracle,
+stdout/status comparison, 1 MiB stack and 10^8-step budget as `eeff78d`; `ieee/` again uses
+`EXTRA_FLAGS=-fno-inline`. `run-all.sh` ran the corpora sequentially, **three workers** maximum.
+Wall times: GCC **602.85 s**, c-testsuite **80.52 s**, `ieee/` **29.32 s**. These are shared-laptop
+wall times with different worker counts, not a throughput comparison with the previous run.
+
+| outcome | GCC | c-testsuite | GCC `ieee/` |
+|---|---:|---:|---:|
+| agrees | **1,569** | **218** | **64** |
+| refused by name | 1 | 0 | 3 |
+| named fault (native passed) | 5 | 1 | 0 |
+| **wrong** | **0** | **0** | **0** |
+| crash | 0 | 0 | 0 |
+| budget | 0 | 1 | 0 |
+| skipped | 81 | 0 | 1 |
+
+All **1,944 programs** were compared by name with `results-eeff78d`, including normalized reasons and
+steps (`compare.py`; only diagnostic source locations are omitted). Exactly two outcome changes:
+
+| program | `eeff78d` | `64571ac` | measured reason |
+|---|---|---|---|
+| GCC `pr67037` | `bad_indirect`, 2,048 steps | agrees, 2,139 steps | the unprototyped pointer call passes an extra argument; the new call lowering drops it before calling the fixed-arity target |
+| c-testsuite `00025` | refused at the mismatched `strlen` prototype | agrees, 2,084 steps | the program declares `int strlen(char *)`; lowering now accepts it, and optimization folds `main` to `ret 0` (no executed `strlen` remains) |
+
+Both native builds pass; their retained new device programs return 0. The old fault/refusal artifacts,
+new device programs and executed-site measurements are retained with the results. Every other outcome and normalized reason is
+unchanged: GCC's inline assembly refusal and five file-system faults; c-testsuite's `fopen` fault and
+8-queens budget; the three `ieee/` complex-division refusals under `FENV_ACCESS`. No new wrong-result or
+crash witness was needed.
+
+### Device steps against `eeff78d`
+
+The following compares **unchanged outcomes with numeric steps**; the two newly agreeing programs above
+are separate (one never ran before, the other previously stopped at a fault). Percentages are computed per
+program as `100 * (new - old) / old`; the median includes the unchanged budget row.
+
+| corpus | comparable | up | down | unchanged | median extra steps | median relative change | largest relative change |
+|---|---:|---:|---:|---:|---:|---:|---|
+| GCC | 1,573 | 1,573 | 0 | 0 | +43 | +2.0408% | `bcp-1`: 2,118 → 2,580, **+21.8130%** |
+| c-testsuite | 219 | 218 | 0 | 1 | +30 | +1.4648% | `00189`: 4,946 → 5,103, **+3.1743%** |
+| `ieee/` | 64 | 64 | 0 | 0 | +43 | +1.8150% | `fp-cmp-5`: 4,231 → 4,633, **+9.5013%** |
+
+Together: **1,855 up, none down, one unchanged** (the 10^8-step budget of `00040`), median **+43 steps /
++2.0329%** across the 1,856 comparable programs. The largest absolute increase is c-testsuite `00186`:
+83,962 → 84,808 (**+846**, +1.0076%), its twenty `sprintf`/`printf` iterations.
+
+**Attribution was measured for every program with steps.** A second run used the frozen `eeff78d`
+front and its compiler runtimes, the same musl sources/build, and the **current executor**. All 1,944
+outcomes, normalized reasons and steps exactly reproduced `results-eeff78d`. Thus the executor's address
+gates and deferred checks add no device instructions on these classical programs. The only production
+front change between the measured commits is the prototype-call lowering (`329ef7a`).
+
+For each of the **1,857 programs with numeric steps in both runs** (including `pr67037`'s old fault), a
+scratch copy of the current executor counted successful instructions and terminators by function/block/site
+before each step. Each counter sum was checked against Stats and both uninstrumented runs; each function
+delta sums exactly to the program delta. All 3,714 profile outcomes match, and successful-run stdout matches
+native byte for byte. Of these programs, **1,736 change only in musl startup/exit functions**; 121 also
+change elsewhere. The full function attribution is retained per program, rather than inferred from names.
+
+- The common **+30** is `__init_libc` +12, `exit` +9, `libc_exit_fini` +3, `libc_start_init` +3 and
+  `libc_start_main_stage2` +3 (measured on GCC `20000121-1`). The common **+42** adds +14/+12/+4/+4/+6
+  respectively and `__libc_start_main` +2 (`20000113-1`). The exact overhead varies with the module's
+  address-taken functions and optimized dispatch; GCC has 558 rows at +42 and 745 at +43.
+- **`bcp-1`, the largest relative increase:** all fourteen correctly typed calls through its volatile
+  function-pointer tables still execute. `main` grows **57 → 295 steps (+238)**: +112 comparisons,
+  +71 conditional branches, +41 binary operations and +14 jumps, with the same fourteen loads and
+  indirect calls. Its larger address-taken set also raises musl dispatch by **224**: `__init_libc` +48,
+  `__libc_start_main` +36, `exit` +54, fini +18, init +18 and stage2 +50. Together exactly **+462**.
+  These are pointer-dispatch checks, including their effect on runtime calls, not extra floating-point work.
+- **`00186`, the largest absolute increase:** `vfprintf` contributes **740** (+380 comparisons,
+  +340 conditional branches, +20 jumps; its twenty indirect calls are unchanged); `__fwritex` adds 11,
+  `close_file` 34 and startup/exit 61: exactly **846**. The twenty formatted-output iterations amplify
+  dispatch in musl. **`00189`**, c-testsuite's largest relative case, adds 15 in `main`, 8 in `vfprintf`,
+  11 in `__fwritex`, 56 in `close_file` and 67 in startup/exit: exactly **157**.
+- **`fp-cmp-5`**, `ieee/`'s largest relative and absolute increase: `one_test` keeps the same 72 indirect
+  calls, adding 144 comparisons, 144 conditional branches and 72 jumps (**+360**); startup/exit adds
+  **42**: exactly **402**. Its floating-point helper bodies have unchanged executed counts.
+- **`00040`'s unchanged budget is a cutoff, not unchanged work**: the new prefix executes 50 more
+  instructions; `go` and `chk` each execute 25 fewer before both runs stop at 100,000,000 steps.
+  Some individual function counts also decrease through optimization (`20210505-1`, `pr42614`,
+  `00216`), but no completed program's total decreases.
+
+The two outcome moves are distinguished from cost: the old `pr67037` still faults with the current
+executor; the new dispatch recognizes `f` and drops its extra argument (the target body is unchanged).
+`00025` is compilation acceptance followed by a folded check, not an executed `strlen` ABI test: its
+emitted `main` is literally `ret 0`, with all 2,084 steps outside it.
+
+Results stay in the testing checkout's ignored **`.tmp/corpus-2/results-64571ac/`**: frozen binaries and
+hashes, source commit, complete `{gcc,cts,ieee}/results.tsv`, every native/device artifact, per-program
+`*.cmp.tsv` comparisons and `*.attribution.tsv` executed-function deltas. The old-front replay and paired
+site profiles are in **`.tmp/corpus-2/replay-eeff78d/`**; build/check logs and scratch profiling code are in
+`.tmp/corpus-2/`. Baseline results and fetched sources were read-only throughout.
 
 ## The three corpora at `eeff78d`, with musl linked (2026-11-16)
 
