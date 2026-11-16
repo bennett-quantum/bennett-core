@@ -29,11 +29,13 @@ per helper. It compares with **the host's libgcc archive**, retaining the native
 `long double` inputs use canonical x87 encodings, and output omits its six padding bytes.
 Results are compared bit for bit, except by **the NaN payload rule** (the maintainer's decision of the
 afternoon of 2026-11-16): a result component that differs only in which NaN's payload it carries counts as
-agreement. Exactly: both components are NaNs, and each carries (quiet bit set, sign free) the payload of
-one of the tuple's NaN operands or of the format's default NaN, which an invalid operation inside the
-helper makes. `compare.py` regenerates every tuple's operands as `cplx_exact.c` draws them, counts such
+agreement. Exactly: both components are quiet NaNs, and each carries (sign free) the payload of one of
+the tuple's NaN operands, quieted, or of the format's default NaN, which an invalid operation inside the
+helper makes. An output whose quiet bit is clear is never accepted by the rule (until 2026-11-16 the
+comparison quieted outputs too, accepting a signalling output: the independent witness
+`a_signalling_output_is_not_accepted_as_another_quiet_nan_payload`, `front/tests/tests/nan_rule_independent.rs`). `compare.py` regenerates every tuple's operands as `cplx_exact.c` draws them, counts such
 tuples separately, and fails the runner on any other difference; `compare.py --raw` keeps every raw-bit
-difference a failure, for the diagnostics below, and `compare.py --self-test` checks the rule on 14 cases
+difference a failure, for the diagnostics below, and `compare.py --self-test` checks the rule on 16 cases
 worked by hand (front test `the_nan_payload_rule_allows_exactly_another_nans_payload`).
 Scratch output goes under `.tmp/libgcc-exact`.
 

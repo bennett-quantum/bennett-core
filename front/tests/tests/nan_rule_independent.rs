@@ -47,7 +47,6 @@ for width, exponent, quiet, sign in formats:
 /// signalling output is not merely a different permitted payload. This witness
 /// deliberately differs in that bit only, so masking/quieting the outputs is wrong.
 #[test]
-#[ignore = "defect: NaN payload comparison silently quiets signalling output NaNs"]
 fn a_signalling_output_is_not_accepted_as_another_quiet_nan_payload() {
     probe(
         r#"

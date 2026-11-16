@@ -3,8 +3,8 @@ tuples that agree by the NaN payload rule, and tuples that differ otherwise (the
 
 The NaN payload rule (the maintainer's decision of the afternoon of 2026-11-16): a result that differs from
 the native one only in which NaN's payload it carries counts as agreement. Exactly: a component agrees when
-its bits are equal, or when both are NaNs and each carries (quiet bit set, sign free) the payload of one of
-the tuple's NaN operands or of the format's default NaN, the NaN an invalid operation makes. C and LLVM leave
+its bits are equal, or when both are quiet NaNs and each carries (sign free) the payload of one of
+the tuple's NaN operands, quieted, or of the format's default NaN, the NaN an invalid operation makes. C and LLVM leave
 which NaN operand an operation returns, and its sign, unspecified; nothing else is allowed. Exit status 1 if
 any tuple differs otherwise; with `--raw`, if any tuple differs at all (raw bits, for the diagnostics that
 show where NaN choices come from). `compare.py --self-test` checks the rule on cases worked by hand."""
@@ -101,6 +101,15 @@ def nan(v, w):
     return (v >> 64) & 0x7fff == 0x7fff and (v & ((1 << 63) - 1)) != 0
 
 
+def quiet(v, w):
+    """Whether a NaN's quiet bit is set (x87: the integer and quiet bits, as an operation leaves them)."""
+    if w == 8:
+        return v & 0x400000 != 0
+    if w == 16:
+        return v & 0x8000000000000 != 0
+    return v & 0xc000000000000000 == 0xc000000000000000
+
+
 def payload(v, w):
     """A NaN's payload with its quiet bit set (an operation quiets a signalling NaN); the sign left out."""
     if w == 8:
@@ -119,6 +128,10 @@ def agrees(p, q, w, tuple_operands):
     if p == q:
         return True
     if not (nan(p, w) and nan(q, w)):
+        return False
+    # The rule allows another payload, quieted: an output that is a signalling NaN is never another
+    # operand's payload, whatever its other bits.
+    if not (quiet(p, w) and quiet(q, w)):
         return False
     allowed = {payload(o, w) for o in tuple_operands if nan(o, w)} | {DEFAULT[w]}
     return payload(p, w) in allowed and payload(q, w) in allowed
@@ -140,6 +153,9 @@ def self_test():
         ((0x7fc12345 | 0x80000000, qnan, 8, (0x7fc12345, qnan, one, one)), True),
         # A signalling input NaN is carried quieted.
         ((0x7fc12345, 0xffc00000, 8, (snan_payload, one, one, one)), True),
+        # A signalling output is not a quieted payload, even of a signalling operand.
+        ((0x7f812345, 0x7fc12345, 8, (0x7fc12345, one, one, one)), False),
+        ((0x7f812345, 0xffc00000, 8, (snan_payload, one, one, one)), False),
         # The default NaN (an invalid operation's) against an input NaN.
         ((0xffc00000, 0x7fc12345, 8, (0x7fc12345, one, one, one)), True),
         # A payload no operand carries: not allowed.
