@@ -660,3 +660,39 @@ fn with_worlds_the_work_per_iteration_does_not_grow_with_the_run() {
     assert!(long.0 <= short.0 * 1.01 && long.0 >= short.0 * 0.99, "work per iteration {short:?} vs {long:?}");
     assert!(long.1 <= short.1 * 1.05, "journal bytes per iteration {short:?} vs {long:?}");
 }
+
+#[test]
+fn replaying_a_reversed_register_split_still_refuses_a_dirty_free() {
+    let module = load(
+        "memory 64
+func @read(i1 %x) {
+entry:
+    ret
+}
+func @main() {
+entry:
+    %dirty = qalloc 1
+    x %dirty
+    %q = qalloc 1
+    h %q
+    call @read(%q)
+    qfree %dirty
+    ret
+}
+",
+    );
+    let mut executor = executor(&module, "main", &[], reversible());
+    for _ in 0..4 {
+        assert_eq!(executor.step(), None);
+    }
+    let before = executor.snapshot();
+    assert_eq!(executor.step(), None);
+    assert_eq!(executor.stats().worlds, 2);
+    assert_eq!(executor.step_back(), Ok(true));
+    assert_eq!(executor.snapshot(), before, "undoing the call restores its full coherent input");
+    assert_eq!(
+        executor.run(),
+        Outcome::Stopped(RunError::WorldFault { fault: Fault::DirtyFree, worlds: 2 }),
+        "a host replay must still refuse to discard the register holding 1"
+    );
+}
