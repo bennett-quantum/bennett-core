@@ -80,7 +80,8 @@ will confirm current source and attempt the independent table stage.
    after reversal, exactly, and checks that no undo step remains. The
    independent interpreter additionally compares every native result and
    reverses every run to its complete initial world and empty history, on
-   both clang inputs. Scalar stack: 256 bytes above static data; production
+   both clang inputs. Scalar stack: the front harness's normal 65,536 bytes
+   above static data, preserving the emitted image; production
    step budget: 10,000,000, independent interpreter: 10,000.
    These are ordinary source-function entries, not lifted XOR oracles with
    extra output/fault/dirty-ancilla input wires; §5.1's larger oracle domain
