@@ -1158,8 +1158,10 @@ the ordinary frontend run without changing its domain or assertions.
   refuses, which is safe but brittle.
 - Variadic calls follow the x86-64 System V convention and clang's inline `va_arg`, for every alignment up to
   LLVM's limit of 2^14 bytes. Above it clang 18 itself writes invalid IR (a `byval` with `align 1048576`; the
-  native build crashes) and `bennett-front` aborts in LLVM's bitcode reader instead of naming the cause (route:
-  a fatal-error handler around reading the input that reports invalid input by name).
+  native build crashes). `bennett-front` names such input as not valid LLVM IR, with the verifier's finding and
+  status 2 (`front/tests/tests/invalid_input.rs`); it aborted inside LLVM's bitcode reader before when the input
+  carried debug info, since the reader verifies while upgrading debug info and stops with a fatal error. A
+  fatal-error handler around reading now names the input instead.
 - A struct passed by value from a call clang marked `tail` lost the stores that fill its copy once `byval` was
   dropped (a silent wrong result at `-O2` when the callee is not inlined; fixed with the over-aligned variadic
   work, `front/tests/c/byval_tail_call.c`). The front's other lowerings that pass a copy by address (the variadic

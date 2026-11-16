@@ -22,6 +22,7 @@
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/CrashRecoveryContext.h>
+#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/InitLLVM.h>
 #include <llvm/Support/Path.h>
@@ -102,6 +103,34 @@ void verify(const Module &module, const char *stage) {
   }
 }
 
+// What a module that is not valid LLVM IR is called, wherever it is found.
+constexpr const char *invalidInput = "the input is not valid LLVM IR";
+
+// Reads the input. LLVM's bitcode reader verifies a module that carries debug info while upgrading it
+// (`UpgradeDebugInfo`) and, when the module is broken, calls `report_fatal_error`, which aborts (clang 18
+// writes such a module for an argument aligned past LLVM's limit of 2^14 bytes, a `byval` with
+// `align 1048576`). While reading, a fatal error names the input as invalid and exits with status 2; the
+// verifier has printed its findings above it. Any other reading failure is reported as LLVM reports it.
+std::unique_ptr<Module> readInput(LLVMContext &context, const char *argv0) {
+  ScopedFatalErrorHandler handler([](void *, const char *reason, bool) {
+    errs() << "error: " << invalidInput << " (LLVM's reader stopped: " << reason
+           << "); no device program was written\n";
+    std::exit(2);
+  });
+  SMDiagnostic error;
+  std::unique_ptr<Module> module = parseIRFile(input, error, context);
+  if (!module) {
+    error.print(argv0, errs());
+    std::exit(2);
+  }
+  std::string problems;
+  raw_string_ostream out(problems);
+  if (verifyModule(*module, &out)) {
+    bennett::fail(std::string(invalidInput) + ":\n" + out.str());
+  }
+  return module;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -110,13 +139,7 @@ int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv, "Bennett front end: LLVM bitcode to a device program\n");
 
   LLVMContext context;
-  SMDiagnostic error;
-  std::unique_ptr<Module> module = parseIRFile(input, error, context);
-  if (!module) {
-    error.print(argv[0], errs());
-    return 2;
-  }
-  verify(*module, "on input");
+  std::unique_ptr<Module> module = readInput(context, argv[0]);
   bennett::checkMarkers(*module);
   bennett::lowerStartup(*module, entryName);
   verify(*module, "after constructor/destructor startup");

@@ -46,7 +46,8 @@ pub fn c_dir() -> PathBuf {
     root().join("front/tests/c")
 }
 
-fn front() -> PathBuf {
+/// The `bennett-front` under test: `BENNETT_FRONT`, or the one `front/test.sh` builds.
+pub fn front() -> PathBuf {
     std::env::var_os("BENNETT_FRONT").map_or_else(|| root().join("target/front/bennett-front"), PathBuf::from)
 }
 
