@@ -12,7 +12,7 @@ int main(int argc, char **argv) {
     return 0;
 }
 #elif defined(CLASSICAL_REGION)
-unsigned result(unsigned basis) {
+_Bool result(unsigned _BitInt(2) basis) {
     _Bool y = 0;
     update(basis & 1, (basis >> 1) & 1, &y);
     return (cells[0] >> 1) & 1;

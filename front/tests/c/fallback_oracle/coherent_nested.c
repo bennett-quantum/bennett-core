@@ -1,5 +1,3 @@
 #include "fixture.h"
-static __attribute__((always_inline)) inline void update(_Bool q, _Bool r, _Bool *y) {
-    if (q) { if (r) *y ^= 1; }
-}
+#define update(q, r, yp) do { if (q) { if (r) *(yp) ^= 1; } } while (0)
 #include "driver.h"

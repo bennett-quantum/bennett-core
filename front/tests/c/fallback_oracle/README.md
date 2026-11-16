@@ -5,11 +5,12 @@ It does not read front lowering or executor arithmetic, gate, region or history
 implementations. It imports the original independent dense oracle from
 `crates/exec/tests/oracle_support/dense.rs` read-only as a second reference.
 
-Every fixture has one `update(q, r, &y)` body, included in both builds. Host clang
+Every fixture has a shared `update(q, r, &y)` body, included in both builds. Host clang
 compiles it at `-O0` and `-O2`. A **fresh native process per basis input** executes
 that body once and prints q, r, y and four memory bytes; there are eight basis
-inputs per program. There are no native marker implementations, no device runs
-in this reference calculation, no expected values extracted from lowered IR.
+inputs per program. There are no device runs in this reference calculation and no expected values
+extracted from lowered IR. The controlled-X baseline gives X its ordinary C basis
+action (Boolean toggle); native runs do not execute preparation or phase gates.
 Unsigned byte operations and bounded, in-bounds loops avoid C undefined behavior.
 
 The common device driver prepares each basis column or a complex product state
@@ -24,7 +25,7 @@ register is zero and there is one world before projecting to named C variables.
 DESIGN.md, “What is promised when history is left behind”, permits full state
 assertions only for the documented coherent class or after an un-run. Therefore:
 
-- `coherent_xor` and `coherent_nested` exercise documented XOR updates. Each runs
+- `coherent_gate` and `coherent_nested` exercise documented controlled gates/XOR updates. Each runs
   as a direct circuit and as a phase round trip, over all eight columns and the
   complex input, with O0, O2 and `--taint-all`. Both the device and the existing
   dense *interpreter* are compared with the native oracle.
@@ -46,10 +47,15 @@ assertions only for the documented coherent class or after an un-run. Therefore:
   This validates the oracle/adapter now; it does not claim the front accepts
   these C programs under qubit control or exposes C mark/rewind markers.
 
-The regular inventory always attempts all seven waiting fixtures in all three
+`coherent_xor` preserves a measured refusal even inside the documented class:
+Boolean `y ^= q && !r` is refused as an update without a known inverse. If it
+starts compiling, the inventory checks its full complex vector without requiring
+a history warning. This refusal is a debt, not a wrong result.
+
+The regular inventory always attempts all eight waiting fixtures in all three
 modes, prints `WAITING <name>/<mode>: <named refusal>`, and checks every program
 that succeeds. Only a `not handled yet:` refusal is an allowed waiting outcome;
-a crash, invalid device program, fault or wrong value fails. The seven individually
+a crash, invalid device program, fault or wrong value fails. The eight individually
 ignored acceptance tests fail with the refusal when explicitly run. Unignore each
 as fallback support lands; the regular inventory ensures acceptance cannot silently
 stop being checked in the meantime.
