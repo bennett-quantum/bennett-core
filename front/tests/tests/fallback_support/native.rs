@@ -29,16 +29,21 @@ pub struct Native {
 
 impl Native {
     pub fn compile(name: &str, level: &str) -> Self {
+        Self::compile_with(name, level, &[level])
+    }
+
+    /// A native build with `flags` (an optimisation level, sanitizers), named by `tag`.
+    pub fn compile_with(name: &str, tag: &str, flags: &[&str]) -> Self {
         let include = format!("-I{}", root().join("front/include").display());
-        let exe = native_build(
-            &c_dir().join(format!("fallback_oracle/{name}.c")),
-            &format!("fallback.{name}.{level}"),
-            &["-DNATIVE", level, &include],
-        );
+        let mut all = vec!["-DNATIVE", &include];
+        all.extend_from_slice(flags);
+        let exe =
+            native_build(&c_dir().join(format!("fallback_oracle/{name}.c")), &format!("fallback.{name}.{tag}"), &all);
         let images = (0..8)
             .map(|basis| {
                 let output = Command::new(&exe).arg(basis.to_string()).output().expect("native basis run");
                 assert!(output.status.success(), "{name} basis {basis}: native failed: {output:?}");
+                assert!(output.stderr.is_empty(), "{name} basis {basis}: native diagnostics: {output:?}");
                 let words: Vec<u8> = String::from_utf8(output.stdout)
                     .expect("native text")
                     .split_whitespace()
@@ -90,6 +95,12 @@ impl Native {
     pub fn kept(&self) -> [usize; 4] {
         std::array::from_fn(|b| usize::from((self.images[b].memory[0] >> 1) & 1))
     }
+
+    /// The four cells after the region on each (q, r), little-endian, as the
+    /// region driver returns them; y is 0 there.
+    pub fn region_image(&self) -> [u64; 4] {
+        std::array::from_fn(|b| u64::from(u32::from_le_bytes(self.images[b].memory)))
+    }
 }
 
 fn scatter(input: Vector, image: &[usize]) -> Vector {
@@ -106,10 +117,18 @@ pub fn hadamard_q(input: Vector) -> Vector {
     })
 }
 
-/// Preparation is tabulated analytically, separately from the dense gate oracle.
+/// Preparation is tabulated analytically, separately from the dense gate oracle:
+/// columns 0..7, the complex product state 8 and the real product state 9 of
+/// `driver.h` (Ry(theta)|0> = cos(theta/2)|0> + sin(theta/2)|1>).
 pub fn prepared(basis: usize) -> Vector {
     if basis < 8 {
         return std::array::from_fn(|b| C::new(f64::from(b == basis), 0.0));
+    }
+    if basis == 9 {
+        let half = |theta: f64, bit: bool| if bit { (theta / 2.0).sin() } else { (theta / 2.0).cos() };
+        return std::array::from_fn(|b| {
+            C::new(half(0.7, b & 1 != 0) * half(1.3, b & 2 != 0) * half(2.2, b & 4 != 0), 0.0)
+        });
     }
     assert_eq!(basis, 8);
     std::array::from_fn(|b| {

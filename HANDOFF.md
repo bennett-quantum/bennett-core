@@ -47,7 +47,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (306 tests; ignored: heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks, the scratch mutation matrix, about 9 s, no LLVM needed) and `front/test.sh` (162 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
+Check it: `cargo test` (306 tests; ignored: heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks, the scratch mutation matrix, about 9 s, no LLVM needed) and `front/test.sh` (170 tests; ignored by default: the nine fallback acceptance tests waiting for step 4, a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
 musl-linked ABI check and two independent variadic checks that need `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"); needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -542,6 +542,16 @@ explicitly after the separate musl build.
    move into memory are still integration details. Four checks pass: cargo test 292/19 ignored,
    front/test.sh 162/21 ignored, clippy and fmt clean; front-specific clippy also clean.
    Details and oracle risks: fixture README.
+   Its independent testing pass seeded wrong device results into the harness: four were accepted, all
+   fixed and kept as regression tests (`mod seeded`, seven tests): a wrong weight and a swapped basis state
+   in superposition only (the 512-sample tolerance 0.075 exceeds every q = 1 branch's weight 0.0296, and the
+   complex preparation gives y equal weights; now exact Born weights read across worlds, and a preparation
+   that weighs all eight basis states apart), a leftover ordinary write in a coherent program (the projection
+   ignored memory, the measured check ran at O0 only; now both, in every mode and for every accepted
+   inventory case), and a wrong r-dependent write in a marked region (one kept bit, equal for both r in four
+   of six regions; now the whole four-cell image is kept and checked, and 48 dense nibble runs). A correct
+   hand-written fallback-shaped `store` with two worlds is accepted and needs its warning; the native
+   reference runs clean under ASan/UBSan. `front/test.sh` 170 passed / 21 ignored.
 
 5. **Floating point** is done over Berkeley SoftFloat 3e (decided 2026-11-15; `rt/softfloat/README.md`), the
    complex helpers over libgcc (`rt/libgcc/README.md`), including `__divxc3`. Left: `__float128` and
