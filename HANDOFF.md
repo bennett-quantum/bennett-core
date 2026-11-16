@@ -461,8 +461,16 @@ explicitly after the separate musl build.
    region fault reports `unreachable` instead of `divide_by_zero` when the region's writes to memory qubits reorder
    the configurations (the first fault is to be in configuration order); **F3** compare mode misses 6 of 24
    mutations of the history path (`steps`, `merges`, `peak_worlds`, a changed budget, `in_region`, a leftover
-   backup world); **F4** the whole-world reference numbers marks from 1, the executor from 2 (fixed in the reference,
-   `36f7ae4`: public mark numbers modelled apart from its snapshots; 88 region comparisons added). Held: 65 budgets in
+   backup world); **F4** the whole-world reference numbers marks from 1, the executor from 2. F1-F3 fixed
+   (`FIXSHA`): a mark in a region counts records from the region's start, as on the region's own journal (the
+   enumeration's numbering; `docs/DESIGN.md`, "History"); a strict fault's configurations are taken after the
+   un-run; compare mode restores and compares every field of the run outside the world, the other worlds
+   exactly (30 corruptions of the history path caught by `src/compare_tests.rs`, 24 of 24 by the scratch
+   matrix). The witnesses are regular tests, with whole-class checks (5 region bodies under 5 caller prefixes,
+   20 cell rewrites with analytic first faults); no cost difference measured beyond the host's noise. Compare
+   mode: `cargo test` 110,198 `apply` executions (350 strict stops), `front/test.sh` 21,882 (76).
+   F4 fixed in the reference (`36f7ae4`: public mark numbers modelled apart from its snapshots; 88 region
+   comparisons added). Held: 65 budgets in
    all three modes on memory-qubit regions with full reversal, 131,072 configurations against the analytic XOR.
    Peak memory measured 260 against 200 MiB at 2^20 configurations on its own fixture (the published 0.89 against
    0.43 GB was not reproduced on that program's layout).
@@ -560,7 +568,11 @@ explicitly after the separate musl build.
   gate) attached to it. Add it, or keep `apply`? (A2) Inside a region the worlds run one after another and
   merge only at its end, never in lockstep ticks: merging earlier would join configurations that have
   spent different amounts of the budget, so the budget would make time part of the state (question W1).
-  Keep that as the region's rule?
+  Keep that as the region's rule? (A3) A mark's handle is an ordinary `i64` that code may compute with or
+  return; the documents do not say whether it may be observed. Taken, as the reversible choice (`1c8e8c3`): in
+  a region it counts records from the region's start, so a region's result never depends on the caller's
+  history and `apply` stays its own inverse; it still depends on the region's own path (how many records
+  it wrote). Keep handles observable, or make them opaque (the validator refusing any use but `rewind`)?
 - **Return addresses** (`2bf0b69`): the outermost frame gives `0xFFFF_FFFF_0000_0000` (natively an address in the C
   library's startup) and a level beyond it 0 (natively unspecified). Keep? Levels above 0 follow the device's
   frames, which natively needs frame pointers kept and sibling calls off (plain native `-O2` crashed at level 1).
