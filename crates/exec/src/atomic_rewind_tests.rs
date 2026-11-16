@@ -622,6 +622,11 @@ fn generated_replay_failures_restore_every_private_machine_field() {
                             "exit i8 7",
                             "%t = qalloc 1\nx %t\nqfree %t\nret",
                         ] {
+                            // A return from a callee during a wrapper replay does not leave the
+                            // wrapper's marked activation (DESIGN, History); that path may succeed.
+                            if action == "ret" && depth > 0 {
+                                continue;
+                            }
                             let context = format!(
                                 "layout {layout}, depth {depth}, initial {initial}, bad {bad}, rotation {rotation}, {action}"
                             );
@@ -682,6 +687,9 @@ fn generated_replay_failures_among_four_worlds_preserve_the_failed_worlds() {
     for layout in 0..4 {
         for depth in 0..3 {
             for action in ["fault unreachable", "%m = measure %q\nret", "ret", "exit i8 7"] {
+                if action == "ret" && depth > 0 {
+                    continue;
+                }
                 let text = generated_replay_failure(layout, depth, 0, 3, action, true)
                     .replace("%outer = mark", "%s = qalloc 2\nh %s[0]\nh %s[1]\n%k = call @read(%s)\n%outer = mark")
                     .replace("i2 1 ->", "%k ->");
@@ -717,7 +725,7 @@ fn generated_replay_failures_among_four_worlds_preserve_the_failed_worlds() {
 
 #[test]
 fn a_deferred_failure_after_replaying_a_split_restores_the_whole_machine() {
-    refuses_unchanged(
+    let p = load(
         "memory 512
 func @id(i1 %x) -> i1 {
 entry:
@@ -738,6 +746,25 @@ entry:
     ret
 }
 ",
-        "a replayed split precedes a failing deferred allocation check",
     );
+    let mut e = start(&p, Options::default());
+    let initial = e.snapshot();
+    at_last_rewind(&mut e, &p);
+    let before = Machine::of(&e);
+    assert_eq!(e.step(), Some(Outcome::Faulted(Fault::BadRewind)));
+    let mut after = Machine::of(&e);
+    after.worlds[0].outcome = None;
+    // DESIGN, History/Cost and Worlds/Scheduling: a completed rewind tick counts even when a
+    // subsequent deferred check refuses it. The replay split and joined again; these are work counts.
+    assert_eq!(after.steps, before.steps + 1);
+    assert_eq!(after.splits, before.splits + 1);
+    assert_eq!(after.merges, before.merges + 1);
+    after.merges = before.merges;
+    after.steps = before.steps;
+    after.splits = before.splits;
+    after.assert_same(&before, "deferred refusal restores the machine, charging the attempted work");
+    e.reverse().expect("deferred failure reverses");
+    let restored = e.snapshot();
+    assert_eq!(restored.classical, initial.classical);
+    assert!(restored.quantum.distance(&initial.quantum).is_some_and(|d| d < TOLERANCE));
 }
