@@ -1,14 +1,17 @@
 # HANDOFF
 
-State on 2026-11-16: stopped at 14:26 UTC by the maintainer's wind-down order; nothing is running. Landed today
-on `main`: an independent oracle for the front's fallback and its testing pass's fixes (`27265ba`, `40c84d4`); a
-failed rewind made atomic, the two replay panics and the canceled-keeps refusal fixed (`145a72c`); the six complex
-helpers from libgcc 13.3, unmodified, replacing compiler-rt (`e89c98f`..`df429d7`); a Rust scalar probe
-(`c906fad`); files, clock and entropy for the musl runtime and the SQL oracle grown to five query shapes through
-256 rows with Grover at 512 (`a3f4de5`); test commits of the journal mutation job (`623d9e4`). Finished but not
-landed, because their checks were interrupted: see "Stopped in flight on 2026-11-16". The design audition of the
-same day has its own section; the maintainer then answered every open question and decided on the audition's
-findings ("Decisions the maintainer took on 2026-11-16, in the afternoon"), so no question is open.
+State on 2026-11-16: stopped at 14:26 UTC by the maintainer's wind-down order, resumed at 15:30 UTC: the landing
+stack is on `main` (see "Stopped in flight on 2026-11-16" for what is still in flight). Landed today on `main`: an
+independent oracle for the front's fallback and its testing pass's fixes (`27265ba`, `40c84d4`); a failed rewind
+made atomic, the two replay panics and the canceled-keeps refusal fixed (`145a72c`); the six complex helpers from
+libgcc 13.3, unmodified, replacing compiler-rt (`e89c98f`..`df429d7`); a Rust scalar probe (`c906fad`); files, clock
+and entropy for the musl runtime and the SQL oracle grown to five query shapes through 256 rows with Grover at 512
+(`a3f4de5`); test commits of the journal mutation job (`623d9e4`); then the landing stack: C evidence for North Star
+rungs 1 to 3, the entry-frame fault returned instead of a panic, replay probes, the libgcc and files testing passes
+with their fixes, IR and CLI mutation tests (`8cae924`..`e2320fe`). Still in flight: see "Stopped in flight on
+2026-11-16". The design audition of the same day has its own section; the maintainer then answered every open
+question and decided on the audition's findings ("Decisions the maintainer took on 2026-11-16, in the afternoon"),
+so no question is open.
 Earlier: the night session (the journalled machine in the executor, all five steps of its order, with two
 independent oracles; journal content; `setjmp`/`longjmp`, return addresses and calls through another prototype in
 the front). The last corpus run (`64571ac`, musl linked) has GCC 1,569 agree, c-testsuite 218, `ieee/` 64, none
@@ -50,9 +53,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (315 tests; ignored: heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks, the scratch mutation matrix and the region-copy-cost witness; about 9 s, no LLVM needed) and `front/test.sh` (171 tests; ignored by default: the nine fallback acceptance tests waiting for step 4, a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
-Check it: `cargo test` (328 tests; ignored: heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks, the scratch mutation matrix, about 9 s, no LLVM needed) and `front/test.sh` (171 tests; ignored by default: the nine fallback acceptance tests waiting for step 4, a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
-Check it: `cargo test` (328 tests; ignored: heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks, the scratch mutation matrix, about 9 s, no LLVM needed) and `front/test.sh` (172 tests; ignored by default: the nine fallback acceptance tests waiting for step 4, a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
+Check it: `cargo test` (364 tests; 19 ignored: heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks, the scratch mutation matrix, the region-copy-cost witness and the infinite-angle round-trip witness; about 9 s, no LLVM needed) and `front/test.sh` (175 tests; 27 ignored by default: the nine fallback acceptance tests waiting for step 4, the five C North Star ladder runs (explicit experiments, `experiments/northstar-ladder/README.md`), the noncanonical x87 compare witness, a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
 musl-linked ABI check and two independent variadic checks that need `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"); needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -124,13 +125,11 @@ explicitly after the separate musl build.
 
 ## Stopped in flight on 2026-11-16
 
-Stopped at 14:26 UTC with nothing running. Every piece of work is on a `wip/` branch of the public repository;
-nothing unchecked is on `main`.
+Stopped at 14:26 UTC with nothing running; resumed at 15:30 UTC. Every piece of work not on `main` is on a
+`wip/` branch of the public repository; nothing unchecked is on `main`. The landing stack (ladder, entry-fix,
+replay-test, libgcc-test, files-test, mutants-ir) landed on `main` (`8cae924`..`e2320fe` and its HANDOFF
+commit) after the four checks passed on it.
 
-- **Landing stack** `wip/land-stack` (`a67fd71`): 22 commits on `623d9e4` (ladder, entry-fix, replay-test,
-  libgcc-test, files-test, mutants-ir) plus a hand-merged HANDOFF commit. Each job passed the four checks on its
-  own base; the four checks on the stack were interrupted. Next: run the four checks on the stack (fill the
-  `Check it` counts from that run), then fast-forward `main` to it.
 - **Checks job** `wip/checks-rebased` (`33b97f0`; the job's own head before my rebase is `wip/checks`,
   `364ee49`): the ten automatic checks, the test rules, `bennett.h` for C++. The four checks and the hygiene
   scan passed on `33b97f0`; its changed-line mutation sweep (`python3 scripts/mutate-diff.py origin/main`, 22
@@ -145,7 +144,7 @@ nothing unchecked is on `main`.
 - **Testing passes owed:** machine-decisions a-d (by sol, Opus built it); sql-oracle, checks and entry-fix (by
   Opus, sol built them). Done today: fix-replay (sol, no wrong result), fallback oracle (Opus, four accepted
   wrong results fixed), libgcc (Opus, none on canonical inputs; a noncanonical x87 compare witness), files
-  and clocks (Opus, 18 wrong results fixed, on the stack).
+  and clocks (Opus, 18 wrong results fixed, landed).
 - **The fallback** (next step 4): not started. Ready for it: the landed oracle (`front/tests/c/fallback_oracle/`)
   and a second, independent plan for its order of steps, kept privately for the implementer to compare with
   its own. Starts after step e.
@@ -979,10 +978,6 @@ the ordinary frontend run without changing its domain or assertions.
   `crates/ir/tests/mutation_contract.rs` (explicitly fails on `3418e51` production code). Route: reject
   overflowing angles during reading, or preserve a readable spelling when writing them.
 
-- An outer rewind whose keep makes an inner rewind replay split and fault can panic before restoring
-  its saved world. A newly reached measurement during that replay can also panic at the reversal barrier.
-  Both have ignored witnesses in `crates/exec/tests/history_independent.rs`; they require atomic `bad_rewind`.
-
 - **C North Star rung 2, second-executor coverage is a testing debt.** The independent snapshot
   interpreter times out at the 120-second diagnostic limit; last checkpoint 2,048 steps/history records,
   39 overlay bytes, `__libc_start_main` block 1 instruction 0 at 97.296 s. Startup checkpoints at
@@ -992,11 +987,6 @@ the ordinary frontend run without changing its domain or assertions.
   classical history in an independent interpreter, then rerun both compiler inputs and all ten original
   cases. The resource cap (also 1 GiB address space) is not a semantic fault or an acceptance shortcut;
   exact command and witness are in `experiments/northstar-ladder/README.md`.
-
-- An entry frame that does not fit in memory: `Executor::new` records `stack_overflow`, but `run` then panics in
-  `next_is_rewind` instead of stopping with that fault (found by the SQL oracle's growth; ignored witness
-  `an_entry_frame_that_does_not_fit_returns_stack_overflow` in `front/tests`). Route: `run` returns the recorded
-  fault of a run stopped at entry before looking at the next instruction.
 
 - The fallback oracle compares the four `cells` bytes and the qubit variables only: a stray write just past
   the array would go unseen by both its native and device sides. Route: compare the whole fixture image
