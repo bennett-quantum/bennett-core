@@ -83,8 +83,7 @@ def main():
         for name in TESTS[rung]:
             command = ["cargo", "test", "-p", "bennett-front-tests", "--test", "ladder", name,
                        "--", "--exact", "--nocapture", "--test-threads=1"]
-            if name != TESTS[1][0]:
-                command.append("--ignored")
+            command.append("--ignored")
             bounded = rung == 2 and "independent" in name
             stage_env = {**env, "BENNETT_LADDER_REFERENCE_TABLE": "bounded"} if bounded else env
             limit = args.reference_memory_mib * 1024 * 1024

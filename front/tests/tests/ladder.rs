@@ -69,6 +69,7 @@ fn assert_snapshot(mut actual: Snapshot, expected: &Snapshot, context: &str) {
 }
 
 #[test]
+#[ignore = "full Int8 sweep; run experiments/northstar-ladder/run.py explicitly"]
 fn scalar_c_exhaustive_int8_native_forward_and_reverse() {
     let start = Instant::now();
     let sources = ["scalars.c", "scalar_native.c"];

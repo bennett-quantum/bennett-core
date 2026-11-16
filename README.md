@@ -59,7 +59,7 @@ amplitudes and Grover for LIKE, integer equality, text ordering, a two-condition
 aggregate. Larger sizes, measured limits and reproducible commands are recorded with the experiment.
 
 C North Star ladder checks are in [experiments/northstar-ladder](experiments/northstar-ladder/README.md).
-Rung 3 (musl hello) passes native output, exact reset and deterministic tape replay at clang O0/O2;
-rung 2's ten-case production runs match native and reverse exactly, with its independent check still pending.
-Rung 1's full Int8 checks are queued. The independent interpreter
-is used explicitly, so two modes of one executor do not count as two implementations.
+The C portion of rung 1 passes exhaustively on the declared Int8 functions, and rung 3 passes native
+output, exact reset and deterministic tape replay. Rung 2's ten-case production runs pass native agreement
+and byte-exact reversal; its independent interpreter timed out during startup, so the two-executor
+acceptance remains unmeasured. The experiment records the witness, full domains and route to close it.
