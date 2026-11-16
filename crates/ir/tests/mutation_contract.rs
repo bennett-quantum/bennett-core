@@ -111,6 +111,7 @@ fn function_addresses_in_data_must_exist_and_fit_their_width() {
     module.data[0].items[0] = DataItem::FuncAddr { width: Width::WORD, func: FuncId(2) };
     assert!(rejected(module).contains(&Problem::UnknownFunction(2)));
     assert!(load(&text.replace("i1 @second", "i2 @second")).is_ok());
+    assert!(load(&text.replace("i1 @second", "i1 @first")).is_ok(), "address 1 fits exactly in i1");
 }
 
 #[test]
@@ -190,6 +191,30 @@ fn regions_check_argument_counts_widths_and_all_alias_roles() {
         ["apply @g(%q) -> %o, %o budget 5", "apply @g(%o) -> %o, %e budget 5", "apply @g(%e) -> %o, %e budget 5"]
     {
         assert!(rejected(parsed(&body(apply))).iter().any(|p| matches!(p, Problem::RegionAlias(_))), "{apply}");
+    }
+}
+
+#[test]
+fn switch_cases_must_be_distinct_and_fit_including_the_maximum() {
+    let text = "func @f(i2 %x) -> i8 {\nentry:\n switch i2 %x, 3: yes, default: no\nyes:\n ret 1\nno:\n ret 2\n}\n";
+    let mut module = parsed(text);
+    validate(module.clone()).expect("maximum case value fits");
+    let duplicate = text.replace("3: yes, default", "3: yes, 3: no, default");
+    assert!(rejected(parsed(&duplicate)).contains(&Problem::BadCase(3)));
+    let Terminator::Switch { cases, .. } = &mut module.functions[0].blocks[0].term else {
+        panic!("a switch");
+    };
+    cases[0].value = 4;
+    assert!(rejected(module).contains(&Problem::BadCase(4)), "direct modules need the same range check");
+}
+
+#[test]
+fn void_calls_cannot_define_a_result() {
+    for call in ["call @g(i8 0)", "call_indirect fn(i8) %p(i8 0)"] {
+        let text = format!(
+            "func @g(i8 %x) {{\nentry:\n ret\n}}\nfunc @f() {{\nentry:\n %p = faddr @g\n %v = {call}\n ret\n}}\n"
+        );
+        assert!(rejected(parsed(&text)).contains(&Problem::NoResult), "{call}");
     }
 }
 

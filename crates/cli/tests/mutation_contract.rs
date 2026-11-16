@@ -18,6 +18,7 @@ fn text(output: &Output) -> String {
 #[test]
 fn signed_arguments_preserve_width_boundaries_and_zero() {
     for (entry, literal, value) in [
+        ("bit", "1", "1"),
         ("main", "0", "0"),
         ("main", "127", "127"),
         ("main", "128", "128 (signed -128)"),
