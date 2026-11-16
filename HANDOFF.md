@@ -1232,8 +1232,9 @@ the ordinary frontend run without changing its domain or assertions.
   rewind after such a read faults. The reference interprets `CallBudget` (nested guarded frames,
   remaining steps, returns/catches, faults, region rules and longjmp boundaries), including in `apply`.
   Live guards retain their branch-local consumption through an internal rewind of a memory-qubit
-  read; inverse replay retains the original counts. The default matrix has 16 tests / 638 executor
-  runs, plus an ignored specification witness for the clock-composition question above.
+  read; inverse replay retains the original counts. Bounds are checked before a queued rewind,
+  and replay charges the catch step as well as the call and body. The default matrix has 17 tests /
+  651 executor runs, plus an ignored specification witness for the clock-composition question above.
   Its replay resource limit is incremental, so a newly endless replay ends atomically with `budget`;
   replay seeks a dynamic visit rather than a fixed instruction count. It models strict/machine dirty
   frees and stale handles, nonzero-allocation leftovers and barriers. New comparisons:

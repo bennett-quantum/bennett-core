@@ -522,16 +522,6 @@ impl<'a> Model<'a> {
     }
 
     fn step_group_raw(&self, state: &Superposition) -> Result<Superposition, Fault> {
-        if self.unrunning.get() > 0 && self.checking.get() == 0 {
-            if let Some(left) = self.replay_left.get() {
-                if left == 0 {
-                    self.replay_exhausted.set(true);
-                    return Err(Fault::Budget);
-                }
-                self.replay_left.set(Some(left - 1));
-            }
-            self.replayed.set(self.replayed.get() + 1);
-        }
         let first = state.keys().next().expect("nonempty group");
         if first.classical.finish.is_none()
             && let Some(Inst::Rewind { mark, keep }) = self.instruction(&first.classical)
@@ -1312,6 +1302,28 @@ impl<'a> Model<'a> {
         let mut faults = BTreeMap::new();
         for (i, group) in groups.iter().enumerate() {
             let first = group.keys().next().expect("group");
+            // A barrier is still a step: exhausted call/mark bounds must take their
+            // catch/fault before the rewind can un-run anything.
+            if self.spent_guard(first).is_some() || (self.replaying.get() == 0 && self.deadline_spent(first)) {
+                match self.step_group(group) {
+                    Ok(outputs) => {
+                        for (w, a) in outputs {
+                            add(&mut faults, w, a);
+                        }
+                    }
+                    Err(fault) => {
+                        self.diagnostics.borrow_mut().push(Diagnostic::World(fault));
+                        for (w, &a) in group {
+                            let mut w = w.clone();
+                            w.classical.finish = Some(Finish::Faulted(fault));
+                            add(&mut faults, w, a);
+                        }
+                    }
+                }
+                continue;
+            }
+            self.charge_replay()?;
+
             let shared = groups
                 .iter()
                 .enumerate()

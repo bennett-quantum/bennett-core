@@ -505,7 +505,8 @@ fn an_in_callee_rewind_does_not_erase_branch_local_guard_consumption() {
         )
         .expect("starts");
         assert_eq!(e.run(), Outcome::Returned(None));
-        eprintln!("inner-rewind B={budget}, clocks reference {} actual {}", m.clock(&expected), e.stats().clock);
+        assert_eq!(m.clock(&expected), e.stats().clock, "inner rewind, budget {budget}");
+        assert_eq!(m.replayed(), e.stats().replay_charged, "inner rewind replay, budget {budget}");
         assert_snapshot(&m, &expected, &e);
         let reversed = m.reverse_joined(expected.clone()).expect("reference branch budgets reverse");
         assert_eq!(reversed.keys().collect::<Vec<_>>(), initial.keys().collect::<Vec<_>>());
@@ -561,4 +562,28 @@ fn caller_mark_and_padded_callee_clock_need_a_composition_rule() {
     .expect("starts");
     e.run();
     assert_snapshot(&m, &expected, &e);
+}
+
+#[test]
+fn replay_charges_a_guard_budget_catch_as_a_step() {
+    let p = common::load(
+        "memory 256\nfunc @f() {\nentry:\nret\n}\nfunc @main() {\nentry:\n%outer = mark budget 40\n%inner = mark budget 20\n%c = call @f() budget 0\nrewind %inner\nrewind %outer\nret\n}\n",
+    );
+    for budget in 0..13 {
+        let m = Model::new(&p, "main");
+        let initial = basis(m.initial("main", &[]));
+        let expected = m.run_budgeted(initial.clone(), budget);
+        let mut e = Executor::new(
+            &p,
+            p.function_named("main").expect("entry"),
+            &[],
+            Options { reversible: true, budget: Some(budget as u64), ..common::bounded() },
+        )
+        .expect("starts");
+        e.run();
+        assert_snapshot(&m, &expected, &e);
+        assert_eq!(m.replayed(), e.stats().replay_charged, "catch replay, budget {budget}");
+        e.reverse().expect("catch replay reverses");
+        assert_snapshot(&m, &initial, &e);
+    }
 }

@@ -47,6 +47,29 @@ pub enum Diagnostic {
 }
 
 impl Model<'_> {
+    pub(super) fn charge_replay(&self) -> Result<(), Fault> {
+        if self.unrunning.get() > 0 && self.checking.get() == 0 {
+            if let Some(left) = self.replay_left.get() {
+                if left == 0 {
+                    self.replay_exhausted.set(true);
+                    return Err(Fault::Budget);
+                }
+                self.replay_left.set(Some(left - 1));
+            }
+            self.replayed.set(self.replayed.get() + 1);
+        }
+        Ok(())
+    }
+
+    pub(super) fn spent_guard(&self, w: &World) -> Option<usize> {
+        w.classical
+            .frames
+            .iter()
+            .enumerate()
+            .find(|(_, f)| f.fault.is_some() && w.classical.time.guards.get(&f.activation) == Some(&0))
+            .map(|(i, _)| i)
+    }
+
     pub(super) fn deadline_spent(&self, w: &World) -> bool {
         w.classical.marks.iter().any(|m| {
             m.valid
@@ -100,15 +123,10 @@ impl Model<'_> {
         if first.classical.finish.is_some() {
             return Ok(inputs.clone());
         }
+        self.charge_replay()?;
         let time = &first.classical.time;
         let mark_spent = self.deadline_spent(first);
-        let spent_guard = first
-            .classical
-            .frames
-            .iter()
-            .enumerate()
-            .find(|(_, f)| f.fault.is_some() && time.guards.get(&f.activation) == Some(&0))
-            .map(|(i, _)| i);
+        let spent_guard = self.spent_guard(first);
         let attempt =
             if mark_spent && self.replaying.get() == 0 && self.unrunning.get() == 0 && self.checking.get() == 0 {
                 Err(Fault::Budget)
