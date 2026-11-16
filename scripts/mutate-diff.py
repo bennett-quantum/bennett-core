@@ -35,10 +35,17 @@ def main():
                '--jobs', '1', '--jobserver-tasks', os.environ.get('CARGO_BUILD_JOBS', '2')]
     for name in packages:
         command.extend(['--test-package', name])
-    if args.list:
-        command.append('--list')
     print(f'mutation step {base}..{head}; results {output.relative_to(root)}', flush=True)
-    code = subprocess.call(command, cwd=root, env=os.environ | {'TMPDIR': str(output)})
+    env = os.environ | {'TMPDIR': str(output)}
+    candidates = json.loads(run(*command, '--list', '--json', cwd=root, env=env))
+    if not candidates:
+        sys.exit('no generated Rust mutants in this diff: record explicit seeded edits for unsupported changes')
+    print(f'{len(candidates)} changed-line mutants selected', flush=True)
+    if args.list:
+        for candidate in candidates:
+            print(candidate)
+        return 0
+    code = subprocess.call(command, cwd=root, env=env)
     # A successful empty run is not evidence for changes outside cargo-mutants' Rust scope.
     print('Inspect missed/unviable/timeout outcomes. Non-Rust changes require explicit seeded edits; '
           'see docs/CHECKS.md. No mutation percentage is accepted as a substitute.', flush=True)

@@ -49,7 +49,7 @@ python3 scripts/mutate-diff.py origin/main --list
 python3 scripts/mutate-diff.py origin/main
 ```
 
-The script checks a clean revision, uses its merge-base diff, runs one mutant at a time, and tests all
+The script checks a clean revision, uses its merge-base diff, rejects an empty mutation set, runs one mutant at a time, and tests all
 workspace default packages rather than just the mutated crate. Results and the input diff go under
 `.tmp/mutation/`. Fix every real surviving mutant with a regression test; examine unviable mutants and
 timeouts rather than relabeling them as caught. Do not lower a score threshold or exclude a survivor to
