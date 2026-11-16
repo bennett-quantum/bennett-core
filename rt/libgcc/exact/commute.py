@@ -10,12 +10,17 @@ cplx_exact.c's sample. Long-double helpers need no check: x87 NaN selection does
 python3 rt/libgcc/exact/commute.py [--random N] [--out DIR]; exits non-zero if any helper is not reproduced.
 """
 import argparse
+import os
 from pathlib import Path
 import re
 import subprocess
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
+# The front's build directory: where $BENNETT_FRONT lives when it is set (as the front tests honour it),
+# else target/front as front/test.sh builds it.
+FRONT_BUILD = Path(os.environ['BENNETT_FRONT']).resolve().parent if 'BENNETT_FRONT' in os.environ \
+    else ROOT / 'target/front'
 
 # Performs the operation with operand 0 as the SSE destination (SoftFloat's 8086-SSE NaN priority) unless
 # the instruction's bit in cm_mask swaps them; records instructions whose two operands are both NaN.
@@ -48,7 +53,7 @@ def main():
     run(['clang-18', '-O1', '-c', out / 'wrap.c', '-o', out / 'wrap.o'])
     objects = [out / 'wrap.o']
     for name in ['mulsc3', 'divsc3', 'muldc3', 'divdc3']:
-        text = run(['llvm-dis-18', ROOT / f'target/front/complex/{name}.bc', '-o', '-'],
+        text = run(['llvm-dis-18', FRONT_BUILD / f'complex/{name}.bc', '-o', '-'],
                    capture_output=True, text=True).stdout
         index = 0
 

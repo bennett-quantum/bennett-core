@@ -1,5 +1,5 @@
 //! Independent executed native oracles for by-value calls and over-aligned variadics.
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use bennett_exec::Outcome;
@@ -183,11 +183,18 @@ fn musl_vprintf_after_aligned_arguments_matches_native_stdout() {
             for taint in [false, true] {
                 if taint {
                     checked(
-                        Command::new(root().join("target/front/bennett-front"))
-                            .arg(keep.join("linked.bc"))
-                            .arg("-o")
-                            .arg(&program)
-                            .args(["--taint-all", "--stack-bytes=1048576", "--region-budget=100000"]),
+                        Command::new(
+                            std::env::var_os("BENNETT_FRONT")
+                                .map_or_else(|| root().join("target/front/bennett-front"), PathBuf::from),
+                        )
+                        .arg(keep.join("linked.bc"))
+                        .arg("-o")
+                        .arg(&program)
+                        .args([
+                            "--taint-all",
+                            "--stack-bytes=1048576",
+                            "--region-budget=100000",
+                        ]),
                     );
                 }
                 let module =

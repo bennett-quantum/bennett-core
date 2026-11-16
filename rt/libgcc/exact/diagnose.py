@@ -6,12 +6,17 @@ This uses its saved device output, never replaces the GCC archive as the oracle,
 and changes only scratch IR in an explicitly labelled native diagnostic.
 """
 import argparse
+import os
 from pathlib import Path
 import re
 import subprocess
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
+# The front's build directory: where $BENNETT_FRONT lives when it is set (as the front tests honour it),
+# else target/front as front/test.sh builds it.
+FRONT_BUILD = Path(os.environ['BENNETT_FRONT']).resolve().parent if 'BENNETT_FRONT' in os.environ \
+    else ROOT / 'target/front'
 RUNTIME = HERE.parent
 NAMES = ['mulsc3', 'divsc3', 'muldc3', 'divdc3', 'mulxc3', 'divxc3']
 
@@ -60,7 +65,7 @@ def ordered_objects(out):
     objects = [wrapper]
     for name in NAMES:
         ir = out / f'ordered-{name}.ll'
-        run(['llvm-dis-18', ROOT / f'target/front/complex/{name}.bc', '-o', ir])
+        run(['llvm-dis-18', FRONT_BUILD / f'complex/{name}.bc', '-o', ir])
         text = ir.read_text()
 
         def replace(m):
@@ -116,7 +121,7 @@ def main():
     bc, bn = out / 'witness.bc', out / 'witness.bn'
     run(['clang-18', f'-{args.level}', '-Xclang', '-disable-O0-optnone', '-ffp-contract=off',
          '-emit-llvm', '-c', HERE / 'nan_witness.c', '-o', bc])
-    run([ROOT / 'target/front/bennett-front', bc, '--region-budget', '100000', '--stack-bytes', '1048576', '-o', bn])
+    run([FRONT_BUILD / 'bennett-front', bc, '--region-budget', '100000', '--stack-bytes', '1048576', '-o', bn])
     result = run([ROOT / 'target/release/bennett', 'run', bn, '--budget', '10000000'],
                  capture_output=True, text=True).stdout
     (out / 'witness-device.out').write_text(result)
