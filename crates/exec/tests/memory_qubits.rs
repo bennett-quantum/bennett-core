@@ -833,3 +833,52 @@ fn direct_address_reference_extended() {
     assert_eq!((agreed, refused), (1200, 256));
     println!("{agreed} direct address/dense/full-world agreements; {refused} exact refusals");
 }
+
+#[test]
+fn replaying_a_reversed_cell_split_still_checks_dirty_registers() {
+    let module = bennett_ir::load(
+        "memory 64
+func @main() {
+entry:
+    %q = qalloc 1
+    x %q
+    h [16]
+    %v = load i8 16
+    qfree %q
+    ret
+}
+",
+    )
+    .expect("valid");
+    let mut executor = start(&module, "main", true);
+    for _ in 0..3 {
+        assert_eq!(executor.step(), None);
+    }
+    let before_read = executor.snapshot();
+    assert_eq!(executor.step(), None);
+    assert_eq!(executor.stats().worlds, 2);
+    assert_eq!(executor.step_back(), Ok(true));
+    // Reverse restores the complete state, including the phases, before replaying the splitting load.
+    assert_eq!(executor.snapshot(), before_read);
+    assert_eq!(
+        executor.run(),
+        Outcome::Stopped(RunError::WorldFault { fault: Fault::DirtyFree, worlds: 2 }),
+        "an ordinary replay must still refuse to discard the register holding 1"
+    );
+}
+
+#[test]
+fn a_gate_at_the_first_byte_past_memory_faults_without_promoting_it() {
+    for (address, bit) in [(64, 0), (49, 127)] {
+        let module = bennett_ir::load(&format!("memory 64\nfunc @main() {{\nentry:\n z [{address}:{bit}]\n ret\n}}\n"))
+            .expect("valid");
+        let mut executor = start(&module, "main", true);
+        let before = executor.snapshot();
+        let journal = executor.stats().journal_bytes;
+        assert_eq!(executor.step(), Some(Outcome::Faulted(Fault::OutOfBounds)));
+        let mut after = executor.snapshot();
+        after.classical.outcome = None;
+        assert_eq!(after, before, "bit {bit} at {address} reaches byte 64, outside memory");
+        assert_eq!(executor.stats().journal_bytes, journal);
+    }
+}

@@ -49,7 +49,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (274 tests; ignored: heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks, the scratch mutation matrix; about 9 s, no LLVM needed) and `front/test.sh` (158 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
+Check it: `cargo test` (276 tests; ignored: heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks, the scratch mutation matrix; about 9 s, no LLVM needed) and `front/test.sh` (158 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
 musl-linked ABI check and two independent variadic checks that need `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"); needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
