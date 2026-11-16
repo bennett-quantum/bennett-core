@@ -99,3 +99,70 @@ fn compare_mode_catches_every_corruption_of_the_history_path() {
         .collect();
     assert!(missed.is_empty(), "compare mode accepted a corrupted history path: {missed:?}");
 }
+
+#[test]
+fn compare_mode_checks_existing_worlds_including_phase_and_history_state() {
+    fn attempt(corrupt: Option<Corruption>) -> Option<String> {
+        let text = "memory 512
+func @id(i1 %bit) -> i1 {
+entry:
+ret %bit
+}
+func @f() -> i1 {
+entry:
+ret 1
+}
+func @main() {
+entry:
+%q = qalloc 1
+%o = qalloc 1
+%e = qalloc 4
+h %q
+%read = call @id(%q)
+apply @f() -> %o, %e budget 4
+ret
+}";
+        let module = bennett_ir::load(text).expect("program");
+        let mut e = Executor::new(&module, module.function_named("main").expect("main"), &[], Options::default())
+            .expect("entry");
+        e.set_apply_mode(ApplyMode::Compare);
+        while !matches!(
+            e.function(e.top().func).block(e.top().block).insts.get(e.top().inst),
+            Some(bennett_ir::Inst::Apply { .. })
+        ) {
+            assert_eq!(e.step(), None);
+        }
+        assert_eq!(e.worlds.len(), 2, "the integer read split the state");
+        e.corrupt_history = corrupt;
+        catch_unwind(AssertUnwindSafe(|| {
+            assert_eq!(e.step(), None);
+        }))
+        .err()
+        .map(|panic| {
+            panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_default()
+        })
+    }
+    assert_eq!(attempt(None), None, "unchanged other world agrees");
+    let corruptions: &[(&str, Corruption)] = &[
+        ("other world's tape", |e| e.worlds.iter_mut().flatten().next().expect("other world").tape.push(1)),
+        ("other world's phase", |e| {
+            let world = e.worlds.iter_mut().flatten().next().expect("other world");
+            let mut amplitudes = world.quantum.take_amplitudes();
+            for a in amplitudes.values_mut() {
+                *a = -*a;
+            }
+            world.quantum.replace_amplitudes(amplitudes);
+        }),
+        ("other world's history", |e| {
+            let world = e.worlds.iter_mut().flatten().next().expect("other world");
+            world.partial = !world.partial;
+        }),
+    ];
+    for &(name, corrupt) in corruptions {
+        assert!(attempt(Some(corrupt)).is_some(), "{name}");
+    }
+}

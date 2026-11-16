@@ -242,3 +242,42 @@ fn an_entry_frame_that_never_fit_is_unchanged_by_an_empty_reverse_step() {
     assert_eq!(executor.step_back(), Ok(false));
     assert_eq!(executor.snapshot(), initial, "no step ran, so the entry fault is part of the initial state");
 }
+
+#[test]
+fn a_multivalued_measurement_preserves_conditional_phases_and_reaches_every_outcome() {
+    let module = load(
+        "memory 256
+func @main() -> i2 {
+entry:
+    %q = qalloc 2
+    %r = qalloc 1
+    h %q[0]
+    h %q[1]
+    h %r
+    s %r
+    x %r ctrl %q[0]
+    %value = measure %q
+    ret %value
+}
+",
+    );
+    let mut seen = [false; 4];
+    for seed in 0..256 {
+        let (outcome, executor) = run(&module, "main", &[], Options { seed, ..bounded() });
+        let Outcome::Returned(Some(value)) = outcome else { panic!("{outcome:?}") };
+        let value = usize::try_from(value).expect("a two-bit result");
+        seen[value] = true;
+        let state = executor.snapshot().quantum;
+        assert_eq!(state.amplitudes.len(), 2);
+        let plus_i = [Complex64::new(FRAC_1_SQRT_2, 0.0), Complex64::new(0.0, FRAC_1_SQRT_2)];
+        let expected = if value & 1 == 0 { plus_i } else { [plus_i[1], plus_i[0]] };
+        for (spectator, amplitude) in expected.into_iter().enumerate() {
+            assert!(
+                (state.amplitude(&[value as u64, spectator as u64]) - amplitude).norm() <= TOLERANCE,
+                "outcome {value}, spectator {spectator}, seed {seed}"
+            );
+        }
+    }
+    // All four outcomes have Born weight 1/4; avoid fixing the mapping from a seed to an outcome.
+    assert!(seen.into_iter().all(|value| value), "every positive-weight outcome must be sampled");
+}

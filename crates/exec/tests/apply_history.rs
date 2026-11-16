@@ -173,6 +173,7 @@ fn what_each_way_of_computing_apply_costs_on_the_known_exponential() {
     for name in ["top_clean", "top_open"] {
         for d in 0..=8 {
             let (h, h_steps) = cost(name, d, ApplyMode::History);
+            assert_eq!(h.copied_bytes, 0, "argument parts run in place; this region never forks on memory");
             let (b, b_steps) = cost(name, d, ApplyMode::Branches);
             cost(name, d, ApplyMode::Compare);
             assert_eq!(h_steps, b_steps, "@{name}({d}): region steps per configuration");
@@ -197,3 +198,46 @@ fn what_each_way_of_computing_apply_costs_on_the_known_exponential() {
 
 /// Work per run (forward, rewound, run again and un-run steps) at depth 8, the same both ways.
 const CLEAN_AND_OPEN_AT_8: (u64, u64) = (14_311, 183);
+
+#[test]
+fn environment_selects_each_apply_mode_and_compare_appends_its_tally() {
+    const CHILD: &str = "BENNETT_TEST_APPLY_MODE_CHILD";
+    const NAME: &str = "environment_selects_each_apply_mode_and_compare_appends_its_tally";
+    if let Ok(mode) = std::env::var(CHILD) {
+        let expected = match mode.as_str() {
+            "unset" => None,
+            "history" => Some(ApplyMode::History),
+            "branches" => Some(ApplyMode::Branches),
+            "compare" => Some(ApplyMode::Compare),
+            _ => unreachable!("parent's cases"),
+        };
+        assert_eq!(ApplyMode::from_env(), expected);
+        if mode == "compare" {
+            let module = load(
+                "memory 128\nfunc @f() -> i1 {\nentry:\nret 1\n}\nfunc @main() {\nentry:\n%o = qalloc 1\n%e = qalloc 4\napply @f() -> %o, %e budget 4\nret\n}",
+            );
+            assert_eq!(run_in(&module, "main", &[], bounded(), ApplyMode::Compare).0, Outcome::Returned(None));
+        }
+        return;
+    }
+    let tally = std::env::temp_dir().join(format!("bennett-apply-tally-{}", std::process::id()));
+    std::fs::write(&tally, "existing\n").expect("initial tally");
+    for mode in ["unset", "history", "branches", "compare"] {
+        let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        child.args(["--exact", NAME]).env(CHILD, mode).env_remove("BENNETT_APPLY").env_remove("BENNETT_APPLY_TALLY");
+        if mode != "unset" {
+            child.env("BENNETT_APPLY", mode);
+        }
+        if mode == "compare" {
+            child.env("BENNETT_APPLY_TALLY", &tally);
+        }
+        let output = child.output().expect("isolated environment test");
+        assert!(output.status.success(), "{mode}: {}", String::from_utf8_lossy(&output.stderr));
+    }
+    let written = std::fs::read_to_string(&tally).expect("tally");
+    std::fs::remove_file(tally).expect("remove tally");
+    assert!(
+        written.starts_with("existing\n") && written.len() > "existing\n".len(),
+        "each comparison appends its costs"
+    );
+}

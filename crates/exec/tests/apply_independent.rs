@@ -729,3 +729,169 @@ entry:
         }
     }
 }
+
+#[test]
+fn compare_cost_is_the_sum_of_both_methods_even_after_prior_regions() {
+    let mut first = None;
+    for repeats in [1, 2, 4] {
+        let apply = "    apply @f(%x) -> %o, %e budget %budget\n";
+        // An already split caller keeps the memory base shared in every mode, so the two
+        // computations have the same overlay costs as their separate runs.
+        let text = MIXED
+            .replace("func @jump(", "func @read(i1 %bit) -> i1 {\nentry:\nret %bit\n}\nfunc @jump(")
+            .replace("    s %s\n", "    s %s\n    %unused_read = call @read(%s)\n")
+            .replace(apply, &apply.repeat(repeats));
+        let module = load(&text);
+        let mut costs = Vec::new();
+        for mode in [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare] {
+            let mut e = executor(&module, "main", &[64], Options { reversible: true, ..bounded() });
+            e.set_apply_mode(mode);
+            assert_eq!(e.run(), Outcome::Returned(None));
+            let state = e.snapshot().quantum;
+            if repeats == 1 {
+                if let Some(expected) = &first {
+                    assert_same_quantum(&state, expected, "same phased state in every mode");
+                } else {
+                    first = Some(state);
+                }
+            }
+            let cost = e.stats().region_cost;
+            assert!(cost.runs > 0 && cost.work > 0 && cost.journal_bytes > 0, "{mode:?}: {cost:?}");
+            if mode == ApplyMode::History {
+                assert!(cost.copied_bytes > 0, "memory loads split region worlds");
+            }
+            costs.push(cost);
+        }
+        let fields = |c: &bennett_exec::RegionCost| [c.runs, c.work, c.journal_bytes, c.overlay_bytes, c.copied_bytes];
+        for ((h, b), c) in fields(&costs[0]).into_iter().zip(fields(&costs[1])).zip(fields(&costs[2])) {
+            assert_eq!(c, h + b, "{repeats} regions: compare reports all work from both methods");
+        }
+    }
+}
+
+fn split_copy_cost(
+    caller_slots: usize,
+    callee_slots: usize,
+) -> (bennett_exec::RegionCost, bennett_exec::QuantumSnapshot) {
+    let params = (0..caller_slots).map(|n| format!("i8 %parameter{n}")).collect::<Vec<_>>().join(", ");
+    let tail = (0..callee_slots).map(|n| format!("%unused{n} = add i8 0, 0\n")).collect::<String>();
+    let module = load(&format!(
+        "memory 1024\nfunc @f() -> i8 {{\nentry:\n%v = load i8 0\n{tail}ret %v\n}}\nfunc @main({params}) {{\nentry:\nh [0:0]\ns [0:0]\n%o = qalloc 8\n%e = qalloc 4\napply @f() -> %o, %e budget 32\nret\n}}\n"
+    ));
+    let mut e = executor(&module, "main", &vec![0; caller_slots], bounded());
+    e.set_apply_mode(ApplyMode::History);
+    assert_eq!(e.run(), Outcome::Returned(None));
+    (e.stats().region_cost, e.snapshot().quantum)
+}
+
+#[test]
+fn region_cost_counts_shared_steps_and_the_caller_slots_copied_at_an_internal_split() {
+    let (small, state) = split_copy_cost(0, 0);
+    let (large, padded) = split_copy_cost(8, 0);
+    assert_same_quantum(&padded, &state, "unused parameters do not change phases");
+    // First world: load, return, three un-run records (entry call included).
+    // Fork: return, three un-run records; the load is already in its shared prefix.
+    assert_eq!((small.runs, small.work, large.work), (2, 9, 9));
+    // The two values of the promoted byte cause one fork, copying eight more u128 slots.
+    assert_eq!(large.copied_bytes - small.copied_bytes, 8 * size_of::<u128>() as u64);
+}
+
+#[test]
+#[ignore = "region copied-byte count omits callee slots allocated before a memory split"]
+fn region_copy_cost_includes_slots_of_the_frame_where_memory_splits() {
+    let (small, state) = split_copy_cost(0, 0);
+    let (large, padded) = split_copy_cost(0, 8);
+    assert_same_quantum(&padded, &state, "unused callee slots do not change phases");
+    // Callee slots already exist at the load; their later writes are not in the copied journal yet.
+    assert_eq!(large.copied_bytes - small.copied_bytes, 8 * size_of::<u128>() as u64);
+}
+
+#[test]
+fn regions_without_internal_forks_copy_no_worlds_even_inside_split_callers() {
+    let module = load(
+        "memory 512
+func @id(i1 %x) -> i1 {
+entry:
+ret %x
+}
+func @main() {
+entry:
+%q = qalloc 1
+%r = qalloc 1
+%o = qalloc 1
+%e = qalloc 4
+h %q
+s %q
+h %r
+%m = mark
+%read = call @id(%q)
+store i8 7, 0
+%second = call @id(%r)
+apply @id(%read) -> %o, %e budget 4
+rewind %m
+sdg %q
+h %q
+h %r
+ret
+}",
+    );
+    let mut e = executor(&module, "main", &[], Options { reversible: true, ..bounded() });
+    e.set_apply_mode(ApplyMode::History);
+    let entry = e.snapshot();
+    assert_eq!(e.run(), Outcome::Returned(None));
+    assert!(e.stats().splits > 0 && e.stats().split_memory_bytes > 0, "the caller split");
+    assert_eq!(e.stats().region_cost.copied_bytes, 0, "no region forks: scalar arguments run in place");
+    let state = e.snapshot().quantum;
+    assert_eq!(state.amplitudes.len(), 1);
+    assert!((state.amplitude(&[0, 0, 0, 0]) - num_complex::Complex64::new(1.0, 0.0)).norm() <= 1e-12);
+    e.reverse().expect("reverses");
+    assert_same_state(&e.snapshot(), &entry, "split caller reverses");
+}
+
+#[test]
+fn strict_fault_order_uses_fault_register_values_before_the_keep() {
+    let module = load(
+        "memory 512
+func @f(i1 %x) -> i1 {
+entry:
+br %x, low, high
+low:
+fault divide_by_zero
+high:
+fault unreachable
+}
+func @main() {
+entry:
+%e = qalloc 4
+%q = qalloc 1
+%o = qalloc 1
+h %q
+s %q
+apply @f(%q) -> %o, %e budget 4
+ret
+}",
+    );
+    for mode in [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare] {
+        let mut e = executor(&module, "main", &[], Options { reversible: true, ..bounded() });
+        e.set_apply_mode(mode);
+        let entry = e.snapshot();
+        for _ in 0..5 {
+            assert_eq!(e.step(), None);
+        }
+        let before = e.snapshot();
+        assert_eq!(
+            e.step(),
+            Some(Outcome::Stopped(RunError::RegionFault {
+                callee: module.function_named("f").expect("f"),
+                fault: Fault::Unreachable,
+                branches: 2,
+                configurations: 2,
+            }))
+        );
+        let mut after = e.snapshot();
+        after.classical.outcome = None;
+        assert_same_state(&after, &before, "strict refusal restores phases and the zero fault register");
+        e.reverse().expect("reverses");
+        assert_same_state(&e.snapshot(), &entry, "fault reverses");
+    }
+}

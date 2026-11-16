@@ -104,18 +104,20 @@ fn every_keep_is_checked_before_any_xor_or_unrun() {
     for (setup, expected) in
         [("%young = qalloc 1", Fault::BadRewind), ("qfree %q\n%young = qalloc 1", Fault::BadRewind)]
     {
-        let module = load(&format!(
-            "memory 512\nfunc @main() {{\nentry:\n%q = qalloc 1\n%r = qalloc 1\n%h = mark\neffect 65\n{setup}\nrewind %h keep (i1 1 -> %r, i1 1 -> %young)\nret\n}}"
-        ));
-        let mut e = executor(&module, "main", &[], options());
-        at_rewind(&mut e, &module);
-        let before = e.snapshot();
-        let bytes = e.stats().journal_bytes;
-        assert_eq!(e.step(), Some(Outcome::Faulted(expected)));
-        let mut after = e.snapshot();
-        after.classical.outcome = None;
-        assert_same_state(&after, &before, "no partial first keep");
-        assert_eq!(e.stats().journal_bytes, bytes);
+        for keep_value in [0, 1] {
+            let module = load(&format!(
+                "memory 512\nfunc @main() {{\nentry:\n%q = qalloc 1\n%r = qalloc 1\n%h = mark\neffect 65\n{setup}\nrewind %h keep (i1 1 -> %r, i1 {keep_value} -> %young)\nret\n}}"
+            ));
+            let mut e = executor(&module, "main", &[], options());
+            at_rewind(&mut e, &module);
+            let before = e.snapshot();
+            let bytes = e.stats().journal_bytes;
+            assert_eq!(e.step(), Some(Outcome::Faulted(expected)));
+            let mut after = e.snapshot();
+            after.classical.outcome = None;
+            assert_same_state(&after, &before, "no partial first keep");
+            assert_eq!(e.stats().journal_bytes, bytes);
+        }
     }
     let module = load(
         "memory 512\nfunc @main() {\nentry:\n%q = qalloc 1\n%r = qalloc 1\n%h = mark\nqfree %q\nrewind %h keep (i1 1 -> %r, i1 1 -> %q)\nret\n}",

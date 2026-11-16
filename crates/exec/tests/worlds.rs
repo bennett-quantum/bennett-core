@@ -728,3 +728,38 @@ entry:
     assert!((state.quantum.amplitude(&[0]) - Complex64::new(1.0, 0.0)).norm() <= TOLERANCE);
     assert_eq!(assert_reverses(&module, "main", &[], reversible()), Outcome::Returned(None));
 }
+
+#[test]
+fn unequal_temporary_allocation_paths_interfere_after_rewind() {
+    let module = load(
+        "memory 256
+func @maybe_allocate(i1 %bit) {
+entry:
+    br %bit, allocate, done
+allocate:
+    %temporary = qalloc 1
+    qfree %temporary
+    br done
+done:
+    ret
+}
+func @main() {
+entry:
+    %q = qalloc 1
+    h %q
+    %m = mark
+    call @maybe_allocate(%q)
+    rewind %m
+    h %q
+    ret
+}
+",
+    );
+    let (outcome, executor) = run(&module, "main", &[], reversible());
+    assert_eq!(outcome, Outcome::Returned(None));
+    assert_eq!(executor.stats().observations, 0, "uncomputed allocation histories must merge before observation");
+    let state = executor.snapshot().quantum;
+    assert_eq!(state.amplitudes.len(), 1);
+    assert!((state.amplitude(&[0]) - Complex64::new(1.0, 0.0)).norm() <= TOLERANCE);
+    assert_eq!(assert_reverses(&module, "main", &[], reversible()), Outcome::Returned(None));
+}

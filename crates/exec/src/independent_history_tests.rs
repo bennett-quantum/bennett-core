@@ -492,3 +492,36 @@ fn independent_memory_composite_bijection_includes_cell_table_dead_slots_and_ful
     assert_eq!(check_bijection(&starts, &images, |s| map[s].clone()), Ok(128));
     println!("128 complete memory composite images and {linear} signed 16-basis linear extensions invert exactly");
 }
+
+#[test]
+fn epsilon_amplitude_cutoff_is_inclusive_for_gates_and_world_merges() {
+    use bennett_ir::{Gate, Rotation, Width};
+    use num_complex::Complex64 as C;
+
+    let mut base = super::QuantumState::default();
+    base.allocate(Width::new(1).expect("one qubit"));
+    for (amplitude, retained) in [(f64::EPSILON, false), (2.0 * f64::EPSILON, true)] {
+        let mut gated = base.clone();
+        gated
+            .apply_gate(
+                &crate::gates::matrix(Gate::Rotate(Rotation::Ry, 2.0 * amplitude)),
+                super::QubitRef { column: 0, bit: 0 },
+                &[],
+                None,
+            )
+            .expect("tiny rotation");
+        // Equal real parts cancel on |1>; their imaginary parts add exactly to `amplitude`.
+        let part = |real| {
+            BTreeMap::from([
+                (vec![0u64].into_boxed_slice(), C::new(0.5, 0.0)),
+                (vec![1u64].into_boxed_slice(), C::new(real, amplitude / 2.0)),
+            ])
+        };
+        let mut merged = base.with_amplitudes(part(0.5));
+        merged.absorb(base.with_amplitudes(part(-0.5)));
+        assert_eq!(gated.amplitudes().get(&[0u64][..]).copied(), Some(C::new(1.0, 0.0)));
+        assert_eq!(merged.amplitudes().get(&[0u64][..]).copied(), Some(C::new(1.0, 0.0)));
+        assert_eq!(gated.amplitudes().get(&[1u64][..]).copied(), retained.then_some(C::new(amplitude, 0.0)));
+        assert_eq!(merged.amplitudes().get(&[1u64][..]).copied(), retained.then_some(C::new(0.0, amplitude)));
+    }
+}
