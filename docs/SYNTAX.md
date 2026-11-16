@@ -54,7 +54,9 @@ terminator := br label[(typed, ...)]
             | fault NAME                                 ; budget, unreachable, ... (bennett_ir::Fault; 5-bit codes)
 ```
 
-Integers are decimal or `0x` hex and may be negative (two's complement at the type's width). Strings
+Integers are decimal or `0x` hex and may be negative (two's complement at the type's width). An `ANGLE` is a
+decimal floating-point number that must be finite as an `f64`: a literal that overflows (`1e999`) is a read
+error, since the writer has no spelling for an infinite angle and the round-trip rule must hold. Strings
 accept `\n \t \r \0 \\ \" \xHH`. Names may be used before they are defined.
 
 ## Memory

@@ -1,8 +1,8 @@
 //! Semantic boundaries exercised by the IR mutation pass.
 
 use bennett_ir::{
-    BlockId, Const, DataItem, FuncId, Inst, Module, Operand, Param, Problem, Signature, Slot, Terminator, Type, Width,
-    load, read, validate, write,
+    BlockId, Const, DataItem, FuncId, Gate, Inst, Module, Operand, Param, Problem, ReadErrorKind, Signature, Slot,
+    Terminator, Type, Width, load, read, validate, write,
 };
 
 fn parsed(text: &str) -> Module {
@@ -253,11 +253,23 @@ fn separate_statements_require_separate_lines() {
 }
 
 #[test]
-#[ignore = "reader accepts infinite rotation from exponent overflow, writer emits unreadable inf"]
 fn every_readable_rotation_round_trips_even_when_validation_rejects_it() {
-    // SYNTAX promises read(write(m)) == m for every module read from text, not only valid modules.
-    // Rejecting an overflowing angle at read time also satisfies the round-trip rule.
-    let Ok(module) = read("func @f(q1 %q) {\nentry:\n rx(1e999) %q\n ret\n}\n") else { return };
-    assert!(rejected(module.clone()).contains(&Problem::AngleNotFinite));
-    assert_eq!(read(&write(&module)).expect("a module read from text must read back"), module);
+    // SYNTAX promises read(write(m)) == m for every module read from text, not only valid modules. An angle
+    // that overflows to infinity has no written spelling, so the reader refuses it; validation's
+    // `AngleNotFinite` stays for modules built in code.
+    let rotation = |angle: &str| format!("func @f(q1 %q) {{\nentry:\n rx({angle}) %q\n ret\n}}\n");
+    for overflow in ["1e999", "-1e999", "1.8e308"] {
+        let error = read(&rotation(overflow)).expect_err("an angle that overflows to infinity is not readable");
+        assert_eq!(error.kind, ReadErrorKind::BadNumber(overflow.into()), "{overflow}");
+    }
+    for finite in ["1.7976931348623157e308", "-1.7976931348623157e308", "1e-999", "-0.0", "5e-324"] {
+        let module = read(&rotation(finite)).expect("a finite angle reads");
+        assert_eq!(read(&write(&module)).expect("a module read from text must read back"), module, "{finite}");
+    }
+    let mut infinite = parsed(&rotation("1.5"));
+    let Inst::Gate { gate: Gate::Rotate(_, angle), .. } = &mut infinite.functions[0].blocks[0].insts[0] else {
+        panic!("the fixture is one rotation")
+    };
+    *angle = f64::INFINITY;
+    assert!(rejected(infinite).contains(&Problem::AngleNotFinite));
 }

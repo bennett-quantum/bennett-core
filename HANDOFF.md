@@ -1077,12 +1077,6 @@ the ordinary frontend run without changing its domain or assertions.
 - `Stats::region_cost.copied_bytes` omits callee-frame growth before a memory split: adding eight
   callee slots adds 128 copied bytes but leaves the report unchanged. Ignored witness:
   `region_copy_cost_includes_slots_of_the_frame_where_memory_splits` in `crates/exec/tests/apply_independent.rs`.
-- The IR reader accepts a rotation such as `rx(1e999)` as an infinite angle; validation rejects it,
-  but the writer emits `inf`, which the reader cannot parse. This breaks SYNTAX's round-trip rule for
-  every module read from text, including invalid modules. Ignored witness:
-  `every_readable_rotation_round_trips_even_when_validation_rejects_it` in
-  `crates/ir/tests/mutation_contract.rs` (explicitly fails on `3418e51` production code). Route: reject
-  overflowing angles during reading, or preserve a readable spelling when writing them.
 
 - **C North Star rung 2, second-executor coverage is a testing debt.** The independent snapshot
   interpreter times out at the 120-second diagnostic limit; last checkpoint 2,048 steps/history records,
@@ -1263,8 +1257,8 @@ Debts, with routes (the goal is not narrowed to the present surface):
 ## IR and CLI mutation pass (2026-11-16)
 
 **Defect:** an overflowing rotation angle can be read but cannot be read back after writing; the ignored
-witness and both possible fix routes are recorded in "Known weak spots". It explicitly fails on the
-unchanged production code. No library fix is included.
+witness explicitly failed on the unchanged production code. Fixed later the same day: the reader refuses an
+angle that is not finite as an `f64` (`docs/SYNTAX.md`), and the witness runs by default.
 
 Production base `3418e51`, cargo-mutants 27.1.0; `crates/ir` excluding `fault.rs`, and `crates/cli`.
 Added 21 ordinary tests and one ignored witness in `crates/ir/tests/mutation_contract.rs` and

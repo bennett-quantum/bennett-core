@@ -288,11 +288,16 @@ impl<'s> Parser<'s> {
         Ok(Place::Memory { address, bit })
     }
 
-    /// `(ANGLE)` in radians.
+    /// `(ANGLE)` in radians: a finite number. A literal that overflows to infinity (`1e999`) is refused here,
+    /// because the writer has no spelling for an infinite angle and `read(write(m)) == m` must hold.
     fn angle(&mut self) -> Result<f64, Failure> {
         self.cursor.expect(Token::LParen, "`(` and an angle")?;
         let (text, offset) = self.cursor.number("an angle in radians")?;
-        let angle = text.parse().map_err(|_| Failure { offset, kind: ReadErrorKind::BadNumber(text.to_owned()) })?;
+        let angle = text
+            .parse::<f64>()
+            .ok()
+            .filter(|angle| angle.is_finite())
+            .ok_or_else(|| Failure { offset, kind: ReadErrorKind::BadNumber(text.to_owned()) })?;
         self.cursor.expect(Token::RParen, "`)`")?;
         Ok(angle)
     }
