@@ -57,3 +57,8 @@ The [SQLite device experiment](experiments/sqlite-on-device/README.md#larger-sql
 unmodified SQLite as a SQL oracle: native truth tables, exact classical reversal, independent dense
 amplitudes and Grover for LIKE, integer equality, text ordering, a two-condition WHERE and a range
 aggregate. Larger sizes, measured limits and reproducible commands are recorded with the experiment.
+
+C North Star ladder checks are in [experiments/northstar-ladder](experiments/northstar-ladder/README.md).
+Rung 3 (musl hello) passes native output, exact reset and deterministic tape replay at clang O0/O2;
+rungs 1–2 have their full-domain tests implemented and await measurement. The independent interpreter
+is used explicitly, so two modes of one executor do not count as two implementations.

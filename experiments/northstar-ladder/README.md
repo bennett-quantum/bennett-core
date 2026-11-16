@@ -24,8 +24,29 @@ interpreter's history storage or supply another independent interpreter. The arc
 ISA interpreter accepts a different ISA and cannot consume these `.bn`
 programs. Two modes alone cannot satisfy the two-implementation clause.
 
-Measured results, including rung 3, are pending the first run. No semantic
-failure has yet been observed. Rust and Julia are outside this C-only run.
+Rung 3 passes its acceptance test in the first measured run below; the
+full runner will repeat it from the committed source. Rungs 1–2 await their
+queued measurement. No semantic failure has yet been observed. Rust and
+Julia are outside this C-only run.
+
+## Measurements on 2026-11-16
+
+Machine: x86-64 Intel i7-1365U (12 logical CPUs), clang 18.1.3,
+Rust 1.99.1, CMake 3.28.3; shared laptop, two build workers.
+
+First short integration run (the hello test body is unchanged between
+`6806fbe` and `efdfade`), 19.17 seconds including native compilation and
+musl linking:
+
+| Hello input | Native stdout | Device steps | Journal bytes | Full reset memory bytes | Replay/reset checks |
+|---|---:|---:|---:|---:|---|
+| clang O0 | 13 bytes, exact | 3,227 | 65,131 | 2,106,920 | 3 identical replays, 4 exact resets |
+| clang O2 | 13 bytes, exact | 2,698 | 53,722 | 2,104,192 | 3 identical replays, 4 exact resets |
+
+Both native and device exit status: 0. All memory, frames, slots, stack,
+console, outcome, steps, registers and worlds return exactly to the
+pre-startup entry snapshot, with empty history. The complete five-stage
+run is still queued; its report will supersede this early receipt.
 
 ## Domain and checks
 
