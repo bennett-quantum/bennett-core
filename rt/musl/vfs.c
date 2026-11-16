@@ -17,7 +17,6 @@
 /* Exhausting the bounded runtime arena is a named fault until syscall-wide rollback exists. */
 static void *checked_malloc(size_t n) { void *p=malloc(n); if(!p) __builtin_trap(); return p; }
 static void *checked_calloc(size_t n,size_t size) { void *p=calloc(n,size); if(!p) __builtin_trap(); return p; }
-static char *checked_strdup(const char *s) { char *p=strdup(s); if(!p) __builtin_trap(); return p; }
 
 struct page { uint64_t number; struct page *next; unsigned char bytes[4096]; };
 struct bennett_inode {
@@ -43,7 +42,8 @@ static struct name initial_names[8] = {
 static struct name *names=initial_names;
 static uint64_t next_inode=11;
 static unsigned creation_mask=022;
-static char *cwd="/";
+/* The working directory is an inode, as on Linux: it follows renames and, once removed, names nothing. */
+static struct bennett_inode *cwd=initial_inodes;
 static struct bennett_file standard_files[3] = {
     {BRT_INPUT,O_RDONLY,0,1,0}, {BRT_CONSOLE,O_WRONLY,0,1,0}, {BRT_ERROR,O_WRONLY,0,1,0}
 };
@@ -86,18 +86,39 @@ static struct name *lookup(const char *path) {
     for(struct name *n=names;n;n=n->next) if(n->inode && !strcmp(path,n->path)) return n;
     return 0;
 }
-/* Canonical paths have no host NAME_MAX/PATH_MAX or stack-buffer bound. */
-static char *canonical(const char *path,long at,int *error) {
+/* The live name of an inode, or none once it is removed. */
+static const char *inode_path(struct bennett_inode *i) {
+    for(struct name *n=names;n;n=n->next) if(n->inode==i) return n->path;
+    return 0;
+}
+/* How Linux classifies a path's last component: 1 for ".", 2 for "..", 3 for the root alone, 0 otherwise. */
+static int last_type(const char *path) {
+    size_t end=strlen(path);
+    while(end && path[end-1]=='/') --end;
+    if(!end) return *path=='/'?3:0;
+    size_t begin=end; while(begin && path[begin-1]!='/') --begin;
+    if(end-begin==1 && path[begin]=='.') return 1;
+    if(end-begin==2 && path[begin]=='.' && path[begin+1]=='.') return 2;
+    return 0;
+}
+static int trailing_slash(const char *path) { size_t n=strlen(path); return n && path[n-1]=='/'; }
+/* Linux's limits: a path of PATH_MAX bytes or more and a component of more than NAME_MAX bytes are too long.
+ * With `tail`, a trailing slash after an existing non-directory is ENOTDIR (callers that order it otherwise pass 0). */
+static char *canonical(const char *path,long at,int *error,int tail) {
     if(!path) { *error=EFAULT; return 0; }
     if(!*path) { *error=ENOENT; return 0; }
+    if(strnlen(path,PATH_MAX)>=PATH_MAX) { *error=ENAMETOOLONG; return 0; }
     const char *begin_path=path;
-    const char *base=cwd;
-    if(*path!='/' && at!=AT_FDCWD) {
-        struct bennett_file *f=__bennett_rt_vfs_file(at);
-        if(!f) { *error=EBADF; return 0; }
-        if(f->kind!=BRT_DIRECTORY) { *error=ENOTDIR; return 0; }
-        base=0;
-        for(struct name *n=names;n;n=n->next) if(n->inode==f->inode) { base=n->path; break; }
+    const char *base="/";
+    if(*path!='/') {
+        struct bennett_inode *directory=cwd;
+        if(at!=AT_FDCWD) {
+            struct bennett_file *f=__bennett_rt_vfs_file(at);
+            if(!f) { *error=EBADF; return 0; }
+            if(f->kind!=BRT_DIRECTORY) { *error=ENOTDIR; return 0; }
+            directory=f->inode;
+        }
+        base=inode_path(directory);
         if(!base) { *error=ENOENT; return 0; }
     }
     size_t a=*path=='/'?0:strlen(base), b=strlen(path);
@@ -108,6 +129,7 @@ static char *canonical(const char *path,long at,int *error) {
         while(*path=='/') ++path;
         const char *begin=path; while(*path && *path!='/') ++path;
         size_t len=path-begin;
+        if(len>NAME_MAX) { *error=ENAMETOOLONG; free(result); return 0; }
         if(!len || (len==1 && begin[0]=='.')) continue;
         if(len==2 && begin[0]=='.' && begin[1]=='.') {
             while(used>1 && result[used-1]!='/') --used;
@@ -125,7 +147,7 @@ static char *canonical(const char *path,long at,int *error) {
         }
     }
     result[used]=0;
-    if(path>begin_path && path[-1]=='/') {
+    if(tail && path>begin_path && path[-1]=='/') {
         struct name *n=lookup(result);
         if(n && n->inode->kind!=BRT_DIRECTORY) { *error=ENOTDIR; free(result); return 0; }
     }
@@ -164,18 +186,17 @@ static void truncate_inode(struct bennett_inode *i,uint64_t size) {
 }
 long __bennett_rt_vfs_open(const char *path,int flags,unsigned mode,long at) {
     if(flags & ~(O_ACCMODE|O_CREAT|O_EXCL|O_TRUNC|O_APPEND|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY|O_NOFOLLOW|O_LARGEFILE|O_NOCTTY|O_SYNC|O_DSYNC|O_TMPFILE)) __builtin_trap();
+    /* Flag errors precede the path walk, as in Linux's build_open_flags. O_ACCMODE itself is a valid mode. */
     if((flags&(O_DIRECTORY|O_CREAT))==(O_DIRECTORY|O_CREAT)) return -EINVAL;
-    size_t path_len=path?strlen(path):0;
-    if(path_len && path[path_len-1]=='/' && (flags&O_CREAT)) return -EISDIR;
+    if((flags&(O_TMPFILE&~O_DIRECTORY)) && ((flags&O_TMPFILE)!=O_TMPFILE || (flags&O_ACCMODE)==O_RDONLY)) return -EINVAL;
     mode &= ~creation_mask;
-    if((flags&O_ACCMODE)==O_ACCMODE) return -EINVAL;
-    int error=0; char *full=canonical(path,at,&error); if(!full) return -error;
+    int error=0; char *full=canonical(path,at,&error,0); if(!full) return -error;
     struct name *n=lookup(full);
-    if(path_len && path[path_len-1]=='/' && n && n->inode->kind!=BRT_DIRECTORY) { free(full); return -ENOTDIR; }
+    if(trailing_slash(path) && (flags&O_CREAT)) { free(full); return -EISDIR; }
+    if(trailing_slash(path) && n && n->inode->kind!=BRT_DIRECTORY) { free(full); return -ENOTDIR; }
     if((flags&O_TMPFILE)==O_TMPFILE) {
         if(!n) { free(full); return -ENOENT; }
         if(n->inode->kind!=BRT_DIRECTORY) { free(full); return -ENOTDIR; }
-        if((flags&O_ACCMODE)==O_RDONLY) { free(full); return -EINVAL; }
         free(full);
         struct bennett_inode *i=checked_calloc(1,sizeof *i);
         i->kind=BRT_REGULAR; i->mode=S_IFREG|(mode&07777); i->number=next_inode++;
@@ -189,7 +210,8 @@ long __bennett_rt_vfs_open(const char *path,int flags,unsigned mode,long at) {
     } else if((flags&(O_CREAT|O_EXCL))==(O_CREAT|O_EXCL)) { free(full); return -EEXIST; }
     free(full);
     if((flags&O_DIRECTORY) && n->inode->kind!=BRT_DIRECTORY) return -ENOTDIR;
-    if(n->inode->kind==BRT_DIRECTORY && ((flags&O_ACCMODE)!=O_RDONLY || (flags&O_CREAT))) return -EISDIR;
+    /* O_TRUNC asks for write access, so a directory refuses it as Linux's may_open does. */
+    if(n->inode->kind==BRT_DIRECTORY && ((flags&O_ACCMODE)!=O_RDONLY || (flags&(O_CREAT|O_TRUNC)))) return -EISDIR;
     if((flags&O_TRUNC) && n->inode->kind==BRT_REGULAR)
         truncate_inode(n->inode,0);
     struct bennett_file *f=checked_malloc(sizeof *f);
@@ -197,7 +219,7 @@ long __bennett_rt_vfs_open(const char *path,int flags,unsigned mode,long at) {
     return install(f,0,0,!!(flags&O_CLOEXEC));
 }
 long __bennett_rt_vfs_io(struct bennett_file *f,void *buffer,uint64_t n,int writing,uint64_t offset,int positional) {
-    if((f->flags&O_PATH) || (writing?(f->flags&O_ACCMODE)==O_RDONLY:(f->flags&O_ACCMODE)==O_WRONLY)) return -EBADF;
+    if(writing?!__bennett_rt_writable(f->flags):!__bennett_rt_readable(f->flags)) return -EBADF;
     if(f->kind==BRT_DIRECTORY) return -EISDIR;
     if(f->kind==BRT_NULL) return writing?(long)n:0;
     if(f->kind==BRT_ZERO) { if(!writing) memset(buffer,0,n); return n; }
@@ -227,6 +249,24 @@ long __bennett_rt_vfs_seek(struct bennett_file *f,int64_t offset,int whence,uint
     (void)block_size;
     if(f->kind==BRT_NULL || f->kind==BRT_ZERO || f->kind==BRT_ENTROPY) return 0;
     if(f->kind!=BRT_REGULAR && f->kind!=BRT_DIRECTORY) return -ESPIPE;
+    if(whence==SEEK_DATA || whence==SEEK_HOLE) {
+        if(f->kind!=BRT_REGULAR) __builtin_trap(); /* directory data and holes are not modelled */
+        /* Holes are the unwritten 4096-byte pages, as ext4 and tmpfs report them; the end of file is a hole. */
+        uint64_t size=f->inode->size, at=(uint64_t)offset, number=at/4096, found;
+        if(at>=size) return -ENXIO;
+        if(whence==SEEK_DATA) {
+            uint64_t first=UINT64_MAX;
+            for(struct page *p=f->inode->pages;p;p=p->next) if(p->number>=number && p->number<first) first=p->number;
+            if(first==UINT64_MAX || first>=(size+4095)/4096) return -ENXIO;
+            found=first==number?at:first*4096;
+        } else {
+            for(struct page *p=f->inode->pages;p;)
+                if(p->number==number) { ++number; p=f->inode->pages; } else p=p->next;
+            found=number==at/4096?at:number*4096;
+            if(found>size) found=size;
+        }
+        return f->pos=found;
+    }
     if(whence<0 || whence>2) return -EINVAL;
     uint64_t base=whence==0?0:whence==1?f->pos:f->inode->size;
     uint64_t magnitude=offset<0?0-(uint64_t)offset:(uint64_t)offset;
@@ -260,50 +300,63 @@ long __bennett_rt_vfs_meta(long nr,long a,long b,long c,long d,long e) {
         }
         __builtin_trap();
     }
-    if(nr==SYS_fsync || nr==SYS_fdatasync || nr==SYS_ftruncate) {
+    if(nr==SYS_fsync || nr==SYS_fdatasync) {
         struct bennett_file *f=__bennett_rt_vfs_file(a); if(!f) return -EBADF;
-        if(nr!=77) return f->kind==BRT_REGULAR?0:-EINVAL;
-        if(f->kind!=BRT_REGULAR) return -EINVAL;
-        if((f->flags&O_ACCMODE)==O_RDONLY) return -EBADF;
-        if(b<0) return -EINVAL; truncate_inode(f->inode,b); return 0;
+        return f->kind==BRT_REGULAR || f->kind==BRT_DIRECTORY?0:-EINVAL;
+    }
+    if(nr==SYS_ftruncate) {
+        /* Linux's order: the length, the descriptor, then a regular file open for writing (else EINVAL). */
+        if(b<0) return -EINVAL;
+        struct bennett_file *f=__bennett_rt_vfs_file(a); if(!f) return -EBADF;
+        if(f->kind!=BRT_REGULAR || !__bennett_rt_writable(f->flags)) return -EINVAL;
+        truncate_inode(f->inode,b); return 0;
     }
     if(nr==SYS_getcwd) {
-        if(!lookup(cwd)) return -ENOENT;
-        size_t n=strlen(cwd)+1; if((uint64_t)b<n) return -ERANGE;
-        if(!a) return -EFAULT; memcpy((void *)a,cwd,n); return n;
+        const char *path=inode_path(cwd); if(!path) return -ENOENT;
+        size_t n=strlen(path)+1; if((uint64_t)b<n) return -ERANGE;
+        if(!a) return -EFAULT; memcpy((void *)a,path,n); return n;
     }
     if(nr==SYS_fchdir) {
         struct bennett_file *f=__bennett_rt_vfs_file(a); if(!f) return -EBADF;
         if(f->kind!=BRT_DIRECTORY) return -ENOTDIR;
-        for(struct name *n=names;n;n=n->next) if(n->inode==f->inode) { cwd=checked_strdup(n->path); return 0; }
-        return -ENOENT;
+        cwd=f->inode; return 0; /* also a removed directory, as on Linux */
     }
     if((nr==SYS_readlink && c<=0) || (nr==SYS_readlinkat && d<=0)) return -EINVAL;
     if((nr==SYS_newfstatat && (d & ~AT_SYMLINK_NOFOLLOW)) || (nr==SYS_unlinkat && (c & ~AT_REMOVEDIR))) __builtin_trap();
+    /* Argument errors Linux reports before the path walk. */
+    if(nr==SYS_truncate && b<0) return -EINVAL;
+    if((nr==SYS_access && (b&~7L)) || (nr==SYS_faccessat && (c&~7L))) return -EINVAL;
     long at=AT_FDCWD; const char *path=(void *)a;
     if(nr==SYS_readlinkat || nr==SYS_openat || nr==SYS_newfstatat || nr==SYS_faccessat || nr==SYS_mkdirat || nr==SYS_unlinkat) { at=a; path=(void *)b; }
-    int error=0; char *full=canonical(path,at,&error); if(!full) return -error;
+    int creating=nr==SYS_mkdir || nr==SYS_mkdirat, removing=nr==SYS_unlink || nr==SYS_rmdir || nr==SYS_unlinkat;
+    int error=0; char *full=canonical(path,at,&error,!creating && nr!=SYS_rename); if(!full) return -error;
     struct name *n=lookup(full); long result=0;
-    if(nr==SYS_mkdir || nr==SYS_mkdirat) {
+    /* A last component ".", ".." or the root: Linux refuses these by kind before looking the name up. */
+    int kind=last_type(path), directory=nr==SYS_rmdir || (nr==SYS_unlinkat && (c&AT_REMOVEDIR));
+    char *dest=0;
+    if(nr==SYS_rename && !(dest=canonical((void *)b,AT_FDCWD,&error,0))) result=-error;
+    else if(nr==SYS_rename && (kind || last_type((void *)b))) result=-EBUSY;
+    else if(creating && kind) result=-EEXIST;
+    else if(removing && kind) result=!directory?-EISDIR:kind==1?-EINVAL:kind==2?-ENOTEMPTY:-EBUSY;
+    else if(creating) {
         if(n) result=-EEXIST;
         else if((result=parent_directory(full))==0) {
             create_name(full,S_IFDIR|((nr==SYS_mkdir?b:c)&07777&~creation_mask),BRT_DIRECTORY); full=0;
         }
     } else if(!n) result=-ENOENT;
+    else if(nr==SYS_rename && n->inode->kind!=BRT_DIRECTORY && (trailing_slash(path) || trailing_slash((void *)b))) result=-ENOTDIR;
     else if(nr==SYS_readlink || nr==SYS_readlinkat) result=-EINVAL; /* no symlinks in this namespace yet */
     else if(nr==SYS_stat || nr==SYS_lstat || nr==SYS_newfstatat) result=fill_stat(n->inode,(void *)(nr==SYS_newfstatat?c:b));
     else if(nr==SYS_access || nr==SYS_faccessat) {
         long mode=nr==SYS_access?b:c;
-        if(mode&~7L) result=-EINVAL;
-        else if((mode&X_OK) && n->inode->kind!=BRT_DIRECTORY && !(n->inode->mode&0111)) result=-EACCES;
+        if((mode&X_OK) && n->inode->kind!=BRT_DIRECTORY && !(n->inode->mode&0111)) result=-EACCES;
     } else if(nr==SYS_truncate) {
-        if(b<0) result=-EINVAL;
-        else if(n->inode->kind!=BRT_REGULAR) result=-EISDIR;
+        if(n->inode->kind==BRT_DIRECTORY) result=-EISDIR;
+        else if(n->inode->kind!=BRT_REGULAR) result=-EINVAL;
         else truncate_inode(n->inode,b);
     } else if(nr==SYS_chdir) {
-        if(n->inode->kind!=BRT_DIRECTORY) result=-ENOTDIR; else cwd=checked_strdup(full);
-    } else if(nr==SYS_unlink || nr==SYS_rmdir || nr==SYS_unlinkat) {
-        int directory=nr==SYS_rmdir || (nr==SYS_unlinkat && (c&AT_REMOVEDIR));
+        if(n->inode->kind!=BRT_DIRECTORY) result=-ENOTDIR; else cwd=n->inode;
+    } else if(removing) {
         if(directory && n->inode->kind!=BRT_DIRECTORY) result=-ENOTDIR;
         else if(!directory && n->inode->kind==BRT_DIRECTORY) result=-EISDIR;
         else if(!strcmp(full,"/")) result=-EBUSY;
@@ -318,10 +371,7 @@ long __bennett_rt_vfs_meta(long nr,long a,long b,long c,long d,long e) {
             }
         }
     } else if(nr==SYS_rename) {
-        char *dest=canonical((void *)b,AT_FDCWD,&error);
-        if(!dest) result=-error;
-        else if(!strcmp(full,dest)) result=0;
-        else if(!strcmp(full,"/")) result=-EBUSY;
+        if(!strcmp(full,dest)) result=0;
         else if(n->inode->kind==BRT_DIRECTORY && !strncmp(dest,full,strlen(full)) && dest[strlen(full)]=='/') result=-EINVAL;
         else if((result=parent_directory(dest))==0) {
             struct name *existing=lookup(dest);
@@ -348,17 +398,11 @@ long __bennett_rt_vfs_meta(long nr,long a,long b,long c,long d,long e) {
                         char *updated=checked_malloc(prefix+tail);
                         memcpy(updated,dest,prefix); memcpy(updated+prefix,child->path+oldlen,tail); child->path=updated;
                     }
-                    if(!strncmp(cwd,full,oldlen) && (!cwd[oldlen] || cwd[oldlen]=='/')) {
-                        size_t prefix=strlen(dest), tail=strlen(cwd+oldlen)+1;
-                        char *updated=checked_malloc(prefix+tail);
-                        memcpy(updated,dest,prefix); memcpy(updated+prefix,cwd+oldlen,tail); cwd=updated;
-                    }
                 }
                 n->path=dest; dest=0;
             }
         }
-        free(dest);
     } else if(nr==SYS_chmod) n->inode->mode=(n->inode->mode&S_IFMT)|(b&07777);
     else result=-ENOSYS;
-    free(full); (void)d; return result;
+    free(dest); free(full); (void)d; return result;
 }
