@@ -2,7 +2,8 @@ memory 256
 
 func @main(i8 %value) -> i8 {
 entry:
- ret %value
+ %copy = add i8 %value, 0
+ ret %copy
 }
 
 func @bit(i1 %value) -> i1 {

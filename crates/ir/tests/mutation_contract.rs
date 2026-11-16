@@ -242,6 +242,14 @@ fn return_addresses_count_instructions_and_terminators_in_prior_blocks() {
 }
 
 #[test]
+fn separate_statements_require_separate_lines() {
+    for text in ["memory 64 data 0 = zero 1\n", "func @f() {\nentry:\n effect 65 effect 66\n ret\n}\n"] {
+        assert!(read(text).is_err(), "one statement per line: {text}");
+    }
+    assert!(read("memory 64").is_ok(), "EOF may end the last statement");
+}
+
+#[test]
 #[ignore = "reader accepts infinite rotation from exponent overflow, writer emits unreadable inf"]
 fn every_readable_rotation_round_trips_even_when_validation_rejects_it() {
     // SYNTAX promises read(write(m)) == m for every module read from text, not only valid modules.

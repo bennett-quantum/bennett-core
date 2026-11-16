@@ -61,7 +61,7 @@ fn journal_bytes_per_step_agree_with_the_reported_totals() {
     let words: Vec<_> = journal.split_whitespace().collect();
     let bytes: f64 = words[0].parse().expect("byte count");
     let per_step: f64 = words[2].parse().expect("bytes per step");
-    assert!(steps > 0.0 && bytes > 0.0);
+    assert!(steps > 1.0 && bytes > 0.0, "division and multiplication must differ in this fixture");
     assert!((per_step - bytes / steps).abs() <= 0.051, "{report}");
     assert!(report.contains("  forward: ") && report.contains("steps/s"), "{report}");
     assert!(report.contains("  reverse: "), "{report}");
