@@ -6,8 +6,9 @@ failed rewind made atomic, the two replay panics and the canceled-keeps refusal 
 helpers from libgcc 13.3, unmodified, replacing compiler-rt (`e89c98f`..`df429d7`); a Rust scalar probe
 (`c906fad`); files, clock and entropy for the musl runtime and the SQL oracle grown to five query shapes through
 256 rows with Grover at 512 (`a3f4de5`); test commits of the journal mutation job (`623d9e4`). Finished but not
-landed, because their checks were interrupted: see "Stopped in flight on 2026-11-16". New questions are in
-"Questions for the maintainer"; the design audition of the same day is recorded before them.
+landed, because their checks were interrupted: see "Stopped in flight on 2026-11-16". The design audition of the
+same day has its own section; the maintainer then answered every open question and decided on the audition's
+findings ("Decisions the maintainer took on 2026-11-16, in the afternoon"), so no question is open.
 Earlier: the night session (the journalled machine in the executor, all five steps of its order, with two
 independent oracles; journal content; `setjmp`/`longjmp`, return addresses and calls through another prototype in
 the front). The last corpus run (`64571ac`, musl linked) has GCC 1,569 agree, c-testsuite 218, `ieee/` 64, none
@@ -667,7 +668,9 @@ its vendor; at most two sol jobs at once.
 
 ## Decisions the maintainer took on 2026-11-16
 
-Every question in the next section is answered. The labels in brackets are that section's.
+Every question in "Questions the maintainer answered on 2026-11-16 (kept for their detail)" is answered. The
+labels in brackets are that section's. Four of these were changed or refined the same afternoon ([(1), W2], [W3],
+[W1], [A1]): see the next section.
 
 The machine:
 
@@ -727,6 +730,41 @@ How work is done:
   the decisions above that change the device program and the executor; the front's fallback (step 4); files and
   clocks; the checks; then growing the SQL oracle (a cost at a large size needs a cost model, a design question
   of its own).
+
+## Decisions the maintainer took on 2026-11-16, in the afternoon
+
+Taken after the design audition (its own section below) and on the three questions then open ("Questions the
+maintainer answered on 2026-11-16, in the afternoon"). Where one changes a decision of the morning it says so,
+and it is the later one that holds.
+
+- **NaN payloads.** A result that differs from the native one only in which input NaN's payload it carries
+  counts as agreement, compared by a rule that allows exactly this. The bit-for-bit debt is dropped.
+- **Running again is charged to the run's budget.** When the budget is spent the rewind fails cleanly, changing
+  nothing. This removes the hang recorded under "Known weak spots".
+- **The coherent class stays as documented for now.** A controlled in-place update of ordinary memory
+  (`cells[0] += 2` under a qubit) is not added to the guaranteed class for the first fallback steps; such
+  updates run under marks with their history and the warning. Adding it waits for the fallback and an oracle
+  that compares phases as well as weights, because the class may never shrink.
+- **A rewind that meets a state its history does not describe** (changes the morning's [(1), W2]). The machine's
+  meaning is the ruling of 2026-11-13: the inverse steps run regardless, the result is unspecified and the
+  toolchain warns. Qubits left over are kept, not released, so no channels are needed for this. `bad_rewind`
+  for the state-dependent causes, with its restore, and `dirty_free` are diagnostics of the simulator's strict
+  mode, as a sanitizer's are: no device can make these checks. `bad_rewind` for the classical causes (not a
+  live mark of this activation, a measurement since the mark) stays a fault.
+- **A fault on some branches** (changes [W3]). The machine's meaning is a fault code held in qubits, which the
+  program may measure (what `--allow-region-faults` does today). Stopping the run at once stays the simulator's
+  default, as a debugging aid.
+- **Time** (refines [W1]). A budget is required wherever a rewind follows a read of a qubit, and the rewind
+  means there: every branch waits at the rewind, the keeps are made, then the same steps run backwards on all
+  branches together. The cost is the budget, not the work done. The `Unaligned` case keeps stopping the run:
+  those worlds are not allowed to interfere.
+- **The call form with a fault code and a budget** (refines [A1]). Built, with two conditions. The
+  simulator-only checks (the state-dependent `bad_rewind`, `dirty_free`, the strict region and world stops) are
+  never delivered to a program as fault codes. And the budget is on the mark as well as on the call, so that
+  the caller's own steps between the mark and the rewind are bounded too.
+
+These join "the decisions above that change the device program and the executor" in the order of the next work,
+before the front's fallback (the advisor's placement). The work on `wip/machine-decisions` predates them.
 
 ## Questions the maintainer answered on 2026-11-16 (kept for their detail)
 
@@ -819,7 +857,8 @@ quantum circuit with ideal logical qubits, plus dynamic allocation of wires), wi
 reversible core, "to smoke out any unphysical assumptions that lead to exponential overheads or violations of
 quantum mechanics". Two independent designs with small working prototypes were made (Claude Fable, GPT Astra);
 they agree on the findings below. The prototypes are private and not in this tree; merging them into one was
-started and is unfinished. The maintainer has decided nothing on these findings yet.
+handed over but not begun when work stopped. The maintainer decided the same day on the findings that touch
+earlier decisions: "Decisions the maintainer took on 2026-11-16, in the afternoon".
 
 - **Checks that inspect the state cannot be device behaviour.** `dirty_free`, the state-dependent causes of
   `bad_rewind` with its restore, and "stop the run when some world faults" need to know something about every
@@ -857,6 +896,12 @@ started and is unfinished. The maintainer has decided nothing on these findings 
   part of it tied to a named compiler step.
 
 ## Questions for the maintainer
+
+None open.
+
+## Questions the maintainer answered on 2026-11-16, in the afternoon (kept for their detail)
+
+Each recommendation was taken ("Decisions the maintainer took on 2026-11-16, in the afternoon").
 
 - **NaN payloads of the complex helpers.** Over 2,532,864 inputs the device's libgcc helpers differ from the native
   archive in 50,952 results, all in which input NaN's payload the result carries; nothing else differs, and both
