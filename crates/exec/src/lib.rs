@@ -38,8 +38,8 @@ pub use journal::Undo;
 pub use measure::{
     Alignment, ApplyClassification, ApplyJournal, BranchJournal, CallPathStep, ChainRecovery, ClassifiedPosition,
     JournalMeasurement, LiveSource, PathId, ProducerOutput, RecomputeWitness, RecordInstance, RecoverableReason, Site,
-    SitePos, SourceKind, WordClass, WordInstance, WordRole, WordWitness, classify, classify_with_chains,
-    classify_with_recompute,
+    SitePos, SourceKind, Unobserved, UnobservedStep, WordClass, WordInstance, WordRole, WordWitness, classify,
+    classify_with_chains, classify_with_recompute,
 };
 pub use quantum::RegisterState;
 pub use region::{ApplyMode, RegionCost};

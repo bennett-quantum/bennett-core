@@ -255,7 +255,7 @@ fn a_rewind_has_finite_budget_even_in_an_infinite_loop() {
 }
 
 #[test]
-fn journal_content_refuses_rewind_in_a_region_but_observes_marks() {
+fn journal_content_names_a_rewind_in_a_region_but_observes_marks() {
     let source = "memory 512\nfunc @f() -> i2 {\nentry:\n%h = mark budget -1\nREWIND\nret 3\n}\nfunc @main() {\nentry:\n%q = qalloc 2\n%e = qalloc 5\napply @f() -> %q, %e budget 10\nret\n}";
     for raw in [false, true] {
         let module = load(&source.replace("REWIND", ""));
@@ -268,14 +268,15 @@ fn journal_content_refuses_rewind_in_a_region_but_observes_marks() {
         let module = load(&source.replace("REWIND", "rewind %h"));
         let mut observed = executor(&module, "main", &[], options());
         observed.measure_journal_content(raw);
-        let panic =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observed.run())).expect_err("must refuse rewind");
-        let message = panic
-            .downcast_ref::<String>()
-            .map(String::as_str)
-            .or_else(|| panic.downcast_ref::<&str>().copied())
-            .expect("panic text");
-        assert!(message.contains("the journal-content measurement does not follow `rewind`"), "{message}");
+        // It panicked here until the observer named what it does not follow.
+        assert_eq!(observed.run(), Outcome::Returned(None), "the run goes on unobserved");
+        let mut plain = executor(&module, "main", &[], options());
+        plain.run();
+        assert_same_state(&observed.snapshot(), &plain.snapshot(), "rewind observer");
+        let measurement = observed.take_journal_measurement().expect("on");
+        let unsupported = measurement.unsupported.expect("the rewind is named");
+        assert_eq!(unsupported.kind, bennett_exec::Unobserved::Rewind);
+        assert!(measurement.applies.is_empty());
     }
 }
 

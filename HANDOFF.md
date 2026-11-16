@@ -1305,6 +1305,11 @@ the ordinary frontend run without changing its domain or assertions.
   rewinds stop at a rewind that left history behind; route: journal the leftovers it made, so undoing the
   rewind takes them back as the registers its replayed allocations allocate.
 
+- The journal-content observer (`crates/exec/src/measure.rs`) does not follow a `rewind` or a call with a
+  budget inside a region. It panicked there (an `assert!` on valid programs) until 2026-11-16; it now stops
+  observing and names the step (`JournalMeasurement::unsupported`), the run unchanged. Route: shadow the
+  records a rewind pops (its history nodes and entries) and the frames a caught fault discards.
+
 - Worlds' deferred un-run checks (`d6036a1`) are matched across worlds by a 64-bit hash of the classical state; a
   collision would add two different checks (route: compare the states on a hash match). The copy each world saves
   before a rewind makes the 1,500-iteration idiom loop about a third slower (route: copy only the journal above

@@ -289,9 +289,13 @@ arguments and reads of registers included, with the region's rules attached to i
   catch as a step too (run budgets 0 to 12 compare the success and atomic failure boundaries).
   Clock composition of a padded rewind inside a guarded call with a narrow caller mark remains a
   specification question: its ignored witness and the alternatives are in `HANDOFF.md`.
-- **Not yet** (debts): the journal-content observer does not follow the form; a `call_indirect` with a
-  budget; the front does not emit it. `apply`, `qalloc` and `qfree` remain first-class forms (the
-  maintainer's decision of the evening of 2026-11-16).
+- **Not yet** (debts): the journal-content observer does not follow the form nor a `rewind` in a region: at
+  the first it stops observing, names the step (`JournalMeasurement::unsupported`, `Unobserved::CallBudget`
+  or `Rewind`) and leaves the unfinished `apply` out, and the run goes on as with it off (it asserted before,
+  a panic on valid programs; `a_rewind_or_a_call_with_a_budget_in_a_region_is_named_unsupported`,
+  `journal_content.rs`; route: shadow the records a rewind pops and the frames a catch discards); a
+  `call_indirect` with a budget; the front does not emit it. `apply`, `qalloc` and `qfree` remain
+  first-class forms (the maintainer's decision of the evening of 2026-11-16).
 
 ### Worlds
 
