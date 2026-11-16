@@ -404,3 +404,68 @@ the overflow tail seen at N=256/1024 in `sqlite-footprint`. The complete SQL eng
 not exercise most of its features. The flags and VFS intentionally remove OS services rather than
 implementing a host filesystem. Build and execution wall times are observations on a shared laptop,
 not performance thresholds. Neither compiler, executor nor musl runtime is changed by this experiment.
+
+## Larger SQL oracles
+
+`SQL_ORACLE=1` enables four additional **Boolean** statements without changing the original four.
+The schema, seed, generated row contents, bind/step/column/reset calls, SQLite source and VFS remain
+those above. The new `scale.py` entry uses the generated table directly, with no SQL updates to plant
+matches. Every native result must be 0 or 1 before constructing a one-bit oracle; counts are never
+silently truncated to their parity.
+
+| Shape | SQL | Distinct work exercised |
+|---|---|---|
+| `like_note` | `SELECT note LIKE '%zq%' FROM t WHERE id=?1` | Existing B-tree lookup, record decoding and LIKE, including long notes at larger N |
+| `int_eq` | `SELECT a=3 FROM t WHERE id=?1` | Integer equality after indexed rowid lookup |
+| `text_order` | `SELECT name<'m' FROM t WHERE id=?1` | TEXT comparison with SQLite's default BINARY collation |
+| `two_where` | `SELECT EXISTS(SELECT 1 FROM t WHERE id=?1 AND a<8 AND b>=500)` | Scalar subquery, two WHERE comparisons, conditional exits, and EXISTS returning false when no row qualifies |
+| `range_agg` | `SELECT count(*)>0 FROM t WHERE a BETWEEN ?1 AND ?1+1` | Full-table range scan, aggregate accumulator and finalization; the result is Boolean even when several rows qualify |
+
+The parameter is row index + 1 for the first four shapes and the zero-based index for `range_agg`.
+The aggregate searches candidate values of `a`, rather than looking up the candidate's primary key.
+The constants 3, 8, 500 and `'m'` stay fixed at every size. Prepared statements are warmed at setup;
+SQLite performs the actual query at every oracle call.
+
+Build the ordinary prerequisites above, then the optimized standalone observer and each size:
+
+```sh
+CARGO_BUILD_JOBS=2 cargo build --release --manifest-path experiments/sqlite-on-device/harness/Cargo.toml --target-dir target
+SQLITE_DIR=<amalgamation directory> SQL_ORACLE=1 NROWS=16 OUT=target/sqlite-on-device/oracle16 experiments/sqlite-on-device/build.sh
+python3 experiments/sqlite-on-device/scale.py target/sqlite-on-device/oracle16 --n 16
+# Repeat with NROWS=32, etc. Run heavy commands sequentially on shared machines.
+# Independent history-versus-branches comparison, with the same strict checks:
+python3 experiments/sqlite-on-device/scale.py target/sqlite-on-device/oracle16 --n 16 --modes coherent grover --apply compare
+# Portable tabular report from the raw, ignored JSON:
+python3 experiments/sqlite-on-device/summarize.py target/sqlite-on-device/oracle16/scale-history/results.json
+```
+
+Each child has an explicit default 300-second timeout and 4,096 MiB virtual-address-space limit
+(`--seconds`, `--memory-mib`); reports retain process status, timeout state, stderr, stdout, wall time
+and `/usr/bin/time` peak RSS. A stopped child fails the run, and its limits remain in the report.
+These are shared-host experiment limits, not claimed physical limits. Executor forward/reverse
+seconds exclude module parsing; wall time includes parsing, snapshot checks and dense comparisons.
+
+For each size/shape the complete native/device driver output and status are checked, then a separate
+entry checks every row against the native truth table. The same entry in reversible mode restores the
+initial full classical snapshot byte for byte and the quantum snapshot within 1e-12. Two coherent
+calls with output initially 0 and initially 1 each compare **every** amplitude after **each** call
+with the existing independent `oracle_support/dense.rs` matrices and native truth-table permutation.
+Both coherent runs reverse all the way through setup to their original snapshots. Each successful
+apply preserves the entire database, memory, stack, slots, tape and register table. No region faults
+are allowed. Reversible outer execution retains one Apply tag per call; the callee history is erased.
+
+Grover uses the native match set and a positive iteration count nearest the first theoretical peak
+(at least one iteration, also for no/all matches). It checks every intermediate oracle state and
+all final complex amplitudes against the independent dense calculation, plus the closed-form success
+probability. The kick and fault registers must free cleanly and only row qubits remain before
+measurement. No measurement is used as evidence for the distribution. The dense vector holds 32N
+complex doubles (row, output and four fault bits); it uses the existing matrix/tensor methods, without
+materializing a quadratic matrix. No dense allocation bound in the older reference interpreter is
+changed. All SQLite instructions still run in the device; native truth replaces SQL only in the
+independent expected-state calculation.
+
+Fast glue coverage is in `front/tests/tests/sql_oracle_glue.rs`: the actual Python generator at
+N=4/8/16/32 and all five query indices, with a memory-writing fixture, forward truth tables, full
+reversal, coherent XOR cancellation and signed Grover amplitudes. It needs no SQLite build.
+The standalone observer's unit test also checks dense no/single/half/all-match Grover phases through
+N=256. Real SQLite execution remains an explicit experiment and does not slow `cargo test`.

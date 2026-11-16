@@ -2,11 +2,16 @@
 use bennett_exec::{Executor, Options, Outcome};
 use std::{env, fs, time::Instant};
 mod grover;
+mod scale;
 
 fn main() {
     let args: Vec<_> = env::args().collect();
     let text = fs::read_to_string(&args[1]).expect("device text");
     let module = bennett_ir::load(&text).expect("valid device program");
+    if args[2] == "scale" {
+        scale::run(&module, &args[3..]);
+        return;
+    }
     if args[2] == "grover" {
         grover::run(&module, &args[3]);
         return;

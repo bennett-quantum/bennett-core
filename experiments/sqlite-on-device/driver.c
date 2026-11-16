@@ -9,15 +9,29 @@
 #define HEAP_BYTES (256 * 1024)
 #endif
 #include "vfs.c"
-static const char *sod_names[] = {"arith", "like_name", "like_note", "scan"};
+#ifndef SQL_ORACLE
+#define SQL_ORACLE 0
+#endif
+static const char *sod_names[] = {"arith", "like_name", "like_note", "scan"
+#if SQL_ORACLE
+  , "int_eq", "text_order", "two_where", "range_agg"
+#endif
+};
 static const char *sod_sql[] = {
   "SELECT (a*7+b)%13=5 FROM t WHERE id=?1",
   "SELECT name LIKE '%qu%' FROM t WHERE id=?1",
   "SELECT note LIKE '%zq%' FROM t WHERE id=?1",
   "SELECT count(*) FROM t WHERE a=?1"
+#if SQL_ORACLE
+  , "SELECT a=3 FROM t WHERE id=?1",
+  "SELECT name<'m' FROM t WHERE id=?1",
+  "SELECT EXISTS(SELECT 1 FROM t WHERE id=?1 AND a<8 AND b>=500)",
+  "SELECT count(*)>0 FROM t WHERE a BETWEEN ?1 AND ?1+1"
+#endif
 };
 static sqlite3 *sod_db;
-static sqlite3_stmt *sod_st[4];
+#define SOD_QUERIES (sizeof sod_sql / sizeof sod_sql[0])
+static sqlite3_stmt *sod_st[SOD_QUERIES];
 static _Alignas(16) unsigned char sod_heap[HEAP_BYTES];
 static uint64_t sod_lcg = UINT64_C(0x2545F4914F6CDD1D);
 static uint32_t sod_rnd(void) {
@@ -37,7 +51,7 @@ static void sod_check(int rc) {
 /* External names survive lowering for the handwritten device harness. */
 __attribute__((noinline)) int experiment_query(int q, int r) {
   sqlite3_stmt *st = sod_st[q];
-  sod_check(sqlite3_bind_int64(st, 1, r + (q != 3)));
+  sod_check(sqlite3_bind_int64(st, 1, r + (q != 3 && q != 7)));
   int rc = sqlite3_step(st);
   sod_check(rc);
   int result = rc == SQLITE_ROW ? sqlite3_column_int64(st, 0) : -1;
@@ -67,7 +81,7 @@ __attribute__((noinline)) int experiment_setup(void) {
   }
   sod_check(sqlite3_finalize(ins));
   sod_check(sqlite3_exec(sod_db, "COMMIT", 0, 0, 0));
-  for (int q = 0; q < 4; ++q) {
+  for (int q = 0; q < (int)SOD_QUERIES; ++q) {
     sod_check(sqlite3_prepare_v2(sod_db, sod_sql[q], -1, &sod_st[q], 0));
     experiment_query(q, 0);
   }
@@ -75,13 +89,13 @@ __attribute__((noinline)) int experiment_setup(void) {
 }
 int main(void) {
   experiment_setup();
-  for (int q = 0; q < 4; ++q) {
+  for (int q = 0; q < (int)SOD_QUERIES; ++q) {
     for (int r = 0; r < NROWS; ++r)
       printf("%s %d %d\n", sod_names[q], r, experiment_query(q, r));
     printf("memory %s %lld %lld\n", sod_names[q],
            (long long)sqlite3_memory_used(), (long long)sqlite3_memory_highwater(0));
   }
-  for (int q = 0; q < 4; ++q) sod_check(sqlite3_finalize(sod_st[q]));
+  for (int q = 0; q < (int)SOD_QUERIES; ++q) sod_check(sqlite3_finalize(sod_st[q]));
   sod_check(sqlite3_close(sod_db));
   printf("vfs open=%u random=%u clock=%u\n", sod_open_calls, sod_random_calls, sod_clock_calls);
   return 0;

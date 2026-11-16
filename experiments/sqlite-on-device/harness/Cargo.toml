@@ -9,6 +9,8 @@ publish = false
 [dependencies]
 bennett-ir = { path = "../../../crates/ir" }
 bennett-exec = { path = "../../../crates/exec" }
+nalgebra = { version = "0.33", default-features = false, features = ["std"] }
+num-complex = "0.4"
 
 [profile.dev.package.bennett-exec]
 opt-level = 3

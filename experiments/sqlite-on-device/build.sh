@@ -21,7 +21,7 @@ out=$(realpath "$out")
 printf '#include "sqlite3.c"\n#include "driver.c"\n' > "$out/program.c"
 set -- -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OS_OTHER=1 \
   -DSQLITE_ENABLE_MEMSYS5 -DSQLITE_TEMP_STORE=3 -DNROWS="${NROWS:-4}" \
-  -DHEAP_BYTES="${HEAP_BYTES:-262144}" -I"$SQLITE_DIR" -I"$root/experiments/sqlite-on-device"
+  -DSQL_ORACLE="${SQL_ORACLE:-0}" -DHEAP_BYTES="${HEAP_BYTES:-262144}" -I"$SQLITE_DIR" -I"$root/experiments/sqlite-on-device"
 clang-18 -O2 -fno-vectorize -fno-slp-vectorize "$@" "$out/program.c" -o "$out/native"
 # Pass each identical configuration flag to the device compilation.
 for flag do
