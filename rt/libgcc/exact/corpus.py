@@ -25,11 +25,11 @@ def main():
         source = source_dir / f'{name}.c'
         for level in ['O0', 'O2']:
             native = OUT / f'{name}-{level}'
-            run(['clang-18', f'-{level}', source, '-lm', f'-Wl,-Map,{native}.map', '-o', native], check=True)
+            run(['clang-18', f'-{level}', '-fno-inline', source, '-lm', f'-Wl,-Map,{native}.map', '-o', native], check=True)
             reference = run([native], capture_output=True, check=True)
             assert reference.stdout == b'', reference.stdout
         linked = OUT / f'{name}.bn'
-        result = run(['python3', MUSL / 'link.py', source, '-o', linked], capture_output=True, text=True)
+        result = run(['python3', MUSL / 'link.py', source, '-o', linked, '--clang-flag=-fno-inline'], capture_output=True, text=True)
         (OUT / f'{name}-normal.log').write_text(result.stdout + result.stderr)
         if result.returncode:
             assert 'constrained floating-point intrinsic' in result.stderr, result.stderr
@@ -45,12 +45,12 @@ def main():
         # observable exception state are NOT implemented by this diagnostic.
         shim = OUT / f'{name}-diagnostic.c'
         bodies = []
-        for f in ['ilogb.c', 'ilogbl.c']:
+        for f in ['ilogb.c', 'ilogbf.c', 'ilogbl.c']:
             body = (MUSL / 'musl-1.2.5/src/math' / f).read_text()
             bodies.append(body.replace('#pragma STDC FENV_ACCESS ON', '/* diagnostic: pragma removed */'))
         shim.write_text('\n'.join(bodies) + '\n' + source.read_text())
         program = OUT / f'{name}-diagnostic.bn'
-        run(['python3', MUSL / 'link.py', shim, '-o', program, '--clang-flag=-Dhidden=', '--clang-flag=-I' + str(MUSL / 'musl-1.2.5/src/internal'),
+        run(['python3', MUSL / 'link.py', shim, '-o', program, '--clang-flag=-fno-inline', '--clang-flag=-Dhidden=', '--clang-flag=-I' + str(MUSL / 'musl-1.2.5/src/internal'),
              '--clang-flag=-I' + str(MUSL / 'musl-1.2.5/arch/x86_64'),
              '--clang-flag=-I' + str(MUSL / 'musl-1.2.5/arch/generic')], check=True)
         actual = run([ROOT / 'target/release/bennett', 'run', program, '--entry', '__bennett_entry',

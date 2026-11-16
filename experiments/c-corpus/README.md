@@ -75,6 +75,20 @@ error. **wrong**: the device reaches `abort()`/`exit(≠0)`, or `main` returns a
 exits other than 0 or 3, `bennett check` rejects its output, or `bennett run` exits other than 0, 1 or 2. **budget**:
 the 10^8-step budget ran out. **skipped**: no native reference, as above.
 
+## Complex helpers switched to libgcc (2026-11-16)
+
+The six helpers now come from unmodified GCC 13.3.0 libgcc, the release supplying the native
+reference's static archive (`rt/libgcc/VENDOR.md`). Long-double division is self-contained;
+its earlier `logbl` dependency is gone. The three GCC 14.2 `ieee/` programs still refuse on
+the normal musl route at their own `ilogb`/`ilogbl` `FENV_ACCESS` operations. No corpus
+aggregate is changed by claiming those as passes. An explicitly diagnostic run of the
+original programs, with only those pragmas removed in scratch copies of musl's exponent
+routines, passes all three with empty stdout/status 0: `cdivchkf` 7,045, `cdivchkd` 7,262,
+`cdivchkld` 9,238 steps (`-fno-inline`, native `-O0`/`-O2` also pass). This fixes the
+compiler-rt accuracy failure exposed by that diagnostic; production completion still
+requires the constrained-operation fallback. Reproduction and precise limits:
+`rt/libgcc/README.md`, `rt/libgcc/exact/corpus.py`.
+
 ## Three open cost debts, measured (2026-11-16)
 
 No compiler/runtime behavior changed for this measurement and no wrong result was found. The long-double

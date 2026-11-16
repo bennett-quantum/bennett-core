@@ -30,3 +30,26 @@ Scratch output goes under `.tmp/libgcc-exact`; any raw-bit mismatch fails the ru
 The GCC `cdivchk` programs separately call `ilogb`/`ilogbl`. Those musl routines contain
 `FENV_ACCESS` and currently require the front's constrained-operation fallback. This is
 separate from `__divxc3`, which no longer calls a library function.
+
+To repeat the corpus check, pass the GCC **14.2.0** corpus's
+`gcc/testsuite/gcc.c-torture/execute/ieee` directory (build musl first):
+
+```sh
+python3 rt/libgcc/exact/corpus.py path/to/execute/ieee
+```
+
+The runner uses the corpus's `-fno-inline`, checks native `-O0` and `-O2` stdout/status,
+and attempts the normal musl link first. Its separately labelled diagnostic copies musl's
+`ilogb.c`, `ilogbf.c` and `ilogbl.c` into scratch, removing only their `FENV_ACCESS` pragmas;
+it supplies their internal declaration visibility macro but changes no arithmetic. The
+original corpus programs and all six libgcc helpers stay unchanged. This diagnostic tests
+the division algorithms; it does not implement observable exceptions or turn a normal-route
+refusal into a corpus pass. Scratch sources, native link maps and outputs are retained under
+`.tmp/libgcc-corpus`.
+
+Measured on 2026-11-16 with GCC 14.2.0's three original test files, clang 18.1.3 and
+libgcc 13.3.0: both native levels exit 0 with empty stdout. All three normal device links
+still refuse at musl's constrained operation. With the explicitly diagnostic pragma removal,
+all three return 0 with empty stdout: `cdivchkf` **7,045**, `cdivchkd` **7,262**, `cdivchkld`
+**9,238** steps. The old compiler-rt division failed even this diagnostic; libgcc passes it.
+This removes the helper-accuracy failure, while the ordinary corpus route remains a debt.
