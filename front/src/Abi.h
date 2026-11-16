@@ -7,6 +7,20 @@ class Module;
 
 namespace bennett {
 
+// Calls through a prototype that differs from the callee's definition (an unprototyped K&R call, a
+// redeclared library function, a cast function pointer) become calls with the callee's own prototype, made
+// to read what a native x86-64 System V call reads: each parameter from the register or stack slot where
+// the caller's prototype put an argument, a result from where the callee's put it. Extra arguments are
+// dropped; an argument the callee never reads may be missing; narrower reads take the low bits. Where the
+// callee or the caller would read bits the other side does not set (the upper half of a 32-bit value, a
+// missing argument that is read, an integer from a floating-point register), the convention determines no
+// value: a direct call is refused by name; a narrow argument whose extension the callee relies on is
+// checked when the call runs, and stops with the named fault `unreachable` when it is not the extension
+// of its low bits. A call through a pointer compares the pointer with each function whose address is
+// taken and whose prototype differs but is reconciled, and calls it so (see lowerCallThroughPointer).
+// Calls of declarations are left alone (refused later). Must run before lowerVariadics.
+void lowerMismatchedCalls(llvm::Module &module);
+
 // Variadic functions and calls. The x86-64 System V convention is emulated in memory: clang has already
 // lowered `va_arg` inline against it, so the device program need only give it the memory it reads.
 //
@@ -22,11 +36,9 @@ namespace bennett {
 // placing everything on the stack would be wrong: clang passes a 16-byte-aligned struct that fits in two
 // registers as two plain `i64`s, and reads it from the stack at a 16-byte boundary.
 //
-// `va_copy` becomes a copy of the 24-byte `va_list`, and `va_end` is dropped. A call with a variadic
-// type of a function that is not variadic (an unprototyped K&R declaration) becomes a plain call when
-// the arguments the function takes match its parameters exactly; the native call passes the rest in
-// registers or on the stack, where the function never reads them. Must run before
-// lowerParameterAttributes, which would drop the `byval` of a variadic argument.
+// `va_copy` becomes a copy of the 24-byte `va_list`, and `va_end` is dropped. Calls through another
+// prototype are lowerMismatchedCalls' (run first). Must run before lowerParameterAttributes, which would
+// drop the `byval` of a variadic argument.
 void lowerVariadics(llvm::Module &module);
 
 // Results that are aggregates of integer and floating-point fields of at most 128 bits in all (`{ i64, i64 }`,

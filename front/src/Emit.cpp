@@ -831,7 +831,8 @@ void BodyWriter::call(const Instruction &inst) {
     return;
   }
   // getCalledFunction() is null when the call's type differs from the callee's, so a direct call through a
-  // wrong prototype arrives here.
+  // wrong prototype would arrive here: lowerMismatchedCalls (Abi.h) leaves none but calls of declarations,
+  // refused above, so this is a guard.
   if (const auto *callee = dyn_cast<Function>(call.getCalledOperand()->stripPointerCasts())) {
     notHandled("a call through a mismatched prototype of @" + callee->getName().str(), &inst);
   }

@@ -9,9 +9,13 @@
 #include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Module.h>
 #include <llvm/TargetParser/Triple.h>
+#include <llvm/Transforms/Utils/BasicBlockUtils.h>
 
 #include <algorithm>
+#include <array>
 #include <functional>
+#include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -233,116 +237,6 @@ void lowerCall(CallInst *call, const DataLayout &layout) {
   lowered->takeName(call);
   call->replaceAllUsesWith(lowered);
   call->eraseFromParent();
-}
-
-// A call with a variadic type of a function that is not variadic: a plain call of the function if the
-// arguments it takes have its parameters' types and the result is the same or unused.
-void lowerCallOfFixed(CallInst *call, Function *callee) {
-  FunctionType *type = callee->getFunctionType();
-  bool fits = call->arg_size() >= type->getNumParams() &&
-              (call->getType() == type->getReturnType() || call->use_empty() || call->getType()->isVoidTy());
-  for (unsigned i = 0; fits && i < type->getNumParams(); ++i) {
-    fits = call->getArgOperand(i)->getType() == type->getParamType(i) && !call->isByValArgument(i) &&
-           !callee->hasParamAttribute(i, Attribute::ByVal);
-  }
-  if (!fits) {
-    notHandled("a call through a mismatched prototype of @" + callee->getName().str(), call);
-  }
-  IRBuilder<> b(call);
-  std::vector<Value *> args(call->arg_begin(), call->arg_begin() + type->getNumParams());
-  CallInst *lowered = b.CreateCall(callee, args);
-  lowered->setDebugLoc(call->getDebugLoc());
-  if (!call->use_empty()) {
-    lowered->takeName(call);
-    call->replaceAllUsesWith(lowered);
-  }
-  call->eraseFromParent();
-}
-
-// A call of variadic type through a pointer. clang gives every call through an unprototyped pointer
-// (`void (*)()`) a variadic type, and on x86-64 System V such a call reaches a variadic and a fixed function
-// alike. The target is known only when the call runs, so the call compares the pointer with each variadic
-// function whose address is taken: on a match it passes the area as a call of that function would, with
-// that function's named parameters; otherwise it is a plain call with the argument types it has. A target
-// whose parameters differ from the arguments still ends in the named fault of a mismatched indirect call.
-void lowerCallThroughPointer(CallInst *call, const std::vector<Function *> &reachable, const DataLayout &layout) {
-  IRBuilder<> b(call);
-  Value *target = call->getCalledOperand();
-  auto plainCall = [&](IRBuilder<> &at) {
-    std::vector<Type *> params;
-    for (Value *arg : call->args()) {
-      params.push_back(arg->getType());
-    }
-    FunctionType *type = FunctionType::get(call->getType(), params, false);
-    std::vector<Value *> args(call->arg_begin(), call->arg_end());
-    CallInst *plain = at.CreateCall(type, target, args);
-    plain->setAttributes(call->getAttributes());
-    plain->setCallingConv(call->getCallingConv());
-    plain->setDebugLoc(call->getDebugLoc());
-    return plain;
-  };
-  std::vector<Function *> candidates;
-  for (Function *function : reachable) {
-    FunctionType *type = function->getFunctionType();
-    bool fits = call->arg_size() >= type->getNumParams() &&
-                (call->getType() == type->getReturnType() || call->use_empty() || call->getType()->isVoidTy());
-    for (unsigned i = 0; fits && i < type->getNumParams(); ++i) {
-      fits = call->getArgOperand(i)->getType() == type->getParamType(i) &&
-             call->isByValArgument(i) == function->hasParamAttribute(i, Attribute::ByVal);
-    }
-    if (fits) {
-      candidates.push_back(function);
-    }
-  }
-  if (candidates.empty()) {
-    CallInst *plain = plainCall(b);
-    plain->takeName(call);
-    call->replaceAllUsesWith(plain);
-    call->eraseFromParent();
-    return;
-  }
-  BasicBlock *head = call->getParent();
-  Function &caller = *head->getParent();
-  BasicBlock *tail = head->splitBasicBlock(call, "call.join");
-  head->getTerminator()->eraseFromParent();
-  bool result = !call->getType()->isVoidTy() && !call->use_empty();
-  PHINode *phi = nullptr;
-  if (result) {
-    phi = PHINode::Create(call->getType(), unsigned(candidates.size() + 1), "", &*tail->begin());
-  }
-  BasicBlock *test = head;
-  std::vector<CallInst *> toLower;
-  for (Function *function : candidates) {
-    BasicBlock *match = BasicBlock::Create(call->getContext(), "call.variadic", &caller, tail);
-    BasicBlock *next = BasicBlock::Create(call->getContext(), "call.next", &caller, tail);
-    IRBuilder<> t(test);
-    t.SetCurrentDebugLocation(call->getDebugLoc());
-    t.CreateCondBr(t.CreateICmpEQ(target, function), match, next);
-    IRBuilder<> m(match);
-    std::vector<Value *> args(call->arg_begin(), call->arg_end());
-    CallInst *direct = m.CreateCall(function->getFunctionType(), function, args);
-    direct->setAttributes(call->getAttributes());
-    direct->setCallingConv(call->getCallingConv());
-    direct->setDebugLoc(call->getDebugLoc());
-    m.CreateBr(tail);
-    if (phi) {
-      phi->addIncoming(direct, match);
-    }
-    toLower.push_back(direct);
-    test = next;
-  }
-  IRBuilder<> e(test);
-  CallInst *plain = plainCall(e);
-  e.CreateBr(tail);
-  if (phi) {
-    phi->addIncoming(plain, test);
-    phi->takeName(call);
-    call->replaceAllUsesWith(phi);
-  }
-  call->eraseFromParent();
-  for (CallInst *direct : toLower) {
-    lowerCall(direct, layout); // replaces the call, and its use in the phi
-  }
 }
 
 // Fills the `va_list` at `list` for a function whose named parameters use `named`, reading `area`.
@@ -666,7 +560,724 @@ void lowerDefinitionInMemory(Function *function, const DataLayout &layout) {
   function->eraseFromParent();
 }
 
+// ---- Calls through a prototype that differs from the callee's definition.
+//
+// Natively such a call passes what the caller's prototype says, where the x86-64 System V convention puts
+// it, and the callee reads what its own definition says, from where the convention puts that. A value is
+// determined wherever the reader reads bits the other side set. Each value leaves an "image" in its
+// registers or 8-byte stack slots: an integer, of which a number of low bits are set, as clang 18's code
+// sets them and relies on them (measured natively at -O0 and -O2). A caller extends an argument narrower
+// than 32 bits that has `signext` or `zeroext` to 32 bits, and a callee relies on that extension (at -O2 it
+// uses the register as it is; at -O0 it extends again): so the callee's value is determined only when the
+// 32 bits are the extension of its own narrow value, which is checked when the call runs. Nothing else is
+// extended: the upper half of a 32-bit argument is not set, nor anything in a result above its width
+// (callees do not extend results; callers extend them again), except an `i1` result with `zeroext`, a
+// byte (the psABI's _Bool).
+
+// Bits of one value's image in one register or slot: from bit `shift`, `known` of them set.
+struct Piece {
+  unsigned value; // argument or parameter index, or result element
+  unsigned shift;
+  unsigned known;
+};
+
+// A value passed whole in memory (`byval`, `x86_fp80`): only the same value at the same place is understood.
+struct WholeValue {
+  unsigned value;
+  Type *type;
+  Type *byval;
+  uint64_t bytes;
+};
+
+constexpr unsigned extendedBits = 32; // what a caller extends a narrow argument to
+constexpr unsigned boolBits = 8;      // what an `i1` result with `zeroext` fills
+
+// The image of a scalar of `type`, in bits: 0 for a type passed whole in memory, nullopt for a type not
+// reasoned about here (vectors other than two floats, aggregates, integers wider than 128 bits).
+std::optional<unsigned> imageBits(Type *type) {
+  if (type->isIntegerTy()) {
+    unsigned bits = type->getIntegerBitWidth();
+    return bits <= 128 ? std::optional<unsigned>(bits) : std::nullopt;
+  }
+  if (type->isPointerTy() || type->isDoubleTy()) {
+    return 64;
+  }
+  if (type->isFloatTy()) {
+    return 32;
+  }
+  auto *vectorType = dyn_cast<FixedVectorType>(type);
+  if (vectorType && vectorType->getNumElements() == 2 && vectorType->getElementType()->isFloatTy()) {
+    return 64;
+  }
+  if (type->isX86_FP80Ty()) {
+    return 0;
+  }
+  return std::nullopt;
+}
+
+std::string typeName(const Type *type) {
+  std::string text;
+  raw_string_ostream out(text);
+  type->print(out);
+  return out.str();
+}
+
+bool extended(const AttributeSet &attributes) {
+  return attributes.hasAttribute(Attribute::SExt) || attributes.hasAttribute(Attribute::ZExt);
+}
+
+// Where the values of one side of a call go, by Place::offset.
+struct Arrangement {
+  std::map<uint64_t, Piece> pieces;
+  std::map<uint64_t, WholeValue> whole;
+  std::vector<Place> places;
+  std::vector<std::array<uint64_t, 3>> used; // registers and stack used after each value
+
+  const Piece *pieceAt(uint64_t offset) const {
+    auto found = pieces.find(offset);
+    return found == pieces.end() ? nullptr : &found->second;
+  }
+  bool insideWhole(uint64_t offset) const {
+    return std::any_of(whole.begin(), whole.end(), [&](const auto &entry) {
+      return offset >= entry.first && offset < entry.first + entry.second.bytes;
+    });
+  }
+};
+
+// Arranges values of `types` with `attributes`; a caller's images include its extensions. Returns why not.
+std::string arrange(const std::vector<Type *> &types, const AttributeList &attributes, bool caller,
+                    const DataLayout &layout, const Value *at, Arrangement &out) {
+  Assigner assigner;
+  for (unsigned i = 0; i < types.size(); ++i) {
+    Type *type = types[i];
+    AttributeSet set = attributes.getParamAttrs(i);
+    for (Attribute::AttrKind kind : {Attribute::InReg, Attribute::InAlloca, Attribute::Preallocated, Attribute::Nest,
+                                     Attribute::SwiftSelf, Attribute::SwiftError, Attribute::SwiftAsync,
+                                     Attribute::ByRef}) {
+      if (set.hasAttribute(kind)) {
+        return "an argument with the attribute `" + Attribute::getNameFromAttrKind(kind).str() + "`";
+      }
+    }
+    Type *byval = attributes.getParamByValType(i);
+    std::optional<unsigned> bits = byval ? std::optional<unsigned>(0) : imageBits(type);
+    if (!bits) {
+      return "an argument of type " + typeName(type);
+    }
+    if (type->isIntegerTy(128) && assigner.general + 1 == generalRegisters) {
+      // The psABI and LLVM's backend disagree here (see Assigner): which one each side followed is unknown.
+      return "a 128-bit integer argument when one register is left";
+    }
+    Place place = assigner.assign(type, byval, attributes.getParamAlignment(i), layout, at);
+    out.places.push_back(place);
+    out.used.push_back({assigner.general, assigner.vector, assigner.stackBytes});
+    if (*bits == 0) {
+      uint64_t bytes = byval ? layout.getTypeAllocSize(byval).getFixedValue() : 16;
+      out.whole[place.offset] = {i, type, byval, roundUp(bytes, slotBytes)};
+      continue;
+    }
+    if (caller && *bits < extendedBits && extended(set)) {
+      bits = extendedBits;
+    }
+    if (*bits > 64) {
+      out.pieces[place.offset] = {i, 0, 64};
+      out.pieces[place.offset + generalBytes] = {i, 64, *bits - 64};
+    } else {
+      out.pieces[place.offset] = {i, 0, *bits};
+    }
+  }
+  return "";
+}
+
+// Whether a callee's parameter is never read: unused, or only stored to stack slots that nothing reads but
+// loads whose value is unused (how clang -O0 keeps an unused parameter, and `(void)p`).
+bool unread(const Argument &arg) {
+  for (const User *user : arg.users()) {
+    const auto *store = dyn_cast<StoreInst>(user);
+    const auto *slot = store ? dyn_cast<AllocaInst>(store->getPointerOperand()) : nullptr;
+    if (!slot || store->getValueOperand() != &arg) {
+      return false;
+    }
+    for (const User *use : slot->users()) {
+      const auto *other = dyn_cast<StoreInst>(use);
+      const auto *load = dyn_cast<LoadInst>(use);
+      if (!(other && other->getPointerOperand() == slot && other->getValueOperand() != slot) &&
+          !(load && load->use_empty() && !load->isVolatile()) && !isa<LifetimeIntrinsic>(use)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+// How one value the reader reads is made: from pieces of the writer's images, low bits first.
+struct Source {
+  enum Kind { Bits, Unread, Whole } kind = Unread;
+  std::vector<std::pair<Piece, unsigned>> parts; // a piece, and how many of its bits are taken
+  unsigned need = 0;                             // bits read: the value's own, or what an extension fills
+  enum Check { None, Sign, Zero, Bool } check = None;
+  unsigned whole = 0; // the argument passed on as it is
+};
+
+// Collects `need` bits from the pieces `pieceAt` gives in turn (the next register or slot). Returns why not.
+std::string collect(const std::function<const Piece *(unsigned)> &pieceAt, unsigned need, Source &out) {
+  out.kind = Source::Bits;
+  out.need = need;
+  for (unsigned i = 0, left = need; left; ++i) {
+    const Piece *piece = pieceAt(i);
+    unsigned take = std::min(left, 64u);
+    if (!piece) {
+      return "a value that is not passed";
+    }
+    if (piece->known < take) {
+      return "bits " + std::to_string(need - left + piece->known) + " to " + std::to_string(need - left + take - 1) +
+             ", which are not set";
+    }
+    out.parts.push_back({*piece, take});
+    left -= take;
+  }
+  return "";
+}
+
+// The pieces a result of `type` leaves in rax, rdx (locations 0, 1), xmm0, xmm1 (2, 3), by element. False
+// when it is not reasoned about here.
+bool arrangeResult(Type *type, const AttributeSet &attributes, std::map<unsigned, Piece> &out) {
+  if (type->isVoidTy()) {
+    return true;
+  }
+  std::vector<Type *> elements;
+  if (auto *structure = dyn_cast<StructType>(type)) {
+    elements.assign(structure->element_begin(), structure->element_end());
+  } else {
+    elements.push_back(type);
+  }
+  unsigned general = 0;
+  unsigned vector = 2;
+  for (unsigned e = 0; e < elements.size(); ++e) {
+    std::optional<unsigned> bits = imageBits(elements[e]);
+    if (!bits || *bits == 0) {
+      return false;
+    }
+    if (elements[e]->isIntegerTy(1) && attributes.hasAttribute(Attribute::ZExt)) {
+      bits = boolBits;
+    }
+    if (elements[e]->isFloatingPointTy() || elements[e]->isVectorTy()) {
+      if (vector == 4) {
+        return false;
+      }
+      out[vector++] = {e, 0, *bits};
+      continue;
+    }
+    for (unsigned shift = 0; shift < *bits; shift += 64) {
+      if (general == 2) {
+        return false;
+      }
+      out[general++] = {e, shift, std::min(*bits - shift, 64u)};
+    }
+  }
+  return true;
+}
+
+std::vector<Type *> elementsOf(Type *type) {
+  if (auto *structure = dyn_cast<StructType>(type)) {
+    return {structure->element_begin(), structure->element_end()};
+  }
+  return {type};
+}
+
+// How a call through a prototype other than the callee's is made with the callee's own.
+struct Plan {
+  std::vector<Source> params;
+  std::vector<unsigned> variadic; // arguments passed on as the callee's variadic ones
+  bool resultWhole = false;       // the caller's result is the callee's, as it is
+  std::vector<Source> result;     // otherwise, per element of the caller's result (empty: none used)
+};
+
+// Plans a call of `callee` by a call of `type` with `attributes` and the argument types `args` (more than
+// `type` names, when it is variadic). Returns why the convention does not determine what is read.
+std::string plan(FunctionType *type, const AttributeList &attributes, const std::vector<Type *> &args,
+                 bool resultUsed, const Function &callee, const DataLayout &layout, const Value *at, Plan &out) {
+  FunctionType *own = callee.getFunctionType();
+  std::string name = "@" + callee.getName().str();
+  bool callerSret = !args.empty() && attributes.hasParamAttr(0, Attribute::StructRet);
+  bool calleeSret = own->getNumParams() > 0 && callee.hasParamAttribute(0, Attribute::StructRet);
+  if (callerSret != calleeSret) {
+    return "a result " + name + " returns in memory on one side only";
+  }
+  Arrangement caller;
+  if (std::string why = arrange(args, attributes, true, layout, at, caller); !why.empty()) {
+    return why;
+  }
+  std::vector<Type *> params(own->param_begin(), own->param_end());
+  Arrangement reader;
+  if (std::string why = arrange(params, callee.getAttributes(), false, layout, at, reader); !why.empty()) {
+    return why + " in " + name;
+  }
+  for (unsigned j = 0; j < params.size(); ++j) {
+    Place place = reader.places[j];
+    std::string what = "parameter " + std::to_string(j + 1) + " of " + name;
+    Source source;
+    if (reader.whole.count(place.offset)) {
+      auto passed = caller.whole.find(place.offset);
+      if (passed != caller.whole.end() && passed->second.type == params[j] &&
+          passed->second.byval == reader.whole[place.offset].byval) {
+        source.kind = Source::Whole;
+        source.whole = passed->second.value;
+      } else if (caller.insideWhole(place.offset) || caller.pieceAt(place.offset) || !unread(*callee.getArg(j))) {
+        return what + ", passed in memory, where the caller passes something else";
+      }
+      out.params.push_back(source);
+      continue;
+    }
+    if (caller.insideWhole(place.offset)) {
+      return what + ", where the caller passes part of a value in memory";
+    }
+    if (!caller.pieceAt(place.offset)) {
+      if (!unread(*callee.getArg(j))) {
+        return what + ", which is read and not passed";
+      }
+      out.params.push_back(source);
+      continue;
+    }
+    unsigned bits = *imageBits(params[j]);
+    bool narrow = params[j]->isIntegerTy() && bits < extendedBits && extended(callee.getAttributes().getParamAttrs(j));
+    std::string why = collect([&](unsigned i) { return caller.pieceAt(place.offset + i * generalBytes); },
+                              narrow ? extendedBits : bits, source);
+    if (!why.empty()) {
+      return what + " reads " + why;
+    }
+    if (narrow) {
+      source.check = callee.hasParamAttribute(j, Attribute::ZExt) ? Source::Zero : Source::Sign;
+    }
+    out.params.push_back(source);
+  }
+  // Arguments past the callee's parameters: never read, or its variadic arguments.
+  if (own->isVarArg()) {
+    std::array<uint64_t, 3> named = reader.used.empty() ? std::array<uint64_t, 3>{} : reader.used.back();
+    std::array<uint64_t, 3> used{};
+    unsigned first = 0;
+    while (first < args.size() && used != named) {
+      used = caller.used[first++];
+    }
+    bool fewer = used[0] <= named[0] && used[1] <= named[1] && used[2] <= named[2];
+    if (used != named && !(first == args.size() && fewer)) {
+      return "variadic arguments that do not start where the parameters of " + name + " end";
+    }
+    for (unsigned i = first; i < args.size(); ++i) {
+      // A call without a variadic prototype does not set %al, the number of vector registers used, which the
+      // callee's prologue tests before saving them.
+      if (!type->isVarArg() && caller.places[i].kind == Place::Vector) {
+        return "a variadic floating-point argument of " + name + " from a call without a variadic prototype";
+      }
+      out.variadic.push_back(i);
+    }
+  }
+  Type *wanted = type->getReturnType();
+  if (!resultUsed || wanted->isVoidTy()) {
+    return "";
+  }
+  AttributeSet wantedAttributes = attributes.getRetAttrs();
+  if (wanted == own->getReturnType() && (!wanted->isIntegerTy(1) || wantedAttributes.hasAttribute(Attribute::ZExt) ==
+                                                                         callee.hasRetAttribute(Attribute::ZExt))) {
+    out.resultWhole = true;
+    return "";
+  }
+  std::map<unsigned, Piece> given;
+  std::map<unsigned, Piece> read;
+  if (!arrangeResult(own->getReturnType(), callee.getAttributes().getRetAttrs(), given)) {
+    return "a result of type " + typeName(own->getReturnType()) + " from " + name;
+  }
+  if (!arrangeResult(wanted, AttributeSet(), read)) {
+    return "a result of type " + typeName(wanted) + " from a call of " + name;
+  }
+  std::vector<Type *> elements = elementsOf(wanted);
+  for (unsigned e = 0; e < elements.size(); ++e) {
+    std::vector<unsigned> locations;
+    for (const auto &[location, piece] : read) {
+      if (piece.value == e) {
+        locations.push_back(location);
+      }
+    }
+    bool isBool = elements[e]->isIntegerTy(1) && wantedAttributes.hasAttribute(Attribute::ZExt);
+    Source source;
+    std::string why = collect(
+        [&](unsigned i) -> const Piece * {
+          if (i >= locations.size()) {
+            return nullptr;
+          }
+          auto found = given.find(locations[i]);
+          return found == given.end() ? nullptr : &found->second;
+        },
+        isBool ? boolBits : *imageBits(elements[e]), source);
+    if (!why.empty()) {
+      return "the result of " + name + ": " + why;
+    }
+    if (isBool) {
+      source.check = Source::Bool;
+    }
+    out.result.push_back(source);
+  }
+  return "";
+}
+
+// The image of `value` as an integer.
+Value *imageOf(IRBuilder<> &b, Value *value, bool extend, bool sign) {
+  Type *type = value->getType();
+  if (type->isPointerTy()) {
+    return b.CreatePtrToInt(value, b.getInt64Ty());
+  }
+  if (!type->isIntegerTy()) {
+    return b.CreateBitCast(value, b.getIntNTy(unsigned(type->getPrimitiveSizeInBits().getFixedValue())));
+  }
+  if (extend && type->getIntegerBitWidth() < extendedBits) {
+    return sign ? b.CreateSExt(value, b.getInt32Ty()) : b.CreateZExt(value, b.getInt32Ty());
+  }
+  return value;
+}
+
+// Stops the run with the named fault `unreachable` unless `ok`, before `at`.
+void trapUnless(Value *ok, Instruction *at) {
+  Instruction *then = SplitBlockAndInsertIfThen(BinaryOperator::CreateNot(ok, "", at), at, /*Unreachable=*/true);
+  IRBuilder<> b(then);
+  b.CreateCall(Intrinsic::getDeclaration(at->getModule(), Intrinsic::trap));
+}
+
+// The value `source` makes, of `type`, from the images `images` gives (by piece value), at `b`. A check splits
+// the block; `b` is left after it.
+Value *build(IRBuilder<> &b, const Source &source, Type *type, const std::function<Value *(unsigned)> &images) {
+  IntegerType *wide = b.getIntNTy(source.need);
+  Value *bits = ConstantInt::get(wide, 0);
+  unsigned at = 0;
+  for (const auto &[piece, take] : source.parts) {
+    Value *image = images(piece.value);
+    if (image->getType()->getIntegerBitWidth() < piece.shift + take) {
+      image = b.CreateZExt(image, b.getIntNTy(piece.shift + take)); // a `zeroext` `i1` result fills its byte
+    }
+    Value *part = b.CreateLShr(image, piece.shift);
+    part = b.CreateZExtOrTrunc(b.CreateTrunc(part, b.getIntNTy(take)), wide);
+    bits = b.CreateOr(bits, at ? b.CreateShl(part, at) : part);
+    at += take;
+  }
+  unsigned width = type->isIntegerTy() ? type->getIntegerBitWidth() : unsigned(type->getPrimitiveSizeInBits());
+  if (type->isPointerTy()) {
+    width = 64;
+  }
+  Value *value = b.CreateTrunc(bits, b.getIntNTy(width));
+  if (source.check == Source::Sign || source.check == Source::Zero) {
+    Value *again = source.check == Source::Sign ? b.CreateSExt(value, wide) : b.CreateZExt(value, wide);
+    trapUnless(b.CreateICmpEQ(again, bits), &*b.GetInsertPoint());
+    b.SetInsertPoint(&*b.GetInsertPoint()); // now in the block after the check
+  } else if (source.check == Source::Bool) {
+    trapUnless(b.CreateICmpULT(bits, ConstantInt::get(wide, 2)), &*b.GetInsertPoint());
+    b.SetInsertPoint(&*b.GetInsertPoint());
+  }
+  if (type->isPointerTy()) {
+    return b.CreateIntToPtr(value, type);
+  }
+  return type->isIntegerTy() ? value : b.CreateBitCast(value, type);
+}
+
+// Replaces `call` of type `type` by a call of `callee` with its own prototype, as `plan` says. Inserts
+// before `at` and returns the value of the caller's result type (null when void or unused).
+Value *emitPlanned(CallInst *call, FunctionType *type, Function *callee, const Plan &plan, Instruction *at) {
+  IRBuilder<> b(at);
+  b.SetCurrentDebugLocation(call->getDebugLoc());
+  AttributeList attributes = call->getAttributes();
+  std::map<unsigned, Value *> images;
+  auto argImage = [&](unsigned i) {
+    if (!images.count(i)) {
+      images[i] = imageOf(b, call->getArgOperand(i), extended(attributes.getParamAttrs(i)),
+                          attributes.hasParamAttr(i, Attribute::SExt));
+    }
+    return images[i];
+  };
+  FunctionType *own = callee->getFunctionType();
+  std::vector<Value *> args;
+  std::vector<AttributeSet> params;
+  for (unsigned j = 0; j < own->getNumParams(); ++j) {
+    const Source &source = plan.params[j];
+    Type *param = own->getParamType(j);
+    if (source.kind == Source::Unread) {
+      args.push_back(Constant::getNullValue(param));
+    } else if (source.kind == Source::Whole) {
+      args.push_back(call->getArgOperand(source.whole));
+    } else {
+      args.push_back(build(b, source, param, argImage));
+    }
+    params.push_back(callee->getAttributes().getParamAttrs(j));
+  }
+  for (unsigned i : plan.variadic) {
+    args.push_back(call->getArgOperand(i));
+    params.push_back(attributes.getParamAttrs(i));
+  }
+  CallInst *direct = b.CreateCall(own, callee, args);
+  direct->setAttributes(
+      AttributeList::get(call->getContext(), AttributeSet(), callee->getAttributes().getRetAttrs(), params));
+  direct->setDebugLoc(call->getDebugLoc());
+  if (call->getType()->isVoidTy() || call->use_empty()) {
+    return nullptr;
+  }
+  if (plan.resultWhole) {
+    return direct;
+  }
+  std::vector<Value *> elements;
+  std::map<unsigned, Value *> results;
+  auto resultImage = [&](unsigned e) {
+    if (!results.count(e)) {
+      Value *element = isa<StructType>(own->getReturnType()) ? b.CreateExtractValue(direct, e) : direct;
+      results[e] = imageOf(b, element, false, false);
+    }
+    return results[e];
+  };
+  std::vector<Type *> wanted = elementsOf(type->getReturnType());
+  for (unsigned e = 0; e < wanted.size(); ++e) {
+    elements.push_back(build(b, plan.result[e], wanted[e], resultImage));
+  }
+  if (!isa<StructType>(type->getReturnType())) {
+    return elements.front();
+  }
+  Value *result = PoisonValue::get(type->getReturnType());
+  for (unsigned e = 0; e < elements.size(); ++e) {
+    result = b.CreateInsertValue(result, elements[e], e);
+  }
+  return result;
+}
+
+std::vector<Type *> argTypes(const CallInst *call) {
+  std::vector<Type *> types;
+  for (const Value *arg : call->args()) {
+    types.push_back(arg->getType());
+  }
+  return types;
+}
+
+// Whether a call of `type` with `attributes` reaches `callee` natively just as a device call does: the same
+// prototype and the same extension of narrow values.
+bool sameShape(FunctionType *type, const AttributeList &attributes, const Function &callee) {
+  if (type != callee.getFunctionType()) {
+    return false;
+  }
+  auto narrow = [](Type *t) { return t->isIntegerTy() && t->getIntegerBitWidth() < extendedBits; };
+  for (unsigned i = 0; i < type->getNumParams(); ++i) {
+    if (narrow(type->getParamType(i)) &&
+        (attributes.hasParamAttr(i, Attribute::SExt) != callee.hasParamAttribute(i, Attribute::SExt) ||
+         attributes.hasParamAttr(i, Attribute::ZExt) != callee.hasParamAttribute(i, Attribute::ZExt))) {
+      return false;
+    }
+    if (attributes.getParamByValType(i) != callee.getParamByValType(i) ||
+        attributes.hasParamAttr(i, Attribute::StructRet) != callee.hasParamAttribute(i, Attribute::StructRet)) {
+      return false;
+    }
+  }
+  return !type->getReturnType()->isIntegerTy(1) ||
+         attributes.hasRetAttr(Attribute::ZExt) == callee.hasRetAttribute(Attribute::ZExt);
+}
+
+// A plain call with the argument types `call` has, of `target`, before `at`.
+CallInst *plainCall(CallInst *call, Value *target, Instruction *at) {
+  IRBuilder<> b(at);
+  FunctionType *type = FunctionType::get(call->getType(), argTypes(call), false);
+  std::vector<Value *> args(call->arg_begin(), call->arg_end());
+  CallInst *plain = b.CreateCall(type, target, args);
+  plain->setAttributes(call->getAttributes());
+  plain->setCallingConv(call->getCallingConv());
+  plain->setDebugLoc(call->getDebugLoc());
+  return plain;
+}
+
+// Whether a device call of `type` may reach `callee` without the named fault of a mismatched indirect call:
+// the device compares the widths of parameters and result, as the later lowerings leave them. Generous
+// where those lowerings change the prototype (aggregates and vectors, `x86_fp80`).
+bool mayRunAlike(FunctionType *type, const Function &callee) {
+  auto width = [](Type *t) -> int {
+    if (t->isIntegerTy()) {
+      return int(t->getIntegerBitWidth());
+    }
+    if (t->isPointerTy() || t->isDoubleTy()) {
+      return 64;
+    }
+    if (t->isFloatTy()) {
+      return 32;
+    }
+    if (t->isVoidTy()) {
+      return 0;
+    }
+    return -1; // any
+  };
+  auto exotic = [](FunctionType *t) {
+    return t->getReturnType()->isAggregateType() || t->getReturnType()->isVectorTy() ||
+           std::any_of(t->param_begin(), t->param_end(), [](Type *p) { return p->isVectorTy(); });
+  };
+  FunctionType *own = callee.getFunctionType();
+  if (exotic(type) || exotic(own)) {
+    return true;
+  }
+  std::vector<int> want;
+  std::vector<int> have;
+  for (Type *param : type->params()) {
+    want.push_back(width(param));
+  }
+  for (Type *param : own->params()) {
+    have.push_back(width(param));
+  }
+  if (own->isVarArg()) {
+    have.push_back(64); // the area (lowerVariadics)
+  }
+  auto same = [](int a, int b) { return a == b || a < 0 || b < 0; };
+  if (want.size() != have.size() || !same(width(type->getReturnType()), width(own->getReturnType()))) {
+    return false;
+  }
+  for (size_t i = 0; i < want.size(); ++i) {
+    if (!same(want[i], have[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// A call through a pointer. The target is known only when the call runs, so the call compares the pointer
+// with each function whose address is taken and that a device call would not reach as the native call
+// does: on a match it calls that function with its own prototype, as planned, or, where the convention
+// does not determine what the native call reads and the device call would run, stops with the named fault
+// `unreachable`. Otherwise it is a plain call (for a call of variadic type, through an unprototyped
+// pointer: with the argument types it has), and a target it does not fit ends in the named fault of a
+// mismatched indirect call. The comparisons cost every such call, also in programs that never call
+// through another prototype (measured on the musl tests: see experiments/c-corpus/README.md).
+void lowerCallThroughPointer(CallInst *call, const std::vector<Function *> &taken, const DataLayout &layout) {
+  FunctionType *type = call->getFunctionType();
+  FunctionType *plainType = type->isVarArg() ? FunctionType::get(call->getType(), argTypes(call), false) : type;
+  bool used = !call->getType()->isVoidTy() && !call->use_empty();
+  std::vector<std::pair<Function *, std::optional<Plan>>> candidates;
+  for (Function *function : taken) {
+    if (sameShape(plainType, call->getAttributes(), *function)) {
+      continue;
+    }
+    Plan planned;
+    bool adaptable = plan(type, call->getAttributes(), argTypes(call), used, *function, layout, call, planned).empty();
+    bool alike = mayRunAlike(plainType, *function);
+    if (adaptable) {
+      candidates.emplace_back(function, std::move(planned));
+    } else if (alike) {
+      candidates.emplace_back(function, std::nullopt);
+    }
+  }
+  if (candidates.empty() && !type->isVarArg()) {
+    return;
+  }
+  if (call->isMustTailCall()) {
+    notHandled("a `musttail` call through a pointer whose targets need other prototypes", call);
+  }
+  Value *target = call->getCalledOperand();
+  BasicBlock *head = call->getParent();
+  Function &caller = *head->getParent();
+  BasicBlock *tail = head->splitBasicBlock(call, "call.join");
+  head->getTerminator()->eraseFromParent();
+  PHINode *phi = nullptr;
+  if (used) {
+    phi = PHINode::Create(call->getType(), unsigned(candidates.size() + 1), "", &*tail->begin());
+  }
+  BasicBlock *test = head;
+  for (const auto &[function, planned] : candidates) {
+    BasicBlock *match = BasicBlock::Create(call->getContext(), "call.adapted", &caller, tail);
+    BasicBlock *next = BasicBlock::Create(call->getContext(), "call.next", &caller, tail);
+    IRBuilder<> t(test);
+    t.SetCurrentDebugLocation(call->getDebugLoc());
+    t.CreateCondBr(t.CreateICmpEQ(target, function), match, next);
+    test = next;
+    if (!planned) {
+      IRBuilder<> m(match);
+      m.SetCurrentDebugLocation(call->getDebugLoc());
+      m.CreateCall(Intrinsic::getDeclaration(call->getModule(), Intrinsic::trap));
+      m.CreateUnreachable();
+      continue;
+    }
+    BranchInst *join = BranchInst::Create(tail, match);
+    join->setDebugLoc(call->getDebugLoc());
+    Value *value = emitPlanned(call, type, function, *planned, join);
+    if (phi) {
+      phi->addIncoming(value, join->getParent());
+    }
+  }
+  BranchInst *join = BranchInst::Create(tail, test);
+  join->setDebugLoc(call->getDebugLoc());
+  CallInst *fallback = type->isVarArg() ? plainCall(call, target, join) : cast<CallInst>(call->clone());
+  if (!type->isVarArg()) {
+    fallback->insertBefore(join);
+  }
+  if (phi) {
+    phi->addIncoming(fallback, test);
+    phi->takeName(call);
+    call->replaceAllUsesWith(phi);
+  }
+  call->eraseFromParent();
+}
+
 } // namespace
+
+void lowerMismatchedCalls(Module &module) {
+  const DataLayout &layout = module.getDataLayout();
+  std::vector<Function *> taken; // functions a pointer may hold
+  std::vector<CallInst *> direct;
+  std::vector<CallInst *> indirect;
+  for (Function &function : module) {
+    if (!function.isDeclaration() && function.hasAddressTaken()) {
+      taken.push_back(&function);
+    }
+    for (Instruction &inst : instructions(function)) {
+      auto *call = dyn_cast<CallInst>(&inst);
+      if (!call || call->isInlineAsm() || isa<IntrinsicInst>(call)) {
+        continue;
+      }
+      auto *callee = dyn_cast<Function>(call->getCalledOperand());
+      if (!callee) {
+        indirect.push_back(call); // through a pointer, or an alias
+
+      } else if (callee && !callee->isDeclaration() &&
+                 !sameShape(call->getFunctionType(), call->getAttributes(), *callee)) {
+        direct.push_back(call);
+      }
+    }
+  }
+  for (CallInst *call : direct) {
+    auto *callee = cast<Function>(call->getCalledOperand());
+    // LLVM's InstCombine (so native clang -O2) passes an argument of the same size as the parameter as a cast
+    // of its value, where the convention (and -O0) passes it in a register of another class: native builds
+    // disagree, and nothing determines the result.
+    FunctionType *own = callee->getFunctionType();
+    for (unsigned i = 0; i < std::min<unsigned>(call->arg_size(), own->getNumParams()); ++i) {
+      Type *arg = call->getArgOperand(i)->getType();
+      Type *param = own->getParamType(i);
+      auto floating = [](Type *t) { return t->isFloatingPointTy() || t->isVectorTy(); };
+      if (floating(arg) != floating(param) && arg->isSized() && param->isSized() &&
+          layout.getTypeSizeInBits(arg) == layout.getTypeSizeInBits(param)) {
+        notHandled("a call of @" + callee->getName().str() + " through another prototype whose argument " +
+                       std::to_string(i + 1) + " is " + typeName(arg) + " for a parameter " + typeName(param) +
+                       ": native clang -O2 passes it as a cast and -O0 in a register of another class",
+                   call);
+      }
+    }
+    Plan planned;
+    bool used = !call->getType()->isVoidTy() && !call->use_empty();
+    if (std::string why = plan(call->getFunctionType(), call->getAttributes(), argTypes(call), used, *callee, layout,
+                               call, planned);
+        !why.empty()) {
+      notHandled("a call of @" + callee->getName().str() +
+                     " through another prototype, where x86-64 does not determine what is read: " + why,
+                 call);
+    }
+    if (call->isMustTailCall()) {
+      notHandled("a `musttail` call of @" + callee->getName().str() + " through another prototype", call);
+    }
+    Value *value = emitPlanned(call, call->getFunctionType(), callee, planned, call);
+    if (value) {
+      value->takeName(call);
+      call->replaceAllUsesWith(value);
+    }
+    call->eraseFromParent();
+  }
+  for (CallInst *call : indirect) {
+    lowerCallThroughPointer(call, taken, layout);
+  }
+}
 
 void lowerValuesInMemory(Module &module) {
   const DataLayout &layout = module.getDataLayout();
@@ -737,24 +1348,13 @@ void lowerVariadics(Module &module) {
     notHandled("a variadic function for a target other than x86-64 System V", at);
   }
 
-  std::vector<Function *> reachable; // variadic functions a pointer may hold
-  for (Function *function : variadic) {
-    if (function->hasAddressTaken()) {
-      reachable.push_back(function);
-    }
-  }
   for (CallInst *call : calls) {
     auto *callee = dyn_cast<Function>(call->getCalledOperand());
     if (callee && callee->isDeclaration()) {
       continue; // refused later: no library is linked yet
     }
-    if (callee && !callee->isVarArg()) {
-      lowerCallOfFixed(call, callee);
-      continue;
-    }
-    if (!callee) {
-      lowerCallThroughPointer(call, reachable, layout);
-      continue;
+    if (!callee || !callee->isVarArg() || callee->getFunctionType() != call->getFunctionType()) {
+      notHandled("internal: a variadic call that lowerMismatchedCalls left through another prototype", call);
     }
     lowerCall(call, layout);
   }

@@ -5,3 +5,5 @@
  * Native (x86-64): exit 0. Device: fault bad_indirect. Named, not silent; the intended refusal is dead code. */
 long f(long x) { return x; }
 int main(void) { return ((int (*)(int))f)(5) - 5; }
+/* Since calls through another prototype follow the convention (docs/DESIGN.md): refused by name, since
+ * parameter 1 of @f reads bits 32 to 63 of an int, which x86-64 leaves unset. */

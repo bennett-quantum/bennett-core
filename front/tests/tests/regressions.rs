@@ -222,7 +222,8 @@ fn a_call_through_a_mismatched_prototype_is_refused() {
         "mismatched_prototype",
         "long f(long x) { return x; }\nint main(void) { return ((int (*)(int))f)(5) - 5; }\n",
     );
-    assert_refused(&source, "mismatched_prototype", "a call through a mismatched prototype of @f");
+    // The callee reads the upper half of an `int`, which x86-64 leaves unset (more in prototypes.rs).
+    assert_refused(&source, "mismatched_prototype", "parameter 1 of @f reads bits 32 to 63, which are not set");
 }
 
 /// LLVM 18's dead-store elimination crashes on a module that defines `calloc` and a `malloc` it cannot inline.

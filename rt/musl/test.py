@@ -30,11 +30,14 @@ def main():
     # tests/regress: witnesses of the independent testing pass, each self-checking (status 0 natively).
     regressions = sorted(f"regress/{path.stem}" for path in (HERE / "tests/regress").glob("*.c"))
     names = ["library", "exit", "arena", "unimplemented", "stderr", "heap", "signals", "abort", "stdin", "brk",
-             "fenv", "fenv-mode", "fenv-flags", "complex", "setjmp", "setjmp-independent", "setjmp-masks", *regressions]
+             "fenv", "fenv-mode", "fenv-flags", "complex", "setjmp", "setjmp-independent", "setjmp-masks", "prototypes",
+             *regressions]
     # Non-local jumps are lowered after the optimiser, so they are also checked from -O2 (against the same
     # native output); the small ones are also un-run to their entry state.
     jumps = [name for name in names if "setjmp" in name]
-    for name, level in [(name, "-O0") for name in names] + [(name, "-O2") for name in jumps]:
+    # Calls through another prototype are lowered before the optimiser, which must not undo them.
+    optimised = jumps + ["prototypes"]
+    for name, level in [(name, "-O0") for name in names] + [(name, "-O2") for name in optimised]:
         source = HERE / "tests" / f"{name}.c"
         program = args.out / f"{name.replace('/', '-')}{'' if level == '-O0' else level}.bn"
         command = ["python3", HERE / "link.py", source, "--libdir", args.libdir, "--front", args.front,

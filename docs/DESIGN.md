@@ -323,6 +323,31 @@ and utilities where they exist (`Abi.h`, `Normalise.h`):
   struct with `aligned(32)`, a 32- or 64-byte vector) is read at the next multiple of its alignment in memory,
   not in the area, so the area is aligned to its widest argument and the argument placed at that boundary.
   A 16-byte vector takes one vector register; a wider one, passed directly under AVX, goes to the stack.
+- **Calls through a prototype that differs from the callee's definition** (an unprototyped K&R call, a
+  library function redeclared with another type, a cast function pointer) read what a native x86-64 call
+  reads (`lowerMismatchedCalls`, before the variadic lowering). Each side's values are laid out in registers
+  and 8-byte stack slots as the convention places them, with the bits each one sets as clang 18 sets and
+  relies on them (measured at -O0 and -O2): a caller extends an argument narrower than 32 bits that has
+  `signext`/`zeroext` to 32 bits and nothing else, so the upper half of an `int` is not set; a callee
+  extends no result. The call becomes a call with the callee's own prototype that gives each parameter the
+  bits of the register or slot it reads: extra arguments are dropped, a narrower read takes the low bits, a
+  pointer and an integer exchange their 64 bits, a 128-bit integer is two registers, a variadic callee gets
+  the caller's later arguments as its variadic ones, and an argument the callee never reads (only kept in a
+  stack slot) may be missing. Where a side would read bits the other does not set (the upper half of a
+  32-bit value, a missing argument that is read, a result that is not returned, a floating-point register
+  for an integer, a variadic floating-point argument from a call that does not set `%al`, a value passed
+  in memory against another, a result in memory on one side only), the convention determines nothing and a
+  direct call is refused by name. So is a direct call whose argument is a floating-point value of the size
+  of an integer parameter or the reverse: native clang -O2 passes it as a cast (InstCombine), -O0 in a
+  register of the other class, and the two native builds disagree. A callee relies on the extension of a
+  narrow argument (at -O2 it uses the 32-bit register as it is; at -O0 it extends again), so where the
+  callee's extension differs from the caller's the 32 bits are checked when the call runs, and a value that
+  is not the extension of its low bits stops with the named fault `unreachable`. A call through a pointer
+  compares the pointer with each function whose address is taken and that the device call would not reach
+  as the native call does: a match is called as above, or, where nothing is determined and the device call
+  would run, stops with `unreachable`; any other target keeps the device's own check (`bad_indirect`). The
+  comparisons cost calls through correctly typed pointers too: on the musl tests 107 to 353 steps (0.06% to
+  5%) and 5% to 16% more device code (`HANDOFF.md`, "Known weak spots").
 - **Aggregate results of at most 128 bits of integer and floating-point fields** (`{ i64, i64 }`, how
   clang returns a small struct in two registers; SoftFloat's `extFloat80_t`) come back as one integer, the
   fields side by side, so code under a qubit branch can call such a function. **Other aggregate and vector

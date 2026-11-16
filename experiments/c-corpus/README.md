@@ -147,6 +147,23 @@ regression runs normally. The sources are `front_call_independent.c`, `front_var
 `cargo test -p bennett-front-tests --test front_call_independent -- --include-ignored` after
 `python3 rt/musl/build.py --jobs 3`.
 
+## The programs that waited on calls through another prototype (2026-11-16)
+
+After calls through a prototype that differs from the callee's definition were made to read what native
+x86-64 reads (`docs/DESIGN.md`, "Calls through a prototype"), only the two programs that waited on it were
+run again, with `run-one.sh` (binaries built from the job's tree and copied), with musl linked (`MUSL_LIBDIR`)
+and without the library (`rt.c`), and each also with `OPTNONE=1`:
+
+| program | before (`a155611`) | with musl | without the library |
+|---|---|---|---|
+| `pr67037` (an unprototyped pointer call with an extra argument) | named fault `bad_indirect` | agrees (2,139 steps) | agrees (47 steps) |
+| `00025` (`int strlen(char *)` against `size_t strlen(const char *)`) | refused: a call through a mismatched prototype | agrees (2,084 steps) | agrees (1 step) |
+
+With `OPTNONE=1` all four agree. A sample of 43 other GCC programs with unprototyped declarations or
+pointers (every eighth match of a `grep` for them; two more are skipped natively), with musl, against the
+front at `a155611`: no outcome changed, and each takes 30 to 54 more steps, the comparisons that musl's
+startup and exit now make at their calls through pointers.
+
 ## The program that waited on over-aligned variadic arguments (2026-11-16)
 
 After variadic arguments aligned to more than 16 bytes were placed where clang's `va_arg` reads them
@@ -262,8 +279,8 @@ What still does not run, per reason:
 | GCC | inline assembly (`990413-2`) | 1 |
 | GCC | a variadic argument aligned to more than 16 bytes (`pr92904`); agrees since, run alone (section above) | 1 |
 | GCC | named fault `unreachable`: no file system (`printf-2`, `user-printf`, `fprintf-2`, `loop-2f`, `loop-2g`) | 5 |
-| GCC | named fault `bad_indirect`: unprototyped call with an extra argument (`pr67037`) | 1 |
-| c-testsuite | a call through a mismatched prototype of `strlen` (`00025`) | 1 |
+| GCC | named fault `bad_indirect`: unprototyped call with an extra argument (`pr67037`); agrees since, run alone (section above) | 1 |
+| c-testsuite | a call through a mismatched prototype of `strlen` (`00025`); agrees since, run alone (section above) | 1 |
 | c-testsuite | named fault `unreachable`: `fopen` (`00187`) | 1 |
 | c-testsuite | the 10^8-step budget (`00040`) | 1 |
 | `ieee/` | `cdivchkf`, `cdivchkd`, `cdivchkld`: musl's `ilogb.c`, `ilogbl.c` under `FENV_ACCESS` | 3 |

@@ -126,6 +126,8 @@ int main(int argc, char **argv) {
   bool softFloat = bennett::lowerFloatOperations(
       *module, floatRuntime.empty() ? besideFront(argv[0], "float-runtime.bc") : floatRuntime);
   verify(*module, "after lowering floating-point operations");
+  bennett::lowerMismatchedCalls(*module);
+  verify(*module, "after lowering calls through another prototype");
   bennett::lowerVariadics(*module);
   bennett::lowerValuesInMemory(*module);
   bennett::lowerIndirectBranches(*module);

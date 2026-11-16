@@ -502,7 +502,8 @@ explicitly after the separate musl build.
 
 | Refused today | What removes it |
 |---|---|
-| Files, clocks and the other unimplemented system calls (named faults); a program that redeclares a library function incompatibly | Step 1 above |
+| Files, clocks and the other unimplemented system calls (named faults) | Step 1 above |
+| A call through another prototype where x86-64 does not determine what is read: the upper half of a 32-bit value, a missing argument that is read, an integer from a floating-point register, a variadic floating-point argument without `%al`, a narrow argument that is not the extension the callee relies on (named fault `unreachable` when the call runs); a direct call whose argument differs from its parameter only in register class (native -O0 and -O2 disagree) | Nothing to remove: the native result is not determined (`docs/DESIGN.md`, "Calls through a prototype"). Conservative, removable by a finer model where named: a variadic floating-point argument after an unread named one, a call whose result is used only by dead code before the optimiser, values in memory read at another place |
 | A qubit-dependent call of a function that uses `setjmp` | The front's own effect summary of `setjmp` (writes only its buffer) when deciding what runs coherently (`docs/DESIGN.md`, "Non-local jumps") |
 | `__float128`; `powi` on `_Float16`/`__bf16`; `#pragma STDC FENV_ACCESS` (with it musl's `ilogb`, and so `__divxc3`, the `long double` complex division); non-default rounding modes and floating-point flags | Step 5 above |
 | A store under qubit control; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control | The journalled machine (step 3; the device holds qubits at any address since `56b2c0b`, the front's fallback, step 4, is what uses it) |
@@ -524,6 +525,13 @@ explicitly after the separate musl build.
   control at `-O2` (route: pack it too, after measuring what turning a pointer into an integer costs LLVM's alias
   analysis). A packed struct of 129 bits of bitfields becomes an `i136` and is refused (route: split memory
   operations LLVM widens past 128 bits before emission).
+
+- Calls through pointers compare the target with each address-taken function a device call would not reach
+  as natively, also when the prototype is right: on the musl tests 107 to 353 more steps (0.06% to 5%) and 5%
+  to 16% more device code; 30 to 54 steps on GCC programs (musl's startup and exit). A cheaper policy measured
+  +11 steps but left prototyped calls of functions of other widths at `bad_indirect`. Route if it matters:
+  one uniform device signature for address-taken functions (a wrapper reading its arguments from a register
+  image, as the variadic area does), which needs memory writes per call (refused under qubit control today).
 
 - The region budget counts device instructions, not the source-fixed unit the North Star asks for.
 - A `_Bool` qubit costs 8 qubits.
