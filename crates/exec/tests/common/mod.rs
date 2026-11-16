@@ -4,7 +4,7 @@
 
 #[allow(dead_code, reason = "optional independent comparison uses a subset of helpers")]
 #[path = "../oracle_support/mod.rs"]
-mod oracle_support;
+pub(crate) mod oracle_support;
 
 use bennett_exec::{Executor, Options, Outcome, Snapshot};
 use bennett_ir::{FuncId, ValidModule};
