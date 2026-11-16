@@ -277,7 +277,26 @@ fn renumber_functions(module: &mut Module, order: &[u32]) {
             Inst::Call { callee: func, .. } | Inst::Apply { callee: func, .. } | Inst::FuncAddr { func, .. } => {
                 renumber(func);
             }
-            _ => {}
+            Inst::Binary { .. }
+            | Inst::Compare { .. }
+            | Inst::Select { .. }
+            | Inst::Cast { .. }
+            | Inst::Load { .. }
+            | Inst::Store { .. }
+            | Inst::Alloca { .. }
+            | Inst::StackSave { .. }
+            | Inst::StackRestore { .. }
+            | Inst::Setjmp { .. }
+            | Inst::ReturnAddress { .. }
+            | Inst::CallIndirect { .. }
+            | Inst::Effect { .. }
+            | Inst::Qalloc { .. }
+            | Inst::Qfree { .. }
+            | Inst::Gate { .. }
+            | Inst::GateAt { .. }
+            | Inst::Measure { .. }
+            | Inst::Mark { .. }
+            | Inst::Rewind { .. } => {}
         }
     }
 }

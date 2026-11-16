@@ -228,7 +228,21 @@ impl<'m> Executor<'m> {
                 Undo::Longjmp => depth += jumps.next().expect("a longjmp record has an entry"),
                 Undo::Call => depth = depth.checked_sub(1)?,
                 Undo::Measure | Undo::Finish => return None,
-                _ => {}
+                Undo::Slot
+                | Undo::Store
+                | Undo::Alloca
+                | Undo::StackRestore
+                | Undo::Effect
+                | Undo::Jump
+                | Undo::Gate
+                | Undo::Qalloc
+                | Undo::Qfree
+                | Undo::Apply
+                | Undo::Mark
+                | Undo::Rewind
+                | Undo::Setjmp
+                | Undo::GateAt
+                | Undo::GateAtPromoted => {}
             }
         }
         (depth == 0).then_some(entry)
