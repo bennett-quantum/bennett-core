@@ -80,11 +80,6 @@ fn scalar_c_exhaustive_int8_native_forward_and_reverse() {
     let mut steps = 0;
     for (tag, flags) in [("o0", CLANG_FLAGS), ("o2", CLANG_O2_FLAGS)] {
         let p = lower(&fixtures().join("scalars.c"), &format!("ladder-scalar-{tag}"), flags, &["--entry=r1_sat_add"]);
-        // No recursion or large objects. Bound the stack to 256 bytes so an
-        // exhaustive full-memory comparison stays small, without skipping bytes.
-        let mut image = p.into_module();
-        image.memory_size = image.static_end() + 256;
-        let p = bennett_ir::validate(image).expect("bounded scalar image");
         let mut offset = 0;
         for (name, arity) in
             [("r1_sat_add", 2), ("r1_gcd", 2), ("r1_popcount", 1), ("r1_sign_abs", 1), ("r1_lookup", 1)]
@@ -131,9 +126,6 @@ fn scalar_c_independent_exhaustive_int8_native_and_reverse() {
     for (tag, flags) in [("o0", CLANG_FLAGS), ("o2", CLANG_O2_FLAGS)] {
         let p =
             lower(&fixtures().join("scalars.c"), &format!("ladder-reference-{tag}"), flags, &["--entry=r1_sat_add"]);
-        let mut image = p.into_module();
-        image.memory_size = image.static_end() + 256;
-        let p = bennett_ir::validate(image).expect("bounded scalar image");
         let mut offset = 0;
         for (name, arity) in
             [("r1_sat_add", 2), ("r1_gcd", 2), ("r1_popcount", 1), ("r1_sign_abs", 1), ("r1_lookup", 1)]
