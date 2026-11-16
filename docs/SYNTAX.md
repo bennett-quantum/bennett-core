@@ -126,7 +126,9 @@ done(i64 %sum):
 `%h = mark` defines an `i64` handle naming the current point of the history. `%h = mark budget B`, with
 `B` an `i64` (a constant or a value), also bounds the steps from the mark to its rewind, the rewind
 included, and makes a rewind of it cost `B` (`docs/DESIGN.md`, "The mark's budget"); the writer prints
-`budget` only for a mark that has one. `rewind %h` un-runs every
+`budget` only for a mark that has one. A rewind that follows a read of a qubit (a register read as an
+integer, a memory qubit touched) needs a budget on its mark, outside an `apply`; `budget -1` (2^64 - 1)
+meets that and bounds nothing. `rewind %h` un-runs every
 step since that point and the program continues after the rewind; `rewind %h keep (%v -> %r, i2 1 -> %s)`
 first XORs each value into its register, in order. `%h` must be the result of a `mark` in the same
 function (the validator's `NotAMark`), not a value derived from one or passed through a block parameter.

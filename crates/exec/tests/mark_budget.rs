@@ -49,10 +49,11 @@ fn a_world_takes_at_most_the_budget_from_the_mark() {
 }
 
 /// `@f(v)` takes 3v + 6 steps from the call: the call, the branch into the loop, three per round for v + 1
-/// rounds, the return. With `%h = mark budget 20` around `call @f(%q)` the
-/// machine's time (`Stats::clock`) is 2 (qalloc, a gate) + 1 (mark) + 20 (to the rewind, included) + 1
-/// (ret) = 24 whether `%q` is 0, 1 or both: time does not tell the branches apart. Without the budget it
-/// does. The simulator's ticks (`Stats::steps`) count the work of the longest world either way.
+/// rounds, the return. With `%h = mark budget 20` around `call @f(%q)` the machine's time (`Stats::clock`)
+/// is 2 (qalloc, a gate) + 1 (mark) + 20 (to the rewind, included) + 1 (ret) = 24 whether `%q` is 0, 1 or
+/// both: time does not tell the branches apart. The simulator's ticks (`Stats::steps`) count the work of
+/// the longest world: 3v + 11. Without the budget the rewind follows a read of a qubit with none, which is
+/// refused (`bad_rewind`, nothing changed).
 #[test]
 fn a_rewind_of_a_mark_with_a_budget_costs_the_budget() {
     let program = |prepare: &str, mark: &str| {
@@ -79,22 +80,35 @@ entry:
 }}"
         )
     };
-    let mut unbudgeted = Vec::new();
+    let mut ticks = Vec::new();
     for prepare in ["z %q[0]", "x %q[0]", "h %q[0]", "x %q[1]"] {
         let module = load(&program(prepare, "mark budget 20"));
         let (outcome, e) = common::run(&module, "main", &[], bounded());
         assert_eq!(outcome, Outcome::Returned(Some(0)), "{prepare}");
         assert_eq!(e.stats().clock, 24, "{prepare}");
-        let ticks = e.stats().steps;
+        ticks.push(e.stats().steps);
+        // Unbudgeted: refused at the rewind with the state as it was there; with two worlds the first to
+        // reach it is refused while the other runs, so strict mode stops the run as a world fault.
         let module = load(&program(prepare, "mark"));
-        let (outcome, e) = common::run(&module, "main", &[], bounded());
-        assert_eq!(outcome, Outcome::Returned(Some(0)), "{prepare}");
-        assert_eq!(e.stats().steps, ticks, "{prepare}: the budget changes no tick");
-        assert_eq!(e.stats().clock, e.stats().steps, "{prepare}: without a budget the time is the ticks");
-        unbudgeted.push(e.stats().steps);
+        let mut e = executor(&module, "main", &[], bounded());
+        let mut before = e.snapshot();
+        let outcome = loop {
+            if let Some(outcome) = e.step() {
+                break outcome;
+            }
+            before = e.snapshot();
+        };
+        if prepare.starts_with('h') {
+            assert!(matches!(outcome, Outcome::Stopped(RunError::WorldFault { fault: Fault::BadRewind, .. })));
+        } else {
+            assert_eq!(outcome, Outcome::Faulted(Fault::BadRewind), "{prepare}");
+            let mut after = e.snapshot();
+            after.classical.outcome = None;
+            common::assert_same_state(&after, &before, prepare);
+        }
     }
-    // Unbudgeted: 2 + 1 + (3v + 6) + 1 rewind + 1 ret = 3v + 11, the longer world for |+>.
-    assert_eq!(unbudgeted, [11, 14, 14, 17]);
+    // 2 + 1 + (3v + 6) + 1 rewind + 1 ret = 3v + 11, the longer world for |+>.
+    assert_eq!(ticks, [11, 14, 14, 17]);
 }
 
 /// The path of one world needs more than the budget: strict mode stops the run where that world faults;
@@ -138,21 +152,51 @@ entry:
     assert_eq!((e.stats().clock, e.stats().worlds), (2 + 1 + 8 + 1, 1));
 }
 
-/// A rewind closes its mark's budget: a loop that marks and rewinds each round, every mark staying in the
-/// history, runs until the run's budget, each round taking 1 (br) + 1 (mark) + 5 (the budget, the rewind
-/// included) of the machine's time and 3 ticks.
+/// A rewind closes its mark's budget: a loop that marks, reads a qubit and rewinds each round, every mark
+/// staying in the history, runs until the run's budget. Each round takes 5 ticks (mark, call, return,
+/// rewind, br) and 7 of the machine's time (mark, the budget 5 from the call to the rewind, br). Where no
+/// qubit is read since the mark, the rewind costs its work.
 #[test]
 fn a_rewind_closes_its_marks_budget() {
-    let module = load("memory 64\nfunc @main() {\nentry:\nbr loop\nloop:\n%h = mark budget 5\nrewind %h\nbr loop\n}");
-    for run_budget in [10u64, 50, 100] {
-        let (outcome, e) = common::run(&module, "main", &[], Options { budget: Some(run_budget), ..bounded() });
-        assert_eq!(outcome, Outcome::Faulted(Fault::Budget));
-        assert_eq!(e.stats().steps, run_budget);
-        // By hand: the ticks go br, mark, rewind, br, ...; the time 1, 2, 7, 8, 9, 14, ...
-        let rounds = (run_budget - 1) / 3;
-        let rest = (run_budget - 1) % 3;
-        let clock = 1 + 7 * rounds + [0, 1, 6][rest as usize];
-        assert_eq!(e.stats().clock, clock, "run budget {run_budget}");
+    let text = "memory 64
+func @id(i1 %x) -> i1 {
+entry:
+    ret %x
+}
+func @main() {
+entry:
+    %q = qalloc 1
+    br loop
+loop:
+    %h = mark budget 5
+    %v = call @id(ARG)
+    rewind %h
+    br loop
+}";
+    for (arg, read) in [("%q", true), ("i1 0", false)] {
+        let module = load(&text.replace("ARG", arg));
+        for run_budget in [10u64, 50, 100] {
+            let (outcome, e) = common::run(&module, "main", &[], Options { budget: Some(run_budget), ..bounded() });
+            assert_eq!(outcome, Outcome::Faulted(Fault::Budget));
+            assert_eq!(e.stats().steps, run_budget);
+            // By hand, step by step: qalloc and br, then mark, call, return, rewind, br per round.
+            let (mut ticks, mut clock, mut deadline) = (2u64, 2u64, 0u64);
+            'run: loop {
+                for step in ["mark", "call", "ret", "rewind", "br"] {
+                    if ticks >= run_budget {
+                        break 'run;
+                    }
+                    ticks += 1;
+                    clock += 1;
+                    match step {
+                        "mark" => deadline = clock + 5,
+                        "rewind" if read => clock = clock.max(deadline),
+                        _ => {}
+                    }
+                }
+            }
+            assert_eq!(e.stats().clock, clock, "{arg}, run budget {run_budget}");
+        }
     }
 }
 
@@ -196,4 +240,54 @@ entry:
         let faulting = (0..4u64).filter(|v| 4 + 3 * v > budget).count() as u64;
         assert_eq!(e.stats().region_faults, u64::from(faulting > 0), "budget {budget}");
     }
+}
+
+/// A rewind whose history since an unbudgeted mark read a qubit faults `bad_rewind` (a classical cause,
+/// nothing changed): here a load of a byte that holds qubits. With a budget it runs. Inside an applied
+/// function no budget is required, as the `apply` has one: both ways of computing it agree there.
+#[test]
+fn a_rewind_after_a_read_of_a_qubit_needs_a_budget_outside_a_region() {
+    let outside = |mark: &str| {
+        format!(
+            "memory 64\nfunc @main() -> i8 {{\nentry:\nh [16:0]\n%h = {mark}\n%v = load i8 16\nrewind %h\nret 3\n}}"
+        )
+    };
+    let module = load(&outside("mark"));
+    let (outcome, e) = common::run(&module, "main", &[], bounded());
+    assert!(
+        matches!(
+            outcome,
+            Outcome::Faulted(Fault::BadRewind) | Outcome::Stopped(RunError::WorldFault { fault: Fault::BadRewind, .. })
+        ),
+        "{outcome:?}"
+    );
+    assert_eq!(e.stats().rewound_steps, 0);
+    let module = load(&outside("mark budget 10"));
+    assert_eq!(common::run(&module, "main", &[], bounded()).0, Outcome::Returned(Some(3)));
+    // Without any read: no budget needed.
+    let module = load("memory 64\nfunc @main() -> i8 {\nentry:\n%h = mark\n%v = load i8 16\nrewind %h\nret 3\n}");
+    assert_eq!(common::run(&module, "main", &[], bounded()).0, Outcome::Returned(Some(3)));
+
+    let module = load(
+        "memory 64
+func @g() -> i8 {
+entry:
+    %h = mark
+    %v = load i8 16
+    rewind %h
+    ret 3
+}
+func @main() -> i8 {
+entry:
+    h [16:0]
+    %out = qalloc 8
+    %fault = qalloc 5
+    apply @g() -> %out, %fault budget 10
+    %m = measure %out
+    ret %m
+}",
+    );
+    let mut e = executor(&module, "main", &[], bounded());
+    e.set_apply_mode(ApplyMode::Compare);
+    assert_eq!(e.run(), Outcome::Returned(Some(3)));
 }

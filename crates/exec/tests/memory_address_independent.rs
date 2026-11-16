@@ -84,7 +84,7 @@ fn generated(seed: usize, width: u32) -> String {
     let read: String = match (seed / 4) % 4 {
         0 => "%v = load i16 64\n".into(),
         1 => "store i9 257, 64\n%v = load i16 64\n".into(),
-        2 => "%inner = mark\n%a = load i16 64\nstore i9 3, 64\nrewind %inner\n%v = load i16 64\n".into(),
+        2 => "%inner = mark budget -1\n%a = load i16 64\nstore i9 3, 64\nrewind %inner\n%v = load i16 64\n".into(),
         _ => "%a = load i16 64\n%p = and i16 %a, 1\n%p64 = zext i16 %p to i64\n%addr = add i64 %p64, 80\nstore i16 %a, %addr\n%v = load i16 64\n".into(),
     };
     let middle = [
@@ -97,7 +97,7 @@ fn generated(seed: usize, width: u32) -> String {
     ][(seed / 16) % 6];
     let keep = if seed & 128 == 0 { "%wide -> [128]" } else { "%b -> %o" };
     format!(
-        "memory 2048\ndata 64 = i8 0x34, i8 0x52, i8 0xa7\nfunc @f(i16 %a)->i8 {{\nentry:\n%x = load i8 65\nstore i8 99, 65\n%r = xor i8 %x, 42\nret %r\n}}\nfunc @main() {{\nentry:\n%o = qalloc 8\n%fault = qalloc 5\n{promotions}{prep}\n%m = mark\n{read}%b = trunc i16 %v to i8\n%wide = zext i8 %b to i{width}\napply @f(%v) -> %o, %fault budget 100\n{middle}\nrewind %m keep ({keep})\nret\n}}\n"
+        "memory 2048\ndata 64 = i8 0x34, i8 0x52, i8 0xa7\nfunc @f(i16 %a)->i8 {{\nentry:\n%x = load i8 65\nstore i8 99, 65\n%r = xor i8 %x, 42\nret %r\n}}\nfunc @main() {{\nentry:\n%o = qalloc 8\n%fault = qalloc 5\n{promotions}{prep}\n%m = mark budget -1\n{read}%b = trunc i16 %v to i8\n%wide = zext i8 %b to i{width}\napply @f(%v) -> %o, %fault budget 100\n{middle}\nrewind %m keep ({keep})\nret\n}}\n"
     )
 }
 
@@ -132,7 +132,7 @@ fn generated_memory_extended() {
 fn every_bit_offset_and_nonzero_first_gate_move_matches_direct_reference() {
     for bit in 0..128 {
         let text = format!(
-            "memory 512\ndata 64 = i128 0x123456789abcdef00123456789abcdef\nfunc @main() {{\nentry:\n%o = qalloc 1\n%p = add i64 63, 1\nh [%p:{bit}]\n%m = mark\n%v = load i128 64\nh [%p:{bit}]\nrewind %m keep (i1 1 -> %o)\nh [%p:{bit}]\nret\n}}\n"
+            "memory 512\ndata 64 = i128 0x123456789abcdef00123456789abcdef\nfunc @main() {{\nentry:\n%o = qalloc 1\n%p = add i64 63, 1\nh [%p:{bit}]\n%m = mark budget -1\n%v = load i128 64\nh [%p:{bit}]\nrewind %m keep (i1 1 -> %o)\nh [%p:{bit}]\nret\n}}\n"
         );
         compare(&text);
     }
@@ -142,7 +142,7 @@ fn every_bit_offset_and_nonzero_first_gate_move_matches_direct_reference() {
 fn jump_records_read_and_write_quantum_bytes_including_high_bits() {
     for byte in [0, 3, 7, 8, 15, 16, 23, 24, 31] {
         let text = format!(
-            "memory 1024\ndata 64 = i128 0xa5a5, i128 0x1234\nfunc @throw(i64 %buf) {{\nentry:\nlongjmp %buf, 7\n}}\nfunc @main() {{\nentry:\n%out = qalloc 8\nh [{cell}:0]\n%m = mark\n%j = setjmp 64\n%c = icmp eq i32 %j, 0\nbr %c, first, done\nfirst:\ncall @throw(i64 64)\nunreachable:\nfault unreachable\ndone:\n%l = load i8 64\nrewind %m keep (i8 1 -> %out)\nret\n}}\n",
+            "memory 1024\ndata 64 = i128 0xa5a5, i128 0x1234\nfunc @throw(i64 %buf) {{\nentry:\nlongjmp %buf, 7\n}}\nfunc @main() {{\nentry:\n%out = qalloc 8\nh [{cell}:0]\n%m = mark budget -1\n%j = setjmp 64\n%c = icmp eq i32 %j, 0\nbr %c, first, done\nfirst:\ncall @throw(i64 64)\nunreachable:\nfault unreachable\ndone:\n%l = load i8 64\nrewind %m keep (i8 1 -> %out)\nret\n}}\n",
             cell = 64 + byte
         );
         // An unreachable label needs a terminator before it.
@@ -153,7 +153,7 @@ fn jump_records_read_and_write_quantum_bytes_including_high_bits() {
 fn staggered(refuses: bool) -> String {
     let keep = if refuses { " keep (i1 1 -> %o)" } else { "" };
     format!(
-        "memory 1024\nfunc @slow(i2 %x)->i8 {{\nentry:\nbr loop(%x)\nloop(i2 %n):\n%c = icmp eq i2 %n, 0\nbr %c, done, more\nmore:\n%next = sub i2 %n, 1\nbr loop(%next)\ndone:\n%r = zext i2 %x to i8\nret %r\n}}\nfunc @main() {{\nentry:\n%o = qalloc 1\nz [64]\n%m = mark\n%first = load i8 64\nx [64] ctrl %o\nry(0.37) [64]\nry(1.1) [64:1]\nrx(0.91) [64:1] ctrl [64]\nry(0.63) [64] ctrl [64:1]\n%last = load i8 64\n%v = trunc i8 %last to i2\n%r = call @slow(%v)\nstore i8 %r, 80\nrewind %m{keep}\nret\n}}\n"
+        "memory 1024\nfunc @slow(i2 %x)->i8 {{\nentry:\nbr loop(%x)\nloop(i2 %n):\n%c = icmp eq i2 %n, 0\nbr %c, done, more\nmore:\n%next = sub i2 %n, 1\nbr loop(%next)\ndone:\n%r = zext i2 %x to i8\nret %r\n}}\nfunc @main() {{\nentry:\n%o = qalloc 1\nz [64]\n%m = mark budget -1\n%first = load i8 64\nx [64] ctrl %o\nry(0.37) [64]\nry(1.1) [64:1]\nrx(0.91) [64:1] ctrl [64]\nry(0.63) [64] ctrl [64:1]\n%last = load i8 64\n%v = trunc i8 %last to i2\n%r = call @slow(%v)\nstore i8 %r, 80\nrewind %m{keep}\nret\n}}\n"
     )
 }
 
@@ -213,7 +213,7 @@ fn disagreeing_longjmp_record_is_the_documented_bad_longjmp_debt() {
 
 #[test]
 fn nested_replay_failure_preserves_the_outer_rewind_state() {
-    let text = "memory 512\nfunc @id(i1 %x)->i1 {\nentry:\nret %x\n}\nfunc @main() {\nentry:\n%q = qalloc 1\n%o = qalloc 1\n%r = qalloc 1\nry(1.1) %q\nrx(0.3) %o\n%m = mark\n%v1 = call @id(%q)\nx %q ctrl %o\n%n = mark\n%w = call @id(%q)\nh %q\nrewind %n keep (%w -> %r)\nrewind %m keep (%v1 -> %o)\nret\n}\n";
+    let text = "memory 512\nfunc @id(i1 %x)->i1 {\nentry:\nret %x\n}\nfunc @main() {\nentry:\n%q = qalloc 1\n%o = qalloc 1\n%r = qalloc 1\nry(1.1) %q\nrx(0.3) %o\n%m = mark budget -1\n%v1 = call @id(%q)\nx %q ctrl %o\n%n = mark budget -1\n%w = call @id(%q)\nh %q\nrewind %n keep (%w -> %r)\nrewind %m keep (%v1 -> %o)\nret\n}\n";
     compare(text);
     let memory = text
         .replace("%q = qalloc 1", "z [64]")

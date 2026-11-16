@@ -55,8 +55,8 @@ const MARK_VALUE: &str = r#"
 memory 512
 func @f() -> i64 {
 entry:
-    %m = mark
-    %n = mark
+    %m = mark budget -1
+    %n = mark budget -1
     rewind %n
     rewind %m
     ret 2
@@ -70,7 +70,7 @@ entry:
 }
 "#;
 
-const HANDLE_WITNESS: &str = "memory 512\nfunc @f() -> i64 {\nentry:\n    %m = mark\n    ret %m\n}\n";
+const HANDLE_WITNESS: &str = "memory 512\nfunc @f() -> i64 {\nentry:\n    %m = mark budget -1\n    ret %m\n}\n";
 
 fn refused_for_its_handle(text: &str, handle: &str) {
     match bennett_ir::load(text) {
@@ -120,7 +120,7 @@ done:
 func @f(i2 %x) -> i8 {
 entry:
     %a = load i8 0
-    %m = mark
+    %m = mark budget -1
     %b = load i8 1
     %w = zext i8 %b to i16
     store i16 %w, 0
@@ -347,7 +347,7 @@ fn allowed_cell_fault_codes_and_private_writes_match_the_reference() {
 fn regions_in_existing_worlds_and_rewind_replay_match_the_reference() {
     let text = MIXED
         .replace("func @f(i2 %x)", "func @id(i2 %x) -> i2 {\nentry:\n    ret %x\n}\nfunc @f(i2 %x)")
-        .replace("    apply @f(%x)", "    %outer = mark\n    %read = call @id(%x)\n    apply @f(%read)")
+        .replace("    apply @f(%x)", "    %outer = mark budget -1\n    %read = call @id(%x)\n    apply @f(%read)")
         .replace("    ret\n}", "    rewind %outer\n    ret\n}");
     for budget in [0, 12, 24, 32, 64] {
         reference_case(&text, &[budget]);
@@ -461,7 +461,7 @@ fn mark_observation_case(body: &str, expected: [u64; 4], modes: &[ApplyMode]) ->
 memory 2048
 func @leaf(i2 %x) -> i64 {{
 entry:
-    %m = mark
+    %m = mark budget -1
     store i2 %x, 8
     rewind %m
     %r = zext i2 %x to i64
@@ -516,10 +516,10 @@ fn fresh_region_mark_numbers_can_be_returned_stored_branched_on_and_called() {
     // Before handles became opaque (2026-11-16) these bodies observed the private fresh-journal numbering.
     // Now each is refused by name; the region's marks and rewinds still run, in a callee as well.
     for body in [
-        "%m = mark\nret %m",
-        "%m = mark\nstore i64 %m, 0\n%r = load i64 0\nret %r",
-        "%m = mark\n%ok = icmp eq i64 %m, 2\nbr %ok, yes, no\nyes:\nret 37\nno:\nret 99",
-        "%m = mark\n%r = call @g(%m)\nret %r",
+        "%m = mark budget -1\nret %m",
+        "%m = mark budget -1\nstore i64 %m, 0\n%r = load i64 0\nret %r",
+        "%m = mark budget -1\n%ok = icmp eq i64 %m, 2\nbr %ok, yes, no\nyes:\nret 37\nno:\nret 99",
+        "%m = mark budget -1\n%r = call @g(%m)\nret %r",
     ] {
         let text = format!(
             "memory 512\nfunc @g(i64 %v) -> i64 {{\nentry:\nret %v\n}}\nfunc @f(i2 %x) -> i64 {{\nentry:\n{body}\n}}\n"
@@ -539,13 +539,22 @@ fn relative_region_mark_numbers_match_all_modes_through_rewind_and_replay() {
     // Since handles are opaque the bodies return a value of x, not a difference of marks (which the
     // validator refuses, above); the marks, rewinds and replays are the same.
     let cases = [
-        ("%m = mark\nstore i2 %x, 0\nrewind %m\n%n = mark\n%d = zext i2 %x to i64\nret %d", [0, 1, 2, 3]),
-        ("%m = mark\n%n = mark\nrewind %n\nrewind %m\n%p = mark\n%d = zext i2 %x to i64\nret %d", [0, 1, 2, 3]),
-        ("%m = mark\nrewind %m\nrewind %m\n%n = mark\n%d = zext i2 %x to i64\nret %d", [0, 1, 2, 3]),
-        ("%m = mark\n%n = call @leaf(%x)\n%d = add i64 %n, 1\nret %d", [1, 2, 3, 4]),
-        ("%p = faddr @leaf\n%m = mark\n%n = call_indirect fn(i2) -> i64 %p(%x)\nret %n", [0, 1, 2, 3]),
         (
-            "%m = mark\n%zero = icmp eq i2 %x, 0\nbr %zero, short, long\nshort:\nbr join\nlong:\nstore i2 %x, 0\nbr join\njoin:\n%n = mark\n%v = load i8 0\n%d = zext i8 %v to i64\nret %d",
+            "%m = mark budget -1\nstore i2 %x, 0\nrewind %m\n%n = mark budget -1\n%d = zext i2 %x to i64\nret %d",
+            [0, 1, 2, 3],
+        ),
+        (
+            "%m = mark budget -1\n%n = mark budget -1\nrewind %n\nrewind %m\n%p = mark budget -1\n%d = zext i2 %x to i64\nret %d",
+            [0, 1, 2, 3],
+        ),
+        (
+            "%m = mark budget -1\nrewind %m\nrewind %m\n%n = mark budget -1\n%d = zext i2 %x to i64\nret %d",
+            [0, 1, 2, 3],
+        ),
+        ("%m = mark budget -1\n%n = call @leaf(%x)\n%d = add i64 %n, 1\nret %d", [1, 2, 3, 4]),
+        ("%p = faddr @leaf\n%m = mark budget -1\n%n = call_indirect fn(i2) -> i64 %p(%x)\nret %n", [0, 1, 2, 3]),
+        (
+            "%m = mark budget -1\n%zero = icmp eq i2 %x, 0\nbr %zero, short, long\nshort:\nbr join\nlong:\nstore i2 %x, 0\nbr join\njoin:\n%n = mark budget -1\n%v = load i8 0\n%d = zext i8 %v to i64\nret %d",
             [0, 1, 2, 3],
         ),
     ];
@@ -565,24 +574,24 @@ fn relative_region_mark_numbers_match_all_modes_through_rewind_and_replay() {
 // reversible run must reverse to its entry.
 const REGION_BODIES: &[&str] = &[
     // A mark, then a constant.
-    "    %m = mark\n    ret 2\n",
+    "    %m = mark budget -1\n    ret 2\n",
     // Nested marks, a rewind of the inner one, a mark after it.
-    "    %m1 = mark\n    %m2 = mark\n    store i8 100, 8\n    rewind %m2\n    %m3 = mark\n    %x64 = zext i2 %x to i64\n    %s = shl i64 %x64, 8\n    %r = or i64 %s, 2\n    ret %r\n",
+    "    %m1 = mark budget -1\n    %m2 = mark budget -1\n    store i8 100, 8\n    rewind %m2\n    %m3 = mark budget -1\n    %x64 = zext i2 %x to i64\n    %s = shl i64 %x64, 8\n    %r = or i64 %s, 2\n    ret %r\n",
     // A load of a qubit in memory (a split in history, private memory in the enumeration), paths of
     // different lengths, then a mark.
-    "    %a = load i8 0\n    %c = icmp eq i8 %a, 0\n    br %c, p, q\np:\n    %u = add i8 %a, 1\n    br q\nq:\n    %m = mark\n    %x64 = zext i2 %x to i64\n    %a64 = zext i8 %a to i64\n    %r = add i64 %a64, %x64\n    ret %r\n",
+    "    %a = load i8 0\n    %c = icmp eq i8 %a, 0\n    br %c, p, q\np:\n    %u = add i8 %a, 1\n    br q\nq:\n    %m = mark budget -1\n    %x64 = zext i2 %x to i64\n    %a64 = zext i8 %a to i64\n    %r = add i64 %a64, %x64\n    ret %r\n",
     // A mark in a callee of the region.
     "    %k = zext i2 %x to i64\n    %r = call @g(%k)\n    ret %r\n",
     // A mark and its rewind on one path only, then a mark (its value, unseen now, differs by path).
-    "    %c = icmp eq i2 %x, 1\n    br %c, p, q\np:\n    %m = mark\n    store i2 %x, 8\n    rewind %m\n    br q\nq:\n    %n = mark\n    %v = load i8 8\n    %r = zext i8 %v to i64\n    ret %r\n",
+    "    %c = icmp eq i2 %x, 1\n    br %c, p, q\np:\n    %m = mark budget -1\n    store i2 %x, 8\n    rewind %m\n    br q\nq:\n    %n = mark budget -1\n    %v = load i8 8\n    %r = zext i8 %v to i64\n    ret %r\n",
 ];
 
 const REGION_PREFIXES: &[&str] = &[
     "",
-    "    %p = mark\n",
-    "    %p = mark\n    x %t\n    x %t\n    %q = mark\n",
+    "    %p = mark budget -1\n",
+    "    %p = mark budget -1\n    x %t\n    x %t\n    %q = mark budget -1\n",
     "    apply @zero(%x) -> %t, %te budget 8\n",
-    "    %p = mark\n    apply @zero(%x) -> %t, %te budget 8\n    x %t\n    x %t\n",
+    "    %p = mark budget -1\n    apply @zero(%x) -> %t, %te budget 8\n    x %t\n    x %t\n",
 ];
 
 fn region_program(body: &str, prefix: &str, applies: usize) -> String {
@@ -595,7 +604,7 @@ entry:
 }}
 func @g(i64 %k) -> i64 {{
 entry:
-    %m = mark
+    %m = mark budget -1
     %r = add i64 %k, 4
     ret %r
 }}
@@ -860,7 +869,7 @@ entry:
 h %q
 s %q
 h %r
-%m = mark
+%m = mark budget -1
 %read = call @id(%q)
 store i8 7, 0
 %second = call @id(%r)

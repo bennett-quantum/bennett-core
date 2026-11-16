@@ -217,10 +217,14 @@ fn apply_equals_the_history_idiom_where_no_branch_faults() {
                 assert!(distance.is_some_and(|d| d <= 1e-12), "@{} superposed: {distance:?}", region.name);
                 assert_eq!(rewound.stats().peak_worlds, 1 << bits, "@{}: a world per argument value", region.name);
             }
-            // The text idiom has no region budget (the executor's own `apply` has it: `docs/DESIGN.md`,
-            // "`apply` as mark, call, rewind-keep"), so where only the budget faults, it runs to the end.
+            // The text idiom carries the region's budget on its mark (`common::as_history_idiom`), so a world
+            // over it faults `budget` as the region does, and strict mode stops the run.
             Outcome::Stopped(RunError::RegionFault { fault: Fault::Budget, .. }) => {
-                assert_eq!(outcome, Outcome::Returned(None), "@{}", region.name);
+                assert!(
+                    matches!(outcome, Outcome::Stopped(RunError::WorldFault { fault: Fault::Budget, .. })),
+                    "@{}: {outcome:?}",
+                    region.name
+                );
             }
             Outcome::Stopped(RunError::RegionFault { .. }) => {
                 assert!(

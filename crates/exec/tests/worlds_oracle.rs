@@ -60,7 +60,7 @@ entry:
     ry(0.7) %q[1]
     h %r
     rx(0.3) %o[0]
-    %m = mark
+    %m = mark budget -1
     %y = call @f(%q)
 {caller_store}{middle}    rewind %m keep (%y -> %o)
     h %q[0]

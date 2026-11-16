@@ -35,7 +35,8 @@ impl<'m> Executor<'m> {
     pub(crate) fn mark(&mut self, dst: Slot, budget: Option<&Operand>) {
         let allocations = self.quantum.allocations();
         let budget = budget.map(|budget| self.read_word(budget));
-        let deadline = budget.map(|budget| self.clock.saturating_add(budget));
+        // A budget whose deadline does not fit the clock (2^64 - 1, `budget -1`) bounds nothing.
+        let deadline = budget.and_then(|budget| self.clock.checked_add(budget));
         let journal = self.journal.get_or_insert_with(Journal::default);
         let position = journal.records() + 1;
         journal.push_mark(MarkEntry { position, allocations, budget, deadline });
@@ -79,13 +80,21 @@ impl<'m> Executor<'m> {
         }) {
             return Err(Fault::BadRewind.into());
         }
+        // A budget is required wherever a rewind follows a read of a qubit (the maintainer's decision of the
+        // afternoon of 2026-11-16): a rewind taken as a step, outside a coherent region (whose `apply` has
+        // its budget), whose history since an unbudgeted mark read a register or touched a memory qubit
+        // faults, a classical cause, changing nothing.
+        let step = self.rewinding == 0 && self.rerunning == 0;
+        let read = !(reads.is_empty() && cells.is_empty());
+        if step && !self.in_region && entry.budget.is_none() && read {
+            return Err(Fault::BadRewind.into());
+        }
         // Worlds can split off only where an earlier rewind's region runs again. If one does and the un-run
         // then fails, running forward again cannot join them, so keep a copy to restore.
         let rewinds_inside = (entry.position..journal.records()).any(|index| journal.kind_at(index) == Undo::Rewind);
         // A rewind taken as a step that may un-run past a read where its world split defers the checks below
         // that point to the sum of the worlds' parts (`worlds.rs`); if that sum fails them, this world is put
         // back from a copy. A rewind inside another's un-run or run-again belongs to that one's copy.
-        let step = self.rewinding == 0 && self.rerunning == 0;
         let split_read = reads.iter().any(|read| read.split) || cells.iter().any(|cell| cell.split);
         let defers = step && (rewinds_inside || split_read);
         // Outside strict mode an un-run may leave a register over and then fail elsewhere; running forward
@@ -153,12 +162,15 @@ impl<'m> Executor<'m> {
         if left_behind {
             self.record(Undo::LeftBehind);
         }
-        // The cost of a rewind of a mark with an open budget is the budget, whatever the work since the mark:
-        // the world's clock goes on to the mark's plus the budget (the rewind's own step is the last of it),
-        // and the rewind closes the budget. Running steps again takes no time.
+        // Where the rewind follows a read of a qubit, the cost of a rewind of a mark with an open budget is the
+        // budget, whatever the work since the mark: the world's clock goes on to the mark's plus the budget
+        // (the rewind's own step is the last of it). Any rewind of it closes the budget. Running steps again
+        // takes no time.
         if let Some(deadline) = entry.deadline.filter(|_| step) {
             let close = |executor: &mut Self| {
-                executor.clock = executor.clock.max(deadline);
+                if read {
+                    executor.clock = executor.clock.max(deadline);
+                }
                 if let Some(journal) = &mut executor.journal {
                     journal.close_mark(entry.position);
                 }

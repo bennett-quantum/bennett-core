@@ -63,7 +63,7 @@ fn net_keeps(extended: bool) -> usize {
                     "memory 128\nfunc @id(i2 %v) -> i2 {{\nentry:\nret %v\n}}\n\
                      func @main() {{\nentry:\n%q = qalloc 2\n%out = qalloc 2\n\
                      ry(0.71) %q[0]\nh %q[1]\ns %q[1]\nry(0.43) %out[0]\n\
-                     %outer = mark\n%inner = mark\n%v = call @id(%q)\nrewind %inner\n\
+                     %outer = mark budget -1\n%inner = mark budget -1\n%v = call @id(%q)\nrewind %inner\n\
                      %w = call @id(%q)\nrewind %outer keep ({})\nret\n}}\n",
                     keeps.join(", ")
                 );
@@ -118,7 +118,7 @@ fn generated_overlapping_memory_keeps_match_a_dense_calculation() {
                     };
                     let inner = if nested {
                         let read = read.replace("%byte", "%inner_byte").replace("%v", "%inner_v");
-                        format!("%inner = mark\n{read}\nrewind %inner\n")
+                        format!("%inner = mark budget -1\n{read}\nrewind %inner\n")
                     } else {
                         String::new()
                     };
@@ -126,7 +126,7 @@ fn generated_overlapping_memory_keeps_match_a_dense_calculation() {
                         "memory 128\nfunc @id(i2 %v) -> i2 {{\nentry:\nret %v\n}}\n\
                          func @main() {{\nentry:\n%q = qalloc 2\n%out = qalloc 2\n\
                          z [8]\nz [16]\nz [17]\nry(0.71) {q0}\nh {q1}\ns {q1}\nry(0.43) {o0}\n\
-                         %outer = mark\n{inner}{read}\n%guard = load i8 17\n%w = xor i2 %v, 3\n\
+                         %outer = mark budget -1\n{inner}{read}\n%guard = load i8 17\n%w = xor i2 %v, 3\n\
                          ry(0.37) {o1}\nrewind %outer keep (i2 1 -> {q_target}, i2 2 -> {q_target}, i2 3 -> {q_target}, \
                          %w -> {out_target}, i2 {b} -> {out_target}, i2 {b} -> {out_target}{extra})\nret\n}}\n",
                         q0 = q(0),

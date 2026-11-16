@@ -53,7 +53,7 @@ func @interfere() -> i1 {
 entry:
     %q = qalloc 1
     h %q
-    %m = mark
+    %m = mark budget -1
     %v = call @id(%q)
     rewind %m
     h %q
@@ -64,7 +64,7 @@ entry:
 ; The apply idiom: y ^= f(x) on every branch of x, with f's history un-run.
 func @copied(q2 %x, q8 %y) {
 entry:
-    %m = mark
+    %m = mark budget -1
     %v = call @f(%x)
     rewind %m keep (%v -> %y)
     ret
@@ -197,7 +197,7 @@ entry:
     %q = qalloc 2
     %c = xor i2 %v, 0
     call @prepare(%q, %c)
-    %m = mark
+    %m = mark budget -1
     %r = call @id2(%q)
     rewind %m keep (%r -> %q)
     ret
@@ -227,7 +227,7 @@ entry:
     %q = qalloc 1
     %o = qalloc 1
     h %q
-    %m = mark
+    %m = mark budget -1
     %r = call @id(%q)
     x %q ctrl %o
     rewind %m keep (i1 1 -> %o)
@@ -240,7 +240,7 @@ entry:
     %q = qalloc 1
     %o = qalloc 1
     h %q
-    %m = mark
+    %m = mark budget -1
     %r = call @id(%q)
     x %o ctrl %q
     rewind %m keep (i1 1 -> %o)
@@ -251,7 +251,7 @@ entry:
 ; allocation; the parts sum to the empty register table again.
 func @alloc_inside_state() {
 entry:
-    %m = mark
+    %m = mark budget -1
     %r = qalloc 1
     h %r
     %v = call @id(%r)
@@ -262,7 +262,7 @@ entry:
 ; acc ^= b, by the apply idiom.
 func @inner_copy(q1 %b, q2 %acc) {
 entry:
-    %m = mark
+    %m = mark budget -1
     %v = call @widen(%b)
     rewind %m keep (%v -> %acc)
     ret
@@ -278,7 +278,7 @@ entry:
     %out = qalloc 2
     h %a
     h %b
-    %m = mark
+    %m = mark budget -1
     %x = call @widen(%a)
     call @inner_copy(%b, %acc)
     rewind %m keep (%x -> %out)
@@ -328,7 +328,7 @@ stay:
 func @jumps(q1 %q, q8 %out) {
 entry:
     %buf = alloca 32
-    %m = mark
+    %m = mark budget -1
     %r = setjmp %buf
     %first = icmp eq i32 %r, 0
     br %first, call_it, after
@@ -356,7 +356,7 @@ func @unaligned() {
 entry:
     %q = qalloc 1
     h %q
-    %m = mark
+    %m = mark budget -1
     %v = call @id(%q)
     br %v, one, zero
 zero:
@@ -534,7 +534,7 @@ entry:
 ; Cleaning up at every level, each level reading x: two worlds from the outermost read on.
 func @clean(q1 %x, q8 %out, i8 %d) {
 entry:
-    %h = mark
+    %h = mark budget -1
     %w = call @work(%x, %d)
     %leaf = icmp eq i8 %d, 0
     br %leaf, done, deeper
@@ -574,7 +574,7 @@ entry:
     %x = qalloc 1
     h %x
     %out = qalloc 8
-    %h = mark
+    %h = mark budget -1
     %w = call @open(%x, %d)
     rewind %h keep (%w -> %out)
     ret
@@ -591,7 +591,7 @@ head(i16 %i):
     %more = icmp ult i16 %i, %n
     br %more, body, done
 body:
-    %h = mark
+    %h = mark budget -1
     %w = call @work(%x, i8 5)
     rewind %h keep (%w -> %out)
     %next = add i16 %i, 1
@@ -709,8 +709,8 @@ func @main() {
 entry:
     %q = qalloc 1
     h %q
-    %outer = mark
-    %inner = mark
+    %outer = mark budget -1
+    %inner = mark budget -1
     %temporary = qalloc 1
     qfree %temporary
     rewind %inner
@@ -747,7 +747,7 @@ func @main() {
 entry:
     %q = qalloc 1
     h %q
-    %m = mark
+    %m = mark budget -1
     call @maybe_allocate(%q)
     rewind %m
     h %q

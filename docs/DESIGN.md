@@ -213,12 +213,22 @@ the call); built as machine step e4. `%h = mark budget B` gives the mark a budge
   the rewind included; the next one faults `budget` in that world (a world fault, so strict mode stops the
   run while others go on; on the machine the world ends). Steps run again or un-run take no time and are not
   bounded by it (running again is charged to the run's budget instead, "History", Cost).
-- **The cost is the budget.** A rewind of a mark whose budget is open sets the world's clock to the mark's
-  clock plus `B`, whatever the work since the mark, and closes the budget: the mark stays in the history
-  (it can be rewound again) but bounds nothing more. So every branch waits at the rewind and the time after
-  it does not tell branches apart: `crates/exec/tests/mark_budget.rs`, a callee that takes 3v + 6 steps
-  for v = 0, 1, 2 under `mark budget 20` gives the time 24 for |0>, |1>, |2> and |0> + |1>, where without
-  the budget it is 11, 14, 17 and 14.
+- **The cost is the budget where the rewind follows a read of a qubit.** A rewind of a mark whose budget is
+  open, whose history since the mark read a register or touched a memory qubit, sets the world's clock to
+  the mark's clock plus `B`, whatever the work since the mark; any rewind of the mark closes its budget: the
+  mark stays in the history (it can be rewound again) but bounds nothing more. So every branch waits at the
+  rewind and the time after it does not tell branches apart: `crates/exec/tests/mark_budget.rs`, a callee
+  that takes 3v + 6 steps for v = 0, 1, 2 under `mark budget 20` gives the time 24 for |0>, |1>, |2> and
+  |0> + |1>, where its ticks are 11, 14, 17 and 14. Where nothing was read, there are no branches to wait
+  for and the rewind costs its work. Budgets nest: an outer mark's budget must cover the inner budgets its
+  region spends.
+- **Required where a rewind follows a read of a qubit** (machine step e5). A rewind taken as a step, outside
+  a coherent region (an `apply` has its own budget), whose history since a mark without a budget read a
+  register or touched a memory qubit faults `bad_rewind`, a classical cause, changing nothing. Where worlds
+  split, the first to reach the rewind faults, so strict mode stops the run. The tests written before the
+  rule give their marks `budget -1` (2^64 - 1): a budget whose deadline does not fit the clock meets the
+  rule and bounds nothing (and costs nothing); the text idiom of `apply` carries the region's budget plus 2
+  (the call and the rewind).
 - **Time is not machine state** ([W1]): the clock and the deadline in a mark's entry are left out of the
   worlds' equality and hashing, so worlds that took different times are one machine state again after the
   rewind and merge (their clock is the later one). The simulator's `steps` stay its ticks, in which every
@@ -229,8 +239,8 @@ the call); built as machine step e4. `%h = mark budget B` gives the mark a budge
 - **Cost of the representation**: each mark's entry in the journal's side table grows from 16 to 48 bytes
   (the budget and the deadline), measured in `memory_independent.rs`.
 
-Not yet: a budget required wherever a rewind follows a read of a qubit (the next step), and the
-independent whole-world reference does not model the mark's budget (it reads it; its programs give none).
+Not yet: the independent whole-world reference does not model the mark's budget (it reads it; the programs
+it runs give `budget -1`, which bounds nothing). Route: give its worlds a clock and compare `Stats::clock`.
 
 ### Worlds
 
@@ -827,9 +837,10 @@ It stays one step of the run that executes it, journalled as one record and undo
   runs, so neither way sees what the other left; `src/compare_tests.rs` corrupts the history path in 30
   ways and each is caught. `BENNETT_APPLY_TALLY=file` appends each comparison's costs. The journal-content observer classifies the
   enumeration's branches, so it computes `apply` by enumeration.
-- **The text idiom** (`%h = mark`, `%y = call @f(args)`, `rewind %h keep (%y -> out)`) still has no fault
-  register and no budget: a fault ends the world, and its steps count against the run's budget. That is the
-  executor's lowering, not a form a program can write; a question for the maintainer (`HANDOFF.md`).
+- **The text idiom** (`%h = mark budget B'`, `%y = call @f(args)`, `rewind %h keep (%y -> out)`, with
+  `B'` the region's `B` plus 2 for the call and the rewind) still has no fault register: a fault ends the
+  world (strict mode stops the run, as a region fault does). The call form with a fault value, decided on
+  2026-11-16, is the form a program can write (a later step).
 - **Checked.** In compare mode every `apply` of `cargo test` (107,687 executions in 46 tests, among them the
   bijection checks, the exhaustive harness, faults, budgets, effects, `exit`, jumps, return addresses, qubits
   in memory and inner rewinds; 325 of them strict region-fault stops) and of `front/test.sh` (21,866

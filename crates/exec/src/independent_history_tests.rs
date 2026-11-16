@@ -65,9 +65,9 @@ memory 256
 func @main(i2 %a) {
 entry:
     %q = qalloc 2
-    %h = mark
+    %h = mark budget -1
     store i2 %a, 16
-    %g = mark
+    %g = mark budget -1
     %v = add i2 %a, 1
     rewind %g keep (%v -> %q, i2 3 -> %q)
     rewind %h keep (%a -> %q)
@@ -271,7 +271,7 @@ entry:
 %q = qalloc 2
 %r = qalloc 1
 %o = qalloc 2
-%m = mark
+%m = mark budget -1
 %v = call @f(%q, %r, %a)
 rewind %m keep (%v -> %o)
 ret
@@ -409,7 +409,7 @@ ret
 #[test]
 fn independent_memory_composite_bijection_includes_cell_table_dead_slots_and_full_journal() {
     use num_complex::Complex64 as C;
-    let p = bennett_ir::load("memory 512\nfunc @main() {\nentry:\n%q = qalloc 2\nz [40]\n%m = mark\n%l = load i8 40\n%r = trunc i8 %l to i2\nstore i8 3, 40\nh %q\nrewind %m keep (%r -> %q)\nret\n}\n").expect("valid");
+    let p = bennett_ir::load("memory 512\nfunc @main() {\nentry:\n%q = qalloc 2\nz [40]\n%m = mark budget -1\n%l = load i8 40\n%r = trunc i8 %l to i2\nstore i8 3, 40\nh %q\nrewind %m keep (%r -> %q)\nret\n}\n").expect("valid");
     let (mut starts, mut images, mut map) = (Vec::new(), Vec::new(), BTreeMap::new());
     let mut linear = 0;
     for dirty in [false, true] {

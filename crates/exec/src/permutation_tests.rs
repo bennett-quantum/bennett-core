@@ -72,7 +72,7 @@ entry:
     %o = qalloc 2
     %e = qalloc 5
     apply @inc(%a) -> %o, %e budget 10
-    %h = mark
+    %h = mark budget -1
     br %c, left(%s), right(%u)
 left(i2 %x):
     switch i2 %x, 0: zero, 1: one, default: rest(%x)
@@ -91,7 +91,7 @@ rest(i2 %v):
 ; mark of its own, so that the caller's rewind runs that region again.
 func @mix(i2 %a, i2 %b) -> i2 {
 entry:
-    %g = mark
+    %g = mark budget -1
     %l = load i8 24
     %k = trunc i8 %l to i2
     %s = add i2 %a, %k
@@ -118,7 +118,7 @@ func @region(i2 %a, i2 %b) -> i2 {
 entry:
     %r = qalloc 2
     %x = add i2 %a, 1
-    %h = mark
+    %h = mark budget -1
     %y = call @mix(%a, %b)
     %z = add i2 %y, %x
     rewind %h keep (%y -> %r, %z -> %r)
@@ -620,7 +620,7 @@ func @worlds(i2 %a, i2 %b) -> i2 {
 entry:
     %q = qalloc 2
     %r = qalloc 2
-    %m = mark
+    %m = mark budget -1
     %s = call @pick(%q, %a)
     %t = add i2 %s, %b
     rewind %m keep (%t -> %r)
@@ -829,7 +829,7 @@ entry:
     %n = trunc i16 %l to i2
     store i16 %l, 23
     %j = setjmp 16
-    %h = mark
+    %h = mark budget -1
     x [24:5]
     h [40:0]
     x [40:0] ctrl [24:5]
@@ -902,7 +902,7 @@ func @cellworlds(i2 %a, i2 %b) -> i2 {{
 entry:
     %r = qalloc 2
     z [40]
-    %m = mark
+    %m = mark budget -1
 {first_access}
     %t = trunc i8 %l to i2
     %s = call @pick(%t, %a)

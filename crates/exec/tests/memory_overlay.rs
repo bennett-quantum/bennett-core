@@ -50,7 +50,7 @@ entry:
     h %q[1]
     %r = qalloc 1
     h %r
-    %m = mark
+    %m = mark budget -1
     %a = call @write(%q, %n)
     %b = call @id(%r)
     rewind %m

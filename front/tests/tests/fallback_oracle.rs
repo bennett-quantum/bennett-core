@@ -490,7 +490,7 @@ fn check_region(name: &str, region: &str, after: &str) {
         // y gets the conjugated bit, k the whole image: every cell the region
         // wrote is compared on every branch, not one bit of one cell.
         let text = format!(
-            "{region}\nfunc @oracle_adapter() {{\nentry:\n%q = qalloc 2\n%y = qalloc 1\n%k = qalloc 32\n{prep}%m = mark\n%v = call @result(%q)\n%s = lshr i32 %v, 1\n%b = trunc i32 %s to i1\ns %y\nrewind %m keep (%b -> %y, %v -> %k)\n{after}ret\n}}\n"
+            "{region}\nfunc @oracle_adapter() {{\nentry:\n%q = qalloc 2\n%y = qalloc 1\n%k = qalloc 32\n{prep}%m = mark budget -1\n%v = call @result(%q)\n%s = lshr i32 %v, 1\n%b = trunc i32 %s to i1\ns %y\nrewind %m keep (%b -> %y, %v -> %k)\n{after}ret\n}}\n"
         );
         let module = bennett_ir::load(&text).expect("marked adapter valid");
         let mut e = Executor::new(&module, entry(&module, "oracle_adapter"), &[], options(0)).expect("starts");

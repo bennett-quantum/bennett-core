@@ -73,7 +73,7 @@ entry:
 func @across() -> i8 {
 entry:
     h [16:0]
-    %h = mark
+    %h = mark budget -1
     %m = measure i8 [16]
     rewind %h
     ret 0
@@ -82,7 +82,7 @@ entry:
 func @interfere() -> i8 {
 entry:
     h [16:3]
-    %h = mark
+    %h = mark budget -1
     %v = load i8 16
     %c = icmp eq i8 %v, 8
     br %c, one, done

@@ -135,9 +135,9 @@ entry:
 %out = qalloc 1
 h %q
 h %r
-%m = mark
+%m = mark budget -1
 %v = call @work(%q)
-%n = mark
+%n = mark budget -1
 %w = call @id(%r)
 rewind %n
 rewind %n
@@ -210,7 +210,7 @@ h %q
 %v = call @write(%q)
 %m = measure %q
 h %r
-%n = mark
+%n = mark budget -1
 %w = call @id(%r)
 store i8 99, 7
 rewind %n
@@ -275,7 +275,7 @@ entry:
 %q = qalloc 1
 %out = qalloc 1
 h %q
-%m = mark
+%m = mark budget -1
 %v = call @work(%q)
 rewind %m keep (%v -> %out)
 h %q
@@ -317,7 +317,7 @@ entry:
 %r = qalloc 1
 h %q
 h %r
-%m = mark
+%m = mark budget -1
 %a = call @id(%q)
 store i8 99, 1
 %b = call @id(%r)

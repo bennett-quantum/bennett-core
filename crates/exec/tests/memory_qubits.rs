@@ -111,7 +111,7 @@ entry:
 }}
 func @main() {{
 entry:
-{allocations}{prepare}    %m = mark
+{allocations}{prepare}    %m = mark budget -1
 {read}{caller_store}{middle}    rewind %m keep (%y -> {target})
 {after}    ret
 }}
@@ -365,7 +365,7 @@ fn grover(memory: bool, iterations: u8) -> String {
     let body = format!(
         "    br iterate(i8 0)
 iterate(i8 %k):
-    %h = mark
+    %h = mark budget -1
 {read}    rewind %h keep (%y -> {kick})
 {diffuse}    %k.next = add i8 %k, 1
     %more = icmp ult i8 %k.next, {iterations}
@@ -517,7 +517,7 @@ fn reading_a_rotated_bit_and_un_running_the_read_interferes() {
 func @main() -> i8 {
 entry:
     h [16:3]
-    %h = mark
+    %h = mark budget -1
     %v = load i8 16
     %c = icmp eq i8 %v, 8
     br %c, one, done
@@ -615,7 +615,7 @@ fn keeps_into_memory_conjugate_and_need_qubits_held_since_the_mark() {
 func @conjugated() -> i8 {
 entry:
     h [16]
-    %h = mark
+    %h = mark budget -1
     h [16]
     rewind %h keep (i1 1 -> [16])
     h [16]
@@ -624,7 +624,7 @@ entry:
 }
 func @promoted_since() -> i8 {
 entry:
-    %h = mark
+    %h = mark budget -1
     x [16]
     %z = add i8 0, 0
     rewind %h keep (i1 1 -> [16])
@@ -632,14 +632,14 @@ entry:
 }
 func @classical() -> i8 {
 entry:
-    %h = mark
+    %h = mark budget -1
     rewind %h keep (i8 1 -> [16])
     ret 0
 }
 func @read_since() -> i8 {
 entry:
     x [16]
-    %h = mark
+    %h = mark budget -1
     %v = load i8 16
     rewind %h keep (i8 1 -> [16])
     ret 0
@@ -648,7 +648,7 @@ func @carried() -> i8 {
 entry:
     x [17]
     x [17]
-    %h = mark
+    %h = mark budget -1
     x [16] ctrl [17]
     rewind %h keep (i8 1 -> [17])
     ret 0
@@ -714,7 +714,7 @@ fn a_rewind_un_runs_a_promotion_shared_by_the_worlds_a_read_split() {
 data 16 = i8 6
 func @main() -> i8 {
 entry:
-    %h = mark
+    %h = mark budget -1
     h [16:0]
     ry(0.9) [16:3]
     %v = load i8 16
@@ -759,7 +759,7 @@ entry:
 }}
 func @main() {{
 entry:
-    {}    {}    %m = mark
+    {}    {}    %m = mark budget -1
     {read}
     x {q} ctrl {out}
     h {q}
@@ -804,7 +804,7 @@ entry:
     {allocate}
     %q = qalloc 1
     h %q
-    %m = mark
+    %m = mark budget -1
     x [64] ctrl {out}
     call @id(%q)
     rewind %m keep ({keep} -> {out})
@@ -924,7 +924,7 @@ func @main() -> i8 {
 entry:
     z [16]
     %old = load i8 16
-    %m = mark
+    %m = mark budget -1
     rewind %m keep (i8 1 -> [16])
     %result = load i8 16
     ret %result
@@ -947,7 +947,7 @@ fn canceled_memory_keeps_preserve_a_read_and_its_interference() {
 func @main() -> i8 {
 entry:
     h [16]
-    %m = mark
+    %m = mark budget -1
     %value = load i8 16
     rewind %m keep (i8 1 -> [16], i8 1 -> [16])
     h [16]
@@ -972,7 +972,7 @@ fn memory_keeps_xor_every_little_endian_byte_at_every_integer_width() {
         let value = 0x8102_0304_0506_0708_090a_0b0c_0d0e_0f13_u128 & width.mask();
         let promotions: String = (0..width.bytes()).map(|offset| format!(" z [{}]\n", 32 + offset)).collect();
         let module = bennett_ir::load(&format!(
-            "memory 256\nfunc @main() -> i{bits} {{\nentry:\n{promotions} %m = mark\n \
+            "memory 256\nfunc @main() -> i{bits} {{\nentry:\n{promotions} %m = mark budget -1\n \
              rewind %m keep (i{bits} {value} -> [32])\n %result = load i{bits} 32\n ret %result\n}}\n"
         ))
         .expect("valid");

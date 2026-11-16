@@ -80,7 +80,8 @@ fn generated(k: usize) -> String {
     };
     let inner = if k & 2 == 0 { "" } else { "call @copy(%b, %acc)" };
     let temp = if k & 4 == 0 { "" } else { "%tmp = qalloc 1\nh %tmp\n%ignored = call @id(%tmp)" };
-    let repeat = if k & 8 == 0 { "" } else { "%n = mark\n%w = call @work(%q, %b, %acc)\nrewind %n keep (%w -> %out)" };
+    let repeat =
+        if k & 8 == 0 { "" } else { "%n = mark budget -1\n%w = call @work(%q, %b, %acc)\nrewind %n keep (%w -> %out)" };
     let prep = [
         "h %q[0]\nh %q[1]",
         "ry(0.31) %q[0]\nrx(1.1) %q[1]",
@@ -93,7 +94,7 @@ fn generated(k: usize) -> String {
 func @id(i1 %x)->i1 {{
 entry:\nret %x\n}}
 func @copy(q1 %b, q1 %a) {{
-entry:\n%m = mark\n%r = call @id(%b)\nrewind %m keep (%r -> %a)\nret\n}}
+entry:\n%m = mark budget -1\n%r = call @id(%b)\nrewind %m keep (%r -> %a)\nret\n}}
 func @work(i2 %x, q1 %b, q1 %acc)->i2 {{
 entry:
 %c = icmp ult i2 %x, 2
@@ -116,7 +117,7 @@ entry:
 %out = qalloc 2
 {prep}
 ry(0.7) %b
-%outer = mark
+%outer = mark budget -1
 {temp}
 {indirect}
 {middle}
@@ -217,7 +218,7 @@ func @uniform() {
 entry:
 %q = qalloc 1
 h %q
-%m = mark
+%m = mark budget -1
 %v = call @id1(%q)
 rewind %m
 ret
@@ -226,7 +227,7 @@ func @unaligned() {
 entry:
 %q = qalloc 1
 h %q
-%m = mark
+%m = mark budget -1
 %v = call @id1(%q)
 br %v, one, zero
 zero:
@@ -307,7 +308,7 @@ func @main() {
 entry:
 %q = qalloc 1
 %out = qalloc 1
-%m = mark
+%m = mark budget -1
 call @id(%q)
 x %q ctrl %out
 h %q
@@ -387,7 +388,7 @@ ret %z
                 let apply = format!("{body}{}", entry.replace("OP", "apply @f(%a, %b) -> %out, %fault budget 100"));
                 let idiom = format!(
                     "{body}{}",
-                    entry.replace("OP", "%m = mark\n%v = call @f(%a, %b)\nrewind %m keep (%v -> %out)")
+                    entry.replace("OP", "%m = mark budget -1\n%v = call @f(%a, %b)\nrewind %m keep (%v -> %out)")
                 );
                 let pa = bennett_ir::load(&apply).expect("apply");
                 let pi = bennett_ir::load(&idiom).expect("idiom");
@@ -517,13 +518,13 @@ fn shared_history_class(events: usize, stride: usize) -> (usize, usize, usize) {
                         }
                         "N" => {
                             inner += 1;
-                            format!("%n{inner} = mark\n%w{inner} = call @id(%q)\nh %q\nrewind %n{inner} keep (%w{inner} -> %r)")
+                            format!("%n{inner} = mark budget -1\n%w{inner} = call @id(%q)\nh %q\nrewind %n{inner} keep (%w{inner} -> %r)")
                         }
                         gate => gate.to_string(),
                     })
                     .collect();
                 let text = format!(
-                    "memory 512\nfunc @id(i1 %x)->i1 {{\nentry:\nret %x\n}}\n{SLOW}func @main() {{\nentry:\n%q = qalloc 1\n%o = qalloc 1\n%r = qalloc 1\n{prep}\n%m = mark\n{}\nrewind %m{keep}\nret\n}}\n",
+                    "memory 512\nfunc @id(i1 %x)->i1 {{\nentry:\nret %x\n}}\n{SLOW}func @main() {{\nentry:\n%q = qalloc 1\n%o = qalloc 1\n%r = qalloc 1\n{prep}\n%m = mark budget -1\n{}\nrewind %m{keep}\nret\n}}\n",
                     body.join("\n")
                 );
                 let p = bennett_ir::load(&text).expect("valid generated class program");
@@ -726,7 +727,7 @@ fn a_stop_before_deferred_checks_are_made_reverses_exactly() {
     ] {
         let ret = 9 + gate.lines().count() - 1;
         let text = format!(
-            "memory 512\nfunc @id(i1 %x)->i1 {{\nentry:\nret %x\n}}\n{SLOW}func @main() {{\nentry:\n%q = qalloc 1\n%o = qalloc 1\nh %q\n%m = mark\n%v1 = call @id(%q)\n{gate}\nh %q\n%v2 = call @slow(%q)\nrewind %m{keep}\nret\n}}\n"
+            "memory 512\nfunc @id(i1 %x)->i1 {{\nentry:\nret %x\n}}\n{SLOW}func @main() {{\nentry:\n%q = qalloc 1\n%o = qalloc 1\nh %q\n%m = mark budget -1\n%v1 = call @id(%q)\n{gate}\nh %q\n%v2 = call @slow(%q)\nrewind %m{keep}\nret\n}}\n"
         );
         let p = bennett_ir::load(&text).expect("valid");
         let mut full = executor(&p, "main", 0);
@@ -768,7 +769,7 @@ fn a_stop_before_deferred_checks_are_made_reverses_exactly() {
 #[test]
 fn emptied_parts_wait_for_their_own_checks_while_a_deeper_rewind_passes() {
     let text = format!(
-        "memory 512\nfunc @id(i1 %x)->i1 {{\nentry:\nret %x\n}}\n{SLOW}func @main() {{\nentry:\n%q = qalloc 1\n%o = qalloc 1\n%r = qalloc 1\nh %q\n%m = mark\n%v1 = call @slow(%q)\nh %q\n%t = qalloc 1\nx %t ctrl %o\n%n1 = mark\n%w1 = call @id(%q)\nh %q\nrewind %n1 keep (%w1 -> %r)\nrewind %m keep (i1 1 -> %o)\nret\n}}\n"
+        "memory 512\nfunc @id(i1 %x)->i1 {{\nentry:\nret %x\n}}\n{SLOW}func @main() {{\nentry:\n%q = qalloc 1\n%o = qalloc 1\n%r = qalloc 1\nh %q\n%m = mark budget -1\n%v1 = call @slow(%q)\nh %q\n%t = qalloc 1\nx %t ctrl %o\n%n1 = mark budget -1\n%w1 = call @id(%q)\nh %q\nrewind %n1 keep (%w1 -> %r)\nrewind %m keep (i1 1 -> %o)\nret\n}}\n"
     );
     let p = bennett_ir::load(&text).expect("valid");
     let model = Model::new(&p, "main");

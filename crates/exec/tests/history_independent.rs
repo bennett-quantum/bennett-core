@@ -32,7 +32,7 @@ fn nested_gate_rewinds_and_rewind_of_rewind_replay_every_snapshot() {
 memory 1024
 func @callee(q2 %q) {
 entry:
-    %i = mark
+    %i = mark budget -1
     ry(0.47) %q[0]
     x %q[1] ctrl %q[0]
     rewind %i keep (i2 1 -> %q)
@@ -42,9 +42,9 @@ func @main() {
 entry:
     %q = qalloc 2
     h %q[1]
-    %outer = mark
+    %outer = mark budget -1
     call @callee(%q)
-    %inner = mark
+    %inner = mark budget -1
     s %q[1]
     rewind %inner keep (i2 2 -> %q)
     rewind %inner keep (i2 3 -> %q)
@@ -75,7 +75,7 @@ fn aliased_keep_parameters_and_all_width_boundaries_xor_values_read_now() {
 memory 512
 func @keep(q{width} %a, q{width} %b, i{width} %v) {{
 entry:
-    %h = mark
+    %h = mark budget -1
     %w = xor i{width} %v, {max}
     rewind %h keep (%v -> %a, %w -> %b, i{width} {max} -> %a)
     ret
@@ -106,7 +106,7 @@ fn every_keep_is_checked_before_any_xor_or_unrun() {
     {
         for keep_value in [0, 1] {
             let module = load(&format!(
-                "memory 512\nfunc @main() {{\nentry:\n%q = qalloc 1\n%r = qalloc 1\n%h = mark\neffect 65\n{setup}\nrewind %h keep (i1 1 -> %r, i1 {keep_value} -> %young)\nret\n}}"
+                "memory 512\nfunc @main() {{\nentry:\n%q = qalloc 1\n%r = qalloc 1\n%h = mark budget -1\neffect 65\n{setup}\nrewind %h keep (i1 1 -> %r, i1 {keep_value} -> %young)\nret\n}}"
             ));
             let mut e = executor(&module, "main", &[], options());
             at_rewind(&mut e, &module);
@@ -120,7 +120,7 @@ fn every_keep_is_checked_before_any_xor_or_unrun() {
         }
     }
     let module = load(
-        "memory 512\nfunc @main() {\nentry:\n%q = qalloc 1\n%r = qalloc 1\n%h = mark\nqfree %q\nrewind %h keep (i1 1 -> %r, i1 1 -> %q)\nret\n}",
+        "memory 512\nfunc @main() {\nentry:\n%q = qalloc 1\n%r = qalloc 1\n%h = mark budget -1\nqfree %q\nrewind %h keep (i1 1 -> %r, i1 1 -> %q)\nret\n}",
     );
     let mut e = executor(&module, "main", &[], options());
     at_rewind(&mut e, &module);
@@ -139,7 +139,7 @@ fn fault_and_exit_between_mark_and_rewind_stop_first_and_reverse() {
         ("exit i8 9", Outcome::Returned(Some(9))),
     ] {
         let module = load(&format!(
-            "memory 512\nfunc @f() -> i8 {{\nentry:\neffect 66\nstore i8 42, 16\n{term}\n}}\nfunc @main() -> i8 {{\nentry:\n%h = mark\n%r = call @f()\nrewind %h\nret 0\n}}"
+            "memory 512\nfunc @f() -> i8 {{\nentry:\neffect 66\nstore i8 42, 16\n{term}\n}}\nfunc @main() -> i8 {{\nentry:\n%h = mark budget -1\n%r = call @f()\nrewind %h\nret 0\n}}"
         ));
         let mut e = executor(&module, "main", &[], options());
         let initial = e.snapshot();
@@ -161,7 +161,7 @@ fn faults_and_effects_inside_applied_marked_regions_leave_no_trace() {
         ("%d = udiv i2 3, 0\nret %d", Fault::DivideByZero),
     ] {
         let module = load(&format!(
-            "memory 1024\nfunc @f() -> i2 {{\nentry:\n%h = mark\nstore i8 27, 16\n{body}\n}}\nfunc @main() {{\nentry:\n%out = qalloc 2\n%e = qalloc 5\n%h = mark\napply @f() -> %out, %e budget 20\nrewind %h keep (i2 2 -> %out)\nret\n}}"
+            "memory 1024\nfunc @f() -> i2 {{\nentry:\n%h = mark budget -1\nstore i8 27, 16\n{body}\n}}\nfunc @main() {{\nentry:\n%out = qalloc 2\n%e = qalloc 5\n%h = mark budget -1\napply @f() -> %out, %e budget 20\nrewind %h keep (i2 2 -> %out)\nret\n}}"
         ));
         let opts = Options { allow_region_faults: true, ..options() };
         let mut e = executor(&module, "main", &[], opts);
@@ -178,7 +178,7 @@ fn faults_and_effects_inside_applied_marked_regions_leave_no_trace() {
 #[test]
 fn measuring_before_mark_is_allowed_but_after_mark_is_an_atomic_barrier() {
     let module = load(
-        "memory 512\nfunc @main() {\nentry:\n%q = qalloc 1\nh %q\n%m = measure %q\n%h = mark\nx %q\nrewind %h\nret\n}",
+        "memory 512\nfunc @main() {\nentry:\n%q = qalloc 1\nh %q\n%m = measure %q\n%h = mark budget -1\nx %q\nrewind %h\nret\n}",
     );
     for seed in 0..16 {
         let mut e = executor(&module, "main", &[], Options { seed, ..options() });
@@ -191,7 +191,7 @@ fn measuring_before_mark_is_allowed_but_after_mark_is_an_atomic_barrier() {
         assert_same_state(&e.snapshot(), &measured, "barrier restored");
     }
     let module = load(
-        "memory 512\nfunc @main() {\nentry:\n%q = qalloc 1\n%h = mark\nh %q\n%m = measure %q\nrewind %h keep (i1 1 -> %q)\nret\n}",
+        "memory 512\nfunc @main() {\nentry:\n%q = qalloc 1\n%h = mark budget -1\nh %q\n%m = measure %q\nrewind %h keep (i1 1 -> %q)\nret\n}",
     );
     let mut e = executor(&module, "main", &[], options());
     at_rewind(&mut e, &module);
@@ -202,7 +202,7 @@ fn measuring_before_mark_is_allowed_but_after_mark_is_an_atomic_barrier() {
     assert_same_state(&after, &before, "measurement barrier");
 }
 
-/// `%h = mark; loop: rewind %h; br loop`, worked by hand. Every rewind un-runs back to the mark, so the
+/// `%h = mark budget -1; loop: rewind %h; br loop`, worked by hand. Every rewind un-runs back to the mark, so the
 /// region of the n-th rewind (n > 1) is the (n-1)-th rewind and a `br`, and the first one's is a `br`.
 /// Undoing the k-th rewind's record runs again from the mark to its k-th visit: k `br`s and the rewinds
 /// 1..k-1, each one step plus its own running again, so W(k) = k + sum over j < k of (1 + C(j)); the n-th
@@ -236,7 +236,7 @@ fn loop_of_rewinds_by_hand(budget: u64) -> (u64, u64) {
 
 #[test]
 fn a_rewind_has_finite_budget_even_in_an_infinite_loop() {
-    let module = load("memory 256\nfunc @main() {\nentry:\n%h = mark\nbr loop\nloop:\nrewind %h\nbr loop\n}");
+    let module = load("memory 256\nfunc @main() {\nentry:\n%h = mark budget -1\nbr loop\nloop:\nrewind %h\nbr loop\n}");
     // By hand for the small budgets: the second rewind needs 6, the third 12, the fourth 24, the fifth 48.
     assert_eq!(
         [1, 2, 3, 4, 5, 6, 7, 8, 12, 32].map(loop_of_rewinds_by_hand),
@@ -256,7 +256,7 @@ fn a_rewind_has_finite_budget_even_in_an_infinite_loop() {
 
 #[test]
 fn journal_content_refuses_rewind_in_a_region_but_observes_marks() {
-    let source = "memory 512\nfunc @f() -> i2 {\nentry:\n%h = mark\nREWIND\nret 3\n}\nfunc @main() {\nentry:\n%q = qalloc 2\n%e = qalloc 5\napply @f() -> %q, %e budget 10\nret\n}";
+    let source = "memory 512\nfunc @f() -> i2 {\nentry:\n%h = mark budget -1\nREWIND\nret 3\n}\nfunc @main() {\nentry:\n%q = qalloc 2\n%e = qalloc 5\napply @f() -> %q, %e budget 10\nret\n}";
     for raw in [false, true] {
         let module = load(&source.replace("REWIND", ""));
         let mut observed = executor(&module, "main", &[], options());
@@ -281,7 +281,7 @@ fn journal_content_refuses_rewind_in_a_region_but_observes_marks() {
 
 #[test]
 fn text_roundtrip_preserves_execution_of_nested_marks_and_keep_lists() {
-    let source = "memory 512\nfunc @f(q64 %q, q64 %alias) {\nentry:\n%h = mark\n%v = add i64 18446744073709551615, 1\n%g = mark\nrewind %g keep (i64 -1 -> %q)\nrewind %h keep (%v -> %q, i64 -1 -> %alias)\nret\n}\nfunc @main() {\nentry:\n%q = qalloc 64\ncall @f(%q, %q)\nret\n}";
+    let source = "memory 512\nfunc @f(q64 %q, q64 %alias) {\nentry:\n%h = mark budget -1\n%v = add i64 18446744073709551615, 1\n%g = mark budget -1\nrewind %g keep (i64 -1 -> %q)\nrewind %h keep (%v -> %q, i64 -1 -> %alias)\nret\n}\nfunc @main() {\nentry:\n%q = qalloc 64\ncall @f(%q, %q)\nret\n}";
     let parsed = bennett_ir::read(source).expect("read");
     let written = bennett_ir::write(&parsed);
     assert_eq!(bennett_ir::read(&written).expect("reread"), parsed);
@@ -298,7 +298,7 @@ fn text_roundtrip_preserves_execution_of_nested_marks_and_keep_lists() {
 #[test]
 fn simple_rewind_replays_identically_with_and_without_an_initial_journal() {
     let module = load(
-        "memory 256\nfunc @main() {\nentry:\n%q = qalloc 2\n%h = mark\nx %q[0]\nrewind %h keep (i2 2 -> %q)\nret\n}",
+        "memory 256\nfunc @main() {\nentry:\n%q = qalloc 2\n%h = mark budget -1\nx %q[0]\nrewind %h keep (i2 2 -> %q)\nret\n}",
     );
     let mut a = executor(&module, "main", &[], options());
     at_rewind(&mut a, &module);
@@ -330,7 +330,7 @@ fn simple_rewind_replays_identically_with_and_without_an_initial_journal() {
 #[test]
 fn rewind_keep_must_not_erase_norm_when_a_temporary_read_the_destination() {
     let module = load(
-        "memory 256\nfunc @main() {\nentry:\n%q = qalloc 1\n%h = mark\n%tmp = qalloc 1\nx %tmp ctrl %q\nrewind %h keep (i1 1 -> %q)\nret\n}",
+        "memory 256\nfunc @main() {\nentry:\n%q = qalloc 1\n%h = mark budget -1\n%tmp = qalloc 1\nx %tmp ctrl %q\nrewind %h keep (i1 1 -> %q)\nret\n}",
     );
     let mut e = executor(&module, "main", &[], options());
     at_rewind(&mut e, &module);
@@ -347,7 +347,7 @@ fn rewind_keep_must_not_erase_norm_when_a_temporary_read_the_destination() {
 #[test]
 fn undo_rewind_restores_the_second_dynamic_visit_to_the_same_instruction() {
     let module = load(
-        "memory 256\nfunc @main() {\nentry:\n%q = qalloc 1\n%h = mark\nbr loop\nloop:\nrewind %h keep (i1 1 -> %q)\nbr loop\n}",
+        "memory 256\nfunc @main() {\nentry:\n%q = qalloc 1\n%h = mark budget -1\nbr loop\nloop:\nrewind %h keep (i1 1 -> %q)\nbr loop\n}",
     );
     let mut e = executor(&module, "main", &[], options());
     at_rewind(&mut e, &module);
@@ -364,7 +364,7 @@ fn strict_apply_checks_are_suspended_only_during_unrun_and_replay() {
     // The kept value changes an input of @f. No specific interference is promised by rule 4;
     // the documented apply permutation still defines its unrun even on newly faulting branches.
     let module = load(
-        "memory 1024\nfunc @f(i1 %x) -> i1 {\nentry:\n%v = udiv i1 1, %x\nret %v\n}\nfunc @main() {\nentry:\n%x = qalloc 1\n%y = qalloc 1\n%e = qalloc 5\n%h = mark\nx %x\napply @f(%x) -> %y, %e budget 2\nrewind %h keep (i1 1 -> %x)\nret\n}",
+        "memory 1024\nfunc @f(i1 %x) -> i1 {\nentry:\n%v = udiv i1 1, %x\nret %v\n}\nfunc @main() {\nentry:\n%x = qalloc 1\n%y = qalloc 1\n%e = qalloc 5\n%h = mark budget -1\nx %x\napply @f(%x) -> %y, %e budget 2\nrewind %h keep (i1 1 -> %x)\nret\n}",
     );
     let mut e = executor(&module, "main", &[], options());
     let initial = e.snapshot();
@@ -383,7 +383,7 @@ fn strict_apply_checks_are_suspended_only_during_unrun_and_replay() {
 #[test]
 fn nested_replay_ignores_configuration_and_step_limits_but_restores_them_afterwards() {
     let module = load(
-        "memory 512\nfunc @main() {\nentry:\n%q = qalloc 2\n%h = mark\nh %q[0]\nx %q[1] ctrl %q[0]\nh %q[0]\nrewind %h keep (i2 1 -> %q)\nret\n}",
+        "memory 512\nfunc @main() {\nentry:\n%q = qalloc 2\n%h = mark budget -1\nh %q[0]\nx %q[1] ctrl %q[0]\nh %q[0]\nrewind %h keep (i2 1 -> %q)\nret\n}",
     );
     // Forward reaches four configurations, rewind and its replay must not spend the forward budget.
     let opts = Options { budget: Some(7), max_configurations: Some(4), ..options() };
@@ -409,14 +409,14 @@ fn stale_inner_and_returned_activation_marks_fail_without_partial_keeps() {
 memory 512
 func @old(q1 %q) {
 entry:
-    %a = mark
-    %b = mark
+    %a = mark budget -1
+    %b = mark budget -1
     ret
 }
 func @new(q1 %q) {
 entry:
-    %a = mark
-    %b = mark
+    %a = mark budget -1
+    %b = mark budget -1
     rewind %a
     rewind %b keep (i1 1 -> %q)
     ret
@@ -431,8 +431,8 @@ entry:
 func @stale() {
 entry:
     %q = qalloc 1
-    %a = mark
-    %b = mark
+    %a = mark budget -1
+    %b = mark budget -1
     rewind %a
     rewind %b keep (i1 1 -> %q)
     ret
@@ -471,13 +471,13 @@ entry:
     %branch = call @id(%s)
     br %branch, later, early
 early:
-    %early = mark
+    %early = mark budget -1
     %temporary = qalloc 1
     x %temporary ctrl %out
     rewind %early keep (i1 1 -> %out)
     ret
 later:
-{delay}    %later = mark
+{delay}    %later = mark budget -1
     call @id(%q)
     x %q ctrl %out
     h %q
@@ -500,7 +500,7 @@ fn failed_rewind_work_counts_the_steps_undone_and_replayed_for_restoration() {
     for extra_gates in 0..3 {
         let gates = " z %out\n".repeat(extra_gates);
         let module = load(&format!(
-            "memory 512\nfunc @main() {{\nentry:\n %out = qalloc 1\n %m = mark\n \
+            "memory 512\nfunc @main() {{\nentry:\n %out = qalloc 1\n %m = mark budget -1\n \
              %temporary = qalloc 1\n x %temporary ctrl %out\n{gates} \
              rewind %m keep (i1 1 -> %out)\n ret\n}}\n"
         ));
@@ -534,9 +534,9 @@ func @main() {
 entry:
     %q = qalloc 1
     %out = qalloc 1
-    %outer = mark
+    %outer = mark budget -1
     ry(0.7) %q ctrl %out
-    %inner = mark
+    %inner = mark budget -1
     call @f(%q)
     rewind %inner
     ry(-0.7) %q ctrl %out
@@ -574,9 +574,9 @@ func @main() {
 entry:
     %q = qalloc 1
     %out = qalloc 1
-    %outer = mark
+    %outer = mark budget -1
     ry(0.7) %q ctrl %out
-    %inner = mark
+    %inner = mark budget -1
     call @f(%q, %q)
     rewind %inner
     ry(-0.7) %q ctrl %out
@@ -614,9 +614,9 @@ entry:
     %q = qalloc 1
     %out = qalloc 1
     x %q
-    %outer = mark
+    %outer = mark budget -1
     ry(0.7) %q ctrl %out
-    %inner = mark
+    %inner = mark budget -1
     call @f(%q)
     rewind %inner
     ry(-0.7) %q ctrl %out
@@ -652,9 +652,9 @@ func @main() {
 entry:
     %q = qalloc 1
     %out = qalloc 1
-    %outer = mark
+    %outer = mark budget -1
     x %q ctrl %out
-    %inner = mark
+    %inner = mark budget -1
     call @f(%q)
     rewind %inner
     x %q ctrl %out
@@ -696,10 +696,10 @@ entry:
     %q = qalloc 1
     %out = qalloc 1
     %control = qalloc 1
-    %outer = mark
+    %outer = mark budget -1
     ry(0.7) %q ctrl %control
-    %parent = mark
-    %inner = mark
+    %parent = mark budget -1
+    %inner = mark budget -1
     br loop(i1 0)
 loop(i1 %i):
     %value = call @id(%q)
@@ -745,11 +745,11 @@ entry:
     %q = qalloc 1
     %control = qalloc 1
     h %q
-    %outer = mark
-    %first = mark
+    %outer = mark budget -1
+    %first = mark budget -1
     call @f(%q, %control)
     rewind %first
-    %second = mark
+    %second = mark budget -1
     call @id(%q)
     rewind %second
     rewind %outer keep (i1 1 -> %control)
@@ -789,9 +789,9 @@ entry:
     %q = qalloc 1
     %control = qalloc 1
     x %q
-    %outer = mark
-    %inner = mark
-    %cleanup = mark
+    %outer = mark budget -1
+    %inner = mark budget -1
+    %cleanup = mark budget -1
     call @f(%q, i1 1)
     rewind %cleanup
     h %q ctrl %control

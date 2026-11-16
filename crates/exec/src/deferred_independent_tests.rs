@@ -4,7 +4,7 @@ use crate::executor::Options;
 use num_complex::Complex64 as C;
 use std::collections::BTreeMap;
 
-const FOUR: &str = "memory 1024\nfunc @main() {\nentry:\nz [64]\n%m = mark\n%first = load i8 64\nry(0.37) [64]\nry(1.1) [64:1]\nrx(0.91) [64:1] ctrl [64]\nry(0.63) [64] ctrl [64:1]\n%last = load i8 64\nrewind %m\nret\n}\n";
+const FOUR: &str = "memory 1024\nfunc @main() {\nentry:\nz [64]\n%m = mark budget -1\n%first = load i8 64\nry(0.37) [64]\nry(1.1) [64:1]\nrx(0.91) [64:1] ctrl [64]\nry(0.63) [64] ctrl [64:1]\n%last = load i8 64\nrewind %m\nret\n}\n";
 
 #[test]
 fn four_executed_parts_require_more_than_pairwise_cancellation() {

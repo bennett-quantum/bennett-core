@@ -148,8 +148,9 @@ commit) after the four checks passed on it.
   nonzero allocation runs regardless outside strict mode (the register left over, a `LeftBehind` barrier
   record), is built; the other state-dependent causes are debts ("Known weak spots"). e4, the mark's
   budget (`%h = mark budget B`: a per-world bound from the mark to its rewind, and a rewind costs `B` of
-  the machine's time, `Stats::clock`; `docs/DESIGN.md`, "The mark's budget"), is built. Next: the budget
-  required where a rewind follows a read of a qubit. The panic reported for a
+  the machine's time, `Stats::clock`; `docs/DESIGN.md`, "The mark's budget"), is built; e5, the budget
+  required where a rewind follows a read of a qubit (else `bad_rewind`; the older tests' marks migrated to
+  `budget -1`, which bounds nothing), is built. Next: the call form with a fault value and a budget. The panic reported for a
   `measure_memory` fixture in 64 bytes of memory was not the executor's: it returns `stack_overflow` before
   the first step (since `5515ae8`); the independent whole-world reference panicked at its own start
   (`expect("entry fits memory")`). The reference now models the fault, and
@@ -978,6 +979,13 @@ earlier decisions: "Decisions the maintainer took on 2026-11-16, in the afternoo
   would no longer bound the simulator's), or restart a mark's budget at each rewind of it (a loop that
   marks each round would then fault, since its marks stay in the history). Recommendation: keep; revisit
   when the front emits budgeted marks.
+
+- **How the budget is required** (e5). Taken: at run time, a rewind whose history since an unbudgeted mark
+  read a qubit faults `bad_rewind` (the validator cannot see loads of memory qubits); a rewind costs its
+  budget only where it follows such a read ("the rewind means there"), and a budget whose deadline does not
+  fit the clock (`budget -1`) meets the rule and bounds nothing, which is what the tests written before the
+  rule use. The alternatives: a new fault code instead of `bad_rewind`, or every mark costing its budget.
+  Recommendation: keep; a validator rule for calls that read registers can be added beside it.
 
 ## Questions the maintainer answered on 2026-11-16, in the afternoon (kept for their detail)
 

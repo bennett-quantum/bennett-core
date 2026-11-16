@@ -96,7 +96,7 @@ fn public_marks_count_reading_calls_once_even_with_repeated_register_arguments()
 memory 512
 func @read(i1 %a, i1 %b) -> i64 {{
 entry:
-    %h = mark
+    %h = mark budget -1
     ret 0
 }}
 func @identity(i64 %v) -> i64 {{
@@ -109,10 +109,10 @@ entry:
     h %q
     %p = faddr @read
     %out = qalloc 64
-    %m = mark
+    %m = mark budget -1
     %r = {call}
     store i64 %r, 0
-    %n = mark
+    %n = mark budget -1
     rewind %m keep (i64 5 -> %out)
     %result = call @identity(%out)
     ret %result
@@ -167,7 +167,7 @@ entry:
 
 #[test]
 fn every_small_whole_state_step_is_bijective_on_dirty_history_and_restores_its_input() {
-    let p=bennett_ir::load("memory 128\nfunc @main(i2 %x) -> i2 {\nentry:\n%h = mark\nstore i2 %x, 0\n%y = load i2 0\n%z = add i2 %y, 1\nret %z\n}").expect("valid reference fixture or inverse");
+    let p=bennett_ir::load("memory 128\nfunc @main(i2 %x) -> i2 {\nentry:\n%h = mark budget -1\nstore i2 %x, 0\n%y = load i2 0\n%z = add i2 %y, 1\nret %z\n}").expect("valid reference fixture or inverse");
     let model = Model::new(&p, "main");
     let mut total = 0;
     // Whole states include all 2-bit assignments to overwritten and live slots, overlay byte,
@@ -239,8 +239,8 @@ fn every_small_whole_state_step_is_bijective_on_dirty_history_and_restores_its_i
 #[test]
 fn repeated_rewinds_replay_the_dynamic_visit_and_faults_remain_atomic() {
     for text in [
-        "memory 256\nfunc @main() {\nentry:\n%q = qalloc 1\n%h = mark\nbr loop\nloop:\nrewind %h keep (i1 1 -> %q)\nbr loop\n}",
-        "memory 256\nfunc @main() {\nentry:\n%q = qalloc 1\n%h = mark\n%tmp = qalloc 1\nx %tmp ctrl %q\nrewind %h keep (i1 1 -> %q)\nret\n}",
+        "memory 256\nfunc @main() {\nentry:\n%q = qalloc 1\n%h = mark budget -1\nbr loop\nloop:\nrewind %h keep (i1 1 -> %q)\nbr loop\n}",
+        "memory 256\nfunc @main() {\nentry:\n%q = qalloc 1\n%h = mark budget -1\n%tmp = qalloc 1\nx %tmp ctrl %q\nrewind %h keep (i1 1 -> %q)\nret\n}",
     ] {
         let p = bennett_ir::load(text).expect("valid reference fixture or inverse");
         compare(&p, "main", &[], 12, false);
@@ -299,7 +299,7 @@ fn a_register_passed_as_an_integer_runs_every_world_and_clean_rewind_keeps_coher
     // Today's reader requires an integer call operand. Inject a register value in the initial
     // world at that operand: the model already supplies the documented next-step call meaning,
     // without changing today's validator or reading the worlds implementation.
-    let p=bennett_ir::load("memory 256\nfunc @f(i1 %x) -> i1 {\nentry:\nstore i1 %x, 0\n%r = xor i1 %x, 1\nret %r\n}\nfunc @main(i1 %x) {\nentry:\n%out = qalloc 1\n%h = mark\n%v = call @f(%x)\nrewind %h keep (%v -> %out)\nret\n}").expect("valid reference fixture or inverse");
+    let p=bennett_ir::load("memory 256\nfunc @f(i1 %x) -> i1 {\nentry:\nstore i1 %x, 0\n%r = xor i1 %x, 1\nret %r\n}\nfunc @main(i1 %x) {\nentry:\n%out = qalloc 1\n%h = mark budget -1\n%v = call @f(%x)\nrewind %h keep (%v -> %out)\nret\n}").expect("valid reference fixture or inverse");
     let model = Model::new(&p, "main");
     let mut a = model.initial("main", &[0]);
     a.classical.slots[0] = Value::Register(0, 1);
@@ -324,7 +324,7 @@ fn a_register_passed_as_an_integer_runs_every_world_and_clean_rewind_keeps_coher
 
 #[test]
 fn changed_classical_read_that_cannot_be_replayed_faults_bad_rewind_without_erasing_norm() {
-    let p=bennett_ir::load("memory 256\nfunc @f(i1 %x) -> i1 {\nentry:\nret %x\n}\nfunc @main(i1 %x, q1 %dst) {\nentry:\n%h = mark\n%v = call @f(%x)\nrewind %h keep (%v -> %dst)\nret\n}").expect("valid reference fixture or inverse");
+    let p=bennett_ir::load("memory 256\nfunc @f(i1 %x) -> i1 {\nentry:\nret %x\n}\nfunc @main(i1 %x, q1 %dst) {\nentry:\n%h = mark budget -1\n%v = call @f(%x)\nrewind %h keep (%v -> %dst)\nret\n}").expect("valid reference fixture or inverse");
     let model = Model::new(&p, "main");
     let mut w = model.initial("main", &[0, 0]);
     w.classical.slots[0] = Value::Register(0, 1);
@@ -344,7 +344,7 @@ fn changed_classical_read_that_cannot_be_replayed_faults_bad_rewind_without_eras
 
 #[test]
 fn nested_mark_rewind_composite_is_a_whole_state_bijection_including_dirty_prefixes() {
-    let p=bennett_ir::load("memory 128\nfunc @main(i2 %x) {\nentry:\n%q = qalloc 2\n%h = mark\nstore i2 %x, 0\n%inner = mark\nrewind %inner keep (i2 1 -> %q)\nrewind %h keep (%x -> %q)\nret\n}").expect("valid reference fixture or inverse");
+    let p=bennett_ir::load("memory 128\nfunc @main(i2 %x) {\nentry:\n%q = qalloc 2\n%h = mark budget -1\nstore i2 %x, 0\n%inner = mark budget -1\nrewind %inner keep (i2 1 -> %q)\nrewind %h keep (%x -> %q)\nret\n}").expect("valid reference fixture or inverse");
     let model = Model::new(&p, "main");
     let mut inputs = Vec::new();
     let mut outputs = Vec::new();

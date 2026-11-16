@@ -46,7 +46,7 @@ entry:
     %q = qalloc 8
 {h}    %out = qalloc 32
     %r = qalloc 1
-{prepare_r}    %m = mark
+{prepare_r}    %m = mark budget -1
     %v = call @{work}(%q, %reps)
 {split}    rewind %m keep (%v -> %out)
     ret

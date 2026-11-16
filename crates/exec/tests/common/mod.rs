@@ -98,8 +98,10 @@ pub fn assert_reverses(module: &ValidModule, name: &str, args: &[u64], options: 
 }
 
 /// Rewrites every `apply @f(args) -> %out, %fault budget B` as the history idiom
-/// `%h = mark`, `%y = call @f(args)`, `rewind %h keep (%y -> %out)` (`docs/DESIGN.md`, "Worlds"). The idiom
-/// has no fault register and no region budget: it equals the `apply` wherever no branch faults.
+/// `%h = mark budget B + 2`, `%y = call @f(args)`, `rewind %h keep (%y -> %out)` (`docs/DESIGN.md`,
+/// "Worlds"; the mark's budget counts the call, the callee's B steps and the rewind, and a rewind after a
+/// read of a qubit needs one). The idiom has no fault register: it equals the `apply` wherever no branch
+/// faults.
 pub fn as_history_idiom(text: &str) -> String {
     let mut out = String::new();
     for (index, line) in text.lines().enumerate() {
@@ -113,8 +115,10 @@ pub fn as_history_idiom(text: &str) -> String {
         let rest = rest.split(';').next().unwrap_or(rest);
         let (call, targets) = rest.split_once("->").unwrap_or_else(|| panic!("an apply: {line}"));
         let out_register = targets.split(',').next().unwrap_or_else(|| panic!("an out register: {line}")).trim();
-        let (h, y) = (format!("%idiom.{index}.h"), format!("%idiom.{index}.y"));
-        out += &format!("{indent}{h} = mark\n{indent}{y} = call {}\n", call.trim());
+        let budget = targets.split("budget").nth(1).unwrap_or_else(|| panic!("a budget: {line}")).trim();
+        let (h, y, b) = (format!("%idiom.{index}.h"), format!("%idiom.{index}.y"), format!("%idiom.{index}.b"));
+        out += &format!("{indent}{b} = add i64 {budget}, 2\n");
+        out += &format!("{indent}{h} = mark budget {b}\n{indent}{y} = call {}\n", call.trim());
         out += &format!("{indent}rewind {h} keep ({y} -> {out_register})\n");
     }
     out

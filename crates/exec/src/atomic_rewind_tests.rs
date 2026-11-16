@@ -225,9 +225,9 @@ entry:
     %q = qalloc 1
     %out = qalloc 1
     {prepare}
-    %outer = mark
+    %outer = mark budget -1
     ry(0.7) %q ctrl %out
-    %inner = mark
+    %inner = mark budget -1
     call @f({args})
     rewind %inner
     ry(-0.7) %q ctrl %out
@@ -290,13 +290,13 @@ func @main() {
 entry:
     %q = qalloc 1
     %out = qalloc 1
-    %outer = mark
+    %outer = mark budget -1
     ry(0.7) %q ctrl %out
-    %early = mark
+    %early = mark budget -1
     call @f(%q)
     rewind %early
     ry(0.4) %q ctrl %out
-    %late = mark
+    %late = mark budget -1
     %v = call @id(%q)
     rewind %late
     ry(-1.1) %q ctrl %out
@@ -315,7 +315,7 @@ fn an_unfaithful_allocation_run_forward_again_changes_nothing() {
 func @main() {
 entry:
     %out = qalloc 1
-    %m = mark
+    %m = mark budget -1
     %temporary = qalloc 1
     x %temporary ctrl %out
     z %out
@@ -332,7 +332,7 @@ fn keeps_whose_net_change_to_a_read_byte_is_not_zero_change_nothing() {
     for keeps in ["i8 1 -> [16], i8 3 -> [16]", "i8 1 -> [16], i8 1 -> [16], i8 1 -> [16]"] {
         refuses_unchanged(
             &format!(
-                "memory 64\nfunc @main() {{\nentry:\n    z [16]\n    %m = mark\n    %value = load i8 16\n    \
+                "memory 64\nfunc @main() {{\nentry:\n    z [16]\n    %m = mark budget -1\n    %value = load i8 16\n    \
                  rewind %m keep ({keeps})\n    ret\n}}\n"
             ),
             keeps,
@@ -352,7 +352,7 @@ func @main() {
 entry:
     %q = qalloc 2
     x %q[0]
-    %m = mark
+    %m = mark budget -1
     %v = call @id(%q)
     rewind %m keep (i2 1 -> %q, i2 2 -> %q)
     ret
@@ -374,7 +374,7 @@ func @main() {
 entry:
     %q = qalloc 1
     h %q
-    %m = mark
+    %m = mark budget -1
     %v = call @id(%q)
     rewind %m keep (i1 1 -> %q, i1 1 -> %q)
     h %q
@@ -424,9 +424,9 @@ entry:
     %out = qalloc 1
     h %s
     %k = call @id(%s)
-    %outer = mark
+    %outer = mark budget -1
     ry(0.7) %q ctrl %out
-    %inner = mark
+    %inner = mark budget -1
     call @f(%q, %q)
     rewind %inner
     ry(-0.7) %q ctrl %out
@@ -488,9 +488,9 @@ entry:
     %q = qalloc 1
     %out = qalloc 1
     {prepare}
-    %outer = mark
+    %outer = mark budget -1
     ry(0.7) %q ctrl %out
-    %inner = mark
+    %inner = mark budget -1
     %v = call @id(%q)
     br %v, {first}, {second}
 leave:
@@ -537,7 +537,7 @@ fn a_replay_that_loops_for_ever_is_charged_to_the_budget_and_changes_nothing() {
 /// an ordinary step or at a rewind that faults `budget`; there the whole machine is as before the rewind.
 #[test]
 fn a_budget_spent_inside_nested_running_again_changes_nothing() {
-    let module = load("memory 256\nfunc @main() {\nentry:\n%h = mark\nbr loop\nloop:\nrewind %h\nbr loop\n}");
+    let module = load("memory 256\nfunc @main() {\nentry:\n%h = mark budget -1\nbr loop\nloop:\nrewind %h\nbr loop\n}");
     let mut refused = Vec::new();
     for budget in 1..=100 {
         let mut e = start(&module, Options { budget: Some(budget), ..Options::default() });
@@ -581,7 +581,7 @@ entry:
 }
 func @g(q1 %q) {
 entry:
-    %inner = mark
+    %inner = mark budget -1
     %v = call @id(%q)
     br %v, leave, stay
 leave:
@@ -594,7 +594,7 @@ func @main() {
 entry:
     %q = qalloc 1
     %out = qalloc 1
-    %outer = mark
+    %outer = mark budget -1
     ry(0.7) %q ctrl %out
     call @g(%q)
     ry(-0.7) %q ctrl %out
@@ -614,7 +614,7 @@ entry:
 }
 func @g(q1 %q, i1 %read) {
 entry:
-    %inner = mark
+    %inner = mark budget -1
     br %read, test, stay
 test:
     %v = call @id(%q)
@@ -629,7 +629,7 @@ func @main() {
 entry:
     %q = qalloc 1
     %out = qalloc 1
-    %outer = mark
+    %outer = mark budget -1
     ry(0.7) %q ctrl %out
     call @g(%q, i1 1)
     call @g(%q, i1 0)
@@ -658,19 +658,21 @@ fn generated_replay_failure(layout: u8, depth: usize, initial: u8, bad: u8, acti
     let read = if input_memory { "%byte = load i8 16\n%v = trunc i8 %byte to i2" } else { "%v = call @read(%q)" };
     let mut callees = format!(
         "func @read(i2 %x) -> i2 {{\nentry:\nret %x\n}}\n\
-         func @g0(q2 %q) {{\nentry:\n%inner = mark\n{read}\n\
+         func @g0(q2 %q) {{\nentry:\n%inner = mark budget -1\n{read}\n\
          %bad = icmp eq i2 %v, {bad}\nbr %bad, bad, stay\n\
          bad:\neffect 88\n%p = alloca 8\nstore i8 73, %p\n{action}\n\
          stay:\nrewind %inner\nret\n}}\n"
     );
     for d in 1..=depth {
-        callees
-            .push_str(&format!("func @g{d}(q2 %q) {{\nentry:\n%m = mark\ncall @g{}(%q)\nrewind %m\nret\n}}\n", d - 1));
+        callees.push_str(&format!(
+            "func @g{d}(q2 %q) {{\nentry:\n%m = mark budget -1\ncall @g{}(%q)\nrewind %m\nret\n}}\n",
+            d - 1
+        ));
     }
     format!(
         "memory 512\n{callees}\nfunc @main() -> i8 {{\nentry:\n\
          %q = qalloc 2\n%out = qalloc 2\nz [16]\nz [20]\n{prepare}\n\
-         %outer = mark\n{forward}call @g{depth}(%q)\ncall @g{depth}(%q)\n{inverse}\
+         %outer = mark budget -1\n{forward}call @g{depth}(%q)\ncall @g{depth}(%q)\n{inverse}\
          rewind %outer keep (i2 1 -> {target}, i2 2 -> {target}, i2 2 -> {target})\nret 0\n}}\n",
         forward = gates(forward),
         inverse = gates(inverse)
@@ -738,7 +740,7 @@ fn generated_nonzero_net_keeps_refuse_before_mutating_any_world() {
             let p = load(&format!(
                 "memory 128\nfunc @id(i2 %v) -> i2 {{\nentry:\nret %v\n}}\n\
                  func @main() {{\nentry:\n%q = qalloc 2\n%out = qalloc 2\nh %q[0]\nh %q[1]\n\
-                 %mark = mark\n%v = call @id(%q)\nrewind %mark keep ({})\nret\n}}\n",
+                 %mark = mark budget -1\n%v = call @id(%q)\nrewind %mark keep ({})\nret\n}}\n",
                 keep.join(", ")
             ));
             let mut e = start(&p, Options::default());
@@ -765,7 +767,10 @@ fn generated_replay_failures_among_four_worlds_preserve_the_failed_worlds() {
                     continue;
                 }
                 let text = generated_replay_failure(layout, depth, 0, 3, action, true)
-                    .replace("%outer = mark", "%s = qalloc 2\nh %s[0]\nh %s[1]\n%k = call @read(%s)\n%outer = mark")
+                    .replace(
+                        "%outer = mark budget -1",
+                        "%s = qalloc 2\nh %s[0]\nh %s[1]\n%k = call @read(%s)\n%outer = mark budget -1",
+                    )
                     .replace("i2 1 ->", "%k ->");
                 let p = load(&text);
                 let mut e = start(&p, Options { allow_region_faults: true, ..Options::default() });
@@ -810,10 +815,10 @@ entry:
     %q = qalloc 1
     %out = qalloc 1
     h %q
-    %outer = mark
+    %outer = mark budget -1
     %temporary = qalloc 1
     x %temporary ctrl %out
-    %inner = mark
+    %inner = mark budget -1
     %v = call @id(%q)
     rewind %inner
     rewind %outer keep (i1 1 -> %out)
