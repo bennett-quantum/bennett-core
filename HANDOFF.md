@@ -42,7 +42,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (224 tests; ignored: 5 heavy reference or generated runs, the memory-cost report, 1 heavy recomputation check, 1 witness of a wrong result; about 8 s, no LLVM needed) and `front/test.sh` (151 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, an extended float sweep, a
+Check it: `cargo test` (228 tests; ignored: 6 heavy reference or generated runs, the memory-cost report, 1 heavy recomputation check; about 8 s, no LLVM needed) and `front/test.sh` (151 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, an extended float sweep, a
 musl-linked ABI check and two independent variadic checks that need `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"); needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -329,7 +329,7 @@ explicitly after the separate musl build.
    2,048 whole-state split/merge images, 64 `apply`/idiom comparisons, sampling by weight at measurement and end
    of run (4,096 seeds each, within 0.035 per bin), 11,129 reference comparisons across every executor test. One
    wrong result: **a later split hid an earlier changed read**, so a rewind that must fault `bad_rewind` returned
-   success with (q, out) = (1, 1). Fixed (`d9a7119`): below a world's split point the un-run's checks (a read
+   success with (q, out) = (1, 1). Fixed (`d6036a1`): below a world's split point the un-run's checks (a read
    still holds its value, an un-allocated or freed register is zero) are made on the sum of the worlds' parts once
    every world has rewound, and a failing sum puts each of those worlds back from a copy and faults `bad_rewind`
    (`docs/DESIGN.md`, "Worlds"). Checked on the whole class against the reference and an independent dense
@@ -479,6 +479,12 @@ explicitly after the separate musl build.
 | Non-empty inline assembly; code without source | An emulator of the real machine, compiled as an ordinary program |
 
 ## Known weak spots
+
+- Worlds' deferred un-run checks (`d6036a1`) are matched across worlds by a 64-bit hash of the classical state; a
+  collision would add two different checks (route: compare the states on a hash match). The copy each world saves
+  before a rewind makes the 1,500-iteration idiom loop about a third slower (route: copy only the journal above
+  the mark). When a sum fails, every waiting world of the group that rewound last faults; the reference model
+  faults every world at that rewind (no generated program differs).
 
 - Since `8bbb56c` some `long double` programs take more steps than before `a9ce585` (GCC `960215-1` 3,863 to
   4,052, `regstack-1` 4,145 to 4,354, c-testsuite `00204` 1,068,923 to 1,089,594; 25 other programs got
