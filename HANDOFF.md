@@ -121,13 +121,17 @@ explicitly after the separate musl build.
 
 ## Stopped in flight
 
-- **SQLite on the device, stages 1–2 measured** (`experiments/sqlite-on-device/README.md`): unmodified 3.54.1,
+- **SQLite on the device, all three stages measured** (`experiments/sqlite-on-device/README.md`): unmodified 3.54.1,
   musl linked, OS_OTHER no-files VFS, all four footprint query shapes at N=4/8/16 agree with native on
   stdout/status and all 112 fresh-setup results. Full runs 957,295/1,200,929/1,841,474 steps;
   device text about 9.06 MB, final lowering 19.50–24.09 s. SQLite live/peak 101,632/107,264 bytes;
   256 KiB SQLite heap, 4 KiB libc arena, N=4 stack minimum 155,099 bytes (one less: `stack_overflow`).
   Full reversal restores the entry snapshot exactly at all three N; journals 19,086,335/23,956,769/
-  36,573,538 bytes, 1.184/1.184/1.179 u128 words per step. No wrong result or crash. A coherent query is next.
+  36,573,538 bytes, 1.184/1.184/1.179 u128 words per step. No wrong result or crash.
+  N=4 `like_note` under hand-written `apply` agrees with native on every basis and in superposition:
+  7 qubits, 4 configurations, fault zero; 36,056 region steps, 72,116 with uncomputation, largest
+  per-world journal/overlay 215,617/416 bytes. C markers still refuse the memory-writing query call;
+  no compiler/runtime changes. The 11,048-step region budget passes, one less faults only row 3.
 
 - **The musl runtime: landed** (`d8050df`..`b464c0b`; `rt/musl/README.md`). musl 1.2.5's own startup and exit run
   on the device; its system calls are answered at one boundary function by console effects, an arena and `exit`;
@@ -514,8 +518,9 @@ explicitly after the separate musl build.
    wrong answer. `powi` on the two
    short formats is refused by name (it calls `powf` natively). `setjmp`/`longjmp` are done (`31f5138`); then the
    remaining intrinsics.
-6. **A SQL query as an oracle.** Ordinary SQLite now runs and reverses exactly (stages 1–2 above);
-   next run the N=4/8 query with its row id in superposition, via existing `apply` or the history idiom.
+6. **A SQL query as an oracle.** SQLite runs, reverses and acts as a checked N=4 coherent oracle
+   (experiment above). Next: grow the size/query range and run Grover; the C front's memory-writing
+   fallback remains necessary to remove the hand-written device entry.
 
 ## What the earlier workspace offers
 

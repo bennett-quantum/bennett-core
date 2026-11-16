@@ -146,7 +146,98 @@ or crash occurred in these successful forward/backward runs.
 
 ## Stage 3: a query under a qubit
 
-Not run yet.
+**Pass**, N=4, `like_note`, native bits `[0,0,0,1]`. The database and all prepared statements are
+fixed by classical `experiment_setup` before allocating the qubits. Two Hadamards give uniform row
+indices 0..3; the query still binds rowid = index + 1. Output is the query's Boolean XORed into one
+qubit, with a separate four-qubit fault register. Only **7 qubits** and **4 basis configurations** are
+needed (simulator limit 8). This is the nonconstant LIKE query, not a hand-written predicate or table.
+
+```sh
+cargo build -j 4 --offline --manifest-path experiments/sqlite-on-device/harness/Cargo.toml --target-dir target
+python3 experiments/sqlite-on-device/coherent.py target/sqlite-on-device/n4
+# Independent executor path: same cases, checking history against branch enumeration at each apply.
+BENNETT_APPLY=compare python3 experiments/sqlite-on-device/coherent.py target/sqlite-on-device/n4
+# These write the same ignored artifact names: run sequentially.
+python3 experiments/sqlite-on-device/refusals.py target/sqlite-on-device/n4
+```
+
+`coherent.py` appends device text to the ordinary lowered module. **All SQLite and driver functions,
+static data, allocator, VFS and musl code come from that unchanged lowered module.** Hand-written:
+the entry calls classical setup, allocates/gates registers and issues `apply`; this width adapter
+calls the ordinary lowered driver, which executes SQLite's bind/step/column/reset:
+
+```
+func @sqlite_lookup(i2 %row) -> i1 {
+entry:
+ %r = zext i2 %row to i32
+ %v = call @experiment_query(i32 2, %r)
+ %b = trunc i32 %v to i1
+ ret %b
+}
+```
+
+There are four separate basis runs and two uniform-superposition runs (out initially 0 and 1).
+The standalone observer uses the public executor snapshot interface; Python compares every resulting
+configuration and complex amplitude with the native answers at tolerance 1e-12, including phase.
+For out=0 the resulting state has amplitude +1/2 on each of `(row,out,fault)` =
+`(0,0,0)`, `(1,0,0)`, `(2,0,0)`, `(3,1,0)`. For out=1 every output bit is complemented.
+The row input is preserved and every successful fault register remains zero. The observer also
+compares snapshots immediately before and after the uniform `apply`: every classical memory byte
+(including the database), stack pointer, live slot and tape byte is unchanged. Two applies followed by
+the inverse Hadamards permit all registers to be freed cleanly: interference, not just measurement
+probabilities. A full forward/backward coherent run restores the classical entry exactly and the
+amplitudes within 2.23e-16 (floating-point Hadamards); the observer requires less than 1e-12.
+History and branch enumeration compare mode passes all cases, including the budget probes and reversal.
+The tables use normal history mode; compare mode reports the combined cost of both computations.
+
+| row index | native bit | forward region steps | region journal bytes | region overlay bytes |
+|---|---:|---:|---:|---:|
+| 0 | 0 | 6,751 | 133,752 | 178 |
+| 1 | 0 | 9,160 | 179,585 | 273 |
+| 2 | 0 | 9,097 | 178,690 | 236 |
+| 3 | 1 | 11,048 | 215,617 | 416 |
+
+The uniform run performs four region runs, **36,056 forward region steps**, **72,116 work steps**
+including uncomputation/call overhead. `region_cost` sums per-run high-water journal/overlay values:
+**707,644 / 1,103 bytes**; these are sums, not simultaneous peaks. The largest individual run is
+215,617 / 416 bytes. The classical base is shared and these four region worlds run one at a time;
+the outer `Stats::worlds` stays 1, not 4 simultaneous worlds. No region split copies are needed.
+The normal outer run keeps no setup journal; a separately reversed whole run retains 14,800,617 outer
+journal bytes. Its incremental region counters are the same. These counters exclude host containers, IR and snapshot storage.
+The same 256 KiB SQLite heap, 4 KiB libc arena and 1 MiB stack suffice.
+
+An 11,048-step region budget passes; **11,047 faults `budget` only on row 3**, with inputs preserved,
+other fault bits zero and weight 1/4. Budget 1,000 faults all four rows with weight 1. Raising the
+budget removes those faults. Budget probes allow region faults explicitly so their registers can be
+inspected. There is no resource obstacle at this size; no larger coherent database was tested.
+
+### C front boundary, measured separately
+
+`marker.c` attempts the same query using C markers, against the identical already linked bitcode:
+
+| attempt | measured refusal | source construct / route past it |
+|---|---|---|
+| Override the ordinary `main` with the marker entry | `not handled yet: the address of @__stdio_seek, which performs quantum operations, is taken` (15.91 s) | Control-function classification reaches an address-taken musl stdio callback in this build (`fwrite.c:16`). Supporting address-taken control functions or refining their call graph is needed. Renaming the marker entry away from musl's callback-based `main` removes this first refusal, as the second attempt measures. |
+| Keep classical `main`; add `experiment_coherent_c` as a separate entry | `not handled yet: a call that depends on a qubit, to a function that writes memory or performs quantum operations` (6.85 s) | `marker.c:11`, the call of `experiment_query(2,row)`. The query writes SQLite cursor/VM/allocator memory. The front's documented memory-writing fallback would remove this refusal; today's device already runs it through the hand-written `apply`. |
+
+Both are compiler exit status 3; neither emits a runnable coherent C program. These are separate
+refusal probes, not edits to SQLite or to the compiler. The text adapter is the explicitly allowed
+workaround for stage 3, not evidence that the C marker front now accepts SQLite under qubit control.
+
+### Stack observer
+
+The standalone observer can also repeat the stack search without reparsing the large module at every
+trial; it checks the whole-run status and tape against the original successful run and prints the
+faulting frame/instruction:
+
+```sh
+target/debug/sqlite-on-device-harness target/sqlite-on-device/n4/program.bn stack
+# n8 and n16 likewise.
+```
+
+Whole-driver minima N=4/8/16: **155,099 / 155,163 / 155,211 bytes**, all stopped one byte below by the
+same indirect `xParseCell` call in `btreeParseCell`. These are execution measurements, not a general
+static stack bound.
 
 ## What the numbers do not show
 
