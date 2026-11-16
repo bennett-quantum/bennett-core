@@ -82,4 +82,33 @@ overflow checks off; the front uses its normal O2 pipeline.
 | checked | 65,536 | 6–6 | 393,216 | 102 |
 | ordinary_add | 65,536 | 2–2 | 131,072 | 18 |
 
-The remaining LLVM 18 compiler and debug-panic measurements are pending.
+## Debug boundary, current compiler
+
+At opt-level 0 with overflow checks on, unmodified LLVM 23 text also fails the
+LLVM 18 parser at `trunc nuw` (`expected type`). `current-debug.sh` drops those
+four promises and `nocreateundeforpoison`. Assembly then succeeds and the front
+refuses the complete module with:
+
+```text
+not handled yet: a call to @_RNvNtNtCskADBYZwJmSU_4core9panicking11panic_const24panic_const_add_overflow, which has no definition (no library is linked yet), at in @ordinary_add
+```
+
+This is a `call` in the overflow arm of `llvm.uadd.with.overflow.i8`, not a
+refusal of the checked-add intrinsic itself. It needs the appropriate `core`
+bitcode plus a defined panic boundary. `panic=abort` prevents unwinding but does
+not supply the missing Rust library definition in `--crate-type lib --emit`.
+No input of this refused function was executed on the device in this route.
+Native `ordinary_add(255, 1)` terminates with `SIGABRT` (core dumps disabled).
+
+```sh
+CARGO_BUILD_JOBS=2 experiments/rust-probe/current-debug.sh
+```
+
+Compiling the four non-panicking functions without `ordinary_add` then gives
+**131,584 native comparisons and full-state reversals, zero wrong results or
+faults**. Arithmetic and branch step counts match the release table; `checked`
+takes 6 steps with a peak journal of 86 bytes. The loop takes 3–2,298 steps,
+294,528 in total, peak journal 47,226 bytes. This route uses the same source and
+normal front O2 pipeline; native compilation is opt-level 0, checks on.
+
+The LLVM 18 producer and linked panic-boundary measurements are still pending.
