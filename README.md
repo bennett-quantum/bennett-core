@@ -52,3 +52,8 @@ array bounds owns startup instead; the front supplies those arrays for it.
 
 The design, and what is deliberately left open, is in `docs/DESIGN.md`. It is a working note, not a contract.
 The text form of the device program is in `docs/SYNTAX.md`; `examples/` has one program per feature.
+
+The [SQLite device experiment](experiments/sqlite-on-device/README.md#larger-sql-oracles) checks
+unmodified SQLite as a SQL oracle: native truth tables, exact classical reversal, independent dense
+amplitudes and Grover for LIKE, integer equality, text ordering, a two-condition WHERE and a range
+aggregate. Larger sizes, measured limits and reproducible commands are recorded with the experiment.

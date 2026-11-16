@@ -51,7 +51,11 @@ static void sod_check(int rc) {
 /* External names survive lowering for the handwritten device harness. */
 __attribute__((noinline)) int experiment_query(int q, int r) {
   sqlite3_stmt *st = sod_st[q];
+#if SQL_ORACLE
   sod_check(sqlite3_bind_int64(st, 1, r + (q != 3 && q != 7)));
+#else
+  sod_check(sqlite3_bind_int64(st, 1, r + (q != 3)));
+#endif
   int rc = sqlite3_step(st);
   sod_check(rc);
   int result = rc == SQLITE_ROW ? sqlite3_column_int64(st, 0) : -1;

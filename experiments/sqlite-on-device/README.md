@@ -458,8 +458,8 @@ Grover uses the native match set and a positive iteration count nearest the firs
 (at least one iteration, also for no/all matches). It checks every intermediate oracle state and
 all final complex amplitudes against the independent dense calculation, plus the closed-form success
 probability. The kick and fault registers must free cleanly and only row qubits remain before
-measurement. No measurement is used as evidence for the distribution. The dense vector holds 32N
-complex doubles (row, output and four fault bits); it uses the existing matrix/tensor methods, without
+measurement. No measurement is used as evidence for the distribution. The dense vector holds 64N
+complex doubles (row, output and five fault bits (the 2026-11-16 decision)); it uses the existing matrix/tensor methods, without
 materializing a quadratic matrix. No dense allocation bound in the older reference interpreter is
 changed. All SQLite instructions still run in the device; native truth replaces SQL only in the
 independent expected-state calculation.
@@ -469,3 +469,62 @@ N=4/8/16/32 and all five query indices, with a memory-writing fixture, forward t
 reversal, coherent XOR cancellation and signed Grover amplitudes. It needs no SQLite build.
 The standalone observer's unit test also checks dense no/single/half/all-match Grover phases through
 N=256. Real SQLite execution remains an explicit experiment and does not slow `cargo test`.
+
+### Size and shape measurements
+
+Measured 2026-11-16 with the optimized observer. All checks pass for every row below. The table
+uses one classical entry per shape, executing setup followed by all N queries. Classical journal
+is the full retained history before reversal. Grover region steps count configurations; region
+journal is the **sum of per-run high-water bytes**, not simultaneous storage. These differ from
+classical journal and process peak RSS. Full per-size/shape/mode steps, journal, forward/reverse
+seconds, wall time, peak RSS, qubits, configurations and amplitude errors: [measurements.tsv](measurements.tsv).
+
+| N | shape | matches | classical steps | classical journal B | Grover k | region steps | region journal sum B | success |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 16 | like_note | 2 | 1,300,716 | 25,678,012 | 2 | 633,692 | 6,207,566 | 0.9453125 |
+| 16 | int_eq | 1 | 1,218,790 | 24,120,006 | 3 | 458,814 | 4,635,903 | 0.96131897 |
+| 16 | text_order | 6 | 1,228,686 | 24,312,206 | 1 | 172,730 | 1,737,501 | 0.84375 |
+| 16 | two_where | 5 | 1,228,295 | 24,325,015 | 1 | 171,948 | 1,750,310 | 0.95703125 |
+| 16 | range_agg | 13 | 1,509,891 | 29,579,939 | 1 | 735,140 | 7,005,234 | 0.05078125 |
+| 32 | like_note | 8 | 2,690,930 | 52,362,962 | 1 | 914,068 | 8,861,066 | 1 |
+| 32 | int_eq | 0 | 2,399,919 | 46,850,943 | 1 | 331,902 | 3,347,823 | -0 |
+| 32 | text_order | 11 | 2,419,414 | 47,229,606 | 1 | 370,892 | 3,726,486 | 0.907714844 |
+| 32 | two_where | 5 | 2,416,398 | 47,206,014 | 1 | 364,860 | 3,702,894 | 0.881347656 |
+| 32 | range_agg | 26 | 3,560,138 | 68,581,098 | 1 | 2,652,340 | 25,077,978 | 0.05078125 |
+| 64 | like_note | 16 | 3,702,201 | 72,035,369 | 1 | 1,600,670 | 15,585,631 | 1 |
+| 64 | int_eq | 0 | 3,236,201 | 63,197,097 | 1 | 668,366 | 6,744,775 | -0 |
+| 64 | text_order | 26 | 3,274,129 | 63,933,489 | 1 | 744,222 | 7,481,167 | 0.768066406 |
+| 64 | two_where | 2 | 3,265,129 | 63,820,105 | 4 | 2,904,888 | 29,471,132 | 0.999182316 |
+| 64 | range_agg | 51 | 7,814,231 | 148,894,839 | 1 | 9,824,426 | 92,442,517 | 0.0280151367 |
+
+Wall times below include parsing and checks; each range spans all shapes (and both initial outputs
+for coherent mode). RSS is the maximum among all four modes. Every individual measurement is in
+the TSV, including executor-only forward and reverse times. These are observations on a shared host.
+
+| N | forward wall s | reverse wall s | coherent wall s | Grover wall s | max RSS KiB |
+|---:|---:|---:|---:|---:|---:|
+| 16 | 0.827–1.083 | 0.880–1.225 | 1.548–2.868 | 0.621–1.945 | 178,636 |
+| 32 | 0.675–2.854 | 0.881–2.439 | 2.642–7.057 | 0.836–2.007 | 197,588 |
+| 64 | 0.576–1.645 | 0.924–2.634 | 4.827–10.002 | 1.334–2.720 | 252,548 |
+
+
+### Measured limits and remaining work
+
+At N=128 the original 256 KiB SQLite heap returns `SQLITE_NOMEM` (7) while the full driver
+executes `like_note` at row index 24. Native exits 2 and the device returns 2 after 7,893,757
+steps, with exactly identical output through the refusal. Its last printed SQLite allocation
+counts are 232,704 live / 242,432 high-water bytes. Native wall/RSS: 0.011509 s / 3,024 KiB;
+device wall/RSS: 7.568937 s / 180,268 KiB. It is an allocation refusal in the configured SQLite
+heap, not a host-memory, dense-vector or qubit limit. The 1 MiB heap retry is measured separately.
+
+The fast fixture also exposed an executor defect independent of SQL: when the entry's slot frame
+does not fit, `Executor::new` records `stack_overflow`, but `run` panics in `next_is_rewind` before
+checking that outcome. The normal glue test reserves 64 KiB. The minimal refusal witness is kept
+ignored, since this experiment does not edit the executor:
+
+```sh
+cargo test -p bennett-front-tests --test sql_oracle_glue an_entry_frame_that_does_not_fit -- --ignored
+```
+
+That explicit witness currently fails by panic. The repair belongs in the executor's stopped-entry
+handling; then enable the witness. The successful SQL cases use the original 1 MiB device stack.

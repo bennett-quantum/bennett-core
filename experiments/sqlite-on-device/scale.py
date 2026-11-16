@@ -5,6 +5,7 @@ Build with SQL_ORACLE=1 first. Each child has explicit time/address-space bounds
 failures retain their reports and are reported, never treated as passing checks.
 """
 import argparse
+import ast
 import json
 import math
 import os
@@ -45,7 +46,7 @@ entry:
         name = 'scale_grover' if prep == 'minus' else f'scale_{prep}'
         lines = [f'func @{name}() -> i32 {{', 'entry:',
                  ' %s = call @experiment_setup()', f' %row = qalloc {width}',
-                 ' %out = qalloc 1', ' %fault = qalloc 4']
+                 ' %out = qalloc 1', ' %fault = qalloc 5']
         lines += [f' h %row[{b}]' for b in range(width)]
         if prep != 'zero':
             lines += [' x %out']
@@ -100,6 +101,14 @@ def measured(cmd, stem, seconds, memory_mib):
                 limit_seconds=seconds, limit_mib=memory_mib, stdout=stdout, stderr=stderr)
 
 
+def agrees_with_native(device, native):
+    console = re.search(r'^console: (".*")$', device['stdout'], re.M)
+    returned = re.search(r'^result: (\d+)$', device['stdout'], re.M)
+    return bool(device['passed'] and console and returned
+                and ast.literal_eval('b'+console[1]).decode() == native['stdout']
+                and int(returned[1]) == native['status'])
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('build', type=Path)
@@ -123,7 +132,18 @@ def main():
         report.write_text(json.dumps(results, indent=2) + '\n')
     save()
     if not native['passed']:
-        print('native setup failed: ' + native['stdout'] + native['stderr'], flush=True)
+        # Preserve a paired device observation even when setup cannot produce a
+        # complete native truth table (e.g. SQLITE_NOMEM in the fixed heap).
+        results['device_failure'] = measured(
+            [ROOT/'target/debug/bennett', 'run', build/'program.bn', '--entry',
+             '__bennett_entry', '--budget', '1000000000', '--stats'],
+            output/'device-setup-failure', args.seconds, args.memory_mib)
+        results['device_failure']['matches_native'] = agrees_with_native(results['device_failure'], native)
+        save()
+        if native['status'] == 2 and 'sqlite error: 7' in native['stdout']:
+            assert results['device_failure']['matches_native'], 'SQLite allocation refusal disagrees'
+        print('native driver failed: ' + native['stdout'] + native['stderr'], flush=True)
+        print(results['device_failure']['stdout'], flush=True)
         raise SystemExit(1)
     answers = {}
     for shape in args.shapes:
@@ -134,21 +154,18 @@ def main():
         answers[shape] = bits
     base = (build/'program.bn').read_text()
     # Check the complete ordinary driver too, including memory/VFS reports and status.
+    failed = False
     if 'forward' in args.modes:
         full = measured([ROOT/'target/debug/bennett', 'run', build/'program.bn', '--entry',
                          '__bennett_entry', '--budget', '1000000000', '--stats'],
                         output/'full', args.seconds, args.memory_mib)
         if full['passed']:
-            import ast
-            console = re.search(r'^console: (".*")$', full['stdout'], re.M)
-            full['passed'] = bool(console and ast.literal_eval('b'+console[1]).decode() == native['stdout']
-                                  and re.search(r'^result: 0$', full['stdout'], re.M))
+            full['passed'] = agrees_with_native(full, native)
         results['full_forward'] = full
         save()
         print(json.dumps(dict(n=args.n, mode='full', **{k: v for k, v in full.items() if k not in ['stdout', 'stderr']})), flush=True)
         if not full['passed']:
-            raise SystemExit(1)
-    failed = False
+            failed = True
     for shape, bits in answers.items():
         k = optimal_iterations(bits)
         path = output/f'{shape}.bn'

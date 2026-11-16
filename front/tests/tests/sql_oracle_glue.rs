@@ -17,7 +17,7 @@ fn generated(n: usize, query: usize, k: usize) -> String {
     // The fixture checks both the forwarded query index and row value, and writes
     // a global byte that apply must restore. Only row 3 is marked.
     let base = format!(
-        r#"memory 256
+        r#"memory 65536
 func @experiment_setup() -> i32 {{
 entry:
  store i8 91, 0
@@ -107,4 +107,15 @@ fn generated_sql_entries_preserve_memory_reverse_and_match_grover_amplitudes() {
             }
         }
     }
+}
+
+#[test]
+#[ignore = "entry frame exhaustion panics in next_is_rewind; executor fix belongs to the executor job"]
+fn an_entry_frame_that_does_not_fit_returns_stack_overflow() {
+    let module =
+        bennett_ir::load("memory 1\nfunc @main() -> i32 {\nentry:\n %v = add i32 1, 2\n ret %v\n}\n").expect("valid");
+    let entry = module.function_named("main").expect("entry");
+    let mut exec = Executor::new(&module, entry, &[], Options::default()).expect("start");
+    assert_eq!(exec.outcome(), Some(Outcome::Faulted(bennett_ir::Fault::StackOverflow)));
+    assert_eq!(exec.run(), Outcome::Faulted(bennett_ir::Fault::StackOverflow));
 }

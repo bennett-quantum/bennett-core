@@ -13,9 +13,9 @@ use dense::{Dense, gate_matrix};
 
 fn initial(n: usize, prep: &str) -> Dense {
     let width = n.ilog2();
-    let mut state = DVector::zeros(n * 32);
+    let mut state = DVector::zeros(n * 64);
     state[0] = C::new(1.0, 0.0);
-    let mut d = Dense { widths: vec![width, 1, 4], state };
+    let mut d = Dense { widths: vec![width, 1, 5], state };
     for b in 0..width {
         d.gate(gate_matrix(Gate::Fixed(FixedGate::H)), (0, b as u8), &[]);
     }
@@ -66,6 +66,8 @@ fn compare(actual: &QuantumSnapshot, expected: &Dense) -> f64 {
     for (config, _) in &actual.amplitudes {
         assert!(config.iter().zip(&expected.widths).all(|(&v, &w)| v < 1 << w));
     }
+    let norm: f64 = actual.amplitudes.iter().map(|(_, a)| a.norm_sqr()).sum();
+    assert!((norm - 1.0).abs() < 1e-12, "state norm {norm}");
     assert!(error < 1e-12, "dense amplitude deviation {error:e}");
     error
 }
@@ -131,6 +133,7 @@ pub fn run(module: &ValidModule, args: &[String]) {
                     assert_eq!(now.journal_bytes, stats.journal_bytes.map(|bytes| bytes + 1));
                     assert_eq!(now.overlay_bytes, 0);
                     assert_eq!(now.worlds, 1);
+                    assert_eq!(now.live_qubits, stats.live_qubits);
                     calls += 1;
                     println!(
                         "oracle {calls} steps {} work {} journal {} overlay {} runs {}",
@@ -179,7 +182,13 @@ pub fn run(module: &ValidModule, args: &[String]) {
             }
         }
         assert!(calls > 0);
-        assert!(matches!(exec.run(), Outcome::Returned(Some(_))));
+        let result = exec.run();
+        let Outcome::Returned(Some(sampled)) = result else { panic!("{result:?}") };
+        if mode == "grover" {
+            assert!(sampled < bits.len() as u128);
+            assert!(expected.state[sampled as usize].norm() > 1e-12, "sampled zero support");
+            println!("sampled_row {sampled}");
+        }
         println!("dense_deviation {deviation:e}");
     }
     println!("forward_seconds {:.6}", start.elapsed().as_secs_f64());
