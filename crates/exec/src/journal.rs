@@ -90,6 +90,11 @@ pub(crate) struct Journal {
     /// (`history.rs`). A count of time, so equality, hashing and the byte count leave it out: inside a call
     /// with a budget worlds that differ in it differ in their frames' budgets anyway.
     rewind_costs: Vec<(usize, u64)>,
+    /// The marks whose budget is open (a deadline), in order: each mark's index and the depth of the frames
+    /// when it ran (the frame that made it is the last of them). A frame left closes the budgets of its marks,
+    /// which can no longer be rewound. Time, like `rewind_costs`: equality, hashing and the byte count leave
+    /// it out.
+    open: Vec<(usize, usize)>,
 }
 
 impl PartialEq for Journal {
@@ -173,14 +178,31 @@ impl std::hash::Hash for MarkEntry {
 }
 
 impl Journal {
-    /// Appends a `Mark` record's entry; the record itself is pushed as usual.
-    pub(crate) fn push_mark(&mut self, entry: MarkEntry) {
+    /// Appends a `Mark` record's entry, made with `depth` frames live; the record itself is pushed as usual.
+    pub(crate) fn push_mark(&mut self, entry: MarkEntry, depth: usize) {
+        if entry.deadline.is_some() {
+            self.open.push((self.marks.len(), depth));
+        }
         self.marks.push(entry);
     }
 
     /// Removes the last mark entry, when its record is undone.
     pub(crate) fn pop_mark(&mut self) {
         self.marks.pop().expect("a mark record has an entry");
+        if self.open.last().is_some_and(|&(index, _)| index == self.marks.len()) {
+            self.open.pop();
+        }
+    }
+
+    /// Closes the budgets of the marks made in frames deeper than `depth`: those frames were left (a return,
+    /// a catch or a `longjmp`), so no rewind can reach their marks any more and they bound nothing.
+    pub(crate) fn close_left(&mut self, depth: usize) {
+        while let Some(&(index, made)) = self.open.last()
+            && made > depth
+        {
+            self.marks[index].deadline = None;
+            self.open.pop();
+        }
     }
 
     /// Appends a `Longjmp` record's count of discarded frames; the record itself is pushed as usual.
@@ -256,14 +278,19 @@ impl Journal {
 
     /// When the first open budget of the marks above the first `from` records is spent: the least deadline.
     pub(crate) fn mark_deadline(&self, from: usize) -> Option<u64> {
-        let start = self.marks.partition_point(|entry| entry.position <= from);
-        self.marks[start..].iter().filter_map(|entry| entry.deadline).min()
+        self.open
+            .iter()
+            .map(|&(index, _)| self.marks[index])
+            .filter(|entry| entry.position > from)
+            .filter_map(|entry| entry.deadline)
+            .min()
     }
 
     /// Closes the budget of the mark at `position`: a rewind of it finished.
     pub(crate) fn close_mark(&mut self, position: usize) {
         let index = self.marks.binary_search_by_key(&position, |entry| entry.position).expect("a mark entry");
         self.marks[index].deadline = None;
+        self.open.retain(|&(open, _)| open != index);
     }
 
     /// The mark whose record is the last of the first `position` records, if there is one.
@@ -327,6 +354,7 @@ impl Journal {
 
     pub(crate) fn clear(&mut self) {
         self.rewind_costs.clear();
+        self.open.clear();
         self.kinds.clear();
         self.words.clear();
         self.marks.clear();

@@ -113,7 +113,7 @@ fn independent_checker_exhausts_mark_and_nested_rewind_on_clean_and_dirty_histor
                 for &word in &input[8..11] {
                     j.push_word(word.into());
                     j.push(Undo::Mark);
-                    j.push_mark(MarkEntry { position: j.records(), allocations: 1, budget: None, deadline: None });
+                    j.push_mark(MarkEntry { position: j.records(), allocations: 1, budget: None, deadline: None }, 0);
                 }
             }
             let before = state(&e);

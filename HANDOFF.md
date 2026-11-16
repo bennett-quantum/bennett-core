@@ -1212,6 +1212,13 @@ promotion and Grover tests remain; they are not new circuit-backend comparisons 
   of `front/tests/tests/complex.rs` still count any two NaNs as equal (looser than the rule); route: give
   their comparison the operands, as `compare.py` has them, and apply the same rule.
 
+- **A mark's budget once its frame is left** (machine-finish 0c). "From the mark until a rewind of it" read
+  literally lets a budgeted mark in a callee that returns, or that a catch or `longjmp` discards, bound
+  its caller for ever, though no rewind can reach it. Taken: leaving the frame closes the mark's budget
+  (time, not state; reversal does not reopen it, as it does not reopen a rewound mark's). This is what
+  makes `apply` and mark, call with a budget, rewind-keep agree when the callee leaves a budgeted mark
+  behind, and what the testing pass's witness expected. Recommendation: keep.
+
 ## Questions the maintainer answered on 2026-11-16, in the afternoon (kept for their detail)
 
 Each recommendation was taken ("Decisions the maintainer took on 2026-11-16, in the afternoon").

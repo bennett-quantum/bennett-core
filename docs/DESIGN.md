@@ -213,6 +213,14 @@ the call); built as machine step e4. `%h = mark budget B` gives the mark a budge
   the rewind included; the next one faults `budget` in that world (a world fault, so strict mode stops the
   run while others go on; on the machine the world ends). Steps run again or un-run take no time and are not
   bounded by it (running again is charged to the run's budget instead, "History", Cost).
+- **A mark whose frame is left bounds nothing more.** A return from the frame that made it, a catch or a
+  `longjmp` that discards it closes its budget: no rewind can reach it any more (`bad_rewind`), so there is
+  no "until a rewind of it" left to bound (taken on 2026-11-16, `HANDOFF.md`, "Questions for the
+  maintainer"). Without this, a budgeted mark in a callee that returns without rewinding faulted its caller
+  `budget` later, and `apply` and its forms differed there.
+- **A call with a budget spent at the same step as a mark's budget** ends first, the outermost spent one,
+  as when the mark is not involved; a catch for the mark below it panicked (it counted a step the spent
+  frame has no budget for: `simultaneous_mark_and_outer_call_expiry_returns_budget`).
 - **The cost is the budget where the rewind follows a read of a qubit.** A rewind of a mark whose budget is
   open, whose history since the mark read a register or touched a memory qubit, sets the world's clock to
   the mark's clock plus `B`, whatever the work since the mark; any rewind of the mark closes its budget: the

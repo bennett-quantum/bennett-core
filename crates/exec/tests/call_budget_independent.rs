@@ -153,7 +153,6 @@ entry:
 /// The documented outermost-spent-call rule must return Budget to main. Neither
 /// a mark deadline nor the nested catch may subtract from an already-zero guard.
 #[test]
-#[ignore = "defect: simultaneous mark and outer-call expiry underflows the outer guard"]
 fn simultaneous_mark_and_outer_call_expiry_returns_budget() {
     let module = load(
         "memory 512

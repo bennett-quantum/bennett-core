@@ -21,6 +21,11 @@ impl<'m> Executor<'m> {
         if self.rerunning == 0 && self.rewinding == 0 {
             let deadline = self.journal.as_ref().and_then(|journal| journal.mark_deadline(self.region_records));
             if deadline.is_some_and(|deadline| self.clock >= deadline) {
+                // A call with a budget spent at the same step ends first, the outermost as below: a catch
+                // below it would count a step its frame has no budget for.
+                if let Some(depth) = self.spent_guard() {
+                    return self.catch(depth, Fault::Budget);
+                }
                 return self.fault_or_catch(Fault::Budget);
             }
             self.clock += 1;
@@ -30,8 +35,7 @@ impl<'m> Executor<'m> {
         }
         // Inside calls with a budget: the outermost whose budget is spent ends with `budget`; a fault returns
         // to the innermost; every frame live before the step counts it (a callee's return included).
-        let spent = self.guards().find(|&depth| self.frames[depth].guard == Some(0));
-        if let Some(depth) = spent {
+        if let Some(depth) = self.spent_guard() {
             return self.catch(depth, Fault::Budget);
         }
         let before = self.frames.len();
@@ -47,6 +51,21 @@ impl<'m> Executor<'m> {
                 }
             }
         }
+    }
+
+    /// Closes the budgets of the marks of frames just left (`Journal::close_left`).
+    fn frames_left(&mut self) {
+        if let Some(journal) = &mut self.journal {
+            journal.close_left(self.frames.len());
+        }
+    }
+
+    /// The outermost live call with a budget whose budget is spent, if one is.
+    fn spent_guard(&self) -> Option<usize> {
+        if !self.any_guard || !self.counting {
+            return None;
+        }
+        self.guards().find(|&depth| self.frames[depth].guard == Some(0))
     }
 
     /// The indices of the live frames of callees of calls with a budget, outermost first.
@@ -106,6 +125,7 @@ impl<'m> Executor<'m> {
         if discarded > 0 {
             self.stack_pointer = self.frames[depth].entry_stack_pointer;
             self.frames.truncate(depth);
+            self.frames_left();
         }
         let caller = *self.top();
         let Inst::CallBudget { dst, fault: code, .. } =
@@ -391,6 +411,7 @@ impl<'m> Executor<'m> {
         self.record_word(u128::from(self.stack_pointer));
         self.record_word(discarded as u128);
         self.frames.truncate(depth + 1);
+        self.frames_left();
         self.stack_pointer = stack_pointer;
         let top = self.top_mut();
         top.block = block;
@@ -649,6 +670,7 @@ impl<'m> Executor<'m> {
             return;
         }
         let callee = self.frames.pop().expect("a returning frame exists");
+        self.frames_left();
         self.record_word(u128::from(callee.func.0) << 32 | u128::from(callee.block.0));
         self.record_word(u128::from(self.stack_pointer));
         if let Some(left) = callee.guard {

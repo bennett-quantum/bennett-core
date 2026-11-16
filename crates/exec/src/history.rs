@@ -39,7 +39,7 @@ impl<'m> Executor<'m> {
         let deadline = budget.and_then(|budget| self.clock.checked_add(budget));
         let journal = self.journal.get_or_insert_with(Journal::default);
         let position = journal.records() + 1;
-        journal.push_mark(MarkEntry { position, allocations, budget, deadline });
+        journal.push_mark(MarkEntry { position, allocations, budget, deadline }, self.frames.len());
         self.write_slot(dst, (position - self.region_records) as u128);
         self.record(Undo::Mark);
         self.advance();
