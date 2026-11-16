@@ -1,19 +1,20 @@
 # HANDOFF
 
 State on 2026-11-16: stopped at 14:26 UTC by the maintainer's wind-down order, resumed at 15:30 UTC: the landing
-stack and the checks job are on `main` (see "Stopped in flight on 2026-11-16" for what is still in flight). Landed
-today on `main`: an independent oracle for the front's fallback and its testing pass's fixes (`27265ba`, `40c84d4`);
-a failed rewind made atomic, the two replay panics and the canceled-keeps refusal fixed (`145a72c`); the six complex
-helpers from libgcc 13.3, unmodified, replacing compiler-rt (`e89c98f`..`df429d7`); a Rust scalar probe (`c906fad`);
-files, clock and entropy for the musl runtime and the SQL oracle grown to five query shapes through 256 rows with
-Grover at 512 (`a3f4de5`); test commits of the journal mutation job (`623d9e4`); then the landing stack: C evidence
-for North Star rungs 1 to 3, the entry-frame fault returned instead of a panic, replay probes, the libgcc and files
-testing passes with their fixes, IR and CLI mutation tests (`8cae924`..`e2320fe`); the checks job: the ten automatic
-checks, the test-writing rules and `bennett.h` for C++ (`2ab9ebf`..`83ae722`), with `0e1b00d` so that the libgcc
-scripts find the front's build through `BENNETT_FRONT` as the mutation run needs. Still in flight: see "Stopped in
-flight on 2026-11-16". The design audition of the same day has its own section; the maintainer then answered every
-open question and decided on the audition's findings ("Decisions the maintainer took on 2026-11-16, in the
-afternoon"), so no question is open.
+stack, the checks job and machine decisions a to d are on `main` (see "Stopped in flight on 2026-11-16" for what is
+still in flight). Landed today on `main`: an independent oracle for the front's fallback and its testing pass's
+fixes (`27265ba`, `40c84d4`); a failed rewind made atomic, the two replay panics and the canceled-keeps refusal
+fixed (`145a72c`); the six complex helpers from libgcc 13.3, unmodified, replacing compiler-rt
+(`e89c98f`..`df429d7`); a Rust scalar probe (`c906fad`); files, clock and entropy for the musl runtime and the SQL
+oracle grown to five query shapes through 256 rows with Grover at 512 (`a3f4de5`); test commits of the journal
+mutation job (`623d9e4`); then the landing stack: C evidence for North Star rungs 1 to 3, the entry-frame fault
+returned instead of a panic, replay probes, the libgcc and files testing passes with their fixes, IR and CLI
+mutation tests (`8cae924`..`e2320fe`); the checks job: the ten automatic checks, the test-writing rules and
+`bennett.h` for C++ (`2ab9ebf`..`83ae722`), with `0e1b00d` so that the libgcc scripts find the front's build through
+`BENNETT_FRONT` as the mutation run needs; machine decisions a to d (`209d3c6`..`ba6ddb5`). Still in flight: see
+"Stopped in flight on 2026-11-16". The design audition of the same day has its own section; the maintainer then
+answered every open question and decided on the audition's findings ("Decisions the maintainer took on 2026-11-16,
+in the afternoon"), so no question is open.
 Earlier: the night session (the journalled machine in the executor, all five steps of its order, with two
 independent oracles; journal content; `setjmp`/`longjmp`, return addresses and calls through another prototype in
 the front). The last corpus run (`64571ac`, musl linked) has GCC 1,569 agree, c-testsuite 218, `ieee/` 64, none
@@ -55,7 +56,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (367 tests; 19 ignored: heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks, the scratch mutation matrix, the region-copy-cost witness and the infinite-angle round-trip witness; about 9 s, no LLVM needed) and `front/test.sh` (176 tests; 27 ignored by default: the nine fallback acceptance tests waiting for step 4, the five C North Star ladder runs (explicit experiments, `experiments/northstar-ladder/README.md`), the noncanonical x87 compare witness, a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
+Check it: `cargo test` (384 tests; 19 ignored: heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks, the scratch mutation matrix, the region-copy-cost witness and the infinite-angle round-trip witness; about 9 s, no LLVM needed) and `front/test.sh` (176 tests; 27 ignored by default: the nine fallback acceptance tests waiting for step 4, the five C North Star ladder runs (explicit experiments, `experiments/northstar-ladder/README.md`), the noncanonical x87 compare witness, a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
 musl-linked ABI check and two independent variadic checks that need `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"); needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -132,17 +133,14 @@ Stopped at 14:26 UTC with nothing running; resumed at 15:30 UTC. Every piece of 
 replay-test, libgcc-test, files-test, mutants-ir) landed on `main` (`8cae924`..`e2320fe` and its HANDOFF
 commit) after the four checks passed on it.
 
-- **Checks job**: landed (`2ab9ebf`..`83ae722`, then `0e1b00d`). Its changed-line mutation run
-  (`python3 scripts/mutate-diff.py 2142238`, 22 mutants on the job's own diff) is running; its result is
-  recorded under "Automatic checks (implementation)" when it ends. A surviving mutant becomes a small follow-up.
-- **Machine decisions** `wip/machine-decisions`: steps a to d done, rebased on `main` after the checks job,
-  one commit each: (a) 5-bit fault codes and `bad_longjmp`; (b) opaque mark handles (`HandleUse`); (c) no use
-  after a rewind of a value defined since its mark (`RewoundUse`); (d) `measure iN [ADDR]`. Main's newer tests
-  were migrated in the step that needs it (fault registers `q5` and `bad_longjmp` in a; admission rows in b,
-  c and d; every alternative named where b and c matched instructions with a catch-all arm, which the
-  checks job's lint refuses). The four checks passed on c before the rebase and on the rebased d. Not
-  run: the changed-line mutation sweep (`scripts/mutate-diff.py`). Step e (the call form with a fault value
-  and a budget) not started. Next: the sweep and landing a to d one by one; the testing pass (sol); then e.
+- **Checks job**: landed (`2ab9ebf`..`83ae722`, then `0e1b00d`). Its changed-line mutation run on the job's own
+  diff: 22 mutants, 16 caught, 5 unviable, 1 missed (see "Automatic checks (implementation)"). Next: a test
+  that catches the missed mutant.
+- **Machine decisions a to d**: landed one by one, the four checks passing on each (`209d3c6` a, 5-bit fault
+  codes and `bad_longjmp`; `84d6fd4` b, opaque mark handles; `24a4169` c, no use after a rewind of a value
+  defined since its mark; `ba6ddb5` d, `measure iN [ADDR]`). Main's newer tests were migrated in the step that
+  needs it. The changed-line mutation run over a to d (110 mutants) is running. Step e (the call form with a
+  fault value and a budget, with the afternoon's decisions) is next.
 - **Testing passes owed:** machine-decisions a-d (by sol, Opus built it); sql-oracle, checks and entry-fix (by
   Opus, sol built them). Done today: fix-replay (sol, no wrong result), fallback oracle (Opus, four accepted
   wrong results fixed), libgcc (Opus, none on canonical inputs; a noncanonical x87 compare witness), files
@@ -800,6 +798,14 @@ proven relevant tests, retaining complete changed-line mutation scope; no timeou
 The default tests and small guard witnesses stay fast. (3) Enum classification records scope rather than
 proving every attribute placement; expand native ABI matrices and enforce/refine policies when lowering
 new conventions. No attribute-name list is maintained independently of the compiler-exhaustive switch.
+
+The changed-line mutation run on the job's own diff (`python3 scripts/mutate-diff.py 2142238` at `0e1b00d`, 2026-11-16):
+22 mutants, 16 caught, 5 unviable, 0 timeouts, 1 missed: `crates/exec/src/measure.rs`, `live_sources`,
+`Undo::Longjmp => shadow.len() - discarded` with `-` replaced by `/`. The line predates the job; it is in the
+diff because the job named every alternative of that match. No test drives a `longjmp` undo through the
+live-source scan with a frame count that tells the two apart. Route: such a test, as a small follow-up. The
+first attempt's unmutated baseline failed because the libgcc scripts read `target/front` directly instead of
+following `BENNETT_FRONT` (fixed in `0e1b00d`).
 
 ## Questions the maintainer answered on 2026-11-16 (kept for their detail)
 
