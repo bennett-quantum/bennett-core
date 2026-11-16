@@ -51,6 +51,7 @@ fn random_programs_round_trip_and_reverse_step_by_step() {
             seed,
             reversible: true,
             allow_region_faults: true,
+            machine_meaning: false,
         };
         let mut executor = common::executor(&module, &module.functions[0].name, &args, options);
         let history = run_recording(&mut executor);

@@ -64,6 +64,9 @@ pub(crate) struct QuantumState {
     /// The memory bytes that hold qubits ("cells", `docs/DESIGN.md`, "Qubits in memory"): byte address to
     /// the column of the 8-qubit register that holds the byte's value. Part of the register table.
     cells: BTreeMap<u64, usize>,
+    /// The ids of registers left over, in the order they were left: freed while not zero outside the
+    /// simulator's strict mode, so kept, with no live handle (`docs/DESIGN.md`, "Strict mode").
+    leftovers: Vec<usize>,
 }
 
 impl Default for QuantumState {
@@ -79,6 +82,7 @@ impl Default for QuantumState {
             allocations: 0,
             allocation_numbers: Vec::new(),
             cells: BTreeMap::new(),
+            leftovers: Vec::new(),
         }
     }
 }
@@ -186,6 +190,27 @@ impl QuantumState {
         self.amplitudes.retain(|config, _| config[id] == 0);
         self.release(id);
         Ok(())
+    }
+
+    /// Keeps the register's qubits as left over instead of freeing them: its handle goes stale (the
+    /// generation moves on, so no handle names it), its column and amplitudes stay, and its id is not reused.
+    pub(crate) fn leave(&mut self, id: usize) {
+        let register = &mut self.registers[id];
+        register.generation = register.generation.wrapping_add(1);
+        self.leftovers.push(id);
+    }
+
+    /// Undoes `leave`: the register's handle is live again.
+    pub(crate) fn take_back(&mut self, handle: u64) {
+        let id = handle_id(handle);
+        assert_eq!(self.leftovers.pop(), Some(id), "the last register left over is taken back");
+        let register = &mut self.registers[id];
+        register.generation = register.generation.wrapping_sub(1);
+    }
+
+    /// The qubits of registers left over.
+    pub(crate) fn leftover_qubits(&self) -> u32 {
+        self.leftovers.iter().filter_map(|&id| self.registers[id].width).map(Width::bits).sum()
     }
 
     /// Undoes `free`: the register is live again, zero in every configuration, with the same handle.
@@ -355,6 +380,7 @@ impl QuantumState {
             allocations: self.allocations,
             allocation_numbers: self.allocation_numbers.clone(),
             cells: self.cells.clone(),
+            leftovers: self.leftovers.clone(),
         }
     }
 
@@ -392,6 +418,7 @@ impl QuantumState {
             && self.allocations == other.allocations
             && self.allocation_numbers == other.allocation_numbers
             && self.cells == other.cells
+            && self.leftovers == other.leftovers
     }
 
     /// Feeds the classical part (the register table) to `state`.
@@ -402,6 +429,7 @@ impl QuantumState {
         self.allocations.hash(state);
         self.allocation_numbers.hash(state);
         self.cells.hash(state);
+        self.leftovers.hash(state);
     }
 
     /// Adds `other`'s amplitudes to this state's: two worlds that are the same machine state become one.
@@ -424,7 +452,8 @@ impl QuantumState {
             && self.columns == other.columns
             && self.allocations == other.allocations
             && self.allocation_numbers == other.allocation_numbers
-            && self.cells == other.cells;
+            && self.cells == other.cells
+            && self.leftovers == other.leftovers;
         let zero = Complex64::new(0.0, 0.0);
         let configs = self.amplitudes.keys().chain(other.amplitudes.keys());
         exact

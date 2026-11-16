@@ -159,6 +159,7 @@ pub fn options(seed: u64) -> Options {
         seed,
         reversible: false,
         allow_region_faults: false,
+        machine_meaning: false,
     }
 }
 

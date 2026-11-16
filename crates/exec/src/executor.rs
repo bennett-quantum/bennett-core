@@ -34,6 +34,13 @@ pub struct Options {
     /// a run that went on would look like a success. Set it for programs that inspect their fault
     /// registers on purpose. Either way the faults are counted in [`Stats`].
     pub allow_region_faults: bool,
+    /// Whether to run the machine's meaning instead of the simulator's strict mode (the default,
+    /// `docs/DESIGN.md`, "Strict mode"). Strict mode adds diagnostics no device can make, as a sanitizer
+    /// does: an `apply` or a world faulting on only some branches stops the run, and `qfree` of a register
+    /// that is not zero faults `dirty_free`. On the machine a fault on some branches is a fault code the
+    /// program may measure (as with `allow_region_faults`), and the qubits of a dirty `qfree` are left
+    /// over: kept, never released, counted in [`Stats::leftover_qubits`], the toolchain's warning.
+    pub machine_meaning: bool,
 }
 
 /// How a run ended.
@@ -229,8 +236,11 @@ pub struct Stats {
     /// Memory bytes that hold qubits now, the most in any one world (`docs/DESIGN.md`, "Qubits in memory").
     /// Each is an 8-qubit register, counted in `live_qubits` too.
     pub memory_qubit_bytes: usize,
-    /// Qubits allocated now.
+    /// Qubits allocated now, those left over included.
     pub live_qubits: u32,
+    /// Qubits left over now, the most in any one world: kept by a `qfree` of a register that was not
+    /// zero, outside strict mode ([`Options::machine_meaning`]). Each is a warning: history left behind.
+    pub leftover_qubits: u32,
     /// The most qubits allocated at once.
     pub peak_live_qubits: u32,
     /// Basis configurations with nonzero amplitude now.
@@ -304,6 +314,8 @@ pub struct Executor<'m> {
     pub(crate) rng: ChaCha8Rng,
     pub(crate) region_steps: u64,
     pub(crate) allow_region_faults: bool,
+    /// The simulator's strict mode (`Options::machine_meaning` off).
+    pub(crate) strict: bool,
     pub(crate) region_faults: u64,
     pub(crate) region_fault_weight: f64,
     pub(crate) region_fault_max_weight: f64,
@@ -401,7 +413,8 @@ impl<'m> Executor<'m> {
             scratch: Vec::new(),
             rng: ChaCha8Rng::seed_from_u64(options.seed),
             region_steps: 0,
-            allow_region_faults: options.allow_region_faults,
+            allow_region_faults: options.allow_region_faults || options.machine_meaning,
+            strict: !options.machine_meaning,
             region_faults: 0,
             region_fault_weight: 0.0,
             region_fault_max_weight: 0.0,
@@ -612,6 +625,7 @@ impl<'m> Executor<'m> {
             peak_overlay_bytes: self.peak_overlay_bytes.max(self.overlay_bytes()),
             memory_qubit_bytes: self.quantum_states().iter().map(|q| q.cells().len()).max().unwrap_or(0),
             live_qubits: self.quantum_states().iter().map(|q| q.live_qubits()).max().unwrap_or(0),
+            leftover_qubits: self.quantum_states().iter().map(|q| q.leftover_qubits()).max().unwrap_or(0),
             peak_live_qubits: self.quantum_states().iter().map(|q| q.peak_qubits()).max().unwrap_or(0),
             configurations: self.quantum_states().iter().map(|q| q.amplitudes().len()).sum(),
             peak_configurations: self

@@ -249,6 +249,7 @@ impl<'m> Executor<'m> {
                 | Undo::Gate
                 | Undo::Qalloc
                 | Undo::Qfree
+                | Undo::Leftover
                 | Undo::Apply
                 | Undo::Mark
                 | Undo::Rewind

@@ -142,7 +142,10 @@ commit) after the four checks passed on it.
   needs it. The changed-line mutation run over a to d (110 mutants) is running. Step e (the call form with a
   fault value and a budget, with the afternoon's decisions) is in progress on `wip/machine-e`, in small
   steps each landed alone: e1, running again charged to the run's budget (`Stats::replay_charged`; a
-  rewind whose running again would pass the budget faults `budget`, changing nothing), is built. The panic reported for a
+  rewind whose running again would pass the budget faults `budget`, changing nothing), is built; e2, strict
+  mode named (`Options::machine_meaning`, `--machine-meaning`: no region or world stops, a dirty `qfree`
+  leaves its qubits over, `docs/DESIGN.md`, "Strict mode"), is built; the un-run of a state the history
+  does not describe, regardless, is next. The panic reported for a
   `measure_memory` fixture in 64 bytes of memory was not the executor's: it returns `stack_overflow` before
   the first step (since `5515ae8`); the independent whole-world reference panicked at its own start
   (`expect("entry fits memory")`). The reference now models the fault, and

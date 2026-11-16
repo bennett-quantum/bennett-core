@@ -55,6 +55,11 @@ struct RunArgs {
     /// could not detect it with certainty, and its other branches would go on with the interference gone.
     #[arg(long)]
     allow_region_faults: bool,
+    /// Run the machine's meaning instead of the simulator's strict mode: a fault on some branches is a
+    /// fault code the program may measure (as with --allow-region-faults), and a `qfree` of a register that
+    /// is not zero leaves its qubits over, reported as a warning, instead of faulting `dirty_free`.
+    #[arg(long)]
+    machine_meaning: bool,
     /// The seed for `measure`.
     #[arg(long, value_name = "N", default_value_t = 0)]
     seed: u64,

@@ -93,7 +93,8 @@ each `apply` execution that faulted on some branch of nonzero amplitude, with th
 the run statistics. By default such an `apply` stops the run with the run error `region fault`, leaving the state
 as it was before the `apply`; `allow_region_faults` (`bennett run --allow-region-faults`) lets the run go on, for
 programs that read their fault registers on purpose (`examples/fault.bn`). Programs from `front` are always run
-strictly in the tests.
+strictly in the tests. This stop is a diagnostic of the simulator's strict mode; the machine's meaning is the
+fault code in the register ("Strict mode", below).
 
 ### History: `mark` and `rewind`
 
@@ -270,7 +271,8 @@ configuration. With one world the machine is exactly the machine above.
   before anything they share is undone.
 - **Faults in some worlds.** As for `apply`, a fault on only some worlds cannot be detected by the program
   with certainty: by default the first world to fault while others go on stops the run with
-  `RunError::WorldFault`; `allow_region_faults` lets the faulting world end and the others go on.
+  `RunError::WorldFault`; `allow_region_faults` lets the faulting world end and the others go on. The stop
+  is a diagnostic of strict mode; on the machine the faulting world ends ("Strict mode", below).
 - **Observation.** A `measure` waits until no world runs or is parked, so every world that will merge has
   merged and the worlds' weights are the probabilities of their machine states. With several worlds it is
   the exact instrument "the machine is in this world at this measurement, or not": with this world's
@@ -822,6 +824,30 @@ It stays one step of the run that executes it, journalled as one record and undo
   a region holds two copies of its amplitudes (0.89 GB against 0.43 GB peak on the in-place updates, the
   run's other memory unchanged; whole front suite 4.25 GB peak either way, wall 91 s against 83 s on a
   loaded host; `cargo test` 19.8 s against 20.4 s).
+
+## Strict mode
+
+Decided by the maintainer on the afternoon of 2026-11-16. Some checks of the simulator are no part of the
+machine's meaning: no device can make them, because each looks at every branch or at amplitudes. They are
+diagnostics of the simulator's **strict mode**, as a sanitizer's are, and strict mode is the default.
+`Options::machine_meaning` (`bennett run --machine-meaning`) runs the machine's meaning instead.
+
+| Check | Strict mode (default) | The machine's meaning |
+|---|---|---|
+| An `apply` faulting on some branches | the run stops, `RunError::RegionFault` | the fault code in the fault register, the program's to measure (as `allow_region_faults`) |
+| A world faulting while others go on | the run stops, `RunError::WorldFault` | the world ends with its fault; the others go on |
+| `qfree` of a register that is not zero | fault `dirty_free` | its qubits are **left over**: kept, never released; the handle is stale (its generation moves on, so a use faults `dangling_register`) and the id is not reused. `Stats::leftover_qubits` counts them, the toolchain's warning (`bennett run` prints it). Undoing the step (reversal, a rewind) takes the register back; running it again leaves it over again |
+| A rewind whose un-run meets a state its history does not describe (the state-dependent causes of `bad_rewind`) | fault `bad_rewind`, nothing changed | the inverse steps run regardless, the result unspecified, leftover qubits kept: a later step |
+
+`bad_rewind` for its classical causes (a handle that names no live mark of this activation, a measurement
+since the mark, a keep into a register allocated since) stays a fault in both. On one world's part of a state
+several worlds share, a `qfree`'s check is deferred to the sum of the parts as before (`worlds.rs`); strict
+or not, that path is unchanged. The simulator's checks are never delivered to a program as fault codes.
+Measured in `crates/exec/tests/strict.rs`, each expected state by hand: a dirty `qfree` faults in strict
+mode and leaves two qubits of a Bell pair over on the machine, the next allocation in a new column, reversal
+back to the entry; a rewind takes back what a dirty `qfree` in its region left over; a fault in one of two
+worlds and an `apply` out of budget stop strict mode and give, seed by seed, what `allow_region_faults` gives
+on the machine.
 
 ## What is promised when history is left behind
 

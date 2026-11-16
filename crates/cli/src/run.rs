@@ -18,6 +18,7 @@ pub(crate) fn run(args: &RunArgs) -> Result<ExitCode, CliError> {
         seed: args.seed,
         reversible: args.reverse,
         allow_region_faults: args.allow_region_faults,
+        machine_meaning: args.machine_meaning,
     };
     let mut executor = Executor::new(&module, entry, &values, options)?;
     let entry_state = executor.snapshot();
@@ -80,6 +81,13 @@ fn report_outcome(module: &ValidModule, entry: FuncId, outcome: Outcome, tape: &
         println!(
             "region faults (allowed): {} apply executions faulted on some branch, total weight {:e}",
             stats.region_faults, stats.region_fault_weight
+        );
+    }
+    if stats.leftover_qubits > 0 {
+        println!(
+            "warning: {} qubits left over by `qfree` of registers that were not zero (the machine keeps them; \
+             strict mode would fault dirty_free)",
+            stats.leftover_qubits
         );
     }
     if !tape.is_empty() {
@@ -177,8 +185,8 @@ fn report_stats(stats: &Stats, forward: Timed, reverse: Option<Timed>) {
         (None, _) => println!("  journal: off (run with --reverse to keep one)"),
     }
     println!(
-        "  qubits: {} live, {} peak; {} memory bytes hold qubits",
-        stats.live_qubits, stats.peak_live_qubits, stats.memory_qubit_bytes
+        "  qubits: {} live, {} peak, {} left over; {} memory bytes hold qubits",
+        stats.live_qubits, stats.peak_live_qubits, stats.leftover_qubits, stats.memory_qubit_bytes
     );
     println!("  basis configurations: {} now, {} peak", stats.configurations, stats.peak_configurations);
 }

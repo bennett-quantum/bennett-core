@@ -79,8 +79,16 @@ impl<'m> Executor<'m> {
                     let nonzero = self.quantum.failing(|config| config[id] != 0);
                     self.defer(Undo::Qfree, nonzero);
                 }
-                self.quantum.free(id, !self.partial)?;
-                self.record(Undo::Qfree);
+                // `dirty_free` is a check of the simulator's strict mode: on the machine the qubits are left
+                // over, going forward and when the step runs again alike. On one world's part of a shared
+                // state the check is deferred to the sum of the parts as before (`history.rs`).
+                if !self.strict && !self.partial && !self.quantum.failing(|config| config[id] != 0).is_empty() {
+                    self.quantum.leave(id);
+                    self.record(Undo::Leftover);
+                } else {
+                    self.quantum.free(id, !self.partial)?;
+                    self.record(Undo::Qfree);
+                }
                 self.advance();
             }
             Inst::Gate { gate, target, controls } => {

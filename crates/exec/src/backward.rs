@@ -101,6 +101,10 @@ impl<'m> Executor<'m> {
                 let Type::Qreg(width) = self.slot_type(*register) else { unreachable!("a register slot") };
                 self.quantum.revive(self.handle(*register), width);
             }
+            Undo::Leftover => {
+                let Inst::Qfree { register } = self.retreat() else { unreachable!("a qfree record") };
+                self.quantum.take_back(self.handle(*register));
+            }
             Undo::Apply => {
                 let Inst::Apply { callee, args, out, fault, budget } = self.retreat() else {
                     unreachable!("an apply record")
