@@ -1022,6 +1022,17 @@ the ordinary frontend run without changing its domain or assertions.
 
 ## Known weak spots
 
+- **A valid `longjmp` resumption can be refused as a stale buffer read.** The rewind-use
+  analysis joins non-local paths before the `setjmp` instruction's operand uses, although a
+  `longjmp` resumes after that instruction. A buffer address defined since the mark is then
+  reported as `RewoundUse` even when the continuation never reads it. Ignored witness
+  `resuming_after_setjmp_does_not_read_its_stale_buffer_operand` in
+  `crates/ir/tests/machine_decisions.rs` explicitly fails on `e90bfb8`: it rebuilds a valid jump
+  record after the rewind and must return 7. A literal-address control with the same slot
+  layout executes to 7 in the device and whole-world reference and reverses every step.
+  Route: join non-local resumption facts after the `setjmp` operand uses, before defining its
+  result. No production fix in this independent testing pass.
+
 - `Stats::region_cost.copied_bytes` omits callee-frame growth before a memory split: adding eight
   callee slots adds 128 copied bytes but leaves the report unchanged. Ignored witness:
   `region_copy_cost_includes_slots_of_the_frame_where_memory_splits` in `crates/exec/tests/apply_independent.rs`.
