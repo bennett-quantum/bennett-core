@@ -172,6 +172,8 @@ impl Executor<'_> {
         let outer = self.begin_history_region();
         // The mark: the journal's position. The region leaves nothing above it, so it needs no record.
         let position = self.journal.get_or_insert_with(Journal::default).records();
+        // Marks inside the region count from here, as on a journal of the region's own (the enumeration's).
+        self.region_records = position;
         let bases = (self.journal.as_ref().map_or(0, Journal::bytes), self.memory.overlay_len());
         let slot_bytes = (self.slots.len() * size_of::<u128>()) as u64;
         // What every world of the region is again after its un-run, but for its amplitudes.
@@ -254,11 +256,7 @@ impl Executor<'_> {
         let (column, value) = match run.outcome {
             // The validator made the result as wide as the register, at most 64 bits.
             Outcome::Returned(result) => (out, result.expect("a region callee returns an integer") as u64),
-            Outcome::Faulted(code) => {
-                let amplitudes = self.quantum.amplitudes().iter();
-                done.faulting.extend(amplitudes.map(|(config, a)| (config.clone(), a.norm_sqr(), code)));
-                (fault, code.code())
-            }
+            Outcome::Faulted(code) => (fault, code.code()),
             Outcome::Stopped(_) => unreachable!("a region reaches no limit of the simulator"),
         };
         self.quantum.xor_register(column, value);
@@ -271,6 +269,15 @@ impl Executor<'_> {
         done.rerun += (run.rerun + rerun) * weight;
         let mut world = self.take_current();
         assert!(self.same_world(start, &world), "a region's world is the world at the mark again after its un-run");
+        // The faulting configurations as they were before the `apply`, which orders them: the region's writes
+        // to qubits in memory changed them until its un-run, and the keep changed `fault` since.
+        if let Outcome::Faulted(code) = run.outcome {
+            done.faulting.extend(world.quantum.amplitudes().iter().map(|(config, a)| {
+                let mut config = config.clone();
+                config[fault] ^= code.code();
+                (config, a.norm_sqr(), code)
+            }));
+        }
         done.amplitudes.extend(world.quantum.take_amplitudes());
         self.swap_world(&mut world);
     }
@@ -377,6 +384,7 @@ impl Executor<'_> {
             budget: self.budget.take(),
             base_depth: std::mem::replace(&mut self.base_depth, base_depth),
             in_region: std::mem::replace(&mut self.in_region, true),
+            region_records: self.region_records,
             allow_region_faults: self.allow_region_faults,
             forked: std::mem::take(&mut self.forked),
             partial: std::mem::replace(&mut self.partial, false),
@@ -410,6 +418,7 @@ impl Executor<'_> {
         self.budget = outer.budget;
         self.base_depth = outer.base_depth;
         self.in_region = outer.in_region;
+        self.region_records = outer.region_records;
         self.allow_region_faults = outer.allow_region_faults;
         self.forked = outer.forked;
         self.partial = outer.partial;
@@ -488,6 +497,7 @@ impl Executor<'_> {
             budget: self.budget.replace(budget),
             base_depth: std::mem::replace(&mut self.base_depth, self.frames.len()),
             in_region: std::mem::replace(&mut self.in_region, true),
+            region_records: std::mem::take(&mut self.region_records),
             materialised: std::mem::replace(&mut self.materialised, true),
         };
         self.run_journal_peak = 0;
@@ -526,6 +536,7 @@ impl Executor<'_> {
         self.budget = outer.budget;
         self.base_depth = outer.base_depth;
         self.in_region = outer.in_region;
+        self.region_records = outer.region_records;
         self.materialised = outer.materialised;
     }
 
@@ -533,8 +544,10 @@ impl Executor<'_> {
     // Both, compared.
 
     /// `apply` by both definitions from the same state: panics at any difference in the result, in the
-    /// world's state after it (classical state and journal exactly, amplitudes exactly), or in the counts
-    /// the documents promise. Keeps the history result.
+    /// world's state after it (classical state and journal exactly, amplitudes exactly, its history state),
+    /// in the counts the documents promise or in anything else of the run outside the world (`Run`). Both
+    /// start from the whole executor as it was, but for the cost report and reused buffers. Keeps the
+    /// history result.
     fn apply_compared(
         &mut self,
         callee: FuncId,
@@ -544,13 +557,17 @@ impl Executor<'_> {
         budget: &Operand,
     ) -> Result<(), Halt> {
         let start = self.clone_world(None);
-        let before = Counters::of(self);
+        let before = Run::of(self);
         let cost_before = self.region_cost;
         let clock = Instant::now();
         let history = self.apply_by_history(callee, args, out, fault, budget);
         let history_time = clock.elapsed();
+        #[cfg(test)]
+        if let Some(corrupt) = self.corrupt_history {
+            corrupt(self);
+        }
         let mut by_history = self.take_current();
-        let history_counts = Counters::of(self);
+        let history_run = Run::take(self);
         let history_cost = self.region_cost;
         let mut world = start;
         self.swap_world(&mut world);
@@ -560,7 +577,7 @@ impl Executor<'_> {
         let branches = self.apply_by_branches(callee, args, out, fault, budget);
         let branches_time = clock.elapsed();
         let by_branches = self.take_current();
-        let branches_counts = Counters::of(self);
+        let mut branches_run = Run::take(self);
         let name = &self.function(callee).name;
         assert_eq!(history, branches, "apply @{name}: the result by history and by branches");
         assert!(self.same_world(&by_history, &by_branches), "apply @{name}: the machine state after it");
@@ -569,12 +586,18 @@ impl Executor<'_> {
             by_branches.quantum.amplitudes(),
             "apply @{name}: the amplitudes after it"
         );
-        assert_eq!(
-            (by_history.status, by_history.partial, by_history.pending, by_history.deferred.len()),
-            (by_branches.status, by_branches.partial, by_branches.pending, by_branches.deferred.len()),
-            "apply @{name}: the world's history state"
+        assert!(self.same_history_state(&by_history, &by_branches), "apply @{name}: the world's history state");
+        assert_eq!(history_run.counters, branches_run.counters, "apply @{name}: the counts");
+        assert_eq!(history_run.state, branches_run.state, "apply @{name}: the run's state");
+        assert!(
+            self.identical_worlds(&history_run.forked, &branches_run.forked)
+                && history_run.worlds.len() == branches_run.worlds.len()
+                && history_run.worlds.iter().zip(&branches_run.worlds).all(|(a, b)| match (a, b) {
+                    (Some(a), Some(b)) => self.identical_world(a, b),
+                    (a, b) => a.is_none() && b.is_none(),
+                }),
+            "apply @{name}: the other worlds"
         );
-        assert_eq!(history_counts, branches_counts, "apply @{name}: the counts");
         let tally = Tally {
             callee: name,
             configurations: by_branches.quantum.amplitudes().len(),
@@ -588,12 +611,32 @@ impl Executor<'_> {
             before: cost_before,
         };
         tally.write();
+        // The other worlds, the same both ways, go back.
+        self.worlds = std::mem::take(&mut branches_run.worlds);
+        self.forked = std::mem::take(&mut branches_run.forked);
         // Both cost reports are kept, the enumeration's in the run's: the idiom's can be told apart by runs.
         self.region_cost = add(history_cost, diff(self.region_cost, cost_before));
         self.swap_world(&mut by_history);
         drop(by_history);
         self.memory.fold();
         history
+    }
+
+    /// Whether two worlds are the same in every field: machine state, amplitudes and history state, the
+    /// copies held for deferred checks included.
+    fn identical_world(&self, a: &World, b: &World) -> bool {
+        self.same_world(a, b) && a.quantum.amplitudes() == b.quantum.amplitudes() && self.same_history_state(a, b)
+    }
+
+    /// Whether two worlds are in the same history state: status, deferred checks and the copies they hold.
+    fn same_history_state(&self, a: &World, b: &World) -> bool {
+        (a.status, a.partial, a.pending) == (b.status, b.partial, b.pending)
+            && a.deferred == b.deferred
+            && self.identical_worlds(&a.backups, &b.backups)
+    }
+
+    fn identical_worlds(&self, a: &[World], b: &[World]) -> bool {
+        a.len() == b.len() && a.iter().zip(b).all(|(a, b)| self.identical_world(a, b))
     }
 }
 
@@ -662,6 +705,131 @@ impl Counters {
     }
 }
 
+/// Everything of the executor outside the current world, but the cost report ([`RegionCost`], which says
+/// how `apply` was computed), the cost of one region run in progress and buffers kept for reuse: what
+/// compare mode restores before the enumeration and requires both ways to leave alike.
+struct Run {
+    counters: Counters,
+    state: RunState,
+    /// The other worlds of a run of several, and those split off in the step in progress.
+    worlds: Vec<Option<World>>,
+    forked: Vec<World>,
+}
+
+/// The run's fields outside the world besides [`Counters`] and the other worlds.
+#[derive(Clone, Debug, PartialEq)]
+struct RunState {
+    steps: u64,
+    budget: Option<u64>,
+    max_configurations: Option<usize>,
+    base_depth: usize,
+    in_region: bool,
+    region_records: usize,
+    materialised: bool,
+    apply_mode: ApplyMode,
+    allow_region_faults: bool,
+    reversible: bool,
+    rng: rand_chacha::ChaCha8Rng,
+    current: usize,
+    run_outcome: Option<Outcome>,
+    departed: Vec<u64>,
+    observed: bool,
+    merges: u64,
+    observations: u64,
+    world_steps: u64,
+    peak_worlds: usize,
+    peak_overlay_bytes: usize,
+    peak_world_configurations: usize,
+    others_configurations: usize,
+    rerunning: u32,
+    rewinding: u32,
+    splitting: bool,
+    deferring: bool,
+}
+
+impl Run {
+    /// The run as it is, the other worlds copied.
+    fn of(e: &Executor<'_>) -> Self {
+        let (worlds, forked) = (e.worlds.clone(), e.forked.clone());
+        Run { worlds, forked, ..Run::state(e) }
+    }
+
+    /// The run as it is, the other worlds taken out.
+    fn take(e: &mut Executor<'_>) -> Self {
+        let (worlds, forked) = (std::mem::take(&mut e.worlds), std::mem::take(&mut e.forked));
+        Run { worlds, forked, ..Run::state(e) }
+    }
+
+    fn state(e: &Executor<'_>) -> Self {
+        Run {
+            counters: Counters::of(e),
+            state: RunState {
+                steps: e.steps,
+                budget: e.budget,
+                max_configurations: e.max_configurations,
+                base_depth: e.base_depth,
+                in_region: e.in_region,
+                region_records: e.region_records,
+                materialised: e.materialised,
+                apply_mode: e.apply_mode,
+                allow_region_faults: e.allow_region_faults,
+                reversible: e.reversible,
+                rng: e.rng.clone(),
+                current: e.current,
+                run_outcome: e.run_outcome,
+                departed: e.departed.clone(),
+                observed: e.observed,
+                merges: e.merges,
+                observations: e.observations,
+                world_steps: e.world_steps,
+                peak_worlds: e.peak_worlds,
+                peak_overlay_bytes: e.peak_overlay_bytes,
+                peak_world_configurations: e.peak_world_configurations,
+                others_configurations: e.others_configurations,
+                rerunning: e.rerunning,
+                rewinding: e.rewinding,
+                splitting: e.splitting,
+                deferring: e.deferring,
+            },
+            worlds: Vec::new(),
+            forked: Vec::new(),
+        }
+    }
+
+    fn set(self, e: &mut Executor<'_>) {
+        self.counters.set(e);
+        let s = self.state;
+        e.steps = s.steps;
+        e.budget = s.budget;
+        e.max_configurations = s.max_configurations;
+        e.base_depth = s.base_depth;
+        e.in_region = s.in_region;
+        e.region_records = s.region_records;
+        e.materialised = s.materialised;
+        e.apply_mode = s.apply_mode;
+        e.allow_region_faults = s.allow_region_faults;
+        e.reversible = s.reversible;
+        e.rng = s.rng;
+        e.current = s.current;
+        e.run_outcome = s.run_outcome;
+        e.departed = s.departed;
+        e.observed = s.observed;
+        e.merges = s.merges;
+        e.observations = s.observations;
+        e.world_steps = s.world_steps;
+        e.peak_worlds = s.peak_worlds;
+        e.peak_overlay_bytes = s.peak_overlay_bytes;
+        e.peak_world_configurations = s.peak_world_configurations;
+        e.others_configurations = s.others_configurations;
+        e.rerunning = s.rerunning;
+        e.rewinding = s.rewinding;
+        e.splitting = s.splitting;
+        e.deferring = s.deferring;
+        e.worlds = self.worlds;
+        e.forked = self.forked;
+    }
+}
+
 /// A world of a region waiting to run: split off at `steps` of the region's budget, sharing with the world
 /// it split from the steps `rewind`s inside the region had rewound and run again by then.
 struct Pending {
@@ -707,6 +875,7 @@ struct HistoryRegion {
     budget: Option<u64>,
     base_depth: usize,
     in_region: bool,
+    region_records: usize,
     allow_region_faults: bool,
     forked: Vec<World>,
     partial: bool,
@@ -729,6 +898,7 @@ struct Saved {
     budget: Option<u64>,
     base_depth: usize,
     in_region: bool,
+    region_records: usize,
     materialised: bool,
 }
 

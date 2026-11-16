@@ -28,13 +28,15 @@ use crate::journal::{Journal, MarkEntry, Undo};
 
 impl<'m> Executor<'m> {
     /// `dst = mark`: the handle is the number of journal records up to and including the mark's own. A
-    /// run that keeps no journal starts one here.
+    /// run that keeps no journal starts one here. Inside a coherent region the records are counted from
+    /// the region's start, as on a journal of its own whose first record is the call into the region's
+    /// function, so a handle never depends on the caller's history (`docs/DESIGN.md`, "History").
     pub(crate) fn mark(&mut self, dst: Slot) {
         let allocations = self.quantum.allocations();
         let journal = self.journal.get_or_insert_with(Journal::default);
         let position = journal.records() + 1;
         journal.push_mark(MarkEntry { position, allocations });
-        self.write_slot(dst, position as u128);
+        self.write_slot(dst, (position - self.region_records) as u128);
         self.record(Undo::Mark);
         self.advance();
     }
@@ -206,7 +208,7 @@ impl<'m> Executor<'m> {
     /// (the frame was never left below since), and no measurement or finish was journalled since.
     fn open_mark(&self, handle: u128) -> Option<MarkEntry> {
         let journal = self.journal.as_ref()?;
-        let entry = journal.mark_at(usize::try_from(handle).ok()?)?;
+        let entry = journal.mark_at(usize::try_from(handle).ok()?.checked_add(self.region_records)?)?;
         let mut depth = 0usize;
         // A longjmp left the frames it discarded, as that many returns would have.
         let mut jumps = journal.jumps().iter().rev();

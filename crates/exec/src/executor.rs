@@ -269,6 +269,9 @@ pub struct Executor<'m> {
     /// caller's depth inside a coherent region.
     pub(crate) base_depth: usize,
     pub(crate) in_region: bool,
+    /// The journal records below the coherent region running, which its marks do not count: the caller's
+    /// history (`history.rs`). Zero outside a region and on a region's own journal (`ApplyMode::Branches`).
+    pub(crate) region_records: usize,
     /// Whether the current run is one branch of a coherent region enumerated on private memory, which holds
     /// the values its configuration gives the qubits in memory (`ApplyMode::Branches`).
     pub(crate) materialised: bool,
@@ -341,6 +344,10 @@ pub struct Executor<'m> {
     pub(crate) backups: Vec<World>,
     /// Whether the current world is the result of a rewind whose deferred checks are not yet made.
     pub(crate) pending: bool,
+    /// A change made to the run after computing an `apply` by history, before compare mode computes it by
+    /// enumeration: the comparison's own test corrupts the history path with it (`compare_tests.rs`).
+    #[cfg(test)]
+    pub(crate) corrupt_history: Option<fn(&mut Executor<'_>)>,
 }
 
 impl<'m> Executor<'m> {
@@ -364,6 +371,7 @@ impl<'m> Executor<'m> {
             max_configurations: options.max_configurations,
             base_depth: 0,
             in_region: false,
+            region_records: 0,
             materialised: false,
             apply_mode: ApplyMode::from_env().unwrap_or_default(),
             region_cost: RegionCost::default(),
@@ -407,6 +415,8 @@ impl<'m> Executor<'m> {
             deferred: Vec::new(),
             backups: Vec::new(),
             pending: false,
+            #[cfg(test)]
+            corrupt_history: None,
         };
         let args: Vec<u128> = args.iter().map(|&arg| u128::from(arg)).collect();
         if let Err(fault) = executor.push_frame(entry, &args) {

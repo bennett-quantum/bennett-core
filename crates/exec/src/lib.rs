@@ -11,6 +11,8 @@
 mod arith;
 mod backward;
 mod cells;
+#[cfg(test)]
+mod compare_tests;
 mod executor;
 mod forward;
 mod gates;

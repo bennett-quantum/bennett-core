@@ -102,7 +102,11 @@ step ("Worlds", below).
 
 - **`%h = mark`** sets `%h`, an `i64`, to the number of journal records up to and including the mark's
   own. A run that keeps no journal starts one at its first mark (a run that was not started reversible
-  still cannot be reversed).
+  still cannot be reversed). In a coherent region the records are counted from the region's start, as on
+  a journal of the region's own whose first record is the call into its function (the first `mark` of
+  `@f` gives 2): a region's result depends on its arguments and memory only, never on the caller's
+  history, so `apply` stays its own inverse. A rewind's handle is a mark of its own function (the
+  validator's rule), so no handle of the caller's can be named in a region.
 - **`rewind %h keep (v -> r, ...)`** checks, then copies, then un-runs:
   1. It faults with `bad_rewind`, changing nothing, unless `%h` names a mark of the running activation
      that is still in the history (the frame was not left, below its own depth, since the mark), no
@@ -694,6 +698,8 @@ computes `apply @f(args) -> out, fault budget B` as the history idiom, with the 
 It stays one step of the run that executes it, journalled as one record and undone by applying it again.
 
 - **Mark.** The world's journal position (a journal is started if the run keeps none, as a `mark` does).
+  Marks inside the region count records from it ("History"), as the enumeration's journal of each
+  branch does.
 - **Call.** `@f` is entered on top of the caller's frames; a register argument is read as an integer, as a
   `call` reads one ("Worlds"): where the configurations disagree on the arguments' values the world splits
   into one world per value, and the reads are journalled. A frame that does not fit faults alike in every
@@ -712,8 +718,10 @@ It stays one step of the run that executes it, journalled as one record and undo
   qubit in memory, so every check holds (the executor asserts it), and the worlds are then one machine state
   and merge. Where some world with nonzero weight faulted, the fault is counted with the weight of its
   configurations; unless region faults are allowed the worlds un-run with no keep, merge, and the run stops
-  with `region fault` (the first faulting configuration's fault, in configuration order, and its count),
-  the state as before the `apply`.
+  with `region fault` (the first faulting configuration's fault, in the order of the configurations as
+  they were before the `apply`, and its count), the state as before the `apply`. A region's writes to the
+  qubits in memory it read change its configurations until its un-run, so the faulting ones are taken
+  after it.
 - **Why the worlds run one after another and merge only at the end.** A region cannot gate, so nothing in
   it interferes, and merging inside it would join configurations that have spent different amounts of
   their budget (two worlds whose paths differed in length, equal again after an inner `rewind`). Kept apart
@@ -729,8 +737,11 @@ It stays one step of the run that executes it, journalled as one record and undo
 - **The comparison.** `Executor::set_apply_mode` (or `BENNETT_APPLY=history|branches|compare` for a whole
   test suite) selects the idiom (the default), branch enumeration, or both: compare mode computes every
   `apply` both ways from the same state and stops at any difference in the result, the world's whole
-  machine state and journal, its amplitudes (exactly: both only move them) or the counts above;
-  `BENNETT_APPLY_TALLY=file` appends each comparison's costs. The journal-content observer classifies the
+  machine state and journal, its amplitudes (exactly: both only move them), its history state, the counts
+  above or anything else of the run outside the world (budget, worlds and the other worlds themselves,
+  peak worlds, the generator, ...). Everything but the cost report is restored before the enumeration
+  runs, so neither way sees what the other left; `src/compare_tests.rs` corrupts the history path in 30
+  ways and each is caught. `BENNETT_APPLY_TALLY=file` appends each comparison's costs. The journal-content observer classifies the
   enumeration's branches, so it computes `apply` by enumeration.
 - **The text idiom** (`%h = mark`, `%y = call @f(args)`, `rewind %h keep (%y -> out)`) still has no fault
   register and no budget: a fault ends the world, and its steps count against the run's budget. That is the

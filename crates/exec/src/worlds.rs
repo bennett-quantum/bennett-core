@@ -86,7 +86,7 @@ pub(crate) struct World {
 /// A check of a rewind's un-run below a world's split point, deferred to the sum of the worlds' parts: the
 /// configurations of this world's part that fail it, keyed by the classical machine state where it was
 /// made. Parts of the same state add, as their worlds would if they were there together.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Defect {
     key: u64,
     amplitudes: Amplitudes,

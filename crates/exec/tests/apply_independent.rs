@@ -31,7 +31,6 @@ entry:
 "#;
 
 #[test]
-#[ignore = "wrong strict fault: cell writes reorder faulting configurations before un-run"]
 fn strict_fault_uses_the_first_original_configuration() {
     let module = load(CELL_FAULT_ORDER);
     for mode in [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare] {
@@ -66,7 +65,6 @@ entry:
 "#;
 
 #[test]
-#[ignore = "history apply exposes the caller journal position, unlike branch enumeration"]
 fn region_mark_values_are_independent_of_the_callers_journal() {
     let module = load(MARK_VALUE);
     for reversible in [false, true] {
@@ -276,7 +274,6 @@ fn amplitude_peak_probe() {
 }
 
 #[test]
-#[ignore = "returning an inner mark makes two history applies fail the promised self-inverse law"]
 fn two_identical_regions_must_xor_the_same_result() {
     let text = MARK_VALUE.replace("    ret\n}", "    apply @f() -> %o, %e budget 10\n    ret\n}");
     let p = load(&text);
@@ -285,18 +282,6 @@ fn two_identical_regions_must_xor_the_same_result() {
         e.set_apply_mode(mode);
         assert_eq!(e.run(), Outcome::Returned(None));
         assert_eq!(e.snapshot().quantum.amplitudes[0].0, [0, 0], "{mode:?}: apply is its own inverse");
-    }
-}
-
-#[test]
-#[ignore = "diagnostic: compare catches F1/F2 while their ignored wrong-answer witnesses remain unfixed"]
-fn compare_detects_the_executed_semantic_disagreements() {
-    for (text, reversible) in [(CELL_FAULT_ORDER, false), (MARK_VALUE, true)] {
-        let p = load(text);
-        let mut e = executor(&p, "main", &[], Options { reversible, ..bounded() });
-        e.set_apply_mode(ApplyMode::Compare);
-        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| e.run()));
-        assert!(panic.is_err(), "the reduced wrong-answer witness must be caught");
     }
 }
 
@@ -346,7 +331,7 @@ fn regions_in_existing_worlds_and_rewind_replay_match_the_reference() {
 }
 
 #[test]
-#[ignore = "compare omits the promised outer steps count; mutates and compiles only a scratch copy"]
+#[ignore = "rebuilds a scratch copy of the source per mutation; the regular check is src/compare_tests.rs"]
 fn compare_must_reject_corrupt_history_state() {
     let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support/apply_mutations.py");
     let mutation = std::env::var("BENNETT_TEST_MUTATION").unwrap_or_else(|_| "steps".into());
@@ -535,4 +520,212 @@ fn relative_region_mark_numbers_match_all_modes_through_rewind_and_replay() {
     let runs: usize = cases.into_iter().map(|(body, expected)| mark_observation_case(body, expected, &modes)).sum();
     assert_eq!(runs, 72);
     println!("{runs} origin-independent mark observations, four configurations each, all apply modes and reversal");
+}
+
+// The whole class of F1: what the region's function observes of its history (the values of its marks; a
+// rewind's handle is a mark of its own function, the validator's rule, so no handle of the caller's can be
+// named) is that of a run on a journal of its own, whose first record is
+// the call (`docs/DESIGN.md`, "History"), never the caller's. Each body runs after caller prefixes that
+// journal different amounts (gates, marks, an earlier `apply`, a split of worlds) in each mode, reversible or
+// not; the state must not depend on the prefix or the mode, an `apply` twice must be no `apply`, and every
+// reversible run must reverse to its entry.
+const REGION_BODIES: &[&str] = &[
+    // The witness: a mark's value.
+    "    %m = mark\n    ret %m\n",
+    // Nested marks, a rewind of the inner one, a mark after it.
+    "    %m1 = mark\n    %m2 = mark\n    %y = add i64 %m1, 100\n    rewind %m2\n    %m3 = mark\n    %s = shl i64 %m3, 8\n    %r = or i64 %s, %m1\n    ret %r\n",
+    // A load of a qubit in memory (a split in history, private memory in the enumeration), paths of
+    // different lengths, then a mark.
+    "    %a = load i8 0\n    %c = icmp eq i8 %a, 0\n    br %c, p, q\np:\n    %u = add i8 %a, 1\n    br q\nq:\n    %m = mark\n    %x64 = zext i2 %x to i64\n    %r = add i64 %m, %x64\n    ret %r\n",
+    // A mark in a callee of the region.
+    "    %k = zext i2 %x to i64\n    %r = call @g(%k)\n    ret %r\n",
+    // A mark and its rewind on one path only, then a mark: the second mark's value differs by path.
+    "    %c = icmp eq i2 %x, 1\n    br %c, p, q\np:\n    %m = mark\n    %y = add i2 %x, 1\n    rewind %m\n    br q\nq:\n    %n = mark\n    ret %n\n",
+];
+
+const REGION_PREFIXES: &[&str] = &[
+    "",
+    "    %p = mark\n",
+    "    %p = mark\n    x %t\n    x %t\n    %q = mark\n",
+    "    apply @zero(%x) -> %t, %te budget 8\n",
+    "    %p = mark\n    apply @zero(%x) -> %t, %te budget 8\n    x %t\n    x %t\n",
+];
+
+fn region_program(body: &str, prefix: &str, applies: usize) -> String {
+    let applies = "    apply @f(%x) -> %o, %e budget 200\n".repeat(applies);
+    format!(
+        "memory 512
+func @zero(i2 %x) -> i1 {{
+entry:
+    ret 0
+}}
+func @g(i64 %k) -> i64 {{
+entry:
+    %m = mark
+    %r = add i64 %m, %k
+    ret %r
+}}
+func @f(i2 %x) -> i64 {{
+entry:
+{body}}}
+func @main() {{
+entry:
+    h [0:0]
+    %x = qalloc 2
+    h %x[0]
+    h %x[1]
+    %t = qalloc 1
+    %te = qalloc 4
+    %o = qalloc 64
+    %e = qalloc 4
+{prefix}{applies}    ret
+}}
+"
+    )
+}
+
+fn final_state(text: &str, mode: ApplyMode, reversible: bool) -> bennett_exec::QuantumSnapshot {
+    let p = load(text);
+    let mut e = executor(&p, "main", &[], Options { reversible, ..common::allowing_region_faults() });
+    e.set_apply_mode(mode);
+    let entry = e.snapshot();
+    assert_eq!(e.run(), Outcome::Returned(None), "{mode:?}\n{text}");
+    let state = e.snapshot().quantum;
+    if reversible {
+        e.reverse().expect("reverses");
+        assert_same_state(&e.snapshot(), &entry, "full reverse");
+    }
+    state
+}
+
+fn assert_same_quantum(
+    actual: &bennett_exec::QuantumSnapshot,
+    expected: &bennett_exec::QuantumSnapshot,
+    context: &str,
+) {
+    let distance = actual.distance(expected);
+    assert!(distance.is_some_and(|d| d <= 1e-12), "{context}: {distance:?}\n{actual:?}\n{expected:?}");
+}
+
+#[test]
+fn what_a_region_sees_of_its_history_does_not_depend_on_the_caller() {
+    for (b, body) in REGION_BODIES.iter().enumerate() {
+        for reversible in [false, true] {
+            let expected = final_state(&region_program(body, "", 1), ApplyMode::Branches, reversible);
+            for (p, prefix) in REGION_PREFIXES.iter().enumerate() {
+                let none = final_state(&region_program(body, prefix, 0), ApplyMode::Branches, reversible);
+                for mode in [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare] {
+                    let context = format!("body {b}, prefix {p}, {mode:?}, reversible={reversible}");
+                    let once = final_state(&region_program(body, prefix, 1), mode, reversible);
+                    assert_same_quantum(&once, &expected, &context);
+                    let twice = final_state(&region_program(body, prefix, 2), mode, reversible);
+                    assert_same_quantum(&twice, &none, &format!("{context}: twice is no apply"));
+                }
+            }
+        }
+    }
+}
+
+// The mark values of the bodies above, by the documents' count (records up to and including the mark's
+// own, from the region's start, the call into `@f` the first): an analytic check of the numbering itself.
+#[test]
+fn region_mark_values_count_from_the_call_into_the_region() {
+    // Body 1: m1 = 2 (call, mark); m2 = 3; after `rewind %m2` (un-runs the add) the rewind is record 4 and
+    // m3 = 5: (5 << 8) | 2.
+    // Body 3: the call into @f, the zext, the call into @g, then its mark: 4, plus the argument.
+    for (body, expected) in
+        [(REGION_BODIES[0], [2; 4]), (REGION_BODIES[1], [5 << 8 | 2; 4]), (REGION_BODIES[3], [4, 5, 6, 7])]
+    {
+        for prefix in REGION_PREFIXES {
+            let state = final_state(&region_program(body, prefix, 1), ApplyMode::History, true);
+            // Columns: the cell, x, t, te, o, e.
+            for (config, _) in &state.amplitudes {
+                assert_eq!(config[4], expected[config[1] as usize], "{body}\n{prefix}");
+                assert_eq!(config[5], 0);
+            }
+        }
+    }
+}
+
+// The whole class of F2: a strict region fault is the first faulting configuration's, in the order of the
+// configurations as they were before the `apply` (`docs/DESIGN.md`, "`apply` as mark, call, rewind-keep"),
+// whatever the region writes to the qubits in memory it read. Two cells (byte 0 in four values, byte 1 in two),
+// rewritten in place by every kind of permutation (none, XOR, increment, swap, reversal), and every
+// assignment of outcomes to the eight configurations a salt chooses.
+#[test]
+fn strict_fault_is_the_first_original_configurations_whatever_the_region_writes_to_its_cells() {
+    let rewrites = [
+        "",
+        "    %v = xor i8 %a, 3\n    store i8 %v, 0\n",
+        "    %v = add i8 %a, 1\n    store i8 %v, 0\n",
+        "    store i8 %b, 0\n    store i8 %a, 1\n",
+        "    %v = sub i8 3, %a\n    store i8 %v, 0\n    %w = xor i8 %b, 1\n    store i8 %w, 1\n",
+    ];
+    let faults = [None, Some(Fault::DivideByZero), Some(Fault::Unreachable), Some(Fault::OutOfBounds)];
+    for (r, rewrite) in rewrites.iter().enumerate() {
+        for salt in 0..4u64 {
+            let text = format!(
+                "memory 512
+func @f() -> i1 {{
+entry:
+    %a = load i8 0
+    %b = load i8 1
+{rewrite}    %k0 = mul i8 %a, 3
+    %k1 = mul i8 %b, 5
+    %k2 = add i8 %k0, %k1
+    %k3 = add i8 %k2, {salt}
+    %k = and i8 %k3, 3
+    %z = icmp eq i8 %k, 0
+    br %z, ok, n1
+n1:
+    %c1 = icmp eq i8 %k, 1
+    br %c1, f1, n2
+n2:
+    %c2 = icmp eq i8 %k, 2
+    br %c2, f2, f3
+ok:
+    ret 0
+f1:
+    fault divide_by_zero
+f2:
+    fault unreachable
+f3:
+    fault out_of_bounds
+}}
+func @main() {{
+entry:
+    h [0:0]
+    h [0:1]
+    h [1:0]
+    %o = qalloc 1
+    %e = qalloc 4
+    apply @f() -> %o, %e budget 100
+    ret
+}}
+"
+            );
+            // The configurations in order: byte 0's register is the first column, byte 1's the second.
+            let outcome = |a: u64, b: u64| faults[((a * 3 + b * 5 + salt) & 3) as usize];
+            let faulting: Vec<Fault> =
+                (0..4).flat_map(|a| (0..2).map(move |b| (a, b))).filter_map(|(a, b)| outcome(a, b)).collect();
+            let p = load(&text);
+            for mode in [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare] {
+                let mut e = executor(&p, "main", &[], Options { reversible: true, ..bounded() });
+                e.set_apply_mode(mode);
+                let entry = e.snapshot();
+                let expected = match faulting.first() {
+                    Some(&fault) => Outcome::Stopped(RunError::RegionFault {
+                        callee: p.function_named("f").expect("f"),
+                        fault,
+                        branches: faulting.len(),
+                        configurations: 8,
+                    }),
+                    None => Outcome::Returned(None),
+                };
+                assert_eq!(e.run(), expected, "rewrite {r}, salt {salt}, {mode:?}");
+                e.reverse().expect("reverses");
+                assert_same_state(&e.snapshot(), &entry, "full reverse");
+            }
+        }
+    }
 }
