@@ -42,7 +42,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 
-Check it: `cargo test` (255 tests; ignored: 9 heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks; about 9 s, no LLVM needed) and `front/test.sh` (158 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
+Check it: `cargo test` (262 tests; ignored: heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks, and the witnesses of the `apply` testing pass's four findings; about 9 s, no LLVM needed) and `front/test.sh` (158 tests; ignored by default: a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
 musl-linked ABI check and two independent variadic checks that need `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"); needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -455,6 +455,16 @@ explicitly after the separate musl build.
    `out` and `fault` and a call's register argument are registers, and a qubit in memory costs a whole byte
    (8 qubits) in the simulator; Grover with its qubits in memory (`memory_qubits.rs`) is the one measured
    program. The maintainer decides.
+   Its independent testing pass (`38e10c4`, sol; `crates/exec/tests/apply_independent.rs`, ignored witnesses) found:
+   **F1** a `mark` value is visible as a result and depends on the caller's journal (history 4, enumeration 2),
+   so two identical `apply`s no longer XOR the same result (`apply` is its own inverse no more); **F2** a strict
+   region fault reports `unreachable` instead of `divide_by_zero` when the region's writes to memory qubits reorder
+   the configurations (the first fault is to be in configuration order); **F3** compare mode misses 6 of 24
+   mutations of the history path (`steps`, `merges`, `peak_worlds`, a changed budget, `in_region`, a leftover
+   backup world); **F4** the whole-world reference numbers marks from 1, the executor from 2. Held: 65 budgets in
+   all three modes on memory-qubit regions with full reversal, 131,072 configurations against the analytic XOR.
+   Peak memory measured 260 against 200 MiB at 2^20 configurations on its own fixture (the published 0.89 against
+   0.43 GB was not reproduced on that program's layout).
    The implementer's order is done: 1 mark/rewind, 2 worlds, 3 the memory overlay, 4 gates that take
    addresses, 5 `apply` as mark, call, rewind-keep.
 4. **The front's fallback**: the program almost verbatim under marks, the documented coherent class recognised by
