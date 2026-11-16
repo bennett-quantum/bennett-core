@@ -8,15 +8,21 @@ or reducing it to a process exit status.
 
 ## Acceptance status
 
-**Rungs 1 and 2 are not yet established as worded:** “both executors” in the
+**Rung 2 is not yet established as worded:** “both executors” in the
 archive meant the VM and an independently implemented ISA interpreter.
 `bennett-core` has one production executor, with forward and reversible modes.
-This experiment exercises both modes and reports them separately; that is
-not a claim of two independent executors. Route: run these same native
-oracles and full domains through a second implementation of this restart's
-device program. The archived ISA interpreter accepts a different ISA and
-cannot consume these `.bn` programs. The snapshot-based whole-world test
-oracle is not wired into this experiment.
+This experiment reports those modes separately. For rung 1 it additionally
+runs the existing, independently written whole-world test interpreter
+(`crates/exec/tests/oracle_support/worlds.rs`, with `dense.rs`'s separate
+integer operations), unchanged, on every source input and reverses its own
+snapshot history. It uses no production executor semantics.
+
+Rung 2's full ten-case table execution on that independent implementation
+is also implemented, with its own history reversal and exact reset check,
+and awaits measurement. Route if resource-limited: improve the independent
+interpreter's history storage or supply another independent interpreter. The archived
+ISA interpreter accepts a different ISA and cannot consume these `.bn`
+programs. Two modes alone cannot satisfy the two-implementation clause.
 
 Measured results, including rung 3, are pending the first run. No semantic
 failure has yet been observed. Rust and Julia are outside this C-only run.
@@ -29,8 +35,11 @@ failure has yet been observed. Rust and Julia are outside this C-only run.
    required. Compare each result byte against separate native O2 and
    O0/UBSan builds, then run both forward and reversibly from clang O0 and
    O2 bitcode. Every reversible run compares the entire entry snapshot
-   after reversal, exactly, and checks that no undo step remains. Scalar
-   stack: 256 bytes above static data; step budget: 10,000,000.
+   after reversal, exactly, and checks that no undo step remains. The
+   independent interpreter additionally compares every native result and
+   reverses every run to its complete initial world and empty history, on
+   both clang inputs. Scalar stack: 256 bytes above static data; production
+   step budget: 10,000,000, independent interpreter: 10,000.
    These are ordinary source-function entries, not lifted XOR oracles with
    extra output/fault/dirty-ancilla input wires; §5.1's larger oracle domain
    is not claimed.
@@ -45,7 +54,9 @@ failure has yet been observed. Rust and Julia are outside this C-only run.
    Both clang O0 and O2 inputs, forward and reversible modes. Reversal
    compares every byte of the full memory, live slots/frames, stack pointer,
    console, outcome, steps, register state and worlds against an externally
-   taken snapshot. No memory hash stands in for equality.
+   taken snapshot. No memory hash stands in for equality. The second test
+   runs the identical linked image on the independent whole-world model,
+   compares all ten native results and reverses its own snapshot history.
 3. `printf("hello, world\n")`, linked to musl 1.2.5, entering through musl's
    own startup and exit. Native stdout/status compared with forward and
    reversible runs, from clang O0 and O2. Un-run to the externally captured
@@ -74,19 +85,26 @@ cmake -S front -B target/front
 cmake --build target/front --parallel 2
 python3 rt/musl/build.py --jobs 2
 front/test.sh --test ladder -- --nocapture
-cargo test -p bennett-front-tests --test ladder -- --ignored --nocapture --test-threads=1
 python3 experiments/northstar-ladder/run.py
 ```
 
-The scalar exhaustive check runs in `front/test.sh`; musl tests are ignored
-there because they require the separate library build. Scratch and native
+The production scalar exhaustive check runs in `front/test.sh`; the slower
+independent exhaustive check and musl tests are ignored there. `run.py`
+explicitly runs both scalar implementations and the musl tests, including
+the independent table attempt. The latter refuses direct invocation without
+the runner's resource guard. Scratch and native
 binaries go to `.tmp/northstar-ladder`; scalar lowering products follow the
 front harness in `target/front-tests`. A failing test exits nonzero.
 `run.py` verifies fixture hashes, runs the selected tests, and writes
 `.tmp/northstar-ladder/report.json` after each rung. Its default acceptance
-gate stays **nonzero** while “both executors” is unmet, even if all available
-mode checks pass. `--rung 3` selects hello alone; `--slot SCRIPT` wraps each
-test in a shared-machine heavy slot.
+gate stays **nonzero** while any acceptance stage fails or remains unmeasured.
+`--rung 3` selects hello alone; `--slot SCRIPT` acquires a
+shared-machine heavy slot around the whole runner before its timers start. The independent table process is limited to
+1 GiB address space and 120 seconds (configurable with
+`--reference-memory-mib` and `--reference-timeout`). A resource stop is
+`UNMEASURED`, not a wrong-result verdict or evidence of a semantic refusal.
+The full ten-case source domain is unchanged. On timeout the entire isolated
+process group is killed, so no orphan interpreter keeps running.
 
 ## Source provenance
 
@@ -113,4 +131,6 @@ The archive records the table and native harness as unchanged copies of
   needed because these programs contain no quantum operations.
 - The two modes share instruction semantics; they can agree on a wrong
   answer. Native comparison is independent, but does not supply the second
-  device executor required by rungs 1–2.
+  device executor required by rung 2. Rung 1 also uses the independently
+  written whole-world interpreter; assess its shared frontend/IR and separate
+  instruction semantics when judging independence.

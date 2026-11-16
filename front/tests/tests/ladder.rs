@@ -7,6 +7,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::Instant;
 
+// Reuse the independently written interpreter unchanged. It imports no
+// bennett-exec semantics; dense supplies its separate integer operations.
+#[allow(dead_code)]
+#[path = "../../../crates/exec/tests/oracle_support/dense.rs"]
+mod dense;
+#[allow(dead_code)]
+#[path = "../../../crates/exec/tests/oracle_support/worlds.rs"]
+mod reference;
+
 fn fixtures() -> PathBuf {
     root().join("experiments/northstar-ladder/fixtures")
 }
@@ -112,6 +121,59 @@ fn scalar_c_exhaustive_int8_native_forward_and_reverse() {
     );
 }
 
+#[test]
+#[ignore = "independent snapshot interpreter exhaustively runs and reverses the complete Int8 domain"]
+fn scalar_c_independent_exhaustive_int8_native_and_reverse() {
+    let expected = native("scalar-reference-native", &["scalars.c", "scalar_native.c"], &["-O2"]);
+    assert_eq!(expected.len(), 131_840);
+    let start = Instant::now();
+    let mut cases = 0;
+    for (tag, flags) in [("o0", CLANG_FLAGS), ("o2", CLANG_O2_FLAGS)] {
+        let p =
+            lower(&fixtures().join("scalars.c"), &format!("ladder-reference-{tag}"), flags, &["--entry=r1_sat_add"]);
+        let mut image = p.into_module();
+        image.memory_size = image.static_end() + 256;
+        let p = bennett_ir::validate(image).expect("bounded scalar image");
+        let mut offset = 0;
+        for (name, arity) in
+            [("r1_sat_add", 2), ("r1_gcd", 2), ("r1_popcount", 1), ("r1_sign_abs", 1), ("r1_lookup", 1)]
+        {
+            let model = reference::Model::new(&p, name);
+            for a in 0..256 {
+                for b in 0..if arity == 2 { 256 } else { 1 } {
+                    let args: &[u128] = if arity == 2 { &[a, b] } else { &[a] };
+                    let before = reference::basis(model.initial(name, args));
+                    let mut state = model.run(before.clone(), 10_000);
+                    assert_eq!(state.len(), 1, "{tag} {name}({args:?}): one basis world");
+                    let world = state.keys().next().expect("one world");
+                    assert_eq!(
+                        world.classical.finish,
+                        Some(reference::Finish::Returned(Some(u128::from(expected[offset])))),
+                        "{tag} {name}({args:?})"
+                    );
+                    let records = world.history.len();
+                    assert!(records > 0);
+                    for _ in 0..records {
+                        state = model.undo_state(&state).expect("reference scalar undo");
+                    }
+                    assert_eq!(state, before, "reference reset {tag} {name}({args:?})");
+                    cases += 1;
+                    offset += 1;
+                }
+            }
+            println!(
+                "independent scalar {tag} {name}: native agreement and exact reversal on complete Int8 domain, {:.3}s elapsed",
+                start.elapsed().as_secs_f64()
+            );
+        }
+        assert_eq!(offset, expected.len());
+    }
+    println!(
+        "independent scalar: {cases} native comparisons and exact reversals, zero faults/exclusions, {:.3}s",
+        start.elapsed().as_secs_f64()
+    );
+}
+
 fn musl_program(name: &str, source: &str, level: &str) -> ValidModule {
     assert!(root().join("target/musl/libc.a").is_file(), "build musl first: python3 rt/musl/build.py --jobs 2");
     let program = scratch().join(format!("{name}{level}.bn"));
@@ -186,6 +248,58 @@ fn hashtable_native_forward_and_byte_exact_reverse() {
                 start.elapsed().as_secs_f64()
             );
         }
+    }
+}
+
+#[test]
+#[ignore = "full table on the snapshot interpreter; use run.py to bound the process's memory/time"]
+fn hashtable_independent_native_forward_and_byte_exact_reverse() {
+    assert_eq!(
+        std::env::var("BENNETT_LADDER_REFERENCE_TABLE").as_deref(),
+        Ok("bounded"),
+        "run via experiments/northstar-ladder/run.py for a bounded reference process"
+    );
+    let expected = native("table-reference-native", &["hashtable.c", "main_golden.c"], &["-O2"]);
+    for level in ["-O0", "-O2"] {
+        // The preceding production test generated this exact same linked image.
+        let p = load(&scratch().join(format!("table{level}.bn")));
+        let model = reference::Model::new(&p, "__bennett_entry");
+        let before = reference::basis(model.initial("__bennett_entry", &[]));
+        let mut state = before.clone();
+        let started = Instant::now();
+        let mut steps = 0_usize;
+        while state.keys().any(|w| w.classical.finish.is_none()) && steps < 10_000_000 {
+            state = model.step(&state);
+            steps += 1;
+            if steps.is_power_of_two() {
+                let world = state.keys().next().expect("world");
+                let frame = world.classical.frames.last();
+                let site = frame.map(|f| (&p.function(f.function).name, f.block, f.instruction));
+                println!(
+                    "independent table {level}: {steps} steps, {} history snapshots, {} overlay bytes, site {site:?}, {:.3}s",
+                    world.history.len(),
+                    world.classical.overlay.len(),
+                    started.elapsed().as_secs_f64()
+                );
+            }
+        }
+        assert_eq!(state.len(), 1);
+        let world = state.keys().next().expect("one world");
+        assert_eq!(
+            world.classical.finish,
+            Some(reference::Finish::Returned(Some(0))),
+            "{level}: reference table did not complete, {steps} steps"
+        );
+        assert_eq!(world.classical.tape, expected, "{level}: all ten native table results");
+        let records = world.history.len();
+        for _ in 0..records {
+            state = model.undo_state(&state).expect("reference table undo");
+        }
+        assert_eq!(state, before, "{level}: independent table reset");
+        println!(
+            "independent table {level}: 10 native results, {steps} steps, complete reversal, {:.3}s",
+            started.elapsed().as_secs_f64()
+        );
     }
 }
 
