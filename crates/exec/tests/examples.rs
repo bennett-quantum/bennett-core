@@ -166,3 +166,79 @@ fn apply_equals_the_history_idiom_on_the_examples() {
         }
     }
 }
+
+#[test]
+fn gates_reject_physical_aliases_hidden_by_distinct_parameters() {
+    for args in ["%q, %q, %r", "%q, %r, %r"] {
+        let module = load(&format!(
+            "memory 256
+func @bad(q1 %target, q1 %a, q1 %b) {{
+entry:
+    x %target ctrl %a, %b
+    ret
+}}
+func @main() {{
+entry:
+    %q = qalloc 1
+    %r = qalloc 1
+    h %q
+    s %q
+    call @bad({args})
+    ret
+}}
+"
+        ));
+        let mut executor = executor(&module, "main", &[], Options { reversible: true, ..bounded() });
+        for _ in 0..5 {
+            assert_eq!(executor.step(), None);
+        }
+        let before = executor.snapshot();
+        assert_eq!(executor.step(), Some(Outcome::Faulted(Fault::QubitAlias)));
+        let mut after = executor.snapshot();
+        after.classical.outcome = None;
+        assert_eq!(after, before, "alias refusal preserves the complex amplitudes and classical state");
+    }
+}
+
+#[test]
+fn restoring_the_current_saved_stack_pointer_is_valid_with_or_without_allocations() {
+    for size in [0, 1, 17] {
+        let module = load(&format!(
+            "memory 256\nfunc @main() -> i8 {{\nentry:\n %p = alloca {size}\n %sp = stacksave\n \
+             stackrestore %sp\n ret 0\n}}\n"
+        ));
+        assert_eq!(assert_reverses(&module, "main", &[], bounded()), Outcome::Returned(Some(0)));
+    }
+}
+
+#[test]
+fn entry_results_respect_the_declared_integer_width() {
+    for bits in [1, 2, 7, 8, 31, 32, 63, 64] {
+        let module = load(&format!("memory 256\nfunc @main(i{bits} %x) -> i{bits} {{\nentry:\n ret %x\n}}\n"));
+        let max = if bits == 64 { u64::MAX } else { (1u64 << bits) - 1 };
+        for value in [0, max] {
+            assert_eq!(run(&module, "main", &[value], bounded()).0, Outcome::Returned(Some(u128::from(value))));
+        }
+        if bits < 64 {
+            for value in [max + 1, u64::MAX] {
+                // The host may refuse or convert an argument; an accepted iN result must still fit N bits.
+                if let Ok(mut executor) =
+                    bennett_exec::Executor::new(&module, common::entry(&module, "main"), &[value], bounded())
+                    && let Outcome::Returned(Some(result)) = executor.run()
+                {
+                    assert!(result <= u128::from(max), "i{bits} returned {result}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn an_entry_frame_that_never_fit_is_unchanged_by_an_empty_reverse_step() {
+    let module = load("memory 0\nfunc @main(i1 %x) -> i1 {\nentry:\n ret %x\n}\n");
+    let mut executor = executor(&module, "main", &[0], Options { reversible: true, ..bounded() });
+    assert_eq!(executor.outcome(), Some(Outcome::Faulted(Fault::StackOverflow)));
+    let initial = executor.snapshot();
+    assert_eq!(executor.step_back(), Ok(false));
+    assert_eq!(executor.snapshot(), initial, "no step ran, so the entry fault is part of the initial state");
+}

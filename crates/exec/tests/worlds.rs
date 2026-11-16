@@ -9,7 +9,7 @@ use std::f64::consts::FRAC_1_SQRT_2;
 
 use bennett_exec::{Options, Outcome, ReverseError, RunError, Snapshot};
 use bennett_ir::Fault;
-use common::{TOLERANCE, assert_same_state, bounded, executor, load, run};
+use common::{TOLERANCE, assert_reverses, assert_same_state, bounded, executor, load, run};
 use num_complex::Complex64;
 
 const WORLDS: &str = r#"
@@ -695,4 +695,36 @@ entry:
         Outcome::Stopped(RunError::WorldFault { fault: Fault::DirtyFree, worlds: 2 }),
         "a host replay must still refuse to discard the register holding 1"
     );
+}
+
+#[test]
+fn a_replayed_free_below_a_split_defers_only_nonzero_configurations() {
+    let module = load(
+        "memory 256
+func @read(i1 %x) {
+entry:
+    ret
+}
+func @main() {
+entry:
+    %q = qalloc 1
+    h %q
+    %outer = mark
+    %inner = mark
+    %temporary = qalloc 1
+    qfree %temporary
+    rewind %inner
+    call @read(%q)
+    rewind %outer
+    h %q
+    ret
+}
+",
+    );
+    let mut executor = executor(&module, "main", &[], reversible());
+    assert_eq!(executor.run(), Outcome::Returned(None));
+    let state = executor.snapshot();
+    assert_eq!(state.quantum.amplitudes.len(), 1);
+    assert!((state.quantum.amplitude(&[0]) - Complex64::new(1.0, 0.0)).norm() <= TOLERANCE);
+    assert_eq!(assert_reverses(&module, "main", &[], reversible()), Outcome::Returned(None));
 }

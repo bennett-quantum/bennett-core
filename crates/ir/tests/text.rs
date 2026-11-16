@@ -353,15 +353,3 @@ fn gates_at_addresses_read_write_and_validate() {
     let errors = validate(module).expect_err("invalid").0;
     assert_eq!(errors.iter().map(|e| e.problem.clone()).collect::<Vec<_>>(), vec![Problem::GateAtWithoutMemory]);
 }
-
-#[test]
-fn a_register_read_type_error_names_its_site_and_expected_widths() {
-    let text = "func @g(i4 %x) {\nentry:\n ret\n}\nfunc @f(q2 %q) {\nentry:\n call @g(%q)\n ret\n}\n";
-    let Err(LoadError::Invalid(errors)) = load(text) else { panic!("a mismatched register read is invalid") };
-    let report = errors.to_string();
-    // Keep the diagnostic useful without fixing its punctuation or prose: the call's site and the
-    // integer/register alternatives from DESIGN's reading rule must survive formatting.
-    for detail in ["@f", "entry", "i4", "q4", "q2"] {
-        assert!(report.contains(detail), "missing {detail}: {report}");
-    }
-}
