@@ -144,8 +144,10 @@ commit) after the four checks passed on it.
   steps each landed alone: e1, running again charged to the run's budget (`Stats::replay_charged`; a
   rewind whose running again would pass the budget faults `budget`, changing nothing), is built; e2, strict
   mode named (`Options::machine_meaning`, `--machine-meaning`: no region or world stops, a dirty `qfree`
-  leaves its qubits over, `docs/DESIGN.md`, "Strict mode"), is built; the un-run of a state the history
-  does not describe, regardless, is next. The panic reported for a
+  leaves its qubits over, `docs/DESIGN.md`, "Strict mode"), is built; e3, a rewind's un-run that meets a
+  nonzero allocation runs regardless outside strict mode (the register left over, a `LeftBehind` barrier
+  record), is built; the other state-dependent causes are debts ("Known weak spots"). Next: the mark's
+  budget. The panic reported for a
   `measure_memory` fixture in 64 bytes of memory was not the executor's: it returns `stack_overflow` before
   the first step (since `5515ae8`); the independent whole-world reference panicked at its own start
   (`expect("entry fits memory")`). The reference now models the fault, and
@@ -1071,6 +1073,20 @@ the ordinary frontend run without changing its domain or assertions.
   and such a rewind faults `budget`, changing nothing (`docs/DESIGN.md`, "History", Cost). What remains: a
   run with no budget can still loop there, as any forward loop can. A path that faults, measures, returns
   from the rewind's frame or ends the run stays refused atomically with `bad_rewind`.
+
+- **Running regardless, outside strict mode, is built only for an allocation** (machine step e3). Still
+  `bad_rewind` there, each a debt with its route: (1) a register read as an integer since the mark that no
+  longer holds the value read: un-run the read into a leftover register of the read's width holding the
+  value read XOR the register, in every world that un-runs that read, decided on the sum of the parts when
+  the read is below a split point; (2) a memory qubit read or written since the mark that no longer holds
+  its value, and a promotion of memory to qubits whose byte is not classical again at its un-run: the same
+  with a leftover cell; (3) a check deferred to the sum of the worlds' parts that fails: run (1) and (2) on
+  the parts once the sum is known, instead of restoring; (4) an inner region run again that faults (a
+  measurement, leaving the rewind's frame, an inner `bad_rewind`): running again must reach the inner
+  rewind, so these stay refusals of the path until channels; (5) a leftover where worlds split off during
+  the same un-run: carry the leftover into every world split off. And the barrier: reversal and outer
+  rewinds stop at a rewind that left history behind; route: journal the leftovers it made, so undoing the
+  rewind takes them back as the registers its replayed allocations allocate.
 
 - Worlds' deferred un-run checks (`d6036a1`) are matched across worlds by a 64-bit hash of the classical state; a
   collision would add two different checks (route: compare the states on a hash match). The copy each world saves

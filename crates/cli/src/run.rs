@@ -85,8 +85,8 @@ fn report_outcome(module: &ValidModule, entry: FuncId, outcome: Outcome, tape: &
     }
     if stats.leftover_qubits > 0 {
         println!(
-            "warning: {} qubits left over by `qfree` of registers that were not zero (the machine keeps them; \
-             strict mode would fault dirty_free)",
+            "warning: {} qubits left over by `qfree` of registers that were not zero or by rewinds that met a \
+             state their history does not describe (the machine keeps them; strict mode would fault)",
             stats.leftover_qubits
         );
     }
@@ -116,7 +116,7 @@ fn reverse_and_report(executor: &mut Executor<'_>, entry_state: &Snapshot, stats
             }
             Some(Timed { steps, time })
         }
-        Err(error @ ReverseError::PastMeasurement) => {
+        Err(error @ (ReverseError::PastMeasurement | ReverseError::PastLeftBehind)) => {
             println!("reverse: stopped after undoing {} steps: {error}", stats.steps - executor.stats().steps);
             None
         }

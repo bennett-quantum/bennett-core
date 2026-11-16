@@ -690,8 +690,10 @@ impl<'m> Executor<'m> {
         let count = self.worlds.len();
         for index in (0..count).filter(|&index| records[index] == longest) {
             self.select(index);
-            if self.journal.as_ref().and_then(Journal::last) == Some(Undo::Measure) {
-                return Err(ReverseError::PastMeasurement);
+            match self.journal.as_ref().and_then(Journal::last) {
+                Some(Undo::Measure) => return Err(ReverseError::PastMeasurement),
+                Some(Undo::LeftBehind) => return Err(ReverseError::PastLeftBehind),
+                Some(_) | None => {}
             }
         }
         self.run_outcome = None;

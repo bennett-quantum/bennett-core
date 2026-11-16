@@ -172,6 +172,10 @@ pub enum ReverseError {
     /// The next step to undo is a measurement, which destroyed information.
     #[error("cannot reverse past a measurement")]
     PastMeasurement,
+    /// The next step to undo is a rewind that left history behind outside strict mode
+    /// ([`Options::machine_meaning`]): its un-run met a state its history does not describe.
+    #[error("cannot reverse past a rewind that left history behind")]
+    PastLeftBehind,
 }
 
 /// Counts reported after a run.
@@ -316,6 +320,8 @@ pub struct Executor<'m> {
     pub(crate) allow_region_faults: bool,
     /// The simulator's strict mode (`Options::machine_meaning` off).
     pub(crate) strict: bool,
+    /// Whether the rewind un-running now ran regardless over a state its history does not describe.
+    pub(crate) left_behind: bool,
     pub(crate) region_faults: u64,
     pub(crate) region_fault_weight: f64,
     pub(crate) region_fault_max_weight: f64,
@@ -415,6 +421,7 @@ impl<'m> Executor<'m> {
             region_steps: 0,
             allow_region_faults: options.allow_region_faults || options.machine_meaning,
             strict: !options.machine_meaning,
+            left_behind: false,
             region_faults: 0,
             region_fault_weight: 0.0,
             region_fault_max_weight: 0.0,
@@ -536,6 +543,7 @@ impl<'m> Executor<'m> {
         match journal.last() {
             None => Ok(false),
             Some(Undo::Measure) => Err(ReverseError::PastMeasurement),
+            Some(Undo::LeftBehind) => Err(ReverseError::PastLeftBehind),
             Some(_) => {
                 self.undo_last();
                 // After several worlds, ticks and records need not match one for one; none is left once

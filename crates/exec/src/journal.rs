@@ -37,6 +37,10 @@ pub enum Undo {
     /// A `qfree` of a register that was not zero, outside the simulator's strict mode: the register is left
     /// over (kept, its handle stale), undone by taking it back. No words.
     Leftover,
+    /// After a `rewind` record, outside strict mode: the rewind's un-run met a state its history does not
+    /// describe and ran regardless, leaving qubits over. A barrier, as a measurement is: reversal and outer
+    /// rewinds do not cross it. No words.
+    LeftBehind,
     /// A measurement: a barrier that reversal refuses to cross. Words: the old slot value.
     Measure,
     /// An `apply`, undone by applying it again. No words.

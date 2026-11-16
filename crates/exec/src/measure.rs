@@ -1064,6 +1064,7 @@ impl Executor<'_> {
             | Undo::GateAtPromoted
             | Undo::Qfree
             | Undo::Leftover
+            | Undo::LeftBehind
             | Undo::Apply => Vec::new(),
             Undo::Rewind => unreachable!("the measurement stops before a rewind"),
         };
@@ -1230,6 +1231,7 @@ impl Executor<'_> {
             | Undo::Qfree
             | Undo::Leftover
             | Undo::Measure
+            | Undo::LeftBehind
             | Undo::Apply
             | Undo::Mark
             | Undo::Rewind
@@ -1274,6 +1276,7 @@ impl Executor<'_> {
             | Undo::Qfree
             | Undo::Leftover
             | Undo::Measure
+            | Undo::LeftBehind
             | Undo::Apply
             | Undo::Mark
             | Undo::Rewind
@@ -1492,6 +1495,7 @@ impl Executor<'_> {
             | Undo::Qfree
             | Undo::Leftover
             | Undo::Measure
+            | Undo::LeftBehind
             | Undo::Apply
             | Undo::Mark
             | Undo::Rewind

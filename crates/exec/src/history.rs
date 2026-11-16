@@ -86,7 +86,10 @@ impl<'m> Executor<'m> {
         let step = self.rewinding == 0 && self.rerunning == 0;
         let split_read = reads.iter().any(|read| read.split) || cells.iter().any(|cell| cell.split);
         let defers = step && (rewinds_inside || split_read);
-        let backup = (rewinds_inside && (changes || self.deferring) || defers).then(|| self.clone_world(None));
+        // Outside strict mode an un-run may leave a register over and then fail elsewhere; running forward
+        // again could not take it back, so a copy is kept.
+        let backup = (rewinds_inside && (changes || self.deferring) || defers || !self.strict && step)
+            .then(|| self.clone_world(None));
         let counters = (self.rewound_steps, self.rerun_steps, self.mismatches, self.splits);
         for &(column, value) in &kept {
             self.quantum.xor_register(column, value);
@@ -102,6 +105,7 @@ impl<'m> Executor<'m> {
         if step {
             self.charging = true;
             self.budget_spent = false;
+            self.left_behind = false;
         }
         self.rewinding += 1;
         let from = self.forked.len();
@@ -113,9 +117,12 @@ impl<'m> Executor<'m> {
         }
         self.allow_region_faults = saved;
         let forked = self.forked.len() > from || self.splits != counters.3;
-        if result.is_err() || self.mismatches != counters.2 {
+        let left_behind = step && std::mem::take(&mut self.left_behind);
+        // Running regardless where worlds split off during the un-run is not built (a debt, `HANDOFF.md`):
+        // that rewind refuses as in strict mode.
+        if result.is_err() || self.mismatches != counters.2 || left_behind && forked {
             match backup {
-                Some(mut backup) if forked || self.partial => {
+                Some(mut backup) if forked || self.partial || left_behind => {
                     self.forked.truncate(from);
                     self.swap_world(&mut backup);
                     (self.rewound_steps, self.rerun_steps, self.mismatches, self.splits) = counters;
@@ -140,6 +147,10 @@ impl<'m> Executor<'m> {
         }
         self.partial = outer_partial;
         self.for_forks(from, &|executor| executor.partial = outer_partial);
+        // Ran regardless over a state its history does not describe: a barrier after the rewind's record.
+        if left_behind {
+            self.record(Undo::LeftBehind);
+        }
         // Every world this rewind made waits for its deferred checks, holding the copy to restore.
         if let Some(backup) =
             backup.filter(|_| defers && (self.pending || self.forked[from..].iter().any(|world| world.pending)))
@@ -239,7 +250,7 @@ impl<'m> Executor<'m> {
                 Undo::Return => depth += 1,
                 Undo::Longjmp => depth += jumps.next().expect("a longjmp record has an entry"),
                 Undo::Call => depth = depth.checked_sub(1)?,
-                Undo::Measure | Undo::Finish => return None,
+                Undo::Measure | Undo::Finish | Undo::LeftBehind => return None,
                 Undo::Slot
                 | Undo::Store
                 | Undo::Alloca

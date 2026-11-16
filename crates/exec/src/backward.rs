@@ -34,6 +34,11 @@ impl<'m> Executor<'m> {
             let failing =
                 if last == Undo::Qalloc { self.allocation_undone_nonzero() } else { self.reads_no_longer_held() };
             if checked && !failing.is_empty() {
+                // Outside strict mode a rewind's own un-run runs regardless: the register is left over.
+                if last == Undo::Qalloc && self.runs_regardless() {
+                    self.leave_allocation_over();
+                    return Ok(());
+                }
                 return Err(Mismatch);
             }
             if deferred {
@@ -130,9 +135,30 @@ impl<'m> Executor<'m> {
             }
             Undo::Longjmp => self.undo_longjmp(),
             Undo::Measure => unreachable!("reversal stops before a measurement"),
+            Undo::LeftBehind => unreachable!("reversal and rewinds stop before a rewind that left history behind"),
             Undo::GateAt | Undo::GateAtPromoted => unreachable!("a GateAt record is un-run before it is popped"),
         }
         Ok(())
+    }
+
+    /// Whether an un-run that meets a state its history does not describe runs regardless: outside strict
+    /// mode, in the un-run of a rewind taken as a step, not while running steps again (which must find the
+    /// path the history describes) and not on one world's part of a shared state (checked on the sum).
+    fn runs_regardless(&self) -> bool {
+        !self.strict && self.rewinding == 1 && self.rerunning == 0 && !self.partial
+    }
+
+    /// Un-runs the `qalloc` of the last record whose register is not zero: the register is left over, its
+    /// handle slot back to its old value, and the rewind marks its history as left behind.
+    fn leave_allocation_over(&mut self) {
+        self.journal.as_mut().and_then(Journal::pop).expect("a qalloc record");
+        self.pop_cell_entries();
+        let inst = self.retreat();
+        let dst = inst.result().expect("qalloc defines its handle");
+        let id = self.quantum.resolve(self.handle(dst)).expect("an allocation being undone is live");
+        self.quantum.leave(id);
+        self.restore_result();
+        self.left_behind = true;
     }
 
     /// The configurations where the register that the `qalloc` of the last record allocated is not zero.

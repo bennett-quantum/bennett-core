@@ -194,3 +194,88 @@ fn a_region_fault_is_a_fault_code_on_the_machine() {
         assert_eq!(packed >> 8, if n > 3 { Fault::Budget.code().into() } else { 0 }, "n = {n}");
     }
 }
+
+/// A rewind whose keep changes what the region read, through a gate, so that its un-run meets a temporary
+/// that is not zero. `%q` = |+>, `%t` = `%q` copied, keep 1 into `%q`: (|00> + |11>)/sqrt 2 becomes
+/// (|10> + |01>)/sqrt 2 (columns `%q`, `%t`); un-running `x %t ctrl %q` gives (|11> + |01>)/sqrt 2, `%t` = 1
+/// in both. Strict mode faults `bad_rewind`, changing nothing; the machine runs the un-run regardless and
+/// leaves `%t` over holding 1, `%q` = |+> again; the history is left behind, so reversal stops there and a
+/// rewind of an outer mark faults `bad_rewind` (a classical cause, as a measurement since the mark is).
+#[test]
+fn an_un_run_that_meets_a_nonzero_allocation_runs_regardless_on_the_machine() {
+    let text = "memory 64
+func @main() -> i8 {
+entry:
+    %q = qalloc 1
+    h %q
+    %outer = mark
+    %h = mark
+    %t = qalloc 1
+    x %t ctrl %q
+    rewind %h keep (i1 1 -> %q)
+    OUTER
+    ret 5
+}";
+    let module = load(&text.replace("OUTER", ""));
+    let mut e = executor(&module, "main", &[], strict());
+    for _ in 0..6 {
+        assert_eq!(e.step(), None);
+    }
+    let before = e.snapshot();
+    assert_eq!(e.step(), Some(Outcome::Faulted(Fault::BadRewind)));
+    let mut after = e.snapshot();
+    after.classical.outcome = None;
+    assert_same_state(&after, &before, "strict: nothing changed");
+
+    let mut e = executor(&module, "main", &[], machine());
+    assert_eq!(e.run(), Outcome::Returned(Some(5)));
+    let stats = e.stats();
+    assert_eq!((stats.leftover_qubits, stats.live_qubits, stats.rewound_steps), (1, 2, 2));
+    let quantum = e.snapshot().quantum;
+    assert_eq!(
+        quantum.registers,
+        [RegisterState { generation: 1, width: Width::new(1) }, RegisterState { generation: 2, width: Width::new(1) }]
+    );
+    let half = std::f64::consts::FRAC_1_SQRT_2;
+    let expected = [(vec![0, 1], half), (vec![1, 1], half)];
+    assert_eq!(quantum.amplitudes.len(), 2);
+    for ((config, amplitude), (want, re)) in quantum.amplitudes.iter().zip(&expected) {
+        assert_eq!(config, want);
+        assert!((amplitude - C::new(*re, 0.0)).norm() < 1e-12);
+    }
+    // Reversal undoes the return and the rewind's barrier stops it.
+    assert_eq!(e.reverse(), Err(bennett_exec::ReverseError::PastLeftBehind));
+
+    let module = load(&text.replace("OUTER", "rewind %outer"));
+    let mut e = executor(&module, "main", &[], machine());
+    assert_eq!(e.run(), Outcome::Faulted(Fault::BadRewind));
+    assert_eq!(e.stats().leftover_qubits, 1);
+}
+
+/// With the keep 0 nothing changes what the region read: the un-run is faithful in both modes, nothing is
+/// left over, and the run reverses to its entry.
+#[test]
+fn a_faithful_un_run_is_the_same_in_both_modes() {
+    let module = load(
+        "memory 64
+func @main() {
+entry:
+    %q = qalloc 1
+    h %q
+    %h = mark
+    %t = qalloc 1
+    x %t ctrl %q
+    rewind %h keep (i1 0 -> %q)
+    ret
+}",
+    );
+    let (mut s, mut m) = (executor(&module, "main", &[], strict()), executor(&module, "main", &[], machine()));
+    let entry = s.snapshot();
+    assert_eq!((s.run(), m.run()), (Outcome::Returned(None), Outcome::Returned(None)));
+    assert_same_state(&m.snapshot(), &s.snapshot(), "same state");
+    assert_eq!(m.stats().leftover_qubits, 0);
+    for e in [&mut s, &mut m] {
+        e.reverse().expect("reverses");
+        assert_same_state(&e.snapshot(), &entry, "back to the entry");
+    }
+}
