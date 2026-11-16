@@ -136,8 +136,11 @@ NaNs, so the explanation does not rely on signalling NaNs being undefined.
 
 C does not promise a particular input NaN's payload for an arithmetic result. C11's
 [Annex F](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf), notably F.2.1
-(signalling NaNs) and F.10 paragraphs 11–13 (NaN results and recommended propagation),
-does not impose the archive's selection. See also the committee's
+(signalling NaNs), F.3 (mapping arithmetic to IEC 60559), and F.10 paragraphs 11–13
+(NaN results and recommended propagation), does not impose the archive's selection.
+The IEEE working group's [NaN propagation background paper, page 5](https://grouper.ieee.org/groups/msc/ANSI_IEEE-Std-754-2019/background/nan-propagation.pdf)
+explains the unspecified choice among input NaNs and the compiler operand swaps that
+change it. See also the C committee's
 [discussion of that recommended practice](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1486.htm).
 [LLVM 18's NaN rules](https://releases.llvm.org/18.1.6/docs/LangRef.html#behavior-of-floating-point-nan-values)
 explicitly allow an arbitrary result sign and payload selection from a NaN operand.
@@ -152,3 +155,15 @@ flags need the front's environment fallback. The former requires x87-compatible 
 and normalization of operand encodings at the operation boundary; the latter requires real
 SoftFloat state and constrained-operation lowering. They are debts, not coverage proved by
 this canonical-input sweep.
+
+## Verification snapshot
+
+All four repository checks passed after rebasing onto `3418e51` on 2026-11-16:
+`cargo test` (292 passed, 19 ignored), `cargo clippy --all-targets -- -D warnings`,
+`cargo fmt --all --check`, and `front/test.sh` (158 passed, 12 ignored).
+These green checks do not replace the strict raw sweep's exit 1 or the normal corpus
+route's three environment refusals. The large raw sweep used an `-O0` caller with the
+production `-O2` helper bitcode; both caller levels are covered by the fast complex suite.
+The end-to-end NaN diagnostic also passes: every full-sample operand-order hardware
+result matches the device, and the five small device witnesses match in **4,120 steps**.
+That diagnostic success is a cause check, not an archive-exactness pass.
