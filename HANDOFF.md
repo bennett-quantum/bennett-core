@@ -328,10 +328,16 @@ explicitly after the separate musl build.
    coherent programs, 729 dense un-run cases (557 equal, 172 refusals exactly where the reads no longer match),
    2,048 whole-state split/merge images, 64 `apply`/idiom comparisons, sampling by weight at measurement and end
    of run (4,096 seeds each, within 0.035 per bin), 11,129 reference comparisons across every executor test. One
-   wrong result: **a later split hides an earlier changed read**, so a rewind that must fault `bad_rewind` returns
-   success with (q, out) = (1, 1) (`worlds_independent.rs`, ignored witness; read checks are switched off below
-   the later split point). The two earlier differences from the reference are decided by `docs/DESIGN.md`
-   ("Worlds") in the executor's favour.
+   wrong result: **a later split hid an earlier changed read**, so a rewind that must fault `bad_rewind` returned
+   success with (q, out) = (1, 1). Fixed (`d9a7119`): below a world's split point the un-run's checks (a read
+   still holds its value, an un-allocated or freed register is zero) are made on the sum of the worlds' parts once
+   every world has rewound, and a failing sum puts each of those worlds back from a copy and faults `bad_rewind`
+   (`docs/DESIGN.md`, "Worlds"). Checked on the whole class against the reference and an independent dense
+   calculation: every order of three of reads, gates, a temporary and nested rewinds, 12,816 programs (1,710
+   refused), and of four, 134,264, all agree; the previous executor missed 336 refusals and panicked on 15 of the
+   12,816. Steps and journal unchanged; the 1,500-iteration idiom loop test takes about a third longer (the
+   copy). The two earlier differences from the reference are decided by `docs/DESIGN.md` ("Worlds") in the
+   executor's favour.
    **Third step: memory as an overlay** (`7c34bf5`; `docs/DESIGN.md`, "Memory as an overlay"; `crates/exec/src/memory.rs`).
    Memory is a classical base shared by every world plus, per world, a normal overlay of the bytes where its
    memory differs from the base; a split copies the overlay, never the memory. With one world the machine
