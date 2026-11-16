@@ -935,22 +935,32 @@ Each recommendation was taken ("Decisions the maintainer took on 2026-11-16, in 
 | A qubit-dependent value used by ordinary code or printed; measurement under control; a dirty discard | Channels |
 | Non-empty inline assembly; code without source | An emulator of the real machine, compiled as an ordinary program |
 
-## C North Star rungs 1–3 (testing in progress)
+## C North Star rungs 1–3 (measured 2026-11-16)
 
-`experiments/northstar-ladder/README.md` and `front/tests/tests/ladder.rs`: unchanged archived five
-Int8 functions and 258-line hashtable, provenance pinned to committed Git blobs. Scalar checks cover
-131,840 source-input tuples per compiler input on the production executor and independent whole-world
-model, with each reversing its own history. Table domain is the unchanged native harness's ten cases.
-The exhaustive scalar and independent table checks are queued. The production table check passes all
-ten cases, both compiler inputs and both modes (40 full i64 results), with two exact full-memory resets:
-O0/O2 at 803,856/803,263 steps, 15,987,376/15,992,591 journal bytes and 2,108,000/2,108,016 memory
-bytes. This alone does not establish rung 2's two-executor clause. **Rung 3 passes as worded** in the
-first short check: musl hello's
-13 output bytes and status equal native, clang O0/O2 at 3,227/2,698 steps, 65,131/53,722 journal bytes;
-three same-executor replays each and four full exact resets (2,106,920/2,104,192 memory bytes).
-The full runner will repeat it from the committed source. No rung 1/2 pass is claimed yet; tests and
-measurements use the independent model explicitly rather than counting forward/reversible modes as
-two executors. Slow checks are ignored in the fast front suite and run explicitly by the experiment.
+`experiments/northstar-ladder/README.md`, `front/tests/tests/ladder.rs`: unchanged archived five Int8
+functions and 258-line hashtable, provenance checked against pinned Git blobs. Measured at `5361c71`,
+after the file-runtime rebase. **The C portion of rung 1 and rung 3 pass as worded; rung 2 is not established.**
+
+Scalar domain: 131,840 tuples per compiler input, no exclusions, native O2 and O0/UBSan agree. Across
+clang O0/O2 and both production modes: 527,360 native comparisons, 263,680 exact resets, 9,320,952
+forward steps, zero faults (118.233 s). The independently written whole-world interpreter adds 263,680
+native comparisons and reversals of its own history, zero faults (1,278.459 s). These slow sweeps are
+explicit experiments; two modes of one executor are not counted as two implementations.
+
+The original table's basic/grow at n=0,1,7,64,1000 passes all 40 full i64 production comparisons, native
+O2 versus O0/ASan/UBSan, 195 console bytes/status 0, and two exact full-memory resets. O0/O2:
+804,179/803,586 steps, 15,994,195/15,999,410 journal bytes; both images 2,108,912 memory bytes.
+The independent model times out before the full native-output comparison (debt below); no rung 2 pass
+is claimed. Its unchanged ten-case test remains present, not sampled or weakened.
+
+Musl hello: 13 exact native bytes/status 0, three identical same-executor replays and four full resets
+at each clang level. O0/O2: 3,379/2,917 steps, 68,371/58,357 journal bytes,
+2,108,896/2,106,160 full reset memory bytes. No incorrect C result was observed. These fresh receipts
+supersede the early pre-file-runtime numbers. The runner retains a nonzero acceptance exit for rung 2.
+Final repository checks pass: cargo test 306 passed/16 ignored, full frontend 171 passed/27 ignored,
+clippy and formatting clean; extra frontend clippy and exact discovery of all five ignored acceptance
+stages also pass. The measured 118-second scalar sweep is explicit experiment work, keeping it out of
+the ordinary frontend run without changing its domain or assertions.
 
 ## Known weak spots
 
@@ -958,6 +968,15 @@ two executors. Slow checks are ignored in the fast front suite and run explicitl
   callee slots adds 128 copied bytes but leaves the report unchanged. Ignored witness:
   `region_copy_cost_includes_slots_of_the_frame_where_memory_splits` in `crates/exec/tests/apply_independent.rs`.
 
+- **C North Star rung 2, second-executor coverage is a testing debt.** The independent snapshot
+  interpreter times out at the 120-second diagnostic limit; last checkpoint 2,048 steps/history records,
+  39 overlay bytes, `__libc_start_main` block 1 instruction 0 at 97.296 s. Startup checkpoints at
+  256/512/1,024 steps take 1.534/5.819/24.364 s; it copies accumulated history while stepping. No table
+  case is verified by it. Production's unchanged ten-case native comparison and byte-exact reversal
+  pass, which does not discharge “both executors”. Route: efficient shared/persistent or compact
+  classical history in an independent interpreter, then rerun both compiler inputs and all ten original
+  cases. The resource cap (also 1 GiB address space) is not a semantic fault or an acceptance shortcut;
+  exact command and witness are in `experiments/northstar-ladder/README.md`.
 
 - An entry frame that does not fit in memory: `Executor::new` records `stack_overflow`, but `run` then panics in
   `next_is_rewind` instead of stopping with that fault (found by the SQL oracle's growth; ignored witness
