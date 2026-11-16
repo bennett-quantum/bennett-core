@@ -13,7 +13,7 @@ runs classically, reversibly or coherently. Each piece of plumbing exists once, 
 | `rt` | runtime bitcode: floating point (Berkeley SoftFloat 3e under the libgcc names), the complex helpers (libgcc 13.3.0), built with `front`; the C library (musl) with journalled files, input clock and entropy images | step 3 |
 
 ```sh
-cargo test                                   # the Rust crates, in seconds; needs no LLVM
+cargo test                                   # Rust + guard witnesses, in seconds; Python 3, no LLVM
 cargo run -p bennett -- run examples/thesis.bn
 front/test.sh                                # builds bennett-front, runs its tests (LLVM 18, clang 18, CMake)
 ```
@@ -63,3 +63,5 @@ The C portion of rung 1 passes exhaustively on the declared Int8 functions, and 
 output, exact reset and deterministic tape replay. Rung 2's ten-case production runs pass native agreement
 and byte-exact reversal; its independent interpreter timed out during startup, so the two-executor
 acceptance remains unmeasured. The experiment records the witness, full domains and route to close it.
+
+Repository checks and the optional exact-revision pre-push hook: [docs/CHECKS.md](docs/CHECKS.md).

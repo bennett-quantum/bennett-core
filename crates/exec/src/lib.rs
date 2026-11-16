@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::wildcard_enum_match_arm))]
+
 //! The Bennett executor: runs a [`ValidModule`](bennett_ir::ValidModule) forward, and in reversible mode
 //! backward, over flat byte memory, a frame stack and a sparse quantum state.
 //!

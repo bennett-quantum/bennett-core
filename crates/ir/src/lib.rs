@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::wildcard_enum_match_arm))]
+
 //! The Bennett device program: one data structure, one text reader, one text writer and one validator.
 //!
 //! A [`Module`] comes from [`read`] or is built directly, is checked by [`validate`] into a

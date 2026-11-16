@@ -26,15 +26,11 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use bennett_front_tests::{c_dir, float_runtime, out_dir, root};
+use bennett_front_tests::{c_dir, clang, float_runtime, out_dir, root};
 
 /// The vendored release.
 fn softfloat() -> PathBuf {
     root().join("rt/softfloat/berkeley-softfloat-3e")
-}
-
-fn clang() -> PathBuf {
-    std::env::var_os("CLANG").map_or_else(|| PathBuf::from("clang"), PathBuf::from)
 }
 
 /// The defines of SoftFloat's own `build/Linux-x86_64-GCC/Makefile` (`SOFTFLOAT_OPTS` and the compile

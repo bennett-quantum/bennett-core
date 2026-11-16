@@ -10,5 +10,6 @@ if [ -n "${LLVM_DIR:-}" ]; then
 else
   cmake -S "$root/front" -B "$build" >/dev/null
 fi
-cmake --build "$build" --parallel >/dev/null
+cmake --build "$build" --parallel "${CARGO_BUILD_JOBS:-2}" >/dev/null
+"$build/bennett-front-checks"
 cargo test --manifest-path "$root/Cargo.toml" -p bennett-front-tests "$@"
