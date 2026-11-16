@@ -106,7 +106,10 @@ step ("Worlds", below).
   a journal of the region's own whose first record is the call into its function (the first `mark` of
   `@f` gives 2): a region's result depends on its arguments and memory only, never on the caller's
   history, so `apply` stays its own inverse. A rewind's handle is a mark of its own function (the
-  validator's rule), so no handle of the caller's can be named in a region.
+  validator's rule), so no handle of the caller's can be named in a region. Since 2026-11-16 a handle is
+  opaque (the maintainer's decision, `HANDOFF.md` [A3]): the validator refuses any use of it but by a
+  `rewind`, so its value is the executor's own and no program result can depend on it; how it counts is
+  what the executor matches a rewind's mark by, and could change without changing any program.
 - **`rewind %h keep (v -> r, ...)`** checks, then copies, then un-runs:
   1. It faults with `bad_rewind`, changing nothing, unless `%h` names a mark of the running activation
      that is still in the history (the frame was not left, below its own depth, since the mark), no

@@ -48,12 +48,18 @@ fn strict_fault_uses_the_first_original_configuration() {
     }
 }
 
+// A region that marks and rewinds inside itself. Its handles are opaque (the maintainer's decision of
+// 2026-11-16, `docs/SYNTAX.md`, "History"): the region that returned its mark's value, the witness of F1
+// and F4 before, is refused by the validator (`HANDLE_WITNESS`).
 const MARK_VALUE: &str = r#"
 memory 512
 func @f() -> i64 {
 entry:
     %m = mark
-    ret %m
+    %n = mark
+    rewind %n
+    rewind %m
+    ret 2
 }
 func @main() {
 entry:
@@ -64,8 +70,24 @@ entry:
 }
 "#;
 
+const HANDLE_WITNESS: &str = "memory 512\nfunc @f() -> i64 {\nentry:\n    %m = mark\n    ret %m\n}\n";
+
+fn refused_for_its_handle(text: &str, handle: &str) {
+    match bennett_ir::load(text) {
+        Err(bennett_ir::LoadError::Invalid(errors)) => {
+            assert!(
+                errors.0.iter().all(|e| e.problem == bennett_ir::Problem::HandleUse(handle.into())),
+                "{errors}\n{text}"
+            );
+        }
+        other => panic!("expected the handle %{handle} refused, got {other:?}\n{text}"),
+    }
+}
+
 #[test]
 fn region_mark_values_are_independent_of_the_callers_journal() {
+    // Since handles are opaque nothing a region computes can depend on one: the witness is refused.
+    refused_for_its_handle(HANDLE_WITNESS, "m");
     let module = load(MARK_VALUE);
     for reversible in [false, true] {
         for mode in [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare] {
@@ -406,11 +428,11 @@ fn apply_through_an_ordinary_call_keeps_the_real_caller_frames() {
     }
 }
 
-// DESIGN "History": marks count journal records including their own. This checks the fresh
-// private journal used by enumeration, not the unresolved caller-journal origin of history apply
-// (F1). One entry-call record plus the mark gives 2, regardless of reference snapshot layout.
+// The reference model and branch enumeration agree on a region that marks and rewinds inside itself. (The
+// mark's value, which this compared before handles became opaque, is no longer a program's to see.)
 #[test]
 fn reference_apply_mark_value_matches_branch_enumeration() {
+    refused_for_its_handle(HANDLE_WITNESS, "m");
     let p = load(MARK_VALUE);
     let model = oracle_support::worlds::Model::new(&p, "main");
     let reference = model.run_joined(oracle_support::worlds::basis(model.initial("main", &[])), 20);
@@ -438,7 +460,10 @@ memory 2048
 func @leaf(i2 %x) -> i64 {{
 entry:
     %m = mark
-    ret %m
+    store i2 %x, 8
+    rewind %m
+    %r = zext i2 %x to i64
+    ret %r
 }}
 func @f(i2 %x) -> i64 {{
 entry:
@@ -486,18 +511,22 @@ entry:
 
 #[test]
 fn fresh_region_mark_numbers_can_be_returned_stored_branched_on_and_called() {
-    // These absolute numbers select the private fresh-journal definition, just like the F4
-    // witness above. They do not decide F1's unresolved origin for History/Compare.
-    let cases = [
-        ("%m = mark\nret %m", 2),
-        ("%m = mark\nstore i64 %m, 0\n%r = load i64 0\nret %r", 2),
-        ("%m = mark\n%ok = icmp eq i64 %m, 2\nbr %ok, yes, no\nyes:\nret 37\nno:\nret 99", 37),
-        ("%r = call @leaf(%x)\nret %r", 3),
-    ];
-    let runs: usize =
-        cases.into_iter().map(|(body, n)| mark_observation_case(body, [n; 4], &[ApplyMode::Branches])).sum();
-    assert_eq!(runs, 16);
-    println!("{runs} fresh-journal mark observations, four configurations each, with analytic answers and reversal");
+    // Before handles became opaque (2026-11-16) these bodies observed the private fresh-journal numbering.
+    // Now each is refused by name; the region's marks and rewinds still run, in a callee as well.
+    for body in [
+        "%m = mark\nret %m",
+        "%m = mark\nstore i64 %m, 0\n%r = load i64 0\nret %r",
+        "%m = mark\n%ok = icmp eq i64 %m, 2\nbr %ok, yes, no\nyes:\nret 37\nno:\nret 99",
+        "%m = mark\n%r = call @g(%m)\nret %r",
+    ] {
+        let text = format!(
+            "memory 512\nfunc @g(i64 %v) -> i64 {{\nentry:\nret %v\n}}\nfunc @f(i2 %x) -> i64 {{\nentry:\n{body}\n}}\n"
+        );
+        refused_for_its_handle(&text, "m");
+    }
+    let runs = mark_observation_case("%r = call @leaf(%x)\nret %r", [0, 1, 2, 3], &[ApplyMode::Branches]);
+    assert_eq!(runs, 4);
+    println!("{runs} runs of a region whose callee marks and rewinds, four configurations each, reversed");
 }
 
 #[test]
@@ -505,15 +534,17 @@ fn relative_region_mark_numbers_match_all_modes_through_rewind_and_replay() {
     // DESIGN History/Worlds: calls, returns, jumps, marks and rewinds are journalled steps.
     // Subtract marks so the caller's journal origin cancels. Rewinding retains the mark and
     // replaces everything after it with one rewind record; undoing an inner rewind replays it.
+    // Since handles are opaque the bodies return a value of x, not a difference of marks (which the
+    // validator refuses, above); the marks, rewinds and replays are the same.
     let cases = [
-        ("%m = mark\nstore i2 %x, 0\nrewind %m\n%n = mark\n%d = sub i64 %n, %m\nret %d", [2; 4]),
-        ("%m = mark\n%n = mark\nrewind %n\nrewind %m\n%p = mark\n%d = sub i64 %p, %m\nret %d", [2; 4]),
-        ("%m = mark\nrewind %m\nrewind %m\n%n = mark\n%d = sub i64 %n, %m\nret %d", [2; 4]),
-        ("%m = mark\n%n = call @leaf(%x)\n%d = sub i64 %n, %m\nret %d", [2; 4]),
-        ("%p = faddr @leaf\n%m = mark\n%n = call_indirect fn(i2) -> i64 %p(%x)\n%d = sub i64 %n, %m\nret %d", [2; 4]),
+        ("%m = mark\nstore i2 %x, 0\nrewind %m\n%n = mark\n%d = zext i2 %x to i64\nret %d", [0, 1, 2, 3]),
+        ("%m = mark\n%n = mark\nrewind %n\nrewind %m\n%p = mark\n%d = zext i2 %x to i64\nret %d", [0, 1, 2, 3]),
+        ("%m = mark\nrewind %m\nrewind %m\n%n = mark\n%d = zext i2 %x to i64\nret %d", [0, 1, 2, 3]),
+        ("%m = mark\n%n = call @leaf(%x)\n%d = add i64 %n, 1\nret %d", [1, 2, 3, 4]),
+        ("%p = faddr @leaf\n%m = mark\n%n = call_indirect fn(i2) -> i64 %p(%x)\nret %n", [0, 1, 2, 3]),
         (
-            "%m = mark\n%zero = icmp eq i2 %x, 0\nbr %zero, short, long\nshort:\nbr join\nlong:\nstore i2 %x, 0\nbr join\njoin:\n%n = mark\n%d = sub i64 %n, %m\nret %d",
-            [4, 5, 5, 5],
+            "%m = mark\n%zero = icmp eq i2 %x, 0\nbr %zero, short, long\nshort:\nbr join\nlong:\nstore i2 %x, 0\nbr join\njoin:\n%n = mark\n%v = load i8 0\n%d = zext i8 %v to i64\nret %d",
+            [0, 1, 2, 3],
         ),
     ];
     let modes = [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare];
@@ -522,25 +553,26 @@ fn relative_region_mark_numbers_match_all_modes_through_rewind_and_replay() {
     println!("{runs} origin-independent mark observations, four configurations each, all apply modes and reversal");
 }
 
-// The whole class of F1: what the region's function observes of its history (the values of its marks; a
-// rewind's handle is a mark of its own function, the validator's rule, so no handle of the caller's can be
-// named) is that of a run on a journal of its own, whose first record is
-// the call (`docs/DESIGN.md`, "History"), never the caller's. Each body runs after caller prefixes that
+// The whole class of F1: what the region's function observes of its history is that of a run on a journal
+// of its own, whose first record is the call (`docs/DESIGN.md`, "History"), never the caller's. Since
+// handles are opaque (2026-11-16) it observes no mark's value at all (the validator's `HandleUse`); the
+// bodies keep the marks, rewinds, splits and callees that made those values differ and return values of
+// their arguments and memory. Each body runs after caller prefixes that
 // journal different amounts (gates, marks, an earlier `apply`, a split of worlds) in each mode, reversible or
 // not; the state must not depend on the prefix or the mode, an `apply` twice must be no `apply`, and every
 // reversible run must reverse to its entry.
 const REGION_BODIES: &[&str] = &[
-    // The witness: a mark's value.
-    "    %m = mark\n    ret %m\n",
+    // A mark, then a constant.
+    "    %m = mark\n    ret 2\n",
     // Nested marks, a rewind of the inner one, a mark after it.
-    "    %m1 = mark\n    %m2 = mark\n    %y = add i64 %m1, 100\n    rewind %m2\n    %m3 = mark\n    %s = shl i64 %m3, 8\n    %r = or i64 %s, %m1\n    ret %r\n",
+    "    %m1 = mark\n    %m2 = mark\n    store i8 100, 8\n    rewind %m2\n    %m3 = mark\n    %x64 = zext i2 %x to i64\n    %s = shl i64 %x64, 8\n    %r = or i64 %s, 2\n    ret %r\n",
     // A load of a qubit in memory (a split in history, private memory in the enumeration), paths of
     // different lengths, then a mark.
-    "    %a = load i8 0\n    %c = icmp eq i8 %a, 0\n    br %c, p, q\np:\n    %u = add i8 %a, 1\n    br q\nq:\n    %m = mark\n    %x64 = zext i2 %x to i64\n    %r = add i64 %m, %x64\n    ret %r\n",
+    "    %a = load i8 0\n    %c = icmp eq i8 %a, 0\n    br %c, p, q\np:\n    %u = add i8 %a, 1\n    br q\nq:\n    %m = mark\n    %x64 = zext i2 %x to i64\n    %a64 = zext i8 %a to i64\n    %r = add i64 %a64, %x64\n    ret %r\n",
     // A mark in a callee of the region.
     "    %k = zext i2 %x to i64\n    %r = call @g(%k)\n    ret %r\n",
-    // A mark and its rewind on one path only, then a mark: the second mark's value differs by path.
-    "    %c = icmp eq i2 %x, 1\n    br %c, p, q\np:\n    %m = mark\n    %y = add i2 %x, 1\n    rewind %m\n    br q\nq:\n    %n = mark\n    ret %n\n",
+    // A mark and its rewind on one path only, then a mark (its value, unseen now, differs by path).
+    "    %c = icmp eq i2 %x, 1\n    br %c, p, q\np:\n    %m = mark\n    store i2 %x, 8\n    rewind %m\n    br q\nq:\n    %n = mark\n    %v = load i8 8\n    %r = zext i8 %v to i64\n    ret %r\n",
 ];
 
 const REGION_PREFIXES: &[&str] = &[
@@ -562,7 +594,7 @@ entry:
 func @g(i64 %k) -> i64 {{
 entry:
     %m = mark
-    %r = add i64 %m, %k
+    %r = add i64 %k, 4
     ret %r
 }}
 func @f(i2 %x) -> i64 {{
@@ -626,16 +658,19 @@ fn what_a_region_sees_of_its_history_does_not_depend_on_the_caller() {
     }
 }
 
-// The mark values of the bodies above, by the documents' count (records up to and including the mark's
-// own, from the region's start, the call into `@f` the first): an analytic check of the numbering itself.
+// The results of the bodies above, analytically, after every prefix. (This checked the marks' values by
+// the documents' count before handles became opaque; that count is now the executor's own, unseen by a
+// program, and `public_marks_count_reading_calls_once_even_with_repeated_register_arguments` checks it in
+// the executor's slots, outside a region.)
 #[test]
 fn region_mark_values_count_from_the_call_into_the_region() {
-    // Body 1: m1 = 2 (call, mark); m2 = 3; after `rewind %m2` (un-runs the add) the rewind is record 4 and
-    // m3 = 5: (5 << 8) | 2.
-    // Body 3: the call into @f, the zext, the call into @g, then its mark: 4, plus the argument.
-    for (body, expected) in
-        [(REGION_BODIES[0], [2; 4]), (REGION_BODIES[1], [5 << 8 | 2; 4]), (REGION_BODIES[3], [4, 5, 6, 7])]
-    {
+    // Body 4: the store on the path x = 1 is un-run, so memory at 8 is 0 on every path.
+    for (body, expected) in [
+        (REGION_BODIES[0], [2; 4]),
+        (REGION_BODIES[1], [2, 1 << 8 | 2, 2 << 8 | 2, 3 << 8 | 2]),
+        (REGION_BODIES[3], [4, 5, 6, 7]),
+        (REGION_BODIES[4], [0; 4]),
+    ] {
         for prefix in REGION_PREFIXES {
             let state = final_state(&region_program(body, prefix, 1), ApplyMode::History, true);
             // Columns: the cell, x, t, te, o, e.

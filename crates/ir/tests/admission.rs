@@ -35,6 +35,8 @@ fn malformed_programs_have_the_expected_validation_problem() {
         ("%q = qalloc 1\nh %q[1]\nret 0", Problem::QubitOutOfRange { bit: 1, bits: 1 }),
         ("%q = qalloc 1\nx %q[0] ctrl %q[0]\nret 0", Problem::RepeatedQubit("q".into(), 0)),
         ("%v = add i64 0, 0\nrewind %v\nret 0", Problem::NotAMark("v".into())),
+        // Mark handles are opaque (2026-11-16): only a rewind may use one.
+        ("%m = mark\n%v = add i64 %m, 1\nrewind %m\nret 0", Problem::HandleUse("m".into())),
     ] {
         for prefix in ["", "func @main() -> i8 {\nentry:\nret 0\n}\n"] {
             let text = format!("{prefix}{}", program(body));

@@ -694,7 +694,8 @@ The machine:
   `longjmp` that finds no valid record, also one held in qubits that disagree [M3], is `bad_longjmp` (16);
   `bad_indirect` (4) is a call target again.
 - **Inside a region the worlds run one after another and merge at its end** [A2]: kept.
-- **Mark handles are opaque** [A3]: the validator refuses any use of a handle but `rewind`.
+- **Mark handles are opaque** [A3]: the validator refuses any use of a handle but `rewind`. Built: the
+  validator's `HandleUse` (`crates/ir/tests/history_rules.rs`).
 - **A keep into memory needs bytes that hold qubits since before the mark** [M1]: kept.
 - **A `longjmp` whose record is held in qubits that disagree** [M3] stays a fault; a debt.
 - **A rewind across a measurement** [(3)] stays a fault.

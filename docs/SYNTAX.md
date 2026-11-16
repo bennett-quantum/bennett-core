@@ -40,7 +40,7 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | (rx | ry | rz)(ANGLE) qubit [ctrl ...]     ; radians
             | %d = measure %r
             | apply @f(typed, ...) -> %out, %fault budget operand  ; %fault: a register of 5 qubits or more
-            | %d = mark                                  ; an i64 handle for rewind
+            | %d = mark                                  ; an opaque i64 handle: only rewind may use it
             | rewind %h [keep (typed -> kept {, typed -> kept})]  ; XOR each value in, un-run since %h
 kept       := %r | "[" operand "]"                ; a register, or memory qubits from bit 0 of the address
 terminator := br label[(typed, ...)]
@@ -126,6 +126,9 @@ done(i64 %sum):
 step since that point and the program continues after the rewind; `rewind %h keep (%v -> %r, i2 1 -> %s)`
 first XORs each value into its register, in order. `%h` must be the result of a `mark` in the same
 function (the validator's `NotAMark`), not a value derived from one or passed through a block parameter.
+A handle is opaque (decided 2026-11-16): the validator refuses every use of it but as the handle a `rewind`
+names (`HandleUse`), so it is never computed with, compared, stored, passed, returned, kept or branched on,
+and no result of a program depends on its value.
 Each kept value is an integer exactly as wide as its register (a typed constant names its width); keeping
 a register's value is not accepted. `keep` with an empty list is not accepted: write `rewind %h`. The
 meaning, and when a rewind faults (`bad_rewind`), is in `docs/DESIGN.md`, "History: `mark` and `rewind`".

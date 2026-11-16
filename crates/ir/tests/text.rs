@@ -285,10 +285,14 @@ fn mark_and_rewind_read_write_and_validate() {
         [Problem::TypeMismatch { .. }]
     ));
     assert!(matches!(problems(&body(" rewind %h\n %h = mark")).as_slice(), [Problem::NotDominated(_)]));
-    // A handle is an i64 like any other value: it may be compared, but only a mark's own slot rewinds.
-    assert!(load(&body(" %h = mark\n %same = icmp eq i64 %h, %n\n rewind %h")).is_ok());
+    // A handle is opaque since 2026-11-16 (it could be compared before): only a rewind may use it, and only a
+    // mark's own slot rewinds (more in `history_rules.rs`).
+    assert_eq!(
+        problems(&body(" %h = mark\n %same = icmp eq i64 %h, %n\n rewind %h")),
+        vec![Problem::HandleUse("h".into())]
+    );
     let text = "func @f() {\nentry:\n %h = mark\n br next(%h)\nnext(i64 %k):\n rewind %k\n ret\n}\n";
-    assert_eq!(problems(text), vec![Problem::NotAMark("k".into())]);
+    assert_eq!(problems(text), vec![Problem::NotAMark("k".into()), Problem::HandleUse("h".into())]);
 }
 
 /// A call may pass a register to an integer parameter of its width: ordinary code reads the register as an

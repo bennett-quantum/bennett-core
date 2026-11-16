@@ -85,6 +85,9 @@ fn initial_worlds_split_classical_calls_and_keep_history_distinct() {
     }
 }
 
+/// The executor's count of journal records in a mark's handle, checked in the reference model's slots: a
+/// handle is opaque to programs since 2026-11-16 (the validator refuses any use but `rewind`), so the count is
+/// read from the machine state, not from a value the program computes.
 #[test]
 fn public_marks_count_reading_calls_once_even_with_repeated_register_arguments() {
     for call in ["call @read(%q, %q)", "call_indirect fn(i1, i1) -> i64 %p(%q, %q)"] {
@@ -94,7 +97,7 @@ memory 512
 func @read(i1 %a, i1 %b) -> i64 {{
 entry:
     %h = mark
-    ret %h
+    ret 0
 }}
 func @identity(i64 %v) -> i64 {{
 entry:
@@ -110,24 +113,39 @@ entry:
     %r = {call}
     store i64 %r, 0
     %n = mark
-    %span = sub i64 %n, %m
-    rewind %m keep (%span -> %out)
+    rewind %m keep (i64 5 -> %out)
     %result = call @identity(%out)
     ret %result
 }}
 "#
         );
         let p = bennett_ir::load(&text).expect("public mark fixture");
+        let slot = |function: &str, name: &str| {
+            let function = p.function(p.function_named(function).expect("function"));
+            function.slot_names.iter().position(|n| n == name).expect("slot")
+        };
+        let handle = |w: &oracle_support::worlds::World, frame: usize, index: usize| {
+            let Value::Int(n) = w.classical.slots[w.classical.frames[frame].base + index] else { panic!("integer") };
+            n
+        };
         let model = Model::new(&p, "main");
         let initial = basis(model.initial("main", &[]));
         let mut prefix = initial.clone();
-        for _ in 0..11 {
+        for steps in 1..=10 {
             prefix = model.step(&prefix);
-        }
-        for w in prefix.keys() {
-            // Five caller steps, call, callee mark = 7. Both read annotations belong to
-            // that one call step; call/mark/ret/store/mark gives a span of five records.
-            assert_eq!(&model.memory(w)[..8], &7_u64.to_le_bytes());
+            for w in prefix.keys() {
+                match steps {
+                    // Five caller steps, call, callee mark = 7. Both read annotations belong to that one call
+                    // step.
+                    7 => assert_eq!(handle(w, 1, slot("read", "h")), 7),
+                    // call/mark/ret/store/mark gives a span of five records.
+                    10 => {
+                        assert_eq!(handle(w, 0, slot("main", "m")), 5);
+                        assert_eq!(handle(w, 0, slot("main", "n")), 10);
+                    }
+                    _ => {}
+                }
+            }
         }
         let state = model.run_joined(initial.clone(), 30);
         for w in state.keys() {

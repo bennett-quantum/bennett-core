@@ -5,7 +5,8 @@ use petgraph::graph::{DiGraph, NodeIndex};
 
 use super::error::{Expected, Location, Problem, ValidationError};
 use crate::{
-    CastOp, Fault, Function, Gate, Inst, MEMORY_QUBIT_BITS, Module, Operand, Place, Slot, Terminator, Type, Width,
+    CastOp, Fault, Function, Gate, Inst, KeepTarget, MEMORY_QUBIT_BITS, Module, Operand, Place, Slot, Terminator, Type,
+    Width,
 };
 
 /// Checks `function`, appending what is wrong to `errors`, and returns the type of every slot. The types
@@ -19,6 +20,7 @@ pub(super) fn check(module: &Module, function: &Function, errors: &mut Vec<Valid
     checker.definitions();
     checker.undefined_uses();
     checker.operand_types();
+    checker.handle_uses();
     checker.dominance();
     checker.types.into_iter().map(|ty| ty.unwrap_or(Type::Int(Width::WORD))).collect()
 }
@@ -284,12 +286,12 @@ impl<'a> Checker<'a> {
                 self.rewind_mark(site, *mark);
                 for pair in keep {
                     match pair.target {
-                        crate::KeepTarget::Register(register) => {
+                        KeepTarget::Register(register) => {
                             if let Some(width) = self.register_width(site, register) {
                                 self.expect(site, pair.value, Type::Int(width));
                             }
                         }
-                        crate::KeepTarget::Memory(address) => {
+                        KeepTarget::Memory(address) => {
                             self.expect(site, address, Type::Int(Width::WORD));
                             self.expect_integer(site, pair.value);
                         }
@@ -306,13 +308,73 @@ impl<'a> Checker<'a> {
 
     /// Reports `mark` unless a `mark` instruction of this function defines it.
     fn rewind_mark(&mut self, site: Site, mark: Slot) {
-        let Some(def) = self.defs[mark.index()] else { return };
-        let block = &self.function.blocks[def.block];
-        let is_mark = def.position > 0 && matches!(block.insts[def.position - 1], Inst::Mark { .. });
-        if !is_mark {
+        if self.defs[mark.index()].is_some() && !self.is_handle(mark) {
             let name = self.slot_name(mark);
             self.error(site, Problem::NotAMark(name));
         }
+    }
+
+    /// Reports every use of a mark's handle except as the handle a `rewind` names: handles are opaque
+    /// (`docs/SYNTAX.md`, "History"), so no value a program computes can depend on one.
+    fn handle_uses(&mut self) {
+        let function = self.function;
+        let mut uses = Vec::new();
+        for (b, block) in function.blocks.iter().enumerate() {
+            for (i, inst) in block.insts.iter().enumerate() {
+                let site = Site::Inst(b, i);
+                match inst {
+                    Inst::Rewind { keep, .. } => {
+                        for pair in keep {
+                            let target = match pair.target {
+                                KeepTarget::Register(register) => Operand::Slot(register),
+                                KeepTarget::Memory(address) => address,
+                            };
+                            for operand in [pair.value, target] {
+                                if let Operand::Slot(slot) = operand {
+                                    uses.push((site, slot));
+                                }
+                            }
+                        }
+                    }
+                    Inst::Binary { .. }
+                    | Inst::Compare { .. }
+                    | Inst::Select { .. }
+                    | Inst::Cast { .. }
+                    | Inst::Load { .. }
+                    | Inst::Store { .. }
+                    | Inst::Alloca { .. }
+                    | Inst::StackSave { .. }
+                    | Inst::StackRestore { .. }
+                    | Inst::Setjmp { .. }
+                    | Inst::ReturnAddress { .. }
+                    | Inst::Call { .. }
+                    | Inst::CallIndirect { .. }
+                    | Inst::FuncAddr { .. }
+                    | Inst::Effect { .. }
+                    | Inst::Qalloc { .. }
+                    | Inst::Qfree { .. }
+                    | Inst::Gate { .. }
+                    | Inst::GateAt { .. }
+                    | Inst::Measure { .. }
+                    | Inst::Apply { .. }
+                    | Inst::Mark { .. } => inst.visit_uses(|slot| uses.push((site, slot))),
+                }
+            }
+            block.term.visit_uses(|slot| uses.push((Site::Terminator(b), slot)));
+        }
+        for (site, slot) in uses {
+            if self.is_handle(slot) {
+                let name = self.slot_name(slot);
+                self.error(site, Problem::HandleUse(name));
+            }
+        }
+    }
+
+    /// Whether a `mark` of this function defines `slot`.
+    fn is_handle(&self, slot: Slot) -> bool {
+        self.defs[slot.index()].is_some_and(|def| {
+            def.position > 0 && matches!(self.function.blocks[def.block].insts[def.position - 1], Inst::Mark { .. })
+        })
     }
 
     /// Checks a gate's qubits, the target first. A memory qubit's address is an `i64`; the same address

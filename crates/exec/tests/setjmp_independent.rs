@@ -122,10 +122,10 @@ entry:
     effect 88
     longjmp %b, 7
 }
-func @work(i64 %h, i64 %buf) -> i32 {
+func @work(i64 %buf) -> i32 {
 entry:
     %local = mark
-    store i64 %local, 16
+    store i64 4660, 16
     %r = setjmp %buf
     %first = icmp eq i32 %r, 0
     br %first, go, done
@@ -140,7 +140,7 @@ entry:
     %sp = stacksave
     %h = mark
     %buf = alloca 32
-    %v = call @work(%h, %buf)
+    %v = call @work(%buf)
     rewind %h
     %after = stacksave
     %dirty = load i64 16
