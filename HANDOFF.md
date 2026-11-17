@@ -1301,13 +1301,13 @@ the ordinary frontend run without changing its domain or assertions.
 
 ## Known weak spots
 
-- Independent conformance testing of the noncanonical x87/input fixes: `front/tests/tests/p0_independent.rs`
-  has ignored defect witnesses for `isfinite`/`isnan` differing at clang `-O0` (the same classification
-  witnesses pass at `-O2`). Fixed on 2026-11-17, their witnesses run by default: `powi(x, 1)` returns
+- Independent conformance testing of the noncanonical x87/input fixes (`front/tests/tests/p0_independent.rs`):
+  its five wrong results were fixed on 2026-11-17 and their witnesses run by default: `powi(x, 1)` returns
   noncanonical encodings unchanged, as libgcc does; `roundevenl` follows glibc's software bit operations on
-  them (every sign and exponent compared natively). Route: make the front's classification
-  follow the native x87 comparison where clang emits one. The already documented `roundl` and half/bfloat
-  software conversion differences now have minimal ignored witnesses too. All witnesses were run and failed.
+  them (every sign and exponent compared natively); `is.fpclass` follows LLVM's x86-64 expansion mask by
+  mask (`isfinite`/`isnan` at `-O0`; all 1,024 masks compared natively, `fp_class.rs`). The already
+  documented `roundl` and half/bfloat software conversion differences have minimal ignored witnesses, run and
+  observed failing.
   Exact coverage and excluded cases: `rt/softfloat/README.md`, "Independent conformance pass".
 - Front input admission still has three gaps (`front/tests/tests/p0_invalid_input.rs`, ignored witnesses,
   each run and observed failing): ordinary syntax errors exit 2 but omit "the input is not valid LLVM IR";

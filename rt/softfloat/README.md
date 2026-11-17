@@ -132,8 +132,8 @@ are exact, including NaN bits and excluding the six ABI padding bytes.
   **139,264 floating-source conversions** (every half/bfloat encoding; double samples in every exponent).
 - `p0_x87_pipeline.c`: **4,640 results per level**, including negation/fabs/copysign, narrow integers,
   lrint/llrint, all ordered/unordered comparison combinations, classification masks and arithmetic after
-  min/max/add. At O0, only the two witnessed predicate bits are excluded in fourteen noncanonical aggregate
-  classification cases; the other predicate bits are checked. Ten noncanonical half-conversion cases are
+  min/max/add. Every classification bit is compared at both levels (until the fix below, O0 excluded the
+  two witnessed predicate bits in fourteen noncanonical classification cases). Ten noncanonical half-conversion cases are
   excluded by explicit operation/operand identity and have a minimal witness. Twelve undefined NaN/unsupported
   to-u64 cases at O2 are measured separately: native gives 2^63, the device gives 0 (the native O0 result).
   This is recorded target behavior, not counted as conformance or as a defined-C defect.
@@ -151,8 +151,8 @@ before asserting, so a failure at the first level does not hide the second.
 | `powi_one_preserves_a_pseudo_denormal_encoding` | `powi(x,1)`: native preserves exponent 0, runtime changed it to 1 | Fixed (below); runs by default |
 | `powi_one_preserves_an_unsupported_encoding` | Native returns the unsupported argument unchanged; runtime replaced it with indefinite | Fixed (below); runs by default |
 | `roundeven_of_an_unnormal_matches_native_software` | For exponent 1/significand 1, glibc returns +0, runtime NaN; adding 1 preserves the difference | Fixed (below); runs by default |
-| `a_pseudo_denormal_is_finite` | Native true, device false at O0; O2 agrees | Medium; wrong branch predicate |
-| `an_unsupported_encoding_is_nan` | Native true, device false at O0; O2 agrees | Medium; wrong branch predicate |
+| `a_pseudo_denormal_is_finite` | Native true, device false at O0; O2 agrees | Fixed (below); runs by default |
+| `an_unsupported_encoding_is_nan` | Native true, device false at O0; O2 agrees | Fixed (below); runs by default |
 
 The expected `powi` bits follow native libgcc's exponent-1 path, which returns without arithmetic.
 **Fixed:** `__powixf2` read its argument as x87 does at entry, so `powi(x, 1)` returned the canonical
@@ -174,8 +174,19 @@ glibc's quirks included: an unnormal at exponent 0x3FFE whose low 32 significand
 now meets `roundevenl` on all 354 inputs (2,388,177 checks). Dropping the low-word half of the 0x3FFE test
 gives 26 differences. Cost: 44 steps on `float_long_double.c` at each level (2,119,666 and 1,843,084),
 `float_long_double_programs.c` unchanged. Native aggregate classification uses
-x87 comparisons at O0 where the front's bit classification has different answers. The individual
-`is.fpclass` masks and `fpclassify` are retained as passing probes, not conflated with those C predicates.
+x87 comparisons at O0 where the front's bit classification has different answers. **Fixed:** at `-O0`
+clang emits `llvm.is.fpclass`, which LLVM's x86-64 back end expands mask by mask
+(`TargetLowering::expandIS_FPCLASS`): for long double, "zero or subnormal" is "the exponent is 0" (a
+pseudo-denormal is finite), "NaN" outside `strictfp` is an x87 comparison (an unsupported encoding is
+unordered) and inside it a bit test that also takes in pseudo-denormals, and the masks it inverts first
+(LLVM's `invertFPClassTestIfSimpler`) follow suit. The front tested class by class with "no class" for
+every noncanonical encoding. It now follows the expansion (`front/src/FpClass.h`, called with LLVM's own
+inversion), and `front/tests/tests/fp_class.rs` compares all 1,024 masks on 48 encodings (every class, both
+signs) with and without `strictfp` against clang's native code: 98,304 bits, 13,932 of them different with
+the old front, none now. Its encodings are integers in memory: LLVM's constant folder rewrites a
+noncanonical `x86_fp80` constant (a pseudo-denormal constant comes out with exponent 1), which hid the
+pseudo-denormal cases in a first version of the probe. Cost on `float_long_double.c`: 2,119,666 to
+2,119,578 steps at `-O0`, 1,843,084 to 1,843,216 at `-O2`; `float_long_double_programs.c` unchanged.
 The already documented `roundl`, half and bfloat software differences each now have a minimal ignored
 witness too (`round_of_an_unnormal_matches_native_software`, `half_conversion_of_an_unnormal_matches_native_software`,
 `bfloat_conversion_of_an_unnormal_matches_native_software`): exponent 1/significand 1 becomes zero

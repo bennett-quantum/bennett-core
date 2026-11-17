@@ -103,17 +103,6 @@ fn raw_encodings_survive_the_complete_pipeline_at_both_optimization_levels() {
         for (i, expected) in expected.iter().enumerate() {
             let unary_op = i / 20;
             let operand = i % 20;
-            // Noncanonical aggregate class tests have minimal ignored witnesses below. Canonical
-            // classifications, explicit per-class masks and fpclassify remain in this passing sweep.
-            if unary_op == 21 && operand < 14 && opt == "-O0" {
-                let Outcome::Returned(Some(actual)) = run(&module, "result", &[i as u64], 0) else {
-                    panic!("classification did not return");
-                };
-                // Only isnan (bit 0) and isfinite (bit 2) are known defects. Check every other
-                // predicate here so that those witnesses cannot hide a different classification bug.
-                assert_eq!(actual & !5, expected & !5, "{opt} class {operand}: {actual:x} versus {expected:x}");
-                continue;
-            }
             // Native libgcc half conversion reads noncanonical bits in software (existing debt).
             // The remaining half conversions and reuse of their results are compared exactly.
             if unary_op == 30 && (4..14).contains(&operand) {
@@ -137,13 +126,11 @@ fn raw_encodings_survive_the_complete_pipeline_at_both_optimization_levels() {
 }
 
 #[test]
-#[ignore = "defect: isfinite returns false for an x87 pseudo-denormal that native treats as finite"]
 fn a_pseudo_denormal_is_finite() {
     witness("pseudo_is_finite");
 }
 
 #[test]
-#[ignore = "defect: isnan returns false for an unsupported x87 encoding that native treats as NaN"]
 fn an_unsupported_encoding_is_nan() {
     witness("unnormal_is_nan");
 }

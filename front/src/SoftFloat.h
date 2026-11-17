@@ -10,10 +10,11 @@
 //    back end would use, which decides what an out-of-range value gives. Comparisons follow
 //    TargetLowering::softenSetCCOperands: which calls each `fcmp` predicate needs, and how their results
 //    are compared with 0. `fneg`, `fabs`, `copysign` and `is.fpclass` are bit operations, written
-//    inline; `fmuladd` is a multiplication and an addition, unfused, as x86-64 without FMA computes it
-//    natively; `minimum`, `maximum`, `lrint` and `lround` are compositions. Vector operations are done
-//    element by element. `half` (_Float16) and `bfloat` (__bf16) are computed as LLVM's x86-64 back end
-//    computes them without half-precision hardware: each operation in float, rounded back to the type
+//    inline (`is.fpclass` as LLVM's x86-64 back end expands it, `FpClass.h`); `fmuladd` is a
+//    multiplication and an addition, unfused, as x86-64 without FMA computes it natively; `minimum`,
+//    `maximum`, `lrint` and `lround` are compositions. Vector operations are done element by element.
+//    `half` (_Float16) and `bfloat` (__bf16) are computed as LLVM's x86-64 back end computes them without
+//    half-precision hardware: each operation in float, rounded back to the type
 //    after it (`fneg` and `fabs` included; `copysign` and `is.fpclass` stay bit operations), through
 //    libgcc's conversion routines (`__extendhfsf2`, `__truncdfbf2`, ...); `bfloat` to float is a shift.
 // 2. The runtime functions the program needs are linked from a bitcode file that defines the interface

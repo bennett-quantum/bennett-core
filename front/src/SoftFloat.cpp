@@ -1,6 +1,7 @@
 #include "SoftFloat.h"
 
 #include "Diagnostic.h"
+#include "FpClass.h"
 #include "Markers.h"
 #include "Normalise.h"
 
@@ -535,57 +536,6 @@ private:
     return call(b, name, to, {extended}, at);
   }
 
-  // llvm.is.fpclass(x, mask) on the bits of x: bit 0 signalling NaN, 1 quiet NaN, 2 -inf, 3 -normal,
-  // 4 -subnormal, 5 -0, 6 +0, 7 +subnormal, 8 +normal, 9 +inf.
-  Value *fpClass(IRBuilder<> &b, Value *x, uint64_t mask) {
-    Type *type = x->getType();
-    const fltSemantics &semantics = type->getFltSemantics();
-    unsigned width = type->getPrimitiveSizeInBits();
-    unsigned fraction = APFloat::semanticsPrecision(semantics) - 1;
-    Value *value = bits(b, x);
-    auto constant = [&](const APInt &v) { return ConstantInt::get(value->getType(), v); };
-    APInt sign = APInt::getSignMask(width);
-    APInt infinity = APInt::getBitsSet(width, fraction, width - 1);
-    APInt quiet = APInt::getOneBitSet(width, fraction - 1);
-    Value *magnitude = b.CreateAnd(value, constant(~sign));
-    Value *negative = b.CreateICmpSLT(value, constant(APInt::getZero(width)));
-    Value *positive = b.CreateNot(negative);
-    Value *isInfinity = b.CreateICmpEQ(magnitude, constant(infinity));
-    Value *isNaN = b.CreateICmpUGT(magnitude, constant(infinity));
-    Value *isQuiet = b.CreateICmpUGE(magnitude, constant(infinity | quiet));
-    Value *isZero = b.CreateICmpEQ(magnitude, constant(APInt::getZero(width)));
-    Value *isSubnormal = b.CreateAnd(b.CreateNot(isZero),
-                                     b.CreateICmpULT(magnitude, constant(APInt::getOneBitSet(width, fraction))));
-    Value *isNormal = b.CreateAnd(b.CreateICmpUGE(magnitude, constant(APInt::getOneBitSet(width, fraction))),
-                                  b.CreateICmpULT(magnitude, constant(infinity)));
-    if (type->isX86_FP80Ty()) {
-      // x87's explicit integer bit (bit 63): set in every normal number, which has an exponent from 1 to
-      // 0x7FFE (bits 64 to 78). Without it (an unnormal, a pseudo-infinity, a pseudo-NaN), or with it and
-      // a zero exponent (a pseudo-denormal), an encoding is in no class, as LLVM's x86 expansion of
-      // is.fpclass decides class by class; no arithmetic produces one.
-      APInt exponentOne = APInt::getOneBitSet(width, 64);
-      Value *integer = b.CreateICmpNE(b.CreateAnd(value, constant(APInt::getOneBitSet(width, 63))),
-                                      constant(APInt::getZero(width)));
-      isNormal = b.CreateAnd(b.CreateICmpULT(b.CreateSub(magnitude, constant(exponentOne)),
-                                             constant(APInt::getBitsSet(width, 64, 79) - exponentOne)),
-                             integer);
-    }
-    Value *classes[10] = {
-        b.CreateAnd(isNaN, b.CreateNot(isQuiet)), isQuiet,
-        b.CreateAnd(isInfinity, negative),        b.CreateAnd(isNormal, negative),
-        b.CreateAnd(isSubnormal, negative),       b.CreateAnd(isZero, negative),
-        b.CreateAnd(isZero, positive),            b.CreateAnd(isSubnormal, positive),
-        b.CreateAnd(isNormal, positive),          b.CreateAnd(isInfinity, positive),
-    };
-    Value *result = b.getFalse();
-    for (unsigned i = 0; i < 10; ++i) {
-      if (mask & (uint64_t(1) << i)) {
-        result = b.CreateOr(result, classes[i]);
-      }
-    }
-    return result;
-  }
-
   Value *lowerIntrinsic(IntrinsicInst *call) {
     IRBuilder<> b(call);
     Intrinsic::ID id = call->getIntrinsicID();
@@ -630,7 +580,8 @@ private:
       break;
     }
     case Intrinsic::is_fpclass:
-      replacement = fpClass(b, x, cast<ConstantInt>(call->getArgOperand(1))->getZExtValue());
+      replacement = classTest(b, bits(b, x), x->getType(), cast<ConstantInt>(call->getArgOperand(1))->getZExtValue(),
+                              call->getFunction()->hasFnAttribute(Attribute::StrictFP));
       break;
     case Intrinsic::arithmetic_fence:
       replacement = x;

@@ -546,8 +546,9 @@ and utilities where they exist (`Abi.h`, `Normalise.h`):
   renamed so that a program's own function of the same name is never redirected, and internal, so the
   optimiser inlines and folds them; then every floating-point type becomes the integer of its width
   (`x86_fp80` is `i80`), and the front checks with the data layout that no size, alignment or struct field
-  offset moves. `fneg`, `fabs`, `copysign` and `is.fpclass` are bit operations; `fmuladd` is unfused, as
-  x86-64 without FMA computes it natively; `fma` is fused.
+  offset moves. `fneg`, `fabs`, `copysign` and `is.fpclass` are bit operations (`is.fpclass` as LLVM's
+  x86-64 back end expands it, mask by mask, so the class of a noncanonical long double is native's:
+  `FpClass.h`); `fmuladd` is unfused, as x86-64 without FMA computes it natively; `fma` is fused.
 - **Where C leaves a choice, the native program's** is taken: `fmin`/`fmax` are clang's x86-64 expansion
   (`isnan(x) ? y : y < x ? y : x`, so of two equal zeros the first), `fminl`/`fmaxl` are glibc's, which the
   native program calls; an out-of-range conversion to an integer goes through the integer LLVM's x86-64 back
@@ -1099,9 +1100,8 @@ giving x87's indefinite (`rt/softfloat/README.md`, "Noncanonical long double ope
 program calls software rather than x87 instructions (glibc's `fmal` and `roundl`, libgcc's truncations to
 `_Float16` and `__bf16`), that software reads such encodings at face value, and the device differs there.
 glibc's `roundevenl` is software too; the runtime's follows its bit operations on these encodings.
-The independent conformance pass also finds the front's aggregate `isfinite`/`isnan` classification
-differing at `-O0`, with ignored defect witnesses (`rt/softfloat/README.md`, "Independent conformance
-pass"). `powi(x, 1)` returns its argument's bits, noncanonical ones included, as libgcc's loop does.
+`powi(x, 1)` returns its argument's bits, noncanonical ones included, as libgcc's loop does
+(`rt/softfloat/README.md`, "Independent conformance pass").
 
 ## The next extension: code that is not a clean function (decided; `mark`, `rewind`, worlds, the memory overlay, gates at addresses and `apply` as the idiom built)
 

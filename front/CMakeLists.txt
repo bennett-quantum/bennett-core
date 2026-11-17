@@ -30,6 +30,7 @@ add_executable(bennett-front
   src/InPlace.cpp
   src/Startup.cpp
   src/SoftFloat.cpp
+  src/FpClass.cpp
   src/Complex.cpp
   src/Jumps.cpp
 )
