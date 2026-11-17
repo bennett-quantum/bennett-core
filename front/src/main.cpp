@@ -107,7 +107,7 @@ void verify(const Module &module, const char *stage) {
 // What a module that is not valid LLVM IR is called, wherever it is found.
 constexpr const char *invalidInput = "the input is not valid LLVM IR";
 
-// Reads the input. Two ways LLVM's reader can find it is not LLVM IR, each named, with status 2 and no
+// Reads the input. Three ways LLVM's reader can find it is not LLVM IR, each named, with status 2 and no
 // device program written:
 // - It cannot parse it (text that is not LLVM's assembly language, bitcode that is cut short): LLVM's
 //   diagnostic, then the name.
@@ -115,6 +115,9 @@ constexpr const char *invalidInput = "the input is not valid LLVM IR";
 //   (`UpgradeDebugInfo`) and, when the module is broken, calls `report_fatal_error` (clang 18 writes such a
 //   module for an argument aligned past LLVM's limit of 2^14 bytes, a `byval` with `align 1048576`); the
 //   verifier has printed its findings above the name.
+// - It crashes: damaged metadata (a subprogram whose type refers to metadata that is not there) makes its
+//   metadata loader stop with SIGSEGV. A signal while reading is caught (CrashRecoveryContext) and named as
+//   well; whether the input or LLVM is at fault cannot be told apart.
 // An empty file is LLVM's empty module, which is valid: it becomes an empty device program. A file that
 // cannot be read at all is not called invalid IR.
 std::unique_ptr<Module> readInput(LLVMContext &context, const char *argv0) {
@@ -129,7 +132,17 @@ std::unique_ptr<Module> readInput(LLVMContext &context, const char *argv0) {
     std::exit(2);
   });
   SMDiagnostic error;
-  std::unique_ptr<Module> module = parseIR((*bytes)->getMemBufferRef(), error, context);
+  std::unique_ptr<Module> module;
+  CrashRecoveryContext::Enable();
+  CrashRecoveryContext recovery;
+  bool finished = recovery.RunSafely([&] { module = parseIR((*bytes)->getMemBufferRef(), error, context); });
+  CrashRecoveryContext::Disable();
+  if (!finished) {
+    errs() << "error: " << invalidInput
+           << " (LLVM's reader crashed on it, which damaged metadata does; if the input is valid, this is a bug in "
+              "LLVM); no device program was written\n";
+    std::exit(2);
+  }
   if (!module) {
     error.print(argv0, errs());
     errs() << "error: " << invalidInput << " (LLVM's reader could not parse it); no device program was written\n";

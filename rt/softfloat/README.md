@@ -205,7 +205,8 @@ right, low severity; fixed, the front names it after LLVM's diagnostic); empty i
 and exits 0 (the witness asked for a refusal, but an empty file is LLVM's empty module, which `llvm-as` and
 the verifier accept, and no document asks the front to refuse a module without `main`: the witness now
 expects acceptance); malformed subprogram metadata in a
-44-byte bitcode file segfaults in LLVM's reader instead of returning 2 (medium severity, compiler crash).
+44-byte bitcode file segfaulted in LLVM's reader instead of returning 2 (medium severity, compiler crash;
+fixed: a signal while reading is caught and the input named, status 2).
 The existing over-aligned-byval test continues to cover debug-reader fatal errors and ordinary verification.
 
 Reproduce with `front/test.sh --test p0_independent --test p0_invalid_input -- --nocapture` and

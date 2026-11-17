@@ -1313,9 +1313,9 @@ the ordinary frontend run without changing its domain or assertions.
   failure is named "the input is not valid LLVM IR" after LLVM's diagnostic (status 2 as before), and an
   empty input is accepted as the empty module it is in LLVM (`llvm-as` and the verifier accept it; the
   testing pass's witness asked for a refusal, which no document requires), becoming an empty device
-  program. Still open, an ignored witness run and observed failing: a 44-byte bitcode module with dangling
-  subprogram type metadata segfaults inside LLVM's metadata reader. Route: contain signals while reading,
-  as well as fatal errors.
+  program; a signal inside LLVM's reader (a 44-byte bitcode module with dangling subprogram type metadata
+  made its metadata loader segfault) is caught and named the same way, status 2, no device program. A crash
+  in the reader on valid input, an LLVM bug, would be named so too: the two cannot be told apart.
 
 - The changed-line mutation scope preview can crash on a diff without generated workspace Rust
   mutants: `python3 scripts/mutate-diff.py origin/main --list` on the Lua probe reports

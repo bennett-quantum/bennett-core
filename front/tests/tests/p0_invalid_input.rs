@@ -90,7 +90,6 @@ fn an_empty_file_is_the_empty_module() {
 }
 
 #[test]
-#[ignore = "defect: malformed bitcode metadata causes SIGSEGV inside LLVM's reader"]
 fn a_dangling_subprogram_type_is_a_named_refusal_instead_of_a_signal() {
     // Reduced from a one-bit corruption of clang's debug bitcode. These 44 bytes contain MODULE
     // version 2 and one METADATA SUBPROGRAM record (18 operands, all 0 except operand 6 = 2).
