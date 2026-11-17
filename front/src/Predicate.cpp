@@ -10,6 +10,7 @@
 #include <llvm/Analysis/LoopInfo.h>
 #include <llvm/Analysis/ValueTracking.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/Dominators.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
@@ -44,6 +45,7 @@ bool isBitCall(const Value *value) {
 // What a copy of the region returns where the operation is reached, and at the region's exit.
 enum class Result {
   Reached,  // i1: the operation's condition (its own, if it already has one) / 0
+  Entered,  // i1: 1 where the region reaches the instruction (the first of a loop's header) / 0
   Change,   // the store's new value XOR the variable's value there / 0
   NewValue, // the store's new value / the variable's value
 };
@@ -95,6 +97,8 @@ private:
   bool mutates(const Instruction *op, const Storage *storage) const;
   bool stale(const LoadInst *load, const Instruction *op) const;
   const Storage *targetOf(const Instruction *op) const;
+  // A copy of the region returning `result` at `op` (an operation, or for Entered any instruction that is
+  // not a phi).
   Function *copy(Instruction *op, Result result, const Value *known, std::vector<Param> &params);
   void refuseStale(Function *copy, const std::vector<Param> &params, const Instruction *op) const;
   bool readsVariable(Function *copy, const std::vector<Param> &params, const Storage *storage) const;
@@ -107,8 +111,11 @@ private:
   size_t gateLoop(Instruction *op);
   void moveLoop(GateLoop &gates, IRBuilder<> &b);
   // The ordinary part of the condition on which the region enters `loop`, computed at `b`: the loop's own
-  // guard, which LLVM may have merged into the branch on a qubit.
+  // guard among the tests on the way, which LLVM may have merged into the branch on a qubit.
   Value *entryGuard(Loop *loop, IRBuilder<> &b, ValueToValueMapTy &map);
+  // The ordinary conjuncts of `branch`'s condition where it takes its true (`onTrue`) or false edge, or null
+  // if it has none.
+  Value *ordinaryPart(const BranchInst *branch, bool onTrue, IRBuilder<> &b, ValueToValueMapTy &map);
   // `value` at `b`, after the region: defined outside it, or an ordinary computation of the region recomputed.
   Value *recomputed(Value *value, IRBuilder<> &b, ValueToValueMapTy &map, const Instruction *at);
   // The qubit variables the computation of `value` reads, outside the region included.
@@ -282,8 +289,9 @@ Value *knownPart(IRBuilder<> &b, Value *known, unsigned bits, unsigned offset, T
 
 Function *Predicator::copy(Instruction *op, Result result, const Value *known, std::vector<Param> &params) {
   LLVMContext &context = fn.getContext();
-  const Storage *target = targetOf(op);
-  Type *targetType = IntegerType::get(context, target->bits);
+  bool condition = result == Result::Reached || result == Result::Entered;
+  const Storage *target = condition ? nullptr : targetOf(op);
+  Type *targetType = target ? IntegerType::get(context, target->bits) : nullptr;
 
   // Parameters: the values the region uses from outside, and the qubit variables it reads.
   params.clear();
@@ -339,7 +347,7 @@ Function *Predicator::copy(Instruction *op, Result result, const Value *known, s
       loadIndex[load] = current(source.storage, source.offset, load->getType());
     }
   }
-  if (result != Result::Reached && !known) {
+  if (!condition && !known) {
     current(target, 0, targetType);
   }
 
@@ -349,8 +357,8 @@ Function *Predicator::copy(Instruction *op, Result result, const Value *known, s
                     : param.kind == Param::Current ? param.type
                                                    : param.load->getType());
   }
-  Type *returnType = result == Result::Reached ? Type::getInt1Ty(context) : targetType;
-  const char *suffix = result == Result::Reached ? ".when" : result == Result::Change ? ".change" : ".update";
+  Type *returnType = condition ? Type::getInt1Ty(context) : targetType;
+  const char *suffix = condition ? ".when" : result == Result::Change ? ".change" : ".update";
   Function *copy = Function::Create(FunctionType::get(returnType, types, false), GlobalValue::InternalLinkage,
                                     fn.getName() + suffix, fn.getParent());
   copy->setOnlyReadsMemory(); // the region writes no memory: outlineAround refused it
@@ -427,9 +435,9 @@ Function *Predicator::copy(Instruction *op, Result result, const Value *known, s
   head->getTerminator()->eraseFromParent();
   b.SetInsertPoint(head);
   Value *value;
-  Value *variable = known ? knownPart(b, knownCopy, target->bits, 0, targetType)
-                          : (result == Result::Reached ? nullptr
-                                                       : copy->getArg(currentIndex.at({target, 0, targetType})));
+  Value *variable = known       ? knownPart(b, knownCopy, target->bits, 0, targetType)
+                    : condition ? nullptr
+                                : copy->getArg(currentIndex.at({target, 0, targetType}));
   switch (result) {
   case Result::Reached:
     if (std::optional<OperandBundleUse> bundle = cast<CallBase>(opClone)->getOperandBundle(controlBundle)) {
@@ -437,6 +445,9 @@ Function *Predicator::copy(Instruction *op, Result result, const Value *known, s
     } else {
       value = b.getTrue();
     }
+    break;
+  case Result::Entered:
+    value = b.getTrue();
     break;
   case Result::Change:
     value = b.CreateXor(cast<StoreInst>(opClone)->getValueOperand(), variable);
@@ -449,7 +460,7 @@ Function *Predicator::copy(Instruction *op, Result result, const Value *known, s
 
   // The region's exit returns the default.
   b.SetInsertPoint(out);
-  b.CreateRet(result == Result::Reached  ? static_cast<Value *>(b.getFalse())
+  b.CreateRet(condition                  ? static_cast<Value *>(b.getFalse())
               : result == Result::Change ? static_cast<Value *>(ConstantInt::get(targetType, 0))
                                          : variable);
 
@@ -609,19 +620,41 @@ Value *Predicator::recomputed(Value *value, IRBuilder<> &b, ValueToValueMapTy &m
 }
 
 Value *Predicator::entryGuard(Loop *loop, IRBuilder<> &b, ValueToValueMapTy &map) {
-  BasicBlock *from = loop->getLoopPredecessor();
-  const auto *branch = dyn_cast<BranchInst>(from->getTerminator());
-  if (!branch) {
-    notHandled("a loop with gates under the control of a value that depends on a qubit, entered by a switch",
-               from->getTerminator());
+  // Every test on the way into the loop decides it: each conditional branch, from the loop's predecessor up
+  // through the region to the branch that enters the region, one of whose edges every path to the header
+  // takes. The loop's own guard is among them, but not always in the predecessor: LLVM may have hoisted code
+  // into a preheader of its own (a nested loop's guard) or merged the guard into the branch on the qubit.
+  DominatorTree dominators(fn); // the region's blocks are as they were; only code after it is new
+  BasicBlock *header = loop->getHeader();
+  Value *guard = nullptr;
+  for (DomTreeNode *node = dominators.getNode(loop->getLoopPredecessor()); node; node = node->getIDom()) {
+    BasicBlock *from = node->getBlock();
+    const Instruction *term = from->getTerminator();
+    if (const auto *choice = dyn_cast<SwitchInst>(term); choice && !analysis.tainted(choice->getCondition())) {
+      notHandled("a loop with gates under the control of a value that depends on a qubit, entered by a switch",
+                 term);
+    }
+    const auto *branch = dyn_cast<BranchInst>(term);
+    if (branch && branch->isConditional() && branch->getSuccessor(0) != branch->getSuccessor(1)) {
+      for (bool onTrue : {true, false}) {
+        if (dominators.dominates(BasicBlockEdge(from, branch->getSuccessor(onTrue ? 0 : 1)), header)) {
+          if (Value *part = ordinaryPart(branch, onTrue, b, map)) {
+            guard = guard ? b.CreateAnd(guard, part) : part;
+          }
+        }
+      }
+    }
+    if (!inRegion.count(from)) {
+      break; // the block whose branch enters the region
+    }
   }
-  if (!branch->isConditional()) {
-    return b.getTrue();
-  }
-  // On the edge into the loop the condition holds (or fails): its ordinary conjuncts (disjuncts) must too.
-  bool onTrue = branch->getSuccessor(0) == loop->getHeader();
+  return guard ? guard : b.getTrue();
+}
+
+Value *Predicator::ordinaryPart(const BranchInst *branch, bool onTrue, IRBuilder<> &b, ValueToValueMapTy &map) {
+  // Where the condition holds (fails), its ordinary conjuncts (disjuncts) do too.
   unsigned opcode = onTrue ? Instruction::And : Instruction::Or;
-  Value *guard = b.getTrue();
+  Value *guard = nullptr;
   std::vector<Value *> work{branch->getCondition()};
   while (!work.empty()) {
     Value *value = work.back();
@@ -641,7 +674,8 @@ Value *Predicator::entryGuard(Loop *loop, IRBuilder<> &b, ValueToValueMapTy &map
       work.push_back(select->getFalseValue());
     } else if (!analysis.tainted(value)) {
       Value *term = recomputed(value, b, map, branch);
-      guard = b.CreateAnd(guard, onTrue ? term : b.CreateNot(term));
+      term = onTrue ? term : b.CreateNot(term);
+      guard = guard ? b.CreateAnd(guard, term) : term;
     }
   }
   return guard;
@@ -695,68 +729,62 @@ bool returnsOneQubit(Function *copy, const std::vector<Param> &params) {
   return param.kind == Param::Current && param.offset == 0 && popcount(param.storage->support) == 1;
 }
 
-// The loop runs in the control program after the region, as written: its trip count is ordinary. Each gate
-// in it acts where the region reaches it: a condition computed once before the loop, into a fresh qubit
-// variable (or one qubit as it is), which controls the gate in every pass and is computed again after the
-// loop, returning it to 0. The gates must not change what the conditions read. No loop is unrolled or
+// The loop runs in the control program after the region, as written: its trip count is ordinary. Its gates
+// act where the region reaches the loop: one condition, computed once before the loop into a fresh qubit
+// variable (or one qubit as it is), controls every gate of the loop in every pass, and is computed again after
+// the loop, returning it to 0. The condition is that the region reaches the loop's header, not a gate: nothing
+// in the loop depends on a qubit (gateLoop refused it), so which gates act in which pass is decided by the
+// loop's own ordinary code, which the control program runs, and the condition's `apply` runs only the path to
+// the loop, none of its passes. The gates must not change what the condition reads. No loop is unrolled or
 // created; the loop also runs for the configurations whose path would not reach it, as ordinary code that
 // writes no memory (outlineAround refused writes), its gates acting on none of them.
 void Predicator::moveLoop(GateLoop &gates, IRBuilder<> &b) {
   LLVMContext &context = fn.getContext();
+  Loop *loop = gates.loop;
   BasicBlock *pre = b.GetInsertBlock();
   BasicBlock *cont = pre->splitBasicBlock(b.GetInsertPoint(), pre->getName() + ".loop");
   b.SetInsertPoint(pre->getTerminator());
 
-  // The conditions, before the loop.
+  // The condition, before the loop.
   enum class Kind { Never, Always, Qubit, Variable };
-  struct Condition {
-    Kind kind;
-    Value *value = nullptr;      // Qubit: the copy's result, for the control program's literal controls
-    AllocaInst *qubit = nullptr; // Variable: the fresh qubit variable holding it
-    Function *when = nullptr;
-    std::vector<Param> params;
-  };
-  std::map<const Instruction *, Condition> conditions;
+  Kind kind = Kind::Variable;
+  Value *value = nullptr;      // Qubit: the copy's result, for the control program's literal controls
+  AllocaInst *qubit = nullptr; // Variable: the fresh qubit variable holding it
+  std::vector<Param> params;
+  Function *when = copy(loop->getHeader()->getFirstNonPHI(), Result::Entered, nullptr, params);
+  refuseStale(when, params, gates.gates.front());
+  std::set<const Storage *> inputs;
+  for (size_t i = 0; i < params.size(); ++i) {
+    if (params[i].kind == Param::Input && !when->getArg(unsigned(i))->use_empty()) {
+      std::set<const Storage *> read = variablesRead(params[i].input);
+      inputs.insert(read.begin(), read.end());
+    }
+  }
   for (Instruction *gate : gates.gates) {
-    Condition condition{Kind::Variable};
-    condition.when = copy(gate, Result::Reached, nullptr, condition.params);
-    refuseStale(condition.when, condition.params, gate);
-    std::set<const Storage *> inputs;
-    for (size_t i = 0; i < condition.params.size(); ++i) {
-      if (condition.params[i].kind == Param::Input && !condition.when->getArg(unsigned(i))->use_empty()) {
-        std::set<const Storage *> read = variablesRead(condition.params[i].input);
-        inputs.insert(read.begin(), read.end());
-      }
+    if (readsVariable(when, params, targetOf(gate)) || inputs.count(targetOf(gate))) {
+      notHandled("a gate on qubit variable " + targetOf(gate)->name +
+                     " in a loop whose gates are controlled by a condition that reads it (the gate would change "
+                     "the condition; not built yet)",
+                 gate);
     }
-    for (Instruction *other : gates.gates) {
-      if (readsVariable(condition.when, condition.params, targetOf(other)) || inputs.count(targetOf(other))) {
-        notHandled("a gate on qubit variable " + targetOf(other)->name +
-                       " in a loop whose gates are controlled by a condition that reads it (the gate would change "
-                       "the condition; not built yet)",
-                   other);
-      }
-    }
-    if (returnsConstant(condition.when, false)) {
-      condition.kind = Kind::Never;
-    } else if (returnsConstant(condition.when, true)) {
-      condition.kind = Kind::Always;
-    } else if (returnsOneQubit(condition.when, condition.params)) {
-      condition.kind = Kind::Qubit;
-      condition.value = call(condition.when, condition.params, b);
-    } else {
-      IRBuilder<> top(&*fn.getEntryBlock().getFirstInsertionPt());
-      condition.qubit = top.CreateAlloca(b.getInt8Ty(), nullptr, "condition");
-      condition.qubit->setMetadata(qubitMetadata, MDNode::get(context, {}));
-      Value *old = b.CreateLoad(b.getInt8Ty(), condition.qubit);
-      b.CreateStore(b.CreateXor(old, b.CreateZExt(call(condition.when, condition.params, b), b.getInt8Ty())),
-                    condition.qubit);
-    }
-    conditions[gate] = std::move(condition);
+  }
+  if (returnsConstant(when, false)) {
+    kind = Kind::Never;
+  } else if (returnsConstant(when, true)) {
+    kind = Kind::Always;
+  } else if (returnsOneQubit(when, params)) {
+    kind = Kind::Qubit;
+    value = call(when, params, b);
+  } else {
+    IRBuilder<> top(&*fn.getEntryBlock().getFirstInsertionPt());
+    qubit = top.CreateAlloca(b.getInt8Ty(), nullptr, "condition");
+    qubit->setMetadata(qubitMetadata, MDNode::get(context, {}));
+    Value *old = b.CreateLoad(b.getInt8Ty(), qubit);
+    b.CreateStore(b.CreateXor(old, b.CreateZExt(call(when, params, b), b.getInt8Ty())), qubit);
   }
 
   // The loop, cloned between `pre` and `cont`, entered where its ordinary guard holds; what it uses from the
   // region is recomputed in `pre` (ordinary values: the region writes no memory).
-  Loop *loop = gates.loop;
   ValueToValueMapTy map;
   for (BasicBlock *block : loop->blocks()) {
     for (Instruction &inst : *block) {
@@ -798,8 +826,7 @@ void Predicator::moveLoop(GateLoop &gates, IRBuilder<> &b) {
   }
   for (Instruction *gate : gates.gates) {
     auto *clone = cast<CallBase>(map[gate]);
-    const Condition &condition = conditions.at(gate);
-    if (condition.kind == Kind::Never) {
+    if (kind == Kind::Never) {
       clone->eraseFromParent();
       continue;
     }
@@ -808,27 +835,23 @@ void Predicator::moveLoop(GateLoop &gates, IRBuilder<> &b) {
     std::vector<Value *> args(clone->arg_begin(), clone->arg_end());
     args[0] = qubitPointer(gate->getOperand(0), g);
     std::vector<OperandBundleDef> bundles;
-    if (condition.kind == Kind::Qubit) {
-      bundles.emplace_back(controlBundle, std::vector<Value *>{condition.value});
-    } else if (condition.kind == Kind::Variable) {
-      Value *set = g.CreateICmpNE(g.CreateLoad(g.getInt8Ty(), condition.qubit), g.getInt8(0));
+    if (kind == Kind::Qubit) {
+      bundles.emplace_back(controlBundle, std::vector<Value *>{value});
+    } else if (kind == Kind::Variable) {
+      Value *set = g.CreateICmpNE(g.CreateLoad(g.getInt8Ty(), qubit), g.getInt8(0));
       bundles.emplace_back(controlBundle, std::vector<Value *>{set});
     }
     g.CreateCall(clone->getFunctionType(), clone->getCalledOperand(), args, bundles);
     clone->eraseFromParent();
   }
 
-  // The conditions again, after the loop: each returns its qubit variable to 0.
+  // The condition again, after the loop: it returns its qubit variable to 0.
   b.SetInsertPoint(cont->getTerminator());
-  for (Instruction *gate : gates.gates) {
-    Condition &condition = conditions.at(gate);
-    if (condition.kind == Kind::Variable) {
-      Value *old = b.CreateLoad(b.getInt8Ty(), condition.qubit);
-      b.CreateStore(b.CreateXor(old, b.CreateZExt(call(condition.when, condition.params, b), b.getInt8Ty())),
-                    condition.qubit);
-    } else if (condition.kind != Kind::Qubit && condition.when->use_empty()) {
-      condition.when->eraseFromParent();
-    }
+  if (kind == Kind::Variable) {
+    Value *old = b.CreateLoad(b.getInt8Ty(), qubit);
+    b.CreateStore(b.CreateXor(old, b.CreateZExt(call(when, params, b), b.getInt8Ty())), qubit);
+  } else if (kind != Kind::Qubit && when->use_empty()) {
+    when->eraseFromParent();
   }
 }
 

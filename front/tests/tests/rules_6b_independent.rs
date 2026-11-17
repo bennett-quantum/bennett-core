@@ -224,7 +224,6 @@ fn run_bounded(module: &ValidModule, args: &[u64], budget: u64) -> Outcome {
 }
 
 #[test]
-#[ignore = "the cloned outer gate loop loses its zero-trip guard"]
 fn zero_outer_trip_count_skips_nested_gate_loops() {
     let source = write_c(
         "rules-6b-zero-outer",
@@ -248,7 +247,6 @@ unsigned entry(unsigned n, unsigned m) {
 }
 
 #[test]
-#[ignore = "the gate condition evaluator replays the ordinary loop and can exhaust its apply budget"]
 fn ordinary_gate_site_position_does_not_spend_the_condition_apply_budget() {
     let source = write_c(
         "rules-6b-late-gate",

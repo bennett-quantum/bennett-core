@@ -1,8 +1,13 @@
 //! Loops with gates under a condition that depends on a qubit (docs/DESIGN.md, "Code under a qubit"). The
 //! expected states are computed here from the C by hand: per value of the condition's register, the gates
 //! the C applies, multiplied out on one qubit.
+use bennett_exec::{Executor, Options, Snapshot};
 use bennett_front_tests::state_before_first_measurement;
-use bennett_front_tests::{CLANG_FLAGS, CLANG_O2_FLAGS, c_dir, column, lower, lower_text, registers, write_c};
+use bennett_front_tests::{
+    CLANG_FLAGS, CLANG_O2_FLAGS, c_dir, column, entry, lower, lower_text, lower_text_with_budget, options, registers,
+    write_c,
+};
+use bennett_ir::Inst;
 use num_complex::Complex64;
 
 const MODES: [(&str, &[&str], &[&str]); 3] =
@@ -117,4 +122,97 @@ fn a_gate_in_the_loop_on_what_the_condition_reads_is_refused_by_name() {
     let error =
         refusal("gate-loops-own", "    if (q) for (unsigned i = 0; i < n; i++) { bennett_x(&y); bennett_h(&q); }");
     assert!(error.starts_with("not handled yet:") && error.contains("would change"), "{error}");
+}
+
+/// The steps the two programs below may take in all: far more than the passes the C asks for take, far fewer
+/// than a 32-bit loop counter's full cycle, which a loop entered when its count is 0 would run through.
+const STEP_LIMIT: u64 = 100_000;
+
+/// The state of `entry(args)` before its first measurement, within `STEP_LIMIT` steps.
+fn state_within_limit(module: &bennett_ir::ValidModule, args: &[u64], context: &str) -> Snapshot {
+    let options = Options { budget: Some(STEP_LIMIT), ..options(0) };
+    let mut executor = Executor::new(module, entry(module, "entry"), args, options).expect("starts");
+    loop {
+        let snapshot = executor.snapshot();
+        let frame = snapshot.classical.frames.last().expect("a frame");
+        if let Some(Inst::Measure { .. }) = module.function(frame.func).block(frame.block).insts.get(frame.inst) {
+            return snapshot;
+        }
+        if let Some(outcome) = executor.step() {
+            panic!("{context}: ended ({outcome:?}) before measuring");
+        }
+    }
+}
+
+/// q in equal superposition; where q = 1, y holds `flipped`; every other register 0.
+fn check_q_y(module: &bennett_ir::ValidModule, args: &[u64], flipped: bool, context: &str) {
+    let state = state_within_limit(module, args, context);
+    let columns = registers(module, "entry");
+    let (q, y) = (column(&columns, "q"), column(&columns, "y"));
+    assert_eq!(state.quantum.amplitudes.len(), 2, "{context}: configurations");
+    for (config, amplitude) in &state.quantum.amplitudes {
+        assert_eq!(config[y], config[q] & u64::from(flipped), "{context}: {columns:?} = {config:?}");
+        assert!((amplitude.norm() - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-12, "{context}: {amplitude}");
+        for (i, name) in columns.iter().enumerate() {
+            if i != q && i != y {
+                assert_eq!(config[i], 0, "{context}: register %{name} not 0");
+            }
+        }
+    }
+}
+
+/// Nested gate loops: the outer loop is entered only where its own guard holds, though LLVM puts the inner
+/// loop's guard in a preheader of the outer loop's own and merges the outer guard into the branch on q.
+#[test]
+fn nested_gate_loops_run_no_pass_where_a_trip_count_is_zero() {
+    let source = write_c(
+        "gate-loops-nested-zero",
+        r#"#include "bennett.h"
+unsigned entry(unsigned n, unsigned m) {
+    _Bool q = 0, y = 0;
+    bennett_h(&q);
+    if (q)
+        for (unsigned i = 0; i < n; ++i)
+            for (unsigned j = 0; j < m; ++j)
+                bennett_x(&y);
+    return (unsigned)(bennett_measure(&q) | bennett_measure(&y) << 1);
+}
+"#,
+    );
+    for (mode, clang, flags) in MODES {
+        let module = lower(&source, &format!("gate-loops-nested-zero-{mode}"), clang, flags);
+        for n in 0..3 {
+            for m in 0..3 {
+                check_q_y(&module, &[n, m], n * m % 2 == 1, &format!("{mode} entry({n}, {m})"));
+            }
+        }
+    }
+}
+
+/// The condition of a gate loop is that the code reaches the loop, so its `apply` runs none of the loop's
+/// passes: a budget far below one pass per site suffices wherever the C puts its gate.
+#[test]
+fn the_condition_of_a_gate_loop_runs_none_of_its_passes() {
+    let source = write_c(
+        "gate-loops-late-site",
+        r#"#include "bennett.h"
+unsigned entry(unsigned n, unsigned site) {
+    _Bool q = 0, y = 0;
+    bennett_h(&q);
+    if (q)
+        for (unsigned i = 0; i < n; ++i)
+            if (i == site) bennett_x(&y);
+    return (unsigned)(bennett_measure(&q) | bennett_measure(&y) << 1);
+}
+"#,
+    );
+    const BUDGET: u64 = 16; // a handful of steps: the path to the loop only
+    for (mode, clang, flags) in MODES {
+        let name = format!("gate-loops-late-site-{mode}");
+        let text = lower_text_with_budget(&source, &name, clang, flags, BUDGET).expect("lowers");
+        let module = bennett_ir::load(&text).expect("valid program");
+        for (n, site) in [(0, 0), (1, 0), (6, 5), (200, 199), (200, 200)] {
+            check_q_y(&module, &[n, site], site < n, &format!("{mode} entry({n}, {site}), budget {BUDGET}"));
+        }
+    }
 }

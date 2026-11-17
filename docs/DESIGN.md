@@ -447,15 +447,21 @@ program has no loop left.
 
 **Gate loops.** A loop with gates under a condition that depends on a qubit stays a loop of the control
 program, run as written: the circuit model needs a definite list of gates, and the loop's trip count is an
-ordinary value written in the C, so the control program issues the gates of every pass, each controlled by
-the condition that the code reaches it (`Predicate.h`). That condition is computed once before the loop, by
-one `apply` into a fresh qubit (or is one qubit as it is, `if (q)` on a `_Bool`), controls the gate in every
-pass, and is computed again after the loop by the same `apply`, which returns the qubit to 0. Nothing is
-unrolled or created: the loop is the C's loop, entered where its ordinary guard holds (LLVM may have merged
-that guard into the branch on the qubit; the front takes its ordinary part apart again), and ordinary values
-it needs from the code before it are computed again before it. It also runs for the configurations whose
-path would not reach it, as ordinary code that writes no memory, its gates acting on none of them. For each
-definite value of what the condition reads the result is the product of the gates the C applies there.
+ordinary value written in the C, so the control program issues the gates of every pass, controlled by the
+condition that the code reaches the loop (`Predicate.h`). Nothing in the loop depends on a qubit (what does is
+refused, below), so which gates act in which pass is decided by the loop's own ordinary code, which the control
+program runs. The condition is computed once before the loop, by one `apply` into a fresh qubit (or is one
+qubit as it is, `if (q)` on a `_Bool`), controls every gate of the loop in every pass, and is computed again
+after the loop by the same `apply`, which returns the qubit to 0. Its applied function runs the path to the
+loop and none of the loop's passes, so its steps do not grow with the trip count or with where in the loop a
+gate is. Nothing is unrolled or created: the loop is the C's loop, entered where its ordinary guard holds,
+and ordinary values it needs from the code before it are computed again before it. The guard is the ordinary
+part of every test on the way into the loop, from the branch that enters the code under the qubit down to the
+loop (each conditional branch one of whose edges every path to the loop takes): LLVM may have merged the
+loop's own guard into the branch on the qubit, and put code of its own between them (a nested loop's guard
+hoisted into a block before the outer loop). The loop also runs for the configurations whose path would not
+reach it, as ordinary code that writes no memory, its gates acting on none of them. For each definite value of
+what the condition reads the result is the product of the gates the C applies there.
 Refused by name, each with its route:
 
 - a loop whose number of passes depends on a qubit: a circuit is a definite list of gates, so the number of
@@ -476,7 +482,9 @@ Refused by name, each with its route:
 
 Acceptance (`front/tests/tests/gate_loops.rs`): the front audit's witness `if (q) for (i < n) x(y)`, and a
 computed condition with two gate sites, one on odd passes only, give the state computed by hand for n = 0, 1,
-2, 3, 6 at O0, O2 and with `--taint-all`, every other register 0; the loop has one controlled gate line.
+2, 3, 6 at O0, O2 and with `--taint-all`, every other register 0; the loop has one controlled gate line. Two
+nested gate loops give the state computed by hand for every pair of trip counts 0 to 2, a zero outer or inner
+count included, and a gate at pass 199 of 200 under a budget of 16 steps gives it too, in all three modes.
 
 ## Overwrites that keep the old value
 

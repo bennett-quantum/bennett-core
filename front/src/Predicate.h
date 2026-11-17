@@ -18,9 +18,10 @@
 // operation changed that variable, which the copy would need, is refused by name.
 //
 // A gate on a cycle stays in its loop, which the control program runs after the region with its ordinary
-// trip count, entered where the loop's ordinary guard holds: the gate is controlled in every pass by the
-// condition that the region reaches it, computed once before the loop and again after it (docs/DESIGN.md,
-// "Code under a qubit"). A loop whose trip count or decisions depend on a qubit is refused by name.
+// trip count, entered where the loop's ordinary guard holds (the ordinary part of the tests on the way into
+// it): the loop's gates are controlled in every pass by one condition, that the region reaches the loop,
+// computed once before the loop and again after it (docs/DESIGN.md, "Code under a qubit"). A loop whose trip
+// count or decisions depend on a qubit is refused by name.
 #pragma once
 
 #include <vector>

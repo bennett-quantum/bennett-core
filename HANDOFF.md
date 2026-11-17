@@ -21,9 +21,10 @@ address is done too (`docs/DESIGN.md`, "Memory written under a qubit"), with the
 `bennett_measure_bytes`; the fallback oracle's `store`, `memset`, `nested`, `memcpy` and `loop` fixtures agree
 with native C in a harness that reads bytes holding qubits, and stay ignored in the oracle itself, whose
 adapter does not (a question below). An independent testing pass over rules B and C and the first part of
-rule A (`03ae832`) left four ignored witnesses in `front/tests/tests/rules_6b_independent.rs`, not yet
-fixed. Nothing of this work is running. Next: those four witnesses, then the independent testing pass over
-rule A at memory.
+rule A (`03ae832`) left four ignored witnesses in `front/tests/tests/rules_6b_independent.rs`; the two on
+gate loops are fixed ("Fixes after the testing pass over rules B and C (2026-11-17)"), the two on rule B's
+results not yet. Nothing of this work is running. Next: those two witnesses, then the independent testing
+pass over rule A at memory.
 
 ## Resumed on 2026-11-17
 
@@ -338,15 +339,16 @@ explicitly after the separate musl build.
       keeping one old value per pass.
    2. **Rule C, partly done** (`docs/DESIGN.md`, "Code under a qubit", gate loops; `front/src/Predicate.h`).
       Done: a loop with gates and an ordinary trip count under a qubit condition (the note's case 1, the front
-      audit's witness) stays the C's loop in the control program, entered under its ordinary guard, each gate
-      controlled by a condition computed once before the loop and cleared after it by the same `apply`; no
-      unrolling. A loop whose number of passes depends on a qubit (case 4) is refused, the message saying that
-      the number of passes must be written as an ordinary value and that such a loop does not consume its
-      loop variable; a gate on what the condition reads (case 5) is refused by name. **Not built: case 3**, a
-      loop whose passes decide on qubit-dependent values carried from pass to pass: refused by name with the
-      table route; why it is not built is a question below ("Questions for the maintainer"). Routes for case 5
-      (a body that changes the tested register but never whether the condition holds: one control qubit
-      computed once, cleared by computing it again) are in DESIGN.
+      audit's witness) stays the C's loop in the control program, entered under its ordinary guard (the
+      ordinary part of every test on the way into it), its gates controlled by one condition, that the code
+      reaches the loop, computed once before the loop and cleared after it by the same `apply`, which runs none
+      of the loop's passes; no unrolling. A loop whose number of passes depends on a qubit (case 4) is
+      refused, the message saying that the number of passes must be written as an ordinary value and that
+      such a loop does not consume its loop variable; a gate on what the condition reads (case 5) is refused
+      by name. **Not built: case 3**, a loop whose passes decide on qubit-dependent values carried from pass
+      to pass: refused by name with the table route; why it is not built is a question below ("Questions for
+      the maintainer"). Routes for case 5 (a body that changes the tested register but never whether the
+      condition holds: one control qubit computed once, cleared by computing it again) are in DESIGN.
    3. **Rule A, partly done.** Done: the executor's part (a `measure` at an address measuring all eight bits of
       a byte makes it ordinary memory again, holding the result; `docs/DESIGN.md`, "Qubits in memory"), and the
       retained form for qubit variables in registers (an overwrite whose old value cannot be erased is
@@ -1425,3 +1427,30 @@ order", 4):
   for v = 1; regression test `an_ordinary_reader_in_a_slice_does_not_see_the_applied_calls_writes`). The
   warning now also follows a later direct call given a pointer to the caller's local variable.
 
+## Fixes after the testing pass over rules B and C (2026-11-17)
+
+The independent testing pass over rules B and C and the first part of rule A (`03ae832`, gpt-6.2-sol) left four
+ignored witnesses in `front/tests/tests/rules_6b_independent.rs`, each reproduced and each failing on the code
+before these fixes; the two on gate loops run now, the two on rule B's results are next. Documents:
+`docs/DESIGN.md`, "Code under a qubit".
+
+- **A gate loop nested in another lost its zero-trip guard** (`entry(n = 0, m = 0)` faulted `budget` instead of
+  returning). Cause: the guard was read from the loop's predecessor only. With a nested loop LLVM hoists the
+  inner loop's guard into a preheader of the outer loop's own, which ends in an unconditional branch, and merges
+  the outer loop's guard `n != 0` into the branch on the qubit one block above; the front found no test and
+  entered the loop always, so with `n = 0` it ran through the counter's whole cycle. Fix
+  (`front/src/Predicate.cpp`, `entryGuard`): the guard is the ordinary part of every conditional branch one of
+  whose edges every path to the loop takes, from the loop's predecessor up to the branch that enters the code
+  under the qubit.
+- **The condition of a gate in a loop replayed the loop's ordinary passes** (`if (q) for (i < n) if (i ==
+  site) x(y)` with budget 32 faulted from `n = 6, site = 5`). Cause: the condition was "the code reaches this
+  gate", computed by a copy of the code that runs until its first visit to the gate, so through `site` passes of
+  the loop. Nothing in such a loop depends on a qubit (anything that does is refused), so which gates act in
+  which pass is decided by the loop's own ordinary code, which the control program runs anyway. Fix
+  (`moveLoop`): one condition for the whole loop, "the code reaches the loop's header", whose copy returns
+  before the first pass; its steps no longer grow with the trip count or the gate's position. One bound per
+  `apply` as before; no bound, loop or counter added.
+
+Regression tests besides the two witnesses: `front/tests/tests/gate_loops.rs` (nested gate loops at every
+pair of trip counts 0 to 2, and a gate at pass 199 of 200 under a budget of 16 steps, in O0, O2 and
+`--taint-all`); each fails on the code before.
