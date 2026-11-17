@@ -1274,13 +1274,15 @@ fails today:
     Latin-1, which keeps every ASCII byte) or decoded when it has a UTF-16/32 byte-order mark; the witness is
     an ordinary test, with a second for wide text and binary data. Not covered: UTF-16 without a byte-order
     mark;
-  - an `amend!` subject passes the WIP check on `main`.
+  - an `amend!` subject (`git commit --fixup=amend:` or `reword:`) passed the WIP check on `main`. Fixed:
+    `amend!` is refused like `fixup!` and `squash!`; the witness is an ordinary test.
 
-  Open witnesses are skipped unless `BENNETT_RUN_DEFECTS=1`. Every other claimed rejection was seeded and
-  fails as documented (host paths, litter, symlinks, time literals, WIP ancestors, a bad non-HEAD revision,
-  `_` and binding arms in the executor library, a removed attribute policy, clang 23 by `CLANG`, LLVM 23 by
-  `LLVM_DIR`, the refused attributes). Not covered and not claimed: `matches!`/`if let` catch-alls, the experiment observers'
-  standalone workspaces, a pushed revision that weakens its own `scripts/check.sh`.
+  All four fixed on `wip/small-fixes`, one commit each; no witness is skipped any more. Every other claimed
+  rejection was seeded and fails as documented (host paths, litter, symlinks, time literals, WIP ancestors, a
+  bad non-HEAD revision, `_` and binding arms in the executor library, a removed attribute policy, clang 23 by
+  `CLANG`, LLVM 23 by `LLVM_DIR`, the refused attributes). Not covered and not claimed: `matches!`/`if let`
+  catch-alls, the experiment observers' standalone workspaces, a pushed revision that weakens its own
+  `scripts/check.sh`.
 - **The Lua probe** (low): `%a` of a subnormal double is musl's spelling, not glibc's (question above;
   `front/tests/tests/printf_hex_float.rs`).
 

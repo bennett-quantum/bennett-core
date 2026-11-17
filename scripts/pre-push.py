@@ -15,10 +15,11 @@ def git(root, *args):
 
 
 def wip_commits(root, sha, remote_sha):
+    # git's autosquash markers: `commit --fixup`, `--squash` and `--fixup=amend:`/`reword:` (both `amend!`).
     revision = sha if set(remote_sha) == {'0'} else f'{remote_sha}..{sha}'
     rows = git(root, 'log', '--format=%h %s', revision).splitlines()
     return [row for row in rows if re.match(
-        r'\S+\s+(?:\W*wip\b|work[- ]in[- ]progress\b|fixup!|squash!)', row, re.I)]
+        r'\S+\s+(?:\W*wip\b|work[- ]in[- ]progress\b|fixup!|squash!|amend!)', row, re.I)]
 
 
 def check_revision(root, sha):

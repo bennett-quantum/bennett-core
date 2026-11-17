@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Executed defect witnesses for the fast checks and exact-revision push hook."""
 import importlib.util
-import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -10,8 +9,6 @@ import unittest
 import checks
 
 ROOT = Path(__file__).resolve().parent.parent
-# Witnesses of known defects in the checks are skipped unless this is set: `BENNETT_RUN_DEFECTS=1`.
-DEFECTS = os.environ.get('BENNETT_RUN_DEFECTS') == '1'
 
 
 def module(name, path):
@@ -99,13 +96,17 @@ class Checks(unittest.TestCase):
         (self.root / 'blob').write_bytes(b'\xff\xfe\x00\x00\x00\xd8')
         self.assertEqual(checks.hygiene(self.root, [Path('blob')]), [])
 
-    @unittest.skipUnless(DEFECTS, "defect: git's amend! subjects (commit --fixup=amend:) pass the no-WIP check on main")
     def test_amend_subject_is_rejected_on_main(self):
         base = self.init_repo()
         (self.root / 'note').write_text('amended')
         self.commit('amend! Accepted base')
         tip = self.git('rev-parse', 'HEAD')
         self.assertEqual(len(push.wip_commits(self.root, tip, base)), 1)
+        with self.assertRaisesRegex(RuntimeError, 'unfinished commits'):
+            push.main(self.root, [f'HEAD {tip} refs/heads/main {base}'])
+        # git itself writes the subject: commit --fixup=amend: and --fixup=reword:.
+        self.git('-c', 'core.editor=true', 'commit', '-q', '--allow-empty', '--fixup=reword:' + base)
+        self.assertEqual(len(push.wip_commits(self.root, self.git('rev-parse', 'HEAD'), base)), 2)
 
     def git(self, *args):
         return push.git(self.root, *args)
