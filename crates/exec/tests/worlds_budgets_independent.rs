@@ -633,9 +633,7 @@ fn a_collective_jump_diagnostic_never_becomes_a_program_fault_value() {
 
 /// The collective check inspects all configurations. Named bad_longjmp faults may be caught;
 /// this simulator diagnostic must not become code 16, even in strict mode (HANDOFF, V4b).
-/// cargo test -p bennett-exec --test worlds_budgets_independent collective_jump -- --ignored --nocapture
 #[test]
-#[ignore = "defect: a collective longjmp-record check becomes a budgeted call's fault value"]
 fn collective_jump_diagnostic_is_not_delivered_by_a_budgeted_call() {
     let p = common::load(COLLECTIVE_JUMP);
     let m = Model::new(&p, "main");

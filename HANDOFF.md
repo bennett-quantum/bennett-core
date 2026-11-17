@@ -1316,7 +1316,7 @@ the ordinary frontend run without changing its domain or assertions.
   Live guards retain their branch-local consumption through an internal rewind of a memory-qubit
   read; inverse replay retains the original counts. Bounds are checked before a queued rewind,
   and replay charges the catch step as well as the call and body. The default matrix has 18 tests /
-  653 executor runs, plus the ignored clock-composition question and V4b defect witnesses.
+  653 executor runs, plus the ignored clock-composition witness and the V4b witness (passing since the executor's fix).
   A collective jump-record diagnostic stays outside a budgeted call's named-fault catch; per-branch
   jumps for disagreeing records remain the V4 decision above.
   Its replay resource limit is incremental, so a newly endless replay ends atomically with `budget`;
@@ -1334,15 +1334,17 @@ the ordinary frontend run without changing its domain or assertions.
   state guarantee is asserted for unfaithful inverses. The reference keeps the previously recorded
   deferred-check cohort limitation below. Large snapshot histories remain slow (rung 2 above).
 
-- **Council V4b, independently reproduced:** in strict mode a budgeted call turns a collective
+- **Council V4b, independently reproduced, fixed:** in strict mode a budgeted call turned a collective
   `longjmp`-record check into program value 16, although the afternoon's decision forbids delivering
   simulator-only checks as codes. One record names the callee and one the caller; both are held in one
   world's qubits. Ignored witness `collective_jump_diagnostic_is_not_delivered_by_a_budgeted_call` in
-  `crates/exec/tests/worlds_budgets_independent.rs` fails with `Returned(Some(16))` on `16f71a8`.
+  `crates/exec/tests/worlds_budgets_independent.rs` failed with `Returned(Some(16))` on `16f71a8`; it passes
+  since the executor stopped delivering faults found by inspecting the state as a call's code, and runs by
+  default.
   The reference regression failed too before its cause was separated from named per-branch faults;
   it now ends at the diagnostic boundary and reverses exactly. The two basis records give code 0
   and named `bad_longjmp` respectively in both machines, each step reversed. Route: keep the collective check out
-  of the catch path, separately from deciding the per-branch jump rule (V4). No executor fix here.
+  of the catch path, separately from deciding the per-branch jump rule (V4), as the executor now does.
 
 - `Stats::region_cost.copied_bytes` omits callee-frame growth before a memory split: adding eight
   callee slots adds 128 copied bytes but leaves the report unchanged. Ignored witness:
