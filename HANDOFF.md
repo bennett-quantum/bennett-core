@@ -149,9 +149,9 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 | Lua probe | Unmodified Lua 5.4.9 through musl: seven native stdout/status comparisons and exact reversals; a Lua predicate under hand-written `apply`, dense-checked Grover at N=4/8 (`experiments/lua-probe`) |
 
-Check it: `cargo test` (242 passed; 3 ignored, each naming its reason: heavy reference, generated or
+Check it: `cargo test` (251 passed; 3 ignored, each naming its reason: heavy reference, generated or
 hash-sample runs with their commands, witnesses of recorded defects and of questions awaiting the maintainer;
-about 9 s, no LLVM needed) and `front/test.sh` (218 passed; 26 ignored by default, each naming its reason: the
+about 9 s, no LLVM needed) and `front/test.sh` (222 passed; 26 ignored by default, each naming its reason: the
 fallback acceptance tests, waiting for the route that replaces the cancelled fallback, the C North Star ladder runs and other explicit experiments,
 musl-linked checks that need `rt/musl/build.py` first, heavy runs, and witnesses of recorded debts; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -1115,3 +1115,24 @@ diff --recursive --no-dereference "$auth/musl-1.2.5" rt/musl/musl-1.2.5
 ```
 
 The additional entry-type/executable-flag comparison is reproduced in `rt/musl/VENDOR.md`.
+
+## Independent checks of apply, removal and front fixes (2026-11-17)
+
+`current_model_independent.rs` checks one runtime budget across nested loops and a callee against
+hand-counted costs (5, 12, 29, 56 steps), with complex amplitudes, correlated dirty targets and an untouched
+reference register: 28 runs, 896 configuration amplitudes checked within 1e-12. Four deep-callee fault
+cases check private memory and console isolation. Ordinary calls, stack changes, console effects, gates
+at addresses and apply reverse to every saved predecessor; measurement refuses reversal for both address
+and register forms. Sixteen seeded address-gate/measurement runs have the analytic value and phase.
+
+IR tests reject obsolete instructions in unused functions and qubit arguments to direct and indirect
+ordinary integer calls; writer and CLI checks cover the remaining forms. Front variants exercise four
+save/jump spellings, five unused atomic/volatile effects and five stale gate controls, each at O0, O2 and
+with `--taint-all`; a valid volatile-control case returns zero in 24 seeded executions. All 13 new tests
+pass; no defect confirmed. This pass excludes `qfree` and ordinary accesses to qubit bytes. It is finite
+test evidence, not a proof of the executor.
+
+Checks on main at `40c2800`: `cargo test` 251 passed / 3 ignored; `front/test.sh` 222 passed /
+26 ignored, with the C++ header and all 88 LLVM attribute kinds checked; clippy all targets with
+warnings denied and formatting clean. All eight device examples also execute: seven deterministic
+results match by hand; Grover completes at seed 0 (its distribution is checked by the existing tests).
