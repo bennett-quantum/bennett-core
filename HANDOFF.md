@@ -1,6 +1,8 @@
 # HANDOFF
 
-State on 2026-11-16, night (from 20:40 UTC): machine step e is on `main` (`229d3b9`..`a1b516e`: running
+State on 2026-11-17, 02:30 UTC (a night run from 20:40 UTC on 2026-11-16, still going): the fixes, testing
+passes and probes listed under "Stopped in flight on 2026-11-16" are on `main` through `ea213c7`. Machine
+step e is on `main` (`229d3b9`..`a1b516e`: running
 again charged to the run's budget, strict mode named, un-run regardless over a nonzero allocation, the mark's
 budget, the budget required after a read of a qubit, the call with a fault value and a budget, the NaN payload
 rule), then the IR reader refusing an infinite angle (`3206433`), the front naming invalid LLVM input instead of
@@ -56,9 +58,11 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 | Lua probe | Unmodified Lua 5.4.9 through musl: seven native stdout/status comparisons and exact reversals; a Lua predicate under hand-written `apply`, dense-checked Grover at N=4/8 (`experiments/lua-probe`) |
 
-Check it: `cargo test` (471 passed; 20 ignored: heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks, the scratch mutation matrix and the region-copy-cost witness; about 9 s, no LLVM needed) and `front/test.sh` (182 passed; 26 ignored by default: the nine fallback acceptance tests waiting for step 4, the five C North Star ladder runs (explicit experiments, `experiments/northstar-ladder/README.md`), the noncanonical x87 compare witness, a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
-musl-linked ABI check and two independent variadic checks that need `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
-129-bit bitfield struct; see "Known weak spots"); needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
+Check it: `cargo test` (499 passed; 29 ignored, each naming its reason: heavy reference, generated or
+hash-sample runs with their commands, witnesses of recorded defects and of questions awaiting the maintainer;
+about 9 s, no LLVM needed) and `front/test.sh` (198 passed; 30 ignored by default, each naming its reason: the
+nine fallback acceptance tests waiting for step 4, the C North Star ladder runs and other explicit experiments,
+musl-linked checks that need `rt/musl/build.py` first, heavy runs, and witnesses of recorded debts; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 With musl linked, standard output and exit status compared with native (`experiments/c-corpus/README.md`):
 GCC's C torture tests **1,574 agree, 1 refused by name**, 81 skipped;
@@ -161,21 +165,32 @@ commit) after the four checks passed on it.
   the first step (since `5515ae8`); the independent whole-world reference panicked at its own start
   (`expect("entry fits memory")`). The reference now models the fault, and
   `an_entry_frame_that_does_not_fit_faults_in_both_machines` steps every fixture in 64 bytes in both.
-- **In flight tonight**, each pushing checked steps to its `wip/` branch, landed one by one:
-  `wip/machine-finish` (the journal-content observer named instead of a panic, a false `RewoundUse` after
-  `setjmp`, deferred checks compared on a hash match, then the testing passes' and the design seam's findings
-  below, then `apply` computed as mark, call and keep, compared on every test); `wip/p0-fixes` (the missed
-  mutants of a to d, noncanonical x87 operands); `wip/sol-reference` (the whole-world reference modelling the
-  mark's budget and the call form); a changed-line mutation run over step e (about 300 mutants).
-- **Testing passes:** machine decisions a to d (sol, tonight): one false refusal (`RewoundUse` after `setjmp`),
-  fixed on `wip/machine-finish`; 18 probes kept. Step e (sol, tonight): three executor defects (a panic when a
-  mark's budget and an outer call's budget end at the same step; the call form giving `bad_rewind` where `apply`
-  succeeds; a callee frame that does not fit ending the world instead of giving its code) and one in the NaN
-  rule (a signalling output accepted), each with an ignored witness, given to `wip/machine-finish`; it also
-  turned the audition's witnesses into executor tests. Still owed: sql-oracle, checks and entry-fix (by Opus,
-  sol built them). Done earlier: fix-replay (sol, no wrong result), fallback oracle (Opus, four accepted
-  wrong results fixed), libgcc (Opus, none on canonical inputs; a noncanonical x87 compare witness), files
-  and clocks (Opus, 18 wrong results fixed, landed).
+- **Landed tonight, each step with the four checks passing on it:** from `wip/machine-finish`, the
+  journal-content observer naming what it does not follow instead of a panic, the `RewoundUse` false refusal
+  after `setjmp`, deferred checks compared by state on a hash match, the step-e testing pass's four defects,
+  no fault found by inspecting the state ever delivered as a call's code (the seam's V4b), every built un-run
+  check run regardless outside strict mode with leftovers taken back (V1 and V2 at the sites built), the
+  region copy cost counting callee-frame slots; from `wip/p0-fixes`, the infinite angle, invalid input named,
+  the a-to-d missed mutants, noncanonical x87 operands; from `wip/fp-front`, `powi(x, 1)`, `roundevenl` and
+  `roundl` on noncanonical operands, classification as LLVM's x86-64 expansion of `is.fpclass`, a crash in
+  LLVM's reader caught and named; the whole-world reference with the mark's budget and the call form
+  (`wip/sol-reference`); the C rung-2 table on an independent executor (`wip/sol-rung2`); musl authenticated
+  against its signed release and the IR mnemonic contract tests (`wip/sol-evidence`); copied `sigjmp_buf`
+  compared with glibc (`wip/sol-sigjmp`); the corpus rerun (`wip/corpus-night`).
+- **In flight:** `wip/machine-finish` (Opus): a panic when leftovers are taken back out of stack order, and
+  the memory-qubit read and deferred-sum sites of "run regardless" (witnesses ignored in
+  `crates/exec/tests/machine_finish_independent.rs`), then `apply` computed as a mark with a budget, the call
+  form and a rewind's keep, compared with today's path on every test; `apply`, `qalloc` and `qfree` stay.
+  `wip/sol-mutants-e`: tests for the survivors of a partial changed-line mutation run over step e (stopped
+  after 10 of about 300 mutants: each took four minutes or more on a shared machine; the full run over the
+  machine's final diff is owed, with tests scoped to the executor). `wip/sol-test-fp`: the testing pass over
+  `wip/fp-front`'s fixes.
+- **Testing passes done tonight (sol):** machine decisions a to d (one false refusal, fixed); step e (four
+  defects, fixed; the audition's witnesses became executor tests); the p0 fixes (four wrong results and a crash
+  in the front, fixed); machine-finish (a panic and two unbuilt sites, in flight). Still owed (by Opus, sol
+  built them): sql-oracle, checks, entry-fix, the Lua probe. Done earlier: fix-replay (sol, no wrong result),
+  fallback oracle (Opus, four accepted wrong results fixed), libgcc (Opus, none on canonical inputs), files and
+  clocks (Opus, 18 wrong results fixed).
 - **The fallback** (next step 4): not started. Ready for it: the landed oracle (`front/tests/c/fallback_oracle/`)
   and a second, independent plan for its order of steps, kept privately for the implementer to compare with
   its own. Starts after step e.
