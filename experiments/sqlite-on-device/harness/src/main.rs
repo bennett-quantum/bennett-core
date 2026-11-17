@@ -1,6 +1,7 @@
 //! Standalone experiment observer, using only the executor's public interface.
 use bennett_exec::{Executor, Options, Outcome};
 use std::{env, fs, time::Instant};
+mod dump;
 mod grover;
 mod scale;
 
@@ -10,6 +11,10 @@ fn main() {
     let module = bennett_ir::load(&text).expect("valid device program");
     if args[2] == "scale" {
         scale::run(&module, &args[3..]);
+        return;
+    }
+    if args[2] == "dump" {
+        dump::run(&module, &args[3], args[4].parse().expect("configuration bound"));
         return;
     }
     if args[2] == "grover" {

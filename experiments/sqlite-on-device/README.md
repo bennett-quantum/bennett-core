@@ -637,3 +637,35 @@ Final verification after the rebase: `cargo test` passes 306 tests (16 ignored),
 `cargo fmt --check` pass. The standalone observer's clippy, format check and dense Grover
 unit test pass too. The ignored entry-frame exhaustion witness described above remains an
 explicit executor debt; this experiment changes no executor implementation files.
+
+### Independent testing pass (2026-11-17)
+
+`edge/truth.py` rebuilds the generated table from `driver.c`'s LCG and text generator and answers every
+query twice: with the host Python's own SQLite (3.45) and with a plain-Python reading of the SQL. Both agree,
+and the native driver's printed truth table equals them for all eight shapes at N=16/32/64/128/256/512
+(`oracle128` with the original heap stops at its `SQLITE_NOMEM` row as recorded). The match counts, the
+iteration counts and the success probabilities in the tables above all follow from these sets. With
+`--amplitudes` it runs each saved Grover entry to its measurement through the observer's `dump` mode and
+compares every amplitude with a dense Grover iteration written in the script: all five shapes at all six sizes
+agree within 2.7e-15, norm 1 within 1.3e-14, no region fault (largest run: `range_agg` at N=512, 42 s).
+
+`edge/edge_driver.c` is a second database behind the same `experiment_setup`/`experiment_query` interface,
+eight rows chosen for their edges: NULL in each column, duplicate keys, `INT64_MIN`/`INT64_MAX`, the empty
+string, `'M'` against `'m'` and a two-byte UTF-8 name under BINARY collation, LIKE metacharacters and case,
+integer overflow in `+` (a REAL) and in `abs` (an error, as a result code), an all-rows and a no-rows
+predicate. `edge/edge.py` computes its truth table with the host SQLite and a plain reading, requires the
+native driver to print the same, then runs `scale.py`'s checks on the eleven Boolean queries:
+
+```sh
+SQLITE_DIR=<amalgamation directory> python3 experiments/sqlite-on-device/edge/edge.py target/sqlite-on-device/edge
+```
+
+All 56 checks pass: the complete native/device driver output (the `abs` error included), and for each query
+the forward truth table, byte-exact classical reversal, both coherent calls against the dense matrices with
+full reversal, and Grover with every amplitude. The Grover amplitudes were also compared with `truth.py`'s
+dense iteration on the edge truth tables (the all-rows oracle gives every row -1/√8, the no-rows oracle +1/√8).
+No wrong result, panic, hang or refusal was found.
+
+Not probed: a key that is absent from the table. The driver returns -1 for a query that finds no row, and the
+generated `@scale_lookup` truncates the result to one bit, which would mark the row; `scale.py` refuses such a
+table before building an oracle (every native result must be 0 or 1), so no measured oracle reaches it.
