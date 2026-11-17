@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
-/// Exhaust the ENTIRE supplied finite domain, including history/marks/control state in S.
+/// Exhaust the ENTIRE supplied finite domain, including history and control state in S.
 /// Input and output domains may differ (e.g. push/pop a bounded history record) but must
 /// have the same cardinality. No assumption that an involution is therefore injective.
 /// The caller must enumerate all encodings it claims are legal, not just reachable clean states.

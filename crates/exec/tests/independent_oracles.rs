@@ -1,4 +1,4 @@
-//! Experiments for DESIGN.md “The next extension”, independently of the journalled-machine job.
+//! Independent dense and bijection checks of gates, controls, `apply` and reversal (`docs/DESIGN.md`, "Tests").
 //! Run: cargo test -p bennett-exec --test independent_oracles -- --nocapture
 
 mod oracle_support;
@@ -291,7 +291,6 @@ fn generated_region_circuits_match_dense_vectors() {
 fn apply_step_preserves_and_restores_an_existing_journal_prefix() {
     // Public stepping cannot inject an arbitrary journal encoding. Exercise actual reachable
     // prefixes instead: untouched memory and a dirty prefix which destroys 0 then 165 at address 64.
-    // This tests current apply; it does NOT assert that future mark/rewind is implemented.
     for dirty in [false, true] {
         let prefix = if dirty { "store i8 165, 64\nstore i8 90, 64\n" } else { "" };
         let text = region_program(2, "%r = mul i2 %a, %a\nret %r", 8)
@@ -329,8 +328,8 @@ fn apply_step_preserves_and_restores_an_existing_journal_prefix() {
 
 #[test]
 fn finite_checker_accepts_distinct_domains_and_detects_erased_history() {
-    // An adapter example only, not a proposed mark/rewind implementation. A finite push moves
-    // one old value from a machine cell into a history cell. Include PC/mark tags in both domains.
+    // An adapter example only. A finite push moves one old value from a machine cell into a history cell.
+    // Include PC tags in both domains.
     let before: Vec<_> = words(&[2, 2]).into_iter().map(|s| vec![0, s[0], s[1], 0]).collect();
     let after: Vec<_> = words(&[2, 2]).into_iter().map(|s| vec![1, s[0], 0, s[1]]).collect();
     assert_eq!(check_bijection(&before, &after, |s| vec![1, s[1], 0, s[2]]), Ok(16));
