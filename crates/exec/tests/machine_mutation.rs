@@ -99,13 +99,26 @@ fn run_leftover_and_reverse(text: &str, leftover_qubits: u32) {
     let options = Options { budget: Some(100), machine_meaning: true, reversible: true, ..Options::default() };
     let mut executor = Executor::new(&module, entry, &[], options).expect("entry fits");
     let start = executor.snapshot();
-    assert_eq!(executor.run(), Outcome::Returned(Some(7)));
+    let mut snapshots = vec![start.clone()];
+    let mut finished = false;
+    for _ in 0..100 {
+        if let Some(outcome) = executor.step() {
+            assert_eq!(outcome, Outcome::Returned(Some(7)));
+            finished = true;
+            break;
+        }
+        snapshots.push(executor.snapshot());
+    }
+    assert!(finished, "the straight-line witness must finish in fewer than 100 steps");
     assert_eq!(executor.stats().leftover_qubits, leftover_qubits);
-    executor.reverse().expect("take back the leftovers and reverse");
-    let restored = executor.snapshot();
-    assert_eq!(restored.classical, start.classical);
-    assert!(restored.quantum.distance(&start.quantum).is_some_and(|distance| distance < 1e-12));
-    assert_eq!(restored.worlds.len(), start.worlds.len());
+    for expected in snapshots.iter().rev() {
+        assert_eq!(executor.step_back(), Ok(true));
+        let restored = executor.snapshot();
+        assert_eq!(restored.classical, expected.classical);
+        assert!(restored.quantum.distance(&expected.quantum).is_some_and(|distance| distance < 1e-12));
+        assert_eq!(restored.worlds.len(), expected.worlds.len());
+    }
+    assert_eq!(executor.step_back(), Ok(false));
     assert_eq!(executor.stats().leftover_qubits, 0);
 }
 
@@ -114,7 +127,7 @@ fn a_changed_three_bit_read_takes_back_its_nonzero_value_from_a_later_column() {
     for outer in ["", "rewind %outer"] {
         let text = format!(
             "memory 256
-func @identity(i3 %value) -> i3 {{
+func @identity(i8 %padding, i3 %value) -> i3 {{
 entry:
     ret %value
 }}
@@ -127,7 +140,7 @@ entry:
     %k = qalloc 1
     %outer = mark budget 60
     %inner = mark budget 20
-    %value = call @identity(%q)
+    %value = call @identity(i8 23, %q)
     x %q[1] ctrl %k
     rewind %inner keep (i1 1 -> %k)
     {outer}
@@ -156,6 +169,29 @@ entry:
 }}"
         );
         run_leftover_and_reverse(&text, if outer.is_empty() { 8 } else { 0 });
+    }
+}
+
+#[test]
+fn two_leftover_allocations_are_matched_to_their_own_records() {
+    for outer in ["", "rewind %outer"] {
+        let text = format!(
+            "memory 256
+func @main() -> i8 {{
+entry:
+    %k = qalloc 1
+    %outer = mark budget 60
+    %inner = mark budget 20
+    %a = qalloc 1
+    %b = qalloc 2
+    x %a ctrl %k
+    x %b[1] ctrl %k
+    rewind %inner keep (i1 1 -> %k)
+    {outer}
+    ret 7
+}}"
+        );
+        run_leftover_and_reverse(&text, if outer.is_empty() { 3 } else { 0 });
     }
 }
 
@@ -212,9 +248,37 @@ entry:
     let before_call = executor.snapshot();
     assert_eq!(executor.step(), None); // read and split
     assert_eq!(executor.stats().splits, 1);
+    let clock = executor.stats().clock;
+    assert!(clock > 0);
     assert_eq!(executor.step_back(), Ok(true));
     let restored = executor.snapshot();
     assert_eq!(restored.classical, before_call.classical);
     assert_eq!(restored.worlds.len(), before_call.worlds.len());
     assert!(restored.quantum.distance(&before_call.quantum).is_some_and(|distance| distance < 1e-12));
+    assert_eq!(executor.stats().clock, clock, "partial reversal does not turn back time");
+    assert_eq!(executor.step_back(), Ok(true)); // undo H
+    assert_eq!(executor.step_back(), Ok(true)); // undo allocation, back at the entry
+    assert_eq!(executor.stats().clock, 0);
+}
+
+#[test]
+fn one_reverse_step_actually_unpromotes_a_memory_gate() {
+    let module = bennett_ir::load(
+        "memory 256
+data 73 = i8 166
+func @main() {
+entry:
+    x [73]
+    ret
+}",
+    )
+    .expect("valid promotion witness");
+    let entry = module.function_named("main").expect("main");
+    let options = Options { budget: Some(4), reversible: true, ..Options::default() };
+    let mut executor = Executor::new(&module, entry, &[], options).expect("entry fits");
+    let start = executor.snapshot();
+    assert_eq!(executor.step(), None);
+    assert_ne!(executor.snapshot().classical, start.classical);
+    assert_eq!(executor.step_back(), Ok(true));
+    assert_eq!(executor.snapshot(), start);
 }

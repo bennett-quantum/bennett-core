@@ -9,7 +9,8 @@ fn only_a_run_that_leaves_qubits_over_reports_the_warning() {
         [("dirty", true, 0, true), ("clean", true, 0, false), ("dirty", false, 1, false), ("clean", false, 0, false)]
     {
         let mut command = Command::new(env!("CARGO_BIN_EXE_bennett"));
-        command.args(["run", fixture, "--entry", entry]);
+        // The longest fixture entry takes five instructions; bound a broken forward instruction too.
+        command.args(["run", fixture, "--entry", entry, "--budget", "20"]);
         if machine {
             command.arg("--machine-meaning");
         }
