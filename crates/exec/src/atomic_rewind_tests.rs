@@ -13,6 +13,45 @@ use crate::journal::Journal;
 use crate::quantum::QuantumState;
 use crate::worlds::{Defect, Status, World};
 
+#[test]
+fn restoring_a_step_inside_a_budgeted_call_does_not_spend_its_budget() {
+    let module = bennett_ir::load(
+        "memory 128
+func @callee() -> i8 {
+entry:
+    %v = add i8 17, 25
+    ret %v
+}
+func @main() -> i8 {
+entry:
+    %v, %c = call @callee() budget 2
+    ret %v
+}",
+    )
+    .expect("valid program");
+    let mut e = Executor::new(
+        &module,
+        module.function_named("main").expect("entry"),
+        &[],
+        Options { reversible: true, budget: Some(8), ..Options::default() },
+    )
+    .expect("starts");
+    assert_eq!(e.step(), None); // Enter the call; neither callee step has run.
+    assert!(e.any_guard);
+    assert_eq!(e.frames.last().expect("callee frame").guard, Some(2));
+    // The state used by run_forward when a failed rewind restores steps it just un-ran. Its forward
+    // execution must restore the instruction's data without charging the still-live call a second time.
+    e.counting = false;
+    e.rerunning = 1;
+    let clock = e.clock;
+    assert_eq!(e.execute(), Ok(()));
+    let frame = e.frames.last().expect("callee frame");
+    assert_eq!(frame.inst, 1);
+    assert_eq!(e.slots[frame.base], 42);
+    assert_eq!(frame.guard, Some(2), "restoration must preserve the call's remaining budget");
+    assert_eq!(e.clock, clock);
+}
+
 /// Amplitudes after an un-run and its run again round; a few gates give errors of order 1e-16.
 const TOLERANCE: f64 = 1e-12;
 
