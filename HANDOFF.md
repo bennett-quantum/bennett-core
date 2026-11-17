@@ -50,7 +50,7 @@ The maintainer's decisions of 2026-11-17:
 `apply`, `qalloc` and `qfree` stay ("Decision the maintainer took on 2026-11-16, in the evening"); `apply` is
 the only bridge from qubits to ordinary code.
 
-The maintainer's further points, about 13:00, 13:15 and 13:40 UTC:
+The maintainer's further points, about 13:00, 13:15, 13:40 and 15:35 UTC:
 
 - **Memory written under `apply` (about 13:40 UTC).** The rule put to the maintainer: "memory writes made by code
   run under `apply` do not survive it; only the returned value does." The answer: "ok I accept rule 1 in the
@@ -58,6 +58,26 @@ The maintainer's further points, about 13:00, 13:15 and 13:40 UTC:
   ensuring all memory allocs are *also* simulated and applied". The runtime already has the property: musl's
   allocator, the file model, the clock and the entropy image are ordinary device code over device memory, so under
   `apply` they run on its private memory and are undone with it.
+- **Code under a qubit that writes what later code reads (about 15:35 UTC),** on a design note the advisor put
+  to the maintainer: "i agree with the fable note. I like the philosophy of Soeren Wilkening: 'everything is
+  quantum: if it is in a classical config, and only classical stuff happens, we can approx it as classical. as
+  soon as quantum touches it it becomes quantum' measurement is the antithesis of that philosophy". Decided, in
+  plain words:
+  - A store written in a quantum function's own code, whose value or whether it runs depends on a qubit, makes
+    the bytes it writes hold qubits and keeps the value in superposition there: the value is applied into a
+    fresh register and exchanged with the target bytes by gates, and the register is cleared when its old
+    content can be recomputed (it was known, is a function of registers that have not changed, or the update is
+    invertible). The compiler inserts no measurement anywhere.
+  - An overwrite whose old value cannot be erased is accepted: the old value is kept in spare qubits that are
+    released by `qfree` (the partial trace), with a warning and the count of qubits kept.
+  - Measuring bytes at an address makes them ordinary memory again, holding the result.
+  - A loop with an ordinary, definite trip count may keep one small `apply` per pass (the front audit's finding
+    of one `apply` per pass is harmless as witnessed). Code without gates whose control flow depends on a qubit
+    is one `apply` with one budget, whether or not it assigns to qubit variables. The front never creates a
+    loop, counter or bound that is not in the C.
+  - A loop containing gates keeps a trip count that is an ordinary value written in the C; its ordinary part is
+    one applied function returning a table of control bits for the gates, cleared afterwards by the same
+    `apply`. No unrolling.
 
 - **Goals, not started:** "a lean proof of the executor is a medium term goal"; and, on the requirement that each
   instruction's step is a total function of the machine state, "this is a followup lemma. partial functions are
@@ -113,7 +133,8 @@ The order of the work:
    and calls it contains; its writes are undone when it ends and only its result survives (a console write or
    `exit` inside is the named fault). Acceptance target: `apply` of a function running a SQLite query whose key
    depends on a small qubit register, on a database set up by ordinary code before the `apply`, each argument
-   value compared with native SQLite. Writes that must survive the applied code are planned separately.
+   value compared with native SQLite. Writes that must survive: "Next steps, in order", 4 (decided at about
+   15:35 UTC).
 
 Debts opened by step 2 (removing `mark`, `rewind`, machine states in superposition and the call form):
 
@@ -275,9 +296,16 @@ explicitly after the separate musl build.
    loops and calls it contains; its writes are undone when it ends and only its result survives. Today the
    front applies a function only if LLVM proved it reads memory only, and refuses a qubit-dependent call to one
    that writes memory; the route lifts that. Acceptance target: SQLite under `apply`, a query whose key depends
-   on a small qubit register, each argument value compared with native SQLite. Planned separately: writes that
-   must survive the applied code (an inline store under a qubit-dependent condition that later code reads), with
-   the two loop findings of the front audit ("Known weak spots"). The target for those is the fallback oracle
+   on a small qubit register, each argument value compared with native SQLite.
+   Then, after that has landed and step 5 of the order in "Resumed on 2026-11-17" is done, code under a qubit
+   that writes what later code reads (the maintainer's decision of about 15:35 UTC), each a landable step, in this
+   order: (B) code without gates under a qubit-dependent condition that assigns to qubit variables becomes one
+   `apply` with one budget, lifting today's refusal, tested with two nested loops whose trip counts depend on a
+   qubit register; (C) loops with gates, the condition computed once or as a table of control bits, the ordinary
+   loop kept in the control code; (A) at a definite address, a qubit-dependent store keeps its value in qubits
+   at the bytes it writes, measuring those bytes makes them ordinary memory again, and an overwrite that cannot
+   be erased keeps the old value in qubits released by `qfree`, with a warning and its count. Rule A at an
+   address that depends on a qubit: a plan first. The target for these is the fallback oracle
    (`front/tests/tests/fallback_oracle.rs`; fixtures and explanation in `front/tests/c/fallback_oracle/`): host
    clang runs each C update once per basis input, the device result is compared with it, and its ignored
    acceptance tests wait for the route. The Boolean XOR on a quantum `_Bool` (`y ^= q && !r`, and
@@ -563,16 +591,16 @@ fails today:
 - **The Lua probe** (low): `%a` of a subnormal double is musl's spelling, not glibc's (question above;
   `front/tests/tests/printf_hex_float.rs`).
 
-Found correct: the SQL oracle's marked sets, recomputed from the query semantics by host SQLite and by hand,
-at every shape and size, and every device Grover amplitude at N=16 to 512 against a separate dense
-calculation; an edge-row database (NULLs, duplicates, 64-bit bounds, collation, overflow, all and no rows),
-all 56 checks (`experiments/sqlite-on-device/edge/`). The entry frame at every memory size around it, seven
-signatures, three data layouts, four option sets, and with musl startup at every stack size near both edges,
-against the independent reference interpreter of the time (removed on 2026-11-17) (`crates/exec/tests/entry_frame_boundary.rs`,
-`front/tests/tests/entry_frame_musl.rs`). The Lua probe's three stages rerun, five more scripts (error
-messages, format corners, garbage collection under pressure, integer/float edges, ordered tables) agreeing
-and reversing exactly, a second predicate with three of eight marked, and every Grover amplitude against
-closed forms (`experiments/lua-probe/README.md`, "Independent testing pass").
+Found correct: the SQL oracle's marked sets, recomputed from the query semantics by host SQLite and by hand, at
+every shape and size, and every device Grover amplitude at N=16 to 512 against a separate dense calculation; an
+edge-row database (NULLs, duplicates, 64-bit bounds, collation, overflow, all and no rows), all 56 checks
+(`experiments/sqlite-on-device/edge/`). The entry frame at every memory size around it, seven signatures, three
+data layouts, four option sets, and with musl startup at every stack size near both edges, against the independent
+reference interpreter of the time (removed on 2026-11-17) (`crates/exec/tests/entry_frame_boundary.rs`,
+`front/tests/tests/entry_frame_musl.rs`). The Lua probe's three stages rerun, five more scripts (error messages,
+format corners, garbage collection under pressure, integer/float edges, ordered tables) agreeing and reversing
+exactly, a second predicate with three of eight marked, and every Grover amplitude against closed forms
+(`experiments/lua-probe/README.md`, "Independent testing pass").
 
 ## Questions for the maintainer
 
@@ -585,7 +613,12 @@ would pass the budget; Superseded (2026-11-17): the leftover is now taken back; 
 budget is required; The call with a fault value; Reference-only clock/diagnostic boundaries; A budgeted callee's
 padded clock and its caller's mark; A mark's budget once its frame is left.
 
-- **Which bytes hold qubits, for the fault `qubit_memory_access` (2026-11-17, step 3 of the work).** Taken
+- **Which bytes hold qubits, for the fault `qubit_memory_access` (2026-11-17, step 3 of the work). ANSWERED
+  at about 15:35 UTC:** measuring bytes at an address makes them ordinary memory again, holding the result
+  ("i agree with the fable note. I like the philosophy of Soeren Wilkening: 'everything is quantum: if it is in a
+  classical config, and only classical stuff happens, we can approx it as classical. as soon as quantum touches it
+  it becomes quantum' measurement is the antithesis of that philosophy"; "Resumed on 2026-11-17"). Not built yet:
+  until it is, the rule below holds. Taken
   (the simulator's rule already, the easiest to reverse): a byte holds qubits from the first gate that names
   any of its bits until that gate is undone, then for the rest of the run; not released when its qubits are
   definite again, when measured, or when its stack frame returns, and the rule is per whole byte (a load of a
@@ -594,6 +627,11 @@ padded clock and its caller's mark; A mark's budget once its frame is left.
   back to memory holding the values found (a device knows that classically); or a release of qubits at an
   address, as `qfree` is for a register (a new instruction, so the maintainer's to decide). Recommendation:
   keep the rule until a front emits gates at addresses; then the measured-byte release.
+- **Ordinary code that needs a definite value from bytes holding qubits (2026-11-17, taken by the advisor
+  with the decision of about 15:35 UTC).** Where ordinary code needs such a value (console output, a jump in
+  control code, the exit code), the front refuses and asks for a measurement the programmer writes; it does not
+  insert one. Cheap to reverse; the alternative would be a measurement the compiler inserts, which the decision
+  rules out for stores.
 - **Applied functions and qubits in memory (2026-11-17).** Taken, per the orchestrator's brief: inside `apply`
   the rule is the same, so an applied function cannot read qubits in memory; before, each run saw its
   configuration's values. A program copies the qubits into a register with controlled X gates, applies, and
@@ -662,7 +700,7 @@ Each recommendation was taken ("Decisions the maintainer took on 2026-11-16, in 
 | A call through another prototype where x86-64 does not determine what is read: the upper half of a 32-bit value, a missing argument that is read, an integer from a floating-point register, a variadic floating-point argument without `%al`, a narrow argument that is not the extension the callee relies on (named fault `unreachable` when the call runs); a direct call whose argument differs from its parameter only in register class (native -O0 and -O2 disagree) | Nothing to remove: the native result is not determined (`docs/DESIGN.md`, "Calls through a prototype"). Conservative, removable by a finer model where named: a variadic floating-point argument after an unread named one, a call whose result is used only by dead code before the optimiser, values in memory read at another place |
 | A qubit-dependent call of a function that uses `setjmp` | The front's own effect summary of `setjmp` (writes only its buffer) when deciding what runs coherently (`docs/DESIGN.md`, "Non-local jumps") |
 | `__float128`; `powi` on `_Float16`/`__bf16`; `#pragma STDC FENV_ACCESS` (with it musl's `ilogb`/`ilogbl` in the corpus accuracy checks; libgcc's `__divxc3` itself works); non-default rounding modes and floating-point flags | Step 5 above |
-| A store under qubit control; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control that LLVM does not unroll fully | For stores and calls whose writes stay inside a whole applied function: step 6 of "Resumed on 2026-11-17"; for gates in a loop with an ordinary trip count: its plan ("Known weak spots"). The rest is open: keeping what ordinary code overwrote under a qubit beyond the `apply` (`docs/DESIGN.md`, "Open questions") |
+| A store under qubit control; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control that LLVM does not unroll fully | For calls whose writes stay inside a whole applied function: step 6 of "Resumed on 2026-11-17". For the rest, the decision of about 15:35 UTC, rules B, C and A in that order ("Next steps, in order", 4): code without gates under a qubit as one `apply`; gate loops with an ordinary trip count; stores that keep their value in qubits at the bytes written, an overwrite that cannot be erased keeping the old value in qubits released by `qfree` |
 | A qubit-dependent value used by ordinary code or printed; measurement under control | Channels |
 | Non-empty inline assembly; code without source | An emulator of the real machine, compiled as an ordinary program |
 | A floating-point operation that reads the subnormal mode (arithmetic, comparison, conversion from floating point, intrinsics other than `fabs`/`copysign`/`is.fpclass`) in a function promising a non-IEEE mode (`-fdenormal-fp-math=preserve-sign`, `positive-zero`, `dynamic`, or the `-f32` form); moves and sign/magnitude bit operations there are accepted | The floating-point environment carried through SoftFloat's state (flush inputs and outputs as the promised mode says), compared with native code run under MXCSR DAZ/FTZ |
@@ -708,16 +746,17 @@ the ordinary frontend run without changing its domain or assertions.
 
 ## Known weak spots
 
-- **Two findings of the front audit of 2026-11-17 on loops, open** (planned with step 4 of "Next steps"). (1)
+- **Two findings of the front audit of 2026-11-17 on loops** (decided at about 15:35 UTC; step 4 of "Next
+  steps"). (1)
   The front writes one `apply` per update of a qubit variable, so `for (i = 0; i < n; i++) y ^= f(q, i) & 1;`
   is `n` applications, each with its own budget and fault register, where one `apply` of the whole loop's XOR
   with one budget would do; a loop inside a function that only reads memory, called with arguments that depend
-  on a qubit, already runs under one `apply` and one budget. (2) Gates in a loop under a qubit condition are accepted only when
-  LLVM unrolls the loop fully (`if (q) for (i = 0; i < n; i++) bennett_x(&y);` is refused; with `n` constant it
-  is accepted). Route for an ordinary trip count: compute the condition once into a fresh qubit, keep the
-  ordinary loop with each gate controlled by it, clear it after. A trip count that depends on a qubit would make
-  the number of gates depend on a qubit; what to do then is a question for the maintainer once the plan is
-  reported.
+  on a qubit, already runs under one `apply` and one budget. With an ordinary, definite trip count this is
+  harmless and may stay. (2) Gates in a loop under a qubit condition are accepted only when LLVM unrolls the
+  loop fully (`if (q) for (i = 0; i < n; i++) bennett_x(&y);` is refused; with `n` constant it is accepted).
+  Route (rule C): the trip count stays the ordinary value written in the C, the condition is computed once (or
+  as a table of control bits by one applied function), the ordinary loop stays in the control code with each
+  gate controlled, and the condition is cleared after.
 
 - **Three wrong translations in the front, found by the front audit of 2026-11-17, fixed** (`8bff6a5`,
   `313386d`, `bc5b3cb`; each a case of `what_was_once_translated_wrongly_is_refused_by_name_in_every_mode` in

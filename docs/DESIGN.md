@@ -220,7 +220,8 @@ an empty device program (`front/src/main.cpp`, `readInput`).
   `q && !r` by De Morgan into another `select`, so `(s ^ 1) ^ s` did not fold and `y ^= q && !r` was refused
   until 2026-11-17 (the fallback oracle's `coherent_xor`, and `coherent_nested` at O0).
 - **Conditional jumps, joins and loops that depend on a qubit** are outlined into ordinary functions and
-  applied. They may not write memory: an ordinary write under quantum control is a channel, and is refused.
+  applied. They may not write memory yet: the front refuses such a write (decided, not built: it will keep
+  its value in qubits at the bytes it writes; `HANDOFF.md`, "Next steps, in order", 4).
 - **Quantum operations under such a condition are predicated** (`Predicate.h`). For each basis configuration
   the outlined code runs one path; its gates and stores are moved after it, in a topological order of the
   code, each acting only where its path reaches it. A gate becomes a gate controlled by "this configuration
@@ -534,8 +535,9 @@ by the maintainer on 2026-11-17). Registers stay as they are, one way of naming 
   gate is undone, and then for the rest of the run: it does not stop when its qubits are definite again, when
   they are measured, or when the stack frame it lies in returns. The rule reads no amplitude, so a device
   can keep it as a table of addresses. It is the rule the simulator held already, taken on 2026-11-17 as the
-  easiest to reverse: any later way to give a byte back to ordinary code only accepts more programs
-  (`HANDOFF.md`, "Questions for the maintainer").
+  easiest to reverse: any later way to give a byte back to ordinary code only accepts more programs. The
+  maintainer decided on 2026-11-17 that measuring bytes at an address makes them ordinary memory again,
+  holding the result; not built yet (`HANDOFF.md`, "Questions for the maintainer").
 - **Ordinary code touching a byte that holds qubits faults `qubit_memory_access`** (code 17; the maintainer's
   decision of 2026-11-17, "yes, it should be a fault to read qubits"): a `load` or `store` any byte of which
   holds qubits, a `setjmp` record written over one, a `longjmp` record read from one. It faults in every
@@ -801,9 +803,11 @@ conditions (each predicated operation computes and clears its own).
 - **Memory written under qubit control that later code reads.**
 - **Keeping what ordinary code overwrote under a qubit, and un-running it later.** `apply` computes, copies the
   result out and un-runs at once. An update with no known inverse (`x = x * x`) and a conditional boot need the
-  kept values to outlive the `apply`. A narrow static form of this has a proof and may be added with its check
-  (`HANDOFF.md`). Gates, allocation and measurement inside code that is later un-run are not part of the model:
-  a program wanting them writes the forward and inverse gate sequences itself.
+  kept values to outlive the `apply`. Decided on 2026-11-17, not built: such an overwrite is accepted, the old
+  value kept in spare qubits released by `qfree`, with a warning and the count of qubits kept. A narrow static
+  form of this has a proof and may be added with its check (`HANDOFF.md`). Gates, allocation and measurement
+  inside code that is later un-run are not part of the model: a program wanting them writes the forward and
+  inverse gate sequences itself.
 - **Channels.** A dirty discard is the partial trace, measurement is described by effects, noise by channels; the
   finished Bennett covers them (maintainer, 2026-11-13). This step has unitaries, measurement and the partial
   trace (`qfree`, since 2026-11-17), the simulator keeping a purification. Nothing in
