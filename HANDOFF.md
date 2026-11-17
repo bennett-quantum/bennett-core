@@ -60,7 +60,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 
 Check it: `cargo test` (499 passed; 29 ignored, each naming its reason: heavy reference, generated or
 hash-sample runs with their commands, witnesses of recorded defects and of questions awaiting the maintainer;
-about 9 s, no LLVM needed) and `front/test.sh` (198 passed; 30 ignored by default, each naming its reason: the
+about 9 s, no LLVM needed) and `front/test.sh` (210 passed; 36 ignored by default, each naming its reason: the
 nine fallback acceptance tests waiting for step 4, the C North Star ladder runs and other explicit experiments,
 musl-linked checks that need `rt/musl/build.py` first, heavy runs, and witnesses of recorded debts; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -853,8 +853,13 @@ The ten checks and test-writing rules are implemented in `docs/CHECKS.md`, `docs
 The hook is opt-in (`git config --local core.hooksPath .githooks`), checks every pushed nondeleted SHA in
 an isolated archive, and rejects incoming WIP ancestors on main. It runs all four repository checks.
 The pin is LLVM/clang major 18, as before; patch releases are compatible. Attribute classification is
-exhaustive for LLVM enum kinds and records conditional ABI handling; open-ended string attributes
-still need semantic review/native comparisons.
+exhaustive for LLVM enum kinds and records conditional ABI handling. The clang 18.1.3 input envelope
+now has an inventory at both optimisation levels (7,597 emitted modules, 43 enum kinds and 16 string keys),
+including enum/string values and every observed
+function/return/parameter placement on definitions, declarations and calls (`docs/CHECKS.md`,
+"Measured attribute placements and native comparisons"; complete counts in `docs/attribute-inventory.tsv`).
+String policies were reviewed against native comparisons within that envelope; this is not an exhaustive
+claim about arbitrary strings or calling conventions.
 
 Debts and their routes: (1) automated changed-line mutation generation is Rust-only (cargo-mutants);
 C++/script changes currently use recorded seeded edits. Route: integrate an established C++/script
@@ -862,9 +867,23 @@ mutation engine with diff selection and the existing suites, then demonstrate su
 (2) Whole-step mutation and isolated cold pre-push builds do not have a seconds-long total-time guarantee;
 work scales with diff size and compilation. Route: measure/cache exact dependency artifacts and select
 proven relevant tests, retaining complete changed-line mutation scope; no timeout or percentage gate.
-The default tests and small guard witnesses stay fast. (3) Enum classification records scope rather than
-proving every attribute placement; expand native ABI matrices and enforce/refine policies when lowering
-new conventions. No attribute-name list is maintained independently of the compiler-exhaustive switch.
+The default tests and small guard witnesses stay fast. (3) Remaining attribute debt: accepted non-IEEE
+`denormal-fp-math` and `denormal-fp-math-f32` silently keep IEEE subnormals in SoftFloat. Native MXCSR
+DAZ/FTZ satisfies the promised preserve-sign environment and disagrees at both O0/O2; two ignored
+`defect:` witnesses in `front/tests/tests/attributes_independent.rs` were run and seen failing. Route:
+lower input/output flushing at the SoftFloat boundary, or refuse non-IEEE modes by name until built.
+The observed ABI/reference/allocation/no-builtin/ordinary-FP comparisons otherwise agree (704 exact result
+words and 32 allocation hashes at both levels combined); strict FP arithmetic is refused by name. Still unproved: attributes/values/placements outside the measured input
+envelope, generated sources only constructed by ignored experiments, nondefault calling conventions
+(`inreg`, `preallocated`, `inalloca` have zero measured occurrences), native AVX512 execution on this CPU,
+and exception/environment semantics already deferred to the fallback. Expand the inventory/native matrix
+when these inputs are added. No second exhaustive enum-name allowlist is maintained.
+
+The attribute-evidence step's required checks after rebasing on `d3880f6`: Rust 499 passed / 29 ignored,
+front 210 passed / 36 ignored; root clippy, the workspace-library lint, formatting and tree guards pass.
+The new test target also passes clippy separately. An extra front-wide all-targets clippy run exposes two
+pre-existing `unwrap()` calls in `front/tests/tests/complex.rs` (archive/commutation paths), left unchanged;
+that broader harness lint is not covered by the root's default-package all-targets command.
 
 The changed-line mutation run on the job's own diff (`python3 scripts/mutate-diff.py 2142238` at `0e1b00d`, 2026-11-16):
 22 mutants, 16 caught, 5 unviable, 0 timeouts, 1 missed: `crates/exec/src/measure.rs`, `live_sources`,

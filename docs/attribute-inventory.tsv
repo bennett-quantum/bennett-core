@@ -1,0 +1,2445 @@
+group	level	site	placement	kind	attribute	count
+cts	O0	call	function	enum	allocsize(0,1)	1
+cts	O0	call	function	enum	nounwind	1
+cts	O0	call	parameter	enum	align 1	177
+cts	O0	call	parameter	enum	align 16	82
+cts	O0	call	parameter	enum	align 2	4
+cts	O0	call	parameter	enum	align 4	62
+cts	O0	call	parameter	enum	align 8	106
+cts	O0	call	parameter	enum	byval(%struct.foo)	3
+cts	O0	call	parameter	enum	byval(%struct.hfa13)	2
+cts	O0	call	parameter	enum	byval(%struct.hfa23)	16
+cts	O0	call	parameter	enum	byval(%struct.hfa24)	17
+cts	O0	call	parameter	enum	byval(%struct.hfa31)	7
+cts	O0	call	parameter	enum	byval(%struct.hfa32)	13
+cts	O0	call	parameter	enum	byval(%struct.hfa33)	15
+cts	O0	call	parameter	enum	byval(%struct.hfa34)	17
+cts	O0	call	parameter	enum	byval(%struct.s11)	1
+cts	O0	call	parameter	enum	byval(%struct.s12)	2
+cts	O0	call	parameter	enum	byval(%struct.s13)	2
+cts	O0	call	parameter	enum	byval(%struct.s14)	1
+cts	O0	call	parameter	enum	byval(%struct.s17)	1
+cts	O0	call	parameter	enum	byval(%struct.s9)	7
+cts	O0	call	parameter	enum	dead_on_unwind	11
+cts	O0	call	parameter	enum	noundef	1757
+cts	O0	call	parameter	enum	signext	3
+cts	O0	call	parameter	enum	sret(%struct.hfa23)	2
+cts	O0	call	parameter	enum	sret(%struct.hfa24)	2
+cts	O0	call	parameter	enum	sret(%struct.hfa32)	2
+cts	O0	call	parameter	enum	sret(%struct.hfa33)	2
+cts	O0	call	parameter	enum	sret(%struct.hfa34)	2
+cts	O0	call	parameter	enum	sret(%struct.s17)	1
+cts	O0	call	parameter	enum	writable	11
+cts	O0	declaration	function	enum	allocsize(0,1)	1
+cts	O0	declaration	function	enum	memory(argmem: readwrite)	7
+cts	O0	declaration	function	enum	memory(argmem: write)	2
+cts	O0	declaration	function	enum	memory(none)	1
+cts	O0	declaration	function	enum	nocallback	13
+cts	O0	declaration	function	enum	nofree	13
+cts	O0	declaration	function	enum	nosync	4
+cts	O0	declaration	function	enum	nounwind	14
+cts	O0	declaration	function	enum	speculatable	1
+cts	O0	declaration	function	enum	willreturn	13
+cts	O0	declaration	function	string	"frame-pointer"="all"	91
+cts	O0	declaration	function	string	"no-trapping-math"="true"	91
+cts	O0	declaration	function	string	"stack-protector-buffer-size"="8"	91
+cts	O0	declaration	function	string	"target-cpu"="x86-64"	91
+cts	O0	declaration	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	91
+cts	O0	declaration	function	string	"tune-cpu"="generic"	91
+cts	O0	declaration	parameter	enum	immarg	9
+cts	O0	declaration	parameter	enum	noalias	14
+cts	O0	declaration	parameter	enum	nocapture	16
+cts	O0	declaration	parameter	enum	noundef	115
+cts	O0	declaration	parameter	enum	readonly	7
+cts	O0	declaration	parameter	enum	writeonly	9
+cts	O0	definition	function	enum	noinline	430
+cts	O0	definition	function	enum	nounwind	430
+cts	O0	definition	function	enum	uwtable	430
+cts	O0	definition	function	string	"frame-pointer"="all"	430
+cts	O0	definition	function	string	"min-legal-vector-width"="0"	421
+cts	O0	definition	function	string	"min-legal-vector-width"="64"	9
+cts	O0	definition	function	string	"no-trapping-math"="true"	430
+cts	O0	definition	function	string	"stack-protector-buffer-size"="8"	430
+cts	O0	definition	function	string	"target-cpu"="x86-64"	430
+cts	O0	definition	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	430
+cts	O0	definition	function	string	"tune-cpu"="generic"	430
+cts	O0	definition	parameter	enum	align 1	1
+cts	O0	definition	parameter	enum	align 16	9
+cts	O0	definition	parameter	enum	align 8	14
+cts	O0	definition	parameter	enum	byval(%struct.foo)	1
+cts	O0	definition	parameter	enum	byval(%struct.hfa23)	2
+cts	O0	definition	parameter	enum	byval(%struct.hfa24)	2
+cts	O0	definition	parameter	enum	byval(%struct.hfa31)	1
+cts	O0	definition	parameter	enum	byval(%struct.hfa32)	2
+cts	O0	definition	parameter	enum	byval(%struct.hfa33)	1
+cts	O0	definition	parameter	enum	byval(%struct.hfa34)	2
+cts	O0	definition	parameter	enum	byval(%struct.s11)	1
+cts	O0	definition	parameter	enum	byval(%struct.s12)	2
+cts	O0	definition	parameter	enum	byval(%struct.s13)	2
+cts	O0	definition	parameter	enum	byval(%struct.s14)	1
+cts	O0	definition	parameter	enum	byval(%struct.s17)	1
+cts	O0	definition	parameter	enum	dead_on_unwind	6
+cts	O0	definition	parameter	enum	noalias	6
+cts	O0	definition	parameter	enum	noundef	151
+cts	O0	definition	parameter	enum	signext	1
+cts	O0	definition	parameter	enum	sret(%struct.hfa23)	1
+cts	O0	definition	parameter	enum	sret(%struct.hfa24)	1
+cts	O0	definition	parameter	enum	sret(%struct.hfa32)	1
+cts	O0	definition	parameter	enum	sret(%struct.hfa33)	1
+cts	O0	definition	parameter	enum	sret(%struct.hfa34)	1
+cts	O0	definition	parameter	enum	sret(%struct.s17)	1
+cts	O0	definition	parameter	enum	writable	6
+cts	O0	definition	return	enum	zeroext	1
+cts	O2	call	function	enum	allocsize(0,1)	1
+cts	O2	call	function	enum	nounwind	69
+cts	O2	call	parameter	enum	align 1	9
+cts	O2	call	parameter	enum	align 16	54
+cts	O2	call	parameter	enum	align 2	1
+cts	O2	call	parameter	enum	align 8	58
+cts	O2	call	parameter	enum	byval(%struct.hfa13)	2
+cts	O2	call	parameter	enum	byval(%struct.hfa23)	14
+cts	O2	call	parameter	enum	byval(%struct.hfa24)	15
+cts	O2	call	parameter	enum	byval(%struct.hfa31)	6
+cts	O2	call	parameter	enum	byval(%struct.hfa32)	11
+cts	O2	call	parameter	enum	byval(%struct.hfa33)	14
+cts	O2	call	parameter	enum	byval(%struct.hfa34)	15
+cts	O2	call	parameter	enum	byval(%struct.s9)	7
+cts	O2	call	parameter	enum	dereferenceable(1)	1498
+cts	O2	call	parameter	enum	dereferenceable(11)	2
+cts	O2	call	parameter	enum	dereferenceable(12)	4
+cts	O2	call	parameter	enum	dereferenceable(13)	4
+cts	O2	call	parameter	enum	dereferenceable(14)	2
+cts	O2	call	parameter	enum	dereferenceable(16)	2
+cts	O2	call	parameter	enum	dereferenceable(17)	6
+cts	O2	call	parameter	enum	dereferenceable(2)	4
+cts	O2	call	parameter	enum	dereferenceable(24)	2
+cts	O2	call	parameter	enum	dereferenceable(32)	4
+cts	O2	call	parameter	enum	dereferenceable(4)	6
+cts	O2	call	parameter	enum	dereferenceable(48)	2
+cts	O2	call	parameter	enum	dereferenceable(6)	8
+cts	O2	call	parameter	enum	dereferenceable(64)	2
+cts	O2	call	parameter	enum	dereferenceable(7)	4
+cts	O2	call	parameter	enum	dereferenceable(9)	2
+cts	O2	call	parameter	enum	nonnull	2097
+cts	O2	call	parameter	enum	noundef	3450
+cts	O2	call	return	enum	align 16	4
+cts	O2	call	return	enum	dereferenceable_or_null(256)	1
+cts	O2	declaration	function	enum	allockind("alloc,zeroed")	1
+cts	O2	declaration	function	enum	allocsize(0,1)	1
+cts	O2	declaration	function	enum	memory(argmem: read)	5
+cts	O2	declaration	function	enum	memory(argmem: readwrite)	19
+cts	O2	declaration	function	enum	memory(argmem: write)	1
+cts	O2	declaration	function	enum	memory(inaccessiblemem: readwrite)	1
+cts	O2	declaration	function	enum	memory(none)	1
+cts	O2	declaration	function	enum	mustprogress	5
+cts	O2	declaration	function	enum	nocallback	22
+cts	O2	declaration	function	enum	nofree	127
+cts	O2	declaration	function	enum	nosync	18
+cts	O2	declaration	function	enum	nounwind	127
+cts	O2	declaration	function	enum	speculatable	1
+cts	O2	declaration	function	enum	willreturn	28
+cts	O2	declaration	function	string	"alloc-family"="malloc"	1
+cts	O2	declaration	function	string	"no-trapping-math"="true"	70
+cts	O2	declaration	function	string	"stack-protector-buffer-size"="8"	70
+cts	O2	declaration	function	string	"target-cpu"="x86-64"	70
+cts	O2	declaration	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	70
+cts	O2	declaration	function	string	"tune-cpu"="generic"	70
+cts	O2	declaration	parameter	enum	immarg	20
+cts	O2	declaration	parameter	enum	noalias	7
+cts	O2	declaration	parameter	enum	nocapture	125
+cts	O2	declaration	parameter	enum	noundef	121
+cts	O2	declaration	parameter	enum	readonly	90
+cts	O2	declaration	parameter	enum	writeonly	5
+cts	O2	declaration	return	enum	noalias	2
+cts	O2	declaration	return	enum	noundef	100
+cts	O2	definition	function	enum	memory(argmem: read)	3
+cts	O2	definition	function	enum	memory(argmem: write)	4
+cts	O2	definition	function	enum	memory(none)	154
+cts	O2	definition	function	enum	memory(read, argmem: none, inaccessiblemem: none)	47
+cts	O2	definition	function	enum	memory(read, argmem: readwrite, inaccessiblemem: none)	1
+cts	O2	definition	function	enum	memory(read, inaccessiblemem: none)	5
+cts	O2	definition	function	enum	memory(readwrite, argmem: none, inaccessiblemem: none)	7
+cts	O2	definition	function	enum	memory(readwrite, argmem: write, inaccessiblemem: none)	1
+cts	O2	definition	function	enum	memory(readwrite, inaccessiblemem: none)	7
+cts	O2	definition	function	enum	memory(write, argmem: none, inaccessiblemem: none)	4
+cts	O2	definition	function	enum	memory(write, inaccessiblemem: readwrite)	1
+cts	O2	definition	function	enum	mustprogress	224
+cts	O2	definition	function	enum	nofree	370
+cts	O2	definition	function	enum	noinline	1
+cts	O2	definition	function	enum	norecurse	232
+cts	O2	definition	function	enum	noreturn	1
+cts	O2	definition	function	enum	nosync	233
+cts	O2	definition	function	enum	nounwind	380
+cts	O2	definition	function	enum	uwtable	380
+cts	O2	definition	function	enum	willreturn	224
+cts	O2	definition	function	string	"min-legal-vector-width"="0"	371
+cts	O2	definition	function	string	"min-legal-vector-width"="64"	9
+cts	O2	definition	function	string	"no-trapping-math"="true"	380
+cts	O2	definition	function	string	"stack-protector-buffer-size"="8"	380
+cts	O2	definition	function	string	"target-cpu"="x86-64"	380
+cts	O2	definition	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	380
+cts	O2	definition	function	string	"tune-cpu"="generic"	380
+cts	O2	definition	parameter	enum	align 1	1
+cts	O2	definition	parameter	enum	align 16	9
+cts	O2	definition	parameter	enum	align 8	14
+cts	O2	definition	parameter	enum	byval(%struct.foo)	1
+cts	O2	definition	parameter	enum	byval(%struct.hfa23)	2
+cts	O2	definition	parameter	enum	byval(%struct.hfa24)	2
+cts	O2	definition	parameter	enum	byval(%struct.hfa31)	1
+cts	O2	definition	parameter	enum	byval(%struct.hfa32)	2
+cts	O2	definition	parameter	enum	byval(%struct.hfa33)	1
+cts	O2	definition	parameter	enum	byval(%struct.hfa34)	2
+cts	O2	definition	parameter	enum	byval(%struct.s11)	1
+cts	O2	definition	parameter	enum	byval(%struct.s12)	2
+cts	O2	definition	parameter	enum	byval(%struct.s13)	2
+cts	O2	definition	parameter	enum	byval(%struct.s14)	1
+cts	O2	definition	parameter	enum	byval(%struct.s17)	1
+cts	O2	definition	parameter	enum	dead_on_unwind	6
+cts	O2	definition	parameter	enum	noalias	6
+cts	O2	definition	parameter	enum	nocapture	42
+cts	O2	definition	parameter	enum	noundef	107
+cts	O2	definition	parameter	enum	readnone	1
+cts	O2	definition	parameter	enum	readonly	25
+cts	O2	definition	parameter	enum	returned	4
+cts	O2	definition	parameter	enum	signext	1
+cts	O2	definition	parameter	enum	sret(%struct.hfa23)	1
+cts	O2	definition	parameter	enum	sret(%struct.hfa24)	1
+cts	O2	definition	parameter	enum	sret(%struct.hfa32)	1
+cts	O2	definition	parameter	enum	sret(%struct.hfa33)	1
+cts	O2	definition	parameter	enum	sret(%struct.hfa34)	1
+cts	O2	definition	parameter	enum	sret(%struct.s17)	1
+cts	O2	definition	parameter	enum	writable	6
+cts	O2	definition	parameter	enum	writeonly	11
+cts	O2	definition	return	enum	nonnull	3
+cts	O2	definition	return	enum	noundef	223
+cts	O2	definition	return	enum	zeroext	1
+front-harness	O0	call	function	enum	allocsize(0)	3
+front-harness	O0	call	function	enum	allocsize(0,1)	1
+front-harness	O0	call	function	enum	allocsize(1)	2
+front-harness	O0	call	function	enum	memory(none)	35
+front-harness	O0	call	function	enum	nobuiltin	18
+front-harness	O0	call	function	enum	noreturn	47
+front-harness	O0	call	function	enum	nounwind	139
+front-harness	O0	call	function	enum	returns_twice	57
+front-harness	O0	call	function	enum	strictfp	18
+front-harness	O0	call	function	string	"no-builtin-abort"	16
+front-harness	O0	call	function	string	"no-builtins"	16
+front-harness	O0	call	parameter	enum	align 1	615
+front-harness	O0	call	parameter	enum	align 1024	24
+front-harness	O0	call	parameter	enum	align 1048576	6
+front-harness	O0	call	parameter	enum	align 128	156
+front-harness	O0	call	parameter	enum	align 16	669
+front-harness	O0	call	parameter	enum	align 16384	50
+front-harness	O0	call	parameter	enum	align 2	178
+front-harness	O0	call	parameter	enum	align 2048	24
+front-harness	O0	call	parameter	enum	align 256	260
+front-harness	O0	call	parameter	enum	align 32	644
+front-harness	O0	call	parameter	enum	align 4	301
+front-harness	O0	call	parameter	enum	align 4096	186
+front-harness	O0	call	parameter	enum	align 512	24
+front-harness	O0	call	parameter	enum	align 64	552
+front-harness	O0	call	parameter	enum	align 8	968
+front-harness	O0	call	parameter	enum	align 8192	24
+front-harness	O0	call	parameter	enum	byval(%struct.A)	212
+front-harness	O0	call	parameter	enum	byval(%struct.Aligned)	8
+front-harness	O0	call	parameter	enum	byval(%struct.B)	332
+front-harness	O0	call	parameter	enum	byval(%struct.Big)	8
+front-harness	O0	call	parameter	enum	byval(%struct.C)	182
+front-harness	O0	call	parameter	enum	byval(%struct.D)	102
+front-harness	O0	call	parameter	enum	byval(%struct.E)	102
+front-harness	O0	call	parameter	enum	byval(%struct.F)	102
+front-harness	O0	call	parameter	enum	byval(%struct.G)	102
+front-harness	O0	call	parameter	enum	byval(%struct.P)	134
+front-harness	O0	call	parameter	enum	byval(%struct.S)	13
+front-harness	O0	call	parameter	enum	byval(%struct.S10)	24
+front-harness	O0	call	parameter	enum	byval(%struct.S11)	24
+front-harness	O0	call	parameter	enum	byval(%struct.S12)	24
+front-harness	O0	call	parameter	enum	byval(%struct.S13)	24
+front-harness	O0	call	parameter	enum	byval(%struct.S14)	24
+front-harness	O0	call	parameter	enum	byval(%struct.S15)	24
+front-harness	O0	call	parameter	enum	byval(%struct.S16)	24
+front-harness	O0	call	parameter	enum	byval(%struct.S17)	24
+front-harness	O0	call	parameter	enum	byval(%struct.S18)	24
+front-harness	O0	call	parameter	enum	byval(%struct.S19)	24
+front-harness	O0	call	parameter	enum	byval(%struct.S22)	24
+front-harness	O0	call	parameter	enum	byval(%struct.S23)	24
+front-harness	O0	call	parameter	enum	byval(%struct.S24)	24
+front-harness	O0	call	parameter	enum	byval(%struct.S25)	24
+front-harness	O0	call	parameter	enum	byval(%struct.S26)	24
+front-harness	O0	call	parameter	enum	byval(%struct.S8)	24
+front-harness	O0	call	parameter	enum	byval(%struct.S9)	24
+front-harness	O0	call	parameter	enum	byval(%struct.T)	30
+front-harness	O0	call	parameter	enum	byval(%struct.V)	6
+front-harness	O0	call	parameter	enum	byval(%struct.aligned)	14
+front-harness	O0	call	parameter	enum	byval(%struct.big)	16
+front-harness	O0	call	parameter	enum	byval(%struct.holder)	6
+front-harness	O0	call	parameter	enum	byval(%struct.huge)	3
+front-harness	O0	call	parameter	enum	byval(%struct.mixed)	2
+front-harness	O0	call	parameter	enum	byval(%struct.odd)	4
+front-harness	O0	call	parameter	enum	byval(%struct.pair)	8
+front-harness	O0	call	parameter	enum	byval(%struct.three)	4
+front-harness	O0	call	parameter	enum	byval(%struct.triple)	4
+front-harness	O0	call	parameter	enum	byval(%struct.value)	2
+front-harness	O0	call	parameter	enum	byval(<16 x float>)	68
+front-harness	O0	call	parameter	enum	byval(<16 x i32>)	60
+front-harness	O0	call	parameter	enum	byval(<4 x double>)	34
+front-harness	O0	call	parameter	enum	byval(<8 x i32>)	40
+front-harness	O0	call	parameter	enum	dead_on_unwind	92
+front-harness	O0	call	parameter	enum	dereferenceable(16)	28
+front-harness	O0	call	parameter	enum	elementtype(i64)	9
+front-harness	O0	call	parameter	enum	nofpclass(nan inf)	3
+front-harness	O0	call	parameter	enum	nonnull	28
+front-harness	O0	call	parameter	enum	noundef	20695
+front-harness	O0	call	parameter	enum	signext	320
+front-harness	O0	call	parameter	enum	sret(%struct.B)	10
+front-harness	O0	call	parameter	enum	sret(%struct.Big)	8
+front-harness	O0	call	parameter	enum	sret(%struct.aligned32)	10
+front-harness	O0	call	parameter	enum	sret(%struct.bool_mixed)	10
+front-harness	O0	call	parameter	enum	sret(%struct.chars17)	10
+front-harness	O0	call	parameter	enum	sret(%struct.chars31)	10
+front-harness	O0	call	parameter	enum	sret(%struct.holder)	6
+front-harness	O0	call	parameter	enum	sret(%struct.longdouble_tail)	10
+front-harness	O0	call	parameter	enum	sret(%struct.mixed)	2
+front-harness	O0	call	parameter	enum	sret(%struct.packed)	10
+front-harness	O0	call	parameter	enum	sret(%struct.triple)	2
+front-harness	O0	call	parameter	enum	sret(%struct.wide)	4
+front-harness	O0	call	parameter	enum	writable	92
+front-harness	O0	call	parameter	enum	zeroext	127
+front-harness	O0	call	return	enum	align 64	1
+front-harness	O0	call	return	enum	align 8	8
+front-harness	O0	call	return	enum	dereferenceable(16)	8
+front-harness	O0	call	return	enum	noalias	1
+front-harness	O0	call	return	enum	nofpclass(nan inf)	3
+front-harness	O0	call	return	enum	nonnull	8
+front-harness	O0	call	return	enum	noundef	24
+front-harness	O0	call	return	enum	signext	18
+front-harness	O0	call	return	enum	zeroext	40
+front-harness	O0	declaration	function	enum	allocsize(0)	1
+front-harness	O0	declaration	function	enum	allocsize(0,1)	1
+front-harness	O0	declaration	function	enum	allocsize(1)	2
+front-harness	O0	declaration	function	enum	cold	2
+front-harness	O0	declaration	function	enum	convergent	2
+front-harness	O0	declaration	function	enum	memory(argmem: readwrite)	119
+front-harness	O0	declaration	function	enum	memory(argmem: readwrite, inaccessiblemem: readwrite)	2
+front-harness	O0	declaration	function	enum	memory(argmem: write)	42
+front-harness	O0	declaration	function	enum	memory(inaccessiblemem: readwrite)	12
+front-harness	O0	declaration	function	enum	memory(inaccessiblemem: write)	5
+front-harness	O0	declaration	function	enum	memory(none)	434
+front-harness	O0	declaration	function	enum	nocallback	712
+front-harness	O0	declaration	function	enum	nofree	712
+front-harness	O0	declaration	function	enum	noreturn	41
+front-harness	O0	declaration	function	enum	nosync	551
+front-harness	O0	declaration	function	enum	nounwind	759
+front-harness	O0	declaration	function	enum	returns_twice	17
+front-harness	O0	declaration	function	enum	speculatable	419
+front-harness	O0	declaration	function	enum	strictfp	12
+front-harness	O0	declaration	function	enum	willreturn	712
+front-harness	O0	declaration	function	string	"disable-tail-calls"="true"	4
+front-harness	O0	declaration	function	string	"frame-pointer"="all"	753
+front-harness	O0	declaration	function	string	"no-trapping-math"="true"	753
+front-harness	O0	declaration	function	string	"stack-protector-buffer-size"="8"	753
+front-harness	O0	declaration	function	string	"target-cpu"="x86-64"	753
+front-harness	O0	declaration	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	753
+front-harness	O0	declaration	function	string	"tune-cpu"="generic"	753
+front-harness	O0	declaration	parameter	enum	align 1	12
+front-harness	O0	declaration	parameter	enum	align 16	4
+front-harness	O0	declaration	parameter	enum	align 32	4
+front-harness	O0	declaration	parameter	enum	align 8	7
+front-harness	O0	declaration	parameter	enum	byval(%struct.S)	1
+front-harness	O0	declaration	parameter	enum	dead_on_unwind	26
+front-harness	O0	declaration	parameter	enum	immarg	222
+front-harness	O0	declaration	parameter	enum	noalias	238
+front-harness	O0	declaration	parameter	enum	nocapture	282
+front-harness	O0	declaration	parameter	enum	noundef	969
+front-harness	O0	declaration	parameter	enum	readonly	121
+front-harness	O0	declaration	parameter	enum	signext	77
+front-harness	O0	declaration	parameter	enum	sret(%struct.aligned32)	4
+front-harness	O0	declaration	parameter	enum	sret(%struct.bool_mixed)	4
+front-harness	O0	declaration	parameter	enum	sret(%struct.chars17)	4
+front-harness	O0	declaration	parameter	enum	sret(%struct.chars31)	4
+front-harness	O0	declaration	parameter	enum	sret(%struct.longdouble_tail)	4
+front-harness	O0	declaration	parameter	enum	sret(%struct.packed)	4
+front-harness	O0	declaration	parameter	enum	sret(%struct.wide)	2
+front-harness	O0	declaration	parameter	enum	writable	26
+front-harness	O0	declaration	parameter	enum	writeonly	161
+front-harness	O0	definition	function	enum	allocsize(0)	2
+front-harness	O0	definition	function	enum	allocsize(0,1)	1
+front-harness	O0	definition	function	enum	mustprogress	16
+front-harness	O0	definition	function	enum	noinline	2504
+front-harness	O0	definition	function	enum	noreturn	1
+front-harness	O0	definition	function	enum	nounwind	2502
+front-harness	O0	definition	function	enum	strictfp	5
+front-harness	O0	definition	function	enum	uwtable	2502
+front-harness	O0	definition	function	string	"denormal-fp-math"="preserve-sign,preserve-sign"	4
+front-harness	O0	definition	function	string	"denormal-fp-math-f32"="preserve-sign,preserve-sign"	4
+front-harness	O0	definition	function	string	"disable-tail-calls"="true"	34
+front-harness	O0	definition	function	string	"frame-pointer"="all"	2504
+front-harness	O0	definition	function	string	"min-legal-vector-width"="0"	2413
+front-harness	O0	definition	function	string	"min-legal-vector-width"="128"	34
+front-harness	O0	definition	function	string	"min-legal-vector-width"="256"	14
+front-harness	O0	definition	function	string	"min-legal-vector-width"="512"	10
+front-harness	O0	definition	function	string	"min-legal-vector-width"="64"	33
+front-harness	O0	definition	function	string	"no-builtin-abort"	18
+front-harness	O0	definition	function	string	"no-builtins"	20
+front-harness	O0	definition	function	string	"no-infs-fp-math"="true"	6
+front-harness	O0	definition	function	string	"no-nans-fp-math"="true"	6
+front-harness	O0	definition	function	string	"no-signed-zeros-fp-math"="true"	4
+front-harness	O0	definition	function	string	"no-trapping-math"="true"	2504
+front-harness	O0	definition	function	string	"stack-protector-buffer-size"="8"	2504
+front-harness	O0	definition	function	string	"target-cpu"="x86-64"	2504
+front-harness	O0	definition	function	string	"target-features"="+avx,+avx2,+avx512f,+cmov,+crc32,+cx8,+evex512,+f16c,+fma,+fxsr,+mmx,+popcnt,+sse,+sse2,+sse3,+sse4.1,+sse4.2,+ssse3,+x87,+xsave"	86
+front-harness	O0	definition	function	string	"target-features"="+avx,+avx2,+cmov,+crc32,+cx8,+fxsr,+mmx,+popcnt,+sse,+sse2,+sse3,+sse4.1,+sse4.2,+ssse3,+x87,+xsave"	86
+front-harness	O0	definition	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	2332
+front-harness	O0	definition	function	string	"tune-cpu"="generic"	2504
+front-harness	O0	definition	parameter	enum	align 1	12
+front-harness	O0	definition	parameter	enum	align 1024	8
+front-harness	O0	definition	parameter	enum	align 1048576	3
+front-harness	O0	definition	parameter	enum	align 128	14
+front-harness	O0	definition	parameter	enum	align 16	36
+front-harness	O0	definition	parameter	enum	align 16384	8
+front-harness	O0	definition	parameter	enum	align 2048	8
+front-harness	O0	definition	parameter	enum	align 256	14
+front-harness	O0	definition	parameter	enum	align 32	36
+front-harness	O0	definition	parameter	enum	align 4096	14
+front-harness	O0	definition	parameter	enum	align 512	8
+front-harness	O0	definition	parameter	enum	align 64	44
+front-harness	O0	definition	parameter	enum	align 8	108
+front-harness	O0	definition	parameter	enum	align 8192	8
+front-harness	O0	definition	parameter	enum	byval(%struct.A)	6
+front-harness	O0	definition	parameter	enum	byval(%struct.Aligned)	8
+front-harness	O0	definition	parameter	enum	byval(%struct.B)	22
+front-harness	O0	definition	parameter	enum	byval(%struct.Big)	8
+front-harness	O0	definition	parameter	enum	byval(%struct.C)	6
+front-harness	O0	definition	parameter	enum	byval(%struct.D)	6
+front-harness	O0	definition	parameter	enum	byval(%struct.E)	6
+front-harness	O0	definition	parameter	enum	byval(%struct.F)	6
+front-harness	O0	definition	parameter	enum	byval(%struct.G)	6
+front-harness	O0	definition	parameter	enum	byval(%struct.P)	6
+front-harness	O0	definition	parameter	enum	byval(%struct.S)	13
+front-harness	O0	definition	parameter	enum	byval(%struct.S10)	8
+front-harness	O0	definition	parameter	enum	byval(%struct.S11)	8
+front-harness	O0	definition	parameter	enum	byval(%struct.S12)	8
+front-harness	O0	definition	parameter	enum	byval(%struct.S13)	8
+front-harness	O0	definition	parameter	enum	byval(%struct.S14)	8
+front-harness	O0	definition	parameter	enum	byval(%struct.S15)	8
+front-harness	O0	definition	parameter	enum	byval(%struct.S16)	8
+front-harness	O0	definition	parameter	enum	byval(%struct.S17)	8
+front-harness	O0	definition	parameter	enum	byval(%struct.S18)	8
+front-harness	O0	definition	parameter	enum	byval(%struct.S19)	8
+front-harness	O0	definition	parameter	enum	byval(%struct.S22)	8
+front-harness	O0	definition	parameter	enum	byval(%struct.S23)	8
+front-harness	O0	definition	parameter	enum	byval(%struct.S24)	8
+front-harness	O0	definition	parameter	enum	byval(%struct.S25)	8
+front-harness	O0	definition	parameter	enum	byval(%struct.S26)	8
+front-harness	O0	definition	parameter	enum	byval(%struct.S8)	8
+front-harness	O0	definition	parameter	enum	byval(%struct.S9)	8
+front-harness	O0	definition	parameter	enum	byval(%struct.V)	2
+front-harness	O0	definition	parameter	enum	byval(%struct.big)	2
+front-harness	O0	definition	parameter	enum	byval(%struct.holder)	6
+front-harness	O0	definition	parameter	enum	byval(%struct.huge)	3
+front-harness	O0	definition	parameter	enum	byval(%struct.mixed)	2
+front-harness	O0	definition	parameter	enum	byval(%struct.pair)	2
+front-harness	O0	definition	parameter	enum	byval(%struct.triple)	4
+front-harness	O0	definition	parameter	enum	byval(%struct.value)	2
+front-harness	O0	definition	parameter	enum	byval(<16 x float>)	4
+front-harness	O0	definition	parameter	enum	byval(<4 x double>)	2
+front-harness	O0	definition	parameter	enum	dead_on_unwind	47
+front-harness	O0	definition	parameter	enum	dereferenceable(16)	16
+front-harness	O0	definition	parameter	enum	noalias	63
+front-harness	O0	definition	parameter	enum	nofpclass(nan inf)	3
+front-harness	O0	definition	parameter	enum	nonnull	32
+front-harness	O0	definition	parameter	enum	noundef	2457
+front-harness	O0	definition	parameter	enum	signext	29
+front-harness	O0	definition	parameter	enum	sret(%struct.B)	3
+front-harness	O0	definition	parameter	enum	sret(%struct.Big)	8
+front-harness	O0	definition	parameter	enum	sret(%struct.aligned32)	4
+front-harness	O0	definition	parameter	enum	sret(%struct.bool_mixed)	4
+front-harness	O0	definition	parameter	enum	sret(%struct.chars17)	4
+front-harness	O0	definition	parameter	enum	sret(%struct.chars31)	4
+front-harness	O0	definition	parameter	enum	sret(%struct.holder)	6
+front-harness	O0	definition	parameter	enum	sret(%struct.longdouble_tail)	4
+front-harness	O0	definition	parameter	enum	sret(%struct.mixed)	2
+front-harness	O0	definition	parameter	enum	sret(%struct.packed)	4
+front-harness	O0	definition	parameter	enum	sret(%struct.triple)	2
+front-harness	O0	definition	parameter	enum	sret(%struct.wide)	2
+front-harness	O0	definition	parameter	enum	writable	47
+front-harness	O0	definition	parameter	enum	zeroext	145
+front-harness	O0	definition	return	enum	align 8	8
+front-harness	O0	definition	return	enum	dereferenceable(16)	8
+front-harness	O0	definition	return	enum	noalias	1
+front-harness	O0	definition	return	enum	nofpclass(nan inf)	3
+front-harness	O0	definition	return	enum	nonnull	8
+front-harness	O0	definition	return	enum	noundef	12
+front-harness	O0	definition	return	enum	signext	10
+front-harness	O0	definition	return	enum	zeroext	36
+front-harness	O2	call	function	enum	allocsize(0)	2
+front-harness	O2	call	function	enum	allocsize(0,1)	1
+front-harness	O2	call	function	enum	allocsize(1)	2
+front-harness	O2	call	function	enum	memory(none)	21
+front-harness	O2	call	function	enum	nobuiltin	16
+front-harness	O2	call	function	enum	noreturn	47
+front-harness	O2	call	function	enum	nounwind	6064
+front-harness	O2	call	function	enum	returns_twice	57
+front-harness	O2	call	function	enum	strictfp	18
+front-harness	O2	call	function	string	"no-builtin-abort"	14
+front-harness	O2	call	function	string	"no-builtins"	14
+front-harness	O2	call	parameter	enum	align 1	53
+front-harness	O2	call	parameter	enum	align 1024	22
+front-harness	O2	call	parameter	enum	align 128	72
+front-harness	O2	call	parameter	enum	align 16	262
+front-harness	O2	call	parameter	enum	align 16384	44
+front-harness	O2	call	parameter	enum	align 2	14
+front-harness	O2	call	parameter	enum	align 2048	22
+front-harness	O2	call	parameter	enum	align 256	160
+front-harness	O2	call	parameter	enum	align 32	334
+front-harness	O2	call	parameter	enum	align 4	13
+front-harness	O2	call	parameter	enum	align 4096	130
+front-harness	O2	call	parameter	enum	align 512	22
+front-harness	O2	call	parameter	enum	align 64	379
+front-harness	O2	call	parameter	enum	align 8	316
+front-harness	O2	call	parameter	enum	align 8192	22
+front-harness	O2	call	parameter	enum	byval(%struct.A)	146
+front-harness	O2	call	parameter	enum	byval(%struct.Aligned)	8
+front-harness	O2	call	parameter	enum	byval(%struct.B)	254
+front-harness	O2	call	parameter	enum	byval(%struct.Big)	8
+front-harness	O2	call	parameter	enum	byval(%struct.C)	128
+front-harness	O2	call	parameter	enum	byval(%struct.D)	48
+front-harness	O2	call	parameter	enum	byval(%struct.E)	48
+front-harness	O2	call	parameter	enum	byval(%struct.F)	48
+front-harness	O2	call	parameter	enum	byval(%struct.G)	48
+front-harness	O2	call	parameter	enum	byval(%struct.P)	104
+front-harness	O2	call	parameter	enum	byval(%struct.S)	13
+front-harness	O2	call	parameter	enum	byval(%struct.S10)	22
+front-harness	O2	call	parameter	enum	byval(%struct.S11)	22
+front-harness	O2	call	parameter	enum	byval(%struct.S12)	22
+front-harness	O2	call	parameter	enum	byval(%struct.S13)	24
+front-harness	O2	call	parameter	enum	byval(%struct.S14)	24
+front-harness	O2	call	parameter	enum	byval(%struct.S15)	22
+front-harness	O2	call	parameter	enum	byval(%struct.S16)	22
+front-harness	O2	call	parameter	enum	byval(%struct.S17)	24
+front-harness	O2	call	parameter	enum	byval(%struct.S18)	24
+front-harness	O2	call	parameter	enum	byval(%struct.S19)	22
+front-harness	O2	call	parameter	enum	byval(%struct.S22)	22
+front-harness	O2	call	parameter	enum	byval(%struct.S23)	22
+front-harness	O2	call	parameter	enum	byval(%struct.S24)	22
+front-harness	O2	call	parameter	enum	byval(%struct.S25)	22
+front-harness	O2	call	parameter	enum	byval(%struct.S26)	22
+front-harness	O2	call	parameter	enum	byval(%struct.S8)	22
+front-harness	O2	call	parameter	enum	byval(%struct.S9)	22
+front-harness	O2	call	parameter	enum	byval(%struct.T)	30
+front-harness	O2	call	parameter	enum	byval(%struct.V)	6
+front-harness	O2	call	parameter	enum	byval(%struct.aligned)	14
+front-harness	O2	call	parameter	enum	byval(%struct.big)	14
+front-harness	O2	call	parameter	enum	byval(%struct.holder)	6
+front-harness	O2	call	parameter	enum	byval(%struct.mixed)	2
+front-harness	O2	call	parameter	enum	byval(%struct.odd)	4
+front-harness	O2	call	parameter	enum	byval(%struct.pair)	8
+front-harness	O2	call	parameter	enum	byval(%struct.three)	4
+front-harness	O2	call	parameter	enum	byval(%struct.triple)	4
+front-harness	O2	call	parameter	enum	byval(<16 x float>)	32
+front-harness	O2	call	parameter	enum	byval(<16 x i32>)	60
+front-harness	O2	call	parameter	enum	byval(<4 x double>)	16
+front-harness	O2	call	parameter	enum	byval(<8 x i32>)	40
+front-harness	O2	call	parameter	enum	dead_on_unwind	92
+front-harness	O2	call	parameter	enum	dereferenceable(1)	6
+front-harness	O2	call	parameter	enum	dereferenceable(102)	6
+front-harness	O2	call	parameter	enum	dereferenceable(127)	4
+front-harness	O2	call	parameter	enum	dereferenceable(128)	3
+front-harness	O2	call	parameter	enum	dereferenceable(15)	6
+front-harness	O2	call	parameter	enum	dereferenceable(16)	28
+front-harness	O2	call	parameter	enum	dereferenceable(16384)	2
+front-harness	O2	call	parameter	enum	dereferenceable(17)	8
+front-harness	O2	call	parameter	enum	dereferenceable(2)	10
+front-harness	O2	call	parameter	enum	dereferenceable(200)	7
+front-harness	O2	call	parameter	enum	dereferenceable(216)	12
+front-harness	O2	call	parameter	enum	dereferenceable(24)	24
+front-harness	O2	call	parameter	enum	dereferenceable(254)	6
+front-harness	O2	call	parameter	enum	dereferenceable(256)	8
+front-harness	O2	call	parameter	enum	dereferenceable(31)	4
+front-harness	O2	call	parameter	enum	dereferenceable(32)	6
+front-harness	O2	call	parameter	enum	dereferenceable(33)	4
+front-harness	O2	call	parameter	enum	dereferenceable(4)	5
+front-harness	O2	call	parameter	enum	dereferenceable(40)	6
+front-harness	O2	call	parameter	enum	dereferenceable(4096)	24
+front-harness	O2	call	parameter	enum	dereferenceable(48)	4
+front-harness	O2	call	parameter	enum	dereferenceable(56)	6
+front-harness	O2	call	parameter	enum	dereferenceable(64)	10
+front-harness	O2	call	parameter	enum	dereferenceable(8192)	3
+front-harness	O2	call	parameter	enum	elementtype(i64)	9
+front-harness	O2	call	parameter	enum	nocapture	1
+front-harness	O2	call	parameter	enum	nofpclass(nan inf)	3
+front-harness	O2	call	parameter	enum	nonnull	7537
+front-harness	O2	call	parameter	enum	noundef	16886
+front-harness	O2	call	parameter	enum	signext	411
+front-harness	O2	call	parameter	enum	sret(%struct.B)	10
+front-harness	O2	call	parameter	enum	sret(%struct.Big)	8
+front-harness	O2	call	parameter	enum	sret(%struct.aligned32)	10
+front-harness	O2	call	parameter	enum	sret(%struct.bool_mixed)	10
+front-harness	O2	call	parameter	enum	sret(%struct.chars17)	10
+front-harness	O2	call	parameter	enum	sret(%struct.chars31)	10
+front-harness	O2	call	parameter	enum	sret(%struct.holder)	6
+front-harness	O2	call	parameter	enum	sret(%struct.longdouble_tail)	10
+front-harness	O2	call	parameter	enum	sret(%struct.mixed)	2
+front-harness	O2	call	parameter	enum	sret(%struct.packed)	10
+front-harness	O2	call	parameter	enum	sret(%struct.triple)	2
+front-harness	O2	call	parameter	enum	sret(%struct.wide)	4
+front-harness	O2	call	parameter	enum	writable	92
+front-harness	O2	call	parameter	enum	zeroext	41
+front-harness	O2	call	return	enum	align 128	6
+front-harness	O2	call	return	enum	align 16	134
+front-harness	O2	call	return	enum	align 16384	2
+front-harness	O2	call	return	enum	align 256	22
+front-harness	O2	call	return	enum	align 32	46
+front-harness	O2	call	return	enum	align 4096	12
+front-harness	O2	call	return	enum	align 64	35
+front-harness	O2	call	return	enum	align 8	8
+front-harness	O2	call	return	enum	dereferenceable(16)	8
+front-harness	O2	call	return	enum	dereferenceable_or_null(128)	3
+front-harness	O2	call	return	enum	dereferenceable_or_null(256)	1
+front-harness	O2	call	return	enum	noalias	1
+front-harness	O2	call	return	enum	nofpclass(nan inf)	3
+front-harness	O2	call	return	enum	nonnull	16
+front-harness	O2	call	return	enum	noundef	24
+front-harness	O2	call	return	enum	signext	16
+front-harness	O2	call	return	enum	zeroext	36
+front-harness	O2	declaration	function	enum	allockind("alloc,uninitialized")	1
+front-harness	O2	declaration	function	enum	allockind("alloc,uninitialized,aligned")	1
+front-harness	O2	declaration	function	enum	allockind("alloc,zeroed")	1
+front-harness	O2	declaration	function	enum	allockind("free")	1
+front-harness	O2	declaration	function	enum	allockind("realloc")	1
+front-harness	O2	declaration	function	enum	allocsize(0)	1
+front-harness	O2	declaration	function	enum	allocsize(0,1)	1
+front-harness	O2	declaration	function	enum	allocsize(1)	2
+front-harness	O2	declaration	function	enum	cold	2
+front-harness	O2	declaration	function	enum	memory(argmem: readwrite)	427
+front-harness	O2	declaration	function	enum	memory(argmem: readwrite, inaccessiblemem: readwrite)	4
+front-harness	O2	declaration	function	enum	memory(argmem: write)	25
+front-harness	O2	declaration	function	enum	memory(inaccessiblemem: readwrite)	15
+front-harness	O2	declaration	function	enum	memory(inaccessiblemem: write)	5
+front-harness	O2	declaration	function	enum	memory(none)	433
+front-harness	O2	declaration	function	enum	memory(write)	1
+front-harness	O2	declaration	function	enum	mustprogress	7
+front-harness	O2	declaration	function	enum	nocallback	995
+front-harness	O2	declaration	function	enum	nofree	1002
+front-harness	O2	declaration	function	enum	noreturn	41
+front-harness	O2	declaration	function	enum	nosync	937
+front-harness	O2	declaration	function	enum	nounwind	1050
+front-harness	O2	declaration	function	enum	returns_twice	17
+front-harness	O2	declaration	function	enum	speculatable	420
+front-harness	O2	declaration	function	enum	strictfp	12
+front-harness	O2	declaration	function	enum	willreturn	1002
+front-harness	O2	declaration	function	string	"alloc-family"="malloc"	5
+front-harness	O2	declaration	function	string	"disable-tail-calls"="true"	4
+front-harness	O2	declaration	function	string	"frame-pointer"="all"	4
+front-harness	O2	declaration	function	string	"no-trapping-math"="true"	753
+front-harness	O2	declaration	function	string	"stack-protector-buffer-size"="8"	753
+front-harness	O2	declaration	function	string	"target-cpu"="x86-64"	753
+front-harness	O2	declaration	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	753
+front-harness	O2	declaration	function	string	"tune-cpu"="generic"	753
+front-harness	O2	declaration	parameter	enum	align 1	12
+front-harness	O2	declaration	parameter	enum	align 16	4
+front-harness	O2	declaration	parameter	enum	align 32	4
+front-harness	O2	declaration	parameter	enum	align 8	7
+front-harness	O2	declaration	parameter	enum	allocalign	1
+front-harness	O2	declaration	parameter	enum	allocptr	2
+front-harness	O2	declaration	parameter	enum	byval(%struct.S)	1
+front-harness	O2	declaration	parameter	enum	dead_on_unwind	26
+front-harness	O2	declaration	parameter	enum	immarg	506
+front-harness	O2	declaration	parameter	enum	noalias	66
+front-harness	O2	declaration	parameter	enum	nocapture	492
+front-harness	O2	declaration	parameter	enum	noundef	969
+front-harness	O2	declaration	parameter	enum	readonly	38
+front-harness	O2	declaration	parameter	enum	signext	77
+front-harness	O2	declaration	parameter	enum	sret(%struct.aligned32)	4
+front-harness	O2	declaration	parameter	enum	sret(%struct.bool_mixed)	4
+front-harness	O2	declaration	parameter	enum	sret(%struct.chars17)	4
+front-harness	O2	declaration	parameter	enum	sret(%struct.chars31)	4
+front-harness	O2	declaration	parameter	enum	sret(%struct.longdouble_tail)	4
+front-harness	O2	declaration	parameter	enum	sret(%struct.packed)	4
+front-harness	O2	declaration	parameter	enum	sret(%struct.wide)	2
+front-harness	O2	declaration	parameter	enum	writable	26
+front-harness	O2	declaration	parameter	enum	writeonly	58
+front-harness	O2	declaration	return	enum	noalias	4
+front-harness	O2	declaration	return	enum	noundef	6
+front-harness	O2	definition	function	enum	allocsize(0)	1
+front-harness	O2	definition	function	enum	memory(argmem: read)	121
+front-harness	O2	definition	function	enum	memory(argmem: readwrite)	119
+front-harness	O2	definition	function	enum	memory(argmem: readwrite, inaccessiblemem: readwrite)	7
+front-harness	O2	definition	function	enum	memory(argmem: write)	17
+front-harness	O2	definition	function	enum	memory(inaccessiblemem: readwrite)	11
+front-harness	O2	definition	function	enum	memory(none)	543
+front-harness	O2	definition	function	enum	memory(read, argmem: none, inaccessiblemem: none)	10
+front-harness	O2	definition	function	enum	memory(read, argmem: readwrite, inaccessiblemem: none)	16
+front-harness	O2	definition	function	enum	memory(read, inaccessiblemem: none)	8
+front-harness	O2	definition	function	enum	memory(readwrite, argmem: none)	112
+front-harness	O2	definition	function	enum	memory(readwrite, argmem: none, inaccessiblemem: none)	43
+front-harness	O2	definition	function	enum	memory(readwrite, argmem: write)	7
+front-harness	O2	definition	function	enum	memory(readwrite, argmem: write, inaccessiblemem: none)	3
+front-harness	O2	definition	function	enum	memory(readwrite, inaccessiblemem: none)	3
+front-harness	O2	definition	function	enum	memory(write, argmem: none, inaccessiblemem: none)	8
+front-harness	O2	definition	function	enum	memory(write, inaccessiblemem: none)	3
+front-harness	O2	definition	function	enum	mustprogress	915
+front-harness	O2	definition	function	enum	nofree	1321
+front-harness	O2	definition	function	enum	noinline	1170
+front-harness	O2	definition	function	enum	norecurse	1275
+front-harness	O2	definition	function	enum	noreturn	48
+front-harness	O2	definition	function	enum	nosync	1111
+front-harness	O2	definition	function	enum	nounwind	2071
+front-harness	O2	definition	function	enum	strictfp	5
+front-harness	O2	definition	function	enum	uwtable	2069
+front-harness	O2	definition	function	enum	willreturn	907
+front-harness	O2	definition	function	string	"denormal-fp-math"="preserve-sign,preserve-sign"	4
+front-harness	O2	definition	function	string	"denormal-fp-math-f32"="preserve-sign,preserve-sign"	4
+front-harness	O2	definition	function	string	"disable-tail-calls"="true"	34
+front-harness	O2	definition	function	string	"frame-pointer"="all"	34
+front-harness	O2	definition	function	string	"min-legal-vector-width"="0"	1998
+front-harness	O2	definition	function	string	"min-legal-vector-width"="128"	26
+front-harness	O2	definition	function	string	"min-legal-vector-width"="256"	10
+front-harness	O2	definition	function	string	"min-legal-vector-width"="512"	8
+front-harness	O2	definition	function	string	"min-legal-vector-width"="64"	29
+front-harness	O2	definition	function	string	"no-builtin-abort"	18
+front-harness	O2	definition	function	string	"no-builtins"	20
+front-harness	O2	definition	function	string	"no-infs-fp-math"="true"	6
+front-harness	O2	definition	function	string	"no-nans-fp-math"="true"	6
+front-harness	O2	definition	function	string	"no-signed-zeros-fp-math"="true"	4
+front-harness	O2	definition	function	string	"no-trapping-math"="true"	2071
+front-harness	O2	definition	function	string	"stack-protector-buffer-size"="8"	2071
+front-harness	O2	definition	function	string	"target-cpu"="x86-64"	2071
+front-harness	O2	definition	function	string	"target-features"="+avx,+avx2,+avx512f,+cmov,+crc32,+cx8,+evex512,+f16c,+fma,+fxsr,+mmx,+popcnt,+sse,+sse2,+sse3,+sse4.1,+sse4.2,+ssse3,+x87,+xsave"	48
+front-harness	O2	definition	function	string	"target-features"="+avx,+avx2,+cmov,+crc32,+cx8,+fxsr,+mmx,+popcnt,+sse,+sse2,+sse3,+sse4.1,+sse4.2,+ssse3,+x87,+xsave"	48
+front-harness	O2	definition	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	1975
+front-harness	O2	definition	function	string	"tune-cpu"="generic"	2071
+front-harness	O2	definition	parameter	enum	align 1	12
+front-harness	O2	definition	parameter	enum	align 1024	8
+front-harness	O2	definition	parameter	enum	align 1048576	3
+front-harness	O2	definition	parameter	enum	align 128	8
+front-harness	O2	definition	parameter	enum	align 16	28
+front-harness	O2	definition	parameter	enum	align 16384	8
+front-harness	O2	definition	parameter	enum	align 2048	8
+front-harness	O2	definition	parameter	enum	align 256	8
+front-harness	O2	definition	parameter	enum	align 32	16
+front-harness	O2	definition	parameter	enum	align 4096	8
+front-harness	O2	definition	parameter	enum	align 512	8
+front-harness	O2	definition	parameter	enum	align 64	34
+front-harness	O2	definition	parameter	enum	align 8	108
+front-harness	O2	definition	parameter	enum	align 8192	8
+front-harness	O2	definition	parameter	enum	byval(%struct.Aligned)	8
+front-harness	O2	definition	parameter	enum	byval(%struct.B)	16
+front-harness	O2	definition	parameter	enum	byval(%struct.Big)	8
+front-harness	O2	definition	parameter	enum	byval(%struct.S)	13
+front-harness	O2	definition	parameter	enum	byval(%struct.S10)	8
+front-harness	O2	definition	parameter	enum	byval(%struct.S11)	8
+front-harness	O2	definition	parameter	enum	byval(%struct.S12)	8
+front-harness	O2	definition	parameter	enum	byval(%struct.S13)	8
+front-harness	O2	definition	parameter	enum	byval(%struct.S14)	8
+front-harness	O2	definition	parameter	enum	byval(%struct.S15)	8
+front-harness	O2	definition	parameter	enum	byval(%struct.S16)	8
+front-harness	O2	definition	parameter	enum	byval(%struct.S17)	8
+front-harness	O2	definition	parameter	enum	byval(%struct.S18)	8
+front-harness	O2	definition	parameter	enum	byval(%struct.S19)	8
+front-harness	O2	definition	parameter	enum	byval(%struct.S22)	8
+front-harness	O2	definition	parameter	enum	byval(%struct.S23)	8
+front-harness	O2	definition	parameter	enum	byval(%struct.S24)	8
+front-harness	O2	definition	parameter	enum	byval(%struct.S25)	8
+front-harness	O2	definition	parameter	enum	byval(%struct.S26)	8
+front-harness	O2	definition	parameter	enum	byval(%struct.S8)	8
+front-harness	O2	definition	parameter	enum	byval(%struct.S9)	8
+front-harness	O2	definition	parameter	enum	byval(%struct.V)	2
+front-harness	O2	definition	parameter	enum	byval(%struct.big)	2
+front-harness	O2	definition	parameter	enum	byval(%struct.holder)	6
+front-harness	O2	definition	parameter	enum	byval(%struct.huge)	3
+front-harness	O2	definition	parameter	enum	byval(%struct.mixed)	2
+front-harness	O2	definition	parameter	enum	byval(%struct.pair)	2
+front-harness	O2	definition	parameter	enum	byval(%struct.triple)	4
+front-harness	O2	definition	parameter	enum	dead_on_unwind	47
+front-harness	O2	definition	parameter	enum	dereferenceable(16)	16
+front-harness	O2	definition	parameter	enum	noalias	63
+front-harness	O2	definition	parameter	enum	nocapture	408
+front-harness	O2	definition	parameter	enum	nofpclass(nan inf)	3
+front-harness	O2	definition	parameter	enum	nonnull	32
+front-harness	O2	definition	parameter	enum	noundef	1883
+front-harness	O2	definition	parameter	enum	readnone	46
+front-harness	O2	definition	parameter	enum	readonly	207
+front-harness	O2	definition	parameter	enum	returned	19
+front-harness	O2	definition	parameter	enum	signext	27
+front-harness	O2	definition	parameter	enum	sret(%struct.B)	3
+front-harness	O2	definition	parameter	enum	sret(%struct.Big)	8
+front-harness	O2	definition	parameter	enum	sret(%struct.aligned32)	4
+front-harness	O2	definition	parameter	enum	sret(%struct.bool_mixed)	4
+front-harness	O2	definition	parameter	enum	sret(%struct.chars17)	4
+front-harness	O2	definition	parameter	enum	sret(%struct.chars31)	4
+front-harness	O2	definition	parameter	enum	sret(%struct.holder)	6
+front-harness	O2	definition	parameter	enum	sret(%struct.longdouble_tail)	4
+front-harness	O2	definition	parameter	enum	sret(%struct.mixed)	2
+front-harness	O2	definition	parameter	enum	sret(%struct.packed)	4
+front-harness	O2	definition	parameter	enum	sret(%struct.triple)	2
+front-harness	O2	definition	parameter	enum	sret(%struct.wide)	2
+front-harness	O2	definition	parameter	enum	writable	47
+front-harness	O2	definition	parameter	enum	writeonly	61
+front-harness	O2	definition	parameter	enum	zeroext	117
+front-harness	O2	definition	return	enum	align 8	8
+front-harness	O2	definition	return	enum	dereferenceable(16)	8
+front-harness	O2	definition	return	enum	noalias	1
+front-harness	O2	definition	return	enum	nofpclass(nan inf)	3
+front-harness	O2	definition	return	enum	nonnull	14
+front-harness	O2	definition	return	enum	noundef	253
+front-harness	O2	definition	return	enum	signext	10
+front-harness	O2	definition	return	enum	zeroext	36
+front-static	O0	call	function	enum	allocsize(0)	2
+front-static	O0	call	function	enum	allocsize(0,1)	1
+front-static	O0	call	function	enum	allocsize(1)	2
+front-static	O0	call	function	enum	memory(none)	17
+front-static	O0	call	function	enum	memory(read)	18
+front-static	O0	call	function	enum	noreturn	19
+front-static	O0	call	function	enum	nounwind	147
+front-static	O0	call	function	enum	returns_twice	26
+front-static	O0	call	function	enum	willreturn	18
+front-static	O0	call	parameter	enum	align 1	315
+front-static	O0	call	parameter	enum	align 1024	12
+front-static	O0	call	parameter	enum	align 1048576	2
+front-static	O0	call	parameter	enum	align 128	39
+front-static	O0	call	parameter	enum	align 16	254
+front-static	O0	call	parameter	enum	align 16384	12
+front-static	O0	call	parameter	enum	align 2	93
+front-static	O0	call	parameter	enum	align 2048	12
+front-static	O0	call	parameter	enum	align 256	47
+front-static	O0	call	parameter	enum	align 32	141
+front-static	O0	call	parameter	enum	align 4	138
+front-static	O0	call	parameter	enum	align 4096	39
+front-static	O0	call	parameter	enum	align 512	12
+front-static	O0	call	parameter	enum	align 64	97
+front-static	O0	call	parameter	enum	align 8	416
+front-static	O0	call	parameter	enum	align 8192	12
+front-static	O0	call	parameter	enum	byval(%struct.A)	34
+front-static	O0	call	parameter	enum	byval(%struct.Aligned)	1
+front-static	O0	call	parameter	enum	byval(%struct.B)	54
+front-static	O0	call	parameter	enum	byval(%struct.Big)	1
+front-static	O0	call	parameter	enum	byval(%struct.C)	27
+front-static	O0	call	parameter	enum	byval(%struct.D)	17
+front-static	O0	call	parameter	enum	byval(%struct.E)	17
+front-static	O0	call	parameter	enum	byval(%struct.F)	17
+front-static	O0	call	parameter	enum	byval(%struct.G)	17
+front-static	O0	call	parameter	enum	byval(%struct.P)	19
+front-static	O0	call	parameter	enum	byval(%struct.S)	2
+front-static	O0	call	parameter	enum	byval(%struct.S10)	12
+front-static	O0	call	parameter	enum	byval(%struct.S11)	12
+front-static	O0	call	parameter	enum	byval(%struct.S12)	12
+front-static	O0	call	parameter	enum	byval(%struct.S13)	12
+front-static	O0	call	parameter	enum	byval(%struct.S14)	12
+front-static	O0	call	parameter	enum	byval(%struct.S15)	12
+front-static	O0	call	parameter	enum	byval(%struct.S16)	12
+front-static	O0	call	parameter	enum	byval(%struct.S17)	12
+front-static	O0	call	parameter	enum	byval(%struct.S18)	12
+front-static	O0	call	parameter	enum	byval(%struct.S19)	12
+front-static	O0	call	parameter	enum	byval(%struct.S22)	12
+front-static	O0	call	parameter	enum	byval(%struct.S23)	12
+front-static	O0	call	parameter	enum	byval(%struct.S24)	12
+front-static	O0	call	parameter	enum	byval(%struct.S25)	12
+front-static	O0	call	parameter	enum	byval(%struct.S26)	12
+front-static	O0	call	parameter	enum	byval(%struct.S8)	12
+front-static	O0	call	parameter	enum	byval(%struct.S9)	12
+front-static	O0	call	parameter	enum	byval(%struct.T)	5
+front-static	O0	call	parameter	enum	byval(%struct.V)	3
+front-static	O0	call	parameter	enum	byval(%struct.aligned)	7
+front-static	O0	call	parameter	enum	byval(%struct.big)	8
+front-static	O0	call	parameter	enum	byval(%struct.holder)	3
+front-static	O0	call	parameter	enum	byval(%struct.huge)	1
+front-static	O0	call	parameter	enum	byval(%struct.mixed)	1
+front-static	O0	call	parameter	enum	byval(%struct.odd)	2
+front-static	O0	call	parameter	enum	byval(%struct.pair)	4
+front-static	O0	call	parameter	enum	byval(%struct.three)	2
+front-static	O0	call	parameter	enum	byval(%struct.triple)	2
+front-static	O0	call	parameter	enum	byval(<16 x float>)	17
+front-static	O0	call	parameter	enum	byval(<16 x i32>)	10
+front-static	O0	call	parameter	enum	byval(<4 x double>)	17
+front-static	O0	call	parameter	enum	byval(<8 x i32>)	12
+front-static	O0	call	parameter	enum	dead_on_unwind	38
+front-static	O0	call	parameter	enum	dereferenceable(16)	7
+front-static	O0	call	parameter	enum	elementtype(i64)	4
+front-static	O0	call	parameter	enum	nonnull	7
+front-static	O0	call	parameter	enum	noundef	6973
+front-static	O0	call	parameter	enum	signext	22
+front-static	O0	call	parameter	enum	sret(%struct.B)	5
+front-static	O0	call	parameter	enum	sret(%struct.Big)	1
+front-static	O0	call	parameter	enum	sret(%struct.aligned32)	4
+front-static	O0	call	parameter	enum	sret(%struct.bool_mixed)	4
+front-static	O0	call	parameter	enum	sret(%struct.chars17)	4
+front-static	O0	call	parameter	enum	sret(%struct.chars31)	4
+front-static	O0	call	parameter	enum	sret(%struct.holder)	3
+front-static	O0	call	parameter	enum	sret(%struct.longdouble_tail)	4
+front-static	O0	call	parameter	enum	sret(%struct.mixed)	1
+front-static	O0	call	parameter	enum	sret(%struct.packed)	4
+front-static	O0	call	parameter	enum	sret(%struct.triple)	1
+front-static	O0	call	parameter	enum	sret(%struct.value)	1
+front-static	O0	call	parameter	enum	sret(%struct.wide)	2
+front-static	O0	call	parameter	enum	writable	38
+front-static	O0	call	parameter	enum	zeroext	62
+front-static	O0	call	return	enum	align 64	1
+front-static	O0	call	return	enum	align 8	2
+front-static	O0	call	return	enum	dereferenceable(16)	2
+front-static	O0	call	return	enum	noalias	4
+front-static	O0	call	return	enum	nonnull	2
+front-static	O0	call	return	enum	noundef	6
+front-static	O0	call	return	enum	signext	6
+front-static	O0	call	return	enum	zeroext	12
+front-static	O0	declaration	function	enum	allocsize(0)	1
+front-static	O0	declaration	function	enum	allocsize(0,1)	1
+front-static	O0	declaration	function	enum	allocsize(1)	2
+front-static	O0	declaration	function	enum	convergent	1
+front-static	O0	declaration	function	enum	memory(argmem: readwrite)	49
+front-static	O0	declaration	function	enum	memory(argmem: readwrite, inaccessiblemem: readwrite)	1
+front-static	O0	declaration	function	enum	memory(argmem: write)	18
+front-static	O0	declaration	function	enum	memory(inaccessiblemem: write)	2
+front-static	O0	declaration	function	enum	memory(none)	211
+front-static	O0	declaration	function	enum	memory(read)	8
+front-static	O0	declaration	function	enum	nocallback	314
+front-static	O0	declaration	function	enum	nofree	314
+front-static	O0	declaration	function	enum	noreturn	11
+front-static	O0	declaration	function	enum	nosync	247
+front-static	O0	declaration	function	enum	nounwind	385
+front-static	O0	declaration	function	enum	returns_twice	6
+front-static	O0	declaration	function	enum	speculatable	206
+front-static	O0	declaration	function	enum	willreturn	322
+front-static	O0	declaration	function	string	"frame-pointer"="all"	402
+front-static	O0	declaration	function	string	"no-trapping-math"="true"	402
+front-static	O0	declaration	function	string	"stack-protector-buffer-size"="8"	402
+front-static	O0	declaration	function	string	"target-cpu"="x86-64"	402
+front-static	O0	declaration	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	402
+front-static	O0	declaration	function	string	"tune-cpu"="generic"	402
+front-static	O0	declaration	parameter	enum	align 1	6
+front-static	O0	declaration	parameter	enum	align 16	2
+front-static	O0	declaration	parameter	enum	align 32	2
+front-static	O0	declaration	parameter	enum	align 8	3
+front-static	O0	declaration	parameter	enum	dead_on_unwind	13
+front-static	O0	declaration	parameter	enum	immarg	97
+front-static	O0	declaration	parameter	enum	noalias	98
+front-static	O0	declaration	parameter	enum	nocapture	117
+front-static	O0	declaration	parameter	enum	noundef	565
+front-static	O0	declaration	parameter	enum	readonly	50
+front-static	O0	declaration	parameter	enum	signext	4
+front-static	O0	declaration	parameter	enum	sret(%struct.aligned32)	2
+front-static	O0	declaration	parameter	enum	sret(%struct.bool_mixed)	2
+front-static	O0	declaration	parameter	enum	sret(%struct.chars17)	2
+front-static	O0	declaration	parameter	enum	sret(%struct.chars31)	2
+front-static	O0	declaration	parameter	enum	sret(%struct.longdouble_tail)	2
+front-static	O0	declaration	parameter	enum	sret(%struct.packed)	2
+front-static	O0	declaration	parameter	enum	sret(%struct.wide)	1
+front-static	O0	declaration	parameter	enum	writable	13
+front-static	O0	declaration	parameter	enum	writeonly	67
+front-static	O0	declaration	return	enum	noalias	3
+front-static	O0	definition	function	enum	allocsize(0)	1
+front-static	O0	definition	function	enum	mustprogress	4
+front-static	O0	definition	function	enum	noinline	919
+front-static	O0	definition	function	enum	nounwind	918
+front-static	O0	definition	function	enum	uwtable	919
+front-static	O0	definition	function	string	"frame-pointer"="all"	919
+front-static	O0	definition	function	string	"min-legal-vector-width"="0"	899
+front-static	O0	definition	function	string	"min-legal-vector-width"="128"	10
+front-static	O0	definition	function	string	"min-legal-vector-width"="64"	10
+front-static	O0	definition	function	string	"no-trapping-math"="true"	919
+front-static	O0	definition	function	string	"stack-protector-buffer-size"="8"	919
+front-static	O0	definition	function	string	"target-cpu"="x86-64"	919
+front-static	O0	definition	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	919
+front-static	O0	definition	function	string	"tune-cpu"="generic"	919
+front-static	O0	definition	parameter	enum	align 1	1
+front-static	O0	definition	parameter	enum	align 1024	4
+front-static	O0	definition	parameter	enum	align 1048576	1
+front-static	O0	definition	parameter	enum	align 128	5
+front-static	O0	definition	parameter	enum	align 16	13
+front-static	O0	definition	parameter	enum	align 16384	4
+front-static	O0	definition	parameter	enum	align 2048	4
+front-static	O0	definition	parameter	enum	align 256	5
+front-static	O0	definition	parameter	enum	align 32	8
+front-static	O0	definition	parameter	enum	align 4096	5
+front-static	O0	definition	parameter	enum	align 512	4
+front-static	O0	definition	parameter	enum	align 64	9
+front-static	O0	definition	parameter	enum	align 8	40
+front-static	O0	definition	parameter	enum	align 8192	4
+front-static	O0	definition	parameter	enum	byval(%struct.A)	1
+front-static	O0	definition	parameter	enum	byval(%struct.Aligned)	1
+front-static	O0	definition	parameter	enum	byval(%struct.B)	4
+front-static	O0	definition	parameter	enum	byval(%struct.Big)	1
+front-static	O0	definition	parameter	enum	byval(%struct.C)	1
+front-static	O0	definition	parameter	enum	byval(%struct.D)	1
+front-static	O0	definition	parameter	enum	byval(%struct.E)	1
+front-static	O0	definition	parameter	enum	byval(%struct.F)	1
+front-static	O0	definition	parameter	enum	byval(%struct.G)	1
+front-static	O0	definition	parameter	enum	byval(%struct.P)	1
+front-static	O0	definition	parameter	enum	byval(%struct.S)	2
+front-static	O0	definition	parameter	enum	byval(%struct.S10)	4
+front-static	O0	definition	parameter	enum	byval(%struct.S11)	4
+front-static	O0	definition	parameter	enum	byval(%struct.S12)	4
+front-static	O0	definition	parameter	enum	byval(%struct.S13)	4
+front-static	O0	definition	parameter	enum	byval(%struct.S14)	4
+front-static	O0	definition	parameter	enum	byval(%struct.S15)	4
+front-static	O0	definition	parameter	enum	byval(%struct.S16)	4
+front-static	O0	definition	parameter	enum	byval(%struct.S17)	4
+front-static	O0	definition	parameter	enum	byval(%struct.S18)	4
+front-static	O0	definition	parameter	enum	byval(%struct.S19)	4
+front-static	O0	definition	parameter	enum	byval(%struct.S22)	4
+front-static	O0	definition	parameter	enum	byval(%struct.S23)	4
+front-static	O0	definition	parameter	enum	byval(%struct.S24)	4
+front-static	O0	definition	parameter	enum	byval(%struct.S25)	4
+front-static	O0	definition	parameter	enum	byval(%struct.S26)	4
+front-static	O0	definition	parameter	enum	byval(%struct.S8)	4
+front-static	O0	definition	parameter	enum	byval(%struct.S9)	4
+front-static	O0	definition	parameter	enum	byval(%struct.V)	1
+front-static	O0	definition	parameter	enum	byval(%struct.big)	1
+front-static	O0	definition	parameter	enum	byval(%struct.holder)	3
+front-static	O0	definition	parameter	enum	byval(%struct.huge)	1
+front-static	O0	definition	parameter	enum	byval(%struct.mixed)	1
+front-static	O0	definition	parameter	enum	byval(%struct.pair)	1
+front-static	O0	definition	parameter	enum	byval(%struct.triple)	2
+front-static	O0	definition	parameter	enum	byval(<16 x float>)	1
+front-static	O0	definition	parameter	enum	byval(<4 x double>)	1
+front-static	O0	definition	parameter	enum	dead_on_unwind	8
+front-static	O0	definition	parameter	enum	dereferenceable(16)	4
+front-static	O0	definition	parameter	enum	noalias	10
+front-static	O0	definition	parameter	enum	nonnull	6
+front-static	O0	definition	parameter	enum	noundef	1346
+front-static	O0	definition	parameter	enum	signext	10
+front-static	O0	definition	parameter	enum	sret(%struct.B)	1
+front-static	O0	definition	parameter	enum	sret(%struct.Big)	1
+front-static	O0	definition	parameter	enum	sret(%struct.holder)	3
+front-static	O0	definition	parameter	enum	sret(%struct.mixed)	1
+front-static	O0	definition	parameter	enum	sret(%struct.triple)	1
+front-static	O0	definition	parameter	enum	sret(%struct.value)	1
+front-static	O0	definition	parameter	enum	writable	8
+front-static	O0	definition	parameter	enum	zeroext	107
+front-static	O0	definition	return	enum	align 8	2
+front-static	O0	definition	return	enum	dereferenceable(16)	2
+front-static	O0	definition	return	enum	noalias	1
+front-static	O0	definition	return	enum	nonnull	2
+front-static	O0	definition	return	enum	noundef	3
+front-static	O0	definition	return	enum	signext	2
+front-static	O0	definition	return	enum	zeroext	4
+front-static	O2	call	function	enum	allocsize(0)	2
+front-static	O2	call	function	enum	allocsize(0,1)	1
+front-static	O2	call	function	enum	allocsize(1)	2
+front-static	O2	call	function	enum	memory(none)	10
+front-static	O2	call	function	enum	memory(read)	22
+front-static	O2	call	function	enum	noreturn	23
+front-static	O2	call	function	enum	nounwind	3516
+front-static	O2	call	function	enum	returns_twice	26
+front-static	O2	call	function	enum	willreturn	22
+front-static	O2	call	parameter	enum	align 1	29
+front-static	O2	call	parameter	enum	align 1024	11
+front-static	O2	call	parameter	enum	align 128	23
+front-static	O2	call	parameter	enum	align 16	113
+front-static	O2	call	parameter	enum	align 16384	11
+front-static	O2	call	parameter	enum	align 2	2
+front-static	O2	call	parameter	enum	align 2048	11
+front-static	O2	call	parameter	enum	align 256	31
+front-static	O2	call	parameter	enum	align 32	74
+front-static	O2	call	parameter	enum	align 4	1
+front-static	O2	call	parameter	enum	align 4096	29
+front-static	O2	call	parameter	enum	align 512	11
+front-static	O2	call	parameter	enum	align 64	66
+front-static	O2	call	parameter	enum	align 8	153
+front-static	O2	call	parameter	enum	align 8192	11
+front-static	O2	call	parameter	enum	byval(%struct.A)	23
+front-static	O2	call	parameter	enum	byval(%struct.Aligned)	1
+front-static	O2	call	parameter	enum	byval(%struct.B)	41
+front-static	O2	call	parameter	enum	byval(%struct.Big)	1
+front-static	O2	call	parameter	enum	byval(%struct.C)	18
+front-static	O2	call	parameter	enum	byval(%struct.D)	8
+front-static	O2	call	parameter	enum	byval(%struct.E)	8
+front-static	O2	call	parameter	enum	byval(%struct.F)	8
+front-static	O2	call	parameter	enum	byval(%struct.G)	8
+front-static	O2	call	parameter	enum	byval(%struct.P)	14
+front-static	O2	call	parameter	enum	byval(%struct.S)	2
+front-static	O2	call	parameter	enum	byval(%struct.S10)	11
+front-static	O2	call	parameter	enum	byval(%struct.S11)	11
+front-static	O2	call	parameter	enum	byval(%struct.S12)	11
+front-static	O2	call	parameter	enum	byval(%struct.S13)	12
+front-static	O2	call	parameter	enum	byval(%struct.S14)	12
+front-static	O2	call	parameter	enum	byval(%struct.S15)	11
+front-static	O2	call	parameter	enum	byval(%struct.S16)	11
+front-static	O2	call	parameter	enum	byval(%struct.S17)	12
+front-static	O2	call	parameter	enum	byval(%struct.S18)	12
+front-static	O2	call	parameter	enum	byval(%struct.S19)	11
+front-static	O2	call	parameter	enum	byval(%struct.S22)	11
+front-static	O2	call	parameter	enum	byval(%struct.S23)	11
+front-static	O2	call	parameter	enum	byval(%struct.S24)	11
+front-static	O2	call	parameter	enum	byval(%struct.S25)	11
+front-static	O2	call	parameter	enum	byval(%struct.S26)	11
+front-static	O2	call	parameter	enum	byval(%struct.S8)	11
+front-static	O2	call	parameter	enum	byval(%struct.S9)	11
+front-static	O2	call	parameter	enum	byval(%struct.T)	5
+front-static	O2	call	parameter	enum	byval(%struct.V)	3
+front-static	O2	call	parameter	enum	byval(%struct.aligned)	7
+front-static	O2	call	parameter	enum	byval(%struct.big)	7
+front-static	O2	call	parameter	enum	byval(%struct.holder)	3
+front-static	O2	call	parameter	enum	byval(%struct.mixed)	1
+front-static	O2	call	parameter	enum	byval(%struct.odd)	2
+front-static	O2	call	parameter	enum	byval(%struct.pair)	4
+front-static	O2	call	parameter	enum	byval(%struct.three)	2
+front-static	O2	call	parameter	enum	byval(%struct.triple)	2
+front-static	O2	call	parameter	enum	byval(<16 x float>)	8
+front-static	O2	call	parameter	enum	byval(<16 x i32>)	10
+front-static	O2	call	parameter	enum	byval(<4 x double>)	8
+front-static	O2	call	parameter	enum	byval(<8 x i32>)	12
+front-static	O2	call	parameter	enum	dead_on_unwind	38
+front-static	O2	call	parameter	enum	dereferenceable(1)	101
+front-static	O2	call	parameter	enum	dereferenceable(10)	41
+front-static	O2	call	parameter	enum	dereferenceable(102)	1
+front-static	O2	call	parameter	enum	dereferenceable(12)	2
+front-static	O2	call	parameter	enum	dereferenceable(125)	2
+front-static	O2	call	parameter	enum	dereferenceable(127)	2
+front-static	O2	call	parameter	enum	dereferenceable(128)	4
+front-static	O2	call	parameter	enum	dereferenceable(13)	2
+front-static	O2	call	parameter	enum	dereferenceable(14)	5
+front-static	O2	call	parameter	enum	dereferenceable(15)	1
+front-static	O2	call	parameter	enum	dereferenceable(16)	20
+front-static	O2	call	parameter	enum	dereferenceable(17)	4
+front-static	O2	call	parameter	enum	dereferenceable(18)	1
+front-static	O2	call	parameter	enum	dereferenceable(2)	2
+front-static	O2	call	parameter	enum	dereferenceable(200)	13
+front-static	O2	call	parameter	enum	dereferenceable(216)	4
+front-static	O2	call	parameter	enum	dereferenceable(24)	10
+front-static	O2	call	parameter	enum	dereferenceable(254)	1
+front-static	O2	call	parameter	enum	dereferenceable(256)	1
+front-static	O2	call	parameter	enum	dereferenceable(31)	4
+front-static	O2	call	parameter	enum	dereferenceable(32)	4
+front-static	O2	call	parameter	enum	dereferenceable(33)	2
+front-static	O2	call	parameter	enum	dereferenceable(34)	2
+front-static	O2	call	parameter	enum	dereferenceable(4)	1
+front-static	O2	call	parameter	enum	dereferenceable(40)	2
+front-static	O2	call	parameter	enum	dereferenceable(4096)	4
+front-static	O2	call	parameter	enum	dereferenceable(48)	2
+front-static	O2	call	parameter	enum	dereferenceable(56)	1
+front-static	O2	call	parameter	enum	dereferenceable(64)	5
+front-static	O2	call	parameter	enum	dereferenceable(7)	2
+front-static	O2	call	parameter	enum	dereferenceable(72)	2
+front-static	O2	call	parameter	enum	dereferenceable(8192)	3
+front-static	O2	call	parameter	enum	dereferenceable(9)	3
+front-static	O2	call	parameter	enum	elementtype(i64)	4
+front-static	O2	call	parameter	enum	nocapture	3
+front-static	O2	call	parameter	enum	nonnull	3773
+front-static	O2	call	parameter	enum	noundef	6999
+front-static	O2	call	parameter	enum	signext	71
+front-static	O2	call	parameter	enum	sret(%struct.B)	5
+front-static	O2	call	parameter	enum	sret(%struct.Big)	1
+front-static	O2	call	parameter	enum	sret(%struct.aligned32)	4
+front-static	O2	call	parameter	enum	sret(%struct.bool_mixed)	4
+front-static	O2	call	parameter	enum	sret(%struct.chars17)	4
+front-static	O2	call	parameter	enum	sret(%struct.chars31)	4
+front-static	O2	call	parameter	enum	sret(%struct.holder)	3
+front-static	O2	call	parameter	enum	sret(%struct.longdouble_tail)	4
+front-static	O2	call	parameter	enum	sret(%struct.mixed)	1
+front-static	O2	call	parameter	enum	sret(%struct.packed)	4
+front-static	O2	call	parameter	enum	sret(%struct.triple)	1
+front-static	O2	call	parameter	enum	sret(%struct.value)	1
+front-static	O2	call	parameter	enum	sret(%struct.wide)	2
+front-static	O2	call	parameter	enum	writable	38
+front-static	O2	call	parameter	enum	zeroext	16
+front-static	O2	call	return	enum	align 128	2
+front-static	O2	call	return	enum	align 16	16
+front-static	O2	call	return	enum	align 256	3
+front-static	O2	call	return	enum	align 32	9
+front-static	O2	call	return	enum	align 4096	2
+front-static	O2	call	return	enum	align 64	6
+front-static	O2	call	return	enum	align 8	2
+front-static	O2	call	return	enum	dereferenceable(16)	2
+front-static	O2	call	return	enum	dereferenceable_or_null(128)	3
+front-static	O2	call	return	enum	dereferenceable_or_null(256)	1
+front-static	O2	call	return	enum	noalias	4
+front-static	O2	call	return	enum	nonnull	3
+front-static	O2	call	return	enum	noundef	6
+front-static	O2	call	return	enum	signext	5
+front-static	O2	call	return	enum	zeroext	10
+front-static	O2	declaration	function	enum	allockind("alloc,uninitialized")	1
+front-static	O2	declaration	function	enum	allockind("alloc,uninitialized,aligned")	1
+front-static	O2	declaration	function	enum	allockind("alloc,zeroed")	1
+front-static	O2	declaration	function	enum	allockind("free")	1
+front-static	O2	declaration	function	enum	allockind("realloc")	1
+front-static	O2	declaration	function	enum	allocsize(0)	1
+front-static	O2	declaration	function	enum	allocsize(0,1)	1
+front-static	O2	declaration	function	enum	allocsize(1)	2
+front-static	O2	declaration	function	enum	memory(argmem: read)	6
+front-static	O2	declaration	function	enum	memory(argmem: readwrite)	150
+front-static	O2	declaration	function	enum	memory(argmem: readwrite, inaccessiblemem: readwrite)	3
+front-static	O2	declaration	function	enum	memory(argmem: write)	11
+front-static	O2	declaration	function	enum	memory(inaccessiblemem: readwrite)	3
+front-static	O2	declaration	function	enum	memory(inaccessiblemem: write)	2
+front-static	O2	declaration	function	enum	memory(none)	226
+front-static	O2	declaration	function	enum	memory(read)	1
+front-static	O2	declaration	function	enum	memory(write)	8
+front-static	O2	declaration	function	enum	mustprogress	20
+front-static	O2	declaration	function	enum	nocallback	420
+front-static	O2	declaration	function	enum	nofree	457
+front-static	O2	declaration	function	enum	noreturn	11
+front-static	O2	declaration	function	enum	nosync	393
+front-static	O2	declaration	function	enum	nounwind	505
+front-static	O2	declaration	function	enum	returns_twice	6
+front-static	O2	declaration	function	enum	speculatable	222
+front-static	O2	declaration	function	enum	willreturn	443
+front-static	O2	declaration	function	string	"alloc-family"="malloc"	5
+front-static	O2	declaration	function	string	"no-trapping-math"="true"	399
+front-static	O2	declaration	function	string	"stack-protector-buffer-size"="8"	399
+front-static	O2	declaration	function	string	"target-cpu"="x86-64"	399
+front-static	O2	declaration	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	399
+front-static	O2	declaration	function	string	"tune-cpu"="generic"	399
+front-static	O2	declaration	parameter	enum	align 1	6
+front-static	O2	declaration	parameter	enum	align 16	2
+front-static	O2	declaration	parameter	enum	align 32	2
+front-static	O2	declaration	parameter	enum	align 8	3
+front-static	O2	declaration	parameter	enum	allocalign	1
+front-static	O2	declaration	parameter	enum	allocptr	2
+front-static	O2	declaration	parameter	enum	dead_on_unwind	13
+front-static	O2	declaration	parameter	enum	immarg	188
+front-static	O2	declaration	parameter	enum	noalias	33
+front-static	O2	declaration	parameter	enum	nocapture	211
+front-static	O2	declaration	parameter	enum	noundef	562
+front-static	O2	declaration	parameter	enum	readonly	34
+front-static	O2	declaration	parameter	enum	signext	4
+front-static	O2	declaration	parameter	enum	sret(%struct.aligned32)	2
+front-static	O2	declaration	parameter	enum	sret(%struct.bool_mixed)	2
+front-static	O2	declaration	parameter	enum	sret(%struct.chars17)	2
+front-static	O2	declaration	parameter	enum	sret(%struct.chars31)	2
+front-static	O2	declaration	parameter	enum	sret(%struct.longdouble_tail)	2
+front-static	O2	declaration	parameter	enum	sret(%struct.packed)	2
+front-static	O2	declaration	parameter	enum	sret(%struct.wide)	1
+front-static	O2	declaration	parameter	enum	writable	13
+front-static	O2	declaration	parameter	enum	writeonly	28
+front-static	O2	declaration	return	enum	noalias	4
+front-static	O2	declaration	return	enum	noundef	20
+front-static	O2	definition	function	enum	allocsize(0)	1
+front-static	O2	definition	function	enum	memory(argmem: read)	50
+front-static	O2	definition	function	enum	memory(argmem: readwrite)	45
+front-static	O2	definition	function	enum	memory(argmem: readwrite, inaccessiblemem: readwrite)	3
+front-static	O2	definition	function	enum	memory(argmem: write)	2
+front-static	O2	definition	function	enum	memory(inaccessiblemem: readwrite)	4
+front-static	O2	definition	function	enum	memory(none)	230
+front-static	O2	definition	function	enum	memory(read, argmem: none, inaccessiblemem: none)	7
+front-static	O2	definition	function	enum	memory(read, argmem: readwrite, inaccessiblemem: none)	5
+front-static	O2	definition	function	enum	memory(read, inaccessiblemem: none)	5
+front-static	O2	definition	function	enum	memory(readwrite, argmem: none)	37
+front-static	O2	definition	function	enum	memory(readwrite, argmem: none, inaccessiblemem: none)	12
+front-static	O2	definition	function	enum	memory(readwrite, argmem: write)	2
+front-static	O2	definition	function	enum	memory(readwrite, argmem: write, inaccessiblemem: none)	3
+front-static	O2	definition	function	enum	memory(readwrite, inaccessiblemem: none)	3
+front-static	O2	definition	function	enum	mustprogress	303
+front-static	O2	definition	function	enum	nofree	475
+front-static	O2	definition	function	enum	noinline	443
+front-static	O2	definition	function	enum	norecurse	450
+front-static	O2	definition	function	enum	noreturn	15
+front-static	O2	definition	function	enum	nosync	397
+front-static	O2	definition	function	enum	nounwind	740
+front-static	O2	definition	function	enum	uwtable	740
+front-static	O2	definition	function	enum	willreturn	301
+front-static	O2	definition	function	string	"min-legal-vector-width"="0"	723
+front-static	O2	definition	function	string	"min-legal-vector-width"="128"	8
+front-static	O2	definition	function	string	"min-legal-vector-width"="64"	9
+front-static	O2	definition	function	string	"no-trapping-math"="true"	740
+front-static	O2	definition	function	string	"stack-protector-buffer-size"="8"	740
+front-static	O2	definition	function	string	"target-cpu"="x86-64"	740
+front-static	O2	definition	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	740
+front-static	O2	definition	function	string	"tune-cpu"="generic"	740
+front-static	O2	definition	parameter	enum	align 1	1
+front-static	O2	definition	parameter	enum	align 1024	4
+front-static	O2	definition	parameter	enum	align 1048576	1
+front-static	O2	definition	parameter	enum	align 128	4
+front-static	O2	definition	parameter	enum	align 16	12
+front-static	O2	definition	parameter	enum	align 16384	4
+front-static	O2	definition	parameter	enum	align 2048	4
+front-static	O2	definition	parameter	enum	align 256	4
+front-static	O2	definition	parameter	enum	align 32	4
+front-static	O2	definition	parameter	enum	align 4096	4
+front-static	O2	definition	parameter	enum	align 512	4
+front-static	O2	definition	parameter	enum	align 64	7
+front-static	O2	definition	parameter	enum	align 8	40
+front-static	O2	definition	parameter	enum	align 8192	4
+front-static	O2	definition	parameter	enum	byval(%struct.Aligned)	1
+front-static	O2	definition	parameter	enum	byval(%struct.B)	3
+front-static	O2	definition	parameter	enum	byval(%struct.Big)	1
+front-static	O2	definition	parameter	enum	byval(%struct.S)	2
+front-static	O2	definition	parameter	enum	byval(%struct.S10)	4
+front-static	O2	definition	parameter	enum	byval(%struct.S11)	4
+front-static	O2	definition	parameter	enum	byval(%struct.S12)	4
+front-static	O2	definition	parameter	enum	byval(%struct.S13)	4
+front-static	O2	definition	parameter	enum	byval(%struct.S14)	4
+front-static	O2	definition	parameter	enum	byval(%struct.S15)	4
+front-static	O2	definition	parameter	enum	byval(%struct.S16)	4
+front-static	O2	definition	parameter	enum	byval(%struct.S17)	4
+front-static	O2	definition	parameter	enum	byval(%struct.S18)	4
+front-static	O2	definition	parameter	enum	byval(%struct.S19)	4
+front-static	O2	definition	parameter	enum	byval(%struct.S22)	4
+front-static	O2	definition	parameter	enum	byval(%struct.S23)	4
+front-static	O2	definition	parameter	enum	byval(%struct.S24)	4
+front-static	O2	definition	parameter	enum	byval(%struct.S25)	4
+front-static	O2	definition	parameter	enum	byval(%struct.S26)	4
+front-static	O2	definition	parameter	enum	byval(%struct.S8)	4
+front-static	O2	definition	parameter	enum	byval(%struct.S9)	4
+front-static	O2	definition	parameter	enum	byval(%struct.V)	1
+front-static	O2	definition	parameter	enum	byval(%struct.big)	1
+front-static	O2	definition	parameter	enum	byval(%struct.holder)	3
+front-static	O2	definition	parameter	enum	byval(%struct.huge)	1
+front-static	O2	definition	parameter	enum	byval(%struct.mixed)	1
+front-static	O2	definition	parameter	enum	byval(%struct.pair)	1
+front-static	O2	definition	parameter	enum	byval(%struct.triple)	2
+front-static	O2	definition	parameter	enum	dead_on_unwind	8
+front-static	O2	definition	parameter	enum	dereferenceable(16)	4
+front-static	O2	definition	parameter	enum	noalias	10
+front-static	O2	definition	parameter	enum	nocapture	146
+front-static	O2	definition	parameter	enum	nonnull	6
+front-static	O2	definition	parameter	enum	noundef	859
+front-static	O2	definition	parameter	enum	readnone	6
+front-static	O2	definition	parameter	enum	readonly	88
+front-static	O2	definition	parameter	enum	returned	2
+front-static	O2	definition	parameter	enum	signext	9
+front-static	O2	definition	parameter	enum	sret(%struct.B)	1
+front-static	O2	definition	parameter	enum	sret(%struct.Big)	1
+front-static	O2	definition	parameter	enum	sret(%struct.holder)	3
+front-static	O2	definition	parameter	enum	sret(%struct.mixed)	1
+front-static	O2	definition	parameter	enum	sret(%struct.triple)	1
+front-static	O2	definition	parameter	enum	sret(%struct.value)	1
+front-static	O2	definition	parameter	enum	writable	8
+front-static	O2	definition	parameter	enum	writeonly	12
+front-static	O2	definition	parameter	enum	zeroext	92
+front-static	O2	definition	return	enum	align 8	2
+front-static	O2	definition	return	enum	dereferenceable(16)	2
+front-static	O2	definition	return	enum	noalias	3
+front-static	O2	definition	return	enum	nonnull	3
+front-static	O2	definition	return	enum	noundef	79
+front-static	O2	definition	return	enum	signext	2
+front-static	O2	definition	return	enum	zeroext	4
+gcc	O0	call	function	enum	allocsize(0)	15
+gcc	O0	call	function	enum	allocsize(0,1)	2
+gcc	O0	call	function	enum	hot	1
+gcc	O0	call	function	enum	memory(none)	13
+gcc	O0	call	function	enum	memory(read)	24
+gcc	O0	call	function	enum	nobuiltin	1
+gcc	O0	call	function	enum	noreturn	6205
+gcc	O0	call	function	enum	nounwind	2447
+gcc	O0	call	function	enum	returns_twice	2
+gcc	O0	call	function	enum	willreturn	28
+gcc	O0	call	function	string	"no-builtin-abort"	4
+gcc	O0	call	parameter	enum	align 1	1179
+gcc	O0	call	parameter	enum	align 16	560
+gcc	O0	call	parameter	enum	align 2	84
+gcc	O0	call	parameter	enum	align 32	176
+gcc	O0	call	parameter	enum	align 4	552
+gcc	O0	call	parameter	enum	align 8	651
+gcc	O0	call	parameter	enum	byval(%struct.A)	4
+gcc	O0	call	parameter	enum	byval(%struct.A10)	1
+gcc	O0	call	parameter	enum	byval(%struct.A11)	1
+gcc	O0	call	parameter	enum	byval(%struct.A12)	1
+gcc	O0	call	parameter	enum	byval(%struct.A13)	1
+gcc	O0	call	parameter	enum	byval(%struct.A14)	1
+gcc	O0	call	parameter	enum	byval(%struct.A15)	1
+gcc	O0	call	parameter	enum	byval(%struct.A16)	1
+gcc	O0	call	parameter	enum	byval(%struct.A31)	1
+gcc	O0	call	parameter	enum	byval(%struct.A32)	1
+gcc	O0	call	parameter	enum	byval(%struct.A35)	1
+gcc	O0	call	parameter	enum	byval(%struct.A72)	1
+gcc	O0	call	parameter	enum	byval(%struct.A9)	1
+gcc	O0	call	parameter	enum	byval(%struct.B)	9
+gcc	O0	call	parameter	enum	byval(%struct.G)	2
+gcc	O0	call	parameter	enum	byval(%struct.H)	2
+gcc	O0	call	parameter	enum	byval(%struct.I)	2
+gcc	O0	call	parameter	enum	byval(%struct.Point)	3
+gcc	O0	call	parameter	enum	byval(%struct.Q)	2
+gcc	O0	call	parameter	enum	byval(%struct.R)	2
+gcc	O0	call	parameter	enum	byval(%struct.S)	15
+gcc	O0	call	parameter	enum	byval(%struct.S1)	9
+gcc	O0	call	parameter	enum	byval(%struct.Scf10)	1
+gcc	O0	call	parameter	enum	byval(%struct.T)	12
+gcc	O0	call	parameter	enum	byval(%struct.U)	24
+gcc	O0	call	parameter	enum	byval(%struct.V)	20
+gcc	O0	call	parameter	enum	byval(%struct.W)	13
+gcc	O0	call	parameter	enum	byval(%struct.X)	15
+gcc	O0	call	parameter	enum	byval(%struct.Y)	3
+gcc	O0	call	parameter	enum	byval(%struct.Z)	3
+gcc	O0	call	parameter	enum	byval(%struct.assembly_operand)	3
+gcc	O0	call	parameter	enum	byval(%struct.baz)	2
+gcc	O0	call	parameter	enum	byval(%struct.big)	4
+gcc	O0	call	parameter	enum	byval(%struct.big_t)	11
+gcc	O0	call	parameter	enum	byval(%struct.et6)	1
+gcc	O0	call	parameter	enum	byval(%struct.et7)	1
+gcc	O0	call	parameter	enum	byval(%struct.s)	3
+gcc	O0	call	parameter	enum	byval(%struct.two)	1
+gcc	O0	call	parameter	enum	byval(<16 x i16>)	1
+gcc	O0	call	parameter	enum	byval(<4 x i64>)	1
+gcc	O0	call	parameter	enum	byval({ double, double })	1
+gcc	O0	call	parameter	enum	byval({ x86_fp80, x86_fp80 })	7
+gcc	O0	call	parameter	enum	dead_on_unwind	62
+gcc	O0	call	parameter	enum	elementtype(%struct.anon)	2
+gcc	O0	call	parameter	enum	elementtype(%struct.anon.0)	2
+gcc	O0	call	parameter	enum	elementtype(i32)	9
+gcc	O0	call	parameter	enum	elementtype(i64)	2
+gcc	O0	call	parameter	enum	elementtype(ptr)	4
+gcc	O0	call	parameter	enum	noundef	15569
+gcc	O0	call	parameter	enum	signext	148
+gcc	O0	call	parameter	enum	sret(%struct.A)	6
+gcc	O0	call	parameter	enum	sret(%struct.B)	2
+gcc	O0	call	parameter	enum	sret(%struct.C)	2
+gcc	O0	call	parameter	enum	sret(%struct.G)	2
+gcc	O0	call	parameter	enum	sret(%struct.H)	2
+gcc	O0	call	parameter	enum	sret(%struct.I)	2
+gcc	O0	call	parameter	enum	sret(%struct.Q)	2
+gcc	O0	call	parameter	enum	sret(%struct.R)	2
+gcc	O0	call	parameter	enum	sret(%struct.S)	3
+gcc	O0	call	parameter	enum	sret(%struct.U)	12
+gcc	O0	call	parameter	enum	sret(%struct.V)	10
+gcc	O0	call	parameter	enum	sret(%struct.W)	3
+gcc	O0	call	parameter	enum	sret(%struct.X)	5
+gcc	O0	call	parameter	enum	sret(%struct.Y)	3
+gcc	O0	call	parameter	enum	sret(%struct.Z)	3
+gcc	O0	call	parameter	enum	sret(%struct.realvaluetype)	1
+gcc	O0	call	parameter	enum	sret(%struct.s)	2
+gcc	O0	call	parameter	enum	writable	62
+gcc	O0	call	parameter	enum	zeroext	196
+gcc	O0	call	return	enum	noalias	2
+gcc	O0	call	return	enum	signext	122
+gcc	O0	call	return	enum	zeroext	276
+gcc	O0	declaration	function	enum	allocsize(0)	13
+gcc	O0	declaration	function	enum	allocsize(0,1)	2
+gcc	O0	declaration	function	enum	cold	2
+gcc	O0	declaration	function	enum	convergent	3
+gcc	O0	declaration	function	enum	memory(argmem: readwrite)	237
+gcc	O0	declaration	function	enum	memory(argmem: readwrite, inaccessiblemem: readwrite)	6
+gcc	O0	declaration	function	enum	memory(argmem: write)	97
+gcc	O0	declaration	function	enum	memory(inaccessiblemem: write)	2
+gcc	O0	declaration	function	enum	memory(none)	72
+gcc	O0	declaration	function	enum	memory(read)	3
+gcc	O0	declaration	function	enum	nocallback	557
+gcc	O0	declaration	function	enum	nofree	557
+gcc	O0	declaration	function	enum	noreturn	2131
+gcc	O0	declaration	function	enum	nosync	223
+gcc	O0	declaration	function	enum	nounwind	1017
+gcc	O0	declaration	function	enum	returns_twice	2
+gcc	O0	declaration	function	enum	speculatable	60
+gcc	O0	declaration	function	enum	willreturn	560
+gcc	O0	declaration	function	string	"frame-pointer"="all"	2348
+gcc	O0	declaration	function	string	"no-builtin-abort"	1
+gcc	O0	declaration	function	string	"no-trapping-math"="true"	2348
+gcc	O0	declaration	function	string	"stack-protector-buffer-size"="8"	2348
+gcc	O0	declaration	function	string	"target-cpu"="x86-64"	2348
+gcc	O0	declaration	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	2348
+gcc	O0	declaration	function	string	"tune-cpu"="generic"	2348
+gcc	O0	declaration	parameter	enum	immarg	379
+gcc	O0	declaration	parameter	enum	noalias	470
+gcc	O0	declaration	parameter	enum	nocapture	577
+gcc	O0	declaration	parameter	enum	noundef	1056
+gcc	O0	declaration	parameter	enum	readonly	243
+gcc	O0	declaration	parameter	enum	writeonly	334
+gcc	O0	definition	function	enum	hot	1
+gcc	O0	definition	function	enum	memory(none)	6
+gcc	O0	definition	function	enum	memory(read)	11
+gcc	O0	definition	function	enum	noinline	5794
+gcc	O0	definition	function	enum	noreturn	3
+gcc	O0	definition	function	enum	nounwind	5794
+gcc	O0	definition	function	enum	uwtable	5794
+gcc	O0	definition	function	enum	willreturn	17
+gcc	O0	definition	function	string	"frame-pointer"="all"	5794
+gcc	O0	definition	function	string	"min-legal-vector-width"="0"	5762
+gcc	O0	definition	function	string	"min-legal-vector-width"="128"	10
+gcc	O0	definition	function	string	"min-legal-vector-width"="256"	2
+gcc	O0	definition	function	string	"min-legal-vector-width"="64"	20
+gcc	O0	definition	function	string	"no-builtin-abort"	4
+gcc	O0	definition	function	string	"no-trapping-math"="true"	5794
+gcc	O0	definition	function	string	"stack-protector-buffer-size"="8"	5794
+gcc	O0	definition	function	string	"target-cpu"="x86-64"	5794
+gcc	O0	definition	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	5794
+gcc	O0	definition	function	string	"tune-cpu"="generic"	5794
+gcc	O0	definition	parameter	enum	align 1	26
+gcc	O0	definition	parameter	enum	align 16	15
+gcc	O0	definition	parameter	enum	align 32	3
+gcc	O0	definition	parameter	enum	align 4	4
+gcc	O0	definition	parameter	enum	align 8	59
+gcc	O0	definition	parameter	enum	byval(%struct.A)	2
+gcc	O0	definition	parameter	enum	byval(%struct.B)	7
+gcc	O0	definition	parameter	enum	byval(%struct.G)	2
+gcc	O0	definition	parameter	enum	byval(%struct.H)	2
+gcc	O0	definition	parameter	enum	byval(%struct.I)	2
+gcc	O0	definition	parameter	enum	byval(%struct.Point)	3
+gcc	O0	definition	parameter	enum	byval(%struct.Q)	2
+gcc	O0	definition	parameter	enum	byval(%struct.R)	2
+gcc	O0	definition	parameter	enum	byval(%struct.S)	3
+gcc	O0	definition	parameter	enum	byval(%struct.Scf10)	1
+gcc	O0	definition	parameter	enum	byval(%struct.U)	3
+gcc	O0	definition	parameter	enum	byval(%struct.W)	3
+gcc	O0	definition	parameter	enum	byval(%struct.X)	5
+gcc	O0	definition	parameter	enum	byval(%struct.Y)	3
+gcc	O0	definition	parameter	enum	byval(%struct.Z)	3
+gcc	O0	definition	parameter	enum	byval(%struct.assembly_operand)	3
+gcc	O0	definition	parameter	enum	byval(%struct.baz)	2
+gcc	O0	definition	parameter	enum	byval(%struct.big)	3
+gcc	O0	definition	parameter	enum	byval(%struct.big_t)	1
+gcc	O0	definition	parameter	enum	byval(%struct.et6)	1
+gcc	O0	definition	parameter	enum	byval(%struct.et7)	1
+gcc	O0	definition	parameter	enum	byval(%struct.s)	3
+gcc	O0	definition	parameter	enum	byval(%struct.two)	1
+gcc	O0	definition	parameter	enum	byval(<16 x i16>)	1
+gcc	O0	definition	parameter	enum	byval(<4 x i64>)	1
+gcc	O0	definition	parameter	enum	byval({ double, double })	1
+gcc	O0	definition	parameter	enum	byval({ x86_fp80, x86_fp80 })	7
+gcc	O0	definition	parameter	enum	dead_on_unwind	39
+gcc	O0	definition	parameter	enum	noalias	51
+gcc	O0	definition	parameter	enum	nonnull	3
+gcc	O0	definition	parameter	enum	noundef	5281
+gcc	O0	definition	parameter	enum	signext	93
+gcc	O0	definition	parameter	enum	sret(%struct.A)	2
+gcc	O0	definition	parameter	enum	sret(%struct.B)	2
+gcc	O0	definition	parameter	enum	sret(%struct.C)	2
+gcc	O0	definition	parameter	enum	sret(%struct.G)	2
+gcc	O0	definition	parameter	enum	sret(%struct.H)	2
+gcc	O0	definition	parameter	enum	sret(%struct.I)	2
+gcc	O0	definition	parameter	enum	sret(%struct.Q)	2
+gcc	O0	definition	parameter	enum	sret(%struct.R)	2
+gcc	O0	definition	parameter	enum	sret(%struct.S)	3
+gcc	O0	definition	parameter	enum	sret(%struct.U)	3
+gcc	O0	definition	parameter	enum	sret(%struct.V)	1
+gcc	O0	definition	parameter	enum	sret(%struct.W)	3
+gcc	O0	definition	parameter	enum	sret(%struct.X)	4
+gcc	O0	definition	parameter	enum	sret(%struct.Y)	3
+gcc	O0	definition	parameter	enum	sret(%struct.Z)	3
+gcc	O0	definition	parameter	enum	sret(%struct.realvaluetype)	1
+gcc	O0	definition	parameter	enum	sret(%struct.s)	2
+gcc	O0	definition	parameter	enum	writable	39
+gcc	O0	definition	parameter	enum	zeroext	129
+gcc	O0	definition	return	enum	noalias	1
+gcc	O0	definition	return	enum	signext	72
+gcc	O0	definition	return	enum	zeroext	268
+gcc	O2	call	function	enum	allocsize(0)	18
+gcc	O2	call	function	enum	allocsize(0,1)	4
+gcc	O2	call	function	enum	cold	10
+gcc	O2	call	function	enum	hot	1
+gcc	O2	call	function	enum	memory(none)	11
+gcc	O2	call	function	enum	memory(read)	4
+gcc	O2	call	function	enum	nobuiltin	1
+gcc	O2	call	function	enum	noreturn	3724
+gcc	O2	call	function	enum	nounwind	6048
+gcc	O2	call	function	enum	returns_twice	2
+gcc	O2	call	function	enum	willreturn	4
+gcc	O2	call	function	string	"no-builtin-abort"	1
+gcc	O2	call	parameter	enum	align 1	349
+gcc	O2	call	parameter	enum	align 16	434
+gcc	O2	call	parameter	enum	align 2	76
+gcc	O2	call	parameter	enum	align 32	34
+gcc	O2	call	parameter	enum	align 4	154
+gcc	O2	call	parameter	enum	align 8	167
+gcc	O2	call	parameter	enum	byval(%struct.A10)	1
+gcc	O2	call	parameter	enum	byval(%struct.A11)	1
+gcc	O2	call	parameter	enum	byval(%struct.A12)	1
+gcc	O2	call	parameter	enum	byval(%struct.A13)	1
+gcc	O2	call	parameter	enum	byval(%struct.A14)	1
+gcc	O2	call	parameter	enum	byval(%struct.A15)	1
+gcc	O2	call	parameter	enum	byval(%struct.A16)	1
+gcc	O2	call	parameter	enum	byval(%struct.A31)	1
+gcc	O2	call	parameter	enum	byval(%struct.A32)	1
+gcc	O2	call	parameter	enum	byval(%struct.A35)	1
+gcc	O2	call	parameter	enum	byval(%struct.A72)	1
+gcc	O2	call	parameter	enum	byval(%struct.A9)	1
+gcc	O2	call	parameter	enum	byval(%struct.B)	2
+gcc	O2	call	parameter	enum	byval(%struct.S)	13
+gcc	O2	call	parameter	enum	byval(%struct.S1)	9
+gcc	O2	call	parameter	enum	byval(%struct.T)	12
+gcc	O2	call	parameter	enum	byval(%struct.U)	20
+gcc	O2	call	parameter	enum	byval(%struct.V)	20
+gcc	O2	call	parameter	enum	byval(%struct.W)	10
+gcc	O2	call	parameter	enum	byval(%struct.X)	10
+gcc	O2	call	parameter	enum	byval(%struct.assembly_operand)	3
+gcc	O2	call	parameter	enum	byval(%struct.baz)	2
+gcc	O2	call	parameter	enum	byval(%struct.big)	2
+gcc	O2	call	parameter	enum	byval(%struct.two)	1
+gcc	O2	call	parameter	enum	byval({ double, double })	1
+gcc	O2	call	parameter	enum	byval({ x86_fp80, x86_fp80 })	5
+gcc	O2	call	parameter	enum	dead_on_unwind	26
+gcc	O2	call	parameter	enum	dereferenceable(1)	1153
+gcc	O2	call	parameter	enum	dereferenceable(10)	66
+gcc	O2	call	parameter	enum	dereferenceable(100)	2
+gcc	O2	call	parameter	enum	dereferenceable(1024)	9
+gcc	O2	call	parameter	enum	dereferenceable(11)	49
+gcc	O2	call	parameter	enum	dereferenceable(12)	48
+gcc	O2	call	parameter	enum	dereferenceable(13)	33
+gcc	O2	call	parameter	enum	dereferenceable(131068)	2
+gcc	O2	call	parameter	enum	dereferenceable(131072)	7
+gcc	O2	call	parameter	enum	dereferenceable(13371)	1
+gcc	O2	call	parameter	enum	dereferenceable(14)	36
+gcc	O2	call	parameter	enum	dereferenceable(15)	35
+gcc	O2	call	parameter	enum	dereferenceable(16)	106
+gcc	O2	call	parameter	enum	dereferenceable(17)	10
+gcc	O2	call	parameter	enum	dereferenceable(18)	6
+gcc	O2	call	parameter	enum	dereferenceable(19)	5
+gcc	O2	call	parameter	enum	dereferenceable(192)	1
+gcc	O2	call	parameter	enum	dereferenceable(2)	7
+gcc	O2	call	parameter	enum	dereferenceable(20)	23
+gcc	O2	call	parameter	enum	dereferenceable(200)	2
+gcc	O2	call	parameter	enum	dereferenceable(2000)	3
+gcc	O2	call	parameter	enum	dereferenceable(2048)	3
+gcc	O2	call	parameter	enum	dereferenceable(2056)	1
+gcc	O2	call	parameter	enum	dereferenceable(21)	4
+gcc	O2	call	parameter	enum	dereferenceable(22)	4
+gcc	O2	call	parameter	enum	dereferenceable(23)	6
+gcc	O2	call	parameter	enum	dereferenceable(238)	1
+gcc	O2	call	parameter	enum	dereferenceable(24)	11
+gcc	O2	call	parameter	enum	dereferenceable(25)	23
+gcc	O2	call	parameter	enum	dereferenceable(256)	5
+gcc	O2	call	parameter	enum	dereferenceable(257)	1
+gcc	O2	call	parameter	enum	dereferenceable(26)	4
+gcc	O2	call	parameter	enum	dereferenceable(262144)	1
+gcc	O2	call	parameter	enum	dereferenceable(27)	4
+gcc	O2	call	parameter	enum	dereferenceable(28)	9
+gcc	O2	call	parameter	enum	dereferenceable(29)	4
+gcc	O2	call	parameter	enum	dereferenceable(3)	41
+gcc	O2	call	parameter	enum	dereferenceable(30)	11
+gcc	O2	call	parameter	enum	dereferenceable(31)	109
+gcc	O2	call	parameter	enum	dereferenceable(32)	70
+gcc	O2	call	parameter	enum	dereferenceable(33)	4
+gcc	O2	call	parameter	enum	dereferenceable(34)	6
+gcc	O2	call	parameter	enum	dereferenceable(35)	6
+gcc	O2	call	parameter	enum	dereferenceable(36)	17
+gcc	O2	call	parameter	enum	dereferenceable(37)	4
+gcc	O2	call	parameter	enum	dereferenceable(38)	4
+gcc	O2	call	parameter	enum	dereferenceable(39)	4
+gcc	O2	call	parameter	enum	dereferenceable(4)	10
+gcc	O2	call	parameter	enum	dereferenceable(40)	11
+gcc	O2	call	parameter	enum	dereferenceable(404)	35
+gcc	O2	call	parameter	enum	dereferenceable(41)	4
+gcc	O2	call	parameter	enum	dereferenceable(42)	4
+gcc	O2	call	parameter	enum	dereferenceable(43)	4
+gcc	O2	call	parameter	enum	dereferenceable(44)	7
+gcc	O2	call	parameter	enum	dereferenceable(45)	6
+gcc	O2	call	parameter	enum	dereferenceable(46)	4
+gcc	O2	call	parameter	enum	dereferenceable(47)	4
+gcc	O2	call	parameter	enum	dereferenceable(48)	8
+gcc	O2	call	parameter	enum	dereferenceable(49)	4
+gcc	O2	call	parameter	enum	dereferenceable(5)	44
+gcc	O2	call	parameter	enum	dereferenceable(50)	4
+gcc	O2	call	parameter	enum	dereferenceable(51)	4
+gcc	O2	call	parameter	enum	dereferenceable(512)	1
+gcc	O2	call	parameter	enum	dereferenceable(52)	5
+gcc	O2	call	parameter	enum	dereferenceable(520)	2
+gcc	O2	call	parameter	enum	dereferenceable(53)	4
+gcc	O2	call	parameter	enum	dereferenceable(54)	4
+gcc	O2	call	parameter	enum	dereferenceable(55)	4
+gcc	O2	call	parameter	enum	dereferenceable(56)	4
+gcc	O2	call	parameter	enum	dereferenceable(57)	4
+gcc	O2	call	parameter	enum	dereferenceable(58)	4
+gcc	O2	call	parameter	enum	dereferenceable(59)	4
+gcc	O2	call	parameter	enum	dereferenceable(6)	63
+gcc	O2	call	parameter	enum	dereferenceable(60)	4
+gcc	O2	call	parameter	enum	dereferenceable(61)	4
+gcc	O2	call	parameter	enum	dereferenceable(62)	4
+gcc	O2	call	parameter	enum	dereferenceable(63)	4
+gcc	O2	call	parameter	enum	dereferenceable(64)	25
+gcc	O2	call	parameter	enum	dereferenceable(648)	1
+gcc	O2	call	parameter	enum	dereferenceable(65)	4
+gcc	O2	call	parameter	enum	dereferenceable(66)	4
+gcc	O2	call	parameter	enum	dereferenceable(67)	4
+gcc	O2	call	parameter	enum	dereferenceable(68)	8
+gcc	O2	call	parameter	enum	dereferenceable(69)	4
+gcc	O2	call	parameter	enum	dereferenceable(7)	46
+gcc	O2	call	parameter	enum	dereferenceable(70)	4
+gcc	O2	call	parameter	enum	dereferenceable(71)	4
+gcc	O2	call	parameter	enum	dereferenceable(72)	9
+gcc	O2	call	parameter	enum	dereferenceable(73)	4
+gcc	O2	call	parameter	enum	dereferenceable(74)	4
+gcc	O2	call	parameter	enum	dereferenceable(75)	4
+gcc	O2	call	parameter	enum	dereferenceable(76)	4
+gcc	O2	call	parameter	enum	dereferenceable(77)	4
+gcc	O2	call	parameter	enum	dereferenceable(78)	4
+gcc	O2	call	parameter	enum	dereferenceable(79)	4
+gcc	O2	call	parameter	enum	dereferenceable(8)	7
+gcc	O2	call	parameter	enum	dereferenceable(80)	2
+gcc	O2	call	parameter	enum	dereferenceable(81)	2
+gcc	O2	call	parameter	enum	dereferenceable(9)	73
+gcc	O2	call	parameter	enum	dereferenceable(96)	2
+gcc	O2	call	parameter	enum	dereferenceable(97)	2
+gcc	O2	call	parameter	enum	elementtype(%struct.anon)	2
+gcc	O2	call	parameter	enum	elementtype(%struct.anon.0)	2
+gcc	O2	call	parameter	enum	elementtype(i32)	8
+gcc	O2	call	parameter	enum	elementtype(i64)	2
+gcc	O2	call	parameter	enum	elementtype(ptr)	4
+gcc	O2	call	parameter	enum	nocapture	1
+gcc	O2	call	parameter	enum	nonnull	7310
+gcc	O2	call	parameter	enum	noundef	10149
+gcc	O2	call	parameter	enum	signext	28
+gcc	O2	call	parameter	enum	sret(%struct.A)	4
+gcc	O2	call	parameter	enum	sret(%struct.U)	10
+gcc	O2	call	parameter	enum	sret(%struct.V)	10
+gcc	O2	call	parameter	enum	sret(%struct.X)	1
+gcc	O2	call	parameter	enum	sret(%struct.s)	1
+gcc	O2	call	parameter	enum	writable	26
+gcc	O2	call	parameter	enum	zeroext	43
+gcc	O2	call	return	enum	align 16	19
+gcc	O2	call	return	enum	align 32	2
+gcc	O2	call	return	enum	dereferenceable_or_null(12)	1
+gcc	O2	call	return	enum	dereferenceable_or_null(131072)	2
+gcc	O2	call	return	enum	dereferenceable_or_null(16)	6
+gcc	O2	call	return	enum	dereferenceable_or_null(2)	1
+gcc	O2	call	return	enum	dereferenceable_or_null(24)	4
+gcc	O2	call	return	enum	dereferenceable_or_null(268)	1
+gcc	O2	call	return	enum	dereferenceable_or_null(276)	1
+gcc	O2	call	return	enum	dereferenceable_or_null(32)	1
+gcc	O2	call	return	enum	dereferenceable_or_null(4)	2
+gcc	O2	call	return	enum	dereferenceable_or_null(40)	1
+gcc	O2	call	return	enum	dereferenceable_or_null(4000)	1
+gcc	O2	call	return	enum	dereferenceable_or_null(404)	2
+gcc	O2	call	return	enum	dereferenceable_or_null(8)	2
+gcc	O2	call	return	enum	dereferenceable_or_null(8192)	1
+gcc	O2	call	return	enum	dereferenceable_or_null(94)	1
+gcc	O2	call	return	enum	dereferenceable_or_null(96)	1
+gcc	O2	call	return	enum	noundef	6
+gcc	O2	call	return	enum	signext	17
+gcc	O2	call	return	enum	zeroext	38
+gcc	O2	declaration	function	enum	allockind("alloc,uninitialized")	18
+gcc	O2	declaration	function	enum	allockind("alloc,zeroed")	3
+gcc	O2	declaration	function	enum	allockind("free")	3
+gcc	O2	declaration	function	enum	allocsize(0)	18
+gcc	O2	declaration	function	enum	allocsize(0,1)	3
+gcc	O2	declaration	function	enum	cold	2
+gcc	O2	declaration	function	enum	memory(argmem: read)	73
+gcc	O2	declaration	function	enum	memory(argmem: readwrite)	611
+gcc	O2	declaration	function	enum	memory(argmem: readwrite, inaccessiblemem: readwrite)	9
+gcc	O2	declaration	function	enum	memory(argmem: write)	69
+gcc	O2	declaration	function	enum	memory(inaccessiblemem: readwrite)	24
+gcc	O2	declaration	function	enum	memory(inaccessiblemem: write)	6
+gcc	O2	declaration	function	enum	memory(none)	128
+gcc	O2	declaration	function	enum	memory(read)	2
+gcc	O2	declaration	function	enum	memory(write)	1
+gcc	O2	declaration	function	enum	mustprogress	77
+gcc	O2	declaration	function	enum	nocallback	953
+gcc	O2	declaration	function	enum	nofree	1124
+gcc	O2	declaration	function	enum	noreturn	1567
+gcc	O2	declaration	function	enum	nosync	820
+gcc	O2	declaration	function	enum	nounwind	1399
+gcc	O2	declaration	function	enum	returns_twice	2
+gcc	O2	declaration	function	enum	speculatable	119
+gcc	O2	declaration	function	enum	willreturn	1062
+gcc	O2	declaration	function	string	"alloc-family"="malloc"	24
+gcc	O2	declaration	function	string	"no-builtin-abort"	1
+gcc	O2	declaration	function	string	"no-trapping-math"="true"	1713
+gcc	O2	declaration	function	string	"stack-protector-buffer-size"="8"	1713
+gcc	O2	declaration	function	string	"target-cpu"="x86-64"	1713
+gcc	O2	declaration	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	1713
+gcc	O2	declaration	function	string	"tune-cpu"="generic"	1713
+gcc	O2	declaration	parameter	enum	allocptr	3
+gcc	O2	declaration	parameter	enum	immarg	729
+gcc	O2	declaration	parameter	enum	noalias	155
+gcc	O2	declaration	parameter	enum	nocapture	958
+gcc	O2	declaration	parameter	enum	noundef	921
+gcc	O2	declaration	parameter	enum	readonly	138
+gcc	O2	declaration	parameter	enum	returned	9
+gcc	O2	declaration	parameter	enum	writeonly	153
+gcc	O2	declaration	return	enum	noalias	24
+gcc	O2	declaration	return	enum	noundef	82
+gcc	O2	definition	function	enum	hot	1
+gcc	O2	definition	function	enum	inlinehint	20
+gcc	O2	definition	function	enum	memory(argmem: read)	58
+gcc	O2	definition	function	enum	memory(argmem: readwrite)	144
+gcc	O2	definition	function	enum	memory(argmem: readwrite, inaccessiblemem: readwrite)	18
+gcc	O2	definition	function	enum	memory(argmem: readwrite, inaccessiblemem: write)	1
+gcc	O2	definition	function	enum	memory(argmem: write)	67
+gcc	O2	definition	function	enum	memory(argmem: write, inaccessiblemem: readwrite)	2
+gcc	O2	definition	function	enum	memory(inaccessiblemem: readwrite)	116
+gcc	O2	definition	function	enum	memory(inaccessiblemem: write)	2
+gcc	O2	definition	function	enum	memory(none)	1611
+gcc	O2	definition	function	enum	memory(read)	1
+gcc	O2	definition	function	enum	memory(read, argmem: none, inaccessiblemem: none)	314
+gcc	O2	definition	function	enum	memory(read, argmem: readwrite, inaccessiblemem: none)	17
+gcc	O2	definition	function	enum	memory(read, argmem: write, inaccessiblemem: none)	4
+gcc	O2	definition	function	enum	memory(read, inaccessiblemem: none)	27
+gcc	O2	definition	function	enum	memory(read, inaccessiblemem: readwrite)	2
+gcc	O2	definition	function	enum	memory(readwrite, argmem: none)	25
+gcc	O2	definition	function	enum	memory(readwrite, argmem: none, inaccessiblemem: none)	788
+gcc	O2	definition	function	enum	memory(readwrite, argmem: read)	7
+gcc	O2	definition	function	enum	memory(readwrite, argmem: read, inaccessiblemem: none)	7
+gcc	O2	definition	function	enum	memory(readwrite, argmem: write)	3
+gcc	O2	definition	function	enum	memory(readwrite, argmem: write, inaccessiblemem: none)	30
+gcc	O2	definition	function	enum	memory(readwrite, inaccessiblemem: none)	38
+gcc	O2	definition	function	enum	memory(write, argmem: none, inaccessiblemem: none)	149
+gcc	O2	definition	function	enum	memory(write, argmem: none, inaccessiblemem: readwrite)	3
+gcc	O2	definition	function	enum	memory(write, argmem: read, inaccessiblemem: none)	9
+gcc	O2	definition	function	enum	memory(write, argmem: readwrite, inaccessiblemem: none)	11
+gcc	O2	definition	function	enum	memory(write, inaccessiblemem: none)	17
+gcc	O2	definition	function	enum	mustprogress	3173
+gcc	O2	definition	function	enum	nofree	3566
+gcc	O2	definition	function	enum	noinline	680
+gcc	O2	definition	function	enum	norecurse	3501
+gcc	O2	definition	function	enum	noreturn	746
+gcc	O2	definition	function	enum	nosync	3353
+gcc	O2	definition	function	enum	nounwind	5527
+gcc	O2	definition	function	enum	uwtable	5527
+gcc	O2	definition	function	enum	willreturn	3173
+gcc	O2	definition	function	string	"min-legal-vector-width"="0"	5492
+gcc	O2	definition	function	string	"min-legal-vector-width"="128"	10
+gcc	O2	definition	function	string	"min-legal-vector-width"="256"	2
+gcc	O2	definition	function	string	"min-legal-vector-width"="64"	23
+gcc	O2	definition	function	string	"no-builtin-abort"	3
+gcc	O2	definition	function	string	"no-trapping-math"="true"	5527
+gcc	O2	definition	function	string	"stack-protector-buffer-size"="8"	5527
+gcc	O2	definition	function	string	"target-cpu"="x86-64"	5527
+gcc	O2	definition	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	5527
+gcc	O2	definition	function	string	"tune-cpu"="generic"	5527
+gcc	O2	definition	parameter	enum	align 1	26
+gcc	O2	definition	parameter	enum	align 16	15
+gcc	O2	definition	parameter	enum	align 32	2
+gcc	O2	definition	parameter	enum	align 4	2
+gcc	O2	definition	parameter	enum	align 8	50
+gcc	O2	definition	parameter	enum	byval(%struct.B)	4
+gcc	O2	definition	parameter	enum	byval(%struct.G)	2
+gcc	O2	definition	parameter	enum	byval(%struct.H)	2
+gcc	O2	definition	parameter	enum	byval(%struct.I)	2
+gcc	O2	definition	parameter	enum	byval(%struct.Point)	3
+gcc	O2	definition	parameter	enum	byval(%struct.Q)	2
+gcc	O2	definition	parameter	enum	byval(%struct.R)	2
+gcc	O2	definition	parameter	enum	byval(%struct.S)	3
+gcc	O2	definition	parameter	enum	byval(%struct.Scf10)	1
+gcc	O2	definition	parameter	enum	byval(%struct.U)	3
+gcc	O2	definition	parameter	enum	byval(%struct.W)	3
+gcc	O2	definition	parameter	enum	byval(%struct.X)	5
+gcc	O2	definition	parameter	enum	byval(%struct.Y)	3
+gcc	O2	definition	parameter	enum	byval(%struct.Z)	3
+gcc	O2	definition	parameter	enum	byval(%struct.assembly_operand)	3
+gcc	O2	definition	parameter	enum	byval(%struct.baz)	2
+gcc	O2	definition	parameter	enum	byval(%struct.big)	3
+gcc	O2	definition	parameter	enum	byval(%struct.big_t)	1
+gcc	O2	definition	parameter	enum	byval(%struct.s)	3
+gcc	O2	definition	parameter	enum	byval(%struct.two)	1
+gcc	O2	definition	parameter	enum	byval(<16 x i16>)	1
+gcc	O2	definition	parameter	enum	byval({ double, double })	1
+gcc	O2	definition	parameter	enum	byval({ x86_fp80, x86_fp80 })	7
+gcc	O2	definition	parameter	enum	dead_on_unwind	35
+gcc	O2	definition	parameter	enum	noalias	47
+gcc	O2	definition	parameter	enum	nocapture	923
+gcc	O2	definition	parameter	enum	nonnull	6
+gcc	O2	definition	parameter	enum	noundef	4308
+gcc	O2	definition	parameter	enum	readnone	229
+gcc	O2	definition	parameter	enum	readonly	441
+gcc	O2	definition	parameter	enum	returned	74
+gcc	O2	definition	parameter	enum	signext	79
+gcc	O2	definition	parameter	enum	sret(%struct.A)	1
+gcc	O2	definition	parameter	enum	sret(%struct.B)	2
+gcc	O2	definition	parameter	enum	sret(%struct.C)	1
+gcc	O2	definition	parameter	enum	sret(%struct.G)	2
+gcc	O2	definition	parameter	enum	sret(%struct.H)	2
+gcc	O2	definition	parameter	enum	sret(%struct.I)	2
+gcc	O2	definition	parameter	enum	sret(%struct.Q)	2
+gcc	O2	definition	parameter	enum	sret(%struct.R)	2
+gcc	O2	definition	parameter	enum	sret(%struct.S)	2
+gcc	O2	definition	parameter	enum	sret(%struct.U)	3
+gcc	O2	definition	parameter	enum	sret(%struct.V)	1
+gcc	O2	definition	parameter	enum	sret(%struct.W)	3
+gcc	O2	definition	parameter	enum	sret(%struct.X)	4
+gcc	O2	definition	parameter	enum	sret(%struct.Y)	3
+gcc	O2	definition	parameter	enum	sret(%struct.Z)	3
+gcc	O2	definition	parameter	enum	sret(%struct.s)	2
+gcc	O2	definition	parameter	enum	writable	35
+gcc	O2	definition	parameter	enum	writeonly	228
+gcc	O2	definition	parameter	enum	zeroext	119
+gcc	O2	definition	return	enum	noalias	21
+gcc	O2	definition	return	enum	nonnull	38
+gcc	O2	definition	return	enum	noundef	2776
+gcc	O2	definition	return	enum	signext	58
+gcc	O2	definition	return	enum	zeroext	258
+ieee	O0	call	function	enum	noreturn	313
+ieee	O0	call	function	enum	nounwind	48
+ieee	O0	call	parameter	enum	align 16	6
+ieee	O0	call	parameter	enum	align 8	6
+ieee	O0	call	parameter	enum	byval({ x86_fp80, x86_fp80 })	2
+ieee	O0	call	parameter	enum	noundef	888
+ieee	O0	call	parameter	enum	signext	1
+ieee	O0	declaration	function	enum	memory(argmem: readwrite)	3
+ieee	O0	declaration	function	enum	memory(none)	22
+ieee	O0	declaration	function	enum	nocallback	25
+ieee	O0	declaration	function	enum	nofree	25
+ieee	O0	declaration	function	enum	noreturn	98
+ieee	O0	declaration	function	enum	nosync	22
+ieee	O0	declaration	function	enum	nounwind	50
+ieee	O0	declaration	function	enum	speculatable	22
+ieee	O0	declaration	function	enum	willreturn	25
+ieee	O0	declaration	function	string	"frame-pointer"="all"	123
+ieee	O0	declaration	function	string	"no-trapping-math"="true"	123
+ieee	O0	declaration	function	string	"stack-protector-buffer-size"="8"	123
+ieee	O0	declaration	function	string	"target-cpu"="x86-64"	123
+ieee	O0	declaration	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	123
+ieee	O0	declaration	function	string	"tune-cpu"="generic"	123
+ieee	O0	declaration	parameter	enum	immarg	6
+ieee	O0	declaration	parameter	enum	noalias	6
+ieee	O0	declaration	parameter	enum	nocapture	6
+ieee	O0	declaration	parameter	enum	noundef	81
+ieee	O0	declaration	parameter	enum	readonly	3
+ieee	O0	declaration	parameter	enum	writeonly	3
+ieee	O0	definition	function	enum	memory(none)	1
+ieee	O0	definition	function	enum	noinline	250
+ieee	O0	definition	function	enum	nounwind	250
+ieee	O0	definition	function	enum	uwtable	250
+ieee	O0	definition	function	enum	willreturn	1
+ieee	O0	definition	function	string	"frame-pointer"="all"	250
+ieee	O0	definition	function	string	"min-legal-vector-width"="0"	246
+ieee	O0	definition	function	string	"min-legal-vector-width"="128"	2
+ieee	O0	definition	function	string	"min-legal-vector-width"="64"	2
+ieee	O0	definition	function	string	"no-trapping-math"="true"	250
+ieee	O0	definition	function	string	"stack-protector-buffer-size"="8"	250
+ieee	O0	definition	function	string	"target-cpu"="x86-64"	250
+ieee	O0	definition	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	250
+ieee	O0	definition	function	string	"tune-cpu"="generic"	250
+ieee	O0	definition	parameter	enum	align 16	2
+ieee	O0	definition	parameter	enum	byval({ x86_fp80, x86_fp80 })	2
+ieee	O0	definition	parameter	enum	noundef	482
+ieee	O0	definition	parameter	enum	signext	1
+ieee	O2	call	function	enum	noreturn	227
+ieee	O2	call	function	enum	nounwind	268
+ieee	O2	call	parameter	enum	align 16	8
+ieee	O2	call	parameter	enum	byval({ x86_fp80, x86_fp80 })	8
+ieee	O2	call	parameter	enum	dereferenceable(1)	3
+ieee	O2	call	parameter	enum	dereferenceable(10)	32
+ieee	O2	call	parameter	enum	dereferenceable(2)	2
+ieee	O2	call	parameter	enum	dereferenceable(5)	1
+ieee	O2	call	parameter	enum	nonnull	126
+ieee	O2	call	parameter	enum	noundef	1078
+ieee	O2	call	parameter	enum	signext	1
+ieee	O2	declaration	function	enum	memory(argmem: read)	4
+ieee	O2	declaration	function	enum	memory(argmem: readwrite)	10
+ieee	O2	declaration	function	enum	memory(none)	17
+ieee	O2	declaration	function	enum	mustprogress	1
+ieee	O2	declaration	function	enum	nocallback	27
+ieee	O2	declaration	function	enum	nofree	32
+ieee	O2	declaration	function	enum	noreturn	86
+ieee	O2	declaration	function	enum	nosync	27
+ieee	O2	declaration	function	enum	nounwind	43
+ieee	O2	declaration	function	enum	speculatable	17
+ieee	O2	declaration	function	enum	willreturn	31
+ieee	O2	declaration	function	string	"no-trapping-math"="true"	94
+ieee	O2	declaration	function	string	"stack-protector-buffer-size"="8"	94
+ieee	O2	declaration	function	string	"target-cpu"="x86-64"	94
+ieee	O2	declaration	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	94
+ieee	O2	declaration	function	string	"tune-cpu"="generic"	94
+ieee	O2	declaration	parameter	enum	immarg	10
+ieee	O2	declaration	parameter	enum	noalias	1
+ieee	O2	declaration	parameter	enum	nocapture	20
+ieee	O2	declaration	parameter	enum	noundef	48
+ieee	O2	declaration	parameter	enum	readonly	1
+ieee	O2	declaration	parameter	enum	writeonly	1
+ieee	O2	declaration	return	enum	noundef	1
+ieee	O2	definition	function	enum	memory(argmem: read)	2
+ieee	O2	definition	function	enum	memory(argmem: write)	2
+ieee	O2	definition	function	enum	memory(none)	104
+ieee	O2	definition	function	enum	memory(read, argmem: none, inaccessiblemem: none)	1
+ieee	O2	definition	function	enum	memory(read, inaccessiblemem: none)	1
+ieee	O2	definition	function	enum	memory(readwrite, argmem: none, inaccessiblemem: none)	3
+ieee	O2	definition	function	enum	memory(write, argmem: none, inaccessiblemem: none)	1
+ieee	O2	definition	function	enum	mustprogress	111
+ieee	O2	definition	function	enum	nofree	114
+ieee	O2	definition	function	enum	noinline	245
+ieee	O2	definition	function	enum	norecurse	111
+ieee	O2	definition	function	enum	noreturn	38
+ieee	O2	definition	function	enum	nosync	114
+ieee	O2	definition	function	enum	nounwind	245
+ieee	O2	definition	function	enum	uwtable	245
+ieee	O2	definition	function	enum	willreturn	111
+ieee	O2	definition	function	string	"min-legal-vector-width"="0"	241
+ieee	O2	definition	function	string	"min-legal-vector-width"="128"	2
+ieee	O2	definition	function	string	"min-legal-vector-width"="64"	2
+ieee	O2	definition	function	string	"no-trapping-math"="true"	245
+ieee	O2	definition	function	string	"stack-protector-buffer-size"="8"	245
+ieee	O2	definition	function	string	"target-cpu"="x86-64"	245
+ieee	O2	definition	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	245
+ieee	O2	definition	function	string	"tune-cpu"="generic"	245
+ieee	O2	definition	parameter	enum	align 16	2
+ieee	O2	definition	parameter	enum	byval({ x86_fp80, x86_fp80 })	2
+ieee	O2	definition	parameter	enum	nocapture	20
+ieee	O2	definition	parameter	enum	noundef	478
+ieee	O2	definition	parameter	enum	readnone	3
+ieee	O2	definition	parameter	enum	readonly	15
+ieee	O2	definition	parameter	enum	signext	1
+ieee	O2	definition	parameter	enum	writeonly	2
+ieee	O2	definition	return	enum	noundef	154
+lua	O0	call	function	enum	allocsize(1)	1
+lua	O0	call	function	enum	memory(none)	21
+lua	O0	call	function	enum	memory(read)	20
+lua	O0	call	function	enum	noreturn	109
+lua	O0	call	function	enum	nounwind	68
+lua	O0	call	function	enum	returns_twice	1
+lua	O0	call	function	enum	willreturn	41
+lua	O0	call	parameter	enum	align 1	50
+lua	O0	call	parameter	enum	align 16	1
+lua	O0	call	parameter	enum	align 4	1
+lua	O0	call	parameter	enum	align 8	200
+lua	O0	call	parameter	enum	noundef	10142
+lua	O0	call	parameter	enum	zeroext	9
+lua	O0	call	return	enum	zeroext	12
+lua	O0	declaration	function	enum	allocsize(1)	1
+lua	O0	declaration	function	enum	cold	1
+lua	O0	declaration	function	enum	memory(argmem: readwrite)	19
+lua	O0	declaration	function	enum	memory(inaccessiblemem: write)	1
+lua	O0	declaration	function	enum	memory(none)	10
+lua	O0	declaration	function	enum	memory(read)	14
+lua	O0	declaration	function	enum	nocallback	34
+lua	O0	declaration	function	enum	nofree	34
+lua	O0	declaration	function	enum	noreturn	32
+lua	O0	declaration	function	enum	nosync	15
+lua	O0	declaration	function	enum	nounwind	75
+lua	O0	declaration	function	enum	returns_twice	1
+lua	O0	declaration	function	enum	speculatable	7
+lua	O0	declaration	function	enum	willreturn	51
+lua	O0	declaration	function	string	"frame-pointer"="all"	903
+lua	O0	declaration	function	string	"no-trapping-math"="true"	903
+lua	O0	declaration	function	string	"stack-protector-buffer-size"="8"	903
+lua	O0	declaration	function	string	"target-cpu"="x86-64"	903
+lua	O0	declaration	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	903
+lua	O0	declaration	function	string	"tune-cpu"="generic"	903
+lua	O0	declaration	parameter	enum	immarg	20
+lua	O0	declaration	parameter	enum	noalias	38
+lua	O0	declaration	parameter	enum	nocapture	38
+lua	O0	declaration	parameter	enum	noundef	2129
+lua	O0	declaration	parameter	enum	readonly	19
+lua	O0	declaration	parameter	enum	writeonly	19
+lua	O0	definition	function	enum	noinline	1068
+lua	O0	definition	function	enum	noreturn	21
+lua	O0	definition	function	enum	nounwind	1068
+lua	O0	definition	function	enum	uwtable	1068
+lua	O0	definition	function	string	"frame-pointer"="all"	1068
+lua	O0	definition	function	string	"min-legal-vector-width"="0"	1068
+lua	O0	definition	function	string	"no-trapping-math"="true"	1068
+lua	O0	definition	function	string	"stack-protector-buffer-size"="8"	1068
+lua	O0	definition	function	string	"target-cpu"="x86-64"	1068
+lua	O0	definition	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	1068
+lua	O0	definition	function	string	"tune-cpu"="generic"	1068
+lua	O0	definition	parameter	enum	noundef	2380
+lua	O0	definition	parameter	enum	zeroext	1
+lua	O0	definition	return	enum	zeroext	1
+lua	O2	call	function	enum	allocsize(1)	1
+lua	O2	call	function	enum	cold	7
+lua	O2	call	function	enum	memory(none)	21
+lua	O2	call	function	enum	memory(read)	13
+lua	O2	call	function	enum	noreturn	263
+lua	O2	call	function	enum	nounwind	3568
+lua	O2	call	function	enum	returns_twice	1
+lua	O2	call	function	enum	willreturn	34
+lua	O2	call	parameter	enum	align 1	64
+lua	O2	call	parameter	enum	align 16	1
+lua	O2	call	parameter	enum	align 8	89
+lua	O2	call	parameter	enum	dereferenceable(1)	107
+lua	O2	call	parameter	enum	dereferenceable(1024)	1
+lua	O2	call	parameter	enum	dereferenceable(128)	1
+lua	O2	call	parameter	enum	dereferenceable(136)	1
+lua	O2	call	parameter	enum	dereferenceable(16)	11
+lua	O2	call	parameter	enum	dereferenceable(20)	2
+lua	O2	call	parameter	enum	dereferenceable(24)	62
+lua	O2	call	parameter	enum	dereferenceable(3)	11
+lua	O2	call	parameter	enum	dereferenceable(36)	1
+lua	O2	call	parameter	enum	dereferenceable(4)	3
+lua	O2	call	parameter	enum	dereferenceable(40)	2
+lua	O2	call	parameter	enum	dereferenceable(48)	2
+lua	O2	call	parameter	enum	dereferenceable(5)	3
+lua	O2	call	parameter	enum	dereferenceable(57)	2
+lua	O2	call	parameter	enum	dereferenceable(59)	2
+lua	O2	call	parameter	enum	dereferenceable(6)	6
+lua	O2	call	parameter	enum	dereferenceable(64)	1
+lua	O2	call	parameter	enum	dereferenceable(7)	3
+lua	O2	call	parameter	enum	dereferenceable(72)	1
+lua	O2	call	parameter	enum	dereferenceable(9)	2
+lua	O2	call	parameter	enum	nonnull	3807
+lua	O2	call	parameter	enum	noundef	10159
+lua	O2	declaration	function	enum	allockind("free")	1
+lua	O2	declaration	function	enum	allockind("realloc")	1
+lua	O2	declaration	function	enum	allocsize(1)	1
+lua	O2	declaration	function	enum	cold	1
+lua	O2	declaration	function	enum	memory(argmem: read)	39
+lua	O2	declaration	function	enum	memory(argmem: readwrite)	64
+lua	O2	declaration	function	enum	memory(argmem: readwrite, inaccessiblemem: readwrite)	2
+lua	O2	declaration	function	enum	memory(argmem: write)	11
+lua	O2	declaration	function	enum	memory(inaccessiblemem: write)	2
+lua	O2	declaration	function	enum	memory(none)	30
+lua	O2	declaration	function	enum	memory(read)	14
+lua	O2	declaration	function	enum	memory(write)	19
+lua	O2	declaration	function	enum	mustprogress	71
+lua	O2	declaration	function	enum	nocallback	111
+lua	O2	declaration	function	enum	nofree	229
+lua	O2	declaration	function	enum	noreturn	32
+lua	O2	declaration	function	enum	nosync	94
+lua	O2	declaration	function	enum	nounwind	231
+lua	O2	declaration	function	enum	returns_twice	1
+lua	O2	declaration	function	enum	speculatable	27
+lua	O2	declaration	function	enum	willreturn	188
+lua	O2	declaration	function	string	"alloc-family"="malloc"	2
+lua	O2	declaration	function	string	"no-trapping-math"="true"	889
+lua	O2	declaration	function	string	"stack-protector-buffer-size"="8"	889
+lua	O2	declaration	function	string	"target-cpu"="x86-64"	889
+lua	O2	declaration	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	889
+lua	O2	declaration	function	string	"tune-cpu"="generic"	889
+lua	O2	declaration	parameter	enum	allocptr	2
+lua	O2	declaration	parameter	enum	immarg	74
+lua	O2	declaration	parameter	enum	noalias	26
+lua	O2	declaration	parameter	enum	nocapture	192
+lua	O2	declaration	parameter	enum	noundef	2118
+lua	O2	declaration	parameter	enum	readonly	31
+lua	O2	declaration	parameter	enum	returned	1
+lua	O2	declaration	parameter	enum	writeonly	23
+lua	O2	declaration	return	enum	noalias	5
+lua	O2	declaration	return	enum	noundef	44
+lua	O2	definition	function	enum	inlinehint	1
+lua	O2	definition	function	enum	memory(argmem: read)	6
+lua	O2	definition	function	enum	memory(argmem: readwrite)	5
+lua	O2	definition	function	enum	memory(argmem: readwrite, inaccessiblemem: readwrite)	3
+lua	O2	definition	function	enum	memory(argmem: write)	3
+lua	O2	definition	function	enum	memory(none)	7
+lua	O2	definition	function	enum	memory(read)	2
+lua	O2	definition	function	enum	memory(read, argmem: readwrite, inaccessiblemem: none)	7
+lua	O2	definition	function	enum	memory(read, inaccessiblemem: none)	17
+lua	O2	definition	function	enum	memory(readwrite, inaccessiblemem: none)	18
+lua	O2	definition	function	enum	memory(write)	1
+lua	O2	definition	function	enum	memory(write, argmem: none, inaccessiblemem: none)	1
+lua	O2	definition	function	enum	memory(write, argmem: readwrite, inaccessiblemem: none)	8
+lua	O2	definition	function	enum	mustprogress	57
+lua	O2	definition	function	enum	nofree	81
+lua	O2	definition	function	enum	norecurse	71
+lua	O2	definition	function	enum	noreturn	22
+lua	O2	definition	function	enum	nosync	70
+lua	O2	definition	function	enum	nounwind	648
+lua	O2	definition	function	enum	uwtable	648
+lua	O2	definition	function	enum	willreturn	57
+lua	O2	definition	function	string	"min-legal-vector-width"="0"	648
+lua	O2	definition	function	string	"no-trapping-math"="true"	648
+lua	O2	definition	function	string	"stack-protector-buffer-size"="8"	648
+lua	O2	definition	function	string	"target-cpu"="x86-64"	648
+lua	O2	definition	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	648
+lua	O2	definition	function	string	"tune-cpu"="generic"	648
+lua	O2	definition	parameter	enum	nocapture	277
+lua	O2	definition	parameter	enum	noundef	1406
+lua	O2	definition	parameter	enum	readnone	18
+lua	O2	definition	parameter	enum	readonly	148
+lua	O2	definition	parameter	enum	writeonly	29
+lua	O2	definition	return	enum	noalias	1
+lua	O2	definition	return	enum	nonnull	5
+lua	O2	definition	return	enum	noundef	176
+musl	O0	call	function	enum	memory(none)	311
+musl	O0	call	function	enum	nobuiltin	7048
+musl	O0	call	function	enum	noreturn	23
+musl	O0	call	function	enum	nounwind	317
+musl	O0	call	function	enum	returns_twice	1
+musl	O0	call	function	enum	strictfp	190
+musl	O0	call	function	enum	willreturn	311
+musl	O0	call	function	string	"no-builtins"	7048
+musl	O0	call	parameter	enum	align 1	4
+musl	O0	call	parameter	enum	align 16	58
+musl	O0	call	parameter	enum	align 4	58
+musl	O0	call	parameter	enum	align 8	217
+musl	O0	call	parameter	enum	byval({ x86_fp80, x86_fp80 })	13
+musl	O0	call	parameter	enum	dead_on_unwind	4
+musl	O0	call	parameter	enum	noundef	15264
+musl	O0	call	parameter	enum	signext	18
+musl	O0	call	parameter	enum	sret(%struct.dd)	4
+musl	O0	call	parameter	enum	writable	4
+musl	O0	call	parameter	enum	zeroext	16
+musl	O0	call	return	enum	zeroext	9
+musl	O0	declaration	function	enum	cold	12
+musl	O0	declaration	function	enum	memory(argmem: readwrite)	71
+musl	O0	declaration	function	enum	memory(argmem: write)	59
+musl	O0	declaration	function	enum	memory(inaccessiblemem: readwrite)	39
+musl	O0	declaration	function	enum	memory(inaccessiblemem: write)	12
+musl	O0	declaration	function	enum	memory(none)	244
+musl	O0	declaration	function	enum	nocallback	363
+musl	O0	declaration	function	enum	nofree	363
+musl	O0	declaration	function	enum	noreturn	28
+musl	O0	declaration	function	enum	nosync	233
+musl	O0	declaration	function	enum	nounwind	520
+musl	O0	declaration	function	enum	returns_twice	1
+musl	O0	declaration	function	enum	speculatable	99
+musl	O0	declaration	function	enum	strictfp	39
+musl	O0	declaration	function	enum	willreturn	508
+musl	O0	declaration	function	string	"frame-pointer"="all"	2952
+musl	O0	declaration	function	string	"no-builtins"	2952
+musl	O0	declaration	function	string	"no-trapping-math"="true"	2952
+musl	O0	declaration	function	string	"stack-protector-buffer-size"="8"	2952
+musl	O0	declaration	function	string	"target-cpu"="x86-64"	2952
+musl	O0	declaration	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	2952
+musl	O0	declaration	function	string	"tune-cpu"="generic"	2952
+musl	O0	declaration	parameter	enum	align 16	13
+musl	O0	declaration	parameter	enum	byval({ x86_fp80, x86_fp80 })	13
+musl	O0	declaration	parameter	enum	immarg	130
+musl	O0	declaration	parameter	enum	noalias	142
+musl	O0	declaration	parameter	enum	nocapture	201
+musl	O0	declaration	parameter	enum	noundef	6770
+musl	O0	declaration	parameter	enum	readonly	71
+musl	O0	declaration	parameter	enum	signext	1
+musl	O0	declaration	parameter	enum	writeonly	130
+musl	O0	declaration	parameter	enum	zeroext	5
+musl	O0	declaration	return	enum	zeroext	5
+musl	O0	definition	function	enum	memory(none)	2
+musl	O0	definition	function	enum	noinline	2948
+musl	O0	definition	function	enum	noreturn	13
+musl	O0	definition	function	enum	nounwind	2948
+musl	O0	definition	function	enum	strictfp	11
+musl	O0	definition	function	enum	willreturn	2
+musl	O0	definition	function	string	"frame-pointer"="all"	2948
+musl	O0	definition	function	string	"min-legal-vector-width"="0"	2925
+musl	O0	definition	function	string	"min-legal-vector-width"="64"	23
+musl	O0	definition	function	string	"no-builtins"	2948
+musl	O0	definition	function	string	"no-trapping-math"="true"	2948
+musl	O0	definition	function	string	"stack-protector-buffer-size"="8"	2948
+musl	O0	definition	function	string	"target-cpu"="x86-64"	2948
+musl	O0	definition	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	2948
+musl	O0	definition	function	string	"tune-cpu"="generic"	2948
+musl	O0	definition	parameter	enum	align 1	4
+musl	O0	definition	parameter	enum	align 16	25
+musl	O0	definition	parameter	enum	align 2	1
+musl	O0	definition	parameter	enum	align 4	7
+musl	O0	definition	parameter	enum	align 8	1
+musl	O0	definition	parameter	enum	byval(%struct._IO_cookie_io_functions_t)	1
+musl	O0	definition	parameter	enum	byval({ x86_fp80, x86_fp80 })	23
+musl	O0	definition	parameter	enum	dead_on_unwind	2
+musl	O0	definition	parameter	enum	dereferenceable(1344)	4
+musl	O0	definition	parameter	enum	dereferenceable(256)	4
+musl	O0	definition	parameter	enum	dereferenceable(28)	2
+musl	O0	definition	parameter	enum	dereferenceable(56)	1
+musl	O0	definition	parameter	enum	dereferenceable(8)	1
+musl	O0	definition	parameter	enum	noalias	448
+musl	O0	definition	parameter	enum	noundef	6115
+musl	O0	definition	parameter	enum	signext	2
+musl	O0	definition	parameter	enum	sret(%struct.dd)	2
+musl	O0	definition	parameter	enum	writable	2
+musl	O0	definition	parameter	enum	zeroext	8
+musl	O0	definition	return	enum	zeroext	4
+musl	O2	call	function	enum	memory(none)	261
+musl	O2	call	function	enum	nobuiltin	5430
+musl	O2	call	function	enum	noreturn	25
+musl	O2	call	function	enum	nounwind	6412
+musl	O2	call	function	enum	returns_twice	1
+musl	O2	call	function	enum	strictfp	183
+musl	O2	call	function	enum	willreturn	261
+musl	O2	call	function	string	"no-builtins"	5430
+musl	O2	call	parameter	enum	align 1	2
+musl	O2	call	parameter	enum	align 16	41
+musl	O2	call	parameter	enum	align 4	23
+musl	O2	call	parameter	enum	align 8	120
+musl	O2	call	parameter	enum	byval({ x86_fp80, x86_fp80 })	13
+musl	O2	call	parameter	enum	dereferenceable(11)	2
+musl	O2	call	parameter	enum	dereferenceable(112)	2
+musl	O2	call	parameter	enum	dereferenceable(120)	4
+musl	O2	call	parameter	enum	dereferenceable(128)	11
+musl	O2	call	parameter	enum	dereferenceable(144)	1
+musl	O2	call	parameter	enum	dereferenceable(152)	10
+musl	O2	call	parameter	enum	dereferenceable(16)	15
+musl	O2	call	parameter	enum	dereferenceable(19)	3
+musl	O2	call	parameter	enum	dereferenceable(20)	5
+musl	O2	call	parameter	enum	dereferenceable(208)	1
+musl	O2	call	parameter	enum	dereferenceable(232)	14
+musl	O2	call	parameter	enum	dereferenceable(24)	8
+musl	O2	call	parameter	enum	dereferenceable(28)	5
+musl	O2	call	parameter	enum	dereferenceable(304)	2
+musl	O2	call	parameter	enum	dereferenceable(32)	10
+musl	O2	call	parameter	enum	dereferenceable(336)	5
+musl	O2	call	parameter	enum	dereferenceable(36)	4
+musl	O2	call	parameter	enum	dereferenceable(40)	6
+musl	O2	call	parameter	enum	dereferenceable(48)	6
+musl	O2	call	parameter	enum	dereferenceable(56)	22
+musl	O2	call	parameter	enum	dereferenceable(60)	2
+musl	O2	call	parameter	enum	dereferenceable(84)	1
+musl	O2	call	parameter	enum	nonnull	5110
+musl	O2	call	parameter	enum	noundef	13383
+musl	O2	call	parameter	enum	signext	6
+musl	O2	call	parameter	enum	zeroext	10
+musl	O2	call	return	enum	align 16	2
+musl	O2	call	return	enum	noundef	122
+musl	O2	call	return	enum	zeroext	7
+musl	O2	declaration	function	enum	cold	12
+musl	O2	declaration	function	enum	memory(argmem: read)	1
+musl	O2	declaration	function	enum	memory(argmem: readwrite)	743
+musl	O2	declaration	function	enum	memory(argmem: write)	54
+musl	O2	declaration	function	enum	memory(inaccessiblemem: readwrite)	44
+musl	O2	declaration	function	enum	memory(inaccessiblemem: write)	12
+musl	O2	declaration	function	enum	memory(none)	465
+musl	O2	declaration	function	enum	mustprogress	144
+musl	O2	declaration	function	enum	nocallback	1256
+musl	O2	declaration	function	enum	nofree	1400
+musl	O2	declaration	function	enum	noreturn	27
+musl	O2	declaration	function	enum	nosync	1303
+musl	O2	declaration	function	enum	nounwind	1412
+musl	O2	declaration	function	enum	returns_twice	1
+musl	O2	declaration	function	enum	speculatable	321
+musl	O2	declaration	function	enum	strictfp	38
+musl	O2	declaration	function	enum	willreturn	1400
+musl	O2	declaration	function	string	"no-builtins"	2874
+musl	O2	declaration	function	string	"no-trapping-math"="true"	2874
+musl	O2	declaration	function	string	"stack-protector-buffer-size"="8"	2874
+musl	O2	declaration	function	string	"target-cpu"="x86-64"	2874
+musl	O2	declaration	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	2874
+musl	O2	declaration	function	string	"tune-cpu"="generic"	2874
+musl	O2	declaration	parameter	enum	align 16	13
+musl	O2	declaration	parameter	enum	byval({ x86_fp80, x86_fp80 })	13
+musl	O2	declaration	parameter	enum	immarg	810
+musl	O2	declaration	parameter	enum	noalias	86
+musl	O2	declaration	parameter	enum	nocapture	840
+musl	O2	declaration	parameter	enum	noundef	6595
+musl	O2	declaration	parameter	enum	readonly	43
+musl	O2	declaration	parameter	enum	signext	1
+musl	O2	declaration	parameter	enum	writeonly	97
+musl	O2	declaration	parameter	enum	zeroext	5
+musl	O2	declaration	return	enum	zeroext	5
+musl	O2	definition	function	enum	inlinehint	9
+musl	O2	definition	function	enum	memory(argmem: read)	27
+musl	O2	definition	function	enum	memory(argmem: readwrite)	50
+musl	O2	definition	function	enum	memory(argmem: readwrite, inaccessiblemem: readwrite)	10
+musl	O2	definition	function	enum	memory(argmem: write)	30
+musl	O2	definition	function	enum	memory(inaccessiblemem: readwrite)	27
+musl	O2	definition	function	enum	memory(inaccessiblemem: write)	1
+musl	O2	definition	function	enum	memory(none)	229
+musl	O2	definition	function	enum	memory(read, argmem: none, inaccessiblemem: none)	2
+musl	O2	definition	function	enum	memory(read, argmem: readwrite, inaccessiblemem: none)	9
+musl	O2	definition	function	enum	memory(read, argmem: readwrite, inaccessiblemem: readwrite)	1
+musl	O2	definition	function	enum	memory(read, inaccessiblemem: none)	29
+musl	O2	definition	function	enum	memory(readwrite, argmem: none)	1
+musl	O2	definition	function	enum	memory(readwrite, argmem: none, inaccessiblemem: none)	1
+musl	O2	definition	function	enum	memory(readwrite, inaccessiblemem: none)	24
+musl	O2	definition	function	enum	memory(write, argmem: none, inaccessiblemem: none)	3
+musl	O2	definition	function	enum	memory(write, argmem: readwrite, inaccessiblemem: none)	7
+musl	O2	definition	function	enum	memory(write, argmem: readwrite, inaccessiblemem: readwrite)	2
+musl	O2	definition	function	enum	memory(write, inaccessiblemem: none)	6
+musl	O2	definition	function	enum	mustprogress	353
+musl	O2	definition	function	enum	nofree	462
+musl	O2	definition	function	enum	noinline	7
+musl	O2	definition	function	enum	norecurse	444
+musl	O2	definition	function	enum	noreturn	19
+musl	O2	definition	function	enum	nosync	413
+musl	O2	definition	function	enum	nounwind	1845
+musl	O2	definition	function	enum	strictfp	11
+musl	O2	definition	function	enum	willreturn	353
+musl	O2	definition	function	string	"min-legal-vector-width"="0"	1822
+musl	O2	definition	function	string	"min-legal-vector-width"="64"	23
+musl	O2	definition	function	string	"no-builtins"	1845
+musl	O2	definition	function	string	"no-trapping-math"="true"	1845
+musl	O2	definition	function	string	"stack-protector-buffer-size"="8"	1845
+musl	O2	definition	function	string	"target-cpu"="x86-64"	1845
+musl	O2	definition	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	1845
+musl	O2	definition	function	string	"tune-cpu"="generic"	1845
+musl	O2	definition	parameter	enum	align 1	2
+musl	O2	definition	parameter	enum	align 16	23
+musl	O2	definition	parameter	enum	align 2	1
+musl	O2	definition	parameter	enum	align 4	3
+musl	O2	definition	parameter	enum	align 8	1
+musl	O2	definition	parameter	enum	byval(%struct._IO_cookie_io_functions_t)	1
+musl	O2	definition	parameter	enum	byval({ x86_fp80, x86_fp80 })	23
+musl	O2	definition	parameter	enum	dereferenceable(1344)	2
+musl	O2	definition	parameter	enum	dereferenceable(256)	2
+musl	O2	definition	parameter	enum	dereferenceable(28)	1
+musl	O2	definition	parameter	enum	dereferenceable(8)	1
+musl	O2	definition	parameter	enum	noalias	439
+musl	O2	definition	parameter	enum	nocapture	619
+musl	O2	definition	parameter	enum	noundef	3569
+musl	O2	definition	parameter	enum	readnone	144
+musl	O2	definition	parameter	enum	readonly	275
+musl	O2	definition	parameter	enum	returned	27
+musl	O2	definition	parameter	enum	signext	2
+musl	O2	definition	parameter	enum	writeonly	189
+musl	O2	definition	parameter	enum	zeroext	4
+musl	O2	definition	return	enum	noalias	14
+musl	O2	definition	return	enum	nonnull	16
+musl	O2	definition	return	enum	noundef	417
+musl	O2	definition	return	enum	zeroext	2
+musl-glue	O0	call	function	enum	nobuiltin	189
+musl-glue	O0	call	function	enum	noreturn	3
+musl-glue	O0	call	function	string	"no-builtins"	189
+musl-glue	O0	call	parameter	enum	align 16	3
+musl-glue	O0	call	parameter	enum	align 4	2
+musl-glue	O0	call	parameter	enum	align 8	14
+musl-glue	O0	call	parameter	enum	noundef	322
+musl-glue	O0	call	parameter	enum	signext	1
+musl-glue	O0	declaration	function	enum	cold	4
+musl-glue	O0	declaration	function	enum	memory(argmem: readwrite)	2
+musl-glue	O0	declaration	function	enum	memory(argmem: write)	1
+musl-glue	O0	declaration	function	enum	memory(inaccessiblemem: write)	4
+musl-glue	O0	declaration	function	enum	memory(none)	1
+musl-glue	O0	declaration	function	enum	nocallback	4
+musl-glue	O0	declaration	function	enum	nofree	4
+musl-glue	O0	declaration	function	enum	noreturn	6
+musl-glue	O0	declaration	function	enum	nosync	1
+musl-glue	O0	declaration	function	enum	nounwind	8
+musl-glue	O0	declaration	function	enum	speculatable	1
+musl-glue	O0	declaration	function	enum	willreturn	4
+musl-glue	O0	declaration	function	string	"frame-pointer"="all"	29
+musl-glue	O0	declaration	function	string	"no-builtins"	29
+musl-glue	O0	declaration	function	string	"no-trapping-math"="true"	29
+musl-glue	O0	declaration	function	string	"stack-protector-buffer-size"="8"	29
+musl-glue	O0	declaration	function	string	"target-cpu"="x86-64"	29
+musl-glue	O0	declaration	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	29
+musl-glue	O0	declaration	function	string	"tune-cpu"="generic"	29
+musl-glue	O0	declaration	parameter	enum	immarg	4
+musl-glue	O0	declaration	parameter	enum	noalias	4
+musl-glue	O0	declaration	parameter	enum	nocapture	5
+musl-glue	O0	declaration	parameter	enum	noundef	71
+musl-glue	O0	declaration	parameter	enum	readonly	2
+musl-glue	O0	declaration	parameter	enum	signext	1
+musl-glue	O0	declaration	parameter	enum	writeonly	3
+musl-glue	O0	definition	function	enum	noinline	52
+musl-glue	O0	definition	function	enum	nounwind	52
+musl-glue	O0	definition	function	string	"frame-pointer"="all"	52
+musl-glue	O0	definition	function	string	"min-legal-vector-width"="0"	52
+musl-glue	O0	definition	function	string	"no-builtins"	52
+musl-glue	O0	definition	function	string	"no-trapping-math"="true"	52
+musl-glue	O0	definition	function	string	"stack-protector-buffer-size"="8"	52
+musl-glue	O0	definition	function	string	"target-cpu"="x86-64"	52
+musl-glue	O0	definition	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	52
+musl-glue	O0	definition	function	string	"tune-cpu"="generic"	52
+musl-glue	O0	definition	parameter	enum	noundef	104
+musl-glue	O2	call	function	enum	nobuiltin	136
+musl-glue	O2	call	function	enum	noreturn	3
+musl-glue	O2	call	function	enum	nounwind	109
+musl-glue	O2	call	function	string	"no-builtins"	136
+musl-glue	O2	call	parameter	enum	align 16	2
+musl-glue	O2	call	parameter	enum	align 4	2
+musl-glue	O2	call	parameter	enum	align 8	3
+musl-glue	O2	call	parameter	enum	dereferenceable(128)	1
+musl-glue	O2	call	parameter	enum	dereferenceable(32)	6
+musl-glue	O2	call	parameter	enum	nonnull	80
+musl-glue	O2	call	parameter	enum	noundef	273
+musl-glue	O2	call	parameter	enum	signext	1
+musl-glue	O2	declaration	function	enum	cold	4
+musl-glue	O2	declaration	function	enum	memory(argmem: readwrite)	5
+musl-glue	O2	declaration	function	enum	memory(argmem: write)	1
+musl-glue	O2	declaration	function	enum	memory(inaccessiblemem: write)	5
+musl-glue	O2	declaration	function	enum	memory(none)	4
+musl-glue	O2	declaration	function	enum	nocallback	11
+musl-glue	O2	declaration	function	enum	nofree	11
+musl-glue	O2	declaration	function	enum	noreturn	6
+musl-glue	O2	declaration	function	enum	nosync	9
+musl-glue	O2	declaration	function	enum	nounwind	15
+musl-glue	O2	declaration	function	enum	speculatable	4
+musl-glue	O2	declaration	function	enum	willreturn	11
+musl-glue	O2	declaration	function	string	"no-builtins"	29
+musl-glue	O2	declaration	function	string	"no-trapping-math"="true"	29
+musl-glue	O2	declaration	function	string	"stack-protector-buffer-size"="8"	29
+musl-glue	O2	declaration	function	string	"target-cpu"="x86-64"	29
+musl-glue	O2	declaration	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	29
+musl-glue	O2	declaration	function	string	"tune-cpu"="generic"	29
+musl-glue	O2	declaration	parameter	enum	immarg	8
+musl-glue	O2	declaration	parameter	enum	noalias	2
+musl-glue	O2	declaration	parameter	enum	nocapture	7
+musl-glue	O2	declaration	parameter	enum	noundef	72
+musl-glue	O2	declaration	parameter	enum	readonly	1
+musl-glue	O2	declaration	parameter	enum	signext	1
+musl-glue	O2	declaration	parameter	enum	writeonly	2
+musl-glue	O2	definition	function	enum	memory(argmem: readwrite)	1
+musl-glue	O2	definition	function	enum	memory(inaccessiblemem: write)	3
+musl-glue	O2	definition	function	enum	memory(none)	2
+musl-glue	O2	definition	function	enum	memory(read, argmem: none, inaccessiblemem: write)	1
+musl-glue	O2	definition	function	enum	memory(read, argmem: readwrite, inaccessiblemem: write)	1
+musl-glue	O2	definition	function	enum	memory(read, inaccessiblemem: none)	1
+musl-glue	O2	definition	function	enum	memory(readwrite, argmem: none, inaccessiblemem: none)	2
+musl-glue	O2	definition	function	enum	memory(readwrite, argmem: write, inaccessiblemem: write)	1
+musl-glue	O2	definition	function	enum	memory(readwrite, inaccessiblemem: none)	1
+musl-glue	O2	definition	function	enum	memory(write, argmem: none, inaccessiblemem: none)	1
+musl-glue	O2	definition	function	enum	mustprogress	5
+musl-glue	O2	definition	function	enum	nofree	8
+musl-glue	O2	definition	function	enum	norecurse	8
+musl-glue	O2	definition	function	enum	noreturn	1
+musl-glue	O2	definition	function	enum	nosync	8
+musl-glue	O2	definition	function	enum	nounwind	36
+musl-glue	O2	definition	function	enum	willreturn	5
+musl-glue	O2	definition	function	string	"min-legal-vector-width"="0"	36
+musl-glue	O2	definition	function	string	"no-builtins"	36
+musl-glue	O2	definition	function	string	"no-trapping-math"="true"	36
+musl-glue	O2	definition	function	string	"stack-protector-buffer-size"="8"	36
+musl-glue	O2	definition	function	string	"target-cpu"="x86-64"	36
+musl-glue	O2	definition	function	string	"target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87"	36
+musl-glue	O2	definition	function	string	"tune-cpu"="generic"	36
+musl-glue	O2	definition	parameter	enum	nocapture	8
+musl-glue	O2	definition	parameter	enum	noundef	81
+musl-glue	O2	definition	parameter	enum	readnone	2
+musl-glue	O2	definition	parameter	enum	readonly	1
+musl-glue	O2	definition	parameter	enum	writeonly	2
+musl-glue	O2	definition	return	enum	noundef	12
