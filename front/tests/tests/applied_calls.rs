@@ -337,3 +337,28 @@ int applied_entry(void) {
         assert_eq!(executor.run(), Outcome::Returned(Some(7)), "{}", mode.0);
     }
 }
+
+/// The caller already owns an allocation and an open descriptor at apply entry. The applied function
+/// reallocates and frees the object, then duplicates the descriptor, changes the file and closes both
+/// descriptors. The caller can still use its original object and descriptor after the apply.
+#[test]
+fn apply_restores_an_existing_heap_object_file_and_shared_offset() {
+    let source = c_dir().join("applied/rollback.c");
+    let native = native_results(&source, "applied_rollback");
+    let (text, _) = musl_link(&source, "applied_rollback", WORK_BUDGET);
+    let module = bennett_ir::load(&text).expect("valid device program");
+    let (before, after) = state_around_first_apply(&module, "applied_entry", options(0));
+    assert!(before.classical.memory == after.classical.memory, "apply changed the working memory");
+    assert_eq!(after.classical.stack_pointer, before.classical.stack_pointer);
+    assert_eq!(after.classical.tape, before.classical.tape);
+
+    let expected: Vec<_> = native.iter().copied().enumerate().map(|(n, result)| (n as u64, Some(result))).collect();
+    assert_applied(&module, &after, &expected, Fault::Budget, "existing allocation and descriptor");
+    let mut executor =
+        Executor::new(&module, module.function_named("applied_entry").expect("entry"), &[], options(0)).expect("start");
+    let outcome = executor.run();
+    assert!(
+        matches!(outcome, Outcome::Returned(Some(result)) if native.contains(&(result as u64))),
+        "ordinary heap and descriptor probe: {outcome:?}"
+    );
+}
