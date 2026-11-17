@@ -1,6 +1,6 @@
-//! Small progress and clock witnesses: bounded calls to the public stepping API, never polling loops.
+//! The machine clock stays fixed while reversal replays a rewind.
 
-use bennett_exec::{Executor, Options, Outcome};
+use bennett_exec::{Executor, Options};
 
 #[test]
 fn replaying_a_rewind_during_reversal_does_not_advance_the_machine_clock() {

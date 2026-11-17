@@ -885,6 +885,122 @@ The new test target also passes clippy separately. An extra front-wide all-targe
 pre-existing `unwrap()` calls in `front/tests/tests/complex.rs` (archive/commutation paths), left unchanged;
 that broader harness lint is not covered by the root's default-package all-targets command.
 
+The partial changed-line screen of machine step e (`3459a0b`..`a1b516e`) stopped after ten mutants:
+five missed and five timed out (1,121 seconds each). This follow-up adds tests only. Its mutation
+measurements use production `0c5b878`; the final four checks are after rebasing onto `d3880f6`, with
+the five function bodies unchanged. It does not complete the machine's changed-line mutation check. The full changed-line run over
+the machine's final implementation diff is still owed, through `scripts/mutate-diff.py`.
+
+Each original miss was applied by hand, observed failing its new test, reverted, and observed passing:
+
+- `report_outcome` (`crates/cli/src/run.rs`), `leftover_qubits > 0` changed to `== 0`, `< 0`, or `>= 0`:
+  `only_nonzero_leftovers_warn_and_the_warning_counts_the_qubits` (`leftover_reports.rs`) runs the CLI
+  without `--stats`. A clean free must give no warning; a dirty two-qubit free must warn of two, and a
+  rewind leaving one allocation over must warn of one. The equality and greater-or-equal mutants warn
+  about zero; the less-than mutant omits the real warning. The fixture has a finite run budget.
+- `Executor::execute` (`forward.rs`), the clock's `rerunning == 0 && rewinding == 0` changed to `||`:
+  `replaying_a_rewind_during_reversal_does_not_advance_the_machine_clock` (`mutation_progress.rs`)
+  reverses a rewind that must run an addition again. The mutant advances the clock to 4; the original
+  leaves it at 3, as the mark's budget requires for replay. The test uses fixed stepping, not a loop
+  waiting for an outcome.
+- `Executor::execute`, the guard bypass's `!any_guard || !counting` changed to `&&`:
+  `restoring_a_step_inside_a_budgeted_call_does_not_spend_its_budget` (`atomic_rewind_tests.rs`) enters
+  a real budgeted call, then uses the restoration flags that `run_forward` sets after a failed rewind.
+  The addition is restored, and the live frame's allowance must stay 2. The mutant spends it to 1.
+  This is an internal restoration-path witness, not a new claim about which programs can fail there.
+
+The original timeouts remove progress, rather than merely making a slow calculation:
+
+- `unrun_last -> Ok(())` and `unrun_record -> Ok(())` leave the journal's top record in place.
+  `reverse` keeps getting `true` from `step_back`, and `unwind_to_mark` keeps seeing more records than
+  its target, so neither loop can finish. The new fixed-step snapshot test (`atomic_rewind_tests.rs`) also detects either no-op
+  without calling `reverse` or entering a rewind.
+- `leave_allocation_over -> ()` leaves the nonzero allocation's record, instruction position and
+  quantum allocation unchanged. `unrun_record` returns success after calling it, so `unwind_to_mark`
+  repeats that same nonzero-allocation case forever. A budget cannot interrupt this inner loop.
+  `a_bounded_nonzero_allocation_un_run_makes_progress` now calls the inverse steps individually and
+  requires each one to pop its record, retreat the frame and leave the qubit over; it catches this
+  replacement before any inner loop starts.
+- `step_world -> None` neither executes nor sets an outcome or increments the step count. `run` loops,
+  and even a finite step budget cannot be spent. The fixed-step test checks that the first addition
+  actually advances the frame and writes 42.
+- `execute -> Ok(())` never advances the frame. An unbounded run never reaches its return, while
+  `run_again_to` can repeat it forever when replay is not charging a run budget. A bounded ordinary
+  run eventually faults `budget` instead of computing. The same fixed-step test catches the unchanged
+  frame immediately.
+
+The five-function screen at `ac9fdf7` used cargo-mutants 27.1.0: **50 mutants, 42 caught,
+3 missed, 1 unviable, 4 timeouts**, 33 minutes. The test selection was the executor unit suite plus
+`mutation_progress`, `call_budget`, `mark_budget`, `strict`, `history`, `history_unrun`,
+`leftover_wires` and `worlds_budgets_independent`. Executor optimization level 1, debug info off,
+one mutation worker, three build jobs, one test thread, 90-second test timeout, shared heavy slot.
+An earlier full-package attempt's unmutated baseline timed out in the exhaustive permutation oracle;
+it tested no mutants and is not counted. Interrupted tuning attempts are not double-counted.
+
+The surviving `deferred = checked && partial` changed to `||` is now caught by
+`a_nested_rewind_does_not_defer_an_unsplit_changed_read` (`leftover_wires.rs`). A rewind that contains
+an earlier rewind un-reads a changed, unsplit register by leaving its wire over locally. A later faithful
+split/join must still succeed. The mutant wrongly notes the local case as a deferred world check and
+that stale note faults the later rewind: **`bad_rewind` instead of result 7**. Applied by hand, the test
+failed in under 0.01 seconds; restored, it passed and reversed to its independently captured entry.
+
+All five original no-op bodies were also run by cargo-mutants against just the two `a_bounded_` unit
+witnesses: **5 caught, 0 missed, 0 unviable, 0 timeouts** (unmutated baseline passed). In the broader
+screen the Rust harness continued after those witnesses failed and later tests hung; the isolated run
+shows the new tests kill them fast without relying on the timeout.
+
+Two equivalent survivors remain in `unrun_record`, each an outer `&&` changed to `||`:
+
+- `(checked || deferred) && matches!(last, Undo::Qalloc | Undo::Call)`: with neither checking mode
+  active the extra allocation/read failure set is computed but never used. With a checking mode active
+  on any other record, `reads_no_longer_held` returns an empty set: register-read entries belong only
+  to `Call` records, later entries have already been popped, and `reads_from(last_record)` is empty.
+  No refusal or deferred note is added. Both helpers are read-only; the real undo is unchanged.
+- `(checked || deferred) && journal.top_has_cells()`: with neither checking mode active the extra
+  failure set is unused. With a checking mode active but no cells on this record, the cell check has no
+  entries and returns an empty set. It cannot refuse or add a deferred note; undoing is unchanged.
+
+The one unviable mutant is `step_world -> Some(Default::default())`: `Outcome` has no `Default`.
+The combined classification of the same **50 unique executor mutants** is **47 caught, 2 equivalent,
+1 unviable**, with no unexplained survivor or timeout. The three hand-applied CLI comparison mutants
+are additional checks, not included in that 50.
+
+The three screen survivors were rechecked with all default Rust packages (`bennett-exec`, `bennett-ir`,
+`bennett`) and the normal executor optimization level 3: one caught, two equivalent misses, no timeout
+or unviable case. Its unmutated baseline passed; the hand-applied mutants also passed their tests
+after restoration. The five-body isolated pass
+used optimization level 1, only the `a_bounded_` unit tests and a 15-second test timeout; its test commands
+took about 0.1 seconds each, compilation excluded (89 seconds for the whole pass).
+
+Reproduce the function screen on the final tests (the deferred-mode miss above is now caught), through
+the shared heavy slot with `CARGO_BUILD_JOBS=3`, using:
+
+```sh
+cargo mutants -p bennett-exec --test-package bennett-exec \
+  --file crates/exec/src/backward.rs --file crates/exec/src/executor.rs \
+  --file crates/exec/src/forward.rs \
+  --re '::(unrun_last|unrun_record|leave_allocation_over|step_world|execute)( |$)' \
+  --in-place --jobserver-tasks 3 --timeout 90 \
+  --cargo-arg=--config=profile.dev.package.bennett-exec.opt-level=1 \
+  --cargo-arg=--config=profile.dev.debug=0 --cargo-arg=--lib \
+  --cargo-arg=--test=mutation_progress --cargo-arg=--test=call_budget \
+  --cargo-arg=--test=mark_budget --cargo-arg=--test=strict --cargo-arg=--test=history \
+  --cargo-arg=--test=history_unrun --cargo-arg=--test=leftover_wires \
+  --cargo-arg=--test=worlds_budgets_independent -- -- --test-threads=1
+```
+
+Target selectors are `--cargo-arg`s so that they restrict both compilation and execution. For the fast
+five-body recheck, retain those three files and use the regex
+`replace Executor.*::((unrun_last|unrun_record|execute) -> .* with Ok\(\(\)\)|step_world -> .* with None|leave_allocation_over with \(\))$`,
+`--cargo-arg=--lib` only, and trailing `-- a_bounded_`. The broader three-survivor qualification used
+`--file crates/exec/src/backward.rs --re 'backward.rs:(62:32|64:34|88:34):'`, all three `--test-package`
+flags, no optimization/debug override or target selection, and `--timeout 180 -- -- --test-threads=1`.
+
+Final checks after rebasing onto `d3880f6`: `cargo test` **505 passed / 29 ignored**;
+`front/test.sh` **205 passed / 33 ignored**; `cargo clippy --all-targets -- -D warnings` and
+`cargo fmt --check` passed. Tree guards: 3,613 tracked files, zero problems. The final Rust suite was
+rerun after removing an unused import left by moving the bounded witness into the unit suite.
+
 The changed-line mutation run on the job's own diff (`python3 scripts/mutate-diff.py 2142238` at `0e1b00d`, 2026-11-16):
 22 mutants, 16 caught, 5 unviable, 0 timeouts, 1 missed: `crates/exec/src/measure.rs`, `live_sources`,
 `Undo::Longjmp => shadow.len() - discarded` with `-` replaced by `/`. The line predates the job; it is in the
