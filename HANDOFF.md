@@ -103,9 +103,10 @@ The order of the work:
    device can carry it out and what it costs, and defines the derived forms (`call_indirect`, `stacksave`,
    `stackrestore`, `retaddr`, `setjmp`, `longjmp`, `exit`) by their expansion into ordinary code.
 5. Independent checks: an audit of the front against the model (done: three wrong translations fixed, "Known
-   weak spots"; two findings on loops go to step 6), a testing pass over steps 1 and 2 (done: 13 tests, no
-   defect; "Independent checks of apply, removal and front fixes"), a testing pass over step 3 (running), and a
-   small reference that runs `apply` literally by the device's construction (not started).
+   weak spots"; two findings on loops go to step 6), a testing pass over steps 1 and 2 (done, `214fa8f`: 13
+   tests, no defect), a testing pass over step 3 (done, `33ebafa`: 16 tests, no defect; both in "Independent
+   checks of apply, removal, front fixes and qfree"), and a small reference that runs `apply` literally by the
+   device's construction (not started).
 6. Then the route that replaces the front's cancelled fallback ("Next steps, in order", 4): a call whose
    arguments depend on a qubit, to an ordinary function (no quantum operation, directly or through anything it
    calls), is applied whole with one `budget`, whatever memory it writes, allocates or frees and whatever loops
@@ -168,7 +169,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | Lua probe | Unmodified Lua 5.4.9 through musl: seven native stdout/status comparisons and exact reversals; a Lua predicate under hand-written `apply`, dense-checked Grover at N=4/8 (`experiments/lua-probe`) |
 | `c5085b4`..`ee41593` | The model of 2026-11-17: `apply` for each definite value of its arguments only; `mark`, `rewind` and what served them removed; `qfree` the partial trace with the simulator's report; the fault `qubit_memory_access`; the simulator's own stops named; three wrong translations of the front fixed |
 
-Check it: `cargo test` (253 passed; 3 ignored, each naming its reason: heavy reference, generated or
+Check it: `cargo test` (269 passed; 3 ignored, each naming its reason: heavy reference, generated or
 hash-sample runs with their commands, witnesses of recorded defects and of questions awaiting the maintainer;
 about 9 s, no LLVM needed) and `front/test.sh` (222 passed; 26 ignored by default, each naming its reason: the
 fallback acceptance tests, waiting for the route that replaces the cancelled fallback, the C North Star ladder runs and other explicit experiments,
@@ -1130,7 +1131,7 @@ diff --recursive --no-dereference "$auth/musl-1.2.5" rt/musl/musl-1.2.5
 
 The additional entry-type/executable-flag comparison is reproduced in `rt/musl/VENDOR.md`.
 
-## Independent checks of apply, removal and front fixes (2026-11-17)
+## Independent checks of apply, removal, front fixes and qfree (2026-11-17)
 
 `current_model_independent.rs` checks one runtime budget across nested loops and a callee against
 hand-counted costs (5, 12, 29, 56 steps), with complex amplitudes, correlated dirty targets and an untouched
@@ -1150,3 +1151,17 @@ Checks on main at `40c2800`: `cargo test` 251 passed / 3 ignored; `front/test.sh
 26 ignored, with the C++ header and all 88 LLVM attribute kinds checked; clippy all targets with
 warnings denied and formatting clean. All eight device examples also execute: seven deterministic
 results match by hand; Grover completes at seed 0 (its distribution is checked by the existing tests).
+
+The second pass (`33ebafa`) tests `qfree`, the fault `qubit_memory_access` and the simulator's stops: 16 tests,
+expectations worked by hand. Reduced density matrices (computed by the test from the snapshot, not by the
+executor) after releasing parts of Bell and phased GHZ states held in separate registers, after controlled
+rotations down to a released weight of about 5e-31, after repeated releases and around an `apply` target agree
+with hand calculation (`release_independent.rs`). Every integer width from 1 to 128 is loaded and stored at
+every byte overlapping one that holds qubits and its neighbours, 8,064 cases (6,528 faults, each leaving the
+whole state unchanged); faults inside `apply` per argument address XOR code 17 into a dirty fault register;
+all 32 jump-record bytes, copying loops and a measured stack byte after its frame returned are covered
+(`qubit_access_independent.rs`). The configuration limit and the stop at an `apply` faulting for some argument
+values leave the state as before the step and let no later effect run; gates and measurements at addresses
+inside an applied function give `quantum_in_region` (`simulator_stops_independent.rs`). No defect confirmed.
+Checks on that commit: `cargo test` 269 passed / 3 ignored; `front/test.sh` 222 passed / 26 ignored; clippy
+and formatting clean. Finite tests in `f64`, not a proof.
