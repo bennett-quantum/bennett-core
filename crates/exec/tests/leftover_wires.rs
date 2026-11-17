@@ -252,3 +252,40 @@ entry:
     check(&text, "one", &[(&[1, 1], 1.0)], 0);
     strict_unchanged(&text);
 }
+
+#[test]
+fn a_nested_rewind_does_not_defer_an_unsplit_changed_read() {
+    // The first outer rewind contains another rewind, but its read of q never split the world. Its
+    // changed read is handled locally by leaving a wire over. A spurious deferred note would survive
+    // until the later faithful split/join and incorrectly fault that rewind with bad_rewind.
+    let module = load(
+        "memory 256
+func @id(i1 %x) -> i1 {
+entry:
+    ret %x
+}
+func @main() -> i8 {
+entry:
+    %q = qalloc 1
+    %k = qalloc 1
+    %m = mark budget 20
+    %y = call @id(%q)
+    %inner = mark
+    %v = add i8 17, 25
+    rewind %inner
+    x %q ctrl %k
+    rewind %m keep (i1 1 -> %k)
+    %join = mark budget 10
+    h %k
+    %read = call @id(%k)
+    rewind %join
+    ret 7
+}",
+    );
+    let mut e = executor(&module, "main", &[], machine());
+    let start = e.snapshot();
+    assert_eq!(e.run(), Outcome::Returned(Some(7)));
+    assert_eq!(e.stats().leftover_qubits, 1);
+    e.reverse().expect("reverses through the nested rewind and leftover");
+    assert_same_state(&e.snapshot(), &start, "nested local inverse returns to entry");
+}
