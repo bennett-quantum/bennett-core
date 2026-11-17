@@ -1,92 +1,74 @@
 # HANDOFF
 
-State on 2026-11-17, about 06:40 UTC: **stopped by the maintainer; see "Stopped on 2026-11-17 by the
-maintainer" below before anything else.** The night run (from 20:40 UTC on 2026-11-16) landed what that section
-lists. Questions opened in the night are under "Questions for the maintainer", unanswered; the maintainer withdrew
-the retirement of `apply`, `qalloc` and `qfree` ("Decision the maintainer took on 2026-11-16, in the evening").
-Earlier on 2026-11-16: an independent oracle for the front's fallback and its testing pass's fixes (`27265ba`,
-`40c84d4`); a failed rewind made atomic, the two replay panics and the canceled-keeps refusal fixed (`145a72c`);
-the six complex helpers from libgcc 13.3 (`e89c98f`..`df429d7`); a Rust scalar probe (`c906fad`); files, clock and
-entropy for the musl runtime and the SQL oracle at five query shapes (`a3f4de5`); test commits of the journal
-mutation job (`623d9e4`); the landing stack (`8cae924`..`e2320fe`); the checks job (`2ab9ebf`..`83ae722`,
-`0e1b00d`); machine decisions a to d (`209d3c6`..`ba6ddb5`); the design audition and the maintainer's afternoon
-decisions on it.
-Earlier: the night session (the journalled machine in the executor, all five steps of its order, with two
-independent oracles; journal content; `setjmp`/`longjmp`, return addresses and calls through another prototype in
-the front). The night corpus run (`1e06f2f`, musl linked) has GCC 1,574 agree, c-testsuite 219, `ieee/` 64, none
-wrong or crashing; all six former file-related faults now agree with native.
-Earlier: the evening session of 2026-11-15 (the musl runtime, `zero N`, the floating-point leftovers, the complex
-helpers, constructor startup, the first journal-content and control-schedule measurements, the salvage survey).
+State on 2026-11-17, about 12:40 UTC: **resumed by the maintainer the same day; see "Resumed on 2026-11-17"
+below before anything else.** Running: one job on `wip/model`, making per-argument evaluation the only
+definition of `apply` and then removing `mark`/`rewind` and what goes with them (steps 1 and 2 of the order in
+that section). The sections further down still narrate the journalled machine as it stood at `f81a70a`; they are
+deleted step by step as the machinery goes.
 
-## Stopped on 2026-11-17 by the maintainer
+## Resumed on 2026-11-17
 
-**Work is paused by the maintainer. Nothing is running. Do not resume, launch or land anything until the
-maintainer says so.**
+Work was stopped on the morning of 2026-11-17 because the maintainer wanted to understand the computational
+model before deciding anything, and was concerned that it might be unphysical. A rigorous account of the model,
+with proofs, was written that day. What it showed:
 
-Why: the maintainer wants to understand the computational model that has been built before taking any
-decision, and is concerned that the framework may be unphysical. None of the "Questions for the maintainer" is
-answered, and none is to be treated as answered or pressed. Every choice "taken meanwhile" stays provisional.
+- Ordinary code that issues qubit allocation, gates with controls and measurement is the standard quantum
+  circuit model, for a bounded number of steps and finite memory.
+- `apply @f(args) -> out, fault budget B`, defined for each definite value of the argument registers as running
+  `@f` (ordinary code, no quantum instruction) for exactly `B` steps on a private copy of memory and XORing its
+  result or fault code into a target it does not read, can be carried out by a device: each ordinary step is
+  made reversible by keeping the previous state, the result is copied out by XOR, the inverse steps run, and the
+  working memory returns exactly. One `apply` costs two runs of `B` steps.
+- `mark`/`rewind` is proved only in a narrow static form (each mark paired with its rewind in the program text,
+  nothing allocated, released, measured or printed between). The form the executor runs, where run-time paths
+  choose what a rewind undoes, is proved only under conditions and open in general, and several of the
+  executor's rules for it decide by inspecting amplitudes, by comparing parts of a superposition with each other
+  or by one counter for the whole run, which no device can do.
+- A release that faults when its register is not zero is not something a device can decide reliably: a nonzero
+  part may have arbitrarily small amplitude.
 
-What the evidence on physical realisability is, and is not:
+No lowering of a device program to a circuit exists in the tree yet: the executor is a simulator of the
+model's rules, not a compiler to gates.
 
-- No lowering of the device program to a circuit exists in the tree. The executor is a simulator of the
-  machine's rules, not a compiler to gates.
-- The only comparison of the executor with an ideal circuit model is a private prototype (the design seam, at
-  `a1b516e`), reviewed by one council round of three seats ("Design audition of 2026-11-16").
-- That review found rules of the executor that no device can implement: rules whose result depends on which
-  configurations have nonzero amplitude, on other worlds or on a run-wide counter. Fixed overnight: a
-  state-inspecting check delivered to a program as a call's code (V4b); the barrier after a leftover (V1);
-  `bad_rewind` with the restore where a read changed on some configurations only, at the check sites built
-  (V2: allocation, register read, un-promotion, memory-qubit access, the check on the sum of the worlds' parts,
-  reads where the world split). Still open, as questions, each with an ignored witness: the run's step budget
-  ending the whole run, and the replay charge as one counter delivered as a code (V3, V3'); a `longjmp` over a
-  record in superposition (V4); the unbounded `mark budget -1` (V5, a defect of the specification); a second
-  rewind of one budgeted mark (N1); a mark's budget outliving its frame. An inner region run again into a
-  measurement stays a refusal until channels.
-- The review found no violation of quantum mechanics in the aim itself (ordinary code read by and un-run
-  around qubits, with exact classical results). The general lowering, one flat step machine covering several
-  rewind sites, loops and branch-varying budgets at polynomial cost, is argued, not built.
-- Six rows of the seam's table were never executed (listed under "Design audition of 2026-11-16"). Both
-  reviewers judged the seam's own state comparison too weak (it did not compare returned values or console
-  output, and traced out history that a later un-run can reveal).
+The maintainer's decisions of 2026-11-17:
 
-The exact state:
+- **`qfree` is partial trace**: the register is dropped unexamined; a released register that is not zero is not
+  a fault of the program. ("qfree can only mean partial trace. I don't see how measuring is stable here: what if
+  nonzero has tiny prob?")
+- **`mark` and `rewind` are removed** from the language, the validator and the executor. The last commit that
+  contains them is `f81a70a`; they can be recovered from it. The proved static form can come back later with its
+  test attached.
+- **Gates on memory bytes keep their plain form**: a gate or a measurement may name its qubit by an ordinary
+  address. ("ok keep plain form")
+- **Ordinary code that reads or writes a byte holding qubits is a named fault.** ("yes, it should be a fault to
+  read qubits")
 
-- `main` is described by this commit; the four checks pass on it (counts under "What works", `Check it`).
-- Landed during the night of 2026-11-16 to 17 (each step with the four checks passing on it): machine step e;
-  the machine-finish job (the testing passes' and the seam's executor findings, `apply` computed as a mark with
-  a budget, the call form and a rewind's keep, compared with today's path on every test); machine-sites (run
-  regardless where worlds join and split); the IR's infinite angle, the front's invalid-input naming, the x87
-  noncanonical operands and the floating-point follow-ups (`powi`, `roundevenl`, `roundl`, `lroundl`,
-  classification); the refusal of non-IEEE subnormal modes; the whole-world reference for the mark's budget,
-  the call form and leftover take-back; the C rung-2 table on an independent executor; musl authenticated
-  against its signed release; the automatic checks' four gaps closed; the SQL oracle's absent-key marking;
-  copied `sigjmp_buf` compared with glibc; an LLVM attribute inventory; the corpus rerun; the Lua probe; the
-  fallback oracle comparing the whole fixture image with guard bytes (`2fbbd08`); the fallback's second step,
-  a one-bit flip proven case by case where the simplifier does not fold it (`e3a47d4`); testing passes and
-  their tests (see "Stopped in flight on 2026-11-16").
-- Unlanded work on `wip/` branches: `wip/fallback-step3` (the fallback's step 3, the program run as written
-  with its history kept; marked unfinished: the four checks passed on it in its job, its compare-mode run over
-  the front tests was stopped part-way, one acceptance test still waits); `wip/sol-mutants-machine` (two
-  commits of tests from the stopped mutation run, reported finished by their job, not run through the landing
-  checks); `wip/sol-mutants-machine-partial` (the run's unfinished qualification: 36 executor survivors still
-  need an equivalence argument or a killing test). The other `wip/` branches of 2026-11-16 and 17 are on `main` as rebased
-  copies (some with conflicts resolved), not as their own commits.
-- Machine defects still open: a run that falsely stops `Unaligned` after three distinct, once-rewound marks
-  over one `|+>` read in the machine's meaning (P1; ignored witness in `crates/exec/tests/machine_sites/
-  nested.rs`); leftover registers share the program's register ids, so a `qalloc` run again during an outer
-  un-run can get a different id than the first time (P1, no test reaches it); an inner region run again into a
-  measurement or out of its frame, a refusal until channels; the open questions above (witnesses in
-  `crates/exec/tests/seam_questions.rs`).
-- Owed: the full changed-line mutation run over the machine's changes since `3459a0b` (stopped part-way; a
-  scoped run over step e's survivors is recorded under "Automatic checks (implementation)"); testing passes
-  over the small fixes of the night and over the fallback's steps.
-- Not started: the rest of the front's fallback (next step 4), idiomatic modular quantum C with Shor's period
-  finding as acceptance, Grover over a SQL query from plain C, the floating-point environment.
+`apply`, `qalloc` and `qfree` stay ("Decision the maintainer took on 2026-11-16, in the evening"); `apply` is
+the only bridge from qubits to ordinary code.
 
-**The first thing owed when work resumes is not a feature.** It is a plain, complete account of the
-computational model for the maintainer: what a state is, what each rule of the machine does to it, and which
-rules have a circuit and why. The maintainer decides what follows.
+The order of the work:
+
+1. The executor computes `apply` by per-argument evaluation only (`ApplyMode::Branches` today); the mode switch,
+   the comparison mode and the computation through marks go.
+2. `mark`/`rewind` leave the reader, writer, validator, executor, CLI, examples, fixtures and tests, with what
+   exists only for them: a call passing a qubit register to ordinary code outside `apply`; the call form
+   returning a fault code; deadlines and clocks on marks; leftovers; the scheduling and joining of machine states
+   in superposition. Stepping an ordinary run backwards stays where it is exact (ordinary steps, gates, `apply`)
+   and refuses at a measurement.
+3. `qfree` as partial trace (the simulator keeps a nonzero released register as an unnamed part of the stored
+   state and reports it; the program never sees the report), and the named fault for ordinary code touching a
+   byte that holds qubits.
+4. The documents say what the code does now; `docs/DESIGN.md` states `apply`'s meaning, why a device can carry
+   it out and what it costs.
+5. Independent checks: an audit of the front against the model, a testing pass, and a small reference that runs
+   `apply` literally by the device's construction.
+6. Then the route that replaces the front's cancelled fallback ("Next steps, in order", 4).
+
+Not to be landed: `wip/fallback-step3`, `wip/sol-mutants-machine` and `wip/sol-mutants-machine-partial`. They
+build on what is being removed and are left where they are.
+
+Not started: idiomatic modular quantum C with Shor's period finding as acceptance, Grover over a SQL query from
+plain C, the floating-point environment.
 
 ## What this repository is
 
@@ -682,9 +664,14 @@ its vendor; at most two sol jobs at once.
    0.43 GB was not reproduced on that program's layout).
    The implementer's order is done: 1 mark/rewind, 2 worlds, 3 the memory overlay, 4 gates that take
    addresses, 5 `apply` as mark, call, rewind-keep.
-4. **The front's fallback**: the program almost verbatim under marks, the documented coherent class recognised by
-   its form, and the two warnings (history still entangled at a measurement or at the end; an un-run that meets a
-   state its history does not match).
+4. **Cancelled on 2026-11-17: the front's fallback through marks** (the program almost verbatim under marks, the
+   documented coherent class recognised by its form, and the two warnings), since `mark`/`rewind` are removed.
+   Its replacement route: the front refuses a memory write under a condition that depends on a qubit, and a call
+   under such a condition to a function that writes memory; inside the model a whole applied function may write
+   memory, call, loop and use its stack, because that memory is private to the `apply` and discarded. The route
+   lifts those refusals where the write stays inside a whole applied function, checked against the fallback
+   oracle's ignored acceptance tests; a plan comes before any building. What follows is the record of the
+   fallback as built up to `f81a70a`.
    Independent oracle prepared before the fallback (`front/tests/tests/fallback_oracle.rs`,
    `front/tests/tests/fallback_support/native.rs`, fixtures and explanation in
    `front/tests/c/fallback_oracle/`): host clang executes each shared C update once per basis input,
@@ -1375,7 +1362,11 @@ closed forms (`experiments/lua-probe/README.md`, "Independent testing pass").
 
 ## Questions for the maintainer
 
-- **Choices made in machine-sites (2026-11-17), not yet asked.** Taken meanwhile, each easy to reverse:
+Gone through on 2026-11-17 after the maintainer's decisions ("Resumed on 2026-11-17"): those about only the
+machinery being removed are marked withdrawn; the rest stay open, and none is answered.
+
+- **Withdrawn on 2026-11-17: concerns only `mark`/`rewind` and the machinery removed with them.**
+  **Choices made in machine-sites (2026-11-17), not yet asked.** Taken meanwhile, each easy to reverse:
   (1) after worlds merge, a leftover wire that is zero in every configuration is discarded rather than kept
   (the state is then the rest times |0>, so no amplitude changes; outside strict mode faithful programs then
   behave as in strict mode); (2) a wire that survives moves only into register ids freed by wires discarded in
@@ -1393,14 +1384,16 @@ closed forms (`experiments/lua-probe/README.md`, "Independent testing pass").
   by an overlay of musl's hexadecimal branch of `fmt_fp`, low priority; or record musl's spelling as the
   device's and drop the witness.
 
-- **Independent reference snapshot storage (2026-11-17):** taken: the established `rpds` crate's
+- **Withdrawn on 2026-11-17: concerns only the reference for the machine states removed with `mark`/`rewind`.**
+  **Independent reference snapshot storage (2026-11-17):** taken: the established `rpds` crate's
   persistent vectors and ordered map plus standard `Rc` cold metadata, keeping snapshots and content
   equality rather than importing production journal machinery. Eight-way slot nodes reduce retained point-write paths; the heavy
   ladder runner uses an optimized build, prepared before the existing 120 s / 1 GiB execution cap.
   Recommendation: keep this reversible test-only representation; an independent undo log remains
   an alternative if a larger workload requires less space. No machine-meaning choice changes.
 
-- **From the design seam and its council (2026-11-16, night; see "Design audition of 2026-11-16").** Rules of
+- **Withdrawn on 2026-11-17: concerns only `mark`/`rewind` and the machinery removed with them.**
+  **From the design seam and its council (2026-11-16, night; see "Design audition of 2026-11-16").** Rules of
   the machine's meaning whose result depends on other worlds or on a run-wide counter, where a device can only
   decide per branch, and which the recorded decisions do not settle. Taken meanwhile for each: unchanged; ignored
   witness tests ("awaits the maintainer's decision") are being added on `wip/machine-finish`.
@@ -1438,7 +1431,8 @@ closed forms (`experiments/lua-probe/README.md`, "Independent testing pass").
   debt with its route), rewinds one budgeted mark twice after a read, or lets a program observe a world's
   clock, the replay charge or the rewind costs.
 
-- **A rewind naming a mark that an outer rewind un-ran** (from building [(4)]). Read literally, such a handle
+- **Withdrawn on 2026-11-17: concerns only `mark`/`rewind` and the machinery removed with them.**
+  **A rewind naming a mark that an outer rewind un-ran** (from building [(4)]). Read literally, such a handle
   is a value defined between the outer mark and its rewind, so the validator refuses the inner rewind
   (`RewoundUse`), and the executor's own `bad_rewind` for a stale handle is no longer reachable from a
   validated program. Exempt a rewind's handle operand, so that path stays reachable and the case is a fault
@@ -1446,18 +1440,23 @@ closed forms (`experiments/lua-probe/README.md`, "Independent testing pass").
   by it, and relaxing a validator rule later breaks no program. Taken meanwhile: the refusal, with the
   run-time check kept as defence in depth.
 
-- **Which fault a rewind gives when running again would pass the budget** (machine step e1). Taken:
+- **Withdrawn on 2026-11-17: concerns only `mark`/`rewind` and the machinery removed with them.**
+  **Which fault a rewind gives when running again would pass the budget** (machine step e1). Taken:
   `budget`, the state as before the rewind, since the run's budget is what ran out. The alternative is
   `bad_rewind`. Recommendation: keep `budget`; it says what to raise.
-- **The name of the option for the machine's meaning** (e2): `Options::machine_meaning`,
+- **Open; changes with the work of 2026-11-17:** once `mark`/`rewind` go and `qfree` is partial trace, the
+  option is left distinguishing only the stop at an `apply` faulting for some argument values.
+  **The name of the option for the machine's meaning** (e2): `Options::machine_meaning`,
   `bennett run --machine-meaning`; strict mode stays the default and `--allow-region-faults` stays as the
   one relaxation it was. Recommendation: keep; renaming is cheap while no program depends on it.
-- **Superseded (2026-11-17): the leftover is now taken back** where its region runs again, so the barrier
+- **Withdrawn on 2026-11-17: concerns only `mark`/`rewind` and the machinery removed with them.**
+  **Superseded (2026-11-17): the leftover is now taken back** where its region runs again, so the barrier
   below no longer exists ("Known weak spots", "Running regardless, outside strict mode").
   **A rewind that ran regardless is a barrier** (e3): reversal stopped there and a rewind of an outer mark
   faults `bad_rewind`, as at a measurement, because the history no longer describes the state. Taken as the
   easiest to reverse; the route to lift it is in "Known weak spots". Recommendation: keep until channels.
-- **Time and the run's budget** (e4). Taken: the machine's time is a per-world clock (`Stats::clock`),
+- **Withdrawn on 2026-11-17: concerns only `mark`/`rewind` and the machinery removed with them.**
+  **Time and the run's budget** (e4). Taken: the machine's time is a per-world clock (`Stats::clock`),
   separate from the simulator's ticks (`Stats::steps`); a rewind of a budgeted mark moves the clock to the
   mark's plus the budget and closes the mark's budget (the mark stays rewindable but bounds nothing more);
   the run's budget keeps counting ticks plus the replay charge, not the clock. The alternatives: count the
@@ -1466,28 +1465,33 @@ closed forms (`experiments/lua-probe/README.md`, "Independent testing pass").
   marks each round would then fault, since its marks stay in the history). Recommendation: keep; revisit
   when the front emits budgeted marks.
 
-- **How the budget is required** (e5). Taken: at run time, a rewind whose history since an unbudgeted mark
+- **Withdrawn on 2026-11-17: concerns only `mark`/`rewind` and the machinery removed with them.**
+  **How the budget is required** (e5). Taken: at run time, a rewind whose history since an unbudgeted mark
   read a qubit faults `bad_rewind` (the validator cannot see loads of memory qubits); a rewind costs its
   budget only where it follows such a read ("the rewind means there"), and a budget whose deadline does not
   fit the clock (`budget -1`) meets the rule and bounds nothing, which is what the tests written before the
   rule use. The alternatives: a new fault code instead of `bad_rewind`, or every mark costing its budget.
   Recommendation: keep; a validator rule for calls that read registers can be added beside it.
 
-- **The call with a fault value** (e6). Taken: the code is an `i5` (the fault code width, as the fault
+- **Withdrawn on 2026-11-17: the call form goes with `mark`/`rewind` unless a use of it outside expressing
+  `apply` is found (then this question reopens for ordinary code only).**
+  **The call with a fault value** (e6). Taken: the code is an `i5` (the fault code width, as the fault
   registers); `%c = call ... budget B` names the code alone; the budget lives in the callee's frame as steps
   left, counted for every step while it is live and never given back by a rewind inside (as an applied
   function's), and the innermost call takes a fault, the outermost spent one a budget. Recommendation: keep;
   an `i8` code would survive a further widening of the codes, at the cost of a `trunc` before a keep into a
   `q5`.
 
-- **Reference-only clock/diagnostic boundaries:** the documents define successful forward clocks and
+- **Withdrawn on 2026-11-17: concerns only `mark`/`rewind` and the machinery removed with them.**
+  **Reference-only clock/diagnostic boundaries:** the documents define successful forward clocks and
   budget deadlines, but not the time of a faulting attempt or the ordering of a caught fault and a
   sibling return in one simulator round. Taken for the reference: count an attempted named fault as
   one clock unit, except an already-spent deadline; do not assert fault clocks or the simultaneous
   strict-stop boundary. Recommendation: leave these as simulator conventions until time is observable
   to a program. The reference's strict diagnostic report is separate from the machine state.
 
-- **A budgeted callee's padded clock and its caller's mark:** does an internal rewind after a memory
+- **Withdrawn on 2026-11-17: concerns only `mark`/`rewind` and the machinery removed with them.**
+  **A budgeted callee's padded clock and its caller's mark:** does an internal rewind after a memory
   qubit read spend its mark's whole budget against an enclosing caller mark, or does the call have a
   region-local clock and charge only its forward steps to the caller? "The mark's budget" says nested
   marks cover inner waits, but also excludes callers' marks inside a coherent region; "The call with a
@@ -1507,7 +1511,8 @@ closed forms (`experiments/lua-probe/README.md`, "Independent testing pass").
   of `front/tests/tests/complex.rs` still count any two NaNs as equal (looser than the rule); route: give
   their comparison the operands, as `compare.py` has them, and apply the same rule.
 
-- **A mark's budget once its frame is left** (machine-finish 0c). "From the mark until a rewind of it" read
+- **Withdrawn on 2026-11-17: concerns only `mark`/`rewind` and the machinery removed with them.**
+  **A mark's budget once its frame is left** (machine-finish 0c). "From the mark until a rewind of it" read
   literally lets a budgeted mark in a callee that returns, or that a catch or `longjmp` discards, bound
   its caller for ever, though no rewind can reach it. Taken: leaving the frame closes the mark's budget
   (time, not state; reversal does not reopen it, as it does not reopen a rewound mark's). This is what
