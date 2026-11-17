@@ -203,13 +203,12 @@ entry:
     }
 }
 
-/// Known debt (HANDOFF, "Known weak spots", running regardless, cause 1).
+/// Was a debt until 2026-11-17 (HANDOFF, "Known weak spots", running regardless, cause 1).
 /// Keeping the value into the register just read changes that read on q=1.
 /// The afternoon ruling requires the inverse to run regardless outside strict
 /// mode. Its resulting state is unspecified, so only continuation is asserted;
 /// strict mode must still diagnose the mismatch.
 #[test]
-#[ignore = "defect: machine meaning still refuses a rewind that changes a register read"]
 fn a_changed_read_is_a_strict_diagnostic_and_machine_execution_continues() {
     let module = load(
         "memory 512

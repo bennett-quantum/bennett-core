@@ -267,7 +267,6 @@ fn a_faithful_memory_read_runs_and_changed_reads_are_strict_diagnostics() {
 }
 
 #[test]
-#[ignore = "defect: deferred un-run checks fault every world instead of retaining the read XOR wire"]
 fn a_deferred_nonzero_read_keeps_the_dense_phase_and_reduced_state() {
     let text = "memory 512
 func @id(i1 %b) -> i1 {

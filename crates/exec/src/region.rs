@@ -379,6 +379,10 @@ impl<'m> Executor<'m> {
     /// rewind in it cannot keep, so every part holds what its history read: no part fails a check and the
     /// copy kept to restore is dropped, as the checks on the sum would.
     fn finish_region_rewind(&mut self) {
+        // The worlds of a region do not merge until it ends, so a rewind's leftovers are settled in each world.
+        if self.unresolved {
+            self.resolve_leftovers();
+        }
         if self.pending {
             assert!(self.deferred.is_empty(), "a part of a region's world holds what its history read");
             self.pending = false;
@@ -429,6 +433,9 @@ impl<'m> Executor<'m> {
             deferred: std::mem::take(&mut self.deferred),
             backups: std::mem::take(&mut self.backups),
             pending: std::mem::replace(&mut self.pending, false),
+            leftovers_made: std::mem::take(&mut self.leftovers_made),
+            taking_back: std::mem::take(&mut self.taking_back),
+            unresolved: std::mem::replace(&mut self.unresolved, false),
             had_journal: self.journal.is_some(),
             counters: Counters::of(self),
         }
@@ -468,6 +475,9 @@ impl<'m> Executor<'m> {
         self.deferred = outer.deferred;
         self.backups = outer.backups;
         self.pending = outer.pending;
+        self.leftovers_made = outer.leftovers_made;
+        self.taking_back = outer.taking_back;
+        self.unresolved = outer.unresolved;
     }
 
     // ---------------------------------------------------------------------------------------------------
@@ -984,6 +994,9 @@ struct HistoryRegion {
     deferred: Vec<crate::worlds::Defect>,
     backups: Vec<World>,
     pending: bool,
+    leftovers_made: Vec<crate::leftover::TakeBack>,
+    taking_back: Vec<crate::leftover::TakeBack>,
+    unresolved: bool,
     had_journal: bool,
     counters: Counters,
 }

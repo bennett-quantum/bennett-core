@@ -373,9 +373,11 @@ configuration. With one world the machine is exactly the machine above.
   and the rewind runs forward again what it un-ran, as for the other mismatches above, or, if worlds
   split off during its un-run (running an earlier merging rewind again) or it un-ran past its split
   point, restores a copy of the world it took first. Below a world's split point the check is made on
-  the sum of the worlds' parts (next paragraph). Summing the parts of worlds whose
+  the sum of the worlds' parts (next paragraph). All of this is strict mode; outside it the un-run runs
+  regardless and leaves the read's wire over ("Strict mode", below). Summing the parts of worlds whose
   un-runs were faithful is exactly the linear map: `h q; mark; read q; rewind; h q` measures 0 every time.
-- **Shared history is un-run part by part, and checked on the sum.** Below the read where a world split
+- **Shared history is un-run part by part, and checked on the sum** (strict mode; outside it nothing is
+  checked and every check site leaves its wire over in every part, "Strict mode"). Below the read where a world split
   from others, its rewind un-runs its *part* of the state the worlds shared. Every undo there is linear,
   but a part need not hold what the shared history read, nor be zero where it allocated a register (or
   freed one, in steps run again): only the sum of the parts must. So below a world's split point each
@@ -1088,7 +1090,36 @@ diagnostics of the simulator's **strict mode**, as a sanitizer's are, and strict
 | ... a byte promoted to qubits since the mark whose qubits do not hold its old byte at the un-promotion | fault `bad_rewind`, nothing changed | the old byte is XORed out and the cell's register is left over; the byte is memory again |
 | ... an inner region run again whose `qfree` is dirty | fault `bad_rewind`, nothing changed | the `qfree` leaves its register over, as going forward, and the outer rewind goes on |
 | ... a memory qubit read or written since the mark (a load, a store, a `setjmp`'s record) that no longer holds the byte noted | fault `bad_rewind`, nothing changed | the access's wire is left over: a fresh byte register holding the byte noted XOR the cell, per configuration; where the access runs again it reads the byte from the wire XOR the cell, without splitting, and the wire is un-allocated |
-| The other state-dependent causes: a check deferred to the sum of the worlds' parts (a read where worlds split, below a split point); an inner region run again that reaches a measurement or leaves the rewind's frame; a leftover where worlds split off during the un-run | fault `bad_rewind`, nothing changed | not built yet: `bad_rewind` as in strict mode, never a call's fault code (P0 debts with their routes in `HANDOFF.md`, "Known weak spots") |
+| ... any of these on one world's part of a state several worlds share (below a split point: checked on the sum of the parts), at a read or access where the world split, or where worlds split off during the un-run | fault `bad_rewind` where the sum fails, nothing changed | the un-run runs regardless in every part: every read, access, allocation and promotion there leaves its wire over, faithful or not, so that the worlds' register tables agree and the worlds that join at the rewind merge; then the wires zero in every configuration are discarded; no world faults |
+| An inner region run again that reaches a measurement or leaves the rewind's frame | fault `bad_rewind`, nothing changed | not built: `bad_rewind` as in strict mode, never a call's fault code, until channels (the path the keeps opened is a measurement or a return the history does not describe; `HANDOFF.md`, "Known weak spots") |
+
+**Where worlds join** (built on 2026-11-17; `crates/exec/src/leftover.rs`). Outside strict mode no check of a
+rewind's un-run decides anything by the configurations a world holds where other worlds may join it: below a
+split point (on one world's part of a shared state), wherever other worlds exist, and where worlds split off
+during the un-run, every read, memory-qubit access, allocation and promotion the un-run meets leaves its wire (or
+register) over, faithful or not. The worlds' register tables then agree, the worlds that are one machine state
+again after the rewind merge, and their sum is what the circuit gives: the read's wire holds the value read XOR
+the register in every part. Once they have merged (at once where the world is alone), a wire zero in every
+configuration is discarded and the others move down into the ids the discarded ones freed. That discards no
+amplitude (the state is the rest times |0>), no world that could still become equal to this one holds the wire
+(every world the rewind joins has merged first, and a parked world is compared with the worlds that went on as it
+will be, its wires settled), and undoing the rewind gives the same state either way (where the step runs again,
+a zero wire XOR the register is the register), so no program can tell; it keeps a faithful un-run outside
+strict mode exactly as in strict mode. Before, each world (or part) left a wire over only where its own
+configurations failed the check, so a world whose wire was zero stayed apart from one whose wire was not and the
+two never merged (`worlds_that_join_at_the_rewind_leave_the_wire_over_in_each`, `joint_leftovers.rs`: the host
+then observed one of them), and below a split point the checks were deferred to the sum of the parts, whose
+failure faulted every world, the faithful ones too (the seam's V2, the deferred sum). What is left over, and what
+is to be taken back, is each world's own: a world that splits off during the un-run carries what was left over
+so far, and one that splits off where a call or access runs again takes back its own copy of each wire (the
+world splits by the step's other reads first); both refused before. Steps run again on a part leave a dirty
+`qfree`'s register over whatever the part holds (the same un-run takes it back). A register left over at an id
+that a later step of the same un-run revives (freed since the mark) moves out of its way first; that panicked
+before. Checked (`joint_leftovers.rs`, every state by hand on |0>, |+>, |1>): a read above the split point,
+the same for a memory access, worlds split off during the un-run, a call run again whose other read splits, and
+the revived id, with an outer rewind where it takes the wires back; and the two seam witnesses below a split
+point (`leftover_wires.rs`, `machine_finish_independent.rs`, the second against an independent dense calculation
+with its reduced state), which faulted before. Strict mode is unchanged at each.
 
 **Leftovers are taken back** (built on 2026-11-16, the design seam's V1 and V2; `crates/exec/src/leftover.rs`).
 What a rewind's un-run left over is journalled with the rewind (its `LeftBehind` record: for each leftover the
@@ -1115,9 +1146,9 @@ strict mode unchanged at each. The three sites built here failed on the previous
 |1>); the dirty `qfree` run again already ran regardless.
 
 `bad_rewind` for its classical causes (a handle that names no live mark of this activation, a measurement
-since the mark, a keep into a register allocated since) stays a fault in both. On one world's part of a state
-several worlds share, a `qfree`'s check is deferred to the sum of the parts as before (`worlds.rs`); strict
-or not, that path is unchanged. The simulator's checks are never delivered to a program as fault codes. The
+since the mark, a keep into a register allocated since) stays a fault in both. A keep whose net change to a
+register read since the mark is not zero is refused before un-running in strict mode only; outside it the
+un-run runs and the read leaves its wire over. The simulator's checks are never delivered to a program as fault codes. The
 result of an un-run that ran regardless is unspecified by the ruling of 2026-11-13 ("What is promised",
 rule 4): what is built keeps every step a bijection of the whole machine with its leftovers, so no channel
 is needed, and the leftovers' record lets undoing the rewind take them back.

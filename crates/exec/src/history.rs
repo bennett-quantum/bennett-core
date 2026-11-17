@@ -83,13 +83,17 @@ impl<'m> Executor<'m> {
         }
         let changes = net.iter().any(|&(_, value)| value != 0);
         // A net change to a register or memory qubit read since the mark: un-running the read would find it
-        // changed.
+        // changed. A diagnostic of strict mode; outside it the un-run runs regardless and leaves the read's wire
+        // over (`leftover.rs`).
         let reads = journal.reads_from(entry.position);
         let cells = journal.cells_from(entry.position);
-        if net.iter().any(|&(column, value)| {
-            value != 0
-                && (reads.iter().any(|read| read.column == column) || cells.iter().any(|cell| cell.column == column))
-        }) {
+        if self.strict
+            && net.iter().any(|&(column, value)| {
+                value != 0
+                    && (reads.iter().any(|read| read.column == column)
+                        || cells.iter().any(|cell| cell.column == column))
+            })
+        {
             return Err(Fault::BadRewind.into());
         }
         // A budget is required wherever a rewind follows a read of a qubit (the maintainer's decision of the
@@ -108,8 +112,9 @@ impl<'m> Executor<'m> {
         // A rewind taken as a step that may un-run past a read where its world split defers the checks below
         // that point to the sum of the worlds' parts (`worlds.rs`); if that sum fails them, this world is put
         // back from a copy. A rewind inside another's un-run or run-again belongs to that one's copy.
+        // Outside strict mode nothing is checked, so nothing is deferred (`backward.rs`).
         let split_read = reads.iter().any(|read| read.split) || cells.iter().any(|cell| cell.split);
-        let defers = step && (rewinds_inside || split_read);
+        let defers = step && self.strict && (rewinds_inside || split_read);
         // Outside strict mode an un-run may leave a register over and then fail elsewhere; running forward
         // again could not take it back, so a copy is kept.
         let backup =
@@ -132,8 +137,10 @@ impl<'m> Executor<'m> {
             // function's running again is charged to its region's budget: the least room any of them has.
             self.guard_room = self.guard_left().map(|left| (left, self.charged));
         }
-        // What this rewind's own un-run leaves over; a rewind run again inside it keeps its own.
-        let outer_made = std::mem::take(&mut self.leftovers_made);
+        // What this rewind's own un-run leaves over goes above `made_from`; what enclosing rewinds' un-runs left
+        // over so far stays below (a step of this un-run may move one, `Executor::make_room`), and a rewind run
+        // again inside this one takes its own off the top.
+        let made_from = self.leftovers_made.len();
         self.rewinding += 1;
         let from = self.forked.len();
         let result = self.unwind_to_mark(entry.position, site, 0, 0);
@@ -144,11 +151,9 @@ impl<'m> Executor<'m> {
         }
         self.allow_region_faults = saved;
         let forked = self.forked.len() > from || self.splits != counters.3;
-        let made = std::mem::replace(&mut self.leftovers_made, outer_made);
+        let made = self.leftovers_made.split_off(made_from);
         let left_behind = !made.is_empty();
-        // Running regardless where worlds split off during the un-run is not built (a debt, `HANDOFF.md`):
-        // that rewind refuses as in strict mode.
-        if result.is_err() || self.mismatches != counters.2 || left_behind && forked {
+        if result.is_err() || self.mismatches != counters.2 {
             match backup {
                 Some(mut backup) if forked || self.partial || left_behind => {
                     self.forked.truncate(from);
@@ -188,10 +193,25 @@ impl<'m> Executor<'m> {
             self.for_forks(from, &charge);
         }
         // Ran regardless over a state its history does not describe: what it left over is journalled after the
-        // rewind's record, for undoing the rewind to take back (`leftover.rs`).
-        if left_behind {
-            self.record_leftovers(&made);
-        }
+        // rewind's record, for undoing the rewind to take back (`leftover.rs`), in every world, those split off
+        // during the un-run with what they carried and left over themselves. Where other worlds may join this
+        // one at the rewind, which of the wires are zero is settled once they have merged (`worlds.rs`).
+        let joins = step && (self.has_worlds() || forked);
+        let settle = |executor: &mut Self, made: Vec<crate::leftover::TakeBack>| {
+            if !made.is_empty() {
+                executor.record_leftovers(&made);
+                if joins {
+                    executor.unresolved = true;
+                } else {
+                    executor.resolve_leftovers();
+                }
+            }
+        };
+        settle(self, made);
+        self.for_forks(from, &|executor| {
+            let made = executor.leftovers_made.split_off(made_from);
+            settle(executor, made);
+        });
         // Where the rewind follows a read of a qubit, the cost of a rewind of a mark with an open budget is the
         // budget, whatever the work since the mark: the world's clock goes on to the mark's plus the budget
         // (the rewind's own step is the last of it). Any rewind of it closes the budget. Running steps again

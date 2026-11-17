@@ -69,10 +69,10 @@ impl<'m> Executor<'m> {
         self.memory.read_into(address as usize..address as usize + 1, &mut old);
         // Running again a promotion whose un-run left the byte's register over takes the register back.
         let record = self.next_record();
-        let handle = match self
-            .take_back_at(record, |kind| matches!(kind, Leftover::Promotion { address: a, .. } if a == address))
-        {
-            Some(take) => self.quantum.reclaim_allocation(take.id),
+        let take =
+            self.take_back_at(record, |kind| matches!(kind, Leftover::Promotion { address: a, .. } if a == address));
+        let handle = match take {
+            Some(take) => self.take_allocation_back(take.id, Width::BYTE),
             None => self.quantum.allocate(Width::BYTE),
         };
         let column = self.quantum.resolve(handle).expect("a fresh register is live");
@@ -140,7 +140,17 @@ impl<'m> Executor<'m> {
     /// longer holds its old value in every configuration (`checked`): then it changes nothing. Below a
     /// world's split point (`deferred`) that check is made on the sum of the worlds' parts instead: this
     /// part notes its failing configurations (`Executor::defer`) and keeps the others (the adjoint).
-    pub(crate) fn unrun_gate_at(&mut self, checked: bool, deferred: bool, promoting: bool) -> Result<(), Mismatch> {
+    ///
+    /// Outside strict mode (`regardless`) no check is made: each promoted byte whose qubits do not hold its old
+    /// value, and in a joint un-run (`Executor::joint`) every promoted byte, leaves its register's content over
+    /// in a wire (`leftover.rs`).
+    pub(crate) fn unrun_gate_at(
+        &mut self,
+        checked: bool,
+        deferred: bool,
+        regardless: bool,
+        promoting: bool,
+    ) -> Result<(), Mismatch> {
         let Inst::GateAt { gate, target, controls } = self.retreat() else { unreachable!("a GateAt record") };
         let places = std::iter::once(target).chain(controls);
         let resolved: Vec<Resolved> =
@@ -156,17 +166,13 @@ impl<'m> Executor<'m> {
             .map(|word| ((word >> 8) as u64, word as u8))
             .collect();
         let record = journal.records() - 1;
-        let mut regardless = false;
         if (checked || deferred) && !promoted.is_empty() {
             let expected: Vec<(usize, u64)> = promoted
                 .iter()
                 .map(|&(byte, old)| (self.quantum.cell(byte).expect("a promoted byte is a cell"), u64::from(old)))
                 .collect();
             let failing = self.quantum.failing(|config| expected.iter().any(|&(column, old)| config[column] != old));
-            // Outside strict mode a rewind's own un-run runs regardless: a byte whose qubits do not hold its old
-            // value leaves its register over (`leftover.rs`).
-            regardless = checked && !failing.is_empty() && self.runs_regardless();
-            if checked && !failing.is_empty() && !regardless {
+            if checked && !failing.is_empty() {
                 let forward = gates::matrix(*gate);
                 self.quantum.apply_gate(&forward, qubits[0], &qubits[1..], None).expect("no limit");
                 self.advance();
@@ -185,9 +191,10 @@ impl<'m> Executor<'m> {
             journal.pop_word();
         }
         // `promoted` lists the latest promotion first.
+        let joint = regardless && self.joint();
         for &(byte, old) in &promoted {
             let column = self.quantum.cell(byte).expect("a promoted byte is a cell");
-            if regardless && !self.quantum.failing(|config| config[column] != u64::from(old)).is_empty() {
+            if regardless && (joint || !self.quantum.failing(|config| config[column] != u64::from(old)).is_empty()) {
                 self.leave_promotion_over(record, byte, old);
             } else {
                 self.unpromote(byte, old);
@@ -212,11 +219,13 @@ impl<'m> Executor<'m> {
         if cells.is_empty() {
             return (cells, false);
         }
-        // Running again an access whose un-run left wires over: those cells are read from their wires.
-        let taken = self.take_cells_back(&cells);
+        // Running again an access whose un-run left wires over: those cells are read from their wires, after the
+        // world split by the others, so that every world split off takes back its own copy of each wire.
+        let wired = self.wired_cells(&cells);
         let columns: Vec<usize> =
-            cells.iter().map(|&(_, column)| column).filter(|column| !taken.contains(column)).collect();
+            cells.iter().map(|&(_, column)| column).filter(|column| !wired.contains(column)).collect();
         let split = self.split(&columns, step) || self.splitting;
+        self.take_cells_back(&wired);
         (cells, split)
     }
 

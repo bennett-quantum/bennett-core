@@ -89,6 +89,10 @@ pub(crate) struct World {
     pub(crate) pending: bool,
     /// The world's clock (`Executor::clock`): time, left out of equality.
     pub(crate) clock: u64,
+    /// The world's leftovers in the making, to take back, and unsettled (`Executor::leftovers_made`, ...).
+    pub(crate) leftovers_made: Vec<crate::leftover::TakeBack>,
+    pub(crate) taking_back: Vec<crate::leftover::TakeBack>,
+    pub(crate) unresolved: bool,
 }
 
 /// A check of a rewind's un-run below a world's split point, deferred to the sum of the worlds' parts: the
@@ -150,6 +154,9 @@ impl World {
             backups: Vec::new(),
             pending: false,
             clock: 0,
+            leftovers_made: Vec::new(),
+            taking_back: Vec::new(),
+            unresolved: false,
         }
     }
 
@@ -179,6 +186,9 @@ impl<'m> Executor<'m> {
         std::mem::swap(&mut self.backups, &mut world.backups);
         std::mem::swap(&mut self.pending, &mut world.pending);
         std::mem::swap(&mut self.clock, &mut world.clock);
+        std::mem::swap(&mut self.leftovers_made, &mut world.leftovers_made);
+        std::mem::swap(&mut self.taking_back, &mut world.taking_back);
+        std::mem::swap(&mut self.unresolved, &mut world.unresolved);
     }
 
     /// A copy of the current world, with `amplitudes` in place of its own if given.
@@ -201,6 +211,9 @@ impl<'m> Executor<'m> {
             backups: self.backups.clone(),
             pending: self.pending,
             clock: self.clock,
+            leftovers_made: self.leftovers_made.clone(),
+            taking_back: self.taking_back.clone(),
+            unresolved: self.unresolved,
         }
     }
 
@@ -348,7 +361,7 @@ impl<'m> Executor<'m> {
         }
         let was_rewind = self.next_is_rewind();
         let outcome = self.step_world();
-        if !self.forked.is_empty() || self.pending {
+        if !self.forked.is_empty() || self.pending || self.unresolved {
             self.world_steps += self.forked.len() as u64;
             self.adopt_forks(if was_rewind { Status::Parked } else { Status::Running });
             if was_rewind {
@@ -440,10 +453,12 @@ impl<'m> Executor<'m> {
         {
             return self.stop_worlds(worlds, error);
         }
-        let hashes: Vec<Option<u64>> = worlds
-            .iter()
-            .map(|world| (world.status == Status::Parked && !self.departed.is_empty()).then(|| Self::hash_world(world)))
-            .collect();
+        // A parked world is compared as it will go on, its leftovers settled.
+        let mut hashes: Vec<Option<u64>> = Vec::with_capacity(worlds.len());
+        for world in &worlds {
+            hashes
+                .push((world.status == Status::Parked && !self.departed.is_empty()).then(|| self.settled_hash(world)));
+        }
         if hashes.iter().flatten().any(|hash| self.departed.contains(hash)) {
             return self.stop_worlds(worlds, RunError::Unaligned);
         }
@@ -455,6 +470,12 @@ impl<'m> Executor<'m> {
                     for world in &mut worlds {
                         if world.status == Status::Parked && world.records() == depth {
                             world.status = Status::Running;
+                            // Every world its rewind joins has merged with it: its leftovers are settled.
+                            if world.unresolved {
+                                self.swap_world(world);
+                                self.resolve_leftovers();
+                                self.swap_world(world);
+                            }
                         }
                     }
                     if !alone {
@@ -563,7 +584,9 @@ impl<'m> Executor<'m> {
                     let backups = std::mem::take(&mut worlds[from].backups);
                     let pending = worlds[from].pending;
                     let clock = worlds[from].clock;
+                    let unresolved = worlds[from].unresolved;
                     let world = &mut worlds[into];
+                    world.unresolved |= unresolved;
                     world.clock = world.clock.max(clock);
                     world.quantum.absorb(quantum);
                     world.deferred.extend(deferred);
@@ -599,6 +622,18 @@ impl<'m> Executor<'m> {
             && a.journal == b.journal
             && a.quantum.same_registers(&b.quantum)
             && a.memory.same(&b.memory)
+    }
+
+    /// The hash of `world` with its leftovers settled (`resolve_leftovers`), as it will be when it goes on.
+    fn settled_hash(&mut self, world: &World) -> u64 {
+        if !world.unresolved {
+            return Self::hash_world(world);
+        }
+        let mut settled = world.clone();
+        self.swap_world(&mut settled);
+        self.resolve_leftovers();
+        self.swap_world(&mut settled);
+        Self::hash_world(&settled)
     }
 
     fn hash_world(world: &World) -> u64 {

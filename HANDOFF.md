@@ -1643,24 +1643,28 @@ the budget of a call with a fault value (`call_budget_replay.rs`).
   from the rewind's frame or ends the run stays refused atomically with `bad_rewind`.
 
 - **Running regardless, outside strict mode** (machine step e3; machine-finish 0d, the design seam's V1 and
-  V2): built for a nonzero allocation, a changed register read and a changed memory-qubit access where the
-  access did not split the world, an un-promotion whose cell changed, and an inner region whose `qfree` is
-  dirty when run again; leftovers are journalled with the rewind and taken back where its region runs again,
-  in whatever order, so the barrier is gone (`docs/DESIGN.md`, "Strict mode"; `crates/exec/tests/leftover_wires.rs`,
-  `machine_finish_independent.rs`). Still `bad_rewind` outside strict mode, each a P0 debt with its route:
-  (1) a check deferred to the sum of the worlds' parts, and a read or access where the world split (witnesses
-  `a_deferred_check_that_fails_on_one_part_leaves_the_wire_over_in_every_part` and
-  `a_deferred_nonzero_read_keeps_the_dense_phase_and_reduced_state`, ignored; also
-  `a_changed_read_is_a_strict_diagnostic_and_machine_execution_continues` in `audition_machine.rs`): below a
-  split point, un-run every read into a wire in every part, faithful or not, so that the parts' register tables
-  agree and their sum is the circuit's (deciding per part would keep a faithful part apart from an unfaithful
-  one); note the parts' failing configurations as today, and where the sum shows a wire zero on every part
-  discard it in every part (no observable effect), else keep it and fault no world; (2) an inner region run
-  again that reaches a measurement or leaves the rewind's frame on a path the keeps changed: run the changed
-  path as the circuit would (the measurement a channel), so until channels these stay refusals; (3) a leftover
-  where worlds split off during the same un-run, and a call or access run again whose wire is taken back while
-  another of its reads splits the world: carry the leftover into every world split off. None of these is ever
-  a call's fault code.
+  V2; machine-sites, 2026-11-17): built for a nonzero allocation, a changed register read, a changed memory-qubit
+  access, an un-promotion whose cell changed, and an inner region whose `qfree` is dirty when run again;
+  leftovers are journalled with the rewind and taken back where its region runs again, in whatever order, so the
+  barrier is gone. Since 2026-11-17 also where worlds join (debts (1) and (3) of this bullet, removed): below a
+  split point, at a read or access where the world split, wherever other worlds exist and where worlds split off
+  during the un-run, every check site leaves its wire over in every world, faithful or not, the worlds merge, and
+  the wires zero in every configuration are discarded once they have (`docs/DESIGN.md`, "Strict mode", "Where
+  worlds join"; `crates/exec/tests/joint_leftovers.rs`; the three witnesses of debt (1) run by default). A world
+  split off carries what was left over and takes back its own copy of each wire. Found and fixed on the way: a
+  world whose wire was zero was kept apart from one whose wire was not (above the split point, one world each:
+  they never merged, and the host observed one of them), and a register left over at an id that a later step of
+  the same un-run revives panicked. Still `bad_rewind` outside strict mode, never a call's fault code: an inner
+  region run again that reaches a measurement or leaves the rewind's frame on a path the keeps changed (debt
+  (2)): running that path as the circuit would makes the measurement a channel, so until channels this stays a
+  refusal (the `bad_rewind` of `run_again`, `Halt::Inspected`).
+  Debt (P1, found here): the ids of registers left over are in the program's id space, so where a step run again
+  allocates (a `qalloc` of an inner region run again by an outer un-run) while a leftover of the outer un-run
+  holds the id it took the first time, it takes another id and the state differs from the one its history
+  describes (no test reaches it yet; the old first-free choice had the same exposure). Route: give leftovers an
+  id space of their own (columns after the program's, in the order made, compacted as they are taken back), so
+  that no leftover takes an id a program step can want; the take-back then names a wire by its record, not its
+  column.
 
 - The journal-content observer (`crates/exec/src/measure.rs`) does not follow a `rewind` or a call with a
   budget inside a region. It panicked there (an `assert!` on valid programs) until 2026-11-16; it now stops

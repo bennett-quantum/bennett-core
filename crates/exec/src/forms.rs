@@ -57,6 +57,9 @@ struct Outer {
     deferred: Vec<crate::worlds::Defect>,
     backups: Vec<World>,
     pending: bool,
+    leftovers_made: Vec<crate::leftover::TakeBack>,
+    taking_back: Vec<crate::leftover::TakeBack>,
+    unresolved: bool,
     had_journal: bool,
     counters: Counters,
 }
@@ -209,6 +212,10 @@ impl<'m> Executor<'m> {
             gathered.stop.get_or_insert(halt);
             return;
         }
+        // The worlds of the forms do not merge until they end, so the rewind's leftovers are settled here.
+        if self.unresolved {
+            self.resolve_leftovers();
+        }
         // A region changes no register and no cell, so its parts hold what their history read: nothing is
         // deferred, and the copy kept to restore is dropped, as the checks on the sum would.
         assert!(self.deferred.is_empty(), "a part of a region's world holds what its history read");
@@ -279,6 +286,9 @@ impl<'m> Executor<'m> {
             deferred: std::mem::take(&mut self.deferred),
             backups: std::mem::take(&mut self.backups),
             pending: std::mem::replace(&mut self.pending, false),
+            leftovers_made: std::mem::take(&mut self.leftovers_made),
+            taking_back: std::mem::take(&mut self.taking_back),
+            unresolved: std::mem::replace(&mut self.unresolved, false),
             had_journal: self.journal.is_some(),
             counters: Counters::of(self),
         }
@@ -311,6 +321,9 @@ impl<'m> Executor<'m> {
         self.deferred = outer.deferred;
         self.backups = outer.backups;
         self.pending = outer.pending;
+        self.leftovers_made = outer.leftovers_made;
+        self.taking_back = outer.taking_back;
+        self.unresolved = outer.unresolved;
         self.forms_values = None;
         self.inspected = false;
     }

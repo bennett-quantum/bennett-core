@@ -339,11 +339,16 @@ pub struct Executor<'m> {
     pub(crate) allow_region_faults: bool,
     /// The simulator's strict mode (`Options::machine_meaning` off).
     pub(crate) strict: bool,
-    /// What the rewind un-running now left over, running regardless over a state its history does not
-    /// describe (`leftover.rs`).
+    /// What the rewinds un-running now left over in the current world, running regardless outside strict mode,
+    /// the innermost's last (`leftover.rs`). Per world: a world that splits off during the un-run carries what
+    /// was left over so far.
     pub(crate) leftovers_made: Vec<crate::leftover::TakeBack>,
-    /// What the rewind being undone left over, to take back where its steps run again (`leftover.rs`).
+    /// What the rewind being undone left over, to take back where its steps run again (`leftover.rs`). Per
+    /// world: a world that splits off while they run again takes back its own copy of each wire.
     pub(crate) taking_back: Vec<crate::leftover::TakeBack>,
+    /// Whether the current world's last rewind left wires over that are settled only once the worlds it joins
+    /// have merged (`Executor::resolve_leftovers`).
+    pub(crate) unresolved: bool,
     /// Whether the current world's last step ended it with a fault found by inspecting the state
     /// ([`Halt::Inspected`]): read by a region, which must not make it a fault code.
     pub(crate) inspected: bool,
@@ -462,6 +467,7 @@ impl<'m> Executor<'m> {
             strict: !options.machine_meaning,
             leftovers_made: Vec::new(),
             taking_back: Vec::new(),
+            unresolved: false,
             inspected: false,
             forms_values: None,
             guard_room: None,

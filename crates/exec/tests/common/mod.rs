@@ -6,6 +6,8 @@
 #[path = "../oracle_support/mod.rs"]
 pub(crate) mod oracle_support;
 
+pub mod leftover;
+
 use bennett_exec::{Executor, Options, Outcome, Snapshot};
 use bennett_ir::{FuncId, ValidModule};
 

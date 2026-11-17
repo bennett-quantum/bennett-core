@@ -238,6 +238,56 @@ impl QuantumState {
         id
     }
 
+    /// Whether the id `id` holds a register, live or left over.
+    pub(crate) fn occupied(&self, id: usize) -> bool {
+        self.registers.get(id).is_some_and(|register| register.width.is_some())
+    }
+
+    /// The id `allocate` would give a register now.
+    pub(crate) fn first_free(&self) -> usize {
+        self.registers.iter().position(|r| r.width.is_none()).unwrap_or(self.registers.len())
+    }
+
+    /// Moves the register left over at `from` (a wire, or an allocation or promotion left over at its own id:
+    /// they are kept alike, with no allocation number) to the first free id, its place in the leftovers kept:
+    /// the values move with it, and `from` is freed as discarding it would, its generation back to what it was
+    /// before the register was allocated there. Returns the new id.
+    pub(crate) fn move_leftover(&mut self, from: usize) -> usize {
+        let to = self.first_free();
+        self.move_leftover_to(from, to);
+        to
+    }
+
+    /// `move_leftover` to the free id `to`.
+    pub(crate) fn move_leftover_to(&mut self, from: usize, to: usize) {
+        let width = self.width_of(from);
+        if to == self.registers.len() {
+            self.registers.push(RegisterState { generation: 0, width: None });
+            self.allocation_numbers.push(Vec::new());
+        }
+        let register = &mut self.registers[to];
+        // Allocated, then left over (stale), as a wire is.
+        register.generation = register.generation.wrapping_add(2);
+        register.width = Some(width);
+        if to >= self.columns {
+            self.set_columns(to + 1);
+        }
+        let amplitudes = std::mem::take(&mut self.amplitudes);
+        self.amplitudes = amplitudes
+            .into_iter()
+            .map(|(mut config, amplitude)| {
+                config.swap(from, to);
+                (config, amplitude)
+            })
+            .collect();
+        let index = self.leftovers.iter().rposition(|&left| left == from).expect("a register left over moves");
+        self.leftovers[index] = to;
+        self.registers[from].generation = self.registers[from].generation.wrapping_sub(1);
+        self.allocations += 1;
+        self.allocation_numbers[from].push(self.allocations);
+        self.unallocate_column(from);
+    }
+
     /// Undoes `allocate_wire` of the register `id`, zero in every configuration.
     pub(crate) fn discard_wire(&mut self, id: usize) {
         self.allocations += 1;

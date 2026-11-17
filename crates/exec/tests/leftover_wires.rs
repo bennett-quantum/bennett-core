@@ -11,63 +11,9 @@
 
 mod common;
 
-use bennett_exec::{Options, Outcome};
-use bennett_ir::Fault;
-use common::{assert_same_state, bounded, executor, load};
-use num_complex::Complex64 as C;
-
-const HALF: f64 = std::f64::consts::FRAC_1_SQRT_2;
-
-fn machine() -> Options {
-    Options { machine_meaning: true, reversible: true, ..bounded() }
-}
-
-fn strict() -> Options {
-    Options { reversible: true, ..bounded() }
-}
-
-/// The three entries: `@zero`, `@plus` and `@one` allocate the control qubit, prepare it and call `@body`.
-fn entries(body: &str) -> String {
-    let entry = |name: &str, prepare: &str| {
-        format!(
-            "func @{name}() -> i8 {{\nentry:\n    %c = qalloc 1\n{prepare}    %v = call @body(%c)\n    ret %v\n}}\n"
-        )
-    };
-    format!(
-        "memory 256\n\nfunc @id(i1 %x) -> i1 {{\nentry:\n    ret %x\n}}\n\n{body}\n{}{}{}",
-        entry("zero", ""),
-        entry("plus", "    h %c\n"),
-        entry("one", "    x %c\n")
-    )
-}
-
-/// The final quantum state of a machine run of `entry`, checked against `expected` (configuration, real
-/// amplitude) in configuration order, and the leftover qubits; then the run reverses to its entry.
-fn check(text: &str, entry: &str, expected: &[(&[u64], f64)], leftover: u32) {
-    let module = load(text);
-    let mut e = executor(&module, entry, &[], machine());
-    let start = e.snapshot();
-    assert_eq!(e.run(), Outcome::Returned(Some(7)), "@{entry}");
-    let quantum = e.snapshot().quantum;
-    assert_eq!(quantum.amplitudes.len(), expected.len(), "@{entry}: {quantum:?}");
-    for ((config, amplitude), (want, re)) in quantum.amplitudes.iter().zip(expected) {
-        assert_eq!(config.as_slice(), *want, "@{entry}: {quantum:?}");
-        assert!((amplitude - C::new(*re, 0.0)).norm() < 1e-12, "@{entry}: {quantum:?}");
-    }
-    assert_eq!(e.stats().leftover_qubits, leftover, "@{entry}");
-    e.reverse().unwrap_or_else(|error| panic!("@{entry}: reverses: {error:?}"));
-    assert_same_state(&e.snapshot(), &start, &format!("@{entry}: back to the entry"));
-}
-
-/// Strict mode keeps each of these a diagnostic: the rewind faults `bad_rewind` where the un-run is not
-/// faithful (`plus`, `one`) and returns where it is (`zero`).
-fn strict_unchanged(text: &str) {
-    let module = load(text);
-    assert_eq!(common::run(&module, "zero", &[], strict()).0, Outcome::Returned(Some(7)));
-    for entry in ["plus", "one"] {
-        assert_eq!(common::run(&module, entry, &[], strict()).0, Outcome::Faulted(Fault::BadRewind), "@{entry}");
-    }
-}
+use bennett_exec::Outcome;
+use common::leftover::{HALF, check, entries, machine, strict_unchanged};
+use common::{assert_same_state, executor, load};
 
 /// An allocation made since the mark that the keep leaves nonzero (the seam's V1). `%a ^= c & r` forward with
 /// `r` = 0 does nothing; the keep sets `r`; un-running the gate gives `a = c`, so un-running `qalloc %a` finds
@@ -202,9 +148,9 @@ entry:
 /// gate carries the keep into `a` where `b` = 1; then `%b` is read, which splits the world where `b` is in
 /// superposition. The un-run of the first read is below the split point: in the world `b` = 0 the part is
 /// faithful, in the world `b` = 1 it is not. A circuit leaves the read's wire over holding `a` = `b` (columns
-/// `b`, `a`, `k`, wire); today both worlds fault `bad_rewind`, the faithful one too.
+/// `b`, `a`, `k`, wire). Until 2026-11-17 both worlds faulted `bad_rewind`, the faithful one too; now every part
+/// leaves the wire over (`joint_leftovers.rs`).
 #[test]
-#[ignore = "defect: a check deferred to the sum of the worlds' parts does not run regardless (P0 debt, HANDOFF.md, Known weak spots)"]
 fn a_deferred_check_that_fails_on_one_part_leaves_the_wire_over_in_every_part() {
     let text = entries(
         "func @body(q1 %b) -> i8 {

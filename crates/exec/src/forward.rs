@@ -235,8 +235,9 @@ impl<'m> Executor<'m> {
             _ if self.in_region || self.guarded() => return Err(Fault::QuantumInRegion.into()),
             Inst::Qalloc { dst, width } => {
                 // Running again a `qalloc` whose un-run left its register over takes the register back.
-                let handle = match self.take_back_at(self.next_record(), |kind| kind == Leftover::Allocation) {
-                    Some(take) => self.quantum.reclaim_allocation(take.id),
+                let take = self.take_back_at(self.next_record(), |kind| kind == Leftover::Allocation);
+                let handle = match take {
+                    Some(take) => self.take_allocation_back(take.id, *width),
                     None => self.quantum.allocate(*width),
                 };
                 self.write_slot(*dst, u128::from(handle));
@@ -245,14 +246,17 @@ impl<'m> Executor<'m> {
             }
             Inst::Qfree { register } => {
                 let id = self.quantum.resolve(self.handle(*register))?;
-                if self.partial {
+                if self.partial && self.strict {
                     let nonzero = self.quantum.failing(|config| config[id] != 0);
                     self.defer(Undo::Qfree, nonzero);
                 }
                 // `dirty_free` is a check of the simulator's strict mode: on the machine the qubits are left
                 // over, going forward and when the step runs again alike. On one world's part of a shared
-                // state the check is deferred to the sum of the parts as before (`history.rs`).
-                if !self.strict && !self.partial && !self.quantum.failing(|config| config[id] != 0).is_empty() {
+                // state (steps run again below a split point, inside a rewind's un-run) they are left over
+                // whatever the part holds, so that the parts' register tables agree; the same un-run takes them
+                // back where it un-runs this step. In strict mode the check is deferred to the sum of the parts
+                // as before (`history.rs`).
+                if !self.strict && (self.partial || !self.quantum.failing(|config| config[id] != 0).is_empty()) {
                     self.quantum.leave(id);
                     self.record(Undo::Leftover);
                 } else {
@@ -640,35 +644,20 @@ impl<'m> Executor<'m> {
         }
         // Running again a call whose un-run left the wire of a read over takes the wire back: the read's value
         // is the wire XOR the register, the same in every configuration, and splits nothing (`leftover.rs`).
-        let mut taken: Vec<(usize, usize, bennett_ir::Slot, usize)> = Vec::new();
+        // The world splits by the call's other reads first, so that every world split off takes back its own
+        // copy of the wire (until 2026-11-17 running again refused there).
+        let mut wired: Vec<(usize, usize, bennett_ir::Slot)> = Vec::new();
         if !self.taking_back.is_empty() {
             let record = self.next_record();
             let leftover = |column| {
                 move |take: &crate::leftover::TakeBack| take.record == record && take.kind == Leftover::Read { column }
             };
-            let wired: Vec<bool> =
-                reads.iter().map(|&(_, column, _)| self.taking_back.iter().any(leftover(column))).collect();
-            if wired.contains(&true) {
+            let (with, without): (Vec<_>, Vec<_>) =
+                reads.into_iter().partition(|&(_, column, _)| self.taking_back.iter().any(leftover(column)));
+            if !with.is_empty() {
                 self.frame_fits(callee)?;
-                // Where the other reads of the call would split the world as well, each world would take the
-                // wire back alone: not built (a debt, `HANDOFF.md`), so running again fails here.
-                let columns: Vec<usize> =
-                    reads.iter().zip(&wired).filter(|&(_, &w)| !w).map(|(&(_, column, _), _)| column).collect();
-                if self.quantum.partition(&columns).len() > 1 {
-                    return Err(Fault::BadRewind);
-                }
-                let mut kept = Vec::with_capacity(reads.len());
-                for (&(arg, column, slot), &w) in reads.iter().zip(&wired) {
-                    if w {
-                        let take = self.take_back_at(record, |kind| kind == Leftover::Read { column });
-                        let take = take.expect("a wire was found for this read");
-                        taken.push((arg, column, slot, take.id));
-                    } else {
-                        kept.push((arg, column, slot));
-                    }
-                }
-                reads = kept;
             }
+            (wired, reads) = (with, without);
         }
         let mut split = false;
         if !reads.is_empty() {
@@ -676,6 +665,12 @@ impl<'m> Executor<'m> {
             self.frame_fits(callee)?;
             let columns: Vec<usize> = reads.iter().map(|&(_, column, _)| column).collect();
             split = self.split(&columns, &|executor| executor.call(callee, args, guard)) || self.splitting;
+        }
+        let record = self.next_record();
+        let mut taken: Vec<(usize, usize, bennett_ir::Slot, usize)> = Vec::with_capacity(wired.len());
+        for (arg, column, slot) in wired {
+            let take = self.take_back_at(record, |kind| kind == Leftover::Read { column });
+            taken.push((arg, column, slot, take.expect("a wire was found for this read").id));
         }
         let mut values = std::mem::take(&mut self.scratch);
         values.clear();
