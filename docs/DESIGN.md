@@ -651,6 +651,13 @@ from any depth:
   and refuses a qubit-dependent call of it by name. A debt, with its route: the front decides what may run
   coherently from its own summary in which `setjmp` writes only its buffer and `longjmp` only reads it (the
   device region discards private writes anyway), without giving that summary to LLVM's optimiser.
+- **A `setjmp` in a function with qubit variables** is refused by name. The front's facts about each qubit
+  variable (its value known, or held in its register only) and its checks that a variable or memory is
+  unchanged between two points follow the function's control-flow edges; a `longjmp` resumes the function
+  after its `setjmp` from any later point, or from a callee, along no such edge, so a read after the
+  `setjmp` was taken for the value of the first return. A debt, with its route: give each `setjmp` the
+  resumption edges from every later call and `longjmp` that may reach it, in the facts, in those checks, and
+  in the blocks counted as being on a cycle (which take a fresh fault register per `apply`).
 
 The front (`Jumps.h`), after the optimiser, so that LLVM sees the C library's `returns_twice` calls as a native
 compile does: calls of the undefined library functions `setjmp`, `_setjmp` become `setjmp`; `longjmp`,

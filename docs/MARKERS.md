@@ -83,12 +83,13 @@ gate's own variable, a quantum operation inside a loop (fully unrolled loops wor
 call of a function that may write memory, or a volatile read; a branch on such a value whose arms do not
 rejoin before the function returns; an update of a qubit variable that is not a bijection listed above
 (`x = x * x`, `x += x`): that needs its history kept, which is a later step; a qubit variable passed to a
-function, or wider than 8 bytes; a write into part of a qubit variable; a value that depends on a qubit
-used by ordinary code (returned, stored to ordinary memory, passed to a function that writes memory, used
-as an address of memory that is not constant), or by an access with an effect of its own (an atomic update,
-a volatile or atomic read), even when its result is unused; a value read from a qubit variable used after that
-variable changed; a loop that re-initialises a qubit variable whose known value differs from pass to
-pass. `bennett_bit` with an index that is not constant, or its result used other than by a gate.
+function, or wider than 8 bytes; a write into part of a qubit variable; a value that depends on a qubit used
+by ordinary code (returned, stored to ordinary memory, passed to a function that writes memory, used as an
+address of memory that is not constant), or by an access with an effect of its own (an atomic update, a
+volatile or atomic read), even when its result is unused; a value read from a qubit variable used after that
+variable changed; a loop that re-initialises a qubit variable whose known value differs from pass to pass; a
+`setjmp` in a function with qubit variables. `bennett_bit` with an index that is not constant, or its result
+used other than by a gate.
 
 ## Device calls (not markers)
 

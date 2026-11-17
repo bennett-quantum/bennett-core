@@ -92,7 +92,36 @@ fn what_cannot_run_under_qubit_control_or_in_place_is_refused_by_name_at_its_lin
 /// comment of each case says what the old translation computed.
 #[test]
 fn what_was_once_translated_wrongly_is_refused_by_name_in_every_mode() {
-    let cases: [(&str, &str, &str, usize); 4] = [
+    let cases: [(&str, &str, &str, usize); 7] = [
+        // A longjmp resumes the function at its setjmp with q changed, an edge the qubit dataflow did not
+        // see: the read of q after the setjmp became the constant 0 where C gives 1.
+        (
+            "resumed_read",
+            "#include \"bennett.h\"\n#include <setjmp.h>\njmp_buf env;\nint main(void) {\n  \
+             volatile _Bool q = 0;\n  if (setjmp(env) == 0) { bennett_x((_Bool *)&q); longjmp(env, 1); }\n  \
+             int v = q;\n  bennett_measure((_Bool *)&q);\n  return v;\n}\n",
+            "a setjmp in a function with qubit variables",
+            6,
+        ),
+        // The same resumed q as a gate's condition: the gate was dropped, so y ended 0 where C gives 1.
+        (
+            "resumed_condition",
+            "#include \"bennett.h\"\n#include <setjmp.h>\njmp_buf env;\nint main(void) {\n  \
+             volatile _Bool q = 0; _Bool y = 0;\n  if (setjmp(env) == 0) { bennett_x((_Bool *)&q); longjmp(env, 1); }\n  \
+             if (q) bennett_x(&y);\n  bennett_measure((_Bool *)&q);\n  return bennett_measure(&y);\n}\n",
+            "a setjmp in a function with qubit variables",
+            6,
+        ),
+        // The jump comes from a callee: the resumption is no edge of this function's control flow at all.
+        (
+            "resumed_from_callee",
+            "#include \"bennett.h\"\n#include <setjmp.h>\njmp_buf env;\n\
+             __attribute__((noinline)) void bail(void) { longjmp(env, 1); }\nint main(void) {\n  \
+             volatile _Bool q = 0;\n  if (setjmp(env) == 0) { bennett_x((_Bool *)&q); bail(); }\n  \
+             int v = q;\n  bennett_measure((_Bool *)&q);\n  return v;\n}\n",
+            "a setjmp in a function with qubit variables",
+            7,
+        ),
         // An atomic update whose operand depends on a qubit, its result unused: it was dropped, so `cell`
         // stayed 0 where C gives 1.
         (

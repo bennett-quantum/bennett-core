@@ -57,6 +57,7 @@ ControlAnalysis::ControlAnalysis(Function &function, bool taintAll)
   ReversePostOrderTraversal<Function *> rpot(&function);
   order.assign(rpot.begin(), rpot.end());
   findStorage();
+  refuseResumption();
   for (auto &storage : storages) {
     checkUses(*storage);
   }
@@ -83,6 +84,19 @@ void ControlAnalysis::computeSupport(bool gatesOnly) {
       }
     }
     storage->support = storage->bits == 64 ? support : support & ((uint64_t(1) << storage->bits) - 1);
+  }
+}
+
+void ControlAnalysis::refuseResumption() {
+  if (storages.empty()) {
+    return;
+  }
+  for (const Instruction &inst : instructions(function)) {
+    if (const auto *call = dyn_cast<CallBase>(&inst); call && call->hasFnAttr(Attribute::ReturnsTwice)) {
+      notHandled("a setjmp in a function with qubit variables (a longjmp may resume the function there with the "
+                 "variables changed, which the front's tracking of qubit variables does not follow)",
+                 call);
+    }
   }
 }
 

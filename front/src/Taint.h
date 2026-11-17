@@ -89,6 +89,10 @@ private:
   std::set<const llvm::Value *> quantumLoads;
 
   void findStorage();
+  // Refuses by name a call that may return twice (`setjmp`) in a function with qubit variables. The facts
+  // and the reachability checks follow the function's control flow edges; a `longjmp` resumes the function
+  // after its `setjmp` from any later point, or from a callee, which is no such edge.
+  void refuseResumption();
   void checkUses(Storage &storage);
   void runDataflow();
   void transfer(const llvm::Instruction &inst, std::vector<Fact> &facts) const;
