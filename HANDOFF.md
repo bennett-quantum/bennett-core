@@ -19,8 +19,9 @@ overwrite that cannot be erased keeps the old value, with a warning), not for st
 is there, as is the plan for addresses that depend on a qubit. Rule A for stores into memory at a definite
 address is done too (`docs/DESIGN.md`, "Memory written under a qubit"), with the programmer's measurement
 `bennett_measure_bytes`; the fallback oracle's `store`, `memset`, `nested`, `memcpy` and `loop` fixtures agree
-with native C in a harness that reads bytes holding qubits, and stay ignored in the oracle itself, whose
-adapter does not (a question below). An independent testing pass over rules B and C and the first part of
+with native C in a harness that reads bytes holding qubits, and in the oracle itself (`f2d0212`), whose adapter
+now reads them; the reference that runs `apply` by its construction checks stores by exchange (`f81f2b7`). An
+independent testing pass over rules B and C and the first part of
 rule A (`03ae832`) left four ignored witnesses in `front/tests/tests/rules_6b_independent.rs`, all fixed
 since ("Fixes after the testing pass over rules B and C (2026-11-17)"): a gate loop's guard and its
 condition, and one applied function for all results of code under a qubit, results wider than 64 bits and
@@ -370,11 +371,12 @@ explicitly after the separate musl build.
       Fallback tests: `store`, `memset`, `nested`, `memcpy` and `loop` are lowered in all three modes and, with
       the driver measuring the cells (`-DMEASURED_CELLS`, the driver's only change), give native C's results
       for every definite input and its exact weights for all ten preparations in
-      `front/tests/tests/memory_held.rs`, which reads bytes that hold qubits from their registers. In the
-      oracle itself they stay ignored: its driver reads the cells with ordinary loads (refused, by name, in its
-      inventory) and its adapter (`born`, the finished image) assumes no byte holds qubits; un-ignoring them
-      needs that adapter extended, a question below. `user_write` waits by decision (the route of a call that
-      fills memory named at the call). Debts, each refused by name: a store into memory in code that also has
+      `front/tests/tests/memory_held.rs`, which reads bytes that hold qubits from their registers. They pass
+      in the oracle itself too since `f2d0212`: its adapter decodes the whole image for each basis
+      configuration from the snapshot's address table, and its driver measures the four result cells first
+      (`front/tests/c/fallback_oracle/README.md`; the inventory checks 24 accepted fixture and mode
+      combinations). `user_write` waits by decision (the route of a call that fills memory named at the
+      call). Debts, each refused by name: a store into memory in code that also has
       gates (route: predication of whole stores into the shadow, as for qubit variables); more than 8 bytes of
       one object (one shadow per 8 bytes); an access that touches the held bytes only in part; a position that
       is not constant outside code applied whole; an object the front cannot name (a pointer loaded from
@@ -406,8 +408,13 @@ explicitly after the separate musl build.
    k(k+1)/2 evaluations of the calls when done call by call, k when the sequence is one applied function.
    This is the route for a stateful library whose writes must survive.
 
-   Then one independent testing pass over steps 1 to 3, and the reference that runs `apply` by its construction
-   extended with the exchange form of rule A, checked exactly, including an old value that cannot be recomputed.
+   Then one independent testing pass over steps 1 to 3 (rules B and C and the first part of rule A: `03ae832`,
+   its four defects fixed since; rule A at memory: next), and the reference that runs `apply` by its
+   construction extended with the exchange form of rule A (done, `f81f2b7`; `docs/DESIGN.md`, "Tests"): the
+   exchange with each way of clearing the spare register on exact amplitudes, a byte at a definite address
+   included, and for an old value kept and for a fault inside an applied function every entry of the reduced
+   density matrix after the release; one ignored witness, the reference does not model the stack space
+   available where an applied call starts (`crates/exec/tests/compute_copy/swap_in.rs`).
    No step inserts a measurement, bounds a loop on its own, or lets ordinary code act on a qubit outside
    `apply`; a choice that would is the maintainer's. The Boolean XOR on a quantum `_Bool` (`y ^= q && !r`, and
    `if (q) if (r) y ^= 1` at O0 and with `--taint-all`) already passes the fallback oracle (`coherent_xor`,
@@ -738,13 +745,6 @@ padded clock and its caller's mark; A mark's budget once its frame is left.
   that overwrite); (c) the control program keeps, in ordinary memory, a flag per object saying whether its bytes
   hold qubits, and the front writes both forms (no new instruction). Recommendation: (a) now, (c) when a program
   needs it.
-- **The fallback oracle's adapter and bytes that hold qubits (2026-11-17; nothing taken).** The oracle's five
-  memory fixtures pass in `front/tests/tests/memory_held.rs`, whose adapter reads bytes that hold qubits from
-  their registers (and from the shadow before the span ends). The oracle's own `born` and finished-image
-  readers assume none (its README lists that mapping as an open integration detail), and its driver reads the
-  cells with ordinary loads; the driver has a `-DMEASURED_CELLS` variant that measures them. Un-ignoring the
-  oracle's tests needs its adapter extended the same way and the variant made its default. Recommendation:
-  have the oracle's author (or an independent tester) extend the adapter, keeping it independent of the front.
 - **The table of control bits for a gate loop whose passes decide on qubit-dependent values carried between
   passes (2026-11-17, rule C, not built; nothing taken).** `t = x; for (i = 0; i < n; i++) { if (t & 1)
   h(y); t = step(t); }` with `n` an ordinary run-time value. The decided form is one applied function
@@ -1407,8 +1407,8 @@ byte-identical) and `767f853` (the SQLite acceptance). Documents: `docs/DESIGN.m
   inlined callee from its debug location when a store it made is refused or kept in qubits, and mark calls in
   control functions `noinline` before the front's own optimiser. `cargo clippy -p bennett-front-tests
   --all-targets` reports two `unwrap` uses in `front/tests/tests/complex.rs` (outside the four checks). The
-  fallback oracle's seven waiting acceptance tests stay ignored: each needs a write that survives or an
-  erasure, rules B, C and A.
+  fallback oracle's seven waiting acceptance tests stayed ignored then: each needed a write that survives or
+  an erasure, rules B, C and A; since `f2d0212` only `user_write` waits.
 
 **Independent testing pass** (`a0c0bc6`, gpt-6.2-sol; `front/tests/tests/applied_calls_independent.rs`,
 fixtures `front/tests/c/applied/independent.c`, `rollback.c`): nine tests, every memory byte, the stack pointer,
