@@ -120,6 +120,9 @@ private:
   // fresh register when it is null.
   std::string slice(const Slice &slice, const Value *root, const Storage *target, unsigned bits,
                     const Instruction &sink, std::string &args, bool flipProved = false);
+  // Refuses by name a load of the slice, other than of `target`, whose variable may change between the load
+  // and `sink`: what is computed at `sink` reads the registers as they are there, not as they were read.
+  void requireCurrent(const Slice &slice, const Storage *target, const Instruction &sink);
   bool provesFlip(const Slice &slice, const Value *root, const Storage &target);
   // provesFlip by evaluating both values of the target on every assignment of the other variables' support
   // bits, when the computation has no ordinary leaves and those bits are few.
@@ -602,24 +605,27 @@ bool ControlWriter::provesFlipByCases(const Slice &slice, const Value *root, con
   return true;
 }
 
+void ControlWriter::requireCurrent(const Slice &slice, const Storage *target, const Instruction &sink) {
+  for (const LoadInst *load : slice.loads) {
+    const Storage *storage = analysis.access(load->getPointerOperand())->storage;
+    if (storage != target && !analysis.unchangedBetween(load, &sink, storage)) {
+      notHandled("the value of qubit variable " + storage->name + " read here is used after the variable changed (at " +
+                     locationOf(&sink) + ")",
+                 load);
+    }
+  }
+}
+
 // The function computing `root` from its leaves: ordinary values (passed in) and qubit variables (whose
 // registers are passed in and read as integers). Every instruction of the computation dominates the sink,
 // so the function computes exactly what the control program would have computed there. Loads of the
 // target itself read 0: they occur only where provesFlip has shown that this gives the XOR form.
 std::string ControlWriter::slice(const Slice &slice, const Value *root, const Storage *target, unsigned bits,
                                  const Instruction &sink, std::string &args, bool flipProved) {
+  requireCurrent(slice, target, sink);
   bool inPlace = false;
   for (const LoadInst *load : slice.loads) {
-    const Storage *storage = analysis.access(load->getPointerOperand())->storage;
-    if (storage == target) {
-      inPlace = true;
-      continue;
-    }
-    if (!analysis.unchangedBetween(load, &sink, storage)) {
-      notHandled("the value of qubit variable " + storage->name + " read here is used after the variable changed (at " +
-                     locationOf(&sink) + ")",
-                 load);
-    }
+    inPlace = inPlace || analysis.access(load->getPointerOperand())->storage == target;
   }
   if (inPlace && !flipProved) {
     notHandled("an update of qubit variable " + target->name + " computed from its own value; only `" +
@@ -680,7 +686,8 @@ std::string ControlWriter::slice(const Slice &slice, const Value *root, const St
 // A gate, controlled by the condition in the call's bundle if it has one. A condition that is a conjunction
 // of qubits becomes the gate's controls; any other is computed into a fresh qubit, controls the gate, and
 // is computed again to return the qubit to 0 before it is released. Either way the condition must not read
-// the gate's own variable, or the gate would change what controls it.
+// the gate's own variable, or the gate would change what controls it, and every qubit variable it reads must
+// be unchanged between the read and the gate, since the gate reads the registers as they are there.
 void ControlWriter::controlledGate(const CallBase &call, const Access &target, const std::string &gate) {
   std::optional<OperandBundleUse> bundle = call.getOperandBundle(controlBundle);
   if (!bundle) {
@@ -705,6 +712,8 @@ void ControlWriter::controlledGate(const CallBase &call, const Access &target, c
                    &call);
       }
     }
+    // Literal controls name the registers as they are at the gate, as the computed condition reads them.
+    requireCurrent(computation, nullptr, call);
     if (std::optional<std::vector<std::pair<std::string, bool>>> qubits = literals(computation, condition)) {
       std::string controls;
       for (const auto &[qubit, one] : *qubits) {

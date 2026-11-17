@@ -43,7 +43,9 @@ function returns.
 A gate under a branch on a qubit is controlled by it: `if (a) bennett_x(&b);` is a CNOT, and
 `if (a && b) bennett_x(&c);` a Toffoli. A condition that is not a conjunction of single qubits
 (`if (f(p, q) == 3)`) is computed into a fresh qubit and uncomputed after the gate. Writes under such a
-branch are controlled the same way. The condition may not read the variable the gate acts on.
+branch are controlled the same way. The condition may not read the variable the gate acts on, nor a value
+read from a qubit variable that changed between the read and the gate
+(`_Bool old = q; bennett_x(&q); if (old) bennett_x(&y);`): both are refused by name.
 
 ```c
 void bennett_x(_Bool *qubit);    void bennett_h(_Bool *qubit);    void bennett_z(_Bool *qubit);

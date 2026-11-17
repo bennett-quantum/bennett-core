@@ -1,7 +1,7 @@
 //! What this version does not handle under qubit control, or in place, is refused by name at the
 //! construct's source line, never compiled to something cheaper or approximate.
 
-use bennett_front_tests::{CLANG_FLAGS, lower_text, write_c};
+use bennett_front_tests::{CLANG_FLAGS, CLANG_O2_FLAGS, lower_text, write_c};
 
 /// The program around each case: qubit variables a, b, c (one bit), x and p (8 bits), with a, every bit
 /// of x and the low bit of p in superposition. The case's body is on line `BODY_LINE`.
@@ -83,6 +83,40 @@ fn what_cannot_run_under_qubit_control_or_in_place_is_refused_by_name_at_its_lin
                     && message.contains(&format!("{file}.c:{BODY_LINE}:")),
                 "{name}: {message}"
             ),
+        }
+    }
+}
+
+/// Programs the front once translated into a program with another result, accepting them silently; each
+/// is now refused by name at its line, from unoptimised and optimised C and with `--taint-all`. The
+/// comment of each case says what the old translation computed.
+#[test]
+fn what_was_once_translated_wrongly_is_refused_by_name_in_every_mode() {
+    let cases: [(&str, &str, &str, usize); 1] = [
+        // A gate controlled by a value read from q before q changed: the gate was controlled by q's current
+        // qubit instead, so y ended 0 where it must end 1.
+        (
+            "stale_literal_control",
+            "#include \"bennett.h\"\nint main(void) {\n  _Bool q = 0, y = 0;\n  bennett_x(&q);\n  _Bool old = q;\n  \
+             bennett_x(&q);\n  if (old) bennett_x(&y);\n  bennett_measure(&q);\n  return bennett_measure(&y);\n}\n",
+            "the value of qubit variable 'q' read here is used after the variable changed",
+            5,
+        ),
+    ];
+    let modes: [(&[&str], &[&str], &str); 3] =
+        [(CLANG_FLAGS, &[], ""), (CLANG_O2_FLAGS, &[], ".o2"), (CLANG_FLAGS, &["--taint-all"], ".taint-all")];
+    for (name, text, expected, line) in cases {
+        let source = write_c(name, text);
+        for (clang_flags, front_flags, tag) in modes {
+            match lower_text(&source, &format!("{name}{tag}"), clang_flags, front_flags) {
+                Ok(program) => panic!("{name}{tag}: accepted\n{program}"),
+                Err(message) => assert!(
+                    message.starts_with("not handled yet: ")
+                        && message.contains(expected)
+                        && message.contains(&format!("{name}.c:{line}:")),
+                    "{name}{tag}: {message}"
+                ),
+            }
         }
     }
 }
