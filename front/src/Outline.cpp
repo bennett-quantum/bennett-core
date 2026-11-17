@@ -1,6 +1,7 @@
 #include "Outline.h"
 
 #include "Diagnostic.h"
+#include "HeldBytes.h"
 #include "InPlace.h"
 #include "Markers.h"
 #include "Predicate.h"
@@ -17,6 +18,7 @@
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 #include <llvm/Transforms/Utils/CodeExtractor.h>
+#include <llvm/Transforms/Utils/Local.h>
 #include <llvm/Transforms/Utils/PromoteMemToReg.h>
 #include <llvm/Transforms/Utils/ValueMapper.h>
 
@@ -223,6 +225,8 @@ void outlineAround(Function &function, Instruction *seed, ControlAnalysis &analy
     }
   }
   std::vector<LoadInst *> loads;
+  std::vector<Instruction *> memoryWrites; // stores into memory: its bytes will hold qubits (HeldBytes.h)
+  bool variablePosition = false;          // a load from a qubit variable at a position that is not constant
   for (BasicBlock *member : blocks) {
     for (Instruction &inst : *member) {
       if (std::optional<Marker> marker = markerCall(&inst);
@@ -232,7 +236,7 @@ void outlineAround(Function &function, Instruction *seed, ControlAnalysis &analy
       if (markerCall(&inst)) {
         continue; // gates and the qubits they act on: predicated below
       }
-      if (auto *store = dyn_cast<StoreInst>(&inst); store && analysis.access(store->getPointerOperand())) {
+      if (auto *store = dyn_cast<StoreInst>(&inst); store && analysis.basedOn(store->getPointerOperand())) {
         continue; // predicated below
       }
       if (auto *call = dyn_cast<CallBase>(&inst); call && control.count(call->getCalledFunction())) {
@@ -240,19 +244,47 @@ void outlineAround(Function &function, Instruction *seed, ControlAnalysis &analy
                        ", which performs quantum operations, controlled by a value that depends on a qubit",
                    &inst);
       }
-      // The region becomes an ordinary function applied coherently, whose memory is private to each run:
-      // a write to memory that outlives it would be lost. An ordinary write under quantum control acts
-      // irreversibly on a quantum system, which is a channel, not a unitary.
+      // The region becomes an ordinary function applied coherently, whose memory is private to each run: a
+      // store into memory that outlives it makes the bytes it writes hold qubits (HeldBytes.h). A call's
+      // writes would be undone with it, unlike natively.
+      if (auto *store = dyn_cast<StoreInst>(&inst); store && store->isSimple()) {
+        memoryWrites.push_back(store);
+        continue;
+      }
       if (inst.mayWriteToMemory()) {
         notHandled(memoryWrite(inst) +
-                       " controlled by a value that depends on a qubit (not built yet: the bytes written would keep "
-                       "the value in qubits)",
+                       " controlled by a value that depends on a qubit (not built: " +
+                       (isa<CallBase>(inst) ? "a call that fills memory named at the call, HANDOFF.md)" : "HANDOFF.md)"),
                    &inst);
       }
       if (auto *load = dyn_cast<LoadInst>(&inst); load && analysis.access(load->getPointerOperand())) {
         loads.push_back(load);
+      } else if (load && analysis.basedOn(load->getPointerOperand())) {
+        variablePosition = true;
       }
     }
+  }
+
+  // Stores into memory: the bytes they write hold qubits from a point before the region on, kept in a qubit
+  // variable while they do (HeldBytes.h). Then the region is looked at again.
+  if (!memoryWrites.empty()) {
+    if (hasGates(blocks)) {
+      notHandled("a store to memory under a value that depends on a qubit, in code that also has gates (not built: "
+                 "write the memory in code without gates, HANDOFF.md)",
+                 memoryWrites.front());
+    }
+    SmallVector<BasicBlock *, 4> outside;
+    for (BasicBlock *pred : predecessors(region->getEntry())) {
+      if (!region->contains(pred)) {
+        outside.push_back(pred);
+      }
+    }
+    BasicBlock *before = SplitBlockPredecessors(region->getEntry(), outside, ".held", &dominators);
+    if (!before) {
+      fail("cannot make a block before a region that writes memory");
+    }
+    holdWrites(function, memoryWrites, before->getTerminator(), {blocks.begin(), blocks.end()}, analysis);
+    return;
   }
 
   // Without gates, the region is one applied function for all the qubit variables it writes; otherwise (or
@@ -262,8 +294,28 @@ void outlineAround(Function &function, Instruction *seed, ControlAnalysis &analy
     if (!hasGates(blocks) && applyRegionWhole(function, blocks, region->getExit(), analysis)) {
       return;
     }
+    for (BasicBlock *member : blocks) {
+      for (Instruction &inst : *member) {
+        auto *store = dyn_cast<StoreInst>(&inst);
+        const Storage *storage = store ? analysis.basedOn(store->getPointerOperand()) : nullptr;
+        std::optional<Access> place = storage ? analysis.access(store->getPointerOperand()) : std::nullopt;
+        if (storage && (!place || place->offset != 0 ||
+                        function.getParent()->getDataLayout().getTypeStoreSizeInBits(
+                            store->getValueOperand()->getType()) != storage->bits)) {
+          notHandled("a store into part of qubit variable " + storage->name +
+                         " under a value that depends on a qubit, in code with gates or after its value became "
+                         "unknown (not built, HANDOFF.md)",
+                     store);
+        }
+      }
+    }
     predicateRegion(function, blocks, region->getExit(), analysis);
     return;
+  }
+  if (variablePosition) {
+    notHandled("a read at a position that is not constant of a qubit variable or of memory that holds qubits, "
+               "in code under a qubit that writes no qubit variable (not built, HANDOFF.md)",
+               block);
   }
 
   // Nothing in the region changes a qubit variable, so its loads read what they would read just before
@@ -289,6 +341,19 @@ void outlineAround(Function &function, Instruction *seed, ControlAnalysis &analy
     }
   }
 
+  // Dead code left by earlier steps (an address into a qubit variable whose store has moved out) would become
+  // an input of the outlined function.
+  for (bool changed = true; changed;) {
+    changed = false;
+    for (BasicBlock *member : blocks) {
+      for (Instruction &inst : make_early_inc_range(reverse(*member))) {
+        if (isInstructionTriviallyDead(&inst)) {
+          inst.eraseFromParent();
+          changed = true;
+        }
+      }
+    }
+  }
   CodeExtractor extractor(blocks, &dominators, /*AggregateArgs=*/false, nullptr, nullptr, nullptr,
                           /*AllowVarArgs=*/false, /*AllowAlloca=*/true, nullptr, "region");
   if (!extractor.isEligible()) {
@@ -359,6 +424,9 @@ void outlineRegions(Function &function, bool taintAll, const std::set<const Func
     ControlAnalysis analysis(function, taintAll);
     Instruction *seed = analysis.seed();
     if (!seed) {
+      if (holdStraightWrite(function, analysis) || finishHeld(function, analysis)) {
+        continue;
+      }
       if (rewriteInPlaceUpdate(function, analysis)) {
         continue;
       }

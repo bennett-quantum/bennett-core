@@ -232,10 +232,8 @@ Function *RegionWhole::copy(const std::vector<const Written *> &fields, unsigned
   for (size_t i = 0; i < inputs.size(); ++i) {
     map[inputs[i]] = copy->getArg(unsigned(i));
   }
-  for (const auto &storage : analysis.storages) {
-    map[storage->alloca] = PoisonValue::get(storage->alloca->getType()); // only used by what is replaced below
-  }
-  // The private locals and their starting values.
+  // The private locals and their starting values. A qubit variable the region does not touch is not used by
+  // the copy; one it touches is its private local, so that positions that are not constant follow it too.
   std::map<const Storage *, AllocaInst *> locals;
   std::map<const Storage *, Value *> starts;
   for (size_t i = 0; i < read.size(); ++i) {
@@ -255,6 +253,11 @@ Function *RegionWhole::copy(const std::vector<const Written *> &fields, unsigned
   }
   for (const auto &[storage, local] : locals) {
     b.CreateStore(starts[storage], local);
+  }
+  for (const auto &storage : analysis.storages) {
+    auto local = locals.find(storage.get());
+    map[storage->alloca] = local != locals.end() ? static_cast<Value *>(local->second)
+                                                 : PoisonValue::get(storage->alloca->getType());
   }
   std::vector<BasicBlock *> cloned;
   for (BasicBlock *block : blocks) {
@@ -365,7 +368,7 @@ void RegionWhole::removeStores() {
   std::vector<StoreInst *> stores;
   for (BasicBlock *block : blocks) {
     for (Instruction &inst : *block) {
-      if (auto *store = dyn_cast<StoreInst>(&inst); store && analysis.access(store->getPointerOperand())) {
+      if (auto *store = dyn_cast<StoreInst>(&inst); store && analysis.basedOn(store->getPointerOperand())) {
         stores.push_back(store);
       }
     }
@@ -373,9 +376,9 @@ void RegionWhole::removeStores() {
   for (BasicBlock *block : blocks) {
     for (Instruction &inst : *block) {
       auto *load = dyn_cast<LoadInst>(&inst);
-      std::optional<Access> source = load ? analysis.access(load->getPointerOperand()) : std::nullopt;
+      const Storage *source = load ? analysis.basedOn(load->getPointerOperand()) : nullptr;
       for (StoreInst *store : stores) {
-        if (source && analysis.access(store->getPointerOperand())->storage == source->storage && precedes(store, load)) {
+        if (source && analysis.basedOn(store->getPointerOperand()) == source && precedes(store, load)) {
           readAfterChange.insert(load);
         }
       }
@@ -442,8 +445,7 @@ void RegionWhole::removeStores() {
   for (BasicBlock *block : blocks) {
     for (Instruction &inst : *block) {
       if (readAfterChange.count(&inst)) {
-        notHandled("the value of qubit variable " +
-                       analysis.access(cast<LoadInst>(inst).getPointerOperand())->storage->name +
+        notHandled("the value of qubit variable " + analysis.basedOn(cast<LoadInst>(inst).getPointerOperand())->name +
                        " read here, after the code under a condition that depends on a qubit wrote it, is used "
                        "after that code ends",
                    &inst);
@@ -472,12 +474,12 @@ bool RegionWhole::run() {
   for (BasicBlock *block : blocks) {
     for (Instruction &inst : *block) {
       if (auto *store = dyn_cast<StoreInst>(&inst)) {
-        if (std::optional<Access> target = analysis.access(store->getPointerOperand())) {
-          writes.insert(target->storage);
+        if (const Storage *target = analysis.basedOn(store->getPointerOperand())) {
+          writes.insert(target);
         }
       } else if (auto *load = dyn_cast<LoadInst>(&inst)) {
-        if (std::optional<Access> source = analysis.access(load->getPointerOperand())) {
-          reads.insert(source->storage);
+        if (const Storage *source = analysis.basedOn(load->getPointerOperand())) {
+          reads.insert(source);
         }
       }
     }
@@ -572,7 +574,8 @@ bool RegionWhole::run() {
     Function *whole = copy(fields, bits);
     if (fields.size() == 1) {
       const Storage &target = *fields.front()->storage;
-      xorInto(b, target.alloca, IntegerType::get(context, target.bits), b.CreateCall(whole, arguments(b)));
+      Type *type = IntegerType::get(context, target.bits);
+      xorInto(b, target.alloca, type, b.CreateZExtOrTrunc(b.CreateCall(whole, arguments(b)), type));
       continue;
     }
     // Several results: into a fresh register, a CNOT from each of its bits into its variable, and the same

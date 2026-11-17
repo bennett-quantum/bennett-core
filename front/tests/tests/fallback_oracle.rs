@@ -470,13 +470,18 @@ fn waiting_case(name: &str) {
 macro_rules! waiting {
     ($($name:ident),* $(,)?) => {$(
         #[test]
-        #[ignore = "waiting for the route that replaces the fallback (HANDOFF, Next steps 4): controlled stores/writing calls or destructive updates are refused; inventory prints the measured refusal"]
+        #[ignore = "the front lowers it with the cells measured by bennett_measure_bytes (front/tests/tests/memory_held.rs checks it against native C); this driver reads the cells with ordinary loads, refused by name, and this adapter does not read bytes that hold qubits (README)"]
         fn $name() { waiting_case(stringify!($name)); }
     )*};
 }
 mod waiting_for_fallback {
     use super::waiting_case;
-    waiting!(store, memcpy, memset, user_write, nested);
+    waiting!(store, memcpy, memset, nested);
+    #[test]
+    #[ignore = "waiting by decision: a call under a qubit that writes memory (HANDOFF, Next steps 4: a call that fills memory named at the call)"]
+    fn user_write() {
+        waiting_case("user_write");
+    }
     /// `*y = 0` on a y of unknown value: the old value is kept in a register released at once, with the
     /// coherence warning (docs/DESIGN.md, "Overwrites that keep the old value").
     #[test]
@@ -495,7 +500,7 @@ mod waiting_for_fallback {
         waiting_case("coherent_nested");
     }
     #[test]
-    #[ignore = "waiting for the route that replaces the fallback (HANDOFF, Next steps 4): loop trip count depends on a qubit and writes memory"]
+    #[ignore = "the front lowers it with the cells measured by bennett_measure_bytes (front/tests/tests/memory_held.rs checks it against native C); this driver reads the cells with ordinary loads, refused by name, and this adapter does not read bytes that hold qubits (README)"]
     fn variable_trip_loop() {
         waiting_case("loop");
     }

@@ -53,11 +53,9 @@ fn unused_atomic_and_volatile_effect_variants_do_not_disappear() {
         let text = format!(
             "#include \"bennett.h\"\n{declarations}\nint main(void) {{\n_Bool q=0; bennett_h(&q);\n{statement}\nreturn bennett_measure(&q);\n}}\n"
         );
-        let expected = if name == "cmpxchg" {
-            "a store to memory controlled by a value that depends on a qubit".to_string()
-        } else {
-            format!("an effect on memory (the instruction `{instruction}`) that depends on a qubit")
-        };
+        // The store of the old value clang writes after a `cmpxchg` makes its bytes hold qubits (docs/DESIGN.md,
+        // "Memory written under a qubit"); the `cmpxchg` itself is then what is refused, as the others are.
+        let expected = format!("an effect on memory (the instruction `{instruction}`) that depends on a qubit");
         refused_in_every_mode(&format!("ind_effect_{name}"), &text, &expected);
     }
 }

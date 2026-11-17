@@ -189,14 +189,14 @@ fn treating_everything_as_tainted_changes_no_result() {
 #[test]
 fn what_is_not_handled_is_refused_by_name() {
     let cases = [
-        // An overwrite of b (b = 1, b = b ? 0 : b) keeps the old value since 2026-11-17 (tests/retained.rs).
+        // An overwrite of b (b = 1, b = b ? 0 : b) keeps the old value since 2026-11-17 (tests/retained.rs), and
+        // `sink = b` makes the bytes of sink hold qubits (tests/memory_held.rs).
         ("returned", "return b;", "used by ordinary code"),
         (
             "stale",
             "_Bool t = b; bennett_h(&b); c ^= t; return (int)bennett_measure(&c);",
             "used after the variable changed",
         ),
-        ("stored", "sink = b; return 0;", "used by ordinary code"),
     ];
     for (name, body, expected) in cases {
         let text = format!(

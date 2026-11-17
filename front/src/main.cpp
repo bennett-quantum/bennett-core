@@ -248,5 +248,6 @@ int main(int argc, char **argv) {
     bennett::fail("cannot write " + output + ": " + code.message());
   }
   out << text;
+  bennett::printWarnings();
   return 0;
 }

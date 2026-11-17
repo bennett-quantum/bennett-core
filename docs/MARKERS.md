@@ -47,6 +47,30 @@ division by zero, an exhausted budget). `bennett run` stops at such an `apply` a
 is run with `--allow-region-faults`; then the fault code stays in the fault register until the function
 returns, where the register is released (and the release reported).
 
+## Memory written under a qubit
+
+A store into memory whose value, or whether it runs, depends on a qubit keeps the value in superposition:
+the bytes it writes **hold qubits** from then on (`docs/DESIGN.md`, "Memory written under a qubit"). This
+holds for a global variable, the memory a pointer argument points to and a local variable, at constant
+offsets, and, inside code under a qubit without gates, at positions LLVM bounds to at most 8 bytes of the
+object (a loop over a small array, `memset`, `memcpy` of a length that depends on a qubit):
+
+```c
+unsigned char cells[4] = {1, 2, 3, 0};
+...
+if (q) cells[0] = 7;                       /* cells[0] holds 7 where q is 1, 1 elsewhere */
+if (q) memset(cells, r ? 5 : 6, 4);
+unsigned long long v = bennett_measure_bytes(cells, 4);   /* measured: ordinary again */
+```
+
+The front warns at the first such store, naming the bytes. Code that depends on a qubit may read them and
+write them again, with the forms of qubit variables (an overwrite whose old value cannot be recovered keeps
+it, with that warning). Ordinary code may not read them: it is refused, asking for the measurement, which the
+program writes with `bennett_measure_bytes`; the compiler never inserts one. Bytes of a global or of memory
+passed by pointer still hold qubits when the function returns; ordinary code elsewhere that reads them faults
+(`qubit_memory_access`), and so does a later function's first store under a qubit into them, which reads their
+old value (measure them first). A local's value is kept in qubits in a register, never in its stack bytes.
+
 ## Gates
 
 A gate under a condition on a qubit is controlled by it: `if (a) bennett_x(&b);` is a CNOT, and
@@ -139,8 +163,14 @@ depends on a qubit, a call of a function that has gates, a measurement, a gate w
 gate's own variable, a gate inside a loop whose number of passes depends on a qubit (write it as an ordinary
 count and test the condition inside) or that decides on qubit-dependent values carried from pass to pass (a
 loop with an ordinary count and gates is kept as a loop, each gate controlled), a write of a qubit variable
-inside a loop that does more than XOR into it when its value before is not known, a write to memory, a
-call of a function that may write memory, or a volatile read; a branch on such a value whose arms do not
+inside a loop that does more than XOR into it when its value before is not known, a store to memory in code
+that also has gates, an atomic or volatile write, a call of a function that may write memory, or a volatile
+read; a store under a qubit into memory whose object the front cannot name (not a global variable, a pointer
+argument or a local variable), at a position it cannot bound, or into more than 8 bytes of one object; an
+access that touches bytes holding qubits only in part, or at a position that is not constant outside code
+applied whole; ordinary code that reads bytes holding qubits (measure them first), or a call given memory of
+an object while bytes of it hold qubits; a measurement of part of the bytes of a local written under a
+qubit; a branch on such a value whose arms do not
 rejoin before the function returns; a qubit variable passed to a
 function, or wider than 8 bytes; a write into part of a qubit variable; `bennett_measure_bytes` with a number
 of bytes that is not a constant from 1 to 8, or on part of a qubit variable; a value that depends on a qubit used

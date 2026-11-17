@@ -63,8 +63,16 @@ unsigned long long experiment(unsigned basis) {
     unsigned long long result = bennett_measure(&q);
     result |= bennett_measure(&r) << 1;
     result |= bennett_measure(&y) << 2;
+#ifdef MEASURED_CELLS
+    /* Written under a qubit, the cells hold qubits, which ordinary code may not
+     * read: they are measured (on ordinary bytes the marker is a read). Used by
+     * front/tests/tests/memory_held.rs, whose adapter reads bytes that hold
+     * qubits; this oracle's adapter does not yet (README). */
+    result |= bennett_measure_bytes(cells, 4) << 3;
+#else
     for (unsigned i = 0; i < 4; ++i)
         result |= (unsigned long long)cells[i] << (3 + 8 * i);
+#endif
     return result;
 }
 #endif

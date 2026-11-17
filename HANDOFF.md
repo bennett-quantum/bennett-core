@@ -16,8 +16,14 @@ are fixed; rule B is done (code without gates under a qubit that writes qubit va
 C is done for a gate loop with an ordinary trip count, not for one deciding on values carried between passes
 (a question below); rule A is done for the executor's part and for qubit variables in registers (an
 overwrite that cannot be erased keeps the old value, with a warning), not for stores into memory, whose plan
-is there, as is the plan for addresses that depend on a qubit. Nothing of this work is running. Next: rule A
-at a definite address in memory, then the independent testing pass over rules B, C and A.
+is there, as is the plan for addresses that depend on a qubit. Rule A for stores into memory at a definite
+address is done too (`docs/DESIGN.md`, "Memory written under a qubit"), with the programmer's measurement
+`bennett_measure_bytes`; the fallback oracle's `store`, `memset`, `nested`, `memcpy` and `loop` fixtures agree
+with native C in a harness that reads bytes holding qubits, and stay ignored in the oracle itself, whose
+adapter does not (a question below). An independent testing pass over rules B and C and the first part of
+rule A (`03ae832`) left four ignored witnesses in `front/tests/tests/rules_6b_independent.rs`, not yet
+fixed. Nothing of this work is running. Next: those four witnesses, then the independent testing pass over
+rule A at memory.
 
 ## Resumed on 2026-11-17
 
@@ -346,18 +352,35 @@ explicitly after the separate musl build.
       retained form for qubit variables in registers (an overwrite whose old value cannot be erased is
       exchanged into a fresh register released at once, with a warning giving the qubits kept per executed
       overwrite; `docs/DESIGN.md`, "Overwrites that keep the old value"): the fallback oracle's `outside_class`
-      passes and is un-ignored (its inventory: 9 checked, 18 waiting by name). **Not built: stores into memory
-      at a definite address** (the front emitting gates on address-named bits, the exchange with a fresh
-      register, its clearing K, F or I, else the retained form; the refusal of ordinary reads of such bytes,
-      asking for a measurement the programmer writes). Its plan, and why the remaining fallback tests wait:
-      `store`, `memset`, `nested` and `memcpy` need exactly that; their driver then reads `cells` with ordinary
-      loads, which the decided rule refuses, so the driver must measure the cells with a marker the programmer
-      writes (a marker for `measure iN [ADDR]`, which exists in the device language; adding a marker and
-      changing the oracle's driver are steps to take with the oracle's author's reasoning in view); `loop`
-      writes `cells[i]` in a loop whose trip count depends on qubits, so it needs the region form (the code
-      applied whole, its final memory the result: the note's "buffer" form) on top; `user_write` is a call
-      under a qubit whose writes are undone by the applied-call rule while native keeps them: it needs the
-      route of a call that fills a buffer named at the call (a marker), so it stays waiting by decision.
+      passes and is un-ignored (its inventory: 9 checked, 18 waiting by name). **Done since: stores into
+      memory at a definite address** (`docs/DESIGN.md`, "Memory written under a qubit";
+      `front/src/HeldBytes.h`): the bytes the stores may write (a global, memory a pointer argument points to,
+      a local; constant offsets, or LLVM's bound on a position inside code applied whole) get a qubit variable
+      of their width, at most 8 bytes, for a span: an ordinary load of their old value and an exchange by three
+      CNOTs per bit on address-named bits start it (the shadow then holds a known value), every access in it
+      goes to the shadow (so rule B, the in-place inverse and the retained form apply), and the same exchange
+      ends it before each return and each measurement of the bytes. A local's stack bytes never hold qubits.
+      The programmer's measurement is the marker `bennett_measure_bytes(address, bytes)`, which lowers to
+      `measure iN [ADDR]` (`docs/MARKERS.md`); ordinary code reading such bytes is refused, asking for it.
+      Fallback tests: `store`, `memset`, `nested`, `memcpy` and `loop` are lowered in all three modes and, with
+      the driver measuring the cells (`-DMEASURED_CELLS`, the driver's only change), give native C's results
+      for every definite input and its exact weights for all ten preparations in
+      `front/tests/tests/memory_held.rs`, which reads bytes that hold qubits from their registers. In the
+      oracle itself they stay ignored: its driver reads the cells with ordinary loads (refused, by name, in its
+      inventory) and its adapter (`born`, the finished image) assumes no byte holds qubits; un-ignoring them
+      needs that adapter extended, a question below. `user_write` waits by decision (the route of a call that
+      fills memory named at the call). Debts, each refused by name: a store into memory in code that also has
+      gates (route: predication of whole stores into the shadow, as for qubit variables); more than 8 bytes of
+      one object (one shadow per 8 bytes); an access that touches the held bytes only in part; a position that
+      is not constant outside code applied whole; an object the front cannot name (a pointer loaded from
+      memory: step 4's region); a measurement of part of a local's held bytes. Not refused, documented: where
+      LLVM's bound is wider than the C's writes (`memcpy` of 2 or 4 bytes is bounded at 6) the extra bytes hold
+      qubits with their old values; the front assumes the bytes are ordinary where a span starts, so a second
+      function's store under a qubit into bytes an earlier call left holding qubits is the fault
+      `qubit_memory_access` (a question below). Found on the way, older than this work: after a qubit
+      variable's value became unknown, `if (r) y += 2` is predicated as an overwrite and takes the retained
+      form instead of the in-place inverse (route: invert the predicated store in place when the update is a
+      bijection on a condition that does not read y).
    4. **Rule A at an address that depends on a qubit: plan** (not built). The region every possible target lies
       in is taken from the object the address is based on when its extent is known (a global, a fixed-size
       local), else refused with the route "declare the storage" (a marker naming a region: a language choice
@@ -701,6 +724,22 @@ padded clock and its caller's mark; A mark's budget once its frame is left.
   control code, the exit code), the front refuses and asks for a measurement the programmer writes; it does not
   insert one. Cheap to reverse; the alternative would be a measurement the compiler inserts, which the decision
   rules out for stores.
+- **Where a span of memory written under a qubit starts, when an earlier call may have left the bytes holding
+  qubits (2026-11-17, rule A at memory; taken, cheap to reverse).** The front reads the bytes' old value with an
+  ordinary load where the span starts, so the shadow's value is known (the clean form). It cannot see across
+  calls whether the bytes still hold qubits from an earlier call; if they do, that load is the named fault
+  `qubit_memory_access`. Options: (a) as taken; (b) without the load, the exchange alone (correct whatever the
+  bytes hold, but the old value is then unknown: overwrites keep it, with the warning, and rule B refuses loops
+  that overwrite); (c) the control program keeps, in ordinary memory, a flag per object saying whether its bytes
+  hold qubits, and the front writes both forms (no new instruction). Recommendation: (a) now, (c) when a program
+  needs it.
+- **The fallback oracle's adapter and bytes that hold qubits (2026-11-17; nothing taken).** The oracle's five
+  memory fixtures pass in `front/tests/tests/memory_held.rs`, whose adapter reads bytes that hold qubits from
+  their registers (and from the shadow before the span ends). The oracle's own `born` and finished-image
+  readers assume none (its README lists that mapping as an open integration detail), and its driver reads the
+  cells with ordinary loads; the driver has a `-DMEASURED_CELLS` variant that measures them. Un-ignoring the
+  oracle's tests needs its adapter extended the same way and the variant made its default. Recommendation:
+  have the oracle's author (or an independent tester) extend the adapter, keeping it independent of the front.
 - **The table of control bits for a gate loop whose passes decide on qubit-dependent values carried between
   passes (2026-11-17, rule C, not built; nothing taken).** `t = x; for (i = 0; i < n; i++) { if (t & 1)
   h(y); t = step(t); }` with `n` an ordinary run-time value. The decided form is one applied function

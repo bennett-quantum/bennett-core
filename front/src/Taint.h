@@ -34,6 +34,10 @@ struct Storage {
   std::string name; // the C variable, for messages
   uint64_t support = ~uint64_t(0); // the bits that may be 1 (computeSupport)
   std::vector<llvm::Instruction *> mutations; // the stores into it and the markers applied to it
+  // Memory written under a qubit (HeldBytes.h): the shadow of bytes in memory. Code under a qubit applied whole
+  // may store into part of it, and at positions that are not constant; HeldBytes.h rewrites or refuses what of
+  // that is left in the control program.
+  bool held = false;
 };
 
 // A pointer into a qubit variable: the variable and a constant byte offset. As the qubit of a gate it
@@ -62,8 +66,10 @@ public:
   llvm::DominatorTree dominators;
   llvm::LoopInfo loops;
 
-  // The qubit variable `pointer` points into, if any.
+  // The qubit variable `pointer` points into at a constant offset, if any.
   std::optional<Access> access(const llvm::Value *pointer) const;
+  // The qubit variable `pointer` points into at any offset, if any.
+  const Storage *basedOn(const llvm::Value *pointer) const;
   // What is known about `storage` just before `at` executes.
   Fact before(const llvm::Instruction *at, const Storage *storage) const;
   // Whether `value` is a load of a qubit variable that reads its quantum value.

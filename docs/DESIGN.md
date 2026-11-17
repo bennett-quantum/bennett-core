@@ -405,8 +405,9 @@ Two things the first C programs taught:
 Control code cannot branch on a value that depends on a qubit, so the front takes the smallest single-entry,
 single-exit piece of code around such a branch or join (`Outline.h`). What happens to it depends on what it
 contains. Without gates and without stores into qubit variables it is one ordinary function, applied once, with
-one budget, whatever loops and calls it contains. With gates it is predicated (above). **Without gates but with
-stores into qubit variables** it is also one applied function, for all the variables it writes
+one budget, whatever loops and calls it contains. With gates it is predicated (above). Stores into memory in it
+make their bytes hold qubits, kept in a qubit variable while they do ("Memory written under a qubit").
+**Without gates but with stores into qubit variables** it is also one applied function, for all the variables it writes
 (`RegionResults.h`), with one budget for everything it does, loops and nested loops included; the front creates
 no loop, counter or bound that is not in the C, and none of the code's loops stays in the control program.
 
@@ -504,15 +505,77 @@ the variable and the number of qubits kept: one register of the variable's width
 runs (the warning counts per executed overwrite). If an applied function faults for some argument values,
 interference between those values and the rest can be lost when the fault register is released.
 
-This is the form for qubit variables in registers. The same exchange at bytes of memory (a store whose value
-or execution depends on a qubit keeps its value in qubits at the bytes it writes), with the clearings that
-return `n` to 0 when the old value is known, a function of registers unchanged since, or computed back by an
-inverse, is decided and not built (`HANDOFF.md`, "Next steps, in order", 4); such a store is refused by name.
+This is the form for qubit variables in registers; stores into memory reach it through their shadows (next
+section).
 
 Acceptance: `front/tests/tests/retained.rs` (`x = x * x`, `x += x`, `x = x / 3`, `x = 5`, a conditional
 square on a three-qubit `x`: the weights of the values of `x` are those of C, at O0, O2 and with
 `--taint-all`; the warning's count); the fallback oracle's `outside_class` (`*y = 0` on a `y` in superposition:
 exact basis results, exact Born weights of every preparation, 512 samples, the warning), un-ignored.
+
+## Memory written under a qubit
+
+A store into memory whose value, or whether it runs, depends on a qubit makes the bytes it writes hold qubits
+and keeps its value in superposition there (the maintainer's decision of 2026-11-17); the compiler inserts no
+measurement. The front (`front/src/HeldBytes.h`) names the bytes by their object, a global variable, the
+memory a pointer argument points to, or a local variable, and their offsets: constant offsets, or, inside
+code under a qubit without gates (which is applied whole), the offsets LLVM's bound on a position allows (a
+loop over a small array, `memset`, `memcpy` of a length that depends on a qubit). The union of the bytes the
+writes of one object may touch, at most 8 (one register), gets a qubit variable of its width, its **shadow**
+`m`, for a stretch of the function, its **span**. With `p` the address of the bytes, `w` their width in bits
+and `v` their old value:
+
+```
+%v = load iw [p]             the old value: the bytes are ordinary here
+x m[b] ctrl [p:b]            three CNOTs per bit b exchange m (0) and the bytes:
+x [p:b] ctrl m[b]            m = v, a value the front knows; the bytes hold qubits at 0
+x m[b] ctrl [p:b]            (the first gate at a byte makes it hold qubits)
+...                          every access to the bytes is an access to m
+x m[b] ctrl [p:b]            at the end, the same exchange: the bytes hold the value, m is 0 again
+x [p:b] ctrl m[b]
+x m[b] ctrl [p:b]
+```
+
+Between the two exchanges `m` is a qubit variable whose value before the first store is known, so the forms of
+qubit variables apply: code under a qubit without gates that writes it, loops included, is one `apply` with
+one budget ("Code under a qubit"); a store elsewhere is XORed in, inverted in place, or exchanged into a
+fresh register that keeps the old value ("Overwrites that keep the old value", with its warning and count).
+Written out for one store `x = g(a, x)` this is the exchange form of a store at memory: the new value is
+applied into a fresh register, exchanged with the bytes by gates on address-named bits, and the register is
+returned to 0 because the old value is known (`v`, or a function of registers unchanged since, or computed
+back by an inverse); where none holds the old value is kept and dropped by `qfree`. The exchange maps definite
+states to definite states one to one, so the span is unitary on the registers and the bytes except where the
+retained form releases a register; the shadow starts at 0 and ends at 0 for each definite value of what it
+depends on, outside those releases.
+
+Where the span starts and ends. It starts before the first such write, outside the code under a qubit that
+contains it, and is moved earlier, to a block that dominates, until every access to the bytes sees one state on
+every path. It ends before each return and before each `bennett_measure_bytes` that touches the bytes (the
+programmer's measurement, `docs/MARKERS.md`): there the bytes get their value, and the measurement of whole
+bytes makes them ordinary memory again, holding the result ("Qubits in memory"). For a local variable of the
+function the shadow takes `v` by XOR instead and the stack bytes are left as they are, so they never hold
+qubits after the function returns; the exchange happens only before a measurement of all of them, after which
+`m` holds `v` and is returned to 0 with the function's other known variables.
+
+What is refused, by name: ordinary code that reads the bytes while they hold qubits (it asks for the
+measurement), a call given memory of the object meanwhile, an access that touches them only in part, a
+position that is not constant outside code applied whole, more than 8 bytes of one object, an object the
+front cannot name, and a store into memory in code that also has gates (each a debt in `HANDOFF.md`). The
+front assumes the bytes are ordinary where a span starts: if an earlier call left them holding qubits, the
+load of `v` is the fault `qubit_memory_access`, a named fault, never a wrong value. The bytes the front
+cannot rule out are the bytes held: where LLVM's bound is wider than what the C writes (`memcpy` of 2 or 4
+bytes is bounded at 6), the extra bytes hold qubits with their old values. If an applied function faults for
+some argument values, interference between those values and the rest can be lost when the fault register is
+released.
+
+Acceptance (`front/tests/tests/memory_held.rs`): the fallback oracle's `store`, `memset`, `nested`, `memcpy`
+and `loop` fixtures, with the cells measured by `bennett_measure_bytes`, give native C's q, r, y and whole
+twelve-byte image (guard bytes included, bytes that still hold qubits read from their registers) for every
+definite input, with no register released that is not 0, and native C's exact weights of every result for
+the oracle's ten preparations, at O0, O2 and with `--taint-all`; a store under a qubit followed by its inverse
+under the same qubit leaves `q` unentangled (a Hadamard then gives 0 every time); a straight store of a value
+that depends on two qubits, a local array, and an overwrite that keeps its old value (8 qubits, the warning)
+give C's values; and the refusals.
 
 ## Applied calls
 

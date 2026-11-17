@@ -140,9 +140,11 @@ fn a_write_to_memory_under_qubit_control_is_refused_wherever_it_hides() {
                    __attribute__((noinline)) int sum(int *p) { return p[0] + p[1]; }\n";
     let cases = [
         ("call", "if (q) put(7);", "a call to @put, which may write memory, controlled"),
-        ("pointer", "int *p = &cells[n & 3]; if (q) *p = 7;", "a store to memory controlled"),
-        ("memcpy", "if (q) memcpy(to, from + n, (unsigned)n * 8);", "a store to memory controlled"),
-        ("local", "int buf[2] = {0, 0}; if (q) buf[1] = 7; r = sum(buf);", "a store to memory controlled"),
+        // Since 2026-11-17 a store under a qubit makes the bytes it writes hold qubits (tests/memory_held.rs):
+        // these are refused because the bytes are too many to bound, or are passed to a call while they do.
+        ("pointer", "int *p = &cells[n & 3]; if (q) *p = 7;", "at a position the front cannot bound"),
+        ("memcpy", "if (q) memcpy(to, from + n, (unsigned)n * 8);", "at a position the front cannot bound"),
+        ("local", "int buf[2] = {0, 0}; if (q) buf[1] = 7; r = sum(buf);", "a call that is given memory of %buf"),
         ("volatile_load", "int y = 0; if (q) y = device; r = y;", "a volatile or atomic load controlled"),
         ("address", "cells[q] = 7;", "used by ordinary code"),
     ];

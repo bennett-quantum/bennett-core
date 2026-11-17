@@ -20,6 +20,7 @@
 #include "Applied.h"
 #include "Diagnostic.h"
 #include "Emit.h"
+#include "HeldBytes.h"
 #include "Markers.h"
 #include "Normalise.h"
 #include "Taint.h"
@@ -97,6 +98,7 @@ private:
   void terminator(const Instruction &term) override;
 
   void classicalUse(const Instruction &inst);
+  void exchange(const CallBase &call);
   void knownLoad(const LoadInst &load);
   void marker(const CallBase &call, const Marker &marker);
   void measureBytes(const CallBase &call);
@@ -212,6 +214,10 @@ void ControlWriter::apply(const std::string &callee, const std::string &args, co
 }
 
 void ControlWriter::instruction(const Instruction &inst) {
+  if (isExchange(&inst)) {
+    exchange(cast<CallBase>(inst));
+    return;
+  }
   if (analysis.tainted(&inst)) {
     // Computed coherently inside the functions applied where it is stored; its other uses are checked
     // where they are. What has an effect is checked here, since the effect would otherwise vanish with an
@@ -264,9 +270,39 @@ void ControlWriter::instruction(const Instruction &inst) {
 
 void ControlWriter::classicalUse(const Instruction &inst) {
   for (const Use &use : inst.operands()) {
-    if (analysis.tainted(use.get())) {
-      notHandled("a value that depends on a qubit, used by ordinary code (measure it first)", &inst);
+    if (!analysis.tainted(use.get())) {
+      continue;
     }
+    // Read from memory that holds qubits: the measurement the program needs is of those bytes.
+    Slice computation = collect(use.get(), inst);
+    std::vector<const Storage *> read(computation.quantum.begin(), computation.quantum.end());
+    for (const Value *leaf : computation.classical) {
+      if (const auto *load = dyn_cast<LoadInst>(leaf); load && analysis.basedOn(load->getPointerOperand())) {
+        read.push_back(analysis.basedOn(load->getPointerOperand()));
+      }
+    }
+    for (const Storage *storage : read) {
+      if (storage->held) {
+        notHandled("a value read from memory that holds qubits (qubit variable " + storage->name +
+                       "), used by ordinary code (measure the bytes first, with bennett_measure_bytes)",
+                   &inst);
+      }
+    }
+    notHandled("a value that depends on a qubit, used by ordinary code (measure it first)", &inst);
+  }
+}
+
+// Three CNOTs per bit exchange the shadow's register and the bits of memory from the address
+// (docs/DESIGN.md, "Memory written under a qubit"); the first gate at a byte makes it hold qubits.
+void ControlWriter::exchange(const CallBase &call) {
+  const Storage &shadow = *analysis.access(call.getArgOperand(0))->storage;
+  std::string address = operand(call.getArgOperand(1));
+  for (unsigned bit = 0; bit < shadow.bits; ++bit) {
+    std::string held = registers.at(&shadow) + "[" + std::to_string(bit) + "]";
+    std::string memory = "[" + address + ":" + std::to_string(bit) + "]";
+    line("x " + held + " ctrl " + memory);
+    line("x " + memory + " ctrl " + held);
+    line("x " + held + " ctrl " + memory);
   }
 }
 

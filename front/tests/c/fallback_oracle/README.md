@@ -45,7 +45,17 @@ assertions only for the documented coherent class or after an un-run. Therefore:
   front output; no change to the original oracle or its allocation limit is
   needed. Actual C snapshots still check every high bit and extra register.
 - `store`, `memcpy`, `memset`, `user_write`, `nested`, `loop` retain writes in
-  ordinary memory. `outside_class` deliberately erases y; it passes since the front
+  ordinary memory. Since 2026-11-17 the front lowers all but `user_write`: the
+  bytes written under a qubit hold qubits (`docs/DESIGN.md`, "Memory written
+  under a qubit"), so ordinary code may not read them, and this driver's reading
+  of the cells by ordinary loads is refused by name (they wait in the inventory
+  with that refusal). With `-DMEASURED_CELLS` the driver measures the cells with
+  `bennett_measure_bytes` instead; `../../tests/memory_held.rs` runs that build
+  against these native images (every basis result, the exact weights of all ten
+  preparations, with bytes that hold qubits read from their registers). This
+  harness's adapter does not read bytes that hold qubits yet (`born` and the
+  finished image assume none), so its five tests stay ignored; mapping them is
+  the open integration detail below. `user_write` waits by decision. `outside_class` deliberately erases y; it passes since the front
   keeps an old value it cannot erase in a register released at once (2026-11-17), and
   is no longer ignored. Only immediate Born
   probabilities and exact basis results are asserted; phases/history layout are

@@ -33,7 +33,7 @@ namespace {
 
 bool isQubitStore(const Instruction &inst, const ControlAnalysis &analysis) {
   const auto *store = dyn_cast<StoreInst>(&inst);
-  return store && analysis.access(store->getPointerOperand());
+  return store && analysis.basedOn(store->getPointerOperand());
 }
 
 bool isBitCall(const Value *value) {

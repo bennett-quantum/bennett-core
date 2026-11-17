@@ -1,6 +1,7 @@
 #include "Taint.h"
 
 #include "Diagnostic.h"
+#include "HeldBytes.h"
 #include "Markers.h"
 
 #include <llvm/ADT/PostOrderIterator.h>
@@ -136,6 +137,10 @@ void ControlAnalysis::findStorage() {
     storage->alloca = const_cast<AllocaInst *>(alloca);
     storage->bits = unsigned(size->getFixedValue() * 8);
     storage->name = variableName(alloca);
+    if (const MDNode *held = alloca->getMetadata(heldMetadata)) {
+      storage->held = true;
+      storage->name = "holding the " + cast<MDString>(held->getOperand(0))->getString().str();
+    }
     storages.push_back(std::move(storage));
   }
 }
@@ -143,6 +148,7 @@ void ControlAnalysis::findStorage() {
 void ControlAnalysis::checkUses(Storage &storage) {
   const DataLayout &layout = function.getParent()->getDataLayout();
   const unsigned bytes = storage.bits / 8;
+  constexpr uint64_t unknownOffset = ~uint64_t(0);
   std::vector<std::pair<Value *, uint64_t>> pointers{{storage.alloca, 0}};
   auto other = [&](const Instruction *user) {
     notHandled("the address of qubit variable " + storage.name +
@@ -159,17 +165,28 @@ void ControlAnalysis::checkUses(Storage &storage) {
       }
       if (auto *gep = dyn_cast<GetElementPtrInst>(inst)) {
         APInt delta(64, 0);
-        if (gep->getPointerOperand() != pointer || !gep->accumulateConstantOffset(layout, delta)) {
+        if (gep->getPointerOperand() != pointer) {
           other(inst);
         }
-        pointers.push_back({gep, offset + delta.getZExtValue()});
+        if (!gep->accumulateConstantOffset(layout, delta)) {
+          if (!storage.held) {
+            other(inst);
+          }
+          pointers.push_back({gep, unknownOffset}); // a position that is not constant: inside code applied whole
+          continue;
+        }
+        pointers.push_back({gep, offset == unknownOffset ? unknownOffset : offset + delta.getZExtValue()});
         continue;
       }
       if (auto *load = dyn_cast<LoadInst>(inst)) {
         uint64_t size = layout.getTypeStoreSize(load->getType()).getFixedValue();
-        if (offset + size > bytes || !load->getType()->isIntegerTy()) {
+        if ((offset != unknownOffset && offset + size > bytes) || !load->getType()->isIntegerTy()) {
           notHandled("a load outside qubit variable " + storage.name + " or not of an integer", inst);
         }
+        continue;
+      }
+      if (isExchange(inst) && cast<CallBase>(inst)->getArgOperand(0) == pointer && offset == 0) {
+        storage.mutations.push_back(inst);
         continue;
       }
       if (auto *store = dyn_cast<StoreInst>(inst)) {
@@ -177,7 +194,8 @@ void ControlAnalysis::checkUses(Storage &storage) {
         if (store->getValueOperand() == pointer) {
           other(inst);
         }
-        if (offset != 0 || size != bytes || !store->getValueOperand()->getType()->isIntegerTy()) {
+        bool part = storage.held && (offset == unknownOffset || offset + size <= bytes);
+        if ((!part && (offset != 0 || size != bytes)) || !store->getValueOperand()->getType()->isIntegerTy()) {
           notHandled("a store into part of qubit variable " + storage.name +
                          "; only a store of the whole variable is handled",
                      inst);
@@ -285,6 +303,19 @@ std::optional<Access> ControlAnalysis::access(const Value *pointer) const {
   return std::nullopt;
 }
 
+const Storage *ControlAnalysis::basedOn(const Value *pointer) const {
+  if (!pointer->getType()->isPointerTy()) {
+    return nullptr;
+  }
+  const Value *base = getUnderlyingObject(pointer, 0);
+  for (const auto &storage : storages) {
+    if (storage->alloca == base) {
+      return storage.get();
+    }
+  }
+  return nullptr;
+}
+
 size_t ControlAnalysis::indexOf(const Storage *storage) const {
   for (size_t i = 0; i < storages.size(); ++i) {
     if (storages[i].get() == storage) {
@@ -296,9 +327,22 @@ size_t ControlAnalysis::indexOf(const Storage *storage) const {
 
 void ControlAnalysis::transfer(const Instruction &inst, std::vector<Fact> &facts) const {
   if (const auto *store = dyn_cast<StoreInst>(&inst)) {
-    if (std::optional<Access> target = access(store->getPointerOperand())) {
+    if (const Storage *storage = basedOn(store->getPointerOperand())) {
       Value *value = const_cast<Value *>(store->getValueOperand());
-      facts[indexOf(target->storage)] = tainted(value) ? Fact{Fact::Quantum, nullptr} : Fact{Fact::Known, value};
+      std::optional<Access> target = access(store->getPointerOperand());
+      const DataLayout &layout = function.getParent()->getDataLayout();
+      bool whole = target && target->offset == 0 && layout.getTypeStoreSizeInBits(value->getType()) == storage->bits;
+      // A store into part of a variable: what it holds is not one value the front has (Quantum, the safe side).
+      facts[indexOf(storage)] =
+          tainted(value) || !whole ? Fact{Fact::Quantum, nullptr} : Fact{Fact::Known, value};
+    }
+    return;
+  }
+  if (isExchange(&inst)) {
+    const auto *call = cast<CallBase>(&inst);
+    if (const Storage *storage = basedOn(call->getArgOperand(0))) {
+      Value *after = call->getArgOperand(2);
+      facts[indexOf(storage)] = tainted(after) ? Fact{Fact::Quantum, nullptr} : Fact{Fact::Known, after};
     }
     return;
   }
@@ -375,6 +419,9 @@ bool ControlAnalysis::computeTaint() {
     }
     std::optional<Access> source = access(load->getPointerOperand());
     if (!source) {
+      if (basedOn(load->getPointerOperand())) {
+        quantumLoads.insert(load); // at a position that is not constant
+      }
       continue;
     }
     Fact fact = before(load, source->storage);

@@ -7,6 +7,7 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include <cstdlib>
+#include <vector>
 
 using namespace llvm;
 
@@ -58,8 +59,24 @@ void misuse(const std::string &what, const Value *at) {
   std::exit(2);
 }
 
+namespace {
+// Warnings are about the device program written, so they are printed when it is (printWarnings), and a
+// refusal's message is the whole output of a run that writes nothing.
+std::vector<std::string> &pending() {
+  static std::vector<std::string> warnings;
+  return warnings;
+}
+} // namespace
+
 void warning(const std::string &what, const Value *at) {
-  errs() << "warning: " << what << ", at " << locationOf(at) << "\n";
+  pending().push_back("warning: " + what + ", at " + locationOf(at) + "\n");
+}
+
+void printWarnings() {
+  for (const std::string &line : pending()) {
+    errs() << line;
+  }
+  pending().clear();
 }
 
 void fail(const std::string &what) {

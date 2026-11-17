@@ -67,7 +67,7 @@ fn what_cannot_run_under_qubit_control_or_in_place_is_refused_by_name_at_its_lin
         ("bit_escapes", "sink = (long)bennett_bit(&x, 1);", "the result of bennett_bit used other than as the qubit"),
         // What was refused before stays refused.
         ("passed", "touch(&x);", "qubit variable 'x' is passed to a function"),
-        ("ordinary_use", "sink = x;", "used by ordinary code"),
+        // `sink = x` makes the bytes of sink hold qubits since 2026-11-17 (tests/memory_held.rs).
     ];
     for (name, body, expected) in cases {
         let text = format!("{PRELUDE}  {body}{EPILOGUE}");
