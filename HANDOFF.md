@@ -1346,7 +1346,8 @@ closed forms (`experiments/lua-probe/README.md`, "Independent testing pass").
   `permutation_tests.rs`), `crates/exec/tests/` (`apply_independent.rs`, `history_independent.rs`,
   `measure_memory.rs`, `memory_address_independent.rs`, `memory_independent.rs`, `memory_overlay.rs`,
   `memory_qubits.rs`, `replay_generated.rs`, `worlds.rs`, `worlds_independent.rs`, `worlds_oracle.rs`,
-  `worlds_reference.rs`), `front/tests/tests/fallback_oracle.rs`, `front/tests/tests/journal_global.rs`, and
+  `worlds_reference.rs`), `front/tests/tests/journal_global.rs` (`fallback_oracle.rs` uses the front's region
+  budget plus 2 since 2026-11-17), and
   the examples in `docs/DESIGN.md` and `docs/SYNTAX.md`.
   (N1) A second rewind of one budgeted mark: the mark's deadline is cleared at its first rewind, the second
   pass ends with different clocks on different configurations, merging takes the largest, and a still-open
@@ -1601,9 +1602,11 @@ the budget of a call with a fault value (`call_budget_replay.rs`).
   of the catch path, separately from deciding the per-branch jump rule (V4), as the executor now does.
 
 
-- The fallback oracle compares the four `cells` bytes and the qubit variables only: a stray write just past
-  the array would go unseen by both its native and device sides. Route: compare the whole fixture image
-  (guard bytes around `cells`) on both sides before the fallback's first step lands.
+- Removed on 2026-11-17: the fallback oracle compared the four `cells` bytes and the qubit variables only, so
+  a stray write just past the array went unseen by both its native and device sides. The fixture's cells now
+  lie in a twelve-byte image between guard bytes, and every native and device comparison takes the whole
+  image; seeded stray writes before and past the cells are rejected on both sides
+  (`front/tests/c/fallback_oracle/README.md`, "Guard bytes").
 
 - A stale `setjmp` record (its frame returned) can match another activation of the same function at the same
   depth and stack address and jump into it (C leaves this undefined; decided 2026-11-16: today's behaviour kept).

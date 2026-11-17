@@ -8,18 +8,28 @@ use std::process::Command;
 use bennett_front_tests::{c_dir, native_build, root};
 use num_complex::Complex64 as C;
 
-pub const INITIAL_MEMORY: [u8; 4] = [1, 2, 3, 0];
+/// The fixture's twelve-byte image (`fixture.h`): four guard bytes, the four
+/// cells the bodies write, four guard bytes.
+pub const INITIAL_IMAGE: [u8; 12] = [0xa5, 0x5a, 0xc3, 0x3c, 1, 2, 3, 0, 0x96, 0x69, 0xf0, 0x0f];
+/// Where the cells lie in the image.
+pub const CELLS: std::ops::Range<usize> = 4..8;
 pub type Vector = [C; 8];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Image {
     pub bits: usize,
-    pub memory: [u8; 4],
+    pub memory: [u8; 12],
 }
 
 impl Image {
-    pub fn measured(&self) -> u64 {
-        self.memory.iter().enumerate().fold(self.bits as u64, |v, (i, b)| v | (u64::from(*b) << (3 + 8 * i)))
+    /// q, r, y in bits 0 to 2 and the whole image above them: guard bytes are
+    /// part of every compared result, so a stray write outside the cells counts.
+    pub fn measured(&self) -> u128 {
+        self.memory.iter().enumerate().fold(self.bits as u128, |v, (i, b)| v | (u128::from(*b) << (3 + 8 * i)))
+    }
+
+    pub fn cells(&self) -> [u8; 4] {
+        self.memory[CELLS].try_into().expect("four cells")
     }
 }
 
@@ -49,11 +59,11 @@ impl Native {
                     .split_whitespace()
                     .map(|word| word.parse().expect("native byte"))
                     .collect();
-                assert_eq!(words.len(), 7, "{name} basis {basis}");
+                assert_eq!(words.len(), 3 + INITIAL_IMAGE.len(), "{name} basis {basis}");
                 assert!(words[..3].iter().all(|&b| b <= 1));
                 Image {
                     bits: usize::from(words[0] | words[1] << 1 | words[2] << 2),
-                    memory: words[3..].try_into().expect("four cells"),
+                    memory: words[3..].try_into().expect("the whole image"),
                 }
             })
             .collect();
@@ -61,7 +71,7 @@ impl Native {
     }
 
     fn permutation(&self) -> Vec<usize> {
-        assert!(self.images.iter().all(|image| image.memory == INITIAL_MEMORY), "coherent map must restore memory");
+        assert!(self.images.iter().all(|image| image.memory == INITIAL_IMAGE), "coherent map must restore memory");
         let map: Vec<_> = self.images.iter().map(|image| image.bits).collect();
         assert_eq!(map.iter().collect::<BTreeSet<_>>().len(), 8, "coherent update must be injective");
         map
@@ -81,7 +91,7 @@ impl Native {
         hadamard_q(scatter(marked, &inverse))
     }
 
-    pub fn measured(&self, input: &Vector) -> BTreeMap<u64, f64> {
+    pub fn measured(&self, input: &Vector) -> BTreeMap<u128, f64> {
         let mut probabilities = BTreeMap::new();
         for (image, amplitude) in self.images.iter().zip(input) {
             *probabilities.entry(image.measured()).or_default() += amplitude.norm_sqr();
@@ -93,13 +103,13 @@ impl Native {
     /// The ordinary region driver returns bit 1 of cell 0, then everything it
     /// did is un-run. Native memory is NOT kept in the coherent output.
     pub fn kept(&self) -> [usize; 4] {
-        std::array::from_fn(|b| usize::from((self.images[b].memory[0] >> 1) & 1))
+        std::array::from_fn(|b| usize::from((self.images[b].cells()[0] >> 1) & 1))
     }
 
-    /// The four cells after the region on each (q, r), little-endian, as the
-    /// region driver returns them; y is 0 there.
-    pub fn region_image(&self) -> [u64; 4] {
-        std::array::from_fn(|b| u64::from(u32::from_le_bytes(self.images[b].memory)))
+    /// The whole image after the region on each (q, r), guard bytes included,
+    /// little-endian, as the region driver returns it; y is 0 there.
+    pub fn region_image(&self) -> [u128; 4] {
+        std::array::from_fn(|b| self.images[b].memory.iter().rev().fold(0, |v, byte| v << 8 | u128::from(*byte)))
     }
 }
 

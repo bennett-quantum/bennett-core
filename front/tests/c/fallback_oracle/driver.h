@@ -7,28 +7,38 @@ int main(int argc, char **argv) {
     if (basis >= 8) return 2;
     _Bool q = basis & 1, r = (basis >> 1) & 1, y = (basis >> 2) & 1;
     update(q, r, &y);
-    printf("%u %u %u %u %u %u %u\n", q, r, y,
-           cells[0], cells[1], cells[2], cells[3]);
+#ifdef STRAY_WRITE
+    /* A seeded stray write just past the cells: the native image must show it. */
+    cells[4] ^= 0x10;
+#endif
+    printf("%u %u %u", q, r, y);
+    for (unsigned i = 0; i < sizeof image; ++i) printf(" %u", image[i]);
+    printf("\n");
     return 0;
 }
 #elif defined(CLASSICAL_REGION)
-/* The whole four-byte image, so every write the region makes is compared. */
-unsigned result(unsigned _BitInt(2) basis) {
+/* The whole twelve-byte image, guard bytes included, little-endian, so every
+ * write the region makes is compared, also one just outside the cells. */
+unsigned __int128 result(unsigned _BitInt(2) basis) {
     _Bool y = 0;
     update(basis & 1, (basis >> 1) & 1, &y);
-    return cells[0] | cells[1] << 8 | cells[2] << 16 | (unsigned)cells[3] << 24;
+    unsigned __int128 whole = 0;
+    for (unsigned i = 0; i < sizeof image; ++i) whole |= (unsigned __int128)image[i] << (8 * i);
+    return whole;
 }
-/* One bit of it, for the phase-conjugation envelope. */
-_Bool bit(unsigned _BitInt(2) basis) { return (result(basis) >> 1) & 1; }
+/* One bit of it, bit 1 of cells[0], for the phase-conjugation envelope. */
+_Bool bit(unsigned _BitInt(2) basis) { return (result(basis) >> 33) & 1; }
 /* Four bits of it, small enough for the dense interpreter's qubit cap. */
-unsigned _BitInt(4) nibble(unsigned _BitInt(2) basis, unsigned _BitInt(3) which) {
+unsigned _BitInt(4) nibble(unsigned _BitInt(2) basis, unsigned _BitInt(5) which) {
     return (unsigned _BitInt(4))(result(basis) >> (4 * which));
 }
 #else
 /* basis 0..7 prepares a column; 8 prepares a complex product state; 9 a real
  * product state whose eight Born weights all differ, so a measured check can
  * tell every basis state from every other.
- * All measurements precede reading the ordinary memory into the result. */
+ * All measurements precede reading the ordinary memory into the result. The
+ * result holds the four cells; the harness reads the whole image, guard bytes
+ * included, from the machine's memory. */
 unsigned long long experiment(unsigned basis) {
     _Bool q = 0, r = 0, y = 0;
     if (basis < 8) {

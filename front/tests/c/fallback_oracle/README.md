@@ -7,8 +7,11 @@ implementations. It imports the original independent dense oracle from
 
 Every fixture has a shared `update(q, r, &y)` body, included in both builds. Host clang
 compiles it at `-O0` and `-O2`. A **fresh native process per basis input** executes
-that body once and prints q, r, y and four memory bytes; there are eight basis
-inputs per program. There are no device runs in this reference calculation and no expected values
+that body once and prints q, r, y and the whole twelve-byte memory image; there are
+eight basis inputs per program. The four `cells` the bodies write lie in the middle
+of `image` (`fixture.h`), between four guard bytes on each side (`a5 5a c3 3c` and
+`96 69 f0 0f`), and every comparison below takes the whole image, so a stray write
+just before or just past the cells is a wrong result on either side, not unseen. There are no device runs in this reference calculation and no expected values
 extracted from lowered IR. The controlled-X baseline gives X its ordinary C basis
 action (Boolean toggle); native runs do not execute preparation or phase gates.
 Unsigned byte operations and bounded, in-bounds loops avoid C undefined behavior.
@@ -16,7 +19,9 @@ Unsigned byte operations and bounded, in-bounds loops avoid C undefined behavior
 The common device driver prepares each basis column, a complex product state
 (preparation 8: Ry(0.7) q, S H r, T H y) or a real one whose eight Born weights all
 differ (preparation 9: Ry(0.7) q, Ry(1.3) r, Ry(2.2) y), runs the same body, then
-measures q/r/y and returns those bits together with the four bytes. The reference tabulates the preparation
+measures q/r/y and returns those bits together with the four cells; the harness
+reads the whole image from the finished machine's memory and checks the returned
+cells against it. The reference tabulates the preparation
 analytically. Its coherent operation is a native basis permutation applied to
 input amplitudes; its round trip is U-adjoint Z U then H q, with an explicit check
 that repeating the fixture's U implements its inverse. No global-phase quotient:
@@ -29,7 +34,7 @@ assertions only for the documented coherent class or after an un-run. Therefore:
 - `coherent_gate` exercises a documented controlled gate. It runs
   as a direct circuit and as a phase round trip, over all eight columns and the
   complex input, with O0, O2 and `--taint-all`. Native expectations are compared
-  with the full C device state, and the fixture's four cells must still hold their
+  with the full C device state, and the fixture's whole image must still hold its
   initial bytes there (the coherent class writes no ordinary memory, so a leaked
   write or a write whose un-run was missed is a wrong result). Every coherent
   program also gets the measured checks below, in every mode. The front allocates three byte registers plus
@@ -46,7 +51,7 @@ assertions only for the documented coherent class or after an un-run. Therefore:
   measured result, rather than adding amplitudes across hidden histories. The
   device's distribution is read **exactly** from its state just before the
   measurements, for every column and both superposed preparations: each world's
-  weight on each configuration of q/r/y, keyed by that world's own cells, other
+  weight on each configuration of q/r/y, keyed by that world's own image, other
   registers summed over (rule 1, branch by branch). Then 512 seeded runs check the
   measurement path itself, and the eight columns are run to their exact results. Once
   accepted, each case must emit a history/coherence warning. Diagnostics from
@@ -56,15 +61,17 @@ assertions only for the documented coherent class or after an un-run. Therefore:
   ordinary memory-writing bodies without quantum markers, then adds a **test-only
   device IR** mark/call/rewind-keep envelope. The native result is bit 1 of cell 0;
   q/r remain, this bit is XOR-kept into y, and everything in the ordinary C region
-  is un-run; the whole four-cell image is kept as well into a 32-bit register, so
-  every write the region made is compared with native on every branch.
+  is un-run; the whole twelve-byte image is kept as well, into a 64-bit and a
+  32-bit register, so every write the region made, guard bytes included, is
+  compared with native on every branch. The mark's budget is the front's region
+  budget plus 2 (its call and rewind), never unbounded.
   With S y inside the mark, the expected operation is S-adjoint X^f S,
   including its opposite imaginary signs on y=0 and y=1. Original dense matrix
   gates/permutations cross-check it, and all memory must be restored exactly.
   In addition, those **same lowered ordinary C functions** run in seven-qubit
   `apply` envelopes under both the original dense interpreter and the device,
   compared to native results, and the whole image runs through the dense
-  interpreter four bits at a time with q in uniform superposition (its 13-qubit
+  interpreter four bits at a time (24 nibbles) with q in uniform superposition (its 13-qubit
   cap). Thus the original interpreter's arithmetic,
   memory, branch and call evaluation also cross-check the native reference,
   without hitting its allocation cap.
@@ -146,8 +153,9 @@ programs (coherent_gate in three modes, nested O2) each with 8 exact columns, 10
 exact Born tables and 512 sampled outcomes; 54 ordinary-C region vectors with the
 whole image kept, each checked under mark/rewind, under apply in the original
 dense interpreter and device, and by dense conjugation, plus 48 dense nibble
-runs. The default oracle suite has twelve passing tests (seven of them seeded
-wrong results) and nine intentionally ignored acceptance tests; inventory has
+runs (144 since the guard bytes: 24 nibbles of the twelve-byte image). The default
+oracle suite has twelve passing tests (seven of them seeded wrong results;
+fourteen and nine since the guard bytes) and nine intentionally ignored acceptance tests; inventory has
 one accepted mode and 26 named refusals. No
 accepted wrong result was found. Warning checks remain waiting with the refused
 outside-class programs; none has silently been counted as a tested warning.
