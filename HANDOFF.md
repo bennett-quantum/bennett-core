@@ -1375,9 +1375,20 @@ the ordinary frontend run without changing its domain or assertions.
   depth and stack address and jump into it (C leaves this undefined; decided 2026-11-16: today's behaviour kept).
   Route if it is ever to fault: an activation counter in the jump record.
 
-- A copied `sigjmp_buf` is to follow glibc (decided 2026-11-16); whether the device's behaviour matches glibc's
-  on every way to copy and jump is not yet compared. Route: the native comparison of the `sigsetjmp` testing pass,
-  run against glibc as well as musl.
+- **A partial `sigjmp_buf` copy can select the wrong continuation** (native glibc and musl status 0,
+  device 1, empty stdout, at both O0/O2): copying the first 16 bytes between two live savemask-0
+  environments preserves the native target's instruction pointer at bytes 56..64, but replaces the
+  device continuation at bytes 8..16. Ignored witness, explicitly seen failing:
+  `a_partial_record_copy_preserves_the_glibc_continuation` in `front/tests/tests/sigjmp_copy.rs`;
+  no production code changed. Route: preserve glibc's byte-level copy semantics in the lowered C
+  environment separately from the device record, then enable the witness and sweep more prefix/suffix
+  boundaries. The broader copied-buffer evidence hole is narrowed: 576 cases at each of O0/O2 compare
+  the musl-linked device with native glibc and native musl (memcpy, struct assignment, two union paths,
+  copies in pieces, record-only/record-plus-flag/mask-only partial copies, savemask 0/1/-7, original
+  re-saved or not, original/copy targets and changed masks). All device stdout/status matches glibc,
+  including the 94 O0 / 92 O2 cases where musl differs. Native musl changes 56 rows between levels;
+  glibc and device are stable. Full reproduction and limitations: `rt/musl/README.md`, "Copied jump
+  buffers"; retained heavy test and `rt/musl/test-sigjmp.py`. Returned-frame jumps are excluded, as decided.
 
 - Return-address values at and beyond the outermost frame (`0xFFFF_FFFF_0000_0000`, then 0) are kept as they are
   (decided 2026-11-16); native gives other values there, so a program printing them differs from native.

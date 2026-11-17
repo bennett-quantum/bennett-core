@@ -644,7 +644,11 @@ buffer carries its mask with it, any number of buffers can share a call site, an
 the jump, as glibc does (musl restores it on arrival, finding the buffer through a register its assembly saved
 in it). musl's own C is linked by `rt/musl/link.py`; without the library a mask-saving `sigsetjmp` is refused as
 a call with no definition, and a program without one is lowered without the flag. The jump record itself is
-the rest of the environment and is all in the buffer too. clang's `__builtin_setjmp`/`__builtin_longjmp`
+the rest of the environment and is all in the buffer too. Whole-buffer copies and partial copies at the
+64/72-byte record/mask boundaries agree with glibc in the retained O0/O2 matrix, including where native
+musl differs. Partial copies inside the record remain a defect: copying bytes 0..16 changes the device
+continuation but preserves glibc's, because the two layouts place it at different offsets. The ignored
+witness and three-way native comparison are documented in `rt/musl/README.md`, "Copied jump buffers". clang's `__builtin_setjmp`/`__builtin_longjmp`
 (`llvm.eh.sjlj.setjmp`/`longjmp`) become the same instructions with the value 1; the frame address clang stores
 in the buffer, `llvm.frameaddress(0)`, is the stack pointer at the function's entry (a caller's frame address is
 refused by name). The address of a library `setjmp` or `longjmp`, a call through another prototype and an

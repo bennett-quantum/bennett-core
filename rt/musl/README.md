@@ -232,3 +232,59 @@ Final combined-revision verification after rebasing on `40c84d4`: `cargo test` *
 The 16 focused cases passed again in **135.20 s** on the shared machine, with every step/journal count
 above unchanged and every entry snapshot restored exactly. This also checks the file/clock models
 against the upstream atomic-rewind fixes and libgcc runtime update.
+
+### Copied jump buffers: glibc/musl comparison
+
+The maintainer's reference for a copied `sigjmp_buf` is glibc, even with musl linked
+on the device. `front/tests/c/sigjmp_copy_matrix.c` retains 576 cases per optimization
+level: eight copy paths (memcpy, struct assignment, two union paths, record-only,
+record-plus-flag, mask-only and a full copy in pieces), savemask 0/1/-7, a destination
+saved with 0/1, no re-save or re-saving the original with 0/1, jumps through either
+buffer, and two masks between save and jump. Every saving frame stays live. The
+partial-copy offsets are explicitly x86-64 glibc/musl ABI probes, not portable C
+promises about the opaque buffer. Output includes the landing site, jump-value
+check and mask; the harness compares complete stdout and exit status.
+
+Build the bitcode library and a separate, unmodified native musl from the vendored
+source (no network), from the repository root:
+
+```sh
+python3 rt/musl/build.py --jobs 3
+mkdir -p target/musl-native/build
+(cd target/musl-native/build && \
+  ../../../rt/musl/musl-1.2.5/configure --disable-shared --prefix="$PWD/../install" CC=clang-18 && \
+  make -j3 && make install)
+cargo build -p bennett
+front/test.sh
+cargo test -p bennett-front-tests --test sigjmp_copy copied_sigjmp_buffers -- --ignored --nocapture
+# Equivalent direct runner; --musl-cc/--libdir/--front/--executor/--out override locations:
+python3 rt/musl/test-sigjmp.py
+```
+
+Measured on x86-64 with clang 18.1.3, glibc 2.39 and native musl 1.2.5: at both
+`-O0` and `-O2`, all 576 device cases agree with glibc stdout/status.
+Native musl differs from glibc in 94 cases at O0 and 92 at O2; the device follows
+glibc in all of them. Native musl also changes 56 rows between optimization levels:
+its saved-register reference to the original buffer can change both the landing
+site and mask after that original is re-saved. Musl's result is measured separately
+at each level, never substituted for the decided reference. Full native output,
+device output and per-case differences are generated under `target/front-tests/sigjmp-copy`.
+
+One defect remains: `sigjmp_partial_record.c` copies 16 bytes between two live
+savemask-0 environments. This changes callee-saved-register bytes natively, leaving
+the copy's continuation intact (glibc and musl status 0, empty stdout); it instead
+replaces the device's continuation (status 1, empty stdout), at O0 and O2. The
+ignored Rust witness is marked `defect:` and was explicitly observed failing:
+
+```sh
+cargo test -p bennett-front-tests --test sigjmp_copy a_partial_record_copy -- --ignored --nocapture
+# Or: python3 rt/musl/test-sigjmp.py --partial-record
+```
+
+Root cause: the device stores the continuation in bytes 8..16 of its 32-byte
+record; x86-64 glibc stores its saved instruction pointer in bytes 56..64. The
+passing matrix's partial record copies end at bytes 64 or 72 and therefore do not
+exercise this disagreement. Route: preserve glibc's byte-level copy semantics in
+the lowered C environment while keeping the device instruction's layout separate,
+then enable the witness and extend the prefix/suffix boundary sweep. Jumps after
+a saving frame returned remain excluded, as decided.
