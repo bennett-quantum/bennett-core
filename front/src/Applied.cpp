@@ -152,18 +152,27 @@ void AppliedCalls::warnUndoneWrites(const CallBase &call, const DominatorTree &d
       continue;
     }
     Footprint read;
+    // Whether code after the call reads one of the caller's local variables the call writes: a load of it,
+    // or a direct call that reads the memory it is given a pointer to.
+    bool readsLocal = false;
     if (const auto *load = dyn_cast<LoadInst>(&inst)) {
       note(read, load->getPointerOperand());
-      if (locals.count(getUnderlyingObject(load->getPointerOperand()))) {
-        warning("the call of @" + callee->getName().str() +
-                    " depends on a qubit and is applied whole: its writes are undone when it ends, but code after "
-                    "it reads a local variable it writes (at " +
-                    locationOf(&inst) + ")",
-                &call);
-        return;
-      }
+      readsLocal = locals.count(getUnderlyingObject(load->getPointerOperand())) != 0;
     } else if (const Function *later = directCallee(inst)) {
-      read = atCall(effects.at(later).reads, cast<CallBase>(inst));
+      const auto &laterCall = cast<CallBase>(inst);
+      read = atCall(effects.at(later).reads, laterCall);
+      for (unsigned parameter : effects.at(later).reads.parameters) {
+        readsLocal = readsLocal || (parameter < laterCall.arg_size() &&
+                                    locals.count(getUnderlyingObject(laterCall.getArgOperand(parameter))) != 0);
+      }
+    }
+    if (readsLocal) {
+      warning("the call of @" + callee->getName().str() +
+                  " depends on a qubit and is applied whole: its writes are undone when it ends, but code after "
+                  "it reads a local variable it writes (at " +
+                  locationOf(&inst) + ")",
+              &call);
+      return;
     }
     std::string name = shared(read, written);
     if (!name.empty()) {

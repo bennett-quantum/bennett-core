@@ -445,6 +445,9 @@ under `apply` they run on the private copy and are undone with it.
   of the warning proves nothing.
 - **`--taint-all`** does not move an ordinary call with ordinary arguments into an `apply`: there its writes
   must survive, so only calls of functions that read memory at most are treated as computable coherently.
+  Such a call does not count as one of "two calls that depend on a qubit", and in the applied function it
+  runs before anything that depends on a qubit, so it reads memory as it is at its own site, never what an
+  applied call in the same computation wrote on the private copy.
 
 The acceptance target of the rule is SQLite (`experiments/sqlite-on-device`, stage 4): C entries that set a
 database up with ordinary code and then apply one query whose key depends on a three-qubit register; each of

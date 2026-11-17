@@ -371,7 +371,6 @@ fn warns_for_globals_caller_parameters_and_direct_local_reads() {
 }
 
 #[test]
-#[ignore = "the front misses a later direct call reading the same caller-local pointer"]
 fn warns_when_a_direct_callee_reads_the_callers_local_variable() {
     let name = "apply-warning-local-reader";
     let source = write_c(
@@ -479,7 +478,6 @@ unsigned applied_entry(void) {
 }
 
 #[test]
-#[ignore = "taint-all counts an ordinary pure call toward the two qubit-dependent calls refusal"]
 fn a_pure_call_on_an_ordinary_argument_does_not_count_as_qubit_dependent() {
     let name = "apply-ordinary-pure";
     let source = write_c(
@@ -506,5 +504,38 @@ unsigned applied_entry(unsigned n) {
         let (v, r) = (column(&columns, "v"), column(&columns, "r"));
         let values = state.quantum.amplitudes.iter().map(|(config, _)| (config[v], config[r])).collect::<Vec<_>>();
         assert_eq!(values, [(0, 46), (1, 47)], "{mode}");
+    }
+}
+
+/// `--taint-all` moves an ordinary read-only call into the slice of an applied writing call: it must still read
+/// memory as at its own site, never the applied call's writes on the private copy (`peek` reads 13 in every
+/// mode, so r is 2 * (13 + v) - 13).
+#[test]
+fn an_ordinary_reader_in_a_slice_does_not_see_the_applied_calls_writes() {
+    let name = "apply-ordinary-reader";
+    let source = write_c(
+        name,
+        r#"#include "bennett.h"
+unsigned cell = 13;
+__attribute__((noinline)) unsigned bump(unsigned v) { cell += v; return cell; }
+__attribute__((noinline)) unsigned peek(unsigned n) { return cell + n; }
+unsigned applied_entry(unsigned n) {
+    unsigned char v = 0;
+    unsigned r = 0;
+    bennett_h(bennett_bit(&v, 0));
+    r ^= bump(v) * 2 - peek(n);
+    return (unsigned)bennett_measure(&r);
+}
+"#,
+    );
+    for (mode, flags) in [("default", &[][..]), ("taint-all", &["--taint-all"][..])] {
+        let text = lower_text(&source, &format!("{name}-{mode}"), CLANG_FLAGS, flags)
+            .unwrap_or_else(|error| panic!("{mode}: {error}"));
+        let module = bennett_ir::load(&text).expect("valid device program");
+        let state = state_before_first_measurement(&module, "applied_entry", &[0]);
+        let columns = registers(&module, "applied_entry");
+        let (v, r) = (column(&columns, "v"), column(&columns, "r"));
+        let values = state.quantum.amplitudes.iter().map(|(config, _)| (config[v], config[r])).collect::<Vec<_>>();
+        assert_eq!(values, [(0, 13), (1, 15)], "{mode}");
     }
 }

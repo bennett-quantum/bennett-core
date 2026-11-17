@@ -9,11 +9,11 @@ definite value of its argument registers with one step bound `B` for the whole a
 of the order below are done: the independent reference that runs `apply` by the device's construction
 (`08d7016`), and applied calls from C (`2464f38`, `4b64089`, `767f853`), with SQLite queries applied to a
 qubit-dependent key as their acceptance; an independent testing pass over applied calls (`a0c0bc6`) found no
-wrong result and two defects of the front's diagnostics, kept as ignored witnesses. DESIGN's model sections
+wrong result and two defects of the front's diagnostics, since fixed. DESIGN's model sections
 were read against the written account of the model by an independent reader and corrected where they said
 more than the argument carries. Nothing of this work is running. Next: code under a qubit that writes what
 later code reads, rules B, C and A at a definite address, each a landable step ("Next steps, in order", 4);
-the two diagnostic defects are small fixes beside it.
+the two diagnostic defects are fixed (step 0 of that work).
 
 ## Resumed on 2026-11-17
 
@@ -311,6 +311,8 @@ explicitly after the separate musl build.
    with native SQLite. **Next, code under a qubit that writes what later code reads** (the maintainer's decision
    of about 15:35 UTC, "Resumed on 2026-11-17"), by an Opus implementer, the plan first rewritten to follow that
    decision, then each a landable step with its tests and documents true in the same step, in this order:
+   0. **Done:** the two defects of the diagnostics found by the testing pass over applied calls ("Applied calls
+      (2026-11-17)", the end).
    1. **Rule B.** Code without gates, written inline, whose control flow depends on a qubit and which assigns to
       qubit variables becomes one `apply` with one budget (one pair of `apply`s for several results), lifting
       today's refusal. Tested with two nested loops whose trip counts depend on a qubit register. The front
@@ -1317,7 +1319,8 @@ descriptor are undone byte for byte, allocator and file model included, and late
 original file and heap. Console output and `exit` give their faults per value with an empty tape; a load and a
 store at a byte holding qubits give `qubit_memory_access` for the values that reach them. Three deliberately
 wrong expectations each fail. The SQLite acceptance, run again on its own build: 64 comparisons pass. No wrong
-result. Two defects of the diagnostics, each an ignored witness in that file:
+result. Two defects of the diagnostics, each a witness in that file, fixed since (step 0 of "Next steps, in
+order", 4):
 
 - **The warning misses a caller-local variable read by a direct callee** (`r ^= put(v, &local)` then
   `get(&local)`: no warning). The write side keeps the local allocation (`front/src/Applied.cpp`, around line
@@ -1325,5 +1328,10 @@ result. Two defects of the diagnostics, each an ignored witness in that file:
 - **`--taint-all` refuses a writing call combined with a pure call on an ordinary argument** (`r ^= bump(v) +
   score(n)`, lowered without the option to the native 46 and 47): the slice admits the pure call
   (`front/src/Control.cpp`, around line 493) and the count of qubit-dependent calls then includes it (around
-  line 519), giving the refusal of two calls in one computation.
+  line 519), giving the refusal of two calls in one computation. Fixed: only calls that depend on a qubit
+  count; and an ordinary call `--taint-all` moves into an applied function now runs before anything that depends
+  on a qubit there. Without the second part the fix would have exposed a wrong result: in
+  `r ^= bump(v) * 2 - peek(n)` the ordinary `peek` read the private copy after `bump` wrote it (14 instead of 15
+  for v = 1; regression test `an_ordinary_reader_in_a_slice_does_not_see_the_applied_calls_writes`). The
+  warning now also follows a later direct call given a pointer to the caller's local variable.
 

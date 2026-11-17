@@ -515,8 +515,11 @@ Slice ControlWriter::collect(const Value *root, const Instruction &sink) {
                    inst);
       }
       // Each applied call starts from the memory as it was and its writes are undone when it ends; in one
-      // computation a second call would see the first's writes.
-      calls.push_back(call);
+      // computation a second call would see the first's writes. Only calls that depend on a qubit count: an
+      // ordinary call `--taint-all` moves into the slice reads memory at most and runs first (below).
+      if (analysis.tainted(call)) {
+        calls.push_back(call);
+      }
       if (calls.size() > 1 && std::any_of(calls.begin(), calls.end(), [](const CallBase *c) {
             return !c->onlyReadsMemory();
           })) {
@@ -538,6 +541,11 @@ Slice ControlWriter::collect(const Value *root, const Instruction &sink) {
     slice.body.push_back(inst);
   };
   visit(root);
+  // What does not depend on a qubit (moved into the slice by `--taint-all`) never depends on what does, so it
+  // can run first: an ordinary call then reads memory as it is at its own site, before any applied call in
+  // the slice writes the private copy.
+  std::stable_partition(slice.body.begin(), slice.body.end(),
+                        [&](const Instruction *inst) { return !analysis.tainted(inst); });
   return slice;
 }
 
