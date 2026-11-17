@@ -24,12 +24,16 @@ the code teaches us something, and say why in the commit.
 
 ## The model
 
-The device program is the standard quantum circuit model driven by ordinary code. Terms used below:
+The device program is ordinary code that issues the operations of the standard quantum circuit model, plus one
+construction of its own, `apply`. Terms used below:
 
 - A **qubit** is a two-level system with basis states 0 and 1; a **register** is a numbered group of qubits read
-  as an integer, little-endian. A **basis configuration** is one definite value of every register; the
+  as an integer, little-endian. A **basis configuration** is one definite value of every register. A pure
   quantum state assigns each configuration a complex **amplitude**, and the probability of a measurement outcome
-  is the sum of the squared magnitudes of the amplitudes that give it.
+  is the sum of the squared magnitudes of the amplitudes that give it. After a partial trace (`qfree`, below)
+  the remaining registers are in general in a **mixture** (a density operator), which no single assignment of
+  amplitudes describes; it is the partial trace of a pure state of a larger set of qubits (a
+  **purification**), and that is how the simulator stores it ("Releasing a register").
 - A **gate** is a unitary (a norm-preserving linear map) on the amplitudes; a gate that permutes basis
   configurations is a classical reversible gate.
 - A **step** is one executed instruction or terminator of the device program.
@@ -40,20 +44,29 @@ The model has three parts.
 
 1. **Ordinary code**: integer arithmetic, memory, jumps, calls, console output, stop. Every operation is a
    total function of the machine state (its slots, frames, stack pointer, position, memory and output), with
-   named faults where C would be undefined. Ordinary code only ever holds definite values.
+   named faults where C would be undefined. Ordinary code is defined on definite values: outside `apply` it
+   holds them; under `apply` it runs for each definite value of the arguments, and a device carries all of
+   those runs at once on qubits ("Why a device can carry it out", below).
 2. **Quantum instructions issued by ordinary code**: `qalloc` (a fresh register, all qubits 0), gates with
    control qubits, `measure` (the outcome becomes an ordinary value), and `qfree`, which is the **partial
    trace**: the register is dropped unexamined, whatever it holds, and the other qubits are left in the state
    they have without it (a mixture, if they were entangled with it: their interference with it is gone). A
-   gate or a measurement may name a qubit by an ordinary address ("Qubits in memory"). Ordinary code never
-   sees a qubit: a register is not an integer (`docs/SYNTAX.md`), and a `load` or `store` touching a byte
-   that holds qubits is the named fault `qubit_memory_access`.
+   gate or a measurement may name a qubit by an ordinary address ("Qubits in memory", a derived form).
+   Ordinary code never sees a qubit: a register is not an integer (`docs/SYNTAX.md`), and a `load` or `store`
+   touching a byte that holds qubits is the named fault `qubit_memory_access`.
 3. **`apply @f(args) -> out, fault budget B`**, the one bridge from qubits to ordinary code: `@f` is ordinary
    code. For each definite value of the argument registers, run `@f` for exactly `B` steps (a run that has
    finished stays finished) on a private copy of memory, XOR the result into `out`, or the fault code into
    `fault` if it faulted or had not finished, and discard the private memory ("`apply`", below).
 
-Rotations take any real angle; a device with a finite gate set approximates them.
+Parts 1 and 2 alone are the circuit model with classical control: a run issues allocations, gates,
+measurements and partial traces, each chosen by ordinary code from the measurement outcomes before it, and its
+first `N` steps, for any `N`, are equivalent to a finite quantum circuit whose measurements are deferred to its
+end.
+Part 3 is not covered by that equivalence; why a device can carry it out is argued separately ("`apply`").
+
+Rotations take any angle written as a finite `f64` (`docs/SYNTAX.md`); a device with a finite gate set
+approximates them.
 
 ## The device program (`ir`)
 
@@ -100,16 +113,18 @@ straightforward expansion into ordinary code; none reads or acts on a qubit:
 
 - **Forward.** The executor counts one step per executed instruction and terminator. The program carries no
   metering code. A run may be given a step limit (`Options::budget`, `bennett run --budget`), a parameter of the
-  simulator like its memory size.
+  run like its memory size.
 - **Reverse.** In reversible mode each step appends to an undo journal exactly what it overwrites: the old value
   of a slot, the old bytes of a store, the predecessor of a control transfer, the stack pointer. Reversal pops
   the journal. The journal is a few machine words per step and never holds a copy of the whole state. Console
   output goes to a tape and is unwound with it. Gates are undone by their inverses and an `apply` by applying
   it again; reversal past a measurement is refused with a named error.
-- **Why reverse exists.** Keeping what each step overwrites is exactly what makes ordinary code reversible, and
-  so runnable on qubits: it is the construction behind `apply` (below). Un-running a whole program is also
-  worth having for its own sake, and "forward then back returns exactly to the start" is one of the independent
-  checks in the defence in depth.
+- **Why reverse exists.** Keeping what each step overwrites makes a run on definite values reversible step by
+  step. It is a cousin of the construction behind `apply`, not that construction: on qubits each step keeps the
+  whole previous state, not only what it overwrote ("Why a device can carry it out", below). Un-running a whole
+  program is worth having for its own sake, and "forward then back returns to the start" is one of the
+  independent checks in the defence in depth: exactly in memory, slots, frames and output, and up to `f64`
+  rounding in the amplitudes, since gates are undone by their inverses in floating point.
 - **Quantum state** is a sparse map from basis configuration (the values of all live registers) to a complex
   amplitude. Gates act on amplitudes. This is numerical (f64), and is evidence, not proof.
 - **`measure`** samples with a seeded generator and keeps only the configurations that agree with the outcome,
@@ -128,64 +143,90 @@ private copy of memory as it stands, starting from a fresh frame above the calle
 - if it has stopped with a named fault `c`, or has not finished (`c` is then `budget`): `fault ^= c`, `out`
   unchanged.
 
-Then the private memory is discarded. The arguments are unchanged, so `apply` permutes basis configurations
-and is its own inverse. Inside `@f` a quantum instruction is the fault `quantum_in_region`, `effect` is
-`effect_in_region` and `exit` is `exit_in_region`, each an ordinary stop of the run of `@f`. This is the
-lifted-oracle contract of the North Star (§4.2).
+Then the private memory is discarded. The arguments are unchanged, so on the arguments and the pair
+(`out`, `fault`) `apply` is the unitary that takes `|a, y, z⟩` to `|a, y ⊕ r, z⟩` for the values `a` where `@f`
+returns `r`, and to `|a, y, z ⊕ c⟩` where it ends with fault code `c`: a permutation of basis
+configurations, which undoes itself when applied again with the same memory and the same `B`. Inside `@f` a
+quantum instruction is the fault `quantum_in_region`, `effect` is `effect_in_region` and `exit` is
+`exit_in_region`, each an ordinary stop of the run of `@f`. This is the lifted-oracle contract of the North
+Star (§4.2).
 
-The executor computes it so, and only so (`crates/exec/src/region.rs`): for each basis configuration of
-nonzero amplitude it runs `@f` on that configuration's argument values, with an undo journal of its own, until
-it finishes or has taken `B` steps (the next step is the fault `budget`; a run that finished earlier would only
-have idled), XORs the result or fault code into that configuration's `out` or `fault`, and undoes the run. An
-`apply` is one step of the run that executes it.
+The executor is written to compute it so, and only so (`crates/exec/src/region.rs`); that it does is a claim
+about the tree, checked by its tests ("Tests"), among them an independent reference that carries out the
+construction below on small functions. For each basis configuration of nonzero amplitude it runs `@f` on
+that configuration's argument values, with an undo journal of its own, until it finishes or has taken `B`
+steps (the next step is the fault `budget`; a run that finished earlier would only have idled), XORs the
+result or fault code into that configuration's `out` or `fault`, and undoes the run. An `apply` is one step of
+the run that executes it.
 
 Control needs no special form at this level: `if (q) y = f(3)` is an `apply` whose argument is `q`.
 
 **One bound for the whole applied function.** `budget B` is one bound on all the steps of `@f`, however its
 loops and calls nest: a step of a loop inside a loop inside a callee counts against the same `B` as any other.
-A device runs one fixed step, the same circuit, exactly `B` times, so nested loops cost nothing beyond the
-steps they take. There is no bound per loop. `B` is an operand, so it may be an ordinary value computed at run
-time.
+There is no bound per loop. `B` is an operand, so it may be an ordinary value computed at run time; like every
+ordinary value it is definite when the `apply` executes, so the circuit a device runs for this `apply` (below)
+is fixed before it starts. That circuit repeats one step circuit, the same each time, `B` times, so nested
+loops cost nothing beyond the steps they take.
 
-**Why a device can carry it out.** Write the state of a run of `@f` as a string of bits: its slots, frames,
-stack pointer, position, memory, and whether it has finished with a result or a fault code. One step of
-ordinary code maps that state to the next; the map is in general not invertible (a store overwrites a byte).
-Keeping the previous state beside the new one (in practice only what the step overwrote, as the undo journal
-does) makes each step an invertible map, a permutation of definite states, which a device carries out as a
-circuit of classical reversible gates controlled by the argument qubits. For each `apply`:
+**Why a device can carry it out.** Write the state of a run of `@f` as a string of `s` bits: its slots,
+frames, stack pointer, position, memory, and whether it is running, has returned a result or has stopped with
+a fault code. `s` is fixed before the `apply` starts: memory has the module's size, frames and stack live in it
+(a call that does not fit is the fault `stack_overflow`), and console output and `exit` fault inside, so there
+is no output to hold. One step of ordinary code is a function from that string to the next; a device
+evaluates it with classical reversible gates, as a circuit defined on every string of `s` bits, strings no run
+reaches included; a run that has returned or faulted stays as it is. The function is in general not
+invertible (a store overwrites a byte). So each step gets its own fresh **record** of `s` qubits, 0 at the
+start: the step XORs the next state into its record, then exchanges record and working state, so that the
+working state holds the next state and the record the whole previous one. That is a permutation of all basis
+states, records that are not 0 included, and on a fresh record it does exactly the ordinary step. (The undo
+journal of "Running a program" keeps only what a step overwrote; that is enough on one definite run, but it is
+not this construction, and nothing here shows that it would do on qubits.) For each `apply`:
 
-1. a working register holds the run's state: memory as it stands, a fresh frame for `@f`, nothing kept yet
-   (the arguments stay in their registers, and the steps read them there);
-2. the `B` reversible steps run forward;
+1. a working register holds the run's state: memory as it stands, a fresh frame for `@f`, the run marked as
+   running; every record is 0 (the arguments stay in their registers, and the steps read them there);
+2. the `B` steps run forward, each with its own record, then one final step with its own record, which marks a
+   run still running as out of budget and leaves any other state as it is;
 3. the result, or the fault code, is copied into `out` or `fault` by XOR;
-4. the inverse steps run in reverse order.
+4. the inverse of every step of 2 runs, in reverse order.
 
-Steps 2 and 4 are a permutation and its inverse, and step 3 changes only the targets, which no step of 2 or 4
-reads; so for each definite value of the arguments the working register returns exactly to where it started.
-That start is one definite state, the same whatever the arguments hold, so at the end the working register is
-not entangled with anything and is released without effect. The result is the unitary that takes
-`|a, t⟩` to `|a, t ⊕ f(a)⟩`. Each hypothesis rests on something in the tree:
+For each definite value of the arguments, the steps of 2 take the working register and the records from their
+start, one basis state, to one basis state; step 3 changes only the targets, which the steps of 2 and 4
+neither write nor use as controls; so step 4 takes working register and records back exactly to their start.
+That start is the same basis state whatever the arguments hold, so at the end working register and records are
+not entangled with anything and are released without effect. By linearity, on any superposition of arguments
+and targets, with any other registers beside them, the result is the unitary of "Meaning" above. The
+hypotheses, and what in the tree they rest on:
 
 - *`@f` is ordinary code*: a quantum instruction, `effect` or `exit` reached inside faults before it acts
-  (`crates/exec/src/forward.rs`), so the run of `@f` is a permutation of definite states.
-- *Memory is definite before the `apply`*: ordinary code cannot read a qubit. The validator refuses a register
-  where an integer is expected (`docs/SYNTAX.md`, "Registers are not integers"), a `load` or `store` at a byte
-  that holds qubits faults `qubit_memory_access`, and a measurement's outcome is a definite value.
-- *The target is not read*: the validator refuses `out` or `fault` among the arguments, or `out` equal to
-  `fault`; the executor faults `qubit_alias` when two handles name one register.
-- *The outcome after exactly `B` steps is a total function of the arguments and of the definite state before
-  the `apply`* (its memory, and the caller's frames, which `retaddr` can read): every operation is total and
-  every failure a named fault ("The device program"), and a run not finished after `B` steps gives `budget`.
+  (`crates/exec/src/forward.rs`). So each step is a function of the run's definite state alone, and with its
+  record a classical reversible circuit, taking basis states to basis states; the permutation comes from the
+  record, not from the faults.
+- *The start is one basis state, the same for every argument value*: memory is definite before the `apply`,
+  because ordinary code cannot read a qubit. The validator refuses a register where an integer is expected
+  (`docs/SYNTAX.md`, "Registers are not integers"), a `load` or `store` at a byte that holds qubits faults
+  `qubit_memory_access`, and a measurement's outcome is a definite value. The fresh frame, the position and
+  the records do not depend on the arguments.
+- *The targets are untouched by the steps of 2 and 4*, neither written nor read: `@f` can name no register,
+  works on a private copy of memory in which touching a byte that holds qubits faults, and the copy of step 3
+  is the only operation on `out` and `fault`. The tree enforces that they are distinct registers: the
+  validator refuses `out` or `fault` among the arguments, or `out` equal to `fault`, and the executor faults
+  `qubit_alias` when two handles name one register.
+- *The outcome after `B` steps is a total function of the arguments and of the definite state before the
+  `apply`* (its memory, and the caller's frames, which `retaddr` can read): every operation is total and every
+  failure a named fault ("The device program"), and a run not finished after `B` steps gives `budget`.
 
-**Cost.** On a device one `apply` is two runs of `B` steps, forward and back, and every step costs gates in
-proportion to the part of the machine state it can touch (a load at an address that depends on the arguments
-can touch every byte it could reach), plus qubits to keep what each step overwrote. For a machine state of `R`
-bits of which `s` are kept per step that is on the order of `B·R` gates and `B·s` kept qubits. The executor's
-step counts (`Stats`, `RegionCost`) count instructions, not gates; they are not a cost on a device.
+**Cost.** On a device one `apply` is the `B + 1` steps of 2, the copy of 3 and the inverses of 4. Each step is
+one circuit computing the next state from the whole state, the choice of instruction included, so its size
+depends on that circuit and on `s`, not on what one run happens to touch (a step that can load at an address
+depending on the arguments must reach every byte). With `B + 1` records of `s` qubits beside the working
+state, all returned to 0, that is at most a constant times `B` times (the size of the step circuit plus `s`)
+gates. These are upper bounds for this construction; nothing here says a cheaper circuit cannot exist. The
+executor's step counts (`Stats`, `RegionCost`) count instructions, not gates; they are not a cost on a device.
 
-**Faults for some argument values.** A fault for only some values of the arguments cannot be detected with
-certainty by anything inside the program: a fault register measured afterwards shows it with probability equal
-to the weight of the faulting configurations, and the others carry on. The executor sees every configuration.
+**Faults for some argument values.** With a fault register that starts at 0, measuring it afterwards finds a
+fault with probability equal to the total weight of the faulting configurations, and the state collapses onto
+the outcome found; nothing in the program learns more than that one measurement shows. The executor sees every
+configuration.
 It counts each `apply` execution that faulted for some configuration of nonzero amplitude, with their weight,
 in the run statistics. By default such an `apply` stops the run with the run error `region fault`, leaving the
 state as it was before the `apply`; `allow_region_faults` (`bennett run --allow-region-faults`) lets the run go
@@ -570,6 +611,22 @@ The front writes `retaddr N` for every `llvm.returnaddress(N)` in the default ad
 Gates take addresses, so a qubit can live at any bit of memory (`crates/exec/src/cells.rs`; the plain form kept
 by the maintainer on 2026-11-17). Registers stay as they are, one way of naming qubits among others.
 
+Qubits in memory are a **derived form**, defined by an expansion into `qalloc`, gates, `measure`, `qfree` and
+ordinary code. The ordinary control code keeps a table from byte addresses to 8-qubit registers (the cells,
+below), data of its own that no instruction of the program reads. Then:
+
+- a gate at `[ADDR:BIT]` looks up the byte `ADDR + BIT / 8`; if it has no register yet, it allocates one
+  (`qalloc`), applies `x` to each qubit whose bit is 1 in the byte (a definite value), stores 0 to the byte and
+  enters the register in the table; then it applies the gate to qubit `BIT % 8` of that register;
+- a `load`, a `store` or a jump record first looks its bytes up in the table and faults `qubit_memory_access`
+  if one is there;
+- `measure iN [ADDR]` copies the qubits of the cells among its `N` bits into a fresh register, one controlled
+  `x` each, measures that register, releases it (it is then in a basis state, so the release is exact), and
+  puts the result together with the memory's own bits.
+
+The simulator does the same directly (`cells.rs`), reading its table only at the addresses an instruction
+names.
+
 - **Text** (`docs/SYNTAX.md`, "Qubits in memory"). A gate's qubit is `%r[i]` or `[ADDR:BIT]`: bit
   `BIT % 8` of the byte at `ADDR + BIT / 8`, that is bit `BIT` of the little-endian integer at `ADDR`, as
   `load` and `store` see it; `ADDR` is an `i64` value or constant, `BIT` below 128, `[ADDR]` is bit 0.
@@ -605,7 +662,8 @@ by the maintainer on 2026-11-17). Registers stay as they are, one way of naming 
   the old byte is XORed out of the register, the register un-allocated and the byte written back.
 - **Measurement at an address** (the maintainer's decision of 2026-11-16): `%d = measure iN [ADDR]` reads
   the `N` bits from bit 0 of the integer at the `i64` address, little-endian, as `load iN` reads them, and
-  gives an `iN`. The bits of bytes that hold qubits, and only those bits, are sampled jointly, in one draw,
+  gives an `iN`. The bits of bytes that hold qubits, and only those bits, are sampled jointly, in one draw
+  (the same as measuring them one at a time, since those measurements commute, and as the expansion above),
   and the state collapses onto the values found: the other bits of a cell keep their superposition, and
   cells that are correlated stay correlated. The bits of other bytes are the memory's, with nothing to
   sample. Inside an applied function it faults `quantum_in_region`; reversal stops before it, also when no
@@ -624,26 +682,32 @@ by the maintainer on 2026-11-17). Registers stay as they are, one way of naming 
 
 `qfree %r` is the partial trace over `%r` (the maintainer's decision of 2026-11-17: "qfree can only mean
 partial trace"): the register is dropped unexamined, whatever it holds, and its handle is dead from then on (a
-later use faults `dangling_register`). A register that is not zero when it is released is no fault of the
-program: no device could decide it reliably, since the nonzero part may have arbitrarily small weight. The
+later use faults `dangling_register`) and is never reused. A register that is not zero when it is released is
+no fault of the program: `qfree` is the partial trace for every state of the register, and whether the register
+was 0 is a property of the whole state (its nonzero part may have arbitrarily small weight), which the
+instruction does not test. The
 partial trace of a register entangled with others leaves them in a mixture; a program that wants the
 interference back returns the register to zero first (uncomputes it), as the front does for every qubit
 variable whose value it knows.
 
 How the simulator stores the result (`crates/exec/src/forward.rs`, `quantum.rs`) is its own affair:
 
-- If the register is zero in every stored configuration, its column is removed. This is exact.
+- If the register is zero in every stored configuration, its column is removed.
 - Otherwise the column is kept, unnamed (its generation moves on, so no handle names it) and never reused.
   The stored state is then a **purification** of the state after the partial trace (a larger state whose
-  partial trace over the kept columns is that state), exact: what any later step of the program, a
-  measurement included, can find out is the same either way.
+  partial trace over the kept columns is that state): what any later step of the program, a measurement
+  included, can find out is the same either way.
+
+Both are the partial trace exactly, as operations on the stored state. The amplitudes themselves are `f64`
+values, with those of rounding size dropped after each gate ("The simulator's own stops and reports"), so what
+is stored approximates that state as every state of the simulator does.
 
 **The simulator's report.** `Stats::nonzero_releases` counts the executions of `qfree` whose register was not
 zero in some stored configuration, and `Stats::nonzero_release_weight` sums the weight (squared amplitude) of
 those configurations; `Stats::leftover_qubits` counts the qubits kept so. `bennett run` prints a line when the
 count is not zero. No program can read any of it. A test may fail on it, as the front's tests do
 (`front/tests/src/lib.rs`, `run`): it is a tool of the test, not a result of the program. Reversal takes a
-kept register back, so undoing a release is exact too. Checked in `crates/exec/tests/release.rs`, each
+kept register back, so undoing a release restores the stored state. Checked in `crates/exec/tests/release.rs`, each
 expected state by hand: half of a Bell pair released (weight 1/2, the pair kept in its column), a release of
 weight about 10^-12 reported as such, a stale handle, and a register returned to zero whose column goes.
 
@@ -657,14 +721,14 @@ every quantum step faults `quantum_in_region` before any stop could arise, so no
 
 | What | Where | Why no program can read it |
 |---|---|---|
-| Amplitudes of magnitude at most `f64::EPSILON` are dropped after a gate (one unit of rounding, what cancellation leaves) | `quantum.rs`, `NEGLIGIBLE_AMPLITUDE` | A dropped configuration has weight at most about 5e-32, so it could only change a measurement's probabilities at that size; it is never an outcome. The state is stored in `f64` anyway: evidence, not proof |
+| Amplitudes of magnitude at most `f64::EPSILON` are dropped after a gate (one unit of rounding, what cancellation leaves) | `quantum.rs`, `NEGLIGIBLE_AMPLITUDE` | A dropped configuration is never an outcome, and no instruction reads amplitudes. Each dropped amplitude is at most `f64::EPSILON` (weight about 5e-32), but the simulator does not sum what it drops: over many configurations and gates the losses add up with the other `f64` rounding, unbounded by that figure. The state is approximate in `f64` throughout (the tests compare amplitudes and weights with hand-worked values to tolerances from 1e-9 to 1e-15, most at 1e-12): evidence, not proof |
 | The limit on stored basis configurations | `Options::max_configurations`, `RunError::ConfigurationLimit` | A stop: the run ends with no result, the state as before the gate |
 | The stop at an `apply` faulting for some values of its arguments (strict mode, below) | `RunError::RegionFault`, `region.rs` | A stop. With `allow_region_faults` the fault code is the program's, in its fault register: that is the meaning, not a report |
 | Amplitudes, the register table and cells in snapshots, and the distance `bennett run --reverse` prints | `snapshot.rs`, `crates/cli/src/run.rs` | Data for tests and reports; no device observation, read by no instruction |
 | The report of nonzero releases (count, weight, qubits kept) and the other counts of `Stats` | `executor.rs`, "Releasing a register" above | Read by tests and printed by `bennett run`, never by an instruction |
 
-The step limit of a whole run (`Options::budget`) is a parameter of the simulator: reaching it ends the run with
-the fault `budget`. Inside `apply`, `budget B` is the program's own bound, and its fault code is the program's.
+The step limit of a whole run (`Options::budget`) is a parameter of the run, like its memory size: reaching it
+ends the run with the fault `budget`, so a run given another limit is another run. Inside `apply`, `budget B` is the program's own bound, and its fault code is the program's.
 
 **Strict mode** (the maintainer's decision of 2026-11-16): a check of the simulator that no device can make,
 because it looks at every configuration, is a diagnostic, as a sanitizer's is, and strict mode, which makes it,
@@ -681,9 +745,12 @@ Decided by the maintainer on 2026-11-13, for ordinary code that overwrites value
 
 1. **Classical results are exact.** If the state was classical before, the C code runs, and you measure, you get
    what the C program says. By linearity the same holds for each definite value of a superposition measured at
-   once.
+   once. For the device program this is what `apply` means ("`apply`"); that the front lowers C to a device
+   program with the C program's meaning is the toolchain's own claim, checked against native builds
+   ("From C to a device program"), not something the argument for `apply` shows.
 2. **Coherence is guaranteed for a documented class of updates**: gates, `^=`, the in-place bijections in
-   `docs/MARKERS.md`, and anything the program un-runs. The class may grow; it never shrinks.
+   `docs/MARKERS.md`, and anything the program un-runs with everything it read unchanged since (rule 4). The
+   class may grow; it never shrinks.
 3. **Everywhere else, how much coherence survives is unspecified.** The toolchain may keep more or less of what
    was overwritten as it sees fit. Leaving it entangled is not a bug and not refused; the toolchain warns.
 4. **Un-running code after something changed what it read or wrote** is likewise not refused. The result is
@@ -865,7 +932,9 @@ conditions (each predicated operation computes and clears its own).
   instructions count is undecided.
 - **The adjoint of an applied computation that is not its own inverse.** Gates under qubit control and
   bijective in-place updates are done (above) without one.
-- **Memory written under qubit control that later code reads.**
+- **Memory written under qubit control that later code reads.** Decided on 2026-11-17, not built: such a store
+  keeps its value in qubits at the bytes it writes, and measuring those bytes makes them ordinary memory again
+  (`HANDOFF.md`, "Next steps, in order").
 - **Keeping what ordinary code overwrote under a qubit, and un-running it later.** `apply` computes, copies the
   result out and un-runs at once. An update with no known inverse (`x = x * x`) and a conditional boot need the
   kept values to outlive the `apply`. Decided on 2026-11-17, not built: such an overwrite is accepted, the old
