@@ -173,6 +173,13 @@ bool ModuleWriter::isCoherent(const Function *function) const {
   return function && !function->isDeclaration() && !isControl(function) && function->onlyReadsMemory();
 }
 
+const AppliedCalls &ModuleWriter::appliedCalls() {
+  if (!applied) {
+    applied = std::make_unique<AppliedCalls>(module);
+  }
+  return *applied;
+}
+
 bool ModuleWriter::isApplicable(const Function *function) const {
   return function && !function->isDeclaration() && !isControl(function);
 }

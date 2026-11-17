@@ -2,8 +2,11 @@
 // of the device program are in crates/ir.
 #pragma once
 
+#include "Applied.h"
+
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -66,6 +69,9 @@ public:
   std::string addFunction(const std::string &hint, const std::string &body);
   // `@bennett.copy.iN`: returns its argument, for XORing an ordinary value into a register with `apply`.
   std::string copyFunction(unsigned bits);
+  // What the module's functions write and read, for the warning about an applied call's undone writes;
+  // computed on first use.
+  const AppliedCalls &appliedCalls();
 
 private:
   llvm::Module &module;
@@ -74,6 +80,7 @@ private:
   std::map<const llvm::Function *, uint64_t> indices;
   std::map<const llvm::GlobalVariable *, uint64_t> addresses;
   std::map<unsigned, std::string> copies;
+  std::unique_ptr<AppliedCalls> applied;
   std::vector<std::string> generated;
   Namer functionNames;
   uint64_t staticEnd = 0;

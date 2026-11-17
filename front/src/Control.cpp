@@ -224,7 +224,7 @@ void ControlWriter::instruction(const Instruction &inst) {
                    &inst);
       }
       if (!call->onlyReadsMemory()) {
-        warnUndoneWrites(*call, analysis.dominators);
+        module.appliedCalls().warnUndoneWrites(*call, analysis.dominators);
       }
     } else if (!readsRegister && inst.mayHaveSideEffects()) {
       notHandled("an effect on memory (the instruction `" + std::string(inst.getOpcodeName()) +

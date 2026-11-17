@@ -21,24 +21,6 @@ namespace bennett {
 
 namespace {
 
-// The memory a function may write or read that the front can name: global variables, and the memory its
-// pointer parameters point to (by parameter number).
-struct Footprint {
-  std::set<const GlobalVariable *> globals;
-  std::set<unsigned> parameters;
-
-  bool add(const Footprint &other) {
-    size_t before = globals.size() + parameters.size();
-    globals.insert(other.globals.begin(), other.globals.end());
-    parameters.insert(other.parameters.begin(), other.parameters.end());
-    return globals.size() + parameters.size() != before;
-  }
-};
-
-struct Effects {
-  Footprint writes, reads;
-};
-
 // Adds the object `pointer` is based on to `footprint`, if it is one the footprint names.
 void note(Footprint &footprint, const Value *pointer) {
   const Value *object = getUnderlyingObject(pointer);
@@ -68,10 +50,17 @@ const Function *directCallee(const Instruction &inst) {
   return callee && !callee->isDeclaration() ? callee : nullptr;
 }
 
-// The effects of every defined function of `module`, through the functions each calls directly: each
-// function's own accesses first, then those of its callees, to a fixed point.
-std::map<const Function *, Effects> effectsOf(const Module &module) {
-  std::map<const Function *, Effects> effects;
+} // namespace
+
+bool Footprint::add(const Footprint &other) {
+  size_t before = globals.size() + parameters.size();
+  globals.insert(other.globals.begin(), other.globals.end());
+  parameters.insert(other.parameters.begin(), other.parameters.end());
+  return globals.size() + parameters.size() != before;
+}
+
+// Each function's own accesses first, then those of its callees, to a fixed point.
+AppliedCalls::AppliedCalls(const Module &module) {
   for (const Function &function : module) {
     if (function.isDeclaration()) {
       continue;
@@ -112,8 +101,9 @@ std::map<const Function *, Effects> effectsOf(const Module &module) {
       }
     }
   }
-  return effects;
 }
+
+namespace {
 
 // An object both footprints name, for a message; empty if none.
 std::string shared(const Footprint &read, const Footprint &written) {
@@ -141,9 +131,8 @@ bool onCycle(const BasicBlock &block, const DominatorTree &dominators) {
 
 } // namespace
 
-void warnUndoneWrites(const CallBase &call, const DominatorTree &dominators) {
+void AppliedCalls::warnUndoneWrites(const CallBase &call, const DominatorTree &dominators) const {
   const Function &caller = *call.getFunction();
-  std::map<const Function *, Effects> effects = effectsOf(*caller.getParent());
   const Function *callee = call.getCalledFunction();
   // The objects the applied call writes, as the calling function names them: its globals and parameters,
   // and its own local variables passed by pointer.

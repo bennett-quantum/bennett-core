@@ -10,14 +10,43 @@
 // seen: the absence of the warning proves nothing.
 #pragma once
 
+#include <map>
+#include <set>
+
 namespace llvm {
 class CallBase;
 class DominatorTree;
+class Function;
+class GlobalVariable;
+class Module;
 } // namespace llvm
 
 namespace bennett {
 
-// Warns, by name and location, about the writes of the applied call `call` that later code reads.
-void warnUndoneWrites(const llvm::CallBase &call, const llvm::DominatorTree &dominators);
+// The memory a function may write or read that the front can name: global variables, and the memory its
+// pointer parameters point to (by parameter number).
+struct Footprint {
+  std::set<const llvm::GlobalVariable *> globals;
+  std::set<unsigned> parameters;
+
+  bool add(const Footprint &other);
+};
+
+struct Effects {
+  Footprint writes, reads;
+};
+
+// The effects of every defined function of a module, through the functions each calls directly, computed
+// once for the module.
+class AppliedCalls {
+public:
+  explicit AppliedCalls(const llvm::Module &module);
+
+  // Warns, by name and location, about the writes of the applied call `call` that later code reads.
+  void warnUndoneWrites(const llvm::CallBase &call, const llvm::DominatorTree &dominators) const;
+
+private:
+  std::map<const llvm::Function *, Effects> effects;
+};
 
 } // namespace bennett
