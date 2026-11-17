@@ -773,6 +773,20 @@ negotiation. The exact syntax is whatever the single reader in `ir` accepts; `ex
 - Random programs, forward and back.
 - `cargo test` finishes in seconds. Throughput and journal bytes per step are *reported*, never gated on wall time.
 
+The independent test helper `crates/exec/tests/compute_copy_reference/` executes the reversible construction
+for small applied functions. Its state vector includes argument and target registers, a fixed machine encoding
+(value slots, call frames, program counter, step count and byte memory), and one full snapshot register per
+scheduled step. Each step XORs its ordinary update into its record and swaps the machine and record registers;
+the inverse swaps first and XORs the same update. After exactly `B` steps, including idle steps after a return
+or fault, it XORs the result or fault code into the targets and runs all inverse steps. Every machine and
+record bit must return exactly. This helper has its own interpreter for the small ordinary instruction subset
+used by its tests; it shares the public IR reader, not executor stepping code, and is not a circuit compiler.
+Exact complex integer amplitudes with a common denominator of 8 check all 64 prepared configurations of the
+argument, result and fault registers, including relative phases and superposed targets. They are compared with
+the executor within `1e-14` per real or imaginary component. Cases cover arithmetic, private memory, calls,
+input-dependent loops and two nested loops, division and bounds faults, `effect`/`exit`, and a single budget
+exhausted only for some argument values. This is finite test evidence, not a proof for all device programs.
+
 The IR mnemonic tests (`crates/ir/tests/mnemonic_contract.rs`) specify all 36 words independently of
 the production macro, check each reader variant and writer instruction against that specification,
 and reject missing operands. Shared reader/writer swaps cannot hide behind a round trip. The explicit
