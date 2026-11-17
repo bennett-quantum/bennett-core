@@ -128,6 +128,9 @@ impl<'m> Executor<'m> {
         if step {
             self.charging = true;
             self.budget_spent = false;
+            // Running again is charged to the calls with a budget live at the rewind too, as an applied
+            // function's running again is charged to its region's budget: the least room any of them has.
+            self.guard_room = self.guard_left().map(|left| (left, self.charged));
         }
         // What this rewind's own un-run leaves over; a rewind run again inside it keeps its own.
         let outer_made = std::mem::take(&mut self.leftovers_made);
@@ -165,6 +168,9 @@ impl<'m> Executor<'m> {
             }
             self.partial = outer_partial;
             self.charged = charged;
+            if step {
+                self.guard_room = None;
+            }
             // Running again stopped because the budget was spent, not because the history did not describe
             // the path: the rewind faults `budget`, having changed nothing.
             let spent = step && std::mem::take(&mut self.budget_spent);
@@ -174,6 +180,13 @@ impl<'m> Executor<'m> {
         }
         self.partial = outer_partial;
         self.for_forks(from, &|executor| executor.partial = outer_partial);
+        // The steps run again are charged to the calls with a budget live at the rewind, in every world.
+        if let Some((_, start)) = if step { self.guard_room.take() } else { None } {
+            let replayed = self.charged - start;
+            let charge = |executor: &mut Self| executor.count_guards(executor.frames.len(), replayed, false);
+            charge(self);
+            self.for_forks(from, &charge);
+        }
         // Ran regardless over a state its history does not describe: what it left over is journalled after the
         // rewind's record, for undoing the rewind to take back (`leftover.rs`).
         if left_behind {
@@ -443,7 +456,9 @@ impl<'m> Executor<'m> {
             }
             // Under a rewind taken as a step, each step run again is charged to the run's budget, after the
             // rewind's own step: one that would pass it stops running again (the rewind faults `budget`).
-            if self.charging && self.budget.is_some_and(|budget| self.steps.saturating_add(self.charged) + 2 > budget) {
+            let run_spent = self.budget.is_some_and(|budget| self.steps.saturating_add(self.charged) + 2 > budget);
+            let call_spent = self.guard_room.is_some_and(|(room, start)| self.charged - start + 1 > room);
+            if self.charging && (run_spent || call_spent) {
                 self.budget_spent = true;
                 return Err(Mismatch);
             }

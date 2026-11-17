@@ -62,6 +62,14 @@ impl<'m> Executor<'m> {
         }
     }
 
+    /// The least number of steps any live call with a budget has left, if one is live.
+    pub(crate) fn guard_left(&self) -> Option<u64> {
+        if !self.any_guard || !self.counting {
+            return None;
+        }
+        self.guards().filter_map(|depth| self.frames[depth].guard).min()
+    }
+
     /// The outermost live call with a budget whose budget is spent, if one is.
     fn spent_guard(&self) -> Option<usize> {
         if !self.any_guard || !self.counting {

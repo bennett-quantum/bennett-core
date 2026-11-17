@@ -270,7 +270,14 @@ arguments and reads of registers included, with the region's rules attached to i
   gives no steps back (an applied function's steps never go back either): its un-run keeps their count, and
   each rewind notes how many it un-ran (`Journal::rewind_costs`, left out of equality like time) so that
   undoing it gives them back before running them again, which then counts exactly as it did. Reversal gives
-  every step back. A failed rewind running forward again what it un-ran counts nothing.
+  every step back. A failed rewind running forward again what it un-ran counts nothing. **Running again is
+  charged to the call's budget** as to the run's ("History", Cost) and to an applied function's region: the
+  steps a rewind taken as a step inside the callee runs again are counted against the least room of the calls
+  with a budget live at it, and a rewind whose running again would pass it (its own step counted first) faults
+  `budget`, changing nothing, which the call then catches. Until 2026-11-16 only the run's budget was charged,
+  so a callee rewinding one mark in a loop ran exponentially many steps again before its own budget ended it,
+  where `apply` of it stops after a few (found by computing `apply` as the forms, below; witness
+  `crates/exec/tests/call_budget_replay.rs`, the hand count of `history_independent.rs` for budgets 1 to 40).
 - **A fault inside** (any named fault: the callee's, a budget spent) does not end the world: the frames from
   the callee's up are discarded (a `Catch` record keeps them), the stack pointer is the callee's entry one, and
   the caller goes on with `%y` = 0 and `%c` = the fault's code; a return gives `%c` = 0. A callee whose frame
