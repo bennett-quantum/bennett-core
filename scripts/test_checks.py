@@ -54,13 +54,25 @@ class Checks(unittest.TestCase):
             (self.root / name).write_text(good)
             self.assertEqual(checks.bare_times(self.root, [Path(name)]), [])
 
-    @unittest.skipUnless(DEFECTS, 'defect: the bare-time check reads only .py/.sh/.js/.ts names, so a shebang script is never read')
     def test_bare_times_reads_extensionless_shell_scripts(self):
         # .githooks/pre-push is such a script in this tree; a literal there must be flagged like one in run.sh.
         (self.root / '.githooks').mkdir()
         hook = self.root / '.githooks/pre-push'
         hook.write_text('#!/bin/sh\nsleep 5\n')
         self.assertEqual(len(checks.bare_times(self.root, [Path('.githooks/pre-push')])), 1)
+
+    def test_bare_times_selects_scripts_by_shebang(self):
+        for name, text, found in [
+            ('tool', '#!/usr/bin/env python3\nimport time\ntime.sleep(2)\n', 'bare time constant'),
+            ('tool.in', '#!/usr/bin/env -S VAR=1 bash -e\ntimeout 9 ./x\n', 'bare time constant'),
+            ('tool', '#! /usr/bin/perl\nsleep 5;\n', "interpreter 'perl' has no bare-time scanner"),
+        ]:
+            (self.root / name).write_text(text)
+            self.assertIn(found, ' '.join(checks.bare_times(self.root, [Path(name)])), text)
+        # A Rust inner attribute, ordinary text and binary data are not scripts.
+        for text in [b'#![deny(warnings)]\nfn sleep(_: u8) {}\n', b'sleep 5\n', b'\x7fELF\xff\x00']:
+            (self.root / 'lib').write_bytes(text)
+            self.assertEqual(checks.bare_times(self.root, [Path('lib')]), [], text)
 
     @unittest.skipUnless(DEFECTS, 'defect: a positional Python timeout literal (wait(30), communicate(None, 30)) is not flagged')
     def test_bare_times_flags_positional_timeouts(self):

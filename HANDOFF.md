@@ -1261,14 +1261,19 @@ promotion and Grover tests remain; they are not new circuit-backend comparisons 
 An Opus testing pass over four pieces sol built, looking for wrong results. Findings, each with a witness that
 fails today:
 
-- **The checks** (low): the bare-time check reads only `.py`/`.sh`/`.js`/`.ts` names, so an extensionless
-  shell script (this tree's `.githooks/pre-push`) is never read; positional Python timeouts (`wait(30)`,
-  `communicate(None, 30)`) are not flagged; a file that is not UTF-8 is not scanned for host paths; an
-  `amend!` subject passes the WIP check on `main`. Witnesses in `scripts/test_checks.py`, skipped unless
-  `BENNETT_RUN_DEFECTS=1`. Every other claimed rejection was seeded and fails as documented (host paths,
-  litter, symlinks, time literals, WIP ancestors, a bad non-HEAD revision, `_` and binding arms in the
-  executor library, a removed attribute policy, clang 23 by `CLANG`, LLVM 23 by `LLVM_DIR`, the refused
-  attributes). Not covered and not claimed: `matches!`/`if let` catch-alls, the experiment observers'
+- **The checks** (low), four gaps, each witness in `scripts/test_checks.py`:
+  - the bare-time check read only `.py`/`.sh`/`.js`/`.ts` names, so an extensionless shell script (this tree's
+    `.githooks/pre-push`) was never read. Fixed: scripts are also selected by their shebang line, and a
+    shebang naming an interpreter the check has no scanner for is reported, not skipped; the witness is an
+    ordinary test;
+  - positional Python timeouts (`wait(30)`, `communicate(None, 30)`) are not flagged;
+  - a file that is not UTF-8 is not scanned for host paths;
+  - an `amend!` subject passes the WIP check on `main`.
+
+  Open witnesses are skipped unless `BENNETT_RUN_DEFECTS=1`. Every other claimed rejection was seeded and
+  fails as documented (host paths, litter, symlinks, time literals, WIP ancestors, a bad non-HEAD revision,
+  `_` and binding arms in the executor library, a removed attribute policy, clang 23 by `CLANG`, LLVM 23 by
+  `LLVM_DIR`, the refused attributes). Not covered and not claimed: `matches!`/`if let` catch-alls, the experiment observers'
   standalone workspaces, a pushed revision that weakens its own `scripts/check.sh`.
 - **The Lua probe** (low): `%a` of a subnormal double is musl's spelling, not glibc's (question above;
   `front/tests/tests/printf_hex_float.rs`).

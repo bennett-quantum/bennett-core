@@ -52,14 +52,48 @@ def literal(node):
         isinstance(node, (ast.UnaryOp, ast.BinOp)) and any(literal(c) for c in ast.iter_child_nodes(node)))
 
 
+SUFFIX_LANGUAGES = {'.py': 'python', '.sh': 'shell', '.js': 'javascript', '.ts': 'javascript'}
+# Interpreter names on a shebang line, matched whole after any directory and an `env` launcher.
+SHEBANG_LANGUAGES = [(re.compile(r'python[0-9.]*'), 'python'), (re.compile(r'(?:ba|da|k|z|a)?sh'), 'shell'),
+                     (re.compile(r'node|deno|bun|ts-node'), 'javascript')]
+
+
+def script_language(path):
+    """The scanner for a script, by extension or else by its shebang line; None for other files.
+
+    An unknown shebang interpreter is returned as ('unknown', interpreter) so it is reported, not skipped.
+    """
+    if path.suffix in SUFFIX_LANGUAGES:
+        return SUFFIX_LANGUAGES[path.suffix]
+    with path.open('rb') as handle:
+        first = handle.readline()
+    # `#![` opens a Rust inner attribute, not an interpreter line.
+    if not first.startswith(b'#!') or first.startswith(b'#!['):
+        return None
+    words = first[2:].decode(errors='replace').split()
+    if words and Path(words[0]).name == 'env':
+        words = [word for word in words[1:] if not word.startswith('-') and '=' not in word]
+    interpreter = Path(words[0]).name if words else ''
+    for pattern, language in SHEBANG_LANGUAGES:
+        if pattern.fullmatch(interpreter):
+            return language
+    return ('unknown', interpreter)
+
+
 def bare_times(root, names):
     issues = []
     for name in names:
         path = root / name
-        if path.suffix not in {'.py', '.sh', '.js', '.ts'} or not path.is_file():
+        if path.is_symlink() or not path.is_file():
+            continue
+        language = script_language(path)
+        if language is None:
+            continue
+        if isinstance(language, tuple):
+            issues.append(f'{name}:1: script for interpreter {language[1]!r} has no bare-time scanner; add one')
             continue
         text = path.read_text()
-        if path.suffix == '.py':
+        if language == 'python':
             tree = ast.parse(text, filename=str(name))
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call):
