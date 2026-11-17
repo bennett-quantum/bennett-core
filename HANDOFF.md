@@ -1,14 +1,19 @@
 # HANDOFF
 
-State on 2026-11-17: **resumed by the maintainer the same day; see "Resumed on 2026-11-17" below before
-anything else.** The tree implements the model stated in `docs/DESIGN.md`, "The model": ordinary code; the
-quantum instructions it issues (`qalloc`, gates, `measure`, `qfree` as the partial trace), naming qubits in
-registers or at memory addresses, with the named fault `qubit_memory_access` when ordinary code touches a byte
-that holds qubits; and `apply`, evaluated for each definite value of its argument registers with one step bound
-`B` for the whole applied function. `mark`, `rewind`, machine states in superposition and the call with a fault
-value are removed. Steps 1 to 4 of the order below are done; the documents say what the code does now. Next:
-the rest of step 5 (the reference that runs `apply` by its construction) and step 6, applied calls, which is
-being built on its own branch.
+State on 2026-11-17, evening: **resumed by the maintainer the same day; see "Resumed on 2026-11-17" below
+before anything else.** The tree implements the model stated in `docs/DESIGN.md`, "The model": ordinary code;
+the quantum instructions it issues (`qalloc`, gates, `measure`, `qfree` as the partial trace), naming qubits in
+registers or at memory addresses (a derived form, defined in DESIGN by its expansion), with the named fault
+`qubit_memory_access` when ordinary code touches a byte that holds qubits; and `apply`, evaluated for each
+definite value of its argument registers with one step bound `B` for the whole applied function. Steps 1 to 6
+of the order below are done: the independent reference that runs `apply` by the device's construction
+(`08d7016`), and applied calls from C (`2464f38`, `4b64089`, `767f853`), with SQLite queries applied to a
+qubit-dependent key as their acceptance; an independent testing pass over applied calls (`a0c0bc6`) found no
+wrong result and two defects of the front's diagnostics, kept as ignored witnesses. DESIGN's model sections
+were read against the written account of the model by an independent reader and corrected where they said
+more than the argument carries. Nothing of this work is running. Next: code under a qubit that writes what
+later code reads, rules B, C and A at a definite address, each a landable step ("Next steps, in order", 4);
+the two diagnostic defects are small fixes beside it.
 
 ## Resumed on 2026-11-17
 
@@ -16,13 +21,16 @@ Work was stopped on the morning of 2026-11-17 because the maintainer wanted to u
 model before deciding anything, and was concerned that it might be unphysical. A rigorous account of the model,
 with proofs, was written that day. What it showed:
 
-- Ordinary code that issues qubit allocation, gates with controls and measurement is the standard quantum
-  circuit model, for a bounded number of steps and finite memory.
+- Ordinary code that issues qubit allocation, gates with controls, measurement and partial trace is the
+  standard quantum circuit model with classical control: the first `N` steps of a run, for any `N`, are a finite
+  quantum circuit with its measurements deferred to the end.
 - `apply @f(args) -> out, fault budget B`, defined for each definite value of the argument registers as running
   `@f` (ordinary code, no quantum instruction) for exactly `B` steps on a private copy of memory and XORing its
   result or fault code into a target it does not read, can be carried out by a device: each ordinary step is
-  made reversible by keeping the previous state, the result is copied out by XOR, the inverse steps run, and the
-  working memory returns exactly. One `apply` costs two runs of `B` steps.
+  made reversible by keeping the whole previous state in a fresh record, the result is copied out by XOR, the
+  inverse steps run, and the working memory and records return exactly. One `apply` costs `B + 1` steps forward
+  (the last marks a run still running as out of budget), the copy and their inverses (`docs/DESIGN.md`,
+  "`apply`", with the hypotheses and the cost as an upper bound).
 - `mark`/`rewind` is proved only in a narrow static form (each mark paired with its rewind in the program text,
   nothing allocated, released, measured or printed between). The form the executor runs, where run-time paths
   choose what a rewind undoes, is proved only under conditions and open in general, and several of the
@@ -121,31 +129,39 @@ The order of the work:
    before a stop could arise (a test checks the last with the configuration limit set where it would bite).
 4. Done: the documents say what the code does now; `docs/DESIGN.md` states the model, `apply`'s meaning, why a
    device can carry it out and what it costs, and defines the derived forms (`call_indirect`, `stacksave`,
-   `stackrestore`, `retaddr`, `setjmp`, `longjmp`, `exit`) by their expansion into ordinary code.
+   `stackrestore`, `retaddr`, `setjmp`, `longjmp`, `exit`) and qubits in memory by their expansion. An
+   independent reader (Muse) compared DESIGN's model sections with the written account of the model and flagged
+   21 sentences as unsupported or imprecise; each was checked against that account, and DESIGN now says only
+   what it and the code support (`5a4c4a2`): the construction keeps the whole previous state per step, not only
+   what a step overwrote; `B` steps and one final step that marks a run still running as out of budget; the
+   hypotheses in full; the cost as an upper bound; mixtures after a partial trace; the simulator's `f64`
+   tolerance as it is.
 5. Independent checks: an audit of the front against the model (done: three wrong translations fixed, "Known
    weak spots"; two findings on loops go to step 6), a testing pass over steps 1 and 2 (done, `214fa8f`: 13
    tests, no defect), a testing pass over step 3 (done, `33ebafa`: 16 tests, no defect; both in "Independent
    checks of apply, removal, front fixes and qfree"), and a small reference that runs `apply` literally by the
-   device's construction (not started).
-6. Then the route that replaces the front's cancelled fallback ("Next steps, in order", 4): a call whose
-   arguments depend on a qubit, to an ordinary function (no quantum operation, directly or through anything it
-   calls), is applied whole with one `budget`, whatever memory it writes, allocates or frees and whatever loops
+   device's construction (done, `08d7016`: 10 tests, agrees with the executor, same section).
+6. Done (`2464f38`, `4b64089`, `767f853`; "Applied calls (2026-11-17)" below): the route that replaces the
+   front's cancelled fallback: a call whose arguments depend on a qubit, to an ordinary function (no quantum
+   operation, directly or through anything it calls), is applied whole with one `budget`, whatever memory it writes, allocates or frees and whatever loops
    and calls it contains; its writes are undone when it ends and only its result survives (a console write or
    `exit` inside is the named fault). Acceptance target: `apply` of a function running a SQLite query whose key
    depends on a small qubit register, on a database set up by ordinary code before the `apply`, each argument
-   value compared with native SQLite. Writes that must survive: "Next steps, in order", 4 (decided at about
-   15:35 UTC).
+   value compared with native SQLite: passed. Writes that must survive: "Next steps, in order", 4 (decided at
+   about 15:35 UTC).
 
 Debts opened by step 2 (removing `mark`, `rewind`, machine states in superposition and the call form):
 
 - **A second implementation of the device language.** The independent reference interpreter modelled the
   removed machinery and went with it; the C rungs 1 and 2 (`experiments/northstar-ladder/`), the musl entry-frame
   edges and several executor tests lost it as a second executor and keep their native or hand-worked
-  expectations. Route: an independent reference of the current language, starting from the reference that runs
-  `apply` by its construction (step 5).
+  expectations. Route: an independent reference of the current language, grown from the reference that runs
+  `apply` by its construction (step 5, `08d7016`; today a small ordinary subset: integer operations, byte loads
+  and stores, fixed call frames, jumps and returns), instruction by instruction with small independent cases.
 - **The fallback oracle's self-tests on a fallback-shaped `store`** (`front/tests/tests/fallback_oracle.rs`, module
   `seeded`) built the program with a call reading a register, which ordinary code may no longer do; they were
-  removed, and come back with the route that replaces the fallback (step 6), on a program the model expresses.
+  removed, and come back with rules B, C and A ("Next steps, in order", 4), on a program the model expresses;
+  applied calls (step 6) satisfy none of the fallback oracle's waiting acceptance tests.
   The self-tests on coherent programs and on applied regions stay.
 
 Not to be landed: `wip/fallback-step3`, `wip/sol-mutants-machine` and `wip/sol-mutants-machine-partial`. They
@@ -189,11 +205,13 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 | Lua probe | Unmodified Lua 5.4.9 through musl: seven native stdout/status comparisons and exact reversals; a Lua predicate under hand-written `apply`, dense-checked Grover at N=4/8 (`experiments/lua-probe`) |
 | `c5085b4`..`ee41593` | The model of 2026-11-17: `apply` for each definite value of its arguments only; `mark`, `rewind` and what served them removed; `qfree` the partial trace with the simulator's report; the fault `qubit_memory_access`; the simulator's own stops named; three wrong translations of the front fixed |
+| `2464f38`, `4b64089`, `767f853` | Applied calls: a call with qubit-dependent arguments to an ordinary function is applied whole with one budget, whatever memory it writes; SQLite queries with a key that depends on a three-qubit register, from C, agree with native SQLite ("Applied calls (2026-11-17)") |
 
-Check it: `cargo test` (269 passed; 3 ignored, each naming its reason: heavy reference, generated or
+Check it: `cargo test` (279 passed; 3 ignored, each naming its reason: heavy reference, generated or
 hash-sample runs with their commands, witnesses of recorded defects and of questions awaiting the maintainer;
-about 9 s, no LLVM needed) and `front/test.sh` (222 passed; 26 ignored by default, each naming its reason: the
-fallback acceptance tests, waiting for the route that replaces the cancelled fallback, the C North Star ladder runs and other explicit experiments,
+about 10 s, no LLVM needed) and `front/test.sh` (239 passed; 29 ignored by default, each naming its reason: the
+fallback acceptance tests, waiting for rules B, C and A, the SQLite acceptance of applied calls (needs the
+SQLite sources), two witnesses of the applied-call diagnostics' defects, the C North Star ladder runs and other explicit experiments,
 musl-linked checks that need `rt/musl/build.py` first, heavy runs, and witnesses of recorded debts; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 With musl linked, standard output and exit status compared with native (`experiments/c-corpus/README.md`):
@@ -284,32 +302,43 @@ explicitly after the separate musl build.
    Linear growth remains a property of this common-circuit witness, not a lower bound on information loss.
    A global-write extension measured log/hash/B-tree insertion with the machinery removed on 2026-11-17 and
    `apply` drivers; its record is in `experiments/journal-content/README.md` and `global.tsv`.
-3. **Independent checks** (step 5 of "Resumed on 2026-11-17"): the reference that runs `apply` by the
-   device's construction (each ordinary step keeping what it overwrote, copy by XOR, the inverse steps in
-   reverse order) on small functions with explicit amplitudes, checking that the working state returns to its
-   start and that the result equals evaluation for each argument value, a faulting argument value and step
-   exhaustion included. It becomes the start of a second implementation of the device language (the debt
-   above).
-4. **Applied calls, replacing the front's cancelled fallback through marks** (the maintainer's decision of about
-   13:40 UTC, "Resumed on 2026-11-17"; being built): a call whose arguments depend on a qubit, to an ordinary
-   function, is applied whole with one `budget`, whatever memory it writes, allocates or frees and whatever
-   loops and calls it contains; its writes are undone when it ends and only its result survives. Today the
-   front applies a function only if LLVM proved it reads memory only, and refuses a qubit-dependent call to one
-   that writes memory; the route lifts that. Acceptance target: SQLite under `apply`, a query whose key depends
-   on a small qubit register, each argument value compared with native SQLite.
-   Then, after that has landed and step 5 of the order in "Resumed on 2026-11-17" is done, code under a qubit
-   that writes what later code reads (the maintainer's decision of about 15:35 UTC), each a landable step, in this
-   order: (B) code without gates under a qubit-dependent condition that assigns to qubit variables becomes one
-   `apply` with one budget, lifting today's refusal, tested with two nested loops whose trip counts depend on a
-   qubit register; (C) loops with gates, the condition computed once or as a table of control bits, the ordinary
-   loop kept in the control code; (A) at a definite address, a qubit-dependent store keeps its value in qubits
-   at the bytes it writes, measuring those bytes makes them ordinary memory again, and an overwrite that cannot
-   be erased keeps the old value in qubits released by `qfree`, with a warning and its count. Rule A at an
-   address that depends on a qubit: a plan first. The target for these is the fallback oracle
-   (`front/tests/tests/fallback_oracle.rs`; fixtures and explanation in `front/tests/c/fallback_oracle/`): host
-   clang runs each C update once per basis input, the device result is compared with it, and its ignored
-   acceptance tests wait for the route. The Boolean XOR on a quantum `_Bool` (`y ^= q && !r`, and
-   `if (q) if (r) y ^= 1` at O0 and with `--taint-all`) already passes it (`coherent_xor`, `coherent_nested`).
+3. **Independent checks are done** (step 5 of "Resumed on 2026-11-17"): the reference that runs `apply` by the
+   device's construction (`08d7016`; "Independent checks of apply, removal, front fixes and qfree") is the start
+   of a second implementation of the device language (the debt above).
+4. **Applied calls are done** (step 6 of "Resumed on 2026-11-17"; "Applied calls (2026-11-17)" below): a call
+   whose arguments depend on a qubit, to an ordinary function, is applied whole with one `budget`, whatever
+   memory it writes and whatever loops and calls it contains; SQLite queries with a qubit-dependent key agree
+   with native SQLite. **Next, code under a qubit that writes what later code reads** (the maintainer's decision
+   of about 15:35 UTC, "Resumed on 2026-11-17"), by an Opus implementer, the plan first rewritten to follow that
+   decision, then each a landable step with its tests and documents true in the same step, in this order:
+   1. **Rule B.** Code without gates, written inline, whose control flow depends on a qubit and which assigns to
+      qubit variables becomes one `apply` with one budget (one pair of `apply`s for several results), lifting
+      today's refusal. Tested with two nested loops whose trip counts depend on a qubit register. The front
+      creates no loop, counter or bound that is not in the C; a loop with an ordinary, definite trip count may
+      keep one small `apply` per pass.
+   2. **Rule C.** Loops containing gates: the trip count stays an ordinary value written in the C; the condition
+      is computed once into a qubit, or the loop's ordinary part is one applied function returning a table of
+      control bits for the gates, cleared by the same `apply`; the ordinary loop stays in the control code. No
+      unrolling. A loop whose trip count depends on a qubit and that contains gates is refused with its route in
+      the message.
+   3. **Rule A at a definite address.** A store whose value or execution depends on a qubit keeps its value in
+      qubits at the bytes it writes: the value is applied into a fresh register and exchanged with the bytes by
+      gates, and the register is cleared when its old content can be recomputed; an overwrite whose old value
+      cannot be erased keeps it in spare qubits released by `qfree`, with a warning and the count of qubits
+      kept. Measuring bytes at an address makes them ordinary memory again, holding the result (the executor's
+      part). Where ordinary code needs a definite value from such bytes, the front refuses and asks for a
+      measurement the programmer writes. Each step says which of the fallback oracle's seven waiting acceptance
+      tests it makes pass (`front/tests/tests/fallback_oracle.rs`; fixtures and explanation in
+      `front/tests/c/fallback_oracle/`: host clang runs each C update once per basis input and the device result
+      is compared with it) and un-ignores them.
+   4. **Rule A at an address that depends on a qubit:** a plan only.
+
+   Then one independent testing pass over steps 1 to 3, and the reference that runs `apply` by its construction
+   extended with the exchange form of rule A, checked exactly, including an old value that cannot be recomputed.
+   No step inserts a measurement, bounds a loop on its own, or lets ordinary code act on a qubit outside
+   `apply`; a choice that would is the maintainer's. The Boolean XOR on a quantum `_Bool` (`y ^= q && !r`, and
+   `if (q) if (r) y ^= 1` at O0 and with `--taint-all`) already passes the fallback oracle (`coherent_xor`,
+   `coherent_nested`).
 
 5. **Floating point** is done over Berkeley SoftFloat 3e (decided 2026-11-15; `rt/softfloat/README.md`), the
    complex helpers over libgcc (`rt/libgcc/README.md`), including `__divxc3`. Left: `__float128` and
@@ -349,8 +378,8 @@ explicitly after the separate musl build.
    N=256 aggregate coherent reversals, with unchanged step/journal counters (separate table).
    The fast glue test exposed an entry-stack refusal panic; its minimal ignored witness is
    `sql_oracle_glue::an_entry_frame_that_does_not_fit_returns_stack_overflow`. The executor is not
-   changed by this experiment. Next: larger process budgets remain unmeasured;
-   the C front's memory-writing fallback remains necessary to remove the hand-written device entry.
+   changed by this experiment. Larger process budgets remain unmeasured. Since applied calls (step 6 of
+   "Resumed on 2026-11-17") the queries are also applied from C, with no hand-written device entry (stage 4).
 
 ## What the earlier workspace offers
 
@@ -632,6 +661,14 @@ padded clock and its caller's mark; A mark's budget once its frame is left.
   control code, the exit code), the front refuses and asks for a measurement the programmer writes; it does not
   insert one. Cheap to reverse; the alternative would be a measurement the compiler inserts, which the decision
   rules out for stores.
+- **Applied calls (2026-11-17, step 6; each taken, cheap to reverse).** A call with qubit-dependent arguments
+  whose result is unused, to a function that may write memory: taken, refused by name (applied, it would do
+  nothing; its writes are its purpose). Recommendation: keep. Two such calls in one computation when one may
+  write memory: taken, refused by name (in one applied function the second would see the first's writes, while
+  under the rule each starts from memory as it was). Route: one register per call, computed before and cleared
+  after the computation that uses it. Recommendation: build it when a program needs it. The warning's reach:
+  taken as written in "Applied calls (2026-11-17)"; no warning proves nothing. Recommendation: keep, extend if a
+  real program misses it.
 - **Applied functions and qubits in memory (2026-11-17).** Taken, per the orchestrator's brief: inside `apply`
   the rule is the same, so an applied function cannot read qubits in memory; before, each run saw its
   configuration's values. A program copies the qubits into a register with controlled X gates, applies, and
@@ -700,8 +737,9 @@ Each recommendation was taken ("Decisions the maintainer took on 2026-11-16, in 
 | A call through another prototype where x86-64 does not determine what is read: the upper half of a 32-bit value, a missing argument that is read, an integer from a floating-point register, a variadic floating-point argument without `%al`, a narrow argument that is not the extension the callee relies on (named fault `unreachable` when the call runs); a direct call whose argument differs from its parameter only in register class (native -O0 and -O2 disagree) | Nothing to remove: the native result is not determined (`docs/DESIGN.md`, "Calls through a prototype"). Conservative, removable by a finer model where named: a variadic floating-point argument after an unread named one, a call whose result is used only by dead code before the optimiser, values in memory read at another place |
 | A qubit-dependent call of a function that uses `setjmp` | The front's own effect summary of `setjmp` (writes only its buffer) when deciding what runs coherently (`docs/DESIGN.md`, "Non-local jumps") |
 | `__float128`; `powi` on `_Float16`/`__bf16`; `#pragma STDC FENV_ACCESS` (with it musl's `ilogb`/`ilogbl` in the corpus accuracy checks; libgcc's `__divxc3` itself works); non-default rounding modes and floating-point flags | Step 5 above |
-| A store under qubit control; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control that LLVM does not unroll fully | For calls whose writes stay inside a whole applied function: step 6 of "Resumed on 2026-11-17". For the rest, the decision of about 15:35 UTC, rules B, C and A in that order ("Next steps, in order", 4): code without gates under a qubit as one `apply`; gate loops with an ordinary trip count; stores that keep their value in qubits at the bytes written, an overwrite that cannot be erased keeping the old value in qubits released by `qfree` |
+| A store under qubit control outside a call; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control that LLVM does not unroll fully | A call with qubit-dependent arguments, whatever it writes, is applied whole since step 6 ("Applied calls (2026-11-17)"). For the rest, the decision of about 15:35 UTC, rules B, C and A in that order ("Next steps, in order", 4): code without gates under a qubit as one `apply`; gate loops with an ordinary trip count; stores that keep their value in qubits at the bytes written, an overwrite that cannot be erased keeping the old value in qubits released by `qfree` |
 | A qubit-dependent value used by ordinary code or printed; measurement under control | Channels |
+| A qubit-dependent call, to a function that may write memory, whose result is unused; two such calls in one computation when one may write memory; quantum operations in `main` of a program linked with musl | "Applied calls (2026-11-17)": nothing to remove for the first (applied, it would do nothing); one register per call for the second; classifying control functions through indirect calls, or a startup that calls `main` directly, for the third |
 | Non-empty inline assembly; code without source | An emulator of the real machine, compiled as an ordinary program |
 | A floating-point operation that reads the subnormal mode (arithmetic, comparison, conversion from floating point, intrinsics other than `fabs`/`copysign`/`is.fpclass`) in a function promising a non-IEEE mode (`-fdenormal-fp-math=preserve-sign`, `positive-zero`, `dynamic`, or the `-f32` form); moves and sign/magnitude bit operations there are accepted | The floating-point environment carried through SoftFloat's state (flush inputs and outputs as the promised mode says), compared with native code run under MXCSR DAZ/FTZ |
 
@@ -900,6 +938,8 @@ the ordinary frontend run without changing its domain or assertions.
   repository, runs `cargo test`, clippy, fmt and `front/test.sh`, rebases on `main` and pushes each finished step
   to `main`; unfinished work goes to a `wip/` branch, never to `main`. A persistent advisor holds the picture and
   launches one job per goal; launches stop when the quota's pace is reached.
+- Models in use for this work since 2026-11-17: implementers Claude Opus 5.5; independent tests, reviews and
+  references gpt-6.2-sol (gpt-6.1-sol did the passes of 2026-11-17 until the evening); Muse as a reader.
 
 ## Files, clocks and entropy: implementation and remaining debts (2026-11-16)
 
@@ -1204,3 +1244,86 @@ values leave the state as before the step and let no later effect run; gates and
 inside an applied function give `quantum_in_region` (`simulator_stops_independent.rs`). No defect confirmed.
 Checks on that commit: `cargo test` 269 passed / 3 ignored; `front/test.sh` 222 passed / 26 ignored; clippy
 and formatting clean. Finite tests in `f64`, not a proof.
+
+The reference that runs `apply` by the device's construction (`08d7016`, gpt-6.1-sol;
+`crates/exec/tests/compute_copy_reference/`, `compute_copy.rs`) is a small interpreter of its own over the
+public IR data, with its own arithmetic, byte memory, calls and fault codes, sharing no stepping code with the
+executor. Its state vector holds explicit argument, `out`, `fault` and machine registers and one full record of
+the previous machine state per scheduled step: each step XORs its update into its record and exchanges record
+and machine, exactly `B` steps run forward (idle after a return or fault), the result or fault code is XORed
+into the targets, and every inverse step runs; every machine and record bit must return exactly. Ten tests,
+nine small functions, 83 function and budget comparisons over four argument values each: 5,312 configuration
+images with exact complex coefficients (both signs and imaginary phases) agree with the executor within 1e-14
+per component, and 332 separate evaluations for single argument values agree. Cases: wrapping arithmetic,
+private byte writes and reads, a call, a loop with an argument-dependent trip count, two nested loops with
+trip counts `x` and `x + 1`, division by zero after a private write, an out-of-range read, `effect` and `exit`
+faults, and `B` as a run-time argument, one bound for the whole function (at `B = 5` the simple loop returns
+for `x = 0` and runs out of budget for 1, 2 and 3). Four deliberately broken variants of the helper (inverse
+exchange left out, one output bit wrong, an argument phase removed, the budget code missing) each fail their
+test. It covers only its small instruction subset (no dynamic stack allocation, indirect calls, non-local
+jumps or qubits in memory); extending it is the route to a second implementation. Finite test evidence, not a
+proof.
+
+## Applied calls (2026-11-17)
+
+Step 6 of "Resumed on 2026-11-17", landed as `2464f38` (the rule, its refusals and the warning), `4b64089`
+(the write summary computed once per module: the front on the SQLite module from 208.6 s to 40.2 s, output
+byte-identical) and `767f853` (the SQLite acceptance). Documents: `docs/DESIGN.md`, "Applied calls";
+`docs/MARKERS.md`, "Calls with qubit-dependent arguments".
+
+- **The rule.** A call whose arguments depend on a qubit, to an ordinary function of the program (no quantum
+  operation, directly or through anything it calls), is applied whole with one budget, whatever memory it
+  writes, allocates or frees and whatever loops and calls it contains; its writes are undone when it ends and
+  only its result survives. A console write or `exit` inside is `effect_in_region` or `exit_in_region` for the
+  argument values that reach it (a musl `printf` of a line too; output left in musl's buffer is memory and is
+  undone). Smallest budget for all eight values of the small fixture: 34,593 steps; at 34,592 only the value 2
+  faults.
+- **The warning.** Natively the writes would remain. The front warns, and still lowers the program, when the
+  called function, or a function it calls directly, writes a global variable or memory passed to it by pointer
+  that later code in the caller reads, directly or through a function it calls directly. Writes through other
+  pointers and reads through indirect calls are not followed, so no warning proves nothing.
+- **The rule is about calls.** With the project's clang flags (`-O0 -Xclang -disable-O0-optnone`) every call
+  stays a call; IR compiled otherwise may arrive with a callee inlined, whose stores are then refused by name.
+- **Acceptance: SQLite from C** (`experiments/sqlite-on-device`, stage 4; `front/tests/tests/sqlite_applied.rs`,
+  ignored by default because it needs the SQLite sources):
+  `SQLITE_DIR=<amalgamation directory> front/test.sh --test sqlite_applied -- --ignored --nocapture`.
+  Each of the SQL oracle's eight queries is applied to a key that depends on a three-qubit register, on a
+  database set up by ordinary code: right after each `apply`, exactly eight configurations of amplitude
+  1/sqrt(8), each with the native result for its row and a zero fault register, and the whole classical
+  memory, database included, unchanged; strict mode, budget 1,000,000 steps per `apply`, no warning. 84 s on
+  the shared laptop with the musl archive and SQLite objects cached (builds 54 s, a cold build 151 s; the front
+  26 s; each query 0.2 s). The Lua probe's C marker, refused before, now lowers and runs
+  (`experiments/lua-probe/README.md`).
+- **Debts.** A program linked with musl cannot hold quantum operations in `main`: musl's startup passes it by
+  pointer, and the front's dispatch of indirect calls makes many musl functions call it, so the first refusal
+  names the address of a musl function that "performs quantum operations"; the fixtures use an entry of their
+  own and keep `main` ordinary. Route: classify control functions through indirect calls, or a startup that
+  calls `main` directly. Nothing in the front checks that calls arrive as calls; proposed route: name an
+  inlined callee from its debug location when a store it made is refused or kept in qubits, and mark calls in
+  control functions `noinline` before the front's own optimiser. `cargo clippy -p bennett-front-tests
+  --all-targets` reports two `unwrap` uses in `front/tests/tests/complex.rs` (outside the four checks). The
+  fallback oracle's seven waiting acceptance tests stay ignored: each needs a write that survives or an
+  erasure, rules B, C and A.
+
+**Independent testing pass** (`a0c0bc6`, gpt-6.2-sol; `front/tests/tests/applied_calls_independent.rs`,
+fixtures `front/tests/c/applied/independent.c`, `rollback.c`): nine tests, every memory byte, the stack pointer,
+the console tape and the register table compared around the `apply`. A recursive call with a variable-length
+array in each frame, writing through a pointer to the caller's local and a global, and an internal `setjmp`
+with a `longjmp` across recursive frames, agree with native for all eight argument values at O0, O2 and O0 with
+`--taint-all`, the target starting nonzero. Nested loops in the applied call share one budget: the callee
+alone takes 21, 58, 119, 204, 313, 446, 603, 784 steps for inputs 0 to 7, and with budget 313 exactly 5, 6 and
+7 fault. musl's `realloc` and `free` of a caller's object and file writes, seeks and reads through a duplicated
+descriptor are undone byte for byte, allocator and file model included, and later ordinary code sees the
+original file and heap. Console output and `exit` give their faults per value with an empty tape; a load and a
+store at a byte holding qubits give `qubit_memory_access` for the values that reach them. Three deliberately
+wrong expectations each fail. The SQLite acceptance, run again on its own build: 64 comparisons pass. No wrong
+result. Two defects of the diagnostics, each an ignored witness in that file:
+
+- **The warning misses a caller-local variable read by a direct callee** (`r ^= put(v, &local)` then
+  `get(&local)`: no warning). The write side keeps the local allocation (`front/src/Applied.cpp`, around line
+  140); the direct callee's read keeps only globals and formal parameters (around lines 24 and 165).
+- **`--taint-all` refuses a writing call combined with a pure call on an ordinary argument** (`r ^= bump(v) +
+  score(n)`, lowered without the option to the native 46 and 47): the slice admits the pure call
+  (`front/src/Control.cpp`, around line 493) and the count of qubit-dependent calls then includes it (around
+  line 519), giving the refusal of two calls in one computation.
+

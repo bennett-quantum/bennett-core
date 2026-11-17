@@ -96,7 +96,7 @@ python3 experiments/lua-probe/build.py .tmp/lua-probe/lua-5.4.9.tar.gz \
   --oracle --out target/lua-probe/oracle
 cargo build -j 3 --offline --manifest-path experiments/lua-probe/harness/Cargo.toml --target-dir target
 python3 experiments/lua-probe/coherent.py target/lua-probe/oracle
-python3 experiments/lua-probe/refusal.py target/lua-probe/oracle
+python3 experiments/lua-probe/marker.py target/lua-probe/oracle
 ```
 
 `predicate.lua` defines `((n*n + 3*n + 1) % 7 == 4) and 1 or 0`. Native Lua
@@ -188,14 +188,18 @@ not handled yet: a call that depends on a qubit, to a function that writes memor
 ```
 
 This is the same wall as the SQLite oracle: calling the interpreter writes Lua
-stack/VM state and uses protected calls. The front's journalled fallback is the
-named route past this refusal. The device already handles the call through
+stack/VM state and uses protected calls. The device already handles the call through
 hand-written `apply`; no Lua, front or executor change is included here.
 
 Since 2026-11-17 the front applies a call with qubit-dependent arguments whole,
 whatever memory it writes (`docs/DESIGN.md`, "Applied calls"), so this refusal
-is gone; `refusal.py` still expects it and was not run again. Not re-measured:
-what the front does with `marker.c` now.
+is gone. Re-measured on 2026-11-17 with Lua/musl bitcode linked from the current runtime
+(`marker.py`, which replaces the refusal script): the front lowers `marker.c`
+with status 0 and no warning in 15.9 s, emitting one `apply` of the outlined
+call; on the device, seeds 0 to 7 give 0, 0, 1, 0, 0, 0, 0, 0 (the predicate is
+1 for one of the four inputs). The simulator reports the release of `input`,
+which the program leaves in superposition. The distribution is not checked
+beyond these eight seeds.
 
 ## Limits and validation
 

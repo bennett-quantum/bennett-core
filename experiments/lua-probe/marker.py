@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure the C-marker boundary using the same linked Lua interpreter."""
+"""Lower the C-marker oracle against the same linked Lua interpreter and run it on the device."""
 import argparse
 import json
 from pathlib import Path
@@ -25,11 +25,18 @@ def main():
                              '--stack-bytes', '1048576', '--region-budget', '1000000'],
                             capture_output=True, text=True)
     report = dict(status=result.returncode, seconds=time.monotonic() - start,
-                  stdout=result.stdout, stderr=result.stderr)
-    (build / 'refusal.json').write_text(json.dumps(report, indent=2) + '\n')
+                  stdout=result.stdout, stderr=result.stderr, results={})
+    assert result.returncode == 0, report
+    for seed in range(8):
+        run = subprocess.run([str(ROOT / 'target/debug/bennett'), 'run', str(build / 'marker.bn'),
+                              '--entry', 'lua_coherent_c', '--seed', str(seed)],
+                             capture_output=True, text=True, check=True)
+        result_line = next(line for line in run.stdout.splitlines() if line.startswith('result: '))
+        report['results'][seed] = int(result_line.split()[1])
+    (build / 'marker.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
-    assert result.returncode == 3, report
-    assert 'a call that depends on a qubit, to a function that writes memory or performs quantum operations' in result.stderr, report
+    # predicate.lua is 1 only for input 2 of the four the two Hadamard qubits give.
+    assert set(report['results'].values()) <= {0, 1}, report
 
 
 if __name__ == '__main__':
