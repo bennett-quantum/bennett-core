@@ -1,0 +1,15 @@
+memory 256
+func @dirty() {
+entry:
+    %q = qalloc 2
+    h %q[0]
+    x %q[1] ctrl %q[0]
+    qfree %q
+    ret
+}
+func @clean() {
+entry:
+    %q = qalloc 2
+    qfree %q
+    ret
+}
