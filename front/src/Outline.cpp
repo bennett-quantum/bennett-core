@@ -225,7 +225,8 @@ void outlineAround(Function &function, Instruction *seed, ControlAnalysis &analy
   std::vector<LoadInst *> loads;
   for (BasicBlock *member : blocks) {
     for (Instruction &inst : *member) {
-      if (std::optional<Marker> marker = markerCall(&inst); marker && marker->kind == MarkerKind::Measure) {
+      if (std::optional<Marker> marker = markerCall(&inst);
+          marker && (marker->kind == MarkerKind::Measure || marker->kind == MarkerKind::MeasureBytes)) {
         notHandled("a measurement under the control of a value that depends on a qubit", &inst);
       }
       if (markerCall(&inst)) {

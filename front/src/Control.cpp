@@ -99,6 +99,7 @@ private:
   void classicalUse(const Instruction &inst);
   void knownLoad(const LoadInst &load);
   void marker(const CallBase &call, const Marker &marker);
+  void measureBytes(const CallBase &call);
   void store(const StoreInst &store);
   void xorInto(const Storage &target, const Value *value, const Instruction &at);
   void xorClassical(const Storage &target, const Value *value, const Instruction &at);
@@ -303,6 +304,10 @@ void ControlWriter::marker(const CallBase &call, const Marker &marker) {
   if (marker.kind == MarkerKind::Bit) {
     return; // a qubit, named where a gate uses it
   }
+  if (marker.kind == MarkerKind::MeasureBytes && !analysis.access(call.getArgOperand(0))) {
+    measureBytes(call);
+    return;
+  }
   Access target = *analysis.access(call.getArgOperand(0));
   const std::string &reg = registers.at(target.storage);
   std::string qubit = reg + "[" + std::to_string(target.bit) + "]";
@@ -322,7 +327,8 @@ void ControlWriter::marker(const CallBase &call, const Marker &marker) {
     controlledGate(call, target, marker.mnemonic + "(" + text + ") " + qubit);
     return;
   }
-  case MarkerKind::Measure: {
+  case MarkerKind::Measure:
+  case MarkerKind::MeasureBytes: { // of a whole qubit variable (Taint.cpp checks it is whole)
     unsigned bits = target.storage->bits;
     std::string measured = bits == 64 ? slot(&call) : fresh(reg.substr(1) + ".measured");
     line(measured + " = measure " + reg);
@@ -331,6 +337,21 @@ void ControlWriter::marker(const CallBase &call, const Marker &marker) {
     }
     return;
   }
+  }
+}
+
+// `%d = measure iN [ADDR]`: the bits of bytes that hold qubits are measured, the others read, and measured
+// bytes are ordinary memory again (docs/DESIGN.md, "Qubits in memory").
+void ControlWriter::measureBytes(const CallBase &call) {
+  const auto *count = dyn_cast<ConstantInt>(call.getArgOperand(1));
+  if (!count || count->getZExtValue() < 1 || count->getZExtValue() > 8) {
+    notHandled("bennett_measure_bytes with a number of bytes that is not a constant from 1 to 8", &call);
+  }
+  unsigned bits = unsigned(8 * count->getZExtValue());
+  std::string measured = bits == 64 ? slot(&call) : fresh("measured");
+  line(measured + " = measure " + intType(bits) + " [" + operand(call.getArgOperand(0)) + "]");
+  if (bits < 64) {
+    line(slot(&call) + " = zext " + intType(bits) + " " + measured + " to i64");
   }
 }
 

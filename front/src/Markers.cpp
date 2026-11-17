@@ -38,6 +38,9 @@ std::optional<Marker> markerOf(const Function *callee) {
   if (name == "measure") {
     return Marker{MarkerKind::Measure, "measure"};
   }
+  if (name == "measure_bytes") {
+    return Marker{MarkerKind::MeasureBytes, "measure"};
+  }
   if (name == "bit") {
     return Marker{MarkerKind::Bit, "bit"};
   }
@@ -107,6 +110,10 @@ void checkMarkers(const Module &module, bool floatsAreBits) {
       break;
     case MarkerKind::Measure:
       shape = type->getReturnType()->isIntegerTy(64) && type->getNumParams() == 1 && pointerFirst;
+      break;
+    case MarkerKind::MeasureBytes:
+      shape = type->getReturnType()->isIntegerTy(64) && type->getNumParams() == 2 && pointerFirst &&
+              type->getParamType(1)->isIntegerTy(32);
       break;
     case MarkerKind::Bit:
       shape = type->getReturnType()->isPointerTy() && type->getNumParams() == 2 && pointerFirst &&

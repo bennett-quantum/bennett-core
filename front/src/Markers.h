@@ -17,6 +17,7 @@ enum class MarkerKind {
   Gate,     // void bennett_<gate>(_Bool *qubit)
   Rotation, // void bennett_<axis>(_Bool *qubit, double theta)
   Measure,  // unsigned long long bennett_measure(const void *variable)
+  MeasureBytes, // unsigned long long bennett_measure_bytes(const void *address, unsigned bytes): memory
   Bit,      // _Bool *bennett_bit(void *variable, unsigned bit): names one qubit of a wider variable
 };
 

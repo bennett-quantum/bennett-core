@@ -107,7 +107,7 @@ void ControlAnalysis::findStorage() {
     const AllocaInst *alloca = nullptr;
     if (auto *tagged = dyn_cast<AllocaInst>(&inst); tagged && tagged->getMetadata(qubitMetadata)) {
       alloca = tagged;
-    } else if (markerCall(&inst)) {
+    } else if (markerCall(&inst) && markerCall(&inst)->kind != MarkerKind::MeasureBytes) {
       auto *call = cast<CallBase>(&inst);
       if (isGateCall(call) && markerCall(call->getArgOperand(0)) &&
           markerCall(call->getArgOperand(0))->kind == MarkerKind::Bit) {
@@ -241,6 +241,12 @@ void ControlAnalysis::checkUses(Storage &storage) {
         if (marker->kind == MarkerKind::Measure && offset != 0) {
           notHandled("a measurement of part of qubit variable " + storage.name, inst);
         }
+        if (marker->kind == MarkerKind::MeasureBytes) {
+          const auto *count = dyn_cast<ConstantInt>(call->getArgOperand(1));
+          if (offset != 0 || !count || count->getZExtValue() != bytes) {
+            notHandled("a measurement of part of qubit variable " + storage.name, inst);
+          }
+        }
         storage.mutations.push_back(call);
         continue;
       }
@@ -300,8 +306,8 @@ void ControlAnalysis::transfer(const Instruction &inst, std::vector<Fact> &facts
     const auto *call = cast<CallBase>(&inst);
     if (std::optional<Access> target = access(call->getArgOperand(0))) {
       Fact &fact = facts[indexOf(target->storage)];
-      fact = marker->kind == MarkerKind::Measure ? Fact{Fact::Known, const_cast<CallBase *>(call)}
-                                                 : Fact{Fact::Quantum, nullptr};
+      bool measured = marker->kind == MarkerKind::Measure || marker->kind == MarkerKind::MeasureBytes;
+      fact = measured ? Fact{Fact::Known, const_cast<CallBase *>(call)} : Fact{Fact::Quantum, nullptr};
     }
   }
 }
@@ -458,7 +464,8 @@ namespace bennett {
 bool ControlAnalysis::memoryUnchangedBetween(const Instruction *from, const Instruction *use) const {
   BasicBlock *barrier = const_cast<BasicBlock *>(from->getParent());
   for (const Instruction &inst : instructions(function)) {
-    if (!inst.mayWriteToMemory() || markerCall(&inst)) {
+    // A measurement of bytes at an address gives measured bytes back to memory, holding the result.
+    if (!inst.mayWriteToMemory() || (markerCall(&inst) && markerCall(&inst)->kind != MarkerKind::MeasureBytes)) {
       continue;
     }
     if (const auto *store = dyn_cast<StoreInst>(&inst); store && access(store->getPointerOperand())) {

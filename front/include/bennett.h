@@ -34,6 +34,11 @@ BENNETT_BOOL *bennett_bit(void *variable, unsigned bit);
 
 /* Measures the whole qubit variable `variable` points to and returns its value, zero-extended. */
 unsigned long long bennett_measure(const void *variable);
+/* Measures the `bytes` bytes at `address` (a constant from 1 to 8), little-endian, and returns their value,
+ * zero-extended: the bits of bytes that hold qubits are measured, the others read. Afterwards the bytes are
+ * ordinary memory holding the result. The measurement a program writes before ordinary code reads memory
+ * that was written under a qubit. */
+unsigned long long bennett_measure_bytes(const void *address, unsigned bytes);
 
 /* Device console byte output. An ordinary effectful call, not a quantum marker. */
 void __bennett_effect(char byte);

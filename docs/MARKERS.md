@@ -87,6 +87,19 @@ unsigned long long bennett_measure(const void *variable);
 Measures the whole qubit variable `variable` points to, in the computational basis, and returns its value
 zero-extended. Afterwards the variable holds that value (it is known), and ordinary code may use both.
 
+```c
+unsigned long long bennett_measure_bytes(const void *address, unsigned bytes);
+```
+
+Measures the `bytes` bytes at `address` (`bytes` a constant from 1 to 8), little-endian, and returns their value
+zero-extended. It is the device program's `%d = measure iN [ADDR]` with `N = 8 * bytes`, nothing more: the bits
+of bytes that hold qubits are measured in the computational basis, in one draw, the bits of other bytes are read
+as they are, and every byte measured is ordinary memory afterwards, holding the result (`docs/DESIGN.md`, "Qubits
+in memory"). On ordinary bytes it is a read. On the address of a whole qubit variable it measures the variable,
+as `bennett_measure` does; on part of one it is refused. It is the measurement a program writes where ordinary
+code needs a definite value from memory that holds qubits; the compiler never inserts one. Under the control of
+a value that depends on a qubit it is refused, as every measurement is.
+
 ## Calls with qubit-dependent arguments
 
 A call whose arguments depend on a qubit, to a function of the program that performs no quantum operation
@@ -129,7 +142,8 @@ loop with an ordinary count and gates is kept as a loop, each gate controlled), 
 inside a loop that does more than XOR into it when its value before is not known, a write to memory, a
 call of a function that may write memory, or a volatile read; a branch on such a value whose arms do not
 rejoin before the function returns; a qubit variable passed to a
-function, or wider than 8 bytes; a write into part of a qubit variable; a value that depends on a qubit used
+function, or wider than 8 bytes; a write into part of a qubit variable; `bennett_measure_bytes` with a number
+of bytes that is not a constant from 1 to 8, or on part of a qubit variable; a value that depends on a qubit used
 by ordinary code (returned, stored to ordinary memory, used as an address of memory that is not constant), or
 by an access with an effect of its own (an atomic update, a
 volatile or atomic read), even when its result is unused; a value read from a qubit variable used after that
