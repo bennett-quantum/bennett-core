@@ -116,6 +116,61 @@ at `-O0` (+10.0%) and 1,649,392 to 1,842,776 at `-O2` (+11.7%); `float_long_doub
 
 ## Independent conformance pass
 
+### Independent fp-front follow-up
+
+`front/tests/tests/fp_front_independent.rs` and `c/fp_front_independent.c` compare the complete
+clang/front/executor pipeline with separate native x86-64 builds at `-O0` and `-O2`. Raw operands
+cross volatile memory. Comparisons include every meaningful result bit, NaNs and signed zero included,
+and exclude only x87's six ABI padding bytes. The default probes add about two seconds:
+
+- **2,112 powers per level:** 36 float, 36 double and 60 long-double encodings, both signs and every
+  encoding class, crossed with 16 exponents: 0, ±1, ±2, ±3, ±17, ±64, ±65537, INT_MAX, -INT_MAX,
+  INT_MIN. Every result agrees, including noncanonical `powi(x,1)` returns.
+- **8,646 rounding results per level:** 786 signed long-double inputs, comprising a Cartesian set of
+  17 exponents and 12 significands plus below/at/above a half at each of the 63 binary-point positions.
+  Includes noncanonical encodings, integer overflow boundaries, infinities and NaNs. `roundl`,
+  `roundevenl`, `rintl`, `nearbyintl`, `truncl`, `floorl`, `ceill`, `lrintl`, `llrintl`, `lroundl` and
+  `llroundl` are tested. **8,514 agree at each level; 132 lroundl/llroundl tuples differ** and are
+  explicitly excluded from the passing comparison by operation and input identity. Canonical integer
+  conversion overflow is measured as native target behavior, not as a defined C result.
+- **1,224 classification results per level:** isfinite/isnan/isinf/isnormal/fpclassify/signbit at all
+  five widths (float, double, x87 long double, half, bfloat), directly and feeding branches and selects.
+  All agree at O0; **1,206 agree at O2**, with 18 negative-bfloat signbit results explicitly excluded.
+
+Three minimal witnesses in `fp_front_witness.c`, each explicitly run and seen to fail, remain ignored
+with `defect:` reasons. Reproduce with:
+
+```sh
+front/test.sh --test fp_front_independent -- --ignored --nocapture
+```
+
+For **lroundl and llroundl**, x87 exponent `0x3fff`, significand zero is an unsupported unnormal zero.
+glibc's software integer-rounding routines read the zero significand and return 0; the front instead
+composes `roundl` with integer conversion, which rejects that encoding and returns INT64_MIN. Both
+optimization levels differ. Route: follow glibc's software integer rounding for these encodings,
+rather than compose the two operations.
+
+For **bfloat signbit**, raw `0xbf80` is exactly -1, and the mathematically correct sign bit is 1.
+The device and native O0 return 1, but LLVM 18's optimized native code loads the word and then returns
+0 unconditionally. This is a measured disagreement with the requested native reference, not evidence
+that the device computes the sign incorrectly or a recommendation to reproduce the native compiler
+bug. The ignored witness pins both native optimization levels separately.
+
+`fp_input_independent.rs` additionally checks 17 malformed inputs (lexical, structural, verifier,
+binary, truncated real bitcode and the metadata crash) through files and stdin, with absent output,
+an existing output sentinel and stdout output: **102 refusals**, each named, status 2, without a
+crash report or a device program. Eight valid empty/comment/text/bitcode channel combinations work;
+a missing file is distinguished from invalid IR. Valid half/bfloat `powi` intrinsics retain their
+documented named unsupported-operation refusal (status 3); numerical conformance for those two widths
+is still a debt, with the native `powf` expansion as its route.
+
+Not measured by this follow-up: non-default rounding modes, observable floating-point flags/errno,
+all possible significands or random exhaustive sweeps, other native architectures/compiler versions,
+or coherent/reversible floating-point execution. The existing suites remain the checks for their
+previously covered valid programs. No production code is changed by these probes.
+
+### Earlier noncanonical operand pass
+
 `front/tests/tests/p0_independent.rs` independently tests the noncanonical operand fix at clang `-O0`
 and `-O2`. Its reference is native x86-64 C (volatile raw operands, no copied normalization algorithm).
 The large matrix compiles the actual device runtime bitcode natively with renamed symbols, as the existing

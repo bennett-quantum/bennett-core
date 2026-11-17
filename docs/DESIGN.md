@@ -1185,6 +1185,13 @@ Their stale-buffer resumption witness found one false refusal, since fixed: the 
 joined the facts of `longjmp` resumptions before the `setjmp`'s own operand uses, although a resumption
 continues after the instruction and reads none of them (`crates/ir/src/validate/rewound.rs`).
 
+Independent fp-front probes compare powi's extreme integer exponents, long-double rounding at each
+binary point, and classification at all five widths against native `-O0` and `-O2` builds. Three
+ignored minimal witnesses record lroundl/llroundl's unsupported-encoding differences and optimized
+native bfloat signbit's incorrect zero. Input admission is also checked through stdin and files,
+including preservation of an existing output on failure. Scope and counts: `rt/softfloat/README.md`,
+"Independent fp-front follow-up".
+
 Tests constrain behavior, with witnesses that would fail for the intended defect:
 
 - Derive small expected results independently, by hand, a dense calculation, an exact arithmetic oracle,
