@@ -167,26 +167,35 @@ fn an_un_promotion_that_meets_changed_qubits_leaves_the_register_over() {
 
 /// A memory qubit read since the mark that no longer holds the value read (the seam's V2, a cell read). Byte
 /// 24 is promoted before the mark (`z`, holding 0); a load reads it; `cell ^= o & k` does nothing forward; the
-/// keep sets `k`; un-running the gate gives `cell = o`, and un-running the load should leave its wire over
-/// holding 0 XOR the cell (columns `o`, `k`, cell, wire).
+/// keep sets `k`; un-running the gate gives `cell = o`, and un-running the load leaves its wire over holding 0
+/// XOR the cell (columns `o`, `k`, cell, wire). It faulted `bad_rewind` for |+> and |1> until 2026-11-16.
 #[test]
-#[ignore = "defect: running regardless over a memory-qubit read that changed is not built (P0 debt, HANDOFF.md, Known weak spots)"]
 fn a_memory_qubit_read_that_changed_leaves_its_wire_over() {
-    let text = entries(
-        "func @body(q1 %o) -> i8 {
+    let body = "func @body(q1 %o) -> i8 {
 entry:
     %k = qalloc 1
     z [24]
+    OUTER_MARK
     %m = mark budget 20
     %v = load i8 24
     x [24:0] ctrl %o, %k
     rewind %m keep (i1 1 -> %k)
+    OUTER_REWIND
     ret 7
-}",
-    );
+}";
+    let text = entries(&body.replace("OUTER_MARK", "").replace("OUTER_REWIND", ""));
     check(&text, "zero", &[(&[0, 1, 0], 1.0)], 0);
     check(&text, "plus", &[(&[0, 1, 0, 0], HALF), (&[1, 1, 1, 1], HALF)], 8);
     check(&text, "one", &[(&[1, 1, 1, 1], 1.0)], 8);
+    strict_unchanged(&text);
+    // An outer rewind takes the wire back where the load runs again: the load reads 0 (the wire XOR the cell)
+    // without splitting, the wire is un-allocated, `cell ^= o & 1` clears the cell and the keep is XORed out:
+    // the state at the outer mark (columns `o`, `k`, cell).
+    let outer =
+        entries(&body.replace("OUTER_MARK", "%outer = mark budget 60").replace("OUTER_REWIND", "rewind %outer"));
+    check(&outer, "zero", &[(&[0, 0, 0], 1.0)], 0);
+    check(&outer, "plus", &[(&[0, 0, 0], HALF), (&[1, 0, 0], HALF)], 0);
+    check(&outer, "one", &[(&[1, 0, 0], 1.0)], 0);
 }
 
 /// A check deferred to the sum of the worlds' parts (the seam's V2, the deferred sum). `%a` (0) is read; a

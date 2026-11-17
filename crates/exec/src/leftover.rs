@@ -39,6 +39,9 @@ pub(crate) enum Leftover {
     Allocation,
     /// A read of the register in `column` as an integer by a call: the wire holding the value read XOR it.
     Read { column: usize },
+    /// An ordinary access (a load, a store, a `setjmp`'s record) to the memory qubits of the cell in `column`:
+    /// the wire holding the byte noted (read, or written) XOR the cell.
+    Cell { column: usize },
     /// A promotion of the memory byte at `address`, whose value was `old`: the register that held it.
     Promotion { address: u64, old: u8 },
 }
@@ -49,6 +52,7 @@ impl Leftover {
             Leftover::Allocation => (0, 0),
             Leftover::Read { column } => (1, column as u128),
             Leftover::Promotion { address, old } => (2, u128::from(address) << 8 | u128::from(old)),
+            Leftover::Cell { column } => (3, column as u128),
         }
     }
 
@@ -56,7 +60,8 @@ impl Leftover {
         match kind {
             0 => Leftover::Allocation,
             1 => Leftover::Read { column: extra as usize },
-            _ => Leftover::Promotion { address: (extra >> 8) as u64, old: extra as u8 },
+            2 => Leftover::Promotion { address: (extra >> 8) as u64, old: extra as u8 },
+            _ => Leftover::Cell { column: extra as usize },
         }
     }
 }
@@ -127,6 +132,51 @@ impl Executor<'_> {
             self.quantum.leave(wire);
             self.leftovers_made.push(TakeBack { record, id: wire, kind: Leftover::Read { column } });
         }
+    }
+
+    /// Un-runs, regardless, the access of the record on top of the journal to memory qubits that no longer hold
+    /// the byte noted: each such cell leaves the access's wire over, holding the byte noted XOR the cell, per
+    /// configuration (an access copied the cell's byte into the classical step; un-running XORs it back).
+    pub(crate) fn leave_cells_over(&mut self) {
+        let journal = self.journal.as_ref().expect("undoing needs a journal");
+        let record = journal.records() - 1;
+        let entries: Vec<(usize, u64)> =
+            journal.cells_of(record).iter().map(|entry| (entry.column, u64::from(entry.value))).collect();
+        for (column, value) in entries {
+            if self.quantum.failing(|config| config[column] != value).is_empty() {
+                continue;
+            }
+            let wire = self.quantum.allocate_wire(self.quantum.width_of(column));
+            self.quantum.xor_column(wire, column, value);
+            self.quantum.leave(wire);
+            self.leftovers_made.push(TakeBack { record, id: wire, kind: Leftover::Cell { column } });
+        }
+    }
+
+    /// Whether an access of the record on top split the world at its cells: its un-run is where worlds' parts
+    /// meet, not built to run regardless (a debt, `HANDOFF.md`).
+    pub(crate) fn cells_split(&self) -> bool {
+        let journal = self.journal.as_ref().expect("undoing needs a journal");
+        journal.cells_of(journal.records() - 1).iter().any(|entry| entry.split)
+    }
+
+    /// Where an access to memory qubits runs again whose un-run left wires over: each wire is taken back, giving
+    /// the byte the access saw (the wire XOR the cell), which the access then reads in place of the cell's
+    /// configurations (`read_view`). Returns the cells taken back.
+    pub(crate) fn take_cells_back(&mut self, cells: &[(u64, usize)]) -> Vec<usize> {
+        if self.taking_back.is_empty() {
+            return Vec::new();
+        }
+        let record = self.next_record();
+        let mut taken = Vec::new();
+        for &(_, column) in cells {
+            if let Some(take) = self.take_back_at(record, |kind| kind == Leftover::Cell { column }) {
+                let byte = self.take_read_back(take.id, column) as u8;
+                self.cell_reads.push((column, byte));
+                taken.push(column);
+            }
+        }
+        taken
     }
 
     /// Takes back the wire a read of `column` left over, where its call runs again: the wire XOR the register

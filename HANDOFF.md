@@ -1444,24 +1444,24 @@ the budget of a call with a fault value (`call_budget_replay.rs`).
   from the rewind's frame or ends the run stays refused atomically with `bad_rewind`.
 
 - **Running regardless, outside strict mode** (machine step e3; machine-finish 0d, the design seam's V1 and
-  V2): built for a nonzero allocation, a changed register read where the read did not split the world, an
-  un-promotion whose cell changed, and an inner region whose `qfree` is dirty when run again; leftovers are
-  journalled with the rewind and taken back where its region runs again, so the barrier is gone
-  (`docs/DESIGN.md`, "Strict mode"; `crates/exec/tests/leftover_wires.rs`). Still `bad_rewind` outside
-  strict mode, each a P0 debt with its route: (1) a memory qubit read or written since the mark that no
-  longer holds its value (witness `a_memory_qubit_read_that_changed_leaves_its_wire_over`, ignored): leave
-  the access's wire over as for a register read, and where the access runs again read the value from the
-  wire XOR the cell instead of splitting on the cell; (2) a check deferred to the sum of the worlds' parts,
-  and a read where the world split (witness
-  `a_deferred_check_that_fails_on_one_part_leaves_the_wire_over_in_every_part`, ignored; also
-  `a_changed_read_is_a_strict_diagnostic_and_machine_execution_continues` in `audition_machine.rs`): leave
-  the wire over in every part that un-runs the read, whether its own part is faithful or not, so that the
-  parts' register tables agree and their sum is the circuit's (deciding per part would keep a faithful
-  part apart from an unfaithful one); (3) an inner region run again that reaches a measurement or leaves
-  the rewind's frame on a path the keeps changed: run the changed path as the circuit would (the
-  measurement a channel), so until channels these stay refusals; (4) a leftover where worlds split off
-  during the same un-run, and a call run again whose wire is taken back while another of its reads splits
-  the world: carry the leftover into every world split off. None of these is ever a call's fault code.
+  V2): built for a nonzero allocation, a changed register read and a changed memory-qubit access where the
+  access did not split the world, an un-promotion whose cell changed, and an inner region whose `qfree` is
+  dirty when run again; leftovers are journalled with the rewind and taken back where its region runs again,
+  in whatever order, so the barrier is gone (`docs/DESIGN.md`, "Strict mode"; `crates/exec/tests/leftover_wires.rs`,
+  `machine_finish_independent.rs`). Still `bad_rewind` outside strict mode, each a P0 debt with its route:
+  (1) a check deferred to the sum of the worlds' parts, and a read or access where the world split (witnesses
+  `a_deferred_check_that_fails_on_one_part_leaves_the_wire_over_in_every_part` and
+  `a_deferred_nonzero_read_keeps_the_dense_phase_and_reduced_state`, ignored; also
+  `a_changed_read_is_a_strict_diagnostic_and_machine_execution_continues` in `audition_machine.rs`): below a
+  split point, un-run every read into a wire in every part, faithful or not, so that the parts' register tables
+  agree and their sum is the circuit's (deciding per part would keep a faithful part apart from an unfaithful
+  one); note the parts' failing configurations as today, and where the sum shows a wire zero on every part
+  discard it in every part (no observable effect), else keep it and fault no world; (2) an inner region run
+  again that reaches a measurement or leaves the rewind's frame on a path the keeps changed: run the changed
+  path as the circuit would (the measurement a channel), so until channels these stay refusals; (3) a leftover
+  where worlds split off during the same un-run, and a call or access run again whose wire is taken back while
+  another of its reads splits the world: carry the leftover into every world split off. None of these is ever
+  a call's fault code.
 
 - The journal-content observer (`crates/exec/src/measure.rs`) does not follow a `rewind` or a call with a
   budget inside a region. It panicked there (an `assert!` on valid programs) until 2026-11-16; it now stops

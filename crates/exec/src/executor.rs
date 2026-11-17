@@ -353,6 +353,8 @@ pub struct Executor<'m> {
     /// For the rewind taken as a step in progress inside calls with a budget: the least room they had at it and
     /// the replay charge then (`Executor::charged`). Running again past the room stops, as past the run's budget.
     pub(crate) guard_room: Option<(u64, u64)>,
+    /// The bytes an access running again reads from the wires it took back, by cell column (`leftover.rs`).
+    pub(crate) cell_reads: Vec<(usize, u8)>,
     pub(crate) region_faults: u64,
     pub(crate) region_fault_weight: f64,
     pub(crate) region_fault_max_weight: f64,
@@ -463,6 +465,7 @@ impl<'m> Executor<'m> {
             inspected: false,
             forms_values: None,
             guard_room: None,
+            cell_reads: Vec::new(),
             region_faults: 0,
             region_fault_weight: 0.0,
             region_fault_max_weight: 0.0,

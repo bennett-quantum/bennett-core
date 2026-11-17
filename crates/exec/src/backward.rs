@@ -88,7 +88,13 @@ impl<'m> Executor<'m> {
         if (checked || deferred) && self.journal.as_ref().is_some_and(Journal::top_has_cells) {
             let failing = self.cells_no_longer_held();
             if checked && !failing.is_empty() {
-                return Err(Mismatch);
+                // Outside strict mode a rewind's own un-run runs regardless: each memory qubit that no longer
+                // holds what the step read or wrote leaves the access's wire over (`leftover.rs`).
+                if self.runs_regardless() && !self.cells_split() {
+                    self.leave_cells_over();
+                } else {
+                    return Err(Mismatch);
+                }
             }
             if deferred {
                 self.defer(last, failing);

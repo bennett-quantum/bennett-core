@@ -1082,14 +1082,16 @@ diagnostics of the simulator's **strict mode**, as a sanitizer's are, and strict
 | ... a register read as an integer since the mark that no longer holds the value read | fault `bad_rewind`, nothing changed | the read's wire is left over: un-reading XORs the register into the copy the call took, so a fresh register holds the value read XOR the register, per configuration |
 | ... a byte promoted to qubits since the mark whose qubits do not hold its old byte at the un-promotion | fault `bad_rewind`, nothing changed | the old byte is XORed out and the cell's register is left over; the byte is memory again |
 | ... an inner region run again whose `qfree` is dirty | fault `bad_rewind`, nothing changed | the `qfree` leaves its register over, as going forward, and the outer rewind goes on |
-| The other state-dependent causes: a memory qubit read or written since the mark that no longer holds its value; a check deferred to the sum of the worlds' parts (a read where worlds split, below a split point); an inner region run again that reaches a measurement or leaves the rewind's frame; a leftover where worlds split off during the un-run | fault `bad_rewind`, nothing changed | not built yet: `bad_rewind` as in strict mode, never a call's fault code (P0 debts with their routes in `HANDOFF.md`, "Known weak spots") |
+| ... a memory qubit read or written since the mark (a load, a store, a `setjmp`'s record) that no longer holds the byte noted | fault `bad_rewind`, nothing changed | the access's wire is left over: a fresh byte register holding the byte noted XOR the cell, per configuration; where the access runs again it reads the byte from the wire XOR the cell, without splitting, and the wire is un-allocated |
+| The other state-dependent causes: a check deferred to the sum of the worlds' parts (a read where worlds split, below a split point); an inner region run again that reaches a measurement or leaves the rewind's frame; a leftover where worlds split off during the un-run | fault `bad_rewind`, nothing changed | not built yet: `bad_rewind` as in strict mode, never a call's fault code (P0 debts with their routes in `HANDOFF.md`, "Known weak spots") |
 
 **Leftovers are taken back** (built on 2026-11-16, the design seam's V1 and V2; `crates/exec/src/leftover.rs`).
 What a rewind's un-run left over is journalled with the rewind (its `LeftBehind` record: for each leftover the
 record of the step whose un-run left it, the register, and its kind), so nothing later decides anything from
 whether a register was left over: undoing the rewind, by reversal or by an outer rewind, runs its region again
 and takes each one back where its step runs again (a `qalloc` gets its register back, a call reads the value
-from the wire XOR the register and un-allocates the wire, a promotion gets its cell's register back), which
+from the wire XOR the register and un-allocates the wire, an access to memory qubits reads the byte from its
+wire XOR the cell, a promotion gets its cell's register back), which
 restores the state before the rewind exactly. Until then the record was a barrier: reversal stopped there and
 an outer rewind faulted `bad_rewind` where the inner un-run had left a register over and not where it had not,
 a fault decided by whether a register was zero in every configuration. A rewind run again (inside an outer

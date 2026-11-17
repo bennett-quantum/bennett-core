@@ -244,7 +244,6 @@ entry:
 }
 
 #[test]
-#[ignore = "defect: an unfaithful memory-qubit read stops machine execution instead of retaining its XOR wire"]
 fn changed_nonzero_memory_read_has_the_independent_dense_state() {
     let text = memory_read_program("h %c\ns %c");
     // Columns c, k, cell, wire. Read value 5, current cell 5 XOR 2c: wire = 2c.

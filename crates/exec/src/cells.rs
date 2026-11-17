@@ -212,7 +212,10 @@ impl<'m> Executor<'m> {
         if cells.is_empty() {
             return (cells, false);
         }
-        let columns: Vec<usize> = cells.iter().map(|&(_, column)| column).collect();
+        // Running again an access whose un-run left wires over: those cells are read from their wires.
+        let taken = self.take_cells_back(&cells);
+        let columns: Vec<usize> =
+            cells.iter().map(|&(_, column)| column).filter(|column| !taken.contains(column)).collect();
         let split = self.split(&columns, step) || self.splitting;
         (cells, split)
     }
@@ -222,7 +225,8 @@ impl<'m> Executor<'m> {
     pub(crate) fn read_view(&self, range: Range<usize>, cells: &[(u64, usize)], out: &mut [u8]) {
         self.memory.read_into(range.clone(), out);
         for &(address, column) in cells {
-            out[address as usize - range.start] = self.quantum.first_value(column) as u8;
+            let taken = self.cell_reads.iter().find(|&&(taken, _)| taken == column).map(|&(_, byte)| byte);
+            out[address as usize - range.start] = taken.unwrap_or(self.quantum.first_value(column) as u8);
         }
     }
 
@@ -242,6 +246,8 @@ impl<'m> Executor<'m> {
     /// Journals the cells a step touched, each with the byte at its offset in `bytes` (from `start`):
     /// what un-running the step must find there.
     pub(crate) fn note_cells(&mut self, cells: &[(u64, usize)], start: usize, bytes: &[u8], split: bool) {
+        // The bytes read from wires taken back served this access only.
+        self.cell_reads.clear();
         if let Some(journal) = &mut self.journal {
             for &(address, column) in cells {
                 journal.push_cell(column, bytes[address as usize - start], split);
