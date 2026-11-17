@@ -6,4 +6,5 @@ static __attribute__((always_inline)) inline void update(_Bool q, _Bool r, _Bool
         cells[i] += (unsigned char)(i + 1);
     }
 }
+#define MEASURED_CELLS 1
 #include "driver.h"

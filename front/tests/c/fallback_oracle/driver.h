@@ -36,9 +36,8 @@ unsigned _BitInt(4) nibble(unsigned _BitInt(2) basis, unsigned _BitInt(5) which)
 /* basis 0..7 prepares a column; 8 prepares a complex product state; 9 a real
  * product state whose eight Born weights all differ, so a measured check can
  * tell every basis state from every other.
- * All measurements precede reading the ordinary memory into the result. The
- * result holds the four cells; the harness reads the whole image, guard bytes
- * included, from the machine's memory. */
+ * The result holds the four cells; the harness reads the whole image, guard
+ * bytes included, from the machine's memory. */
 unsigned long long experiment(unsigned basis) {
     _Bool q = 0, r = 0, y = 0;
     if (basis < 8) {
@@ -60,16 +59,17 @@ unsigned long long experiment(unsigned basis) {
     update(q, r, &y);
     bennett_h(&q);
 #endif
-    unsigned long long result = bennett_measure(&q);
+    unsigned long long result = 0;
+#ifdef MEASURED_CELLS
+    /* Cells written under qubit control require the programmer's measurement
+     * to return an ordinary value. Measure them first so the oracle's snapshot
+     * sees the updated bytes at their addresses before any measurement. */
+    result |= bennett_measure_bytes(cells, 4) << 3;
+#endif
+    result |= bennett_measure(&q);
     result |= bennett_measure(&r) << 1;
     result |= bennett_measure(&y) << 2;
-#ifdef MEASURED_CELLS
-    /* Written under a qubit, the cells hold qubits, which ordinary code may not
-     * read: they are measured (on ordinary bytes the marker is a read). Used by
-     * front/tests/tests/memory_held.rs, whose adapter reads bytes that hold
-     * qubits; this oracle's adapter does not yet (README). */
-    result |= bennett_measure_bytes(cells, 4) << 3;
-#else
+#ifndef MEASURED_CELLS
     for (unsigned i = 0; i < 4; ++i)
         result |= (unsigned long long)cells[i] << (3 + 8 * i);
 #endif

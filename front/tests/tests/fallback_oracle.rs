@@ -112,17 +112,33 @@ impl Device {
         Self { module: bennett_ir::load(text).expect("valid compact program"), image: None }
     }
 
-    /// The whole image in the snapshot's memory: a write anywhere in it is seen.
-    fn image(&self, state: &Snapshot) -> [u8; 12] {
-        let a = self.image.expect("this check needs the fixture's image");
-        state.classical.memory[a..a + INITIAL_IMAGE.len()].try_into().expect("the whole image")
+    /// The whole image for one basis configuration. At each address holding
+    /// qubits, the byte comes from the register named by the snapshot's cell table.
+    fn image(&self, state: &Snapshot, config: &[u64]) -> [u8; 12] {
+        let start = self.image.expect("this check needs the fixture's image");
+        let addresses = start..start + INITIAL_IMAGE.len();
+        let mut bytes: [u8; 12] = state.classical.memory[addresses.clone()].try_into().expect("the whole image");
+        for &(address, register) in &state.quantum.cells {
+            let address = usize::try_from(address).expect("cell address");
+            if addresses.contains(&address) {
+                bytes[address - start] = u8::try_from(config[register]).expect("cell register holds a byte");
+            }
+        }
+        bytes
     }
 
     /// The packed result of a finished run: the q, r, y bits `experiment`
     /// returned and the whole image from the machine's memory. The cells it
     /// returned must be those of the memory.
     fn finished(&self, returned: u64, state: &Snapshot, context: &str) -> u128 {
-        let image = native::Image { bits: (returned & 7) as usize, memory: self.image(state) };
+        let mut images = state.quantum.amplitudes.iter().map(|(config, _)| self.image(state, config));
+        let memory = images.next().expect("a finished run has a configuration");
+        // The unmeasured guard bytes have a definite value in these fixtures, even
+        // when they still hold qubits or other registers were released in superposition.
+        for other in images {
+            assert_eq!(other, memory, "{context}: finished image differs across configurations");
+        }
+        let image = native::Image { bits: (returned & 7) as usize, memory };
         assert_eq!(returned >> 3, u64::from(u32::from_le_bytes(image.cells())), "{context}: returned cells");
         image.measured()
     }
@@ -186,14 +202,18 @@ fn named_bits(config: &[u64], columns: [usize; 3]) -> usize {
 /// is a wrong result here.
 fn projected(device: &Device, basis: usize) -> Vector {
     let snapshot = run_to_measure(device, basis);
-    assert!(snapshot.quantum.cells.is_empty(), "adapter needs a named-address mapping for memory qubits");
-    if device.image.is_some() {
-        assert_eq!(device.image(&snapshot), INITIAL_IMAGE, "WRONG RESULT basis {basis}: ordinary memory changed");
-    }
+    assert!(snapshot.quantum.cells.is_empty(), "coherent fixture left qubits at memory addresses");
     let columns = columns(&device.module, &snapshot);
     let mut result = [C::new(0.0, 0.0); 8];
-    for (config, amplitude) in snapshot.quantum.amplitudes {
-        let b = named_bits(&config, columns);
+    for (config, amplitude) in &snapshot.quantum.amplitudes {
+        if device.image.is_some() {
+            assert_eq!(
+                device.image(&snapshot, config),
+                INITIAL_IMAGE,
+                "WRONG RESULT basis {basis}: ordinary memory changed"
+            );
+        }
+        let b = named_bits(config, columns);
         assert!(
             config.iter().enumerate().all(|(col, v)| columns.contains(&col) || *v == 0),
             "unclean workspace: {config:?}"
@@ -206,15 +226,16 @@ fn projected(device: &Device, basis: usize) -> Vector {
 /// The exact probability of each measured result (q, r, y and the whole image,
 /// packed as `native::Image::measured` packs them), from the device state just
 /// before the measurements: every configuration's weight, keyed by the image.
-/// Other registers (history the toolchain kept) are summed over.
+/// The measurement of the cells comes first for the memory-writing fixtures,
+/// so the snapshot already has the updated bytes at their addresses. The
+/// weights of configurations that agree on the named result are added.
 fn born(device: &Device, basis: usize) -> BTreeMap<u128, f64> {
     let snapshot = run_to_measure(device, basis);
     let mut probabilities = BTreeMap::new();
-    assert!(snapshot.quantum.cells.is_empty(), "adapter needs a named-address mapping for memory qubits");
     let columns = columns(&device.module, &snapshot);
-    let memory = native::Image { bits: 0, memory: device.image(&snapshot) }.measured();
     for (config, amplitude) in &snapshot.quantum.amplitudes {
-        *probabilities.entry(memory | named_bits(config, columns) as u128).or_default() += amplitude.norm_sqr();
+        let image = native::Image { bits: named_bits(config, columns), memory: device.image(&snapshot, config) };
+        *probabilities.entry(image.measured()).or_default() += amplitude.norm_sqr();
     }
     probabilities.retain(|_, p: &mut f64| *p > 1e-14);
     probabilities
@@ -366,8 +387,9 @@ fn coherent_front_programs_match_native_and_existing_dense_oracle() {
 fn run_finished(device: &Device, basis: u64, seed: u64, context: &str) -> u128 {
     let module = &device.module;
     let mut e = Executor::new(module, entry(module, "experiment"), &[basis], options(seed)).expect("starts");
-    let Outcome::Returned(Some(value)) = e.run() else {
-        panic!("{context}: failed measurement run, basis {basis}, seed {seed}");
+    let outcome = e.run();
+    let Outcome::Returned(Some(value)) = outcome else {
+        panic!("{context}: failed measurement run, basis {basis}, seed {seed}: {outcome:?}");
     };
     device.finished(u64::try_from(value).expect("measurement result"), &e.snapshot(), context)
 }
@@ -417,14 +439,14 @@ fn history_warning(diagnostics: &str) -> bool {
 /// Checks a program the front accepted: values first, then the warning. A
 /// coherent fixture gets its full complex vector and the measured checks; any
 /// other gets the measured checks and must carry the history warning.
-fn check_accepted(name: &str, coherent: bool, lowered: &Lowered) -> Result<(), String> {
+fn check_accepted(name: &str, coherent: bool, lowered: &Lowered, context: &str) -> Result<(), String> {
     let device = Device::lowered(&lowered.text);
     if coherent {
-        check_coherent(&device, &natives()[name], false, name, name);
+        check_coherent(&device, &natives()[name], false, name, context);
     }
-    check_measured(&device, &natives()[name], name);
+    check_measured(&device, &natives()[name], context);
     if !coherent && !history_warning(&lowered.diagnostics) {
-        return Err(format!("{name}: missing history/coherence warning: {}", lowered.diagnostics));
+        return Err(format!("{context}: missing history/coherence warning: {}", lowered.diagnostics));
     }
     Ok(())
 }
@@ -446,8 +468,8 @@ fn fallback_inventory_checks_every_accepted_program_and_names_each_refusal() {
                     waiting += 1;
                 }
                 Ok(lowered) => {
-                    if let Err(missing) = check_accepted(name, coherent, &lowered) {
-                        missing_warnings.push(format!("{mode}: {missing}"));
+                    if let Err(missing) = check_accepted(name, coherent, &lowered, &format!("{name}/{mode}")) {
+                        missing_warnings.push(missing);
                     }
                     accepted += 1;
                 }
@@ -458,51 +480,60 @@ fn fallback_inventory_checks_every_accepted_program_and_names_each_refusal() {
     assert!(missing_warnings.is_empty(), "missing documented history/coherence warnings: {missing_warnings:?}");
 }
 
-fn waiting_case(name: &str) {
+fn acceptance_case(name: &str) {
     let coherent = CASES.iter().any(|&(case, coherent)| case == name && coherent);
     for &(mode, flags, extra) in MODES {
         let lowered = lower(name, &format!("required.{mode}"), flags, extra, &[])
             .unwrap_or_else(|reason| panic!("WAITING {name}/{mode}: {reason}"));
-        check_accepted(name, coherent, &lowered).unwrap_or_else(|missing| panic!("{mode}: {missing}"));
+        check_accepted(name, coherent, &lowered, &format!("{name}/{mode}"))
+            .unwrap_or_else(|missing| panic!("{missing}"));
     }
 }
 
-macro_rules! waiting {
-    ($($name:ident),* $(,)?) => {$(
-        #[test]
-        #[ignore = "the front lowers it with the cells measured by bennett_measure_bytes (front/tests/tests/memory_held.rs checks it against native C); this driver reads the cells with ordinary loads, refused by name, and this adapter does not read bytes that hold qubits (README)"]
-        fn $name() { waiting_case(stringify!($name)); }
-    )*};
-}
 mod waiting_for_fallback {
-    use super::waiting_case;
-    waiting!(store, memcpy, memset, nested);
+    use super::acceptance_case;
+
+    #[test]
+    fn store() {
+        acceptance_case("store");
+    }
+    #[test]
+    fn memcpy() {
+        acceptance_case("memcpy");
+    }
+    #[test]
+    fn memset() {
+        acceptance_case("memset");
+    }
+    #[test]
+    fn nested() {
+        acceptance_case("nested");
+    }
     #[test]
     #[ignore = "waiting by decision: a call under a qubit that writes memory (HANDOFF, Next steps 4: a call that fills memory named at the call)"]
     fn user_write() {
-        waiting_case("user_write");
+        acceptance_case("user_write");
     }
     /// `*y = 0` on a y of unknown value: the old value is kept in a register released at once, with the
     /// coherence warning (docs/DESIGN.md, "Overwrites that keep the old value").
     #[test]
     fn outside_class() {
-        waiting_case("outside_class");
+        acceptance_case("outside_class");
     }
     /// The documented Boolean XOR `y ^= q && !r`, coherent in every mode since the
     /// front proves a one-bit flip case by case when the simplifier cannot fold it.
     #[test]
     fn coherent_xor() {
-        waiting_case("coherent_xor");
+        acceptance_case("coherent_xor");
     }
     /// The nested `if (q) if (r) y ^= 1`, also at O0 and with `--taint-all`.
     #[test]
     fn coherent_nested() {
-        waiting_case("coherent_nested");
+        acceptance_case("coherent_nested");
     }
     #[test]
-    #[ignore = "the front lowers it with the cells measured by bennett_measure_bytes (front/tests/tests/memory_held.rs checks it against native C); this driver reads the cells with ordinary loads, refused by name, and this adapter does not read bytes that hold qubits (README)"]
     fn variable_trip_loop() {
-        waiting_case("loop");
+        acceptance_case("loop");
     }
 }
 
