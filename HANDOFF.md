@@ -1460,8 +1460,6 @@ the ordinary frontend run without changing its domain or assertions.
   still differ there (route if that matters: follow each routine's bit tests on such operands). Where C
   leaves a result open (`fmin` of two zeros, out-of-range conversions) the device follows the native x86-64
   program, so a different native target would disagree there.
-- The vendored musl archive was checked byte for byte against the copy in the earlier workspace; its checksum
-  could not be compared with upstream's published one (the address did not answer).
 - The numbers in `docs/AUDITION.md` are each proposal's own and were not recomputed.
 - The implementers' mutation checks found blind spots more than once (a Hadamard-prepared state hid a missing
   negation). A passing suite here is evidence, not proof.
@@ -1583,9 +1581,10 @@ always true, and its position update changed from addition to multiplication.
 | `ir/src/ops.rs` (macro definitions) | 0 | 0 | 0 | 0 | 0 |
 | **Total** | **439** | **0** | **11** | **5** | **70** |
 
-*Survived excludes the separately classified equivalents. `ops.rs` yielded no candidates: the tool
-does not expand its mnemonic macro. This is the tool's generated mutation set, not a claim of complete
-coverage of macro expansions. `fault.rs` belongs to the separate executor mutation pass.
+*Survived excludes the separately classified equivalents. `ops.rs` yielded no generated candidates: the
+tool does not expand its mnemonic macro. The explicit seeded expansion pass below closes the measured
+gap for 19 semantic defects; it does not change this generated-mutation table. Neither set is a claim
+of complete mutation coverage. `fault.rs` belongs to the separate executor mutation pass.
 
 Reproduce the final test population and classifications from this test revision with:
 
@@ -1634,3 +1633,115 @@ Validation: `cargo test` **313 passed / 20 ignored**, `cargo clippy --all-target
 from the unchanged production/frontend source; subsequent changes only added or refined IR/CLI tests.
 The ignored rotation witness was run explicitly and failed as expected. Region tests derive
 `Fault::CODE_WIDTH`; the register-measure CLI fixture must migrate with the planned address form.
+
+### Explicit macro-expansion seeds (2026-11-17)
+
+Base `ed3f15b2f9ae30c20188110b041dd9f315621d50`. Each trial used a fresh scratch copy of that
+revision, one defect at a time. The five `mnemonic_enum!` invocations in `ops.rs` were expanded manually
+using the macro's own enum/`ALL`/`mnemonic`/`from_mnemonic` template; production source was never edited.
+The unmodified expanded control passed **70 IR / 20 CLI tests**. The same control plus the new test
+file passed **76 IR / 20 CLI tests**. The expansion is a control for these seeds, not a Rust compiler
+expansion audit.
+
+Before the new tests: **19 viable seeds, 10 caught / 9 missed**, no compile failures or timeouts.
+After adding six tests in `crates/ir/tests/mnemonic_contract.rs`: **19 caught / 0 missed**. All nine
+former misses were explicitly seen failing with the added tests. Both complete package suites ran
+for every seed, using `--no-fail-fast` so a failing unit-test binary did not skip integration tests.
+Every CLI run passed its 20 tests, before and after: the new catches below belong to IR. This is
+package-level evidence, not a claim that the old executor suite missed all nine defects.
+
+The added tests independently specify all 36 mnemonic-to-variant mappings and complete `ALL` lists;
+assert typed reader instructions with unequal operands and nonzero angles; construct writer inputs
+without reading the operation under test; retain two distinct gate controls; and reject malformed
+operand arities. A consistent spelling swap can satisfy the former self-round-trip test, which
+explains the missed swaps. Absent vocabulary/arity witnesses explain the other misses. The new
+writer checks use literal expected text rather than the reader as their oracle.
+
+New failing-test abbreviations (all in `mnemonic_contract.rs`):
+
+- B: `binary_words_name_the_documented_operations`
+- P: `predicate_words_name_the_documented_comparisons`
+- C: `cast_words_name_the_documented_width_changes`
+- F: `fixed_gate_words_name_the_documented_gates`
+- R: `rotation_words_name_the_documented_axes_and_preserve_angles`
+- A: `macro_named_instructions_require_the_documented_operands`
+
+| Single seeded defect | Existing IR tests that failed before additions | Added IR tests observed failing |
+|---|---|---|
+| Expanded `BinOp::Lshr` / `Ashr`: swap `lshr` / `ashr` writer spellings | **missed** | B |
+| Expanded `BinOp::ALL`: omit `Ashr` | **missed** | B |
+| Expanded `BinOp::from_mnemonic("ashr")`: return `Lshr` | `ops::tests::mnemonics_round_trip` | B |
+| Expanded `Predicate::Sgt` / `Sge`: swap `sgt` / `sge` spellings | **missed** | P |
+| Expanded `Predicate::ALL`: omit `Sge` | **missed** | P |
+| Expanded `Predicate::from_mnemonic("sge")`: return `Sgt` | **missed** | P |
+| Expanded `CastOp::Sext` / `Trunc`: swap `sext` / `trunc` spellings | `a_handle_is_used_only_by_rewind`, `casts_and_ssa_have_strict_boundaries`, `examples_are_valid_and_survive_a_round_trip_through_the_writer` | C |
+| Expanded `CastOp::ALL`: omit `Trunc` | `a_handle_is_used_only_by_rewind`, `casts_and_ssa_have_strict_boundaries`, `examples_are_valid_and_survive_a_round_trip_through_the_writer` | C |
+| Expanded `CastOp::from_mnemonic("trunc")`: return `Sext` | `a_handle_is_used_only_by_rewind`, `casts_and_ssa_have_strict_boundaries`, `examples_are_valid_and_survive_a_round_trip_through_the_writer` | C |
+| Expanded `FixedGate::T` / `Tdg`: swap `t` / `tdg` spellings | **missed** | F |
+| Expanded `FixedGate::ALL`: omit `Tdg` | **missed** | F |
+| Expanded `FixedGate::from_mnemonic("tdg")`: return `T` | `ops::tests::mnemonics_round_trip` | F |
+| Expanded `Rotation::Ry` / `Rz`: swap `ry` / `rz` spellings | **missed** | R |
+| Expanded `Rotation::ALL`: omit `Rz` | `gates_at_addresses_read_write_and_validate` | R |
+| Expanded `Rotation::from_mnemonic("rz")`: return `Ry` | `gates_at_addresses_read_write_and_validate` | R |
+| Binary writer: emit only mnemonic, width and lhs, omitting comma/rhs | `examples_are_valid_and_survive_a_round_trip_through_the_writer`, `measure_at_an_address_reads_writes_and_validates`, `well_formed_programs_are_accepted` | B |
+| Binary reader: make comma/rhs optional, using lhs for a missing rhs | **missed** | A |
+| Rotation writer: emit `0.0` instead of the stored angle | `every_readable_rotation_round_trips_even_when_validation_rejects_it`, `gates_at_addresses_read_write_and_validate` | R |
+| Gate writer: iterate `controls.iter().take(0)` | `examples_are_valid_and_survive_a_round_trip_through_the_writer`, `gates_at_addresses_read_write_and_validate` | F, R |
+
+For each expanded enum, the swap changes only the two explicit `mnemonic()` match-arm string
+literals; the omission removes only the final element of `ALL`; the reader defect inserts an early
+return for the named keyword and otherwise leaves lookup unchanged. The four other edits change only
+the named reader/writer expression, retaining the unmodified expanded vocabulary. All seeds were
+compiled and tested separately, never composed. The source under test was restored from the same
+archive between trials. Reproduction outline, from the repository root:
+
+```sh
+repo=$PWD
+mkdir -p "$repo/.tmp"
+scratch=$(mktemp -d "$repo/.tmp/mnemonic-seed.XXXXXX")
+git -C "$repo" archive ed3f15b2f9ae30c20188110b041dd9f315621d50 | tar -x -C "$scratch"
+# Expand the five invocations using the mnemonic_enum template; run the unchanged control first.
+# Apply exactly one edit from the table, then run both complete package suites:
+(cd "$scratch" && CARGO_BUILD_JOBS=3 cargo test -p bennett-ir --no-fail-fast)
+(cd "$scratch" && CARGO_BUILD_JOBS=3 cargo test -p bennett --no-fail-fast)
+# Add only the new tests to this same seed and repeat both commands:
+cp "$repo/crates/ir/tests/mnemonic_contract.rs" "$scratch/crates/ir/tests/"
+(cd "$scratch" && CARGO_BUILD_JOBS=3 cargo test -p bennett-ir --no-fail-fast)
+(cd "$scratch" && CARGO_BUILD_JOBS=3 cargo test -p bennett --no-fail-fast)
+```
+
+Measured with the default development profile, `CARGO_BUILD_JOBS=3`, headless environment and a
+local temporary directory; each build/test held the shared build slot. No production code changed.
+These 19 seeds do not enumerate every possible expansion or parser/writer defect; broader automatic
+mutation of macro expansions remains a tooling debt, with explicit seeded trials as the current route.
+
+Validation after rebasing on `eec811a`: `cargo test` **474 passed / 21 ignored**; `front/test.sh` **181 passed / 27 ignored**; `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` passed. The front also passed its C++ header and 88 LLVM-attribute checks.
+
+## Vendored musl authentication (2026-11-17)
+
+The upstream musl 1.2.5 release's detached signature verifies with the maintainer key downloaded from
+`https://musl.libc.org/musl.pub`: GnuPG `VALIDSIG` fingerprint
+`836489290BB6B70F99FFDA0556BCDB593020450F`, identity `musl libc <musl@libc.org>`, signature dated
+2024-03-01 02:08:50 UTC. Trust in the key's identity comes from upstream HTTPS, not a local web of trust.
+The authenticated archive's SHA-256 is
+`a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4`.
+All 2,697 vendored regular files, executable flags, entry types and 235 directories match; no extra or
+missing entries. The former weak spot is closed. No vendor source changed; only plain downloads were made.
+
+Exact authentication and content-comparison commands, from the repository root:
+
+```sh
+auth=$(mktemp -d)
+curl --fail --location https://musl.libc.org/releases/musl-1.2.5.tar.gz -o "$auth/musl-1.2.5.tar.gz"
+curl --fail --location https://musl.libc.org/releases/musl-1.2.5.tar.gz.asc -o "$auth/musl-1.2.5.tar.gz.asc"
+curl --fail --location https://musl.libc.org/musl.pub -o "$auth/musl.pub"
+mkdir -m 700 "$auth/gnupg"
+gpg --homedir "$auth/gnupg" --batch --import "$auth/musl.pub"
+gpg --homedir "$auth/gnupg" --batch --status-fd 1 --verify \
+  "$auth/musl-1.2.5.tar.gz.asc" "$auth/musl-1.2.5.tar.gz"
+sha256sum "$auth/musl-1.2.5.tar.gz"
+tar -xzf "$auth/musl-1.2.5.tar.gz" -C "$auth"
+diff --recursive --no-dereference "$auth/musl-1.2.5" rt/musl/musl-1.2.5
+```
+
+The additional entry-type/executable-flag comparison is reproduced in `rt/musl/VENDOR.md`.

@@ -1151,6 +1151,11 @@ negotiation. The exact syntax is whatever the single reader in `ir` accepts; `ex
 - Random programs, forward and back.
 - `cargo test` finishes in seconds. Throughput and journal bytes per step are *reported*, never gated on wall time.
 
+The IR mnemonic tests (`crates/ir/tests/mnemonic_contract.rs`) specify all 36 words independently of
+the production macro, check each reader variant and writer instruction against that specification,
+and reject missing operands. Shared reader/writer swaps cannot hide behind a round trip. The explicit
+macro-expansion mutation trials and their failing tests are recorded in HANDOFF's IR/CLI mutation section.
+
 Independent machine-decision probes (`crates/exec/tests/machine_decisions/` and
 `crates/ir/tests/machine_decisions.rs`) cover every integer measurement width, partial-cell complex
 amplitudes at unaligned addresses, overlapping measurements, byte/end-overflow bounds, every fault
