@@ -10,9 +10,12 @@
 // Every `apply` has a fault register of its own, so that the codes of two faults can never cancel (a
 // compute and its uncompute that fault on the same branch would XOR the same code twice into a shared
 // register). Outside a cycle of the control flow the register is allocated on entry and released at every
-// return, so the evidence stays in the state to the end; the release faults (dirty_free) if any branch
-// faulted. Inside a cycle each execution allocates a fresh register and releases it right after the
-// `apply`, before anything else can write it.
+// return, so the evidence stays in the state to the end. Inside a cycle each execution allocates a fresh
+// register and releases it right after the `apply`, before anything else can write it. A release is the
+// partial trace: a fault register that holds a code is dropped as it is, which ends nothing; the program
+// cannot see the fault unless it measures the register first. The simulator stops by default at the faulting
+// `apply` itself (a region fault) and reports a release of a register that was not zero, both its own
+// diagnostics.
 
 #include "Diagnostic.h"
 #include "Emit.h"
@@ -860,8 +863,8 @@ void ControlWriter::release(const Instruction &ret) {
   for (auto it = analysis.storages.rbegin(); it != analysis.storages.rend(); ++it) {
     const Storage &storage = **it;
     Fact fact = analysis.before(&ret, &storage);
-    // A variable whose value is known is returned to zero first; any other is released as it is, and the
-    // executor faults (dirty_free) if it is not zero on every branch.
+    // A variable whose value is known is returned to zero first; any other is released as it is: the partial
+    // trace, which the simulator reports when the variable is not zero (a report, never a fault).
     if (fact.kind == Fact::Known && analysis.dominators.dominates(fact.value, &ret) && !isZero(fact.value)) {
       xorClassical(storage, fact.value, ret);
     }

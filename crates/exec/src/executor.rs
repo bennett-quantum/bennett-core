@@ -33,11 +33,10 @@ pub struct Options {
     /// their fault registers on purpose. Either way the faults are counted in [`Stats`].
     pub allow_region_faults: bool,
     /// Whether to run the machine's meaning instead of the simulator's strict mode (the default,
-    /// `docs/DESIGN.md`, "Strict mode"). Strict mode adds diagnostics no device can make, as a sanitizer
-    /// does: an `apply` faulting for only some argument values stops the run, and `qfree` of a register that
-    /// is not zero faults `dirty_free`. On the machine a fault for some argument values is a fault code the
-    /// program may measure (as with `allow_region_faults`), and the qubits of a dirty `qfree` are left over:
-    /// kept, never released, counted in [`Stats::leftover_qubits`], the toolchain's warning.
+    /// `docs/DESIGN.md`, "Strict mode"). Strict mode adds one diagnostic no device can make, as a sanitizer
+    /// does: an `apply` faulting for only some argument values stops the run. On the machine the fault code
+    /// is in the fault register, the program's to measure. Since `qfree` became the partial trace this does
+    /// exactly what `allow_region_faults` does.
     pub machine_meaning: bool,
 }
 
@@ -182,9 +181,16 @@ pub struct Stats {
     pub memory_qubit_bytes: usize,
     /// Qubits allocated now, those left over included.
     pub live_qubits: u32,
-    /// Qubits left over now: kept by a `qfree` of a register that was not zero, outside strict mode
-    /// ([`Options::machine_meaning`]). Each is a warning.
+    /// Qubits left over now: the columns the simulator keeps for registers released by `qfree` while not
+    /// zero (`docs/DESIGN.md`, "Releasing a register"). A report of the simulator.
     pub leftover_qubits: u32,
+    /// Executions of `qfree` (forward) whose register was not zero in some configuration of nonzero
+    /// amplitude. A report of the simulator, which no program can read: the release is the partial trace
+    /// either way, and a device could not tell (the nonzero part may have arbitrarily small weight).
+    pub nonzero_releases: u64,
+    /// The weight (summed squared amplitude) of the configurations where the released register was not zero,
+    /// summed over those executions.
+    pub nonzero_release_weight: f64,
     /// The most qubits allocated at once.
     pub peak_live_qubits: u32,
     /// Basis configurations with nonzero amplitude now.
@@ -245,8 +251,8 @@ pub struct Executor<'m> {
     pub(crate) rng: ChaCha8Rng,
     pub(crate) region_steps: u64,
     pub(crate) allow_region_faults: bool,
-    /// The simulator's strict mode (`Options::machine_meaning` off).
-    pub(crate) strict: bool,
+    pub(crate) nonzero_releases: u64,
+    pub(crate) nonzero_release_weight: f64,
     pub(crate) region_faults: u64,
     pub(crate) region_fault_weight: f64,
     pub(crate) region_fault_max_weight: f64,
@@ -286,7 +292,8 @@ impl<'m> Executor<'m> {
             rng: ChaCha8Rng::seed_from_u64(options.seed),
             region_steps: 0,
             allow_region_faults: options.allow_region_faults || options.machine_meaning,
-            strict: !options.machine_meaning,
+            nonzero_releases: 0,
+            nonzero_release_weight: 0.0,
             region_faults: 0,
             region_fault_weight: 0.0,
             region_fault_max_weight: 0.0,
@@ -414,6 +421,8 @@ impl<'m> Executor<'m> {
             memory_qubit_bytes: self.quantum.cells().len(),
             live_qubits: self.quantum.live_qubits(),
             leftover_qubits: self.quantum.leftover_qubits(),
+            nonzero_releases: self.nonzero_releases,
+            nonzero_release_weight: self.nonzero_release_weight,
             peak_live_qubits: self.quantum.peak_qubits(),
             configurations: self.quantum.amplitudes().len(),
             peak_configurations: self.quantum.peak_configurations(),

@@ -72,15 +72,17 @@ impl<'m> Executor<'m> {
                 self.advance();
             }
             Inst::Qfree { register } => {
+                // The partial trace: the register is dropped unexamined, whatever it holds. How the simulator
+                // stores the result is its own choice (`docs/DESIGN.md`, "Releasing a register").
                 let id = self.quantum.resolve(self.handle(*register))?;
-                // `dirty_free` is a check of the simulator's strict mode: on the machine the qubits are left
-                // over.
-                if !self.strict && !self.quantum.failing(|config| config[id] != 0).is_empty() {
+                if self.quantum.is_zero(id) {
+                    self.quantum.free(id);
+                    self.record(Undo::Qfree);
+                } else {
+                    self.nonzero_releases += 1;
+                    self.nonzero_release_weight += self.quantum.nonzero_weight(id);
                     self.quantum.leave(id);
                     self.record(Undo::Leftover);
-                } else {
-                    self.quantum.free(id)?;
-                    self.record(Undo::Qfree);
                 }
                 self.advance();
             }

@@ -1,10 +1,10 @@
 # HANDOFF
 
 State on 2026-11-17: **resumed by the maintainer the same day; see "Resumed on 2026-11-17" below before
-anything else.** Steps 1 and 2 of the order there are done on `wip/model`: `apply` is evaluated for each definite
-value of its arguments only, and `mark`, `rewind`, machine states in superposition and the call with a fault value
-are removed. Next: step 3 (`qfree` as partial trace and the named fault for ordinary code touching qubits in
-memory).
+anything else.** Steps 1 and 2 of the order there are done: `apply` is evaluated for each definite value of its
+arguments only, and `mark`, `rewind`, machine states in superposition and the call with a fault value are removed.
+Step 3 is under way: `qfree` is the partial trace; next, the named fault for ordinary code touching qubits in
+memory.
 
 ## Resumed on 2026-11-17
 
@@ -81,9 +81,12 @@ The order of the work:
    in superposition; also the memory overlay, which existed only so that such machine states could share one
    base. Stepping an ordinary run backwards stays where it is exact (ordinary steps, gates, `apply`) and refuses at
    a measurement.
-3. `qfree` as partial trace (the simulator keeps a nonzero released register as an unnamed part of the stored
-   state and reports it; the program never sees the report), and the named fault for ordinary code touching a
-   byte that holds qubits.
+3. Done: `qfree` is the partial trace (`docs/DESIGN.md`, "Releasing a register"): no release faults; the
+   simulator keeps a register released while not zero as an unnamed column, so the stored state stays the exact
+   purification, and reports the count and weight of such releases, which no program can read. The fault
+   `dirty_free` (code 11) is removed and its code stays unused. The front's tests read the report instead of the
+   fault (their `run` fails a test on a nonzero release). Next in this step: the named fault for ordinary code
+   touching a byte that holds qubits.
 4. The documents say what the code does now; `docs/DESIGN.md` states `apply`'s meaning, why a device can carry
    it out and what it costs.
 5. Independent checks: an audit of the front against the model, a testing pass, and a small reference that runs
@@ -612,8 +615,9 @@ padded clock and its caller's mark; A mark's budget once its frame is left.
   the observer, its classifiers, their tests and the experiments' READMEs); `RunError::RegionFault`'s count is
   `faulting` and its message says basis configurations. Recommendation: rename to `runs` / `configurations` in a
   step that touches the observer anyway.
-- **Fault code 15** (`bad_rewind`, removed): taken, left unused rather than renumbering `bad_longjmp` (16), since
-  codes are stable and a program may have measured one. Recommendation: keep it unused.
+- **Fault codes 15** (`bad_rewind`, removed) **and 11** (`dirty_free`, removed when `qfree` became the partial
+  trace): taken, left unused rather than renumbering, since codes are stable and a program may have measured
+  one. Recommendation: keep them unused.
 - **`printf("%a")` of a subnormal double (2026-11-17, the Opus testing pass):** the device prints musl's
   normalised spelling (`0x1p-1074`), the native reference glibc's denormal one (`0x0.0000000000001p-1022`);
   musl also rounds `%.3a` of `0x1.fffffp-1023` to `0x2.000p-1023`. Equal values, both conforming C; a native
@@ -621,11 +625,11 @@ padded clock and its caller's mark; A mark's budget once its frame is left.
   (`front/tests/tests/printf_hex_float.rs`). Recommendation: follow glibc, as for a copied `sigjmp_buf`,
   by an overlay of musl's hexadecimal branch of `fmt_fp`, low priority; or record musl's spelling as the
   device's and drop the witness.
-- **Open; changes with the work of 2026-11-17:** with `mark`/`rewind` gone the option distinguishes the stop at an
-  `apply` faulting for some argument values and the dirty `qfree`; once `qfree` is partial trace, only the first.
-  **The name of the option for the machine's meaning** (e2): `Options::machine_meaning`,
-  `bennett run --machine-meaning`; strict mode stays the default and `--allow-region-faults` stays as the
-  one relaxation it was. Recommendation: keep; renaming is cheap while no program depends on it.
+- **Open; changed by the work of 2026-11-17:** with `qfree` the partial trace, the option for the machine's
+  meaning distinguishes only the stop at an `apply` faulting for some argument values, so
+  `Options::machine_meaning` (`bennett run --machine-meaning`) now does exactly what `allow_region_faults`
+  (`--allow-region-faults`) does. Taken (easiest to reverse): both kept, documented as the same. Recommendation:
+  keep one; `--allow-region-faults` says what it does, `--machine-meaning` says why.
 - **The NaN payload rule and the default NaN** (e7). Taken: two NaN results agree when each carries the
   payload of one of the tuple's NaN operands or the default NaN's, the sign free. The default NaN is not an
   operand of the helper, but it is an operand of the inner operation whose operand order differs (an inner
@@ -665,8 +669,8 @@ Each recommendation was taken ("Decisions the maintainer took on 2026-11-16, in 
 | A call through another prototype where x86-64 does not determine what is read: the upper half of a 32-bit value, a missing argument that is read, an integer from a floating-point register, a variadic floating-point argument without `%al`, a narrow argument that is not the extension the callee relies on (named fault `unreachable` when the call runs); a direct call whose argument differs from its parameter only in register class (native -O0 and -O2 disagree) | Nothing to remove: the native result is not determined (`docs/DESIGN.md`, "Calls through a prototype"). Conservative, removable by a finer model where named: a variadic floating-point argument after an unread named one, a call whose result is used only by dead code before the optimiser, values in memory read at another place |
 | A qubit-dependent call of a function that uses `setjmp` | The front's own effect summary of `setjmp` (writes only its buffer) when deciding what runs coherently (`docs/DESIGN.md`, "Non-local jumps") |
 | `__float128`; `powi` on `_Float16`/`__bf16`; `#pragma STDC FENV_ACCESS` (with it musl's `ilogb`/`ilogbl` in the corpus accuracy checks; libgcc's `__divxc3` itself works); non-default rounding modes and floating-point flags | Step 5 above |
-| A store under qubit control; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control | The journalled machine (step 3; the device holds qubits at any address since `56b2c0b`, the front's fallback, step 4, is what uses it) |
-| A qubit-dependent value used by ordinary code or printed; measurement under control; a dirty discard | Channels |
+| A store under qubit control; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control | For stores and calls whose writes stay inside a whole applied function: step 6 of "Resumed on 2026-11-17". The rest is open: running code under a qubit with its history kept (`docs/DESIGN.md`, "Open questions"; the journalled machine that did it was removed on 2026-11-17) |
+| A qubit-dependent value used by ordinary code or printed; measurement under control | Channels |
 | Non-empty inline assembly; code without source | An emulator of the real machine, compiled as an ordinary program |
 | A floating-point operation that reads the subnormal mode (arithmetic, comparison, conversion from floating point, intrinsics other than `fabs`/`copysign`/`is.fpclass`) in a function promising a non-IEEE mode (`-fdenormal-fp-math=preserve-sign`, `positive-zero`, `dynamic`, or the `-f32` form); moves and sign/magnitude bit operations there are accepted | The floating-point environment carried through SoftFloat's state (flush inputs and outputs as the promised mode says), compared with native code run under MXCSR DAZ/FTZ |
 
@@ -710,6 +714,20 @@ discovery of all five ignored acceptance stages also pass. The measured 118-seco
 the ordinary frontend run without changing its domain or assertions.
 
 ## Known weak spots
+
+- **Three wrong translations in the front, found by the front audit of 2026-11-17, fixed** (`8bff6a5`,
+  `313386d`, `bc5b3cb`; each a case of `what_was_once_translated_wrongly_is_refused_by_name_in_every_mode` in
+  `front/tests/tests/refusals.rs`, run at O0, O2 and with `--taint-all`, each seen accepted by the front before
+  its fix). (1) A gate whose condition is a conjunction of single qubits took them as controls without the
+  check that each was unchanged since it was read (`_Bool old = q; bennett_x(&q); if (old) bennett_x(&y);`
+  gave y = 0, C gives 1): both paths now share one check and the program is refused at the read. (2) A
+  qubit-dependent atomic update or volatile or atomic read whose result was unused vanished from the device
+  program (`__atomic_fetch_add(&cell, (int)q, ...)` left cell 0): every qubit-dependent instruction other than a
+  call that has an effect on memory is now refused by name. (3) A `setjmp` in a function with qubit variables:
+  a `longjmp` resumes the function along no control-flow edge, so the qubit facts took a read after the
+  `setjmp` for the first return's value (0 where C gives 1): refused by name at the `setjmp`. Debt with its
+  route (`docs/DESIGN.md`, "Non-local jumps"): resumption edges from every later call and `longjmp` in the facts,
+  the unchanged-between checks and the cycle test.
 
 - Independent fp-front testing added two software-rounding witnesses: `lroundl` and `llroundl` on
   unsupported x87 exponent `0x3fff`/significand zero returned INT64_MIN on the device, versus glibc's 0,

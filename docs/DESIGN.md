@@ -138,8 +138,9 @@ an empty device program (`front/src/main.cpp`, `readInput`).
 - **No new device instruction was needed** for any of this: gates take control lists, and `apply` XORs
   into any register.
 - **Every `apply` has a fault register of its own**, released when the function returns (inside a loop: right
-  after the `apply`), so the codes of two faults never cancel. A fault the run was allowed to go past ends it
-  with `dirty_free`.
+  after the `apply`), so the codes of two faults never cancel. A fault the run was allowed to go past stays in
+  its register until the release, which drops it (the partial trace, "Releasing a register" below); the
+  simulator reports that release.
 - **Each qubit variable is Known** (it holds an ordinary value: fresh, assigned, just measured) **or Quantum.**
 - **What it cannot do yet it refuses by name**, with the source location: a qubit-dependent value used by
   ordinary code or by an access with an effect of its own (an atomic update, a volatile or atomic read, even
@@ -402,10 +403,10 @@ The front writes `retaddr N` for every `llvm.returnaddress(N)` in the default ad
   frames in place for reversal. C's `_Noreturn void __bennett_exit(int)` lowers to it; like
   `void __bennett_effect(char)`, it is an ordinary device call, not a quantum marker.
 - Fault codes fit in 5 bits (`Fault::CODE_WIDTH`, widened from 4 on 2026-11-16, the maintainer's decision); a
-  fault register is at least that wide, so every fault register of a program is a `q5` or wider. Fifteen of
-  the 31 nonzero codes are used, the last `bad_longjmp` (16); 15 was `bad_rewind`, removed with `rewind` on
-  2026-11-17, and stays unused.
-- `qfree` requires the register to be zero in every configuration, otherwise the named fault `dirty_free`.
+  fault register is at least that wide, so every fault register of a program is a `q5` or wider. Fourteen of
+  the 31 nonzero codes are used, the last `bad_longjmp` (16); 11 was `dirty_free` and 15 `bad_rewind`, both
+  removed on 2026-11-17, and stay unused.
+- `qfree` is the partial trace and never faults ("Releasing a register", below).
 - `measure` reads a whole register, or the `N` bits from bit 0 of the integer at an address. Amplitudes at or
   below `f64::EPSILON` are dropped.
 - Bounds of the simulator (steps, number of basis configurations) are parameters of a run. Exceeding the
@@ -456,22 +457,46 @@ by the maintainer on 2026-11-17). Registers stay as they are, one way of naming 
   region over superposed cells, loads, stores and a jump record over cells, on clean and dirty history:
   2,808 single steps (184 faulting).
 
+## Releasing a register
+
+`qfree %r` is the partial trace over `%r` (the maintainer's decision of 2026-11-17: "qfree can only mean
+partial trace"): the register is dropped unexamined, whatever it holds, and its handle is dead from then on (a
+later use faults `dangling_register`). A register that is not zero when it is released is no fault of the
+program: no device could decide it reliably, since the nonzero part may have arbitrarily small weight. The
+partial trace of a register entangled with others leaves them in a mixture; a program that wants the
+interference back returns the register to zero first (uncomputes it), as the front does for every qubit
+variable whose value it knows.
+
+How the simulator stores the result (`crates/exec/src/forward.rs`, `quantum.rs`) is its own affair:
+
+- If the register is zero in every stored configuration, its column is removed. This is exact.
+- Otherwise the column is kept, **left over**: unnamed (its generation moves on, so no handle names it) and
+  never reused. The stored state is then a purification of the state after the partial trace, exact: what
+  any later step of the program, a measurement included, can find out is the same either way.
+
+**The simulator's report.** `Stats::nonzero_releases` counts the executions of `qfree` whose register was not
+zero in some stored configuration, and `Stats::nonzero_release_weight` sums the weight (squared amplitude) of
+those configurations; `Stats::leftover_qubits` counts the qubits kept. `bennett run` prints a line when the
+count is not zero. No program can read any of it. A test may fail on it, as the front's tests do
+(`front/tests/src/lib.rs`, `run`): it is a tool of the test, not a result of the program. Reversal takes a
+kept register back, so undoing a release is exact too. Checked in `crates/exec/tests/release.rs`, each
+expected state by hand: half of a Bell pair released (weight 1/2, the pair kept in its column), a release of
+weight about 10^-12 reported as such, a stale handle, and a register returned to zero whose column goes.
+
 ## Strict mode
 
-Decided by the maintainer on the afternoon of 2026-11-16. Some checks of the simulator are no part of the
-machine's meaning: no device can make them, because each looks at every configuration or at amplitudes. They
-are diagnostics of the simulator's **strict mode**, as a sanitizer's are, and strict mode is the default.
-`Options::machine_meaning` (`bennett run --machine-meaning`) runs the machine's meaning instead.
+Decided by the maintainer on the afternoon of 2026-11-16. A check of the simulator that no device can make,
+because it looks at every configuration, is no part of the machine's meaning. It is a diagnostic of the
+simulator's **strict mode**, as a sanitizer's is, and strict mode is the default. `Options::machine_meaning`
+(`bennett run --machine-meaning`) runs the machine's meaning instead.
 
 | Check | Strict mode (default) | The machine's meaning |
 |---|---|---|
 | An `apply` faulting for some values of its arguments | the run stops, `RunError::RegionFault` | the fault code in the fault register, the program's to measure (as `allow_region_faults`) |
-| `qfree` of a register that is not zero | fault `dirty_free` | its qubits are **left over**: kept, never released; the handle is stale (its generation moves on, so a use faults `dangling_register`) and the id is not reused. `Stats::leftover_qubits` counts them, the toolchain's warning (`bennett run` prints it). Reversal takes the register back |
 
-The simulator's checks are never delivered to a program as fault codes. The meaning of `qfree` changes next
-(the maintainer's decision of 2026-11-17: partial trace; `HANDOFF.md`). Measured in `crates/exec/tests/strict.rs`,
-each expected state by hand: a dirty `qfree` faults in strict mode and leaves two qubits of a Bell pair over on
-the machine, the next allocation in a new column, reversal back to the entry; an `apply` out of budget stops
+Since `qfree` became the partial trace (above) this is the only check, so `machine_meaning` does what
+`allow_region_faults` does (`HANDOFF.md`, "Questions for the maintainer"). The simulator's checks are never
+delivered to a program as fault codes. Measured in `crates/exec/tests/strict.rs`: an `apply` out of budget stops
 strict mode and gives, seed by seed, what `allow_region_faults` gives on the machine.
 
 ## What is promised when history is left behind
@@ -668,8 +693,8 @@ recomputation shared between conditions (each predicated operation computes and 
   2026-11-17; a narrow static form with a proof can come back. A program wanting gates inside code that is later
   undone writes the forward and inverse gate sequences itself.
 - **Channels.** A dirty discard is the partial trace, measurement is described by effects, noise by channels; the
-  finished Bennett covers them (maintainer, 2026-11-13). This step is unitaries and clean discard, and a dirty
-  `qfree` is a fault (it becomes the partial trace next, the maintainer's decision of 2026-11-17). Nothing in
+  finished Bennett covers them (maintainer, 2026-11-13). This step has unitaries, measurement and the partial
+  trace (`qfree`, since 2026-11-17), the simulator keeping a purification. Nothing in
   the device program should make channels impossible to add.
 - **Exact amplitudes** for the permutation tier.
 - **Integers wider than 128 bits.** The device program has integers up to 128 bits (decided 2026-11-13: Rust's

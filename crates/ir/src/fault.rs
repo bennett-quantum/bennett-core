@@ -49,8 +49,7 @@ faults! {
     DanglingRegister = 9 "dangling_register",
     /// One gate or `apply` names the same qubit or register twice.
     QubitAlias = 10 "qubit_alias",
-    /// `qfree` of a register that is not zero in every basis configuration.
-    DirtyFree = 11 "dirty_free",
+    // Code 11 was `dirty_free`, removed on 2026-11-17 when `qfree` became the partial trace; it stays unused.
     /// `stackrestore` to a stack pointer below the current one or above the current frame's allocations.
     BadStackRestore = 12 "bad_stack_restore",
     /// A whole-run exit was reached inside a coherent region.

@@ -30,13 +30,15 @@ qubit variable are:
   uncomputed with the inverse.
 
 Any other write would discard x's old value, and is refused. When the function returns, a variable whose
-value is known is returned to 0 first; any other is released as it is, and if it is not 0 on every branch
-the run ends with the fault `dirty_free` (a dirty discard is a fault in this version).
+value is known is returned to 0 first; any other is released as it is: the partial trace (`docs/DESIGN.md`,
+"Releasing a register"). Where the variable is still entangled with others, they are left in a mixture and
+their interference is gone; this is no fault, and the simulator reports the release (`bennett run` prints a
+line), which the program cannot see.
 
-A computation applied coherently may fault on some branches (a division by zero, an exhausted region
-budget). That is a region fault: `bennett run` stops at it and reports it by name, unless it is run with
-`--allow-region-faults`; then the fault stays in the state, and the run ends with `dirty_free` when the
-function returns.
+A computation applied coherently may fault for some values of its arguments (a division by zero, an
+exhausted region budget). That is a region fault: `bennett run` stops at it and reports it by name, unless it
+is run with `--allow-region-faults`; then the fault code stays in the fault register until the function
+returns, where the register is released (and the release reported).
 
 ## Gates
 

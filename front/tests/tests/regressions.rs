@@ -50,11 +50,16 @@ fn faults_of_a_compute_and_its_uncompute_do_not_cancel() {
             panic!("seed {seed}: {outcome:?}")
         };
         assert_eq!((fault, faulting, configurations), (Fault::Budget, 2, 2), "seed {seed}");
-        // Run on regardless, the program keeps the evidence to the end: releasing it faults.
+        // Run on regardless, the program keeps the evidence to the end, where each fault register is released
+        // holding the budget's code in every configuration: the partial trace, which the simulator reports as
+        // two nonzero releases of weight 1 each. Neither application changed t, so q is H H |0> and measures 0.
         let options = Options { allow_region_faults: true, ..options(seed) };
         let mut executor = Executor::new(&starved, entry(&starved, "main"), &[], options).expect("starts");
-        assert_eq!(executor.run(), Outcome::Faulted(Fault::DirtyFree), "seed {seed}");
-        assert_eq!(executor.stats().region_faults, 2, "seed {seed}: both applications faulted");
+        assert_eq!(executor.run(), Outcome::Returned(Some(0)), "seed {seed}");
+        let stats = executor.stats();
+        assert_eq!(stats.region_faults, 2, "seed {seed}: both applications faulted");
+        assert_eq!(stats.nonzero_releases, 2, "seed {seed}: both fault registers released holding a code");
+        assert!((stats.nonzero_release_weight - 2.0).abs() < 1e-12, "seed {seed}: {}", stats.nonzero_release_weight);
     }
 
     // With budget enough the kickback works: q measures 1 on every run.
@@ -101,10 +106,17 @@ fn faults_inside_a_loop_are_kept_per_execution() {
                 continue;
             }
             assert!(matches!(starved_outcome, Outcome::Stopped(RunError::RegionFault { fault: Fault::Budget, .. })));
+            // Run on regardless: each fault register is released right after its `apply`, holding the budget's
+            // code in every configuration, and reported (weight 1 each, two per pass). No application changed
+            // t, so each pass is H H then X on q: q ends as n mod 2.
             let options = Options { allow_region_faults: true, ..options(seed) };
             let mut executor = Executor::new(&starved, entry(&starved, "loop"), &[n], options).expect("starts");
-            assert_eq!(executor.run(), Outcome::Faulted(Fault::DirtyFree), "n = {n}, seed {seed}");
-            assert_eq!(executor.stats().region_faults, 1, "the first faulting execution is caught at once");
+            assert_eq!(executor.run(), Outcome::Returned(Some(u128::from(n % 2))), "n = {n}, seed {seed}");
+            let stats = executor.stats();
+            assert_eq!(stats.region_faults, 2 * n, "n = {n}: every execution faulted");
+            assert_eq!(stats.nonzero_releases, 2 * n, "n = {n}: each released holding a code");
+            let weight = stats.nonzero_release_weight;
+            assert!((weight - 2.0 * n as f64).abs() < 1e-12, "n = {n}, seed {seed}: {weight}");
         }
     }
 }

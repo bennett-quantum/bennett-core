@@ -1,5 +1,6 @@
 /* kickback_no_uncompute.c: kickback.c without the uncomputation. hit is still entangled with b when its
- * scope ends, so releasing it is a dirty discard: a fault on every run, never a wrong answer. */
+ * scope ends, so its release (the partial trace) leaves b in an equal mixture: b measures 0 or 1, each about
+ * half the time, where kickback.c gives 1 on every run. The simulator reports the release (weight 1/2). */
 #include "bennett.h"
 
 static int f(int x) { return x * x + 1; }

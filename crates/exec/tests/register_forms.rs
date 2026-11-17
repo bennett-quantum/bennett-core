@@ -1,16 +1,16 @@
-//! What `qfree` does beside qubits in memory (`docs/DESIGN.md`, "Qubits in memory"): a dirty `qfree` on
-//! the machine and a memory byte holding qubits both keep the qubits.
+//! What `qfree` does beside qubits in memory (`docs/DESIGN.md`, "Qubits in memory"): a `qfree` of a
+//! register that is not zero and a memory byte holding qubits both keep the qubits in the stored state.
 
 mod common;
 
 use bennett_exec::{Options, Outcome};
 use common::{bounded, executor, load};
 
-/// A `qfree` of a register that is not zero, on the machine, leaves its qubits over, kept (strict mode: the
-/// diagnostic `dirty_free`); a byte of memory holding qubits is never released either: its qubits stay where
-/// they are. Both keep the pair, so a measurement afterwards finds it.
+/// A `qfree` of a register that is not zero is the partial trace; the simulator keeps its column (left over);
+/// a byte of memory holding qubits is never released either: its qubits stay where they are. Both keep the
+/// pair in the stored state.
 #[test]
-fn a_dirty_free_and_a_cell_left_alone_both_keep_the_qubits() {
+fn a_nonzero_release_and_a_cell_left_alone_both_keep_the_qubits() {
     let register = load(
         "memory 64
 func @main() -> i2 {

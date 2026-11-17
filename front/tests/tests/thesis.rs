@@ -5,8 +5,8 @@ use std::f64::consts::FRAC_1_SQRT_2;
 
 use bennett_exec::Outcome;
 use bennett_front_tests::{
-    CLANG_FLAGS, c_dir, column, entry, lower, lower_text, registers, run, state_before_first_measurement,
-    state_without_fault_registers, write_c,
+    CLANG_FLAGS, c_dir, column, entry, lower, lower_text, registers, run, run_with_stats,
+    state_before_first_measurement, state_without_fault_registers, write_c,
 };
 use bennett_ir::{Fault, FixedGate, Gate, Inst, ValidModule};
 use num_complex::Complex64;
@@ -29,6 +29,16 @@ fn program(name: &str, clang_flags: &[&str], front_flags: &[&str]) -> ValidModul
 
 fn outcomes(module: &ValidModule) -> Vec<Outcome> {
     (0..SEEDS).map(|seed| run(module, "main", &[], seed)).collect()
+}
+
+/// The outcome of every seed with the simulator's report of nonzero releases (count and weight).
+fn outcomes_and_releases(module: &ValidModule) -> Vec<(Outcome, u64, f64)> {
+    (0..SEEDS)
+        .map(|seed| {
+            let (outcome, stats) = run_with_stats(module, "main", &[], seed);
+            (outcome, stats.nonzero_releases, stats.nonzero_release_weight)
+        })
+        .collect()
 }
 
 fn assert_every_run(module: &ValidModule, expected: Outcome, context: &str) {
@@ -105,11 +115,26 @@ fn kickback_computes_and_uncomputes_in_the_device_program() {
     }
 }
 
+/// Without the uncomputation `hit` is still entangled with `b` when it is released: the release is the
+/// partial trace, so `b` is left in an equal mixture and measures 0 or 1, each about half the time, where the
+/// kickback gives 1 on every run. The simulator reports the release: one, of weight 1/2 whichever value `b`
+/// gave (worked by hand: after `h b` the state is (|00> + |10> - |01> + |11>)/2 over `b`, `hit`; measuring
+/// `b` leaves `hit` in an equal superposition of 0 and 1). The report is the test's tool, never the program's.
 #[test]
-fn without_the_uncomputation_the_discard_faults() {
+fn without_the_uncomputation_the_release_is_reported_and_the_interference_is_gone() {
     for flags in [CLANG_FLAGS, CLANG_O2_FLAGS] {
         let module = program("kickback_no_uncompute", flags, &[]);
-        assert_every_run(&module, Outcome::Faulted(Fault::DirtyFree), "kickback_no_uncompute.c");
+        let runs = outcomes_and_releases(&module);
+        for (seed, &(outcome, releases, weight)) in runs.iter().enumerate() {
+            assert!(matches!(outcome, Outcome::Returned(Some(0 | 1))), "seed {seed}: {outcome:?}");
+            assert_eq!(releases, 1, "seed {seed}");
+            assert!((weight - 0.5).abs() < TOLERANCE, "seed {seed}: {weight}");
+        }
+        let ones = runs.iter().filter(|(outcome, ..)| *outcome == Outcome::Returned(Some(1))).count();
+        // 64 fair draws: both values occur (each missing has probability 2^-64).
+        assert!(ones > 0 && ones < runs.len(), "{ones} of {}", runs.len());
+        let (outcome, stats) = run_with_stats(&program("kickback", flags, &[]), "main", &[], 0);
+        assert_eq!((outcome, stats.nonzero_releases), (Outcome::Returned(Some(1)), 0), "kickback.c uncomputes");
     }
 }
 
@@ -120,7 +145,7 @@ fn treating_everything_as_tainted_changes_no_result() {
     for name in ["thesis", "thesis_no_undo", "thesis_kept", "kickback", "kickback_no_uncompute"] {
         let precise = program(name, CLANG_FLAGS, &[]);
         let coarse = program(name, CLANG_FLAGS, &["--taint-all"]);
-        assert_eq!(outcomes(&precise), outcomes(&coarse), "{name}");
+        assert_eq!(outcomes_and_releases(&precise), outcomes_and_releases(&coarse), "{name}");
     }
     let precise = state_without_fault_registers(&program("thesis_kept", CLANG_FLAGS, &[]), "main", &[]);
     let coarse = state_without_fault_registers(&program("thesis_kept", CLANG_FLAGS, &["--taint-all"]), "main", &[]);

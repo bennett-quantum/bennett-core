@@ -34,8 +34,8 @@ pub enum Undo {
     Qalloc,
     /// A `qfree`, undone by reviving the register. No words.
     Qfree,
-    /// A `qfree` of a register that was not zero, outside the simulator's strict mode: the register is left
-    /// over (kept, its handle stale), undone by taking it back. No words.
+    /// A `qfree` of a register that was not zero: the simulator keeps its column (left over, its handle
+    /// stale), undone by taking it back. No words.
     Leftover,
     /// A measurement: a barrier that reversal refuses to cross. Words: the old slot value.
     Measure,

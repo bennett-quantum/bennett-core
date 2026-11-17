@@ -16,7 +16,6 @@ const CODES: &[(&str, u64)] = &[
     ("quantum_in_region", 8),
     ("dangling_register", 9),
     ("qubit_alias", 10),
-    ("dirty_free", 11),
     ("bad_stack_restore", 12),
     ("exit_in_region", 13),
     ("exit_type_mismatch", 14),
@@ -54,7 +53,7 @@ fn every_fault_xors_into_dirty_fault_registers() {
             }
         }
     }
-    assert_eq!(cases, 1920);
+    assert_eq!(cases, 4 * 14 * 32, "four widths, fourteen codes, 32 dirty values");
 }
 
 #[test]

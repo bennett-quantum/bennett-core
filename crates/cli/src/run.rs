@@ -83,11 +83,11 @@ fn report_outcome(module: &ValidModule, entry: FuncId, outcome: Outcome, tape: &
             stats.region_faults, stats.region_fault_weight
         );
     }
-    if stats.leftover_qubits > 0 {
+    if stats.nonzero_releases > 0 {
         println!(
-            "warning: {} qubits left over by `qfree` of registers that were not zero (the machine keeps them; \
-             strict mode would fault)",
-            stats.leftover_qubits
+            "simulator report: {} `qfree` released a register that was not zero, weight {:e} in all; the release \
+             is the partial trace and the program cannot see this ({} qubits kept as unnamed columns)",
+            stats.nonzero_releases, stats.nonzero_release_weight, stats.leftover_qubits
         );
     }
     if !tape.is_empty() {

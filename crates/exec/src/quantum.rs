@@ -1,8 +1,10 @@
 //! The sparse quantum state: a map from basis configuration to complex amplitude.
 //!
-//! A configuration holds one column per register id: the register's value as an integer. Freed
-//! registers are zero in every configuration, so their columns can be reused or trimmed. The map is
-//! ordered, so iteration, and therefore seeded measurement, is deterministic.
+//! A configuration holds one column per register id: the register's value as an integer. A register
+//! released while zero in every configuration has its column removed or reused; one released while not zero
+//! keeps its column, unnamed and never reused, so the stored state stays the exact purification of the
+//! state after the partial trace (`docs/DESIGN.md`, "Releasing a register"). The map is ordered, so
+//! iteration, and therefore seeded measurement, is deterministic.
 
 use std::collections::BTreeMap;
 
@@ -16,11 +18,10 @@ use crate::gates::Matrix;
 /// The values of every register column, one basis state.
 pub(crate) type Config = Box<[u64]>;
 
-/// The amplitude of every configuration of nonzero amplitude.
-pub(crate) type Amplitudes = BTreeMap<Config, Complex64>;
-
-/// An amplitude no larger than this is treated as zero and dropped. Amplitudes of a normalised state
-/// are at most 1, so this is one unit of rounding: what cancellation leaves behind.
+/// An amplitude no larger than this is treated as zero and dropped, by the simulator: amplitudes of a
+/// normalised state are at most 1, so this is one unit of rounding, what cancellation leaves behind. A
+/// dropped configuration has a weight of at most its square (about 5e-32), so it can never be a measurement's
+/// outcome; nothing else of the program reads amplitudes.
 const NEGLIGIBLE_AMPLITUDE: f64 = f64::EPSILON;
 
 /// The state of one register id.
@@ -60,8 +61,8 @@ pub(crate) struct QuantumState {
     /// The memory bytes that hold qubits ("cells", `docs/DESIGN.md`, "Qubits in memory"): byte address to
     /// the column of the 8-qubit register that holds the byte's value. Part of the register table.
     cells: BTreeMap<u64, usize>,
-    /// The ids of registers left over, in the order they were left: freed while not zero outside the
-    /// simulator's strict mode, so kept, with no live handle (`docs/DESIGN.md`, "Strict mode").
+    /// The ids of registers left over, in the order they were left: released by `qfree` while not zero, so
+    /// their columns are kept, with no live handle (`docs/DESIGN.md`, "Releasing a register").
     leftovers: Vec<usize>,
 }
 
@@ -163,17 +164,20 @@ impl QuantumState {
         self.amplitudes.keys().all(|config| config[id] == 0)
     }
 
-    /// Frees the register, which must be zero in every configuration.
-    pub(crate) fn free(&mut self, id: usize) -> Result<(), Fault> {
-        if !self.is_zero(id) {
-            return Err(Fault::DirtyFree);
-        }
+    /// The weight (summed squared amplitude) of the configurations where register `id` is not zero.
+    pub(crate) fn nonzero_weight(&self, id: usize) -> f64 {
+        self.amplitudes.iter().filter(|(config, _)| config[id] != 0).map(|(_, amplitude)| amplitude.norm_sqr()).sum()
+    }
+
+    /// Frees the register, which is zero in every configuration: its column goes, which is exact.
+    pub(crate) fn free(&mut self, id: usize) {
+        debug_assert!(self.is_zero(id), "only a register zero in every configuration is freed");
         self.release(id);
-        Ok(())
     }
 
     /// Keeps the register's qubits as left over instead of freeing them: its handle goes stale (the
     /// generation moves on, so no handle names it), its column and amplitudes stay, and its id is not reused.
+    /// The stored state is then a purification of the state after the partial trace over the register.
     pub(crate) fn leave(&mut self, id: usize) {
         let register = &mut self.registers[id];
         register.generation = register.generation.wrapping_add(1);
@@ -352,12 +356,6 @@ impl QuantumState {
             parts.entry(key).or_default().insert(config.clone(), amplitude);
         }
         parts.into_iter().collect()
-    }
-
-    /// The configurations, with their amplitudes, for which `fails` holds: what a check that `fails` names
-    /// finds wrong in this state.
-    pub(crate) fn failing(&self, fails: impl Fn(&[u64]) -> bool) -> Amplitudes {
-        self.amplitudes.iter().filter(|(config, _)| fails(config)).map(|(config, &a)| (config.clone(), a)).collect()
     }
 }
 

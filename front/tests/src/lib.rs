@@ -164,12 +164,22 @@ pub fn options(seed: u64) -> Options {
     }
 }
 
-/// Runs `name(args)` to the end.
+/// Runs `name(args)` to the end, and fails the test if the simulator reports a `qfree` of a register that
+/// was not zero. The release is the partial trace and no fault of the program; this check is the test's
+/// tool, kept because a program from `bennett-front` returns every qubit variable it can to zero and its fault
+/// registers stay zero unless an `apply` faulted. A test of a program that releases a nonzero register on
+/// purpose reads the report with [`run_with_stats`].
 pub fn run(module: &ValidModule, name: &str, args: &[u64], seed: u64) -> Outcome {
-    run_with_stats(module, name, args, seed).0
+    let (outcome, stats) = run_with_stats(module, name, args, seed);
+    assert_eq!(
+        stats.nonzero_releases, 0,
+        "@{name}{args:?}, seed {seed}: {outcome:?}, but a released register was not zero (weight {:e})",
+        stats.nonzero_release_weight
+    );
+    outcome
 }
 
-/// Runs `name(args)` to the end and returns the outcome and the run's counts.
+/// Runs `name(args)` to the end and returns the outcome and the run's counts, with the simulator's reports.
 pub fn run_with_stats(module: &ValidModule, name: &str, args: &[u64], seed: u64) -> (Outcome, Stats) {
     let mut executor =
         Executor::new(module, entry(module, name), args, options(seed)).unwrap_or_else(|e| panic!("@{name}: {e}"));
