@@ -7,6 +7,7 @@
 
 #include <llvm/ADT/PostOrderIterator.h>
 #include <llvm/ADT/SetVector.h>
+#include <llvm/Analysis/LoopInfo.h>
 #include <llvm/Analysis/ValueTracking.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/IRBuilder.h>
@@ -78,6 +79,16 @@ private:
   std::map<const Instruction *, const Value *> knownValues;         // a store's target value, when known
   std::set<const Instruction *> readAfterChange; // loads that may read what an operation wrote
 
+  // A loop of the region whose gates stay in it: its trip count is ordinary, so the loop runs in the control
+  // program, each gate controlled by the condition that the region reaches it, computed once before the loop.
+  struct GateLoop {
+    Loop *loop;
+    std::vector<Instruction *> gates; // in the order they are moved
+    bool moved = false;
+  };
+  std::vector<GateLoop> gateLoops;
+  std::map<const Instruction *, size_t> loopOf; // a gate of a GateLoop: its index
+
   // Orders the blocks and operations; refuses an operation on a cycle.
   void order();
   bool precedes(const Instruction *a, const Instruction *b) const;
@@ -91,6 +102,17 @@ private:
   Value *qubitPointer(Value *pointer, IRBuilder<> &b) const;
   void moveGate(CallBase *gate, IRBuilder<> &b);
   void moveStore(StoreInst *store, IRBuilder<> &b);
+  // The loop of the region that contains `op`, on a cycle of the region, checked to be one the control
+  // program can run (refused by name otherwise).
+  size_t gateLoop(Instruction *op);
+  void moveLoop(GateLoop &gates, IRBuilder<> &b);
+  // The ordinary part of the condition on which the region enters `loop`, computed at `b`: the loop's own
+  // guard, which LLVM may have merged into the branch on a qubit.
+  Value *entryGuard(Loop *loop, IRBuilder<> &b, ValueToValueMapTy &map);
+  // `value` at `b`, after the region: defined outside it, or an ordinary computation of the region recomputed.
+  Value *recomputed(Value *value, IRBuilder<> &b, ValueToValueMapTy &map, const Instruction *at);
+  // The qubit variables the computation of `value` reads, outside the region included.
+  std::set<const Storage *> variablesRead(const Value *value) const;
   void removeOperations();
 };
 
@@ -120,15 +142,6 @@ void Predicator::order() {
       }
     }
   }
-  // An operation on a cycle may act more than once per run of the region: that needs a budgeted
-  // construction this version does not have. Loops elsewhere in the region stay in the copies.
-  for (Instruction *op : ops) {
-    if (later[op->getParent()].count(op->getParent())) {
-      notHandled("a loop under the control of a value that depends on a qubit, with quantum operations "
-                 "inside (only a loop that LLVM unrolls fully is handled)",
-                 op);
-    }
-  }
   // A topological order of the region's strongly connected components: a block that reaches another
   // without being reached by it has fewer such predecessors. Ties keep the reverse post-order.
   std::map<const BasicBlock *, size_t> before;
@@ -147,6 +160,89 @@ void Predicator::order() {
       }
     }
   }
+  // An operation on a cycle may act more than once per run of the region: a gate there stays in its loop,
+  // which the control program runs (the loop's trip count must be ordinary). Loops without operations stay
+  // in the copies.
+  for (Instruction *op : ops) {
+    if (later[op->getParent()].count(op->getParent())) {
+      loopOf[op] = gateLoop(op);
+      gateLoops[loopOf[op]].gates.push_back(op);
+    }
+  }
+}
+
+size_t Predicator::gateLoop(Instruction *op) {
+  Loop *loop = analysis.loops.getLoopFor(op->getParent());
+  while (loop && loop->getParentLoop() && inRegion.count(loop->getParentLoop()->getHeader())) {
+    loop = loop->getParentLoop();
+  }
+  if (!loop || !inRegion.count(loop->getHeader())) {
+    notHandled("a cycle of control flow that is not a loop, with gates inside, under the control of a value that "
+               "depends on a qubit",
+               op);
+  }
+  for (size_t i = 0; i < gateLoops.size(); ++i) {
+    if (gateLoops[i].loop == loop) {
+      return i;
+    }
+  }
+  if (isQubitStore(*op, analysis)) {
+    notHandled("a store into qubit variable " + targetOf(op)->name +
+                   " in a loop under the control of a value that depends on a qubit, with gates in the loop (not "
+                   "built yet)",
+               op);
+  }
+  for (BasicBlock *block : loop->blocks()) {
+    const Instruction *term = block->getTerminator();
+    const Value *condition = isa<BranchInst>(term) && cast<BranchInst>(term)->isConditional()
+                                 ? cast<BranchInst>(term)->getCondition()
+                             : isa<SwitchInst>(term) ? cast<SwitchInst>(term)->getCondition()
+                                                     : nullptr;
+    if (condition && analysis.tainted(condition)) {
+      bool exits = std::any_of(succ_begin(block), succ_end(block),
+                               [&](const BasicBlock *succ) { return !loop->contains(succ); });
+      if (exits) {
+        notHandled("a loop with gates whose number of passes depends on a qubit: a circuit is a definite list of "
+                   "gates, so the number of passes must be written as an ordinary value (a loop over an ordinary "
+                   "count, testing the condition inside); such a loop does not consume its loop variable as "
+                   "`while (x > 0) { ...; x--; }` does",
+                   term);
+      }
+      notHandled("a loop with gates whose passes decide on values that depend on a qubit (not built yet: one "
+                 "applied function returning a table of control bits for all passes)",
+                 term);
+    }
+    for (const Instruction &inst : *block) {
+      if (analysis.tainted(&inst)) {
+        notHandled("a loop with gates that computes values that depend on a qubit in its passes (not built yet: "
+                   "one applied function returning a table of control bits for all passes)",
+                   &inst);
+      }
+      if (isQubitStore(inst, analysis)) {
+        notHandled("a store into qubit variable " + targetOf(&inst)->name +
+                       " in a loop under the control of a value that depends on a qubit, with gates in the loop "
+                       "(not built yet)",
+                   &inst);
+      }
+      if (isGateCall(&inst) && cast<CallBase>(inst).getOperandBundle(controlBundle)) {
+        fail("internal: a controlled gate in a loop under a qubit-dependent condition");
+      }
+      for (const User *user : inst.users()) {
+        if (!loop->contains(cast<Instruction>(user))) {
+          notHandled("a loop with gates under the control of a value that depends on a qubit, whose values are "
+                     "used after it (not built yet)",
+                     &inst);
+        }
+      }
+    }
+  }
+  if (!loop->getLoopPredecessor()) {
+    notHandled("a loop with gates under the control of a value that depends on a qubit, entered from more than "
+               "one place",
+               op);
+  }
+  gateLoops.push_back(GateLoop{loop, {}});
+  return gateLoops.size() - 1;
 }
 
 bool Predicator::precedes(const Instruction *a, const Instruction *b) const {
@@ -490,6 +586,252 @@ void Predicator::moveGate(CallBase *gate, IRBuilder<> &b) {
   b.CreateCall(gate->getFunctionType(), gate->getCalledOperand(), args, bundles);
 }
 
+Value *Predicator::recomputed(Value *value, IRBuilder<> &b, ValueToValueMapTy &map, const Instruction *at) {
+  auto *inst = dyn_cast<Instruction>(value);
+  if (!inst || !inRegion.count(inst->getParent()) || analysis.access(inst) || isBitCall(inst)) {
+    return value; // defined before the region (so before the loop's new place), or a qubit, addressed afresh
+  }
+  if (Value *done = map.lookup(inst)) {
+    return done;
+  }
+  if (analysis.tainted(inst) || isa<PHINode>(inst) || inst->mayReadOrWriteMemory() || inst->isTerminator()) {
+    notHandled("a loop with gates under the control of a value that depends on a qubit, using a value computed "
+               "under that control before the loop (not built yet)",
+               at);
+  }
+  Instruction *copy = inst->clone();
+  for (Use &use : copy->operands()) {
+    use.set(recomputed(use.get(), b, map, at));
+  }
+  b.Insert(copy);
+  map[inst] = copy;
+  return copy;
+}
+
+Value *Predicator::entryGuard(Loop *loop, IRBuilder<> &b, ValueToValueMapTy &map) {
+  BasicBlock *from = loop->getLoopPredecessor();
+  const auto *branch = dyn_cast<BranchInst>(from->getTerminator());
+  if (!branch) {
+    notHandled("a loop with gates under the control of a value that depends on a qubit, entered by a switch",
+               from->getTerminator());
+  }
+  if (!branch->isConditional()) {
+    return b.getTrue();
+  }
+  // On the edge into the loop the condition holds (or fails): its ordinary conjuncts (disjuncts) must too.
+  bool onTrue = branch->getSuccessor(0) == loop->getHeader();
+  unsigned opcode = onTrue ? Instruction::And : Instruction::Or;
+  Value *guard = b.getTrue();
+  std::vector<Value *> work{branch->getCondition()};
+  while (!work.empty()) {
+    Value *value = work.back();
+    work.pop_back();
+    auto *binary = dyn_cast<BinaryOperator>(value);
+    auto *select = dyn_cast<SelectInst>(value);
+    if (binary && binary->getOpcode() == opcode) {
+      work.push_back(binary->getOperand(0));
+      work.push_back(binary->getOperand(1));
+    } else if (select && onTrue && isa<ConstantInt>(select->getFalseValue()) &&
+               cast<ConstantInt>(select->getFalseValue())->isZero()) {
+      work.push_back(select->getCondition()); // a && b written as select a, b, false
+      work.push_back(select->getTrueValue());
+    } else if (select && !onTrue && isa<ConstantInt>(select->getTrueValue()) &&
+               cast<ConstantInt>(select->getTrueValue())->isOne()) {
+      work.push_back(select->getCondition()); // a || b written as select a, true, b
+      work.push_back(select->getFalseValue());
+    } else if (!analysis.tainted(value)) {
+      Value *term = recomputed(value, b, map, branch);
+      guard = b.CreateAnd(guard, onTrue ? term : b.CreateNot(term));
+    }
+  }
+  return guard;
+}
+
+std::set<const Storage *> Predicator::variablesRead(const Value *value) const {
+  std::set<const Storage *> read;
+  std::set<const Value *> seen;
+  std::vector<const Value *> work{value};
+  while (!work.empty()) {
+    const Value *next = work.back();
+    work.pop_back();
+    if (!analysis.tainted(next) || !seen.insert(next).second) {
+      continue;
+    }
+    if (analysis.isQuantumLoad(next)) {
+      read.insert(analysis.access(cast<LoadInst>(next)->getPointerOperand())->storage);
+      continue;
+    }
+    for (const Use &use : cast<User>(next)->operands()) {
+      work.push_back(use.get());
+    }
+  }
+  return read;
+}
+
+// Whether `copy` returns one qubit of a variable as it is (the condition `if (q)` on a _Bool): the control
+// program then makes it the gates' control qubit (Control.cpp, literals) without computing anything.
+bool returnsOneQubit(Function *copy, const std::vector<Param> &params) {
+  if (copy->size() != 1) {
+    return false;
+  }
+  const auto *ret = dyn_cast<ReturnInst>(copy->front().getTerminator());
+  const Value *value = ret ? ret->getReturnValue() : nullptr;
+  for (;;) {
+    if (const auto *compare = dyn_cast_or_null<ICmpInst>(value);
+        compare && compare->getPredicate() == ICmpInst::ICMP_NE && isa<ConstantInt>(compare->getOperand(1)) &&
+        cast<ConstantInt>(compare->getOperand(1))->isZero()) {
+      value = compare->getOperand(0);
+    } else if (const auto *cast = dyn_cast_or_null<CastInst>(value); cast && (isa<TruncInst>(cast) || isa<ZExtInst>(cast))) {
+      value = cast->getOperand(0);
+    } else {
+      break;
+    }
+  }
+  const auto *arg = dyn_cast_or_null<Argument>(value);
+  if (!arg) {
+    return false;
+  }
+  const Param &param = params[arg->getArgNo()];
+  return param.kind == Param::Current && param.offset == 0 && popcount(param.storage->support) == 1;
+}
+
+// The loop runs in the control program after the region, as written: its trip count is ordinary. Each gate
+// in it acts where the region reaches it: a condition computed once before the loop, into a fresh qubit
+// variable (or one qubit as it is), which controls the gate in every pass and is computed again after the
+// loop, returning it to 0. The gates must not change what the conditions read. No loop is unrolled or
+// created; the loop also runs for the configurations whose path would not reach it, as ordinary code that
+// writes no memory (outlineAround refused writes), its gates acting on none of them.
+void Predicator::moveLoop(GateLoop &gates, IRBuilder<> &b) {
+  LLVMContext &context = fn.getContext();
+  BasicBlock *pre = b.GetInsertBlock();
+  BasicBlock *cont = pre->splitBasicBlock(b.GetInsertPoint(), pre->getName() + ".loop");
+  b.SetInsertPoint(pre->getTerminator());
+
+  // The conditions, before the loop.
+  enum class Kind { Never, Always, Qubit, Variable };
+  struct Condition {
+    Kind kind;
+    Value *value = nullptr;      // Qubit: the copy's result, for the control program's literal controls
+    AllocaInst *qubit = nullptr; // Variable: the fresh qubit variable holding it
+    Function *when = nullptr;
+    std::vector<Param> params;
+  };
+  std::map<const Instruction *, Condition> conditions;
+  for (Instruction *gate : gates.gates) {
+    Condition condition{Kind::Variable};
+    condition.when = copy(gate, Result::Reached, nullptr, condition.params);
+    refuseStale(condition.when, condition.params, gate);
+    std::set<const Storage *> inputs;
+    for (size_t i = 0; i < condition.params.size(); ++i) {
+      if (condition.params[i].kind == Param::Input && !condition.when->getArg(unsigned(i))->use_empty()) {
+        std::set<const Storage *> read = variablesRead(condition.params[i].input);
+        inputs.insert(read.begin(), read.end());
+      }
+    }
+    for (Instruction *other : gates.gates) {
+      if (readsVariable(condition.when, condition.params, targetOf(other)) || inputs.count(targetOf(other))) {
+        notHandled("a gate on qubit variable " + targetOf(other)->name +
+                       " in a loop whose gates are controlled by a condition that reads it (the gate would change "
+                       "the condition; not built yet)",
+                   other);
+      }
+    }
+    if (returnsConstant(condition.when, false)) {
+      condition.kind = Kind::Never;
+    } else if (returnsConstant(condition.when, true)) {
+      condition.kind = Kind::Always;
+    } else if (returnsOneQubit(condition.when, condition.params)) {
+      condition.kind = Kind::Qubit;
+      condition.value = call(condition.when, condition.params, b);
+    } else {
+      IRBuilder<> top(&*fn.getEntryBlock().getFirstInsertionPt());
+      condition.qubit = top.CreateAlloca(b.getInt8Ty(), nullptr, "condition");
+      condition.qubit->setMetadata(qubitMetadata, MDNode::get(context, {}));
+      Value *old = b.CreateLoad(b.getInt8Ty(), condition.qubit);
+      b.CreateStore(b.CreateXor(old, b.CreateZExt(call(condition.when, condition.params, b), b.getInt8Ty())),
+                    condition.qubit);
+    }
+    conditions[gate] = std::move(condition);
+  }
+
+  // The loop, cloned between `pre` and `cont`, entered where its ordinary guard holds; what it uses from the
+  // region is recomputed in `pre` (ordinary values: the region writes no memory).
+  Loop *loop = gates.loop;
+  ValueToValueMapTy map;
+  for (BasicBlock *block : loop->blocks()) {
+    for (Instruction &inst : *block) {
+      for (Use &use : inst.operands()) {
+        if (auto *operand = dyn_cast<Instruction>(use.get()); operand && !loop->contains(operand)) {
+          recomputed(operand, b, map, &inst);
+        }
+      }
+    }
+  }
+  Value *guard = entryGuard(loop, b, map);
+  std::vector<BasicBlock *> clones;
+  std::set<const BasicBlock *> cloned;
+  for (BasicBlock *block : loop->blocks()) {
+    BasicBlock *clone = CloneBasicBlock(block, map, ".gates", &fn);
+    map[block] = clone;
+    clones.push_back(clone);
+    cloned.insert(clone);
+  }
+  remapInstructionsInBlocks(clones, map);
+  auto *header = cast<BasicBlock>(map[loop->getHeader()]);
+  pre->getTerminator()->eraseFromParent();
+  b.SetInsertPoint(pre);
+  b.CreateCondBr(guard, header, cont);
+  for (BasicBlock *clone : clones) {
+    Instruction *term = clone->getTerminator();
+    for (unsigned i = 0; i < term->getNumSuccessors(); ++i) {
+      if (!cloned.count(term->getSuccessor(i))) {
+        term->setSuccessor(i, cont);
+      }
+    }
+  }
+  for (PHINode &phi : header->phis()) {
+    for (unsigned i = 0; i < phi.getNumIncomingValues(); ++i) {
+      if (!cloned.count(phi.getIncomingBlock(i))) {
+        phi.setIncomingBlock(i, pre);
+      }
+    }
+  }
+  for (Instruction *gate : gates.gates) {
+    auto *clone = cast<CallBase>(map[gate]);
+    const Condition &condition = conditions.at(gate);
+    if (condition.kind == Kind::Never) {
+      clone->eraseFromParent();
+      continue;
+    }
+    IRBuilder<> g(clone);
+    g.SetCurrentDebugLocation(gate->getDebugLoc());
+    std::vector<Value *> args(clone->arg_begin(), clone->arg_end());
+    args[0] = qubitPointer(gate->getOperand(0), g);
+    std::vector<OperandBundleDef> bundles;
+    if (condition.kind == Kind::Qubit) {
+      bundles.emplace_back(controlBundle, std::vector<Value *>{condition.value});
+    } else if (condition.kind == Kind::Variable) {
+      Value *set = g.CreateICmpNE(g.CreateLoad(g.getInt8Ty(), condition.qubit), g.getInt8(0));
+      bundles.emplace_back(controlBundle, std::vector<Value *>{set});
+    }
+    g.CreateCall(clone->getFunctionType(), clone->getCalledOperand(), args, bundles);
+    clone->eraseFromParent();
+  }
+
+  // The conditions again, after the loop: each returns its qubit variable to 0.
+  b.SetInsertPoint(cont->getTerminator());
+  for (Instruction *gate : gates.gates) {
+    Condition &condition = conditions.at(gate);
+    if (condition.kind == Kind::Variable) {
+      Value *old = b.CreateLoad(b.getInt8Ty(), condition.qubit);
+      b.CreateStore(b.CreateXor(old, b.CreateZExt(call(condition.when, condition.params, b), b.getInt8Ty())),
+                    condition.qubit);
+    } else if (condition.kind != Kind::Qubit && condition.when->use_empty()) {
+      condition.when->eraseFromParent();
+    }
+  }
+}
+
 void Predicator::moveStore(StoreInst *store, IRBuilder<> &b) {
   const Storage *target = targetOf(store);
   Type *targetType = b.getIntNTy(target->bits);
@@ -601,7 +943,13 @@ void Predicator::run() {
   IRBuilder<> b(after->getTerminator());
   for (Instruction *op : ops) {
     b.SetCurrentDebugLocation(op->getDebugLoc());
-    if (auto *store = dyn_cast<StoreInst>(op)) {
+    if (auto found = loopOf.find(op); found != loopOf.end()) {
+      GateLoop &gates = gateLoops[found->second];
+      if (!gates.moved) {
+        moveLoop(gates, b);
+        gates.moved = true;
+      }
+    } else if (auto *store = dyn_cast<StoreInst>(op)) {
       moveStore(store, b);
     } else {
       moveGate(cast<CallBase>(op), b);

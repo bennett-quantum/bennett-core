@@ -46,8 +46,12 @@ fn what_cannot_run_under_qubit_control_or_in_place_is_refused_by_name_at_its_lin
             "if (a && p != 0 && 10 / p == 5) x += 1;",
             "an update of qubit variable 'x' under the control of a value that depends on a qubit, which neither",
         ),
-        // Loops under qubit control with quantum operations inside need a budgeted construction.
-        ("loop", "for (unsigned char i = 0; i < p; i++) bennett_x(&c);", "a loop under the control of a value"),
+        // A loop with gates whose number of passes depends on a qubit: the circuit model needs it ordinary.
+        (
+            "loop",
+            "for (unsigned char i = 0; i < p; i++) bennett_x(&c);",
+            "a loop with gates whose number of passes depends on a qubit",
+        ),
         ("measurement", "if (a) bennett_measure(&b);", "a measurement under the control of a value"),
         (
             "stale",

@@ -274,8 +274,8 @@ an empty device program (`front/src/main.cpp`, `readInput`).
   configuration whose path would not compute it. A condition that LLVM's simplifier proves to be a conjunction of
   single qubits becomes the gate's controls (a CNOT, a Toffoli); any other is computed into a fresh
   qubit, controls the gate, and is computed again to clear it. A gate whose condition reads the gate's
-  own variable, a value read before an operation of the outlined code changed it and needed after, an operation
-  on a cycle (a loop that is not unrolled), and a measurement are refused by name.
+  own variable, a value read before an operation of the outlined code changed it and needed after, and a
+  measurement are refused by name. A loop with gates is kept as a loop ("Code under a qubit", gate loops).
 - **No new device instruction was needed** for any of this: gates take control lists, and `apply` XORs
   into any register.
 - **Every `apply` has a fault register of its own**, released when the function returns (inside a loop: right
@@ -444,6 +444,39 @@ with native C for all eight values of `x` at O0, O2 and with `--taint-all`, ever
 do the parity of `x` accumulated into a `_Bool` and an overwrite in a loop of a variable of known value. The
 smallest budget for all values is 128 steps; at 127 the longest runs fault, the others do not. The control
 program has no loop left.
+
+**Gate loops.** A loop with gates under a condition that depends on a qubit stays a loop of the control
+program, run as written: the circuit model needs a definite list of gates, and the loop's trip count is an
+ordinary value written in the C, so the control program issues the gates of every pass, each controlled by
+the condition that the code reaches it (`Predicate.h`). That condition is computed once before the loop, by
+one `apply` into a fresh qubit (or is one qubit as it is, `if (q)` on a `_Bool`), controls the gate in every
+pass, and is computed again after the loop by the same `apply`, which returns the qubit to 0. Nothing is
+unrolled or created: the loop is the C's loop, entered where its ordinary guard holds (LLVM may have merged
+that guard into the branch on the qubit; the front takes its ordinary part apart again), and ordinary values
+it needs from the code before it are computed again before it. It also runs for the configurations whose
+path would not reach it, as ordinary code that writes no memory, its gates acting on none of them. For each
+definite value of what the condition reads the result is the product of the gates the C applies there.
+Refused by name, each with its route:
+
+- a loop whose number of passes depends on a qubit: a circuit is a definite list of gates, so the number of
+  passes must be written as an ordinary value, the condition tested inside the loop. Such a loop is a
+  different program from `while (x > 0) { gates; x--; }`: it does not consume its loop variable, which keeps
+  its value afterwards;
+- a loop whose passes decide on values that depend on a qubit carried from pass to pass (`t = x; for (i < n)
+  { if (t & 1) h(y); t = step(t); }`): route, one applied function returning a table of control bits for
+  all passes, computed before the loop and cleared after it by the same `apply` (not built: a table of one
+  bit per pass needs a register as wide as the number of passes, which here is a run-time value, and a
+  register's bit is named by a constant; `HANDOFF.md`, "Questions for the maintainer");
+- a gate in the loop on a variable the condition reads. The table form is correct when every gate leaves
+  what the table function reads unchanged (those registers may be controls; targets elsewhere). A loop
+  whose gates change the tested register without ever changing whether the condition holds could later be
+  accepted with one control qubit computed once and cleared by computing it again; everything else keeps a
+  record of the passes, the retained case of an overwrite (not built);
+- a store into a qubit variable in such a loop (not built).
+
+Acceptance (`front/tests/tests/gate_loops.rs`): the front audit's witness `if (q) for (i < n) x(y)`, and a
+computed condition with two gate sites, one on odd passes only, give the state computed by hand for n = 0, 1,
+2, 3, 6 at O0, O2 and with `--taint-all`, every other register 0; the loop has one controlled gate line.
 
 ## Applied calls
 

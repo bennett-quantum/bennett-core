@@ -16,6 +16,11 @@
 // the region's control flow, so nothing is computed on a configuration whose path would not compute it.
 // Its qubit variables are read where the operation is; a value read in the region before another
 // operation changed that variable, which the copy would need, is refused by name.
+//
+// A gate on a cycle stays in its loop, which the control program runs after the region with its ordinary
+// trip count, entered where the loop's ordinary guard holds: the gate is controlled in every pass by the
+// condition that the region reaches it, computed once before the loop and again after it (docs/DESIGN.md,
+// "Code under a qubit"). A loop whose trip count or decisions depend on a qubit is refused by name.
 #pragma once
 
 #include <vector>
@@ -34,7 +39,8 @@ bool hasQuantumOperations(const std::vector<llvm::BasicBlock *> &blocks, const C
 
 // Moves every quantum operation of the region `blocks` (entry first; its edges out of the region all go
 // to `exit`) after it, as described above. The region is left without them. Refuses by name what it
-// cannot do: a loop in the region, a measurement, a gate whose condition reads its own qubit variable.
+// cannot do: a loop with gates whose trip count or decisions depend on a qubit, a measurement, a gate whose
+// condition reads its own qubit variable.
 void predicateRegion(llvm::Function &function, const std::vector<llvm::BasicBlock *> &blocks,
                      llvm::BasicBlock *exit, ControlAnalysis &analysis);
 

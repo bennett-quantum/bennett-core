@@ -326,11 +326,17 @@ explicitly after the separate musl build.
       an ordinary trip count), which the design note would merge into one `apply` too; it is refused today
       unless the update is an in-place bijection, and the retained form of step 3 will accept it pass by pass,
       keeping one old value per pass.
-   2. **Rule C.** Loops containing gates: the trip count stays an ordinary value written in the C; the condition
-      is computed once into a qubit, or the loop's ordinary part is one applied function returning a table of
-      control bits for the gates, cleared by the same `apply`; the ordinary loop stays in the control code. No
-      unrolling. A loop whose trip count depends on a qubit and that contains gates is refused with its route in
-      the message.
+   2. **Rule C, partly done** (`docs/DESIGN.md`, "Code under a qubit", gate loops; `front/src/Predicate.h`).
+      Done: a loop with gates and an ordinary trip count under a qubit condition (the note's case 1, the front
+      audit's witness) stays the C's loop in the control program, entered under its ordinary guard, each gate
+      controlled by a condition computed once before the loop and cleared after it by the same `apply`; no
+      unrolling. A loop whose number of passes depends on a qubit (case 4) is refused, the message saying that
+      the number of passes must be written as an ordinary value and that such a loop does not consume its
+      loop variable; a gate on what the condition reads (case 5) is refused by name. **Not built: case 3**, a
+      loop whose passes decide on qubit-dependent values carried from pass to pass: refused by name with the
+      table route; why it is not built is a question below ("Questions for the maintainer"). Routes for case 5
+      (a body that changes the tested register but never whether the condition holds: one control qubit
+      computed once, cleared by computing it again) are in DESIGN.
    3. **Rule A at a definite address.** A store whose value or execution depends on a qubit keeps its value in
       qubits at the bytes it writes: the value is applied into a fresh register and exchanged with the bytes by
       gates, and the register is cleared when its old content can be recomputed; an overwrite whose old value
@@ -671,6 +677,20 @@ padded clock and its caller's mark; A mark's budget once its frame is left.
   control code, the exit code), the front refuses and asks for a measurement the programmer writes; it does not
   insert one. Cheap to reverse; the alternative would be a measurement the compiler inserts, which the decision
   rules out for stores.
+- **The table of control bits for a gate loop whose passes decide on qubit-dependent values carried between
+  passes (2026-11-17, rule C, not built; nothing taken).** `t = x; for (i = 0; i < n; i++) { if (t & 1)
+  h(y); t = step(t); }` with `n` an ordinary run-time value. The decided form is one applied function
+  returning a table of control bits for all passes, computed before the loop and cleared after it. Two
+  things the C does not give: the table's width (one bit per pass and gate site, so as wide as `n`, a
+  run-time value), and a way for the control program to name the table's bit for pass `i` (a register bit is
+  named by a constant). Options, none of which adds a bound per loop: (a) build the table only when the trip
+  count is a constant in the C of at most 64 passes times gate sites, the control program choosing the bit
+  of pass `i` by comparing `i` with each constant index (code in proportion to the table, no new instruction);
+  (b) for any `n`, one small `apply` per pass computing that pass's decision from `x` and `i` (it reruns the
+  passes before it inside the applied function: about `n²/2` passes of work in all, each `apply` with its
+  budget, allowed by the decision on loops with an ordinary trip count); (c) the table in qubit-held memory
+  bytes indexed by an ordinary address, after rule A at addresses. Recommendation: (a) first (exact, cheap,
+  covers loops LLVM did not unroll), then (b) for run-time counts. Today the loop is refused by name.
 - **Applied calls (2026-11-17, step 6; each taken, cheap to reverse).** A call with qubit-dependent arguments
   whose result is unused, to a function that may write memory: taken, refused by name (applied, it would do
   nothing; its writes are its purpose). Recommendation: keep. Two such calls in one computation when one may
@@ -747,7 +767,7 @@ Each recommendation was taken ("Decisions the maintainer took on 2026-11-16, in 
 | A call through another prototype where x86-64 does not determine what is read: the upper half of a 32-bit value, a missing argument that is read, an integer from a floating-point register, a variadic floating-point argument without `%al`, a narrow argument that is not the extension the callee relies on (named fault `unreachable` when the call runs); a direct call whose argument differs from its parameter only in register class (native -O0 and -O2 disagree) | Nothing to remove: the native result is not determined (`docs/DESIGN.md`, "Calls through a prototype"). Conservative, removable by a finer model where named: a variadic floating-point argument after an unread named one, a call whose result is used only by dead code before the optimiser, values in memory read at another place |
 | A qubit-dependent call of a function that uses `setjmp` | The front's own effect summary of `setjmp` (writes only its buffer) when deciding what runs coherently (`docs/DESIGN.md`, "Non-local jumps") |
 | `__float128`; `powi` on `_Float16`/`__bf16`; `#pragma STDC FENV_ACCESS` (with it musl's `ilogb`/`ilogbl` in the corpus accuracy checks; libgcc's `__divxc3` itself works); non-default rounding modes and floating-point flags | Step 5 above |
-| A store under qubit control outside a call; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control that LLVM does not unroll fully | A call with qubit-dependent arguments, whatever it writes, is applied whole since step 6 ("Applied calls (2026-11-17)"). Code without gates under a qubit that writes qubit variables of known value or XORs into them is one `apply` since rule B. For the rest, the decision of about 15:35 UTC, rules C and A in that order ("Next steps, in order", 4): gate loops with an ordinary trip count; stores that keep their value in qubits at the bytes written, an overwrite that cannot be erased keeping the old value in qubits released by `qfree` |
+| A store under qubit control outside a call; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control that LLVM does not unroll fully | A call with qubit-dependent arguments, whatever it writes, is applied whole since step 6 ("Applied calls (2026-11-17)"). Code without gates under a qubit that writes qubit variables of known value or XORs into them is one `apply` since rule B. Gates in a loop with an ordinary trip count are kept in the loop since rule C. For the rest, the decision of about 15:35 UTC ("Next steps, in order", 4): a gate loop deciding on values carried between passes (the table of control bits); stores that keep their value in qubits at the bytes written, an overwrite that cannot be erased keeping the old value in qubits released by `qfree` |
 | A qubit-dependent value used by ordinary code or printed; measurement under control | Channels |
 | A qubit-dependent call, to a function that may write memory, whose result is unused; two such calls in one computation when one may write memory; quantum operations in `main` of a program linked with musl | "Applied calls (2026-11-17)": nothing to remove for the first (applied, it would do nothing); one register per call for the second; classifying control functions through indirect calls, or a startup that calls `main` directly, for the third |
 | Non-empty inline assembly; code without source | An emulator of the real machine, compiled as an ordinary program |
@@ -801,11 +821,9 @@ the ordinary frontend run without changing its domain or assertions.
   is `n` applications, each with its own budget and fault register, where one `apply` of the whole loop's XOR
   with one budget would do; a loop inside a function that only reads memory, called with arguments that depend
   on a qubit, already runs under one `apply` and one budget. With an ordinary, definite trip count this is
-  harmless and may stay. (2) Gates in a loop under a qubit condition are accepted only when LLVM unrolls the
-  loop fully (`if (q) for (i = 0; i < n; i++) bennett_x(&y);` is refused; with `n` constant it is accepted).
-  Route (rule C): the trip count stays the ordinary value written in the C, the condition is computed once (or
-  as a table of control bits by one applied function), the ordinary loop stays in the control code with each
-  gate controlled, and the condition is cleared after.
+  harmless and may stay. (2) Gates in a loop under a qubit condition: done for an ordinary trip count since
+  rule C (`if (q) for (i = 0; i < n; i++) bennett_x(&y);` is one controlled X per pass); a loop whose passes
+  decide on qubit-dependent values carried between passes is still refused (the table route; question below).
 
 - **Three wrong translations in the front, found by the front audit of 2026-11-17, fixed** (`8bff6a5`,
   `313386d`, `bc5b3cb`; each a case of `what_was_once_translated_wrongly_is_refused_by_name_in_every_mode` in

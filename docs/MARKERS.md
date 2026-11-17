@@ -72,6 +72,9 @@ _Bool *bennett_bit(void *variable, unsigned bit);
 The qubit of bit `bit` (a constant after optimisation) of the qubit variable `variable` points to, for
 the gates only: `bennett_h(bennett_bit(&x, 3))`. A loop over the bits works when LLVM unrolls it.
 
+A loop with gates under such a condition runs as written, its number of passes an ordinary value:
+`if (q) for (i = 0; i < n; i++) bennett_x(&y);` flips `y` n times where `q` is 1, one controlled X per pass.
+
 ## Measurement
 
 ```c
@@ -117,8 +120,10 @@ the condition in ordinary memory.
 
 Each is refused with `not handled yet: <what>, at <file:line:col>`: under the control of a value that
 depends on a qubit, a call of a function that has gates, a measurement, a gate whose condition reads the
-gate's own variable, a gate inside a loop (fully unrolled loops work), a write of a qubit variable inside a
-loop that does more than XOR into it when its value before is not known, a write to memory, a
+gate's own variable, a gate inside a loop whose number of passes depends on a qubit (write it as an ordinary
+count and test the condition inside) or that decides on qubit-dependent values carried from pass to pass (a
+loop with an ordinary count and gates is kept as a loop, each gate controlled), a write of a qubit variable
+inside a loop that does more than XOR into it when its value before is not known, a write to memory, a
 call of a function that may write memory, or a volatile read; a branch on such a value whose arms do not
 rejoin before the function returns; an update of a qubit variable that is not a bijection listed above
 (`x = x * x`, `x += x`): that needs the old value kept, which has no form yet; a qubit variable passed to a
