@@ -408,10 +408,10 @@ The front writes `retaddr N` for every `llvm.returnaddress(N)` in the default ad
   the 31 nonzero codes are used, the last `qubit_memory_access` (17); 11 was `dirty_free` and 15
   `bad_rewind`, both removed on 2026-11-17, and stay unused.
 - `qfree` is the partial trace and never faults ("Releasing a register", below).
-- `measure` reads a whole register, or the `N` bits from bit 0 of the integer at an address. Amplitudes at or
-  below `f64::EPSILON` are dropped.
-- Bounds of the simulator (steps, number of basis configurations) are parameters of a run. Exceeding the
-  configuration limit stops the run with a named error; it is not a program fault.
+- `measure` reads a whole register, or the `N` bits from bit 0 of the integer at an address.
+- The simulator's own stops and reports (dropped amplitudes of rounding size, the configuration limit, the
+  stop at an `apply` faulting for some argument values, amplitudes in snapshots, the report of nonzero
+  releases) are listed below, "The simulator's own stops and reports".
 
 ### Qubits in memory
 
@@ -508,6 +508,26 @@ Since `qfree` became the partial trace (above) this is the only check, so `machi
 `allow_region_faults` does (`HANDOFF.md`, "Questions for the maintainer"). The simulator's checks are never
 delivered to a program as fault codes. Measured in `crates/exec/tests/strict.rs`: an `apply` out of budget stops
 strict mode and gives, seed by seed, what `allow_region_faults` gives on the machine.
+
+## The simulator's own stops and reports
+
+The executor is a simulator of the model, not a device. What it adds of its own is listed here; none of it is
+part of the program's meaning, and none produces a value a program can read. Checked for each in the code:
+no instruction reads `Stats`, a snapshot or a `RunError`; a stop ends the run; and inside an applied function
+every quantum step faults `quantum_in_region` before any stop could arise, so no stop becomes a fault code
+(`crates/exec/tests/strict.rs`, `no_stop_or_report_of_the_simulator_becomes_a_value_of_the_program`).
+
+| What | Where | Why no program can read it |
+|---|---|---|
+| Amplitudes of magnitude at most `f64::EPSILON` are dropped after a gate (one unit of rounding, what cancellation leaves) | `quantum.rs`, `NEGLIGIBLE_AMPLITUDE` | A dropped configuration has weight at most about 5e-32, so it could only change a measurement's probabilities at that size; it is never an outcome. The state is stored in `f64` anyway: evidence, not proof |
+| The limit on stored basis configurations | `Options::max_configurations`, `RunError::ConfigurationLimit` | A stop: the run ends with no result, the state as before the gate |
+| The stop at an `apply` faulting for some values of its arguments (strict mode, the default) | `RunError::RegionFault`, "Strict mode" above | A stop. With `allow_region_faults` the fault code is the program's, in its fault register: that is the meaning, not a report |
+| Amplitudes, the register table and cells in snapshots, and the distance `bennett run --reverse` prints | `snapshot.rs`, `crates/cli/src/run.rs` | Data for tests and reports; no device observation, read by no instruction |
+| The report of nonzero releases (count, weight, qubits kept) and the other counts of `Stats` | `executor.rs`, "Releasing a register" above | Read by tests and printed by `bennett run`, never by an instruction |
+
+The step budget of a whole run (`Options::budget`) is a parameter of the run: reaching it ends the run with the
+fault `budget`, as any bounded computation ends. Inside `apply`, `budget B` is the program's own bound, and its
+fault code is the program's.
 
 ## What is promised when history is left behind
 

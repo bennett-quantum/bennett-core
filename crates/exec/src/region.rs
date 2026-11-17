@@ -83,7 +83,9 @@ impl<'m> Executor<'m> {
                 // The validator made the result as wide as the register, at most 64 bits.
                 Outcome::Returned(result) => config[out] ^= result.expect("a region callee returns an integer") as u64,
                 Outcome::Faulted(code) => config[fault] ^= code.code(),
-                Outcome::Stopped(_) => unreachable!("a region reaches no gate, so no limit of the quantum state"),
+                // The simulator's stops concern gates and `apply`, which fault `quantum_in_region` in a region
+                // first: a stop of the simulator never becomes a fault code the program could read.
+                Outcome::Stopped(_) => unreachable!("a region reaches no gate or apply, so no stop of the simulator"),
             }
             permuted.insert(config, amplitude);
         }

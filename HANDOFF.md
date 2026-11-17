@@ -3,8 +3,9 @@
 State on 2026-11-17: **resumed by the maintainer the same day; see "Resumed on 2026-11-17" below before
 anything else.** Steps 1 and 2 of the order there are done: `apply` is evaluated for each definite value of its
 arguments only, and `mark`, `rewind`, machine states in superposition and the call with a fault value are removed.
-Step 3 is done: `qfree` is the partial trace, and ordinary code touching a byte that holds qubits faults
-`qubit_memory_access`; next, the simulator's own stops and reports named and checked.
+Step 3 is done: `qfree` is the partial trace, ordinary code touching a byte that holds qubits faults
+`qubit_memory_access`, and the simulator's own stops and reports are named as its own and checked to give no
+program a value (`docs/DESIGN.md`, "The simulator's own stops and reports"). Next: step 4, the documents.
 
 ## Resumed on 2026-11-17
 
@@ -90,7 +91,11 @@ The order of the work:
    whatever the qubits hold, inside an applied function too (per argument value); the simulator's stop
    `SuperposedMemoryRead` and the reading of qubits in memory by applied functions are gone (`docs/DESIGN.md`,
    "Qubits in memory"). A program applies a function to qubits in memory by copying them into a register with
-   controlled X gates first.
+   controlled X gates first. The simulator's own stops and reports (amplitudes of rounding size dropped, the
+   configuration limit, the stop at an `apply` faulting for some argument values, amplitudes in snapshots, the
+   report of nonzero releases) are listed in one place in `docs/DESIGN.md` with why none gives a program a value:
+   no instruction reads them, a stop ends the run, and inside an applied function every quantum step faults
+   before a stop could arise (a test checks the last with the configuration limit set where it would bite).
 4. The documents say what the code does now; `docs/DESIGN.md` states `apply`'s meaning, why a device can carry
    it out and what it costs.
 5. Independent checks: an audit of the front against the model, a testing pass, and a small reference that runs
@@ -156,7 +161,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 | Lua probe | Unmodified Lua 5.4.9 through musl: seven native stdout/status comparisons and exact reversals; a Lua predicate under hand-written `apply`, dense-checked Grover at N=4/8 (`experiments/lua-probe`) |
 
-Check it: `cargo test` (251 passed; 3 ignored, each naming its reason: heavy reference, generated or
+Check it: `cargo test` (253 passed; 3 ignored, each naming its reason: heavy reference, generated or
 hash-sample runs with their commands, witnesses of recorded defects and of questions awaiting the maintainer;
 about 9 s, no LLVM needed) and `front/test.sh` (222 passed; 26 ignored by default, each naming its reason: the
 fallback acceptance tests, waiting for the route that replaces the cancelled fallback, the C North Star ladder runs and other explicit experiments,

@@ -39,3 +39,57 @@ fn a_region_fault_is_a_fault_code_on_the_machine() {
         assert_eq!(packed >> 8, if n > 3 { Fault::Budget.code().into() } else { 0 }, "n = {n}");
     }
 }
+
+/// The simulator's stops never reach a program as a value. Inside an applied function the quantum steps that
+/// a stop concerns (allocation, gates, release, a nested `apply`) fault `quantum_in_region` first, so with
+/// the configuration limit at the two configurations `%q` gives, the applied `qalloc` and `h` (which would
+/// double them) and the nested `apply` give the program code 8 for each value of `%q`, never a stop; the
+/// program measures 8. The run's report of nonzero releases stays 0: the release inside faulted first.
+#[test]
+fn no_stop_or_report_of_the_simulator_becomes_a_value_of_the_program() {
+    let module = load(
+        "memory 64
+func @grow(i1 %x) -> i1 {
+entry:
+    %r = qalloc 1
+    h %r
+    qfree %r
+    ret 0
+}
+func @nested(i1 %x) -> i1 {
+entry:
+    call @inner()
+    ret 0
+}
+func @inner() {
+entry:
+    %o = qalloc 1
+    %e = qalloc 5
+    apply @grow(i1 0) -> %o, %e budget 10
+    ret
+}
+func @main(i1 %which) -> i5 {
+entry:
+    %q = qalloc 1
+    h %q
+    %o = qalloc 1
+    %e = qalloc 5
+    br %which, nested, grow
+grow:
+    apply @grow(%q) -> %o, %e budget 10
+    br done
+nested:
+    apply @nested(%q) -> %o, %e budget 10
+    br done
+done:
+    %f = measure %e
+    ret %f
+}",
+    );
+    for which in [0, 1] {
+        let options = Options { max_configurations: Some(2), ..common::allowing_region_faults() };
+        let (outcome, e) = common::run(&module, "main", &[which], options);
+        assert_eq!(outcome, Outcome::Returned(Some(Fault::QuantumInRegion.code().into())), "which {which}");
+        assert_eq!((e.stats().region_faults, e.stats().nonzero_releases), (1, 0), "which {which}");
+    }
+}

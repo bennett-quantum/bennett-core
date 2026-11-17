@@ -52,9 +52,11 @@ pub enum Outcome {
     Stopped(RunError),
 }
 
-/// A limit or check of the simulator that a run reached. Unlike a [`Fault`], it is not part of the
-/// program's meaning: another simulator, or the same one with a larger limit or the check switched off,
-/// would continue. No program can read it.
+/// A limit or check of the simulator that a run reached: the simulator's own stop. Unlike a [`Fault`], it is
+/// not part of the program's meaning: another simulator, or the same one with a larger limit or the check
+/// switched off, would continue. No program can read it: it ends the run, and it never arises inside an
+/// applied function, where the quantum steps it concerns fault `quantum_in_region` first, so it can never
+/// become a fault code (`docs/DESIGN.md`, "The simulator's own stops and reports").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum RunError {
     /// A gate would raise the number of basis configurations above the run's limit.

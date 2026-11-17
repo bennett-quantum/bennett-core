@@ -1,5 +1,6 @@
 //! Copies of the whole executor state, for a harness to compare. The executor never judges its own
-//! reversal; a snapshot is only data.
+//! reversal; a snapshot is only data. It is the simulator's view, for tests and reports: the amplitudes it
+//! lists are no observation a device could make, and no instruction reads a snapshot.
 
 use num_complex::Complex64;
 
