@@ -74,11 +74,16 @@ class Checks(unittest.TestCase):
             (self.root / 'lib').write_bytes(text)
             self.assertEqual(checks.bare_times(self.root, [Path('lib')]), [], text)
 
-    @unittest.skipUnless(DEFECTS, 'defect: a positional Python timeout literal (wait(30), communicate(None, 30)) is not flagged')
     def test_bare_times_flags_positional_timeouts(self):
         # Popen.wait(timeout) and Popen.communicate(input, timeout) take the timeout positionally.
         (self.root / 'run.py').write_text('import subprocess\np = subprocess.Popen(["x"])\np.wait(30)\np.communicate(None, 30)\n')
         self.assertEqual(len(checks.bare_times(self.root, [Path('run.py')])), 2)
+        (self.root / 'run.py').write_text('worker.join(5)\nlock.acquire(True, -1 + 3)\nsignal.alarm(2)\n')
+        self.assertEqual(len(checks.bare_times(self.root, [Path('run.py')])), 3)
+        # Other positions, named durations and non-duration uses of the same names pass.
+        (self.root / 'run.py').write_text(
+            'p.communicate(b"30")\np.wait(timeout=RUN_SECONDS)\n", ".join(parts)\nlock.acquire(1)\nd.get(k, 0)\n')
+        self.assertEqual(checks.bare_times(self.root, [Path('run.py')]), [])
 
     @unittest.skipUnless(DEFECTS, 'defect: hygiene skips any file that is not UTF-8, host paths in it included')
     def test_hygiene_reads_files_that_are_not_utf8(self):

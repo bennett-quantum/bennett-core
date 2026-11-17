@@ -1266,7 +1266,10 @@ fails today:
     `.githooks/pre-push`) was never read. Fixed: scripts are also selected by their shebang line, and a
     shebang naming an interpreter the check has no scanner for is reported, not skipped; the witness is an
     ordinary test;
-  - positional Python timeouts (`wait(30)`, `communicate(None, 30)`) are not flagged;
+  - positional Python timeouts (`wait(30)`, `communicate(None, 30)`) were not flagged. Fixed: the positional
+    duration of ten standard-library calls is checked (`POSITIONAL_TIMEOUTS` in `scripts/checks.py`); names
+    whose positional argument is often not a duration (`dict.get`, `select`) stay keyword-only, a debt with
+    the route of resolving the called object's type; the witness is an ordinary test;
   - a file that is not UTF-8 is not scanned for host paths;
   - an `amend!` subject passes the WIP check on `main`.
 

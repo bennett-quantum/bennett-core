@@ -58,6 +58,15 @@ SHEBANG_LANGUAGES = [(re.compile(r'python[0-9.]*'), 'python'), (re.compile(r'(?:
                      (re.compile(r'node|deno|bun|ts-node'), 'javascript')]
 
 
+# Python calls whose duration may be passed by position, with that argument's index: `time.sleep(secs)`,
+# `Popen.wait(timeout)`, `Popen.communicate(input, timeout)`, `Thread.join(timeout)`,
+# `Lock.acquire(blocking, timeout)`, `socket.settimeout(value)`, `asyncio.wait_for(aw, timeout)`,
+# `signal.alarm(seconds)`, `socket.create_connection(address, timeout)`, `urlopen(url, data, timeout)`.
+# Names whose positional argument is often something else (`dict.get`, `select`) are keyword-only here.
+POSITIONAL_TIMEOUTS = {'sleep': 0, 'wait': 0, 'communicate': 1, 'join': 0, 'acquire': 1, 'settimeout': 0,
+                       'wait_for': 1, 'alarm': 0, 'create_connection': 1, 'urlopen': 2}
+
+
 def script_language(path):
     """The scanner for a script, by extension or else by its shebang line; None for other files.
 
@@ -99,9 +108,9 @@ def bare_times(root, names):
                 if not isinstance(node, ast.Call):
                     continue
                 func = node.func
-                is_sleep = (isinstance(func, ast.Attribute) and func.attr == 'sleep') or (
-                    isinstance(func, ast.Name) and func.id == 'sleep')
-                args = ([node.args[0]] if is_sleep and node.args else []) + [
+                called = func.attr if isinstance(func, ast.Attribute) else getattr(func, 'id', None)
+                position = POSITIONAL_TIMEOUTS.get(called)
+                args = ([node.args[position]] if position is not None and len(node.args) > position else []) + [
                     kw.value for kw in node.keywords if kw.arg == 'timeout']
                 if any(literal(arg) for arg in args):
                     issues.append(f'{name}:{node.lineno}: bare time constant; name it with its unit and purpose')
