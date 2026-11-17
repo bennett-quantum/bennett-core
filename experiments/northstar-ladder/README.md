@@ -1,49 +1,62 @@
 # North Star ladder: C rungs 1–3
 
-Measured on 2026-11-16 at `5361c717bd4c05068424a0694b62175fb8a3fd36`, against
-[NorthStar §8](../../docs/NorthStar.md). **The C portion of rung 1 and rung 3
-pass as worded. Rung 2 is not established:** its production runs pass, but
-the independent interpreter did not finish within the diagnostic resource
-limit. No wrong C result was observed. Rust and Julia are outside this run.
+Rung 2 measured on 2026-11-17 against production base `bd2e384`, with the
+persistent independent interpreter in this revision. **The C portion of all
+three rungs now passes as worded** against [NorthStar §8](../../docs/NorthStar.md).
+The rung-1/rung-3 receipts below remain the earlier 2026-11-16 measurements at
+`5361c717bd4c05068424a0694b62175fb8a3fd36`; those full experiments were not rerun
+for this storage change. Rust and Julia are outside this run.
 
 | Acceptance | Result |
 |---|---|
 | 1: every Int8 source input, both implementations equal native, zero faults | PASS: 131,840 inputs per compiler input; 791,040 comparisons and 527,360 complete reversals across the two implementations and production modes |
-| 2: original 258-line hashtable, native agreement and byte-exact reversal, both implementations | UNMEASURED on the second implementation; production passes all ten cases, both compiler inputs and both modes |
+| 2: original 258-line hashtable, native agreement and byte-exact reversal, both implementations | PASS: all ten cases at both compiler inputs, native agreement, production/reference state comparisons and independent byte-exact reversals |
 | 3: musl hello, native output, reset and deterministic console tape replay | PASS: 13 exact native bytes, status 0; three identical same-executor replays and four exact resets per compiler input |
 
 The two implementations are `bennett-exec` and the existing independently
-written whole-world test interpreter, imported unchanged from
+written whole-world test interpreter, imported from
 `crates/exec/tests/oracle_support/worlds.rs` with `dense.rs`'s separate integer
-operations. Two modes of the production executor do not count as two
+operations. Its snapshot storage now uses `rpds` persistent collections and
+standard `Rc` copy-on-write metadata, without importing production executor
+history. Two modes of the production executor do not count as two
 implementations. Both share the frontend and IR parser; the native oracle
 separately compiles the unchanged C.
 
-## The acceptance gap, with its witness
+## Closing the second-executor gap
 
-The independent table process timed out at **120.080 seconds**, with a
-1 GiB address-space cap also in place. Its last logged checkpoint was:
+Before changing storage, the original timeout was reproduced under the same
+**120-second / 1 GiB address-space cap**. The O0 startup reached 256/512/1,024/
+2,048 steps in 1.207/5.422/19.323/82.867 seconds, still in musl. At 1,024 steps,
+cloning and dropping history took 9.301 ms versus 11.538 us for the current
+classical state alone (139 slots, three frames, empty overlay). A ten-second
+99 Hz `cpu-clock` profile collected 813 samples, none lost: slot-vector copying,
+its enumeration/iteration and `Value::clone` accounted for 30.50%, 19.93%,
+13.41% and 4.92% of sampled CPU time. Accumulated snapshots repeatedly cloned
+all their slot vectors; this was validation cost, not a device wrong result.
 
-- clang O0, **2,048 steps and history snapshots**, 39 overlay bytes;
-- `__libc_start_main`, block 1, instruction 0;
-- **97.296 seconds** inside the interpreter run.
+The independent model still records complete classical snapshots and interprets
+forward/inverse instructions from DESIGN. History, frames, slots and console
+use the established `rpds` persistent vector; the normal byte overlay uses its
+ordered red-black map. Slot nodes branch eight ways. Cold register/cell/mark
+metadata and deadline/guard tables share standard `Rc` ownership, detaching on
+write. Content equality is exact, including history and dead slots; no pointer
+identity or digest replaces it. Initial prototypes without all this sharing
+hit the memory cap after 524,288 steps and remained UNMEASURED. The final
+representation completes both images and restores their own recorded histories.
 
-Earlier checkpoints at 256/512/1,024 steps took 1.534/5.819/24.364 seconds,
-with zero overlay bytes. Doubling this startup prefix costs roughly four
-times as much. The snapshot interpreter copies its accumulated history in
-its step machinery; this is a validation cost, not a device wrong result.
-No table case was verified by the independent implementation. The full
-ten-case program and comparison remain in the test; no input was removed.
+**Result: PASS**, 41.091 seconds for the isolated optimized process (40.95 s
+inside the test), with the original cap. O0/O2 independent forward times are
+17.526/8.002 s; forward plus independent and production reversal 24.694/15.294 s.
+Every power-of-two checkpoint, the complete final public machine state and the
+reset agree with production. Both interpreters check all 195 native console
+bytes and status 0, and restore every byte of their 2,108,912-byte entry memory.
+No executor disagreement was found. The storage-sharing regression explicitly
+failed on the old model, then passed with retained-state reversal checks.
+These observations are not a throughput benchmark; peak RSS was not measured.
 
-**Route:** an independent interpreter with shared/persistent or compact
-classical history, retaining full byte-memory and machine-state reversal,
-then rerun the same ten cases from both compiler inputs. Merely checking
-two production modes, sampling the table, or reversing a fresh execution
-cannot discharge the two-implementation clause. The timeout is a resource
-stop, not a semantic fault or a stricter acceptance criterion. Bounds are
-configurable; raising them does not itself establish acceptance.
-
-The runner deliberately exits nonzero while this stage is unmeasured.
+The runner now prepares an optimized test binary before applying the execution
+cap. It exits zero for the completed rung 2; a future resource stop remains
+UNMEASURED and nonzero. No case or source input was removed, sampled or weakened.
 
 ## Domains and independent checks
 
@@ -68,7 +81,8 @@ musl linker. Real musl startup, allocator, stdio and exit execute; no test
 allocator replaces them. Complete native O2 and O0/ASan/UBSan stdout agree.
 The device compares all ten complete decimal i64 results, not a reduced
 exit status or a hash of checksums. Both clang inputs and both production
-modes pass. The independent stage uses the same linked image.
+modes pass. The independent stage uses the same linked image and a paired
+production execution, comparing full public states at checkpoints and completion.
 
 Hello is `printf("hello, world\n")`, linked to musl 1.2.5. Native stdout and
 status are compared with forward and reversible execution from musl's
@@ -94,8 +108,8 @@ full reset comparison.
 ## Measurements
 
 Machine: x86-64 Intel i7-1365U, 12 logical CPUs; clang 18.1.3, Rust 1.99.1,
-CMake 3.28.3. Shared host, two build workers. Wall times are observations,
-not performance gates.
+CMake 3.28.3. Shared host; two build workers for the earlier receipts, three
+for the new rung-2 build. Wall times are observations, not performance gates.
 
 Scalar production: **527,360 comparisons**, **263,680 full reversals**,
 **9,320,952 forward steps**, zero faults/exclusions; **118.233 seconds**.
@@ -106,16 +120,18 @@ These complete sweeps are explicit slow experiments.
 
 | Hashtable input | Steps per run, either production mode | Reversible journal bytes | Full reset memory bytes |
 |---|---:|---:|---:|
-| clang O0 | 804,179 | 15,994,195 | 2,108,912 |
-| clang O2 | 803,586 | 15,999,410 | 2,108,912 |
+| clang O0 | 804,215 | 15,994,967 | 2,108,912 |
+| clang O2 | 803,622 | 16,000,182 | 2,108,912 |
 
 All **40 full i64 comparisons** pass; output is **195 bytes**, status 0.
-Forward/reversible-and-reset times: O0 0.240/0.508 seconds,
-O2 0.212/0.465 seconds; 22.93 seconds including native builds and linking.
+Forward/reversible-and-reset times: O0 0.103/0.144 seconds,
+O2 0.568/0.298 seconds; 10.784 seconds including native builds and linking.
+The paired production runs add 20 complete i64 comparisons and two resets;
+the independent model adds its own 20 comparisons and two exact resets.
 Native basic checksums, in the declared n order:
 `0, 23131069394, 138063414195, 1083288249908, 54380828142828`;
 grow: `4, 23131069404, 138063414247, 1083288250354, 54380828149874`.
-The independent timeout witness is recorded above.
+The closed timeout and new independent measurements are recorded above.
 
 | Hello input | Exact native stdout | Steps | Journal bytes | Reset memory bytes |
 |---|---:|---:|---:|---:|
@@ -133,12 +149,13 @@ LLVM/clang 18, CMake, Rust/Cargo, GNU make, Python 3; no network needed.
 From the repository root:
 
 ```sh
-export CARGO_BUILD_JOBS=2 CMAKE_BUILD_PARALLEL_LEVEL=2
-python3 experiments/northstar-ladder/run.py
+export CARGO_BUILD_JOBS=3 CMAKE_BUILD_PARALLEL_LEVEL=3
+python3 experiments/northstar-ladder/run.py --rung 2
 ```
 
 The runner verifies fixture hashes, builds current frontend prerequisites
-and fingerprint-checks musl, then explicitly runs all five slow test stages.
+and fingerprint-checks musl, prepares the release test binary, then explicitly
+runs the selected slow stages (all five if no rung is selected).
 `--rung 1`, `--rung 2` or `--rung 3` selects a rung. On a shared machine,
 `--slot SCRIPT` acquires the site's heavy/build slot before build/run timers
 start. Do not also wrap that invocation in the same slot.
@@ -159,14 +176,20 @@ lowering products follow the frontend harness in `target/front-tests`.
 
 ## Repository verification
 
-After moving the measured slow sweep out of the default frontend run,
-all four required checks pass: `cargo test` (**306 passed, 16 ignored**),
-`cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, and
-`front/test.sh` (**171 passed, 27 ignored**). Extra frontend clippy is clean.
-An exact `--ignored --list` check selects all five acceptance stages named
-by the runner. The placement change does not alter their function bodies,
-domains or assertions. The experiment's nonzero exit for the independent
-table timeout remains separate from these normal repository checks.
+The storage regression failed against the original deep-copying history. A
+separate private mutation copy retained a history record after undo instead of
+consuming it: both new storage tests failed, then both passed after restoration.
+The changed Rust is test-only: the scope preview returned "No mutants to
+filter", then hit the wrapper's already documented empty-JSON error. No
+generated library mutation coverage is claimed for these helpers. The runner's Python changes retain the named-test,
+resource-stop and zero-test guards.
+
+After rebasing on `bd2e384`, all four required checks pass: `cargo test`
+(**471 passed, 20 ignored**), `cargo clippy --all-targets -- -D warnings`,
+`cargo fmt --check`, and `front/test.sh` (**182 passed, 26 ignored**).
+Workspace-library clippy and tree guards also pass. Exact `--ignored --list`
+discovery selects all five acceptance stages named by the runner. All source
+domains remain unchanged; rung 2 passes separately under its original cap.
 
 ## Source provenance
 
@@ -192,5 +215,9 @@ No archive file was modified. `scalar_native.c`, `table_entry.c` and
   bytes, console and empty history; not merely live allocations.
 - The two implementations share the frontend/parser, but have separate
   instruction semantics; native comparison supplies another independent check.
-- Rung 2's second implementation remains incomplete. The process limit must
-  not be confused with a source fault, input exclusion or partial-domain pass.
+- This closes the declared ten-case rung-2 domain, not every possible table
+  workload. Larger histories can still hit the process cap; those stops remain
+  unmeasured and never count as a source fault or partial-domain pass. Long
+  multiworld history comparisons still walk full contents and were not profiled
+  here; a shared-prefix-aware exact comparison or independent compact undo log
+  is the route if that cost matters.

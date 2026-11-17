@@ -1156,6 +1156,16 @@ the production macro, check each reader variant and writer instruction against t
 and reject missing operands. Shared reader/writer swaps cannot hide behind a round trip. The explicit
 macro-expansion mutation trials and their failing tests are recorded in HANDOFF's IR/CLI mutation section.
 
+The independent whole-world test interpreter keeps full classical snapshots, with `rpds` persistent
+vectors for history, frames, slots and console tape and an ordered persistent map for its normal byte overlay.
+World clones share unchanged nodes; point updates copy paths. Register, cell, mark and budget tables
+share standard `Rc` copy-on-write ownership, so their unchanged metadata is not repeated at each step. Slot vectors use eight-way nodes to
+limit the retained cost of each write. Snapshot and world equality still compare complete contents,
+including dead slots and history; no address identity or digest substitutes for machine equality.
+The interpreter derives its instruction and inverse rules from this document and uses no production
+executor history. Its resource regression checks sharing and retained-state reversal; large native
+comparisons remain explicit ignored experiments (`experiments/northstar-ladder/README.md`).
+
 Independent machine-decision probes (`crates/exec/tests/machine_decisions/` and
 `crates/ir/tests/machine_decisions.rs`) cover every integer measurement width, partial-cell complex
 amplitudes at unaligned addresses, overlapping measurements, byte/end-overflow bounds, every fault

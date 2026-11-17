@@ -1,11 +1,17 @@
 //! Slow, test-only meaning of DESIGN.md's journalled machine. No executor code is used.
 //!
 //! A basis key contains the ENTIRE machine, including history. Classical snapshots deliberately
-//! trade space for clarity; this is not an implementation or a journal-cost model. Gates and apply
+//! use persistent collections for shared history, slots, frames and byte overlays. This is not a
+//! production journal or a journal-cost model. Gates and apply
 //! never put quantum values into a snapshot. Memory is an overlay over one immutable classical base.
 //! Measurement is a boundary (all outcomes are available via `measurement_branches`); seeded RNG
 //! trajectories and configuration-limit policy are not part of the unitary reference meaning.
 
+use rpds::{RedBlackTreeMap, Vector};
+
+#[path = "worlds_classical.rs"]
+mod classical;
+pub use classical::Classical;
 use std::cell::{Cell, RefCell};
 
 #[path = "worlds_replay.rs"]
@@ -69,27 +75,6 @@ pub enum Finish {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Classical {
-    pub time: Timing,
-    pub overlay: BTreeMap<u64, u8>,
-    pub frames: Vec<Frame>,
-    /// Includes dead slots, since a later activation may reuse them.
-    pub slots: Vec<Value>,
-    pub sp: u64,
-    pub tape: Vec<u8>,
-    pub registers: Vec<Register>,
-    /// DESIGN, Qubits in memory: cells are part of the register table.
-    pub cells: BTreeMap<u64, usize>,
-    pub marks: Vec<Mark>,
-    /// DESIGN, History: one record per journalled step, including calls, marks and rewinds.
-    /// Register/cell reads annotate that step; they do not add another instruction record.
-    /// This count is meaning, not the length or layout of our private snapshot history.
-    pub journal_records: usize,
-    pub next_activation: u64,
-    pub finish: Option<Finish>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Action {
     Classical,
     Mark,
@@ -131,7 +116,7 @@ pub struct Record {
 pub struct World {
     pub classical: Classical,
     pub quantum: Vec<u64>,
-    pub history: Vec<Record>,
+    pub history: Vector<Record>,
 }
 
 impl World {
@@ -149,7 +134,7 @@ impl World {
     }
 
     fn frame_mut(&mut self) -> &mut Frame {
-        self.classical.frames.last_mut().expect("active frame")
+        self.classical.frames.get_mut(self.classical.frames.len() - 1).expect("active frame")
     }
 
     pub fn read(&self, operand: Operand) -> Value {
@@ -294,20 +279,19 @@ impl<'a> Model<'a> {
         let mut world = World {
             classical: Classical {
                 time: Timing::default(),
-                overlay: BTreeMap::new(),
-                frames: Vec::new(),
-                slots: Vec::new(),
+                overlay: RedBlackTreeMap::new(),
+                frames: Vector::new(),
+                // Eight-way slot nodes copy fewer pointers per retained point update than
+                // the crate's default 32-way nodes (the table hit the 1 GiB cap with those).
+                slots: Vector::new_with_bits(3),
                 sp: self.program.memory_size,
-                tape: Vec::new(),
-                registers: Vec::new(),
-                cells: BTreeMap::new(),
-                marks: Vec::new(),
+                tape: Vector::new(),
+                metadata: Default::default(),
                 journal_records: 0,
-                next_activation: 0,
                 finish: None,
             },
             quantum: Vec::new(),
-            history: Vec::new(),
+            history: Vector::new(),
         };
         // An entry frame that does not fit ends the run before its first step, with no frame.
         if let Err(fault) = self.call(
@@ -355,9 +339,9 @@ impl<'a> Model<'a> {
                 byte
             };
             if byte == self.base[address as usize] {
-                world.classical.overlay.remove(&address);
+                world.classical.overlay.remove_mut(&address);
             } else {
-                world.classical.overlay.insert(address, byte);
+                world.classical.overlay.insert_mut(address, byte);
             }
         }
         Ok(())
@@ -438,9 +422,11 @@ impl<'a> Model<'a> {
                 (_, v) => v,
             });
         }
-        w.classical.slots.resize(w.classical.slots.len().max(base + function.slot_count()), Value::Int(0));
+        while w.classical.slots.len() < base + function.slot_count() {
+            w.classical.slots.push_back_mut(Value::Int(0));
+        }
         w.classical.next_activation += 1;
-        w.classical.frames.push(Frame {
+        w.classical.frames.push_back_mut(Frame {
             function: func,
             block: BlockId(0),
             instruction: 0,
@@ -565,7 +551,7 @@ impl<'a> Model<'a> {
                     out.classical.time.leftovers.insert(id);
                     out.frame_mut().instruction += 1;
                     out.classical.journal_records += 1;
-                    out.history.push(Record { before: w.classical.clone(), action: Action::LeftoverFree(id) });
+                    out.history.push_back_mut(Record { before: w.classical.clone(), action: Action::LeftoverFree(id) });
                     add(&mut next, out, a);
                 }
                 return Ok(next);
@@ -737,10 +723,11 @@ impl<'a> Model<'a> {
                     self.call(&mut w, *callee, args, *dst)?;
                     if let Some((fault, budget)) = guard {
                         w.frame_mut().fault = Some(fault);
-                        w.classical.time.guards.insert(w.frame().activation, budget);
+                        let activation = w.frame().activation;
+                        w.classical.time.guards.insert(activation, budget);
                     }
                     w.classical.journal_records += 1;
-                    w.history.push(Record { before, action });
+                    w.history.push_back_mut(Record { before, action });
                     return Ok(basis(w));
                 }
                 Inst::CallIndirect { signature, target, args, dst } => {
@@ -764,7 +751,7 @@ impl<'a> Model<'a> {
                     let args = args.iter().map(|a| w.read(*a)).collect();
                     self.call(&mut w, FuncId(index as u32), args, *dst)?;
                     w.classical.journal_records += 1;
-                    w.history.push(Record { before, action });
+                    w.history.push_back_mut(Record { before, action });
                     return Ok(basis(w));
                 }
                 Inst::FuncAddr { func, .. } => result = Some(Value::Int(u128::from(func.0) + 1)),
@@ -772,7 +759,7 @@ impl<'a> Model<'a> {
                     if self.region || w.classical.frames.iter().any(|f| f.fault.is_some()) {
                         return Err(Fault::EffectInRegion);
                     }
-                    w.classical.tape.push(w.integer(*byte)? as u8);
+                    w.classical.tape.push_back_mut(w.integer(*byte)? as u8);
                 }
                 Inst::Qalloc { width, .. } => {
                     let id = w
@@ -832,20 +819,19 @@ impl<'a> Model<'a> {
                     let limit = budget.map(|b| w.integer(b).map(|b| b as u64)).transpose()?;
                     let handle = w.classical.journal_records + 1;
                     result = Some(Value::Int(handle as u128));
+                    let activation = w.frame().activation;
                     w.classical.marks.push(Mark {
                         handle,
                         history_position: w.history.len() + 1,
-                        activation: w.frame().activation,
+                        activation,
                         valid: true,
                     });
+                    let clock = w.classical.time.clock;
                     w.classical.time.marks.insert(
                         handle,
                         match limit {
                             None => MarkBudget::Unbudgeted,
-                            Some(b) => w
-                                .classical
-                                .time
-                                .clock
+                            Some(b) => clock
                                 .saturating_add(1)
                                 .checked_add(b)
                                 .map_or(MarkBudget::Unbounded, MarkBudget::Deadline),
@@ -878,7 +864,11 @@ impl<'a> Model<'a> {
                     if w.classical.frames.len() == self.region_depth + 1 {
                         w.classical.finish = Some(Finish::Returned(value));
                     } else {
-                        let frame = w.classical.frames.pop().expect("callee");
+                        let frame = {
+                            let f = w.classical.frames.last().expect("callee").clone();
+                            w.classical.frames.drop_last_mut();
+                            f
+                        };
                         self.leave(&mut w, frame.activation);
                         w.classical.sp = frame.entry_sp;
                         w.frame_mut().instruction += 1;
@@ -918,7 +908,7 @@ impl<'a> Model<'a> {
         let mut state = self.quantum_action(w, &record, false)?;
         for (mut world, a) in std::mem::take(&mut state) {
             world.classical.journal_records += 1;
-            world.history.push(record.clone());
+            world.history.push_back_mut(record.clone());
             add(&mut state, world, a);
         }
         Ok(state)
@@ -970,7 +960,11 @@ impl<'a> Model<'a> {
         }
         let n = w.integer(value)?;
         while w.classical.frames.len() > depth + 1 {
-            let f = w.classical.frames.pop().expect("discarded frame");
+            let f = {
+                let f = w.classical.frames.last().expect("discarded frame").clone();
+                w.classical.frames.drop_last_mut();
+                f
+            };
             self.leave(w, f.activation);
         }
         w.classical.sp = words[3];
@@ -1045,7 +1039,7 @@ impl<'a> Model<'a> {
                 let values = args.iter().map(|a| w.integer(*a).map(Value::Int)).collect::<Result<Vec<_>, _>>()?;
                 let budget = w.integer(*budget)? as usize;
                 let mut region = w.clone();
-                region.history.clear();
+                region.history = Vector::new();
                 // The basis-state definition evaluates a private region with a fresh journal.
                 // Entering @f is a call: it contributes one public record, even though this
                 // reference never needs to undo that entry and stores no snapshot for it.
@@ -1109,7 +1103,7 @@ impl<'a> Model<'a> {
         if h == 0
             || h > first.history.len()
             || first.history[h - 1].action != Action::Mark
-            || first.history[h..].iter().any(|r| matches!(r.action, Action::Measurement | Action::LeftBehind))
+            || first.history.iter().skip(h).any(|r| matches!(r.action, Action::Measurement | Action::LeftBehind))
         {
             return Err(Fault::BadRewind);
         }
@@ -1151,14 +1145,16 @@ impl<'a> Model<'a> {
             }
             let mut site = (*start).clone();
             let f = first.frame();
-            site.frames.last_mut().expect("frame").block = f.block;
-            site.frames.last_mut().expect("frame").instruction = f.instruction;
+            site.frames.get_mut(site.frames.len() - 1).expect("frame").block = f.block;
+            site.frames.get_mut(site.frames.len() - 1).expect("frame").instruction = f.instruction;
             w.frame_mut().block = f.block;
             w.frame_mut().instruction = f.instruction + 1;
             w.classical.journal_records += 1;
             site.time = first.classical.time.clone();
-            site.time.rewind_visit = 1 + first.history[h..]
+            site.time.rewind_visit = 1 + first
+                .history
                 .iter()
+                .skip(h)
                 .filter(|r| {
                     let f = r.before.frames.last().expect("record frame");
                     matches!(r.action, Action::Rewind { .. })
@@ -1168,13 +1164,13 @@ impl<'a> Model<'a> {
                 .map(|r| r.before.time.rewind_visit)
                 .max()
                 .unwrap_or(0);
-            w.history.push(Record { before: site, action: Action::Rewind { start, count } });
+            w.history.push_back_mut(Record { before: site, action: Action::Rewind { start, count } });
             add(&mut result, w, a);
         }
         if result.keys().any(|w| w.classical.time.leftovers != first.classical.time.leftovers) {
             let mut barrier = BTreeMap::new();
             for (mut w, a) in result {
-                w.history.push(Record { before: w.classical.clone(), action: Action::LeftBehind });
+                w.history.push_back_mut(Record { before: w.classical.clone(), action: Action::LeftBehind });
                 add(&mut barrier, w, a);
             }
             return Ok(barrier);
@@ -1417,13 +1413,15 @@ impl<'a> Model<'a> {
                 || h > w.history.len()
                 || w.history[h - 1].action != Action::Mark
                 || w.mark_position(handle)? != h
-                || w.history[h..].iter().any(|r| matches!(r.action, Action::Measurement | Action::LeftBehind))
+                || w.history.iter().skip(h).any(|r| matches!(r.action, Action::Measurement | Action::LeftBehind))
                 || w.integer(Operand::Slot(*mark))? != handle as u128
             {
                 return Err(Fault::BadRewind);
             }
-            visit = 1 + w.history[h..]
+            visit = 1 + w
+                .history
                 .iter()
+                .skip(h)
                 .filter_map(|r| {
                     let Action::JoinedRewind { visit, .. } = r.action else {
                         return None;
@@ -1479,7 +1477,7 @@ impl<'a> Model<'a> {
                 .get(h)
                 .map_or_else(|| first.classical.time.guards.clone(), |r| r.before.time.guards.clone());
             let mut before = w.classical.clone();
-            let f = before.frames.last_mut().expect("frame");
+            let f = before.frames.get_mut(before.frames.len() - 1).expect("frame");
             (f.block, f.instruction) = (site.block, site.instruction);
             (w.frame_mut().block, w.frame_mut().instruction) = (site.block, site.instruction + 1);
             w.classical.journal_records += 1;
@@ -1506,7 +1504,7 @@ impl<'a> Model<'a> {
             for left in w.classical.time.guards.values_mut() {
                 *left = left.saturating_sub(1);
             }
-            w.history.push(Record { before, action: Action::JoinedRewind { start, visit } });
+            w.history.push_back_mut(Record { before, action: Action::JoinedRewind { start, visit } });
             add(&mut result, w, a);
         }
         self.checking.set(self.checking.get() + 1);
@@ -1534,7 +1532,7 @@ impl<'a> Model<'a> {
             w.put(*dst, Value::Int(value));
             w.frame_mut().instruction += 1;
             w.classical.journal_records += 1;
-            w.history.push(Record { before, action: Action::Measurement });
+            w.history.push_back_mut(Record { before, action: Action::Measurement });
             add(&mut result, w, a);
         }
         result

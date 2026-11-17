@@ -60,8 +60,8 @@ aggregate. Larger sizes, measured limits and reproducible commands are recorded 
 
 C North Star ladder checks are in [experiments/northstar-ladder](experiments/northstar-ladder/README.md).
 The C portion of rung 1 passes exhaustively on the declared Int8 functions, and rung 3 passes native
-output, exact reset and deterministic tape replay. Rung 2's ten-case production runs pass native agreement
-and byte-exact reversal; its independent interpreter timed out during startup, so the two-executor
-acceptance remains unmeasured. The experiment records the witness, full domains and route to close it.
+output, exact reset and deterministic tape replay. Rung 2's ten original cases pass native agreement and byte-exact reversal on both independent
+interpreters, at both compiler inputs, under the unchanged resource cap. The experiment records the
+profile, persistent snapshot storage, complete domains and measurements.
 
 Repository checks and the optional exact-revision pre-push hook: [docs/CHECKS.md](docs/CHECKS.md).
