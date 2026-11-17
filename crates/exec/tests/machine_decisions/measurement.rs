@@ -85,7 +85,7 @@ fn joint_measurement_uses_born_weights_after_marginalizing_unmeasured_bits() {
 }
 
 #[test]
-fn address_measurements_fault_inside_regions_in_all_apply_modes() {
+fn address_measurements_fault_inside_regions() {
     for width in [1, 7, 8, 9, 64, 65, 128] {
         let module = load(&format!(
             "memory 512\nfunc @read() -> i1 {{\nentry:\n %m = measure i{width} [17]\n ret 1\n}}\nfunc @main() {{\nentry:\n %out = qalloc 1\n x %out\n %f = qalloc 5\n x %f[0]\n apply @read() -> %out, %f budget 32\n ret\n}}"
