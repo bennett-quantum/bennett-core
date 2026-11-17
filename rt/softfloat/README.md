@@ -126,8 +126,9 @@ are exact, including NaN bits and excluding the six ABI padding bytes.
   add/sub/mul/div, their results fed to addition, all six comparisons and unordered, `fminl`/`fmaxl` and
   their results fed to arithmetic, sqrt/floor/ceil/trunc/rint/nearbyint, and conversions to/from float,
   double and signed/unsigned 32/64/128-bit integers. Canonical cases also cover round/roundeven/fma and
-  half/bfloat truncation. **3,771 powers** per level (exponents -17,-4,-3,-2,-1,0,1,2,3,4,17, excluding
-  the separately witnessed noncanonical exponent-1 defect), **120 integer boundary conversions**, and
+  half/bfloat truncation. **3,894 powers** per level (exponents -17,-4,-3,-2,-1,0,1,2,3,4,17 on every
+  input, noncanonical ones at exponent 1 included since that defect was fixed), **120 integer boundary
+  conversions**, and
   **139,264 floating-source conversions** (every half/bfloat encoding; double samples in every exponent).
 - `p0_x87_pipeline.c`: **4,640 results per level**, including negation/fabs/copysign, narrow integers,
   lrint/llrint, all ordered/unordered comparison combinations, classification masks and arithmetic after
@@ -147,13 +148,21 @@ before asserting, so a failure at the first level does not hide the second.
 
 | Witness in `p0_independent.rs` | Difference | Severity |
 |---|---|---|
-| `powi_one_preserves_a_pseudo_denormal_encoding` | `powi(x,1)`: native preserves exponent 0, runtime changes it to 1 | Medium; observable raw-bit result |
-| `powi_one_preserves_an_unsupported_encoding` | Native returns the unsupported argument unchanged; runtime replaces it with indefinite | Medium; observable raw-bit result |
+| `powi_one_preserves_a_pseudo_denormal_encoding` | `powi(x,1)`: native preserves exponent 0, runtime changed it to 1 | Fixed (below); runs by default |
+| `powi_one_preserves_an_unsupported_encoding` | Native returns the unsupported argument unchanged; runtime replaced it with indefinite | Fixed (below); runs by default |
 | `roundeven_of_an_unnormal_matches_native_software` | For exponent 1/significand 1, glibc returns +0, runtime NaN; adding 1 preserves the difference | Medium; wrong numerical result, O0/O2 |
 | `a_pseudo_denormal_is_finite` | Native true, device false at O0; O2 agrees | Medium; wrong branch predicate |
 | `an_unsupported_encoding_is_nan` | Native true, device false at O0; O2 agrees | Medium; wrong branch predicate |
 
 The expected `powi` bits follow native libgcc's exponent-1 path, which returns without arithmetic.
+**Fixed:** `__powixf2` read its argument as x87 does at entry, so `powi(x, 1)` returned the canonical
+reading. libgcc2.c starts from `y = n % 2 ? x : 1` and for `m == 1` returns `x` without an operation; on
+every other path `x` meets a multiplication or the division, which read it as x87 does, so the runtime now
+returns `x` for `m == 1` and keeps the single reading at entry otherwise. Both witnesses failed before the
+fix and pass after it; the matrix's powers no longer skip noncanonical inputs at exponent 1 (3,894 agree at
+each level, 470 differ with the early return moved to `m == 2`). Cost, one comparison per call:
+`float_long_double.c` 2,119,358 to 2,119,622 steps at `-O0` and 1,842,776 to 1,843,040 at `-O2`;
+`float_long_double_programs.c` unchanged (84,573 and 81,703).
 `roundevenl` examines the encoding in software, as `roundl` does. Native aggregate classification uses
 x87 comparisons at O0 where the front's bit classification has different answers. The individual
 `is.fpclass` masks and `fpclassify` are retained as passing probes, not conflated with those C predicates.
@@ -182,7 +191,8 @@ witnesses. Default checks leave those witnesses ignored.
 
 Not measured: exhaustive 80-bit inputs or all binary64 angles, every integer value, all fma triples,
 every LLVM bitstream corruption, nondefault rounding/flags/traps, other native C libraries or CPUs,
-coherent superpositions or reversal of these probes. No production implementation changed.
+coherent superpositions or reversal of these probes. The pass changed no production code; the fixes made
+since are named above.
 
 ## Cost on the device
 

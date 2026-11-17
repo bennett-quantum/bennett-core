@@ -1098,10 +1098,10 @@ reads every operand: a pseudo-denormal as the denormal of the same value, the ot
 giving x87's indefinite (`rt/softfloat/README.md`, "Noncanonical long double operands"). Where the native
 program calls software rather than x87 instructions (glibc's `fmal` and `roundl`, libgcc's truncations to
 `_Float16` and `__bf16`), that software reads such encodings at face value, and the device differs there.
-The independent conformance pass also finds `roundevenl` in this software class, `powi(x, 1)` changing a
-noncanonical encoding that native libgcc returns unchanged, and the front's aggregate `isfinite`/`isnan`
-classification differing at `-O0`. These have ignored defect witnesses, not corrected implementations
-(`rt/softfloat/README.md`, "Independent conformance pass").
+The independent conformance pass also finds `roundevenl` in this software class and the front's aggregate
+`isfinite`/`isnan` classification differing at `-O0`. These have ignored defect witnesses, not corrected
+implementations (`rt/softfloat/README.md`, "Independent conformance pass"). `powi(x, 1)` returns its
+argument's bits, noncanonical ones included, as libgcc's loop does.
 
 ## The next extension: code that is not a clean function (decided; `mark`, `rewind`, worlds, the memory overlay, gates at addresses and `apply` as the idiom built)
 

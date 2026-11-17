@@ -410,7 +410,12 @@ double __powidf2(double x, int m) {
   return of_f64(m < 0 ? f64_div(one, y) : y);
 }
 
+/* libgcc2.c starts from `y = n % 2 ? x : 1`; for m == 1 the loop does not run and x itself is returned,
+ * with no arithmetic to read it, so a noncanonical encoding comes back unchanged. On every other path x or
+ * y meets a multiplication or the division, which reads it as x87 does, so reading x once at entry gives
+ * the same results. */
 long double __powixf2(long double x, int m) {
+  if (m == 1) return x;
   unsigned n = m < 0 ? -(unsigned)m : (unsigned)m;
   extFloat80_t a = x80_of(x), one = {UINT64_C(0x8000000000000000), 0x3FFF}, y = n % 2 ? a : one;
   while (n >>= 1) {

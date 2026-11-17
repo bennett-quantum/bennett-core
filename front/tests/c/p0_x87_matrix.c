@@ -155,12 +155,7 @@ static void powers(void) {
   int ns[]={-17,-4,-3,-2,-1,0,1,2,3,4,17};
   for(unsigned i=0;i<sizeof(ns)/sizeof(*ns);i++) {
     power=ns[i]; bi=i;
-    /* The exponent-1 raw return is separately witnessed, not silently accepted as agreement. */
-    if (power == 1) {
-      uint16_t e; U m;
-      memcpy(&e,(const char *)&a+8,2); memcpy(&m,(const void *)&a,8);
-      if (((e & 0x7fff) == 0 && (m >> 63)) || ((e & 0x7fff) != 0 && !(m >> 63))) continue;
-    }
+    /* Exponent 1 included: libgcc returns the argument's bits without arithmetic. */
     LD("powi",__builtin_powil(a,power),rt___powixf2(a,power));
   }
 }

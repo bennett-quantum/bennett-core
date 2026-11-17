@@ -70,13 +70,11 @@ fn witness(entry: &str) {
 }
 
 #[test]
-#[ignore = "defect: powi(x, 1) canonicalizes a pseudo-denormal that native libgcc preserves"]
 fn powi_one_preserves_a_pseudo_denormal_encoding() {
     witness("powi_preserves_pseudo");
 }
 
 #[test]
-#[ignore = "defect: powi(x, 1) replaces an unsupported encoding that native libgcc preserves"]
 fn powi_one_preserves_an_unsupported_encoding() {
     witness("powi_preserves_unsupported");
 }
