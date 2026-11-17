@@ -190,3 +190,62 @@ fn memory_without_qubits_is_read_and_still_cannot_be_reversed_past() {
     }
     assert_eq!(seen.len(), 2);
 }
+
+#[test]
+fn a_mixed_width_measurement_releases_only_whole_bytes_and_allows_repromotion() {
+    let module = bennett_ir::load(
+        r#"
+memory 256
+data 32 = i16 9562
+func @entry(i1 %finish) -> i16 {
+entry:
+    x [32:1]
+    h [33:7]
+    s [33:7]
+    %partial = measure i12 [32]
+    store i8 16, 32
+    br %finish, finish, blocked
+blocked:
+    %early = load i8 33
+    ret 0
+finish:
+    x [32:0]
+    %low = measure i8 [32]
+    %high = measure i8 [33]
+    %both = load i16 32
+    ret %both
+}
+"#,
+    )
+    .expect("valid program");
+    let mut seen = BTreeSet::new();
+    for seed in 0..SEEDS {
+        for finish in [false, true] {
+            let mut e = executor(&module, "entry", &[u64::from(finish)], seed);
+            for _ in 0..4 {
+                assert_eq!(e.step(), None);
+            }
+            // The initial word 0x255a becomes 0x?558, with bit 15 still in (|0> + i|1>)/sqrt(2).
+            assert_eq!(ordinary(&e, 32), 0x58);
+            let h = std::f64::consts::FRAC_1_SQRT_2;
+            let state = cell(&e, 33);
+            assert_eq!(state.keys().copied().collect::<Vec<_>>(), [0x25, 0xa5]);
+            assert!((state[&0x25] - C::new(h, 0.0)).norm() < 1e-12, "{state:?}");
+            assert!((state[&0xa5] - C::new(0.0, h)).norm() < 1e-12, "{state:?}");
+
+            let outcome = e.run();
+            if finish {
+                let Outcome::Returned(Some(word)) = outcome else { panic!("{outcome:?}") };
+                assert!([0x2511, 0xa511].contains(&word), "{word:#x}");
+                assert_eq!(ordinary(&e, 32), 0x11);
+                assert_eq!(ordinary(&e, 33), (word >> 8) as u8);
+                seen.insert(word);
+            } else {
+                assert_eq!(outcome, Outcome::Faulted(bennett_ir::Fault::QubitMemoryAccess));
+                assert_eq!(ordinary(&e, 32), 16, "the store to the fully measured byte succeeds");
+                assert_eq!(cell(&e, 33), state);
+            }
+        }
+    }
+    assert_eq!(seen, BTreeSet::from([0x2511, 0xa511]));
+}
