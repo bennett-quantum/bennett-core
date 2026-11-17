@@ -12,6 +12,7 @@
 mod common;
 
 use bennett_exec::Outcome;
+use bennett_ir::Fault;
 use common::leftover::{HALF, check, entries, machine, strict_unchanged};
 use common::{assert_same_state, executor, load};
 
@@ -234,4 +235,56 @@ entry:
     assert_eq!(e.stats().leftover_qubits, 1);
     e.reverse().expect("reverses through the nested rewind and leftover");
     assert_same_state(&e.snapshot(), &start, "nested local inverse returns to entry");
+}
+
+/// An inner region run again on a path the outer keep opened, which reaches a measurement (the seam's debt 2,
+/// still a refusal until channels). The inner region reads `%r` (0) and skips the measurement; the outer keep
+/// sets `r`, so undoing the inner rewind runs its region again reading 1, and the path reaches `measure`, which
+/// no rewound region held. Running it as the circuit would makes the measurement a channel; until channels the
+/// outer rewind faults `bad_rewind` in both modes, changing nothing (the state before it, `r` = 0), found by
+/// running again, never a call's fault code (`Halt::Inspected`); the run reverses to its entry.
+#[test]
+fn an_inner_region_run_again_that_reaches_a_measurement_stays_a_named_refusal() {
+    let module = common::load(
+        "memory 256
+func @id(i1 %x) -> i1 {
+entry:
+    ret %x
+}
+func @main() -> i8 {
+entry:
+    %c = qalloc 1
+    h %c
+    %r = qalloc 1
+    %outer = mark budget 100
+    %inner = mark budget 40
+    %v = call @id(%r)
+    br %v, measured, done
+measured:
+    %m = measure %c
+    br done
+done:
+    rewind %inner
+    rewind %outer keep (i1 1 -> %r)
+    ret 7
+}",
+    );
+    for options in [common::leftover::machine(), common::leftover::strict()] {
+        let mut e = common::executor(&module, "main", &[], options);
+        let start = e.snapshot();
+        let (outcome, before) = loop {
+            let before = e.snapshot();
+            if let Some(outcome) = e.step() {
+                break (outcome, before);
+            }
+        };
+        assert_eq!(outcome, Outcome::Faulted(Fault::BadRewind));
+        let mut after = e.snapshot();
+        after.classical.outcome = None;
+        common::assert_same_state(&after, &before, "the outer rewind changed nothing");
+        assert_eq!(e.stats().leftover_qubits, 0);
+        assert_eq!(e.stats().observations, 0, "the measurement is refused before it samples");
+        e.reverse().expect("reverses to the entry");
+        common::assert_same_state(&e.snapshot(), &start, "back to the entry");
+    }
 }

@@ -1657,7 +1657,10 @@ the budget of a call with a fault value (`call_budget_replay.rs`).
   the same un-run revives panicked. Still `bad_rewind` outside strict mode, never a call's fault code: an inner
   region run again that reaches a measurement or leaves the rewind's frame on a path the keeps changed (debt
   (2)): running that path as the circuit would makes the measurement a channel, so until channels this stays a
-  refusal (the `bad_rewind` of `run_again`, `Halt::Inspected`).
+  refusal (the `bad_rewind` of `run_again`, `Halt::Inspected`; inside a call with a budget no path can reach it,
+  since keeps and quantum instructions are refused there; checked in both modes by
+  `an_inner_region_run_again_that_reaches_a_measurement_stays_a_named_refusal`: the state unchanged, nothing
+  sampled, reversal to the entry).
   Debt (P1, found here): the ids of registers left over are in the program's id space, so where a step run again
   allocates (a `qalloc` of an inner region run again by an outer un-run) while a leftover of the outer un-run
   holds the id it took the first time, it takes another id and the state differs from the one its history
