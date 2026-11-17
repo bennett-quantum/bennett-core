@@ -203,9 +203,19 @@ void ControlWriter::apply(const std::string &callee, const std::string &args, co
 void ControlWriter::instruction(const Instruction &inst) {
   if (analysis.tainted(&inst)) {
     // Computed coherently inside the functions applied where it is stored; its other uses are checked
-    // where they are. A call is checked here, since it might have effects even if its result is unused.
-    if (const auto *call = dyn_cast<CallBase>(&inst); call && !module.isCoherent(call->getCalledFunction())) {
-      notHandled("a call that depends on a qubit, to a function that writes memory or performs quantum operations",
+    // where they are. What has an effect is checked here, since the effect would otherwise vanish with an
+    // unused result: a call, and any other instruction with an effect on memory (an atomic update, a
+    // volatile or atomic read). A load of a qubit variable reads its register, never memory.
+    const auto *load = dyn_cast<LoadInst>(&inst);
+    bool readsRegister = load && analysis.access(load->getPointerOperand());
+    if (const auto *call = dyn_cast<CallBase>(&inst)) {
+      if (!module.isCoherent(call->getCalledFunction())) {
+        notHandled("a call that depends on a qubit, to a function that writes memory or performs quantum operations",
+                   &inst);
+      }
+    } else if (!readsRegister && inst.mayHaveSideEffects()) {
+      notHandled("an effect on memory (the instruction `" + std::string(inst.getOpcodeName()) +
+                     "`) that depends on a qubit",
                  &inst);
     }
     return;

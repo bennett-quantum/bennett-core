@@ -92,7 +92,33 @@ fn what_cannot_run_under_qubit_control_or_in_place_is_refused_by_name_at_its_lin
 /// comment of each case says what the old translation computed.
 #[test]
 fn what_was_once_translated_wrongly_is_refused_by_name_in_every_mode() {
-    let cases: [(&str, &str, &str, usize); 1] = [
+    let cases: [(&str, &str, &str, usize); 4] = [
+        // An atomic update whose operand depends on a qubit, its result unused: it was dropped, so `cell`
+        // stayed 0 where C gives 1.
+        (
+            "effect_atomic_update",
+            "#include \"bennett.h\"\nint cell;\nint main(void) {\n  _Bool q = 0;\n  bennett_x(&q);\n  \
+             __atomic_fetch_add(&cell, (int)q, __ATOMIC_SEQ_CST);\n  bennett_measure(&q);\n  return cell;\n}\n",
+            "an effect on memory (the instruction `atomicrmw`) that depends on a qubit",
+            6,
+        ),
+        // A volatile read at an address that depends on a qubit, its value unused: it was dropped, so the
+        // device read nothing where C reads one of the two words.
+        (
+            "effect_volatile_read",
+            "#include \"bennett.h\"\nvolatile int port[2];\nint main(void) {\n  _Bool q = 0;\n  bennett_h(&q);\n  \
+             (void)port[q];\n  return (int)bennett_measure(&q);\n}\n",
+            "an effect on memory (the instruction `load`) that depends on a qubit",
+            6,
+        ),
+        // An atomic read at an address that depends on a qubit, its value unused: dropped likewise.
+        (
+            "effect_atomic_read",
+            "#include \"bennett.h\"\nint cells[2];\nint main(void) {\n  _Bool q = 0;\n  bennett_h(&q);\n  \
+             (void)__atomic_load_n(&cells[q], __ATOMIC_ACQUIRE);\n  return (int)bennett_measure(&q);\n}\n",
+            "an effect on memory (the instruction `load`) that depends on a qubit",
+            6,
+        ),
         // A gate controlled by a value read from q before q changed: the gate was controlled by q's current
         // qubit instead, so y ended 0 where it must end 1.
         (

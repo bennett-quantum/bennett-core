@@ -499,7 +499,8 @@ an empty device program (`front/src/main.cpp`, `readInput`).
   with `dirty_free`.
 - **Each qubit variable is Known** (it holds an ordinary value: fresh, assigned, just measured) **or Quantum.**
 - **What it cannot do yet it refuses by name**, with the source location: a qubit-dependent value used by
-  ordinary code, a non-XOR overwrite of a variable whose value is not known that is not an invertible
+  ordinary code or by an access with an effect of its own (an atomic update, a volatile or atomic read, even
+  with its result unused), a non-XOR overwrite of a variable whose value is not known that is not an invertible
   update, reading a qubit variable's old value after it changed, qubit variables passed to functions or
   written partially, and the cases under qubit control above.
 - **`--taint-all`** treats more as tainted; tests check that no result changes.
