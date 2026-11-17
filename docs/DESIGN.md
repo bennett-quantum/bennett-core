@@ -1094,7 +1094,12 @@ restores the state before the rewind exactly. Until then the record was a barrie
 an outer rewind faulted `bad_rewind` where the inner un-run had left a register over and not where it had not,
 a fault decided by whether a register was zero in every configuration. A rewind run again (inside an outer
 un-run or a reversal) runs regardless as a rewind taken as a step does, and leaves the same registers over from
-the same state; outside strict mode every rewind keeps a copy to restore if its un-run still fails. A leftover
+the same state; outside strict mode every rewind keeps a copy to restore if its un-run still fails. Leftovers
+are not taken back in the order they were left: a call running again takes its reads' wires back in the order of
+its arguments, the reverse of their un-run, and a rewind run again inside an outer one leaves and takes back its
+own while a newer leftover waits, so a leftover is taken back wherever it stands in the list (until 2026-11-16 the
+take-back assumed the last and panicked: `two_leftover_read_wires_reverse_to_the_empty_entry` and
+`nested_leftover_lifetimes_complete_and_reverse_on_a_basis_state`, `machine_finish_independent.rs`). A leftover
 takes no allocation number of the program's (a left-over allocation gives its number back, and gets one again
 where it is taken back), so the registers allocated again in between get their old numbers. Checked
 (`crates/exec/tests/leftover_wires.rs`): each built site on |0>, |+> and |1>, the amplitudes and leftovers worked by

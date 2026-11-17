@@ -314,7 +314,6 @@ fn a_single_changed_nonzero_read_reverses_each_step_and_an_outer_rewind_takes_it
 /// leftover wires must hold 1. Inverse replay must restore the initial empty snapshot. Today it
 /// reclaims the older wire first and panics. No amplitudes, deadlines or world scheduling are involved.
 #[test]
-#[ignore = "defect: inverse replay of a call with two leftover read wires panics by reclaiming the older wire first"]
 fn two_leftover_read_wires_reverse_to_the_empty_entry() {
     for alias in [false, true] {
         let args = if alias { "%a, %a" } else { "%a, %b" };
@@ -444,7 +443,6 @@ fn nested_clean_lifetimes_run_and_strict_mode_diagnoses_changed_ones() {
 }
 
 #[test]
-#[ignore = "defect: an outer rewind panics reclaiming an inner allocation while a newer read wire is left over"]
 fn nested_leftover_lifetimes_complete_and_reverse_on_a_basis_state() {
     // Outer inverse takes back and then clears a (column 4), clears k, and leaves the read
     // wire (column 5) with q = 1. It must return, then reverse to the empty entry.

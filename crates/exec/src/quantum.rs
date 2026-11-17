@@ -200,9 +200,13 @@ impl QuantumState {
         self.leftovers.push(id);
     }
 
-    /// Takes back the register left over last, `id`: its handle is live again. Returns the handle.
+    /// Takes back the register `id` left over: its handle is live again. Returns the handle. Leftovers are not
+    /// taken back in the order they were left: a call running again takes its reads' wires back in the order
+    /// of its arguments, and a rewind run again inside an outer one leaves and takes back its own while a
+    /// newer leftover waits; the others keep their order.
     pub(crate) fn reclaim(&mut self, id: usize) -> u64 {
-        assert_eq!(self.leftovers.pop(), Some(id), "leftovers are taken back latest first");
+        let index = self.leftovers.iter().rposition(|&left| left == id).expect("a register left over is taken back");
+        self.leftovers.remove(index);
         let register = &mut self.registers[id];
         register.generation = register.generation.wrapping_sub(1);
         u64::from(register.generation) << 32 | id as u64
