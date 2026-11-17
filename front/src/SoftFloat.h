@@ -12,7 +12,9 @@
 //    are compared with 0. `fneg`, `fabs`, `copysign` and `is.fpclass` are bit operations, written
 //    inline (`is.fpclass` as LLVM's x86-64 back end expands it, `FpClass.h`); `fmuladd` is a
 //    multiplication and an addition, unfused, as x86-64 without FMA computes it natively; `minimum`,
-//    `maximum`, `lrint` and `lround` are compositions. Vector operations are done element by element.
+//    `maximum`, `lrint` and `lround` are compositions, but for `lround` and `llround` on long double, which
+//    call the runtime's `lroundl` and `llroundl` (glibc's software, which takes noncanonical operands at face
+//    value). Vector operations are done element by element.
 //    `half` (_Float16) and `bfloat` (__bf16) are computed as LLVM's x86-64 back end computes them without
 //    half-precision hardware: each operation in float, rounded back to the type
 //    after it (`fneg` and `fabs` included; `copysign` and `is.fpclass` stay bit operations), through

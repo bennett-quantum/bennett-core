@@ -130,25 +130,35 @@ and exclude only x87's six ABI padding bytes. The default probes add about two s
   17 exponents and 12 significands plus below/at/above a half at each of the 63 binary-point positions.
   Includes noncanonical encodings, integer overflow boundaries, infinities and NaNs. `roundl`,
   `roundevenl`, `rintl`, `nearbyintl`, `truncl`, `floorl`, `ceill`, `lrintl`, `llrintl`, `lroundl` and
-  `llroundl` are tested. **8,514 agree at each level; 132 lroundl/llroundl tuples differ** and are
-  explicitly excluded from the passing comparison by operation and input identity. Canonical integer
+  `llroundl` are tested. **All 8,646 agree at each level** (until the fix below, 132 lroundl/llroundl
+  tuples differed and were excluded by operation and input identity). Canonical integer
   conversion overflow is measured as native target behavior, not as a defined C result.
 - **1,224 classification results per level:** isfinite/isnan/isinf/isnormal/fpclassify/signbit at all
   five widths (float, double, x87 long double, half, bfloat), directly and feeding branches and selects.
   All agree at O0; **1,206 agree at O2**, with 18 negative-bfloat signbit results explicitly excluded.
 
-Three minimal witnesses in `fp_front_witness.c`, each explicitly run and seen to fail, remain ignored
-with `defect:` reasons. Reproduce with:
+Three minimal witnesses in `fp_front_witness.c` were each explicitly run and seen to fail; the bfloat
+one remains ignored with a `defect:` reason, the two lroundl ones run by default since the fix below. Reproduce with:
 
 ```sh
 front/test.sh --test fp_front_independent -- --ignored --nocapture
 ```
 
 For **lroundl and llroundl**, x87 exponent `0x3fff`, significand zero is an unsupported unnormal zero.
-glibc's software integer-rounding routines read the zero significand and return 0; the front instead
-composes `roundl` with integer conversion, which rejects that encoding and returns INT64_MIN. Both
-optimization levels differ. Route: follow glibc's software integer rounding for these encodings,
-rather than compose the two operations.
+glibc's software integer-rounding routines read the zero significand and return 0; the front composed
+`roundl` with integer conversion, which rejects that encoding and returns INT64_MIN, at both optimization
+levels. **Fixed (2026-11-17):** the runtime has `lroundl` and `llroundl` (`round_to_integer` in `libgcc.c`),
+glibc's ldbl-96 integer operations on the two 32-bit halves bit for bit, and the front calls them for
+`llvm.lround`/`llvm.llround` on long double (float and double keep the composition, their operands are
+always canonical). Both witnesses failed on the code before (INT64_MIN at -O0 and -O2) and pass. The
+matrix's `rounding` mode now meets both on every sign and exponent with 26 significands (6,815,744 checks per
+level with `roundevenl` and `roundl`, all agree) and its main mode on all 354 inputs (2,389,008 checks); a
+separate native sweep with 90 significands per sign and exponent plus every binary point, both signs, at
+exponents 0x3FFE to 0x3FFF + 63 (11,896,320 checks at -O0 and at -O2) agrees, and catches four mutants (no
+carry out of the high half: 317 differences; no carry into it: 4,576; 0 at exponent 0x3FFE: 948; the
+exponent-31 case shifted: 852). Cost on `float_long_double.c`: 2,119,646 to 2,118,858 steps at `-O0`,
+1,843,304 to 1,841,952 at `-O2` (one call in place of a rounding and a conversion);
+`float_long_double_programs.c` unchanged (84,573).
 
 For **bfloat signbit**, raw `0xbf80` is exactly -1, and the mathematically correct sign bit is 1.
 The device and native O0 return 1, but LLVM 18's optimized native code loads the word and then returns

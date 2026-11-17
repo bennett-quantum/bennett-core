@@ -82,14 +82,6 @@ fn known_difference(mode: &str, opt: &str, args: &[u64]) -> bool {
         // LLVM 18's native optimized bfloat signbit returns false even for -1, unlike its O0 code.
         return opt == "-O2" && args[0] == 4 && args[1] >= 18 && args[2] == 5;
     }
-    if mode == "rounding" && matches!(args[1], 9 | 10) {
-        // Raw unnormal operands, positive indices below and their sign-set counterparts (+393).
-        return [
-            60, 61, 62, 72, 73, 74, 75, 76, 84, 85, 86, 87, 88, 96, 97, 98, 99, 100, 108, 109, 110, 111, 112, 120, 121,
-            122, 123, 124, 132, 133, 134, 135, 136,
-        ]
-        .contains(&(args[0] % 393));
-    }
     false
 }
 
@@ -157,15 +149,14 @@ fn witness(entry: &str) {
 }
 
 #[test]
-#[ignore = "defect: lroundl of x87 unnormal zero returns INT64_MIN instead of glibc's zero"]
 fn lroundl_unnormal_zero_matches_glibc_software() {
-    // glibc's software integer rounding reads the significand (zero) directly. The front instead
-    // composes roundl with an x87-style integer conversion, which rejects the unsupported encoding.
+    // glibc's software integer rounding reads the significand (zero) directly. The front composed roundl
+    // with an x87-style integer conversion, which rejects the unsupported encoding (INT64_MIN), until
+    // 2026-11-17; it now calls the runtime's lroundl, which follows glibc.
     witness("unnormal_lround");
 }
 
 #[test]
-#[ignore = "defect: llroundl of x87 unnormal zero returns INT64_MIN instead of glibc's zero"]
 fn llroundl_unnormal_zero_matches_glibc_software() {
     witness("unnormal_llround");
 }

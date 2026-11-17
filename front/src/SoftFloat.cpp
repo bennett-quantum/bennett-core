@@ -647,6 +647,13 @@ private:
     case Intrinsic::llrint:
     case Intrinsic::lround:
     case Intrinsic::llround: {
+      // On long double the native program calls glibc's lroundl and llroundl, software that takes the
+      // operand's bits at face value (`rt/softfloat/libgcc.c`); a composition would read it as x87 does.
+      bool rounding = id == Intrinsic::lround || id == Intrinsic::llround;
+      if (rounding && type->isX86_FP80Ty() && call->getType()->isIntegerTy(64)) {
+        replacement = this->call(b, id == Intrinsic::lround ? "lroundl" : "llroundl", call->getType(), {x}, call);
+        break;
+      }
       Value *rounded = unary(id == Intrinsic::lrint || id == Intrinsic::llrint ? "rint" : "round");
       replacement = toInteger(b, rounded, cast<IntegerType>(call->getType()), true, call);
       break;

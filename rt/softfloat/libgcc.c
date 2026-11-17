@@ -614,6 +614,45 @@ long double roundl(long double a) {
   return of_x80(extF80_roundToInt(x80_of(a), softfloat_round_near_maxMag, false));
 }
 
+/* lroundl and llroundl (`llvm.lround`, `llvm.llround` on long double, and the library calls). glibc's are
+ * software (sysdeps/ieee754/ldbl-96, s_llroundl.c and s_lroundl.c, the same on x86-64 where long is 64 bits):
+ * integer operations on the two 32-bit halves of the significand that never read the integer bit, so they take
+ * an encoding no arithmetic produces at face value (an unnormal zero at exponent 0x3FFF rounds to 0, where
+ * roundl followed by a conversion, which reads it as x87 does, gives the integer indefinite). This follows them
+ * bit for bit (measured against glibc on every sign and exponent: `front/tests/c/p0_x87_matrix.c`, mode
+ * `rounding`): below exponent 0x3FFE the result is 0, at 0x3FFE it is 1 (signed) whatever the significand;
+ * up to 0x3FFF + 30 half is added at the binary point of the high half (a carry out of it shifts in a set
+ * integer bit and moves the point one place) and the integral part taken; up to 0x3FFF + 62 the same in the
+ * low half, with a carry into the high half. From 0x3FFF + 63 (the integer is too large, or the operand is an
+ * infinity or a NaN) glibc converts the operand itself as x87 does (`(long long int) x`), which `__fixxfdi`
+ * gives. The sign is applied last, wrapping. */
+static long long round_to_integer(long double a) {
+  extFloat80_t x = x80_bits(a);
+  int_fast32_t exponent = (int_fast32_t)(x.signExp & 0x7FFF) - 0x3FFF;
+  uint32_t high = (uint32_t)(x.signif >> 32), low = (uint32_t)x.signif;
+  uint64_t result;
+  if (exponent < 0) {
+    result = exponent == -1;
+  } else if (exponent < 31) {
+    uint32_t sum = high + (UINT32_C(0x40000000) >> exponent);
+    if (sum < high) {
+      sum = sum >> 1 | UINT32_C(0x80000000);
+      ++exponent;
+    }
+    result = sum >> (31 - exponent);
+  } else if (exponent < 63) {
+    uint32_t sum = low + (UINT32_C(0x80000000) >> (exponent - 31));
+    uint64_t integral = high;
+    if (sum < low) ++integral;
+    result = exponent == 31 ? integral : integral << (exponent - 31) | sum >> (63 - exponent);
+  } else {
+    return __fixxfdi(a);
+  }
+  return (long long)((x.signExp & 0x8000) ? -result : result);
+}
+long lroundl(long double a) { return round_to_integer(a); }
+long long llroundl(long double a) { return round_to_integer(a); }
+
 /* fmin and fmax (`llvm.minnum`, `llvm.maxnum`): what clang's x86-64 code computes for them, which is not a
  * call but SSE's minsd/maxsd with a NaN test (X86ISelLowering's combineFMinNumFMaxNum): fmin(x, y) is
  * `isnan(x) ? y : y < x ? y : x`, and fmax the same with `>`. So a NaN operand gives the other operand, and of

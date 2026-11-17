@@ -3,8 +3,8 @@
  * natively with renamed symbols. No copy of the runtime's encoding classifier is used as the oracle.
  * Raw 80-bit equality excludes six ABI padding bytes. Out-of-range integer conversions are measured
  * as target behavior, not claimed to be defined C. Noncanonical fmal/half truncation are known debts.
- * Mode `rounding` puts glibc's software roundevenl and roundl against the runtime on every 16-bit sign and
- * exponent.
+ * Mode `rounding` puts glibc's software roundevenl, roundl, lroundl and llroundl against the runtime on every
+ * 16-bit sign and exponent.
  */
 #include <math.h>
 #include <stdint.h>
@@ -54,6 +54,8 @@ long rt___gtxf2(long double,long double);
 long rt___gexf2(long double,long double);
 long rt___unordxf2(long double,long double);
 long double rt_sqrtl(long double);
+long rt_lroundl(long double);
+long long rt_llroundl(long double);
 long double rt_floorl(long double);
 long double rt_ceill(long double);
 long double rt_truncl(long double);
@@ -108,13 +110,15 @@ static void unary(void) {
   LD("trunc",truncl(a),rt_truncl(a));
   LD("rint",rintl(a),rt_rintl(a));
   LD("nearbyint",nearbyintl(a),rt_nearbyintl(a));
-  /* glibc roundevenl and roundl are software on this target, unlike rintl; the runtime follows them on
-     every encoding. fmal and the half/bfloat truncations are software too and still differ on noncanonical
+  /* glibc roundevenl, roundl, lroundl and llroundl are software on this target, unlike rintl; the runtime
+     follows them on every encoding. fmal and the half/bfloat truncations are software too and still differ on noncanonical
      encodings (known debts), so only canonical inputs meet them here. */
   uint16_t e; U m;
   memcpy(&e,(const char *)&a+8,2); memcpy(&m,(const void *)&a,8);
   LD("roundeven",__builtin_roundevenl(a),rt_roundevenl(a));
   LD("round",roundl(a),rt_roundl(a));
+  CHECK("lround",long,lroundl(a),rt_lroundl(a),8);
+  CHECK("llround",long long,llroundl(a),rt_llroundl(a),8);
   if (((e & 0x7fff) == 0 && !(m >> 63)) || ((e & 0x7fff) != 0 && (m >> 63)))
   {
     LD("fma-x11",fmal(a,1.L,1.L),rt_fmal(a,1.L,1.L));
@@ -217,6 +221,8 @@ static void rounding(void) {
       memcpy(&v,&bits,8); memcpy((char *)&v+8,&se,2); memcpy((void *)&a,&v,16);
       LD("roundeven",__builtin_roundevenl(a),rt_roundevenl(a));
       LD("round",roundl(a),rt_roundl(a));
+      CHECK("lround",long,lroundl(a),rt_lroundl(a),8);
+      CHECK("llround",long long,llroundl(a),rt_llroundl(a),8);
     }
   }
 }

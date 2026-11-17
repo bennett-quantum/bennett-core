@@ -1528,15 +1528,16 @@ the budget of a call with a fault value (`call_budget_replay.rs`).
 ## Known weak spots
 
 - Independent fp-front testing added two software-rounding witnesses: `lroundl` and `llroundl` on
-  unsupported x87 exponent `0x3fff`/significand zero return INT64_MIN on the device, versus glibc's 0,
-  at both `-O0` and `-O2`. The front composes roundl with integer conversion; glibc reads the
-  significand in software. Route: follow that software integer rounding for noncanonical inputs.
+  unsupported x87 exponent `0x3fff`/significand zero returned INT64_MIN on the device, versus glibc's 0,
+  at both `-O0` and `-O2`. **Fixed on 2026-11-17:** the runtime's `lroundl` and `llroundl` follow glibc's
+  software bit operations, and the front calls them for long double (`rt/softfloat/README.md`); both
+  witnesses run by default and the 132 excluded tuples are compared (all agree).
   A third ignored witness records a native-reference divergence: LLVM 18's optimized bfloat signbit
   returns zero even for -1, while the device and native O0 return the correct 1. This is not evidence
   of an incorrect device sign bit. All three were explicitly run and failed; no production fix in
-  this testing pass. The fast pipeline probes retain 4,224 exact powi results, 17,028 rounding
-  results and 2,430 classification results across both optimization levels, with only the precisely
-  identified witnessed tuples excluded. File/stdin/output admission probes pass. Full scope, counts,
+  this testing pass. The fast pipeline probes retain 4,224 exact powi results, 17,292 rounding
+  results (17,028 before the lroundl fix, the rest excluded) and 2,430 classification results across both
+  optimization levels, with only the precisely identified bfloat tuples excluded. File/stdin/output admission probes pass. Full scope, counts,
   reproduction and limits: `rt/softfloat/README.md`, "Independent fp-front follow-up".
 
 - Independent conformance testing of the noncanonical x87/input fixes (`front/tests/tests/p0_independent.rs`):
