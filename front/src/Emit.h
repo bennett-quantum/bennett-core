@@ -52,6 +52,9 @@ public:
   // Whether calls of `function` may run coherently: defined, no quantum operations, and LLVM shows it
   // writes no memory that outlives the call.
   bool isCoherent(const llvm::Function *function) const;
+  // Whether a call of `function` whose arguments depend on a qubit may be applied whole: defined and with no
+  // quantum operations, whatever memory it writes (its writes are undone when the applied call ends).
+  bool isApplicable(const llvm::Function *function) const;
   std::string functionName(const llvm::Function *function) const;
   // Refuses to take the address of `function` if LLVM may assume more alignment of it than its device
   // address (its index plus 1) has.

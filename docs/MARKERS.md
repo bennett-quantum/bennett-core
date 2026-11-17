@@ -77,6 +77,38 @@ unsigned long long bennett_measure(const void *variable);
 Measures the whole qubit variable `variable` points to, in the computational basis, and returns its value
 zero-extended. Afterwards the variable holds that value (it is known), and ordinary code may use both.
 
+## Calls with qubit-dependent arguments
+
+A call whose arguments depend on a qubit, to a function of the program that performs no quantum operation
+(directly or through anything it calls), is **applied whole**: `r ^= f(x)` becomes one `apply` of a function
+that calls `f`, with one step budget (`--region-budget`) for everything `f` does, its loops, nested loops and
+calls included. `f` may write memory, allocate and free on the heap, keep static buffers and use files of the
+file model. For each definite value of the arguments it runs on a private copy of memory, and all it wrote is
+undone when it ends: **only its result survives**, XORed into the variable it is stored into. A value of the
+arguments for which `f` needs more than the budget gives the fault `budget` for that value only; a console write
+(`__bennett_effect`, or a musl `printf` of a line, which writes stdout out) or `exit` inside gives `effect_in_region` or
+`exit_in_region` for the values that reach it. `docs/DESIGN.md`, "Applied calls", says what this means.
+
+Natively `f`'s writes would remain. Where the front sees that code after the call reads memory the call writes
+(a global variable, or memory passed to it by pointer, read directly or by a function called directly), it
+warns, and still lowers the program:
+
+```text
+warning: the call of @f depends on a qubit and is applied whole: its writes are undone when it ends, but code after it reads @counter, which it writes (at p.c:9:42), at p.c:7:8
+```
+
+The value is computed where it is used, not where the call is: memory the call reads must not change in
+between, and a value used twice is computed twice, each time from the same memory.
+
+The rule is about calls, so results depend on calls reaching the front as calls. With the project's flags
+(`-O0 -Xclang -disable-O0-optnone`, as `front/test.sh` compiles) every function keeps its calls. With clang
+`-O2`, clang may already have inlined a small function into its caller, and its writes are then ordinary
+stores with qubit-dependent addresses or values, which are refused; `noinline` keeps the call.
+
+Under a condition that depends on a qubit (`if (q) f(n);`, `if (q) y ^= f(n);`), a call of a function that may
+write memory is refused: natively its writes survive the condition, and keeping them would need the value of
+the condition in ordinary memory.
+
 ## Not handled yet
 
 Each is refused with `not handled yet: <what>, at <file:line:col>`: under the control of a value that
@@ -86,11 +118,14 @@ call of a function that may write memory, or a volatile read; a branch on such a
 rejoin before the function returns; an update of a qubit variable that is not a bijection listed above
 (`x = x * x`, `x += x`): that needs the old value kept, which has no form yet; a qubit variable passed to a
 function, or wider than 8 bytes; a write into part of a qubit variable; a value that depends on a qubit used
-by ordinary code (returned, stored to ordinary memory, passed to a function that writes memory, used as an
-address of memory that is not constant), or by an access with an effect of its own (an atomic update, a
+by ordinary code (returned, stored to ordinary memory, used as an address of memory that is not constant), or
+by an access with an effect of its own (an atomic update, a
 volatile or atomic read), even when its result is unused; a value read from a qubit variable used after that
 variable changed; a loop that re-initialises a qubit variable whose known value differs from pass to pass; a
-`setjmp` in a function with qubit variables. `bennett_bit` with an index that is not constant, or its result
+`setjmp` in a function with qubit variables; a call with qubit-dependent arguments whose result is not used,
+to a function that may write memory (applied, it would do nothing); two such calls in one computation when one
+of them may write memory (each applied call starts from the memory as it was, so the second must not see the
+first's writes); such a call through a pointer, or of a function with no definition. `bennett_bit` with an index that is not constant, or its result
 used other than by a gate.
 
 ## Device calls (not markers)
@@ -102,8 +137,9 @@ _Noreturn void __bennett_exit(int status);
 
 Declared in `bennett.h`, this emits one byte to the device console (`effect`). It is journalled in reversible
 execution and faults with `effect_in_region` inside an applied function. It does not make its callers control
-functions: a call under qubit control is refused as an ordinary call that may write memory. Definitions, other
-signatures, and attributes that permit deleting or moving the call are refused by name, as for markers.
+functions: a call of it with an argument that depends on a qubit is refused (it has no definition to apply), and
+a call under qubit control as an ordinary call that may write memory. Definitions, other signatures, and
+attributes that permit deleting or moving the call are refused by name, as for markers.
 
 `__bennett_exit` lowers to the `exit` terminator: it ends the whole run with `status` as the entry's result,
 including from a nested call or loop. The selected entry must return `i32`; another result type gives the

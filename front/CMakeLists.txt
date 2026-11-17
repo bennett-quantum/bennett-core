@@ -26,6 +26,7 @@ add_executable(bennett-front
   src/Outline.cpp
   src/Emit.cpp
   src/Control.cpp
+  src/Applied.cpp
   src/Predicate.cpp
   src/InPlace.cpp
   src/Startup.cpp

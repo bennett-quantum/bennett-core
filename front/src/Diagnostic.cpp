@@ -58,6 +58,10 @@ void misuse(const std::string &what, const Value *at) {
   std::exit(2);
 }
 
+void warning(const std::string &what, const Value *at) {
+  errs() << "warning: " << what << ", at " << locationOf(at) << "\n";
+}
+
 void fail(const std::string &what) {
   errs() << "error: " << what << "\n";
   std::exit(2);

@@ -214,6 +214,25 @@ pub fn state_before_first_measurement_within(
     }
 }
 
+/// The state just before and just after the first `apply` that `entry` itself executes (not one inside a
+/// function it calls), run from `entry` with `options`.
+pub fn state_around_first_apply(module: &ValidModule, entry: &str, options: Options) -> (Snapshot, Snapshot) {
+    let function = module.function_named(entry).unwrap_or_else(|| panic!("no function @{entry}"));
+    let mut executor = Executor::new(module, function, &[], options).unwrap_or_else(|e| panic!("@{entry}: {e}"));
+    loop {
+        let before = executor.snapshot();
+        let frame = before.classical.frames.last().unwrap_or_else(|| panic!("@{entry} has no frame"));
+        let at = module.function(frame.func).block(frame.block).insts.get(frame.inst);
+        if frame.func == function && matches!(at, Some(Inst::Apply { .. })) {
+            assert_eq!(executor.step(), None, "@{entry}: the apply ended the run");
+            return (before, executor.snapshot());
+        }
+        if let Some(outcome) = executor.step() {
+            panic!("@{entry} ended ({outcome:?}) before its first apply");
+        }
+    }
+}
+
 /// The names of the registers `name` allocates in its entry block, in order: the columns of the quantum
 /// state while they are all live and nothing was allocated before.
 pub fn registers(module: &ValidModule, name: &str) -> Vec<String> {

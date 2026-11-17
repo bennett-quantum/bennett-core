@@ -356,6 +356,55 @@ Two things the first C programs taught:
 - "The operands are still there" is not enough to uncompute; they must be unchanged. A value read from a qubit
   before a gate and used after it cannot be uncomputed, and is refused.
 
+## Applied calls
+
+The language rule, in plain words: **a call whose arguments depend on a qubit, to an ordinary function, is
+applied whole; the writes it makes are undone when it ends, and only its result survives.** An *ordinary
+function* is one of the program's functions that performs no quantum operation, directly or through anything
+it can call (`controlFunctions`, `Outline.h`). The rule follows from what `apply` is: for each definite value
+of the arguments the function runs on a private copy of memory, its result is XORed into the target, and the
+private memory is discarded. Nothing more is needed for a function that writes memory than for one that only
+reads it, and nothing about the function's size: musl's allocator, its stdio buffers, the file model, the
+clock counter and the entropy image are ordinary device code over device memory (`rt/musl/README.md`), so
+under `apply` they run on the private copy and are undone with it.
+
+- **One budget for the whole call.** The `apply` has one step bound `B` (`--region-budget`) for everything the
+  function does: its loops, nested loops whose trip counts depend on the arguments, its calls, allocation and
+  file operations. There is no bound per loop and no unrolling. A value of the arguments that needs more
+  than `B` steps gives the fault `budget` for that value only; the others get their result.
+- **What is a fault inside.** Console output (`effect`) and `exit` cannot be undone; reached inside the
+  applied call they are the named faults `effect_in_region` and `exit_in_region` for the values that reach
+  them. musl writes its stdout buffer out at a newline: a `printf` of a line inside
+  is the fault, while output without a newline stays in the buffer, which is memory and is undone with the
+  rest (`front/tests/tests/applied_calls.rs`).
+- **Where the value is computed.** The front applies the computation of a value where the value is stored
+  into a qubit variable or controls a gate, not where the call is. So the memory the call reads must be the
+  same there (`ControlAnalysis::memoryUnchangedBetween`; refused by name otherwise), and a value used several
+  times is computed again for each use, each time from the same memory, so each time with the same result.
+- **What the front refuses.** A call whose result is not used, to a function that may write memory: applied,
+  it would do nothing at all, while its writes are its only purpose. Two such calls in one computation when
+  one may write memory: under the rule each starts from the memory as it was, but in one applied function the
+  second would see the first's writes; the route is one register for each call's result, computed and
+  cleared around the computation that uses it. A call under a qubit-dependent condition of a function that
+  may write memory (outlined, "Conditional jumps, joins and loops" above): its writes natively survive the
+  condition.
+- **The rule is about calls**, so what a program computes depends on its calls reaching the front as calls.
+  With the project's clang flags (`-O0 -Xclang -disable-O0-optnone`, `front/test.sh`) clang marks every
+  function `noinline`, and the front's own pipeline removes `noinline` only together with `optnone`, so every
+  call stays a call (an `always_inline` function is inlined, as the programmer asked). IR compiled otherwise
+  (clang `-O2`, say) may arrive with a small callee already inlined: its writes are then stores in the
+  calling function with qubit-dependent addresses or values, which the front refuses by name today. The front
+  does not yet check where IR came from; mark such a callee `noinline`, or compile with the project's flags.
+- **What the warning means.** Natively the writes would remain, so a program whose later code reads what the
+  applied call wrote computes something else on the device. The rule is the language's, not a defect, but
+  where the front sees the case it says so: a warning (the program is still lowered) when the called function,
+  or a function it calls directly, writes a global variable or memory passed to it by pointer that code after
+  the call in the same function reads, directly or through a function it calls directly (`Applied.h`). Writes
+  through other pointers (into the heap, say) and reads through indirect calls are not followed, so the absence
+  of the warning proves nothing.
+- **`--taint-all`** does not move an ordinary call with ordinary arguments into an `apply`: there its writes
+  must survive, so only calls of functions that read memory at most are treated as computable coherently.
+
 ## Non-local jumps (`setjmp`, `longjmp`)
 
 C's `setjmp` saves "the calling environment" and `longjmp` returns to it, from any depth. On a machine with
@@ -389,12 +438,9 @@ from any depth:
   before the jump is undone (every later write to them is journalled and undone first). So un-running through
   jumps restores the state exactly, checked step by step (`crates/exec/tests/setjmp.rs`).
 - **In an applied function** a jump within it works for every argument value, the record living in the
-  private memory; a jump to a frame outside it is `bad_longjmp` for every argument value. From C,
-  though, a function that uses `setjmp` is not applied: LLVM must treat `setjmp` as an opaque call that
-  may write any memory (a second return can follow any write), so the front sees a function that writes memory
-  and refuses a qubit-dependent call of it by name. A debt, with its route: the front decides what may be
-  applied from its own summary in which `setjmp` writes only its buffer and `longjmp` only reads it (`apply`
-  discards the private memory anyway), without giving that summary to LLVM's optimiser.
+  private memory; a jump to a frame outside it is `bad_longjmp` for every argument value. From C, a
+  qubit-dependent call of a function that uses `setjmp` and `longjmp` within itself is applied whole like any
+  other call of an ordinary function ("Applied calls"; `front/tests/tests/setjmp.rs`).
 - **A `setjmp` in a function with qubit variables** is refused by name. The front's facts about each qubit
   variable (its value known, or held in its register only) and its checks that a variable or memory is
   unchanged between two points follow the function's control-flow edges; a `longjmp` resumes the function

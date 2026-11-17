@@ -111,17 +111,6 @@ fn what_is_not_handled_is_refused_by_name() {
             "the address of @_setjmp",
             2,
         ),
-        // setjmp's effects are opaque to LLVM (it returns twice), so a function using it writes memory as
-        // far as the front can tell and is not run coherently: a debt (docs/DESIGN.md, "Non-local jumps").
-        (
-            "setjmp_controlled",
-            "#include \"bennett.h\"\n#include <setjmp.h>\n__attribute__((noinline)) unsigned char f(unsigned char x) \
-             {\n  jmp_buf b;\n  int r = setjmp(b);\n  if (r == 0) longjmp(b, x + 1);\n  return (unsigned char)r;\n}\n\
-             int main(void) {\n  unsigned char x = 0, y = 0;\n  bennett_h(bennett_bit(&x, 0));\n  y ^= f(x);\n  \
-             return (int)(bennett_measure(&x) + bennett_measure(&y));\n}\n",
-            "a call that depends on a qubit, to a function that writes memory",
-            12,
-        ),
         (
             "frame_address",
             "volatile void *p;\n__attribute__((noinline)) void f(void) { p = __builtin_frame_address(1); }\n\
@@ -136,6 +125,28 @@ fn what_is_not_handled_is_refused_by_name() {
             let error = lower_text(&source, name, flags, &[]).expect_err(name);
             assert!(error.contains(message), "{name} {flags:?}: {error}");
             assert!(error.contains(&format!("{name}.c:{line}")) || !error.contains(".c:"), "{name}: {error}");
+        }
+    }
+}
+
+/// A qubit-dependent call of a function that uses `setjmp` and `longjmp` within itself is applied whole
+/// (docs/DESIGN.md, "Applied calls"): the jump record lives in the applied run's private memory. For
+/// `x` in {0, 1}, `longjmp(b, x + 1)` makes `setjmp` return `x + 1`, which `f` returns (C 7.13.2.1).
+#[test]
+fn a_qubit_dependent_call_of_a_function_that_jumps_within_itself_is_applied() {
+    let text = "#include \"bennett.h\"\n#include <setjmp.h>\n__attribute__((noinline)) unsigned char f(unsigned char x) \
+                {\n  jmp_buf b;\n  int r = setjmp(b);\n  if (r == 0) longjmp(b, x + 1);\n  return (unsigned char)r;\n}\n\
+                int test(void) {\n  unsigned char x = 0, y = 0;\n  bennett_h(bennett_bit(&x, 0));\n  y ^= f(x);\n  \
+                return (int)(bennett_measure(&x) + bennett_measure(&y));\n}\n";
+    let source = write_c("setjmp_applied", text);
+    for flags in [CLANG_FLAGS, CLANG_O2_FLAGS] {
+        let module = lower(&source, "setjmp_applied", flags, &[]);
+        let (columns, state) = bennett_front_tests::branches(&module, "test", &[], 4);
+        assert_eq!(columns, ["x", "y"], "{flags:?}");
+        let configurations: Vec<Vec<u64>> = state.iter().map(|(config, _)| config.clone()).collect();
+        assert_eq!(configurations, [vec![0, 1], vec![1, 2]], "{flags:?}");
+        for (_, amplitude) in state {
+            assert!((amplitude.re - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-12 && amplitude.im.abs() < 1e-12);
         }
     }
 }

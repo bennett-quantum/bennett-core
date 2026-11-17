@@ -173,6 +173,10 @@ bool ModuleWriter::isCoherent(const Function *function) const {
   return function && !function->isDeclaration() && !isControl(function) && function->onlyReadsMemory();
 }
 
+bool ModuleWriter::isApplicable(const Function *function) const {
+  return function && !function->isDeclaration() && !isControl(function);
+}
+
 void ModuleWriter::checkFunctionAddress(const Function *function) const {
   uint64_t align = function->getPointerAlignment(layout()).value();
   if (align > 1) {

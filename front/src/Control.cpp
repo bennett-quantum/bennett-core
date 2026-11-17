@@ -17,6 +17,7 @@
 // `apply` itself (a region fault) and reports a release of a register that was not zero, both its own
 // diagnostics.
 
+#include "Applied.h"
 #include "Diagnostic.h"
 #include "Emit.h"
 #include "Markers.h"
@@ -131,6 +132,8 @@ private:
   // bits, when the computation has no ordinary leaves and those bits are few.
   bool provesFlipByCases(const Slice &slice, const Value *root, const Storage &target);
   bool sliceable(const Value *value) const;
+  // Refuses by name a call with qubit-dependent arguments that cannot be applied whole (Applied.h).
+  void requireApplicable(const CallBase &call) const;
 };
 
 // Stand-ins for the lines that allocate and release the entry fault registers.
@@ -212,9 +215,16 @@ void ControlWriter::instruction(const Instruction &inst) {
     const auto *load = dyn_cast<LoadInst>(&inst);
     bool readsRegister = load && analysis.access(load->getPointerOperand());
     if (const auto *call = dyn_cast<CallBase>(&inst)) {
-      if (!module.isCoherent(call->getCalledFunction())) {
-        notHandled("a call that depends on a qubit, to a function that writes memory or performs quantum operations",
+      requireApplicable(*call);
+      // Applied whole where its result is stored: its writes are undone when it ends, so a call whose
+      // result nothing uses would do nothing at all.
+      if (!call->onlyReadsMemory() && call->use_empty()) {
+        notHandled("a call that depends on a qubit, whose result is not used, to a function that may write "
+                   "memory (applied, its writes would be undone; writes that must survive are not handled yet)",
                    &inst);
+      }
+      if (!call->onlyReadsMemory()) {
+        warnUndoneWrites(*call, analysis.dominators);
       }
     } else if (!readsRegister && inst.mayHaveSideEffects()) {
       notHandled("an effect on memory (the instruction `" + std::string(inst.getOpcodeName()) +
@@ -442,6 +452,14 @@ std::string ControlWriter::converted(const Value *value, unsigned bits, bool typ
   return result;
 }
 
+void ControlWriter::requireApplicable(const CallBase &call) const {
+  if (isa<IntrinsicInst>(call) || !module.isApplicable(call.getCalledFunction())) {
+    notHandled("a call that depends on a qubit, to a function that performs quantum operations, is not defined, "
+               "or is called through a pointer",
+               &call);
+  }
+}
+
 bool ControlWriter::sliceable(const Value *value) const {
   const auto *inst = dyn_cast<Instruction>(value);
   if (!inst || isa<PHINode>(inst) || isa<LoadInst>(inst) || isa<AllocaInst>(inst)) {
@@ -457,6 +475,7 @@ bool ControlWriter::sliceable(const Value *value) const {
 Slice ControlWriter::collect(const Value *root, const Instruction &sink) {
   Slice slice;
   std::set<const Value *> seen;
+  std::vector<const CallBase *> calls;
   std::function<void(const Value *)> visit = [&](const Value *value) {
     value = resolve(value);
     if (!seen.insert(value).second || isa<Constant>(value)) {
@@ -488,15 +507,21 @@ Slice ControlWriter::collect(const Value *root, const Instruction &sink) {
       }
       visit(load->getPointerOperand());
     } else if (const auto *call = dyn_cast<CallBase>(inst)) {
-      if (isa<IntrinsicInst>(call) || !module.isCoherent(call->getCalledFunction())) {
-        notHandled("a call that depends on a qubit, to a function that writes memory or performs quantum "
-                   "operations",
-                   inst);
-      }
-      // The applied function runs where the value is stored, not where the call was: it must read the
+      requireApplicable(*call);
+      // The applied function runs where the value is stored, not where the call was: it must start from the
       // same memory there.
       if (!call->getCalledFunction()->doesNotAccessMemory() && !analysis.memoryUnchangedBetween(call, &sink)) {
         notHandled("a call that depends on a qubit and reads memory that may change before its result is used",
+                   inst);
+      }
+      // Each applied call starts from the memory as it was and its writes are undone when it ends; in one
+      // computation a second call would see the first's writes.
+      calls.push_back(call);
+      if (calls.size() > 1 && std::any_of(calls.begin(), calls.end(), [](const CallBase *c) {
+            return !c->onlyReadsMemory();
+          })) {
+        notHandled("two calls that depend on a qubit in one computation, one of which may write memory (each would "
+                   "have to start from the memory as it was)",
                    inst);
       }
       for (const Use &arg : call->args()) {

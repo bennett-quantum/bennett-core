@@ -20,6 +20,10 @@ std::string locationOf(const llvm::Value *at);
 // Stops with "error: <what>, at <location>": a misuse of a marker, or input that is not a program.
 [[noreturn]] void misuse(const std::string &what, const llvm::Value *at);
 
+// Prints "warning: <what>, at <location>" and goes on: the program is lowered, but may not do what the C
+// source would do natively (docs/DESIGN.md says what each warning means).
+void warning(const std::string &what, const llvm::Value *at);
+
 // Stops with "error: <what>" without a location.
 [[noreturn]] void fail(const std::string &what);
 
