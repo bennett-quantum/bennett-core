@@ -130,15 +130,38 @@ impl<'m> Executor<'m> {
             self.frames_left();
         }
         let caller = *self.top();
-        let Inst::CallBudget { dst, fault: code, .. } =
-            &self.function(caller.func).block(caller.block).insts[caller.inst]
-        else {
-            unreachable!("a frame with a budget was entered by a call with a budget")
-        };
-        if let Some(dst) = dst {
-            self.write_slot(*dst, 0);
+        match &self.function(caller.func).block(caller.block).insts[caller.inst] {
+            Inst::CallBudget { dst, fault: code, .. } => {
+                if let Some(dst) = dst {
+                    self.write_slot(*dst, 0);
+                }
+                self.write_slot(*code, u128::from(fault.code()));
+            }
+            // An `apply` computed as the forms: `%y` and `%c` are the executor's own (`forms.rs`).
+            Inst::Apply { .. } => self.forms_values = Some((0, u128::from(fault.code()))),
+            Inst::Binary { .. }
+            | Inst::Compare { .. }
+            | Inst::Select { .. }
+            | Inst::Cast { .. }
+            | Inst::Load { .. }
+            | Inst::Store { .. }
+            | Inst::Alloca { .. }
+            | Inst::StackSave { .. }
+            | Inst::StackRestore { .. }
+            | Inst::Setjmp { .. }
+            | Inst::ReturnAddress { .. }
+            | Inst::Call { .. }
+            | Inst::CallIndirect { .. }
+            | Inst::FuncAddr { .. }
+            | Inst::Effect { .. }
+            | Inst::Qalloc { .. }
+            | Inst::Qfree { .. }
+            | Inst::Gate { .. }
+            | Inst::GateAt { .. }
+            | Inst::Measure { .. }
+            | Inst::Mark { .. }
+            | Inst::Rewind { .. } => unreachable!("a frame with a budget was entered by a call with a budget"),
         }
-        self.write_slot(*code, u128::from(fault.code()));
         if let Some(journal) = &mut self.journal {
             journal.push_jump(discarded);
         }
@@ -183,12 +206,7 @@ impl<'m> Executor<'m> {
             Inst::StackRestore { pointer } => self.stack_restore(self.read_word(pointer))?,
             Inst::Call { callee, args, .. } => self.call(*callee, args, None)?,
             Inst::CallBudget { callee, args, budget, .. } => {
-                // A callee whose frame does not fit faults inside the call, as an applied function's does: the
-                // code is the call's, in every world alike (the frame is tried before any read splits).
-                match self.call(*callee, args, Some(self.read_word(budget))) {
-                    Err(Fault::StackOverflow) => return self.deliver_fault(self.frames.len(), Fault::StackOverflow),
-                    entered => entered?,
-                }
+                self.call_with_budget(*callee, args, self.read_word(budget))?;
             }
             Inst::CallIndirect { signature, target, args, .. } => {
                 let callee = self.module.function_at(self.read_word(target));
@@ -585,6 +603,17 @@ impl<'m> Executor<'m> {
         Ok(())
     }
 
+    /// The call of a call with a budget, at the top frame's position (the instruction, or an `apply` computed
+    /// as the forms, `forms.rs`). A callee whose frame does not fit faults inside the call, as an applied
+    /// function's does: the code is the call's, in every world alike (the frame is tried before any read
+    /// splits).
+    pub(crate) fn call_with_budget(&mut self, callee: FuncId, args: &'m [Operand], budget: u64) -> Result<(), Halt> {
+        match self.call(callee, args, Some(budget)) {
+            Err(Fault::StackOverflow) => self.deliver_fault(self.frames.len(), Fault::StackOverflow),
+            entered => Ok(entered?),
+        }
+    }
+
     /// Calls `callee`. An argument that is a register passed to an integer parameter reads the register
     /// as an integer: if the world's configurations disagree on its value, the world splits into one world
     /// per value first (`docs/DESIGN.md`, "Worlds"), and the journal notes the read, which un-running the
@@ -749,6 +778,10 @@ impl<'m> Executor<'m> {
         // A call with a budget gives the fault code 0 on a return.
         if let Some(code) = call.fault_result() {
             self.write_slot(code, 0);
+        }
+        // An `apply` computed as the forms: `%y` and `%c` are the executor's own (`forms.rs`).
+        if let Inst::Apply { .. } = call {
+            self.forms_values = Some((value.expect("a region's callee returns an integer"), 0));
         }
         self.record(Undo::Return);
         self.advance();

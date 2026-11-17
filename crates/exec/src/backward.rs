@@ -306,7 +306,9 @@ impl<'m> Executor<'m> {
         if call.result().is_some() {
             self.restore_result();
         }
-        let guard = call.fault_result().map(|_| self.pop_word() as u64);
+        // The callee of a call with a budget, or of an `apply` computed as the forms, kept its budget.
+        let budgeted = call.fault_result().is_some() || matches!(call, Inst::Apply { .. });
+        let guard = budgeted.then(|| self.pop_word() as u64);
         let callee_stack_pointer = self.pop_word() as u64;
         let packed = self.pop_word() as u64;
         let (func, block) = (FuncId((packed >> 32) as u32), BlockId(packed as u32));

@@ -347,6 +347,9 @@ pub struct Executor<'m> {
     /// Whether the current world's last step ended it with a fault found by inspecting the state
     /// ([`Halt::Inspected`]): read by a region, which must not make it a fault code.
     pub(crate) inspected: bool,
+    /// `%y` and `%c` of an `apply` computed as the forms, given by the callee's return or catch
+    /// (`forms.rs`).
+    pub(crate) forms_values: Option<(u128, u128)>,
     pub(crate) region_faults: u64,
     pub(crate) region_fault_weight: f64,
     pub(crate) region_fault_max_weight: f64,
@@ -455,6 +458,7 @@ impl<'m> Executor<'m> {
             leftovers_made: Vec::new(),
             taking_back: Vec::new(),
             inspected: false,
+            forms_values: None,
             region_faults: 0,
             region_fault_weight: 0.0,
             region_fault_max_weight: 0.0,

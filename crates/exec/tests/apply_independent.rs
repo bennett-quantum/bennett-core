@@ -276,6 +276,7 @@ fn amplitude_peak_probe() {
     let mode = match std::env::var("BENNETT_TEST_MODE").as_deref() {
         Ok("history") => ApplyMode::History,
         Ok("branches") => ApplyMode::Branches,
+        Ok("forms") => ApplyMode::Forms,
         _ => ApplyMode::Compare,
     };
     let p = load(&large_region(bits));
@@ -288,7 +289,7 @@ fn amplitude_peak_probe() {
     assert_eq!(
         stats.region_cost.runs,
         match mode {
-            ApplyMode::History => 4,
+            ApplyMode::History | ApplyMode::Forms => 4,
             ApplyMode::Branches => 1 << (bits + 2),
             ApplyMode::Compare => 4 + (1 << (bits + 2)),
         }

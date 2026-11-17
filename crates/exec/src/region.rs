@@ -35,13 +35,18 @@ pub enum ApplyMode {
     /// Branch enumeration on private memory, the earlier definition, kept as the comparison. The
     /// journal-content observer always uses it (it classifies the journals of branches).
     Branches,
-    /// Both at every `apply`, from the same state; any difference in the result, the world's whole state,
-    /// its amplitudes or the counts the documents promise panics. The history result is kept.
+    /// Mark with a budget, the call with a fault value and a budget, rewind-keep: the device program's own
+    /// forms, run by the code that runs those instructions (`forms.rs`). Its counts of the run are its own.
+    Forms,
+    /// All three at every `apply`, from the same state: any difference between the idiom and the enumeration in
+    /// the result, the world's whole state, its amplitudes or the counts the documents promise panics, and so
+    /// does any difference between the idiom and the forms in the result, the world's whole state, its
+    /// amplitudes or the other worlds. The history result is kept.
     Compare,
 }
 
 impl ApplyMode {
-    /// The mode the environment variable `BENNETT_APPLY` names (`history`, `branches` or `compare`), if it
+    /// The mode the environment variable `BENNETT_APPLY` names (`history`, `branches`, `forms` or `compare`), if it
     /// is set: a switch for running a whole test suite in one mode. Any other value panics.
     pub fn from_env() -> Option<ApplyMode> {
         static MODE: OnceLock<Option<ApplyMode>> = OnceLock::new();
@@ -50,8 +55,9 @@ impl ApplyMode {
             Some(match value.as_str() {
                 "history" => ApplyMode::History,
                 "branches" => ApplyMode::Branches,
+                "forms" => ApplyMode::Forms,
                 "compare" => ApplyMode::Compare,
-                other => panic!("BENNETT_APPLY={other}: expected history, branches or compare"),
+                other => panic!("BENNETT_APPLY={other}: expected history, branches, forms or compare"),
             })
         })
     }
@@ -77,14 +83,14 @@ pub struct RegionCost {
 
 /// Where an argument's value comes from on each configuration.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Input {
+pub(crate) enum Input {
     /// A register, read as an integer: a column of the configuration.
     Register(usize),
     /// A classical value, the same on every configuration.
     Value(u128),
 }
 
-impl Executor<'_> {
+impl<'m> Executor<'m> {
     /// XORs `callee(args)` into `out`, or its fault code into `fault`, on every configuration.
     ///
     /// Every execution that faults on some configuration is counted, with the weight of the faulting
@@ -93,7 +99,7 @@ impl Executor<'_> {
     pub(crate) fn apply(
         &mut self,
         callee: FuncId,
-        args: &[Operand],
+        args: &'m [Operand],
         out: Slot,
         fault: Slot,
         budget: &Operand,
@@ -102,13 +108,19 @@ impl Executor<'_> {
         match mode {
             ApplyMode::History => self.apply_by_history(callee, args, out, fault, budget),
             ApplyMode::Branches => self.apply_by_branches(callee, args, out, fault, budget),
+            ApplyMode::Forms => self.apply_by_forms(callee, args, out, fault, budget),
             ApplyMode::Compare => self.apply_compared(callee, args, out, fault, budget),
         }
     }
 
     /// The columns of `out` and `fault` and where each argument comes from; `qubit_alias` if a target is
     /// an argument or both are one register.
-    fn region_operands(&self, args: &[Operand], out: Slot, fault: Slot) -> Result<(usize, usize, Vec<Input>), Halt> {
+    pub(crate) fn region_operands(
+        &self,
+        args: &[Operand],
+        out: Slot,
+        fault: Slot,
+    ) -> Result<(usize, usize, Vec<Input>), Halt> {
         let out = self.quantum.resolve(self.handle(out))?;
         let fault = self.quantum.resolve(self.handle(fault))?;
         let inputs = args.iter().map(|arg| self.input(arg)).collect::<Result<Vec<_>, _>>()?;
@@ -131,7 +143,7 @@ impl Executor<'_> {
     /// The fault counts of an `apply` whose faulting configurations are `faulting` (configuration, its
     /// squared amplitude, the fault), in configuration order: counted, and unless the run allows region
     /// faults, the stop to return.
-    fn count_region_faults(
+    pub(crate) fn count_region_faults(
         &mut self,
         callee: FuncId,
         faulting: &[(&Config, f64, Fault)],
@@ -584,13 +596,15 @@ impl Executor<'_> {
     fn apply_compared(
         &mut self,
         callee: FuncId,
-        args: &[Operand],
+        args: &'m [Operand],
         out: Slot,
         fault: Slot,
         budget: &Operand,
     ) -> Result<(), Halt> {
         let start = self.clone_world(None);
+        let forms_start = start.clone();
         let before = Run::of(self);
+        let forms_before = Run::of(self);
         let cost_before = self.region_cost;
         let clock = Instant::now();
         let history = self.apply_by_history(callee, args, out, fault, budget);
@@ -630,6 +644,36 @@ impl Executor<'_> {
                     (a, b) => a.is_none() && b.is_none(),
                 }),
             "apply @{name}: the other worlds"
+        );
+        // The forms, from the same state again: the idiom's result, machine state, amplitudes, history state,
+        // run state and other worlds. Their counts and cost are their own (`forms.rs`).
+        let mut world = forms_start;
+        self.swap_world(&mut world);
+        forms_before.set(self);
+        let forms_cost = self.region_cost;
+        let forms = self.apply_by_forms(callee, args, out, fault, budget);
+        let by_forms = self.take_current();
+        let forms_run = Run::take(self);
+        self.region_cost = forms_cost;
+        // The run's counts stay the idiom's and the enumeration's (the same, compared above).
+        history_run.counters.set(self);
+        assert_eq!(history, forms, "apply @{name}: the result by history and by the forms");
+        assert!(self.same_world(&by_history, &by_forms), "apply @{name}: the machine state after the forms");
+        assert_eq!(
+            by_history.quantum.amplitudes(),
+            by_forms.quantum.amplitudes(),
+            "apply @{name}: the amplitudes after the forms"
+        );
+        assert!(self.same_history_state(&by_history, &by_forms), "apply @{name}: the history state after the forms");
+        assert_eq!(history_run.state, forms_run.state, "apply @{name}: the run's state after the forms");
+        assert!(
+            self.identical_worlds(&history_run.forked, &forms_run.forked)
+                && history_run.worlds.len() == forms_run.worlds.len()
+                && history_run.worlds.iter().zip(&forms_run.worlds).all(|(a, b)| match (a, b) {
+                    (Some(a), Some(b)) => self.identical_world(a, b),
+                    (a, b) => a.is_none() && b.is_none(),
+                }),
+            "apply @{name}: the other worlds after the forms"
         );
         let tally = Tally {
             callee: name,
@@ -695,7 +739,7 @@ fn add(a: RegionCost, b: RegionCost) -> RegionCost {
 
 /// The run's counts that both definitions of `apply` must give alike.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Counters {
+pub(crate) struct Counters {
     region_steps: u64,
     region_faults: u64,
     region_fault_weight: f64,
@@ -710,7 +754,7 @@ struct Counters {
 }
 
 impl Counters {
-    fn of(executor: &Executor<'_>) -> Self {
+    pub(crate) fn of(executor: &Executor<'_>) -> Self {
         Counters {
             region_steps: executor.region_steps,
             region_faults: executor.region_faults,
@@ -726,7 +770,7 @@ impl Counters {
         }
     }
 
-    fn set(self, executor: &mut Executor<'_>) {
+    pub(crate) fn set(self, executor: &mut Executor<'_>) {
         executor.region_steps = self.region_steps;
         executor.region_faults = self.region_faults;
         executor.region_fault_weight = self.region_fault_weight;

@@ -54,6 +54,18 @@ impl<'m> Executor<'m> {
         }
         let entry = self.open_mark(self.slot(mark)).ok_or(Fault::BadRewind)?;
         let kept = self.kept_values(keep)?;
+        let site = *self.top();
+        self.rewind_kept(entry, kept, (site.block, site.inst))
+    }
+
+    /// The rewind to the mark `entry` with the columns and values `kept`, for the rewind at `site`: its checks,
+    /// the keeps, its un-run (the instruction, or an `apply` computed as the forms, `forms.rs`).
+    pub(crate) fn rewind_kept(
+        &mut self,
+        entry: MarkEntry,
+        kept: Vec<(usize, u64)>,
+        site: (BlockId, usize),
+    ) -> Result<(), Halt> {
         // Un-running the allocation of a register (or the promotion of a memory byte to qubits) that holds
         // a kept value would discard the value.
         if kept.iter().any(|&(column, _)| self.quantum.allocation_number(column) > entry.allocations) {
@@ -106,7 +118,6 @@ impl<'m> Executor<'m> {
         for &(column, value) in &kept {
             self.quantum.xor_register(column, value);
         }
-        let site = *self.top();
         let outer_partial = std::mem::replace(&mut self.partial, false);
         let saved = std::mem::replace(&mut self.allow_region_faults, true);
         let deferred = self.deferred.len();
@@ -122,7 +133,7 @@ impl<'m> Executor<'m> {
         let outer_made = std::mem::take(&mut self.leftovers_made);
         self.rewinding += 1;
         let from = self.forked.len();
-        let result = self.unwind_to_mark(entry.position, (site.block, site.inst), 0, 0);
+        let result = self.unwind_to_mark(entry.position, site, 0, 0);
         self.rewinding -= 1;
         if step {
             self.deferring = false;
@@ -145,7 +156,7 @@ impl<'m> Executor<'m> {
                     assert!(!forked, "worlds split off only where a rewind's region runs again, with a copy kept");
                     let undone = result.err().map_or(0, |(undone, _)| undone);
                     self.run_forward(undone);
-                    assert_eq!((self.top().block, self.top().inst), (site.block, site.inst), "back at the rewind");
+                    assert_eq!((self.top().block, self.top().inst), site, "back at the rewind");
                     for &(column, value) in &kept {
                         self.quantum.xor_register(column, value);
                     }

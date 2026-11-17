@@ -1314,6 +1314,20 @@ Final repository checks after rebasing on `bd2e384`: cargo test 471 passed/20 ig
 discovery of all five ignored acceptance stages also pass. The measured 118-second scalar sweep is explicit experiment work, keeping it out of
 the ordinary frontend run without changing its domain or assertions.
 
+## `apply` as the forms (machine-finish step 3, 2026-11-17)
+
+`ApplyMode::Forms` (`BENNETT_APPLY=forms`) computes `apply` as mark budget B + 3, the call with a fault value
+and a budget, and rewind-keep, through the code of those instructions; compare mode now computes every `apply`
+by the idiom, by branch enumeration and by the forms and stops at any difference of the forms from the idiom
+in result, state, journal, amplitudes, history state, run state and other worlds. Every test of the workspace
+passes in compare mode (`cargo test` 495, `front/test.sh` 182 with 28,967 `apply` executions compared). The
+differences the decisions allow (time: the forms take `B + 3` of the clock where the arguments read a qubit;
+an outer mark's budget bounds the forms of an `apply` inside it) are witnesses in
+`crates/exec/tests/apply_forms.rs`; the correspondence of `qalloc` and `qfree` with qubits in memory is written
+down in `docs/DESIGN.md`, "The forms beside `qalloc` and `qfree`", with `register_forms.rs`. `apply`, `qalloc`
+and `qfree` stay first-class; nothing was migrated. Found on the way and fixed: running again was not charged to
+the budget of a call with a fault value (`call_budget_replay.rs`).
+
 ## Known weak spots
 
 - Independent fp-front testing added two software-rounding witnesses: `lroundl` and `llroundl` on

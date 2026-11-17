@@ -932,7 +932,7 @@ It stays one step of the run that executes it, journalled as one record and undo
   bytes copied at splits (the journal, the overlay and the whole slot stack as each split finds it: the frames
   of callees live at a split inside the region included, which the report left out until 2026-11-16, counting
   the caller's slots of the region's start instead; `region_copy_cost_includes_slots_of_the_frame_where_memory_splits`).
-- **The comparison.** `Executor::set_apply_mode` (or `BENNETT_APPLY=history|branches|compare` for a whole
+- **The comparison.** `Executor::set_apply_mode` (or `BENNETT_APPLY=history|branches|forms|compare` for a whole
   test suite) selects the idiom (the default), branch enumeration, or both: compare mode computes every
   `apply` both ways from the same state and stops at any difference in the result, the world's whole
   machine state and journal, its amplitudes (exactly: both only move them), its history state, the counts
@@ -969,6 +969,95 @@ It stays one step of the run that executes it, journalled as one record and undo
   a region holds two copies of its amplitudes (0.89 GB against 0.43 GB peak on the in-place updates, the
   run's other memory unchanged; whole front suite 4.25 GB peak either way, wall 91 s against 83 s on a
   loaded host; `cargo test` 19.8 s against 20.4 s).
+
+### `apply` as the forms (an executor mode beside the idiom)
+
+Built on 2026-11-16 (machine-finish step 3; `crates/exec/src/forms.rs`), to show that the newer forms express
+what `apply` does. `apply`, `qalloc` and `qfree` stay first-class forms of the device program, with their
+tests, examples and documentation, and the front may keep emitting them (the maintainer's decision of the
+evening of 2026-11-16): nothing here migrates anything away from them.
+
+`ApplyMode::Forms` (`BENNETT_APPLY=forms`) computes `apply @f(args) -> out, fault budget B` as
+
+```text
+%h = mark budget B + 3
+%y, %c = call @f(args) budget B
+rewind %h keep (%y -> out, %c -> fault)
+```
+
+through the code that runs those instructions: the mark's journal entry with its budget and deadline (the
+`apply`'s own step is the mark's); the call with a budget (its reads of registers, which split the world;
+the budget held in the callee's frame; the region's rules while that frame is live; a fault caught as the
+code; a frame that does not fit caught as `stack_overflow`); and the rewind with its keeps, its checks and its
+un-run. `%h`, `%y` and `%c` are the executor's own, not slots of the caller, so the caller's frame, stack and
+instruction positions are those of the other modes, and the callee sees the same addresses and return
+addresses. The `apply` stays one step of the run, journalled as one record: once the rewind has run, its record
+and the mark's leave the journal, which holds what it held before the `apply`, and the `Apply` record is
+journalled as in the other modes. The worlds the call's reads and the callee's loads split off run one after
+another in the world's place, as for the idiom; a fault on some configurations stops the run in strict mode
+with `region fault`, as the idiom does, and is the fault register's on the machine.
+
+**Compare mode computes every `apply` three ways** from the same state: the idiom, branch enumeration and the
+forms. The forms must give the idiom's result (`Ok`, a fault of the `apply`, or the run's stop, exactly), its
+machine state and journal, its amplitudes exactly, its history state (status, deferred checks, copies), the
+run's state outside the world (steps, budget, generator, worlds, peak counts, ...) and the other worlds; the
+run keeps the idiom's result and counts. Run on every test of the workspace with `BENNETT_APPLY=compare`
+(2026-11-17): `cargo test` 495 passed, 0 failed (25 ignored), and `front/test.sh` 182 passed, 0 failed (26
+ignored), its 28,967 `apply` executions (13.9 million configurations, 76 of them strict region-fault stops)
+each computed and compared three ways. Fault codes are compared as part of the state (the fault register's configurations), budgets by the
+same inputs faulting `budget`, reversal by every reversing test passing in compare mode.
+
+**Differences the decisions allow** (each a witness in `crates/exec/tests/apply_forms.rs`):
+
+- **Time.** The idiom counts an `apply` as one step of the world's clock; the forms take their own: the mark,
+  the call, the callee's steps, a catch and the rewind, and where the arguments read a qubit the rewind costs
+  the mark's budget, so the clock goes to the mark's plus `B + 3`. Time is not machine state ([W1]), so the
+  states agree and compare mode does not compare the clock; the forms' time is the one the decisions on the
+  mark's budget give ("The cost is the budget where the rewind follows a read of a qubit").
+- **Budgets nest.** An outer mark's budget must cover the inner budgets its region spends ("The mark's
+  budget"). Under a caller's `mark budget 6`, an `apply ... budget 20` takes one step by the idiom and fits;
+  as the forms the outer deadline passes inside the callee, the call catches `budget` and the rewind after it
+  is past the deadline too, so the world faults `budget`. Likewise an inner budgeted rewind after a read
+  inside the callee moves the clock by its budget, which the forms' `B + 3` must cover and the idiom's step
+  count does not see. No test of the suites reaches either.
+- **Counts.** Compare mode keeps the idiom's counts, which follow branch enumeration's; the forms' own counts
+  (their splits, history work and region costs) are their cost and are not reported as the run's in compare
+  mode. `ApplyMode::Forms` alone reports the region's steps per configuration and its faults, as the idiom
+  does, and its runs; its other region costs are left at 0.
+- **Found by the comparison, fixed in the call form:** running again inside the callee was not charged to the
+  call's budget ("The call with a fault value"), so the forms of an `apply` whose function rewinds one mark in
+  a loop ran exponentially many steps again where the idiom stops (compare mode did not finish the test that
+  does so for budgets up to 60); and compare mode first left the forms' counts as the run's (two tests' counts
+  differed), now the idiom's.
+- **What the `apply` checks itself.** The `apply`'s operand checks (a target register that is an argument, or
+  both targets one register: `qubit_alias`) are made first, as in the other modes: the forms alone would
+  refuse the keep into a register the call read as `bad_rewind`, or XOR the two keeps into one register.
+- **The journal-content observer** classifies branches, so it computes `apply` by enumeration in every mode.
+
+### The forms beside `qalloc` and `qfree`
+
+What `qalloc` and `qfree` do is written with qubits in memory ("Qubits in memory"), shown, not migrated:
+
+| Register form | Memory form |
+|---|---|
+| `%q = qalloc N` | `%a = alloca ceil(N/8)`, zeroed, and `z [%a]` (and the further bytes) to make its bytes cells: a promotion changes nothing else |
+| a gate on `%q[i]` | the gate on `[%a:i]` |
+| a call passing `%q` to an `iN` parameter (a read, which splits the world) | `load iN %a` (a read of the cells, which splits the world alike), passed as the integer |
+| `rewind %h keep (v -> %q)` | `rewind %h keep (v -> [%a])`, the bytes cells since before the mark |
+| `measure %q` | `measure iN [%a]` |
+| `qfree %q` of a register that is zero | nothing: a byte whose qubits are classical reads as memory does, and stays a cell until its promotion is un-run |
+| `qfree %q` of a register that is not zero, on the machine (strict mode: `dirty_free`) | nothing either: the cell keeps its qubits, as the left-over register does |
+
+Checked: `crates/exec/tests/memory_qubits.rs` (each of `worlds_oracle.rs`'s 182 programs with its registers in
+memory in eight layouts, against the register program, the dense calculation and the whole-world reference;
+Grover in both forms seed by seed) and `crates/exec/tests/register_forms.rs` (a Bell pair read by a call, a
+rewind keeping its parity and both measured, seed by seed; a dirty `qfree` and a cell left alone both keep the
+pair). Where they differ: a cell is a whole byte (8 qubits in the simulator); a register's handle goes stale
+when it is freed (a later use faults `dangling_register`), while a byte stays a cell until its promotion is
+un-run, also after the frame whose `alloca` held it returns (a later access to that address reads the cell, as
+"Qubits in memory" says of every cell); and the
+register form's `dirty_free` diagnostic has no memory counterpart. These are differences of representation
+the register forms are kept for, beside the decision itself.
 
 ## Strict mode
 

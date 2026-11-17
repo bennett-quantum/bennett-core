@@ -18,6 +18,7 @@ mod cells;
 #[cfg(test)]
 mod compare_tests;
 mod executor;
+mod forms;
 mod forward;
 mod gates;
 mod history;
