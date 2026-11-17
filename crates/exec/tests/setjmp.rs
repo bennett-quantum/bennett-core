@@ -236,9 +236,7 @@ fn the_validator_checks_operand_types() {
 #[test]
 fn the_journal_content_observer_follows_jumps() {
     let module = load(REGION);
-    // The observer classifies the enumeration's branches, so it computes `apply` that way.
     let mut off = executor(&module, "main", &[], bounded());
-    off.set_apply_mode(bennett_exec::ApplyMode::Branches);
     let off_outcome = off.run();
     let mut on = executor(&module, "main", &[], bounded());
     on.measure_journal_content(true);

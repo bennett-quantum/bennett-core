@@ -5,7 +5,7 @@
 
 mod common;
 
-use bennett_exec::{ApplyMode, Options, Outcome, RunError};
+use bennett_exec::{Options, Outcome, RunError};
 use bennett_ir::Fault;
 use common::{bounded, executor, load};
 
@@ -232,7 +232,6 @@ entry:
 }}"
         ));
         let mut e = executor(&module, "main", &[], Options { allow_region_faults: true, ..bounded() });
-        e.set_apply_mode(ApplyMode::Compare);
         let outcome = e.run();
         assert!(matches!(outcome, Outcome::Returned(Some(_))), "budget {budget}: {outcome:?}");
         // The value v takes 1 (br) + 3v + 2 (the last test and the branch out) + 1 (rewind) steps after the
@@ -288,6 +287,5 @@ entry:
 }",
     );
     let mut e = executor(&module, "main", &[], bounded());
-    e.set_apply_mode(ApplyMode::Compare);
     assert_eq!(e.run(), Outcome::Returned(Some(3)));
 }

@@ -3,7 +3,7 @@
 
 mod common;
 
-use bennett_exec::{ApplyMode, Options, Outcome, RunError};
+use bennett_exec::{Options, Outcome, RunError};
 use bennett_ir::Fault;
 use common::{assert_same_state, bounded, executor, load};
 use num_complex::Complex64 as C;
@@ -50,17 +50,14 @@ entry:
     let apply = "apply @f(%q) -> %out, %code budget 20";
     for body in [idiom, apply] {
         let module = load(&main(body, "ret 0"));
-        for mode in [ApplyMode::History, ApplyMode::Compare] {
-            let mut e = executor(&module, "main", &[], machine());
-            e.set_apply_mode(mode);
-            assert_eq!(e.run(), Outcome::Returned(Some(0)));
-            let state = e.snapshot().quantum;
-            assert_eq!(state.amplitudes.len(), 4);
-            for x in 0..4 {
-                let (out, code) = if x == 2 { (2, Fault::DivideByZero.code()) } else { (x ^ 2, 0) };
-                let amplitude = if x & 1 == 0 { C::new(0.5, 0.0) } else { C::new(0.0, 0.5) };
-                assert!((state.amplitude(&[x, out, code]) - amplitude).norm() < 1e-12, "{body}: x={x}");
-            }
+        let mut e = executor(&module, "main", &[], machine());
+        assert_eq!(e.run(), Outcome::Returned(Some(0)));
+        let state = e.snapshot().quantum;
+        assert_eq!(state.amplitudes.len(), 4);
+        for x in 0..4 {
+            let (out, code) = if x == 2 { (2, Fault::DivideByZero.code()) } else { (x ^ 2, 0) };
+            let amplitude = if x & 1 == 0 { C::new(0.5, 0.0) } else { C::new(0.0, 0.5) };
+            assert!((state.amplitude(&[x, out, code]) - amplitude).norm() < 1e-12, "{body}: x={x}");
         }
         let measured = load(&main(body, "%v = measure %code\n    ret %v"));
         let mut faults = 0;
@@ -337,12 +334,9 @@ done:
     ret %v
 }",
     );
-    for mode in [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare] {
-        for path in [0, 1] {
-            let mut e = executor(&module, "main", &[path], machine());
-            e.set_apply_mode(mode);
-            assert_eq!(e.run(), Outcome::Returned(Some(Fault::StackOverflow.code().into())), "{mode:?}, path {path}");
-        }
+    for path in [0, 1] {
+        let mut e = executor(&module, "main", &[path], machine());
+        assert_eq!(e.run(), Outcome::Returned(Some(Fault::StackOverflow.code().into())), "path {path}");
     }
 }
 

@@ -46,10 +46,28 @@ The maintainer's decisions of 2026-11-17:
 `apply`, `qalloc` and `qfree` stay ("Decision the maintainer took on 2026-11-16, in the evening"); `apply` is
 the only bridge from qubits to ordinary code.
 
+The maintainer's further points, about 13:00 and 13:15 UTC:
+
+- **Goals, not started:** "a lean proof of the executor is a medium term goal"; and, on the requirement that each
+  instruction's step is a total function of the machine state, "this is a followup lemma. partial functions are
+  probably fine in the standard way." Meanwhile the executor's definition of `apply` and of each ordinary step
+  is kept small and plain enough to be stated formally later.
+- **Derived forms:** "If the front emits more, that is also probably fine, as long as the map to 1-9 + apply is
+  obvious, or straightforward." A form beyond ordinary code, `qalloc`, gates, `measure`, `qfree` and `apply` is
+  acceptable when it is defined by a straightforward expansion into them, and the documents define it by that
+  expansion.
+- **Arbitrary angles** are part of the gate set ("there really is no harm in arbitrary angles"); a device with
+  a finite gate set approximates them.
+- **Step bounds:** a fixed step bound outside `apply` is not a limitation to state ("same holds for normal
+  computation"). Inside `apply` there is exactly one bound, `budget B`, on all the steps of the applied
+  function, its loops, nested loops and calls included; never a bound per loop ("I 100% definitely require the
+  capability to run unbounded classical loops depending on input under apply."). The bound may be a value
+  computed at run time.
+
 The order of the work:
 
-1. The executor computes `apply` by per-argument evaluation only (`ApplyMode::Branches` today); the mode switch,
-   the comparison mode and the computation through marks go.
+1. Done: the executor computes `apply` by evaluation for each definite value of the arguments only; the mode
+   switch, the comparison mode and the computation through marks are gone.
 2. `mark`/`rewind` leave the reader, writer, validator, executor, CLI, examples, fixtures and tests, with what
    exists only for them: a call passing a qubit register to ordinary code outside `apply`; the call form
    returning a fault code; deadlines and clocks on marks; leftovers; the scheduling and joining of machine states
@@ -105,10 +123,10 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 | Lua probe | Unmodified Lua 5.4.9 through musl: seven native stdout/status comparisons and exact reversals; a Lua predicate under hand-written `apply`, dense-checked Grover at N=4/8 (`experiments/lua-probe`) |
 
-Check it: `cargo test` (552 passed; 23 ignored, each naming its reason: heavy reference, generated or
+Check it: `cargo test` (539 passed; 22 ignored, each naming its reason: heavy reference, generated or
 hash-sample runs with their commands, witnesses of recorded defects and of questions awaiting the maintainer;
 about 9 s, no LLVM needed) and `front/test.sh` (224 passed; 31 ignored by default, each naming its reason: the
-fallback acceptance tests still waiting for step 4, the C North Star ladder runs and other explicit experiments,
+fallback acceptance tests, waiting for the route that replaces the cancelled fallback, the C North Star ladder runs and other explicit experiments,
 musl-linked checks that need `rt/musl/build.py` first, heavy runs, and witnesses of recorded debts; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 With musl linked, standard output and exit status compared with native (`experiments/c-corpus/README.md`):
@@ -605,7 +623,9 @@ its vendor; at most two sol jobs at once.
    collision; a birthday search would need about 5 x 10^9 states (about 81 GB), so a constructed collision is
    practical and the equality-on-match route stays a debt.
    **Fifth step: `apply` as mark, call, rewind-keep** (`78ea062`; `docs/DESIGN.md`, "`apply` as mark, call, rewind-keep";
-   `crates/exec/src/region.rs`). The executor now computes every `apply` as the idiom on worlds, the region's
+   `crates/exec/src/region.rs`). (Removed on 2026-11-17: the mode switch, compare mode and this computation;
+   `apply` is evaluated for each definite value of its arguments only, the earlier branch enumeration.) The
+   executor computed every `apply` as the idiom on worlds, the region's
    rules on the call: mark the journal, call `@f` reading the argument registers as integers (one world per
    value), run each world to its end with effects, `exit` and quantum instructions faulting and the budget
    counted on each world's own steps (a world split off inside the region by a load of qubits in memory
@@ -1592,20 +1612,6 @@ Final repository checks after rebasing on `bd2e384`: cargo test 471 passed/20 ig
 182 passed/26 ignored, clippy and formatting clean; workspace-library clippy, tree guards and exact
 discovery of all five ignored acceptance stages also pass. The measured 118-second scalar sweep is explicit experiment work, keeping it out of
 the ordinary frontend run without changing its domain or assertions.
-
-## `apply` as the forms (machine-finish step 3, 2026-11-17)
-
-`ApplyMode::Forms` (`BENNETT_APPLY=forms`) computes `apply` as mark budget B + 3, the call with a fault value
-and a budget, and rewind-keep, through the code of those instructions; compare mode now computes every `apply`
-by the idiom, by branch enumeration and by the forms and stops at any difference of the forms from the idiom
-in result, state, journal, amplitudes, history state, run state and other worlds. Every test of the workspace
-passes in compare mode (`cargo test` 495, `front/test.sh` 182 with 28,967 `apply` executions compared). The
-differences the decisions allow (time: the forms take `B + 3` of the clock where the arguments read a qubit;
-an outer mark's budget bounds the forms of an `apply` inside it) are witnesses in
-`crates/exec/tests/apply_forms.rs`; the correspondence of `qalloc` and `qfree` with qubits in memory is written
-down in `docs/DESIGN.md`, "The forms beside `qalloc` and `qfree`", with `register_forms.rs`. `apply`, `qalloc`
-and `qfree` stay first-class; nothing was migrated. Found on the way and fixed: running again was not charged to
-the budget of a call with a fault value (`call_budget_replay.rs`).
 
 ## Known weak spots
 

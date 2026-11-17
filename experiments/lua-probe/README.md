@@ -96,7 +96,6 @@ python3 experiments/lua-probe/build.py .tmp/lua-probe/lua-5.4.9.tar.gz \
   --oracle --out target/lua-probe/oracle
 cargo build -j 3 --offline --manifest-path experiments/lua-probe/harness/Cargo.toml --target-dir target
 python3 experiments/lua-probe/coherent.py target/lua-probe/oracle
-BENNETT_APPLY=compare python3 experiments/lua-probe/coherent.py target/lua-probe/oracle
 python3 experiments/lua-probe/refusal.py target/lua-probe/oracle
 ```
 

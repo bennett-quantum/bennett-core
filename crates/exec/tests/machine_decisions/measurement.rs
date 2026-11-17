@@ -1,4 +1,4 @@
-use bennett_exec::{ApplyMode, Options, Outcome, ReverseError};
+use bennett_exec::{Options, Outcome, ReverseError};
 use bennett_ir::Fault;
 use num_complex::Complex64 as C;
 
@@ -119,15 +119,12 @@ fn address_measurements_fault_inside_regions_in_all_apply_modes() {
         let module = load(&format!(
             "memory 512\nfunc @read() -> i1 {{\nentry:\n %m = measure i{width} [17]\n ret 1\n}}\nfunc @main() {{\nentry:\n %out = qalloc 1\n x %out\n %f = qalloc 5\n x %f[0]\n apply @read() -> %out, %f budget 32\n ret\n}}"
         ));
-        for mode in [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare] {
-            let mut e =
-                executor(&module, "main", &[], Options { allow_region_faults: true, reversible: true, ..bounded() });
-            e.set_apply_mode(mode);
-            let before = e.snapshot();
-            assert_eq!(e.run(), Outcome::Returned(None));
-            assert!((e.snapshot().quantum.amplitude(&[1, 9]).re - 1.0).abs() < 1e-12);
-            e.reverse().expect("fault was before measurement");
-            crate::common::assert_same_state(&e.snapshot(), &before, "region measurement reverses");
-        }
+        let mut e =
+            executor(&module, "main", &[], Options { allow_region_faults: true, reversible: true, ..bounded() });
+        let before = e.snapshot();
+        assert_eq!(e.run(), Outcome::Returned(None));
+        assert!((e.snapshot().quantum.amplitude(&[1, 9]).re - 1.0).abs() < 1e-12);
+        e.reverse().expect("fault was before measurement");
+        crate::common::assert_same_state(&e.snapshot(), &before, "region measurement reverses");
     }
 }

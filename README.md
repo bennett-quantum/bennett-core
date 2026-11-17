@@ -6,7 +6,7 @@ runs classically, reversibly or coherently. Each piece of plumbing exists once, 
 | Module | What it is | State |
 |---|---|---|
 | `ir` | the device program: one data structure, one reader/writer, one validator | step 2 |
-| `exec` | the executor: forward, reverse (undo journal), history (`mark`, `rewind`), worlds, coherent regions as mark, call, rewind-keep, gates | step 2 |
+| `exec` | the executor: forward, reverse (undo journal), history (`mark`, `rewind`), worlds, coherent regions (`apply`, evaluated for each definite value of its arguments), gates | step 2 |
 | `cli` | `bennett run`, `bennett check` | step 2 |
 | `front` | `bennett-front` (C++, LLVM 18): bitcode with marker calls to `ir` text; taint, outlining, lowering | step 3 |
 | `opt` | optimiser and cost model | not started |

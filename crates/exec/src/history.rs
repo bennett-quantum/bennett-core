@@ -59,7 +59,7 @@ impl<'m> Executor<'m> {
     }
 
     /// The rewind to the mark `entry` with the columns and values `kept`, for the rewind at `site`: its checks,
-    /// the keeps, its un-run (the instruction, or an `apply` computed as the forms, `forms.rs`).
+    /// the keeps, its un-run.
     pub(crate) fn rewind_kept(
         &mut self,
         entry: MarkEntry,

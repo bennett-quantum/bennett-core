@@ -9,7 +9,7 @@ use crate::journal::{Journal, Undo};
 use crate::measure::Collector;
 use crate::memory::Memory;
 use crate::quantum::QuantumState;
-use crate::region::{ApplyMode, RegionCost};
+use crate::region::RegionCost;
 use crate::snapshot::{ClassicalSnapshot, QuantumSnapshot, Snapshot};
 use crate::worlds::{Defect, Status, World};
 
@@ -202,8 +202,8 @@ pub struct Stats {
     pub max_configurations: Option<usize>,
     /// Steps taken inside coherent regions, summed over every basis configuration they ran on.
     pub region_steps: u64,
-    /// What computing the coherent regions cost the executor, by whichever way it computed them
-    /// ([`ApplyMode`]): a report, not part of the meaning.
+    /// What computing the coherent regions cost the executor: a report of the simulator, not part of the
+    /// meaning.
     pub region_cost: RegionCost,
     /// Executions of `apply` (forward or, when reversing, backward) that faulted on at least one basis
     /// configuration. The configurations are those of nonzero amplitude: negligible ones are dropped.
@@ -319,13 +319,11 @@ pub struct Executor<'m> {
     pub(crate) base_depth: usize,
     pub(crate) in_region: bool,
     /// The journal records below the coherent region running, which its marks do not count: the caller's
-    /// history (`history.rs`). Zero outside a region and on a region's own journal (`ApplyMode::Branches`).
+    /// history (`history.rs`). Zero: a region runs on a journal of its own.
     pub(crate) region_records: usize,
-    /// Whether the current run is one branch of a coherent region enumerated on private memory, which holds
-    /// the values its configuration gives the qubits in memory (`ApplyMode::Branches`).
+    /// Whether the current run is a coherent region's run for one basis configuration, on private memory,
+    /// which holds the values that configuration gives the qubits in memory (`region.rs`).
     pub(crate) materialised: bool,
-    /// How `apply` is computed.
-    pub(crate) apply_mode: ApplyMode,
     /// What computing regions cost, and the most journal and overlay bytes the current region run held.
     pub(crate) region_cost: RegionCost,
     pub(crate) run_journal_peak: usize,
@@ -352,9 +350,6 @@ pub struct Executor<'m> {
     /// Whether the current world's last step ended it with a fault found by inspecting the state
     /// ([`Halt::Inspected`]): read by a region, which must not make it a fault code.
     pub(crate) inspected: bool,
-    /// `%y` and `%c` of an `apply` computed as the forms, given by the callee's return or catch
-    /// (`forms.rs`).
-    pub(crate) forms_values: Option<(u128, u128)>,
     /// For the rewind taken as a step in progress inside calls with a budget: the least room they had at it and
     /// the replay charge then (`Executor::charged`). Running again past the room stops, as past the run's budget.
     pub(crate) guard_room: Option<(u64, u64)>,
@@ -394,7 +389,7 @@ pub struct Executor<'m> {
     pub(crate) split_memory_bytes: u64,
     pub(crate) split_journal_bytes: u64,
     /// The bytes of slots copied where a world split (the slot stack as it is then, the frames of callees
-    /// live at the split included): part of a region's copy cost (`RegionCost::copied_bytes`).
+    /// live at the split included).
     pub(crate) split_slot_bytes: u64,
     /// The most overlay bytes all worlds held at once, sampled where worlds are put back after a tick.
     pub(crate) peak_overlay_bytes: usize,
@@ -419,10 +414,6 @@ pub struct Executor<'m> {
     pub(crate) backups: Vec<World>,
     /// Whether the current world is the result of a rewind whose deferred checks are not yet made.
     pub(crate) pending: bool,
-    /// A change made to the run after computing an `apply` by history, before compare mode computes it by
-    /// enumeration: the comparison's own test corrupts the history path with it (`compare_tests.rs`).
-    #[cfg(test)]
-    pub(crate) corrupt_history: Option<fn(&mut Executor<'_>)>,
 }
 
 impl<'m> Executor<'m> {
@@ -455,7 +446,6 @@ impl<'m> Executor<'m> {
             in_region: false,
             region_records: 0,
             materialised: false,
-            apply_mode: ApplyMode::from_env().unwrap_or_default(),
             region_cost: RegionCost::default(),
             run_journal_peak: 0,
             run_overlay_peak: 0,
@@ -469,7 +459,6 @@ impl<'m> Executor<'m> {
             taking_back: Vec::new(),
             unresolved: false,
             inspected: false,
-            forms_values: None,
             guard_room: None,
             cell_reads: Vec::new(),
             region_faults: 0,
@@ -506,8 +495,6 @@ impl<'m> Executor<'m> {
             deferred: Vec::new(),
             backups: Vec::new(),
             pending: false,
-            #[cfg(test)]
-            corrupt_history: None,
         };
         let args: Vec<u128> = args.iter().map(|&arg| u128::from(arg)).collect();
         if let Err(fault) = executor.push_frame(entry, &args) {
@@ -621,13 +608,6 @@ impl<'m> Executor<'m> {
             undone += 1;
         }
         Ok(undone)
-    }
-
-    /// Chooses how `apply` is computed from here on (`docs/DESIGN.md`, "`apply` as mark, call,
-    /// rewind-keep"). The default is [`ApplyMode::History`], or the mode the environment variable
-    /// `BENNETT_APPLY` names.
-    pub fn set_apply_mode(&mut self, mode: ApplyMode) {
-        self.apply_mode = mode;
     }
 
     /// How the run ended, or `None` while it is running.

@@ -134,14 +134,12 @@ def main():
     ap.add_argument('--seconds', type=int, default=DEFAULT_RUN_SECONDS)
     ap.add_argument('--memory-mib', type=int, default=4096)
     ap.add_argument('--harness', type=Path, default=ROOT/'target/release/sqlite-on-device-harness')
-    ap.add_argument('--apply', choices=['history', 'compare', 'branches'], default='history')
     args = ap.parse_args()
-    os.environ['BENNETT_APPLY'] = args.apply
     build = args.build.resolve()
-    output = build / f'scale-{args.apply}'
+    output = build / 'scale'
     output.mkdir(exist_ok=True)
     native = measured([build/'native'], output/'native', args.seconds, args.memory_mib)
-    results = dict(n=args.n, apply=args.apply, native=native, cases=[])
+    results = dict(n=args.n, native=native, cases=[])
     report = output/'results.json'
     def save():
         report.write_text(json.dumps(results, indent=2) + '\n')

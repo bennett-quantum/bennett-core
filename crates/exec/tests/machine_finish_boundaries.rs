@@ -3,7 +3,7 @@
 
 mod common;
 
-use bennett_exec::{ApplyMode, Options, Outcome, Snapshot, Unobserved};
+use bennett_exec::{Options, Outcome, Snapshot, Unobserved};
 use bennett_ir::Fault;
 use common::{bounded, executor, load};
 
@@ -62,7 +62,6 @@ entry:
         );
         let p = load(&text);
         let mut off = executor(&p, "main", &[], options(true));
-        off.set_apply_mode(ApplyMode::Branches);
         let start = off.snapshot();
         assert_eq!(off.run(), Outcome::Returned(Some(7)));
         for raw in [false, true] {
@@ -161,7 +160,6 @@ entry:
         );
         let p = load(&text);
         let mut e = executor(&p, "main", &[], options(true));
-        e.set_apply_mode(ApplyMode::Compare);
         let start = e.snapshot();
         assert_eq!(e.run(), Outcome::Returned(Some(7)));
         let state = e.snapshot().quantum;

@@ -80,9 +80,11 @@ memory, for at most `B` steps.
 
 Arguments are preserved and the private memory is discarded, so the region is a permutation of basis states and its
 own inverse. An `effect` or `exit` reached inside a region is a fault (`effect_in_region` or `exit_in_region`). This is the lifted-oracle contract of the North Star
-(§4.2). Since 2026-11-16 the executor computes it as mark, call, rewind-keep on worlds, faults and budget
-included ("`apply` as mark, call, rewind-keep", below); branch enumeration, its earlier definition, is kept as
-the comparison and gives the same result on every example and test.
+(§4.2). The executor computes it so, and only so (`crates/exec/src/region.rs`): for each basis configuration
+of nonzero amplitude it runs `@f` on that configuration's argument values, on private memory holding the
+values the configuration gives any qubits in memory, with a journal of its own, XORs the result or fault code
+into that configuration's `out` or `fault`, and undoes the run. An `apply` is one step of the run that executes
+it, journalled as one record and undone by applying it again.
 
 Control needs no special form at this level: `if (q) y = f(3)` is a region whose argument is `q`.
 
@@ -246,7 +248,7 @@ the call); built as machine step e4. `%h = mark budget B` gives the mark a budge
   running world takes a step; the run's budget counts them. A reversal to the start resets the clock;
   partial reversal leaves it, as time does not go back.
 - **In a coherent region** the marks of the region are bounded from the region's start, the caller's marks
-  not; both ways of computing `apply` agree (compare mode, budgets 1 to 12).
+  not.
 - **Cost of the representation**: each mark's entry in the journal's side table grows from 16 to 48 bytes
   (the budget and the deadline), measured in `memory_independent.rs`.
 
@@ -276,8 +278,7 @@ arguments and reads of registers included, with the region's rules attached to i
   with a budget live at it, and a rewind whose running again would pass it (its own step counted first) faults
   `budget`, changing nothing, which the call then catches. Until 2026-11-16 only the run's budget was charged,
   so a callee rewinding one mark in a loop ran exponentially many steps again before its own budget ended it,
-  where `apply` of it stops after a few (found by computing `apply` as the forms, below; witness
-  `crates/exec/tests/call_budget_replay.rs`, the hand count of `history_independent.rs` for budgets 1 to 40).
+  where `apply` of it stops after a few (witness `crates/exec/tests/call_budget_replay.rs`, the hand count of `history_independent.rs` for budgets 1 to 40).
 - **A fault inside** (any named fault: the callee's, a budget spent) does not end the world: the frames from
   the callee's up are discarded (a `Catch` record keeps them), the stack pointer is the callee's entry one, and
   the caller goes on with `%y` = 0 and `%c` = the fault's code; a return gives `%c` = 0. A callee whose frame
@@ -302,7 +303,7 @@ arguments and reads of registers included, with the region's rules attached to i
   mark's budget counts the call, `B` steps, a catch and the rewind): `crates/exec/tests/call_budget.rs`, a
   callee that divides by its argument and loops by it, budgets 8 to 20, every basis value and all at once,
   dirty output and fault registers, 30 comparisons on the machine; in strict mode both stop where only some
-  branches fault. Inside an applied function a call with a budget agrees both ways (compare mode).
+  branches fault.
 - **Checked** (`call_budget.rs`, by hand): text read, written and typed; a return and a fault; for
   `@count(n)` of 3n + 5 steps every n < 5 and budget < 25 gives the value or `budget` with the steps exact
   (the call, B steps, the catch); each rule; nested budgets (the inner or the outer ends, at 15 and 14); a
@@ -447,7 +448,7 @@ configuration. With one world the machine is exactly the machine above.
   exactly the worlds the basis results give and step back to itself. `apply` equals the idiom on the
   thesis program and Grover (states and outcomes over 16 seeds) and on the exhaustive `apply` harness
   (108 basis states and the arguments in superposition; the text idiom has no fault register or region
-  budget, which the executor's own lowering of `apply` has: "`apply` as mark, call, rewind-keep").
+  budget, which `apply` has).
   Un-running through gates across worlds equals G† X G applied to each world's part, against an
   independent dense calculation, on 91 programs (75 states equal, 16 refused exactly where the
   calculation finds an unfaithful read), and the independent whole-world reference
@@ -874,9 +875,8 @@ qubits among others; with one world and no qubit in memory the machine is exactl
 - **Not yet, each a debt with its route.** A `longjmp` whose record is held in cells that disagree is
   `bad_longjmp` (kept a fault by the maintainer on 2026-11-16), where it would split worlds that may then
   fault separately (route: let the worlds of a split fault on their own, as other worlds do). The fault is
-  never a program's fault code ("The call with a fault value"); under `apply` computed as worlds the `apply`
-  faults, where branch enumeration jumps on each branch's record (the two ways differ there until the route
-  is built). A cell is a whole byte, so a qubit in memory holds 8 qubits in
+  never a program's fault code ("The call with a fault value"). Under `apply` each configuration runs on
+  private memory holding its own definite record, so each run jumps. A cell is a whole byte, so a qubit in memory holds 8 qubits in
   the simulator (route: cells of single bits, if the count matters).
 - **Channels** stay open as before: a cell is a register column of a world, so a mixture of worlds holds
   qubits in memory as it holds registers.
@@ -906,153 +906,6 @@ qubits among others; with one world and no qubit in memory the machine is exactl
   journals 16 bytes per byte promoted and a count. The eight layouts of one program: the same worlds and
   splits; a register moved into memory is held as a whole byte (8 qubits in place of its 1 or 2) and
   journals 15 bytes more (a promotion's 32 in place of a `qalloc` record's 17).
-
-### `apply` as mark, call, rewind-keep
-
-Built on 2026-11-16 as the last step of the next extension (`crates/exec/src/region.rs`): the executor
-computes `apply @f(args) -> out, fault budget B` as the history idiom, with the region's rules on the call.
-It stays one step of the run that executes it, journalled as one record and undone by applying it again.
-
-- **Mark.** The world's journal position (a journal is started if the run keeps none, as a `mark` does).
-  Marks inside the region count records from it ("History"), as the enumeration's journal of each
-  branch does.
-- **Call.** `@f` is entered on top of the caller's frames; a register argument is read as an integer, as a
-  `call` reads one ("Worlds"): where the configurations disagree on the arguments' values the world splits
-  into one world per value, and the reads are journalled. A frame that does not fit faults alike in every
-  world, before any split.
-- **Run, under the region's rules.** Each world runs `@f` to its end: a return, or a fault. An `effect`,
-  `exit` or quantum instruction faults (`effect_in_region`, `exit_in_region`, `quantum_in_region`; a rewind
-  in it runs but may not keep), a `longjmp` or return address sees the frames below as the same on every
-  branch, and a jump record naming them faults `bad_longjmp`, as before. The budget `B` counts each world's
-  own steps, a world split off inside the region (a load of qubits in memory) starting from the steps it
-  shares with the world it split from: exactly what one enumerated branch of each of its configurations
-  takes, so the same inputs fault `budget`. Ordinary code in the region reads qubits in memory as anywhere
-  else (a load splits the world); the enumeration instead wrote each configuration's values into private
-  memory.
-- **Rewind-keep.** Each world XORs its result into `out`, or its fault code into `fault`, then un-runs
-  every step since the mark, checked as a rewind checks. Nothing in a region can change a register or a
-  qubit in memory, so every check holds (the executor asserts it), and the worlds are then one machine state
-  and merge. Where some world with nonzero weight faulted, the fault is counted with the weight of its
-  configurations; unless region faults are allowed the worlds un-run with no keep, merge, and the run stops
-  with `region fault` (the first faulting configuration's fault, in the order of the configurations as
-  they were before the `apply`, and its count), the state as before the `apply`. A region's writes to the
-  qubits in memory it read change its configurations until its un-run, so the faulting ones are taken
-  after it.
-- **Why the worlds run one after another and merge only at the end.** A region cannot gate, so nothing in
-  it interferes, and merging inside it would join configurations that have spent different amounts of
-  their budget (two worlds whose paths differed in length, equal again after an inner `rewind`). Kept apart
-  until the un-run, every world's own count is its configurations' count. An inner rewind that un-runs past
-  a split inside the region defers its checks to the sum of the parts; in a region every part holds what
-  its history read, so the checks hold part by part and the executor makes them there.
-- **Counts.** `steps`, `region_steps` (summed over configurations), the region-fault counts and weights,
-  `rewound_steps` and `rerun_steps` (counted once per configuration, as the enumeration counted them), and
-  the run's own splits, merges and worlds are those of branch enumeration; the region's own worlds are its
-  cost. `Stats::region_cost` reports what computing the regions cost: runs (configurations enumerated or
-  worlds), work (steps forward and back, rewound and run again), journal and overlay bytes each run held,
-  bytes copied at splits (the journal, the overlay and the whole slot stack as each split finds it: the frames
-  of callees live at a split inside the region included, which the report left out until 2026-11-16, counting
-  the caller's slots of the region's start instead; `region_copy_cost_includes_slots_of_the_frame_where_memory_splits`).
-- **The comparison.** `Executor::set_apply_mode` (or `BENNETT_APPLY=history|branches|forms|compare` for a whole
-  test suite) selects the idiom (the default), branch enumeration, or both: compare mode computes every
-  `apply` both ways from the same state and stops at any difference in the result, the world's whole
-  machine state and journal, its amplitudes (exactly: both only move them), its history state, the counts
-  above or anything else of the run outside the world (budget, worlds and the other worlds themselves,
-  peak worlds, the generator, ...). Everything but the cost report is restored before the enumeration
-  runs, so neither way sees what the other left; `src/compare_tests.rs` corrupts the history path in 31
-  ways and each is caught. `BENNETT_APPLY_TALLY=file` appends each comparison's costs. The journal-content observer classifies the
-  enumeration's branches, so it computes `apply` by enumeration.
-- **The text idiom** (`%h = mark budget B'`, `%y = call @f(args)`, `rewind %h keep (%y -> out)`, with
-  `B'` the region's `B` plus 2 for the call and the rewind) has no fault register: a fault ends the world
-  (strict mode stops the run, as a region fault does). With the call with a fault value ("The call with a
-  fault value", above) the idiom has one and gives the `apply`'s state.
-- **Checked.** In compare mode every `apply` of `cargo test` (107,687 executions in 46 tests, among them the
-  bijection checks, the exhaustive harness, faults, budgets, effects, `exit`, jumps, return addresses, qubits
-  in memory and inner rewinds; 325 of them strict region-fault stops) and of `front/test.sh` (21,866
-  executions in 41 tests, 13.9 million configurations, 76 strict stops) agrees, as do the ignored heavy runs
-  (110,121 more, the whole-world reference's rerun of the suite among them); both suites also pass with
-  each way alone (245 and 155 tests). Regular tests: `apply.rs` (every basis state of the harness, faulting ones included, and
-  the arguments in superposition, strict and allowed, reversed) and `apply_history.rs` (every entry of the
-  three examples over 16 seeds, strict and allowed, reversed).
-- **Measured** (`Stats::region_cost` in compare mode, summed per test; idiom against enumeration). Over
-  `front/test.sh`: 5.57 million runs against 13.9 million (a world per argument value, not per
-  configuration: spectator qubits and equal arguments share one), work 136 million steps against 171
-  million (0.80), journal bytes 1.02 times, time 45.1 s against 30.9 s (1.46 times; the in-place update
-  over 2^20 configurations of which only 4,096 argument values differ takes 1.46 s against 2.86 s, the
-  controlled update whose every configuration differs 7.6 s against 4.4 s). Over `cargo test`: 0.90 times
-  the runs, 0.81 the work, 1.20 the journal bytes (the reads are journalled), 2.6 times the time (small
-  regions, where setting the run aside and checking the world dominate). The known exponential inside a
-  region (`apply_history.rs`: a callee that cleans up at every level, or leaves its callees' history
-  open, over 4 argument values and a spectator): the same work per run both ways, 14,311 steps at depth 8
-  cleaning up (doubling per level: un-running an inner rewind runs its region again, by the keep's un-run
-  as by the enumeration's undo) and 183 with the history open (20 more per level), the idiom in 4 worlds where
-  the enumeration takes 8 runs. Memory: the worlds of a region run one at a time in the world's place, so
-  a region holds two copies of its amplitudes (0.89 GB against 0.43 GB peak on the in-place updates, the
-  run's other memory unchanged; whole front suite 4.25 GB peak either way, wall 91 s against 83 s on a
-  loaded host; `cargo test` 19.8 s against 20.4 s).
-
-### `apply` as the forms (an executor mode beside the idiom)
-
-Built on 2026-11-16 (machine-finish step 3; `crates/exec/src/forms.rs`), to show that the newer forms express
-what `apply` does. `apply`, `qalloc` and `qfree` stay first-class forms of the device program, with their
-tests, examples and documentation, and the front may keep emitting them (the maintainer's decision of the
-evening of 2026-11-16): nothing here migrates anything away from them.
-
-`ApplyMode::Forms` (`BENNETT_APPLY=forms`) computes `apply @f(args) -> out, fault budget B` as
-
-```text
-%h = mark budget B + 3
-%y, %c = call @f(args) budget B
-rewind %h keep (%y -> out, %c -> fault)
-```
-
-through the code that runs those instructions: the mark's journal entry with its budget and deadline (the
-`apply`'s own step is the mark's); the call with a budget (its reads of registers, which split the world;
-the budget held in the callee's frame; the region's rules while that frame is live; a fault caught as the
-code; a frame that does not fit caught as `stack_overflow`); and the rewind with its keeps, its checks and its
-un-run. `%h`, `%y` and `%c` are the executor's own, not slots of the caller, so the caller's frame, stack and
-instruction positions are those of the other modes, and the callee sees the same addresses and return
-addresses. The `apply` stays one step of the run, journalled as one record: once the rewind has run, its record
-and the mark's leave the journal, which holds what it held before the `apply`, and the `Apply` record is
-journalled as in the other modes. The worlds the call's reads and the callee's loads split off run one after
-another in the world's place, as for the idiom; a fault on some configurations stops the run in strict mode
-with `region fault`, as the idiom does, and is the fault register's on the machine.
-
-**Compare mode computes every `apply` three ways** from the same state: the idiom, branch enumeration and the
-forms. The forms must give the idiom's result (`Ok`, a fault of the `apply`, or the run's stop, exactly), its
-machine state and journal, its amplitudes exactly, its history state (status, deferred checks, copies), the
-run's state outside the world (steps, budget, generator, worlds, peak counts, ...) and the other worlds; the
-run keeps the idiom's result and counts. Run on every test of the workspace with `BENNETT_APPLY=compare`
-(2026-11-17): `cargo test` 495 passed, 0 failed (25 ignored), and `front/test.sh` 182 passed, 0 failed (26
-ignored), its 28,967 `apply` executions (13.9 million configurations, 76 of them strict region-fault stops)
-each computed and compared three ways. Fault codes are compared as part of the state (the fault register's configurations), budgets by the
-same inputs faulting `budget`, reversal by every reversing test passing in compare mode.
-
-**Differences the decisions allow** (each a witness in `crates/exec/tests/apply_forms.rs`):
-
-- **Time.** The idiom counts an `apply` as one step of the world's clock; the forms take their own: the mark,
-  the call, the callee's steps, a catch and the rewind, and where the arguments read a qubit the rewind costs
-  the mark's budget, so the clock goes to the mark's plus `B + 3`. Time is not machine state ([W1]), so the
-  states agree and compare mode does not compare the clock; the forms' time is the one the decisions on the
-  mark's budget give ("The cost is the budget where the rewind follows a read of a qubit").
-- **Budgets nest.** An outer mark's budget must cover the inner budgets its region spends ("The mark's
-  budget"). Under a caller's `mark budget 6`, an `apply ... budget 20` takes one step by the idiom and fits;
-  as the forms the outer deadline passes inside the callee, the call catches `budget` and the rewind after it
-  is past the deadline too, so the world faults `budget`. Likewise an inner budgeted rewind after a read
-  inside the callee moves the clock by its budget, which the forms' `B + 3` must cover and the idiom's step
-  count does not see. No test of the suites reaches either.
-- **Counts.** Compare mode keeps the idiom's counts, which follow branch enumeration's; the forms' own counts
-  (their splits, history work and region costs) are their cost and are not reported as the run's in compare
-  mode. `ApplyMode::Forms` alone reports the region's steps per configuration and its faults, as the idiom
-  does, and its runs; its other region costs are left at 0.
-- **Found by the comparison, fixed in the call form:** running again inside the callee was not charged to the
-  call's budget ("The call with a fault value"), so the forms of an `apply` whose function rewinds one mark in
-  a loop ran exponentially many steps again where the idiom stops (compare mode did not finish the test that
-  does so for budgets up to 60); and compare mode first left the forms' counts as the run's (two tests' counts
-  differed), now the idiom's.
-- **What the `apply` checks itself.** The `apply`'s operand checks (a target register that is an argument, or
-  both targets one register: `qubit_alias`) are made first, as in the other modes: the forms alone would
-  refuse the keep into a register the call read as `bad_rewind`, or XOR the two keeps into one register.
-- **The journal-content observer** classifies branches, so it computes `apply` by enumeration in every mode.
 
 ### The forms beside `qalloc` and `qfree`
 
@@ -1256,23 +1109,22 @@ and `roundevenl` are software too; the runtime's follow their bit operations on 
 `powi(x, 1)` returns its argument's bits, noncanonical ones included, as libgcc's loop does
 (`rt/softfloat/README.md`, "Independent conformance pass").
 
-## The next extension: code that is not a clean function (decided; `mark`, `rewind`, worlds, the memory overlay, gates at addresses and `apply` as the idiom built)
+## The next extension: code that is not a clean function (decided; `mark`, `rewind`, worlds, the memory overlay and gates at addresses built)
 
 Decided by the maintainer on 2026-11-13 after five independent proposals (`docs/AUDITION.md`). Built so far:
 `mark` and `rewind ... keep` ("History: `mark` and `rewind`", above; the text form is `%h = mark`, a result
 like any other), worlds, a superposition of whole machine states ("Worlds", above), and memory as an
 overlay over a classical base ("Memory as an overlay", above), and gates that take addresses ("Qubits in
-memory", above), and `apply` computed as mark, call, rewind-keep, shown equal to branch enumeration on every
-example and test ("`apply` as mark, call, rewind-keep", above). `apply`, `qalloc` and `qfree` stay: the text
-idiom has no fault register or budget, and `qalloc`/`qfree` were not re-expressed (`HANDOFF.md`).
+memory", above). `apply` computed as mark, call, rewind-keep was built on 2026-11-16 and shown equal to
+evaluation for each definite value of the arguments on every example and test; it was removed on 2026-11-17,
+and that evaluation is `apply`'s only definition. `apply`, `qalloc` and `qfree` stay (`HANDOFF.md`).
 
 - **One layering.** A journalled machine defines meaning and is the fallback that needs no analysis: the quantum
   state is a superposition of whole machine states, and each step keeps what it destroys as history. Two
   optimisations sit on top and must give the same promised results: memory lowered as objects whose accesses name
   the cells they may touch, and history shrunk to what cannot be recomputed (a compiler-planned tape).
 - **Instructions:** `mark %h` and `rewind %h keep (src -> dst, ...)`. A mark remembers a point; rewind pops the
-  history back to it while XORing chosen values out. Marks nest. Today's `apply` is then the idiom mark, call,
-  rewind-keep.
+  history back to it while XORing chosen values out. Marks nest.
 - **Memory** is a per-branch overlay of writes over a classical base that never becomes quantum, so qubits scale
   with steps run and bytes written, never with memory size.
 - **Gates take addresses,** so a qubit can live anywhere in memory.

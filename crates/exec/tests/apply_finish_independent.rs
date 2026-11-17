@@ -1,15 +1,14 @@
-//! Independent finite-state calculations for the last forms changes. Expectations are explicit
-//! arithmetic/step counts and sparse matrix products, never another executor mode's answers.
+//! Independent finite-state calculations of `apply`. Expectations are explicit arithmetic/step counts and
+//! sparse matrix products, never another executor's answers.
 //! Zero ancillas may be omitted, but the maps below are identical for every amplitude support.
 mod common;
 
-use bennett_exec::{ApplyMode, Options, Outcome, Snapshot};
+use bennett_exec::{Options, Outcome, Snapshot};
 use bennett_ir::Fault;
 use num_complex::Complex64 as C;
 use std::collections::BTreeMap;
 
 const HALF: f64 = std::f64::consts::FRAC_1_SQRT_2;
-const MODES: [ApplyMode; 4] = [ApplyMode::History, ApplyMode::Branches, ApplyMode::Forms, ApplyMode::Compare];
 type State = BTreeMap<Vec<u64>, C>;
 
 fn assert_vector(snapshot: &Snapshot, expected: &State, columns: usize) {
@@ -42,25 +41,17 @@ fn h(mut state: State, column: usize) -> State {
     out
 }
 
-fn check_modes(text: &str, expected: &State, columns: usize) {
+fn check(text: &str, expected: &State, columns: usize) {
     let p = common::load(text);
-    let mut previous = None;
-    for mode in MODES {
-        let mut e =
-            common::executor(&p, "main", &[], Options { reversible: true, machine_meaning: true, ..common::bounded() });
-        e.set_apply_mode(mode);
-        let initial = e.snapshot();
-        assert_eq!(e.run(), Outcome::Returned(None), "{mode:?}\n{text}");
-        let snapshot = e.snapshot();
-        assert_vector(&snapshot, expected, columns);
-        assert_eq!(snapshot.classical.memory[64..80], [0; 16], "callee writes restored");
-        if let Some(previous) = &previous {
-            whole_state(&snapshot, previous, "all apply modes");
-        }
-        previous = Some(snapshot);
-        e.reverse().unwrap_or_else(|error| panic!("{mode:?}: {error}\n{text}"));
-        whole_state(&e.snapshot(), &initial, "entire run reverses");
-    }
+    let mut e =
+        common::executor(&p, "main", &[], Options { reversible: true, machine_meaning: true, ..common::bounded() });
+    let initial = e.snapshot();
+    assert_eq!(e.run(), Outcome::Returned(None), "\n{text}");
+    let snapshot = e.snapshot();
+    assert_vector(&snapshot, expected, columns);
+    assert_eq!(snapshot.classical.memory[64..80], [0; 16], "callee writes restored");
+    e.reverse().unwrap_or_else(|error| panic!("{error}\n{text}"));
+    whole_state(&e.snapshot(), &initial, "entire run reverses");
 }
 
 /// Four input/dirty-target/spectator factors. H after the oracle makes relative phases visible.
@@ -116,12 +107,12 @@ fn every_register_keep_width_with_dirty_complex_targets_and_looped_applies() {
             for repeats in [1, 2, 3] {
                 let expected =
                     expected_apply(width, repeats, |x| if budget < 3 { Err(Fault::Budget) } else { Ok(x ^ k) });
-                check_modes(&harness(width, &f, budget, repeats), &expected, 4);
-                runs += MODES.len();
+                check(&harness(width, &f, budget, repeats), &expected, 4);
+                runs += 1;
             }
         }
     }
-    assert_eq!(runs, 3072);
+    assert_eq!(runs, 768);
 }
 
 #[test]
@@ -129,7 +120,7 @@ fn branch_faults_and_variable_work_match_hand_counts() {
     // loop makes n=x+1 additions, 3 setup steps + 4n loop steps + return = 4x+8.
     let f = "func @f(i2 %x) -> i2 {\nentry:\n%n = zext i2 %x to i8\n%limit = add i8 %n, 1\nbr loop(i8 0, i2 1)\nloop(i8 %i, i2 %sum):\n%a = add i2 %sum, 3\n%j = add i8 %i, 1\n%c = icmp ult i8 %j, %limit\nbr %c, loop(%j, %a), done(%a)\ndone(i2 %r):\nret %r\n}";
     for budget in 0..=21 {
-        check_modes(
+        check(
             &harness(2, f, budget, 1),
             &expected_apply(2, 1, |x| if budget < 4 * x + 8 { Err(Fault::Budget) } else { Ok((1 + 3 * (x + 1)) & 3) }),
             4,
@@ -149,23 +140,23 @@ fn branch_faults_and_variable_work_match_hand_counts() {
                 Ok(3)
             }
         });
-        check_modes(&harness(2, f, budget, 1), &expected, 4);
+        check(&harness(2, f, budget, 1), &expected, 4);
     }
 }
 
 #[test]
 fn jumps_inside_a_region_and_escaping_a_region_and_nested_apply_faults() {
     let local = "func @f(i2 %x) -> i2 {\nentry:\n%p = alloca 32\n%j = setjmp %p\n%first = icmp eq i32 %j, 0\nbr %first, jump, done\njump:\nlongjmp %p, 3\ndone:\n%n = trunc i32 %j to i2\n%r = xor i2 %x, %n\nret %r\n}";
-    check_modes(&harness(2, local, 40, 1), &expected_apply(2, 1, |x| Ok(x ^ 3)), 4);
+    check(&harness(2, local, 40, 1), &expected_apply(2, 1, |x| Ok(x ^ 3)), 4);
     // A valid caller setjmp is below the region boundary, so jumping to it is bad_longjmp,
     // independent of the fact that its record is a valid record for ordinary code.
     let escape = "func @f(i2 %x) -> i2 {\nentry:\nlongjmp 128, 1\n}";
     let text = harness(2, escape, 20, 1).replace("%q = qalloc", "%saved = setjmp 128\n%q = qalloc");
-    check_modes(&text, &expected_apply(2, 1, |_| Err(Fault::BadLongjmp)), 4);
+    check(&text, &expected_apply(2, 1, |_| Err(Fault::BadLongjmp)), 4);
     // A region cannot acquire the quantum targets for an inner apply: integer-only parameters
     // cannot carry them, and the first allocation is already quantum_in_region.
     let nested = "func @id(i2 %x) -> i2 {\nentry:\nret %x\n}\nfunc @f(i2 %x) -> i2 {\nentry:\n%a = qalloc 2\n%b = qalloc 5\napply @id(%x) -> %a, %b budget 4\nret %x\n}";
-    check_modes(&harness(2, nested, 20, 1), &expected_apply(2, 1, |_| Err(Fault::QuantumInRegion)), 4);
+    check(&harness(2, nested, 20, 1), &expected_apply(2, 1, |_| Err(Fault::QuantumInRegion)), 4);
 }
 
 #[test]
@@ -178,11 +169,11 @@ fn textual_forms_and_applies_under_nested_rewinds_have_the_same_dense_answer() {
     );
     // Caller SSA slots differ in the literal expansion; quantum/memory and independent inverses agree.
     let expected = expected_apply(2, 1, |x| Ok(x ^ 3));
-    check_modes(&textual, &expected, 4);
+    check(&textual, &expected, 4);
     // Inner work is undone, the outer work is undone, then one remaining apply supplies f(x).
     // Ample finite bounds cover the forms' permitted waits. No mark is rewound twice.
     let nested = original.replace("apply @f(%q) -> %o, %e budget 4", "%outer = mark budget 300\napply @f(%q) -> %o, %e budget 4\n%inner = mark budget 100\napply @f(%q) -> %o, %e budget 4\nrewind %inner\nrewind %outer\napply @f(%q) -> %o, %e budget 4");
-    check_modes(&nested, &expected, 4);
+    check(&nested, &expected, 4);
 }
 
 #[test]
@@ -205,7 +196,7 @@ fn replay_work_is_charged_to_each_nested_call_budget() {
                     Ok(x)
                 }
             });
-            check_modes(&harness(2, &f, outer, 1), &expected, 4);
+            check(&harness(2, &f, outer, 1), &expected, 4);
         }
     }
 }

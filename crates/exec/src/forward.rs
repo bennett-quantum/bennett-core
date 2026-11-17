@@ -145,9 +145,8 @@ impl<'m> Executor<'m> {
                 }
                 self.write_slot(*code, u128::from(fault.code()));
             }
-            // An `apply` computed as the forms: `%y` and `%c` are the executor's own (`forms.rs`).
-            Inst::Apply { .. } => self.forms_values = Some((0, u128::from(fault.code()))),
-            Inst::Binary { .. }
+            Inst::Apply { .. }
+            | Inst::Binary { .. }
             | Inst::Compare { .. }
             | Inst::Select { .. }
             | Inst::Cast { .. }
@@ -615,8 +614,7 @@ impl<'m> Executor<'m> {
         Ok(())
     }
 
-    /// The call of a call with a budget, at the top frame's position (the instruction, or an `apply` computed
-    /// as the forms, `forms.rs`). A callee whose frame does not fit faults inside the call, as an applied
+    /// The call of a call with a budget, at the top frame's position. A callee whose frame does not fit faults inside the call, as an applied
     /// function's does: the code is the call's, in every world alike (the frame is tried before any read
     /// splits).
     pub(crate) fn call_with_budget(&mut self, callee: FuncId, args: &'m [Operand], budget: u64) -> Result<(), Halt> {
@@ -781,10 +779,6 @@ impl<'m> Executor<'m> {
         // A call with a budget gives the fault code 0 on a return.
         if let Some(code) = call.fault_result() {
             self.write_slot(code, 0);
-        }
-        // An `apply` computed as the forms: `%y` and `%c` are the executor's own (`forms.rs`).
-        if let Inst::Apply { .. } = call {
-            self.forms_values = Some((value.expect("a region's callee returns an integer"), 0));
         }
         self.record(Undo::Return);
         self.advance();

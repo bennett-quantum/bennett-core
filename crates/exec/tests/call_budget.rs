@@ -305,7 +305,6 @@ entry:
     for (prepare, expected) in [("", 7), ("x %q[0]", 7), ("x %q[1]", 1), ("x %q[0]\n    x %q[1]", 1)] {
         let module = load(&text.replace("    PREPARE", &format!("    {prepare}")));
         let mut e = executor(&module, "main", &[], bounded());
-        e.set_apply_mode(bennett_exec::ApplyMode::Compare);
         assert_eq!(e.run(), Outcome::Returned(Some(expected)), "{prepare}");
     }
 }

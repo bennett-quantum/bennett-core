@@ -155,8 +155,6 @@ needed (simulator limit 8). This is the nonconstant LIKE query, not a hand-writt
 ```sh
 cargo build -j 4 --offline --manifest-path experiments/sqlite-on-device/harness/Cargo.toml --target-dir target
 python3 experiments/sqlite-on-device/coherent.py target/sqlite-on-device/n4
-# Independent executor path: same cases, checking history against branch enumeration at each apply.
-BENNETT_APPLY=compare python3 experiments/sqlite-on-device/coherent.py target/sqlite-on-device/n4
 # These write the same ignored artifact names: run sequentially.
 python3 experiments/sqlite-on-device/refusals.py target/sqlite-on-device/n4
 ```
@@ -193,7 +191,7 @@ the inverse Hadamards permit all registers to be freed cleanly: interference, no
 probabilities. A full forward/backward coherent run restores the classical entry exactly and the
 amplitudes within 2.23e-16 (floating-point Hadamards); the observer requires less than 1e-12.
 History and branch enumeration compare mode passes all cases, including the budget probes and reversal.
-The tables use normal history mode; compare mode reports the combined cost of both computations.
+The tables use normal history mode; compare mode reports the combined cost of both computations. (Since 2026-11-17 the executor computes `apply` one way only, by evaluation for each definite value of the arguments; the mode switch these measurements used is gone.)
 
 | row index | native bit | forward region steps | region journal bytes | region overlay bytes |
 |---|---:|---:|---:|---:|
@@ -264,8 +262,6 @@ marked amplitudes are `1/sqrt(2)` and all others zero (success 1).
 ```sh
 cargo build -j 4 --offline --manifest-path experiments/sqlite-on-device/harness/Cargo.toml --target-dir target
 SQLITE_DIR=<amalgamation directory> python3 experiments/sqlite-on-device/grover.py target/sqlite-on-device/n4 --n 4
-# Independent apply implementation, same amplitude/native/memory assertions:
-SQLITE_DIR=<amalgamation directory> BENNETT_APPLY=compare python3 experiments/sqlite-on-device/grover.py target/sqlite-on-device/n4 --n 4
 ```
 
 No rebuild of musl, SQLite or the lowered module is needed. `grover.py` retains every original
@@ -322,8 +318,8 @@ runs sample row 2. The full amplitude comparison, not these single samples, chec
 ### N=8 results
 
 Use the existing N=8 ordinary build with `grover.py target/sqlite-on-device/n8 --n 8`;
-set `SQLITE_DIR` as above. The same command with `BENNETT_APPLY=compare` checks every apply
-against branch enumeration. Both modes pass. The observer allows 16 configurations (the
+set `SQLITE_DIR` as above. On 2026-11-16 the same command also checked every apply of history mode
+against branch enumeration; both modes passed. The observer allows 16 configurations (the
 minus qubit doubles the eight row values); peak live qubits are eight, and only three row
 qubits remain before measurement. The database is prepared by the same classical SQL
 updates, and native bits are `[0,0,0,1,0,0,0,0]` or `[1,0,0,1,0,0,0,0]`.
@@ -445,10 +441,8 @@ python3 experiments/sqlite-on-device/scale.py target/sqlite-on-device/oracle16 -
 # Larger heap after retaining the N=128 original-heap refusal:
 SQLITE_DIR=<amalgamation directory> SQL_ORACLE=1 NROWS=128 HEAP_BYTES=1048576 OUT=target/sqlite-on-device/oracle128-h1m experiments/sqlite-on-device/build.sh
 python3 experiments/sqlite-on-device/scale.py target/sqlite-on-device/oracle128-h1m --n 128
-# Independent history-versus-branches comparison, with the same strict checks:
-python3 experiments/sqlite-on-device/scale.py target/sqlite-on-device/oracle16 --n 16 --modes coherent grover --apply compare
 # Portable tabular report from the raw, ignored JSON:
-python3 experiments/sqlite-on-device/summarize.py target/sqlite-on-device/oracle16/scale-history/results.json
+python3 experiments/sqlite-on-device/summarize.py target/sqlite-on-device/oracle16/scale/results.json
 ```
 
 Each child has an explicit default 300-second timeout and 4,096 MiB virtual-address-space limit
@@ -489,7 +483,7 @@ N=256. Real SQLite execution remains an explicit experiment and does not slow `c
 
 Measured 2026-11-16 with the optimized observer. All checks pass for every row below. N=16/32/64
 use the original 256 KiB SQLite heap; N=128/256 use 1 MiB. History-versus-branches compare mode also
-passes every coherent/Grover entry at N=16/32/64 (its timings are separate rows in the TSV). The table
+passes every coherent/Grover entry at N=16/32/64 (its timings are separate rows in the TSV). (Since 2026-11-17 the executor computes `apply` one way only, by evaluation for each definite value of the arguments; the mode switch these measurements used is gone.) The table
 uses one classical entry per shape, executing setup followed by all N queries. Classical journal
 is the full retained history before reversal. Grover region steps count configurations; region
 journal is the **sum of per-run high-water bytes**, not simultaneous storage. These differ from

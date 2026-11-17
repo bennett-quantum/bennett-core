@@ -2,7 +2,7 @@
 mod common;
 use common::oracle_support;
 
-use bennett_exec::{ApplyMode, Options, Outcome, RunError};
+use bennett_exec::{Options, Outcome, RunError};
 use bennett_ir::Fault;
 use common::{assert_same_state, bounded, executor, load};
 
@@ -33,19 +33,16 @@ entry:
 #[test]
 fn strict_fault_uses_the_first_original_configuration() {
     let module = load(CELL_FAULT_ORDER);
-    for mode in [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare] {
-        let mut e = executor(&module, "main", &[], bounded());
-        e.set_apply_mode(mode);
-        assert_eq!(
-            e.run(),
-            Outcome::Stopped(RunError::RegionFault {
-                callee: module.function_named("f").expect("f"),
-                fault: Fault::DivideByZero,
-                branches: 2,
-                configurations: 2,
-            })
-        );
-    }
+    let mut e = executor(&module, "main", &[], bounded());
+    assert_eq!(
+        e.run(),
+        Outcome::Stopped(RunError::RegionFault {
+            callee: module.function_named("f").expect("f"),
+            fault: Fault::DivideByZero,
+            branches: 2,
+            configurations: 2,
+        })
+    );
 }
 
 // A region that marks and rewinds inside itself. Its handles are opaque (the maintainer's decision of
@@ -90,12 +87,9 @@ fn region_mark_values_are_independent_of_the_callers_journal() {
     refused_for_its_handle(HANDLE_WITNESS, "m");
     let module = load(MARK_VALUE);
     for reversible in [false, true] {
-        for mode in [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare] {
-            let mut e = executor(&module, "main", &[], Options { reversible, ..bounded() });
-            e.set_apply_mode(mode);
-            assert_eq!(e.run(), Outcome::Returned(None));
-            assert_eq!(e.snapshot().quantum.amplitudes[0].0, [2, 0], "{mode:?}, reversible={reversible}");
-        }
+        let mut e = executor(&module, "main", &[], Options { reversible, ..bounded() });
+        assert_eq!(e.run(), Outcome::Returned(None));
+        assert_eq!(e.snapshot().quantum.amplitudes[0].0, [2, 0], "reversible={reversible}");
     }
 }
 
@@ -167,15 +161,12 @@ fn reference_case(text: &str, args: &[u64]) {
     let model = Model::new(&p, "main");
     let initial = model.initial("main", &args.iter().map(|&n| n.into()).collect::<Vec<_>>());
     let expected = model.run_joined(basis(initial), 300);
-    for mode in [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare] {
-        let mut e = executor(&p, "main", args, Options { reversible: true, allow_region_faults: true, ..bounded() });
-        e.set_apply_mode(mode);
-        let entry = e.snapshot();
-        assert_eq!(e.run(), Outcome::Returned(None));
-        assert_worlds(&model, &expected, &e.snapshot());
-        e.reverse().expect("reverses");
-        assert_same_state(&e.snapshot(), &entry, "full reverse");
-    }
+    let mut e = executor(&p, "main", args, Options { reversible: true, allow_region_faults: true, ..bounded() });
+    let entry = e.snapshot();
+    assert_eq!(e.run(), Outcome::Returned(None));
+    assert_worlds(&model, &expected, &e.snapshot());
+    e.reverse().expect("reverses");
+    assert_same_state(&e.snapshot(), &entry, "full reverse");
 }
 
 #[test]
@@ -232,12 +223,9 @@ fn quantum_instructions_reached_through_calls_fault_inside_the_region() {
         // Exit is a terminator, so remove the unreachable second terminator.
         let text = text.replace("exit i1 0\n    ret 0", "exit i1 0");
         let p = load(&text);
-        for mode in [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare] {
-            let mut e = executor(&p, "main", &[], Options { allow_region_faults: true, ..bounded() });
-            e.set_apply_mode(mode);
-            assert_eq!(e.run(), Outcome::Returned(None));
-            assert_eq!(e.snapshot().quantum.amplitudes[0].0, [0, fault.code()]);
-        }
+        let mut e = executor(&p, "main", &[], Options { allow_region_faults: true, ..bounded() });
+        assert_eq!(e.run(), Outcome::Returned(None));
+        assert_eq!(e.snapshot().quantum.amplitudes[0].0, [0, fault.code()]);
         reference_case(&text, &[]);
     }
 }
@@ -273,28 +261,14 @@ entry:
 #[ignore = "large support/peak RSS probe: cargo test -p bennett-exec --test apply_independent amplitude_peak_probe -- --ignored --nocapture"]
 fn amplitude_peak_probe() {
     let bits = std::env::var("BENNETT_TEST_BITS").map_or(15, |s| s.parse().expect("bits"));
-    let mode = match std::env::var("BENNETT_TEST_MODE").as_deref() {
-        Ok("history") => ApplyMode::History,
-        Ok("branches") => ApplyMode::Branches,
-        Ok("forms") => ApplyMode::Forms,
-        _ => ApplyMode::Compare,
-    };
     let p = load(&large_region(bits));
     let mut e = executor(&p, "main", &[], Options { max_configurations: Some(1 << (bits + 2)), ..bounded() });
-    e.set_apply_mode(mode);
     assert_eq!(e.run(), Outcome::Returned(None));
     let stats = e.stats();
     assert_eq!(stats.configurations, 1 << (bits + 2));
     assert_eq!(stats.region_steps, 2 * (1 << (bits + 2)));
-    assert_eq!(
-        stats.region_cost.runs,
-        match mode {
-            ApplyMode::History | ApplyMode::Forms => 4,
-            ApplyMode::Branches => 1 << (bits + 2),
-            ApplyMode::Compare => 4 + (1 << (bits + 2)),
-        }
-    );
-    println!("{mode:?}: {stats:?}");
+    assert_eq!(stats.region_cost.runs, 1 << (bits + 2));
+    println!("{stats:?}");
     // No snapshot: it would add another full copy and contaminate the peak measurement.
 }
 
@@ -302,40 +276,34 @@ fn amplitude_peak_probe() {
 fn two_identical_regions_must_xor_the_same_result() {
     let text = MARK_VALUE.replace("    ret\n}", "    apply @f() -> %o, %e budget 10\n    ret\n}");
     let p = load(&text);
-    for mode in [ApplyMode::Branches, ApplyMode::History] {
-        let mut e = executor(&p, "main", &[], Options { reversible: true, ..bounded() });
-        e.set_apply_mode(mode);
-        assert_eq!(e.run(), Outcome::Returned(None));
-        assert_eq!(e.snapshot().quantum.amplitudes[0].0, [0, 0], "{mode:?}: apply is its own inverse");
-    }
+    let mut e = executor(&p, "main", &[], Options { reversible: true, ..bounded() });
+    assert_eq!(e.run(), Outcome::Returned(None));
+    assert_eq!(e.snapshot().quantum.amplitudes[0].0, [0, 0], ": apply is its own inverse");
 }
 
 #[test]
 fn strict_budget_faults_leave_the_pre_apply_state_and_reverse() {
     let p = load(MIXED);
     for budget in [0, 1, 12, 24, 32, 64] {
-        for mode in [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare] {
-            let mut e = executor(&p, "main", &[budget], Options { reversible: true, ..bounded() });
-            e.set_apply_mode(mode);
-            let entry = e.snapshot();
-            // Stop exactly at apply, preserving the complete visible state before a strict refusal.
-            while e.snapshot().classical.frames.last().expect("frame").inst < 12 {
-                assert_eq!(e.step(), None);
-            }
-            let before = e.snapshot();
-            let result = e.step();
-            if let Some(Outcome::Stopped(RunError::RegionFault { fault, .. })) = result {
-                assert_eq!(fault, Fault::Budget);
-                let mut after = e.snapshot();
-                after.classical.outcome = before.classical.outcome;
-                assert_same_state(&after, &before, "strict stop is atomic");
-            } else {
-                assert_eq!(result, None);
-                assert_eq!(e.run(), Outcome::Returned(None));
-            }
-            e.reverse().expect("strict or successful run reverses");
-            assert_same_state(&e.snapshot(), &entry, "strict reverse");
+        let mut e = executor(&p, "main", &[budget], Options { reversible: true, ..bounded() });
+        let entry = e.snapshot();
+        // Stop exactly at apply, preserving the complete visible state before a strict refusal.
+        while e.snapshot().classical.frames.last().expect("frame").inst < 12 {
+            assert_eq!(e.step(), None);
         }
+        let before = e.snapshot();
+        let result = e.step();
+        if let Some(Outcome::Stopped(RunError::RegionFault { fault, .. })) = result {
+            assert_eq!(fault, Fault::Budget);
+            let mut after = e.snapshot();
+            after.classical.outcome = before.classical.outcome;
+            assert_same_state(&after, &before, "strict stop is atomic");
+        } else {
+            assert_eq!(result, None);
+            assert_eq!(e.run(), Outcome::Returned(None));
+        }
+        e.reverse().expect("strict or successful run reverses");
+        assert_same_state(&e.snapshot(), &entry, "strict reverse");
     }
 }
 
@@ -353,19 +321,6 @@ fn regions_in_existing_worlds_and_rewind_replay_match_the_reference() {
     for budget in [0, 12, 24, 32, 64] {
         reference_case(&text, &[budget]);
     }
-}
-
-#[test]
-#[ignore = "rebuilds a scratch copy of the source per mutation; the regular check is src/compare_tests.rs"]
-fn compare_must_reject_corrupt_history_state() {
-    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support/apply_mutations.py");
-    let mutation = std::env::var("BENNETT_TEST_MUTATION").unwrap_or_else(|_| "steps".into());
-    let status = std::process::Command::new("python3")
-        .arg(script)
-        .args(["--only", &mutation, "--require-all"])
-        .status()
-        .expect("run isolated mutation probe");
-    assert!(status.success(), "compare must reject corrupted {mutation} from the history path");
 }
 
 #[test]
@@ -410,7 +365,6 @@ entry:
 fn more_than_65536_configurations_have_the_analytic_answer() {
     let p = load(&large_region(15));
     let mut e = executor(&p, "main", &[], Options { max_configurations: Some(1 << 17), ..bounded() });
-    e.set_apply_mode(ApplyMode::Compare);
     assert_eq!(e.run(), Outcome::Returned(None));
     let state = e.snapshot();
     assert_eq!(state.quantum.amplitudes.len(), 1 << 17);
@@ -440,7 +394,6 @@ fn reference_apply_mark_value_matches_branch_enumeration() {
     let model = oracle_support::worlds::Model::new(&p, "main");
     let reference = model.run_joined(oracle_support::worlds::basis(model.initial("main", &[])), 20);
     let mut e = executor(&p, "main", &[], bounded());
-    e.set_apply_mode(ApplyMode::Branches);
     assert_eq!(e.run(), Outcome::Returned(None));
     let branch_value = e.snapshot().quantum.amplitudes[0].0[0];
     assert_eq!(branch_value, 2);
@@ -451,7 +404,7 @@ fn reference_apply_mark_value_matches_branch_enumeration() {
 
 // All assertions inspect ordinary results and the entire public world, including memory, slots,
 // amplitudes and frames. The reference's private snapshots are never compared with executor records.
-fn mark_observation_case(body: &str, expected: [u64; 4], modes: &[ApplyMode]) -> usize {
+fn mark_observation_case(body: &str, expected: [u64; 4]) -> usize {
     use oracle_support::worlds::{Model, basis};
     use oracle_support::worlds_executor::assert_worlds;
     let mut runs = 0;
@@ -495,18 +448,15 @@ entry:
             assert_eq!(w.quantum[1..], [answer, 0], "analytic result for x={x}, repeats={repetitions}: {body}");
         }
         for reversible in [false, true] {
-            for &mode in modes {
-                let mut e = executor(&p, "main", &[], Options { reversible, ..bounded() });
-                e.set_apply_mode(mode);
-                let initial = e.snapshot();
-                assert_eq!(e.run(), Outcome::Returned(None));
-                assert_worlds(&model, &reference, &e.snapshot());
-                if reversible {
-                    e.reverse().expect("mark-observing apply reverses");
-                    assert_same_state(&e.snapshot(), &initial, "mark-observing apply full reverse");
-                }
-                runs += 1;
+            let mut e = executor(&p, "main", &[], Options { reversible, ..bounded() });
+            let initial = e.snapshot();
+            assert_eq!(e.run(), Outcome::Returned(None));
+            assert_worlds(&model, &reference, &e.snapshot());
+            if reversible {
+                e.reverse().expect("mark-observing apply reverses");
+                assert_same_state(&e.snapshot(), &initial, "mark-observing apply full reverse");
             }
+            runs += 1;
         }
     }
     runs
@@ -527,7 +477,7 @@ fn fresh_region_mark_numbers_can_be_returned_stored_branched_on_and_called() {
         );
         refused_for_its_handle(&text, "m");
     }
-    let runs = mark_observation_case("%r = call @leaf(%x)\nret %r", [0, 1, 2, 3], &[ApplyMode::Branches]);
+    let runs = mark_observation_case("%r = call @leaf(%x)\nret %r", [0, 1, 2, 3]);
     assert_eq!(runs, 4);
     println!("{runs} runs of a region whose callee marks and rewinds, four configurations each, reversed");
 }
@@ -559,10 +509,9 @@ fn relative_region_mark_numbers_match_all_modes_through_rewind_and_replay() {
             [0, 1, 2, 3],
         ),
     ];
-    let modes = [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare];
-    let runs: usize = cases.into_iter().map(|(body, expected)| mark_observation_case(body, expected, &modes)).sum();
-    assert_eq!(runs, 72);
-    println!("{runs} origin-independent mark observations, four configurations each, all apply modes and reversal");
+    let runs: usize = cases.into_iter().map(|(body, expected)| mark_observation_case(body, expected)).sum();
+    assert_eq!(runs, 24);
+    println!("{runs} origin-independent mark observations, four configurations each, and reversal");
 }
 
 // The whole class of F1: what the region's function observes of its history is that of a run on a journal
@@ -570,8 +519,8 @@ fn relative_region_mark_numbers_match_all_modes_through_rewind_and_replay() {
 // handles are opaque (2026-11-16) it observes no mark's value at all (the validator's `HandleUse`); the
 // bodies keep the marks, rewinds, splits and callees that made those values differ and return values of
 // their arguments and memory. Each body runs after caller prefixes that
-// journal different amounts (gates, marks, an earlier `apply`, a split of worlds) in each mode, reversible or
-// not; the state must not depend on the prefix or the mode, an `apply` twice must be no `apply`, and every
+// journal different amounts (gates, marks, an earlier `apply`, a split of worlds) , reversible or
+// not; the state must not depend on the prefix, an `apply` twice must be no `apply`, and every
 // reversible run must reverse to its entry.
 const REGION_BODIES: &[&str] = &[
     // A mark, then a constant.
@@ -628,12 +577,11 @@ entry:
     )
 }
 
-fn final_state(text: &str, mode: ApplyMode, reversible: bool) -> bennett_exec::QuantumSnapshot {
+fn final_state(text: &str, reversible: bool) -> bennett_exec::QuantumSnapshot {
     let p = load(text);
     let mut e = executor(&p, "main", &[], Options { reversible, ..common::allowing_region_faults() });
-    e.set_apply_mode(mode);
     let entry = e.snapshot();
-    assert_eq!(e.run(), Outcome::Returned(None), "{mode:?}\n{text}");
+    assert_eq!(e.run(), Outcome::Returned(None), "\n{text}");
     let state = e.snapshot().quantum;
     if reversible {
         e.reverse().expect("reverses");
@@ -655,16 +603,14 @@ fn assert_same_quantum(
 fn what_a_region_sees_of_its_history_does_not_depend_on_the_caller() {
     for (b, body) in REGION_BODIES.iter().enumerate() {
         for reversible in [false, true] {
-            let expected = final_state(&region_program(body, "", 1), ApplyMode::Branches, reversible);
+            let expected = final_state(&region_program(body, "", 1), reversible);
             for (p, prefix) in REGION_PREFIXES.iter().enumerate() {
-                let none = final_state(&region_program(body, prefix, 0), ApplyMode::Branches, reversible);
-                for mode in [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare] {
-                    let context = format!("body {b}, prefix {p}, {mode:?}, reversible={reversible}");
-                    let once = final_state(&region_program(body, prefix, 1), mode, reversible);
-                    assert_same_quantum(&once, &expected, &context);
-                    let twice = final_state(&region_program(body, prefix, 2), mode, reversible);
-                    assert_same_quantum(&twice, &none, &format!("{context}: twice is no apply"));
-                }
+                let none = final_state(&region_program(body, prefix, 0), reversible);
+                let context = format!("body {b}, prefix {p}, reversible={reversible}");
+                let once = final_state(&region_program(body, prefix, 1), reversible);
+                assert_same_quantum(&once, &expected, &context);
+                let twice = final_state(&region_program(body, prefix, 2), reversible);
+                assert_same_quantum(&twice, &none, &format!("{context}: twice is no apply"));
             }
         }
     }
@@ -684,7 +630,7 @@ fn region_mark_values_count_from_the_call_into_the_region() {
         (REGION_BODIES[4], [0; 4]),
     ] {
         for prefix in REGION_PREFIXES {
-            let state = final_state(&region_program(body, prefix, 1), ApplyMode::History, true);
+            let state = final_state(&region_program(body, prefix, 1), true);
             // Columns: the cell, x, t, te, o, e.
             for (config, _) in &state.amplitudes {
                 assert_eq!(config[4], expected[config[1] as usize], "{body}\n{prefix}");
@@ -756,142 +702,22 @@ entry:
             let faulting: Vec<Fault> =
                 (0..4).flat_map(|a| (0..2).map(move |b| (a, b))).filter_map(|(a, b)| outcome(a, b)).collect();
             let p = load(&text);
-            for mode in [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare] {
-                let mut e = executor(&p, "main", &[], Options { reversible: true, ..bounded() });
-                e.set_apply_mode(mode);
-                let entry = e.snapshot();
-                let expected = match faulting.first() {
-                    Some(&fault) => Outcome::Stopped(RunError::RegionFault {
-                        callee: p.function_named("f").expect("f"),
-                        fault,
-                        branches: faulting.len(),
-                        configurations: 8,
-                    }),
-                    None => Outcome::Returned(None),
-                };
-                assert_eq!(e.run(), expected, "rewrite {r}, salt {salt}, {mode:?}");
-                e.reverse().expect("reverses");
-                assert_same_state(&e.snapshot(), &entry, "full reverse");
-            }
+            let mut e = executor(&p, "main", &[], Options { reversible: true, ..bounded() });
+            let entry = e.snapshot();
+            let expected = match faulting.first() {
+                Some(&fault) => Outcome::Stopped(RunError::RegionFault {
+                    callee: p.function_named("f").expect("f"),
+                    fault,
+                    branches: faulting.len(),
+                    configurations: 8,
+                }),
+                None => Outcome::Returned(None),
+            };
+            assert_eq!(e.run(), expected, "rewrite {r}, salt {salt}");
+            e.reverse().expect("reverses");
+            assert_same_state(&e.snapshot(), &entry, "full reverse");
         }
     }
-}
-
-#[test]
-fn compare_cost_is_the_sum_of_both_methods_even_after_prior_regions() {
-    let mut first = None;
-    for repeats in [1, 2, 4] {
-        let apply = "    apply @f(%x) -> %o, %e budget %budget\n";
-        // An already split caller keeps the memory base shared in every mode, so the two
-        // computations have the same overlay costs as their separate runs.
-        let text = MIXED
-            .replace("func @jump(", "func @read(i1 %bit) -> i1 {\nentry:\nret %bit\n}\nfunc @jump(")
-            .replace("    s %s\n", "    s %s\n    %unused_read = call @read(%s)\n")
-            .replace(apply, &apply.repeat(repeats));
-        let module = load(&text);
-        let mut costs = Vec::new();
-        for mode in [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare] {
-            let mut e = executor(&module, "main", &[64], Options { reversible: true, ..bounded() });
-            e.set_apply_mode(mode);
-            assert_eq!(e.run(), Outcome::Returned(None));
-            let state = e.snapshot().quantum;
-            if repeats == 1 {
-                if let Some(expected) = &first {
-                    assert_same_quantum(&state, expected, "same phased state in every mode");
-                } else {
-                    first = Some(state);
-                }
-            }
-            let cost = e.stats().region_cost;
-            assert!(cost.runs > 0 && cost.work > 0 && cost.journal_bytes > 0, "{mode:?}: {cost:?}");
-            if mode == ApplyMode::History {
-                assert!(cost.copied_bytes > 0, "memory loads split region worlds");
-            }
-            costs.push(cost);
-        }
-        let fields = |c: &bennett_exec::RegionCost| [c.runs, c.work, c.journal_bytes, c.overlay_bytes, c.copied_bytes];
-        for ((h, b), c) in fields(&costs[0]).into_iter().zip(fields(&costs[1])).zip(fields(&costs[2])) {
-            assert_eq!(c, h + b, "{repeats} regions: compare reports all work from both methods");
-        }
-    }
-}
-
-fn split_copy_cost(
-    caller_slots: usize,
-    callee_slots: usize,
-) -> (bennett_exec::RegionCost, bennett_exec::QuantumSnapshot) {
-    let params = (0..caller_slots).map(|n| format!("i8 %parameter{n}")).collect::<Vec<_>>().join(", ");
-    let tail = (0..callee_slots).map(|n| format!("%unused{n} = add i8 0, 0\n")).collect::<String>();
-    let module = load(&format!(
-        "memory 1024\nfunc @f() -> i8 {{\nentry:\n%v = load i8 0\n{tail}ret %v\n}}\nfunc @main({params}) {{\nentry:\nh [0:0]\ns [0:0]\n%o = qalloc 8\n%e = qalloc 5\napply @f() -> %o, %e budget 32\nret\n}}\n"
-    ));
-    let mut e = executor(&module, "main", &vec![0; caller_slots], bounded());
-    e.set_apply_mode(ApplyMode::History);
-    assert_eq!(e.run(), Outcome::Returned(None));
-    (e.stats().region_cost, e.snapshot().quantum)
-}
-
-#[test]
-fn region_cost_counts_shared_steps_and_the_caller_slots_copied_at_an_internal_split() {
-    let (small, state) = split_copy_cost(0, 0);
-    let (large, padded) = split_copy_cost(8, 0);
-    assert_same_quantum(&padded, &state, "unused parameters do not change phases");
-    // First world: load, return, three un-run records (entry call included).
-    // Fork: return, three un-run records; the load is already in its shared prefix.
-    assert_eq!((small.runs, small.work, large.work), (2, 9, 9));
-    // The two values of the promoted byte cause one fork, copying eight more u128 slots.
-    assert_eq!(large.copied_bytes - small.copied_bytes, 8 * size_of::<u128>() as u64);
-}
-
-#[test]
-fn region_copy_cost_includes_slots_of_the_frame_where_memory_splits() {
-    let (small, state) = split_copy_cost(0, 0);
-    let (large, padded) = split_copy_cost(0, 8);
-    assert_same_quantum(&padded, &state, "unused callee slots do not change phases");
-    // Callee slots already exist at the load; their later writes are not in the copied journal yet.
-    assert_eq!(large.copied_bytes - small.copied_bytes, 8 * size_of::<u128>() as u64);
-}
-
-#[test]
-fn regions_without_internal_forks_copy_no_worlds_even_inside_split_callers() {
-    let module = load(
-        "memory 512
-func @id(i1 %x) -> i1 {
-entry:
-ret %x
-}
-func @main() {
-entry:
-%q = qalloc 1
-%r = qalloc 1
-%o = qalloc 1
-%e = qalloc 5
-h %q
-s %q
-h %r
-%m = mark budget -1
-%read = call @id(%q)
-store i8 7, 0
-%second = call @id(%r)
-apply @id(%read) -> %o, %e budget 4
-rewind %m
-sdg %q
-h %q
-h %r
-ret
-}",
-    );
-    let mut e = executor(&module, "main", &[], Options { reversible: true, ..bounded() });
-    e.set_apply_mode(ApplyMode::History);
-    let entry = e.snapshot();
-    assert_eq!(e.run(), Outcome::Returned(None));
-    assert!(e.stats().splits > 0 && e.stats().split_memory_bytes > 0, "the caller split");
-    assert_eq!(e.stats().region_cost.copied_bytes, 0, "no region forks: scalar arguments run in place");
-    let state = e.snapshot().quantum;
-    assert_eq!(state.amplitudes.len(), 1);
-    assert!((state.amplitude(&[0, 0, 0, 0]) - num_complex::Complex64::new(1.0, 0.0)).norm() <= 1e-12);
-    e.reverse().expect("reverses");
-    assert_same_state(&e.snapshot(), &entry, "split caller reverses");
 }
 
 #[test]
@@ -917,27 +743,24 @@ apply @f(%q) -> %o, %e budget 4
 ret
 }",
     );
-    for mode in [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare] {
-        let mut e = executor(&module, "main", &[], Options { reversible: true, ..bounded() });
-        e.set_apply_mode(mode);
-        let entry = e.snapshot();
-        for _ in 0..5 {
-            assert_eq!(e.step(), None);
-        }
-        let before = e.snapshot();
-        assert_eq!(
-            e.step(),
-            Some(Outcome::Stopped(RunError::RegionFault {
-                callee: module.function_named("f").expect("f"),
-                fault: Fault::Unreachable,
-                branches: 2,
-                configurations: 2,
-            }))
-        );
-        let mut after = e.snapshot();
-        after.classical.outcome = None;
-        assert_same_state(&after, &before, "strict refusal restores phases and the zero fault register");
-        e.reverse().expect("reverses");
-        assert_same_state(&e.snapshot(), &entry, "fault reverses");
+    let mut e = executor(&module, "main", &[], Options { reversible: true, ..bounded() });
+    let entry = e.snapshot();
+    for _ in 0..5 {
+        assert_eq!(e.step(), None);
     }
+    let before = e.snapshot();
+    assert_eq!(
+        e.step(),
+        Some(Outcome::Stopped(RunError::RegionFault {
+            callee: module.function_named("f").expect("f"),
+            fault: Fault::Unreachable,
+            branches: 2,
+            configurations: 2,
+        }))
+    );
+    let mut after = e.snapshot();
+    after.classical.outcome = None;
+    assert_same_state(&after, &before, "strict refusal restores phases and the zero fault register");
+    e.reverse().expect("reverses");
+    assert_same_state(&e.snapshot(), &entry, "fault reverses");
 }

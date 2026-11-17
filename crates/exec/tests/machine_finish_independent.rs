@@ -6,7 +6,7 @@ mod common;
 
 use std::collections::BTreeMap;
 
-use bennett_exec::{ApplyMode, Executor, Options, Outcome, Snapshot};
+use bennett_exec::{Executor, Options, Outcome, Snapshot};
 use bennett_ir::Fault;
 use common::{bounded, executor, load};
 use num_complex::Complex64 as C;
@@ -140,7 +140,6 @@ fn machine() -> Options {
 fn run_dense(text: &str, expected: State, live: usize) {
     let module = load(text);
     let mut e = executor(&module, "main", &[], machine());
-    e.set_apply_mode(ApplyMode::Compare);
     reverse_and_repeat(&mut e, text, expected, live);
 }
 

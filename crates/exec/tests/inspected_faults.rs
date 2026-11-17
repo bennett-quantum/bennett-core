@@ -7,7 +7,7 @@
 
 mod common;
 
-use bennett_exec::{ApplyMode, Options, Outcome};
+use bennett_exec::{Options, Outcome};
 use bennett_ir::Fault;
 use common::{bounded, executor, load};
 
@@ -124,22 +124,13 @@ fn a_longjmp_over_disagreeing_qubits_is_never_a_call_fault_code() {
     }
 }
 
-/// The same under `apply` computed as worlds (the history idiom): the region's world faulted by inspection,
-/// so the `apply` itself faults, changing nothing, instead of XORing 16 into `%fault`. Branch enumeration runs
-/// each configuration on private memory holding its record, so each branch jumps: there the two ways differ
-/// (the per-branch jump is the debt's route), and compare mode would stop at this program.
+/// Under `apply` each configuration runs on private memory holding its own definite record, so each run
+/// jumps: no fault, the result XORed in as usual.
 #[test]
-fn an_apply_computed_as_worlds_does_not_make_an_inspected_fault_its_code() {
+fn an_apply_runs_each_configuration_on_its_own_record() {
     let module = load(PROGRAM);
-    for how in [0, 1] {
+    for how in [0, 1, 2] {
         let mut e = executor(&module, "applied", &[how], machine());
-        e.set_apply_mode(ApplyMode::History);
         assert_eq!(e.run(), Outcome::Returned(Some(9)), "how {how}");
     }
-    let mut e = executor(&module, "applied", &[2], machine());
-    e.set_apply_mode(ApplyMode::History);
-    assert_eq!(e.run(), Outcome::Faulted(Fault::BadLongjmp));
-    let mut e = executor(&module, "applied", &[2], machine());
-    e.set_apply_mode(ApplyMode::Branches);
-    assert_eq!(e.run(), Outcome::Returned(Some(9)), "each branch jumps on its own record");
 }

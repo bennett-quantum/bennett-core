@@ -1,4 +1,4 @@
-use bennett_exec::{ApplyMode, Options, Outcome};
+use bennett_exec::{Options, Outcome};
 use bennett_ir::Fault;
 
 use crate::common::{assert_same_state, bounded, executor, load};
@@ -25,7 +25,7 @@ const CODES: &[(&str, u64)] = &[
 ];
 
 #[test]
-fn every_fault_xors_into_dirty_fault_registers_in_every_apply_mode() {
+fn every_fault_xors_into_dirty_fault_registers() {
     let mut cases = 0;
     for width in [5, 6, 17, 64] {
         for &(name, code) in CODES {
@@ -39,26 +39,23 @@ fn every_fault_xors_into_dirty_fault_registers_in_every_apply_mode() {
             let module = load(&text);
             for low in 0..32 {
                 let dirty = low | if width > 5 { 1 << (width - 1) } else { 0 };
-                for mode in [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare] {
-                    let mut e = executor(
-                        &module,
-                        "main",
-                        &[dirty],
-                        Options { reversible: true, allow_region_faults: true, ..bounded() },
-                    );
-                    e.set_apply_mode(mode);
-                    let start = e.snapshot();
-                    assert_eq!(e.run(), Outcome::Returned(None), "{name} q{width} {dirty} {mode:?}");
-                    assert_eq!(e.snapshot().quantum.amplitudes.len(), 1);
-                    assert!((e.snapshot().quantum.amplitude(&[dirty ^ code, 0, 2]).re - 1.0).abs() < 1e-12);
-                    e.reverse().expect("faulting regions reverse");
-                    assert_same_state(&e.snapshot(), &start, "dirty fault register reverses");
-                    cases += 1;
-                }
+                let mut e = executor(
+                    &module,
+                    "main",
+                    &[dirty],
+                    Options { reversible: true, allow_region_faults: true, ..bounded() },
+                );
+                let start = e.snapshot();
+                assert_eq!(e.run(), Outcome::Returned(None), "{name} q{width} {dirty} ");
+                assert_eq!(e.snapshot().quantum.amplitudes.len(), 1);
+                assert!((e.snapshot().quantum.amplitude(&[dirty ^ code, 0, 2]).re - 1.0).abs() < 1e-12);
+                e.reverse().expect("faulting regions reverse");
+                assert_same_state(&e.snapshot(), &start, "dirty fault register reverses");
+                cases += 1;
             }
         }
     }
-    assert_eq!(cases, 6144);
+    assert_eq!(cases, 2048);
 }
 
 #[test]
@@ -82,32 +79,28 @@ fn fault_register_admission_covers_the_entire_register_width_domain() {
 fn invalid_jumps_and_indirect_calls_give_distinct_codes_with_coherent_dirty_targets() {
     let text = "memory 1024\nfunc @bad(i1 %choice) -> i2 {\nentry:\n br %choice, jump, indirect\njump:\n longjmp 16, 1\nindirect:\n %r = call_indirect fn() -> i2 999()\n ret %r\n}\nfunc @main() {\nentry:\n %q = qalloc 1\n h %q\n %out = qalloc 2\n x %out[0]\n h %out[1]\n %f = qalloc 64\n h %f[0]\n s %f[0]\n h %f[4]\n tdg %f[4]\n h %f[63]\n apply @bad(%q) -> %out, %f budget 32\n ret\n}";
     let module = load(text);
-    for mode in [ApplyMode::History, ApplyMode::Branches, ApplyMode::Compare] {
-        let mut e =
-            executor(&module, "main", &[], Options { allow_region_faults: true, reversible: true, ..bounded() });
-        e.set_apply_mode(mode);
-        let before = e.snapshot();
-        assert_eq!(e.run(), Outcome::Returned(None));
-        let quantum = e.snapshot().quantum;
-        assert_eq!(quantum.amplitudes.len(), 32);
-        for q in 0..2 {
-            for out in [1, 3] {
-                for low in 0..2 {
-                    for bit4 in 0..2 {
-                        for high in 0..2 {
-                            let dirty = low | (bit4 << 4) | (high << 63);
-                            let code = if q == 0 { 4 } else { 16 };
-                            let phase = (low as f64) * std::f64::consts::FRAC_PI_2
-                                - (bit4 as f64) * std::f64::consts::FRAC_PI_4;
-                            let expected = num_complex::Complex64::from_polar(1.0 / 32.0f64.sqrt(), phase);
-                            assert!((quantum.amplitude(&[q, out, dirty ^ code]) - expected).norm() < 1e-12);
-                        }
+    let mut e = executor(&module, "main", &[], Options { allow_region_faults: true, reversible: true, ..bounded() });
+    let before = e.snapshot();
+    assert_eq!(e.run(), Outcome::Returned(None));
+    let quantum = e.snapshot().quantum;
+    assert_eq!(quantum.amplitudes.len(), 32);
+    for q in 0..2 {
+        for out in [1, 3] {
+            for low in 0..2 {
+                for bit4 in 0..2 {
+                    for high in 0..2 {
+                        let dirty = low | (bit4 << 4) | (high << 63);
+                        let code = if q == 0 { 4 } else { 16 };
+                        let phase =
+                            (low as f64) * std::f64::consts::FRAC_PI_2 - (bit4 as f64) * std::f64::consts::FRAC_PI_4;
+                        let expected = num_complex::Complex64::from_polar(1.0 / 32.0f64.sqrt(), phase);
+                        assert!((quantum.amplitude(&[q, out, dirty ^ code]) - expected).norm() < 1e-12);
                     }
                 }
             }
         }
-        e.reverse().expect("no measurement");
-        assert_same_state(&e.snapshot(), &before, "coherent dirty fault targets reverse");
     }
+    e.reverse().expect("no measurement");
+    assert_same_state(&e.snapshot(), &before, "coherent dirty fault targets reverse");
     crate::common::oracle_support::worlds_executor::compare(&module, "main", &[], 64, false);
 }

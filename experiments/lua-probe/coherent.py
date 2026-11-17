@@ -71,8 +71,6 @@ def main():
     parser.add_argument('build', type=Path)
     args = parser.parse_args()
     build = args.build.resolve()
-    mode = os.environ.get('BENNETT_APPLY', 'history')
-    assert mode in ('history', 'branches', 'compare'), mode
     native = subprocess.run([str(build / 'native')], check=True, capture_output=True, text=True)
     pairs = [list(map(int, line.split())) for line in native.stdout.splitlines()]
     assert [p[0] for p in pairs] == list(range(8))
@@ -88,7 +86,7 @@ def main():
     path.write_text(text)
     result = subprocess.run([str(ROOT / 'target/debug/lua-probe-harness'), str(path),
                              ','.join(name for name, _ in specs)], capture_output=True, text=True)
-    (build / f'coherent-{mode}-report.txt').write_text(result.stdout + result.stderr)
+    (build / 'coherent-report.txt').write_text(result.stdout + result.stderr)
     assert result.returncode == 0, result.stdout + result.stderr
     reports = dict(re.findall(r'entry (\w+)\n(.*?)(?=\nentry |\Z)', result.stdout, re.S))
     rows = []
@@ -119,7 +117,7 @@ def main():
             row['success'] = sum(abs(actual.get((r,), 0j)) ** 2 for r in range(n) if bits[r])
         rows.append(row)
         print(json.dumps({k: v for k, v in row.items() if k != 'report'}), flush=True)
-    (build / f'coherent-{mode}.json').write_text(json.dumps(rows, indent=2) + '\n')
+    (build / 'coherent.json').write_text(json.dumps(rows, indent=2) + '\n')
 
 
 if __name__ == '__main__':

@@ -6,19 +6,15 @@
 //! The executor counts one step per executed instruction and enforces the budget itself; the program
 //! carries no metering code. In reversible mode each step journals exactly what it destroys (see
 //! `journal`), and [`Executor::reverse`] pops the journal back to the entry state, from a finished run or
-//! a faulted one alike. A coherent region (`apply`) is mark, call, rewind-keep on worlds: the callee runs
-//! once per value of its arguments, each run un-run after its result is kept; the earlier branch enumeration
-//! is kept as a comparison (`ApplyMode`).
+//! a faulted one alike. A coherent region (`apply`) runs its callee once for each definite value of its
+//! argument registers, on private memory, and XORs the result into its target (`region`).
 
 mod arith;
 #[cfg(test)]
 mod atomic_rewind_tests;
 mod backward;
 mod cells;
-#[cfg(test)]
-mod compare_tests;
 mod executor;
-mod forms;
 mod forward;
 mod gates;
 mod history;
@@ -44,5 +40,5 @@ pub use measure::{
     classify_with_chains, classify_with_recompute,
 };
 pub use quantum::RegisterState;
-pub use region::{ApplyMode, RegionCost};
+pub use region::RegionCost;
 pub use snapshot::{ClassicalSnapshot, QuantumSnapshot, Snapshot};

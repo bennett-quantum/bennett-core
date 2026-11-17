@@ -3,7 +3,7 @@
 //! projection. Matrices below act on a dense vector, independent of the executor/world scheduler.
 mod common;
 
-use bennett_exec::{ApplyMode, Executor, Options, Outcome};
+use bennett_exec::{Executor, Options, Outcome};
 use num_complex::Complex64 as C;
 use std::collections::BTreeMap;
 use std::f64::consts::FRAC_1_SQRT_2;
@@ -236,27 +236,24 @@ fn apply_compare_and_both_implementations_preserve_the_dense_interference_with_l
             "%out = qalloc 2\n%fault = qalloc 5\napply @f(%c) -> %out, %fault budget 20\nret 7",
         );
         let module = common::load(&text);
-        for mode in [ApplyMode::History, ApplyMode::Branches, ApplyMode::Forms, ApplyMode::Compare] {
-            let mut e = common::executor(&module, "main", &[], common::leftover::machine());
-            e.set_apply_mode(mode);
-            let start = e.snapshot();
-            assert_eq!(e.run(), Outcome::Returned(Some(7)), "input={input}, {mode:?}");
-            let snap = e.snapshot();
-            let out = if e.stats().leftover_qubits == 0 { 3 } else { 4 };
-            let mut actual = vec![ZERO; 32];
-            for (config, amp) in &snap.quantum.amplitudes {
-                assert_eq!(config[out], config[0] ^ 1);
-                assert_eq!(config[out + 1], 0);
-                let wire = if out == 3 { 0 } else { config[3] as usize };
-                actual[config[0] as usize | (config[1] as usize) << 2 | (config[2] as usize) << 3 | wire << 4] += amp;
-            }
-            for (a, b) in actual.iter().zip(&dense.0) {
-                assert!((a - b).norm() < 1e-11, "input={input}, {mode:?}");
-            }
-            assert_eq!(e.stats().observations, 0);
-            e.reverse().expect("apply after leftover reverses");
-            common::assert_same_state(&e.snapshot(), &start, "apply after leftover");
+        let mut e = common::executor(&module, "main", &[], common::leftover::machine());
+        let start = e.snapshot();
+        assert_eq!(e.run(), Outcome::Returned(Some(7)), "input={input}");
+        let snap = e.snapshot();
+        let out = if e.stats().leftover_qubits == 0 { 3 } else { 4 };
+        let mut actual = vec![ZERO; 32];
+        for (config, amp) in &snap.quantum.amplitudes {
+            assert_eq!(config[out], config[0] ^ 1);
+            assert_eq!(config[out + 1], 0);
+            let wire = if out == 3 { 0 } else { config[3] as usize };
+            actual[config[0] as usize | (config[1] as usize) << 2 | (config[2] as usize) << 3 | wire << 4] += amp;
         }
+        for (a, b) in actual.iter().zip(&dense.0) {
+            assert!((a - b).norm() < 1e-11, "input={input}");
+        }
+        assert_eq!(e.stats().observations, 0);
+        e.reverse().expect("apply after leftover reverses");
+        common::assert_same_state(&e.snapshot(), &start, "apply after leftover");
     }
 }
 

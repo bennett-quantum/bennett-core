@@ -241,14 +241,11 @@ fn apply_equals_the_history_idiom_where_no_branch_faults() {
     assert_eq!(compared, 32 + 48 + 16 + 12, "basis states compared");
 }
 
-/// `apply` computed as mark, call, rewind-keep on worlds is branch enumeration, faults included
-/// (`docs/DESIGN.md`, "`apply` as mark, call, rewind-keep"): in compare mode the executor computes every
-/// `apply` both ways from the same state and stops at any difference in the result, the world's state and
-/// journal, the amplitudes or the promised counts. Here on every basis state of the exhaustive harness
-/// (faulting ones included), strict and allowing region faults, and on the arguments in uniform
-/// superposition; each run is then reversed, which applies the region again in compare mode.
+/// A run with `apply` reverses to its entry state, faults and budgets included: on every basis state of the
+/// exhaustive harness (faulting ones included), strict and allowing region faults, and on the arguments in
+/// uniform superposition. The same run without a journal ends alike, with the same counts and state.
 #[test]
-fn apply_by_history_equals_branch_enumeration_faults_and_budgets_included() {
+fn apply_reverses_to_the_entry_state_faults_and_budgets_included() {
     let mut compared = 0;
     for region in &REGION_CASES {
         let text = format!("{REGIONS}\n{}", harness(region));
@@ -268,25 +265,21 @@ fn apply_by_history_equals_branch_enumeration_faults_and_budgets_included() {
         }
         for (module, case) in cases {
             for options in [bounded(), allowing_region_faults()] {
-                let mut compare = executor(module, "case", &case, Options { reversible: true, ..options });
-                compare.set_apply_mode(bennett_exec::ApplyMode::Compare);
-                let at_entry = compare.snapshot();
-                let outcome = compare.run();
-                let mut history = executor(module, "case", &case, options);
-                assert_eq!(history.run(), outcome, "@{}{case:?}", region.name);
-                let mut branches = executor(module, "case", &case, options);
-                branches.set_apply_mode(bennett_exec::ApplyMode::Branches);
-                assert_eq!(branches.run(), outcome, "@{}{case:?}", region.name);
-                let (h, b) = (history.stats(), branches.stats());
+                let mut reversible = executor(module, "case", &case, Options { reversible: true, ..options });
+                let at_entry = reversible.snapshot();
+                let outcome = reversible.run();
+                let mut plain = executor(module, "case", &case, options);
+                assert_eq!(plain.run(), outcome, "@{}{case:?}", region.name);
+                let (r, p) = (reversible.stats(), plain.stats());
                 assert_eq!(
-                    (h.steps, h.region_steps, h.region_faults, h.region_fault_weight, h.splits, h.peak_worlds),
-                    (b.steps, b.region_steps, b.region_faults, b.region_fault_weight, b.splits, b.peak_worlds),
-                    "@{}{case:?}: the promised counts",
+                    (r.steps, r.region_steps, r.region_faults, r.region_fault_weight),
+                    (p.steps, p.region_steps, p.region_faults, p.region_fault_weight),
+                    "@{}{case:?}: the counts",
                     region.name
                 );
-                common::assert_same_state(&history.snapshot(), &branches.snapshot(), &format!("@{}", region.name));
-                compare.reverse().unwrap_or_else(|error| panic!("@{}{case:?}: {error}", region.name));
-                common::assert_same_state(&compare.snapshot(), &at_entry, &format!("@{} reversed", region.name));
+                common::assert_same_state(&reversible.snapshot(), &plain.snapshot(), &format!("@{}", region.name));
+                reversible.reverse().unwrap_or_else(|error| panic!("@{}{case:?}: {error}", region.name));
+                common::assert_same_state(&reversible.snapshot(), &at_entry, &format!("@{} reversed", region.name));
                 compared += 1;
             }
         }
