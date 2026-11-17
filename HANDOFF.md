@@ -657,6 +657,12 @@ its vendor; at most two sol jobs at once.
    of six regions; now the whole four-cell image is kept and checked, and 48 dense nibble runs). A correct
    hand-written fallback-shaped `store` with two worlds is accepted and needs its warning; the native
    reference runs clean under ASan/UBSan. `front/test.sh` 170 passed / 21 ignored.
+   **Built on 2026-11-17, step by step** (the fallback oracle's acceptance tests un-ignored as each passes):
+   - The oracle compares the whole fixture image, guard bytes around `cells` included, on both sides.
+   - The documented Boolean XOR on a quantum `_Bool` (`y ^= q && !r`, and `if (q) if (r) y ^= 1` at O0 and
+     with `--taint-all`) is coherent: the one-bit flip is proved case by case where LLVM's simplifier does
+     not fold it (`docs/DESIGN.md`, "From C to a device program"). `coherent_xor` and `coherent_nested` pass
+     in all three modes with their full complex vectors; seven acceptance tests wait.
 
 5. **Floating point** is done over Berkeley SoftFloat 3e (decided 2026-11-15; `rt/softfloat/README.md`), the
    complex helpers over libgcc (`rt/libgcc/README.md`), including `__divxc3`. Left: `__float128` and

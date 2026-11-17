@@ -20,8 +20,10 @@ qubit variable are:
 - `x = e` when x's value is known (it is fresh, was last given an ordinary value, or was just measured):
   the known value is XORed away and e is XORed in;
 - `x ^= e`, with e not reading x: e is XORed in;
-- `x = e(x)` on a one-bit variable, when LLVM proves `e(1) == e(0) ^ 1` (how it writes `b ^= c` on
-  `_Bool`s): `e(0)` is XORed in;
+- `x = e(x)` on a one-bit variable, when `e(1) == e(0) ^ 1` (how LLVM writes `b ^= c` on `_Bool`s):
+  `e(0)` is XORed in. LLVM's simplifier proves the identity, or, when `e` reads no ordinary value and the
+  other qubit variables it reads have at most 8 bits that may be 1, the front checks it on every
+  assignment of those bits (`y ^= q && !r`, whose negated `select` the simplifier does not fold);
 - `x = g(x, a)` in place, where g is a bijection in x: a chain from x of `+ - ^ ~`, negation,
   multiplication by an odd constant, rotation and byte swap, whose other operands `a` do not read x
   (`x += y; x *= 3; x = ~x; x++;`). x is computed afresh into a temporary and the old value is

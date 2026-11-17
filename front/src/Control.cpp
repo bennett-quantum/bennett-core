@@ -48,6 +48,11 @@ namespace {
 // The fault register is as wide as the device program's fault codes (bennett_ir::Fault::CODE_WIDTH).
 constexpr unsigned faultCodeBits = 5;
 
+// The most support bits of the other qubit variables a one-bit update reads for which provesFlip checks
+// every assignment when LLVM's simplifier cannot fold the identity: two evaluations per assignment, each a
+// clone of the computation folded by LLVM, so 2^9 folds at most.
+constexpr unsigned maxEnumeratedSupportBits = 8;
+
 // The C name of a qubit variable, for suggestions in messages.
 std::string plainName(const Storage &storage) {
   return storage.alloca->hasName() ? storage.alloca->getName().str() : "x";
@@ -116,6 +121,9 @@ private:
   std::string slice(const Slice &slice, const Value *root, const Storage *target, unsigned bits,
                     const Instruction &sink, std::string &args, bool flipProved = false);
   bool provesFlip(const Slice &slice, const Value *root, const Storage &target);
+  // provesFlip by evaluating both values of the target on every assignment of the other variables' support
+  // bits, when the computation has no ordinary leaves and those bits are few.
+  bool provesFlipByCases(const Slice &slice, const Value *root, const Storage &target);
   bool sliceable(const Value *value) const;
 };
 
@@ -545,7 +553,53 @@ bool ControlWriter::provesFlip(const Slice &slice, const Value *root, const Stor
   const auto *proved = dyn_cast<ConstantInt>(ret->getReturnValue());
   bool holds = proved && proved->isOne();
   scratch->eraseFromParent();
-  return holds;
+  return holds || provesFlipByCases(slice, root, target);
+}
+
+// The simplifier does not always fold the identity: `y ^= q && !r` on a `_Bool` is `y != (q ? !r : 0)`, and
+// InstCombine rewrites the negated `select` by De Morgan into another `select`, so `(s ^ 1) ^ s` no longer
+// meets itself. When the stored value reads only qubit variables (no ordinary value, which could be
+// anything), every assignment of their support bits is a case: the identity holds if each case folds to
+// v(1) = v(0) ^ 1. The support is sound once the loads carry their ranges (annotateRanges), so these are
+// all the values the variables can hold.
+bool ControlWriter::provesFlipByCases(const Slice &slice, const Value *root, const Storage &target) {
+  if (!slice.classical.empty()) {
+    return false;
+  }
+  std::vector<std::pair<const Storage *, unsigned>> bits; // the other variables' support bits
+  for (const Storage *storage : slice.quantum) {
+    if (storage == &target) {
+      continue;
+    }
+    for (unsigned bit = 0; bit < storage->bits; ++bit) {
+      if (storage->support >> bit & 1) {
+        bits.push_back({storage, bit});
+      }
+    }
+  }
+  if (bits.size() > maxEnumeratedSupportBits) {
+    return false;
+  }
+  for (uint64_t assignment = 0; assignment < uint64_t(1) << bits.size(); ++assignment) {
+    std::map<const Storage *, uint64_t> values;
+    for (const Storage *storage : slice.quantum) {
+      values[storage] = 0;
+    }
+    for (size_t i = 0; i < bits.size(); ++i) {
+      if (assignment >> i & 1) {
+        values[bits[i].first] |= uint64_t(1) << bits[i].second;
+      }
+    }
+    std::optional<uint64_t> folded[2];
+    for (uint64_t bit = 0; bit < 2; ++bit) {
+      values[&target] = bit;
+      folded[bit] = evaluate(slice, root, values);
+    }
+    if (!folded[0] || !folded[1] || (*folded[0] ^ *folded[1]) != 1) {
+      return false;
+    }
+  }
+  return true;
 }
 
 // The function computing `root` from its leaves: ordinary values (passed in) and qubit variables (whose

@@ -486,13 +486,14 @@ macro_rules! waiting {
 mod waiting_for_fallback {
     use super::waiting_case;
     waiting!(store, memcpy, memset, user_write, nested, outside_class);
+    /// The documented Boolean XOR `y ^= q && !r`, coherent in every mode since the
+    /// front proves a one-bit flip case by case when the simplifier cannot fold it.
     #[test]
-    #[ignore = "documented Boolean XOR class still refuses y ^= q && !r; inventory prints the refusal"]
     fn coherent_xor() {
         waiting_case("coherent_xor");
     }
+    /// The nested `if (q) if (r) y ^= 1`, also at O0 and with `--taint-all`.
     #[test]
-    #[ignore = "nested documented Boolean XOR still refuses; inventory prints the refusal"]
     fn coherent_nested() {
         waiting_case("coherent_nested");
     }

@@ -472,6 +472,12 @@ an empty device program (`front/src/main.cpp`, `readInput`).
   by an odd constant, rotation, byte swap, a select whose condition does not read x, and the truncations
   and extensions across which ring operations keep their low bits (`InPlace.h`). The other operands must
   not read x. Anything else that reads x's old value is refused: it needs history (open questions).
+- **A one-bit update `x = e(x)` with `e(1) == e(0) ^ 1`** is `x ^= e(0)`. The identity is proved by LLVM's
+  simplifier on two clones of `e`, or, where `e` reads no ordinary value and the other qubit variables it
+  reads have at most `maxEnumeratedSupportBits` (8) bits that may be 1, by folding both clones on every
+  assignment of those bits (`Control.cpp`, `provesFlipByCases`): InstCombine rewrites the negated `select` of
+  `q && !r` by De Morgan into another `select`, so `(s ^ 1) ^ s` did not fold and `y ^= q && !r` was refused
+  until 2026-11-17 (the fallback oracle's `coherent_xor`, and `coherent_nested` at O0).
 - **Branches, joins and loops that depend on a qubit** are outlined into ordinary functions and applied. They
   may not write memory: an ordinary write under quantum control is a channel, and is refused.
 - **Quantum operations under such a branch are predicated** (`Predicate.h`). On each basis configuration the
