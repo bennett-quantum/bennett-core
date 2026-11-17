@@ -249,11 +249,8 @@ fn strict_and_machine_meaning_dirty_frees_and_stale_handles() {
     );
 }
 
-/// Since the design seam's V1 was fixed (2026-11-16, machine-finish 0d) the leftover is no barrier on the
-/// machine: undoing the rewind takes it back (`crates/exec/tests/leftover_wires.rs`, each state worked by
-/// hand). This reference still models the earlier barrier, so on the machine it is compared up to the
-/// inner rewind only; the outer rewind and reversal are checked against the hand-worked states there. Route:
-/// model the take-back in `oracle_support::worlds`.
+/// The document-based reference now retains inverse allocations and takes them back at replay.
+/// Compare the complete forward run, every public field, and both independent reversals.
 #[test]
 fn nonzero_allocation_left_over_and_the_outer_rewind() {
     for outer in ["", "rewind %outer"] {
@@ -264,7 +261,8 @@ fn nonzero_allocation_left_over_and_the_outer_rewind() {
         for machine in [false, true] {
             let mut m = Model::new(&p, "main");
             m.machine_meaning = machine;
-            let state = m.run(basis(m.initial("main", &[])), 20);
+            let initial = basis(m.initial("main", &[]));
+            let state = m.run(initial.clone(), 20);
             let mut e = Executor::new(
                 &p,
                 p.function_named("main").expect("entry"),
@@ -274,21 +272,16 @@ fn nonzero_allocation_left_over_and_the_outer_rewind() {
             .expect("starts");
             let entry = e.snapshot();
             e.run();
+            assert_snapshot(&m, &state, &e);
             if machine {
-                // The unfaithful inverse's quantum result is unspecified. Compare only the promised
-                // leftover and completion, without pinning amplitudes; then the run reverses to its entry.
-                let expected_leftovers = if outer.is_empty() { 1 } else { 0 };
-                assert_eq!(e.stats().leftover_qubits, expected_leftovers);
+                assert_eq!(e.stats().leftover_qubits, if outer.is_empty() { 1 } else { 0 });
                 assert_eq!(e.outcome(), Some(Outcome::Returned(None)));
-                if outer.is_empty() {
-                    assert!(state.keys().all(|w| w.classical.time.leftovers.len() == 1));
-                }
-                e.reverse().expect("the leftover is taken back on the way");
-                common::assert_same_state(&e.snapshot(), &entry, "back to the entry");
-            } else {
-                assert_snapshot(&m, &state, &e);
-                e.reverse().expect("strict refusal reverses");
+                let reversed = m.reverse_joined(state).expect("reference takes the allocation back");
+                assert_eq!(reversed.keys().collect::<Vec<_>>(), initial.keys().collect::<Vec<_>>());
+                assert!((reversed.values().next().expect("entry amplitude").re - 1.0).abs() < 1e-12);
             }
+            e.reverse().expect("the full run reverses");
+            common::assert_same_state(&e.snapshot(), &entry, "back to the entry");
         }
     }
 }
@@ -651,4 +644,24 @@ fn collective_jump_diagnostic_is_not_delivered_by_a_budgeted_call() {
     e.reverse().expect("the diagnostic's precursor reverses");
     common::assert_same_state(&e.snapshot(), &initial, "collective check reverse");
     assert!(!matches!(actual, Outcome::Returned(_)), "collective diagnostic became a program value: {actual:?}");
+}
+
+/// Multiple retained allocations, reused generations, later fresh allocations and nested replay.
+/// Circuit: keep k=1 turns the inverse controlled flips into t[j]=c; the outer rewind
+/// takes all t[j] back and clears them. H after cleanup tests relative phase as well.
+#[test]
+fn reference_take_back_multiple_allocations_and_reused_generations() {
+    for prepare in ["", "x %q", "h %q", "h %q\ns %q", "ry(0.74) %q\nsdg %q"] {
+        for count in 1..=4 {
+            for outer in [false, true] {
+                let allocations: String =
+                    (0..count).map(|j| format!("%t{j} = qalloc {}\nx %t{j}[{j}] ctrl %q, %k\n", j + 1)).collect();
+                let text = format!(
+                    "memory 2048\nfunc @main() {{\nentry:\n%q = qalloc 1\n{prepare}\n%k = qalloc 1\n%old = qalloc 3\nqfree %old\n%outer = mark budget 200\n%m = mark budget 60\n{allocations}rewind %m keep (i1 1 -> %k)\n{}%fresh = qalloc 2\nx %fresh[1]\nh %q\nret\n}}",
+                    if outer { "rewind %outer\n" } else { "" }
+                );
+                exact(&text, "main", &[], true);
+            }
+        }
+    }
 }

@@ -14,8 +14,11 @@ mod classical;
 pub use classical::Classical;
 use std::cell::{Cell, RefCell};
 
+#[path = "worlds_leftovers.rs"]
+mod leftovers;
 #[path = "worlds_replay.rs"]
 mod replay;
+use leftovers::{Kind, Retained};
 #[path = "worlds_time.rs"]
 mod time;
 use std::collections::BTreeMap;
@@ -82,7 +85,6 @@ pub enum Action {
     Allocate(usize),
     Free(usize),
     LeftoverFree(usize),
-    LeftBehind,
     Catch(Fault),
     /// The operation is read from the program position in `before`.
     Gate,
@@ -117,6 +119,9 @@ pub struct World {
     pub classical: Classical,
     pub quantum: Vec<u64>,
     pub history: Vector<Record>,
+    /// Physical registers retained by an inverse, outside the logical register table at the mark.
+    /// Metadata routes each take-back to its original history boundary and operation kind.
+    pub retained: BTreeMap<usize, Retained>,
 }
 
 impl World {
@@ -292,6 +297,7 @@ impl<'a> Model<'a> {
             },
             quantum: Vec::new(),
             history: Vector::new(),
+            retained: BTreeMap::new(),
         };
         // An entry frame that does not fit ends the run before its first step, with no frame.
         if let Err(fault) = self.call(
@@ -354,16 +360,8 @@ impl<'a> Model<'a> {
         }
         let old = self.read_memory(w, address, 1)?[0];
         self.write_memory(w, address, &[0])?;
-        let id = w.classical.registers.iter().position(|r| r.width.is_none()).unwrap_or(w.classical.registers.len());
-        let generation = w.classical.registers.get(id).map_or(1, |r| r.generation + 1);
-        let info = Register { width: Some(8), generation, allocated_at: w.history.len() };
-        if id == w.classical.registers.len() {
-            w.classical.registers.push(info);
-            w.quantum.push(old.into());
-        } else {
-            w.classical.registers[id] = info;
-            w.quantum[id] = old.into();
-        }
+        let (id, _) = self.allocate_kind(w, 8, Kind::Promotion { address, old });
+        w.quantum[id] ^= u64::from(old);
         w.classical.cells.insert(address, id);
         Ok((id, Some((address, id, old))))
     }
@@ -632,8 +630,14 @@ impl<'a> Model<'a> {
                 }
                 Inst::Load { width, address, .. } => {
                     let address = w.integer(*address)? as u64;
-                    action = Action::Cells(self.touched(&w, address, width.bytes() as usize)?);
-                    let bytes = self.read_memory(&w, address, width.bytes() as usize)?;
+                    let bytes = self.access_memory(&mut w, address, width.bytes() as usize)?;
+                    action = Action::Cells(
+                        w.classical
+                            .cells
+                            .range(address..address + bytes.len() as u64)
+                            .map(|(&a, &id)| (id, bytes[(a - address) as usize], bytes[(a - address) as usize]))
+                            .collect(),
+                    );
                     let mut n = [0; 16];
                     n[..bytes.len()].copy_from_slice(&bytes);
                     result = Some(Value::Int(u128::from_le_bytes(n) & width.mask()));
@@ -641,10 +645,7 @@ impl<'a> Model<'a> {
                 Inst::Store { width, address, value } => {
                     let a = w.integer(*address)? as u64;
                     let n = w.integer(*value)?.to_le_bytes();
-                    let cells = self.touched(&w, a, width.bytes() as usize)?;
-                    self.write_memory(&mut w, a, &n[..width.bytes() as usize])?;
-                    action =
-                        Action::Cells(cells.into_iter().map(|(id, old, _)| (id, old, w.quantum[id] as u8)).collect());
+                    action = Action::Cells(self.store_access(&mut w, a, &n[..width.bytes() as usize])?);
                 }
                 Inst::Alloca { size, .. } => {
                     w.classical.sp = w
@@ -696,25 +697,15 @@ impl<'a> Model<'a> {
                     ];
                     let bytes: Vec<_> = words.into_iter().flat_map(u64::to_le_bytes).collect();
                     let address = w.integer(*buffer)? as u64;
-                    let cells = self.touched(&w, address, bytes.len())?;
-                    self.write_memory(&mut w, address, &bytes)?;
-                    action =
-                        Action::Cells(cells.into_iter().map(|(id, old, _)| (id, old, w.quantum[id] as u8)).collect());
+                    action = Action::Cells(self.store_access(&mut w, address, &bytes)?);
                     result = Some(Value::Int(0));
                 }
                 Inst::Call { callee, args, dst } | Inst::CallBudget { callee, args, dst, .. } => {
-                    let reads = args
-                        .iter()
-                        .zip(&self.program.function(*callee).params)
-                        .filter_map(|(a, p)| match (w.read(*a), p.ty) {
-                            (Value::Register(id, _), Type::Int(_)) => Some((id, w.quantum[id])),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>();
+                    let params = self.program.function(*callee).params.iter().map(|p| p.ty).collect::<Vec<_>>();
+                    let (args, reads) = self.arguments(&mut w, args, &params);
                     if !reads.is_empty() {
                         action = Action::Read(reads);
                     }
-                    let args = args.iter().map(|a| w.read(*a)).collect();
                     let guard = if let Inst::CallBudget { fault, budget, .. } = inst {
                         Some((*fault, w.integer(*budget)? as u64))
                     } else {
@@ -737,18 +728,10 @@ impl<'a> Model<'a> {
                     if !self.program.functions.get(index).is_some_and(|f| f.has_signature(signature)) {
                         return Err(Fault::BadIndirect);
                     }
-                    let reads = args
-                        .iter()
-                        .zip(&self.program.functions[index].params)
-                        .filter_map(|(a, p)| match (w.read(*a), p.ty) {
-                            (Value::Register(id, _), Type::Int(_)) => Some((id, w.quantum[id])),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>();
+                    let (args, reads) = self.arguments(&mut w, args, &signature.params);
                     if !reads.is_empty() {
                         action = Action::Read(reads);
                     }
-                    let args = args.iter().map(|a| w.read(*a)).collect();
                     self.call(&mut w, FuncId(index as u32), args, *dst)?;
                     w.classical.journal_records += 1;
                     w.history.push_back_mut(Record { before, action });
@@ -762,21 +745,7 @@ impl<'a> Model<'a> {
                     w.classical.tape.push_back_mut(w.integer(*byte)? as u8);
                 }
                 Inst::Qalloc { width, .. } => {
-                    let id = w
-                        .classical
-                        .registers
-                        .iter()
-                        .position(|r| r.width.is_none())
-                        .unwrap_or(w.classical.registers.len());
-                    let generation = w.classical.registers.get(id).map_or(1, |r| r.generation + 1);
-                    let info = Register { width: Some(width.bits()), generation, allocated_at: w.history.len() };
-                    if id == w.classical.registers.len() {
-                        w.classical.registers.push(info);
-                        w.quantum.push(0);
-                    } else {
-                        w.classical.registers[id] = info;
-                        w.quantum[id] = 0;
-                    }
+                    let (id, generation) = self.allocate(&mut w, width.bits());
                     result = Some(Value::Register(id, generation));
                     action = Action::Allocate(id);
                 }
@@ -1103,7 +1072,7 @@ impl<'a> Model<'a> {
         if h == 0
             || h > first.history.len()
             || first.history[h - 1].action != Action::Mark
-            || first.history.iter().skip(h).any(|r| matches!(r.action, Action::Measurement | Action::LeftBehind))
+            || first.history.iter().skip(h).any(|r| matches!(r.action, Action::Measurement))
         {
             return Err(Fault::BadRewind);
         }
@@ -1167,17 +1136,8 @@ impl<'a> Model<'a> {
             w.history.push_back_mut(Record { before: site, action: Action::Rewind { start, count } });
             add(&mut result, w, a);
         }
-        if result.keys().any(|w| w.classical.time.leftovers != first.classical.time.leftovers) {
-            let mut barrier = BTreeMap::new();
-            for (mut w, a) in result {
-                w.history.push_back_mut(Record { before: w.classical.clone(), action: Action::LeftBehind });
-                add(&mut barrier, w, a);
-            }
-            return Ok(barrier);
-        }
-        // Interim HANDOFF rule: a rewind must have an inverse on the state its history describes.
-        // This also catches changed classical reads when worlds differ, without merging histories
-        // and silently accepting norm loss/gain. No particular result is promised beyond this rule.
+        // Check the inverse of the complete machine, including retained registers. The exact
+        // unfaithful result is unspecified; take-back must nevertheless recover the input.
         self.checking.set(self.checking.get() + 1);
         let restored = self.undo_state(&result);
         self.checking.set(self.checking.get() - 1);
@@ -1413,7 +1373,7 @@ impl<'a> Model<'a> {
                 || h > w.history.len()
                 || w.history[h - 1].action != Action::Mark
                 || w.mark_position(handle)? != h
-                || w.history.iter().skip(h).any(|r| matches!(r.action, Action::Measurement | Action::LeftBehind))
+                || w.history.iter().skip(h).any(|r| matches!(r.action, Action::Measurement))
                 || w.integer(Operand::Slot(*mark))? != handle as u128
             {
                 return Err(Fault::BadRewind);
@@ -1484,7 +1444,9 @@ impl<'a> Model<'a> {
             let guards = w.classical.time.guards.clone();
             before.time = first.classical.time.clone();
             before.time.guards = guards.clone();
+            let leftovers = w.classical.time.leftovers.clone();
             w.classical.time = first.classical.time.clone();
+            w.classical.time.leftovers.extend(leftovers);
             w.classical.time.guards = guards;
             let clock = inputs
                 .keys()

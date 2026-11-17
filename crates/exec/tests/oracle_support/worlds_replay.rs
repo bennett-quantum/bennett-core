@@ -1,5 +1,5 @@
 //! Inversion of snapshot history and dynamic-visit replay, independently of production journals.
-use super::{Action, Model, Superposition, World, add, basis, clean};
+use super::{Action, Kind, Model, Superposition, World, add, basis, clean};
 use bennett_ir::{Fault, Inst, Operand};
 use std::collections::BTreeMap;
 
@@ -38,7 +38,7 @@ impl Model<'_> {
                 let site = record.before.frames.last().expect("rewind site");
                 let mut reset = BTreeMap::new();
                 for (mut w, a) in state {
-                    w.classical = (**start).clone();
+                    w.restore_classical(start);
                     add(&mut reset, w, a);
                 }
                 let mut completed = self.joined_until(reset, 4096, Some(site));
@@ -66,7 +66,7 @@ impl Model<'_> {
             if let Action::Rewind { start, .. } = &record.action {
                 let mut reset = BTreeMap::new();
                 for (mut w, a) in state {
-                    w.classical = (**start).clone();
+                    w.restore_classical(start);
                     add(&mut reset, w, a);
                 }
                 state = reset;
@@ -99,41 +99,55 @@ impl Model<'_> {
                 continue;
             }
             let abandoned = if let Action::Allocate(id) = record.action {
-                if state.keys().any(|w| w.quantum[id] != 0) {
-                    if !self.machine_meaning {
-                        return Err(Fault::BadRewind);
-                    }
-                    let mut r = state.keys().next().expect("allocation group").classical.registers[id].clone();
-                    r.generation += 1;
-                    Some((id, r))
-                } else {
-                    None
-                }
+                state.keys().any(|w| w.quantum[id] != 0).then_some(id)
             } else {
                 None
             };
+            let changed_reads = if let Action::Read(reads) = &record.action {
+                reads.iter().map(|&(id, value)| state.keys().any(|w| w.quantum[id] != value)).collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            let changed_cells = if let Action::Cells(cells) = &record.action {
+                cells
+                    .iter()
+                    .map(|&(id, _, new)| state.keys().any(|w| w.quantum[id] != u64::from(new)))
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            if !self.machine_meaning
+                && (abandoned.is_some() || changed_reads.contains(&true) || changed_cells.contains(&true))
+            {
+                return Err(Fault::BadRewind);
+            }
             let mut undone = BTreeMap::new();
             for (mut w, a) in state {
                 match &record.action {
-                    Action::Measurement | Action::LeftBehind => return Err(Fault::BadRewind),
-                    Action::Allocate(_) => {
-                        if abandoned.is_none() {
-                            w.quantum.truncate(record.before.registers.len());
+                    Action::Measurement => return Err(Fault::BadRewind),
+                    Action::Allocate(id) => {
+                        if abandoned.is_some() {
+                            w.retain_allocation(*id, Kind::Allocation);
+                        } else {
+                            w.quantum[*id] = 0;
                         }
                     }
                     Action::Free(id) => w.quantum[*id] = 0,
                     Action::LeftoverFree(_) => {}
                     Action::Read(reads) => {
-                        if reads.iter().any(|&(id, value)| w.quantum[id] != value) {
-                            return Err(Fault::BadRewind);
+                        for (&(id, value), changed) in reads.iter().zip(&changed_reads) {
+                            if *changed {
+                                w.retain_wire(id, value, false);
+                            }
                         }
                     }
                     Action::Cells(cells) => {
-                        for &(id, old, new) in cells {
-                            if w.quantum[id] != u64::from(new) {
-                                return Err(Fault::BadRewind);
+                        for (&(id, old, new), changed) in cells.iter().zip(&changed_cells) {
+                            if *changed {
+                                w.retain_wire(id, u64::from(new), true);
                             }
-                            w.quantum[id] = u64::from(old);
+                            // DESIGN: a store XORs old and new; its inverse is the same XOR.
+                            w.quantum[id] ^= u64::from(old ^ new);
                         }
                     }
                     _ => {}
@@ -143,19 +157,29 @@ impl Model<'_> {
                 }
             }
             clean(&mut undone);
+            let dirty_promotions = if let Action::MemoryGate { promoted, .. } = &record.action {
+                promoted
+                    .iter()
+                    .map(|&(_, id, old)| undone.keys().any(|w| w.quantum[id] != u64::from(old)))
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            if !self.machine_meaning && dirty_promotions.contains(&true) {
+                return Err(Fault::BadRewind);
+            }
             for (mut out, a) in undone {
                 if let Action::MemoryGate { promoted, .. } = &record.action {
-                    for &(_, id, old) in promoted {
-                        if out.quantum[id] != u64::from(old) {
-                            return Err(Fault::BadRewind);
+                    for (&(address, id, old), dirty) in promoted.iter().zip(&dirty_promotions) {
+                        out.quantum[id] ^= u64::from(old);
+                        if *dirty {
+                            out.retain_allocation(id, Kind::Promotion { address, old });
                         }
-                        out.quantum[id] = 0;
                     }
-                    out.quantum.truncate(record.before.registers.len());
                 }
                 let clock = out.classical.time.clock;
                 let guards = out.classical.time.guards.clone();
-                out.classical = record.before.clone();
+                out.restore_classical(&record.before);
                 out.classical.time.clock = clock;
                 // An inverse taken by a forward rewind gives no budget back to live calls.
                 // Restoration/reversal still restores the recorded counts exactly.
@@ -165,14 +189,6 @@ impl Model<'_> {
                             *remaining = left;
                         }
                     }
-                }
-                if let Some((id, r)) = &abandoned {
-                    if *id == out.classical.registers.len() {
-                        out.classical.registers.push(r.clone());
-                    } else {
-                        out.classical.registers[*id] = r.clone();
-                    }
-                    out.classical.time.leftovers.insert(*id);
                 }
                 add(&mut result, out, a);
             }

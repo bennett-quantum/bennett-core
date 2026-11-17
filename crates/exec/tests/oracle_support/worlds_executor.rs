@@ -52,12 +52,13 @@ pub fn observed_one_of(model: &Model<'_>, state: &Superposition, snapshot: &benn
 fn matches_group(model: &Model<'_>, state: &Superposition, snapshot: &bennett_exec::Snapshot) -> bool {
     let w = state.keys().next().expect("world group");
     let c = &w.classical;
+    let registers = w.physical_registers();
     if c.cells.iter().map(|(&a, &id)| (a, id)).collect::<Vec<_>>() != snapshot.quantum.cells
         || model.memory(w) != snapshot.classical.memory
         || c.sp != snapshot.classical.stack_pointer
         || !c.tape.iter().copied().eq(snapshot.classical.tape.iter().copied())
         || c.frames.len() != snapshot.classical.frames.len()
-        || c.registers.len() != snapshot.quantum.registers.len()
+        || registers.len() != snapshot.quantum.registers.len()
     {
         return false;
     }
@@ -80,7 +81,7 @@ fn matches_group(model: &Model<'_>, state: &Superposition, snapshot: &bennett_ex
             return false;
         }
     }
-    for (r, a) in c.registers.iter().zip(&snapshot.quantum.registers) {
+    for (r, a) in registers.iter().zip(&snapshot.quantum.registers) {
         if r.width != a.width.map(|w| w.bits()) || r.generation != u64::from(a.generation) {
             return false;
         }
