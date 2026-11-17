@@ -86,7 +86,7 @@ fn fault_outcomes_follow_the_budget_and_leave_out_unchanged() {
         // By default a region fault stops the run: fault.bn reads its fault register on purpose.
         let (strict, _) = run(&module, "main", &[n], bounded());
         let callee = module.function_named("triangle").expect("@triangle");
-        let fault = RunError::RegionFault { callee, fault: Fault::Budget, branches: 1, configurations: 1 };
+        let fault = RunError::RegionFault { callee, fault: Fault::Budget, faulting: 1, configurations: 1 };
         assert_eq!(strict, if n <= 3 { outcome } else { Outcome::Stopped(fault) }, "n = {n}");
         let (out, fault) = (packed & 0xff, packed >> 8);
         let expected =

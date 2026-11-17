@@ -38,7 +38,7 @@ fn strict_fault_uses_the_first_original_configuration() {
         Outcome::Stopped(RunError::RegionFault {
             callee: module.function_named("f").expect("f"),
             fault: Fault::DivideByZero,
-            branches: 2,
+            faulting: 2,
             configurations: 2,
         })
     );
@@ -510,7 +510,7 @@ entry:
                 Some(&fault) => Outcome::Stopped(RunError::RegionFault {
                     callee: p.function_named("f").expect("f"),
                     fault,
-                    branches: faulting.len(),
+                    faulting: faulting.len(),
                     configurations: 8,
                 }),
                 None => Outcome::Returned(None),
@@ -556,7 +556,7 @@ ret
         Some(Outcome::Stopped(RunError::RegionFault {
             callee: module.function_named("f").expect("f"),
             fault: Fault::Unreachable,
-            branches: 2,
+            faulting: 2,
             configurations: 2,
         }))
     );

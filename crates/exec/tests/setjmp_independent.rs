@@ -146,7 +146,7 @@ entry:
         Some(Outcome::Stopped(RunError::RegionFault {
             callee: common::entry(&module, "escape"),
             fault: Fault::BadLongjmp,
-            branches: 1,
+            faulting: 1,
             configurations: 2,
         }))
     );

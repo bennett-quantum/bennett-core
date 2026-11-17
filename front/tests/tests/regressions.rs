@@ -46,10 +46,10 @@ fn faults_of_a_compute_and_its_uncompute_do_not_cancel() {
     for seed in 0..SEEDS {
         // The simulator sees the fault on both branches and stops the run there.
         let outcome = run(&starved, "main", &[], seed);
-        let Outcome::Stopped(RunError::RegionFault { fault, branches, configurations, .. }) = outcome else {
+        let Outcome::Stopped(RunError::RegionFault { fault, faulting, configurations, .. }) = outcome else {
             panic!("seed {seed}: {outcome:?}")
         };
-        assert_eq!((fault, branches, configurations), (Fault::Budget, 2, 2), "seed {seed}");
+        assert_eq!((fault, faulting, configurations), (Fault::Budget, 2, 2), "seed {seed}");
         // Run on regardless, the program keeps the evidence to the end: releasing it faults.
         let options = Options { allow_region_faults: true, ..options(seed) };
         let mut executor = Executor::new(&starved, entry(&starved, "main"), &[], options).expect("starts");

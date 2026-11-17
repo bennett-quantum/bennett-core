@@ -85,7 +85,7 @@ The order of the work:
 
 Debts opened by step 2 (removing `mark`, `rewind`, machine states in superposition and the call form):
 
-- **A second implementation of the device language.** The independent whole-world test interpreter modelled the
+- **A second implementation of the device language.** The independent reference interpreter modelled the
   removed machinery and went with it; the C rungs 1 and 2 (`experiments/northstar-ladder/`), the musl entry-frame
   edges and several executor tests lost it as a second executor and keep their native or hand-worked
   expectations. Route: an independent reference of the current language, starting from the reference that runs
@@ -590,6 +590,12 @@ padded clock and its caller's mark; A mark's budget once its frame is left.
   configurations all agree are still read as memory. Recommendation: replace both by the named fault the
   maintainer decided ("yes, it should be a fault to read qubits") in the next step, for every touch of a byte that
   holds qubits by ordinary code outside `apply`.
+- **Names left from the removed machinery** (2026-11-17): the journal-content observer's public API still
+  counts and lists `apply`'s runs as `branches` (`ApplyJournal::branches`, `BranchJournal`, `branches_total`,
+  `branches_present`), as does the front's test helper `branches`. Taken: unchanged for now (the rename touches
+  the observer, its classifiers, their tests and the experiments' READMEs); `RunError::RegionFault`'s count is
+  `faulting` and its message says basis configurations. Recommendation: rename to `runs` / `configurations` in a
+  step that touches the observer anyway.
 - **Fault code 15** (`bad_rewind`, removed): taken, left unused rather than renumbering `bad_longjmp` (16), since
   codes are stable and a program may have measured one. Recommendation: keep it unused.
 - **`printf("%a")` of a subnormal double (2026-11-17, the Opus testing pass):** the device prints musl's

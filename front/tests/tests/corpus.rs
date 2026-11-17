@@ -96,11 +96,11 @@ fn faulting_inputs(name: &str) -> usize {
 /// and their weight. Returns the outcome, for comparison.
 fn assert_region_fault(module: &ValidModule, name: &str, key: u64) -> Outcome {
     let (outcome, stats) = run_with_stats(module, &format!("coherent_{name}"), &[key], 0);
-    let Outcome::Stopped(RunError::RegionFault { fault, branches, configurations, .. }) = outcome else {
+    let Outcome::Stopped(RunError::RegionFault { fault, faulting, configurations, .. }) = outcome else {
         panic!("{name}({key}): {outcome:?}")
     };
     let expected = device_results()[name].iter().find_map(|result| result.err());
-    assert_eq!((Some(fault), branches, configurations), (expected, faulting_inputs(name), INPUTS as usize), "{name}");
+    assert_eq!((Some(fault), faulting, configurations), (expected, faulting_inputs(name), INPUTS as usize), "{name}");
     let weight = faulting_inputs(name) as f64 / INPUTS as f64;
     assert_eq!(stats.region_faults, 1, "{name}");
     assert!((stats.region_fault_weight - weight).abs() <= WEIGHT_TOLERANCE, "{name}: {}", stats.region_fault_weight);

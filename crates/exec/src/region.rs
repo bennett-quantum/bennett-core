@@ -134,7 +134,7 @@ impl<'m> Executor<'m> {
         (!self.allow_region_faults).then_some(RunError::RegionFault {
             callee,
             fault: code,
-            branches: faulting.len(),
+            faulting: faulting.len(),
             configurations,
         })
     }

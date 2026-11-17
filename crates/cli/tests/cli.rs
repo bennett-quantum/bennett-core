@@ -67,7 +67,7 @@ fn a_region_fault_is_reported_by_name_unless_allowed() {
     let output = bennett(&["run", "fault.bn", "--arg", "5", "--stats"]);
     assert_eq!(output.status.code(), Some(1));
     let text = stdout(&output);
-    assert!(text.contains("region fault: apply @triangle faulted (budget) on 1 of 1 branches"), "{text}");
+    assert!(text.contains("region fault: apply @triangle faulted (budget) on 1 of 1 basis configurations"), "{text}");
     assert!(text.contains("region faults: 1 apply executions faulted for some argument value"), "{text}");
 
     let output = bennett(&["run", "fault.bn", "--arg", "5", "--allow-region-faults"]);

@@ -69,8 +69,8 @@ fn report_outcome(module: &ValidModule, entry: FuncId, outcome: Outcome, tape: &
             _ => println!("result: {value}"),
         },
         Outcome::Faulted(fault) => println!("fault: {fault} (code {})", fault.code()),
-        Outcome::Stopped(RunError::RegionFault { callee, fault, branches, configurations }) => println!(
-            "region fault: apply @{} faulted ({fault}) on {branches} of {configurations} branches, weight {:e}; \
+        Outcome::Stopped(RunError::RegionFault { callee, fault, faulting, configurations }) => println!(
+            "region fault: apply @{} faulted ({fault}) on {faulting} of {configurations} basis configurations, weight {:e}; \
              the program could not detect this with certainty (--allow-region-faults lets the run go on)",
             module.function(callee).name,
             stats.region_fault_max_weight

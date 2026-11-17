@@ -45,7 +45,7 @@ fn exit_faults_on_every_applied_branch_without_leaking_writes() {
         Outcome::Stopped(RunError::RegionFault {
             callee: common::entry(&module, "stop"),
             fault: Fault::ExitInRegion,
-            branches: 4,
+            faulting: 4,
             configurations: 4,
         })
     );
@@ -104,7 +104,7 @@ fn conditional_exit_faults_only_on_the_exiting_branch() {
         Outcome::Stopped(RunError::RegionFault {
             callee: common::entry(&module, "stop"),
             fault: Fault::ExitInRegion,
-            branches: 1,
+            faulting: 1,
             configurations: 4,
         })
     );

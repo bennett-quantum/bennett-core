@@ -112,17 +112,17 @@ impl Device {
         Self { module: bennett_ir::load(text).expect("valid compact program"), image: None }
     }
 
-    /// The whole image in `world`'s memory: a write anywhere in it is seen.
-    fn image(&self, world: &Snapshot) -> [u8; 12] {
+    /// The whole image in the snapshot's memory: a write anywhere in it is seen.
+    fn image(&self, state: &Snapshot) -> [u8; 12] {
         let a = self.image.expect("this check needs the fixture's image");
-        world.classical.memory[a..a + INITIAL_IMAGE.len()].try_into().expect("the whole image")
+        state.classical.memory[a..a + INITIAL_IMAGE.len()].try_into().expect("the whole image")
     }
 
     /// The packed result of a finished run: the q, r, y bits `experiment`
     /// returned and the whole image from the machine's memory. The cells it
     /// returned must be those of the memory.
-    fn finished(&self, returned: u64, world: &Snapshot, context: &str) -> u128 {
-        let image = native::Image { bits: (returned & 7) as usize, memory: self.image(world) };
+    fn finished(&self, returned: u64, state: &Snapshot, context: &str) -> u128 {
+        let image = native::Image { bits: (returned & 7) as usize, memory: self.image(state) };
         assert_eq!(returned >> 3, u64::from(u32::from_le_bytes(image.cells())), "{context}: returned cells");
         image.measured()
     }
@@ -138,8 +138,8 @@ fn image_address(text: &str) -> Option<usize> {
     None
 }
 
-fn at_measure(module: &ValidModule, world: &Snapshot) -> bool {
-    world.classical.frames.last().is_some_and(|frame| {
+fn at_measure(module: &ValidModule, state: &Snapshot) -> bool {
+    state.classical.frames.last().is_some_and(|frame| {
         matches!(module.function(frame.func).block(frame.block).insts.get(frame.inst), Some(Inst::Measure { .. }))
     })
 }
@@ -159,15 +159,15 @@ fn run_to_measure(device: &Device, basis: usize) -> Snapshot {
     }
 }
 
-/// The register columns of the C variables q, r, y in a world standing in `experiment`.
-fn columns(module: &ValidModule, world: &Snapshot) -> [usize; 3] {
-    let frame = world.classical.frames.last().expect("frame before measurement");
+/// The register columns of the C variables q, r, y in a snapshot standing in `experiment`.
+fn columns(module: &ValidModule, state: &Snapshot) -> [usize; 3] {
+    let frame = state.classical.frames.last().expect("frame before measurement");
     let f = module.function(frame.func);
     // Qalloc handles are live slot values, not allocation-order guesses.
     ["q", "r", "y"].map(|name| {
         let slot =
             f.slot_names.iter().position(|s| s == name).unwrap_or_else(|| panic!("no %{name}: {:?}", f.slot_names));
-        usize::try_from(world.classical.slots[frame.base + slot] & 0xffff_ffff).expect("register column")
+        usize::try_from(state.classical.slots[frame.base + slot] & 0xffff_ffff).expect("register column")
     })
 }
 

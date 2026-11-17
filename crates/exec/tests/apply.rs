@@ -290,7 +290,7 @@ fn effects_and_quantum_instructions_inside_a_region_are_faults() {
     // By default the faulting apply stops the run.
     let (outcome, executor) = run(&module, "main", &[0], bounded());
     let callee = module.function_named("noisy").expect("@noisy");
-    let expected = RunError::RegionFault { callee, fault: Fault::EffectInRegion, branches: 2, configurations: 2 };
+    let expected = RunError::RegionFault { callee, fault: Fault::EffectInRegion, faulting: 2, configurations: 2 };
     assert_eq!(outcome, Outcome::Stopped(expected));
     assert!(executor.tape().is_empty(), "the effect never happened");
     let (outcome, _) = run(&module, "alias", &[], bounded());
@@ -360,7 +360,7 @@ fn by_default_a_region_fault_stops_the_run_before_the_apply() {
         }
         before = executor.snapshot();
     };
-    let expected = RunError::RegionFault { callee, fault: Fault::Unreachable, branches: 1, configurations: 4 };
+    let expected = RunError::RegionFault { callee, fault: Fault::Unreachable, faulting: 1, configurations: 4 };
     assert_eq!(outcome, Outcome::Stopped(expected));
     let after = executor.snapshot();
     assert_eq!(after.quantum, before.quantum, "the apply changed no amplitude");

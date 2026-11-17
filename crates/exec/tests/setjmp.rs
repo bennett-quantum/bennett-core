@@ -206,7 +206,7 @@ fn a_jump_out_of_a_region_faults_on_every_branch() {
     let module = load(ESCAPE);
     let (outcome, _) = run(&module, "main", &[], bounded());
     let escape = common::entry(&module, "escape");
-    let expected = RunError::RegionFault { callee: escape, fault: Fault::BadLongjmp, branches: 2, configurations: 2 };
+    let expected = RunError::RegionFault { callee: escape, fault: Fault::BadLongjmp, faulting: 2, configurations: 2 };
     assert_eq!(outcome, Outcome::Stopped(expected));
     let (outcome, executor) = run(&module, "main", &[], allowing_region_faults());
     assert_eq!(outcome, Outcome::Returned(Some(0)));

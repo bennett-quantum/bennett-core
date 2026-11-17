@@ -66,14 +66,14 @@ pub enum RunError {
     },
     /// An `apply` faulted for at least one value of its arguments, and the run does not allow region faults
     /// ([`Options::allow_region_faults`]). The simulator sees every configuration; a program could not.
-    #[error("region fault: an apply faulted ({fault}) on {branches} of {configurations} basis configurations")]
+    #[error("region fault: an apply faulted ({fault}) on {faulting} of {configurations} basis configurations")]
     RegionFault {
         /// The applied function.
         callee: FuncId,
         /// The fault of the first faulting configuration, in configuration order.
         fault: Fault,
         /// The number of basis configurations on which the function faulted.
-        branches: usize,
+        faulting: usize,
         /// The number of basis configurations it ran on.
         configurations: usize,
     },
