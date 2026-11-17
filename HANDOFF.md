@@ -1,14 +1,9 @@
 # HANDOFF
 
-State on 2026-11-17, 02:30 UTC (a night run from 20:40 UTC on 2026-11-16, still going): the fixes, testing
-passes and probes listed under "Stopped in flight on 2026-11-16" are on `main` through `ea213c7`. Machine
-step e is on `main` (`229d3b9`..`a1b516e`: running
-again charged to the run's budget, strict mode named, un-run regardless over a nonzero allocation, the mark's
-budget, the budget required after a read of a qubit, the call with a fault value and a budget, the NaN payload
-rule), then the IR reader refusing an infinite angle (`3206433`), the front naming invalid LLVM input instead of
-aborting (`bd0fc2f`) and the Lua probe (`1e06f2f`, `experiments/lua-probe/`). In flight: see "Stopped in flight on
-2026-11-16". Questions opened tonight are under "Questions for the maintainer"; the maintainer withdrew the
-retirement of `apply`, `qalloc` and `qfree` ("Decision the maintainer took on 2026-11-16, in the evening").
+State on 2026-11-17, about 06:40 UTC: **stopped by the maintainer; see "Stopped on 2026-11-17 by the
+maintainer" below before anything else.** The night run (from 20:40 UTC on 2026-11-16) landed what that section
+lists. Questions opened in the night are under "Questions for the maintainer", unanswered; the maintainer withdrew
+the retirement of `apply`, `qalloc` and `qfree` ("Decision the maintainer took on 2026-11-16, in the evening").
 Earlier on 2026-11-16: an independent oracle for the front's fallback and its testing pass's fixes (`27265ba`,
 `40c84d4`); a failed rewind made atomic, the two replay panics and the canceled-keeps refusal fixed (`145a72c`);
 the six complex helpers from libgcc 13.3 (`e89c98f`..`df429d7`); a Rust scalar probe (`c906fad`); files, clock and
@@ -22,6 +17,76 @@ the front). The night corpus run (`1e06f2f`, musl linked) has GCC 1,574 agree, c
 wrong or crashing; all six former file-related faults now agree with native.
 Earlier: the evening session of 2026-11-15 (the musl runtime, `zero N`, the floating-point leftovers, the complex
 helpers, constructor startup, the first journal-content and control-schedule measurements, the salvage survey).
+
+## Stopped on 2026-11-17 by the maintainer
+
+**Work is paused by the maintainer. Nothing is running. Do not resume, launch or land anything until the
+maintainer says so.**
+
+Why: the maintainer wants to understand the computational model that has been built before taking any
+decision, and is concerned that the framework may be unphysical. None of the "Questions for the maintainer" is
+answered, and none is to be treated as answered or pressed. Every choice "taken meanwhile" stays provisional.
+
+What the evidence on physical realisability is, and is not:
+
+- No lowering of the device program to a circuit exists in the tree. The executor is a simulator of the
+  machine's rules, not a compiler to gates.
+- The only comparison of the executor with an ideal circuit model is a private prototype (the design seam, at
+  `a1b516e`), reviewed by one council round of three seats ("Design audition of 2026-11-16").
+- That review found rules of the executor that no device can implement: rules whose result depends on which
+  configurations have nonzero amplitude, on other worlds or on a run-wide counter. Fixed overnight: a
+  state-inspecting check delivered to a program as a call's code (V4b); the barrier after a leftover (V1);
+  `bad_rewind` with the restore where a read changed on some configurations only, at the check sites built
+  (V2: allocation, register read, un-promotion, memory-qubit access, the check on the sum of the worlds' parts,
+  reads where the world split). Still open, as questions, each with an ignored witness: the run's step budget
+  ending the whole run, and the replay charge as one counter delivered as a code (V3, V3'); a `longjmp` over a
+  record in superposition (V4); the unbounded `mark budget -1` (V5, a defect of the specification); a second
+  rewind of one budgeted mark (N1); a mark's budget outliving its frame. An inner region run again into a
+  measurement stays a refusal until channels.
+- The review found no violation of quantum mechanics in the aim itself (ordinary code read by and un-run
+  around qubits, with exact classical results). The general lowering, one flat step machine covering several
+  rewind sites, loops and branch-varying budgets at polynomial cost, is argued, not built.
+- Six rows of the seam's table were never executed (listed under "Design audition of 2026-11-16"). Both
+  reviewers judged the seam's own state comparison too weak (it did not compare returned values or console
+  output, and traced out history that a later un-run can reveal).
+
+The exact state:
+
+- `main` is described by this commit; the four checks pass on it (counts under "What works", `Check it`).
+- Landed during the night of 2026-11-16 to 17 (each step with the four checks passing on it): machine step e;
+  the machine-finish job (the testing passes' and the seam's executor findings, `apply` computed as a mark with
+  a budget, the call form and a rewind's keep, compared with today's path on every test); machine-sites (run
+  regardless where worlds join and split); the IR's infinite angle, the front's invalid-input naming, the x87
+  noncanonical operands and the floating-point follow-ups (`powi`, `roundevenl`, `roundl`, `lroundl`,
+  classification); the refusal of non-IEEE subnormal modes; the whole-world reference for the mark's budget,
+  the call form and leftover take-back; the C rung-2 table on an independent executor; musl authenticated
+  against its signed release; the automatic checks' four gaps closed; the SQL oracle's absent-key marking;
+  copied `sigjmp_buf` compared with glibc; an LLVM attribute inventory; the corpus rerun; the Lua probe; the
+  fallback oracle comparing the whole fixture image with guard bytes (`2fbbd08`); the fallback's second step,
+  a one-bit flip proven case by case where the simplifier does not fold it (`e3a47d4`); testing passes and
+  their tests (see "Stopped in flight on 2026-11-16").
+- Unlanded work on `wip/` branches: `wip/fallback-step3` (the fallback's step 3, the program run as written
+  with its history kept; marked unfinished: the four checks passed on it in its job, its compare-mode run over
+  the front tests was stopped part-way, one acceptance test still waits); `wip/sol-mutants-machine` (two
+  commits of tests from the stopped mutation run, reported finished by their job, not run through the landing
+  checks); `wip/sol-mutants-machine-partial` (the run's unfinished qualification: 36 executor survivors still
+  need an equivalence argument or a killing test). The other `wip/` branches of 2026-11-16 and 17 are on `main` as rebased
+  copies (some with conflicts resolved), not as their own commits.
+- Machine defects still open: a run that falsely stops `Unaligned` after three distinct, once-rewound marks
+  over one `|+>` read in the machine's meaning (P1; ignored witness in `crates/exec/tests/machine_sites/
+  nested.rs`); leftover registers share the program's register ids, so a `qalloc` run again during an outer
+  un-run can get a different id than the first time (P1, no test reaches it); an inner region run again into a
+  measurement or out of its frame, a refusal until channels; the open questions above (witnesses in
+  `crates/exec/tests/seam_questions.rs`).
+- Owed: the full changed-line mutation run over the machine's changes since `3459a0b` (stopped part-way; a
+  scoped run over step e's survivors is recorded under "Automatic checks (implementation)"); testing passes
+  over the small fixes of the night and over the fallback's steps.
+- Not started: the rest of the front's fallback (next step 4), idiomatic modular quantum C with Shor's period
+  finding as acceptance, Grover over a SQL query from plain C, the floating-point environment.
+
+**The first thing owed when work resumes is not a feature.** It is a plain, complete account of the
+computational model for the maintainer: what a state is, what each rule of the machine does to it, and which
+rules have a circuit and why. The maintainer decides what follows.
 
 ## What this repository is
 
@@ -58,10 +123,10 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 | Lua probe | Unmodified Lua 5.4.9 through musl: seven native stdout/status comparisons and exact reversals; a Lua predicate under hand-written `apply`, dense-checked Grover at N=4/8 (`experiments/lua-probe`) |
 
-Check it: `cargo test` (501 passed; 29 ignored, each naming its reason: heavy reference, generated or
+Check it: `cargo test` (552 passed; 23 ignored, each naming its reason: heavy reference, generated or
 hash-sample runs with their commands, witnesses of recorded defects and of questions awaiting the maintainer;
-about 9 s, no LLVM needed) and `front/test.sh` (217 passed; 35 ignored by default, each naming its reason: the
-nine fallback acceptance tests waiting for step 4, the C North Star ladder runs and other explicit experiments,
+about 9 s, no LLVM needed) and `front/test.sh` (224 passed; 31 ignored by default, each naming its reason: the
+fallback acceptance tests still waiting for step 4, the C North Star ladder runs and other explicit experiments,
 musl-linked checks that need `rt/musl/build.py` first, heavy runs, and witnesses of recorded debts; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
 With musl linked, standard output and exit status compared with native (`experiments/c-corpus/README.md`):
@@ -177,14 +242,8 @@ commit) after the four checks passed on it.
   (`wip/sol-reference`); the C rung-2 table on an independent executor (`wip/sol-rung2`); musl authenticated
   against its signed release and the IR mnemonic contract tests (`wip/sol-evidence`); copied `sigjmp_buf`
   compared with glibc (`wip/sol-sigjmp`); the corpus rerun (`wip/corpus-night`).
-- **In flight:** `wip/machine-finish` (Opus): a panic when leftovers are taken back out of stack order, and
-  the memory-qubit read and deferred-sum sites of "run regardless" (witnesses ignored in
-  `crates/exec/tests/machine_finish_independent.rs`), then `apply` computed as a mark with a budget, the call
-  form and a rewind's keep, compared with today's path on every test; `apply`, `qalloc` and `qfree` stay.
-  `wip/sol-mutants-e`: tests for the survivors of a partial changed-line mutation run over step e (stopped
-  after 10 of about 300 mutants: each took four minutes or more on a shared machine; the full run over the
-  machine's final diff is owed, with tests scoped to the executor). `wip/sol-test-fp`: the testing pass over
-  `wip/fp-front`'s fixes.
+- **In flight:** nothing; work is stopped (see "Stopped on 2026-11-17 by the maintainer" for what is on which
+  `wip/` branch and what is owed).
 - **Testing passes done tonight (sol):** machine decisions a to d (one false refusal, fixed); step e (four
   defects, fixed; the audition's witnesses became executor tests); the p0 fixes (four wrong results and a crash
   in the front, fixed); machine-finish (a panic and two unbuilt sites, in flight). Still owed (by Opus, sol
@@ -1316,6 +1375,16 @@ closed forms (`experiments/lua-probe/README.md`, "Independent testing pass").
 
 ## Questions for the maintainer
 
+- **Choices made in machine-sites (2026-11-17), not yet asked.** Taken meanwhile, each easy to reverse:
+  (1) after worlds merge, a leftover wire that is zero in every configuration is discarded rather than kept
+  (the state is then the rest times |0>, so no amplitude changes; outside strict mode faithful programs then
+  behave as in strict mode); (2) a wire that survives moves only into register ids freed by wires discarded in
+  the same rewind; (3) a region run again inside one world settles its wires in that world, so where parts'
+  wire amplitudes would cancel only across worlds that merge later, the result differs from the first run
+  (rare; noted in the code). Recommendation: review together with the account of the model owed first; the
+  discard in (1) is the one to examine, since it looks at the state, and the open `Unaligned` false stop
+  ("Stopped on 2026-11-17") arises after it.
+
 - **`printf("%a")` of a subnormal double (2026-11-17, the Opus testing pass):** the device prints musl's
   normalised spelling (`0x1p-1074`), the native reference glibc's denormal one (`0x0.0000000000001p-1022`);
   musl also rounds `%.3a` of `0x1.fffffp-1023` to `0x2.000p-1023`. Equal values, both conforming C; a native
@@ -1383,7 +1452,9 @@ closed forms (`experiments/lua-probe/README.md`, "Independent testing pass").
 - **The name of the option for the machine's meaning** (e2): `Options::machine_meaning`,
   `bennett run --machine-meaning`; strict mode stays the default and `--allow-region-faults` stays as the
   one relaxation it was. Recommendation: keep; renaming is cheap while no program depends on it.
-- **A rewind that ran regardless is a barrier** (e3): reversal stops there and a rewind of an outer mark
+- **Superseded (2026-11-17): the leftover is now taken back** where its region runs again, so the barrier
+  below no longer exists ("Known weak spots", "Running regardless, outside strict mode").
+  **A rewind that ran regardless is a barrier** (e3): reversal stopped there and a rewind of an outer mark
   faults `bad_rewind`, as at a measurement, because the history no longer describes the state. Taken as the
   easiest to reverse; the route to lift it is in "Known weak spots". Recommendation: keep until channels.
 - **Time and the run's budget** (e4). Taken: the machine's time is a per-world clock (`Stats::clock`),
