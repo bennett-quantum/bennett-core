@@ -10,6 +10,8 @@ import unittest
 import checks
 
 ROOT = Path(__file__).resolve().parent.parent
+# Witnesses of known defects in the checks are skipped unless this is set: `BENNETT_RUN_DEFECTS=1`.
+DEFECTS = os.environ.get('BENNETT_RUN_DEFECTS') == '1'
 
 
 def module(name, path):
@@ -51,6 +53,34 @@ class Checks(unittest.TestCase):
             self.assertEqual(len(checks.bare_times(self.root, [Path(name)])), 3 if name.endswith(".sh") else 2)
             (self.root / name).write_text(good)
             self.assertEqual(checks.bare_times(self.root, [Path(name)]), [])
+
+    @unittest.skipUnless(DEFECTS, 'defect: the bare-time check reads only .py/.sh/.js/.ts names, so a shebang script is never read')
+    def test_bare_times_reads_extensionless_shell_scripts(self):
+        # .githooks/pre-push is such a script in this tree; a literal there must be flagged like one in run.sh.
+        (self.root / '.githooks').mkdir()
+        hook = self.root / '.githooks/pre-push'
+        hook.write_text('#!/bin/sh\nsleep 5\n')
+        self.assertEqual(len(checks.bare_times(self.root, [Path('.githooks/pre-push')])), 1)
+
+    @unittest.skipUnless(DEFECTS, 'defect: a positional Python timeout literal (wait(30), communicate(None, 30)) is not flagged')
+    def test_bare_times_flags_positional_timeouts(self):
+        # Popen.wait(timeout) and Popen.communicate(input, timeout) take the timeout positionally.
+        (self.root / 'run.py').write_text('import subprocess\np = subprocess.Popen(["x"])\np.wait(30)\np.communicate(None, 30)\n')
+        self.assertEqual(len(checks.bare_times(self.root, [Path('run.py')])), 2)
+
+    @unittest.skipUnless(DEFECTS, 'defect: hygiene skips any file that is not UTF-8, host paths in it included')
+    def test_hygiene_reads_files_that_are_not_utf8(self):
+        # One Latin-1 byte must not hide a home path in the rest of a text file.
+        (self.root / 'notes.txt').write_bytes(b'caf\xe9 /ho' b'me/example/private\n')
+        self.assertIn('host-specific path', ' '.join(checks.hygiene(self.root, [Path('notes.txt')])))
+
+    @unittest.skipUnless(DEFECTS, "defect: git's amend! subjects (commit --fixup=amend:) pass the no-WIP check on main")
+    def test_amend_subject_is_rejected_on_main(self):
+        base = self.init_repo()
+        (self.root / 'note').write_text('amended')
+        self.commit('amend! Accepted base')
+        tip = self.git('rev-parse', 'HEAD')
+        self.assertEqual(len(push.wip_commits(self.root, tip, base)), 1)
 
     def git(self, *args):
         return push.git(self.root, *args)
