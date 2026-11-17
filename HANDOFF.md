@@ -1283,6 +1283,15 @@ fails today:
   `CLANG`, LLVM 23 by `LLVM_DIR`, the refused attributes). Not covered and not claimed: `matches!`/`if let`
   catch-alls, the experiment observers' standalone workspaces, a pushed revision that weakens its own
   `scripts/check.sh`.
+- **The SQL oracle** (latent): the driver returns -1 for a key absent from the table, and the generated
+  lookups truncated the result to one bit, which marked the row. No measured oracle reached it, because
+  `scale.py` refused a truth table that was not all 0 or 1. Fixed on `wip/small-fixes`: the lookups of
+  `scale.py`, `coherent.py` and `grover.py` mark a row exactly when the query returns 1 (`icmp eq i32 %v, 1`),
+  the refusal is gone, and `edge/edge.py` runs all twelve edge queries, `abs_error`'s error row (-1) among
+  them; with real SQLite all 61 edge checks pass, `abs_error` with six of eight rows marked (truncation marked
+  seven). `an_absent_key_in_superposition_is_not_marked` (`front/tests/tests/sql_oracle_glue.rs`) fails on the
+  truncating lookup (`experiments/sqlite-on-device/README.md`, "Independent testing pass"). The N=16 to 512
+  scale runs were not rerun with the comparison (their tables have only 0 and 1, where both agree).
 - **The Lua probe** (low): `%a` of a subnormal double is musl's spelling, not glibc's (question above;
   `front/tests/tests/printf_hex_float.rs`).
 

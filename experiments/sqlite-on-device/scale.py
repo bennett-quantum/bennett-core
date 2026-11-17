@@ -24,6 +24,15 @@ DEFAULT_RUN_SECONDS = 300
 TERMINATION_GRACE_SECONDS = 5
 PARENT_TIMEOUT_GRACE_SECONDS = 15
 SHAPES = {'like_note': 2, 'int_eq': 4, 'text_order': 5, 'two_where': 6, 'range_agg': 7}
+# A row is marked exactly when its query returns this value (SQL true). Every other result is unmarked:
+# false (0), an absent key (the driver's -1), NULL (0 from sqlite3_column_int64) and any other count.
+# The oracle compares; it never truncates the result to its low bit.
+MARKED = 1
+
+
+def marking(values):
+    """The oracle's truth table for a native column of query results."""
+    return [int(v == MARKED) for v in values]
 
 
 def program(base, q, n, k):
@@ -34,7 +43,7 @@ def program(base, q, n, k):
 entry:
  %r = zext i{width} %row to i32
  %v = call @experiment_query(i32 {q}, %r)
- %b = trunc i32 %v to i1
+ %b = icmp eq i32 %v, {MARKED}
  ret %b
 }}
 func @scale_classical() -> i32 {{
@@ -42,9 +51,11 @@ entry:
  %s = call @experiment_setup()
 '''
     for r in range(n):
+        # The classical entry prints each row's marking as '0'/'1', the oracle's truth table.
         text += (f' %v{r} = call @experiment_query(i32 {q}, i32 {r})\n'
-                 f' %b{r} = add i32 %v{r}, 48\n'
-                 f' %c{r} = trunc i32 %b{r} to i8\n effect %c{r}\n')
+                 f' %m{r} = icmp eq i32 %v{r}, {MARKED}\n'
+                 f' %d{r} = zext i1 %m{r} to i8\n'
+                 f' %c{r} = add i8 %d{r}, 48\n effect %c{r}\n')
     text += ' ret 0\n}\n'
     for prep in ['zero', 'one', 'minus']:
         name = 'scale_grover' if prep == 'minus' else f'scale_{prep}'
@@ -153,9 +164,8 @@ def main():
     for shape in args.shapes:
         pairs = [(int(r), int(v)) for r, v in re.findall(rf'^{shape} (\d+) (-?\d+)$', native['stdout'], re.M)]
         assert [r for r, _ in pairs] == list(range(args.n)), (shape, pairs)
-        bits = [v for _, v in pairs]
-        assert all(v in [0, 1] for v in bits), (shape, bits)
-        answers[shape] = bits
+        # The native results may be any integer; the oracle marks the rows equal to MARKED.
+        answers[shape] = marking([v for _, v in pairs])
     base = (build/'program.bn').read_text()
     # Check the complete ordinary driver too, including memory/VFS reports and status.
     failed = False

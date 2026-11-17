@@ -5,7 +5,7 @@ The truth table of every query is computed twice without the native build: by
 the host Python's own SQLite and by a plain-Python reading of the query. Both
 must equal the native driver's output before ../scale.py's checks (complete
 native/device output, exact classical reversal, two coherent calls against the
-dense matrices, Grover with every amplitude) run on the Boolean shapes.
+dense matrices, Grover with every amplitude) run on every query.
 
     SQLITE_DIR=<amalgamation> python3 experiments/sqlite-on-device/edge/edge.py target/sqlite-on-device/edge
 """
@@ -121,10 +121,11 @@ def main():
     got = {name: [int(v) for r, v in re.findall(rf'^{name} (\d+) (-?\d+)$', native.stdout, re.M)] for name in NAMES}
     assert got == host, {k: (got[k], host[k]) for k in NAMES if got[k] != host[k]}
     print('native equals host SQLite and the reading for all', len(NAMES), 'queries')
-    boolean = {name: q for q, name in enumerate(NAMES) if all(v in (0, 1) for v in host[name])}
-    assert set(NAMES) - set(boolean) == {'abs_error'}
+    # Every query is an oracle, its rows marked where the result is 1: abs_error's error row (-1, the
+    # negated SQLITE_ERROR) is unmarked, where truncation to one bit would have marked it.
+    assert [v for v in host['abs_error'] if v not in (0, 1)] == [-SQLITE_ERROR]
     scale.SHAPES.clear()
-    scale.SHAPES.update(boolean)
+    scale.SHAPES.update({name: q for q, name in enumerate(NAMES)})
     sys.argv = [sys.argv[0], str(out), '--n', str(len(ROWS)), '--modes', *args.modes, *rest]
     scale.main()
 

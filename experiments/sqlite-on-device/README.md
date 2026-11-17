@@ -171,10 +171,15 @@ func @sqlite_lookup(i2 %row) -> i1 {
 entry:
  %r = zext i2 %row to i32
  %v = call @experiment_query(i32 2, %r)
- %b = trunc i32 %v to i1
+ %b = icmp eq i32 %v, 1
  ret %b
 }
 ```
+
+The adapter marks a row exactly when the query returns 1 (SQL true). It compares rather than truncating:
+the driver returns -1 for a key absent from the table, whose low bit would mark the row. The runs recorded
+in this file before 2026-11-17 used `trunc i32 %v to i1`, which agrees with the comparison on every row they
+had (all results 0 or 1); their region step counts were not remeasured with the comparison.
 
 There are four separate basis runs and two uniform-superposition runs (out initially 0 and 1).
 The standalone observer uses the public executor snapshot interface; Python compares every resulting
@@ -410,8 +415,11 @@ not performance thresholds. Neither compiler, executor nor musl runtime is chang
 `SQL_ORACLE=1` enables four additional **Boolean** statements without changing the original four.
 The schema, seed, generated row contents, bind/step/column/reset calls, SQLite source and VFS remain
 those above. The new `scale.py` entry uses the generated table directly, with no SQL updates to plant
-matches. Every native result must be 0 or 1 before constructing a one-bit oracle; counts are never
-silently truncated to their parity.
+matches. A row is marked exactly when its query returns 1 (`MARKED` in `scale.py`): the generated lookup
+compares (`icmp eq i32 %v, 1`), so false, NULL (read as 0), a key absent from the table (the driver's -1) and
+any other count all leave the row unmarked, and the classical entry prints the same marking. `scale.py`
+therefore accepts native results of any value; it no longer refuses a table that is not all 0 or 1, a
+refusal that only kept the earlier truncating lookup (`trunc i32 %v to i1`) from marking odd results.
 
 | Shape | SQL | Distinct work exercised |
 |---|---|---|
@@ -654,18 +662,29 @@ eight rows chosen for their edges: NULL in each column, duplicate keys, `INT64_M
 string, `'M'` against `'m'` and a two-byte UTF-8 name under BINARY collation, LIKE metacharacters and case,
 integer overflow in `+` (a REAL) and in `abs` (an error, as a result code), an all-rows and a no-rows
 predicate. `edge/edge.py` computes its truth table with the host SQLite and a plain reading, requires the
-native driver to print the same, then runs `scale.py`'s checks on the eleven Boolean queries:
+native driver to print the same, then runs `scale.py`'s checks on all twelve queries (until 2026-11-17 on the
+eleven Boolean ones; `abs_error`, whose error row returns -1, was left out while the lookup truncated):
 
 ```sh
 SQLITE_DIR=<amalgamation directory> python3 experiments/sqlite-on-device/edge/edge.py target/sqlite-on-device/edge
 ```
 
-All 56 checks pass: the complete native/device driver output (the `abs` error included), and for each query
+All 56 checks passed on the eleven (61 on all twelve since 2026-11-17, below): the complete native/device driver output (the `abs` error included), and for each query
 the forward truth table, byte-exact classical reversal, both coherent calls against the dense matrices with
 full reversal, and Grover with every amplitude. The Grover amplitudes were also compared with `truth.py`'s
 dense iteration on the edge truth tables (the all-rows oracle gives every row -1/√8, the no-rows oracle +1/√8).
 No wrong result, panic, hang or refusal was found.
 
-Not probed: a key that is absent from the table. The driver returns -1 for a query that finds no row, and the
-generated `@scale_lookup` truncates the result to one bit, which would mark the row; `scale.py` refuses such a
-table before building an oracle (every native result must be 0 or 1), so no measured oracle reaches it.
+Found then and fixed on 2026-11-17: a key absent from the table. The driver returns -1 for a query that finds
+no row, and the generated `@scale_lookup` truncated the result to one bit, which marked the row; `scale.py`
+refused such a table before building an oracle (every native result had to be 0 or 1), so no measured oracle
+reached it. The lookups of `scale.py`, `coherent.py` and `grover.py` now compare with 1, and the refusal is
+gone. `an_absent_key_in_superposition_is_not_marked` (`front/tests/tests/sql_oracle_glue.rs`) runs the
+generator over a fixture whose row 5 is absent (-1), row 6 returns the count 3 and row 3 returns 1, at N=8:
+the classical truth table, one coherent lookup over the uniform rows (amplitude 1/√8 at out = marked(row),
+zero elsewhere) and two Grover iterations against a dense iteration in the test (sin 5θ at row 3,
+cos 5θ/√7 elsewhere, θ = asin(1/√8)), each reversed to its start. It fails on the truncating lookup, which
+marks rows 3, 5 and 6. Rerun with real SQLite after the change (`edge/edge.py`, 2026-11-17): native equals host
+SQLite and the plain reading for all twelve queries, and all 61 checks pass (the full driver and five per query),
+`abs_error` among them with six of eight rows marked, its error row unmarked (truncation marked seven). The
+edge run took 190.5 s and 265,480 KiB peak RSS for its build and checks on a shared laptop.

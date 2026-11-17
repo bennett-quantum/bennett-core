@@ -39,14 +39,15 @@ def main():
     args = ap.parse_args()
     build = args.build.resolve()
     native = subprocess.run([str(build/'native')], capture_output=True, text=True, check=True)
-    answers = [int(v) for v in re.findall(r'^like_note \d+ (\d+)$', native.stdout, re.M)]
+    # Marked exactly when the query returns 1 (the lookup compares, never truncates); both outcomes occur.
+    answers = [int(v == '1') for v in re.findall(r'^like_note \d+ (-?\d+)$', native.stdout, re.M)]
     assert len(answers) == 4 and set(answers) == {0, 1}, answers
     wrapper = '''
 func @sqlite_lookup(i2 %row) -> i1 {
 entry:
  %r = zext i2 %row to i32
  %v = call @experiment_query(i32 2, %r)
- %b = trunc i32 %v to i1
+ %b = icmp eq i32 %v, 1
  ret %b
 }
 '''

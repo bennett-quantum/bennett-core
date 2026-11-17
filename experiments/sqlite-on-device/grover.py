@@ -53,7 +53,7 @@ def program(base, width, cases):
 entry:
  %r = zext i{width} %row to i32
  %v = call @experiment_query(i32 2, %r)
- %b = trunc i32 %v to i1
+ %b = icmp eq i32 %v, 1
  ret %b
 }}''']
     for name, marked, iterations in cases:
