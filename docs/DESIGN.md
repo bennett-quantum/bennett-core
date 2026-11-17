@@ -1042,6 +1042,15 @@ the executor within `1e-14` per real or imaginary component. Cases cover arithme
 input-dependent loops and two nested loops, division and bounds faults, `effect`/`exit`, and a single budget
 exhausted only for some argument values. This is finite test evidence, not a proof for all device programs.
 
+The same helper checks stores by exchange on explicit amplitudes. It runs the applied function into the spare
+register, exchanges it with the target by three controlled X gates per bit, and clears the spare by X gates
+for a known old value or by a second applied function for a recomputable old value. The tests compare the
+joint amplitudes with the intended store and a zero spare, including a target byte at a definite address.
+For a retained old value and for a fault inside an applied function, they compare every reduced density
+matrix entry after releasing the spare and fault registers. Coherence survives between matching pairs of
+released values, even between faulting inputs, and is lost between differing pairs, even when the spare is
+zero.
+
 The IR mnemonic tests (`crates/ir/tests/mnemonic_contract.rs`) specify all 36 words independently of
 the production macro, check each reader variant and writer instruction against that specification,
 and reject missing operands. Shared reader/writer swaps cannot hide behind a round trip. The explicit

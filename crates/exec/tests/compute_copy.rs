@@ -1,11 +1,14 @@
 //! Small, phase-sensitive checks of a literal reversible construction against the executor.
 mod common;
 mod compute_copy_reference;
+#[path = "compute_copy/swap_in.rs"]
+mod swap_in;
 
 use bennett_exec::{Options, Outcome, QuantumSnapshot};
 use bennett_ir::Fault;
 use common::{assert_same_state, bounded, executor, load};
 use compute_copy_reference::{Reference, Vector, permute};
+use num_complex::Complex;
 
 const ARITHMETIC: &str = r#"
 func @f(i2 %x) -> i8 {
@@ -163,7 +166,34 @@ entry:
     )
 }
 
-fn assert_amplitudes(exact: &Vector, actual: &QuantumSnapshot) {
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Basis {
+    argument: u64,
+    out: u64,
+    fault: u64,
+}
+
+fn initial_vector() -> Vector<Basis> {
+    let phases = [Complex::new(1, 0), Complex::new(0, 1), Complex::new(-1, 0), Complex::new(0, -1)];
+    let mut vector = Vector::new();
+    for x in 0..4 {
+        for y in 0..4 {
+            for e in 0..4 {
+                let basis = Basis { argument: x, out: 64 | y, fault: 16 | e };
+                let target_phase = match y {
+                    0 => Complex::new(1, 0),
+                    1 | 2 => Complex::new(0, 1),
+                    3 => Complex::new(-1, 0),
+                    _ => unreachable!("two prepared target bits"),
+                };
+                vector.insert(basis, phases[x as usize] * target_phase * phases[e as usize]);
+            }
+        }
+    }
+    vector
+}
+
+fn assert_amplitudes(exact: &Vector<Basis>, actual: &QuantumSnapshot) {
     assert_eq!(actual.amplitudes.len(), exact.len());
     for (basis, amplitude) in exact {
         let actual = actual.amplitude(&[basis.argument, basis.out, basis.fault]);
@@ -178,10 +208,21 @@ fn assert_amplitudes(exact: &Vector, actual: &QuantumSnapshot) {
 // by each test. All 64 argument/target/fault configurations carry nonzero complex amplitudes.
 fn compare(functions: &str, budget: usize) -> [(u64, u64); 4] {
     let module = load(&program(functions));
-    let reference = Reference::new(&module);
-    let before = reference.initial_vector(budget);
-    let (after, computed) = reference.apply(before.clone(), budget);
-    assert_eq!(reference.apply(after.clone(), budget).0, before, "the whole map is an exact involution");
+    let reference = Reference::new(&module, "f");
+    let apply = |vector| {
+        reference.apply(
+            vector,
+            budget,
+            |b: &Basis| [b.argument],
+            |b, (result, fault)| {
+                b.out ^= result;
+                b.fault ^= fault;
+            },
+        )
+    };
+    let before = initial_vector();
+    let (after, computed) = apply(before.clone());
+    assert_eq!(apply(after.clone()).0, before, "the whole map is an exact involution");
 
     let mut e = executor(
         &module,
@@ -221,7 +262,11 @@ fn compare(functions: &str, budget: usize) -> [(u64, u64); 4] {
         let config = &state.quantum.amplitudes[0].0;
         *outcome = (config[0], config[1]);
     }
-    assert_eq!(computed, outcomes, "per-input results agree even if a target is invariant under an XOR");
+    assert_eq!(
+        std::array::from_fn(|x| computed[&[x as u64]]),
+        outcomes,
+        "per-input results agree even if a target is invariant under an XOR"
+    );
     let expected = permute(before, |b| {
         let (result, fault) = outcomes[b.argument as usize];
         b.out ^= result;
@@ -298,10 +343,10 @@ fn one_budget_for_the_whole_function_including_calls_and_nested_loops() {
 #[test]
 fn completed_ticks_invert_nonblank_records_and_invalid_encodings() {
     let module = load(&program(ARITHMETIC));
-    let reference = Reference::new(&module);
-    let basis = reference.initial_vector(1).into_keys().next().expect("basis");
+    let reference = Reference::new(&module, "f");
+    let words = reference.initial_machine().len();
     for pattern in [0, 1, 0x123456789abcdef0, u64::MAX] {
-        let machine = vec![pattern; basis.machine.len()];
+        let machine = vec![pattern; words];
         let record: Vec<_> = (0..machine.len()).map(|i| pattern.wrapping_add(i as u64)).collect();
         for inverse_first in [false, true] {
             let (mut c, mut j) = (machine.clone(), record.clone());

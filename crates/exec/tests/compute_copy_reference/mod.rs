@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 use bennett_ir::{BinOp, CastOp, Fault, Inst, Module, Operand, Predicate, Target, Terminator};
 use num_complex::Complex;
 
+pub mod swap_in;
+
 const STATUS: usize = 0; // 0 running, 1 returned, 2 faulted
 const RESULT: usize = 1;
 const FAULT: usize = 2;
@@ -22,96 +24,95 @@ const FRAMES: usize = 3;
 
 pub type Machine = Vec<u64>;
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Basis {
-    pub argument: u64,
-    pub out: u64,
-    pub fault: u64,
-    pub machine: Machine,
-    pub records: Vec<Machine>,
-}
+// The fixture chooses a common denominator for these exact complex coefficients.
+pub type Vector<B> = BTreeMap<B, Complex<i64>>;
 
-// Every amplitude is an exact complex integer divided by 8. The tests use only permutations
-// after preparation, so no arithmetic rounding or amplitude pruning occurs in the reference.
-pub type Vector = BTreeMap<Basis, Complex<i64>>;
+type Outcomes<const N: usize> = BTreeMap<[u64; N], (u64, u64)>;
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Basis<B> {
+    registers: B,
+    machine: Machine,
+    records: Vec<Machine>,
+}
 
 pub struct Reference<'m> {
     module: &'m Module,
     frame_size: usize,
     memory_start: usize,
     initial: Machine,
-    argument_slot: usize,
+    parameter_slots: Vec<usize>,
 }
 
 impl<'m> Reference<'m> {
-    pub fn new(module: &'m Module) -> Self {
+    pub fn new(module: &'m Module, name: &str) -> Self {
         let frame_size = FRAME_HEADER + module.functions.iter().map(|f| f.slot_count()).max().expect("functions");
         let memory_start = HEADER + FRAMES * frame_size;
         let mut initial = vec![0; memory_start + module.memory_size as usize];
-        let func = module.function_named("f").expect("applied function");
+        let func = module.function_named(name).expect("applied function");
         initial[HEADER] = u64::from(func.0);
         for segment in &module.data {
             for (i, byte) in segment.encode().into_iter().enumerate() {
                 initial[memory_start + segment.address as usize + i] = u64::from(byte);
             }
         }
-        let argument_slot = HEADER + FRAME_HEADER + module.function(func).params[0].slot.index();
-        Self { module, frame_size, memory_start, initial, argument_slot }
+        let parameter_slots =
+            module.function(func).params.iter().map(|param| HEADER + FRAME_HEADER + param.slot.index()).collect();
+        Self { module, frame_size, memory_start, initial, parameter_slots }
     }
 
-    pub fn initial_vector(&self, budget: usize) -> Vector {
-        let phases = [Complex::new(1, 0), Complex::new(0, 1), Complex::new(-1, 0), Complex::new(0, -1)];
-        let mut vector = Vector::new();
-        for x in 0..4 {
-            for y in 0..4 {
-                for e in 0..4 {
-                    let basis = Basis {
-                        argument: x,
-                        out: 64 | y,
-                        fault: 16 | e,
-                        machine: self.initial.clone(),
-                        records: vec![vec![0; self.initial.len()]; budget],
-                    };
-                    let target_phase = match y {
-                        0 => Complex::new(1, 0),
-                        1 | 2 => Complex::new(0, 1),
-                        3 => Complex::new(-1, 0),
-                        _ => unreachable!("two prepared target bits"),
-                    };
-                    vector.insert(basis, phases[x as usize] * target_phase * phases[e as usize]);
-                }
+    pub fn initial_machine(&self) -> &[u64] {
+        &self.initial
+    }
+
+    pub fn apply<B: Ord, const N: usize>(
+        &self,
+        vector: Vector<B>,
+        budget: usize,
+        arguments: impl Fn(&B) -> [u64; N],
+        mut xor_targets: impl FnMut(&mut B, (u64, u64)),
+    ) -> (Vector<B>, Outcomes<N>) {
+        assert_eq!(N, self.parameter_slots.len());
+        let blank_records = vec![vec![0; self.initial.len()]; budget];
+        let mut vector = vector
+            .into_iter()
+            .map(|(registers, amplitude)| {
+                (Basis { registers, machine: self.initial.clone(), records: blank_records.clone() }, amplitude)
+            })
+            .collect();
+        let copy_arguments = |basis: &mut Basis<B>| {
+            for (&slot, argument) in self.parameter_slots.iter().zip(arguments(&basis.registers)) {
+                basis.machine[slot] ^= argument;
             }
-        }
-        vector
-    }
-
-    pub fn apply(&self, mut vector: Vector, budget: usize) -> (Vector, [(u64, u64); 4]) {
-        vector = permute(vector, |b| b.machine[self.argument_slot] ^= b.argument);
+        };
+        vector = permute(vector, copy_arguments);
         for tick in 0..budget {
             vector = permute(vector, |b| self.tick(&mut b.machine, &mut b.records[tick], false));
         }
         let mut outcomes = BTreeMap::new();
-        for basis in vector.keys() {
-            assert_eq!(basis.machine[TICKS], budget as u64, "all inputs take exactly B scheduled ticks");
-            let output = Self::output(&basis.machine);
-            if let Some(previous) = outcomes.insert(basis.argument, output) {
+        vector = permute(vector, |b| {
+            assert_eq!(b.machine[TICKS], budget as u64, "all inputs take exactly B scheduled ticks");
+            let input = arguments(&b.registers);
+            let output = Self::output(&b.machine);
+            if let Some(previous) = outcomes.insert(input, output) {
                 assert_eq!(previous, output, "the computation does not read its targets");
             }
-        }
-        vector = permute(vector, |b| {
-            let (result, fault) = Self::output(&b.machine);
-            b.out ^= result;
-            b.fault ^= fault;
+            xor_targets(&mut b.registers, output);
+            assert_eq!(arguments(&b.registers), input, "the XOR targets are disjoint from the arguments");
         });
         for tick in (0..budget).rev() {
             vector = permute(vector, |b| self.tick(&mut b.machine, &mut b.records[tick], true));
         }
-        vector = permute(vector, |b| b.machine[self.argument_slot] ^= b.argument);
-        for basis in vector.keys() {
-            assert_eq!(basis.machine, self.initial, "every machine bit restored");
-            assert!(basis.records.iter().flatten().all(|&word| word == 0), "every record bit restored");
-        }
-        (vector, std::array::from_fn(|x| outcomes[&(x as u64)]))
+        vector = permute(vector, copy_arguments);
+        let restored = vector
+            .into_iter()
+            .map(|(basis, amplitude)| {
+                assert_eq!(basis.machine, self.initial, "every machine bit restored");
+                assert!(basis.records.iter().flatten().all(|&word| word == 0), "every record bit restored");
+                (basis.registers, amplitude)
+            })
+            .collect();
+        (restored, outcomes)
     }
 
     pub fn tick(&self, machine: &mut Machine, record: &mut Machine, inverse: bool) {
@@ -282,7 +283,7 @@ impl<'m> Reference<'m> {
     }
 }
 
-pub fn permute(vector: Vector, mut operation: impl FnMut(&mut Basis)) -> Vector {
+pub fn permute<B: Ord>(vector: Vector<B>, mut operation: impl FnMut(&mut B)) -> Vector<B> {
     let mut result = Vector::new();
     for (mut basis, amplitude) in vector {
         operation(&mut basis);
