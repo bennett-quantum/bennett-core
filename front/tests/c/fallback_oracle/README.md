@@ -45,7 +45,9 @@ assertions only for the documented coherent class or after an un-run. Therefore:
   front output; no change to the original oracle or its allocation limit is
   needed. Actual C snapshots still check every high bit and extra register.
 - `store`, `memcpy`, `memset`, `user_write`, `nested`, `loop` retain writes in
-  ordinary memory. `outside_class` deliberately erases y. Only immediate Born
+  ordinary memory. `outside_class` deliberately erases y; it passes since the front
+  keeps an old value it cannot erase in a register released at once (2026-11-17), and
+  is no longer ignored. Only immediate Born
   probabilities and exact basis results are asserted; phases/history layout are
   unspecified. The expected distribution sums squared input amplitudes by native
   measured result, rather than adding amplitudes across hidden histories. The

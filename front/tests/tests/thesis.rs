@@ -189,14 +189,13 @@ fn treating_everything_as_tainted_changes_no_result() {
 #[test]
 fn what_is_not_handled_is_refused_by_name() {
     let cases = [
+        // An overwrite of b (b = 1, b = b ? 0 : b) keeps the old value since 2026-11-17 (tests/retained.rs).
         ("returned", "return b;", "used by ordinary code"),
-        ("overwritten", "b = 1; return (int)bennett_measure(&b);", "an overwrite of qubit variable 'b'"),
         (
             "stale",
             "_Bool t = b; bennett_h(&b); c ^= t; return (int)bennett_measure(&c);",
             "used after the variable changed",
         ),
-        ("in_place", "b = b ? 0 : b; return (int)bennett_measure(&b);", "an overwrite of qubit variable 'b'"),
         ("stored", "sink = b; return 0;", "used by ordinary code"),
     ];
     for (name, body, expected) in cases {

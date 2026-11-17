@@ -35,12 +35,7 @@ fn what_cannot_run_under_qubit_control_or_in_place_is_refused_by_name_at_its_lin
             "if (x & 2) bennett_x(bennett_bit(&x, 0));",
             "a gate on qubit variable 'x' under a condition that depends on 'x'",
         ),
-        // Updates with no inverse the front knows: they would need history kept as quantum workspace.
-        ("square", "x = x * x;", "an update of qubit variable 'x' that is not a bijection"),
-        ("double", "x += x;", "an update of qubit variable 'x' that is not a bijection"),
-        ("divide", "x = x / 3;", "an update of qubit variable 'x' that is not a bijection"),
-        ("controlled_square", "if (a) x = x * x;", "an update of qubit variable 'x' that is not a bijection"),
-        ("overwrite", "x = 5;", "an overwrite of qubit variable 'x'"),
+        // Updates with no inverse the front knows keep the old value since 2026-11-17 (tests/retained.rs).
         (
             "branchy_update",
             "if (a && p != 0 && 10 / p == 5) x += 1;",

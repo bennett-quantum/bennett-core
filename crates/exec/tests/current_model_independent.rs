@@ -263,9 +263,11 @@ entry:
         let mut e = executor(&p, "main", &[17], Options { seed, ..bounded() });
         assert_eq!(e.run(), Outcome::Returned(Some(165 ^ 128 ^ 4)));
         let state = e.snapshot();
-        assert_eq!(state.quantum.cells.len(), 1);
+        // Measured whole, the byte is ordinary memory again, holding the result; its column is gone.
+        assert_eq!(state.quantum.cells.len(), 0);
+        assert_eq!(state.classical.memory[17], 165 ^ 128 ^ 4);
         assert_eq!(state.quantum.amplitudes.len(), 1);
-        assert_eq!(state.quantum.amplitudes[0].0, [1, 0, 0, 33]);
+        assert_eq!(state.quantum.amplitudes[0].0, [1, 0, 0]);
         assert!((state.quantum.amplitudes[0].1 - Complex64::new(-1.0, 0.0)).norm() < 1e-12);
     }
 }

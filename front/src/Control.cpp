@@ -103,6 +103,10 @@ private:
   void xorInto(const Storage &target, const Value *value, const Instruction &at);
   void xorClassical(const Storage &target, const Value *value, const Instruction &at);
   void xorConstant(const Storage &target, uint64_t value);
+  // An overwrite of `target` whose old value the front cannot compute back: the new value is applied into a
+  // fresh register, exchanged with the variable by CNOTs, and the register, now holding the old value, is
+  // released (the partial trace), with a warning.
+  void retainedOverwrite(const Storage &target, const Value *value, const StoreInst &store);
   void release(const Instruction &ret);
   void controlledGate(const CallBase &call, const Access &target, const std::string &gate);
   // The qubits whose conjunction `condition` is, if LLVM's simplifier proves it is one: each qubit of a
@@ -370,23 +374,9 @@ void ControlWriter::store(const StoreInst &store) {
       return;
     }
   }
-  if (!known && analysis.tainted(value)) {
-    for (const LoadInst *load : collect(value, store).loads) {
-      if (analysis.access(load->getPointerOperand())->storage == &target) {
-        notHandled("an update of qubit variable " + target.name +
-                       " that is not a bijection the front knows how to invert (it handles `" + plainName(target) +
-                       " ^= e` with e not reading " + plainName(target) +
-                       ", and chains of +, -, ^, ~, negation, multiplication by an odd constant, rotation and "
-                       "byte swap with operands that do not read it)",
-                   &store);
-      }
-    }
-  }
   if (!known) {
-    notHandled("an overwrite of qubit variable " + target.name +
-                   ", whose value is not known here (the old value would be discarded); only `" +
-                   plainName(target) + " ^= expression` is handled",
-               &store);
+    retainedOverwrite(target, value, store);
+    return;
   }
   // The variable holds a known value: XOR it away, then XOR the new value in.
   if (!analysis.tainted(value) && !(module.options.taintAll && sliceable(value))) {
@@ -408,6 +398,47 @@ void ControlWriter::store(const StoreInst &store) {
     xorClassical(target, fact.value, store);
   }
   xorInto(target, value, store);
+}
+
+// The exchange form of a store (docs/DESIGN.md, "Overwrites that keep the old value"): with n a fresh
+// register, `apply g(a, x) -> n` (x, the variable, is an argument, n the target), three CNOTs per bit exchange
+// n and x, so x holds g(a, x_old) and n holds x_old, which nothing kept can compute back here; n is released
+// at once. Where the old value was the same for every configuration present nothing is lost; where it
+// differed, interference between those configurations is gone, which is physics: the old values are what
+// distinguishes them. One register of the variable's width is kept per executed overwrite.
+void ControlWriter::retainedOverwrite(const Storage &target, const Value *value, const StoreInst &store) {
+  const std::string &reg = registers.at(&target);
+  unsigned bits = target.bits;
+  std::string spare = fresh(target.alloca->getName().str() + ".old");
+  line(spare + " = qalloc " + std::to_string(bits));
+  if (const auto *constant = dyn_cast<ConstantInt>(resolve(value))) {
+    for (unsigned bit = 0; bit < bits; ++bit) {
+      if (constant->getValue().getZExtValue() >> bit & 1) {
+        line("x " + spare + "[" + std::to_string(bit) + "]");
+      }
+    }
+  } else if (!analysis.tainted(value) && !(module.options.taintAll && sliceable(value))) {
+    apply(module.copyFunction(bits), converted(value, bits), spare, store);
+  } else {
+    std::string args;
+    std::string callee = slice(collect(value, store), value, nullptr, bits, store, args);
+    apply(callee, args, spare, store);
+  }
+  for (unsigned bit = 0; bit < bits; ++bit) {
+    std::string x = reg + "[" + std::to_string(bit) + "]";
+    std::string n = spare + "[" + std::to_string(bit) + "]";
+    line("x " + n + " ctrl " + x);
+    line("x " + x + " ctrl " + n);
+    line("x " + n + " ctrl " + x);
+  }
+  line("qfree " + spare);
+  warning("the overwrite of qubit variable " + target.name +
+              ", whose old value is not known here and cannot be computed back from what is kept, keeps the old "
+              "value in " +
+              std::to_string(bits) +
+              " qubits each time it runs, released at once (the partial trace): interference between "
+              "configurations with different old values is lost (coherence)",
+          &store);
 }
 
 void ControlWriter::xorConstant(const Storage &target, uint64_t value) {

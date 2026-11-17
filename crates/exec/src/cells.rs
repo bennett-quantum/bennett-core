@@ -10,7 +10,9 @@
 //!
 //! Ordinary code that touches a cell (a load, a store, a jump record), outside `apply` or inside it, faults
 //! `qubit_memory_access` before changing anything, whatever the cell's qubits hold (the maintainer's decision
-//! of 2026-11-17). A byte is a cell from the gate that promoted it until that gate is undone.
+//! of 2026-11-17). A byte is a cell from the gate that promoted it until that gate is undone, or until a
+//! measurement measures all eight of its bits: then it is ordinary memory again, holding the result
+//! (`forward.rs`, `measure_memory`; the maintainer's decision of 2026-11-17).
 
 use std::ops::Range;
 

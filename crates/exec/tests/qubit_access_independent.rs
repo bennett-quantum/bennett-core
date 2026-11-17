@@ -13,7 +13,8 @@ fn every_integer_width_faults_exactly_when_load_or_store_overlaps_a_qubit_byte()
     for width in 1u32..=128 {
         let bytes = width.div_ceil(8);
         for access in [format!("%v = load i{width} 64"), format!("store i{width} 1, 64")] {
-            for prepare in ["z [%cell:7]", "h [%cell:7]", "h [%cell:7]\n%measured = measure i8 [%cell]"] {
+            // A byte measured in part (bit 7, the gated one, unmeasured) still holds qubits.
+            for prepare in ["z [%cell:7]", "h [%cell:7]", "h [%cell:7]\n%measured = measure i7 [%cell]"] {
                 let module = load(&format!(
                     "memory 512\nfunc @main(i64 %cell) -> i8 {{\nentry:\n{prepare}\n{access}\nret 27\n}}"
                 ));
@@ -206,9 +207,11 @@ entry:
     assert_eq!(common::run(&module, "main", &[], bounded()).0, Outcome::Returned(Some(39)));
 }
 
+/// Measuring all eight bits of a byte makes it ordinary memory again, holding the result (the maintainer's
+/// decision of 2026-11-17); measuring some of them does not.
 #[test]
-fn a_measured_stack_byte_stays_protected_after_its_frame_returns() {
-    for access in ["%v = load i1 %address", "store i1 0, %address"] {
+fn a_byte_measured_whole_is_ordinary_memory_holding_the_result() {
+    for (measure, ordinary) in [("i8", true), ("i16", true), ("i7", false), ("i1", false)] {
         let module = load(&format!(
             "memory 512
 func @promote() -> i64 {{
@@ -216,21 +219,34 @@ entry:
  %p = alloca 8
  store i8 165, %p
  h [%p:7]
- %measured = measure i8 [%p]
+ h [%p:0]
+ %measured = measure {measure} [%p]
  ret %p
 }}
-func @main() {{
+func @main() -> i8 {{
 entry:
  %address = call @promote()
- {access}
- ret
+ %v = load i8 %address
+ store i8 7, %address
+ %w = load i8 %address
+ %sum = add i8 %v, %w
+ ret %sum
 }}"
         ));
         for seed in 0..8 {
             let mut e = executor(&module, "main", &[], Options { seed, ..bounded() });
-            assert_eq!(e.run(), Outcome::Faulted(Fault::QubitMemoryAccess));
-            assert_eq!(e.stats().memory_qubit_bytes, 1);
-            assert_eq!(e.snapshot().classical.frames.len(), 1, "callee returned before access");
+            let outcome = e.run();
+            if ordinary {
+                // 165 with bits 0 and 7 random: the load reads the measured byte, then the store writes it.
+                let Outcome::Returned(Some(sum)) = outcome else { panic!("{measure}, seed {seed}: {outcome:?}") };
+                let byte = sum.wrapping_sub(7) & 0xff;
+                assert_eq!(byte & 0x7e, 165 & 0x7e, "{measure}, seed {seed}: {byte}");
+                assert_eq!(e.stats().memory_qubit_bytes, 0, "{measure}: no byte holds qubits");
+                assert_eq!(e.stats().live_qubits, 0, "{measure}: the cell's column is released");
+            } else {
+                assert_eq!(outcome, Outcome::Faulted(Fault::QubitMemoryAccess), "{measure}, seed {seed}");
+                assert_eq!(e.stats().memory_qubit_bytes, 1);
+            }
         }
     }
 }

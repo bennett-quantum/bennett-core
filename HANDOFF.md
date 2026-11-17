@@ -11,9 +11,13 @@ of the order below are done: the independent reference that runs `apply` by the 
 qubit-dependent key as their acceptance; an independent testing pass over applied calls (`a0c0bc6`) found no
 wrong result and two defects of the front's diagnostics, since fixed. DESIGN's model sections
 were read against the written account of the model by an independent reader and corrected where they said
-more than the argument carries. Nothing of this work is running. Next: code under a qubit that writes what
-later code reads, rules B, C and A at a definite address, each a landable step ("Next steps, in order", 4);
-the two diagnostic defects are fixed (step 0 of that work).
+more than the argument carries. Code under a qubit ("Next steps, in order", 4): the two diagnostic defects
+are fixed; rule B is done (code without gates under a qubit that writes qubit variables is one `apply`); rule
+C is done for a gate loop with an ordinary trip count, not for one deciding on values carried between passes
+(a question below); rule A is done for the executor's part and for qubit variables in registers (an
+overwrite that cannot be erased keeps the old value, with a warning), not for stores into memory, whose plan
+is there, as is the plan for addresses that depend on a qubit. Nothing of this work is running. Next: rule A
+at a definite address in memory, then the independent testing pass over rules B, C and A.
 
 ## Resumed on 2026-11-17
 
@@ -337,17 +341,42 @@ explicitly after the separate musl build.
       table route; why it is not built is a question below ("Questions for the maintainer"). Routes for case 5
       (a body that changes the tested register but never whether the condition holds: one control qubit
       computed once, cleared by computing it again) are in DESIGN.
-   3. **Rule A at a definite address.** A store whose value or execution depends on a qubit keeps its value in
-      qubits at the bytes it writes: the value is applied into a fresh register and exchanged with the bytes by
-      gates, and the register is cleared when its old content can be recomputed; an overwrite whose old value
-      cannot be erased keeps it in spare qubits released by `qfree`, with a warning and the count of qubits
-      kept. Measuring bytes at an address makes them ordinary memory again, holding the result (the executor's
-      part). Where ordinary code needs a definite value from such bytes, the front refuses and asks for a
-      measurement the programmer writes. Each step says which of the fallback oracle's seven waiting acceptance
-      tests it makes pass (`front/tests/tests/fallback_oracle.rs`; fixtures and explanation in
-      `front/tests/c/fallback_oracle/`: host clang runs each C update once per basis input and the device result
-      is compared with it) and un-ignores them.
-   4. **Rule A at an address that depends on a qubit:** a plan only.
+   3. **Rule A, partly done.** Done: the executor's part (a `measure` at an address measuring all eight bits of
+      a byte makes it ordinary memory again, holding the result; `docs/DESIGN.md`, "Qubits in memory"), and the
+      retained form for qubit variables in registers (an overwrite whose old value cannot be erased is
+      exchanged into a fresh register released at once, with a warning giving the qubits kept per executed
+      overwrite; `docs/DESIGN.md`, "Overwrites that keep the old value"): the fallback oracle's `outside_class`
+      passes and is un-ignored (its inventory: 9 checked, 18 waiting by name). **Not built: stores into memory
+      at a definite address** (the front emitting gates on address-named bits, the exchange with a fresh
+      register, its clearing K, F or I, else the retained form; the refusal of ordinary reads of such bytes,
+      asking for a measurement the programmer writes). Its plan, and why the remaining fallback tests wait:
+      `store`, `memset`, `nested` and `memcpy` need exactly that; their driver then reads `cells` with ordinary
+      loads, which the decided rule refuses, so the driver must measure the cells with a marker the programmer
+      writes (a marker for `measure iN [ADDR]`, which exists in the device language; adding a marker and
+      changing the oracle's driver are steps to take with the oracle's author's reasoning in view); `loop`
+      writes `cells[i]` in a loop whose trip count depends on qubits, so it needs the region form (the code
+      applied whole, its final memory the result: the note's "buffer" form) on top; `user_write` is a call
+      under a qubit whose writes are undone by the applied-call rule while native keeps them: it needs the
+      route of a call that fills a buffer named at the call (a marker), so it stays waiting by decision.
+   4. **Rule A at an address that depends on a qubit: plan** (not built). The region every possible target lies
+      in is taken from the object the address is based on when its extent is known (a global, a fixed-size
+      local), else refused with the route "declare the storage" (a marker naming a region: a language choice
+      for the maintainer). The access is the exchange of one addressed element: `n ^= R[i]` (`apply`,
+      arguments the index and the region, target a fresh `n`), `R[i] ^= n` (for each element `j` of the
+      region and each bit, an X on the element's bit controlled by `n`'s bit and by "i == j", the latter as
+      X-conjugated literal controls on the index's bits or computed by a decoder that returns its workspace to
+      0), `n ^= R[i]` again; `n` then holds the old element and is cleared as at a definite address, else
+      retained. The loop over the region's elements is a loop of the control program over the object's size,
+      which the C states. Cost: on the order of the region's size times the element's width in gates per
+      access, which is also a lower bound for coherent addressed exchange. The index must not lie in the
+      region; an applied function cannot read qubit-held bytes, so the region is copied into registers by
+      CNOTs around each `apply` that reads it (several registers past 64 bits, or the derived form asked
+      about under "Questions for the maintainer").
+   Route recorded, derived, not built: **k successive applied calls on memory kept in qubits** can run with
+   nothing retained when the argument registers of all the calls are kept and the memory starts in a known
+   definite state: the old memory before call j is computed again from the earlier calls' arguments. Cost
+   k(k+1)/2 evaluations of the calls when done call by call, k when the sequence is one applied function.
+   This is the route for a stateful library whose writes must survive.
 
    Then one independent testing pass over steps 1 to 3, and the reference that runs `apply` by its construction
    extended with the exchange form of rule A, checked exactly, including an old value that cannot be recomputed.
@@ -662,16 +691,11 @@ padded clock and its caller's mark; A mark's budget once its frame is left.
   at about 15:35 UTC:** measuring bytes at an address makes them ordinary memory again, holding the result
   ("i agree with the fable note. I like the philosophy of Soeren Wilkening: 'everything is quantum: if it is in a
   classical config, and only classical stuff happens, we can approx it as classical. as soon as quantum touches it
-  it becomes quantum' measurement is the antithesis of that philosophy"; "Resumed on 2026-11-17"). Not built yet:
-  until it is, the rule below holds. Taken
-  (the simulator's rule already, the easiest to reverse): a byte holds qubits from the first gate that names
-  any of its bits until that gate is undone, then for the rest of the run; not released when its qubits are
-  definite again, when measured, or when its stack frame returns, and the rule is per whole byte (a load of a
-  byte one of whose bits a gate named faults). Consequence: a stack byte once gated faults any later ordinary
-  use of that address. Alternatives, each accepting more programs: a byte whose 8 bits were all measured goes
-  back to memory holding the values found (a device knows that classically); or a release of qubits at an
-  address, as `qfree` is for a register (a new instruction, so the maintainer's to decide). Recommendation:
-  keep the rule until a front emits gates at addresses; then the measured-byte release.
+  it becomes quantum' measurement is the antithesis of that philosophy"; "Resumed on 2026-11-17"). **Built** (step 3 of
+  "Next steps, in order", 4): a `measure` at an address that measures all eight bits of a byte makes it ordinary
+  memory holding the result; a byte measured in part keeps holding qubits (`docs/DESIGN.md`, "Qubits in
+  memory"). Still open: a release of qubits at an address without measuring, as `qfree` is for a register (a
+  new instruction, so the maintainer's to decide).
 - **Ordinary code that needs a definite value from bytes holding qubits (2026-11-17, taken by the advisor
   with the decision of about 15:35 UTC).** Where ordinary code needs such a value (console output, a jump in
   control code, the exit code), the front refuses and asks for a measurement the programmer writes; it does not
@@ -767,7 +791,7 @@ Each recommendation was taken ("Decisions the maintainer took on 2026-11-16, in 
 | A call through another prototype where x86-64 does not determine what is read: the upper half of a 32-bit value, a missing argument that is read, an integer from a floating-point register, a variadic floating-point argument without `%al`, a narrow argument that is not the extension the callee relies on (named fault `unreachable` when the call runs); a direct call whose argument differs from its parameter only in register class (native -O0 and -O2 disagree) | Nothing to remove: the native result is not determined (`docs/DESIGN.md`, "Calls through a prototype"). Conservative, removable by a finer model where named: a variadic floating-point argument after an unread named one, a call whose result is used only by dead code before the optimiser, values in memory read at another place |
 | A qubit-dependent call of a function that uses `setjmp` | The front's own effect summary of `setjmp` (writes only its buffer) when deciding what runs coherently (`docs/DESIGN.md`, "Non-local jumps") |
 | `__float128`; `powi` on `_Float16`/`__bf16`; `#pragma STDC FENV_ACCESS` (with it musl's `ilogb`/`ilogbl` in the corpus accuracy checks; libgcc's `__divxc3` itself works); non-default rounding modes and floating-point flags | Step 5 above |
-| A store under qubit control outside a call; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control that LLVM does not unroll fully | A call with qubit-dependent arguments, whatever it writes, is applied whole since step 6 ("Applied calls (2026-11-17)"). Code without gates under a qubit that writes qubit variables of known value or XORs into them is one `apply` since rule B. Gates in a loop with an ordinary trip count are kept in the loop since rule C. For the rest, the decision of about 15:35 UTC ("Next steps, in order", 4): a gate loop deciding on values carried between passes (the table of control bits); stores that keep their value in qubits at the bytes written, an overwrite that cannot be erased keeping the old value in qubits released by `qfree` |
+| A store into memory under qubit control outside a call; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control whose trip count depends on a qubit or whose passes decide on qubit-dependent values carried between them | A call with qubit-dependent arguments, whatever it writes, is applied whole since step 6 ("Applied calls (2026-11-17)"). Code without gates under a qubit that writes qubit variables of known value or XORs into them is one `apply` since rule B. Gates in a loop with an ordinary trip count are kept in the loop since rule C. For the rest, the decision of about 15:35 UTC ("Next steps, in order", 4): a gate loop deciding on values carried between passes (the table of control bits); stores that keep their value in qubits at the bytes written (an overwrite of a qubit variable that cannot be erased keeps its old value in qubits released by `qfree` since rule A's first part) |
 | A qubit-dependent value used by ordinary code or printed; measurement under control | Channels |
 | A qubit-dependent call, to a function that may write memory, whose result is unused; two such calls in one computation when one may write memory; quantum operations in `main` of a program linked with musl | "Applied calls (2026-11-17)": nothing to remove for the first (applied, it would do nothing); one register per call for the second; classifying control functions through indirect calls, or a startup that calls `main` directly, for the third |
 | Non-empty inline assembly; code without source | An emulator of the real machine, compiled as an ordinary program |

@@ -476,7 +476,13 @@ macro_rules! waiting {
 }
 mod waiting_for_fallback {
     use super::waiting_case;
-    waiting!(store, memcpy, memset, user_write, nested, outside_class);
+    waiting!(store, memcpy, memset, user_write, nested);
+    /// `*y = 0` on a y of unknown value: the old value is kept in a register released at once, with the
+    /// coherence warning (docs/DESIGN.md, "Overwrites that keep the old value").
+    #[test]
+    fn outside_class() {
+        waiting_case("outside_class");
+    }
     /// The documented Boolean XOR `y ^= q && !r`, coherent in every mode since the
     /// front proves a one-bit flip case by case when the simplifier cannot fold it.
     #[test]

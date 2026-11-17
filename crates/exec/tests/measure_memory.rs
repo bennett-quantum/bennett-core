@@ -1,7 +1,8 @@
 //! `measure iN [ADDR]` (`docs/DESIGN.md`, "Qubits in memory"; the maintainer's decision M2 of 2026-11-16):
 //! the `N` bits from bit 0 of the integer at the address, little-endian, read as a load reads them. The bits
 //! of bytes that hold qubits are sampled jointly and the state collapses onto them, only those bits; the bits
-//! of other bytes are the memory's. Each fixture's answer is written out by hand below.
+//! of other bytes are the memory's. A byte whose eight bits were all measured is ordinary memory again,
+//! holding the result. Each fixture's answer is written out by hand below.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -102,6 +103,14 @@ fn cell(e: &Executor<'_>, address: u64) -> BTreeMap<u64, C> {
     values
 }
 
+/// The byte at `address`, which must no longer hold qubits: a byte whose eight bits were all measured is
+/// ordinary memory again, holding the result (the maintainer's decision of 2026-11-17).
+fn ordinary(e: &Executor<'_>, address: u64) -> u8 {
+    let snapshot = e.snapshot();
+    assert!(snapshot.quantum.cells.iter().all(|&(a, _)| a != address), "byte {address} still holds qubits");
+    snapshot.classical.memory[address as usize]
+}
+
 fn module() -> ValidModule {
     bennett_ir::load(FIXTURES).expect("valid")
 }
@@ -112,18 +121,17 @@ fn the_bits_of_cells_are_sampled_jointly_and_collapse_and_other_bytes_are_read()
     let mut seen = BTreeSet::new();
     for (value, e) in outcomes(&module, "joint") {
         assert!([0, 1, 32, 33].contains(&(value & 0xff)) && value >> 8 == 0xAB, "{value:#x}");
-        // Collapsed: the cell holds exactly the measured byte.
-        let cell = cell(&e, 16);
-        assert_eq!(cell.len(), 1, "{cell:?}");
-        assert!((cell[&((value & 0xff) as u64)].norm() - 1.0).abs() < 1e-12);
+        // Measured whole: the byte is ordinary memory holding the result, and no qubits are left.
+        assert_eq!(u128::from(ordinary(&e, 16)), value & 0xff);
+        assert!(e.snapshot().quantum.amplitudes.iter().all(|(config, _)| config.is_empty()));
         seen.insert(value);
     }
     assert_eq!(seen.len(), 4, "every outcome is reached in {SEEDS} seeds: {seen:?}");
     let mut seen = BTreeSet::new();
     for (value, e) in outcomes(&module, "correlated") {
         assert!(value == 0xAB00 || value == 0xAA80, "{value:#x}");
-        assert_eq!(cell(&e, 17).len(), 1);
-        assert_eq!(cell(&e, 16).len(), 1);
+        assert_eq!(u128::from(ordinary(&e, 17)), value >> 8);
+        assert_eq!(u128::from(ordinary(&e, 16)), value & 0xff);
         seen.insert(value);
     }
     assert_eq!(seen.len(), 2);
@@ -177,7 +185,7 @@ fn memory_without_qubits_is_read_and_still_cannot_be_reversed_past() {
     let mut seen = BTreeSet::new();
     for (value, e) in outcomes(&module, "wide") {
         assert_eq!(value & !1, 0x1234_5678_0000_0000_0000_AB00, "{value:#x}");
-        assert_eq!(cell(&e, 16).len(), 1);
+        assert_eq!(u128::from(ordinary(&e, 16)), value & 0xff);
         seen.insert(value);
     }
     assert_eq!(seen.len(), 2);

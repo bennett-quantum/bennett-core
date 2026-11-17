@@ -243,7 +243,9 @@ void outlineAround(Function &function, Instruction *seed, ControlAnalysis &analy
       // a write to memory that outlives it would be lost. An ordinary write under quantum control acts
       // irreversibly on a quantum system, which is a channel, not a unitary.
       if (inst.mayWriteToMemory()) {
-        notHandled(memoryWrite(inst) + " controlled by a value that depends on a qubit (measure the value first)",
+        notHandled(memoryWrite(inst) +
+                       " controlled by a value that depends on a qubit (not built yet: the bytes written would keep "
+                       "the value in qubits)",
                    &inst);
       }
       if (auto *load = dyn_cast<LoadInst>(&inst); load && analysis.access(load->getPointerOperand())) {

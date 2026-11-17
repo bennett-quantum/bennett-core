@@ -252,8 +252,8 @@ an empty device program (`front/src/main.cpp`, `readInput`).
   operations from a load of x to the store, each a bijection in its x operand: add, sub, xor, multiply
   by an odd constant, rotation, byte swap, a select whose condition does not read x, and the truncations
   and extensions across which ring operations keep their low bits (`InPlace.h`). The other operands must
-  not read x. Anything else that reads x's old value is refused: it needs the old value kept (open
-  questions).
+  not read x. Anything else that overwrites x keeps x's old value in a register that is released at once
+  ("Overwrites that keep the old value" below).
 - **A one-bit update `x = e(x)` with `e(1) == e(0) ^ 1`** is `x ^= e(0)`. The identity is proved by LLVM's
   simplifier on two clones of `e`, or, where `e` reads no ordinary value and the other qubit variables it
   reads have at most `maxEnumeratedSupportBits` (8) bits that may be 1, by folding both clones on every
@@ -291,8 +291,7 @@ an empty device program (`front/src/main.cpp`, `readInput`).
 - **Each qubit variable is Known** (it holds an ordinary value: fresh, assigned, just measured) **or Quantum.**
 - **What it cannot do yet it refuses by name**, with the source location: a qubit-dependent value used by
   ordinary code or by an access with an effect of its own (an atomic update, a volatile or atomic read, even
-  with its result unused), a non-XOR overwrite of a variable whose value is not known that is not an invertible
-  update, reading a qubit variable's old value after it changed, qubit variables passed to functions or
+  with its result unused), reading a qubit variable's old value after it changed, qubit variables passed to functions or
   written partially, and the cases under qubit control above.
 - **`--taint-all`** treats more as tainted; tests check that no result changes.
 
@@ -477,6 +476,43 @@ Refused by name, each with its route:
 Acceptance (`front/tests/tests/gate_loops.rs`): the front audit's witness `if (q) for (i < n) x(y)`, and a
 computed condition with two gate sites, one on odd passes only, give the state computed by hand for n = 0, 1,
 2, 3, 6 at O0, O2 and with `--taint-all`, every other register 0; the loop has one controlled gate line.
+
+## Overwrites that keep the old value
+
+An overwrite of a qubit variable whose old value the front can neither XOR away (it is not known), undo by an
+inverse (the update is not a bijection it can invert) nor compute back from what is kept (`x = x * x`, `x =
+5` on an `x` in superposition, `*y = 0`) is accepted (the maintainer's decision of 2026-11-17). With `n` a
+fresh register as wide as the variable `x` and `g` the stored value as an ordinary function of the qubit
+variables it reads (`x` among them, as an argument):
+
+```
+n = qalloc w
+apply @g(a, x) -> n          for each definite value: n = g(a, x)
+x n[b] ctrl x[b]             three CNOTs per bit exchange n and x:
+x x[b] ctrl n[b]             x = g(a, x_old), n = x_old
+x n[b] ctrl x[b]
+qfree n                      the partial trace of the old value
+```
+
+The exchange maps definite states to definite states one to one (`|a, x, n> -> |a, n XOR g(a,x), x>`), so
+the whole is unitary until `qfree`. What `qfree` drops is the old value: where it was the same for every
+configuration present, nothing is lost and the result is exact; where it differed, amplitudes belonging to
+different old values no longer interfere in any later gate (the record distinguishes them). That loss is
+physics, not a limit of the compiler: no unitary sends two definite states to one. Dropping the record at
+once, at the function's end, or never gives the same statistics for everything else. The front warns, naming
+the variable and the number of qubits kept: one register of the variable's width for each overwrite that
+runs (the warning counts per executed overwrite). If an applied function faults for some argument values,
+interference between those values and the rest can be lost when the fault register is released.
+
+This is the form for qubit variables in registers. The same exchange at bytes of memory (a store whose value
+or execution depends on a qubit keeps its value in qubits at the bytes it writes), with the clearings that
+return `n` to 0 when the old value is known, a function of registers unchanged since, or computed back by an
+inverse, is decided and not built (`HANDOFF.md`, "Next steps, in order", 4); such a store is refused by name.
+
+Acceptance: `front/tests/tests/retained.rs` (`x = x * x`, `x += x`, `x = x / 3`, `x = 5`, a conditional
+square on a three-qubit `x`: the weights of the values of `x` are those of C, at O0, O2 and with
+`--taint-all`; the warning's count); the fallback oracle's `outside_class` (`*y = 0` on a `y` in superposition:
+exact basis results, exact Born weights of every preparation, 512 samples, the warning), un-ignored.
 
 ## Applied calls
 
@@ -724,12 +760,12 @@ names.
   value XORed into it and the memory byte set to 0; the gate's journal record keeps the address and the old
   byte.
 - **Which bytes hold qubits.** A byte holds qubits from the first gate that names any of its bits until that
-  gate is undone, and then for the rest of the run: it does not stop when its qubits are definite again, when
-  they are measured, or when the stack frame it lies in returns. The rule reads no amplitude, so a device
-  can keep it as a table of addresses. It is the rule the simulator held already, taken on 2026-11-17 as the
-  easiest to reverse: any later way to give a byte back to ordinary code only accepts more programs. The
-  maintainer decided on 2026-11-17 that measuring bytes at an address makes them ordinary memory again,
-  holding the result; not built yet (`HANDOFF.md`, "Questions for the maintainer").
+  gate is undone, or until a `measure` at an address measures all eight of its bits: then it is ordinary
+  memory again, holding the result (the maintainer's decision of 2026-11-17). Its qubits are in a definite
+  state after that measurement, so the executor XORs the result out of them and releases them, which is
+  exact. A byte measured in part keeps holding qubits; nothing else gives a byte back (not its qubits
+  becoming definite otherwise, nor its stack frame returning). The rule reads no amplitude: a device keeps
+  it as a table of addresses, which a measurement result updates classically.
 - **Ordinary code touching a byte that holds qubits faults `qubit_memory_access`** (code 17; the maintainer's
   decision of 2026-11-17, "yes, it should be a fault to read qubits"): a `load` or `store` any byte of which
   holds qubits, a `setjmp` record written over one, a `longjmp` record read from one. It faults in every

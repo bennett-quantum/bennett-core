@@ -304,7 +304,8 @@ impl<'m> Executor<'m> {
 
     /// Measures the `width` bits from bit 0 of the integer at `range` (its bytes, little-endian): the bits
     /// of bytes that hold qubits are sampled jointly and the state collapsed onto them, only those bits;
-    /// the bits of other bytes are the memory's, as a load reads them, with nothing to sample.
+    /// the bits of other bytes are the memory's, as a load reads them, with nothing to sample. A byte whose
+    /// eight bits are all measured stops holding qubits: it is ordinary memory again, holding the result.
     fn measure_memory(&mut self, range: std::ops::Range<usize>, width: Width) -> u128 {
         let mut bytes = [0u8; 16];
         self.memory.read_into(range.clone(), &mut bytes[..range.len()]);
@@ -320,8 +321,16 @@ impl<'m> Executor<'m> {
                 })
                 .collect();
             let values = self.quantum.measure_bits(&picks, &mut self.rng);
-            for (&(address, _), value) in cells.iter().zip(values) {
+            for ((&(address, column), &(_, mask)), value) in cells.iter().zip(&picks).zip(values) {
                 bytes[address as usize - range.start] = value as u8;
+                // A byte whose eight bits were all measured is definite again: it becomes ordinary memory holding
+                // the result, its column (now holding that value in every configuration) cleared and released.
+                if mask == 0xff {
+                    self.quantum.xor_register(column, value);
+                    self.quantum.free(column);
+                    self.quantum.bind_cell(address, None);
+                    self.memory.write(address as usize, &[value as u8]);
+                }
             }
         }
         u128::from_le_bytes(bytes) & width.mask()
