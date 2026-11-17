@@ -55,7 +55,7 @@ fn matches_group(model: &Model<'_>, state: &Superposition, snapshot: &bennett_ex
     if c.cells.iter().map(|(&a, &id)| (a, id)).collect::<Vec<_>>() != snapshot.quantum.cells
         || model.memory(w) != snapshot.classical.memory
         || c.sp != snapshot.classical.stack_pointer
-        || c.tape != snapshot.classical.tape
+        || !c.tape.iter().copied().eq(snapshot.classical.tape.iter().copied())
         || c.frames.len() != snapshot.classical.frames.len()
         || c.registers.len() != snapshot.quantum.registers.len()
     {

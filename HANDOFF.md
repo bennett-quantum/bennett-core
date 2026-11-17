@@ -56,7 +56,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 | Lua probe | Unmodified Lua 5.4.9 through musl: seven native stdout/status comparisons and exact reversals; a Lua predicate under hand-written `apply`, dense-checked Grover at N=4/8 (`experiments/lua-probe`) |
 
-Check it: `cargo test` (413 tests; 18 ignored: heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks, the scratch mutation matrix and the region-copy-cost witness; about 9 s, no LLVM needed) and `front/test.sh` (178 tests; 27 ignored by default: the nine fallback acceptance tests waiting for step 4, the five C North Star ladder runs (explicit experiments, `experiments/northstar-ladder/README.md`), the noncanonical x87 compare witness, a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
+Check it: `cargo test` (471 passed; 20 ignored: heavy reference, generated or hash-sample runs, the memory-cost report, 2 heavy recomputation checks, the scratch mutation matrix and the region-copy-cost witness; about 9 s, no LLVM needed) and `front/test.sh` (182 passed; 26 ignored by default: the nine fallback acceptance tests waiting for step 4, the five C North Star ladder runs (explicit experiments, `experiments/northstar-ladder/README.md`), the noncanonical x87 compare witness, a musl-linked return-address check, the three heavy journal-content runs, two heavy global-write runs and the global-write check's image writer, an extended float sweep, a
 musl-linked ABI check and two independent variadic checks that need `rt/musl/build.py` first, and the witness of a refusal that is a debt (a packed
 129-bit bitfield struct; see "Known weak spots"); needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -1108,6 +1108,13 @@ promotion and Grover tests remain; they are not new circuit-backend comparisons 
 
 ## Questions for the maintainer
 
+- **Independent reference snapshot storage (2026-11-17):** taken: the established `rpds` crate's
+  persistent vectors and ordered map plus standard `Rc` cold metadata, keeping snapshots and content
+  equality rather than importing production journal machinery. Eight-way slot nodes reduce retained point-write paths; the heavy
+  ladder runner uses an optimized build, prepared before the existing 120 s / 1 GiB execution cap.
+  Recommendation: keep this reversible test-only representation; an independent undo log remains
+  an alternative if a larger workload requires less space. No machine-meaning choice changes.
+
 - **From the design seam and its council (2026-11-16, night; see "Design audition of 2026-11-16").** Rules of
   the machine's meaning whose result depends on other worlds or on a run-wide counter, where a device can only
   decide per branch, and which the recorded decisions do not settle. Taken meanwhile for each: unchanged; ignored
@@ -1258,11 +1265,12 @@ Each recommendation was taken ("Decisions the maintainer took on 2026-11-16, in 
 | A qubit-dependent value used by ordinary code or printed; measurement under control; a dirty discard | Channels |
 | Non-empty inline assembly; code without source | An emulator of the real machine, compiled as an ordinary program |
 
-## C North Star rungs 1–3 (measured 2026-11-16)
+## C North Star rungs 1–3 (measured 2026-11-16/17)
 
 `experiments/northstar-ladder/README.md`, `front/tests/tests/ladder.rs`: unchanged archived five Int8
-functions and 258-line hashtable, provenance checked against pinned Git blobs. Measured at `5361c71`,
-after the file-runtime rebase. **The C portion of rung 1 and rung 3 pass as worded; rung 2 is not established.**
+functions and 258-line hashtable, provenance checked against pinned Git blobs. Rungs 1/3 measured at `5361c71`,
+after the file-runtime rebase; rung 2 repeated on 2026-11-17 against production `bd2e384` with persistent
+independent snapshots. **The C portion of all three rungs passes as worded.**
 
 Scalar domain: 131,840 tuples per compiler input, no exclusions, native O2 and O0/UBSan agree. Across
 clang O0/O2 and both production modes: 527,360 native comparisons, 263,680 exact resets, 9,320,952
@@ -1272,17 +1280,23 @@ explicit experiments; two modes of one executor are not counted as two implement
 
 The original table's basic/grow at n=0,1,7,64,1000 passes all 40 full i64 production comparisons, native
 O2 versus O0/ASan/UBSan, 195 console bytes/status 0, and two exact full-memory resets. O0/O2:
-804,179/803,586 steps, 15,994,195/15,999,410 journal bytes; both images 2,108,912 memory bytes.
-The independent model times out before the full native-output comparison (debt below); no rung 2 pass
-is claimed. Its unchanged ten-case test remains present, not sampled or weakened.
+804,215/803,622 steps, 15,994,967/16,000,182 journal bytes; both images 2,108,912 memory bytes.
+The independent model now also completes all ten full native results from both inputs and reverses its
+own history byte-exactly, with production state/step comparisons at checkpoints, completion and reset.
+Its isolated release process passes in 41.091 s under the unchanged 120 s / 1 GiB cap. Before the change,
+a fresh profile attributed 68.76% of sampled CPU time to slot copying/iteration/clone, with a 1,024-record
+history clone costing 9.301 ms versus 11.538 us for the current state. `rpds` persistent history, slots,
+frames, tape and byte map plus standard `Rc` cold metadata close the gap; the sharing regression failed
+on the old model. No executor disagreement was found. No input was sampled or removed.
 
 Musl hello: 13 exact native bytes/status 0, three identical same-executor replays and four full resets
 at each clang level. O0/O2: 3,379/2,917 steps, 68,371/58,357 journal bytes,
 2,108,896/2,106,160 full reset memory bytes. No incorrect C result was observed. These fresh receipts
-supersede the early pre-file-runtime numbers. The runner retains a nonzero acceptance exit for rung 2.
-Final repository checks pass: cargo test 306 passed/16 ignored, full frontend 171 passed/27 ignored,
-clippy and formatting clean; extra frontend clippy and exact discovery of all five ignored acceptance
-stages also pass. The measured 118-second scalar sweep is explicit experiment work, keeping it out of
+supersede the early pre-file-runtime numbers. The runner now accepts rung 2; future resource stops
+remain UNMEASURED and nonzero.
+Final repository checks after rebasing on `bd2e384`: cargo test 471 passed/20 ignored, full frontend
+182 passed/26 ignored, clippy and formatting clean; workspace-library clippy, tree guards and exact
+discovery of all five ignored acceptance stages also pass. The measured 118-second scalar sweep is explicit experiment work, keeping it out of
 the ordinary frontend run without changing its domain or assertions.
 
 ## Known weak spots
@@ -1314,21 +1328,14 @@ the ordinary frontend run without changing its domain or assertions.
   lifetime of a deadline after its callee returns is the existing seam question (this reference
   invalidates the callee's marks and does not compare that open case); no new quantum
   state guarantee is asserted for unfaithful inverses. The reference keeps the previously recorded
-  deferred-check cohort limitation below. Large snapshot histories remain slow (rung 2 above).
+  deferred-check cohort limitation below. Rung 2 now finishes with shared snapshots; larger workloads
+  can still exhaust its diagnostic resource cap. Multiworld comparisons still walk full history
+  contents; their large-history cost was not measured here. Route if needed: shared-prefix-aware exact
+  comparison or an independent compact undo log.
 
 - `Stats::region_cost.copied_bytes` omits callee-frame growth before a memory split: adding eight
   callee slots adds 128 copied bytes but leaves the report unchanged. Ignored witness:
   `region_copy_cost_includes_slots_of_the_frame_where_memory_splits` in `crates/exec/tests/apply_independent.rs`.
-
-- **C North Star rung 2, second-executor coverage is a testing debt.** The independent snapshot
-  interpreter times out at the 120-second diagnostic limit; last checkpoint 2,048 steps/history records,
-  39 overlay bytes, `__libc_start_main` block 1 instruction 0 at 97.296 s. Startup checkpoints at
-  256/512/1,024 steps take 1.534/5.819/24.364 s; it copies accumulated history while stepping. No table
-  case is verified by it. Production's unchanged ten-case native comparison and byte-exact reversal
-  pass, which does not discharge “both executors”. Route: efficient shared/persistent or compact
-  classical history in an independent interpreter, then rerun both compiler inputs and all ten original
-  cases. The resource cap (also 1 GiB address space) is not a semantic fault or an acceptance shortcut;
-  exact command and witness are in `experiments/northstar-ladder/README.md`.
 
 - The fallback oracle compares the four `cells` bytes and the qubit variables only: a stray write just past
   the array would go unseen by both its native and device sides. Route: compare the whole fixture image

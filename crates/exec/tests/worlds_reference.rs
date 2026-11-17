@@ -178,13 +178,13 @@ fn every_small_whole_state_step_is_bijective_on_dirty_history_and_restores_its_i
         for fields in words(&[2, 2, 2, 2]) {
             let mut w = model.initial("main", &[fields[0].into()]);
             w.classical.slots[2] = Value::Int(fields[1].into());
-            w.classical.overlay.insert(0, fields[2] as u8);
+            w.classical.overlay.insert_mut(0, fields[2] as u8);
             if fields[2] == 0 {
-                w.classical.overlay.remove(&0);
+                w.classical.overlay.remove_mut(&0);
             }
             let mut garbage = w.classical.clone();
-            garbage.tape = vec![fields[3] as u8];
-            w.history.push(Record { before: garbage, action: Action::Classical });
+            garbage.tape = [fields[3] as u8].into_iter().collect();
+            w.history.push_back_mut(Record { before: garbage, action: Action::Classical });
             w.classical.journal_records = 1;
             w.classical.frames[0].instruction = pc;
             let mut out = w.clone();
@@ -202,9 +202,9 @@ fn every_small_whole_state_step_is_bijective_on_dirty_history_and_restores_its_i
                 }
                 1 => {
                     if fields[0] == 0 {
-                        out.classical.overlay.remove(&0);
+                        out.classical.overlay.remove_mut(&0);
                     } else {
-                        out.classical.overlay.insert(0, fields[0] as u8);
+                        out.classical.overlay.insert_mut(0, fields[0] as u8);
                     }
                     Action::Classical
                 }
@@ -220,7 +220,7 @@ fn every_small_whole_state_step_is_bijective_on_dirty_history_and_restores_its_i
             };
             out.classical.frames[0].instruction += 1;
             out.classical.journal_records += 1;
-            out.history.push(Record { before, action });
+            out.history.push_back_mut(Record { before, action });
             inputs.push(w);
             outputs.push(out);
         }
@@ -356,9 +356,9 @@ fn nested_mark_rewind_composite_is_a_whole_state_bijection_including_dirty_prefi
             .expect("nonempty reference state");
         w.quantum[0] = fields[1];
         if fields[2] != 0 {
-            w.classical.overlay.insert(0, fields[2] as u8);
+            w.classical.overlay.insert_mut(0, fields[2] as u8);
         }
-        w.history[0].before.tape = vec![fields[3] as u8];
+        w.history[0].before.tape = [fields[3] as u8].into_iter().collect();
         let at_mark = model.step(&basis(w)).into_keys().next().expect("nonempty reference state");
         let mut expected = at_mark.clone();
         expected.quantum[0] ^= fields[0];
@@ -367,7 +367,7 @@ fn nested_mark_rewind_composite_is_a_whole_state_bijection_including_dirty_prefi
         let start = Box::new(at_mark.classical.clone());
         let mut site = at_mark.classical.clone();
         site.frames[0].instruction = 5;
-        expected.history.push(Record { before: site, action: Action::Rewind { start, count: 3 } });
+        expected.history.push_back_mut(Record { before: site, action: Action::Rewind { start, count: 3 } });
         inputs.push(at_mark);
         outputs.push(expected);
     }

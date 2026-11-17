@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::Instant;
 
-// Reuse the independently written interpreter unchanged. It imports no
+// Reuse the independently written snapshot interpreter. It imports no
 // bennett-exec semantics; dense supplies its separate integer operations.
 #[allow(dead_code)]
 #[path = "../../../crates/exec/tests/oracle_support/dense.rs"]
@@ -15,6 +15,10 @@ mod dense;
 #[allow(dead_code)]
 #[path = "../../../crates/exec/tests/oracle_support/worlds.rs"]
 mod reference;
+use reference as worlds;
+#[allow(dead_code)]
+#[path = "../../../crates/exec/tests/oracle_support/worlds_executor.rs"]
+mod reference_comparison;
 
 fn fixtures() -> PathBuf {
     root().join("experiments/northstar-ladder/fixtures")
@@ -257,21 +261,26 @@ fn hashtable_independent_native_forward_and_byte_exact_reverse() {
         // The preceding production test generated this exact same linked image.
         let p = load(&scratch().join(format!("table{level}.bn")));
         let model = reference::Model::new(&p, "__bennett_entry");
+        let mut actual = Executor::new(&p, entry(&p, "__bennett_entry"), &[], options(true)).expect("table starts");
+        let actual_before = actual.snapshot();
         let before = reference::basis(model.initial("__bennett_entry", &[]));
+        reference_comparison::assert_snapshot(&model, &before, &actual);
         let mut state = before.clone();
         let started = Instant::now();
         let mut steps = 0_usize;
         while state.keys().any(|w| w.classical.finish.is_none()) && steps < 10_000_000 {
             state = model.step(&state);
+            actual.step();
             steps += 1;
             if steps.is_power_of_two() {
+                reference_comparison::assert_snapshot(&model, &state, &actual);
                 let world = state.keys().next().expect("world");
                 let frame = world.classical.frames.last();
                 let site = frame.map(|f| (&p.function(f.function).name, f.block, f.instruction));
                 println!(
                     "independent table {level}: {steps} steps, {} history snapshots, {} overlay bytes, site {site:?}, {:.3}s",
                     world.history.len(),
-                    world.classical.overlay.len(),
+                    world.classical.overlay.size(),
                     started.elapsed().as_secs_f64()
                 );
             }
@@ -283,14 +292,30 @@ fn hashtable_independent_native_forward_and_byte_exact_reverse() {
             Some(reference::Finish::Returned(Some(0))),
             "{level}: reference table did not complete, {steps} steps"
         );
-        assert_eq!(world.classical.tape, expected, "{level}: all ten native table results");
+        assert_eq!(
+            world.classical.tape.iter().copied().collect::<Vec<_>>(),
+            expected,
+            "{level}: all ten native table results"
+        );
+        assert_eq!(actual.outcome(), Some(Outcome::Returned(Some(0))));
+        assert_eq!(actual.tape(), expected, "{level}: production/native");
+        assert_eq!(actual.stats().steps, steps as u64, "{level}: exact step count");
+        reference_comparison::assert_snapshot(&model, &state, &actual);
+        let forward_seconds = started.elapsed().as_secs_f64();
         let records = world.history.len();
         for _ in 0..records {
             state = model.undo_state(&state).expect("reference table undo");
         }
         assert_eq!(state, before, "{level}: independent table reset");
+        assert!(state.keys().next().expect("world").history.is_empty());
+        assert_eq!(actual.reverse().expect("production undo"), steps as u64);
+        assert_snapshot(actual.snapshot(), &actual_before, "production table reset");
+        assert!(!actual.step_back().expect("empty production history"));
+        reference_comparison::assert_snapshot(&model, &state, &actual);
+        // Materialise and compare every byte over the immutable base, including dead stack data.
+        assert_eq!(model.memory(state.keys().next().expect("world")), actual_before.classical.memory);
         println!(
-            "independent table {level}: 10 native results, {steps} steps, complete reversal, {:.3}s",
+            "independent table {level}: 10 native results, {steps} steps, complete reversal, forward {forward_seconds:.3}s, total {:.3}s",
             started.elapsed().as_secs_f64()
         );
     }

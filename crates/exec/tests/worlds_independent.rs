@@ -34,7 +34,7 @@ fn assert_sample(model: &Model<'_>, state: &Superposition, actual: &Executor<'_>
         .find(|g| {
             let w = g.keys().next().expect("world");
             model.memory(w) == snapshot.classical.memory
-                && w.classical.tape == snapshot.classical.tape
+                && w.classical.tape.iter().copied().eq(snapshot.classical.tape.iter().copied())
                 && match (&w.classical.finish, actual.outcome()) {
                     (Some(Finish::Returned(x)), Some(Outcome::Returned(y))) => *x == y,
                     (Some(Finish::Faulted(x)), Some(Outcome::Faulted(y))) => *x == y,

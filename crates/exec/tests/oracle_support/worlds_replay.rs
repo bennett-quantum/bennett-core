@@ -31,7 +31,7 @@ impl Model<'_> {
         for (record, group) in groups {
             let mut state = BTreeMap::new();
             for (mut w, a) in group {
-                w.history.pop();
+                w.history.drop_last_mut();
                 add(&mut state, w, a);
             }
             if let Action::JoinedRewind { start, visit } = &record.action {

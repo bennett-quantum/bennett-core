@@ -51,9 +51,10 @@ def main():
             raise SystemExit(f"fixture provenance mismatch: {name}")
     out = ROOT / ".tmp/northstar-ladder"
     out.mkdir(parents=True, exist_ok=True)
-    env = {**os.environ, "CARGO_BUILD_JOBS": "2", "CMAKE_BUILD_PARALLEL_LEVEL": "2"}
+    env = {**os.environ, "CARGO_BUILD_JOBS": "3", "CMAKE_BUILD_PARALLEL_LEVEL": "3"}
     env.pop("DISPLAY", None)
     env.pop("WAYLAND_DISPLAY", None)
+    env.pop("DBUS_SESSION_BUS_ADDRESS", None)
     report = {
         "revision": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         "scope": "C only, source-input entries; see README for domains and limitations",
@@ -63,8 +64,9 @@ def main():
     # products only after acquisition so measured source and binaries agree.
     prerequisites = [
         ["cmake", "-S", str(ROOT / "front"), "-B", str(ROOT / "target/front")],
-        ["cmake", "--build", str(ROOT / "target/front"), "--parallel", "2"],
-        [sys.executable, str(ROOT / "rt/musl/build.py"), "--jobs", "2"],
+        ["cmake", "--build", str(ROOT / "target/front"), "--parallel", "3"],
+        [sys.executable, str(ROOT / "rt/musl/build.py"), "--jobs", "3"],
+        ["cargo", "test", "--release", "-p", "bennett-front-tests", "--test", "ladder", "--no-run"],
     ]
     report["prerequisites"] = []
     with (out / "prerequisites.txt").open("wb") as log:
@@ -81,7 +83,7 @@ def main():
         row = {"acceptance": "RUNNING", "stages": {}}
         report["rungs"][rung] = row
         for name in TESTS[rung]:
-            command = ["cargo", "test", "-p", "bennett-front-tests", "--test", "ladder", name,
+            command = ["cargo", "test", "--release", "-p", "bennett-front-tests", "--test", "ladder", name,
                        "--", "--exact", "--nocapture", "--test-threads=1"]
             command.append("--ignored")
             bounded = rung == 2 and "independent" in name

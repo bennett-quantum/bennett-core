@@ -1,6 +1,8 @@
 //! Document-based time and guarded-call rules, separate from the snapshot interpreter.
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::{Deref, DerefMut};
+use std::rc::Rc;
 
 use super::{Action, Model, Record, Superposition, World, add};
 use bennett_ir::Fault;
@@ -15,10 +17,28 @@ pub enum MarkBudget {
 #[derive(Clone, Debug, Default)]
 pub struct Timing {
     pub clock: u64,
+    pub budgets: Rc<BudgetState>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct BudgetState {
     pub rewind_visit: usize,
     pub marks: BTreeMap<usize, MarkBudget>,
     pub guards: BTreeMap<u64, u64>,
     pub leftovers: BTreeSet<usize>,
+}
+
+// Clocks change every step; deadline/guard/leftover tables usually do not.
+impl Deref for Timing {
+    type Target = BudgetState;
+    fn deref(&self) -> &BudgetState {
+        &self.budgets
+    }
+}
+impl DerefMut for Timing {
+    fn deref_mut(&mut self) -> &mut BudgetState {
+        Rc::make_mut(&mut self.budgets)
+    }
 }
 
 // Clocks and mark deadlines do not distinguish interfering states. A live call's
@@ -79,8 +99,10 @@ impl Model<'_> {
     }
 
     pub(super) fn rewind_time(&self, w: &World, handle: usize, h: usize) -> Result<u64, Fault> {
-        let read = w.history[h..]
+        let read = w
+            .history
             .iter()
+            .skip(h)
             .any(|r| matches!(&r.action, Action::Read(_) | Action::Cells(_) | Action::MemoryGate { .. }));
         let budget = w.classical.time.marks.get(&handle).copied().unwrap_or(MarkBudget::Unbudgeted);
         if !self.region && read && matches!(budget, MarkBudget::Unbudgeted) {
@@ -101,7 +123,11 @@ impl Model<'_> {
             let mut out = w.clone();
             let frame = out.classical.frames[depth].clone();
             while out.classical.frames.len() > depth {
-                let f = out.classical.frames.pop().expect("caught frame");
+                let f = {
+                    let f = out.classical.frames.last().expect("caught frame").clone();
+                    out.classical.frames.drop_last_mut();
+                    f
+                };
                 self.leave(&mut out, f.activation);
                 out.classical.time.guards.remove(&f.activation);
             }
@@ -112,7 +138,7 @@ impl Model<'_> {
             }
             out.put(frame.fault.expect("guard has code slot"), super::Value::Int(fault.code().into()));
             out.classical.journal_records += 1;
-            out.history.push(Record { before: w.classical.clone(), action: Action::Catch(fault) });
+            out.history.push_back_mut(Record { before: w.classical.clone(), action: Action::Catch(fault) });
             add(&mut result, out, a);
         }
         result
