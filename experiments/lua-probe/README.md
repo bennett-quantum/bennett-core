@@ -245,3 +245,38 @@ empty-set diagnostic. This was a scope preview, not a passing mutation run.
 Route: handle cargo-mutants' empty output explicitly; standalone harness mutation
 coverage remains a separate debt. The deliberate phase mutation above is the
 measured sensitivity check.
+
+## Independent testing pass (2026-11-17)
+
+All three stages were rerun on `main` at `d3880f6` with the rebuilt executor: the seven scripts agree and
+reverse exactly, and the 15 quantum entries pass (amplitude error at most 8.89e-16, unchanged).
+`grover_check.py` checks the recorded Grover amplitudes against closed forms, with the marked set read from
+the predicate by hand and no native run or matrix: all eight entries agree within 7.8e-16, signs included.
+
+Five more scripts are in `probes/` (`build.py --scripts scripts --scripts probes` embeds all twelve):
+
+| Script | What it probes | Forward steps | Journal bytes |
+|---|---|---:|---:|
+| error_messages | Runtime and syntax error messages with positions, error levels and values, `load` failures, coroutine errors, Lua's own C-stack limit from 300 nested parentheses | 2,667,996 | 51,944,820 |
+| format_corners | `string.format` flags, widths, precisions, rounding halves, `-0.0`, infinities, `%a`, `%q` of control bytes and extreme numbers, invalid conversions | 2,040,061 | 40,572,037 |
+| gc_pressure | 3,000 short-lived table/string groups, finalizer order (the manual's reverse marking order), weak keys and values, resurrection, generational/incremental switches, stop/restart | 56,380,741 | 1,096,920,773 |
+| integer_float | Floor division and modulo of every sign, `mininteger // -1`, wraparound, division by zero (error and infinity), `fmod`, conversions, string coercion, shifts, exact int/float comparison | 2,430,215 | 48,514,831 |
+| ordered_tables | Only orders Lua determines: numeric `for`, `ipairs`, `table.sort` with a total order, insert/remove/move/pack/unpack, `select`, borders, UTF-8 | 2,862,600 | 56,717,336 |
+
+All twelve scripts agree with native stdout and status, and all twelve restore their entry snapshot exactly.
+One difference was found and taken out of `format_corners` so the rest could be compared: `%a` of a subnormal
+double. The device prints musl's normalised spelling (`0x1p-1074`), the native reference glibc's denormal one
+(`0x0.0000000000001p-1022`); musl also rounds `%.3a` of `0x1.fffffp-1023` to `0x2.000p-1023` where glibc gives
+`0x1.000p-1022`. The values are equal and C leaves the first digit of a subnormal unspecified. A native build
+against musl 1.2.5 prints exactly what the device prints, so the device runs musl faithfully. The witness is
+`front/tests/tests/printf_hex_float.rs` (ignored; its normal-value companion passes).
+
+A second predicate, `predicates/three_of_eight.lua` (`build.py --oracle --predicate ...`), marks inputs 0, 3
+and 6 through a string-keyed table, `string.format` and a closure, so that N=4 has two of four marked and N=8
+three of eight. All 15 entries of `coherent.py` pass, and `grover_check.py` agrees on all eight Grover entries
+within 5.6e-16 (N=4 stays at success 1/2 for every k, as θ = 45° gives; N=8: 3/8, 27/32, 3/128, 507/512).
+
+Not probed: allocation failure (the device's 1 MiB musl arena would fail before native malloc does, so the
+two cannot be compared without a matched limit), deep C recursion past the device's 1 MiB stack, random
+numbers and the time/address hash seed, `os`/`io` beyond `io.write`, and string-keyed `pairs` order (the
+manual leaves it open).

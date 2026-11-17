@@ -28,6 +28,10 @@ def main():
     parser.add_argument('archive', type=Path)
     parser.add_argument('--out', type=Path, default=ROOT / 'target/lua-probe')
     parser.add_argument('--oracle', action='store_true', help='build the separate predicate embedding')
+    parser.add_argument('--predicate', type=Path, default=HERE / 'predicate.lua',
+                        help='the Lua source of the oracle predicate (with --oracle)')
+    parser.add_argument('--scripts', type=Path, action='append',
+                        help='embed every *.lua here instead of scripts/ (repeatable, in the order given)')
     args = parser.parse_args()
     archive, out = args.archive.resolve(), args.out.resolve()
     if hashlib.sha256(archive.read_bytes()).hexdigest() != SHA256:
@@ -43,13 +47,17 @@ def main():
     version = run([clang, '--version'], capture_output=True, text=True).stdout
     assert 'clang version 18.' in version, version
     common = ['-std=c99', '-DLUA_COMPAT_5_3', '-fno-vectorize', '-fno-slp-vectorize', f'-I{src}']
-    cases = sorted((HERE / 'scripts').glob('*.lua'))
-    assert len(cases) == 7
+    if args.scripts:
+        cases = [p for directory in args.scripts for p in sorted(directory.glob('*.lua'))]
+        assert cases and len({p.stem for p in cases}) == len(cases), cases
+    else:
+        cases = sorted((HERE / 'scripts').glob('*.lua'))
+        assert len(cases) == 7
     (out / 'scripts.h').write_text('static const char *const probe_scripts[] = {\n' +
                                 ',\n'.join(json.dumps(p.read_text()) for p in cases) + '\n};\n')
     (out / 'cases.json').write_text(json.dumps([p.stem for p in cases]) + '\n')
     (out / 'predicate.h').write_text('static const char predicate_source[] = ' +
-                                    json.dumps((HERE / 'predicate.lua').read_text()) + ';\n')
+                                    json.dumps(args.predicate.read_text()) + ';\n')
     driver = HERE / ('oracle.c' if args.oracle else 'driver.c')
     native_objects, members = [], []
     musl = ROOT / 'target/musl'
