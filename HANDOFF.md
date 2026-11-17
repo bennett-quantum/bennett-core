@@ -58,9 +58,9 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 | Lua probe | Unmodified Lua 5.4.9 through musl: seven native stdout/status comparisons and exact reversals; a Lua predicate under hand-written `apply`, dense-checked Grover at N=4/8 (`experiments/lua-probe`) |
 
-Check it: `cargo test` (499 passed; 29 ignored, each naming its reason: heavy reference, generated or
+Check it: `cargo test` (501 passed; 29 ignored, each naming its reason: heavy reference, generated or
 hash-sample runs with their commands, witnesses of recorded defects and of questions awaiting the maintainer;
-about 9 s, no LLVM needed) and `front/test.sh` (210 passed; 36 ignored by default, each naming its reason: the
+about 9 s, no LLVM needed) and `front/test.sh` (217 passed; 35 ignored by default, each naming its reason: the
 nine fallback acceptance tests waiting for step 4, the C North Star ladder runs and other explicit experiments,
 musl-linked checks that need `rt/musl/build.py` first, heavy runs, and witnesses of recorded debts; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -867,11 +867,13 @@ mutation engine with diff selection and the existing suites, then demonstrate su
 (2) Whole-step mutation and isolated cold pre-push builds do not have a seconds-long total-time guarantee;
 work scales with diff size and compilation. Route: measure/cache exact dependency artifacts and select
 proven relevant tests, retaining complete changed-line mutation scope; no timeout or percentage gate.
-The default tests and small guard witnesses stay fast. (3) Remaining attribute debt: accepted non-IEEE
-`denormal-fp-math` and `denormal-fp-math-f32` silently keep IEEE subnormals in SoftFloat. Native MXCSR
-DAZ/FTZ satisfies the promised preserve-sign environment and disagrees at both O0/O2; two ignored
-`defect:` witnesses in `front/tests/tests/attributes_independent.rs` were run and seen failing. Route:
-lower input/output flushing at the SoftFloat boundary, or refuse non-IEEE modes by name until built.
+The default tests and small guard witnesses stay fast. (3) Remaining attribute debt: non-IEEE
+`denormal-fp-math` and `denormal-fp-math-f32` were accepted and silently kept IEEE subnormals in SoftFloat;
+native MXCSR DAZ/FTZ satisfies the promised preserve-sign environment and disagreed at both O0/O2 (two
+witnesses in `front/tests/tests/attributes_independent.rs`, run and seen failing). Since
+`wip/small-fixes`, an operation that reads the mode in such a function is refused by name
+(`front/src/Denormal.cpp`; "What is still refused"); the witnesses expect the refusal. Route: the
+floating-point environment through SoftFloat's state.
 The observed ABI/reference/allocation/no-builtin/ordinary-FP comparisons otherwise agree (704 exact result
 words and 32 allocation hashes at both levels combined); strict FP arithmetic is refused by name. Still unproved: attributes/values/placements outside the measured input
 envelope, generated sources only constructed by ignored experiments, nondefault calling conventions
@@ -1472,6 +1474,7 @@ Each recommendation was taken ("Decisions the maintainer took on 2026-11-16, in 
 | A store under qubit control; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control | The journalled machine (step 3; the device holds qubits at any address since `56b2c0b`, the front's fallback, step 4, is what uses it) |
 | A qubit-dependent value used by ordinary code or printed; measurement under control; a dirty discard | Channels |
 | Non-empty inline assembly; code without source | An emulator of the real machine, compiled as an ordinary program |
+| A floating-point operation that reads the subnormal mode (arithmetic, comparison, conversion from floating point, intrinsics other than `fabs`/`copysign`/`is.fpclass`) in a function promising a non-IEEE mode (`-fdenormal-fp-math=preserve-sign`, `positive-zero`, `dynamic`, or the `-f32` form); moves and sign/magnitude bit operations there are accepted | The floating-point environment carried through SoftFloat's state (flush inputs and outputs as the promised mode says), compared with native code run under MXCSR DAZ/FTZ |
 
 ## C North Star rungs 1–3 (measured 2026-11-16/17)
 

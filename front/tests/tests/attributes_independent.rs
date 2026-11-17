@@ -115,6 +115,7 @@ fn allocation_attributes_preserve_distinct_live_objects_with_musl() {
 fn ieee_denormals_and_no_trapping_math_preserve_native_bits() {
     for (tag, flags) in [
         ("ieee", &[][..]),
+        ("ieee-explicit", &["-fdenormal-fp-math=ieee,ieee"][..]),
         ("no-trapping", &["-fno-trapping-math"][..]),
         ("fast-finite", &["-fno-signed-zeros", "-fno-honor-nans", "-fno-honor-infinities", "-freciprocal-math"]),
     ] {
@@ -122,22 +123,51 @@ fn ieee_denormals_and_no_trapping_math_preserve_native_bits() {
     }
 }
 
-#[test]
-#[ignore = "defect: denormal-fp-math preserve-sign is accepted but SoftFloat keeps subnormals"]
-fn denormal_mode_matches_native_with_the_promised_flush_environment() {
-    compare("attribute_fp", "flush", 6, FP_INPUTS, &["-fdenormal-fp-math=preserve-sign,preserve-sign"], &["-DFLUSH"]);
+/// A function promising a subnormal mode other than IEEE is refused by name at its first operation whose result
+/// depends on the mode: SoftFloat keeps subnormals, while the native program, run in the environment it
+/// promises (MXCSR DAZ and FTZ, `-DFLUSH`), flushes them (48 of 96 words at both levels differed before the
+/// refusal). Route past it: the floating-point environment through SoftFloat's state.
+fn assert_denormal_mode_refused(tag: &str, flags: &[&str], promise: &str) {
+    let source = c_dir().join("attribute_fp.c");
+    for (base, level) in [(CLANG_FLAGS, "o0"), (CLANG_O2_FLAGS, "o2")] {
+        let mut device = base.to_vec();
+        device.extend(flags);
+        let error = lower_text(&source, &format!("attrs.{tag}.{level}"), &device, &[]).expect_err("denormal refusal");
+        assert!(error.contains("not handled yet"), "{level}: {error}");
+        // The first such operation is in @half or in @result, whichever the front lowers first.
+        assert!(error.contains(" in @half,") || error.contains(" in @result,"), "{level}: {error}");
+        assert!(error.contains(promise), "{level}: {error}");
+    }
 }
 
 #[test]
-#[ignore = "defect: denormal-fp-math-f32 preserve-sign is accepted but SoftFloat keeps subnormals"]
-fn f32_denormal_mode_matches_native_with_the_promised_flush_environment() {
-    compare(
-        "attribute_fp",
+fn a_preserve_sign_denormal_mode_is_refused_by_name() {
+    let promise = "\"denormal-fp-math\"=\"preserve-sign,preserve-sign\"";
+    assert_denormal_mode_refused("flush", &["-fdenormal-fp-math=preserve-sign,preserve-sign"], promise);
+}
+
+#[test]
+fn bit_operations_under_a_preserve_sign_mode_are_accepted_and_match_native() {
+    // fneg, fabs, copysign and moves read no subnormal mode: not refused, and equal to native under DAZ/FTZ.
+    let flags = ["-fdenormal-fp-math=preserve-sign,preserve-sign"];
+    compare("attribute_fp_bits", "flush-bits", 3, FP_INPUTS, &flags, &["-DFLUSH"]);
+}
+
+#[test]
+fn positive_zero_and_dynamic_denormal_modes_are_refused_by_name() {
+    for mode in ["positive-zero", "dynamic"] {
+        let flag = format!("-fdenormal-fp-math={mode},{mode}");
+        let promise = format!("\"denormal-fp-math\"=\"{mode},{mode}\"");
+        assert_denormal_mode_refused(&format!("flush-{mode}"), &[&flag], &promise);
+    }
+}
+
+#[test]
+fn an_f32_preserve_sign_denormal_mode_is_refused_by_name() {
+    assert_denormal_mode_refused(
         "flush-f32",
-        2,
-        FP_INPUTS,
         &["-DF32_ONLY", "-Xclang", "-fdenormal-fp-math-f32=preserve-sign,preserve-sign"],
-        &["-DFLUSH"],
+        "on `float` in @result, which promises the subnormal mode \"denormal-fp-math-f32\"=\"preserve-sign,preserve-sign\"",
     );
 }
 

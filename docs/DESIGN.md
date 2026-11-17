@@ -579,7 +579,12 @@ and utilities where they exist (`Abi.h`, `Normalise.h`):
 - **Refused by name**: `frem` and the C library's functions (`sin`, `pow`, `strtod`, and `sqrt` under the
   default `-fmath-errno`, since errno is the C library's); operations on `__float128` (moving it is fine);
   conversions to and from integers wider than 128 bits; `powi` on `_Float16` and `__bf16` (natively the C
-  library's `powf`); `#pragma STDC FENV_ACCESS`.
+  library's `powf`); `#pragma STDC FENV_ACCESS`; an operation whose result depends on the subnormal mode
+  (arithmetic, comparison, conversion from floating point, every intrinsic but `fabs`, `copysign` and
+  `is.fpclass`) in a function that promises a mode other than IEEE through `denormal-fp-math` or
+  `denormal-fp-math-f32` (`-fdenormal-fp-math=preserve-sign`, `positive-zero`, `dynamic`), since SoftFloat
+  keeps subnormals where the promised environment flushes them (`Denormal.h`); moves and those bit operations
+  stay accepted. Route: the floating-point environment through SoftFloat's state.
 - **Beyond SoftFloat**: conversions to and from 128-bit integers follow libgcc's routines on x86-64 step for
   step, so out of range they give what the native program gives; `fmal`, which SoftFloat lacks for the
   80-bit format, is written over SoftFloat's primitives and rounded once by its own rounding, and agrees

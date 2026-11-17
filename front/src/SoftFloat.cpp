@@ -1,5 +1,6 @@
 #include "SoftFloat.h"
 
+#include "Denormal.h"
 #include "Diagnostic.h"
 #include "FpClass.h"
 #include "Markers.h"
@@ -805,6 +806,7 @@ private:
 
   // Lowers `inst` and returns what replaces it (itself if nothing does).
   Value *lower(Instruction *inst) {
+    checkDenormalMode(*inst);
     if (vectorOperation(*inst)) {
       return scalarise(inst);
     }
