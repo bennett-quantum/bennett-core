@@ -405,6 +405,11 @@ under `apply` they run on the private copy and are undone with it.
 - **`--taint-all`** does not move an ordinary call with ordinary arguments into an `apply`: there its writes
   must survive, so only calls of functions that read memory at most are treated as computable coherently.
 
+The acceptance target of the rule is SQLite (`experiments/sqlite-on-device`, stage 4): C entries that set a
+database up with ordinary code and then apply one query whose key depends on a three-qubit register; each of
+eight queries gives the native result on each of the eight rows, and memory is unchanged across each `apply`
+(`front/tests/tests/sqlite_applied.rs`, ignored by default since it needs the SQLite sources).
+
 ## Non-local jumps (`setjmp`, `longjmp`)
 
 C's `setjmp` saves "the calling environment" and `longjmp` returns to it, from any depth. On a machine with

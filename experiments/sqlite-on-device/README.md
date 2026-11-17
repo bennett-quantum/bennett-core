@@ -224,9 +224,11 @@ database (N=8 Grover below does).
 | Override the ordinary `main` with the marker entry | `not handled yet: the address of @__stdio_seek, which performs quantum operations, is taken` (15.91 s) | Control-function classification reaches an address-taken musl stdio callback in this build (`fwrite.c:16`). Supporting address-taken control functions or refining their call graph is needed. Renaming the marker entry away from musl's callback-based `main` removes this first refusal, as the second attempt measures. |
 | Keep classical `main`; add `experiment_coherent_c` as a separate entry | `not handled yet: a call that depends on a qubit, to a function that writes memory or performs quantum operations` (6.85 s) | `marker.c:11`, the call of `experiment_query(2,row)`. The query writes SQLite cursor/VM/allocator memory. The front's documented memory-writing fallback would remove this refusal; today's device already runs it through the hand-written `apply`. |
 
-Both are compiler exit status 3; neither emits a runnable coherent C program. These are separate
-refusal probes, not edits to SQLite or to the compiler. The text adapter is the explicitly allowed
-workaround for stage 3, not evidence that the C marker front now accepts SQLite under qubit control.
+Both were compiler exit status 3 when measured (2026-11-16). Since 2026-11-17 the front applies a call with
+qubit-dependent arguments whole, whatever memory it writes (`docs/DESIGN.md`, "Applied calls"): the second
+attempt is accepted, and stage 4 below is its acceptance run. The first refusal stands: musl's startup passes
+`main` by pointer, and a function with quantum operations may not have its address taken, so the C entry is a
+function of its own and `main` stays ordinary. `refusals.py` measures both again.
 
 ### Stack observer
 
@@ -242,6 +244,36 @@ target/debug/sqlite-on-device-harness target/sqlite-on-device/n4/program.bn stac
 Whole-driver minima N=4/8/16: **155,099 / 155,163 / 155,211 bytes**, all stopped one byte below by the
 same indirect `xParseCell` call in `btreeParseCell`. These are execution measurements, not a general
 static stack bound.
+
+## Stage 4: queries under `apply`, written in C
+
+`applied.c` has one entry per query of the SQL oracle (`SQL_ORACLE=1`, eight queries, `NROWS=8`). Each calls
+the driver's `experiment_setup` (ordinary code: the database, its rows and all prepared statements), puts a
+three-qubit row register in uniform superposition and writes `result ^= experiment_query(Q, row)`, the
+driver's own function, which binds the key `row + 1` (or `row` for the scan and range queries), steps,
+reads the column and resets the statement. The front applies the call whole with one budget: every byte it
+writes (SQLite's cursor, VM, page cache and memsys5 heap, musl) is written on the private memory of each run
+and undone. Linked with the unchanged lowered driver (`link/linked.bc`) and lowered by the front, no
+hand-written device text.
+
+```sh
+SQLITE_DIR=<amalgamation directory> front/test.sh --test sqlite_applied -- --ignored --nocapture
+```
+
+The test (`front/tests/tests/sqlite_applied.rs`) builds the native and device drivers with `build.sh`, takes
+the native result of every query on every row, and for each entry compares the state right after the
+`apply`: exactly eight configurations of amplitude 1/sqrt(8), each holding the row, the native 32-bit result
+for that row (the -1 of a missing row included) and a zero fault register; and the whole classical memory,
+the database included, identical before and after the `apply`.
+
+**Pass**, measured 2026-11-17: all 8 queries (`arith`, `like_name`, `like_note`, `scan`, `int_eq`,
+`text_order`, `two_where`, `range_agg`) on all 8 rows equal the native driver, with memory unchanged across
+every `apply`, in strict mode (no row faulted; budget 1,000,000 steps per `apply`). The test took 84 s on the
+shared laptop: native and device builds 54 s (with the musl archive and SQLite objects already cached by an
+earlier run; a cold build took 151 s), the front 26 s on the linked module, each query (setup, `apply` over
+eight rows) 0.2 s. The front gives no warning: nothing after the call reads memory it can see the query
+write. `refusals.py` on the same N=8 build: the entry overriding `main` is still refused (status 3, 9.9 s,
+now naming `@__stdout_write`); the separate entry is accepted (status 0, 21.6 s).
 
 ## Grover
 

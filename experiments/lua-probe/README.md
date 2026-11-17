@@ -192,6 +192,11 @@ stack/VM state and uses protected calls. The front's journalled fallback is the
 named route past this refusal. The device already handles the call through
 hand-written `apply`; no Lua, front or executor change is included here.
 
+Since 2026-11-17 the front applies a call with qubit-dependent arguments whole,
+whatever memory it writes (`docs/DESIGN.md`, "Applied calls"), so this refusal
+is gone; `refusal.py` still expects it and was not run again. Not re-measured:
+what the front does with `marker.c` now.
+
 ## Limits and validation
 
 This is an optional probe, with a checksum-verified external source dependency

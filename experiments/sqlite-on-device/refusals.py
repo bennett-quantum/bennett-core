@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure both C-marker refusals without changing the original linked program."""
+"""Measure the C-marker entry with and without overriding main, without changing the original linked program."""
 import argparse
 import json
 from pathlib import Path
@@ -35,10 +35,14 @@ def main():
         start = time.monotonic()
         p = subprocess.run(command, capture_output=True, text=True)
         elapsed = time.monotonic()-start
-        assert p.returncode == 3 and 'not handled yet:' in p.stderr, p.stdout+p.stderr
-        expected = ('a call that depends on a qubit, to a function that writes memory or performs quantum operations'
-                    if isolated else 'the address of @__stdio_seek, which performs quantum operations, is taken')
-        assert expected in p.stderr, p.stderr
+        if isolated:
+            # Since applied calls (2026-11-17) the query's call is applied whole: accepted.
+            assert p.returncode == 0, p.stdout+p.stderr
+        else:
+            assert p.returncode == 3 and 'not handled yet:' in p.stderr, p.stdout+p.stderr
+            # Which musl callback is named first depends on the build (__stdio_seek at N=4 on 2026-11-16,
+            # __stdout_write at N=8 with SQL_ORACLE=1 on 2026-11-17): through `main` they all reach markers.
+            assert 'which performs quantum operations, is taken' in p.stderr, p.stderr
         results[tag] = dict(seconds=elapsed, status=p.returncode, reason=p.stderr)
     (build/'refusals.json').write_text(json.dumps(results, indent=2)+'\n')
     print(json.dumps(results, indent=2))
