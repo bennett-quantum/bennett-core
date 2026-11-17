@@ -38,6 +38,11 @@ struct Written {
   const Storage *storage;
   Value *known = nullptr; // its known value before the region; null: accumulated, starting at 0
   unsigned offset = 0;    // its field in the result word
+  // A store where the region ends, of a value the region computes (`moved`); null: the region's own stores.
+  StoreInst *moved = nullptr;
+  // When the moved store's value is a phi of the region's exit: its edges from the region, taken before the
+  // exit block is split.
+  std::vector<std::pair<BasicBlock *, Value *>> incoming{};
 };
 
 // The bits a variable may hold: up to its highest bit that may be 1.
@@ -70,7 +75,9 @@ private:
   bool accumulated(const Storage &storage) const;
   bool cyclic() const;
   bool precedes(const Instruction *a, const Instruction *b) const;
-  Function *copy(const std::vector<const Written *> &fields, unsigned bits);
+  std::map<const Storage *, StoreInst *> movedStores() const;
+  Value *finalValue(const Written &field, IRBuilder<> &b, ValueToValueMapTy &map) const;
+  Function *copy(const std::vector<std::vector<const Written *>> &words, unsigned bits);
   std::vector<Value *> arguments(IRBuilder<> &b) const;
   void xorInto(IRBuilder<> &b, AllocaInst *target, Type *type, Value *value) const;
   void removeStores();
@@ -212,9 +219,76 @@ std::vector<Value *> RegionWhole::arguments(IRBuilder<> &b) const {
   return args;
 }
 
+// Stores where the region ends of values the region computes: LLVM moves a loop's stores out of the loop
+// (scalar promotion), leaving the value in a register and one store after the loop. Such a store is a write of
+// the region when the exit block is entered from the region only and begins with it (after phis and code that
+// touches no memory), it stores all of a qubit variable the region does not touch, whose value before the region
+// is known, and its value is computed in the region or is a phi of the exit block.
+std::map<const Storage *, StoreInst *> RegionWhole::movedStores() const {
+  std::map<const Storage *, StoreInst *> moved;
+  if (!std::all_of(pred_begin(exit), pred_end(exit), [&](const BasicBlock *from) { return inRegion.count(from); })) {
+    return moved;
+  }
+  const DataLayout &layout = fn.getParent()->getDataLayout();
+  Instruction *first = &*blocks.front()->getFirstNonPHIIt();
+  for (Instruction &inst : *exit) {
+    auto *store = dyn_cast<StoreInst>(&inst);
+    if (!store) {
+      if (isa<PHINode>(inst) || isa<DbgInfoIntrinsic>(inst) || !inst.mayReadOrWriteMemory()) {
+        continue;
+      }
+      break;
+    }
+    std::optional<Access> place = analysis.access(store->getPointerOperand());
+    if (!store->isSimple() || !place || place->offset != 0 ||
+        layout.getTypeStoreSizeInBits(store->getValueOperand()->getType()) != place->storage->bits ||
+        moved.count(place->storage)) {
+      break;
+    }
+    const Value *value = store->getValueOperand();
+    bool computed = isa<PHINode>(value) ? cast<PHINode>(value)->getParent() == exit : inside(value);
+    bool untouched = std::none_of(blocks.begin(), blocks.end(), [&](const BasicBlock *block) {
+      return std::any_of(block->begin(), block->end(), [&](const Instruction &use) {
+        const Value *pointer = isa<LoadInst>(use)    ? cast<LoadInst>(use).getPointerOperand()
+                               : isa<StoreInst>(use) ? cast<StoreInst>(use).getPointerOperand()
+                                                     : nullptr;
+        return pointer && analysis.basedOn(pointer) == place->storage;
+      });
+    });
+    Fact fact = analysis.before(first, place->storage);
+    bool known = fact.kind == Fact::Known && !inside(fact.value) &&
+                 (isa<Constant>(fact.value) || analysis.dominators.dominates(fact.value, first));
+    if (!computed || !untouched || !known) {
+      break;
+    }
+    moved[place->storage] = store;
+  }
+  return moved;
+}
+
+// A field's value where the region ends, in the copy's exit block (`b`), whose predecessors are the copies of the
+// region's blocks that leave it.
+Value *RegionWhole::finalValue(const Written &field, IRBuilder<> &b, ValueToValueMapTy &map) const {
+  Type *type = IntegerType::get(fn.getContext(), field.storage->bits);
+  if (!field.moved) {
+    return b.CreateLoad(type, map[field.storage->alloca]);
+  }
+  if (field.incoming.empty()) {
+    return map[field.moved->getValueOperand()];
+  }
+  IRBuilder<> top(b.GetInsertBlock(), b.GetInsertBlock()->begin());
+  PHINode *copy = top.CreatePHI(type, unsigned(field.incoming.size()));
+  for (const auto &[from, in] : field.incoming) {
+    Value *mapped = map.lookup(in);
+    copy->addIncoming(mapped ? mapped : in, cast<BasicBlock>(map[from]));
+  }
+  return copy;
+}
+
 // A copy of the region as an ordinary function: each qubit variable it touches is a private local, starting at
-// the variable's value (read only), its known value or 0 (written); it returns `final XOR start` of each field.
-Function *RegionWhole::copy(const std::vector<const Written *> &fields, unsigned bits) {
+// the variable's value (read only), its known value or 0 (written); it returns `final XOR start` of each field,
+// in one word of `bits` bits. With several words of 64 bits, a last parameter names the word to return.
+Function *RegionWhole::copy(const std::vector<std::vector<const Written *>> &words, unsigned bits) {
   LLVMContext &context = fn.getContext();
   std::vector<Type *> types;
   for (Value *input : inputs) {
@@ -222,6 +296,9 @@ Function *RegionWhole::copy(const std::vector<const Written *> &fields, unsigned
   }
   for (const Storage *storage : read) {
     types.push_back(IntegerType::get(context, storage->bits));
+  }
+  if (words.size() > 1) {
+    types.push_back(Type::getInt32Ty(context));
   }
   Type *result = IntegerType::get(context, bits);
   Function *copy = Function::Create(FunctionType::get(result, types, false), GlobalValue::InternalLinkage,
@@ -305,13 +382,22 @@ Function *RegionWhole::copy(const std::vector<const Written *> &fields, unsigned
     }
   }
   b.SetInsertPoint(out);
-  Value *word = ConstantInt::get(result, 0);
-  for (const Written *field : fields) {
-    Type *type = IntegerType::get(context, field->storage->bits);
-    Value *change = b.CreateXor(b.CreateLoad(type, locals[field->storage]), starts[field->storage]);
-    word = b.CreateOr(word, b.CreateShl(b.CreateZExt(change, result), field->offset));
+  // Every word is computed, then the one asked for chosen, so that each word takes the same steps.
+  std::vector<Value *> values;
+  for (const std::vector<const Written *> &fields : words) {
+    Value *word = ConstantInt::get(result, 0);
+    for (const Written *field : fields) {
+      Value *change = b.CreateXor(finalValue(*field, b, map), starts[field->storage]);
+      word = b.CreateOr(word, b.CreateShl(b.CreateZExt(change, result), field->offset));
+    }
+    values.push_back(word);
   }
-  b.CreateRet(word);
+  Value *chosen = values.back();
+  for (size_t i = values.size() - 1; i-- > 0;) {
+    chosen = b.CreateSelect(b.CreateICmpEQ(copy->getArg(copy->arg_size() - 1), b.getInt32(unsigned(i))), values[i],
+                            chosen);
+  }
+  b.CreateRet(chosen);
   // What named a qubit variable of the control program is unused now; the copy has no debug information.
   for (BasicBlock *clone : cloned) {
     for (Instruction &inst : make_early_inc_range(*clone)) {
@@ -485,7 +571,19 @@ bool RegionWhole::run() {
     }
   }
   Instruction *first = &*blocks.front()->getFirstNonPHIIt();
+  std::map<const Storage *, StoreInst *> moved = movedStores();
   for (const auto &storage : analysis.storages) {
+    if (auto found = moved.find(storage.get()); found != moved.end()) {
+      Written w{storage.get(), analysis.before(first, storage.get()).value};
+      w.moved = found->second;
+      if (auto *phi = dyn_cast<PHINode>(w.moved->getValueOperand())) {
+        for (unsigned i = 0; i < phi->getNumIncomingValues(); ++i) {
+          w.incoming.emplace_back(phi->getIncomingBlock(i), phi->getIncomingValue(i));
+        }
+      }
+      written.push_back(w);
+      continue;
+    }
     if (!writes.count(storage.get())) {
       if (reads.count(storage.get())) {
         read.push_back(storage.get());
@@ -538,6 +636,12 @@ bool RegionWhole::run() {
     if (w.known && !isa<Constant>(w.known) && seen.insert(w.known).second) {
       inputs.push_back(w.known);
     }
+    // A moved store's phi may take a value from outside the region on an edge out of it.
+    for (const auto &[from, in] : w.incoming) {
+      if ((isa<Instruction>(in) || isa<Argument>(in)) && !inside(in) && seen.insert(in).second) {
+        inputs.push_back(in);
+      }
+    }
   }
   for (BasicBlock *block : blocks) {
     for (Instruction &inst : *block) {
@@ -551,7 +655,8 @@ bool RegionWhole::run() {
     }
   }
 
-  // Fields, grouped into result words of at most 64 bits.
+  // Fields, grouped into result words of at most 64 bits: one register each, all of them returned by one
+  // applied function, which takes the word's number when there are several.
   std::vector<std::vector<const Written *>> words(1);
   unsigned used = 0;
   for (Written &w : written) {
@@ -563,28 +668,38 @@ bool RegionWhole::run() {
     used += w.storage->bits;
     words.back().push_back(&w);
   }
+  // A register of whole bytes, as a qubit variable is (Taint.h): 8, 16, 32 or 64 bits.
+  auto width = [](const std::vector<const Written *> &fields) {
+    return std::max(8u, unsigned(PowerOf2Ceil(fields.back()->offset + fields.back()->storage->bits)));
+  };
+  Function *whole = copy(words, words.size() > 1 ? maxResultBits : width(words.front()));
 
   LLVMContext &context = fn.getContext();
   Module &module = *fn.getParent();
   IRBuilder<> b(after->getTerminator());
   b.SetCurrentDebugLocation(writes.empty() ? DebugLoc() : (*writes.begin())->mutations.front()->getDebugLoc());
-  for (const std::vector<const Written *> &fields : words) {
-    // A register of whole bytes, as a qubit variable is (Taint.h): 8, 16, 32 or 64 bits.
-    unsigned bits = std::max(8u, unsigned(PowerOf2Ceil(fields.back()->offset + fields.back()->storage->bits)));
-    Function *whole = copy(fields, bits);
+  for (size_t index = 0; index < words.size(); ++index) {
+    const std::vector<const Written *> &fields = words[index];
+    auto evaluate = [&] {
+      std::vector<Value *> args = arguments(b);
+      if (words.size() > 1) {
+        args.push_back(b.getInt32(unsigned(index)));
+      }
+      return b.CreateCall(whole, args);
+    };
     if (fields.size() == 1) {
       const Storage &target = *fields.front()->storage;
       Type *type = IntegerType::get(context, target.bits);
-      xorInto(b, target.alloca, type, b.CreateZExtOrTrunc(b.CreateCall(whole, arguments(b)), type));
+      xorInto(b, target.alloca, type, b.CreateZExtOrTrunc(evaluate(), type));
       continue;
     }
     // Several results: into a fresh register, a CNOT from each of its bits into its variable, and the same
     // computation again to return the register to 0.
-    Type *type = IntegerType::get(context, bits);
+    Type *type = IntegerType::get(context, width(fields));
     IRBuilder<> top(&*fn.getEntryBlock().getFirstInsertionPt());
     AllocaInst *results = top.CreateAlloca(type, nullptr, fn.getName() + ".results");
     results->setMetadata(qubitMetadata, MDNode::get(context, {}));
-    xorInto(b, results, type, b.CreateCall(whole, arguments(b)));
+    xorInto(b, results, type, b.CreateZExtOrTrunc(evaluate(), type));
     FunctionCallee bit = module.getOrInsertFunction("bennett_bit", PointerType::get(context, 0),
                                                     PointerType::get(context, 0), b.getInt32Ty());
     FunctionCallee x = module.getOrInsertFunction("bennett_x", b.getVoidTy(), PointerType::get(context, 0));
@@ -598,7 +713,25 @@ bool RegionWhole::run() {
         b.CreateCall(x, {target}, {OperandBundleDef(qubitControlBundle, std::vector<Value *>{control})});
       }
     }
-    xorInto(b, results, type, b.CreateCall(whole, arguments(b)));
+    xorInto(b, results, type, b.CreateZExtOrTrunc(evaluate(), type));
+  }
+  // The moved stores are done by the results; what they stored is no longer used after the region.
+  for (Written &w : written) {
+    if (w.moved) {
+      w.moved->eraseFromParent();
+      w.moved = nullptr;
+    }
+  }
+  for (BasicBlock *block : {after->getSingleSuccessor(), after}) { // the exit's phis use those of `after`
+    for (bool changed = true; block && changed;) {
+      changed = false;
+      for (PHINode &phi : make_early_inc_range(block->phis())) {
+        if (phi.use_empty()) {
+          phi.eraseFromParent();
+          changed = true;
+        }
+      }
+    }
   }
   removeStores();
   return true;

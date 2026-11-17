@@ -284,8 +284,8 @@ an empty device program (`front/src/main.cpp`, `readInput`).
   simulator reports that release.
 - **The budget** (`--region-budget`) is the `B` of every `apply` the front writes. Code whose control flow
   depends on a qubit, a loop whose trip count depends on one included, runs under one `apply` and one `B` for
-  everything it does (or, for several results, a pair of `apply`s that each run all of it), as does a
-  function called whole. An update of a qubit variable inside a loop of the control program, whose trip count is
+  everything it does (or, for several results, a pair of `apply`s that each run all of it, one pair for each 64
+  bits of results), as does a function called whole. An update of a qubit variable inside a loop of the control program, whose trip count is
   an ordinary value, is one `apply` per pass: separate computations, one after another, not one computation
   cut up (the maintainer's decision of 2026-11-17).
 - **Each qubit variable is Known** (it holds an ordinary value: fresh, assigned, just measured) **or Quantum.**
@@ -428,7 +428,23 @@ the variable, the variable being the target. Several share a fresh register `N`:
 from each bit of `N` into the bit of its variable, the same `apply` again, `qfree N`. Neither `apply` has a
 written variable among its arguments (their starting values are ordinary values or 0), and the variables the
 code only reads are not changed between the two, so the second `apply` computes the same value and returns `N`
-to 0. Each `apply` runs the whole code: two runs of `B` steps however many results.
+to 0. Each `apply` runs the whole code: two runs of `B` steps however many results fit in one register.
+
+A register holds at most 64 qubits. When the results take more bits, they are packed into words of at most 64
+bits, each a register of its own, and the one applied function takes the word's number as an ordinary argument
+and returns that word: every word is computed and the one asked for chosen at the end, so each run takes the
+same steps whichever word it returns. Each word is then one `apply` into its variable (a word of one variable)
+or a pair around a fresh register as above, with the same arguments and the same `B`: two runs of the whole
+code for each register. There is never a second copy of the code.
+
+What LLVM moves out of the code is still the code's. When it promotes a variable that a loop of the code
+writes to a register (scalar promotion), the stores in the loop become one store after it, in the block where
+the code ends, of a value the code computes. That store counts as a write of the code, and the value is a
+result of the same applied function, when the block is entered from the code only and begins with the store
+(after phis and code that touches no memory), the store writes all of a qubit variable the code does not touch,
+and the variable's value before the code is known: its result is `final XOR start` with the stored value as
+`final`, and the store goes. Otherwise the store stays, and the value is computed again by the `apply` that
+writes it (below, a debt).
 
 Anything else is refused by name: a variable whose value before the code is not known and which the code does
 more with than XOR into it would need its old value kept. Without a loop in the code, predication may still
@@ -438,12 +454,22 @@ code leaves for later code that was read from a variable after the code wrote it
 predication refuses it. clang `-O2`'s own vectoriser can turn an accumulation into vector lanes, which the front
 does not follow; the tests disable it in that loop (`front/tests/c/region_whole.c`).
 
+Debt: a value the code computes that later code uses in any other way (a plain local assigned in a loop under
+a qubit and used in arithmetic after it) is computed again, by a copy of the code inside the `apply` of the
+computation that uses it: the result is right, but that `apply` runs the code and its loops once more. Route:
+make the value a field of the code's results, held in a fresh qubit variable until its last use, then cleared by
+the same results computed again while their arguments are unchanged, or kept as an overwrite keeps its old
+value.
+
 Acceptance (`front/tests/tests/region_whole.rs`): two nested loops whose trip counts depend on a three-qubit
 register `x`, XORing into two variables of values the front does not know and counting into a third, agree
 with native C for all eight values of `x` at O0, O2 and with `--taint-all`, every other register back at 0; so
 do the parity of `x` accumulated into a `_Bool` and an overwrite in a loop of a variable of known value. The
-smallest budget for all values is 128 steps; at 127 the longest runs fault, the others do not. The control
-program has no loop left.
+control program has no loop left, and one pair of `apply`s into one register carries all three results (the
+counter's stores are among those LLVM moves out of the loops). The smallest budget for all values is 151 steps;
+at 150 the longest runs fault, the others do not. Results of 64 + 32 + 16 + 8 bits from one loop take one
+applied function, one `apply` into the 64-bit variable and one pair for the other three, and agree with a hand
+computation for every value of a three-qubit register in all three modes.
 
 **Gate loops.** A loop with gates under a condition that depends on a qubit stays a loop of the control
 program, run as written: the circuit model needs a definite list of gates, and the loop's trip count is an

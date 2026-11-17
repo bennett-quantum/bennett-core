@@ -21,9 +21,10 @@ address is done too (`docs/DESIGN.md`, "Memory written under a qubit"), with the
 `bennett_measure_bytes`; the fallback oracle's `store`, `memset`, `nested`, `memcpy` and `loop` fixtures agree
 with native C in a harness that reads bytes holding qubits, and stay ignored in the oracle itself, whose
 adapter does not (a question below). An independent testing pass over rules B and C and the first part of
-rule A (`03ae832`) left four ignored witnesses in `front/tests/tests/rules_6b_independent.rs`; the two on
-gate loops are fixed ("Fixes after the testing pass over rules B and C (2026-11-17)"), the two on rule B's
-results not yet. Nothing of this work is running. Next: those two witnesses, then the independent testing
+rule A (`03ae832`) left four ignored witnesses in `front/tests/tests/rules_6b_independent.rs`, all fixed
+since ("Fixes after the testing pass over rules B and C (2026-11-17)"): a gate loop's guard and its
+condition, and one applied function for all results of code under a qubit, results wider than 64 bits and
+stores LLVM moves out of the code included. Nothing of this work is running. Next: the independent testing
 pass over rule A at memory.
 
 ## Resumed on 2026-11-17
@@ -327,9 +328,11 @@ explicitly after the separate musl build.
    1. **Done: rule B** (`docs/DESIGN.md`, "Code under a qubit"; `front/src/RegionResults.h`). Code without
       gates, written inline, whose control flow depends on a qubit and which writes qubit variables is one
       applied function with one budget for all of it (one `apply` for one result, a pair with CNOTs between them
-      for several), when each variable it writes has a known value before it or is only XORed into. Two nested
+      for several, one pair for each 64-bit register when the results are wider, all from the same applied
+      function), when each variable it writes has a known value before it or is only XORed into; a store LLVM
+      moves out of the code to where it ends counts as the code's write. Two nested
       loops whose trip counts depend on a three-qubit register agree with native C for all eight values at O0,
-      O2 and with `--taint-all`; the smallest budget is 128 steps and 127 faults the longest runs only; the
+      O2 and with `--taint-all`; the smallest budget is 151 steps and 150 faults the longest runs only; the
       control program keeps no loop. A loop with an ordinary trip count keeps one small `apply` per pass, as
       decided. Still refused, with the route in the message: a variable of unknown value that such a loop does
       more with than XOR into (it needs the retained form of step 3, or an inverse of the loop). Not built: a
@@ -756,6 +759,14 @@ padded clock and its caller's mark; A mark's budget once its frame is left.
   budget, allowed by the decision on loops with an ordinary trip count); (c) the table in qubit-held memory
   bytes indexed by an ordinary address, after rule A at addresses. Recommendation: (a) first (exact, cheap,
   covers loops LLVM did not unroll), then (b) for run-time counts. Today the loop is refused by name.
+- **Results of code under a qubit wider than one register (2026-11-17, rule B; taken, cheap to reverse).** A
+  register holds at most 64 qubits, and one `apply` writes one register. Taken: the code stays one applied
+  function, which takes the number of a 64-bit result word as an ordinary argument and computes every word
+  before choosing the one asked for (so each run takes the same steps); each word is one `apply` into its
+  variable or one pair around a fresh register, all with the same budget. Cost: two runs of the whole code per
+  register instead of two in all. Options: (a) as taken; (b) refuse results wider than 64 bits by name; (c) a
+  register or an `apply` target wider than 64 qubits, a change of the device language. Recommendation: (a)
+  until a program's cost shows otherwise, then (c).
 - **Applied calls (2026-11-17, step 6; each taken, cheap to reverse).** A call with qubit-dependent arguments
   whose result is unused, to a function that may write memory: taken, refused by name (applied, it would do
   nothing; its writes are its purpose). Recommendation: keep. Two such calls in one computation when one may
@@ -1431,8 +1442,7 @@ order", 4):
 
 The independent testing pass over rules B and C and the first part of rule A (`03ae832`, gpt-6.2-sol) left four
 ignored witnesses in `front/tests/tests/rules_6b_independent.rs`, each reproduced and each failing on the code
-before these fixes; the two on gate loops run now, the two on rule B's results are next. Documents:
-`docs/DESIGN.md`, "Code under a qubit".
+before these fixes; all four run now. Documents: `docs/DESIGN.md`, "Code under a qubit".
 
 - **A gate loop nested in another lost its zero-trip guard** (`entry(n = 0, m = 0)` faulted `budget` instead of
   returning). Cause: the guard was read from the loop's predecessor only. With a nested loop LLVM hoists the
@@ -1450,7 +1460,23 @@ before these fixes; the two on gate loops run now, the two on rule B's results a
   (`moveLoop`): one condition for the whole loop, "the code reaches the loop's header", whose copy returns
   before the first pass; its steps no longer grow with the trip count or the gate's position. One bound per
   `apply` as before; no bound, loop or counter added.
+- **A known variable whose stores LLVM moved out of the loop got an applied copy of its own** (`b = 3 * b + d`
+  in the loop that XORs into `a`: two applied copies of the loop). Cause: scalar promotion leaves `b` in a
+  register through the loop and one store after it, in the block where the code ends; the front collected only
+  stores inside the code, so the value left it and was computed again by the `apply` that stores it. Fix
+  (`front/src/RegionResults.cpp`, `movedStores`): such a store is a write of the code when the block is entered
+  from the code only and begins with it, the variable is not touched in the code and its value before is known;
+  the value is a field of the same result, and the store goes. The acceptance fixture of rule B had the same
+  defect (its counter `c` was computed by a separate copy): its smallest budget is now 151 steps, not 128, all
+  three results under one pair of `apply`s.
+- **Results wider than 64 bits were split into two applied functions.** Cause: the results were packed into
+  64-bit words and the code copied once per word. Fix: one applied function, the word's number an ordinary
+  argument (the question "Results of code under a qubit wider than one register" above).
 
-Regression tests besides the two witnesses: `front/tests/tests/gate_loops.rs` (nested gate loops at every
+Regression tests besides the four witnesses: `front/tests/tests/gate_loops.rs` (nested gate loops at every
 pair of trip counts 0 to 2, and a gate at pass 199 of 200 under a budget of 16 steps, in O0, O2 and
-`--taint-all`); each fails on the code before.
+`--taint-all`) and `front/tests/tests/region_whole.rs` (one pair for the fixture's three results; 64 + 32 + 16 + 8
+bits of results from one loop, one applied function, values checked in all three modes); each fails on the
+code before. Debt, in DESIGN: a value the code computes that later code uses other than by such a store (a plain
+local assigned in the loop and used in arithmetic after it) is still computed again by a copy of the code in
+the `apply` of its use; correct, one more run of the code.

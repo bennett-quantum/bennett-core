@@ -13,8 +13,11 @@
 //
 // One result is XORed into its variable by one `apply`. Several share a fresh register N: `apply` into N, a
 // CNOT from each bit of N into its variable, the same `apply` again (its arguments are unchanged, so N returns
-// to 0), release N. Nothing is created that the C does not contain: no loop, counter or bound; the region's
-// loops stay inside the applied function.
+// to 0), release N. Results of more than 64 bits are words of at most 64 bits, one register each, all returned
+// by the same applied function, which takes the word's number as an ordinary argument. A store that LLVM moved
+// out of the region (scalar promotion: the value in a register, one store where the region ends) is a write of
+// the region. Nothing is created that the C does not contain: no loop, counter or bound; the region's loops
+// stay inside the applied function.
 #pragma once
 
 #include <vector>

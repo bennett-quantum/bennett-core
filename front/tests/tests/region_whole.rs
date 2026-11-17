@@ -78,8 +78,8 @@ fn nested_loops_parity_and_known_start_agree_with_native_c_in_every_mode() {
 }
 
 /// The two nested loops whose trip counts depend on x run under one budget, inside one applied function:
-/// the control program has no loop at all, and the pair of applies for the two XORed results each take the
-/// whole region.
+/// the control program has no loop at all, and one pair of applies, each taking the whole region, carries all
+/// three results (the counter c too, whose stores LLVM moves out of the loops).
 #[test]
 fn the_nested_loops_are_one_applied_function_with_one_budget() {
     let text = lower_text(&c_dir().join("region_whole.c"), "region-whole-shape", CLANG_FLAGS, &[]).expect("lowers");
@@ -98,13 +98,81 @@ fn the_nested_loops_are_one_applied_function_with_one_budget() {
             }
         }
     }
-    let applies = body.lines().filter(|line| line.trim().starts_with("apply ")).count();
-    assert!(applies >= 2, "@nested_entry: {applies} applies");
+    let before: Vec<&str> = body
+        .lines()
+        .map(str::trim)
+        .take_while(|line| !line.contains(" = measure "))
+        .filter(|line| line.starts_with("apply "))
+        .collect();
+    assert_eq!(before.len(), 2, "@nested_entry: one pair of applies for a, b and c: {before:?}");
+    let target = |line: &str| line.split(" -> ").nth(1).and_then(|rest| rest.split(',').next()).map(str::to_owned);
+    assert_eq!(target(before[0]), target(before[1]), "@nested_entry: both into one register: {before:?}");
+    assert_eq!(text.matches("\nfunc @nested_entry.whole").count(), 1, "@nested_entry: one applied function");
+}
+
+/// Results of more than 64 bits, more than one register holds: still one applied function, taking the number
+/// of its 64-bit result word as an ordinary argument; a word of one variable is applied into it, a word of
+/// several into a fresh register with CNOTs between the pair. Both words are computed by the same loop, whose
+/// trip count depends on x.
+#[test]
+fn results_wider_than_one_register_come_from_one_applied_function() {
+    let source = write_c(
+        "region-whole-wide",
+        r#"#include "bennett.h"
+unsigned long long wide_entry(void) {
+    unsigned char x = 0, d = 0;
+    unsigned long long a = 0;
+    unsigned b = 7;
+    unsigned short c = 0;
+    bennett_h(bennett_bit(&x, 0));
+    bennett_h(bennett_bit(&x, 1));
+    bennett_h(bennett_bit(&x, 2));
+    bennett_x(bennett_bit(&a, 63)); /* a value the front does not know: only XORed into */
+    for (unsigned t = x; t != 0; t >>= 1) {
+        a ^= 0x9E3779B97F4A7C15ull * t;
+        b = b * 5 + t;
+        c += (unsigned short)(t * 3);
+        d ^= (unsigned char)t;
+    }
+    return bennett_measure(&x) ^ bennett_measure(&a) ^ bennett_measure(&b) ^ bennett_measure(&c) ^
+           bennett_measure(&d);
+}
+"#,
+    );
+    let expected = |x: usize| {
+        let (mut a, mut b, mut c, mut d) = (1u64 << 63, 7u32, 0u16, 0u8);
+        let mut t = x as u32;
+        while t != 0 {
+            a ^= 0x9E37_79B9_7F4A_7C15u64.wrapping_mul(u64::from(t));
+            b = b.wrapping_mul(5).wrapping_add(t);
+            c = c.wrapping_add((t * 3) as u16);
+            d ^= t as u8;
+            t >>= 1;
+        }
+        vec![a, u64::from(b), u64::from(c), u64::from(d)]
+    };
+    for (mode, clang, flags) in MODES {
+        let text = lower_text(&source, &format!("region-whole-wide-{mode}"), clang, flags).expect("lowers");
+        assert_eq!(text.matches("\nfunc @wide_entry.whole").count(), 1, "{mode}: one applied function:\n{text}");
+        let body = text.split("func @wide_entry(").nth(1).expect("@wide_entry").split("\n}\n").next().expect("body");
+        let targets: Vec<&str> = body
+            .lines()
+            .map(str::trim)
+            .take_while(|line| !line.contains(" = measure "))
+            .filter_map(|line| line.strip_prefix("apply ")?.split(" -> ").nth(1)?.split(',').next())
+            .collect();
+        assert!(
+            matches!(targets.as_slice(), ["%a", shared, again] if shared == again && *shared != "%a"),
+            "{mode}: a word of one variable applied into it, then one pair for b, c and d: {targets:?}"
+        );
+        let module = bennett_ir::load(&text).expect("valid");
+        check(&module, "wide_entry", &["a", "b", "c", "d"], expected, mode);
+    }
 }
 
 /// The smallest budget with which no value of x faults in @nested_entry, measured by bisection
 /// (`SMALLEST_BUDGET=search front/test.sh --test region_whole one_budget -- --nocapture`).
-const SMALLEST_BUDGET: u64 = 128;
+const SMALLEST_BUDGET: u64 = 151;
 
 /// How many values of x fault in the first `apply` that faults in @nested_entry with `budget`.
 fn faulting(budget: u64) -> usize {

@@ -274,7 +274,6 @@ unsigned entry(unsigned n, unsigned site) {
 }
 
 #[test]
-#[ignore = "result words above the first 64 bits are outlined and evaluated separately"]
 fn results_wider_than_one_register_still_use_one_applied_function() {
     let source = write_c(
         "rules-6b-wide-results",
@@ -418,7 +417,6 @@ fn known_overwrite_and_xor_accumulation_give_the_expected_values() {
 }
 
 #[test]
-#[ignore = "a known accumulator promoted to SSA is computed by a separate applied copy of the region"]
 fn known_overwrite_and_xor_accumulation_share_the_same_applied_function() {
     let source = write_c("rules-6b-mixed-shape", MIXED_RESULTS);
     let text = lower_text(&source, "rules-6b-mixed-shape", CLANG_FLAGS, &[]).expect("lowers");
