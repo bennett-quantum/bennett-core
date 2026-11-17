@@ -843,7 +843,6 @@ fn region_cost_counts_shared_steps_and_the_caller_slots_copied_at_an_internal_sp
 }
 
 #[test]
-#[ignore = "region copied-byte count omits callee slots allocated before a memory split"]
 fn region_copy_cost_includes_slots_of_the_frame_where_memory_splits() {
     let (small, state) = split_copy_cost(0, 0);
     let (large, padded) = split_copy_cost(0, 8);

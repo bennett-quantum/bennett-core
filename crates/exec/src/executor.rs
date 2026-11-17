@@ -380,6 +380,9 @@ pub struct Executor<'m> {
     /// Overlay bytes copied by splits, and journal bytes.
     pub(crate) split_memory_bytes: u64,
     pub(crate) split_journal_bytes: u64,
+    /// The bytes of slots copied where a world split (the slot stack as it is then, the frames of callees
+    /// live at the split included): part of a region's copy cost (`RegionCost::copied_bytes`).
+    pub(crate) split_slot_bytes: u64,
     /// The most overlay bytes all worlds held at once, sampled where worlds are put back after a tick.
     pub(crate) peak_overlay_bytes: usize,
     pub(crate) peak_world_configurations: usize,
@@ -474,6 +477,7 @@ impl<'m> Executor<'m> {
             peak_worlds: 1,
             split_memory_bytes: 0,
             split_journal_bytes: 0,
+            split_slot_bytes: 0,
             peak_overlay_bytes: 0,
             peak_world_configurations: 0,
             others_configurations: 0,

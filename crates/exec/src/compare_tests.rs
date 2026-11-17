@@ -37,6 +37,7 @@ const CORRUPTIONS: &[(&str, Corruption)] = &[
     ("mismatches", |e| e.mismatches += 1),
     ("split_memory_bytes", |e| e.split_memory_bytes += 1),
     ("split_journal_bytes", |e| e.split_journal_bytes += 1),
+    ("split_slot_bytes", |e| e.split_slot_bytes += 1),
     ("rewound_steps", |e| e.rewound_steps += 1),
     ("splits", |e| e.splits += 1),
     ("fault_weight", |e| e.region_fault_weight += 1.0),

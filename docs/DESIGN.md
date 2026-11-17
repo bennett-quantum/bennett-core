@@ -929,14 +929,16 @@ It stays one step of the run that executes it, journalled as one record and undo
   the run's own splits, merges and worlds are those of branch enumeration; the region's own worlds are its
   cost. `Stats::region_cost` reports what computing the regions cost: runs (configurations enumerated or
   worlds), work (steps forward and back, rewound and run again), journal and overlay bytes each run held,
-  bytes copied at splits.
+  bytes copied at splits (the journal, the overlay and the whole slot stack as each split finds it: the frames
+  of callees live at a split inside the region included, which the report left out until 2026-11-16, counting
+  the caller's slots of the region's start instead; `region_copy_cost_includes_slots_of_the_frame_where_memory_splits`).
 - **The comparison.** `Executor::set_apply_mode` (or `BENNETT_APPLY=history|branches|compare` for a whole
   test suite) selects the idiom (the default), branch enumeration, or both: compare mode computes every
   `apply` both ways from the same state and stops at any difference in the result, the world's whole
   machine state and journal, its amplitudes (exactly: both only move them), its history state, the counts
   above or anything else of the run outside the world (budget, worlds and the other worlds themselves,
   peak worlds, the generator, ...). Everything but the cost report is restored before the enumeration
-  runs, so neither way sees what the other left; `src/compare_tests.rs` corrupts the history path in 30
+  runs, so neither way sees what the other left; `src/compare_tests.rs` corrupts the history path in 31
   ways and each is caught. `BENNETT_APPLY_TALLY=file` appends each comparison's costs. The journal-content observer classifies the
   enumeration's branches, so it computes `apply` by enumeration.
 - **The text idiom** (`%h = mark budget B'`, `%y = call @f(args)`, `rewind %h keep (%y -> out)`, with

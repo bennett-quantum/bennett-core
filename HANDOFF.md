@@ -1363,9 +1363,6 @@ the ordinary frontend run without changing its domain or assertions.
   and named `bad_longjmp` respectively in both machines, each step reversed. Route: keep the collective check out
   of the catch path, separately from deciding the per-branch jump rule (V4), as the executor now does.
 
-- `Stats::region_cost.copied_bytes` omits callee-frame growth before a memory split: adding eight
-  callee slots adds 128 copied bytes but leaves the report unchanged. Ignored witness:
-  `region_copy_cost_includes_slots_of_the_frame_where_memory_splits` in `crates/exec/tests/apply_independent.rs`.
 
 - The fallback oracle compares the four `cells` bytes and the qubit variables only: a stray write just past
   the array would go unseen by both its native and device sides. Route: compare the whole fixture image

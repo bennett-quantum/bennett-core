@@ -225,6 +225,7 @@ impl<'m> Executor<'m> {
             self.splits += 1;
             self.split_memory_bytes += self.memory.overlay_len() as u64;
             self.split_journal_bytes += self.journal.as_ref().map_or(0, Journal::bytes) as u64;
+            self.split_slot_bytes += (self.slots.len() * size_of::<u128>()) as u64;
             self.swap_world(&mut world);
             self.splitting = true;
             step(self).expect("a part of a world runs the step that its world runs");

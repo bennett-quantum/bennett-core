@@ -175,7 +175,6 @@ impl Executor<'_> {
         // Marks inside the region count from here, as on a journal of the region's own (the enumeration's).
         self.region_records = position;
         let bases = (self.journal.as_ref().map_or(0, Journal::bytes), self.memory.overlay_len());
-        let slot_bytes = (self.slots.len() * size_of::<u128>()) as u64;
         // What every world of the region is again after its un-run, but for its amplitudes.
         let start = self.clone_world(Some(BTreeMap::new()));
 
@@ -188,7 +187,7 @@ impl Executor<'_> {
         let original = self.quantum.take_amplitudes();
         let split = parts.len() > 1;
         self.splits += parts.len() as u64 - 1;
-        let mut done = Done { parts: parts.len() as u64, ..Done::default() };
+        let mut done = Done::default();
         for (_, part) in parts {
             self.quantum.replace_amplitudes(part);
             let mut queue: Vec<Pending> = Vec::new();
@@ -217,7 +216,6 @@ impl Executor<'_> {
         if let Some(code) = done.inspected {
             self.quantum.replace_amplitudes(original);
             self.memory.fold();
-            self.region_cost.copied_bytes += slot_bytes * (self.splits - outer.counters.splits - (done.parts - 1));
             self.rewound_steps = outer.counters.rewound_steps + done.rewound;
             self.rerun_steps = outer.counters.rerun_steps + done.rerun;
             self.end_history_region(outer);
@@ -238,8 +236,6 @@ impl Executor<'_> {
             self.quantum.replace_amplitudes(amplitudes);
         }
         self.memory.fold();
-        // A world split off inside the region is a copy; the worlds of the call's read run in this one's place.
-        self.region_cost.copied_bytes += slot_bytes * (self.splits - outer.counters.splits - (done.parts - 1));
         self.rewound_steps = outer.counters.rewound_steps + done.rewound;
         self.rerun_steps = outer.counters.rerun_steps + done.rerun;
         self.end_history_region(outer);
@@ -430,10 +426,12 @@ impl Executor<'_> {
     /// not the run's.
     fn end_history_region(&mut self, outer: HistoryRegion) {
         let c = outer.counters;
-        self.region_cost.copied_bytes +=
-            self.split_memory_bytes - c.split_memory_bytes + self.split_journal_bytes - c.split_journal_bytes;
-        (self.splits, self.split_memory_bytes, self.split_journal_bytes) =
-            (c.splits, c.split_memory_bytes, c.split_journal_bytes);
+        self.region_cost.copied_bytes += self.split_memory_bytes - c.split_memory_bytes + self.split_journal_bytes
+            - c.split_journal_bytes
+            + self.split_slot_bytes
+            - c.split_slot_bytes;
+        (self.splits, self.split_memory_bytes, self.split_journal_bytes, self.split_slot_bytes) =
+            (c.splits, c.split_memory_bytes, c.split_journal_bytes, c.split_slot_bytes);
         assert_eq!(self.mismatches, c.mismatches, "a region's un-run meets the state its history describes");
         if !outer.had_journal {
             let journal = self.journal.take().expect("the region's journal");
@@ -708,6 +706,7 @@ struct Counters {
     splits: u64,
     split_memory_bytes: u64,
     split_journal_bytes: u64,
+    split_slot_bytes: u64,
 }
 
 impl Counters {
@@ -723,6 +722,7 @@ impl Counters {
             splits: executor.splits,
             split_memory_bytes: executor.split_memory_bytes,
             split_journal_bytes: executor.split_journal_bytes,
+            split_slot_bytes: executor.split_slot_bytes,
         }
     }
 
@@ -737,6 +737,7 @@ impl Counters {
         executor.splits = self.splits;
         executor.split_memory_bytes = self.split_memory_bytes;
         executor.split_journal_bytes = self.split_journal_bytes;
+        executor.split_slot_bytes = self.split_slot_bytes;
     }
 }
 
@@ -909,7 +910,6 @@ struct Ran {
 /// their weights, and the history work counted per configuration.
 #[derive(Default)]
 struct Done {
-    parts: u64,
     /// A fault some world ended with that the simulator found by inspecting the state (`Halt::Inspected`):
     /// never the region's fault code.
     inspected: Option<Fault>,
