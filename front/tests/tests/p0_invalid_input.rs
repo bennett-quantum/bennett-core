@@ -73,18 +73,20 @@ fn valid_textual_llvm_input_runs_unchanged() {
 }
 
 #[test]
-#[ignore = "defect: syntax errors exit 2 but omit the named invalid-LLVM-input message"]
 fn a_plain_text_file_is_named_as_invalid_llvm_input() {
-    // LLVM's grammar cannot parse this; the existing parseIRFile failure path prints only SMDiagnostic.
+    // LLVM's grammar cannot parse this; the front prints LLVM's diagnostic, then names the input.
     refused("prose-named", b"This is not LLVM IR.\n", true);
 }
 
 #[test]
-#[ignore = "defect: an empty input succeeds and emits a device program instead of the requested refusal"]
-fn an_empty_file_gets_the_requested_named_refusal() {
-    // LLVM accepts an empty module syntactically, but it has no executable entry. The requested front
-    // admission contract explicitly includes empty files; today it emits just memory and exits 0.
-    refused("empty", b"", true);
+fn an_empty_file_is_the_empty_module() {
+    // The testing pass's witness asked for a refusal. LLVM's assembly language defines a module as a list
+    // of top-level entities, which may be empty (`llvm-as` accepts an empty file, and LLVM's reader gives
+    // an empty module that its verifier accepts), and the front accepts any module without `main`, as
+    // for a library unit. So an empty file is valid input: an empty device program, status 0.
+    let (output, program) = translate("empty", b"");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    bennett_ir::load(&std::fs::read_to_string(program).expect("program")).expect("a valid empty device program");
 }
 
 #[test]

@@ -448,7 +448,9 @@ configuration. With one world the machine is exactly the machine above.
 
 `front` is the only module that links LLVM. It reads the bitcode stock `clang` emits, runs LLVM's own pipeline
 (without vectorisers), and writes the text form; the reader and validator in `ir` check what it wrote. The marker
-surface is `docs/MARKERS.md`.
+surface is `docs/MARKERS.md`. Input LLVM's reader cannot parse, or its verifier rejects, is named "the input is
+not valid LLVM IR" with status 2, and no device program is written; an empty file is LLVM's empty module and gives
+an empty device program (`front/src/main.cpp`, `readInput`).
 
 - **A qubit is a variable, not a value.** A local variable whose address is passed to a marker becomes a quantum
   register as wide as the variable. There is no allocation call.

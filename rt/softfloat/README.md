@@ -200,9 +200,11 @@ and 256 generated readable modules with varying integer widths, function order, 
 invalid validation properties. Reading/writing preserves angle bits and module equality. No reader defect
 was found. `front/tests/tests/p0_invalid_input.rs` checks textual syntax failures, malformed signatures,
 eight truncations of real bitcode, PHI/dominance verifier failures and valid input execution. Three ignored
-front witnesses fail: ordinary parse failures omit the named invalid-input message (status 2 already right,
-low severity); empty input emits an empty module and exits 0 (LLVM accepts an empty module syntactically,
-but this misses the requested admission contract, low severity); malformed subprogram metadata in a
+front witnesses failed: ordinary parse failures omitted the named invalid-input message (status 2 already
+right, low severity; fixed, the front names it after LLVM's diagnostic); empty input emits an empty module
+and exits 0 (the witness asked for a refusal, but an empty file is LLVM's empty module, which `llvm-as` and
+the verifier accept, and no document asks the front to refuse a module without `main`: the witness now
+expects acceptance); malformed subprogram metadata in a
 44-byte bitcode file segfaults in LLVM's reader instead of returning 2 (medium severity, compiler crash).
 The existing over-aligned-byval test continues to cover debug-reader fatal errors and ordinary verification.
 

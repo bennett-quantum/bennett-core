@@ -25,6 +25,7 @@
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/InitLLVM.h>
+#include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/Path.h>
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/raw_ostream.h>
@@ -106,21 +107,32 @@ void verify(const Module &module, const char *stage) {
 // What a module that is not valid LLVM IR is called, wherever it is found.
 constexpr const char *invalidInput = "the input is not valid LLVM IR";
 
-// Reads the input. LLVM's bitcode reader verifies a module that carries debug info while upgrading it
-// (`UpgradeDebugInfo`) and, when the module is broken, calls `report_fatal_error`, which aborts (clang 18
-// writes such a module for an argument aligned past LLVM's limit of 2^14 bytes, a `byval` with
-// `align 1048576`). While reading, a fatal error names the input as invalid and exits with status 2; the
-// verifier has printed its findings above it. Any other reading failure is reported as LLVM reports it.
+// Reads the input. Two ways LLVM's reader can find it is not LLVM IR, each named, with status 2 and no
+// device program written:
+// - It cannot parse it (text that is not LLVM's assembly language, bitcode that is cut short): LLVM's
+//   diagnostic, then the name.
+// - It stops with a fatal error. It verifies a module that carries debug info while upgrading it
+//   (`UpgradeDebugInfo`) and, when the module is broken, calls `report_fatal_error` (clang 18 writes such a
+//   module for an argument aligned past LLVM's limit of 2^14 bytes, a `byval` with `align 1048576`); the
+//   verifier has printed its findings above the name.
+// An empty file is LLVM's empty module, which is valid: it becomes an empty device program. A file that
+// cannot be read at all is not called invalid IR.
 std::unique_ptr<Module> readInput(LLVMContext &context, const char *argv0) {
+  ErrorOr<std::unique_ptr<MemoryBuffer>> bytes = MemoryBuffer::getFileOrSTDIN(input);
+  if (!bytes) {
+    errs() << "error: cannot read " << input << ": " << bytes.getError().message() << "\n";
+    std::exit(2);
+  }
   ScopedFatalErrorHandler handler([](void *, const char *reason, bool) {
     errs() << "error: " << invalidInput << " (LLVM's reader stopped: " << reason
            << "); no device program was written\n";
     std::exit(2);
   });
   SMDiagnostic error;
-  std::unique_ptr<Module> module = parseIRFile(input, error, context);
+  std::unique_ptr<Module> module = parseIR((*bytes)->getMemBufferRef(), error, context);
   if (!module) {
     error.print(argv0, errs());
+    errs() << "error: " << invalidInput << " (LLVM's reader could not parse it); no device program was written\n";
     std::exit(2);
   }
   std::string problems;
