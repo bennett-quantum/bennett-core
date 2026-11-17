@@ -61,15 +61,8 @@ impl<'m> Executor<'m> {
                 self.restore_result();
                 let high = self.pop_word();
                 let low = self.pop_word();
-                let cells = self.ordinary_cells(range.clone());
-                if cells.is_empty() {
-                    self.write_bytes(range.start..range.start + 16, low);
-                    self.write_bytes(range.start + 16..range.end, high);
-                } else {
-                    let old = [low.to_le_bytes(), high.to_le_bytes()].concat();
-                    let record = self.jump_record();
-                    self.write_view(range.start, &old, &record, &cells);
-                }
+                self.write_bytes(range.start..range.start + 16, low);
+                self.write_bytes(range.start + 16..range.end, high);
             }
             Undo::Longjmp => self.undo_longjmp(),
             Undo::GateAt => self.undo_gate_at(false),
@@ -98,22 +91,10 @@ impl<'m> Executor<'m> {
     }
 
     fn undo_store(&mut self) {
-        let Inst::Store { width, address, value } = self.retreat() else { unreachable!("a store record") };
+        let Inst::Store { width, address, .. } = self.retreat() else { unreachable!("a store record") };
         let range = self.memory_range(self.read_word(address), *width).expect("a store that ran forward is in bounds");
         let old = self.pop_word();
-        let cells = self.ordinary_cells(range.clone());
-        if cells.is_empty() {
-            self.write_bytes(range, old);
-        } else {
-            let (old, new) = (old.to_le_bytes(), self.read(value).to_le_bytes());
-            self.write_view(range.start, &old[..range.len()], &new[..range.len()], &cells);
-        }
-    }
-
-    /// The cells among the bytes of `range` that ordinary code touches: none in a coherent region's run,
-    /// whose private memory holds the cells' values.
-    fn ordinary_cells(&self, range: std::ops::Range<usize>) -> Vec<(u64, usize)> {
-        if self.materialised { Vec::new() } else { self.quantum.cells_in(range.start as u64..range.end as u64) }
+        self.write_bytes(range, old);
     }
 
     fn undo_call(&mut self) {

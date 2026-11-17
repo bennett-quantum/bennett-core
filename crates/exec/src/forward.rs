@@ -179,18 +179,15 @@ impl<'m> Executor<'m> {
         record
     }
 
-    /// Writes a jump record naming the top frame and this `setjmp` at `buffer`, and gives 0. Bytes of the
-    /// buffer that hold qubits are read first (`cells.rs`).
+    /// Writes a jump record naming the top frame and this `setjmp` at `buffer`, and gives 0. A buffer byte
+    /// that holds qubits faults (`cells.rs`).
     fn setjmp(&mut self, dst: Slot, buffer: u64) -> Result<(), Halt> {
         let range = self.jump_record_range(buffer)?;
-        let cells = self.read_cells(range.clone())?;
+        self.check_no_cells(range.clone())?;
         let record = self.jump_record();
-        let mut old = [0u8; JUMP_RECORD_BYTES as usize];
-        self.read_view(range.clone(), &cells, &mut old);
-        let (low, high) = old.split_at(16);
-        self.record_word(u128::from_le_bytes(low.try_into().expect("16 bytes")));
-        self.record_word(u128::from_le_bytes(high.try_into().expect("16 bytes")));
-        self.write_view(range.start, &record, &old, &cells);
+        self.record_word(self.read_bytes(range.start..range.start + 16));
+        self.record_word(self.read_bytes(range.start + 16..range.end));
+        self.memory.write(range.start, &record);
         self.write_slot(dst, 0);
         self.record(Undo::Setjmp);
         self.advance();
@@ -203,9 +200,9 @@ impl<'m> Executor<'m> {
     /// (a frame that returned, or one outside a coherent region) faults instead of jumping.
     fn longjmp(&mut self, buffer: u64, value: u128) -> Result<(), Halt> {
         let range = self.jump_record_range(buffer)?;
+        self.check_no_cells(range.clone())?;
         let mut record = [0u8; JUMP_RECORD_BYTES as usize];
-        let cells = self.read_cells(range.clone())?;
-        self.read_view(range.clone(), &cells, &mut record);
+        self.memory.read_into(range, &mut record);
         let mut words = [0u64; 4];
         for (word, chunk) in words.iter_mut().zip(record.as_chunks::<8>().0) {
             *word = u64::from_le_bytes(*chunk);
@@ -330,32 +327,21 @@ impl<'m> Executor<'m> {
         u128::from_le_bytes(bytes) & width.mask()
     }
 
-    /// `dst = load width address`. Bytes that hold qubits are read as a register is read (`cells.rs`).
-    fn load(&mut self, dst: Slot, width: Width, address: &'m Operand) -> Result<(), Halt> {
+    /// `dst = load width address`. A byte that holds qubits faults (`cells.rs`).
+    fn load(&mut self, dst: Slot, width: Width, address: &'m Operand) -> Result<(), Fault> {
         let range = self.memory_range(self.read_word(address), width)?;
-        let cells = self.read_cells(range.clone())?;
-        let mut bytes = [0; 16];
-        self.read_view(range.clone(), &cells, &mut bytes[..range.len()]);
-        self.produce(dst, u128::from_le_bytes(bytes) & width.mask());
+        self.check_no_cells(range.clone())?;
+        self.produce(dst, self.read_bytes(range) & width.mask());
         Ok(())
     }
 
-    /// `store width value, address`. Bytes that hold qubits are read first, then each gets the new value
-    /// XORed over the old one (`cells.rs`).
-    fn store(&mut self, width: Width, value: u128, address: u64) -> Result<(), Halt> {
+    /// `store width value, address`. A byte that holds qubits faults (`cells.rs`).
+    fn store(&mut self, width: Width, value: u128, address: u64) -> Result<(), Fault> {
         let range = self.memory_range(address, width)?;
-        let cells = self.read_cells(range.clone())?;
-        if cells.is_empty() {
-            let old = self.read_bytes(range.clone());
-            self.write_bytes(range, value);
-            self.record_word(old);
-        } else {
-            let mut old = [0; 16];
-            self.read_view(range.clone(), &cells, &mut old[..range.len()]);
-            let new = value.to_le_bytes();
-            self.write_view(range.start, &new[..range.len()], &old[..range.len()], &cells);
-            self.record_word(u128::from_le_bytes(old));
-        }
+        self.check_no_cells(range.clone())?;
+        let old = self.read_bytes(range.clone());
+        self.write_bytes(range, value);
+        self.record_word(old);
         self.record(Undo::Store);
         self.advance();
         Ok(())

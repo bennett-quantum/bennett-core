@@ -127,16 +127,13 @@ impl QuantumState {
         self.cells.get(&address).copied()
     }
 
-    /// Whether any memory byte holds qubits.
-    pub(crate) fn has_cells(&self) -> bool {
-        !self.cells.is_empty()
+    /// Whether any of the bytes of `range` holds qubits.
+    pub(crate) fn has_cells_in(&self, range: std::ops::Range<u64>) -> bool {
+        self.cells.range(range).next().is_some()
     }
 
     /// The cells among the bytes of `range`, in address order.
     pub(crate) fn cells_in(&self, range: std::ops::Range<u64>) -> Vec<(u64, usize)> {
-        if self.cells.is_empty() {
-            return Vec::new();
-        }
         self.cells.range(range).map(|(&address, &column)| (address, column)).collect()
     }
 
@@ -151,12 +148,6 @@ impl QuantumState {
             Some(column) => self.cells.insert(address, column),
             None => self.cells.remove(&address),
         };
-    }
-
-    /// The value of register `column` in the first configuration: its value in every configuration, where
-    /// they agree.
-    pub(crate) fn first_value(&self, column: usize) -> u64 {
-        self.amplitudes.keys().next().map_or(0, |config| config[column])
     }
 
     /// Whether register `id` is zero in every configuration.
@@ -346,16 +337,6 @@ impl QuantumState {
 
     pub(crate) fn peak_configurations(&self) -> usize {
         self.peak_configurations
-    }
-
-    /// The configurations grouped by the values of `columns`, in order of those values.
-    pub(crate) fn partition(&self, columns: &[usize]) -> Vec<(Vec<u64>, BTreeMap<Config, Complex64>)> {
-        let mut parts = BTreeMap::<Vec<u64>, BTreeMap<Config, Complex64>>::new();
-        for (config, &amplitude) in &self.amplitudes {
-            let key = columns.iter().map(|&column| config[column]).collect();
-            parts.entry(key).or_default().insert(config.clone(), amplitude);
-        }
-        parts.into_iter().collect()
     }
 }
 

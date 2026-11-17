@@ -132,7 +132,8 @@ from 128 (`MemoryBitOutOfRange`), the same address operand and bit twice in one 
 (`RepeatedMemoryQubit`; the same bit through different operands is the run-time fault `qubit_alias`),
 and an address that is not an `i64`.
 
-What loads and stores of bytes that hold qubits do is in `docs/DESIGN.md`, "Qubits in memory".
+Ordinary code does not touch a byte that holds qubits: a `load`, `store`, `setjmp` or `longjmp` touching
+one faults `qubit_memory_access`, inside an applied function too (`docs/DESIGN.md`, "Qubits in memory").
 
 ## Registers are not integers
 

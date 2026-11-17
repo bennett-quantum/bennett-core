@@ -377,24 +377,32 @@ fn the_fixture_reaches_every_kind_of_step() {
 }
 
 /// Qubits in memory (`docs/DESIGN.md`, "Qubits in memory"): gates at addresses that promote bytes to
-/// cells, at an address that depends on an argument (in bounds, out of bounds, aliasing another qubit), a
-/// coherent region reading superposed cells, loads, stores and a jump record over cells, and gates after
-/// them that promote further bytes. `assign` changes a cell's value where a varied byte holds qubits.
+/// cells, at an address that depends on an argument (in bounds, out of bounds, aliasing another qubit),
+/// coherent regions beside cells, gates after them that promote further bytes, and then, as `%c` chooses,
+/// ordinary code touching a cell, which faults `qubit_memory_access` whatever the cell holds: a load, a store
+/// over it, a `setjmp` record written over it (after one written to plain memory), and an applied function
+/// reading it (a region fault, the simulator's stop). `assign` changes a cell's value where a varied byte
+/// holds qubits.
 const CELLS: &str = r#"
 memory 256
 data 16 = i8 3, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 5
+data 48 = i8 7
 
 func @peek(i2 %x) -> i8 {
 entry:
-    %v = load i8 16
-    %w = load i8 24
-    %s = add i8 %v, %w
+    %v = load i8 48
     %e = zext i2 %x to i8
-    %t = xor i8 %s, %e
+    %t = xor i8 %v, %e
     ret %t
 }
 
-func @cells(i2 %a, i2 %b) -> i2 {
+func @peek_cell(i2 %x) -> i8 {
+entry:
+    %v = load i8 16
+    ret %v
+}
+
+func @cells(i2 %a, i2 %b, i2 %c) -> i2 {
 entry:
     %q = qalloc 2
     %o = qalloc 8
@@ -416,14 +424,24 @@ entry:
     x [%addr:1] ctrl [16:1]
     x [%addr:0] ctrl [16:1]
     h [16:1]
-    %l = load i16 16
-    %n = trunc i16 %l to i2
-    store i16 %l, 23
-    %j = setjmp 16
     x [24:5]
     h [40:0]
     x [40:0] ctrl [24:5]
+    switch i2 %c, 0: load, 1: store, 2: jump, default: applied
+load:
+    %l = load i16 16
+    %n = trunc i16 %l to i2
     ret %n
+store:
+    store i16 3, 23
+    ret 0
+jump:
+    %k = setjmp 64
+    %j = setjmp 16
+    ret 1
+applied:
+    apply @peek_cell(%b) -> %o, %e budget 20
+    ret 2
 }
 "#;
 
@@ -431,8 +449,10 @@ fn cell_fixtures(module: &ValidModule) -> Vec<Fixture<'_>> {
     let entry = module.function_named("cells").expect("entry");
     let mut fixtures = Vec::new();
     for dirty in [false, true] {
-        // In bounds at two addresses; `[%addr:1]` aliasing `[16:1]` (a = 0); out of bounds (a = 3).
-        for args in [[1, 2], [2, 1], [0, 1], [3, 0]] {
+        // Each way of touching a cell, after gates in bounds; in bounds at another address; `[%addr:1]`
+        // aliasing `[16:1]` (a = 0); out of bounds (a = 3). The last three fault before `%c` is read.
+        let args = (0..4).map(|c| [1, 2, c]).chain([[2, 1, 0], [0, 1, 0], [3, 0, 0]]);
+        for args in args {
             fixtures.push(Fixture { module, entry, args: args.to_vec(), dirty });
         }
     }
@@ -455,6 +475,23 @@ fn every_step_at_memory_qubits_is_a_bijection_on_clean_and_dirty_history() {
     }
     assert!(kinds.contains(&Undo::GateAt) && kinds.contains(&Undo::GateAtPromoted) && kinds.contains(&Undo::Setjmp));
     assert!(outcomes.iter().any(|o| o.contains("QubitAlias")) && outcomes.iter().any(|o| o.contains("OutOfBounds")));
+    // Each way of touching a cell, after the gates in bounds (a = 1, b = 2): a load, a store and a `setjmp`
+    // fault alike; an applied function reading a cell faults for both values of the cell's qubit [16:1]
+    // that remain (x [24:5] and h [40:0] leave two configurations), which strict mode stops at.
+    let peek_cell = module.function_named("peek_cell").expect("peek_cell");
+    for c in 0..4 {
+        let fixture = Fixture { module: &module, entry: fixtures[0].entry, args: vec![1, 2, c], dirty: false };
+        let expected = match c {
+            0..=2 => Outcome::Faulted(bennett_ir::Fault::QubitMemoryAccess),
+            _ => Outcome::Stopped(crate::RunError::RegionFault {
+                callee: peek_cell,
+                fault: bennett_ir::Fault::QubitMemoryAccess,
+                faulting: 2,
+                configurations: 2,
+            }),
+        };
+        assert_eq!(fixture.at(0).run(), expected, "c = {c}");
+    }
     println!("memory qubits: {checked} single steps ({faults} faulting); outcomes {outcomes:?}");
-    assert_eq!((checked, faults), (2_808, 184), "single steps, faulting ones");
+    assert_eq!((checked, faults), (4_504, 512), "single steps, faulting ones");
 }

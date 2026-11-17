@@ -58,8 +58,12 @@ faults! {
     ExitTypeMismatch = 14 "exit_type_mismatch",
     // Code 15 was `bad_rewind`, removed with `rewind` on 2026-11-17; codes are stable, so it stays unused.
     /// `longjmp` through a buffer that holds no jump record to a live frame of the current run (inside a
-    /// coherent region: of the region), or whose record is held in qubits that disagree on it.
+    /// coherent region: of the region).
     BadLongjmp = 16 "bad_longjmp",
+    /// Ordinary code read or wrote a memory byte that holds qubits (a `load`, a `store`, a `setjmp` record
+    /// written over it, a `longjmp` record read from it), whatever the qubits' values; inside an applied
+    /// function too. Gates and measurements name such bytes; ordinary code does not.
+    QubitMemoryAccess = 17 "qubit_memory_access",
 }
 
 impl Fault {

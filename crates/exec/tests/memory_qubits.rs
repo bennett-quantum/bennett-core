@@ -1,6 +1,8 @@
 //! Gates that take addresses (`docs/DESIGN.md`, "Qubits in memory"): a qubit can live at a bit of memory.
-//! Grover with x in memory gives the register form's answers seed by seed; an `apply` reads each
-//! configuration's byte from its private memory; a gate past the end of memory faults without promoting.
+//! Grover with x in memory gives the register form's answers seed by seed, its oracle applied to a register
+//! that x is copied into by controlled X gates; an applied function that reads a byte holding qubits faults
+//! `qubit_memory_access` for every argument value, while the byte beside it is memory; a gate past the end of
+//! memory faults without promoting.
 
 use bennett_exec::{Executor, Options, Outcome};
 use bennett_ir::{Fault, ValidModule};
@@ -12,8 +14,10 @@ fn run(module: &ValidModule, options: Options) -> (Outcome, Executor<'_>) {
 }
 
 /// Grover over `examples/grover.bn`'s predicate, with x in a register or in memory (the low four bits of
-/// byte 64). The oracle is an `apply` into the kick qubit; where x is in memory, the applied function reads
-/// it from its private memory, which holds each configuration's byte.
+/// byte 64). The oracle is an `apply` into the kick qubit. Ordinary code, an applied function included, may
+/// not read a byte holding qubits, so where x is in memory the oracle copies it into a fresh register with
+/// one controlled X per bit (`x %c[i] ctrl [64:i]`), applies the predicate to that register, copies again to
+/// return it to zero and releases it: an expansion into gates, `apply` and `qfree`.
 fn grover(memory: bool, iterations: u8) -> String {
     let x = if memory { ["[64:0]", "[64:1]", "[64:2]", "[64:3]"] } else { ["%x[0]", "%x[1]", "%x[2]", "%x[3]"] };
     let diffuse: String = ["h", "x"]
@@ -24,9 +28,13 @@ fn grover(memory: bool, iterations: u8) -> String {
         .collect();
     let prepare: String = x.iter().map(|q| format!("    h {q}\n")).collect();
     let (allocate, oracle) = if memory {
-        ("", "    apply @at_64() -> %kick, %fault budget 100\n")
+        let copy: String = (0..4).map(|i| format!("    x %c[{i}] ctrl [64:{i}]\n")).collect();
+        let oracle = format!(
+            "    %c = qalloc 4\n{copy}    apply @is_solution(%c) -> %kick, %fault budget 100\n{copy}    qfree %c\n"
+        );
+        ("", oracle)
     } else {
-        ("    %x = qalloc 4\n", "    apply @is_solution(%x) -> %kick, %fault budget 100\n")
+        ("    %x = qalloc 4\n", "    apply @is_solution(%x) -> %kick, %fault budget 100\n".to_string())
     };
     format!(
         "memory 256
@@ -36,13 +44,6 @@ entry:
     %sum = add i4 %square, %x
     %hit = icmp eq i4 %sum, 6
     ret %hit
-}}
-func @at_64() -> i1 {{
-entry:
-    %b = load i8 64
-    %v = trunc i8 %b to i4
-    %y = call @is_solution(%v)
-    ret %y
 }}
 func @main() {{
 entry:
@@ -100,20 +101,22 @@ fn start<'m>(module: &'m ValidModule, entry: &str, reversible: bool) -> Executor
     Executor::new(module, module.function_named(entry).expect("entry"), &[], options).expect("starts")
 }
 
-/// A coherent region reads the byte's value on each configuration from its private memory.
+/// An applied function is ordinary code: its load of byte 16, which holds qubits, faults
+/// `qubit_memory_access` on each of the four configurations, so strict mode stops (a region fault, the
+/// simulator's) and, with region faults allowed, the code 17 is XORed into `%e` everywhere and `%o` stays 0.
+/// Its load of byte 17, beside it, is a load of memory: 5 on every configuration.
 #[test]
-fn a_coherent_region_reads_memory_qubits_per_configuration() {
-    let module = bennett_ir::load(
-        "memory 64
+fn an_applied_function_reading_qubits_in_memory_faults_for_every_argument_value() {
+    let text = |byte: u8| {
+        format!(
+            "memory 64
 data 17 = i8 5
-func @peek() -> i8 {
+func @peek() -> i8 {{
 entry:
-    %v = load i8 16
-    %w = load i8 17
-    %s = mul i8 %v, %w
-    ret %s
-}
-func @main() {
+    %v = load i8 {byte}
+    ret %v
+}}
+func @main() {{
 entry:
     %o = qalloc 8
     %e = qalloc 5
@@ -121,19 +124,32 @@ entry:
     h [16:1]
     apply @peek() -> %o, %e budget 10
     ret
-}
-",
-    )
-    .expect("valid");
+}}
+"
+        )
+    };
+    let module = bennett_ir::load(&text(16)).expect("valid");
     let mut executor = start(&module, "main", true);
-    assert_eq!(executor.run(), Outcome::Returned(None));
-    let snapshot = executor.snapshot();
-    assert_eq!(snapshot.quantum.cells, vec![(16, 2)]);
-    assert_eq!(snapshot.classical.memory[16..18], [0, 5], "classical memory under the qubits is 0");
-    let configs: Vec<Vec<u64>> = snapshot.quantum.amplitudes.iter().map(|(c, _)| c.clone()).collect();
-    assert_eq!(configs, vec![vec![0, 0, 0], vec![5, 0, 1], vec![10, 0, 2], vec![15, 0, 3]]);
-    executor.reverse().expect("reverses");
-    assert!(executor.snapshot().quantum.cells.is_empty());
+    let expected = bennett_exec::RunError::RegionFault {
+        callee: module.function_named("peek").expect("peek"),
+        fault: Fault::QubitMemoryAccess,
+        faulting: 4,
+        configurations: 4,
+    };
+    assert_eq!(executor.run(), Outcome::Stopped(expected));
+    let options = Options { reversible: true, allow_region_faults: true, budget: Some(10_000), ..Options::default() };
+    for (byte, out, fault) in [(16, 0, Fault::QubitMemoryAccess.code()), (17, 5, 0)] {
+        let module = bennett_ir::load(&text(byte)).expect("valid");
+        let (outcome, mut executor) = run(&module, options);
+        assert_eq!(outcome, Outcome::Returned(None));
+        let snapshot = executor.snapshot();
+        assert_eq!(snapshot.quantum.cells, vec![(16, 2)]);
+        assert_eq!(snapshot.classical.memory[16..18], [0, 5], "classical memory under the qubits is 0");
+        let configs: Vec<Vec<u64>> = snapshot.quantum.amplitudes.iter().map(|(c, _)| c.clone()).collect();
+        assert_eq!(configs, (0..4).map(|v| vec![out, fault, v]).collect::<Vec<_>>(), "byte {byte}");
+        executor.reverse().expect("reverses");
+        assert!(executor.snapshot().quantum.cells.is_empty());
+    }
 }
 
 #[test]

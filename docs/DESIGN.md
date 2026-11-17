@@ -80,8 +80,9 @@ memory, for at most `B` steps.
 Arguments are preserved and the private memory is discarded, so the region is a permutation of basis states and its
 own inverse. An `effect` or `exit` reached inside a region is a fault (`effect_in_region` or `exit_in_region`). This is the lifted-oracle contract of the North Star
 (§4.2). The executor computes it so, and only so (`crates/exec/src/region.rs`): for each basis configuration
-of nonzero amplitude it runs `@f` on that configuration's argument values, on private memory holding the
-values the configuration gives any qubits in memory, with a journal of its own, XORs the result or fault code
+of nonzero amplitude it runs `@f` on that configuration's argument values, on a private copy of memory, with
+a journal of its own (a byte that holds qubits is no part of it: the applied function faults if it touches one,
+"Qubits in memory"), XORs the result or fault code
 into that configuration's `out` or `fault`, and undoes the run. An `apply` is one step of the run that executes
 it, journalled as one record and undone by applying it again.
 
@@ -403,9 +404,9 @@ The front writes `retaddr N` for every `llvm.returnaddress(N)` in the default ad
   frames in place for reversal. C's `_Noreturn void __bennett_exit(int)` lowers to it; like
   `void __bennett_effect(char)`, it is an ordinary device call, not a quantum marker.
 - Fault codes fit in 5 bits (`Fault::CODE_WIDTH`, widened from 4 on 2026-11-16, the maintainer's decision); a
-  fault register is at least that wide, so every fault register of a program is a `q5` or wider. Fourteen of
-  the 31 nonzero codes are used, the last `bad_longjmp` (16); 11 was `dirty_free` and 15 `bad_rewind`, both
-  removed on 2026-11-17, and stay unused.
+  fault register is at least that wide, so every fault register of a program is a `q5` or wider. Fifteen of
+  the 31 nonzero codes are used, the last `qubit_memory_access` (17); 11 was `dirty_free` and 15
+  `bad_rewind`, both removed on 2026-11-17, and stay unused.
 - `qfree` is the partial trace and never faults ("Releasing a register", below).
 - `measure` reads a whole register, or the `N` bits from bit 0 of the integer at an address. Amplitudes at or
   below `f64::EPSILON` are dropped.
@@ -428,16 +429,25 @@ by the maintainer on 2026-11-17). Registers stay as they are, one way of naming 
   register bound to the byte's address, part of the register table. The classical memory holds 0 under a
   cell. The first gate at a byte that is not a cell **promotes** it: a register is allocated, the byte's
   value XORed into it and the memory byte set to 0; the gate's journal record keeps the address and the old
-  byte. A byte stays a cell until the gate that promoted it is undone, even where its qubits are classical
-  again: that is how the state is held, not what it means.
-- **Ordinary code touching a cell** (a `load`, a `store` over it, a `setjmp` record written over it, a
-  `longjmp` record read from it) outside `apply`: where every configuration agrees on the cells' values they
-  are read as memory, and a store XORs old and new into each cell, which stays a cell. Where the
-  configurations disagree the simulator stops (`RunError::SuperposedMemoryRead`), which no program can
-  read. Not built: the maintainer decided on 2026-11-17 that ordinary code reading or writing a byte that
-  holds qubits is a named fault; that fault comes with the change of `qfree` (`HANDOFF.md`).
-- **Coherent regions** see the cells' values: each run of an `apply` runs on private memory holding the
-  values its configuration gives the cells. A region cannot gate, so it never changes a cell.
+  byte.
+- **Which bytes hold qubits.** A byte holds qubits from the first gate that names any of its bits until that
+  gate is undone, and then for the rest of the run: it does not stop when its qubits are definite again, when
+  they are measured, or when the stack frame it lies in returns. The rule reads no amplitude, so a device
+  can keep it as a table of addresses. It is the rule the simulator held already, taken on 2026-11-17 as the
+  easiest to reverse: any later way to give a byte back to ordinary code only accepts more programs
+  (`HANDOFF.md`, "Questions for the maintainer").
+- **Ordinary code touching a byte that holds qubits faults `qubit_memory_access`** (code 17; the maintainer's
+  decision of 2026-11-17, "yes, it should be a fault to read qubits"): a `load` or `store` any byte of which
+  holds qubits, a `setjmp` record written over one, a `longjmp` record read from one. It faults in every
+  configuration, whatever the qubits hold, before changing anything, so it is an ordinary fault of the run,
+  as `out_of_bounds` is. The byte beside one that holds qubits is memory as before.
+- **Inside `apply`** the applied function is ordinary code and the same rule holds: touching a byte that
+  holds qubits faults, for each argument value, with the code XORed into the fault register (in strict mode
+  the simulator then stops at the `apply`, as for any fault for some argument values). To apply a function to
+  qubits in memory, a program copies them into a fresh register with one controlled X per bit
+  (`x %c[i] ctrl [ADDR:i]`), applies the function to the register, copies again to return the register to
+  zero, and releases it: an expansion into gates, `apply` and `qfree`, used by the Grover test with x in
+  memory (`crates/exec/tests/memory_qubits.rs`).
 - **Undoing.** A gate at addresses is undone by its inverse, then by un-promoting the bytes it promoted:
   the old byte is XORed out of the register, the register un-allocated and the byte written back.
 - **Measurement at an address** (the maintainer's decision of 2026-11-16): `%d = measure iN [ADDR]` reads
@@ -450,12 +460,12 @@ by the maintainer on 2026-11-17). Registers stay as they are, one way of naming 
   (`crates/exec/tests/measure_memory.rs`): outcomes, collapse and the bits left in superposition written out
   by hand. Grover with x in memory measured at its address gives the register form's answer for every seed
   (`memory_qubits.rs`).
-- **A cell is a whole byte**, so a qubit in memory holds 8 qubits in the simulator (route: cells of single
-  bits, if the count matters).
+- **A cell is a whole byte**, so a qubit in memory holds 8 qubits in the simulator, and the rule above is
+  per byte (route: cells of single bits, if the count matters).
 - **Checked.** Every step at qubits in memory is a bijection by brute force (`permutation_tests.rs`): gates
-  that promote bytes at addresses that depend on an argument (in bounds, out of bounds, aliasing), a coherent
-  region over superposed cells, loads, stores and a jump record over cells, on clean and dirty history:
-  2,808 single steps (184 faulting).
+  that promote bytes at addresses that depend on an argument (in bounds, out of bounds, aliasing), coherent
+  regions beside cells, and a load, a store, a `setjmp` record and an applied function's load at a cell (each
+  the fault), on clean and dirty history: 4,504 single steps (512 faulting).
 
 ## Releasing a register
 

@@ -76,12 +76,6 @@ pub enum RunError {
         /// The number of basis configurations it ran on.
         configurations: usize,
     },
-    /// Ordinary code outside `apply` read memory bytes that hold qubits (a load, a store, a jump record)
-    /// whose basis configurations disagree on their value. Not built: what such a read is to be is not yet
-    /// decided (`HANDOFF.md`, "Questions for the maintainer"), so the simulator stops instead of choosing.
-    /// Bytes whose configurations all agree are read as memory.
-    #[error("ordinary code read memory bytes holding qubits whose basis configurations disagree")]
-    SuperposedMemoryRead,
 }
 
 /// Why a step did not complete: a fault of the program or a limit of the simulator.
@@ -238,9 +232,6 @@ pub struct Executor<'m> {
     /// caller's depth inside a coherent region.
     pub(crate) base_depth: usize,
     pub(crate) in_region: bool,
-    /// Whether the current run is a coherent region's run for one basis configuration, on private memory,
-    /// which holds the values that configuration gives the qubits in memory (`region.rs`).
-    pub(crate) materialised: bool,
     /// What computing regions cost, and the most journal bytes the current region run held.
     pub(crate) region_cost: RegionCost,
     pub(crate) run_journal_peak: usize,
@@ -284,7 +275,6 @@ impl<'m> Executor<'m> {
             max_configurations: options.max_configurations,
             base_depth: 0,
             in_region: false,
-            materialised: false,
             region_cost: RegionCost::default(),
             run_journal_peak: 0,
             spare_journal: Journal::default(),

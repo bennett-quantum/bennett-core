@@ -8,17 +8,15 @@
 //! (address and old byte), so undoing the gate un-promotes: the inverse gate, then the byte XORed out,
 //! the column un-allocated, the byte written back.
 //!
-//! Ordinary code that touches a cell (a load, a store, a jump record) outside `apply` reads its value when
-//! every configuration agrees on it; where they disagree the simulator stops
-//! (`RunError::SuperposedMemoryRead`), what such a read is to be being undecided. A store XORs the old value
-//! out of each cell's column and the new one in (the cell stays a cell). Inside `apply` each configuration's
-//! run sees the cells' values in its private memory instead.
+//! Ordinary code that touches a cell (a load, a store, a jump record), outside `apply` or inside it, faults
+//! `qubit_memory_access` before changing anything, whatever the cell's qubits hold (the maintainer's decision
+//! of 2026-11-17). A byte is a cell from the gate that promoted it until that gate is undone.
 
 use std::ops::Range;
 
 use bennett_ir::{Fault, Gate, Inst, Place, Width};
 
-use crate::executor::{Executor, Halt, RunError};
+use crate::executor::{Executor, Halt};
 use crate::gates;
 use crate::journal::Undo;
 use crate::quantum::QubitRef;
@@ -146,53 +144,12 @@ impl<'m> Executor<'m> {
         }
     }
 
-    /// The cells among the bytes of `range` that an ordinary access outside `apply` touches, each of whose
-    /// configurations must agree on its value. Inside `apply` each configuration's run holds the cells'
-    /// values in its private memory, so it touches no cell.
-    pub(crate) fn read_cells(&self, range: Range<usize>) -> Result<Vec<(u64, usize)>, RunError> {
-        if self.materialised || !self.quantum.has_cells() {
-            return Ok(Vec::new());
+    /// Faults `qubit_memory_access` if any byte of `range`, which ordinary code is about to read or write, is
+    /// a cell.
+    pub(crate) fn check_no_cells(&self, range: Range<usize>) -> Result<(), Fault> {
+        if self.quantum.has_cells_in(range.start as u64..range.end as u64) {
+            return Err(Fault::QubitMemoryAccess);
         }
-        let cells = self.quantum.cells_in(range.start as u64..range.end as u64);
-        if cells.iter().any(|&(_, column)| self.quantum.partition(&[column]).len() > 1) {
-            return Err(RunError::SuperposedMemoryRead);
-        }
-        Ok(cells)
-    }
-
-    /// The bytes at `range` as ordinary code sees them, after `read_cells`: memory, with each cell's
-    /// value (the same in every configuration) in place of its byte.
-    pub(crate) fn read_view(&self, range: Range<usize>, cells: &[(u64, usize)], out: &mut [u8]) {
-        self.memory.read_into(range.clone(), out);
-        for &(address, column) in cells {
-            out[address as usize - range.start] = self.quantum.first_value(column) as u8;
-        }
-    }
-
-    /// Writes `new` over `old` at `start` as ordinary code sees memory: plain bytes are written, and each
-    /// cell's column has `old ^ new` XORed in (its memory byte stays 0). A permutation of configurations
-    /// whatever the cells hold, so un-running uses it with the two swapped.
-    pub(crate) fn write_view(&mut self, start: usize, new: &[u8], old: &[u8], cells: &[(u64, usize)]) {
-        let mut bytes = new.to_vec();
-        for &(address, column) in cells {
-            let offset = address as usize - start;
-            self.quantum.xor_register(column, u64::from(old[offset] ^ new[offset]));
-            bytes[offset] = 0;
-        }
-        self.memory.write(start, &bytes);
-    }
-
-    /// Writes each cell's value in `config` into memory, for a coherent region's run for that
-    /// configuration, or 0 back (`config` `None`) after it.
-    pub(crate) fn materialise_cells(&mut self, cells: &[(u64, usize)], config: Option<&[u64]>) {
-        for &(address, column) in cells {
-            let byte = config.map_or(0, |config| config[column] as u8);
-            self.memory.write(address as usize, &[byte]);
-        }
-    }
-
-    /// The cells for a region to materialise, outside a region.
-    pub(crate) fn region_cells(&self) -> Vec<(u64, usize)> {
-        if self.in_region { Vec::new() } else { self.quantum.cells().iter().map(|(&a, &c)| (a, c)).collect() }
+        Ok(())
     }
 }

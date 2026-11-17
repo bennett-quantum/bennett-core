@@ -57,17 +57,13 @@ impl<'m> Executor<'m> {
         let original = self.quantum.take_amplitudes();
         self.measure_begin_apply(callee);
         let mut outcomes = Vec::with_capacity(original.len());
-        // The private memory of each run holds the values its configuration gives the cells.
-        let cells = self.region_cells();
         for config in original.keys() {
             values.clear();
             values.extend(inputs.iter().map(|input| match *input {
                 Input::Register(column) => u128::from(config[column]),
                 Input::Value(value) => value,
             }));
-            self.materialise_cells(&cells, Some(config));
             outcomes.push(self.evaluate(callee, &values, budget));
-            self.materialise_cells(&cells, None);
         }
         let faulting: Vec<(&Config, f64, Fault)> = original
             .iter()
@@ -149,7 +145,6 @@ impl<'m> Executor<'m> {
             budget: self.budget.replace(budget),
             base_depth: std::mem::replace(&mut self.base_depth, self.frames.len()),
             in_region: std::mem::replace(&mut self.in_region, true),
-            materialised: std::mem::replace(&mut self.materialised, true),
         };
         self.run_journal_peak = 0;
         self.measure_begin_branch(args);
@@ -183,7 +178,6 @@ impl<'m> Executor<'m> {
         self.budget = outer.budget;
         self.base_depth = outer.base_depth;
         self.in_region = outer.in_region;
-        self.materialised = outer.materialised;
     }
 }
 
@@ -195,5 +189,4 @@ struct Saved {
     budget: Option<u64>,
     base_depth: usize,
     in_region: bool,
-    materialised: bool,
 }

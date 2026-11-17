@@ -1,11 +1,12 @@
-//! A jump record held in qubits. Outside `apply`, ordinary code reading bytes that hold qubits whose
-//! configurations disagree is not built: the simulator stops (`RunError::SuperposedMemoryRead`), in strict
-//! mode and on the machine alike, which no program can read. Bytes whose configurations agree are read as
-//! memory. Inside `apply` each configuration's run reads its own definite record from its private memory.
+//! A jump record held in qubits. Ordinary code that reads or writes a byte holding qubits faults
+//! `qubit_memory_access` (the maintainer's decision of 2026-11-17), whatever the qubits hold: a record whose
+//! qubits all agree faults as one in superposition does, in strict mode and on the machine alike. Inside
+//! `apply` the applied function is ordinary code and faults the same way, for each argument value.
 
 mod common;
 
 use bennett_exec::{Options, Outcome, RunError};
+use bennett_ir::Fault;
 use common::{bounded, executor, load};
 
 /// `@callee(%buf, 0)` reserves 16 bytes and jumps through the record at `%buf`. Each caller writes, with
@@ -98,31 +99,41 @@ fn machine() -> Options {
     Options { machine_meaning: true, ..bounded() }
 }
 
+/// Before the gate each record jumps (`@call` with the gate skipped: the callee returns 9). After it, the
+/// `longjmp` faults whether the gate kept the record (`z`), flipped it (`x`) or superposed it (`h`).
 #[test]
-fn a_longjmp_over_disagreeing_qubits_stops_the_simulator() {
+fn a_longjmp_through_a_record_holding_qubits_faults_whatever_they_hold() {
     let module = load(PROGRAM);
+    let ungated = load(&PROGRAM.replace("    z [%bit:3]\n", "").replace("    x [%bit:3]\n", ""));
     for options in [bounded(), machine()] {
-        // Either record alone jumps: the callee returns 9.
         for how in [0, 1] {
-            assert_eq!(common::run(&module, "call", &[how], options).0, Outcome::Returned(Some(9)), "how {how}");
+            assert_eq!(common::run(&ungated, "call", &[how], options).0, Outcome::Returned(Some(9)), "how {how}");
         }
-        // Both at once: the simulator stops, with the state as before the `longjmp`.
-        assert_eq!(
-            common::run(&module, "call", &[2], options).0,
-            Outcome::Stopped(RunError::SuperposedMemoryRead),
-            "machine_meaning {}",
-            options.machine_meaning
-        );
+        for how in [0, 1, 2] {
+            let (outcome, e) = common::run(&module, "call", &[how], options);
+            assert_eq!(outcome, Outcome::Faulted(Fault::QubitMemoryAccess), "how {how}");
+            assert_eq!(e.stats().memory_qubit_bytes, 1, "how {how}: one byte holds qubits");
+        }
     }
 }
 
-/// Under `apply` each configuration runs on private memory holding its own definite record, so each run
-/// jumps: no fault, the result XORed in as usual.
+/// Under `apply` the applied function's `longjmp` reads the record from the bytes holding qubits: it faults
+/// for every argument value, so strict mode stops (a region fault, the simulator's), and on the machine the
+/// code 17 is XORed into the fault register and `out` stays 0: `out | fault << 8` is 17 << 8.
 #[test]
-fn an_apply_runs_each_configuration_on_its_own_record() {
+fn an_applied_function_reading_the_record_faults_for_every_argument_value() {
     let module = load(PROGRAM);
+    let applied = module.function_named("callee").expect("callee");
     for how in [0, 1, 2] {
         let mut e = executor(&module, "applied", &[how], machine());
-        assert_eq!(e.run(), Outcome::Returned(Some(9)), "how {how}");
+        assert_eq!(e.run(), Outcome::Returned(Some(u128::from(Fault::QubitMemoryAccess.code()) << 8)), "how {how}");
+        let (outcome, _) = common::run(&module, "applied", &[how], bounded());
+        let expected = RunError::RegionFault {
+            callee: applied,
+            fault: Fault::QubitMemoryAccess,
+            faulting: if how == 2 { 2 } else { 1 },
+            configurations: if how == 2 { 2 } else { 1 },
+        };
+        assert_eq!(outcome, Outcome::Stopped(expected), "how {how}");
     }
 }

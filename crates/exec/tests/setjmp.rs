@@ -454,7 +454,7 @@ entry:
     z [16]
     z [16]
     %plain = load i8 17
-    %cell = load i8 16
+    %beside = load i8 15
     %value = setjmp 64
     %first = icmp eq i32 %value, 0
     br %first, jump, done
@@ -469,8 +469,8 @@ done:
     step_cost(&mut executor); // First gate promotes; the next one adds only a gate record.
     let record = step_cost(&mut executor);
     let slot = step_cost(&mut executor);
-    let cell = step_cost(&mut executor);
-    assert_eq!(cell, slot, "a load of a cell overwrites one slot, as a load of memory does");
+    let beside = step_cost(&mut executor);
+    assert_eq!(beside, slot, "a load of the byte below a cell is a load of memory");
     let word = slot.checked_sub(record).expect("an overwritten slot adds a word");
     assert!(word > 0);
     for _ in 0..3 {
@@ -480,4 +480,13 @@ done:
     // DESIGN's non-local-jump journal: target position, stack pointer, count, old result slot.
     assert_eq!(jump, record + 4 * word, "a jump that discards no frame journals four words");
     assert_eq!(executor.run(), Outcome::Returned(Some(0)));
+
+    // A load of the cell itself faults `qubit_memory_access` and journals nothing.
+    let module =
+        load("memory 256\nfunc @main() -> i8 {\nentry:\n    z [16]\n    %cell = load i8 16\n    ret %cell\n}\n");
+    let mut cell = self::executor(&module, "main", &[], Options { reversible: true, ..bounded() });
+    step_cost(&mut cell);
+    let before = cell.stats().journal_bytes;
+    assert_eq!(cell.step(), Some(Outcome::Faulted(bennett_ir::Fault::QubitMemoryAccess)));
+    assert_eq!(cell.stats().journal_bytes, before);
 }

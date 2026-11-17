@@ -5,11 +5,12 @@ use bennett_exec::{Options, Outcome, RunError};
 use bennett_ir::Fault;
 use common::{assert_same_state, bounded, executor, load};
 
+// The first configuration of the state before the `apply` (x = 0) faults first; the applied function writes
+// its private memory on the way.
 const CELL_FAULT_ORDER: &str = r#"
 memory 512
-func @f() -> i1 {
+func @f(i8 %x) -> i1 {
 entry:
-    %x = load i8 0
     %y = xor i8 %x, 1
     store i8 %y, 0
     %zero = icmp eq i8 %x, 0
@@ -21,10 +22,11 @@ b:
 }
 func @main() {
 entry:
-    h [0:0]
+    %q = qalloc 8
+    h %q[0]
     %o = qalloc 1
     %e = qalloc 5
-    apply @f() -> %o, %e budget 100
+    apply @f(%q) -> %o, %e budget 100
     ret
 }
 "#;
@@ -60,8 +62,9 @@ entry:
 }
 "#;
 
-// Cell loads and stores run under the region's rules. The function reads both cells after their values
-// have diverged, writes an overlapping i16, then jumps through a callee.
+// Loads and stores run under the region's rules, on its private memory, beside a register in superposition
+// that the region does not read. The function reads two bytes, writes an overlapping i16, then jumps through
+// a callee.
 const MIXED: &str = r#"
 memory 4096
 data 0 = i16 513
@@ -102,8 +105,8 @@ join:
 }
 func @main(i64 %budget) {
 entry:
-    h [0:0]
-    h [1:1]
+    %c = qalloc 2
+    h %c[1]
     %x = qalloc 2
     h %x[0]
     ry(0.7) %x[1]
@@ -130,7 +133,7 @@ fn runs_and_reverses(text: &str, args: &[u64]) {
 }
 
 #[test]
-fn cell_loads_stores_and_jumps_in_a_region_run_and_reverse_at_every_budget() {
+fn loads_stores_and_jumps_in_a_region_run_and_reverse_at_every_budget() {
     for budget in [0, 1, 3, 5, 8, 12, 16, 20, 24, 28, 32, 40, 64] {
         runs_and_reverses(MIXED, &[budget]);
     }
@@ -260,7 +263,7 @@ fn strict_budget_faults_leave_the_pre_apply_state_and_reverse() {
 }
 
 #[test]
-fn allowed_cell_fault_codes_and_private_writes_run_and_reverse() {
+fn allowed_fault_codes_and_private_writes_run_and_reverse() {
     runs_and_reverses(CELL_FAULT_ORDER, &[]);
 }
 
@@ -335,7 +338,7 @@ const REGION_BODIES: &[&str] = &[
     "    ret 2\n",
     // A store to private memory, then a value of x.
     "    store i8 100, 8\n    %x64 = zext i2 %x to i64\n    %s = shl i64 %x64, 8\n    %r = or i64 %s, 2\n    ret %r\n",
-    // A load of a qubit in memory (its value in each run's private memory), paths of different lengths.
+    // A load of a byte holding qubits: faults `qubit_memory_access` for every argument value.
     "    %a = load i8 0\n    %c = icmp eq i8 %a, 0\n    br %c, p, q\np:\n    %u = add i8 %a, 1\n    br q\nq:\n    %x64 = zext i2 %x to i64\n    %a64 = zext i8 %a to i64\n    %r = add i64 %a64, %x64\n    ret %r\n",
     // A callee of the region.
     "    %k = zext i2 %x to i64\n    %r = call @g(%k)\n    ret %r\n",
@@ -443,12 +446,12 @@ fn region_results_are_the_analytic_values_after_every_prefix() {
 }
 
 // The whole class of F2: a strict region fault is the first faulting configuration's, in the order of the
-// configurations as they were before the `apply`,
-// whatever the region writes to the qubits in memory it read. Two cells (byte 0 in four values, byte 1 in two),
-// rewritten in place by every kind of permutation (none, XOR, increment, swap, reversal), and every
-// assignment of outcomes to the eight configurations a salt chooses.
+// configurations as they were before the `apply`, whatever the region writes to its private memory. Two
+// argument registers (a in four values, b in two), their values written to private memory by every kind of
+// permutation (none, XOR, increment, swap, reversal), and every assignment of outcomes to the eight
+// configurations a salt chooses.
 #[test]
-fn strict_fault_is_the_first_original_configurations_whatever_the_region_writes_to_its_cells() {
+fn strict_fault_is_the_first_original_configurations_whatever_the_region_writes() {
     let rewrites = [
         "",
         "    %v = xor i8 %a, 3\n    store i8 %v, 0\n",
@@ -461,10 +464,8 @@ fn strict_fault_is_the_first_original_configurations_whatever_the_region_writes_
         for salt in 0..4u64 {
             let text = format!(
                 "memory 512
-func @f() -> i1 {{
+func @f(i8 %a, i8 %b) -> i1 {{
 entry:
-    %a = load i8 0
-    %b = load i8 1
 {rewrite}    %k0 = mul i8 %a, 3
     %k1 = mul i8 %b, 5
     %k2 = add i8 %k0, %k1
@@ -489,17 +490,19 @@ f3:
 }}
 func @main() {{
 entry:
-    h [0:0]
-    h [0:1]
-    h [1:0]
+    %ra = qalloc 8
+    h %ra[0]
+    h %ra[1]
+    %rb = qalloc 8
+    h %rb[0]
     %o = qalloc 1
     %e = qalloc 5
-    apply @f() -> %o, %e budget 100
+    apply @f(%ra, %rb) -> %o, %e budget 100
     ret
 }}
 "
             );
-            // The configurations in order: byte 0's register is the first column, byte 1's the second.
+            // The configurations in order: a is the first column, b the second.
             let outcome = |a: u64, b: u64| faults[((a * 3 + b * 5 + salt) & 3) as usize];
             let faulting: Vec<Fault> =
                 (0..4).flat_map(|a| (0..2).map(move |b| (a, b))).filter_map(|(a, b)| outcome(a, b)).collect();

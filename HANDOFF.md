@@ -3,8 +3,8 @@
 State on 2026-11-17: **resumed by the maintainer the same day; see "Resumed on 2026-11-17" below before
 anything else.** Steps 1 and 2 of the order there are done: `apply` is evaluated for each definite value of its
 arguments only, and `mark`, `rewind`, machine states in superposition and the call with a fault value are removed.
-Step 3 is under way: `qfree` is the partial trace; next, the named fault for ordinary code touching qubits in
-memory.
+Step 3 is done: `qfree` is the partial trace, and ordinary code touching a byte that holds qubits faults
+`qubit_memory_access`; next, the simulator's own stops and reports named and checked.
 
 ## Resumed on 2026-11-17
 
@@ -85,8 +85,12 @@ The order of the work:
    simulator keeps a register released while not zero as an unnamed column, so the stored state stays the exact
    purification, and reports the count and weight of such releases, which no program can read. The fault
    `dirty_free` (code 11) is removed and its code stays unused. The front's tests read the report instead of the
-   fault (their `run` fails a test on a nonzero release). Next in this step: the named fault for ordinary code
-   touching a byte that holds qubits.
+   fault (their `run` fails a test on a nonzero release). Ordinary code that reads or writes a byte holding
+   qubits (a `load`, a `store`, a jump record) faults `qubit_memory_access` (code 17), in every configuration,
+   whatever the qubits hold, inside an applied function too (per argument value); the simulator's stop
+   `SuperposedMemoryRead` and the reading of qubits in memory by applied functions are gone (`docs/DESIGN.md`,
+   "Qubits in memory"). A program applies a function to qubits in memory by copying them into a register with
+   controlled X gates first.
 4. The documents say what the code does now; `docs/DESIGN.md` states `apply`'s meaning, why a device can carry
    it out and what it costs.
 5. Independent checks: an audit of the front against the model, a testing pass, and a small reference that runs
@@ -602,13 +606,21 @@ would pass the budget; Superseded (2026-11-17): the leftover is now taken back; 
 budget is required; The call with a fault value; Reference-only clock/diagnostic boundaries; A budgeted callee's
 padded clock and its caller's mark; A mark's budget once its frame is left.
 
-- **Ordinary code reading qubits in memory, until the named fault (2026-11-17, step 2 of the work).** With machine
-  states in superposition gone, a `load`, a `store` or a jump record over bytes that hold qubits whose basis
-  configurations disagree has nothing to split into. Taken (easiest to reverse, not deciding the fault's name or
-  code): the simulator stops (`RunError::SuperposedMemoryRead`), which no program can read; bytes whose
-  configurations all agree are still read as memory. Recommendation: replace both by the named fault the
-  maintainer decided ("yes, it should be a fault to read qubits") in the next step, for every touch of a byte that
-  holds qubits by ordinary code outside `apply`.
+- **Which bytes hold qubits, for the fault `qubit_memory_access` (2026-11-17, step 3 of the work).** Taken
+  (the simulator's rule already, the easiest to reverse): a byte holds qubits from the first gate that names
+  any of its bits until that gate is undone, then for the rest of the run; not released when its qubits are
+  definite again, when measured, or when its stack frame returns, and the rule is per whole byte (a load of a
+  byte one of whose bits a gate named faults). Consequence: a stack byte once gated faults any later ordinary
+  use of that address. Alternatives, each accepting more programs: a byte whose 8 bits were all measured goes
+  back to memory holding the values found (a device knows that classically); or a release of qubits at an
+  address, as `qfree` is for a register (a new instruction, so the maintainer's to decide). Recommendation:
+  keep the rule until a front emits gates at addresses; then the measured-byte release.
+- **Applied functions and qubits in memory (2026-11-17).** Taken, per the orchestrator's brief: inside `apply`
+  the rule is the same, so an applied function cannot read qubits in memory; before, each run saw its
+  configuration's values. A program copies the qubits into a register with controlled X gates, applies, and
+  copies back (an expansion into gates and `apply`; the Grover test with x in memory does this). Question: is
+  a derived form wanted that names bits at addresses among an `apply`'s arguments, defined by that expansion?
+  Recommendation: yes once C functions take qubits through pointers.
 - **Names left from the removed machinery** (2026-11-17): the journal-content observer's public API still
   counts and lists `apply`'s runs as `branches` (`ApplyJournal::branches`, `BranchJournal`, `branches_total`,
   `branches_present`), as does the front's test helper `branches`. Taken: unchanged for now (the rename touches
@@ -617,7 +629,7 @@ padded clock and its caller's mark; A mark's budget once its frame is left.
   step that touches the observer anyway.
 - **Fault codes 15** (`bad_rewind`, removed) **and 11** (`dirty_free`, removed when `qfree` became the partial
   trace): taken, left unused rather than renumbering, since codes are stable and a program may have measured
-  one. Recommendation: keep them unused.
+  one; the new `qubit_memory_access` took 17. Recommendation: keep them unused.
 - **`printf("%a")` of a subnormal double (2026-11-17, the Opus testing pass):** the device prints musl's
   normalised spelling (`0x1p-1074`), the native reference glibc's denormal one (`0x0.0000000000001p-1022`);
   musl also rounds `%.3a` of `0x1.fffffp-1023` to `0x2.000p-1023`. Equal values, both conforming C; a native
