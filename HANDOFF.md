@@ -1,11 +1,14 @@
 # HANDOFF
 
 State on 2026-11-17: **resumed by the maintainer the same day; see "Resumed on 2026-11-17" below before
-anything else.** Steps 1 and 2 of the order there are done: `apply` is evaluated for each definite value of its
-arguments only, and `mark`, `rewind`, machine states in superposition and the call with a fault value are removed.
-Step 3 is done: `qfree` is the partial trace, ordinary code touching a byte that holds qubits faults
-`qubit_memory_access`, and the simulator's own stops and reports are named as its own and checked to give no
-program a value (`docs/DESIGN.md`, "The simulator's own stops and reports"). Next: step 4, the documents.
+anything else.** The tree implements the model stated in `docs/DESIGN.md`, "The model": ordinary code; the
+quantum instructions it issues (`qalloc`, gates, `measure`, `qfree` as the partial trace), naming qubits in
+registers or at memory addresses, with the named fault `qubit_memory_access` when ordinary code touches a byte
+that holds qubits; and `apply`, evaluated for each definite value of its argument registers with one step bound
+`B` for the whole applied function. `mark`, `rewind`, machine states in superposition and the call with a fault
+value are removed. Steps 1 to 4 of the order below are done; the documents say what the code does now. Next:
+the rest of step 5 (the reference that runs `apply` by its construction) and step 6, applied calls, which is
+being built on its own branch.
 
 ## Resumed on 2026-11-17
 
@@ -96,10 +99,13 @@ The order of the work:
    report of nonzero releases) are listed in one place in `docs/DESIGN.md` with why none gives a program a value:
    no instruction reads them, a stop ends the run, and inside an applied function every quantum step faults
    before a stop could arise (a test checks the last with the configuration limit set where it would bite).
-4. The documents say what the code does now; `docs/DESIGN.md` states `apply`'s meaning, why a device can carry
-   it out and what it costs.
-5. Independent checks: an audit of the front against the model, a testing pass, and a small reference that runs
-   `apply` literally by the device's construction.
+4. Done: the documents say what the code does now; `docs/DESIGN.md` states the model, `apply`'s meaning, why a
+   device can carry it out and what it costs, and defines the derived forms (`call_indirect`, `stacksave`,
+   `stackrestore`, `retaddr`, `setjmp`, `longjmp`, `exit`) by their expansion into ordinary code.
+5. Independent checks: an audit of the front against the model (done: three wrong translations fixed, "Known
+   weak spots"; two findings on loops go to step 6), a testing pass over steps 1 and 2 (done: 13 tests, no
+   defect; "Independent checks of apply, removal and front fixes"), a testing pass over step 3 (running), and a
+   small reference that runs `apply` literally by the device's construction (not started).
 6. Then the route that replaces the front's cancelled fallback ("Next steps, in order", 4): a call whose
    arguments depend on a qubit, to an ordinary function (no quantum operation, directly or through anything it
    calls), is applied whole with one `budget`, whatever memory it writes, allocates or frees and whatever loops
@@ -160,6 +166,7 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `2bf0b69` | Return addresses: `%r = retaddr N` reads the device's frames (`docs/DESIGN.md`, "Return addresses"); GCC `20030323-1`, `20030811-1`, `pr17377` agree with native, with musl and without |
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 | Lua probe | Unmodified Lua 5.4.9 through musl: seven native stdout/status comparisons and exact reversals; a Lua predicate under hand-written `apply`, dense-checked Grover at N=4/8 (`experiments/lua-probe`) |
+| `c5085b4`..`ee41593` | The model of 2026-11-17: `apply` for each definite value of its arguments only; `mark`, `rewind` and what served them removed; `qfree` the partial trace with the simulator's report; the fault `qubit_memory_access`; the simulator's own stops named; three wrong translations of the front fixed |
 
 Check it: `cargo test` (253 passed; 3 ignored, each naming its reason: heavy reference, generated or
 hash-sample runs with their commands, witnesses of recorded defects and of questions awaiting the maintainer;
@@ -204,14 +211,13 @@ explicitly after the separate musl build.
 - **North Star iteration 8**: 26 passages reviewed, 13 kept, 10 reworded, 3 struck (`docs/NorthStar.md`).
 - **Coverage must end at 100%.** No refusals in the end unless physics forbids it, and then the reason is stated.
   A "not handled yet" is a debt.
-- **What is promised when history is left behind** (`docs/DESIGN.md`): classical results are exact; coherence is
+- **What is promised about coherence** (`docs/DESIGN.md`): classical results are exact; coherence is
   guaranteed for a documented class of updates and for anything un-run; elsewhere it is unspecified and the
   toolchain warns; un-running after something changed what the region read or wrote is a warning, not a refusal.
-- **The next extension** (`docs/DESIGN.md`, "The next extension"): a journalled machine as meaning and fallback,
-  `mark` and `rewind ... keep`, memory as an overlay over a classical base, gates that take addresses; `apply`,
-  `qalloc` and `qfree` stay until the new instructions pass every existing test. Decided, not built.
-- **Channels** (partial trace, measurement by effects, noise) belong to the finished Bennett. The first working
-  version is unitaries and clean discard, and nothing built now may make channels impossible to add.
+- **The next extension**: a journalled machine with `mark` and `rewind`. Built from 2026-11-15, removed on
+  2026-11-17 ("Resumed on 2026-11-17"); gates that take addresses stay.
+- **Channels** (partial trace, measurement by effects, noise) belong to the finished Bennett, and nothing built
+  now may make channels impossible to add. Since 2026-11-17 `qfree` is the partial trace.
 - **Floating point is a low concern** (superseded on 2026-11-15, below). **The refused C library calls are a
   concern** and come first.
 
@@ -254,62 +260,27 @@ explicitly after the separate musl build.
    unsound credits or missed recoveries; the hook on/off step-by-step state and journal checks pass.
    README and `chains.tsv` now report the corrected retained tape, time costs and measured residuals.
    Linear growth remains a property of this common-circuit witness, not a lower bound on information loss.
-   Global-write extension: log/hash/B-tree insertion measured with hand-written worlds and `apply` drivers;
-   log tape residual is zero, hash/tree positive (A/B matter for recursive insertion). Actual world journal
-   payload is much larger than overlay payload on these runs. See the journal-content README/global.tsv;
-   classification of outer worlds/read/rewind history remains a documented observer gap with an explicit route.
-3. **The journalled machine** (`mark`, `rewind`, machine states in superposition, the memory overlay, the
-   call with a fault value, `apply` computed through marks) was built from 2026-11-15 to 2026-11-17 and removed on
-   2026-11-17 ("Resumed on 2026-11-17"); the last commit that has it is `f81a70a`. Gates and measurement at
-   addresses stay. What it measured is in git history and `experiments/journal-content/README.md`.
-4. **Cancelled on 2026-11-17: the front's fallback through marks** (the program almost verbatim under marks, the
-   documented coherent class recognised by its form, and the two warnings), since `mark`/`rewind` are removed.
-   Its replacement route (the maintainer's decision of about 13:40 UTC, "Resumed on 2026-11-17"): a call whose
-   arguments depend on a qubit, to an ordinary function, is applied whole with one `budget`, whatever memory it
-   writes, allocates or frees and whatever loops and calls it contains; its writes are undone when it ends and
-   only its result survives. Today the front applies a function only if LLVM proved it reads memory only, and
-   refuses a qubit-dependent call to one that writes memory; the route lifts that. Acceptance target: SQLite
-   under `apply`, a query whose key depends on a small qubit register, each argument value compared with native
-   SQLite. Writes that must survive the applied code (an inline store under a qubit-dependent condition that
-   later code reads; the fallback oracle's ignored acceptance tests) are planned separately. What follows is the record of the
-   fallback as built up to `f81a70a`.
-   Independent oracle prepared before the fallback (`front/tests/tests/fallback_oracle.rs`,
-   `front/tests/tests/fallback_support/native.rs`, fixtures and explanation in
-   `front/tests/c/fallback_oracle/`): host clang executes each shared C update once per basis input,
-   without device code in the reference. Ten programs, 160 host O0/O2 basis runs; 63 C complex
-   vectors agree with native expectations and independently written compact circuits run by the
-   original dense oracle and device; 520 measured outcomes agree. The compact witnesses avoid
-   the dense oracle's 13-qubit cap (the C front allocates 36 including bytes and cleanup faults);
-   the actual C snapshot still checks all unused bits/workspace. Six lowered ordinary C functions
-   under a test-only mark/call/rewind-keep envelope give 54 native keep/un-run comparisons with
-   exact memory restoration and phases; those same C functions also agree under apply in the
-   original dense interpreter and device, plus a dense matrix conjugation. This envelope is not
-   C fallback acceptance: no C mark/rewind interface is documented yet. Regular inventory checks
-   every accepted program and names every refusal: one mode accepted (nested Boolean XOR at O2),
-   26 refused (ordinary stores/writing calls/loops/overwrite, Boolean expression XOR, nested XOR
-   at O0/taint). Nine explicit ignored acceptance tests preserve those debts. No accepted wrong
-   result found. Outside-class assertions require immediate measurement probabilities and a
-   warning, never an unspecified private-history/phase layout; warning checks remain waiting
-   with the refused programs. Runtime warning delivery and a named-address adapter if C qubits
-   move into memory are still integration details. Four checks pass: cargo test 292/19 ignored,
-   front/test.sh 162/21 ignored, clippy and fmt clean; front-specific clippy also clean.
-   Details and oracle risks: fixture README.
-   Its independent testing pass seeded wrong device results into the harness: four were accepted, all
-   fixed and kept as regression tests (`mod seeded`, seven tests): a wrong weight and a swapped basis state
-   in superposition only (the 512-sample tolerance 0.075 exceeds every q = 1 branch's weight 0.0296, and the
-   complex preparation gives y equal weights; now exact Born weights read across worlds, and a preparation
-   that weighs all eight basis states apart), a leftover ordinary write in a coherent program (the projection
-   ignored memory, the measured check ran at O0 only; now both, in every mode and for every accepted
-   inventory case), and a wrong r-dependent write in a marked region (one kept bit, equal for both r in four
-   of six regions; now the whole four-cell image is kept and checked, and 48 dense nibble runs). A correct
-   hand-written fallback-shaped `store` with two worlds is accepted and needs its warning; the native
-   reference runs clean under ASan/UBSan. `front/test.sh` 170 passed / 21 ignored.
-   **Built on 2026-11-17, step by step** (the fallback oracle's acceptance tests un-ignored as each passes):
-   - The oracle compares the whole fixture image, guard bytes around `cells` included, on both sides.
-   - The documented Boolean XOR on a quantum `_Bool` (`y ^= q && !r`, and `if (q) if (r) y ^= 1` at O0 and
-     with `--taint-all`) is coherent: the one-bit flip is proved case by case where LLVM's simplifier does
-     not fold it (`docs/DESIGN.md`, "From C to a device program"). `coherent_xor` and `coherent_nested` pass
-     in all three modes with their full complex vectors; seven acceptance tests wait.
+   A global-write extension measured log/hash/B-tree insertion with the machinery removed on 2026-11-17 and
+   `apply` drivers; its record is in `experiments/journal-content/README.md` and `global.tsv`.
+3. **Independent checks** (step 5 of "Resumed on 2026-11-17"): the reference that runs `apply` by the
+   device's construction (each ordinary step keeping what it overwrote, copy by XOR, the inverse steps in
+   reverse order) on small functions with explicit amplitudes, checking that the working state returns to its
+   start and that the result equals evaluation for each argument value, a faulting argument value and step
+   exhaustion included. It becomes the start of a second implementation of the device language (the debt
+   above).
+4. **Applied calls, replacing the front's cancelled fallback through marks** (the maintainer's decision of about
+   13:40 UTC, "Resumed on 2026-11-17"; being built): a call whose arguments depend on a qubit, to an ordinary
+   function, is applied whole with one `budget`, whatever memory it writes, allocates or frees and whatever
+   loops and calls it contains; its writes are undone when it ends and only its result survives. Today the
+   front applies a function only if LLVM proved it reads memory only, and refuses a qubit-dependent call to one
+   that writes memory; the route lifts that. Acceptance target: SQLite under `apply`, a query whose key depends
+   on a small qubit register, each argument value compared with native SQLite. Planned separately: writes that
+   must survive the applied code (an inline store under a qubit-dependent condition that later code reads), with
+   the two loop findings of the front audit ("Known weak spots"). The target for those is the fallback oracle
+   (`front/tests/tests/fallback_oracle.rs`; fixtures and explanation in `front/tests/c/fallback_oracle/`): host
+   clang runs each C update once per basis input, the device result is compared with it, and its ignored
+   acceptance tests wait for the route. The Boolean XOR on a quantum `_Bool` (`y ^= q && !r`, and
+   `if (q) if (r) y ^= 1` at O0 and with `--taint-all`) already passes it (`coherent_xor`, `coherent_nested`).
 
 5. **Floating point** is done over Berkeley SoftFloat 3e (decided 2026-11-15; `rt/softfloat/README.md`), the
    complex helpers over libgcc (`rt/libgcc/README.md`), including `__divxc3`. Left: `__float128` and
@@ -339,10 +310,11 @@ explicitly after the separate musl build.
    journal, wall time and peak RSS are in `experiments/sqlite-on-device/measurements.tsv`; commands
    and compact tables in its README. The original 256 KiB SQLite heap refuses N=128 at LIKE row24
    with `SQLITE_NOMEM` identically native/device (7,893,757 steps); N=128/256 pass with 1 MiB heap.
-   History-versus-branches comparison also passes N=16/32/64. All five Grover shapes pass N=512;
+   The comparison of `apply` through marks with evaluation for each argument value (both since removed)
+   also passed N=16/32/64. All five Grover shapes pass N=512;
    the full coherent checks there hit the declared 300 s process cap (LIKE during full
    reversal; other shapes during their second apply); aggregate classical reversal hits the 4 GiB address-space
-   limit while building history (2,322,360 KiB peak RSS). These are shared-host experiment bounds,
+   limit while building the undo journal (2,322,360 KiB peak RSS). These are shared-host experiment bounds,
    not physical qubit/RAM limits. The baseline sweep predates the atomic-rewind fixes; validation
    on the rebased executor passes all 57 checks: full N=16/32, every N=512 Grover shape, and both
    N=256 aggregate coherent reversals, with unchanged step/journal counters (separate table).
@@ -394,7 +366,7 @@ them on 2026-11-17; git has them):
 - **`measure` takes an address** [M2]. Built: `%d = measure iN [ADDR]` reads the `N` bits from bit 0 of the
   integer at the address as a load does; the bits of bytes that hold qubits, only those, are sampled jointly
   and collapse; other bytes give the memory's bits (`docs/DESIGN.md`, "Qubits in memory";
-  `crates/exec/tests/measure_memory.rs`, against the whole-world reference). The register form stays while
+  `crates/exec/tests/measure_memory.rs`, against the independent reference of the time). The register form stays while
   registers do.
 - **Fault codes widen to 5 bits** [(2), "The fault code space is full"], now; an invalid jump record gets its own
   code. Built: `Fault::CODE_WIDTH` is 5, every fault register a `q5` (the front's included), and every
@@ -413,7 +385,8 @@ C:
 - **A copied `sigjmp_buf` follows glibc.**
 - **Return-address values** at and beyond the outermost frame: kept.
 - **The floating-point environment** stays a named fault until the front's fallback is built; then rounding modes
-  and flags become real through SoftFloat's state.
+  and flags become real through SoftFloat's state. (The fallback through marks was cancelled on 2026-11-17; the
+  route through SoftFloat's state stands.)
 - **The exit status is not masked on the device.**
 - **Equal-priority constructor order across separately compiled objects** is a debt; route: lowering startup per
   unit before linking.
@@ -444,9 +417,9 @@ and it is the later one that holds.
 - **NaN payloads.** A result that differs from the native one only in which input NaN's payload it carries
   counts as agreement, compared by a rule that allows exactly this. The bit-for-bit debt is dropped.
 - **The coherent class stays as documented for now.** A controlled in-place update of ordinary memory
-  (`cells[0] += 2` under a qubit) is not added to the guaranteed class for the first fallback steps; such
-  updates run under marks with their history and the warning. Adding it waits for the fallback and an oracle
-  that compares phases as well as weights, because the class may never shrink.
+  (`cells[0] += 2` under a qubit) is not added to the guaranteed class. Adding it waits for an oracle that
+  compares phases as well as weights, because the class may never shrink. (The decision also placed such
+  updates under marks, which were removed on 2026-11-17; the front refuses them.)
 
 Its decisions on rewinds, machine states in superposition, time and the call form went with them on
 2026-11-17. The stop of the run at an `apply` faulting for some argument values stays the simulator's default.
@@ -488,7 +461,7 @@ The observed ABI/reference/allocation/no-builtin/ordinary-FP comparisons otherwi
 words and 32 allocation hashes at both levels combined); strict FP arithmetic is refused by name. Still unproved: attributes/values/placements outside the measured input
 envelope, generated sources only constructed by ignored experiments, nondefault calling conventions
 (`inreg`, `preallocated`, `inalloca` have zero measured occurrences), native AVX512 execution on this CPU,
-and exception/environment semantics already deferred to the fallback. Expand the inventory/native matrix
+and the floating-point environment (route: SoftFloat's state). Expand the inventory/native matrix
 when these inputs are added. No second exhaustive enum-name allowlist is maintained.
 
 The attribute-evidence step's required checks after rebasing on `d3880f6`: Rust 499 passed / 29 ignored,
@@ -516,7 +489,7 @@ code removed on 2026-11-17; git has their records.
   library's startup) and a level beyond it 0 (natively unspecified). Keep? Levels above 0 follow the device's
   frames, which natively needs frame pointers kept and sibling calls off (plain native `-O2` crashed at level 1).
 - **Calls through another prototype** (`329ef7a`; its independent testing pass `4409160`, sol: 2,880 native
-  comparisons, 72 coherent branches, 1,101 further runs and 27 corpus programs, no wrong result): every call through a function pointer now compares its target with
+  comparisons, 72 coherent argument values, 1,101 further runs and 27 corpus programs, no wrong result): every call through a function pointer now compares its target with
   the address-taken functions the device would call wrongly (musl tests: 107 to 353 more steps, 0.06 % to 5 %, and
   5 % to 16 % more device code). Cheaper: compare only for unprototyped pointer calls (about 11 steps), leaving a
   typed pointer call to a function with other argument or result sizes a `bad_indirect` fault instead of agreeing
@@ -594,7 +567,7 @@ at every shape and size, and every device Grover amplitude at N=16 to 512 agains
 calculation; an edge-row database (NULLs, duplicates, 64-bit bounds, collation, overflow, all and no rows),
 all 56 checks (`experiments/sqlite-on-device/edge/`). The entry frame at every memory size around it, seven
 signatures, three data layouts, four option sets, and with musl startup at every stack size near both edges,
-against the whole-world reference (`crates/exec/tests/entry_frame_boundary.rs`,
+against the independent reference interpreter of the time (removed on 2026-11-17) (`crates/exec/tests/entry_frame_boundary.rs`,
 `front/tests/tests/entry_frame_musl.rs`). The Lua probe's three stages rerun, five more scripts (error
 messages, format corners, garbage collection under pressure, integer/float edges, ordered tables) agreeing
 and reversing exactly, a second predicate with three of eight marked, and every Grover amplitude against
@@ -628,10 +601,13 @@ padded clock and its caller's mark; A mark's budget once its frame is left.
   Recommendation: yes once C functions take qubits through pointers.
 - **Names left from the removed machinery** (2026-11-17): the journal-content observer's public API still
   counts and lists `apply`'s runs as `branches` (`ApplyJournal::branches`, `BranchJournal`, `branches_total`,
-  `branches_present`), as does the front's test helper `branches`. Taken: unchanged for now (the rename touches
-  the observer, its classifiers, their tests and the experiments' READMEs); `RunError::RegionFault`'s count is
-  `faulting` and its message says basis configurations. Recommendation: rename to `runs` / `configurations` in a
-  step that touches the observer anyway.
+  `branches_present`), as does the front's test helper `branches`; `Stats::leftover_qubits` counts the columns
+  the simulator keeps after a nonzero release; and the experiments' READMEs (`experiments/journal-content`
+  most) still say "worlds". Taken: unchanged for now (the rename touches the observer, its classifiers, their
+  tests and the experiments' READMEs); `RunError::RegionFault`'s count is `faulting` and its message says basis
+  configurations. "Region" stays in fault and option names (`quantum_in_region`, `--region-budget`,
+  `allow_region_faults`); `docs/DESIGN.md` defines it as the applied function. Recommendation: rename to
+  `runs` / `configurations` / `kept_qubits` in a step that touches the observer anyway.
 - **Fault codes 15** (`bad_rewind`, removed) **and 11** (`dirty_free`, removed when `qfree` became the partial
   trace): taken, left unused rather than renumbering, since codes are stable and a program may have measured
   one; the new `qubit_memory_access` took 17. Recommendation: keep them unused.
@@ -674,9 +650,8 @@ Each recommendation was taken ("Decisions the maintainer took on 2026-11-16, in 
   controlled in-place update of ordinary memory (`cells[0] += 2` under a qubit, as in its `nested` and `loop`
   programs) belongs to the documented coherent class; `docs/DESIGN.md` and `docs/MARKERS.md` limit the class to
   qubit variables. If the class grows, the oracle's weight-only checks would also accept a fallback that
-  collapses such updates, so its checks must grow with it. Recommendation: keep the class as documented for the
-  first fallback steps; such updates run under marks with their history and the warning. Taken meanwhile: as
-  documented.
+  collapses such updates, so its checks must grow with it. Recommendation: keep the class as documented.
+  Taken meanwhile: as documented.
 
 ## What is still refused, and what removes it
 
@@ -686,14 +661,14 @@ Each recommendation was taken ("Decisions the maintainer took on 2026-11-16, in 
 | A call through another prototype where x86-64 does not determine what is read: the upper half of a 32-bit value, a missing argument that is read, an integer from a floating-point register, a variadic floating-point argument without `%al`, a narrow argument that is not the extension the callee relies on (named fault `unreachable` when the call runs); a direct call whose argument differs from its parameter only in register class (native -O0 and -O2 disagree) | Nothing to remove: the native result is not determined (`docs/DESIGN.md`, "Calls through a prototype"). Conservative, removable by a finer model where named: a variadic floating-point argument after an unread named one, a call whose result is used only by dead code before the optimiser, values in memory read at another place |
 | A qubit-dependent call of a function that uses `setjmp` | The front's own effect summary of `setjmp` (writes only its buffer) when deciding what runs coherently (`docs/DESIGN.md`, "Non-local jumps") |
 | `__float128`; `powi` on `_Float16`/`__bf16`; `#pragma STDC FENV_ACCESS` (with it musl's `ilogb`/`ilogbl` in the corpus accuracy checks; libgcc's `__divxc3` itself works); non-default rounding modes and floating-point flags | Step 5 above |
-| A store under qubit control; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control | For stores and calls whose writes stay inside a whole applied function: step 6 of "Resumed on 2026-11-17". The rest is open: running code under a qubit with its history kept (`docs/DESIGN.md`, "Open questions"; the journalled machine that did it was removed on 2026-11-17) |
+| A store under qubit control; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control that LLVM does not unroll fully | For stores and calls whose writes stay inside a whole applied function: step 6 of "Resumed on 2026-11-17"; for gates in a loop with an ordinary trip count: its plan ("Known weak spots"). The rest is open: keeping what ordinary code overwrote under a qubit beyond the `apply` (`docs/DESIGN.md`, "Open questions") |
 | A qubit-dependent value used by ordinary code or printed; measurement under control | Channels |
 | Non-empty inline assembly; code without source | An emulator of the real machine, compiled as an ordinary program |
 | A floating-point operation that reads the subnormal mode (arithmetic, comparison, conversion from floating point, intrinsics other than `fabs`/`copysign`/`is.fpclass`) in a function promising a non-IEEE mode (`-fdenormal-fp-math=preserve-sign`, `positive-zero`, `dynamic`, or the `-f32` form); moves and sign/magnitude bit operations there are accepted | The floating-point environment carried through SoftFloat's state (flush inputs and outputs as the promised mode says), compared with native code run under MXCSR DAZ/FTZ |
 
 ## C North Star rungs 1–3 (measured 2026-11-16/17)
 
-**Since 2026-11-17 the second implementation is gone**: the independently written whole-world interpreter
+**Since 2026-11-17 the second implementation is gone**: the independently written reference interpreter
 modelled `mark`, `rewind` and machine states in superposition and was removed with them, so rungs 1 and 2 are
 checked on `bennett-exec` against native only; the "independent" figures below are the measurements of
 2026-11-16/17. Debt: "Resumed on 2026-11-17".
@@ -705,15 +680,15 @@ independent snapshots. **The C portion of all three rungs passes as worded.**
 
 Scalar domain: 131,840 tuples per compiler input, no exclusions, native O2 and O0/UBSan agree. Across
 clang O0/O2 and both production modes: 527,360 native comparisons, 263,680 exact resets, 9,320,952
-forward steps, zero faults (118.233 s). The independently written whole-world interpreter adds 263,680
-native comparisons and reversals of its own history, zero faults (1,278.459 s). These slow sweeps are
+forward steps, zero faults (118.233 s). The independently written reference interpreter added 263,680
+native comparisons and reversals of its own runs, zero faults (1,278.459 s). These slow sweeps are
 explicit experiments; two modes of one executor are not counted as two implementations.
 
 The original table's basic/grow at n=0,1,7,64,1000 passes all 40 full i64 production comparisons, native
 O2 versus O0/ASan/UBSan, 195 console bytes/status 0, and two exact full-memory resets. O0/O2:
 804,215/803,622 steps, 15,994,967/16,000,182 journal bytes; both images 2,108,912 memory bytes.
-The independent model now also completes all ten full native results from both inputs and reverses its
-own history byte-exactly, with production state/step comparisons at checkpoints, completion and reset.
+The independent interpreter also completed all ten full native results from both inputs and reversed its
+own runs byte-exactly, with production state/step comparisons at checkpoints, completion and reset.
 Its isolated release process passes in 41.091 s under the unchanged 120 s / 1 GiB cap. Before the change,
 a fresh profile attributed 68.76% of sampled CPU time to slot copying/iteration/clone, with a 1,024-record
 history clone costing 9.301 ms versus 11.538 us for the current state. `rpds` persistent history, slots,
@@ -731,6 +706,17 @@ discovery of all five ignored acceptance stages also pass. The measured 118-seco
 the ordinary frontend run without changing its domain or assertions.
 
 ## Known weak spots
+
+- **Two findings of the front audit of 2026-11-17 on loops, open** (planned with step 4 of "Next steps"). (1)
+  The front writes one `apply` per update of a qubit variable, so `for (i = 0; i < n; i++) y ^= f(q, i) & 1;`
+  is `n` applications, each with its own budget and fault register, where one `apply` of the whole loop's XOR
+  with one budget would do; a loop inside a function that only reads memory, called with arguments that depend
+  on a qubit, already runs under one `apply` and one budget. (2) Gates in a loop under a qubit condition are accepted only when
+  LLVM unrolls the loop fully (`if (q) for (i = 0; i < n; i++) bennett_x(&y);` is refused; with `n` constant it
+  is accepted). Route for an ordinary trip count: compute the condition once into a fresh qubit, keep the
+  ordinary loop with each gate controlled by it, clear it after. A trip count that depends on a qubit would make
+  the number of gates depend on a qubit; what to do then is a question for the maintainer once the plan is
+  reported.
 
 - **Three wrong translations in the front, found by the front audit of 2026-11-17, fixed** (`8bff6a5`,
   `313386d`, `bc5b3cb`; each a case of `what_was_once_translated_wrongly_is_refused_by_name_in_every_mode` in
@@ -781,9 +767,6 @@ the ordinary frontend run without changing its domain or assertions.
   Route: handle that output before JSON parsing; standalone experiment workspaces still need their
   own mutation checks (`experiments/lua-probe/README.md`). No mutation pass is claimed for it.
 
-
-
-
 - Removed on 2026-11-17: the fallback oracle compared the four `cells` bytes and the qubit variables only, so
   a stray write just past the array went unseen by both its native and device sides. The fixture's cells now
   lie in a twelve-byte image between guard bytes, and every native and device comparison takes the whole
@@ -817,10 +800,6 @@ the ordinary frontend run without changing its domain or assertions.
 
 - Debt: equal-priority constructor order across separately compiled objects follows a native build of the linked
   module, not separately linked objects (C leaves it unspecified). Route: lower startup per unit before linking.
-
-
-
-
 
 - The `long double` increase is bisected to `8bbb56c`: packed `i80` results and changed round-pack inlining
   add 189/209/20,671 steps in `960215-1`/`regstack-1`/`00204` (normal add/sub probes +9/+10); this buys

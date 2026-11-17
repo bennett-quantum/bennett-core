@@ -3,10 +3,15 @@
 One workspace for the Bennett toolchain: ordinary programs, a few marker calls, and a toolchain that decides what
 runs classically, reversibly or coherently. Each piece of plumbing exists once, behind a module boundary.
 
+The device program is the quantum circuit model driven by ordinary code: ordinary code issues `qalloc`, gates,
+`measure` and `qfree` (the partial trace), and `apply` runs an ordinary function for each definite value of its
+argument registers, within one step bound, XORing the result into a target register (`docs/DESIGN.md`, "The
+model").
+
 | Module | What it is | State |
 |---|---|---|
 | `ir` | the device program: one data structure, one reader/writer, one validator | step 2 |
-| `exec` | the executor: forward, reverse (undo journal), coherent regions (`apply`, evaluated for each definite value of its arguments), gates, qubits in memory | step 2 |
+| `exec` | the executor, a simulator of the model: forward, reverse (undo journal), `apply` (evaluated for each definite value of its arguments), gates, qubits in memory | step 2 |
 | `cli` | `bennett run`, `bennett check` | step 2 |
 | `front` | `bennett-front` (C++, LLVM 18): bitcode with marker calls to `ir` text; taint, outlining, lowering | step 3 |
 | `opt` | optimiser and cost model | not started |
@@ -45,7 +50,8 @@ explicit stderr fault, are in [rt/musl/README.md](rt/musl/README.md).
 call libgcc's six self-contained helpers (including long-double division), from
 `target/front/complex-runtime.bc` (`--complex-runtime file.bc`; source, licences and checks:
 [rt/libgcc](rt/libgcc/README.md)).
-The budget is the step budget of every coherent region; the stack is the memory above static data.
+`--region-budget` is the step bound `B` of every `apply` the front writes; the stack is the memory above static
+data.
 Constructors and destructors wrap `main` by default; `bennett-front --entry name` chooses another automatic
 startup entry (use the same `bennett run --entry name`). A C runtime that references the standard init/fini
 array bounds owns startup instead; the front supplies those arrays for it.
@@ -60,8 +66,9 @@ aggregate. Larger sizes, measured limits and reproducible commands are recorded 
 
 C North Star ladder checks are in [experiments/northstar-ladder](experiments/northstar-ladder/README.md).
 The C portion of rung 1 passes exhaustively on the declared Int8 functions, and rung 3 passes native
-output, exact reset and deterministic tape replay. Rung 2's ten original cases pass native agreement and byte-exact reversal on both independent
-interpreters, at both compiler inputs, under the unchanged resource cap. The experiment records the
-profile, persistent snapshot storage, complete domains and measurements.
+output, exact reset and deterministic tape replay. Rung 2's ten original cases pass native agreement and
+byte-exact reversal at both compiler inputs, under the unchanged resource cap. An independent second
+interpreter agreed on rungs 1 and 2 until 2026-11-17, when it was removed with the forms it modelled
+(`HANDOFF.md`). The experiment records the profile, complete domains and measurements.
 
 Repository checks and the optional exact-revision pre-push hook: [docs/CHECKS.md](docs/CHECKS.md).

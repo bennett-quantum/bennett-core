@@ -35,18 +35,18 @@ value is known is returned to 0 first; any other is released as it is: the parti
 their interference is gone; this is no fault, and the simulator reports the release (`bennett run` prints a
 line), which the program cannot see.
 
-A computation applied coherently may fault for some values of its arguments (a division by zero, an
-exhausted region budget). That is a region fault: `bennett run` stops at it and reports it by name, unless it
+A computation applied coherently (by `apply`, `docs/DESIGN.md`) may fault for some values of its arguments (a
+division by zero, an exhausted budget). `bennett run` stops at such an `apply` and reports it by name, unless it
 is run with `--allow-region-faults`; then the fault code stays in the fault register until the function
 returns, where the register is released (and the release reported).
 
 ## Gates
 
-A gate under a branch on a qubit is controlled by it: `if (a) bennett_x(&b);` is a CNOT, and
+A gate under a condition on a qubit is controlled by it: `if (a) bennett_x(&b);` is a CNOT, and
 `if (a && b) bennett_x(&c);` a Toffoli. A condition that is not a conjunction of single qubits
-(`if (f(p, q) == 3)`) is computed into a fresh qubit and uncomputed after the gate. Writes under such a
-branch are controlled the same way. The condition may not read the variable the gate acts on, nor a value
-read from a qubit variable that changed between the read and the gate
+(`if (f(p, q) == 3)`) is computed into a fresh qubit and uncomputed after the gate. Writes into qubit
+variables under such a condition are controlled the same way. The condition may not read the variable the gate
+acts on, nor a value read from a qubit variable that changed between the read and the gate
 (`_Bool old = q; bennett_x(&q); if (old) bennett_x(&y);`): both are refused by name.
 
 ```c
@@ -84,7 +84,7 @@ depends on a qubit, a call of a function that has gates, a measurement, a gate w
 gate's own variable, a quantum operation inside a loop (fully unrolled loops work), a write to memory, a
 call of a function that may write memory, or a volatile read; a branch on such a value whose arms do not
 rejoin before the function returns; an update of a qubit variable that is not a bijection listed above
-(`x = x * x`, `x += x`): that needs its history kept, which is a later step; a qubit variable passed to a
+(`x = x * x`, `x += x`): that needs the old value kept, which has no form yet; a qubit variable passed to a
 function, or wider than 8 bytes; a write into part of a qubit variable; a value that depends on a qubit used
 by ordinary code (returned, stored to ordinary memory, passed to a function that writes memory, used as an
 address of memory that is not constant), or by an access with an effect of its own (an atomic update, a
@@ -101,13 +101,13 @@ _Noreturn void __bennett_exit(int status);
 ```
 
 Declared in `bennett.h`, this emits one byte to the device console (`effect`). It is journalled in reversible
-execution and faults with `effect_in_region` in a coherent region. It does not make its callers control functions:
-a call under qubit control is refused as an ordinary call that may write memory. Definitions, other signatures,
-and attributes that permit deleting or moving the call are refused by name, as for markers.
+execution and faults with `effect_in_region` inside an applied function. It does not make its callers control
+functions: a call under qubit control is refused as an ordinary call that may write memory. Definitions, other
+signatures, and attributes that permit deleting or moving the call are refused by name, as for markers.
 
 `__bennett_exit` lowers to the `exit` terminator: it ends the whole run with `status` as the entry's result,
 including from a nested call or loop. The selected entry must return `i32`; another result type gives the
-named fault `exit_type_mismatch`. Inside a coherent region it faults with `exit_in_region`. It is journalled,
+named fault `exit_type_mismatch`. Inside an applied function it faults with `exit_in_region`. It is journalled,
 is not a marker, and has the same declaration checks as the console call, including its `noreturn` attribute.
 It does not run C cleanup itself: a library's `exit` runs handlers and flushing before calling this boundary.
 

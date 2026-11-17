@@ -35,12 +35,13 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | %d = faddr @f
             | effect operand                             ; one i8 to the console
             | %d = qalloc N
-            | qfree %r
+            | qfree %r                                   ; the partial trace: %r dropped unexamined
             | GATE qubit [ctrl qubit {, qubit}]          ; x h z s sdg t tdg
-            | (rx | ry | rz)(ANGLE) qubit [ctrl ...]     ; radians
+            | (rx | ry | rz)(ANGLE) qubit [ctrl ...]     ; radians, any finite angle
             | %d = measure %r                            ; every qubit of the register
             | %d = measure iN "[" operand "]"            ; N bits from bit 0 of the integer at the i64 address
             | apply @f(typed, ...) -> %out, %fault budget operand  ; %fault: a register of 5 qubits or more
+                                                                   ; meaning: docs/DESIGN.md, "apply"
 terminator := br label[(typed, ...)]
             | br operand, target, target
             | switch iN operand, INT: target, ..., default: target
@@ -139,8 +140,8 @@ one faults `qubit_memory_access`, inside an applied function too (`docs/DESIGN.m
 
 A register `%q` of type `qN` passed to a parameter of type `qN` passes the handle. Nowhere does a register stand
 for an integer in ordinary code: a `call`, `call_indirect` or branch passing one to an `iN` parameter is a type
-mismatch. Only `apply` reads its argument registers, for each definite value of them. `mark`, `rewind` and the
-call with a fault value (`%y, %c = call ... budget B`) were removed on 2026-11-17 and are not read.
+mismatch. Only `apply` reads its argument registers, for each definite value of them. `out` and `fault` may not
+be among an `apply`'s arguments, nor be one register.
 
 ## Whole-run exit
 
@@ -148,7 +149,8 @@ call with a fault value (`%y, %c = call ... budget B`) were removed on 2026-11-1
 because the enclosing function need not return that type. When executed, its type must match the selected
 entry function's result type exactly, otherwise the named fault is `exit_type_mismatch`. A void entry cannot
 use `exit`. A successful exit has precisely the entry-return outcome, keeps output and memory, and is
-journalled for reversal. Inside `apply` it always faults with `exit_in_region`, before checking the entry type.
+journalled for reversal. Inside an applied function it always faults with `exit_in_region`, before checking
+the entry type.
 
 ## Return addresses
 
