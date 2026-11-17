@@ -85,11 +85,19 @@ class Checks(unittest.TestCase):
             'p.communicate(b"30")\np.wait(timeout=RUN_SECONDS)\n", ".join(parts)\nlock.acquire(1)\nd.get(k, 0)\n')
         self.assertEqual(checks.bare_times(self.root, [Path('run.py')]), [])
 
-    @unittest.skipUnless(DEFECTS, 'defect: hygiene skips any file that is not UTF-8, host paths in it included')
     def test_hygiene_reads_files_that_are_not_utf8(self):
         # One Latin-1 byte must not hide a home path in the rest of a text file.
         (self.root / 'notes.txt').write_bytes(b'caf\xe9 /ho' b'me/example/private\n')
         self.assertIn('host-specific path', ' '.join(checks.hygiene(self.root, [Path('notes.txt')])))
+
+    def test_hygiene_reads_wide_text_and_binary_data(self):
+        home = '/ho' 'me/example/private'
+        for data in [('first\n' + home).encode('utf-16'), ('x\n' + home).encode('utf-32'),
+                     b'\x7fELF\x00\xff\xfe\n\x85' + home.encode() + b'\x00']:
+            (self.root / 'blob').write_bytes(data)
+            self.assertEqual(checks.hygiene(self.root, [Path('blob')]), ['blob:2: host-specific path'], data)
+        (self.root / 'blob').write_bytes(b'\xff\xfe\x00\x00\x00\xd8')
+        self.assertEqual(checks.hygiene(self.root, [Path('blob')]), [])
 
     @unittest.skipUnless(DEFECTS, "defect: git's amend! subjects (commit --fixup=amend:) pass the no-WIP check on main")
     def test_amend_subject_is_rejected_on_main(self):

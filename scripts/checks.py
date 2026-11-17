@@ -25,7 +25,6 @@ def hygiene(root, names):
         r'|\.(?:pyc|pyo|log|bak|orig|rej|swp|o|bc|a|so|tar|gz|zip)$'
         r'|(?:^|/)(?:PROGRESS|TRANSCRIPT|LAST-RUN)(?:\.[^/]*)?$'
         r'|\.lock$|~$', re.I)
-    host = re.compile(r'/(?:home|Users)/[A-Za-z0-9_.-]+|[A-Za-z]:\\Users\\[^\\\s]+')
     for name in names:
         path = root / name
         if litter.search(name.as_posix()) and name.name != 'Cargo.lock':
@@ -37,14 +36,28 @@ def hygiene(root, names):
             continue
         if not path.is_file():
             continue  # a tracked deletion in a working-tree check
-        try:
-            text = path.read_text()
-        except UnicodeError:
-            continue
-        for n, line in enumerate(text.splitlines(), 1):
-            if host.search(line):
+        for n, line in enumerate(text_lines(path.read_bytes()), 1):
+            if HOST_PATH.search(line):
                 issues.append(f'{name}:{n}: host-specific path')
     return issues
+
+
+HOST_PATH = re.compile(r'/(?:home|Users)/[A-Za-z0-9_.-]+|[A-Za-z]:\\Users\\[^\\\s]+')
+# Byte-order marks of the encodings in which ASCII characters are not single bytes.
+WIDE_BOMS = [(b'\xff\xfe\x00\x00', 'utf-32'), (b'\x00\x00\xfe\xff', 'utf-32'), (b'\xff\xfe', 'utf-16'),
+             (b'\xfe\xff', 'utf-16')]
+
+
+def text_lines(data):
+    """Lines of a file (split at newlines) as text, whatever its bytes: no file is skipped for its encoding.
+
+    UTF-16/32 with a byte-order mark is decoded; every other file is read byte for byte as Latin-1, which
+    keeps each ASCII byte (all a host path pattern matches) whatever the encoding or binary content around it.
+    """
+    for bom, encoding in WIDE_BOMS:
+        if data.startswith(bom):
+            return data.decode(encoding, errors='replace').split('\n')
+    return data.decode('latin-1').split('\n')
 
 
 def literal(node):

@@ -1270,7 +1270,10 @@ fails today:
     duration of ten standard-library calls is checked (`POSITIONAL_TIMEOUTS` in `scripts/checks.py`); names
     whose positional argument is often not a duration (`dict.get`, `select`) stay keyword-only, a debt with
     the route of resolving the called object's type; the witness is an ordinary test;
-  - a file that is not UTF-8 is not scanned for host paths;
+  - a file that was not UTF-8 was not scanned for host paths. Fixed: every file is scanned, by bytes (as
+    Latin-1, which keeps every ASCII byte) or decoded when it has a UTF-16/32 byte-order mark; the witness is
+    an ordinary test, with a second for wide text and binary data. Not covered: UTF-16 without a byte-order
+    mark;
   - an `amend!` subject passes the WIP check on `main`.
 
   Open witnesses are skipped unless `BENNETT_RUN_DEFECTS=1`. Every other claimed rejection was seeded and
