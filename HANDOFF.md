@@ -46,7 +46,14 @@ The maintainer's decisions of 2026-11-17:
 `apply`, `qalloc` and `qfree` stay ("Decision the maintainer took on 2026-11-16, in the evening"); `apply` is
 the only bridge from qubits to ordinary code.
 
-The maintainer's further points, about 13:00 and 13:15 UTC:
+The maintainer's further points, about 13:00, 13:15 and 13:40 UTC:
+
+- **Memory written under `apply` (about 13:40 UTC).** The rule put to the maintainer: "memory writes made by code
+  run under `apply` do not survive it; only the returned value does." The answer: "ok I accept rule 1 in the
+  following sense: sqlite. I want to be able to apply sqlite. I understood that to be entirely possible by
+  ensuring all memory allocs are *also* simulated and applied". The runtime already has the property: musl's
+  allocator, the file model, the clock and the entropy image are ordinary device code over device memory, so under
+  `apply` they run on its private memory and are undone with it.
 
 - **Goals, not started:** "a lean proof of the executor is a medium term goal"; and, on the requirement that each
   instruction's step is a total function of the machine state, "this is a followup lemma. partial functions are
@@ -81,7 +88,13 @@ The order of the work:
    it out and what it costs.
 5. Independent checks: an audit of the front against the model, a testing pass, and a small reference that runs
    `apply` literally by the device's construction.
-6. Then the route that replaces the front's cancelled fallback ("Next steps, in order", 4).
+6. Then the route that replaces the front's cancelled fallback ("Next steps, in order", 4): a call whose
+   arguments depend on a qubit, to an ordinary function (no quantum operation, directly or through anything it
+   calls), is applied whole with one `budget`, whatever memory it writes, allocates or frees and whatever loops
+   and calls it contains; its writes are undone when it ends and only its result survives (a console write or
+   `exit` inside is the named fault). Acceptance target: `apply` of a function running a SQLite query whose key
+   depends on a small qubit register, on a database set up by ordinary code before the `apply`, each argument
+   value compared with native SQLite. Writes that must survive the applied code are planned separately.
 
 Debts opened by step 2 (removing `mark`, `rewind`, machine states in superposition and the call form):
 
@@ -239,11 +252,14 @@ explicitly after the separate musl build.
    addresses stay. What it measured is in git history and `experiments/journal-content/README.md`.
 4. **Cancelled on 2026-11-17: the front's fallback through marks** (the program almost verbatim under marks, the
    documented coherent class recognised by its form, and the two warnings), since `mark`/`rewind` are removed.
-   Its replacement route: the front refuses a memory write under a condition that depends on a qubit, and a call
-   under such a condition to a function that writes memory; inside the model a whole applied function may write
-   memory, call, loop and use its stack, because that memory is private to the `apply` and discarded. The route
-   lifts those refusals where the write stays inside a whole applied function, checked against the fallback
-   oracle's ignored acceptance tests; a plan comes before any building. What follows is the record of the
+   Its replacement route (the maintainer's decision of about 13:40 UTC, "Resumed on 2026-11-17"): a call whose
+   arguments depend on a qubit, to an ordinary function, is applied whole with one `budget`, whatever memory it
+   writes, allocates or frees and whatever loops and calls it contains; its writes are undone when it ends and
+   only its result survives. Today the front applies a function only if LLVM proved it reads memory only, and
+   refuses a qubit-dependent call to one that writes memory; the route lifts that. Acceptance target: SQLite
+   under `apply`, a query whose key depends on a small qubit register, each argument value compared with native
+   SQLite. Writes that must survive the applied code (an inline store under a qubit-dependent condition that
+   later code reads; the fallback oracle's ignored acceptance tests) are planned separately. What follows is the record of the
    fallback as built up to `f81a70a`.
    Independent oracle prepared before the fallback (`front/tests/tests/fallback_oracle.rs`,
    `front/tests/tests/fallback_support/native.rs`, fixtures and explanation in
