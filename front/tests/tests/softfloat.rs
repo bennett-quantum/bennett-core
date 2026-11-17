@@ -173,9 +173,9 @@ fn prefixed_runtime(dir: &Path) -> PathBuf {
 
 /// Noncanonical x87 operands (pseudo-denormals, unnormals, unnormal zeros, pseudo-infinities, pseudo-NaNs)
 /// read as x87 reads them in every long double operation of the runtime: each result bit equals the native
-/// program's wherever that runs x87 instructions (`float_noncanonical_x87.c`). glibc's `fmal` and `roundl` and
-/// libgcc's `__truncxfhf2` are software natively and read the encodings at face value; they still differ, and
-/// the test notices if that changes.
+/// program's wherever that runs x87 instructions (`float_noncanonical_x87.c`), and in glibc's software
+/// `roundl`, which the runtime follows. glibc's `fmal` and libgcc's `__truncxfhf2` are software natively and
+/// read the encodings at face value; they still differ, and the test notices if that changes.
 #[test]
 fn noncanonical_long_double_operands_read_as_x87_reads_them() {
     let dir = out_dir().join("float-noncanonical-x87");
@@ -193,7 +193,7 @@ fn noncanonical_long_double_operands_read_as_x87_reads_them() {
     let report = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "noncanonical operands differ from x87:\n{report}");
     assert!(report.contains("unexpected mismatches: 0"), "{report}");
-    for op in ["fmal-yyx", "roundl", "to-f16"] {
+    for op in ["fmal-yyx", "to-f16"] {
         let line =
             report.lines().find(|line| line.starts_with(&format!("{op} "))).unwrap_or_else(|| panic!("{report}"));
         assert!(line.ends_with(" library") && line.split(' ').any(|n| n.split('/').next() != Some("0")), "{line}");

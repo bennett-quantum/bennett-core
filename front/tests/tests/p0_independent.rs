@@ -136,7 +136,6 @@ fn an_unsupported_encoding_is_nan() {
 }
 
 #[test]
-#[ignore = "defect: roundl of a tiny unnormal gives NaN instead of native glibc's zero (known debt)"]
 fn round_of_an_unnormal_matches_native_software() {
     witness("round_unnormal");
 }

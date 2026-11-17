@@ -533,7 +533,7 @@ long double fmal(long double a, long double b, long double c) {
 ROUND(floor, softfloat_round_min)
 ROUND(ceil, softfloat_round_max)
 ROUND(trunc, softfloat_round_minMag)
-ROUND(round, softfloat_round_near_maxMag)
+ROUND_SSE(round, softfloat_round_near_maxMag)
 ROUND_SSE(roundeven, softfloat_round_near_even)
 ROUND(rint, softfloat_round_near_even)
 ROUND(nearbyint, softfloat_round_near_even)
@@ -543,11 +543,11 @@ ROUND(nearbyint, softfloat_round_near_even)
  * clears the bits below, and it never reads the integer bit, so it takes an encoding no arithmetic produces
  * at face value. Below the largest exponent this follows it bit for bit (measured against glibc on every
  * sign and exponent: `front/tests/c/p0_x87_matrix.c`, mode `rounding`). From exponent 0x3FFF + 63 the
- * value is returned. From 0x3FFF the significand is rounded to even in place, a carry out of it giving
- * 0x8000000000000000 with the exponent one higher, so an unnormal stays an unnormal unless a carry reaches
- * the integer bit. At 0x3FFE the result is 1 (signed) when the high 32 bits of the significand exceed
- * 0x80000000 or the low 32 bits are not 0, glibc's test for the interval (0.5, 1), which an unnormal can
- * pass. Below, a zero of the same sign. At the largest exponent glibc returns x + x, an x87 addition, which
+ * value is returned. From 0x3FFF the significand is rounded to even in place, so an unnormal stays an
+ * unnormal unless a carry reaches the integer bit (glibc's carry out of the significand, into the exponent,
+ * cannot happen without the integer bit and is left out). At 0x3FFE the result is 1 (signed) when the high
+ * 32 bits of the significand exceed 0x80000000 or the low 32 bits are not 0, glibc's test for the interval
+ * (0.5, 1), which an unnormal can pass. Below, a zero of the same sign. At the largest exponent glibc returns x + x, an x87 addition, which
  * reads a pseudo-infinity or pseudo-NaN as an invalid operand: the indefinite, as `x80_of` gives.
  * Canonical operands take SoftFloat's rounding, which gives the same results on them. */
 static extFloat80_t roundeven_face_value(extFloat80_t x) {
@@ -556,13 +556,7 @@ static extFloat80_t roundeven_face_value(extFloat80_t x) {
   if (exponent >= 0x3FFF + 63) return x;
   if (exponent >= 0x3FFF) {
     uint64_t one = UINT64_C(1) << (0x3FFF + 63 - exponent), half = one >> 1;
-    if (x.signif & (one | (half - 1))) {
-      x.signif += half;
-      if (x.signif < half) {
-        x.signif = UINT64_C(0x8000000000000000);
-        ++x.signExp;
-      }
-    }
+    if (x.signif & (one | (half - 1))) x.signif += half;
     x.signif &= ~(one - 1);
     return x;
   }
@@ -577,6 +571,47 @@ long double roundevenl(long double a) {
     return of_x80(roundeven_face_value(x));
   }
   return of_x80(extF80_roundToInt(x80_of(a), softfloat_round_near_even, false));
+}
+
+/* roundl. glibc's is software as well (ldbl-96), with its own bit operations on the two 32-bit halves of the
+ * significand, which also never read the integer bit; this follows them bit for bit below the largest
+ * exponent (measured on every sign and exponent: `front/tests/c/p0_x87_matrix.c`, mode `rounding`). Below
+ * exponent 0x3FFE the result is a zero of the same sign, at 0x3FFE it is 1 (signed) whatever the
+ * significand. From 0x3FFF to 0x3FFF + 30 an integral value is returned as it is; otherwise half is added
+ * at the place of the binary point, the bits below it are cleared and the integer bit is set. From
+ * 0x3FFF + 31 to 0x3FFF + 62 the same is done in the low half, with a carry into the high half, and the
+ * integer bit is left as it is. Above, the value is returned. glibc's carries into the exponent cannot happen
+ * without the integer bit and are left out. */
+static extFloat80_t round_face_value(extFloat80_t x) {
+  int_fast32_t exponent = (int_fast32_t)(x.signExp & 0x7FFF) - 0x3FFF;
+  uint32_t high = (uint32_t)(x.signif >> 32), low = (uint32_t)x.signif;
+  if (exponent > 62) return x;
+  if (exponent < 0) {
+    bool one = exponent == -1;
+    return (extFloat80_t){.signif = one ? UINT64_C(0x8000000000000000) : 0,
+                          .signExp = (uint16_t)((x.signExp & 0x8000) | (one ? 0x3FFF : 0))};
+  }
+  if (exponent < 31) {
+    uint32_t fraction = UINT32_C(0x7FFFFFFF) >> exponent;
+    if (!((high & fraction) | low)) return x;
+    high = ((high + (UINT32_C(0x40000000) >> exponent)) & ~fraction) | UINT32_C(0x80000000);
+    low = 0;
+  } else {
+    uint32_t fraction = UINT32_C(0xFFFFFFFF) >> (exponent - 31);
+    if (!(low & fraction)) return x;
+    uint32_t sum = low + (UINT32_C(1) << (62 - exponent));
+    if (sum < low) ++high;
+    low = sum & ~fraction;
+  }
+  x.signif = (uint64_t)high << 32 | low;
+  return x;
+}
+long double roundl(long double a) {
+  extFloat80_t x = x80_bits(a);
+  if (__builtin_expect(noncanonical80(x), 0) && (x.signExp & 0x7FFF) != 0x7FFF) {
+    return of_x80(round_face_value(x));
+  }
+  return of_x80(extF80_roundToInt(x80_of(a), softfloat_round_near_maxMag, false));
 }
 
 /* fmin and fmax (`llvm.minnum`, `llvm.maxnum`): what clang's x86-64 code computes for them, which is not a

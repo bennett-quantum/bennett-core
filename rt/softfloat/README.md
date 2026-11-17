@@ -102,8 +102,9 @@ comparisons and `unordered`, conversions to `float`, `double`, every integer wid
 `floorl`, `ceill`, `truncl`, `rintl`, `nearbyintl`, `fminl`, `fmaxl`, `powi`. Every result bit agrees with
 the native program, NaNs included; with the runtime before this check, 2,198 of those results differed.
 Three routines are software natively and read the encodings at face value, so they still differ, by design: glibc's
-`fmal` and `roundl` and libgcc's truncations to `_Float16` and `__bf16` (there is no x87 instruction for
-them). `float_runtime_exact.c` now expects noncanonical differences only for those.
+`fmal` and libgcc's truncations to `_Float16` and `__bf16` (there is no x87 instruction for them).
+`float_runtime_exact.c` now expects noncanonical differences only for those. glibc's `roundl` and
+`roundevenl` are software too; since 2026-11-17 the runtime follows their bit operations (below).
 
 Cost, device steps of one operation on normal operands at `-O2` (whole probe: operand loads and the
 result's bits included): add 89 to 101, mul 77 to 89, div 144 to 156, `<` 52 to 62, `==` 28 to 38, to
@@ -190,7 +191,18 @@ pseudo-denormal cases in a first version of the probe. Cost on `float_long_doubl
 The already documented `roundl`, half and bfloat software differences each now have a minimal ignored
 witness too (`round_of_an_unnormal_matches_native_software`, `half_conversion_of_an_unnormal_matches_native_software`,
 `bfloat_conversion_of_an_unnormal_matches_native_software`): exponent 1/significand 1 becomes zero
-natively and NaN on the device, at both levels. `fmal`'s previously documented noncanonical differences
+natively and NaN on the device, at both levels. **Fixed for `roundl`** (beyond the pass's list, the same
+cause as `roundevenl`): glibc's ldbl-96 `roundl` works on the two 32-bit halves of the significand and never
+reads the integer bit; the runtime follows it on every noncanonical encoding below the largest exponent
+(`round_face_value`, glibc's quirks included: at exponent 0x3FFE the result is 1 whatever the significand,
+and rounding in the high half sets the integer bit, in the low half leaves it). The matrix's `rounding`
+mode now checks `roundl` too (3,407,872 checks per level with `roundevenl`, all agree), the main matrix meets
+it on all inputs (2,388,300 checks), and `float_noncanonical_x87.c` expects it to agree. Mutants caught by
+the sweep: no integer bit set (799 differences), no carry into the high half (204), no 0x3FFE case (32).
+glibc's carries into the exponent cannot happen without the integer bit and are not written (in
+`roundevenl`'s too, where an earlier version kept one). Cost: `float_long_double.c` 2,119,646 steps at
+`-O0` and 1,843,304 at `-O2` (+68 and +88 against the previous step, measured on a base two machine commits
+older), `float_long_double_programs.c` unchanged. `fmal`'s previously documented noncanonical differences
 remain covered by the existing runtime sweep; this pass's canonical fma probes agree.
 
 The same pass's `crates/ir/tests/p0_angles.rs` checks all three axes in four register/memory/control

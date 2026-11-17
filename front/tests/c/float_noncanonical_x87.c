@@ -10,9 +10,10 @@
  * operation.
  *
  * Where the native program runs x87 instructions (arithmetic, comparisons, conversions, sqrt, rounding to an
- * integral value, glibc's x87 fminl and fmaxl), every result bit must agree, NaNs included. Three routines
- * are software natively and read encodings at face value, so they differ there by design (`library`):
- * glibc's fmal and roundl, and libgcc's __truncxfhf2 (there is no x87 conversion to _Float16).
+ * integral value, glibc's x87 fminl and fmaxl), every result bit must agree, NaNs included; also for glibc's
+ * roundl, which is software and reads encodings at face value, as the runtime's now does. Two routines are
+ * software natively and still differ there (`library`): glibc's fmal and libgcc's __truncxfhf2 (there is no
+ * x87 conversion to _Float16).
  * The exit status is the number of mismatches outside `library`, capped at 100. */
 
 #include <math.h>
@@ -157,7 +158,7 @@ int main(void) {
     LD(25, "floorl", floorl(va), rt_floorl(v));
     LD(26, "ceill", ceill(va), rt_ceill(v));
     LD(27, "truncl", truncl(va), rt_truncl(v));
-    LIB_LD(28, "roundl", roundl(va), rt_roundl(v));
+    LD(28, "roundl", roundl(va), rt_roundl(v));
     LD(29, "rintl", rintl(va), rt_rintl(v));
     LD(30, "nearbyintl", nearbyintl(va), rt_nearbyintl(v));
     LD(31, "powi3", __builtin_powil(va, 3), rt___powixf2(v, 3));

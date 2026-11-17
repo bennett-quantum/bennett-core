@@ -1305,9 +1305,9 @@ the ordinary frontend run without changing its domain or assertions.
   its five wrong results were fixed on 2026-11-17 and their witnesses run by default: `powi(x, 1)` returns
   noncanonical encodings unchanged, as libgcc does; `roundevenl` follows glibc's software bit operations on
   them (every sign and exponent compared natively); `is.fpclass` follows LLVM's x86-64 expansion mask by
-  mask (`isfinite`/`isnan` at `-O0`; all 1,024 masks compared natively, `fp_class.rs`). The already
-  documented `roundl` and half/bfloat software conversion differences have minimal ignored witnesses, run and
-  observed failing.
+  mask (`isfinite`/`isnan` at `-O0`; all 1,024 masks compared natively, `fp_class.rs`); and, beyond the
+  pass's list, `roundl` follows glibc's software bit operations as `roundevenl` does. The documented half and
+  bfloat software conversion differences have minimal ignored witnesses, run and observed failing.
   Exact coverage and excluded cases: `rt/softfloat/README.md`, "Independent conformance pass".
 - Front input admission (`front/tests/tests/p0_invalid_input.rs`): since 2026-11-17 an ordinary parse
   failure is named "the input is not valid LLVM IR" after LLVM's diagnostic (status 2 as before), and an
@@ -1473,8 +1473,9 @@ the ordinary frontend run without changing its domain or assertions.
   refused. `long double` encodings no arithmetic produces (pseudo-denormals, unnormals, pseudo-infinities,
   pseudo-NaNs) are read as x87 reads them in every operation since 2026-11-16, at 4 to 5 device steps per
   operand (+10.0% to +11.7% steps on the long-double tests, `rt/softfloat/README.md`); glibc's `fmal` and
-  `roundl` and libgcc's truncations to `_Float16`/`__bf16`, software natively, read them at face value and
-  still differ there (route if that matters: follow each routine's bit tests on such operands). Where C
+  libgcc's truncations to `_Float16`/`__bf16`, software natively, read them at face value and still differ
+  there (route if that matters: follow each routine's bit tests on such operands, as `roundl` and
+  `roundevenl` now do). Where C
   leaves a result open (`fmin` of two zeros, out-of-range conversions) the device follows the native x86-64
   program, so a different native target would disagree there.
 - The numbers in `docs/AUDITION.md` are each proposal's own and were not recomputed.
