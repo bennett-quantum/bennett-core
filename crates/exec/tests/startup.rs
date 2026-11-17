@@ -25,7 +25,6 @@ fn stopped_at_entry(module: &ValidModule, entry: &str, args: &[u64], options: Op
             }
             assert_eq!(exec.outcome(), Some(expected));
             assert_eq!(exec.stats().steps, 0);
-            assert_eq!(exec.stats().world_steps, 0);
             assert_eq!(exec.tape(), b"");
             assert_eq!(exec.stats().journal_bytes, reversible.then_some(0));
             let mut stopped = initial.clone();
@@ -74,9 +73,9 @@ fn static_data_leaves_too_little_room_for_the_entry_parameters() {
 #[test]
 fn a_zero_budget_stops_before_the_first_instruction_or_terminator() {
     let module = load(
-        "memory 64\nfunc @main() -> i8 {\nentry:\n %v = add i8 1, 2\n ret %v\n}\nfunc @empty() {\nentry:\n ret\n}\nfunc @fault() {\nentry:\n fault unreachable\n}\nfunc @history() {\nentry:\n %h = mark\n rewind %h\n ret\n}\n",
+        "memory 64\nfunc @main() -> i8 {\nentry:\n %v = add i8 1, 2\n ret %v\n}\nfunc @empty() {\nentry:\n ret\n}\nfunc @fault() {\nentry:\n fault unreachable\n}",
     );
-    for entry in ["main", "empty", "fault", "history"] {
+    for entry in ["main", "empty", "fault"] {
         stopped_at_entry(
             &module,
             entry,

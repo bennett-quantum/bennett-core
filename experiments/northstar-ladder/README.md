@@ -1,5 +1,13 @@
 # North Star ladder: C rungs 1–3
 
+**Since 2026-11-17 the second implementation below is gone.** The independent interpreter was the
+whole-world test reference, a model of `mark`, `rewind` and machine states in superposition; it was removed
+with them. Rungs 1 and 2 are now checked on `bennett-exec` against native only, and the runner runs those
+stages alone; the "both implementations" results below are the measurements of 2026-11-16/17 and are not
+repeated. Restoring the second implementation is a debt (`HANDOFF.md`, "Next steps"): an independent
+reference of the current device language, of which the planned reference that runs `apply` by its
+construction can be the start.
+
 Rung 2 measured on 2026-11-17 against production base `bd2e384`, with the
 persistent independent interpreter in this revision. **The C portion of all
 three rungs now passes as worded** against [NorthStar §8](../../docs/NorthStar.md).

@@ -22,7 +22,6 @@ fn well_formed_programs_are_accepted() {
         "%q = qalloc 64\nqfree %q\nret 0",
         "br done(i8 0)\ndone(i8 %x):\nret %x",
         "exit i8 0",
-        "%m = mark\nrewind %m\nret 0",
         "%q = qalloc 8\n%m = measure %q\nret %m",
         "%m = measure i8 [16]\nret %m",
         "%a = add i64 16, 0\n%m = measure i1 [%a]\n%w = zext i1 %m to i8\nret %w",
@@ -42,11 +41,6 @@ fn malformed_programs_have_the_expected_validation_problem() {
         ("%v = zext i8 1 to i8\nret %v", Problem::CastWidths { op: "zext", from: 8, to: 8 }),
         ("%q = qalloc 1\nh %q[1]\nret 0", Problem::QubitOutOfRange { bit: 1, bits: 1 }),
         ("%q = qalloc 1\nx %q[0] ctrl %q[0]\nret 0", Problem::RepeatedQubit("q".into(), 0)),
-        ("%v = add i64 0, 0\nrewind %v\nret 0", Problem::NotAMark("v".into())),
-        // Mark handles are opaque (2026-11-16): only a rewind may use one.
-        ("%m = mark\n%v = add i64 %m, 1\nrewind %m\nret 0", Problem::HandleUse("m".into())),
-        // A value defined between a mark and its rewind is not used after the rewind (2026-11-16).
-        ("%m = mark\n%v = add i8 1, 2\nrewind %m\nret %v", Problem::RewoundUse("v".into())),
         // `measure iN [ADDR]` takes an i64 address and gives an iN (2026-11-16).
         (
             "%a = add i32 16, 0\n%m = measure i8 [%a]\nret %m",

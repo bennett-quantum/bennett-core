@@ -78,8 +78,6 @@ pub enum Expected {
     RegisterOfAtLeast(u32),
     /// An integer or a register of this width.
     IntOrRegister(u32),
-    /// An integer of any width.
-    AnyInteger,
 }
 
 impl fmt::Display for Expected {
@@ -89,7 +87,6 @@ impl fmt::Display for Expected {
             Expected::AnyRegister => write!(f, "a register"),
             Expected::RegisterOfAtLeast(bits) => write!(f, "a register of at least {bits} qubits"),
             Expected::IntOrRegister(bits) => write!(f, "i{bits} or q{bits}"),
-            Expected::AnyInteger => write!(f, "an integer"),
         }
     }
 }
@@ -214,18 +211,6 @@ pub enum Problem {
     /// A register that is both an `apply` target and an argument, or both targets.
     #[error("`%{0}` is used twice among the arguments, output and fault register")]
     RegionAlias(String),
-    /// A `rewind` whose handle is not the result of a `mark` in the same function.
-    #[error("`%{0}` is not defined by a `mark`")]
-    NotAMark(String),
-    /// A mark's handle used other than as the handle a `rewind` names: handles are opaque.
-    #[error("`%{0}` is a mark's handle, which only `rewind` may use")]
-    HandleUse(String),
-    /// A use, after a `rewind`, of a value defined between its mark and the rewind: the rewind restored the
-    /// value to what it was at the mark.
-    #[error(
-        "`%{0}` is used after a `rewind` that un-ran its definition (it was defined between the mark and the rewind)"
-    )]
-    RewoundUse(String),
     /// A memory qubit's bit index at or above `MEMORY_QUBIT_BITS`.
     #[error("bit {0} of a memory qubit is not below 128")]
     MemoryBitOutOfRange(u8),

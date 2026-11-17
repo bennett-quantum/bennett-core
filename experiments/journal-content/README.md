@@ -515,6 +515,11 @@ The other 67 runs: 49 have no copy-Irreducible positions, of which 46 are entire
 
 ## Global-memory writes on the worlds machine
 
+**Removed on 2026-11-17** with `mark`, `rewind` and machine states in superposition: the drivers
+(`front/tests/tests/journal_global.rs`, `journal_global_check.rs`), the C workloads (`front/tests/c/journal_global.c`)
+and the exec crate's independent check of this section. The measurements below are those of 2026-11-16; the
+commands no longer run (the last commit that has them is `f81a70a`).
+
 The front still refuses these coherent writes. The new experiment lowers **ordinary C functions**
 from `front/tests/c/journal_global.c` with the normal `CLANG_FLAGS` and front pipeline, then appends
 hand-written device drivers (`front/tests/tests/journal_global.rs`). It measures seven functions at

@@ -13,10 +13,8 @@ import time
 
 ROOT = Path(__file__).resolve().parents[2]
 TESTS = {
-    1: ["scalar_c_exhaustive_int8_native_forward_and_reverse",
-        "scalar_c_independent_exhaustive_int8_native_and_reverse"],
-    2: ["hashtable_native_forward_and_byte_exact_reverse",
-        "hashtable_independent_native_forward_and_byte_exact_reverse"],
+    1: ["scalar_c_exhaustive_int8_native_forward_and_reverse"],
+    2: ["hashtable_native_forward_and_byte_exact_reverse"],
     3: ["musl_hello_native_reset_and_deterministic_tape_replay"],
 }
 SOURCES = {

@@ -1,10 +1,10 @@
 # HANDOFF
 
-State on 2026-11-17, about 12:40 UTC: **resumed by the maintainer the same day; see "Resumed on 2026-11-17"
-below before anything else.** Running: one job on `wip/model`, making per-argument evaluation the only
-definition of `apply` and then removing `mark`/`rewind` and what goes with them (steps 1 and 2 of the order in
-that section). The sections further down still narrate the journalled machine as it stood at `f81a70a`; they are
-deleted step by step as the machinery goes.
+State on 2026-11-17: **resumed by the maintainer the same day; see "Resumed on 2026-11-17" below before
+anything else.** Steps 1 and 2 of the order there are done on `wip/model`: `apply` is evaluated for each definite
+value of its arguments only, and `mark`, `rewind`, machine states in superposition and the call with a fault value
+are removed. Next: step 3 (`qfree` as partial trace and the named fault for ordinary code touching qubits in
+memory).
 
 ## Resumed on 2026-11-17
 
@@ -68,11 +68,12 @@ The order of the work:
 
 1. Done: the executor computes `apply` by evaluation for each definite value of the arguments only; the mode
    switch, the comparison mode and the computation through marks are gone.
-2. `mark`/`rewind` leave the reader, writer, validator, executor, CLI, examples, fixtures and tests, with what
-   exists only for them: a call passing a qubit register to ordinary code outside `apply`; the call form
+2. Done: `mark`/`rewind` left the reader, writer, validator, executor, CLI, examples, fixtures and tests, with
+   what existed only for them: a call passing a qubit register to ordinary code outside `apply`; the call form
    returning a fault code; deadlines and clocks on marks; leftovers; the scheduling and joining of machine states
-   in superposition. Stepping an ordinary run backwards stays where it is exact (ordinary steps, gates, `apply`)
-   and refuses at a measurement.
+   in superposition; also the memory overlay, which existed only so that such machine states could share one
+   base. Stepping an ordinary run backwards stays where it is exact (ordinary steps, gates, `apply`) and refuses at
+   a measurement.
 3. `qfree` as partial trace (the simulator keeps a nonzero released register as an unnamed part of the stored
    state and reports it; the program never sees the report), and the named fault for ordinary code touching a
    byte that holds qubits.
@@ -81,6 +82,18 @@ The order of the work:
 5. Independent checks: an audit of the front against the model, a testing pass, and a small reference that runs
    `apply` literally by the device's construction.
 6. Then the route that replaces the front's cancelled fallback ("Next steps, in order", 4).
+
+Debts opened by step 2 (removing `mark`, `rewind`, machine states in superposition and the call form):
+
+- **A second implementation of the device language.** The independent whole-world test interpreter modelled the
+  removed machinery and went with it; the C rungs 1 and 2 (`experiments/northstar-ladder/`), the musl entry-frame
+  edges and several executor tests lost it as a second executor and keep their native or hand-worked
+  expectations. Route: an independent reference of the current language, starting from the reference that runs
+  `apply` by its construction (step 5).
+- **The fallback oracle's self-tests on a fallback-shaped `store`** (`front/tests/tests/fallback_oracle.rs`, module
+  `seeded`) built the program with a call reading a register, which ordinary code may no longer do; they were
+  removed, and come back with the route that replaces the fallback (step 6), on a program the model expresses.
+  The self-tests on coherent programs and on applied regions stay.
 
 Not to be landed: `wip/fallback-step3`, `wip/sol-mutants-machine` and `wip/sol-mutants-machine-partial`. They
 build on what is being removed and are left where they are.
@@ -123,9 +136,9 @@ C with a few marker calls goes through stock `clang` 18, then `bennett-front`, t
 | `595339c` | `sigsetjmp`'s signal mask kept in the jump environment: the two wrong results of its testing pass fixed, checked against native on every small way to save, copy and jump |
 | Lua probe | Unmodified Lua 5.4.9 through musl: seven native stdout/status comparisons and exact reversals; a Lua predicate under hand-written `apply`, dense-checked Grover at N=4/8 (`experiments/lua-probe`) |
 
-Check it: `cargo test` (539 passed; 22 ignored, each naming its reason: heavy reference, generated or
+Check it: `cargo test` (242 passed; 3 ignored, each naming its reason: heavy reference, generated or
 hash-sample runs with their commands, witnesses of recorded defects and of questions awaiting the maintainer;
-about 9 s, no LLVM needed) and `front/test.sh` (224 passed; 31 ignored by default, each naming its reason: the
+about 9 s, no LLVM needed) and `front/test.sh` (218 passed; 26 ignored by default, each naming its reason: the
 fallback acceptance tests, waiting for the route that replaces the cancelled fallback, the C North Star ladder runs and other explicit experiments,
 musl-linked checks that need `rt/musl/build.py` first, heavy runs, and witnesses of recorded debts; needs LLVM 18, clang 18, CMake). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean.
 
@@ -195,283 +208,6 @@ explicitly after the separate musl build.
   because the goal is unmodified real programs. No design audition: the two libraries gave matching outcomes in the
   probe (`experiments/libc-probe/README.md`).
 
-## Stopped in flight on 2026-11-16
-
-Stopped at 14:26 UTC with nothing running; resumed at 15:30 UTC. Every piece of work not on `main` is on a
-`wip/` branch of the public repository; nothing unchecked is on `main`. The landing stack (ladder, entry-fix,
-replay-test, libgcc-test, files-test, mutants-ir) landed on `main` (`8cae924`..`e2320fe` and its HANDOFF
-commit) after the four checks passed on it.
-
-- **Checks job**: landed (`2ab9ebf`..`83ae722`, then `0e1b00d`). Its changed-line mutation run on the job's own
-  diff: 22 mutants, 16 caught, 5 unviable, 1 missed (see "Automatic checks (implementation)"), since caught
-  by a test of its own.
-- **Machine decisions a to d**: landed one by one, the four checks passing on each (`209d3c6` a, 5-bit fault
-  codes and `bad_longjmp`; `84d6fd4` b, opaque mark handles; `24a4169` c, no use after a rewind of a value
-  defined since its mark; `ba6ddb5` d, `measure iN [ADDR]`). Main's newer tests were migrated in the step that
-  needs it. The changed-line mutation run over a to d: 110 mutants, 83 caught, 18 unviable, 5 timeouts, 4
-  missed; every outcome is now caught or explained ("Automatic checks (implementation)"). Step e (the call
-  form with a fault value and a budget, with the afternoon's decisions), in small steps each landed alone: e1, running again charged to the run's budget (`Stats::replay_charged`; a
-  rewind whose running again would pass the budget faults `budget`, changing nothing), is built; e2, strict
-  mode named (`Options::machine_meaning`, `--machine-meaning`: no region or world stops, a dirty `qfree`
-  leaves its qubits over, `docs/DESIGN.md`, "Strict mode"), is built; e3, a rewind's un-run that meets a
-  nonzero allocation runs regardless outside strict mode (the register left over, a `LeftBehind` barrier
-  record), is built; the other state-dependent causes are debts ("Known weak spots"). e4, the mark's
-  budget (`%h = mark budget B`: a per-world bound from the mark to its rewind, and a rewind costs `B` of
-  the machine's time, `Stats::clock`; `docs/DESIGN.md`, "The mark's budget"), is built; e5, the budget
-  required where a rewind follows a read of a qubit (else `bad_rewind`; the older tests' marks migrated to
-  `budget -1`, which bounds nothing), is built; e6, the call with a fault value and a budget
-  (`%y, %c = call @f(args) budget B`, the region's rules attached, `apply` equal to mark, this call and
-  rewind-keep; `docs/DESIGN.md`, "The call with a fault value"), is built; e7, the NaN payload rule in the
-  raw libgcc sweep (`rt/libgcc/exact/compare.py`; both caller levels exit 0, every one of the 50,952
-  NaN-only tuples agreeing by the rule, nothing else differing; `rt/libgcc/README.md`), is built. All landed
-  on `main`, the four checks passing on each. The retirement of `apply`, `qalloc` and `qfree` is withdrawn
-  ("Decision the maintainer took on 2026-11-16, in the evening"). The panic reported for a
-  `measure_memory` fixture in 64 bytes of memory was not the executor's: it returns `stack_overflow` before
-  the first step (since `5515ae8`); the independent whole-world reference panicked at its own start
-  (`expect("entry fits memory")`). The reference now models the fault, and
-  `an_entry_frame_that_does_not_fit_faults_in_both_machines` steps every fixture in 64 bytes in both.
-- **Landed tonight, each step with the four checks passing on it:** from `wip/machine-finish`, the
-  journal-content observer naming what it does not follow instead of a panic, the `RewoundUse` false refusal
-  after `setjmp`, deferred checks compared by state on a hash match, the step-e testing pass's four defects,
-  no fault found by inspecting the state ever delivered as a call's code (the seam's V4b), every built un-run
-  check run regardless outside strict mode with leftovers taken back (V1 and V2 at the sites built), the
-  region copy cost counting callee-frame slots; from `wip/p0-fixes`, the infinite angle, invalid input named,
-  the a-to-d missed mutants, noncanonical x87 operands; from `wip/fp-front`, `powi(x, 1)`, `roundevenl` and
-  `roundl` on noncanonical operands, classification as LLVM's x86-64 expansion of `is.fpclass`, a crash in
-  LLVM's reader caught and named; the whole-world reference with the mark's budget and the call form
-  (`wip/sol-reference`); the C rung-2 table on an independent executor (`wip/sol-rung2`); musl authenticated
-  against its signed release and the IR mnemonic contract tests (`wip/sol-evidence`); copied `sigjmp_buf`
-  compared with glibc (`wip/sol-sigjmp`); the corpus rerun (`wip/corpus-night`).
-- **In flight:** nothing; work is stopped (see "Stopped on 2026-11-17 by the maintainer" for what is on which
-  `wip/` branch and what is owed).
-- **Testing passes done tonight (sol):** machine decisions a to d (one false refusal, fixed); step e (four
-  defects, fixed; the audition's witnesses became executor tests); the p0 fixes (four wrong results and a crash
-  in the front, fixed); machine-finish (a panic and two unbuilt sites, in flight). Still owed (by Opus, sol
-  built them): sql-oracle, checks, entry-fix, the Lua probe. Done earlier: fix-replay (sol, no wrong result),
-  fallback oracle (Opus, four accepted wrong results fixed), libgcc (Opus, none on canonical inputs), files and
-  clocks (Opus, 18 wrong results fixed).
-- **The fallback** (next step 4): not started. Ready for it: the landed oracle (`front/tests/c/fallback_oracle/`)
-  and a second, independent plan for its order of steps, kept privately for the implementer to compare with
-  its own. Starts after step e.
-- **Journal mutation job** `wip/mutants-journal` (`623d9e4`, landed): told to finish its last batch and report;
-  its test commits are on `main`.
-
-Quota rule in force: work to pace on Claude and on Codex; launch a job only while `quota` says "behind" for
-its vendor; at most two sol jobs at once.
-
-## Stopped in flight
-
-- **Lua probe, all three stages measured** (`experiments/lua-probe/README.md`): unmodified PUC-Rio
-  5.4.9 (verified upstream archive), all 32 library C sources through clang 18/musl with no front or
-  executor change. Seven scripts (arithmetic, strings, tables, closures, coroutines, protected errors,
-  integer/float formatting) agree on native stdout/status and restore the full entry snapshot exactly.
-  Forward steps 757,628–839,108; journals 14,653,004–16,218,516 bytes. A Lua polynomial predicate
-  agrees on every N=4 basis input and in superposition, including dirty output and interference;
-  uniform apply 6,018 region steps / 12,040 work, largest branch journal/overlay 31,072/45 bytes.
-  Grover N=4/8, k=0..3 passes every amplitude against independent dense matrices (error <=8.89e-16),
-  all 15 entries reverse, and both apply implementations compare equal. The separate C-marker
-  attempt is refused by name at its memory-writing Lua call; the front fallback is the route past it.
-  Full resource minima, arbitrary scripts, coherent fault boundaries and larger sizes are unmeasured.
-
-- **Rust scalar probe** (`experiments/rust-probe/README.md`): Rust 1.99.1/LLVM 23.1.1
-  textual IR reaches LLVM 18 with fixture-specific compatibility edits (range/nocreateundeforpoison,
-  branch prediction metadata; debug also trunc nuw). All five C-ABI scalar functions agree with native
-  on 197,120 exhaustive inputs and reverse to their full start snapshots. Four non-panicking debug
-  functions add 131,584 native comparisons and exact reversals; ordinary checked addition is refused
-  at the missing core panic definition. A matching LLVM 18 producer removes the format edits;
-  matching core bitcode and a panic handler/abort boundary are the next runtime steps, unmeasured.
-  No front or executor changes.
-
-- **SQLite on the device, all three stages measured** (`experiments/sqlite-on-device/README.md`): unmodified 3.54.1,
-  musl linked, OS_OTHER no-files VFS, all four footprint query shapes at N=4/8/16 agree with native on
-  stdout/status and all 112 fresh-setup results. Full runs 957,295/1,200,929/1,841,474 steps;
-  device text about 9.06 MB, final lowering 19.50–24.09 s. SQLite live/peak 101,632/107,264 bytes;
-  256 KiB SQLite heap, 4 KiB libc arena, N=4 stack minimum 155,099 bytes (one less: `stack_overflow`).
-  Full reversal restores the entry snapshot exactly at all three N; journals 19,086,335/23,956,769/
-  36,573,538 bytes, 1.184/1.184/1.179 u128 words per step. No wrong result or crash.
-  N=4 `like_note` under hand-written `apply` agrees with native on every basis and in superposition:
-  7 qubits, 4 configurations, fault zero; 36,056 region steps, 72,116 with uncomputation, largest
-  per-world journal/overlay 215,617/416 bytes. C markers still refuse the memory-writing query call;
-  no compiler/runtime changes. The 11,048-step region budget passes, one less faults only row 3.
-  Grover with the unchanged LIKE query passes N=4 for every singleton, two matches and none,
-  and N=8 for one match at k=1/2 (success 25/32, 121/128) and two at k=1, amplitude error
-  at most 7.78e-16 (two matches at N=4 stay at success 1/2, including k=1/2/3).
-  Repeated N=4 two-match / N=8 singleton calls cost 76,886 / 148,070 region steps and
-  753,471 / 1,453,019 journal bytes each, retaining no journal/overlay or extra qubits;
-  native and independent apply comparison agree.
-
-- **The musl runtime: landed** (`d8050df`..`b464c0b`; `rt/musl/README.md`). musl 1.2.5's own startup and exit run
-  on the device; its system calls are answered at one boundary function by console effects, an arena and `exit`;
-  everything else traps by name. The audit, with each case run against native, found and fixed: `malloc` faulted
-  on its first call (a `PROT_NONE` guard page), `abort` faulted (signals a program sends itself now run their
-  handlers, before the raising call returns), stdin through `readv`, a front bug that made every `scanf` program
-  fault at exit (a call through an unprototyped pointer to a non-variadic target), and `fesetround` reporting
-  success while changing nothing (a silent wrong result; non-default floating-point modes and flags now stop
-  with a named fault). An independent testing pass (sol) found eight boundary wrong results; all fixed, kept in
-  `rt/musl/tests/regress/` (`rt/musl/test.py`, 22 programs; 23 with the complex test). Corpora: see "What works". Refusals removed against
-  the prediction: GCC 40 of 52 (44 predicted; left: `__mulsc3`, `__divsc3`, `setjmp`/`longjmp`, whose musl
-  versions are assembly), c-testsuite 67 of 68 (66 predicted; left: a program declaring its own `strlen`), `ieee/`
-  6 of 9 (9 predicted; left: three complex-division checks, refused at musl's `ilogb` `#pragma STDC FENV_ACCESS`
-  and needing the complex helpers). musl's startup and exit add about 2,050 steps. The corpora took 321 s, 49 s
-  and 14 s with 6 runners on a 12-core laptop. Provisional choices unchanged (`-fno-rounding-math`; descriptor 2 a
-  named fault, except that a zero-byte write succeeds; the 1 MiB arena; `argc` 1, empty input and environment).
-- **Control schedules on the SQLite traces: measured** (`08d7799`; `experiments/sqlite-footprint/README.md`, all
-  eight workloads, independently recomputed by `check_schedule.py`). What a superposed program counter costs in
-  provided IR instructions against one mean run (a trace-derived model, not gates): exact structural alignment
-  (call path, loop iteration, block; its key order is acyclic, so it is also a valid waiting schedule) costs
-  1.07-1.18x for arith and like_name, 4.85x for like_note, 3.0-3.1x for scan; padding loops to their observed
-  maxima costs 10-77x; every reached block at every step 366-2,940x. The greedy waiting schedule's 7.96x was the
-  greedy heuristic, far from that optimum; the 2.04x in `docs/AUDITION.md` is not reproduced (its merge details
-  are not recorded). Held-out halves of the input show learned bounds are not sound: exact structure misses
-  75-333 held-out scan rows. Every family still depends on observed runs; what a compiler could build without
-  them is tabulated there.
-- **Journal content: measured** (`9817fe0`, `c17bde9`, depth-one recomputation in `e7a571c`; `experiments/journal-content/README.md`). A hook in the
-  executor, off by default and shown to change nothing, classifies every journal word of a coherent region as the
-  same on every branch, recoverable from live state, or irreducible, under two alignments. Answer for these
-  workloads: keeping history under superposition costs a constant factor, not orders of magnitude. In every loop
-  that repeats, irreducible words grow linearly with steps (0.41 to 0.86 per step against 1.23 to 1.36 journal
-  words per step: a saving of 1.4 to 3.1 times). Over 256 branches and 1/2/4/8 chained lookups the irreducible
-  share is 37/50/59/64 % for binary search, 36/46/51/53 % for a B-tree, 0/5.5/17/23 % for a hash table; of 67
-  other coherent runs, 49 have none. It is an upper bound: only values that can be copied are credited, not
-  values that could be recomputed. **Depth-one recomputation now measured** on the same workloads and both
-  alignments: linear growth survives, at 0.840/0.388/0.711/0.781 irreducible words per step for binary search,
-  hashing, B-tree and stack writes (copy-only: 0.862/0.405/0.749/0.810). Re-evaluating the old value's producer
-  from live copies of its operands removes 199 Slot positions and 42 Jump parameters across the lookups; no
-  additional Store positions. Copy-only and depth-one classification remain available, with all 428 old data
-  rows reproduced exactly. **Unbounded producer chains and forward instruction time now measured**, on all
-  83 workloads and both alignments. Corrected live-state DAG slopes are 0.848/0.341/0.606/0.641; adding
-  earlier already counted classical/retained journal words gives 0.308/0.033/0.331/0.347. At 8 reps that costs
-  1506782/362752/1020248/572976 re-evaluated instructions across 256 branches, averaging
-  9.279/18.645/4.896/10.131 per recovered word. This is a greedy local tape with one common producer/source
-  circuit per position, not optimal replay. After fixing the independent check's completeness gap, all corrected
-  lookup counts and slopes agree with its greedy rerun, both alignments. Raw step words keep chain context even when an
-  instance has a first-write, unchanged or first-store witness; a common circuit can still recover the
-  whole position. Copy-only and depth-one are unchanged. At reps 8 tape retains 322/7/725/212 positions;
-  282/0/622/150 have individual recipes. Binary/B-tree's other 40/103 words need control-presence replay;
-  all seven hash residuals hit missing `%call` origins. Writes also have changed-memory, missing-call and
-  unavailable whole-word origins. These corrected diagnostics replace the inflated counts that mixed
-  missing context with real producer restrictions. Linear growth survives the measured common-circuit
-  witness, but unavoidable linear information loss is not established. Guarded producer/call replay,
-  global pebbling and DAG scratch/cleanup cost remain open. Global-memory writes are measured below. Tables and exact rules:
-  `experiments/journal-content/README.md`, `chains.tsv`. All 49 zero-copy-Irreducible other runs stay so;
-  46 are entirely Same, three also use copies (corrected from the older prose using the unchanged tables).
-  **Global writes measured on the worlds machine** (`front/tests/tests/journal_global.rs`,
-  `experiments/journal-content/global.tsv`): ordinary lowered C log/hash/B-tree updates plus the four existing
-  lookups, 256 inputs, 1/2/4/8 reps, all four classifiers and both alignments. The hook still follows only
-  `apply`: its callee journal is the explicitly qualified proxy; real mark/call/rewind driver journal,
-  overlay and rewind costs use Stats. Outer mark/read/root-return/rewind history is not classified;
-  per-world provenance/collector forking and capture at rewind barriers is the route. At 8 reps log tape I=0
-  (copy I=56), hash=91, B-tree A/B=3344/1167; fitted tape I/step 0/.407/.992(A) or .295(B).
-  Global writes alone do not imply a growing retained tape; the positive residuals are common-circuit
-  witness limits, not information lower bounds. Actual 256-world peak journal/overlay bytes at 8 reps:
-  log 818688/5976, hash 1159024/11374, tree 12503757/6188. Rewind work 39424/65317/941736 steps, no reruns.
-  A late-split eight-configuration sweep compares copied overlays/journals at three classical memory sizes; counters
-  are independent of extra memory. Native results, final apply/world amplitudes and memory, full reversal,
-  off/on state/Stats and byte-retention checks pass. Old lookup C lowers byte-identically and all 1428
-  published chain/tape rows reproduce exactly; old tables/classifiers are unchanged.
-  Its independent check (`cce2bcc`, Opus) reproduced every number byte for byte, found every credited word sound and
-  none missed on all 28 runs, and found the `apply` callee journal record for record the worlds' own journal (words
-  differ only by a constant stack offset per kind). It qualifies the conclusion: it rests on the log, whose writes
-  destroy nothing branch-dependent; where global writes destroy branch-dependent bytes the residual stays (hash:
-  12 of 16 store positions irreducible; B-tree A: 9 of 57 copy-only, 5 with the tape).
-  Heavy chain measurements are ignored by default. After integrating the observer with `setjmp`/`longjmp`
-  on base `ff338cb`, all 1,992 then-published data rows reproduced exactly; the later completeness fix
-  changes only the chain/tape rows (now 1,428), with all 428 copy/depth-one rows unchanged. Jump
-  words have distinct indexed roles; all 32 bytes of each `setjmp` write are tracked for current-memory
-  checks, and `longjmp` control words remain opaque to scalar aliases. Executor regressions cover these
-  rules and raw/counts-only observer state/statistics equivalence. The independent check of the original copy observer
-  (`5d41748`, sol) reproduced every table and showed the hook off, the hook on and the executor before the hook
-  give identical journals, outcomes and step counts on 127 tests; it found the classifier could lose a common
-  live copy (unsorted lists under a binary search; no published number changes) and one slope rounded twice;
-  both fixed in `613b925`.
-
-- **The complex helpers now follow libgcc** (`rt/libgcc/README.md`, `VENDOR.md`; decision C below).
-  GCC 13.3.0's six helpers are vendored unmodified with GPL 3 and the GCC Runtime Library Exception;
-  the official GNU archive's checksum and signature are verified. The corpus's clang native link pulls
-  all six members from GCC 13.3's static libgcc.a; the installed GCC 14 shared libgcc is not its reference.
-  Distribution patches do not touch these helpers. The front builds the original libgcc2.c six times,
-  links only needed helpers and lowers them over SoftFloat. **All six are self-contained, including
-  `__divxc3`**, so long-double division no longer needs musl's `logbl`/`ilogbl`, and works without musl.
-  The obsolete compiler-rt tree has no remaining build/test consumer and is removed.
-  Raw comparison: 422,144 tuples/helper (160,000 directed + 262,144 random), 2,532,864 total,
-  2,898,176,872 steps: **no non-NaN difference**, both x87 helpers exact including NaN bits.
-  **Remaining raw-bit debt:** 50,952 float/double results differ only in NaN sign/payload;
-  the strict sweep fails, so complete requested bit equality is not claimed. **Cause measured:**
-  the same unchanged source on hardware also differs with GCC/Clang and Clang `-O0`/`-O2`.
-  The apparent additional device division gap is native SSE `fadd`/`fmul` operand commutation:
-  executing the production IR on hardware with those two operations' operand order fixed
-  matches **all 2,532,864 device results, every NaN bit included**. Quiet-NaN witnesses and
-  C/LLVM latitude are recorded in `rt/libgcc/exact/nan_witness.c` and the README. No arithmetic
-  lowering defect demonstrated by this sample. If archive-identical NaNs are still required,
-  route: preserve that archive's individual arithmetic operand choices through compilation and
-  SoftFloat lowering, with upstream source unchanged. Neither using Clang as the oracle nor
-  switching to `-O0` removes the debt. Counts by helper and reproduction:
-  `rt/libgcc/README.md`. The sweep uses canonical x87 encodings; noncanonical ones (unnormals,
-  pseudo-denormals/infinities/NaNs from raw memory) are read as x87 reads them since 2026-11-16
-  (`rt/softfloat/README.md`); non-default rounding and readable flags still need the environment
-  fallback. `__divxc3` itself needs no
-  further library helper or build step in the default environment.
-  **Remaining corpus debt:** `cdivchkf`, `cdivchkd`, `cdivchkld` call `ilogb`/`ilogbl` themselves;
-  musl's `FENV_ACCESS` still stops the normal route. Route: the front's fallback must implement constrained
-  floating-point operations and their observable environment; the maintainer keeps the named refusal
-  until then. A diagnostic that removes only those pragmas in scratch copies checks helper accuracy,
-  and does not count as a production corpus pass: GCC 14.2 `cdivchkf`/`cdivchkd`/`cdivchkld`
-  return 0, empty stdout, in 7,045/7,262/9,238 steps; native `-O0`/`-O2` also pass. This supersedes the 2026-11-15 compiler-rt experiment,
-  whose divisions failed these checks even natively; libgcc is now the reference for all six helpers.
-- **Constructor startup, after its independent testing pass** (`40b04b4`, Muse; `exit` and the console call held
-  under every probe). It found two wrong results, both fixed in `e13a6c8` and now regression tests: at equal
-  priority the device ran explicit `.init_array`/`.fini_array` contributions after the special-array entries
-  (the front now follows the order LLVM emits and GNU ld links, measured against native builds); and a reference
-  to the array bounds from a function the optimiser deletes handed startup to C, so a constructor silently never
-  ran (ownership is now decided on the references that survive the optimiser). Order at equal priority follows a
-  native build of the linked module; separately compiled objects linked natively can differ (C leaves it
-  unspecified; `docs/DESIGN.md`). Safe refusals noted by the pass: a constructor through an alias; a null entry
-  in a section array; an array variable in `.init_array` with alignment above 8; `front/include/bennett.h`
-  cannot be included from C++ (`_Bool`). The independent check of the fix (`9d40852`, sol) found it introduced
-  a silent wrong result: when the optimiser folds a live read of `__init_array_start[0]` (or a fini bound) into a
-  direct call, no bound reference survives, so the front wraps the entry as if C did not own startup and
-  constructors or destructors run twice (`iim` and 2 where native gives `im` and 1). Fixed in `713d996`: the
-  bounds stay undefined through the optimiser, as in a native compile, and are defined afterwards as a linker
-  would, so a surviving reference reliably means C owns startup (`docs/DESIGN.md`). The witnesses are regression
-  tests, with musl's own startup loops as one of them; the three corpora with musl linked are unchanged and musl
-  programs take the same steps.
-
-- **`setjmp`/`longjmp`: landed** (`31f5138`; `docs/DESIGN.md`, "Non-local jumps"; `docs/SYNTAX.md`). The
-  device has no registers, so not musl's assembly: `%r = setjmp %buf` writes a 32-byte jump record (frame
-  depth and function, position, entry and current stack pointer) into program memory and gives 0; the
-  terminator `longjmp %buf, %v` checks the record against the live frames (otherwise the named fault
-  `bad_longjmp`, its own code since the fault codes widened to 5 bits on 2026-11-16; `bad_indirect` before), discards the frames above, restores the stack pointer and resumes after the
-  `setjmp` with `%v`. Both are journalled: un-running through jumps restores the state exactly, checked
-  step by step, and by a `rewind` (a jump counts as the returns of the frames it discards when a rewind
-  checks its mark's activation). In a coherent region a jump within the region works on every branch; out
-  of it, `bad_longjmp`. The front lowers the C library's names (`setjmp`, `_setjmp`, `longjmp`, `_longjmp`,
-  `siglongjmp`, `__longjmp_chk`; `sigsetjmp` saving the mask through musl's own `__sigsetjmp_tail`, as
-  musl's assembly does), clang's `__builtin_setjmp`/`__builtin_longjmp` and `llvm.frameaddress(0)`.
-  Executor changes (rebased onto `mark`/`rewind`, `0513c5e`): `Undo::Setjmp`/`Undo::Longjmp` and their
-  forward and backward steps (`forward.rs`, `backward.rs`), the journal's list of discarded-frame counts
-  and its use in `open_mark` (`journal.rs`, `history.rs`), the journal-content observer following them
-  (`measure.rs`), and one panic arm for `longjmp` in the oracle's interpreter (`oracle_support/dense.rs`).
-  Measured: GCC `20210505-1`, `pr56982`, `built-in-setjmp`, `pr84521` agree with native, with musl
-  (2,059 / 2,074 / 2,161 / 2,122 steps) and without the library (10 / 33 / 130 / 73); ten front functions
-  (nested, repeated, across frames, from a callback, through a copied `jmp_buf`, value 0, the built-ins,
-  allocations freed by the jump) on 32 inputs each against native from -O0 and -O2 and with `--taint-all`;
-  `rt/musl/tests/setjmp.c` (masks saved and not, jumps out of signal handlers) prints what native prints.
-  Its independent testing pass (`e8149f1`, sol: 512 device runs matched to native with exact reversal,
-  recursive and copied buffers, VLAs, the built-ins, eight coherent branches, rewinds, jumps out of signal
-  handlers) found two wrong results with `sigsetjmp` (native status 0, device 1, at -O0 and -O2): revisiting a
-  `sigsetjmp` lost a copied buffer's run-time `savemask`, and revisiting one site restored the last buffer's mask,
-  not the target's. **Fixed** (`595339c`): the front took the buffer and `savemask` from the frame's slots after
-  the jump, which hold the site's latest visit; now the mask state lives in the buffer (a flag word and the saved
-  mask, written before the device `setjmp`) and every library `longjmp` restores its own target's mask before it
-  jumps, as glibc does. Front only, no executor change. The witnesses are regular tests
-  (`rt/musl/tests/regress/setjmp-saved-{mask,buffer}.c`); `rt/musl/tests/setjmp-masks.c` checks every way to save,
-  copy and jump with two buffers, a copy, five call sites, two visits and two jumps (17,640 jumps), and a chain of
-  sixteen buffers, against native: 65 of 421 output lines differed before, none now, from -O0 and -O2.
-  `rt/musl/test.py` also links the `setjmp` programs from -O2 and un-runs the small ones (33 runs, about 30 s), and
-  an executor test runs the lowered shape under a `rewind`, step by step.
-  Debt: a function that uses `setjmp` is not run coherently from C (refused by name at a qubit-dependent
-  call), because LLVM must see `setjmp` as writing any memory; route in `docs/DESIGN.md`.
-
 ## Next steps, in order
 
 1. **The musl runtime is done** ("Stopped in flight"). Files, clocks and entropy now use the carried models
@@ -497,193 +233,10 @@ its vendor; at most two sol jobs at once.
    log tape residual is zero, hash/tree positive (A/B matter for recursive insertion). Actual world journal
    payload is much larger than overlay payload on these runs. See the journal-content README/global.tsv;
    classification of outer worlds/read/rewind history remains a documented observer gap with an explicit route.
-3. **Build the journalled machine in the executor** and run the experiments listed in `docs/DESIGN.md` as it is
-   built: every journalled step is a permutation; `apply` equals mark, call, rewind-keep; un-running through gates
-   equals the conjugated operation.
-   In progress since 2026-11-15, 21:17 UTC. The independent oracle for these experiments landed first
-   (`2201a6e`, sol, written without reading the machine's code): `crates/exec/tests/independent_oracles.rs`, a
-   dense matrix calculation (nalgebra, test-only) of gates, controls, `apply` regions and un-running through gates,
-   and a brute-force bijection checker over whole finite states. Against today's executor: all six examples, 480
-   gate/control runs, 64 conjugation columns, 32 generated circuits, 20,480 finite `apply` states and 512
-   journal-prefix round trips agree; four deliberate executor mutations (a phase sign, a missing adjoint on
-   un-run, reversed control polarity, an `apply` that assigns instead of XORs) each fail it. `mark` and
-   `rewind keep` plug in through the checker once the executor exposes whole machine and history state
-   (`crates/exec/tests/oracle_support/mod.rs`).
-   **First step landed** (`d1db45c`): `%h = mark` and `rewind %h keep (v -> %reg, ...)` in the text form
-   (`docs/SYNTAX.md`), the validator and the executor, on today's single classical state (`docs/DESIGN.md`).
-   A rewind XORs the kept values in, un-runs every step since the mark (gates inverted, so `mark; h q; rewind keep
-   (i1 1 -> q)` is Z) and continues; marks nest; a rewind that cannot un-run (stale or foreign handle, a
-   measurement since the mark, a keep into a register allocated after the mark) is the named fault `bad_rewind`
-   and changes nothing. Measured: every step is a permutation by brute force (38,360 single steps, 3,016 of them
-   faulting, and 8,192 rewinds from their mark, on clean and dirty history); the known exponential is real (every
-   level cleaning up: work 19, 55, 127, ... 36,847 at depth 0..10; keeping callees' history open until the outer
-   rewind: 21 + 20d); a mark, call, rewind loop costs the same per iteration at 50 and 1,500 iterations.
-   Its independent testing pass (`8c917c4`, sol: the oracle plugged in; 2,180 matrix comparisons of un-running
-   through gates under `rewind keep`, 18,432 whole-state images of mark and nested rewinds on clean and dirty
-   history, 64 stale-handle fault states, all agree) found two wrong results, both fixed (`d012728`): **F1** a
-   rewind whose un-run freed a temporary entangled with a keep destination returned success with norm 0; now an
-   un-run that meets a state its history does not describe (a register allocated since the mark not zero when
-   its allocation is un-run, an inner rewind whose region faults when run again) runs the un-run steps forward
-   again and faults `bad_rewind`, changing nothing, as the interim answer to question (1) below; checked
-   against an independent calculation on 1,776 programs (`crates/exec/tests/history_unrun.rs`). **F2** undoing
-   a rewind reached again in a loop replayed to its first visit; a rewind's record now keeps how many steps it
-   un-ran and exactly that many run again. Costs of every other history test unchanged; rewinding one mark
-   again doubles the work (n rewinds of one mark in a loop: 3 * 2^(n-1) - 2 steps un-run).
-   A second independent oracle for the next step (`0ca2480`, sol, written from the documents without reading the
-   worlds work): a whole-world reference model (`crates/exec/tests/oracle_support/worlds.rs`; a superposition is a
-   map from whole classical machine states, memory as an overlay over a classical base, to amplitudes), agreeing
-   with today's executor on 3,357 runs (28,123 instructions; every history, rewind and jump test program) and on
-   1,280 whole-state bijection cases. Where worlds leave the documents silent it asks: how far collision
-   detection must reach and which history a coherent fault keeps; whether a fault in one world stops all worlds;
-   how marks, rewinds and replays align when worlds' histories differ in shape; what one measurement event is
-   when worlds reach it at different places; whether dead slots count in world equality.
-   **Second step landed: worlds** (`2c0563e`; `docs/DESIGN.md`, "Worlds"). A `call` may pass a register to an
-   integer parameter; where configurations disagree on its value the machine state splits into one world per
-   value (a full copy, memory included, journalled from then on); a rewind that makes worlds equal merges them and
-   their amplitudes add. Worlds run in lockstep ticks (the budget counts ticks); a world that has rewound waits
-   until no world runs, then equal worlds merge. Interim choices (questions below): a keep that changes a register
-   the region read faults `bad_rewind` and changes nothing (also when a later gate carries it there); a fault in
-   some worlds stops the run unless region faults are allowed; a measurement with several worlds waits for all,
-   then observes which world; a run ending with several worlds hands the host one, sampled by weight, and
-   reversal stops there. With one world the machine is the old one: every existing test passes, except one
-   expected rewind word, now the visit number of the rewind rather than the steps it undid (paths of different
-   length must merge). Measured: splits and merges are bijections by brute force (128 starting states each, all
-   16 basis configurations and their superposition, clean and dirty history); `apply` equals mark, call,
-   rewind-keep on the thesis program and Grover (16 seeds each), 108 basis states and superposed arguments (the
-   idiom has no region budget: a debt); un-running through gates across worlds equals the independent dense
-   calculation on 91 programs (75 equal, 16 refused exactly where the calculation says the read no longer
-   matches), and the whole-world reference agrees on the same 91; the known exponential with worlds: cleaning up
-   at every level c(d) = 2c(d-1) + 47 steps (22,481 at depth 8), history left open 48 per level (430 at depth 8);
-   a loop of the idiom costs 31 steps and about 135 journal bytes per iteration at 50 and at 1,500 iterations.
-   The reference model differs in two places, both where the documents are silent: it faults a register
-   allocated, rotated and read inside one region (it checks each world's share for zero; the executor sums the
-   shares and checks the norm when all worlds stop), and its lockstep gives no interference when worlds' paths
-   differ in length.
-   Its independent testing pass (`9b3fd45`, sol; the whole-world reference plugged into the executor): 256 generated
-   coherent programs, 729 dense un-run cases (557 equal, 172 refusals exactly where the reads no longer match),
-   2,048 whole-state split/merge images, 64 `apply`/idiom comparisons, sampling by weight at measurement and end
-   of run (4,096 seeds each, within 0.035 per bin), 11,129 reference comparisons across every executor test. One
-   wrong result: **a later split hid an earlier changed read**, so a rewind that must fault `bad_rewind` returned
-   success with (q, out) = (1, 1). Fixed (`d6036a1`): below a world's split point the un-run's checks (a read
-   still holds its value, an un-allocated or freed register is zero) are made on the sum of the worlds' parts once
-   every world has rewound, and a failing sum puts each of those worlds back from a copy and faults `bad_rewind`
-   (`docs/DESIGN.md`, "Worlds"). Checked on the whole class against the reference and an independent dense
-   calculation: every order of three of reads, gates, a temporary and nested rewinds, 12,816 programs (1,710
-   refused), and of four, 134,264, all agree; the previous executor missed 336 refusals and panicked on 15 of the
-   12,816. Steps and journal unchanged; the 1,500-iteration idiom loop test takes about a third longer (the
-   copy). The two earlier differences from the reference are decided by `docs/DESIGN.md` ("Worlds") in the
-   executor's favour.
-   **Third step: memory as an overlay** (`7c34bf5`; `docs/DESIGN.md`, "Memory as an overlay"; `crates/exec/src/memory.rs`).
-   Memory is a classical base shared by every world plus, per world, a normal overlay of the bytes where its
-   memory differs from the base; a split copies the overlay, never the memory. With one world the machine
-   writes the base as before; when one world is left its overlay is folded in. Worlds compare memory by
-   their overlays: normal overlays over one base are equal exactly when the memories are, and the ordered
-   map compares and hashes in address order, so the order of writes does not matter. Measured: the
-   bijection checks with memory owned and as an overlay over two bases (115,080 single steps, 24,576
-   rewinds, 384 reading calls and 384 merging rewinds, representation included); 400 pairs of worlds
-   written in random orders merge exactly when their memories are equal; the gate programs with each
-   world also writing memory agree with the dense calculation and the whole-world reference (150 equal,
-   32 refused where the calculation says); eight worlds writing `n` bytes each copy `4n` bytes at splits
-   and hold at most `8n`, at 16 KiB, 1 MiB and 4 MiB alike (a full copy: 7 times the memory size). In a
-   release build at 16 MiB of memory the peak resident size went from 134 MB to 19.7 MB and the time
-   from about 90 ms to 7 ms; at 1 MiB, 11.5 MB to 4.4 MB. On the existing tests that split (1,234 runs,
-   5,640 splits) splits copied 7.5 MB of memory before and 0 bytes now. What a split still copies is the
-   journal, which grows with steps run (2.77 MB after 4,096 bytes written per world, against 16 KiB of
-   overlay); sharing its common prefix is the route if it matters. `Stats` and `--stats` report the
-   overlay bytes copied and held and the journal bytes copied.
-   The independent testing pass of the overlay and of return addresses (`948dc92`, sol) found no wrong result: 512
-   generated memory programs against the whole-world reference (writes restoring base bytes, overlapping and
-   unaligned writes of every width, folds then new splits, merges after different write orders and un-runs),
-   1,458 dense un-run cases (half with overlays), split statistics against independent counts; 63 device
-   return-address programs, 480 C comparisons with native and 320 musl-linked results.
-   **Fourth step: gates that take addresses** (`56b2c0b`; `docs/DESIGN.md`, "Qubits in memory";
-   `crates/exec/src/cells.rs`). A gate's qubit is `%r[i]` or `[ADDR:BIT]`, registers and memory mixed; a
-   keep may go into memory, `keep (v -> [ADDR])`. A byte that holds qubits is a cell: an 8-qubit register
-   bound to its address in the world's register table, the memory under it 0, the base never quantum. The
-   first gate at a byte promotes it (journalled); un-running the gate un-promotes, checked as the un-run of an
-   allocation. Loads, stores and jump records over cells read them as a register is read (the world splits
-   per value; un-running checks the cell still holds what the step read or wrote); a region's branch sees
-   its configuration's values in its private memory. Keeps into memory need the bytes to hold qubits since
-   before the mark. Registers, `qalloc`, `qfree`, register gates and `apply` are unchanged and the front is
-   untouched. Measured: 8,616 single steps (552 faulting) and 12,288 rewinds are bijections by brute force,
-   clean and dirty history, three memory modes; a splitting load and store and the merging rewind are the
-   linear extension of bijections (192 starts each); `worlds_oracle.rs`'s 182 programs in all 8
-   register/memory placements of q, r, o give the dense calculation's, the register run's and the
-   whole-world reference's state (the reference run on the register form: it does not model memory
-   qubits), 1,200 equal, 256 refused exactly where the calculation says; the worlds pass's F1 in memory
-   faults; 14 mutations caught but one (cells in world equality, implied by equal journals). Cost against
-   the register form (Grover in the history idiom, k = 1, 2, 8): the same worlds, splits, merges and
-   configurations; steps +2(k - 1), world steps +32k - 2 (a load and a truncation read x), journal +30
-   bytes whatever k, qubits held 16 against 5 (a cell is a whole byte). The checks of cell reads and
-   un-promotions below a split point go through main's deferred checks (`d6036a1`), rebased on it.
-   The independent testing pass of address gates and of the deferred checks (`f262f54`, sol; the whole-world
-   reference extended to qubits in memory) found no wrong result: 1,456 dense placements, 384 generated mixed
-   register and memory programs, 12,816 deferred-check cases, sums that cancel only over four worlds, 63 budget
-   stops between a rewind and its checks reversed exactly. The 64-bit key: 1,048,576 distinct states, no
-   collision; a birthday search would need about 5 x 10^9 states (about 81 GB), so a constructed collision is
-   practical and the equality-on-match route stays a debt.
-   **Fifth step: `apply` as mark, call, rewind-keep** (`78ea062`; `docs/DESIGN.md`, "`apply` as mark, call, rewind-keep";
-   `crates/exec/src/region.rs`). (Removed on 2026-11-17: the mode switch, compare mode and this computation;
-   `apply` is evaluated for each definite value of its arguments only, the earlier branch enumeration.) The
-   executor computed every `apply` as the idiom on worlds, the region's
-   rules on the call: mark the journal, call `@f` reading the argument registers as integers (one world per
-   value), run each world to its end with effects, `exit` and quantum instructions faulting and the budget
-   counted on each world's own steps (a world split off inside the region by a load of qubits in memory
-   inherits its parent's count), keep the result into `out` or the fault code into `fault`, un-run to the mark
-   checked as a rewind checks, merge. Strict region faults un-run with no keep and stop with the same
-   `region fault`. It stays one step and one journal record of the calling run. Branch enumeration is kept
-   as the comparison (`Executor::set_apply_mode`, `BENNETT_APPLY=history|branches|compare`); compare mode
-   computes each `apply` both ways from the same state and panics at any difference in the result, the
-   world's machine state and journal, its amplitudes (exactly) or the promised counts (`steps`,
-   `region_steps`, region faults and weights, `rewound_steps`, `rerun_steps`, splits). The journal-content
-   observer still enumerates (it classifies branches). The front is untouched; the text form unchanged.
-   **Shown equal on every example and test that uses `apply`**, not a sample: with `BENNETT_APPLY=compare`,
-   `cargo test` compares 107,687 `apply` executions in 46 tests (325 strict region-fault stops),
-   `front/test.sh` 21,866 in 41 tests (13.9 million configurations; 76 strict stops), the ignored heavy runs
-   110,121 more (the whole-world reference's rerun of the suite among them); no difference. Both suites
-   pass with each way alone (`cargo test` 245, `front/test.sh` 155, in history, branches and compare mode).
-   Regular tests keep it checked: `apply.rs` (every basis state of the exhaustive harness, faulting ones
-   included, and the superposed arguments, strict and allowed, each reversed) and `apply_history.rs` (every
-   entry of the three examples over 16 seeds, strict and allowed, reversed; the known exponential).
-   **Cost** (`Stats::region_cost`, compare mode, summed; `docs/DESIGN.md` has the detail): over the front's
-   tests the idiom makes 5.57 million runs where enumeration makes 13.9 million (a world per argument
-   value), 0.80 times the work, 1.02 times the journal bytes, 1.46 times the time (45.1 s against 30.9 s);
-   over `cargo test` 0.90 the runs, 0.81 the work, 1.20 the journal bytes, 2.6 times the time (small
-   regions). The known exponential inside a region costs the same per run both ways (14,311 steps per run
-   at depth 8 cleaning up, 183 with the history open); the idiom needs half the runs there. A region holds
-   two copies of its amplitudes (0.89 GB against 0.43 GB on the 2^20-configuration in-place updates).
-   **Whether the new instructions now pass every existing test** (the documents' condition for `apply`,
-   `qalloc` and `qfree` to stop being needed as separate forms): for `apply`'s meaning, yes: every existing
-   test and example passes with `apply` computed by mark, call and rewind-keep, faults and budgets included,
-   and gives exactly the enumeration's state. As forms, no, and nothing is removed: the text idiom (`mark`,
-   `call`, `rewind keep`) has no fault register and no region budget, so a program cannot write a region
-   that faults on some branch or spends a budget without `apply` (question A1 below); `qalloc` and `qfree`
-   were not re-expressed, and cannot be yet: `measure` took a register only (question M2; it takes an
-   address since 2026-11-16), an `apply`'s
-   `out` and `fault` and a call's register argument are registers, and a qubit in memory costs a whole byte
-   (8 qubits) in the simulator; Grover with its qubits in memory (`memory_qubits.rs`) is the one measured
-   program. The maintainer decides.
-   Its independent testing pass (`38e10c4`, sol; `crates/exec/tests/apply_independent.rs`, ignored witnesses) found:
-   **F1** a `mark` value is visible as a result and depends on the caller's journal (history 4, enumeration 2),
-   so two identical `apply`s no longer XOR the same result (`apply` is its own inverse no more); **F2** a strict
-   region fault reports `unreachable` instead of `divide_by_zero` when the region's writes to memory qubits reorder
-   the configurations (the first fault is to be in configuration order); **F3** compare mode misses 6 of 24
-   mutations of the history path (`steps`, `merges`, `peak_worlds`, a changed budget, `in_region`, a leftover
-   backup world); **F4** the whole-world reference numbers marks from 1, the executor from 2. F1-F3 fixed
-   (`f16a55b`): a mark in a region counts records from the region's start, as on the region's own journal (the
-   enumeration's numbering; `docs/DESIGN.md`, "History"); a strict fault's configurations are taken after the
-   un-run; compare mode restores and compares every field of the run outside the world, the other worlds
-   exactly (30 corruptions of the history path caught by `src/compare_tests.rs`, 24 of 24 by the scratch
-   matrix). The witnesses are regular tests, with whole-class checks (5 region bodies under 5 caller prefixes,
-   20 cell rewrites with analytic first faults); no cost difference measured beyond the host's noise. Compare
-   mode: `cargo test` 110,198 `apply` executions (350 strict stops), `front/test.sh` 21,882 (76).
-   F4 fixed in the reference (`36f7ae4`: public mark numbers modelled apart from its snapshots; 88 region
-   comparisons added). Held: 65 budgets in
-   all three modes on memory-qubit regions with full reversal, 131,072 configurations against the analytic XOR.
-   Peak memory measured 260 against 200 MiB at 2^20 configurations on its own fixture (the published 0.89 against
-   0.43 GB was not reproduced on that program's layout).
-   The implementer's order is done: 1 mark/rewind, 2 worlds, 3 the memory overlay, 4 gates that take
-   addresses, 5 `apply` as mark, call, rewind-keep.
+3. **The journalled machine** (`mark`, `rewind`, machine states in superposition, the memory overlay, the
+   call with a fault value, `apply` computed through marks) was built from 2026-11-15 to 2026-11-17 and removed on
+   2026-11-17 ("Resumed on 2026-11-17"); the last commit that has it is `f81a70a`. Gates and measurement at
+   addresses stay. What it measured is in git history and `experiments/journal-content/README.md`.
 4. **Cancelled on 2026-11-17: the front's fallback through marks** (the program almost verbatim under marks, the
    documented coherent class recognised by its form, and the two warnings), since `mark`/`rewind` are removed.
    Its replacement route: the front refuses a memory write under a condition that depends on a qubit, and a call
@@ -804,22 +357,12 @@ Every question in "Questions the maintainer answered on 2026-11-16 (kept for the
 labels in brackets are that section's. Four of these were changed or refined the same afternoon ([(1), W2], [W3],
 [W1], [A1]): see the next section.
 
-The machine:
+The machine (its decisions on `mark`, `rewind`, machine states in superposition and the call form went with
+them on 2026-11-17; git has them):
 
 - **Time and randomness on the device**: the clock is a start value given to the run plus the number of clock
   reads so far; entropy is a seeded byte image given to the run. Both are inputs of the run and journalled like
   any other state. This unblocks files and clocks (step 1).
-- **A rewind that meets a state its history does not describe** [(1), W2] stays the fault `bad_rewind`, changing
-  nothing, until channels exist; the warning of "What is promised when history is left behind" is the target
-  then. This postpones that part of the 2026-11-13 decision, knowingly.
-- **A fault in some worlds** [W3] stops the run by default; `--allow-region-faults` stays.
-- **Measurement and the end of a run with several worlds** [W4]: observing which world, and handing the host one
-  world sampled by weight at the end, is the intended reading.
-- **Time is not part of the machine state** [W1]: no clock; worlds are compared when all have stopped.
-- **A call form that gives the fault code as a value and takes a budget** [A1] is added (for example
-  `%y, %c = call @f(args) budget B`), with the region's rules attached to it. `apply`, `qalloc` and `qfree` were to be
-  retired once every existing test passed without them; withdrawn in the evening (see "Decision the maintainer
-  took on 2026-11-16, in the evening").
 - **`measure` takes an address** [M2]. Built: `%d = measure iN [ADDR]` reads the `N` bits from bit 0 of the
   integer at the address as a load does; the bits of bytes that hold qubits, only those, are sampled jointly
   and collapse; other bytes give the memory's bits (`docs/DESIGN.md`, "Qubits in memory";
@@ -829,19 +372,7 @@ The machine:
   code. Built: `Fault::CODE_WIDTH` is 5, every fault register a `q5` (the front's included), and every
   `longjmp` that finds no valid record, also one held in qubits that disagree [M3], is `bad_longjmp` (16);
   `bad_indirect` (4) is a call target again.
-- **Inside a region the worlds run one after another and merge at its end** [A2]: kept.
-- **Mark handles are opaque** [A3]: the validator refuses any use of a handle but `rewind`. Built: the
-  validator's `HandleUse` (`crates/ir/tests/history_rules.rs`).
-- **A keep into memory needs bytes that hold qubits since before the mark** [M1]: kept.
 - **A `longjmp` whose record is held in qubits that disagree** [M3] stays a fault; a debt.
-- **A rewind across a measurement** [(3)] stays a fault.
-- **A use, after the rewind, of a value defined between a mark and its rewind** [(4)] is rejected by the
-  validator. Built: `RewoundUse`, a forward dataflow over every path of the function, `longjmp`
-  resumptions included (`crates/ir/src/validate/rewound.rs`); conservative where paths are. A mark's
-  handle that an outer rewind un-ran is such a value, so a rewind naming it is refused too: the executor's
-  own `bad_rewind` for a stale handle stays as defence in depth but no validated program reaches it any
-  more (the four tests that drove it assert the refusal). Whether to keep that: "Questions for the
-  maintainer".
 
 C:
 
@@ -884,39 +415,18 @@ and it is the later one that holds.
 
 - **NaN payloads.** A result that differs from the native one only in which input NaN's payload it carries
   counts as agreement, compared by a rule that allows exactly this. The bit-for-bit debt is dropped.
-- **Running again is charged to the run's budget.** When the budget is spent the rewind fails cleanly, changing
-  nothing. This removes the hang recorded under "Known weak spots".
 - **The coherent class stays as documented for now.** A controlled in-place update of ordinary memory
   (`cells[0] += 2` under a qubit) is not added to the guaranteed class for the first fallback steps; such
   updates run under marks with their history and the warning. Adding it waits for the fallback and an oracle
   that compares phases as well as weights, because the class may never shrink.
-- **A rewind that meets a state its history does not describe** (changes the morning's [(1), W2]). The machine's
-  meaning is the ruling of 2026-11-13: the inverse steps run regardless, the result is unspecified and the
-  toolchain warns. Qubits left over are kept, not released, so no channels are needed for this. `bad_rewind`
-  for the state-dependent causes, with its restore, and `dirty_free` are diagnostics of the simulator's strict
-  mode, as a sanitizer's are: no device can make these checks. `bad_rewind` for the classical causes (not a
-  live mark of this activation, a measurement since the mark) stays a fault.
-- **A fault on some branches** (changes [W3]). The machine's meaning is a fault code held in qubits, which the
-  program may measure (what `--allow-region-faults` does today). Stopping the run at once stays the simulator's
-  default, as a debugging aid.
-- **Time** (refines [W1]). A budget is required wherever a rewind follows a read of a qubit, and the rewind
-  means there: every branch waits at the rewind, the keeps are made, then the same steps run backwards on all
-  branches together. The cost is the budget, not the work done. The `Unaligned` case keeps stopping the run:
-  those worlds are not allowed to interfere.
-- **The call form with a fault code and a budget** (refines [A1]). Built, with two conditions. The
-  simulator-only checks (the state-dependent `bad_rewind`, `dirty_free`, the strict region and world stops) are
-  never delivered to a program as fault codes. And the budget is on the mark as well as on the call, so that
-  the caller's own steps between the mark and the rewind are bounded too.
 
-These join "the decisions above that change the device program and the executor" in the order of the next work,
-before the front's fallback (the advisor's placement). The work on `wip/machine-decisions` predates them.
+Its decisions on rewinds, machine states in superposition, time and the call form went with them on
+2026-11-17. The stop of the run at an `apply` faulting for some argument values stays the simulator's default.
 ## Decision the maintainer took on 2026-11-16, in the evening
 
 - **`apply`, `qalloc` and `qfree` are not retired** until the maintainer decides otherwise: the forms may suit
   front ends for other LLVM languages. They stay first-class forms of the device program, with their tests,
-  examples and documentation, and the front may keep emitting them. The work that remains of "finish the
-  machine" is to compute `apply` as a mark with a budget, the call form and a rewind's keep, show the two equal
-  on every test, and show that the new forms can express everything the old ones do.
+  examples and documentation, and the front may keep emitting them.
 
 ## Automatic checks (implementation)
 
@@ -959,122 +469,6 @@ The new test target also passes clippy separately. An extra front-wide all-targe
 pre-existing `unwrap()` calls in `front/tests/tests/complex.rs` (archive/commutation paths), left unchanged;
 that broader harness lint is not covered by the root's default-package all-targets command.
 
-The partial changed-line screen of machine step e (`3459a0b`..`a1b516e`) stopped after ten mutants:
-five missed and five timed out (1,121 seconds each). This follow-up adds tests only. Its mutation
-measurements use production `0c5b878`; the final four checks are after rebasing onto `d3880f6`, with
-the five function bodies unchanged. It does not complete the machine's changed-line mutation check. The full changed-line run over
-the machine's final implementation diff is still owed, through `scripts/mutate-diff.py`.
-
-Each original miss was applied by hand, observed failing its new test, reverted, and observed passing:
-
-- `report_outcome` (`crates/cli/src/run.rs`), `leftover_qubits > 0` changed to `== 0`, `< 0`, or `>= 0`:
-  `only_nonzero_leftovers_warn_and_the_warning_counts_the_qubits` (`leftover_reports.rs`) runs the CLI
-  without `--stats`. A clean free must give no warning; a dirty two-qubit free must warn of two, and a
-  rewind leaving one allocation over must warn of one. The equality and greater-or-equal mutants warn
-  about zero; the less-than mutant omits the real warning. The fixture has a finite run budget.
-- `Executor::execute` (`forward.rs`), the clock's `rerunning == 0 && rewinding == 0` changed to `||`:
-  `replaying_a_rewind_during_reversal_does_not_advance_the_machine_clock` (`mutation_progress.rs`)
-  reverses a rewind that must run an addition again. The mutant advances the clock to 4; the original
-  leaves it at 3, as the mark's budget requires for replay. The test uses fixed stepping, not a loop
-  waiting for an outcome.
-- `Executor::execute`, the guard bypass's `!any_guard || !counting` changed to `&&`:
-  `restoring_a_step_inside_a_budgeted_call_does_not_spend_its_budget` (`atomic_rewind_tests.rs`) enters
-  a real budgeted call, then uses the restoration flags that `run_forward` sets after a failed rewind.
-  The addition is restored, and the live frame's allowance must stay 2. The mutant spends it to 1.
-  This is an internal restoration-path witness, not a new claim about which programs can fail there.
-
-The original timeouts remove progress, rather than merely making a slow calculation:
-
-- `unrun_last -> Ok(())` and `unrun_record -> Ok(())` leave the journal's top record in place.
-  `reverse` keeps getting `true` from `step_back`, and `unwind_to_mark` keeps seeing more records than
-  its target, so neither loop can finish. The new fixed-step snapshot test (`atomic_rewind_tests.rs`) also detects either no-op
-  without calling `reverse` or entering a rewind.
-- `leave_allocation_over -> ()` leaves the nonzero allocation's record, instruction position and
-  quantum allocation unchanged. `unrun_record` returns success after calling it, so `unwind_to_mark`
-  repeats that same nonzero-allocation case forever. A budget cannot interrupt this inner loop.
-  `a_bounded_nonzero_allocation_un_run_makes_progress` now calls the inverse steps individually and
-  requires each one to pop its record, retreat the frame and leave the qubit over; it catches this
-  replacement before any inner loop starts.
-- `step_world -> None` neither executes nor sets an outcome or increments the step count. `run` loops,
-  and even a finite step budget cannot be spent. The fixed-step test checks that the first addition
-  actually advances the frame and writes 42.
-- `execute -> Ok(())` never advances the frame. An unbounded run never reaches its return, while
-  `run_again_to` can repeat it forever when replay is not charging a run budget. A bounded ordinary
-  run eventually faults `budget` instead of computing. The same fixed-step test catches the unchanged
-  frame immediately.
-
-The five-function screen at `ac9fdf7` used cargo-mutants 27.1.0: **50 mutants, 42 caught,
-3 missed, 1 unviable, 4 timeouts**, 33 minutes. The test selection was the executor unit suite plus
-`mutation_progress`, `call_budget`, `mark_budget`, `strict`, `history`, `history_unrun`,
-`leftover_wires` and `worlds_budgets_independent`. Executor optimization level 1, debug info off,
-one mutation worker, three build jobs, one test thread, 90-second test timeout, shared heavy slot.
-An earlier full-package attempt's unmutated baseline timed out in the exhaustive permutation oracle;
-it tested no mutants and is not counted. Interrupted tuning attempts are not double-counted.
-
-The surviving `deferred = checked && partial` changed to `||` is now caught by
-`a_nested_rewind_does_not_defer_an_unsplit_changed_read` (`leftover_wires.rs`). A rewind that contains
-an earlier rewind un-reads a changed, unsplit register by leaving its wire over locally. A later faithful
-split/join must still succeed. The mutant wrongly notes the local case as a deferred world check and
-that stale note faults the later rewind: **`bad_rewind` instead of result 7**. Applied by hand, the test
-failed in under 0.01 seconds; restored, it passed and reversed to its independently captured entry.
-
-All five original no-op bodies were also run by cargo-mutants against just the two `a_bounded_` unit
-witnesses: **5 caught, 0 missed, 0 unviable, 0 timeouts** (unmutated baseline passed). In the broader
-screen the Rust harness continued after those witnesses failed and later tests hung; the isolated run
-shows the new tests kill them fast without relying on the timeout.
-
-Two equivalent survivors remain in `unrun_record`, each an outer `&&` changed to `||`:
-
-- `(checked || deferred) && matches!(last, Undo::Qalloc | Undo::Call)`: with neither checking mode
-  active the extra allocation/read failure set is computed but never used. With a checking mode active
-  on any other record, `reads_no_longer_held` returns an empty set: register-read entries belong only
-  to `Call` records, later entries have already been popped, and `reads_from(last_record)` is empty.
-  No refusal or deferred note is added. Both helpers are read-only; the real undo is unchanged.
-- `(checked || deferred) && journal.top_has_cells()`: with neither checking mode active the extra
-  failure set is unused. With a checking mode active but no cells on this record, the cell check has no
-  entries and returns an empty set. It cannot refuse or add a deferred note; undoing is unchanged.
-
-The one unviable mutant is `step_world -> Some(Default::default())`: `Outcome` has no `Default`.
-The combined classification of the same **50 unique executor mutants** is **47 caught, 2 equivalent,
-1 unviable**, with no unexplained survivor or timeout. The three hand-applied CLI comparison mutants
-are additional checks, not included in that 50.
-
-The three screen survivors were rechecked with all default Rust packages (`bennett-exec`, `bennett-ir`,
-`bennett`) and the normal executor optimization level 3: one caught, two equivalent misses, no timeout
-or unviable case. Its unmutated baseline passed; the hand-applied mutants also passed their tests
-after restoration. The five-body isolated pass
-used optimization level 1, only the `a_bounded_` unit tests and a 15-second test timeout; its test commands
-took about 0.1 seconds each, compilation excluded (89 seconds for the whole pass).
-
-Reproduce the function screen on the final tests (the deferred-mode miss above is now caught), through
-the shared heavy slot with `CARGO_BUILD_JOBS=3`, using:
-
-```sh
-cargo mutants -p bennett-exec --test-package bennett-exec \
-  --file crates/exec/src/backward.rs --file crates/exec/src/executor.rs \
-  --file crates/exec/src/forward.rs \
-  --re '::(unrun_last|unrun_record|leave_allocation_over|step_world|execute)( |$)' \
-  --in-place --jobserver-tasks 3 --timeout 90 \
-  --cargo-arg=--config=profile.dev.package.bennett-exec.opt-level=1 \
-  --cargo-arg=--config=profile.dev.debug=0 --cargo-arg=--lib \
-  --cargo-arg=--test=mutation_progress --cargo-arg=--test=call_budget \
-  --cargo-arg=--test=mark_budget --cargo-arg=--test=strict --cargo-arg=--test=history \
-  --cargo-arg=--test=history_unrun --cargo-arg=--test=leftover_wires \
-  --cargo-arg=--test=worlds_budgets_independent -- -- --test-threads=1
-```
-
-Target selectors are `--cargo-arg`s so that they restrict both compilation and execution. For the fast
-five-body recheck, retain those three files and use the regex
-`replace Executor.*::((unrun_last|unrun_record|execute) -> .* with Ok\(\(\)\)|step_world -> .* with None|leave_allocation_over with \(\))$`,
-`--cargo-arg=--lib` only, and trailing `-- a_bounded_`. The broader three-survivor qualification used
-`--file crates/exec/src/backward.rs --re 'backward.rs:(62:32|64:34|88:34):'`, all three `--test-package`
-flags, no optimization/debug override or target selection, and `--timeout 180 -- -- --test-threads=1`.
-
-Final checks after rebasing onto `d3880f6`: `cargo test` **505 passed / 29 ignored**;
-`front/test.sh` **205 passed / 33 ignored**; `cargo clippy --all-targets -- -D warnings` and
-`cargo fmt --check` passed. Tree guards: 3,613 tracked files, zero problems. The final Rust suite was
-rerun after removing an unused import left by moving the bounded witness into the unit suite.
-
 The changed-line mutation run on the job's own diff (`python3 scripts/mutate-diff.py 2142238` at `0e1b00d`, 2026-11-16):
 22 mutants, 16 caught, 5 unviable, 0 timeouts, 1 missed: `crates/exec/src/measure.rs`, `live_sources`,
 `Undo::Longjmp => shadow.len() - discarded` with `-` replaced by `/`. The line predates the job; it is in the
@@ -1085,88 +479,11 @@ the frame and by naming call path 2 instead of 0 for a jump from a callee, and p
 first attempt's unmutated baseline failed because the libgcc scripts read `target/front` directly instead of
 following `BENNETT_FRONT` (fixed in `0e1b00d`).
 
-The changed-line mutation run over machine decisions a to d (`python3 scripts/mutate-diff.py 7127b8e` at
-`ba6ddb5`, 2026-11-16): 110 mutants, 83 caught, 18 unviable, 5 timeouts, 4 missed. Each missed mutant now
-has a test that fails with the mutant applied by hand and passes without (lines as of the run):
-
-- `crates/exec/src/forward.rs:345` and `:346`, `measure_memory`: `* 8` to `/ 8` in the bit offset of a byte
-  that holds qubits, and `bits - low` to `bits + low` in its mask. Both measure all eight bits of a byte the
-  width ends inside, when that byte is not the first; no fixture had such a byte. Caught by
-  `bits_past_the_width_in_a_later_byte_keep_their_superposition` (`crates/exec/tests/measure_memory.rs`,
-  `measure i12` of a byte whose bits 4 to 7 must stay superposed) and by the whole-world comparison of the
-  same fixture.
-- `crates/exec/src/quantum.rs:303`, `measure_bits`: `threshold < probability` to `<=`. A draw exactly on
-  the boundary between two outcomes then goes to the first: the outcomes no longer own half-open intervals
-  of their exact weights. Caught by `a_draw_on_the_boundary_between_two_outcomes_belongs_to_the_second`
-  (`crates/exec/src/measure_sampling_tests.rs`, a generator that draws exactly one half).
-- `crates/ir/src/validate/rewound.rs:125`, `fixpoint`: `&&` to `||` queues every block with a `setjmp`,
-  reached or not, when the analysis goes round again; an unreached one panics the validator. Caught by
-  `a_setjmp_in_a_block_no_path_reaches_is_not_resumed` (`crates/ir/tests/history_rules.rs`).
-
-The timeouts:
-
-- `rewound.rs:115` (`changed && !work.contains` to `||`) and `rewound.rs:120` (`seen_jumps == jumps` to
-  `!=`) make the fixpoint loop for ever: the first requeues the target of every edge round any cycle, the
-  second never returns when the jump states are already stable. Caught by the timeout, as a fixpoint that
-  never ends is; `history_rules` does not finish under either.
-- `rewound.rs:108` (`*state != before` to `==`) requeues a block whose entry did not change, which loops for
-  ever round a stable cycle, and drops one whose entry grew, which loses a refusal. Now also caught fast by
-  `a_use_reached_round_a_loop_after_the_rewind_is_refused` (the mutant accepts that program).
-- `forward.rs:226` (`> 1` to `< 1` in `longjmp`): a jump record in qubits that disagree is no longer
-  refused. `a_jump_record_in_qubits_jumps_only_where_they_agree` (`memory_qubits.rs`) fails at once, but
-  `disagreeing_longjmp_record_is_the_documented_bad_longjmp_debt` (`memory_address_independent.rs`) jumped
-  back before its `h` without end, having no budget. It now runs with its reference's bound of 100 steps
-  and fails at once (`budget` instead of `bad_longjmp`).
-- `forward.rs:29` (`execute_inst` replaced by `Ok(())`): no instruction does anything, so a loop's condition
-  never changes; 7 of the 31 executor test binaries do not finish (programs with loops run without a step
-  budget), the rest fail. Caught by the timeout.
+The mutation runs over the machine's changes of 2026-11-16 and 17 (machine step e, decisions a to d) concerned
+code removed on 2026-11-17; git has their records.
 
 ## Questions the maintainer answered on 2026-11-16 (kept for their detail)
 
-- **The journalled machine (step 3), from its first step.** (1) Once worlds differ (its next step), keeping a
-  result into a register the region read can make two worlds equal after the un-run, so their amplitudes add:
-  not merely unspecified but not unitary. Proposed: detect it and stop with a named fault for now (the warning of
-  step 4 needs the same detection), keeping later choices open. The same thing on today's machine (F1: a
-  temporary not back to zero) is now detected and faults `bad_rewind`, changing nothing (`d012728`); that is the
-  orchestrator's interim decision and the place a warning or another outcome would go. (2) The 4-bit fault codes are full (`bad_rewind`
-  took 15); the next fault needs wider codes, and every `q4` fault register in the examples and the front with
-  them. Widen, or another scheme? (3) A rewind across a measurement faults, as reversal does; "What is promised
-  when history is left behind" says un-running after a change is a warning, not a refusal. Keep this one a fault?
-  (4) A value defined between a mark and its rewind still reads its mark-time value afterwards; the validator
-  allows such uses. Reject them?
-- **Worlds (step 3's second step), with the reversible choice taken.** (W1) Is time part of the machine state? A
-  world can rewind into a state another world reached and already left (only by rewinding a shared mark again):
-  without a clock they interfere, on hardware padded to a budget they do not; the run stops with
-  `RunError::Unaligned`. (W2) Question (1) above, refined: adding equal worlds' amplitudes is interference and
-  exact; what breaks unitarity is un-running a read whose register changed; detected exactly, `bad_rewind`; rule
-  4's warning is the route (keeping `v XOR q` as history, with channels). (W3) Should a fault in some worlds stop
-  the whole run by default? (W4) Is observing which world at a measurement, and sampling one at the end, the
-  intended reading of rule 1? (Counted in `Stats::observations` for step 4's warning.) (W5) Answered by the memory
-  overlay: a split copies the bytes the world wrote, not the memory; it still copies the world's journal.
-- **Qubits in memory (step 3's fourth step), with the reversible choice taken.** (M1) A keep into memory
-  needs the bytes to hold qubits since before the mark, else `bad_rewind`, as a register kept into must be
-  allocated before it: only then is every access since the mark journalled with its value, so un-running
-  finds a keep that changed what the region read or wrote. Allowing a keep into a classical byte would need
-  every load and store to journal its address too. Keep the rule, or pay for addresses in the journal?
-  (M2) `measure` takes registers only; a qubit in memory is read by a load, which splits worlds, and
-  observed where a measurement or the end of the run observes them. Should `measure` take an address (it
-  would collapse the cell's configurations, as for a register)? (M3) A `longjmp` whose record is held in
-  qubits that disagree faults `bad_indirect` instead of splitting into worlds that jump apart and may fault
-  separately: a debt, unless the maintainer prefers the split.
-- **`apply` as mark, call, rewind-keep (step 3's fifth step), with the reversible choice taken.** (A1) The text
-  idiom has no fault register and no budget: a fault in the called function ends the run (with several worlds, that
-  world, or a `WorldFault` stop), and its steps count against the run's budget. The executor's lowering of
-  `apply` has both, so `apply` stays the form that carries them. Route if `apply` is to go as a form: a
-  call form that gives the fault code as a value and takes a budget (for example `%y, %c = call @f(args)
-  budget B`, then `rewind %h keep (%y -> out, %c -> fault)`), with the region's rules (no effect, `exit` or
-  gate) attached to it. Add it, or keep `apply`? (A2) Inside a region the worlds run one after another and
-  merge only at its end, never in lockstep ticks: merging earlier would join configurations that have
-  spent different amounts of the budget, so the budget would make time part of the state (question W1).
-  Keep that as the region's rule? (A3) A mark's handle is an ordinary `i64` that code may compute with or
-  return; the documents do not say whether it may be observed. Taken, as the reversible choice (`1c8e8c3`): in
-  a region it counts records from the region's start, so a region's result never depends on the caller's
-  history and `apply` stays its own inverse; it still depends on the region's own path (how many records
-  it wrote). Keep handles observable, or make them opaque (the validator refusing any use but `rewind`)?
 - **Return addresses** (`2bf0b69`): the outermost frame gives `0xFFFF_FFFF_0000_0000` (natively an address in the C
   library's startup) and a level beyond it 0 (natively unspecified). Keep? Levels above 0 follow the device's
   frames, which natively needs frame pointers kept and sibling calls off (plain native `-O2` crashed at level 1).
@@ -1204,131 +521,6 @@ The timeouts:
 - **Equal-priority constructor order across separately compiled objects** follows a native build of the linked
   module, not separately linked objects (C leaves it unspecified). Record as a debt, with the route of lowering
   startup per unit before linking?
-
-## Design audition of 2026-11-16: the device on an ideal circuit-model quantum computer
-
-The maintainer asked for a prototype VM whose quantum state lives only behind a backend interface (an ideal
-quantum circuit with ideal logical qubits, plus dynamic allocation of wires), with a classical core and a
-reversible core, "to smoke out any unphysical assumptions that lead to exponential overheads or violations of
-quantum mechanics". Two independent designs with small working prototypes were made (Claude Fable, GPT Astra);
-they agree on the findings below. The prototypes are private and not in this tree; merging them into one was
-handed over but not begun when work stopped. The maintainer decided the same day on the findings that touch
-earlier decisions: "Decisions the maintainer took on 2026-11-16, in the afternoon".
-
-- **Checks that inspect the state cannot be device behaviour.** `dirty_free`, the state-dependent causes of
-  `bad_rewind` with its restore, and "stop the run when some world faults" need to know something about every
-  branch with certainty, which no device can (it would tell non-orthogonal states apart). They can stay as
-  simulator diagnostics. On a device a release is a promise, a broken promise is a silent partial trace, and a
-  fault is a code in qubits. This bears on the decisions of 2026-11-16 about (1)/W2, W3 and the call form
-  that returns a fault code [A1], which would let a program observe such a check.
-- **"Until every world has stopped", parking after an un-run, and time not being part of the state [W1] are
-  not realisable as scheduled.** Every stretch of code that depends on a qubit needs a classical step budget,
-  and a rewind after a read has to be: wait at the rewind, keep, then run the same steps backwards on every
-  branch together. Witness: with two branches of 1 and 3 steps, un-run-then-park gives the final measurement 0
-  with probability 0.5 where waiting at the rewind gives 1.
-- **Exponential costs.** Cleaning up at every nesting level: 3·2^d − 2 gates measured, against 2(d + 1) when
-  inner history stays open until the outer rewind. A coherent region inside code that itself runs on a qubit
-  multiplies the budget at every level (a factor of 40 per level in one prototype's witness).
-- **Anything whose number depends on a qubit needs a classical bound and padding**: allocations, frames, the
-  length of the history, loop trips. Allocation is always a classical decision.
-- **Polynomial but large.** With the program position in qubits every step pays for every instruction;
-  memory at an address in superposition pays for every reachable byte on each access (the overlay saves the
-  simulator's memory, not gates); many-controlled gates are not unit cost (30k − 45 elementary gates for k
-  controls in one decomposition).
-- **Found sound on small cases**, with states equal to this executor's: the thesis program, the
-  mark/call/rewind-keep idiom, promotion of a byte, Grover with an arithmetic oracle, and Shor's period
-  finding for 15 with the modular exponentiation as ordinary code (683,469 gates and 1,649 wires in the
-  general, unoptimised lowering).
-- **From C today.** Shor's period finding for 15 (base 7, 8 exponent qubits) compiles through clang and
-  `bennett-front` and runs on the executor, returning 0, 64, 128, 192, with an idiomatic `powmod` (a loop,
-  `*`, `%`) applied to a qubit variable by `fx ^= powmod(7, x, 15)`. The Fourier transform had to be written
-  over separately named `_Bool` variables, because the front refuses: a qubit variable passed to a function,
-  `bennett_bit` with an index that is not a compile-time constant, and a gate on one bit controlled by another
-  bit of the same variable. These three are what stand between an idiomatic, modular Shor in C and running
-  code.
-- **The bar the maintainer set**: idiomatic C in, circuits matching hand-optimised ones out. The gap is to be
-  measured (each lowering of the idiomatic source against a hand-built circuit on the same backend) and each
-  part of it tied to a named compiler step.
-
-
-The seam (2026-11-16, night): the executor at `a1b516e` compared with an ideal circuit model row by row, on
-amplitudes (the table, its witnesses and the council's reviews are private to the design work, as the audition's
-prototypes are). Result: 25 behaviours realisable, 8 realisable at a stated cost, 2 diagnostic only, 6 not
-established, and 5 in the machine's meaning (strict mode off) that no device can have.
-
-The council on the seam (three seats, one round, no disagreement on findings): no violation of quantum mechanics
-in the project's aim (ordinary code read by and un-run around qubits, with exact classical results). The executor
-at `a1b516e` is not yet a physical machine definition: each violation is a rule whose result depends on which
-configurations of a world have nonzero amplitude, on other worlds or on a run-wide counter, and for each a
-realisable per-branch rule exists. V1 (the barrier after a leftover decided by inspecting the state), V2
-(`bad_rewind` with the restore when a read changed on some configurations only, at six check sites) and V4b (a
-state-inspecting check reaching a program as the code 16 through the call form, in strict mode too) contradict
-recorded decisions and are being fixed; V3, V3', V4 and N1 are questions ("Questions for the maintainer"); V5 is a
-defect of the specification. Not established: a measurement by one world inside a marked region with a later
-interference test; console output on a branch later un-run; a gate at an address that depends on a qubit; the
-call form with caller work on both sides; the `Unaligned` stop; instructions the prototype has no rows for
-(`sdiv`, `srem`, `ashr`, `stacksave`/`stackrestore`, `call_indirect`, `faddr`, `retaddr`, recursion); that one flat
-step machine covers several rewind sites and loops at polynomial cost. The seam's own comparison was found too
-weak (it did not compare returned values or console output) and its cheaper lowering misreads memory qubits:
-defects of the prototype, not of the machine.
-
-## Independent testing of machine step e and the audition (2026-11-16)
-
-Requirements for this pass are the two sections above: "Design audition of 2026-11-16" and
-"Decisions the maintainer took on 2026-11-16, in the afternoon". Tests were written independently;
-no production code changed. `apply`, `qalloc` and `qfree` remain first-class forms in these tests.
-
-New failing witnesses, each run explicitly and ignored with a `defect:` reason:
-
-| Witness | What differs from the documented meaning | Severity and route |
-|---|---|---|
-| `simultaneous_mark_and_outer_call_expiry_returns_budget` (`call_budget_independent.rs`) | A zero-budget inner mark and spent outer call reach a nested catch: unsigned subtraction panics instead of returning `budget` to the outermost spent call | High: check spent call guards before a mark-deadline catch; do not charge a zero outer guard |
-| `call_budget_covers_an_inner_unbudgeted_quantum_read_like_apply` (same file) | `apply` returns 7 with code 0, but its documented call-budget expansion returns 0 with `bad_rewind` when an inner unbudgeted mark reads a memory qubit | High: let the call's enclosing budget cover this region, as apply's does |
-| `a_callee_frame_that_does_not_fit_returns_a_call_fault` (same file) | `apply` delivers `stack_overflow` in its fault register; the expansion ends the world before delivering a code, with identical caller slots and memory | Medium: handle failure to enter a budgeted callee at the call site |
-| `a_signalling_output_is_not_accepted_as_another_quiet_nan_payload` (`front/tests/tests/nan_rule_independent.rs`) | The raw comparator accepts a differing signalling output as a quiet NaN payload choice; its exact rule requires quiet outputs | Medium: check output quiet bits before normalising operand payloads |
-
-An additional ignored witness, `a_changed_read_is_a_strict_diagnostic_and_machine_execution_continues`
-(`audition_machine.rs`), reproduces the already documented running-regardless debt for a kept value
-that changes a register read: machine mode still refuses. Only continuation is required; the ruling
-leaves the resulting state unspecified. No stronger coherence requirement is added.
-
-Audition coverage now in the tree:
-
-- **Waiting at the rewind:** `unequal_arms_wait_at_the_rewind_and_preserve_interference`, in
-  `crates/exec/tests/audition_machine.rs`, has arms of one and three instructions. The hand calculation
-  gives final bit 1 with probability 1, versus 1/2 with orthogonal arrival records; four finite budgets,
-  eight seeds each, and both individual arms have the same clock (budget plus nine).
-- **Classical refusals:** `classical_missing_budget_and_unaligned_still_stop` keeps the missing-budget
-  fault and `Unaligned` in both modes. **Leftovers:** `dirty_release_keeps_a_purification_with_the_dense_partial_trace`
-  checks all four complex amplitudes against an independent dense calculation and 1,024 measurements
-  against its partial trace; strict mode still diagnoses `dirty_free`.
-- **Coherent faults:** `a_branch_fault_is_coherent_data_and_is_measurable`, in
-  `crates/exec/tests/call_budget_independent.rs`, checks all amplitudes, including relative phases, for
-  one fault among four branches, under apply and the call expansion, history and compare modes; 256
-  measurements per form follow the hand-calculated fault weight 1/4. Strict mode stops without a value.
-- **Diagnostic separation:** the same strict-stop checks and
-  `quantum_operations_under_a_call_cannot_deliver_simulator_diagnostics` check that a guarded qfree,
-  rewind-keep and apply return the documented `quantum_in_region`, never a state-dependent diagnostic.
-  These operations are forbidden before `dirty_free`, a changed-read check or a nested region stop can
-  actually execute under the call. This does **not** establish the general non-delivery property for
-  future permitted quantum operations; genuine changed-read continuation remains the ignored debt above.
-- **Bounds on branch-dependent counts:** `branch_dependent_frames_allocations_history_and_loop_trips_are_bounded`
-  checks recursion, stack allocations, history-growing stores and loops at B-1/B/B+1, preserving the
-  other branch's exact amplitude; `a_quantum_dependent_allocation_count_is_bounded_on_every_branch`
-  checks qalloc under finite mark budgets (the call form forbids qalloc).
-- **Replay and calls:** longjmp across an ordinary frame retains its budget and reverses exactly;
-  repeated rewinds of one mark under 64 call budgets terminate and reverse. `machine_e_oracles.rs`
-  compares recursive replay at 20 input/run-budget combinations with the whole-world reference, and
-  compares a completed coherent region with its joined evaluation. Forty generated mark/call text
-  variants round-trip and validate. (The reference has since modelled finite mark budgets and the
-  call form, `a70e01b`.) The NaN probe independently constructs allowed and disallowed payloads in all three formats.
-
-Still supported only by the private circuit prototypes, not by these executor tests: the audition's
-primitive gate counts, physical padding wires and allocation schedule, dispatch/QROM/multi-control cost
-scaling, the nesting cost factor on that backend, Shor-15's circuit cost and the C-to-hand-circuit gap.
-This pass did not rerun the C corpus, a full raw libgcc sweep or heavy ignored tests; it did not test
-all remaining state-dependent rewind causes, arbitrary recursion depths or channels. Existing thesis,
-promotion and Grover tests remain; they are not new circuit-backend comparisons here.
 
 ## Independent testing of the SQL oracle, the checks, the entry-frame fix and the Lua probe (2026-11-17)
 
@@ -1382,20 +574,24 @@ closed forms (`experiments/lua-probe/README.md`, "Independent testing pass").
 
 ## Questions for the maintainer
 
-Gone through on 2026-11-17 after the maintainer's decisions ("Resumed on 2026-11-17"): those about only the
-machinery being removed are marked withdrawn; the rest stay open, and none is answered.
+Gone through on 2026-11-17 after the maintainer's decisions ("Resumed on 2026-11-17"); none is answered. Withdrawn,
+with the machinery they concerned (`mark`, `rewind`, machine states in superposition, the call with a fault value;
+git has their text): Choices made in machine-sites (2026-11-17), not yet asked; Independent reference snapshot
+storage (2026-11-17); From the design seam and its council (2026-11-16, night; see "Design audition of
+2026-11-16"); A rewind naming a mark that an outer rewind un-ran; Which fault a rewind gives when running again
+would pass the budget; Superseded (2026-11-17): the leftover is now taken back; Time and the run's budget; How the
+budget is required; The call with a fault value; Reference-only clock/diagnostic boundaries; A budgeted callee's
+padded clock and its caller's mark; A mark's budget once its frame is left.
 
-- **Withdrawn on 2026-11-17: concerns only `mark`/`rewind` and the machinery removed with them.**
-  **Choices made in machine-sites (2026-11-17), not yet asked.** Taken meanwhile, each easy to reverse:
-  (1) after worlds merge, a leftover wire that is zero in every configuration is discarded rather than kept
-  (the state is then the rest times |0>, so no amplitude changes; outside strict mode faithful programs then
-  behave as in strict mode); (2) a wire that survives moves only into register ids freed by wires discarded in
-  the same rewind; (3) a region run again inside one world settles its wires in that world, so where parts'
-  wire amplitudes would cancel only across worlds that merge later, the result differs from the first run
-  (rare; noted in the code). Recommendation: review together with the account of the model owed first; the
-  discard in (1) is the one to examine, since it looks at the state, and the open `Unaligned` false stop
-  ("Stopped on 2026-11-17") arises after it.
-
+- **Ordinary code reading qubits in memory, until the named fault (2026-11-17, step 2 of the work).** With machine
+  states in superposition gone, a `load`, a `store` or a jump record over bytes that hold qubits whose basis
+  configurations disagree has nothing to split into. Taken (easiest to reverse, not deciding the fault's name or
+  code): the simulator stops (`RunError::SuperposedMemoryRead`), which no program can read; bytes whose
+  configurations all agree are still read as memory. Recommendation: replace both by the named fault the
+  maintainer decided ("yes, it should be a fault to read qubits") in the next step, for every touch of a byte that
+  holds qubits by ordinary code outside `apply`.
+- **Fault code 15** (`bad_rewind`, removed): taken, left unused rather than renumbering `bad_longjmp` (16), since
+  codes are stable and a program may have measured one. Recommendation: keep it unused.
 - **`printf("%a")` of a subnormal double (2026-11-17, the Opus testing pass):** the device prints musl's
   normalised spelling (`0x1p-1074`), the native reference glibc's denormal one (`0x0.0000000000001p-1022`);
   musl also rounds `%.3a` of `0x1.fffffp-1023` to `0x2.000p-1023`. Equal values, both conforming C; a native
@@ -1403,141 +599,17 @@ machinery being removed are marked withdrawn; the rest stay open, and none is an
   (`front/tests/tests/printf_hex_float.rs`). Recommendation: follow glibc, as for a copied `sigjmp_buf`,
   by an overlay of musl's hexadecimal branch of `fmt_fp`, low priority; or record musl's spelling as the
   device's and drop the witness.
-
-- **Withdrawn on 2026-11-17: concerns only the reference for the machine states removed with `mark`/`rewind`.**
-  **Independent reference snapshot storage (2026-11-17):** taken: the established `rpds` crate's
-  persistent vectors and ordered map plus standard `Rc` cold metadata, keeping snapshots and content
-  equality rather than importing production journal machinery. Eight-way slot nodes reduce retained point-write paths; the heavy
-  ladder runner uses an optimized build, prepared before the existing 120 s / 1 GiB execution cap.
-  Recommendation: keep this reversible test-only representation; an independent undo log remains
-  an alternative if a larger workload requires less space. No machine-meaning choice changes.
-
-- **Withdrawn on 2026-11-17: concerns only `mark`/`rewind` and the machinery removed with them.**
-  **From the design seam and its council (2026-11-16, night; see "Design audition of 2026-11-16").** Rules of
-  the machine's meaning whose result depends on other worlds or on a run-wide counter, where a device can only
-  decide per branch, and which the recorded decisions do not settle. Taken meanwhile for each: unchanged; ignored
-  witness tests ("awaits the maintainer's decision") are being added on `wip/machine-finish`.
-  (V3) The run's step budget reports `budget` for the whole run while a world of weight 0.5 has already
-  returned; and the same budget, spent by the replay charge, reaches a program as the code 1 through the call
-  form, the replay charge being one counter for all worlds. Options: (i) the run's budget is a per-branch
-  deadline: a branch still running at the allowance ends `budget` for itself, finished branches keep their
-  result, the replay charge is counted per world; (ii) the run's budget is a stop of the simulator, never a
-  fault and never a code a program sees, with "running again is charged to the run's budget" re-expressed.
-  The council prefers (i), two seats to one.
-  (V4) A `longjmp` whose record is in a superposition of two valid records faults the world (a debt since
-  [M3]). Option, all seats: each branch jumps, or faults, for itself.
-  (V5) `mark budget -1` meets "a budget is required where a rewind follows a read of a qubit" and bounds
-  nothing. Not a violation of quantum mechanics but a defect of the specification: the program states no
-  bound and no uniform lowering can supply one. Option, all seats: refuse it wherever a rewind follows a read,
-  as a mark without a budget is refused, and migrate the tests that use it: in `crates/exec/src/`
-  (`atomic_rewind_tests.rs`, `deferred_independent_tests.rs`, `history.rs`, `independent_history_tests.rs`,
-  `permutation_tests.rs`), `crates/exec/tests/` (`apply_independent.rs`, `history_independent.rs`,
-  `measure_memory.rs`, `memory_address_independent.rs`, `memory_independent.rs`, `memory_overlay.rs`,
-  `memory_qubits.rs`, `replay_generated.rs`, `worlds.rs`, `worlds_independent.rs`, `worlds_oracle.rs`,
-  `worlds_reference.rs`), `front/tests/tests/journal_global.rs` (`fallback_oracle.rs` uses the front's region
-  budget plus 2 since 2026-11-17), and
-  the examples in `docs/DESIGN.md` and `docs/SYNTAX.md`.
-  (N1) A second rewind of one budgeted mark: the mark's deadline is cleared at its first rewind, the second
-  pass ends with different clocks on different configurations, merging takes the largest, and a still-open
-  outer deadline then faults `budget` with certainty on some basis inputs and not on others, with finite
-  budgets and no measurement. Options: (i) every rewind of a budgeted mark is scheduled against the bound
-  (the budget re-armed at each rewind); (ii) clocks held in wires and budgets tested per configuration (no
-  interference while timing records remain); (iii) a budgeted mark may be rewound once after a read.
-  Recommendation (the advisor): (i).
-  Also open: a mark's budget outlives its frame (a mark left open in a callee faults `budget` later in the
-  caller's loop).
-  Until these are decided, no new code, test or front output uses an unbounded budget where a rewind follows a
-  read of a qubit (where no real bound is known yet, the budget source the front uses for `apply` regions, or a
-  debt with its route), rewinds one budgeted mark twice after a read, or lets a program observe a world's
-  clock, the replay charge or the rewind costs.
-
-- **Withdrawn on 2026-11-17: concerns only `mark`/`rewind` and the machinery removed with them.**
-  **A rewind naming a mark that an outer rewind un-ran** (from building [(4)]). Read literally, such a handle
-  is a value defined between the outer mark and its rewind, so the validator refuses the inner rewind
-  (`RewoundUse`), and the executor's own `bad_rewind` for a stale handle is no longer reachable from a
-  validated program. Exempt a rewind's handle operand, so that path stays reachable and the case is a fault
-  at run time, or keep the refusal? Recommendation: keep the refusal; the program can never mean anything
-  by it, and relaxing a validator rule later breaks no program. Taken meanwhile: the refusal, with the
-  run-time check kept as defence in depth.
-
-- **Withdrawn on 2026-11-17: concerns only `mark`/`rewind` and the machinery removed with them.**
-  **Which fault a rewind gives when running again would pass the budget** (machine step e1). Taken:
-  `budget`, the state as before the rewind, since the run's budget is what ran out. The alternative is
-  `bad_rewind`. Recommendation: keep `budget`; it says what to raise.
-- **Open; changes with the work of 2026-11-17:** once `mark`/`rewind` go and `qfree` is partial trace, the
-  option is left distinguishing only the stop at an `apply` faulting for some argument values.
+- **Open; changes with the work of 2026-11-17:** with `mark`/`rewind` gone the option distinguishes the stop at an
+  `apply` faulting for some argument values and the dirty `qfree`; once `qfree` is partial trace, only the first.
   **The name of the option for the machine's meaning** (e2): `Options::machine_meaning`,
   `bennett run --machine-meaning`; strict mode stays the default and `--allow-region-faults` stays as the
   one relaxation it was. Recommendation: keep; renaming is cheap while no program depends on it.
-- **Withdrawn on 2026-11-17: concerns only `mark`/`rewind` and the machinery removed with them.**
-  **Superseded (2026-11-17): the leftover is now taken back** where its region runs again, so the barrier
-  below no longer exists ("Known weak spots", "Running regardless, outside strict mode").
-  **A rewind that ran regardless is a barrier** (e3): reversal stopped there and a rewind of an outer mark
-  faults `bad_rewind`, as at a measurement, because the history no longer describes the state. Taken as the
-  easiest to reverse; the route to lift it is in "Known weak spots". Recommendation: keep until channels.
-- **Withdrawn on 2026-11-17: concerns only `mark`/`rewind` and the machinery removed with them.**
-  **Time and the run's budget** (e4). Taken: the machine's time is a per-world clock (`Stats::clock`),
-  separate from the simulator's ticks (`Stats::steps`); a rewind of a budgeted mark moves the clock to the
-  mark's plus the budget and closes the mark's budget (the mark stays rewindable but bounds nothing more);
-  the run's budget keeps counting ticks plus the replay charge, not the clock. The alternatives: count the
-  run's budget in time (then the run's budget, too, would not tell branches apart, but a world's own work
-  would no longer bound the simulator's), or restart a mark's budget at each rewind of it (a loop that
-  marks each round would then fault, since its marks stay in the history). Recommendation: keep; revisit
-  when the front emits budgeted marks.
-
-- **Withdrawn on 2026-11-17: concerns only `mark`/`rewind` and the machinery removed with them.**
-  **How the budget is required** (e5). Taken: at run time, a rewind whose history since an unbudgeted mark
-  read a qubit faults `bad_rewind` (the validator cannot see loads of memory qubits); a rewind costs its
-  budget only where it follows such a read ("the rewind means there"), and a budget whose deadline does not
-  fit the clock (`budget -1`) meets the rule and bounds nothing, which is what the tests written before the
-  rule use. The alternatives: a new fault code instead of `bad_rewind`, or every mark costing its budget.
-  Recommendation: keep; a validator rule for calls that read registers can be added beside it.
-
-- **Withdrawn on 2026-11-17: the call form goes with `mark`/`rewind` unless a use of it outside expressing
-  `apply` is found (then this question reopens for ordinary code only).**
-  **The call with a fault value** (e6). Taken: the code is an `i5` (the fault code width, as the fault
-  registers); `%c = call ... budget B` names the code alone; the budget lives in the callee's frame as steps
-  left, counted for every step while it is live and never given back by a rewind inside (as an applied
-  function's), and the innermost call takes a fault, the outermost spent one a budget. Recommendation: keep;
-  an `i8` code would survive a further widening of the codes, at the cost of a `trunc` before a keep into a
-  `q5`.
-
-- **Withdrawn on 2026-11-17: concerns only `mark`/`rewind` and the machinery removed with them.**
-  **Reference-only clock/diagnostic boundaries:** the documents define successful forward clocks and
-  budget deadlines, but not the time of a faulting attempt or the ordering of a caught fault and a
-  sibling return in one simulator round. Taken for the reference: count an attempted named fault as
-  one clock unit, except an already-spent deadline; do not assert fault clocks or the simultaneous
-  strict-stop boundary. Recommendation: leave these as simulator conventions until time is observable
-  to a program. The reference's strict diagnostic report is separate from the machine state.
-
-- **Withdrawn on 2026-11-17: concerns only `mark`/`rewind` and the machinery removed with them.**
-  **A budgeted callee's padded clock and its caller's mark:** does an internal rewind after a memory
-  qubit read spend its mark's whole budget against an enclosing caller mark, or does the call have a
-  region-local clock and charge only its forward steps to the caller? "The mark's budget" says nested
-  marks cover inner waits, but also excludes callers' marks inside a coherent region; "The call with a
-  fault value" attaches region rules without saying how these clocks compose. Witness:
-  `caller_mark_and_padded_callee_clock_need_a_composition_rule` in
-  `crates/exec/tests/worlds_budgets_independent.rs` (ignored as a specification question, not a defect).
-  With a call budget of 5, an internal `mark budget 10` and caller `mark budget 8`, the reference's
-  shared clock leaves one world with `budget` whereas the executor completes uncomputation. Taken:
-  keep the shared per-world clock in the reference; compare this combined form with an ample caller
-  budget, leaving this narrow boundary unasserted. Recommendation: state explicitly which clock and
-  deadline the call uses, then enable the witness or correct the reference to that rule.
-
 - **The NaN payload rule and the default NaN** (e7). Taken: two NaN results agree when each carries the
   payload of one of the tuple's NaN operands or the default NaN's, the sign free. The default NaN is not an
   operand of the helper, but it is an operand of the inner operation whose operand order differs (an inner
   `0/0`); without it 1,476 of 164,096 `__divdc3` tuples fail. Recommendation: keep. The fast grouped checks
   of `front/tests/tests/complex.rs` still count any two NaNs as equal (looser than the rule); route: give
   their comparison the operands, as `compare.py` has them, and apply the same rule.
-
-- **Withdrawn on 2026-11-17: concerns only `mark`/`rewind` and the machinery removed with them.**
-  **A mark's budget once its frame is left** (machine-finish 0c). "From the mark until a rewind of it" read
-  literally lets a budgeted mark in a callee that returns, or that a catch or `longjmp` discards, bound
-  its caller for ever, though no rewind can reach it. Taken: leaving the frame closes the mark's budget
-  (time, not state; reversal does not reopen it, as it does not reopen a rewound mark's). This is what
-  makes `apply` and mark, call with a budget, rewind-keep agree when the callee leaves a budgeted mark
-  behind, and what the testing pass's witness expected. Recommendation: keep.
 
 ## Questions the maintainer answered on 2026-11-16, in the afternoon (kept for their detail)
 
@@ -1554,9 +626,6 @@ Each recommendation was taken ("Decisions the maintainer took on 2026-11-16, in 
   differences of this kind as agreement? Recommendation: yes, compared by a rule that allows exactly this. Taken
   meanwhile (easiest to reverse): the bit-for-bit requirement stays, recorded as a debt with its route (preserve
   the archive's per-operation operand order through helper compilation and SoftFloat lowering).
-- **A budget for running again.** A replay that newly reaches an endless loop hangs ("Known weak spots"). Charge
-  replay work to the run's budget and fault atomically when it is spent? Recommendation: yes. Taken meanwhile:
-  the hang stays a recorded weak spot.
 
 - **Controlled updates of ordinary memory and the coherent class.** The fallback oracle's testing pass asks whether a
   controlled in-place update of ordinary memory (`cells[0] += 2` under a qubit, as in its `nested` and `loop`
@@ -1580,6 +649,11 @@ Each recommendation was taken ("Decisions the maintainer took on 2026-11-16, in 
 | A floating-point operation that reads the subnormal mode (arithmetic, comparison, conversion from floating point, intrinsics other than `fabs`/`copysign`/`is.fpclass`) in a function promising a non-IEEE mode (`-fdenormal-fp-math=preserve-sign`, `positive-zero`, `dynamic`, or the `-f32` form); moves and sign/magnitude bit operations there are accepted | The floating-point environment carried through SoftFloat's state (flush inputs and outputs as the promised mode says), compared with native code run under MXCSR DAZ/FTZ |
 
 ## C North Star rungs 1–3 (measured 2026-11-16/17)
+
+**Since 2026-11-17 the second implementation is gone**: the independently written whole-world interpreter
+modelled `mark`, `rewind` and machine states in superposition and was removed with them, so rungs 1 and 2 are
+checked on `bennett-exec` against native only; the "independent" figures below are the measurements of
+2026-11-16/17. Debt: "Resumed on 2026-11-17".
 
 `experiments/northstar-ladder/README.md`, `front/tests/tests/ladder.rs`: unchanged archived five Int8
 functions and 258-line hashtable, provenance checked against pinned Git blobs. Rungs 1/3 measured at `5361c71`,
@@ -1650,45 +724,7 @@ the ordinary frontend run without changing its domain or assertions.
   Route: handle that output before JSON parsing; standalone experiment workspaces still need their
   own mutation checks (`experiments/lua-probe/README.md`). No mutation pass is claimed for it.
 
-- **Independent whole-world reference, extended on 2026-11-16:** finite mark budgets now bound each
-  world's clock, close on rewind and charge the deadline after a register/cell read; an unbudgeted
-  rewind after such a read faults. The reference interprets `CallBudget` (nested guarded frames,
-  remaining steps, returns/catches, faults, region rules and longjmp boundaries), including in `apply`.
-  Live guards retain their branch-local consumption through an internal rewind of a memory-qubit
-  read; inverse replay retains the original counts. Bounds are checked before a queued rewind,
-  and replay charges the catch step as well as the call and body. The default matrix has 18 tests /
-  653 executor runs, plus the ignored clock-composition witness and the V4b witness (passing since the executor's fix).
-  A collective jump-record diagnostic stays outside a budgeted call's named-fault catch; per-branch
-  jumps for disagreeing records remain the V4 decision above.
-  Its replay resource limit is incremental, so a newly endless replay ends atomically with `budget`;
-  replay seeks a dynamic visit rather than a fixed instruction count. It models strict/machine dirty
-  frees and stale handles, nonzero-allocation leftovers and barriers. New comparisons:
-  `crates/exec/tests/worlds_budgets_independent.rs`, public states and guard counts each step, finite
-  budget boundaries, fault codes, complex amplitudes after uncomputation, observable successful clocks,
-  Born support and reversal. No executor implementation was used to derive it (only public snapshot
-  declarations for the adapter). Remaining scope limits: snapshots expose the latest world's clock
-  only, so individual parked-world clocks cannot be checked through them; exact strict-stop ordering
-  when a sibling return and a caught fault coincide is unspecified and not asserted; padded clocks
-  inside a budgeted callee versus its caller's mark need a composition rule (question above); the
-  lifetime of a deadline after its callee returns is the existing seam question (this reference
-  invalidates the callee's marks and does not compare that open case); no new quantum
-  state guarantee is asserted for unfaithful inverses. The reference keeps the previously recorded
-  deferred-check cohort limitation below. Rung 2 now finishes with shared snapshots; larger workloads
-  can still exhaust its diagnostic resource cap. Multiworld comparisons still walk full history
-  contents; their large-history cost was not measured here. Route if needed: shared-prefix-aware exact
-  comparison or an independent compact undo log.
 
-- **Council V4b, independently reproduced, fixed:** in strict mode a budgeted call turned a collective
-  `longjmp`-record check into program value 16, although the afternoon's decision forbids delivering
-  simulator-only checks as codes. One record names the callee and one the caller; both are held in one
-  world's qubits. Ignored witness `collective_jump_diagnostic_is_not_delivered_by_a_budgeted_call` in
-  `crates/exec/tests/worlds_budgets_independent.rs` failed with `Returned(Some(16))` on `16f71a8`; it passes
-  since the executor stopped delivering faults found by inspecting the state as a call's code, and runs by
-  default.
-  The reference regression failed too before its cause was separated from named per-branch faults;
-  it now ends at the diagnostic boundary and reverses exactly. The two basis records give code 0
-  and named `bad_longjmp` respectively in both machines, each step reversed. Route: keep the collective check out
-  of the catch path, separately from deciding the per-branch jump rule (V4), as the executor now does.
 
 
 - Removed on 2026-11-17: the fallback oracle compared the four `cells` bytes and the qubit variables only, so
@@ -1725,51 +761,9 @@ the ordinary frontend run without changing its domain or assertions.
 - Debt: equal-priority constructor order across separately compiled objects follows a native build of the linked
   module, not separately linked objects (C leaves it unspecified). Route: lower startup per unit before linking.
 
-- Removed on 2026-11-16 (machine step e1): a rewind whose un-run ran an inner rewind's region again on a
-  path that newly reaches an endless loop ran for ever. Running again is now charged to the run's budget
-  and such a rewind faults `budget`, changing nothing (`docs/DESIGN.md`, "History", Cost). What remains: a
-  run with no budget can still loop there, as any forward loop can. A path that faults, measures, returns
-  from the rewind's frame or ends the run stays refused atomically with `bad_rewind`.
 
-- **Running regardless, outside strict mode** (machine step e3; machine-finish 0d, the design seam's V1 and
-  V2; machine-sites, 2026-11-17): built for a nonzero allocation, a changed register read, a changed memory-qubit
-  access, an un-promotion whose cell changed, and an inner region whose `qfree` is dirty when run again;
-  leftovers are journalled with the rewind and taken back where its region runs again, in whatever order, so the
-  barrier is gone. Since 2026-11-17 also where worlds join (debts (1) and (3) of this bullet, removed): below a
-  split point, at a read or access where the world split, wherever other worlds exist and where worlds split off
-  during the un-run, every check site leaves its wire over in every world, faithful or not, the worlds merge, and
-  the wires zero in every configuration are discarded once they have (`docs/DESIGN.md`, "Strict mode", "Where
-  worlds join"; `crates/exec/tests/joint_leftovers.rs`; the three witnesses of debt (1) run by default). A world
-  split off carries what was left over and takes back its own copy of each wire. Found and fixed on the way: a
-  world whose wire was zero was kept apart from one whose wire was not (above the split point, one world each:
-  they never merged, and the host observed one of them), and a register left over at an id that a later step of
-  the same un-run revives panicked. Still `bad_rewind` outside strict mode, never a call's fault code: an inner
-  region run again that reaches a measurement or leaves the rewind's frame on a path the keeps changed (debt
-  (2)): running that path as the circuit would makes the measurement a channel, so until channels this stays a
-  refusal (the `bad_rewind` of `run_again`, `Halt::Inspected`; inside a call with a budget no path can reach it,
-  since keeps and quantum instructions are refused there; checked in both modes by
-  `an_inner_region_run_again_that_reaches_a_measurement_stays_a_named_refusal`: the state unchanged, nothing
-  sampled, reversal to the entry).
-  Debt (P1, found here): the ids of registers left over are in the program's id space, so where a step run again
-  allocates (a `qalloc` of an inner region run again by an outer un-run) while a leftover of the outer un-run
-  holds the id it took the first time, it takes another id and the state differs from the one its history
-  describes (no test reaches it yet; the old first-free choice had the same exposure). Route: give leftovers an
-  id space of their own (columns after the program's, in the order made, compacted as they are taken back), so
-  that no leftover takes an id a program step can want; the take-back then names a wire by its record, not its
-  column.
 
-- The journal-content observer (`crates/exec/src/measure.rs`) does not follow a `rewind` or a call with a
-  budget inside a region. It panicked there (an `assert!` on valid programs) until 2026-11-16; it now stops
-  observing and names the step (`JournalMeasurement::unsupported`), the run unchanged. Route: shadow the
-  records a rewind pops (its history nodes and entries) and the frames a caught fault discards.
 
-- Worlds' deferred un-run checks (`d6036a1`) were matched across worlds by a 64-bit hash of the classical state
-  alone, so a collision would have added two different checks; since 2026-11-16 a note keeps its state and the
-  states are compared on a hash match (`a_hash_collision_does_not_add_the_checks_of_different_states`, with a
-  test seam that forces every key to collide). The copy each world saves
-  before a rewind makes the 1,500-iteration idiom loop about a third slower (route: copy only the journal above
-  the mark). When a sum fails, every waiting world of the group that rewound last faults; the reference model
-  faults every world at that rewind (no generated program differs).
 
 - The `long double` increase is bisected to `8bbb56c`: packed `i80` results and changed round-pack inlining
   add 189/209/20,671 steps in `960215-1`/`regstack-1`/`00204` (normal add/sub probes +9/+10); this buys

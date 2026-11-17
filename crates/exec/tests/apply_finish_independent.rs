@@ -12,7 +12,6 @@ const HALF: f64 = std::f64::consts::FRAC_1_SQRT_2;
 type State = BTreeMap<Vec<u64>, C>;
 
 fn assert_vector(snapshot: &Snapshot, expected: &State, columns: usize) {
-    assert!(snapshot.worlds.is_empty(), "completed circuit must have joined: {snapshot:?}");
     let mut actual = State::new();
     for (config, amplitude) in &snapshot.quantum.amplitudes {
         assert!(config.len() <= columns, "unexpected extra wires: {snapshot:?}");
@@ -159,52 +158,6 @@ fn jumps_inside_a_region_and_escaping_a_region_and_nested_apply_faults() {
     check(&harness(2, nested, 20, 1), &expected_apply(2, 1, |_| Err(Fault::QuantumInRegion)), 4);
 }
 
-#[test]
-fn textual_forms_and_applies_under_nested_rewinds_have_the_same_dense_answer() {
-    let f = "func @f(i2 %x) -> i2 {\nentry:\n%r = xor i2 %x, 3\nret %r\n}";
-    let original = harness(2, f, 4, 1);
-    let textual = original.replace(
-        "apply @f(%q) -> %o, %e budget 4",
-        "%m = mark budget 7\n%y, %code = call @f(%q) budget 4\nrewind %m keep (%y -> %o, %code -> %e)",
-    );
-    // Caller SSA slots differ in the literal expansion; quantum/memory and independent inverses agree.
-    let expected = expected_apply(2, 1, |x| Ok(x ^ 3));
-    check(&textual, &expected, 4);
-    // Inner work is undone, the outer work is undone, then one remaining apply supplies f(x).
-    // Ample finite bounds cover the forms' permitted waits. No mark is rewound twice.
-    let nested = original.replace("apply @f(%q) -> %o, %e budget 4", "%outer = mark budget 300\napply @f(%q) -> %o, %e budget 4\n%inner = mark budget 100\napply @f(%q) -> %o, %e budget 4\nrewind %inner\nrewind %outer\napply @f(%q) -> %o, %e budget 4");
-    check(&nested, &expected, 4);
-}
-
-#[test]
-fn replay_work_is_charged_to_each_nested_call_budget() {
-    // Six forward steps: mark, add, rewind, add, rewind, ret. The second rewind
-    // undoes the first rewind by running its single add again: one replay step.
-    // Thus work succeeds at B=7, and gives the code budget below that boundary.
-    let body = "func @work(i2 %x) -> i2 {\nentry:\n%m = mark\n%a = add i2 %x, 1\nrewind %m\n%b = add i2 %x, 2\nrewind %m\nret %x\n}";
-    for inner in 0..=12 {
-        for outer in [1, 64] {
-            let f = format!(
-                "{body}\nfunc @f(i2 %x) -> i2 {{\nentry:\n%y, %code = call @work(%x) budget {inner}\n%r = trunc i5 %code to i2\n%v = xor i2 %y, %r\nret %v\n}}"
-            );
-            let expected = expected_apply(2, 1, |x| {
-                if outer == 1 {
-                    Err(Fault::Budget)
-                } else if inner < 7 {
-                    Ok(Fault::Budget.code() & 3)
-                } else {
-                    Ok(x)
-                }
-            });
-            check(&harness(2, &f, outer, 1), &expected, 4);
-        }
-    }
-}
-
 fn whole_state(actual: &bennett_exec::Snapshot, expected: &bennett_exec::Snapshot, context: &str) {
     common::assert_same_state(actual, expected, context);
-    assert_eq!(actual.worlds.len(), expected.worlds.len(), "{context}: other worlds");
-    for (actual, expected) in actual.worlds.iter().zip(&expected.worlds) {
-        whole_state(actual, expected, context);
-    }
 }

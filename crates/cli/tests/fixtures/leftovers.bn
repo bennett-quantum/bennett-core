@@ -12,12 +12,3 @@ entry:
     qfree %q
     ret
 }
-func @rewind() {
-entry:
-    %q = qalloc 1
-    %h = mark
-    %t = qalloc 1
-    x %t ctrl %q
-    rewind %h keep (i1 1 -> %q)
-    ret
-}

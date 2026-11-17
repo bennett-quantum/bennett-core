@@ -28,8 +28,7 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | %d = alloca operand
             | %d = stacksave                             ; the stack pointer, as an i64
             | stackrestore operand                       ; back to a saved stack pointer; else fault bad_stack_restore
-            | [%d =] call @f(typed, ...)                  ; a qN argument to an iN parameter reads the register
-            | [%d,] %c = call @f(typed, ...) budget operand ; the region's rules; %c: the i5 fault code, 0 on return
+            | [%d =] call @f(typed, ...)                  ; a qN argument passes the handle to a qN parameter
             | [%d =] call_indirect fn(type, ...) [-> type] operand(typed, ...)
             | %d = setjmp operand                        ; i32 0; writes a jump record at the i64 address
             | %d = retaddr N                             ; i64 code address the frame N levels down returns to
@@ -42,9 +41,6 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | %d = measure %r                            ; every qubit of the register
             | %d = measure iN "[" operand "]"            ; N bits from bit 0 of the integer at the i64 address
             | apply @f(typed, ...) -> %out, %fault budget operand  ; %fault: a register of 5 qubits or more
-            | %d = mark [budget operand]                 ; an opaque i64 handle: only rewind may use it
-            | rewind %h [keep (typed -> kept {, typed -> kept})]  ; XOR each value in, un-run since %h
-kept       := %r | "[" operand "]"                ; a register, or memory qubits from bit 0 of the address
 terminator := br label[(typed, ...)]
             | br operand, target, target
             | switch iN operand, INT: target, ..., default: target
@@ -124,26 +120,6 @@ done(i64 %sum):
 }
 ```
 
-## History: `mark` and `rewind`
-
-`%h = mark` defines an `i64` handle naming the current point of the history. `%h = mark budget B`, with
-`B` an `i64` (a constant or a value), also bounds the steps from the mark to its rewind, the rewind
-included, and makes a rewind of it cost `B` (`docs/DESIGN.md`, "The mark's budget"); the writer prints
-`budget` only for a mark that has one. A rewind that follows a read of a qubit (a register read as an
-integer, a memory qubit touched) needs a budget on its mark, outside an `apply`; `budget -1` (2^64 - 1)
-meets that and bounds nothing. `rewind %h` un-runs every
-step since that point and the program continues after the rewind; `rewind %h keep (%v -> %r, i2 1 -> %s)`
-first XORs each value into its register, in order. `%h` must be the result of a `mark` in the same
-function (the validator's `NotAMark`), not a value derived from one or passed through a block parameter.
-A handle is opaque (decided 2026-11-16): the validator refuses every use of it but as the handle a `rewind`
-names (`HandleUse`), so it is never computed with, compared, stored, passed, returned, kept or branched on,
-and no result of a program depends on its value. A value defined between a mark and a rewind of it holds,
-after the rewind, its value at the mark; a use of it there, on any path, is refused (`RewoundUse`): define
-it again after the rewind, or keep it into a register.
-Each kept value is an integer exactly as wide as its register (a typed constant names its width); keeping
-a register's value is not accepted. `keep` with an empty list is not accepted: write `rewind %h`. The
-meaning, and when a rewind faults (`bad_rewind`), is in `docs/DESIGN.md`, "History: `mark` and `rewind`".
-
 ## Qubits in memory
 
 A gate's qubit is a register qubit, `%q[3]`, or a bit of memory, `[%p:3]`: bit `3 % 8` of the byte at
@@ -156,25 +132,14 @@ from 128 (`MemoryBitOutOfRange`), the same address operand and bit twice in one 
 (`RepeatedMemoryQubit`; the same bit through different operands is the run-time fault `qubit_alias`),
 and an address that is not an `i64`.
 
-`rewind %h keep (%v -> [%p])` XORs `%v`, of any integer width N, into the N qubits from bit 0 of the byte
-at `%p` on, little-endian; every byte it reaches must hold qubits since before the mark. The meaning, and
-what loads and stores of such bytes do, is in `docs/DESIGN.md`, "Qubits in memory".
+What loads and stores of bytes that hold qubits do is in `docs/DESIGN.md`, "Qubits in memory".
 
-## The call with a fault value
+## Registers are not integers
 
-`%y, %c = call @f(args) budget B` calls `@f` as `call` does, with the region's rules attached: at most `B`
-(an `i64`) steps, no effect, `exit` or quantum instruction, no jump below its own frame. A return gives the
-value in `%y` and 0 in `%c`; a fault inside gives 0 in `%y` and the fault's code in `%c`, an `i5`
-(`bennett_ir::Fault`'s 5-bit codes). `%c = call @f(args) budget B` names only the code: for a function that
-returns nothing, or to ignore the value. Only a call with a budget defines two values. The meaning is in
-`docs/DESIGN.md`, "The call with a fault value".
-
-## Reading a register
-
-A `call` or `call_indirect` may pass a register `%q` of type `qN` to a parameter of type `iN`, the same
-width: the callee receives the register's value as an integer, and the world splits into one world per
-value if its configurations disagree (`docs/DESIGN.md`, "Worlds"). To a `qN` parameter the handle is
-passed, as before. Nowhere else does a register stand for an integer.
+A register `%q` of type `qN` passed to a parameter of type `qN` passes the handle. Nowhere does a register stand
+for an integer in ordinary code: a `call`, `call_indirect` or branch passing one to an `iN` parameter is a type
+mismatch. Only `apply` reads its argument registers, for each definite value of them. `mark`, `rewind` and the
+call with a fault value (`%y, %c = call ... budget B`) were removed on 2026-11-17 and are not read.
 
 ## Whole-run exit
 

@@ -6,8 +6,6 @@
 #[path = "../oracle_support/mod.rs"]
 pub(crate) mod oracle_support;
 
-pub mod leftover;
-
 use bennett_exec::{Executor, Options, Outcome, Snapshot};
 use bennett_ir::{FuncId, ValidModule};
 
@@ -29,7 +27,7 @@ pub fn bounded() -> Options {
 }
 
 /// [`bounded`], for hand-written programs that read their fault registers on purpose: an `apply` may
-/// fault on some branches and the run goes on.
+/// fault for some argument values and the run goes on.
 pub fn allowing_region_faults() -> Options {
     Options { allow_region_faults: true, ..bounded() }
 }
@@ -43,28 +41,6 @@ pub fn entry(module: &ValidModule, name: &str) -> FuncId {
 }
 
 pub fn executor<'m>(module: &'m ValidModule, name: &str, args: &[u64], options: Options) -> Executor<'m> {
-    if std::env::var_os("BENNETT_WORLDS_REFERENCE").is_some()
-        && !oracle_support::worlds_executor::compare_world_entry(module, name, args)
-    {
-        let function = module.function(entry(module, name));
-        let cap = if function
-            .blocks
-            .iter()
-            .any(|b| matches!(b.term, bennett_ir::Terminator::Return(_) | bennett_ir::Terminator::Exit(_)))
-        {
-            256
-        } else {
-            12
-        };
-        let steps = oracle_support::worlds_executor::compare(
-            module,
-            name,
-            args,
-            options.budget.unwrap_or(cap).min(cap) as usize,
-            true,
-        );
-        eprintln!("worlds reference @{name}{args:?}: {steps} steps");
-    }
     Executor::new(module, entry(module, name), args, options).unwrap_or_else(|error| panic!("{error}"))
 }
 
@@ -97,31 +73,4 @@ pub fn assert_reverses(module: &ValidModule, name: &str, args: &[u64], options: 
     assert_eq!(undone, steps, "@{name}{args:?}: every step is undone");
     assert_same_state(&executor.snapshot(), &at_entry, &format!("@{name}{args:?} after {outcome:?}"));
     outcome
-}
-
-/// Rewrites every `apply @f(args) -> %out, %fault budget B` as the history idiom
-/// `%h = mark budget B + 2`, `%y = call @f(args)`, `rewind %h keep (%y -> %out)` (`docs/DESIGN.md`,
-/// "Worlds"; the mark's budget counts the call, the callee's B steps and the rewind, and a rewind after a
-/// read of a qubit needs one). The idiom has no fault register: it equals the `apply` wherever no branch
-/// faults.
-pub fn as_history_idiom(text: &str) -> String {
-    let mut out = String::new();
-    for (index, line) in text.lines().enumerate() {
-        let trimmed = line.trim_start();
-        let Some(rest) = trimmed.strip_prefix("apply ") else {
-            out += line;
-            out.push('\n');
-            continue;
-        };
-        let indent = &line[..line.len() - trimmed.len()];
-        let rest = rest.split(';').next().unwrap_or(rest);
-        let (call, targets) = rest.split_once("->").unwrap_or_else(|| panic!("an apply: {line}"));
-        let out_register = targets.split(',').next().unwrap_or_else(|| panic!("an out register: {line}")).trim();
-        let budget = targets.split("budget").nth(1).unwrap_or_else(|| panic!("a budget: {line}")).trim();
-        let (h, y, b) = (format!("%idiom.{index}.h"), format!("%idiom.{index}.y"), format!("%idiom.{index}.b"));
-        out += &format!("{indent}{b} = add i64 {budget}, 2\n");
-        out += &format!("{indent}{h} = mark budget {b}\n{indent}{y} = call {}\n", call.trim());
-        out += &format!("{indent}rewind {h} keep ({y} -> {out_register})\n");
-    }
-    out
 }

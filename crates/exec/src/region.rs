@@ -21,13 +21,10 @@ use crate::quantum::Config;
 pub struct RegionCost {
     /// Runs of region callees.
     pub runs: u64,
-    /// Steps executed for regions, forward and back (each run undone after its result is XORed out),
-    /// steps rewound and run again by `rewind`s inside the region included.
+    /// Steps executed for regions, forward and back (each run undone after its result is XORed out).
     pub work: u64,
     /// The most journal bytes each run held, summed over runs.
     pub journal_bytes: u64,
-    /// The most overlay bytes each run held above the overlay at the region's start, summed over runs.
-    pub overlay_bytes: u64,
 }
 
 /// Where an argument's value comes from on each configuration.
@@ -149,19 +146,12 @@ impl<'m> Executor<'m> {
             journal: self.journal.replace(region_journal),
             outcome: self.outcome.take(),
             steps: std::mem::take(&mut self.steps),
-            clock: self.clock,
-            charged: std::mem::take(&mut self.charged),
-            charging: std::mem::replace(&mut self.charging, false),
             budget: self.budget.replace(budget),
             base_depth: std::mem::replace(&mut self.base_depth, self.frames.len()),
             in_region: std::mem::replace(&mut self.in_region, true),
-            region_records: std::mem::take(&mut self.region_records),
             materialised: std::mem::replace(&mut self.materialised, true),
         };
         self.run_journal_peak = 0;
-        self.run_overlay_peak = self.memory.overlay_len();
-        let overlay_base = self.run_overlay_peak;
-        let (rewound, rerun) = (self.rewound_steps, self.rerun_steps);
         self.measure_begin_branch(args);
         let outcome = match self.push_frame(callee, args) {
             Ok(()) => {
@@ -178,9 +168,8 @@ impl<'m> Executor<'m> {
         }
         let undone = self.unwind();
         self.region_cost.runs += 1;
-        self.region_cost.work += self.steps + undone + self.rewound_steps - rewound + self.rerun_steps - rerun;
+        self.region_cost.work += self.steps + undone;
         self.region_cost.journal_bytes += self.run_journal_peak as u64;
-        self.region_cost.overlay_bytes += self.run_overlay_peak.saturating_sub(overlay_base) as u64;
         self.restore(outer);
         outcome
     }
@@ -191,28 +180,20 @@ impl<'m> Executor<'m> {
         self.spare_journal = region_journal;
         self.outcome = outer.outcome;
         self.steps = outer.steps;
-        self.clock = outer.clock;
-        self.charged = outer.charged;
-        self.charging = outer.charging;
         self.budget = outer.budget;
         self.base_depth = outer.base_depth;
         self.in_region = outer.in_region;
-        self.region_records = outer.region_records;
         self.materialised = outer.materialised;
     }
 }
 
-/// The run's state set aside while one branch of a region is enumerated.
+/// The run's state set aside while a region runs for one basis configuration.
 struct Saved {
     journal: Option<Journal>,
     outcome: Option<Outcome>,
     steps: u64,
-    clock: u64,
-    charged: u64,
-    charging: bool,
     budget: Option<u64>,
     base_depth: usize,
     in_region: bool,
-    region_records: usize,
     materialised: bool,
 }

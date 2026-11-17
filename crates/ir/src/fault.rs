@@ -57,11 +57,7 @@ faults! {
     ExitInRegion = 13 "exit_in_region",
     /// The exit operand's type differs from the selected entry's result type.
     ExitTypeMismatch = 14 "exit_type_mismatch",
-    /// A `rewind` that cannot un-run: its handle is not a mark of the running function's activation, the
-    /// history since the mark holds a measurement, a kept value goes into a register allocated since, or
-    /// the un-run meets a state its history does not describe (a register read as an integer since the
-    /// mark that no longer holds the value read, a register allocated since that is not zero).
-    BadRewind = 15 "bad_rewind",
+    // Code 15 was `bad_rewind`, removed with `rewind` on 2026-11-17; codes are stable, so it stays unused.
     /// `longjmp` through a buffer that holds no jump record to a live frame of the current run (inside a
     /// coherent region: of the region), or whose record is held in qubits that disagree on it.
     BadLongjmp = 16 "bad_longjmp",

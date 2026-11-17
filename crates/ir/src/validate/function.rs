@@ -5,8 +5,8 @@ use petgraph::graph::{DiGraph, NodeIndex};
 
 use super::error::{Expected, Location, Problem, ValidationError};
 use crate::{
-    CastOp, Fault, Function, Gate, Inst, KeepTarget, MEMORY_QUBIT_BITS, MeasureSource, Module, Operand, Place, Slot,
-    Terminator, Type, Width,
+    CastOp, Fault, Function, Gate, Inst, MEMORY_QUBIT_BITS, MeasureSource, Module, Operand, Place, Slot, Terminator,
+    Type, Width,
 };
 
 /// Checks `function`, appending what is wrong to `errors`, and returns the type of every slot. The types
@@ -20,9 +20,7 @@ pub(super) fn check(module: &Module, function: &Function, errors: &mut Vec<Valid
     checker.definitions();
     checker.undefined_uses();
     checker.operand_types();
-    checker.handle_uses();
     checker.dominance();
-    checker.rewound_uses();
     checker.types.into_iter().map(|ty| ty.unwrap_or(Type::Int(Width::WORD))).collect()
 }
 
@@ -88,12 +86,10 @@ impl<'a> Checker<'a> {
             }
             for (i, inst) in block.insts.iter().enumerate() {
                 let site = Site::Inst(b, i);
-                inst.results().for_each(|slot| self.slot_in_range(site, slot));
+                inst.result().into_iter().for_each(|slot| self.slot_in_range(site, slot));
                 inst.visit_uses(|slot| self.slot_in_range(site, slot));
-                if let Inst::Call { callee: func, .. }
-                | Inst::CallBudget { callee: func, .. }
-                | Inst::Apply { callee: func, .. }
-                | Inst::FuncAddr { func, .. } = inst
+                if let Inst::Call { callee: func, .. } | Inst::Apply { callee: func, .. } | Inst::FuncAddr { func, .. } =
+                    inst
                     && func.index() >= self.module.functions.len()
                 {
                     self.error(site, Problem::UnknownFunction(func.0));
@@ -130,14 +126,6 @@ impl<'a> Checker<'a> {
             }
             for (i, inst) in block.insts.iter().enumerate() {
                 let site = Site::Inst(b, i);
-                if let Some(fault) = inst.fault_result() {
-                    self.define(
-                        site,
-                        fault,
-                        Some(Type::Int(crate::Fault::CODE_WIDTH)),
-                        Def { block: b, position: i + 1 },
-                    );
-                }
                 let Some(dst) = inst.result() else { continue };
                 let ty = self.result_type(site, inst);
                 self.define(site, dst, ty, Def { block: b, position: i + 1 });
@@ -178,15 +166,11 @@ impl<'a> Checker<'a> {
             Inst::Setjmp { .. } => Some(Type::Int(Width::JUMP_VALUE)),
             Inst::Cast { to, .. } => Some(Type::Int(*to)),
             Inst::Measure { source: MeasureSource::Memory { width, .. }, .. } => Some(Type::Int(*width)),
-            Inst::Alloca { .. }
-            | Inst::FuncAddr { .. }
-            | Inst::StackSave { .. }
-            | Inst::ReturnAddress { .. }
-            | Inst::Mark { .. } => Some(Type::Int(Width::WORD)),
-            Inst::Qalloc { width, .. } => Some(Type::Qreg(*width)),
-            Inst::Call { callee, .. } | Inst::CallBudget { callee, .. } => {
-                self.call_result(site, self.module.function(*callee).result)
+            Inst::Alloca { .. } | Inst::FuncAddr { .. } | Inst::StackSave { .. } | Inst::ReturnAddress { .. } => {
+                Some(Type::Int(Width::WORD))
             }
+            Inst::Qalloc { width, .. } => Some(Type::Qreg(*width)),
+            Inst::Call { callee, .. } => self.call_result(site, self.module.function(*callee).result),
             Inst::CallIndirect { signature, .. } => self.call_result(site, signature.result),
             Inst::Measure { source: MeasureSource::Register(_), .. }
             | Inst::Store { .. }
@@ -195,8 +179,7 @@ impl<'a> Checker<'a> {
             | Inst::Qfree { .. }
             | Inst::Gate { .. }
             | Inst::GateAt { .. }
-            | Inst::Apply { .. }
-            | Inst::Rewind { .. } => None,
+            | Inst::Apply { .. } => None,
         }
     }
 
@@ -270,16 +253,11 @@ impl<'a> Checker<'a> {
             }
             Inst::Call { callee, args, .. } => {
                 let params = self.module.function(*callee).params.iter().map(|p| p.ty);
-                self.call_arguments(site, args, params);
-            }
-            Inst::CallBudget { callee, args, budget, .. } => {
-                let params = self.module.function(*callee).params.iter().map(|p| p.ty);
-                self.call_arguments(site, args, params);
-                self.expect(site, *budget, Type::Int(Width::WORD));
+                self.arguments(site, args, params);
             }
             Inst::CallIndirect { signature, target, args, .. } => {
                 self.expect(site, *target, Type::Int(Width::WORD));
-                self.call_arguments(site, args, signature.params.iter().copied());
+                self.arguments(site, args, signature.params.iter().copied());
             }
             Inst::Effect { byte } => self.expect(site, *byte, Type::Int(Width::BYTE)),
             Inst::Qfree { register } | Inst::Measure { source: MeasureSource::Register(register), .. } => {
@@ -304,101 +282,8 @@ impl<'a> Checker<'a> {
                 self.apply(site, *callee, args, *out, *fault);
                 self.expect(site, *budget, Type::Int(Width::WORD));
             }
-            Inst::Rewind { mark, keep } => {
-                self.rewind_mark(site, *mark);
-                for pair in keep {
-                    match pair.target {
-                        KeepTarget::Register(register) => {
-                            if let Some(width) = self.register_width(site, register) {
-                                self.expect(site, pair.value, Type::Int(width));
-                            }
-                        }
-                        KeepTarget::Memory(address) => {
-                            self.expect(site, address, Type::Int(Width::WORD));
-                            self.expect_integer(site, pair.value);
-                        }
-                    }
-                }
-            }
-            Inst::Mark { budget, .. } => {
-                if let Some(budget) = budget {
-                    self.expect(site, *budget, Type::Int(Width::WORD));
-                }
-            }
             Inst::FuncAddr { .. } | Inst::Qalloc { .. } | Inst::StackSave { .. } | Inst::ReturnAddress { .. } => {}
         }
-    }
-
-    /// Reports `mark` unless a `mark` instruction of this function defines it.
-    fn rewind_mark(&mut self, site: Site, mark: Slot) {
-        if self.defs[mark.index()].is_some() && !self.is_handle(mark) {
-            let name = self.slot_name(mark);
-            self.error(site, Problem::NotAMark(name));
-        }
-    }
-
-    /// Reports every use of a mark's handle except as the handle a `rewind` names: handles are opaque
-    /// (`docs/SYNTAX.md`, "History"), so no value a program computes can depend on one.
-    fn handle_uses(&mut self) {
-        let function = self.function;
-        let mut uses = Vec::new();
-        for (b, block) in function.blocks.iter().enumerate() {
-            for (i, inst) in block.insts.iter().enumerate() {
-                let site = Site::Inst(b, i);
-                match inst {
-                    Inst::Rewind { keep, .. } => {
-                        for pair in keep {
-                            let target = match pair.target {
-                                KeepTarget::Register(register) => Operand::Slot(register),
-                                KeepTarget::Memory(address) => address,
-                            };
-                            for operand in [pair.value, target] {
-                                if let Operand::Slot(slot) = operand {
-                                    uses.push((site, slot));
-                                }
-                            }
-                        }
-                    }
-                    Inst::Binary { .. }
-                    | Inst::Compare { .. }
-                    | Inst::Select { .. }
-                    | Inst::Cast { .. }
-                    | Inst::Load { .. }
-                    | Inst::Store { .. }
-                    | Inst::Alloca { .. }
-                    | Inst::StackSave { .. }
-                    | Inst::StackRestore { .. }
-                    | Inst::Setjmp { .. }
-                    | Inst::ReturnAddress { .. }
-                    | Inst::Call { .. }
-                    | Inst::CallBudget { .. }
-                    | Inst::CallIndirect { .. }
-                    | Inst::FuncAddr { .. }
-                    | Inst::Effect { .. }
-                    | Inst::Qalloc { .. }
-                    | Inst::Qfree { .. }
-                    | Inst::Gate { .. }
-                    | Inst::GateAt { .. }
-                    | Inst::Measure { .. }
-                    | Inst::Apply { .. }
-                    | Inst::Mark { .. } => inst.visit_uses(|slot| uses.push((site, slot))),
-                }
-            }
-            block.term.visit_uses(|slot| uses.push((Site::Terminator(b), slot)));
-        }
-        for (site, slot) in uses {
-            if self.is_handle(slot) {
-                let name = self.slot_name(slot);
-                self.error(site, Problem::HandleUse(name));
-            }
-        }
-    }
-
-    /// Whether a `mark` of this function defines `slot`.
-    fn is_handle(&self, slot: Slot) -> bool {
-        self.defs[slot.index()].is_some_and(|def| {
-            def.position > 0 && matches!(self.function.blocks[def.block].insts[def.position - 1], Inst::Mark { .. })
-        })
     }
 
     /// Checks a gate's qubits, the target first. A memory qubit's address is an `i64`; the same address
@@ -525,24 +410,6 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// A call's arguments: as for a branch, except that a register may be passed to an integer parameter of
-    /// its width, which reads the register as an integer (`docs/DESIGN.md`, "Worlds").
-    fn call_arguments(&mut self, site: Site, args: &[Operand], params: impl ExactSizeIterator<Item = Type>) {
-        if args.len() != params.len() {
-            self.error(site, Problem::ArgumentCount { expected: params.len(), found: args.len() });
-            return;
-        }
-        for (arg, ty) in args.iter().zip(params) {
-            match (self.type_of(*arg), ty) {
-                (Some(Type::Qreg(found)), Type::Int(width)) if found == width => {}
-                (Some(found @ Type::Qreg(_)), Type::Int(width)) => {
-                    self.mismatch(site, *arg, Expected::IntOrRegister(width.bits()), found);
-                }
-                _ => self.expect(site, *arg, ty),
-            }
-        }
-    }
-
     fn type_of(&self, operand: Operand) -> Option<Type> {
         match operand {
             Operand::Slot(slot) => self.types[slot.index()],
@@ -556,13 +423,6 @@ impl<'a> Checker<'a> {
             && found != expected
         {
             self.mismatch(site, operand, Expected::Type(expected), found);
-        }
-    }
-
-    /// Reports `operand` if it is a register: an integer of any width is expected.
-    fn expect_integer(&mut self, site: Site, operand: Operand) {
-        if let Some(found @ Type::Qreg(_)) = self.type_of(operand) {
-            self.mismatch(site, operand, Expected::AnyInteger, found);
         }
     }
 
@@ -583,19 +443,6 @@ impl<'a> Checker<'a> {
             Operand::Const(value) => format!("constant {}", value.value()),
         };
         self.error(site, Problem::TypeMismatch { operand, expected, found });
-    }
-
-    /// Reports the first use of each value a rewind restored: defined between a mark and a rewind of it, and
-    /// used after the rewind on some path (`super::rewound`).
-    fn rewound_uses(&mut self) {
-        for (b, position, slot) in super::rewound::rewound_uses(self.function) {
-            let site = match position {
-                Some(i) => Site::Inst(b, i),
-                None => Site::Terminator(b),
-            };
-            let name = self.slot_name(slot);
-            self.error(site, Problem::RewoundUse(name));
-        }
     }
 
     /// Reports every use, in a reachable block, that its definition does not dominate.

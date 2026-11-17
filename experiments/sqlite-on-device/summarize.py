@@ -31,7 +31,7 @@ def main():
             # not simultaneous storage. Outer journal is a separate metric.
             cost = match(r'region_cost: RegionCost \{ ([^}]+)', stdout)
             outer = stdout.split('}, region_faults:', 1)[-1]
-            row = dict(n=data['n'], apply=data['apply'], **{k: c[k] for k in
+            row = dict(n=data['n'], apply=data.get('apply', 'NA'), **{k: c[k] for k in
                        ['shape', 'marked', 'mode', 'prep', 'iterations', 'passed']},
                        wall_s=f"{c['seconds']:.6f}", peak_rss_kib=c['peak_rss_kib'],
                        forward_s=match(r'forward_seconds (\S+)', stdout),

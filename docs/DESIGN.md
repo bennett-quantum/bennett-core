@@ -43,7 +43,6 @@ A module is a list of functions, an initial memory image and a memory size.
   (`x h z s sdg t tdg rx ry rz`) with an optional list of control qubits, each qubit in a register or at a
   bit of memory ("Qubits in memory", below), `measure` of a register or of bits at an address, and `apply`
   (below).
-- **History instructions:** `mark` and `rewind ... keep` (below).
 
 There is one instruction set for every tier. A tier is a way of running code, not a different language.
 
@@ -97,362 +96,6 @@ as it was before the `apply`; `allow_region_faults` (`bennett run --allow-region
 programs that read their fault registers on purpose (`examples/fault.bn`). Programs from `front` are always run
 strictly in the tests. This stop is a diagnostic of the simulator's strict mode; the machine's meaning is the
 fault code in the register ("Strict mode", below).
-
-### History: `mark` and `rewind`
-
-Built on 2026-11-15 as the first step of the next extension (below), on today's machine: one classical
-state, with a superposition only over registers. Worlds that differ in classical state are the second
-step ("Worlds", below).
-
-- **`%h = mark`** sets `%h`, an `i64`, to the number of journal records up to and including the mark's
-  own. A run that keeps no journal starts one at its first mark (a run that was not started reversible
-  still cannot be reversed). In a coherent region the records are counted from the region's start, as on
-  a journal of the region's own whose first record is the call into its function (the first `mark` of
-  `@f` gives 2): a region's result depends on its arguments and memory only, never on the caller's
-  history, so `apply` stays its own inverse. A rewind's handle is a mark of its own function (the
-  validator's rule), so no handle of the caller's can be named in a region. Since 2026-11-16 a handle is
-  opaque (the maintainer's decision, `HANDOFF.md` [A3]): the validator refuses any use of it but by a
-  `rewind`, so its value is the executor's own and no program result can depend on it; how it counts is
-  what the executor matches a rewind's mark by, and could change without changing any program.
-- **`rewind %h keep (v -> r, ...)`** checks, then copies, then un-runs:
-  1. It faults with `bad_rewind`, changing nothing, unless `%h` names a mark of the running activation
-     that is still in the history (the frame was not left, below its own depth, since the mark), no
-     `measure` ran since it, and every register kept into was allocated before it (un-running a later
-     allocation would discard the kept value). A register freed since faults `dangling_register`.
-  2. It XORs each value, read now, into its register on every basis configuration, in order.
-  3. It un-runs every step since the mark, latest first, exactly as reversal does: gates by their
-     inverses, memory and stack writes, console output (un-printed), calls and returns, inner marks, and
-     earlier rewinds (below). The copy comes before the un-run (compute, copy, uncompute), so un-running
-     through gates conjugates it: `mark; h q; rewind keep (i1 1 -> q)` is H X H = Z on `q`.
-     The keeps may change registers the region read, so the un-run can meet a state its history does
-     not describe: a register allocated since the mark that is not zero in every configuration when its
-     allocation is un-run (un-running it would discard those configurations, losing norm), or an inner
-     rewind whose region, run again (below), faults (a `qfree` of a register that is not zero, an inner
-     rewind meeting the same). "What is promised when history is left behind", rule 4, leaves the result
-     of such an un-run unspecified, but every step stays a bijection: in strict mode, the default, the
-     rewind runs forward again the steps it un-ran, XORs the keeps out, and faults with `bad_rewind`,
-     having changed nothing. Outside strict mode an allocation that is not zero is left over and the
-     un-run goes on ("Strict mode", below). "Not zero" is the
-     test `qfree` applies. Checked exhaustively against an independent two-qubit calculation
-     (`crates/exec/tests/history_unrun.rs`): 1,776 programs of a temporary, up to two of ten gates between
-     it and a kept qubit, an optional free, four preparations and both keep values; the rewind faults
-     exactly where the calculation leaves the temporary nonzero (156), runs with the calculated state
-     elsewhere (1,064; 556 fault at the free going forward), and every run reverses.
-  4. The frame continues after the rewind, wherever the mark was. Every slot holds its value at the
-     mark: a slot defined between the mark and the rewind reads, after it, as it did at the mark (a
-     register allocated since is gone). Since 2026-11-16 the validator rejects such a use
-     (`RewoundUse`, the maintainer's decision, `HANDOFF.md` [(4)]): a forward dataflow over the
-     function finds, on some path, a definition after the mark's latest run, then a rewind of it, then
-     the use, with no new definition between the rewind and the use. A path is a path of the
-     control-flow graph, and a `longjmp` (in the function, or in any callee: every call) may resume
-     after any `setjmp` of the function; a rewind's effect on the other marks' sets is not narrowed,
-     so the check may refuse a use that no run reaches (conservative, never the other way).
-- **Marks nest**, and a rewind un-runs every mark and rewind inside its region. Rewinding the same mark
-  twice is allowed; the second un-runs the first, its keep included.
-- **In a coherent region** (`apply`) a rewind runs, but may not keep: registers are quantum
-  (`quantum_in_region`).
-- **Undoing a rewind** (by reversal, or by an outer rewind reaching past it) runs its region again from
-  the mark to the rewind, then XORs the kept values again. Its record keeps which visit of the rewind
-  (in its frame, since the mark) it was, and running again stops at that visit, so a rewind reached
-  again in a loop is restored at the visit being undone, not the first one that reaches its position.
-  (The first fix kept the number of steps un-run; worlds that took paths of different lengths would then
-  never be equal again, so the visit is kept instead.) The steps ran before from the same classical
-  state, so they run again identically; configuration limit and region-fault checks are not
-  repeated, and the budget is charged with them ("Cost", below). Under an outer rewind's keeps one may
-  still fault (step 3), in its own world or in one
-  that split off while it ran, and then is undone again: the outer rewind faults `bad_rewind` with
-  every world exactly as before it (since 2026-11-16 also when the failing world split off, which
-  panicked before). A `measure` reached while running again is such a fault, refused before it samples
-  or observes: no rewound region held one, so it lies on a path the history does not describe.
-  `crates/exec/src/atomic_rewind_tests.rs` compares the whole machine (every world's journal, slots,
-  register table and kept copies, the generator, observations) before and after each way a rewind
-  fails. An `apply` un-run or run again by a rewind may fault on some branches without stopping the
-  run: it is a permutation either way, and the strict check is for running forward.
-- **Cost.** A rewind counts as one step and `steps` never goes back, so the budget bounds a loop of
-  rewinds. The work of un-running is counted apart (`Stats::rewound_steps`, `Stats::rerun_steps`).
-  **Running again is charged to the run's budget** (the maintainer's decision of the afternoon of
-  2026-11-16): every step a rewind taken as a step of the run runs again, its nested rewinds' included,
-  is added to `Stats::replay_charged`, and the budget is spent when `steps + replay_charged` reaches it.
-  A rewind whose running again would pass the budget (its own step counted first) faults `budget`,
-  changing nothing, so a replay that newly reaches an endless loop under an outer rewind's keeps ends
-  (it ran for ever before: `a_replay_that_loops_for_ever_is_charged_to_the_budget_and_changes_nothing`,
-  `atomic_rewind_tests.rs`, whole machine compared). Undoing what a failed rewind ran, and running forward
-  again what it un-ran, restore, and are not charged; un-running is not charged either (it is bounded by
-  the history). Inside a coherent region each world charges the region's budget `B` in the same way, so
-  both ways of computing `apply` agree. A run with no budget has nothing to charge and can still loop, as
-  a forward loop can. The charge is a count of the run, like `steps`, not machine state (a journal holds
-  none of it, so worlds stay equal): reversal to the start sets it to 0 with `steps`, and a partial
-  reversal leaves it. Worked by hand for `mark; loop: rewind; br loop` (`history_independent.rs`): the
-  n-th rewind runs again C(n) = 0, 1, 4, 10, 22, ... = 3 * 2^(n-2) - 2 steps, so a budget of 32 ends the
-  loop after 5 rewinds (10 steps, 15 charged) where it took 15 before; the independent whole-world
-  reference counts its own rounds run again and its harness predicts every budget stop of the executor
-  it is compared with (`oracle_support/worlds_executor.rs`). The
-  known exponential is measured (`crates/exec/tests/history.rs`): a chain of `d` levels that each mark,
-  work, call the next level and rewind costs 19, 55, 127, 271, ... 36,847 steps in all at `d` = 0, 1, 2,
-  3, ... 10, a factor tending to 2 per level, against 21 + 20 `d` (221 at `d` = 10) when only the
-  outermost level rewinds. A mark copies nothing: the work and journal bytes per iteration of a loop of
-  mark, call, rewind are the same at 50 and 1,500 iterations. Rewinding one mark again un-runs the
-  previous rewind of it, so it doubles the same way: a loop whose every iteration rewinds one mark made
-  before the loop un-runs 3 * 2^(n-1) - 2 steps in all for n rewinds (`history_unrun.rs`); a mark made
-  in each iteration, as above, keeps the work per iteration constant.
-- **Every journalled step is a bijection** of (machine state, history), checked by brute force at small
-  widths (`crates/exec/src/permutation_tests.rs`): every kind of step at every position of two
-  programs, from every assignment of small values to the slots it reads or overwrites and to two memory
-  bytes, on the history the run wrote and on garbage records below it (38,360 steps, 3,016 of them
-  faulting); distinct inputs give distinct outputs, the history below is untouched, and stepping back
-  gives the input exactly. A rewind is a bijection only of states its history describes, so it is
-  checked from its mark: 8,192 starts, each giving the state at the mark with the handle set, the kept
-  values XORed and the program counter after the rewind, all distinct, and stepping back gives the state
-  at the rewind exactly.
-
-### The mark's budget
-
-Decided by the maintainer on the afternoon of 2026-11-16 ("Time", and the budget on the mark as well as on
-the call); built as machine step e4. `%h = mark budget B` gives the mark a budget:
-
-- **A bound per world.** Each world has a **clock**: the steps it took going forward (`Executor::clock`,
-  `Stats::clock`, the latest world's). From the mark until a rewind of it, a world takes at most `B` steps,
-  the rewind included; the next one faults `budget` in that world (a world fault, so strict mode stops the
-  run while others go on; on the machine the world ends). Steps run again or un-run take no time and are not
-  bounded by it (running again is charged to the run's budget instead, "History", Cost).
-- **A mark whose frame is left bounds nothing more.** A return from the frame that made it, a catch or a
-  `longjmp` that discards it closes its budget: no rewind can reach it any more (`bad_rewind`), so there is
-  no "until a rewind of it" left to bound (taken on 2026-11-16, `HANDOFF.md`, "Questions for the
-  maintainer"). Without this, a budgeted mark in a callee that returns without rewinding faulted its caller
-  `budget` later, and `apply` and its forms differed there.
-- **A call with a budget spent at the same step as a mark's budget** ends first, the outermost spent one,
-  as when the mark is not involved; a catch for the mark below it panicked (it counted a step the spent
-  frame has no budget for: `simultaneous_mark_and_outer_call_expiry_returns_budget`).
-- **The cost is the budget where the rewind follows a read of a qubit.** A rewind of a mark whose budget is
-  open, whose history since the mark read a register or touched a memory qubit, sets the world's clock to
-  the mark's clock plus `B`, whatever the work since the mark; any rewind of the mark closes its budget: the
-  mark stays in the history (it can be rewound again) but bounds nothing more. So every branch waits at the
-  rewind and the time after it does not tell branches apart: `crates/exec/tests/mark_budget.rs`, a callee
-  that takes 3v + 6 steps for v = 0, 1, 2 under `mark budget 20` gives the time 24 for |0>, |1>, |2> and
-  |0> + |1>, where its ticks are 11, 14, 17 and 14. Where nothing was read, there are no branches to wait
-  for and the rewind costs its work. Budgets nest: an outer mark's budget must cover the inner budgets its
-  region spends.
-- **Required where a rewind follows a read of a qubit** (machine step e5). A rewind taken as a step, outside
-  a coherent region (an `apply` has its own budget) and outside a call with a budget (whose budget bounds it
-  as an `apply`'s does; it gave `bad_rewind` there as the call's code until 2026-11-16, where the same
-  callee under `apply` succeeds: `call_budget_covers_an_inner_unbudgeted_quantum_read_like_apply`), whose
-  history since a mark without a budget read a register or touched a memory qubit faults `bad_rewind`, a
-  classical cause, changing nothing. Where worlds
-  split, the first to reach the rewind faults, so strict mode stops the run. The tests written before the
-  rule give their marks `budget -1` (2^64 - 1): a budget whose deadline does not fit the clock meets the
-  rule and bounds nothing (and costs nothing); the text idiom of `apply` carries the region's budget plus 2
-  (the call and the rewind).
-- **Time is not machine state** ([W1]): the clock and the deadline in a mark's entry are left out of the
-  worlds' equality and hashing, so worlds that took different times are one machine state again after the
-  rewind and merge (their clock is the later one). The simulator's `steps` stay its ticks, in which every
-  running world takes a step; the run's budget counts them. A reversal to the start resets the clock;
-  partial reversal leaves it, as time does not go back.
-- **In a coherent region** the marks of the region are bounded from the region's start, the caller's marks
-  not.
-- **Cost of the representation**: each mark's entry in the journal's side table grows from 16 to 48 bytes
-  (the budget and the deadline), measured in `memory_independent.rs`.
-
-The independent whole-world reference now gives each world a clock, enforces finite deadlines, closes a
-rewound mark's budget, requires a budget after register/cell reads and waits to the deadline where a read
-occurred. Time stays out of its world equality. `worlds_budgets_independent.rs` compares finite bounds,
-nested deadlines, successful clocks (`Stats::clock`), and exact public states through reversal.
-
-### The call with a fault value
-
-Decided by the maintainer on 2026-11-16 ([A1], refined in the afternoon); built as machine step e6.
-`%y, %c = call @f(args) budget B` (`%c = ...` alone for a function that returns nothing) is an ordinary call,
-arguments and reads of registers included, with the region's rules attached to it:
-
-- **The rules.** While the callee's frame is live, an effect, an `exit` or a quantum instruction faults
-  (`effect_in_region`, `exit_in_region`, `quantum_in_region`; a `rewind` may not keep), and a `longjmp`
-  whose record names a frame below the callee's faults `bad_longjmp`, as in a region.
-- **The budget** is held in the callee's frame (`Frame::guard`) as the steps it has left: every step taken
-  while it is live counts, its own return included, so `B` steps fit as in an `apply`. A step with none left
-  ends the call with `budget`; with nested calls the outermost spent one ends. A rewind inside the callee
-  gives no steps back (an applied function's steps never go back either): its un-run keeps their count, and
-  each rewind notes how many it un-ran (`Journal::rewind_costs`, left out of equality like time) so that
-  undoing it gives them back before running them again, which then counts exactly as it did. Reversal gives
-  every step back. A failed rewind running forward again what it un-ran counts nothing. **Running again is
-  charged to the call's budget** as to the run's ("History", Cost) and to an applied function's region: the
-  steps a rewind taken as a step inside the callee runs again are counted against the least room of the calls
-  with a budget live at it, and a rewind whose running again would pass it (its own step counted first) faults
-  `budget`, changing nothing, which the call then catches. Until 2026-11-16 only the run's budget was charged,
-  so a callee rewinding one mark in a loop ran exponentially many steps again before its own budget ended it,
-  where `apply` of it stops after a few (witness `crates/exec/tests/call_budget_replay.rs`, the hand count of `history_independent.rs` for budgets 1 to 40).
-- **A fault inside** (any named fault: the callee's, a budget spent) does not end the world: the frames from
-  the callee's up are discarded (a `Catch` record keeps them), the stack pointer is the callee's entry one, and
-  the caller goes on with `%y` = 0 and `%c` = the fault's code; a return gives `%c` = 0. A callee whose frame
-  does not fit is such a fault, `stack_overflow` with no frame to discard, as for an applied function (it
-  ended the world until 2026-11-16: `a_callee_frame_that_does_not_fit_returns_a_call_fault`, against
-  `apply` in all three ways of computing it). The innermost call
-  with a budget takes the fault. The simulator's checks never become a code: strict mode's stop when a world
-  faults while others go on applies to these faults too, and the run's limits stop the run as before. On the
-  machine (`Options::machine_meaning`) each world gets its own code. A fault the simulator finds by looking
-  at every configuration of one world at once is not caught either, however many worlds there are: a
-  `longjmp` whose record is held in qubits that disagree (`bad_longjmp`), and a rewind whose un-run meets a
-  state its history does not describe (`bad_rewind` for its state-dependent causes). Each ends the world, as
-  outside a call; nor does an `apply` computed as worlds XOR one into its fault register (the `apply`
-  itself faults, changing nothing). Until 2026-11-16 the catch withheld such a fault only where another world
-  went on, so one world holding both records of a jump got `%c` = 16 with certainty, though each record alone
-  jumps (`crates/exec/tests/inspected_faults.rs`, the design seam's V4b). The other simulator checks cannot
-  arise in a call's callee: a `qfree`, a rewind that keeps, and an `apply` are quantum instructions there
-  (`quantum_in_region`), and nothing else in it changes what its history read. The run's own budget spent by
-  running again (`budget`) is still a code: a question for the maintainer (the seam's V3').
-- **`apply` as this form.** `apply @f(%q) -> %out, %fault budget B` gives the same state as
-  `%h = mark budget B + 3`, `%y, %c = call @f(%q) budget B`, `rewind %h keep (%y -> %out, %c -> %fault)` (the
-  mark's budget counts the call, `B` steps, a catch and the rewind): `crates/exec/tests/call_budget.rs`, a
-  callee that divides by its argument and loops by it, budgets 8 to 20, every basis value and all at once,
-  dirty output and fault registers, 30 comparisons on the machine; in strict mode both stop where only some
-  branches fault.
-- **Checked** (`call_budget.rs`, by hand): text read, written and typed; a return and a fault; for
-  `@count(n)` of 3n + 5 steps every n < 5 and budget < 25 gives the value or `budget` with the steps exact
-  (the call, B steps, the catch); each rule; nested budgets (the inner or the outer ends, at 15 and 14); a
-  rewinding callee gets `budget` after exactly B steps; every step of four programs reverses exactly. Seeded
-  defects caught: no give-back on reversal; no noted un-run count.
-- **Independent reference:** the snapshot-based whole-world model interprets the guarded frame, its
-  remaining steps, returns and catches itself. It compares small finite budgets, nested calls, faults,
-  jumps within/across calls, rewinds inside calls, and compute/copy/uncompute of both result and fault
-  code, with phases and reversal (`worlds_budgets_independent.rs`). Replaying seeks the recorded dynamic
-  visit and is bounded while it executes, including a path newly entering an endless loop. A live
-  guard's remaining steps remain distinct after an internal rewind of unequal paths; the un-run
-  preserves consumption and inverse replay starts with the original counts. The matrix includes a
-  memory-qubit read inside the callee (budgets 5 to 11, only the longer path exhausting at 7 and 8).
-  A joined rewind checks a spent guard before un-running, as any step does; replay charges a budget
-  catch as a step too (run budgets 0 to 12 compare the success and atomic failure boundaries).
-  Collective jump-record diagnostics bypass the reference's call catch; uniformly invalid records
-  still give ordinary named faults. The strict no-program-value property is compared separately
-  from the still-open per-branch jump meaning (HANDOFF V4/V4b); its executor witness, which saw code 16 delivered
-  where only a simulator diagnostic is determined, passes since the fix and runs by default.
-  Clock composition of a padded rewind inside a guarded call with a narrow caller mark remains a
-  specification question: its ignored witness and the alternatives are in `HANDOFF.md`.
-- **Not yet** (debts): the journal-content observer does not follow the form nor a `rewind` in a region: at
-  the first it stops observing, names the step (`JournalMeasurement::unsupported`, `Unobserved::CallBudget`
-  or `Rewind`) and leaves the unfinished `apply` out, and the run goes on as with it off (it asserted before,
-  a panic on valid programs; `a_rewind_or_a_call_with_a_budget_in_a_region_is_named_unsupported`,
-  `journal_content.rs`; route: shadow the records a rewind pops and the frames a catch discards); a
-  `call_indirect` with a budget; the front does not emit it. `apply`, `qalloc` and `qfree` remain
-  first-class forms (the maintainer's decision of the evening of 2026-11-16).
-
-Independent testing found three exceptions still to fix (`crates/exec/tests/call_budget_independent.rs`,
-ignored `defect:` witnesses): a mark deadline expiring with an outer call can underflow that call's guard;
-a quantum read under an inner unbudgeted mark is covered by apply's budget but not by the call form's;
-a callee frame that cannot fit gives apply a fault code but ends the call expansion's world instead.
-These are implementation debts against the meaning above, not additional restrictions on programs.
-The audition coverage and remaining measurements are recorded in `HANDOFF.md`, "Independent testing of
-machine step e and the audition".
-
-### Worlds
-
-Built on 2026-11-15 as the second step of the next extension: the quantum state is a superposition of
-whole machine states (`crates/exec/src/worlds.rs`). A **world** is a classical machine state (memory,
-frames, every slot, stack pointer, console tape, register table, journal, outcome) together with the
-amplitudes of the register configurations that go with it; a basis state is a world and one
-configuration. With one world the machine is exactly the machine above.
-
-- **Reading a register.** A `call` or `call_indirect` may pass a register `qN` to a parameter `iN` of its
-  width (the validator accepts nothing else new; a `qN` parameter still takes the handle). The callee
-  receives the register's value as an integer: ordinary code depends on the qubits. If the world's
-  configurations disagree on the value, the world first **splits** into one world per value, each with the
-  configurations of that value, and each takes the call. From the first split on every world keeps a
-  journal, as from a first `mark`. The journal also notes each read (which register, which parameter,
-  whether it split).
-- **Every step keeps what it destroys**, so two different worlds stay different, and stepping forward
-  never makes them equal. A `rewind` that un-runs the read makes them the same machine state again; then
-  they are one basis state and **merge**: their amplitudes add. That is interference, and it is exact
-  wherever every un-run is faithful. `apply @f(args) -> out` is the idiom `%h = mark`, `%y = call @f(args)`,
-  `rewind %h keep (%y -> out)` wherever no branch faults (shown below).
-- **A read the state no longer matches.** Keeping a value into a register the region read as an integer
-  would make the read's un-run discard information: two worlds could become one with their amplitudes
-  added though they no longer belong together (the derivation in `HANDOFF.md`, question 1). The same
-  happens when a kept value into another register reaches a read one through a gate between the read
-  and the rewind (`x %q ctrl %o` carries a keep into `o` over to `q`). The un-run of each read checks
-  that the register still holds the value read, in every configuration; if not, the rewind faults
-  `bad_rewind` and changes nothing (the orchestrator's interim decision until the maintainer answers;
-  rule 4 of "What is promised" makes it a warning in the end, so it is a debt). Keeps whose net change
-  (their XOR, per register or memory byte) to a register read since the mark is not zero are refused
-  before un-running; two equal keeps into it change nothing and are not; anything else is found while un-running,
-  and the rewind runs forward again what it un-ran, as for the other mismatches above, or, if worlds
-  split off during its un-run (running an earlier merging rewind again) or it un-ran past its split
-  point, restores a copy of the world it took first. Below a world's split point the check is made on
-  the sum of the worlds' parts (next paragraph). All of this is strict mode; outside it the un-run runs
-  regardless and leaves the read's wire over ("Strict mode", below). Summing the parts of worlds whose
-  un-runs were faithful is exactly the linear map: `h q; mark; read q; rewind; h q` measures 0 every time.
-- **Shared history is un-run part by part, and checked on the sum** (strict mode; outside it nothing is
-  checked and every check site leaves its wire over in every part, "Strict mode"). Below the read where a world split
-  from others, its rewind un-runs its *part* of the state the worlds shared. Every undo there is linear,
-  but a part need not hold what the shared history read, nor be zero where it allocated a register (or
-  freed one, in steps run again): only the sum of the parts must. So below a world's split point each
-  of those checks is made on the sum. The part notes the configurations that fail it, with the check and
-  the classical machine state where it is made (parts of the same state add, as their worlds would if they
-  were there together; a hash of the state finds the notes to compare, and the states are compared in
-  full, so a collision adds nothing); un-allocating keeps a part's zero configurations (the adjoint of allocating), and
-  steps run again there do not refuse a `qfree`. When no world runs, the parked worlds with the longest
-  history that un-ran such parts are all the parts summed there, as a rewind joins every world at it:
-  their notes are added check by check, and a sum whose weight is above the norm tolerance (1e-9) fails.
-  Then each of those worlds is put back as it was before its rewind, from a copy it kept, and faults
-  `bad_rewind`, changing nothing (`RunError::WorldFault` if other worlds go on and region faults are not
-  allowed). A part a check left with no configuration reads 0 and is dropped once the checks pass. A
-  stop before the checks are made (a budget) keeps the copies, and reversal starts from them. The norm is
-  still checked where every world has stopped (a run stops with `RunError::NormLost` if the worlds'
-  weights do not sum to 1 there), as a backstop. Until 2026-11-16 these checks were off below a split
-  point, so a later split hid an earlier changed read (F1 of the testing pass, `worlds_independent.rs`).
-  Checked against the whole-world reference and an independent dense calculation of this meaning
-  (`worlds_independent.rs`, `shared_history_class`): every order of up to three events among reads
-  (one through a callee whose length depends on the value), six gates (one carries a keep into the read
-  register), a temporary entangled with a kept register, and a nested merging rewind, under four
-  preparations and four keeps: 12,816 programs, 11,106 run to the reference's state and reverse, 1,710
-  refuse (1,376 of them run in the regular tests); four events, 134,264 programs, also agree. The
-  executor before this fix returned instead of refusing on 336 of the 12,816 and panicked on 15.
-- **Scheduling.** Worlds run in lockstep: one tick steps every running world once, and `steps` and the
-  budget count ticks (`Stats::world_steps` counts the steps of all worlds). A world that has just rewound
-  **parks** while another world runs, because that world may still rewind the same mark to the same state
-  (padding is invisible in meaning: a world's state does not include time). When no world runs, equal
-  worlds merge and the parked worlds with the longest history go on; a world can only become equal to
-  another by rewinding a mark they share, and every world still inside that mark's region has a longer
-  history. Reversal undoes the worlds with the longest history first, so worlds merge where they split
-  before anything they share is undone.
-- **Faults in some worlds.** As for `apply`, a fault on only some worlds cannot be detected by the program
-  with certainty: by default the first world to fault while others go on stops the run with
-  `RunError::WorldFault`; `allow_region_faults` lets the faulting world end and the others go on. The stop
-  is a diagnostic of strict mode; on the machine the faulting world ends ("Strict mode", below).
-- **Observation.** A `measure` waits until no world runs or is parked, so every world that will merge has
-  merged and the worlds' weights are the probabilities of their machine states. With several worlds it is
-  the exact instrument "the machine is in this world at this measurement, or not": with this world's
-  weight every other world is dropped and the register is measured; otherwise this world is dropped and
-  the others keep their coherence. When every world has ended and several remain, the host reading the
-  result observes the machine: one world is sampled by its weight. Both count in `Stats::observations` and
-  are the first warning of `HANDOFF.md` step 4 (history still entangled at a measurement or at the end).
-  Reversal refuses to cross either, as it refuses a measurement.
-- **Non-local jumps** are journalled per world: a world-dependent `longjmp` discards frames in that world
-  only, and a rewind un-runs it like any step, so worlds that jumped differently merge again
-  (`a_jump_in_one_world_is_un_run_by_the_rewind`). A jump record lives in the world's own memory.
-- **Not yet decided, stopped instead.** A world reaching, by a rewind, a state another world reached by a
-  rewind and already left (only possible when a world re-rewinds a mark it shares with others, at
-  another world's rewind site): whether those two interfere depends on whether time is part of the state
-  (`HANDOFF.md` question). The run stops with `RunError::Unaligned`.
-- **Costs.** A split copies the world's frames, slots, tape, journal and register table, and of memory only
-  its overlay, the bytes it wrote since worlds share the base ("Memory as an overlay", below). Every world
-  from the first split on keeps a journal. The known exponential with worlds
-  (`crates/exec/tests/worlds.rs`): a chain of `d` levels that each read a qubit, mark, call the next level
-  and rewind costs c(d) = 2 c(d - 1) + 47 steps of all worlds, un-run and run again (22,481 at `d` = 8),
-  against 48 more per level (430 at `d` = 8) when only the outermost level rewinds; two worlds throughout.
-  The apply idiom in a loop on a superposed qubit costs 31 steps of work and about 135 journal bytes per
-  iteration at 50 and at 1,500 iterations. A rewind taken as a step whose region holds a split read or an
-  inner rewind copies its world until its checks are made (above): steps and journal bytes are
-  unchanged, and that loop's test takes about a third longer (0.26 s to 0.35 s, median of 15; all of it
-  the copy, measured by leaving it out). Copying only the journal above the mark would remove most of it.
-- **Checked.** Every split and merge is the linear extension of bijections
-  (`permutation_tests.rs`): a reading call and a merging rewind from 128 starts each (four values of two
-  arguments, two memory bytes, clean and dirty history), each on all 16 basis configurations of two 2-bit
-  registers (distinct results, stepped back exactly) and on their superposition, which must step to
-  exactly the worlds the basis results give and step back to itself. `apply` equals the idiom on the
-  thesis program and Grover (states and outcomes over 16 seeds) and on the exhaustive `apply` harness
-  (108 basis states and the arguments in superposition; the text idiom has no fault register or region
-  budget, which `apply` has).
-  Un-running through gates across worlds equals G† X G applied to each world's part, against an
-  independent dense calculation, on 91 programs (75 states equal, 16 refused exactly where the
-  calculation finds an unfaithful read), and the independent whole-world reference
-  (`oracle_support/worlds.rs`) agrees on the same 91.
 
 ## From C to a device program (`front`)
 
@@ -641,9 +284,7 @@ from any depth:
   discarded frame (its position and entry stack pointer, two words), the target's old position, the stack
   pointer, the count and the result slot. The discarded frames' slots need no journal: nothing overwrites them
   before the jump is undone (every later write to them is journalled and undone first). So un-running through
-  jumps restores the state exactly, checked step by step (`crates/exec/tests/setjmp.rs`). A `rewind` un-runs
-  jumps like any other step; when it checks that its mark belongs to the running activation, a jump counts as
-  the returns of the frames it discarded (the journal keeps those counts beside its marks).
+  jumps restores the state exactly, checked step by step (`crates/exec/tests/setjmp.rs`).
 - **In a coherent region** a jump within the region works on every branch, the record living in the
   region's private memory; a jump to a frame outside the region is `bad_longjmp` on every branch. From C,
   though, a function that uses `setjmp` is not run coherently: LLVM must treat `setjmp` as an opaque call that
@@ -761,276 +402,77 @@ The front writes `retaddr N` for every `llvm.returnaddress(N)` in the default ad
   frames in place for reversal. C's `_Noreturn void __bennett_exit(int)` lowers to it; like
   `void __bennett_effect(char)`, it is an ordinary device call, not a quantum marker.
 - Fault codes fit in 5 bits (`Fault::CODE_WIDTH`, widened from 4 on 2026-11-16, the maintainer's decision); a
-  fault register is at least that wide, so every fault register of a program is a `q5` or wider. Sixteen of
-  the 31 nonzero codes are used, the last `bad_longjmp` (16).
+  fault register is at least that wide, so every fault register of a program is a `q5` or wider. Fifteen of
+  the 31 nonzero codes are used, the last `bad_longjmp` (16); 15 was `bad_rewind`, removed with `rewind` on
+  2026-11-17, and stays unused.
 - `qfree` requires the register to be zero in every configuration, otherwise the named fault `dirty_free`.
 - `measure` reads a whole register, or the `N` bits from bit 0 of the integer at an address. Amplitudes at or
   below `f64::EPSILON` are dropped.
 - Bounds of the simulator (steps, number of basis configurations) are parameters of a run. Exceeding the
   configuration limit stops the run with a named error; it is not a program fault.
 
-### Memory as an overlay
-
-Built on 2026-11-16 as the third step of the next extension (`crates/exec/src/memory.rs`): memory is a
-classical base shared by every world and, per world, an overlay of the bytes it wrote, so a split copies
-what the world wrote, never the memory, and what the worlds hold grows with the bytes they wrote, not with
-the memory's size.
-
-- **The base is classical.** It is written only while one world owns it alone: with one world the
-  machine writes the base as it wrote its byte array before, and keeps no overlay. From the first split
-  every world reads the same base and writes its own overlay; the base does not change while it is
-  shared. When one world is left (the others merged into it or were observed away) its overlay is
-  folded into the base.
-- **The overlay is normal**: it holds a byte exactly where the world's memory differs from the base. A
-  write of the base's own byte removes the entry, so un-running a write (which writes the old byte
-  back) leaves no trace. The overlay is then the set `{(a, m[a]) : m[a] != base[a]}`, a function of the
-  memory `m` alone, whatever order and number of writes made it.
-- **Equality.** Worlds compare memory by their overlays: equal overlays over the one base are equal
-  memories and the converse holds by normality, so worlds that differ only in memory merge exactly when
-  their memories are equal. The overlay is an ordered map, compared and hashed entry by entry in address
-  order, so neither the comparison nor the hash depends on the order of the writes. (The executor
-  asserts that the worlds it compares share one base.)
-- **Meaning unchanged.** Loads, stores, jump records and every other access read the overlay first and
-  the base beneath; snapshots and reports give the whole memory. With one world the machine is exactly
-  the machine above.
-- **Checked.** The brute-force bijection checks run with memory owned by one world and as an overlay
-  over two different bases (115,080 single steps, 9,048 of them faulting; 24,576 rewinds; 384 reading
-  calls and 384 merging rewinds over all 16 basis configurations and their superposition), comparing
-  the representation, overlay included, and asserting normality at every state. 400 pairs of worlds
-  written in random orders merge exactly when their memories are equal. The un-running-through-gates
-  programs run again with each world writing memory between its read and the rewind (an address that
-  depends on the value read, and the value): against the dense calculation and the whole-world
-  reference, 150 equal and 32 refused exactly where the calculation says (`worlds_oracle.rs`).
-- **Measured** (`crates/exec/tests/memory_overlay.rs`; eight worlds that each write `n` bytes, then split
-  again): splits copy `4n` bytes of overlay and the overlays hold at most `8n` bytes, at 16 KiB, 1 MiB
-  and 4 MiB of memory alike; with a full copy they copied 7 times the memory size. In a release build
-  at 16 MiB of memory the run's peak resident size went from 134 MB to 19.7 MB and its time from about
-  90 ms to about 7 ms (at 1 MiB: 11.5 MB to 4.4 MB, about 7 ms to 0.55 ms). Over the existing tests that
-  split (worlds, `apply`, examples, the gate programs; 1,234 runs, 5,640 splits, memories of 256 bytes
-  to 4 KiB), splits copied 7.5 MB of memory before and 0 bytes now: no world had written memory when it
-  split. What a split still copies is its journal, which grows with the steps run (2.77 MB over the four
-  second splits after 4,096 bytes written each, against 16 KiB of overlay): sharing the journal's
-  common prefix between worlds, as the base is shared, is the route if it matters.
-
-
 ### Qubits in memory
 
-Built on 2026-11-16 as the fourth step of the next extension (`crates/exec/src/cells.rs`): gates take
-addresses, so a qubit can live at any bit of memory. Registers stay as they are, one way of naming
-qubits among others; with one world and no qubit in memory the machine is exactly the machine above.
+Gates take addresses, so a qubit can live at any bit of memory (`crates/exec/src/cells.rs`; the plain form kept
+by the maintainer on 2026-11-17). Registers stay as they are, one way of naming qubits among others.
 
 - **Text** (`docs/SYNTAX.md`, "Qubits in memory"). A gate's qubit is `%r[i]` or `[ADDR:BIT]`: bit
   `BIT % 8` of the byte at `ADDR + BIT / 8`, that is bit `BIT` of the little-endian integer at `ADDR`, as
   `load` and `store` see it; `ADDR` is an `i64` value or constant, `BIT` below 128, `[ADDR]` is bit 0.
   Registers and memory mix in one gate. A qubit outside memory is `out_of_bounds`; the same qubit twice
   is `qubit_alias` (the validator reports the same address operand and bit twice); inside a coherent
-  region a gate is `quantum_in_region`, as before. `rewind %h keep (v -> [ADDR])` XORs `v` into the
-  qubits from bit 0 of `ADDR` on, as many as `v` is wide.
-- **What a qubit in memory is.** The memory of a basis state is the world's memory, except at the bytes
-  that hold qubits, whose values are the configuration's. Such a byte is a **cell**: an 8-qubit register
-  bound to the byte's address, part of the world's register table, so world equality and its hash
-  include the cells. The world's memory holds 0 under a cell. The first gate at a byte that is not a cell
-  **promotes** it: a register is allocated, the byte's value XORed into it and the memory byte set to 0;
-  the gate's journal record keeps the address and the old byte. A byte stays a cell until the gate that
-  promoted it is un-run, even where its qubits are classical again: that is how the state is held, not
-  what it means, and it keeps the cells a function of the history, so worlds that are the same machine
-  state hold the same cells.
-- **The classical base never becomes quantum.** A promotion writes 0 where any write would go (the base
-  while one world owns it, else the world's overlay, "Memory as an overlay") and puts the value into a
-  register; no amplitude ever lives in the base or in an overlay. A split copies the cells with the
-  register table; merging compares them.
-- **Ordinary code reads qubits in memory as it reads a register.** A `load` whose bytes include cells, a
-  `store` over cells (it first reads what it overwrites: that goes into the history), and a `setjmp`
-  writing its record over cells split the world into one world per value of those cells where the
-  configurations disagree, as a call passing a register to an integer parameter does ("Worlds"). Then a
-  load gives the cells' values, and a store XORs old and new into each cell, which stays a cell. The
-  journal notes each cell a step touched with the byte it holds after the step (the value read or
-  written); un-running the step checks that the cell still holds it, as for a register read: a keep, or a
-  gate carrying one, that changed it makes the rewind fault `bad_rewind`, changing nothing. Below a
-  world's split point the check is made on the sum of the worlds' parts, as every such check is.
-- **Coherent regions** see the cells' values: each branch of an `apply` runs on private memory holding
-  the values its configuration gives the cells. A region cannot gate, so it never changes a cell.
-- **Un-running.** A gate at addresses is undone by its inverse, then by un-promoting the bytes it
-  promoted: the old byte is XORed out of the register, the register un-allocated and the byte written
-  back. That is the un-run of an allocation, with its check: the register must hold the old byte in every
-  configuration (on the sum of the parts below a split point), else the rewind faults `bad_rewind`, the
-  interim rule for a register allocated since the mark and left nonzero. Un-running through gates at
-  addresses conjugates as through register gates: `h [16]; %h = mark; h [16]; rewind %h keep (i1 1 ->
-  [16]); h [16]` leaves the byte 1.
-- **Keeps into memory** need every target byte to hold qubits since before the mark, else `bad_rewind`,
-  as a register kept into must be allocated before the mark. Every access to such a byte since the mark
-  is journalled with its value, so un-running finds a keep that changed what the region read or wrote
-  (rule 4 of "What is promised"). A keep into a classical byte would need every load and store since the
-  mark to journal its address to find the same (a question, `HANDOFF.md`); to keep into a byte, promote it
-  first (`z [ADDR]` changes nothing else).
-- **Measurement at an address** (the maintainer's decision of 2026-11-16, [M2] in `HANDOFF.md`):
-  `%d = measure iN [ADDR]` reads the `N` bits from bit 0 of the integer at the `i64` address, little-endian,
-  as `load iN` reads them, and gives an `iN`. The bits of bytes that hold qubits, and only those bits, are
-  sampled jointly, in one draw, and the state collapses onto the values found: the other bits of a cell
-  keep their superposition, and cells that are correlated stay correlated. The bits of other bytes are the
-  memory's, with nothing to sample. Everything else is as for a register: with several worlds the
-  measurement waits for them and observes which world first ("Observation" under "Worlds"); inside a
-  coherent region it faults `quantum_in_region`; one reached while running again is refused before it
-  samples; a rewind across it faults `bad_rewind` and reversal stops before it, also when no byte held
-  qubits. An address whose `N` bits do not fit in memory faults `out_of_bounds`. The register form stays
-  while registers do (`qalloc` retires with the call form that gives a fault value, decision [A1]).
-  Checked (`crates/exec/tests/measure_memory.rs`): outcomes, collapse and the bits left in superposition
-  written out by hand, and every fixture against the whole-world reference (`oracle_support::worlds`,
-  which reads a measurement's bits as its loads do): step by step where the worlds stay in step, and the
-  final machine for 8 seeds of each. Grover with x in memory measured at its address gives the register
-  form's answer for every seed (`memory_qubits.rs`); a replay that newly reaches one is refused unchanged
-  (`atomic_rewind_tests.rs`).
-- **Not yet, each a debt with its route.** A `longjmp` whose record is held in cells that disagree is
-  `bad_longjmp` (kept a fault by the maintainer on 2026-11-16), where it would split worlds that may then
-  fault separately (route: let the worlds of a split fault on their own, as other worlds do). The fault is
-  never a program's fault code ("The call with a fault value"). Under `apply` each configuration runs on
-  private memory holding its own definite record, so each run jumps. A cell is a whole byte, so a qubit in memory holds 8 qubits in
-  the simulator (route: cells of single bits, if the count matters).
-- **Channels** stay open as before: a cell is a register column of a world, so a mixture of worlds holds
-  qubits in memory as it holds registers.
-- **Checked.** Every step at qubits in memory is a bijection by brute force (`permutation_tests.rs`):
-  gates that promote bytes at addresses that depend on an argument (in bounds, out of bounds, aliasing),
-  a coherent region over superposed cells, loads, stores and a jump record over cells, on clean and dirty
-  history and in the three memory modes: 8,616 single steps (552 faulting) and 12,288 rewinds from their
-  mark through a region that promotes; a load and a store that split by a cell and the rewind that
-  merges them, 192 starts each, every one on 16 basis states and their superposition (the linear
-  extension of the basis results, stepped back exactly). `worlds_oracle.rs`'s 182 programs with each of
-  q, r, o in a register or in memory (eight layouts; q read by a load where it is in memory, o kept into
-  with `keep (... -> [66])`): 1,200 equal to the independent dense calculation of the register program,
-  to the register program's own run and to the whole-world reference run on the register program (the
-  reference does not model qubits in memory; it is compared through the meaning above, a cell's byte as a
-  register's value), and 256 refused exactly where the dense calculation finds an unfaithful read; each
-  equal case reverses to its entry. The worlds testing pass's F1 (a later split hiding a changed read) in
-  all four placements of its two qubits faults `bad_rewind`; an un-promotion below a split is refused
-  exactly when the keep is nonzero. Fourteen deliberate mutations of this code (promotion, un-promotion
-  and its checks, cell reads, writes and their checks, regions, splits, deferral) are each caught but one:
-  dropping cells from world equality, which equal journals already imply.
-- **Measured** (`memory_qubits.rs`, exact counts). Grover over `examples/grover.bn`'s predicate in the
-  history idiom with x and the kick qubit in registers or in memory (k = 1, 2, 8 iterations): the same
-  state, splits, merges, worlds (16) and configurations (32); `steps` +2(k - 1) and world steps
-  +32k - 2 (no `qalloc`s, a load and a truncation per oracle in each of 16 worlds); journal +30 bytes
-  whatever k (two promotions instead of two `qalloc` records); qubits held 16 against 5 (two bytes). A
-  gate whose bytes already hold qubits journals no words, as a register gate; one that promotes
-  journals 16 bytes per byte promoted and a count. The eight layouts of one program: the same worlds and
-  splits; a register moved into memory is held as a whole byte (8 qubits in place of its 1 or 2) and
-  journals 15 bytes more (a promotion's 32 in place of a `qalloc` record's 17).
-
-### The forms beside `qalloc` and `qfree`
-
-What `qalloc` and `qfree` do is written with qubits in memory ("Qubits in memory"), shown, not migrated:
-
-| Register form | Memory form |
-|---|---|
-| `%q = qalloc N` | `%a = alloca ceil(N/8)`, zeroed, and `z [%a]` (and the further bytes) to make its bytes cells: a promotion changes nothing else |
-| a gate on `%q[i]` | the gate on `[%a:i]` |
-| a call passing `%q` to an `iN` parameter (a read, which splits the world) | `load iN %a` (a read of the cells, which splits the world alike), passed as the integer |
-| `rewind %h keep (v -> %q)` | `rewind %h keep (v -> [%a])`, the bytes cells since before the mark |
-| `measure %q` | `measure iN [%a]` |
-| `qfree %q` of a register that is zero | nothing: a byte whose qubits are classical reads as memory does, and stays a cell until its promotion is un-run |
-| `qfree %q` of a register that is not zero, on the machine (strict mode: `dirty_free`) | nothing either: the cell keeps its qubits, as the left-over register does |
-
-Checked: `crates/exec/tests/memory_qubits.rs` (each of `worlds_oracle.rs`'s 182 programs with its registers in
-memory in eight layouts, against the register program, the dense calculation and the whole-world reference;
-Grover in both forms seed by seed) and `crates/exec/tests/register_forms.rs` (a Bell pair read by a call, a
-rewind keeping its parity and both measured, seed by seed; a dirty `qfree` and a cell left alone both keep the
-pair). Where they differ: a cell is a whole byte (8 qubits in the simulator); a register's handle goes stale
-when it is freed (a later use faults `dangling_register`), while a byte stays a cell until its promotion is
-un-run, also after the frame whose `alloca` held it returns (a later access to that address reads the cell, as
-"Qubits in memory" says of every cell); and the
-register form's `dirty_free` diagnostic has no memory counterpart. These are differences of representation
-the register forms are kept for, beside the decision itself.
+  region a gate is `quantum_in_region`, as before.
+- **What a qubit in memory is.** The memory of a basis configuration is the classical memory, except at the
+  bytes that hold qubits, whose values are the configuration's. Such a byte is a **cell**: an 8-qubit
+  register bound to the byte's address, part of the register table. The classical memory holds 0 under a
+  cell. The first gate at a byte that is not a cell **promotes** it: a register is allocated, the byte's
+  value XORed into it and the memory byte set to 0; the gate's journal record keeps the address and the old
+  byte. A byte stays a cell until the gate that promoted it is undone, even where its qubits are classical
+  again: that is how the state is held, not what it means.
+- **Ordinary code touching a cell** (a `load`, a `store` over it, a `setjmp` record written over it, a
+  `longjmp` record read from it) outside `apply`: where every configuration agrees on the cells' values they
+  are read as memory, and a store XORs old and new into each cell, which stays a cell. Where the
+  configurations disagree the simulator stops (`RunError::SuperposedMemoryRead`), which no program can
+  read. Not built: the maintainer decided on 2026-11-17 that ordinary code reading or writing a byte that
+  holds qubits is a named fault; that fault comes with the change of `qfree` (`HANDOFF.md`).
+- **Coherent regions** see the cells' values: each run of an `apply` runs on private memory holding the
+  values its configuration gives the cells. A region cannot gate, so it never changes a cell.
+- **Undoing.** A gate at addresses is undone by its inverse, then by un-promoting the bytes it promoted:
+  the old byte is XORed out of the register, the register un-allocated and the byte written back.
+- **Measurement at an address** (the maintainer's decision of 2026-11-16): `%d = measure iN [ADDR]` reads
+  the `N` bits from bit 0 of the integer at the `i64` address, little-endian, as `load iN` reads them, and
+  gives an `iN`. The bits of bytes that hold qubits, and only those bits, are sampled jointly, in one draw,
+  and the state collapses onto the values found: the other bits of a cell keep their superposition, and
+  cells that are correlated stay correlated. The bits of other bytes are the memory's, with nothing to
+  sample. Inside a coherent region it faults `quantum_in_region`; reversal stops before it, also when no
+  byte held qubits. An address whose `N` bits do not fit in memory faults `out_of_bounds`. Checked
+  (`crates/exec/tests/measure_memory.rs`): outcomes, collapse and the bits left in superposition written out
+  by hand. Grover with x in memory measured at its address gives the register form's answer for every seed
+  (`memory_qubits.rs`).
+- **A cell is a whole byte**, so a qubit in memory holds 8 qubits in the simulator (route: cells of single
+  bits, if the count matters).
+- **Checked.** Every step at qubits in memory is a bijection by brute force (`permutation_tests.rs`): gates
+  that promote bytes at addresses that depend on an argument (in bounds, out of bounds, aliasing), a coherent
+  region over superposed cells, loads, stores and a jump record over cells, on clean and dirty history:
+  2,808 single steps (184 faulting).
 
 ## Strict mode
 
 Decided by the maintainer on the afternoon of 2026-11-16. Some checks of the simulator are no part of the
-machine's meaning: no device can make them, because each looks at every branch or at amplitudes. They are
-diagnostics of the simulator's **strict mode**, as a sanitizer's are, and strict mode is the default.
+machine's meaning: no device can make them, because each looks at every configuration or at amplitudes. They
+are diagnostics of the simulator's **strict mode**, as a sanitizer's are, and strict mode is the default.
 `Options::machine_meaning` (`bennett run --machine-meaning`) runs the machine's meaning instead.
 
 | Check | Strict mode (default) | The machine's meaning |
 |---|---|---|
-| An `apply` faulting on some branches | the run stops, `RunError::RegionFault` | the fault code in the fault register, the program's to measure (as `allow_region_faults`) |
-| A world faulting while others go on | the run stops, `RunError::WorldFault` | the world ends with its fault; the others go on |
-| `qfree` of a register that is not zero | fault `dirty_free` | its qubits are **left over**: kept, never released; the handle is stale (its generation moves on, so a use faults `dangling_register`) and the id is not reused. `Stats::leftover_qubits` counts them, the toolchain's warning (`bennett run` prints it). Undoing the step (reversal, a rewind) takes the register back; running it again leaves it over again |
-| A rewind whose un-run meets a register allocated since the mark that is not zero | fault `bad_rewind`, nothing changed | the un-run runs regardless: the register is left over, holding what it holds, and the un-run goes on |
-| ... a register read as an integer since the mark that no longer holds the value read | fault `bad_rewind`, nothing changed | the read's wire is left over: un-reading XORs the register into the copy the call took, so a fresh register holds the value read XOR the register, per configuration |
-| ... a byte promoted to qubits since the mark whose qubits do not hold its old byte at the un-promotion | fault `bad_rewind`, nothing changed | the old byte is XORed out and the cell's register is left over; the byte is memory again |
-| ... an inner region run again whose `qfree` is dirty | fault `bad_rewind`, nothing changed | the `qfree` leaves its register over, as going forward, and the outer rewind goes on |
-| ... a memory qubit read or written since the mark (a load, a store, a `setjmp`'s record) that no longer holds the byte noted | fault `bad_rewind`, nothing changed | the access's wire is left over: a fresh byte register holding the byte noted XOR the cell, per configuration; where the access runs again it reads the byte from the wire XOR the cell, without splitting, and the wire is un-allocated |
-| ... any of these on one world's part of a state several worlds share (below a split point: checked on the sum of the parts), at a read or access where the world split, or where worlds split off during the un-run | fault `bad_rewind` where the sum fails, nothing changed | the un-run runs regardless in every part: every read, access, allocation and promotion there leaves its wire over, faithful or not, so that the worlds' register tables agree and the worlds that join at the rewind merge; then the wires zero in every configuration are discarded; no world faults |
-| An inner region run again that reaches a measurement or leaves the rewind's frame | fault `bad_rewind`, nothing changed | not built: `bad_rewind` as in strict mode, never a call's fault code, until channels (the path the keeps opened is a measurement or a return the history does not describe; checked atomic, unobserved and reversible in both modes: `an_inner_region_run_again_that_reaches_a_measurement_stays_a_named_refusal`, `leftover_wires.rs`; `HANDOFF.md`, "Known weak spots") |
+| An `apply` faulting for some values of its arguments | the run stops, `RunError::RegionFault` | the fault code in the fault register, the program's to measure (as `allow_region_faults`) |
+| `qfree` of a register that is not zero | fault `dirty_free` | its qubits are **left over**: kept, never released; the handle is stale (its generation moves on, so a use faults `dangling_register`) and the id is not reused. `Stats::leftover_qubits` counts them, the toolchain's warning (`bennett run` prints it). Reversal takes the register back |
 
-**Where worlds join** (built on 2026-11-17; `crates/exec/src/leftover.rs`). Outside strict mode no check of a
-rewind's un-run decides anything by the configurations a world holds where other worlds may join it: below a
-split point (on one world's part of a shared state), wherever other worlds exist, and where worlds split off
-during the un-run, every read, memory-qubit access, allocation and promotion the un-run meets leaves its wire (or
-register) over, faithful or not. The worlds' register tables then agree, the worlds that are one machine state
-again after the rewind merge, and their sum is what the circuit gives: the read's wire holds the value read XOR
-the register in every part. Once they have merged (at once where the world is alone), a wire zero in every
-configuration is discarded and the others move down into the ids the discarded ones freed. That discards no
-amplitude (the state is the rest times |0>), no world that could still become equal to this one holds the wire
-(every world the rewind joins has merged first, and a parked world is compared with the worlds that went on as it
-will be, its wires settled), and undoing the rewind gives the same state either way (where the step runs again,
-a zero wire XOR the register is the register), so no program can tell; it keeps a faithful un-run outside
-strict mode exactly as in strict mode. Before, each world (or part) left a wire over only where its own
-configurations failed the check, so a world whose wire was zero stayed apart from one whose wire was not and the
-two never merged (`worlds_that_join_at_the_rewind_leave_the_wire_over_in_each`, `joint_leftovers.rs`: the host
-then observed one of them), and below a split point the checks were deferred to the sum of the parts, whose
-failure faulted every world, the faithful ones too (the seam's V2, the deferred sum). What is left over, and what
-is to be taken back, is each world's own: a world that splits off during the un-run carries what was left over
-so far, and one that splits off where a call or access runs again takes back its own copy of each wire (the
-world splits by the step's other reads first); both refused before. Steps run again on a part leave a dirty
-`qfree`'s register over whatever the part holds (the same un-run takes it back). A register left over at an id
-that a later step of the same un-run revives (freed since the mark) moves out of its way first; that panicked
-before. Checked (`joint_leftovers.rs`, every state by hand on |0>, |+>, |1>): a read above the split point,
-the same for a memory access, worlds split off during the un-run, a call run again whose other read splits, and
-the revived id, with an outer rewind where it takes the wires back; and the two seam witnesses below a split
-point (`leftover_wires.rs`, `machine_finish_independent.rs`, the second against an independent dense calculation
-with its reduced state), which faulted before. Strict mode is unchanged at each.
-
-**Leftovers are taken back** (built on 2026-11-16, the design seam's V1 and V2; `crates/exec/src/leftover.rs`).
-What a rewind's un-run left over is journalled with the rewind (its `LeftBehind` record: for each leftover the
-record of the step whose un-run left it, the register, and its kind), so nothing later decides anything from
-whether a register was left over: undoing the rewind, by reversal or by an outer rewind, runs its region again
-and takes each one back where its step runs again (a `qalloc` gets its register back, a call reads the value
-from the wire XOR the register and un-allocates the wire, an access to memory qubits reads the byte from its
-wire XOR the cell, a promotion gets its cell's register back), which
-restores the state before the rewind exactly. Until then the record was a barrier: reversal stopped there and
-an outer rewind faulted `bad_rewind` where the inner un-run had left a register over and not where it had not,
-a fault decided by whether a register was zero in every configuration. A rewind run again (inside an outer
-un-run or a reversal) runs regardless as a rewind taken as a step does, and leaves the same registers over from
-the same state; outside strict mode every rewind keeps a copy to restore if its un-run still fails. Leftovers
-are not taken back in the order they were left: a call running again takes its reads' wires back in the order of
-its arguments, the reverse of their un-run, and a rewind run again inside an outer one leaves and takes back its
-own while a newer leftover waits, so a leftover is taken back wherever it stands in the list (until 2026-11-16 the
-take-back assumed the last and panicked: `two_leftover_read_wires_reverse_to_the_empty_entry` and
-`nested_leftover_lifetimes_complete_and_reverse_on_a_basis_state`, `machine_finish_independent.rs`). A leftover
-takes no allocation number of the program's (a left-over allocation gives its number back, and gets one again
-where it is taken back), so the registers allocated again in between get their old numbers. Checked
-(`crates/exec/tests/leftover_wires.rs`): each built site on |0>, |+> and |1>, the amplitudes and leftovers worked by
-hand as the program's circuit gives them, with an outer rewind and without, every run reversed to its entry;
-strict mode unchanged at each. The three sites built here failed on the previous code (`bad_rewind` for |+> and
-|1>); the dirty `qfree` run again already ran regardless.
-
-`bad_rewind` for its classical causes (a handle that names no live mark of this activation, a measurement
-since the mark, a keep into a register allocated since) stays a fault in both. A keep whose net change to a
-register read since the mark is not zero is refused before un-running in strict mode only; outside it the
-un-run runs and the read leaves its wire over. The simulator's checks are never delivered to a program as fault codes. The
-result of an un-run that ran regardless is unspecified by the ruling of 2026-11-13 ("What is promised",
-rule 4): what is built keeps every step a bijection of the whole machine with its leftovers, so no channel
-is needed, and the leftovers' record lets undoing the rewind take them back.
-The independent whole-world reference also models dirty-free leftovers, stale generations, the
-nonzero-allocation un-run, and reports strict-only diagnostics separately from program fault values
-(`worlds_budgets_independent.rs`); it still models the earlier barrier after a leftover, so on the machine it
-is compared up to the inner rewind only (route: model the take-back there). It does not prescribe production scheduling at a
-sibling-return/catch boundary or invent the unspecified state of an unfaithful inverse.
-Measured in `crates/exec/tests/strict.rs`, each expected state by hand: a dirty `qfree` faults in strict
-mode and leaves two qubits of a Bell pair over on the machine, the next allocation in a new column, reversal
-back to the entry; a rewind takes back what a dirty `qfree` in its region left over; a fault in one of two
-worlds and an `apply` out of budget stop strict mode and give, seed by seed, what `allow_region_faults` gives
-on the machine; a keep that reaches a temporary through a gate faults `bad_rewind` unchanged in strict mode
-and leaves the temporary over holding 1 on the machine (`%q` = |+> again), reversal and an outer rewind
-taking it back (`%q` = |+>, nothing left over); a faithful un-run is the same in both modes.
+The simulator's checks are never delivered to a program as fault codes. The meaning of `qfree` changes next
+(the maintainer's decision of 2026-11-17: partial trace; `HANDOFF.md`). Measured in `crates/exec/tests/strict.rs`,
+each expected state by hand: a dirty `qfree` faults in strict mode and leaves two qubits of a Bell pair over on
+the machine, the next allocation in a new column, reversal back to the entry; an `apply` out of budget stops
+strict mode and gives, seed by seed, what `allow_region_faults` gives on the machine.
 
 ## What is promised when history is left behind
 
@@ -1048,6 +490,10 @@ history, and that history is entangled with the data unless the program un-runs 
 
 Consequences: a test may assert a quantum state only for the documented class or after an un-run; an optimiser is
 free to choose what history to keep (a planned tape, recomputation) without changing any promised behaviour.
+
+Since 2026-11-17 (`mark`, `rewind` and machine states in superposition removed) ordinary code runs on qubits only
+inside `apply`, which keeps no history: no history is left entangled with data, and rules 3 and 4 have nothing
+to apply to until a form that leaves history comes back.
 
 ## Files, clock and entropy at the musl boundary
 
@@ -1117,36 +563,14 @@ and `roundevenl` are software too; the runtime's follow their bit operations on 
 `powi(x, 1)` returns its argument's bits, noncanonical ones included, as libgcc's loop does
 (`rt/softfloat/README.md`, "Independent conformance pass").
 
-## The next extension: code that is not a clean function (decided; `mark`, `rewind`, worlds, the memory overlay and gates at addresses built)
+## The journalled machine, removed (2026-11-17)
 
-Decided by the maintainer on 2026-11-13 after five independent proposals (`docs/AUDITION.md`). Built so far:
-`mark` and `rewind ... keep` ("History: `mark` and `rewind`", above; the text form is `%h = mark`, a result
-like any other), worlds, a superposition of whole machine states ("Worlds", above), and memory as an
-overlay over a classical base ("Memory as an overlay", above), and gates that take addresses ("Qubits in
-memory", above). `apply` computed as mark, call, rewind-keep was built on 2026-11-16 and shown equal to
-evaluation for each definite value of the arguments on every example and test; it was removed on 2026-11-17,
-and that evaluation is `apply`'s only definition. `apply`, `qalloc` and `qfree` stay (`HANDOFF.md`).
-
-- **One layering.** A journalled machine defines meaning and is the fallback that needs no analysis: the quantum
-  state is a superposition of whole machine states, and each step keeps what it destroys as history. Two
-  optimisations sit on top and must give the same promised results: memory lowered as objects whose accesses name
-  the cells they may touch, and history shrunk to what cannot be recomputed (a compiler-planned tape).
-- **Instructions:** `mark %h` and `rewind %h keep (src -> dst, ...)`. A mark remembers a point; rewind pops the
-  history back to it while XORing chosen values out. Marks nest.
-- **Memory** is a per-branch overlay of writes over a classical base that never becomes quantum, so qubits scale
-  with steps run and bytes written, never with memory size.
-- **Gates take addresses,** so a qubit can live anywhere in memory.
-- **`apply`, `qalloc` and `qfree` stay** as accepted forms until the new instructions pass every existing test.
-- **Why optimising history is safe:** between a run and its un-run, any history that makes the run reversible gives
-  the same final state, provided nothing in between changes what the run read or wrote.
-- **The one known exponential:** cleaning up inside every call, inside callers that also clean up, doubles work per
-  call level. Keeping the callees' history open until the caller rewinds avoids it, at the price of more history.
-
-Experiments to run before and while building, each named by a proposal as what would show it wrong: every
-journalled step is a permutation, on a clean and on a dirty history; `apply` equals mark, call, rewind-keep on every
-example and test; how much of the journal is the same on all branches, recoverable, or irreducible; what a
-superposed program counter costs under a schedule a compiler could build; un-running through gates equals the
-conjugated operation, checked against an independent matrix calculation.
+Decided on 2026-11-13 and built from 2026-11-15: `mark` and `rewind ... keep`, whole machine states in
+superposition, split where ordinary code read a qubit and joined by a rewind, memory as an overlay over a shared base,
+the call with a fault value and clocks and deadlines on marks. A rigorous account of the model showed that only
+a narrow static form of `mark`/`rewind` is proved and that several of the executor's rules for the general form
+could not be carried out by a device; the maintainer removed them on 2026-11-17 (`HANDOFF.md`, "Resumed on
+2026-11-17"). The last commit that has them is `f81a70a`. Gates at addresses stay.
 
 ## Text form
 
@@ -1169,26 +593,10 @@ the production macro, check each reader variant and writer instruction against t
 and reject missing operands. Shared reader/writer swaps cannot hide behind a round trip. The explicit
 macro-expansion mutation trials and their failing tests are recorded in HANDOFF's IR/CLI mutation section.
 
-The independent whole-world test interpreter keeps full classical snapshots, with `rpds` persistent
-vectors for history, frames, slots and console tape and an ordered persistent map for its normal byte overlay.
-World clones share unchanged nodes; point updates copy paths. Register, cell, mark and budget tables
-share standard `Rc` copy-on-write ownership, so their unchanged metadata is not repeated at each step. Slot vectors use eight-way nodes to
-limit the retained cost of each write. Snapshot and world equality still compare complete contents,
-including dead slots and history; no address identity or digest substitutes for machine equality.
-The interpreter derives its instruction and inverse rules from this document and uses no production
-executor history. Its resource regression checks sharing and retained-state reversal; large native
-comparisons remain explicit ignored experiments (`experiments/northstar-ladder/README.md`).
-
 Independent machine-decision probes (`crates/exec/tests/machine_decisions/` and
 `crates/ir/tests/machine_decisions.rs`) cover every integer measurement width, partial-cell complex
-amplitudes at unaligned addresses, overlapping measurements, byte/end-overflow bounds, every fault
-code with dirty targets in all three apply modes, all 256 single-bit jump-record corruptions, records
-in agreeing/disagreeing cells, and jumps across marked activations. Whole-world reference checks and
-captured snapshots cross-check outcomes and reversal. Admission probes permute definitions and
-rewinds, diamond block order and non-local continuations, and refuse forged/transferred handles.
-Their stale-buffer resumption witness found one false refusal, since fixed: the rewound-use analysis
-joined the facts of `longjmp` resumptions before the `setjmp`'s own operand uses, although a resumption
-continues after the instruction and reads none of them (`crates/ir/src/validate/rewound.rs`).
+amplitudes at unaligned addresses, byte/end-overflow bounds, every fault code with dirty targets and all 256
+single-bit jump-record corruptions, against expected values worked by hand.
 
 Independent fp-front probes compare powi's extreme integer exponents, long-double rounding at each
 binary point, and classification at all five widths against native `-O0` and `-O2` builds. Three
@@ -1210,7 +618,7 @@ Tests constrain behavior, with witnesses that would fail for the intended defect
   defect is observable before trusting a test. Mutate changed Rust lines before a step lands, separately
   from the fast suite (`docs/CHECKS.md`); retain regressions for real survivors.
 - At each reversible step compare complete independently captured state: memory, slots, frames, stack,
-  tape, worlds and amplitudes. Test forward/reverse/forward, nested regions, faults and failed rollback;
+  tape and amplitudes. Test forward/reverse/forward, nested regions, faults and failed rollback;
   final return values alone miss corrupted state. Compare an applied function over every small input,
   dirty output and fault value with direct evaluation and an independent state oracle.
 - Permute function and block order for semantic analyses; repeat calls and vary call paths. An analysis
@@ -1256,14 +664,13 @@ recomputation shared between conditions (each predicated operation computes and 
 - **Running code under a qubit with its history kept.** `apply` is the cleaned-up special case: compute, copy the
   result out, uncompute at once. The general case keeps the journal as quantum workspace and un-runs later. That is
   what an update with no known inverse (`x = x * x`), a loop under qubit control that contains gates, and a
-  conditional boot need. `mark`, `rewind` and worlds join journal and superposition: ordinary code reads a
-  qubit, keeps its history, and un-runs it. A store under qubit control is now a store in some worlds; the
-  memory overlay makes that cheap, and the front's fallback (`HANDOFF.md` step 4) is what uses it.
+  conditional boot need. The general form (`mark`, `rewind`, machine states in superposition) was removed on
+  2026-11-17; a narrow static form with a proof can come back. A program wanting gates inside code that is later
+  undone writes the forward and inverse gate sequences itself.
 - **Channels.** A dirty discard is the partial trace, measurement is described by effects, noise by channels; the
   finished Bennett covers them (maintainer, 2026-11-13). This step is unitaries and clean discard, and a dirty
-  `qfree` is a fault. Nothing in the device program should make channels impossible to add. Worlds keep that
-  open: a world is already a classical record with amplitudes, so a mixture is a weighted list of such
-  superpositions, and the host's observation at the end is the first, simplest instrument.
+  `qfree` is a fault (it becomes the partial trace next, the maintainer's decision of 2026-11-17). Nothing in
+  the device program should make channels impossible to add.
 - **Exact amplitudes** for the permutation tier.
 - **Integers wider than 128 bits.** The device program has integers up to 128 bits (decided 2026-11-13: Rust's
   `u128` gives their semantics; splitting them in the front would need a type legaliser, which LLVM has only in

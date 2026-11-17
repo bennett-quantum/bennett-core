@@ -10,16 +10,12 @@
 //! argument registers, on private memory, and XORs the result into its target (`region`).
 
 mod arith;
-#[cfg(test)]
-mod atomic_rewind_tests;
 mod backward;
 mod cells;
 mod executor;
 mod forward;
 mod gates;
-mod history;
 mod journal;
-mod leftover;
 mod measure;
 mod memory;
 #[cfg(test)]
@@ -29,15 +25,14 @@ mod quantum;
 mod recompute_independent_tests;
 mod region;
 mod snapshot;
-mod worlds;
 
 pub use executor::{Executor, Frame, Options, Outcome, ReverseError, RunError, StartError, Stats};
 pub use journal::Undo;
 pub use measure::{
     Alignment, ApplyClassification, ApplyJournal, BranchJournal, CallPathStep, ChainRecovery, ClassifiedPosition,
     JournalMeasurement, LiveSource, PathId, ProducerOutput, RecomputeWitness, RecordInstance, RecoverableReason, Site,
-    SitePos, SourceKind, Unobserved, UnobservedStep, WordClass, WordInstance, WordRole, WordWitness, classify,
-    classify_with_chains, classify_with_recompute,
+    SitePos, SourceKind, WordClass, WordInstance, WordRole, WordWitness, classify, classify_with_chains,
+    classify_with_recompute,
 };
 pub use quantum::RegisterState;
 pub use region::RegionCost;

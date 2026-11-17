@@ -1,14 +1,11 @@
-//! A fault the simulator finds by looking at every configuration of the state at once is never a program's
-//! fault code (the maintainer's decision of the afternoon of 2026-11-16: the simulator-only checks are never
-//! delivered to a program). The one such fault today: a `longjmp` whose jump record is held in qubits whose
-//! configurations disagree (`bad_longjmp`; that it faults at all is a debt, `docs/DESIGN.md`, "Qubits in
-//! memory"). No call with a budget catches it and no `apply` XORs it into its fault register: it ends the
-//! world, in strict mode and on the machine alike, as it does outside a call.
+//! A jump record held in qubits. Outside `apply`, ordinary code reading bytes that hold qubits whose
+//! configurations disagree is not built: the simulator stops (`RunError::SuperposedMemoryRead`), in strict
+//! mode and on the machine alike, which no program can read. Bytes whose configurations agree are read as
+//! memory. Inside `apply` each configuration's run reads its own definite record from its private memory.
 
 mod common;
 
-use bennett_exec::{Options, Outcome};
-use bennett_ir::Fault;
+use bennett_exec::{Options, Outcome, RunError};
 use common::{bounded, executor, load};
 
 /// `@callee(%buf, 0)` reserves 16 bytes and jumps through the record at `%buf`. Each caller writes, with
@@ -16,7 +13,7 @@ use common::{bounded, executor, load};
 /// (block 1, instruction 0), the frame's entry stack pointer and a saved stack pointer 48 below it, then gates
 /// bit 3 of the saved stack pointer: `z` keeps it (a valid record), `x` flips it (another valid record, 8 bytes
 /// higher, still within the frame's allocations), `h` holds both. Each valid record lands the jump at the
-/// `setjmp`, and the callee returns 9. The callers return `%y | %c << 8`.
+/// `setjmp`, and the callee returns 9. `@applied` returns `%y | %c << 8`.
 const PROGRAM: &str = "memory 256
 
 func @callee(i64 %buf, i1 %probe) -> i8 {
@@ -64,12 +61,9 @@ both:
     h [%bit:3]
     br go
 go:
-    %y, %c = call @callee(%buf, i1 0) budget 50
-    %c16 = zext i5 %c to i16
+    %y = call @callee(%buf, i1 0)
     %y16 = zext i8 %y to i16
-    %shifted = shl i16 %c16, 8
-    %packed = or i16 %shifted, %y16
-    ret %packed
+    ret %y16
 }
 
 func @applied(i8 %how) -> i16 {
@@ -105,19 +99,17 @@ fn machine() -> Options {
 }
 
 #[test]
-fn a_longjmp_over_disagreeing_qubits_is_never_a_call_fault_code() {
+fn a_longjmp_over_disagreeing_qubits_stops_the_simulator() {
     let module = load(PROGRAM);
     for options in [bounded(), machine()] {
-        // Either record alone jumps: the callee returns 9 and the code is 0 (`9 | 0 << 8`).
+        // Either record alone jumps: the callee returns 9.
         for how in [0, 1] {
             assert_eq!(common::run(&module, "call", &[how], options).0, Outcome::Returned(Some(9)), "how {how}");
         }
-        // Both at once: before 2026-11-16 the call caught `bad_longjmp` and the program returned 16 << 8,
-        // telling with certainty that the byte was in superposition.
-        // Now the world ends with the fault, as without the call.
+        // Both at once: the simulator stops, with the state as before the `longjmp`.
         assert_eq!(
             common::run(&module, "call", &[2], options).0,
-            Outcome::Faulted(Fault::BadLongjmp),
+            Outcome::Stopped(RunError::SuperposedMemoryRead),
             "machine_meaning {}",
             options.machine_meaning
         );

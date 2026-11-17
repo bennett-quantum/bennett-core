@@ -57,10 +57,6 @@ pub(crate) struct QuantumState {
     amplitudes: BTreeMap<Config, Complex64>,
     peak_qubits: u32,
     peak_configurations: usize,
-    /// The number of allocations made and not undone. Each allocation is numbered by it.
-    allocations: u64,
-    /// For each register id, the numbers of its allocations that are not undone, latest last.
-    allocation_numbers: Vec<Vec<u64>>,
     /// The memory bytes that hold qubits ("cells", `docs/DESIGN.md`, "Qubits in memory"): byte address to
     /// the column of the 8-qubit register that holds the byte's value. Part of the register table.
     cells: BTreeMap<u64, usize>,
@@ -79,8 +75,6 @@ impl Default for QuantumState {
             amplitudes,
             peak_qubits: 0,
             peak_configurations: 1,
-            allocations: 0,
-            allocation_numbers: Vec::new(),
             cells: BTreeMap::new(),
             leftovers: Vec::new(),
         }
@@ -94,10 +88,7 @@ impl QuantumState {
         let id = self.registers.iter().position(|r| r.width.is_none()).unwrap_or(self.registers.len());
         if id == self.registers.len() {
             self.registers.push(RegisterState { generation: 0, width: None });
-            self.allocation_numbers.push(Vec::new());
         }
-        self.allocations += 1;
-        self.allocation_numbers[id].push(self.allocations);
         let register = &mut self.registers[id];
         register.generation = register.generation.wrapping_add(1);
         register.width = Some(width);
@@ -110,22 +101,17 @@ impl QuantumState {
     }
 
     /// Undoes `allocate`: the register's column is dropped and the id gets its previous generation.
-    /// Configurations where the register is not zero are dropped: in a whole state they can only be
-    /// rounding residue (a rewind's un-run, which could find it otherwise, checks for them first,
-    /// `history.rs`); in one world's part of a state shared by several, dropping them is the adjoint of
-    /// allocating, a linear map, and the rewind checks that they cancel across the parts (`worlds.rs`).
+    /// Configurations where the register is not zero are dropped: once every later step is undone they can
+    /// only be rounding residue.
     pub(crate) fn unallocate(&mut self, handle: u64) {
         let id = self.resolve(handle).expect("an allocation being undone is live");
         self.amplitudes.retain(|config, _| config[id] == 0);
         let register = &mut self.registers[id];
         register.generation = register.generation.wrapping_sub(1);
-        self.allocations -= 1;
-        self.allocation_numbers[id].pop();
         self.release(id);
         // Ids that were never allocated before are forgotten again, as `allocate` found them.
         while self.registers.last().is_some_and(|r| r.width.is_none() && r.generation == 0) {
             self.registers.pop();
-            self.allocation_numbers.pop();
         }
     }
 
@@ -167,8 +153,7 @@ impl QuantumState {
     }
 
     /// The value of register `column` in the first configuration: its value in every configuration, where
-    /// they agree. A world's part that a deferred check emptied (`Executor::defer`) reads 0: it carries no
-    /// amplitude, and its sum with the other parts decides.
+    /// they agree.
     pub(crate) fn first_value(&self, column: usize) -> u64 {
         self.amplitudes.keys().next().map_or(0, |config| config[column])
     }
@@ -179,15 +164,10 @@ impl QuantumState {
     }
 
     /// Frees the register, which must be zero in every configuration.
-    ///
-    /// Unchecked (`checked` false), it keeps only the configurations where the register is zero: the
-    /// adjoint of allocating it, a linear map. Steps run again to undo a rewind use it where they run on
-    /// one world's part of a state that need be zero only summed over worlds, which the rewind checks.
-    pub(crate) fn free(&mut self, id: usize, checked: bool) -> Result<(), Fault> {
-        if checked && !self.is_zero(id) {
+    pub(crate) fn free(&mut self, id: usize) -> Result<(), Fault> {
+        if !self.is_zero(id) {
             return Err(Fault::DirtyFree);
         }
-        self.amplitudes.retain(|config, _| config[id] == 0);
         self.release(id);
         Ok(())
     }
@@ -200,118 +180,13 @@ impl QuantumState {
         self.leftovers.push(id);
     }
 
-    /// Takes back the register `id` left over: its handle is live again. Returns the handle. Leftovers are not
-    /// taken back in the order they were left: a call running again takes its reads' wires back in the order
-    /// of its arguments, and a rewind run again inside an outer one leaves and takes back its own while a
-    /// newer leftover waits; the others keep their order.
+    /// Takes back the register `id` left over: its handle is live again. Returns the handle.
     pub(crate) fn reclaim(&mut self, id: usize) -> u64 {
         let index = self.leftovers.iter().rposition(|&left| left == id).expect("a register left over is taken back");
         self.leftovers.remove(index);
         let register = &mut self.registers[id];
         register.generation = register.generation.wrapping_sub(1);
         u64::from(register.generation) << 32 | id as u64
-    }
-
-    /// Leaves over a register whose allocation a rewind's un-run undoes: as `leave`, and its allocation is
-    /// un-numbered as `unallocate` would, so that the allocations made again before it get their numbers.
-    pub(crate) fn leave_allocation(&mut self, id: usize) {
-        self.allocations -= 1;
-        self.allocation_numbers[id].pop();
-        self.leave(id);
-    }
-
-    /// Undoes `leave_allocation` where the allocation runs again: the register is taken back, numbered as the
-    /// allocation numbers it. Returns the handle.
-    pub(crate) fn reclaim_allocation(&mut self, id: usize) -> u64 {
-        self.allocations += 1;
-        self.allocation_numbers[id].push(self.allocations);
-        self.reclaim(id)
-    }
-
-    /// A fresh register of `width` qubits in |0>, for a wire a rewind's un-run leaves over (`leftover.rs`): it
-    /// is no allocation of the program, so it takes no allocation number. Returns its id.
-    pub(crate) fn allocate_wire(&mut self, width: Width) -> usize {
-        let handle = self.allocate(width);
-        let id = handle_id(handle);
-        self.allocations -= 1;
-        self.allocation_numbers[id].pop();
-        id
-    }
-
-    /// Whether the id `id` holds a register, live or left over.
-    pub(crate) fn occupied(&self, id: usize) -> bool {
-        self.registers.get(id).is_some_and(|register| register.width.is_some())
-    }
-
-    /// The id `allocate` would give a register now.
-    pub(crate) fn first_free(&self) -> usize {
-        self.registers.iter().position(|r| r.width.is_none()).unwrap_or(self.registers.len())
-    }
-
-    /// Moves the register left over at `from` (a wire, or an allocation or promotion left over at its own id:
-    /// they are kept alike, with no allocation number) to the first free id, its place in the leftovers kept:
-    /// the values move with it, and `from` is freed as discarding it would, its generation back to what it was
-    /// before the register was allocated there. Returns the new id.
-    pub(crate) fn move_leftover(&mut self, from: usize) -> usize {
-        let to = self.first_free();
-        self.move_leftover_to(from, to);
-        to
-    }
-
-    /// `move_leftover` to the free id `to`.
-    pub(crate) fn move_leftover_to(&mut self, from: usize, to: usize) {
-        let width = self.width_of(from);
-        if to == self.registers.len() {
-            self.registers.push(RegisterState { generation: 0, width: None });
-            self.allocation_numbers.push(Vec::new());
-        }
-        let register = &mut self.registers[to];
-        // Allocated, then left over (stale), as a wire is.
-        register.generation = register.generation.wrapping_add(2);
-        register.width = Some(width);
-        if to >= self.columns {
-            self.set_columns(to + 1);
-        }
-        let amplitudes = std::mem::take(&mut self.amplitudes);
-        self.amplitudes = amplitudes
-            .into_iter()
-            .map(|(mut config, amplitude)| {
-                config.swap(from, to);
-                (config, amplitude)
-            })
-            .collect();
-        let index = self.leftovers.iter().rposition(|&left| left == from).expect("a register left over moves");
-        self.leftovers[index] = to;
-        self.registers[from].generation = self.registers[from].generation.wrapping_sub(1);
-        self.allocations += 1;
-        self.allocation_numbers[from].push(self.allocations);
-        self.unallocate_column(from);
-    }
-
-    /// Undoes `allocate_wire` of the register `id`, zero in every configuration.
-    pub(crate) fn discard_wire(&mut self, id: usize) {
-        self.allocations += 1;
-        self.allocation_numbers[id].push(self.allocations);
-        let handle = u64::from(self.registers[id].generation) << 32 | id as u64;
-        self.unallocate(handle);
-    }
-
-    /// The width of the live or left-over register in `column`.
-    pub(crate) fn width_of(&self, column: usize) -> Width {
-        self.registers[column].width.expect("a register in use has a width")
-    }
-
-    /// XORs register `src`, and `constant`, into register `dst` in every configuration: a CNOT from each qubit
-    /// of `src` to `dst`'s, then X where `constant` has ones. A permutation of configurations.
-    pub(crate) fn xor_column(&mut self, dst: usize, src: usize, constant: u64) {
-        let amplitudes = std::mem::take(&mut self.amplitudes);
-        self.amplitudes = amplitudes
-            .into_iter()
-            .map(|(mut config, amplitude)| {
-                config[dst] ^= config[src] ^ constant;
-                (config, amplitude)
-            })
-            .collect();
     }
 
     /// Undoes `leave`: the register's handle is live again.
@@ -406,17 +281,6 @@ impl QuantumState {
         self.amplitudes = std::mem::take(&mut self.amplitudes).into_iter().map(xor).collect();
     }
 
-    /// The number of allocations made and not undone.
-    pub(crate) fn allocations(&self) -> u64 {
-        self.allocations
-    }
-
-    /// The number of the live register `column`'s allocation: it was made after `allocations()` had
-    /// that value minus one.
-    pub(crate) fn allocation_number(&self, column: usize) -> u64 {
-        *self.allocation_numbers[column].last().expect("a live register was allocated")
-    }
-
     /// Samples the value of register `id` and collapses the state onto it.
     pub(crate) fn measure(&mut self, id: usize, rng: &mut impl Rng) -> u64 {
         self.measure_bits(&[(id, u64::MAX)], rng)[0]
@@ -480,21 +344,6 @@ impl QuantumState {
         self.peak_configurations
     }
 
-    /// A copy with the same registers and `amplitudes` in place of this state's.
-    pub(crate) fn with_amplitudes(&self, amplitudes: BTreeMap<Config, Complex64>) -> QuantumState {
-        QuantumState {
-            registers: self.registers.clone(),
-            columns: self.columns,
-            amplitudes,
-            peak_qubits: self.peak_qubits,
-            peak_configurations: self.peak_configurations,
-            allocations: self.allocations,
-            allocation_numbers: self.allocation_numbers.clone(),
-            cells: self.cells.clone(),
-            leftovers: self.leftovers.clone(),
-        }
-    }
-
     /// The configurations grouped by the values of `columns`, in order of those values.
     pub(crate) fn partition(&self, columns: &[usize]) -> Vec<(Vec<u64>, BTreeMap<Config, Complex64>)> {
         let mut parts = BTreeMap::<Vec<u64>, BTreeMap<Config, Complex64>>::new();
@@ -510,69 +359,6 @@ impl QuantumState {
     pub(crate) fn failing(&self, fails: impl Fn(&[u64]) -> bool) -> Amplitudes {
         self.amplitudes.iter().filter(|(config, _)| fails(config)).map(|(config, &a)| (config.clone(), a)).collect()
     }
-
-    /// The summed squared amplitude: the probability of this world among all.
-    pub(crate) fn weight(&self) -> f64 {
-        self.amplitudes.values().map(Complex64::norm_sqr).sum()
-    }
-
-    /// Multiplies every amplitude by `factor`.
-    pub(crate) fn scale(&mut self, factor: f64) {
-        self.amplitudes.values_mut().for_each(|amplitude| *amplitude *= factor);
-    }
-
-    /// Whether `other` has the same registers allocated in the same order: the classical part of a world's
-    /// quantum state, which worlds must share to be one machine state.
-    pub(crate) fn same_registers(&self, other: &QuantumState) -> bool {
-        self.registers == other.registers
-            && self.columns == other.columns
-            && self.allocations == other.allocations
-            && self.allocation_numbers == other.allocation_numbers
-            && self.cells == other.cells
-            && self.leftovers == other.leftovers
-    }
-
-    /// Feeds the classical part (the register table) to `state`.
-    pub(crate) fn hash_registers(&self, state: &mut impl std::hash::Hasher) {
-        use std::hash::Hash;
-        self.registers.hash(state);
-        self.columns.hash(state);
-        self.allocations.hash(state);
-        self.allocation_numbers.hash(state);
-        self.cells.hash(state);
-        self.leftovers.hash(state);
-    }
-
-    /// Adds `other`'s amplitudes to this state's: two worlds that are the same machine state become one.
-    pub(crate) fn absorb(&mut self, other: QuantumState) {
-        for (config, amplitude) in other.amplitudes {
-            accumulate(&mut self.amplitudes, config, amplitude);
-        }
-        self.amplitudes.retain(|_, amplitude| amplitude.norm() > NEGLIGIBLE_AMPLITUDE);
-        self.peak_qubits = self.peak_qubits.max(other.peak_qubits);
-        self.peak_configurations = self.peak_configurations.max(other.peak_configurations).max(self.amplitudes.len());
-    }
-}
-
-#[cfg(test)]
-impl QuantumState {
-    /// Whether `other` is this state: the register table, cells and allocation history exactly, every
-    /// amplitude within `tolerance` (an un-run and its run again round). The peaks are statistics.
-    pub(crate) fn same_state(&self, other: &QuantumState, tolerance: f64) -> bool {
-        let exact = (self.registers == other.registers)
-            && self.columns == other.columns
-            && self.allocations == other.allocations
-            && self.allocation_numbers == other.allocation_numbers
-            && self.cells == other.cells
-            && self.leftovers == other.leftovers;
-        let zero = Complex64::new(0.0, 0.0);
-        let configs = self.amplitudes.keys().chain(other.amplitudes.keys());
-        exact
-            && configs.into_iter().all(|config| {
-                let (a, b) = (self.amplitudes.get(config), other.amplitudes.get(config));
-                (a.copied().unwrap_or(zero) - b.copied().unwrap_or(zero)).norm() <= tolerance
-            })
-    }
 }
 
 fn handle_id(handle: u64) -> usize {
@@ -584,10 +370,6 @@ fn accumulate(map: &mut BTreeMap<Config, Complex64>, config: Config, amplitude: 
         *map.entry(config).or_default() += amplitude;
     }
 }
-
-#[cfg(test)]
-#[path = "independent_history_tests.rs"]
-mod independent_history_tests;
 
 #[cfg(test)]
 #[path = "measure_sampling_tests.rs"]

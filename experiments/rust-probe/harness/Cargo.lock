@@ -29,6 +29,7 @@ dependencies = [
 name = "bennett-ir"
 version = "0.1.0"
 dependencies = [
+ "fixedbitset",
  "logos",
  "petgraph",
  "thiserror",

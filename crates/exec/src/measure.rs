@@ -273,30 +273,8 @@ pub struct ApplyJournal {
 /// Everything the measurement saw in a run.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct JournalMeasurement {
-    /// Each dynamic `apply` execution, in order. An execution the observer stopped in is left out.
+    /// Each dynamic `apply` execution, in order.
     pub applies: Vec<ApplyJournal>,
-    /// The first step in a region the observer does not follow, if one was reached. The observer then
-    /// stopped: the apply execution it was in and every later one are not measured, and the run goes on as
-    /// with the observer off.
-    pub unsupported: Option<UnobservedStep>,
-}
-
-/// A step the journal-content observer does not follow.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Unobserved {
-    /// A `rewind` in a region: it pops records the observer already classified.
-    Rewind,
-    /// A call with a budget in a region: a fault it catches discards frames the observer shadows.
-    CallBudget,
-}
-
-/// Where the observer stopped, and why.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct UnobservedStep {
-    /// The kind of step.
-    pub kind: Unobserved,
-    /// The instruction.
-    pub site: Site,
 }
 
 /// How branches are aligned before journal words are compared.
@@ -545,9 +523,6 @@ struct ShadowFrame {
 /// The observer. Created by [`Executor::measure_journal_content`]; dropped or taken by the caller.
 pub(crate) struct Collector {
     keep_raw: bool,
-    /// Set at a step the observer does not follow (`JournalMeasurement::unsupported`); every hook is then
-    /// a no-op.
-    stopped: bool,
     measurement: JournalMeasurement,
     a_counts: HashMap<Site, u64>,
     shadow: Vec<ShadowFrame>,
@@ -571,7 +546,6 @@ impl Collector {
     fn new(keep_raw: bool) -> Self {
         Collector {
             keep_raw,
-            stopped: false,
             measurement: JournalMeasurement::default(),
             a_counts: HashMap::new(),
             shadow: Vec::new(),
@@ -695,9 +669,7 @@ impl Executor<'_> {
     /// `keep_raw`, every journal record of every branch is kept (what [`classify`] needs); without
     /// it, only per-branch counts, arguments and outcomes are. Off by default, and a pure observer
     /// when on: it copies journal words the run already made and writes no executor state, so a run
-    /// with it on has the outcome, state and journal of the same run with it off. It does not follow a
-    /// `rewind` or a call with a budget inside a region: at the first it stops, naming the step
-    /// ([`JournalMeasurement::unsupported`]).
+    /// with it on has the outcome, state and journal of the same run with it off.
     pub fn measure_journal_content(&mut self, keep_raw: bool) {
         self.journal_measurement = Some(Collector::new(keep_raw));
     }
@@ -712,13 +684,13 @@ impl Executor<'_> {
         self.journal_measurement.take().map(|collector| collector.measurement)
     }
 
-    /// The collector, while the observer is on and has not stopped.
+    /// The collector, while the observer is on.
     fn observing(&self) -> Option<&Collector> {
-        self.journal_measurement.as_ref().filter(|collector| !collector.stopped)
+        self.journal_measurement.as_ref()
     }
 
     fn observing_mut(&mut self) -> Option<&mut Collector> {
-        self.journal_measurement.as_mut().filter(|collector| !collector.stopped)
+        self.journal_measurement.as_mut()
     }
 
     pub(crate) fn measure_begin_apply(&mut self, callee: FuncId) {
@@ -831,24 +803,6 @@ impl Executor<'_> {
         let block = self.function(frame.func).block(frame.block);
         let pos = if frame.inst < block.insts.len() { SitePos::Inst(frame.inst) } else { SitePos::Term };
         let site = Site { func: frame.func, block: frame.block, pos };
-        // A rewind pops records the measurement has already classified; it does not model that. Nor does it
-        // model a call with a budget, whose fault discards frames (a debt, `docs/DESIGN.md`).
-        let inst = block.insts.get(frame.inst);
-        let unobserved = if matches!(inst, Some(Inst::Rewind { .. })) {
-            Some(Unobserved::Rewind)
-        } else if matches!(inst, Some(Inst::CallBudget { .. })) {
-            Some(Unobserved::CallBudget)
-        } else {
-            None
-        };
-        if let Some(kind) = unobserved {
-            let collector = self.journal_measurement.as_mut().expect("observing");
-            collector.stopped = true;
-            collector.measurement.unsupported = Some(UnobservedStep { kind, site });
-            // The apply execution it stopped in is unfinished: it is not reported.
-            collector.measurement.applies.pop();
-            return None;
-        }
         let journal = self.journal.as_ref().expect("a region runs with a journal");
         let call_path = self.journal_measurement.as_ref()?.shadow.last()?.call_path;
         let mut outputs = Vec::new();
@@ -917,7 +871,7 @@ impl Executor<'_> {
         let live_scratch = std::mem::take(&mut collector.live);
         let live = &live_scratch[..];
         let mut words: Vec<WordInstance> = match info.kind {
-            Undo::Slot | Undo::Qalloc | Undo::Measure | Undo::Mark => {
+            Undo::Slot | Undo::Qalloc | Undo::Measure => {
                 let dst = info.dst.expect("a slot record defines a result");
                 let first = collector.bump(executing, dst);
                 vec![WordInstance {
@@ -1113,11 +1067,7 @@ impl Executor<'_> {
             | Undo::GateAtPromoted
             | Undo::Qfree
             | Undo::Leftover
-            | Undo::LeftBehind
             | Undo::Apply => Vec::new(),
-            Undo::Rewind | Undo::Catch => {
-                unreachable!("the measurement stops before a rewind or a call with a budget")
-            }
         };
         // Check original operand values against live state; captured values alone never suffice.
         let context_live = Arc::new(if collector.keep_raw { live.to_vec() } else { Vec::new() });
@@ -1198,7 +1148,6 @@ impl Executor<'_> {
                                 | Inst::Setjmp { .. }
                                 | Inst::ReturnAddress { .. }
                                 | Inst::Call { .. }
-                                | Inst::CallBudget { .. }
                                 | Inst::CallIndirect { .. }
                                 | Inst::FuncAddr { .. }
                                 | Inst::Effect { .. }
@@ -1207,9 +1156,7 @@ impl Executor<'_> {
                                 | Inst::Gate { .. }
                                 | Inst::GateAt { .. }
                                 | Inst::Measure { .. }
-                                | Inst::Apply { .. }
-                                | Inst::Mark { .. }
-                                | Inst::Rewind { .. } => None,
+                                | Inst::Apply { .. } => None,
                             }
                         }
                         SitePos::Entry | SitePos::Term => None,
@@ -1283,11 +1230,7 @@ impl Executor<'_> {
             | Undo::Qfree
             | Undo::Leftover
             | Undo::Measure
-            | Undo::LeftBehind
-            | Undo::Catch
             | Undo::Apply
-            | Undo::Mark
-            | Undo::Rewind
             | Undo::GateAt
             | Undo::GateAtPromoted => {}
         }
@@ -1329,11 +1272,7 @@ impl Executor<'_> {
             | Undo::Qfree
             | Undo::Leftover
             | Undo::Measure
-            | Undo::LeftBehind
-            | Undo::Catch
             | Undo::Apply
-            | Undo::Mark
-            | Undo::Rewind
             | Undo::Setjmp
             | Undo::GateAt
             | Undo::GateAtPromoted => {}
@@ -1356,7 +1295,6 @@ impl Executor<'_> {
                 | Inst::Setjmp { .. }
                 | Inst::ReturnAddress { .. }
                 | Inst::Call { .. }
-                | Inst::CallBudget { .. }
                 | Inst::CallIndirect { .. }
                 | Inst::Effect { .. }
                 | Inst::Qalloc { .. }
@@ -1364,9 +1302,7 @@ impl Executor<'_> {
                 | Inst::Gate { .. }
                 | Inst::GateAt { .. }
                 | Inst::Measure { .. }
-                | Inst::Apply { .. }
-                | Inst::Mark { .. }
-                | Inst::Rewind { .. } => return None,
+                | Inst::Apply { .. } => return None,
             }),
             (SitePos::Term, ProducerOutput::JumpArgument { target, argument }) => {
                 let mut operand = None;
@@ -1427,7 +1363,6 @@ impl Executor<'_> {
                 | Inst::Setjmp { .. }
                 | Inst::ReturnAddress { .. }
                 | Inst::Call { .. }
-                | Inst::CallBudget { .. }
                 | Inst::CallIndirect { .. }
                 | Inst::Effect { .. }
                 | Inst::Qalloc { .. }
@@ -1435,9 +1370,7 @@ impl Executor<'_> {
                 | Inst::Gate { .. }
                 | Inst::GateAt { .. }
                 | Inst::Measure { .. }
-                | Inst::Apply { .. }
-                | Inst::Mark { .. }
-                | Inst::Rewind { .. } => None,
+                | Inst::Apply { .. } => None,
             },
             (SitePos::Term, ProducerOutput::JumpArgument { .. }) => {
                 self.producer_operands(producer.site, producer.output).map(|operands| read(&operands[0]))
@@ -1537,7 +1470,7 @@ impl Executor<'_> {
         live.clear();
         let paired = match kind {
             Undo::Return => shadow.len() - 1,
-            Undo::Longjmp | Undo::Catch => shadow.len() - discarded,
+            Undo::Longjmp => shadow.len() - discarded,
             Undo::Slot
             | Undo::Store
             | Undo::Alloca
@@ -1551,10 +1484,7 @@ impl Executor<'_> {
             | Undo::Qfree
             | Undo::Leftover
             | Undo::Measure
-            | Undo::LeftBehind
             | Undo::Apply
-            | Undo::Mark
-            | Undo::Rewind
             | Undo::Setjmp
             | Undo::GateAt
             | Undo::GateAtPromoted => shadow.len(),

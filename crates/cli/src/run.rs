@@ -79,14 +79,14 @@ fn report_outcome(module: &ValidModule, entry: FuncId, outcome: Outcome, tape: &
     }
     if !matches!(outcome, Outcome::Stopped(RunError::RegionFault { .. })) && stats.region_faults > 0 {
         println!(
-            "region faults (allowed): {} apply executions faulted on some branch, total weight {:e}",
+            "region faults (allowed): {} apply executions faulted for some argument value, total weight {:e}",
             stats.region_faults, stats.region_fault_weight
         );
     }
     if stats.leftover_qubits > 0 {
         println!(
-            "warning: {} qubits left over by `qfree` of registers that were not zero or by rewinds that met a \
-             state their history does not describe (the machine keeps them; strict mode would fault)",
+            "warning: {} qubits left over by `qfree` of registers that were not zero (the machine keeps them; \
+             strict mode would fault)",
             stats.leftover_qubits
         );
     }
@@ -159,25 +159,12 @@ fn report_stats(stats: &Stats, forward: Timed, reverse: Option<Timed>) {
         bound(stats.max_configurations.map(|m| m.to_string()))
     );
     println!("  forward: {forward}");
-    println!("  time: {} (the machine's clock: a rewind of a mark with a budget counts the budget)", stats.clock);
     if let Some(reverse) = reverse {
         println!("  reverse: {reverse}");
     }
     println!("  region steps: {}", stats.region_steps);
     println!(
-        "  history: {} steps un-run by rewind, {} run again, {} of them charged to the budget",
-        stats.rewound_steps, stats.rerun_steps, stats.replay_charged
-    );
-    println!(
-        "  worlds: {} now, {} peak; {} splits, {} merges, {} observed; {} steps of all worlds",
-        stats.worlds, stats.peak_worlds, stats.splits, stats.merges, stats.observations, stats.world_steps
-    );
-    println!(
-        "  world memory: {} bytes in overlays now, {} at most; splits copied {} bytes of overlay, {} of journal",
-        stats.overlay_bytes, stats.peak_overlay_bytes, stats.split_memory_bytes, stats.split_journal_bytes
-    );
-    println!(
-        "  region faults: {} apply executions faulted on some branch; weight {:e} in all, {:e} at most",
+        "  region faults: {} apply executions faulted for some argument value; weight {:e} in all, {:e} at most",
         stats.region_faults, stats.region_fault_weight, stats.region_fault_max_weight
     );
     match (stats.journal_bytes, per_step(stats)) {

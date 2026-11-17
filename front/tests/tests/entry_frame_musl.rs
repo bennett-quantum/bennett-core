@@ -2,22 +2,11 @@
 //! around the two edges that matter, where `__bennett_entry`'s own frame stops fitting and where the whole
 //! run stops fitting. Below the first the run is `stack_overflow` before its first step; between them it is
 //! `stack_overflow` later, its output a prefix of the native output; from the second on it is the native
-//! output and status. The edges are stepped against the independent whole-world reference too.
+//! output and status.
 use bennett_exec::{Executor, Options, Outcome};
 use bennett_front_tests::{native_build, out_dir, root, write_c};
 use bennett_ir::{Fault, Module, ValidModule};
 use std::process::Command;
-
-#[allow(dead_code)]
-#[path = "../../../crates/exec/tests/oracle_support/dense.rs"]
-mod dense;
-#[allow(dead_code)]
-#[path = "../../../crates/exec/tests/oracle_support/worlds.rs"]
-mod reference;
-use reference as worlds;
-#[allow(dead_code)]
-#[path = "../../../crates/exec/tests/oracle_support/worlds_executor.rs"]
-mod reference_comparison;
 
 const SOURCE: &str = r#"#include <stdio.h>
 static int depth(int n) {
@@ -98,14 +87,6 @@ fn every_stack_size_at_the_entry_and_run_edges_agrees_with_native_and_the_refere
             assert_eq!((at_start, outcome), (None, Outcome::Returned(Some(3))), "{context}");
             assert_eq!(tape, native.stdout, "{context}");
         }
-    }
-    for stack in [entry_frame - 1, entry_frame, minimum - 1, minimum] {
-        let module = with_stack(&image, stack);
-        let (at_start, outcome, _, steps) = run(&module);
-        // The comparison counts the step that faults, which the run's count leaves out.
-        let faulting_step = usize::from(at_start.is_none() && outcome != Outcome::Returned(Some(3)));
-        let compared = reference_comparison::compare(&module, "__bennett_entry", &[], steps as usize + 1, false);
-        assert_eq!(compared, steps as usize + faulting_step, "stack {stack}");
     }
     println!("entry frame {entry_frame} bytes; whole run from {minimum} bytes of stack");
 }

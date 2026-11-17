@@ -37,20 +37,10 @@ pub enum Undo {
     /// A `qfree` of a register that was not zero, outside the simulator's strict mode: the register is left
     /// over (kept, its handle stale), undone by taking it back. No words.
     Leftover,
-    /// After a `rewind` record, outside strict mode: the rewind's un-run met a state its history does not
-    /// describe and ran regardless, leaving qubits over. A barrier, as a measurement is: reversal and outer
-    /// rewinds do not cross it. No words.
-    LeftBehind,
     /// A measurement: a barrier that reversal refuses to cross. Words: the old slot value.
     Measure,
     /// An `apply`, undone by applying it again. No words.
     Apply,
-    /// A `mark`. Words: the old slot value. The mark is also listed in the journal's marks.
-    Mark,
-    /// A `rewind`, undone by running the rewound steps again from the mark and XORing the kept values
-    /// again. Words: which visit of the rewind in its frame since the mark it was (the high 64 bits), and
-    /// the block and position the mark left the frame at, packed in one word.
-    Rewind,
     /// A `setjmp`. Words: the record's old bytes (two words, low half first), then the old result slot.
     Setjmp,
     /// A gate with a qubit in memory (`GateAt`) whose memory bytes all held qubits already, undone by its
@@ -60,11 +50,6 @@ pub enum Undo {
     /// them. Words: for each byte it promoted, in order, the address (shifted left by 8) and the byte's
     /// old value (the low 8 bits); then the number of bytes promoted.
     GateAtPromoted,
-    /// A fault inside a call with a budget, returned to its caller as a fault code. Words: for each discarded
-    /// frame from the top down, its packed position, its entry stack pointer and its steps left (0 for none,
-    /// else one more than the count); then the stack pointer before, the number of discarded frames, and
-    /// the old values of the call's result slot, if it names one, and of its fault slot.
-    Catch,
     /// A `longjmp`. Words: for each discarded frame from the top down, its packed position and its entry
     /// stack pointer; then the target frame's packed position and the stack pointer before the jump, the
     /// number of discarded frames, and the old value of the `setjmp`'s result slot.
@@ -72,233 +57,13 @@ pub enum Undo {
 }
 
 /// A stack of undo records.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) struct Journal {
     kinds: Vec<Undo>,
     words: Vec<u128>,
-    /// One entry per `Mark` record, in order: what a `rewind` to it needs.
-    marks: Vec<MarkEntry>,
-    /// One entry per `Longjmp` or `Catch` record, in order: the number of frames it discarded, which a
-    /// `rewind` counts as returns when it checks that its mark belongs to the running activation.
-    jumps: Vec<usize>,
-    /// One entry per register a `Call` record's call read as an integer, in order.
-    reads: Vec<ReadEntry>,
-    /// One entry per memory byte holding qubits that a step's ordinary access touched, in order.
-    cells: Vec<CellEntry>,
-    /// For a `Rewind` record pushed while a call with a budget had run, its index and the number of records
-    /// its un-run popped: what undoing it gives back to the budgets before running its steps again
-    /// (`history.rs`). A count of time, so equality, hashing and the byte count leave it out: inside a call
-    /// with a budget worlds that differ in it differ in their frames' budgets anyway.
-    rewind_costs: Vec<(usize, u64)>,
-    /// The marks whose budget is open (a deadline), in order: each mark's index and the depth of the frames
-    /// when it ran (the frame that made it is the last of them). A frame left closes the budgets of its marks,
-    /// which can no longer be rewound. Time, like `rewind_costs`: equality, hashing and the byte count leave
-    /// it out.
-    open: Vec<(usize, usize)>,
-}
-
-impl PartialEq for Journal {
-    fn eq(&self, other: &Self) -> bool {
-        self.kinds == other.kinds
-            && self.words == other.words
-            && self.marks == other.marks
-            && self.jumps == other.jumps
-            && self.reads == other.reads
-            && self.cells == other.cells
-    }
-}
-
-impl Eq for Journal {}
-
-impl std::hash::Hash for Journal {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.kinds.hash(state);
-        self.words.hash(state);
-        self.marks.hash(state);
-        self.jumps.hash(state);
-        self.reads.hash(state);
-        self.cells.hash(state);
-    }
-}
-
-/// A memory byte holding qubits (a cell) that ordinary code read or wrote: what un-running the step must
-/// find there (`docs/DESIGN.md`, "Qubits in memory").
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct CellEntry {
-    /// The index of the step's record.
-    pub(crate) record: usize,
-    /// The cell's column.
-    pub(crate) column: usize,
-    /// The byte the cell holds after the step: the value read, or the value written.
-    pub(crate) value: u8,
-    /// Whether the world split at this access: its configurations disagreed on the cells.
-    pub(crate) split: bool,
-}
-
-/// A register a call read as an integer: what un-running the call must find still there.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct ReadEntry {
-    /// The index of the call's `Call` record.
-    pub(crate) record: usize,
-    /// The register's column.
-    pub(crate) column: usize,
-    /// The callee's parameter slot that received the value.
-    pub(crate) slot: bennett_ir::Slot,
-    /// Whether the world split at this read: its configurations disagreed on the value.
-    pub(crate) split: bool,
-}
-
-/// What the journal keeps about a `mark` besides its record.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct MarkEntry {
-    /// The number of records up to and including the mark's own: what a `rewind` pops back to.
-    pub(crate) position: usize,
-    /// How many registers had been allocated when the mark ran (`QuantumState::allocations`).
-    pub(crate) allocations: u64,
-    /// The mark's budget, if it has one (`docs/DESIGN.md`, "The mark's budget").
-    pub(crate) budget: Option<u64>,
-    /// The world clock at which the budget is spent: the clock at the mark plus the budget, until a rewind
-    /// of the mark closes it (`None`, also without a budget). Time, not machine state: equality and hashing
-    /// leave it out, so that worlds that took different times stay one machine state.
-    pub(crate) deadline: Option<u64>,
-}
-
-impl PartialEq for MarkEntry {
-    fn eq(&self, other: &Self) -> bool {
-        (self.position, self.allocations, self.budget) == (other.position, other.allocations, other.budget)
-    }
-}
-
-impl Eq for MarkEntry {}
-
-impl std::hash::Hash for MarkEntry {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        (self.position, self.allocations, self.budget).hash(state);
-    }
 }
 
 impl Journal {
-    /// Appends a `Mark` record's entry, made with `depth` frames live; the record itself is pushed as usual.
-    pub(crate) fn push_mark(&mut self, entry: MarkEntry, depth: usize) {
-        if entry.deadline.is_some() {
-            self.open.push((self.marks.len(), depth));
-        }
-        self.marks.push(entry);
-    }
-
-    /// Removes the last mark entry, when its record is undone.
-    pub(crate) fn pop_mark(&mut self) {
-        self.marks.pop().expect("a mark record has an entry");
-        if self.open.last().is_some_and(|&(index, _)| index == self.marks.len()) {
-            self.open.pop();
-        }
-    }
-
-    /// Closes the budgets of the marks made in frames deeper than `depth`: those frames were left (a return,
-    /// a catch or a `longjmp`), so no rewind can reach their marks any more and they bound nothing.
-    pub(crate) fn close_left(&mut self, depth: usize) {
-        while let Some(&(index, made)) = self.open.last()
-            && made > depth
-        {
-            self.marks[index].deadline = None;
-            self.open.pop();
-        }
-    }
-
-    /// Appends a `Longjmp` record's count of discarded frames; the record itself is pushed as usual.
-    pub(crate) fn push_jump(&mut self, discarded: usize) {
-        self.jumps.push(discarded);
-    }
-
-    /// Removes the last `Longjmp` entry, when its record is undone.
-    pub(crate) fn pop_jump(&mut self) {
-        self.jumps.pop().expect("a longjmp record has an entry");
-    }
-
-    /// Notes that the call whose `Call` record is pushed next read a register.
-    pub(crate) fn push_read(&mut self, column: usize, slot: bennett_ir::Slot, split: bool) {
-        self.reads.push(ReadEntry { record: self.kinds.len(), column, slot, split });
-    }
-
-    /// Notes that the step whose record is pushed next touched a cell.
-    pub(crate) fn push_cell(&mut self, column: usize, value: u8, split: bool) {
-        self.cells.push(CellEntry { record: self.kinds.len(), column, value, split });
-    }
-
-    /// Removes and returns the last cell entry if it belongs to the record at `record`.
-    pub(crate) fn pop_cell_of(&mut self, record: usize) -> Option<CellEntry> {
-        self.cells.pop_if(|entry| entry.record == record)
-    }
-
-    /// The cell entries of the record at `record`.
-    pub(crate) fn cells_of(&self, record: usize) -> &[CellEntry] {
-        let start = self.cells.partition_point(|entry| entry.record < record);
-        let end = self.cells.partition_point(|entry| entry.record <= record);
-        &self.cells[start..end]
-    }
-
-    /// The cell entries of records at `record` or later.
-    pub(crate) fn cells_from(&self, record: usize) -> &[CellEntry] {
-        let start = self.cells.partition_point(|entry| entry.record < record);
-        &self.cells[start..]
-    }
-
-    /// Every cell entry, in order.
-    #[cfg(test)]
-    pub(crate) fn cell_entries(&self) -> &[CellEntry] {
-        &self.cells
-    }
-
-    /// The word `depth` places below the top of the word stack (0 is the top).
-    pub(crate) fn word_from_top(&self, depth: usize) -> u128 {
-        self.words[self.words.len() - 1 - depth]
-    }
-
-    /// Removes and returns the last read if it belongs to the `Call` record at `record`.
-    pub(crate) fn pop_read_of(&mut self, record: usize) -> Option<ReadEntry> {
-        self.reads.pop_if(|entry| entry.record == record)
-    }
-
-    /// The reads made by calls whose records are at `record` or later.
-    pub(crate) fn reads_from(&self, record: usize) -> &[ReadEntry] {
-        let start = self.reads.partition_point(|entry| entry.record < record);
-        &self.reads[start..]
-    }
-
-    /// The discarded-frame counts of the `Longjmp` records, in order.
-    pub(crate) fn jumps(&self) -> &[usize] {
-        &self.jumps
-    }
-
-    /// Every mark entry, in order.
-    #[cfg(test)]
-    pub(crate) fn marks(&self) -> &[MarkEntry] {
-        &self.marks
-    }
-
-    /// When the first open budget of the marks above the first `from` records is spent: the least deadline.
-    pub(crate) fn mark_deadline(&self, from: usize) -> Option<u64> {
-        self.open
-            .iter()
-            .map(|&(index, _)| self.marks[index])
-            .filter(|entry| entry.position > from)
-            .filter_map(|entry| entry.deadline)
-            .min()
-    }
-
-    /// Closes the budget of the mark at `position`: a rewind of it finished.
-    pub(crate) fn close_mark(&mut self, position: usize) {
-        let index = self.marks.binary_search_by_key(&position, |entry| entry.position).expect("a mark entry");
-        self.marks[index].deadline = None;
-        self.open.retain(|&(open, _)| open != index);
-    }
-
-    /// The mark whose record is the last of the first `position` records, if there is one.
-    pub(crate) fn mark_at(&self, position: usize) -> Option<MarkEntry> {
-        let index = self.marks.binary_search_by_key(&position, |entry| entry.position).ok()?;
-        Some(self.marks[index])
-    }
-
     pub(crate) fn push(&mut self, undo: Undo) {
         self.kinds.push(undo);
     }
@@ -321,46 +86,12 @@ impl Journal {
 
     /// The bytes the journal holds.
     pub(crate) fn bytes(&self) -> usize {
-        self.kinds.len() * size_of::<Undo>()
-            + self.words.len() * size_of::<u128>()
-            + self.marks.len() * size_of::<MarkEntry>()
-            + self.jumps.len() * size_of::<usize>()
-            + self.reads.len() * size_of::<ReadEntry>()
-            + self.cells.len() * size_of::<CellEntry>()
-    }
-
-    /// Notes the un-run count of the `Rewind` record just pushed (`rewind_costs`).
-    pub(crate) fn push_rewind_cost(&mut self, undone: u64) {
-        self.rewind_costs.push((self.kinds.len() - 1, undone));
-    }
-
-    /// Removes and returns the un-run count noted for the record at `index`, just popped: 0 if none was.
-    pub(crate) fn take_rewind_cost(&mut self, index: usize) -> u64 {
-        match self.rewind_costs.last() {
-            Some(&(at, undone)) if at == index => {
-                self.rewind_costs.pop();
-                undone
-            }
-            Some(_) | None => 0,
-        }
-    }
-
-    /// Puts back an un-run count taken for the record at `index`, which is pushed back.
-    pub(crate) fn rewind_costs_restore(&mut self, index: usize, undone: u64) {
-        if undone > 0 {
-            self.rewind_costs.push((index, undone));
-        }
+        self.kinds.len() * size_of::<Undo>() + self.words.len() * size_of::<u128>()
     }
 
     pub(crate) fn clear(&mut self) {
-        self.rewind_costs.clear();
-        self.open.clear();
         self.kinds.clear();
         self.words.clear();
-        self.marks.clear();
-        self.jumps.clear();
-        self.reads.clear();
-        self.cells.clear();
     }
 
     /// The number of records.

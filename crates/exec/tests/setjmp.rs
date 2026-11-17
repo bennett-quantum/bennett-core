@@ -312,76 +312,13 @@ fn branch_only_longjmp_control_stays_opaque_even_when_live_slots_hold_its_number
     }
 }
 
-/// A `rewind` whose history holds a jump: `@kept(x)` marks, sets a record, jumps back to it from a callee
-/// with `x + 1`, and rewinds keeping the jump's value. The jump and every trace of it are un-run (the record,
-/// the allocation); the value stays in `%out`. The rewind is itself undone by running forward again.
-const REWIND: &str = r#"
-memory 512
-func @thrower(i64 %buf, i32 %v) {
-entry:
-    %pad = alloca 16
-    longjmp %buf, %v
-}
-func @kept(q8 %out, i8 %x) -> i64 {
-entry:
-    %sp0 = stacksave
-    %h = mark
-    %buf = alloca 32
-    %r = setjmp %buf
-    %first = icmp eq i32 %r, 0
-    br %first, go, back
-go:
-    %x32 = zext i8 %x to i32
-    %v = add i32 %x32, 1
-    call @thrower(%buf, %v)
-    ret 0
-back:
-    %v8 = trunc i32 %r to i8
-    rewind %h keep (%v8 -> %out)
-    %sp1 = stacksave
-    %record = sub i64 %sp0, 32
-    %word = load i64 %record
-    %moved = sub i64 %sp0, %sp1
-    %both = or i64 %moved, %word
-    ret %both
-}
-func @main(i8 %x) -> i8 {
-entry:
-    %out = qalloc 8
-    %clean = call @kept(%out, %x)
-    %zero = icmp eq i64 %clean, 0
-    br %zero, ok, bad
-ok:
-    %m = measure %out
-    ret %m
-bad:
-    fault unreachable
-}
-func @unmeasured(i8 %x) -> i64 {
-entry:
-    %out = qalloc 8
-    %clean = call @kept(%out, %x)
-    ret %clean
-}
-"#;
-
-#[test]
-fn a_rewind_un_runs_a_jump_and_keeps_its_value() {
-    let module = load(REWIND);
-    for x in [0u64, 1, 41, 255] {
-        let (outcome, _) = run(&module, "main", &[x], bounded());
-        assert_eq!(outcome, Outcome::Returned(Some(u128::from((x + 1) % 256))), "x = {x}");
-        assert_eq!(assert_reverses(&module, "unmeasured", &[x], bounded()), Outcome::Returned(Some(0)), "x = {x}");
-    }
-}
-
 /// The front's `sigsetjmp` and `siglongjmp` as they are lowered (`front/src/Jumps.cpp`), with a memory word for
 /// the signal mask and `@tail` for musl's `__sigsetjmp_tail`: before its `setjmp` each visit writes the buffer's
 /// flag (here the run-time savemask, `i == 0`) and saves the mask at `buf + 72`; a jump restores the mask from
 /// its target when the target's flag says so. One call site is visited twice, for buffer 0 (mask 1, saved) then
 /// buffer 1 (mask 2, not saved), and buffer 0 is copied to buffer 2 between the visits. The jump from mask 9 to
-/// buffer `t` lands with mask 1, 9, 1: what the target saved, not what the site's latest visit had. Around it a
-/// `rewind` keeps that mask and un-runs everything else: the mask word and all three buffers are zero again.
+/// buffer `t` lands with mask 1, 9, 1: what the target saved, not what the site's latest visit had. It runs as
+/// an applied function: the mask is XORed into `%out`, and the buffers live in the run's private memory.
 const SIGSETJMP: &str = r#"
 memory 2048
 func @tail(i64 %buf, i32 %ret, i64 %mask) {
@@ -460,48 +397,33 @@ landed:
     %got = load i64 %mask
     ret %got
 }
-func @kept(q8 %out, i64 %t) -> i64 {
+func @masked(i64 %t) -> i8 {
 entry:
     %bufs = alloca 600
     %mask = alloca 8
-    %h = mark
     %got = call @visits(%bufs, %mask, %t)
     %g8 = trunc i64 %got to i8
-    rewind %h keep (%g8 -> %out)
-    %end = add i64 %bufs, 600
-    %left = load i64 %mask
-    br sum(%bufs, %left)
-sum(i64 %at, i64 %acc):
-    %w = load i64 %at
-    %acc1 = or i64 %acc, %w
-    %next = add i64 %at, 8
-    %more = icmp ult i64 %next, %end
-    br %more, sum(%next, %acc1), done
-done:
-    ret %acc1
+    ret %g8
 }
 func @main(i64 %t) -> i8 {
 entry:
     %out = qalloc 8
-    %clean = call @kept(%out, %t)
-    %zero = icmp eq i64 %clean, 0
-    br %zero, ok, bad
-ok:
+    %fault = qalloc 5
+    apply @masked(%t) -> %out, %fault budget 100000
     %m = measure %out
     ret %m
-bad:
-    fault unreachable
 }
 func @unmeasured(i64 %t) -> i64 {
 entry:
     %out = qalloc 8
-    %clean = call @kept(%out, %t)
-    ret %clean
+    %fault = qalloc 5
+    apply @masked(%t) -> %out, %fault budget 100000
+    ret 0
 }
 "#;
 
 #[test]
-fn a_lowered_sigsetjmp_restores_its_targets_mask_and_rewinds_exactly() {
+fn a_lowered_sigsetjmp_restores_its_targets_mask_and_reverses_exactly() {
     let module = load(SIGSETJMP);
     for (t, mask) in [(0u64, 1u128), (1, 9), (2, 1)] {
         assert_eq!(run(&module, "main", &[t], bounded()).0, Outcome::Returned(Some(mask)), "target {t}");
@@ -519,29 +441,7 @@ fn a_lowered_sigsetjmp_restores_its_targets_mask_and_rewinds_exactly() {
 }
 
 #[test]
-fn rewinding_a_same_frame_longjmp_does_not_count_a_return() {
-    let module = load(
-        "memory 256
-func @main() -> i32 {
-entry:
-    %m = mark
-    %value = setjmp 64
-    %first = icmp eq i32 %value, 0
-    br %first, jump, done
-jump:
-    longjmp 64, 1
-done:
-    rewind %m
-    ret 0
-}
-",
-    );
-    assert_eq!(run(&module, "main", &[], bounded()).0, Outcome::Returned(Some(0)));
-    assert_eq!(assert_reverses(&module, "main", &[], bounded()), Outcome::Returned(Some(0)));
-}
-
-#[test]
-fn journal_cost_counts_read_cells_and_zero_frame_jump_metadata() {
+fn journal_cost_counts_the_words_each_step_destroys() {
     fn step_cost(executor: &mut bennett_exec::Executor<'_>) -> usize {
         let before = executor.stats().journal_bytes.expect("reversible journal");
         assert_eq!(executor.step(), None);
@@ -570,15 +470,14 @@ done:
     let record = step_cost(&mut executor);
     let slot = step_cost(&mut executor);
     let cell = step_cost(&mut executor);
-    assert!(cell > slot, "a cell read keeps its byte beside the ordinary load's overwritten slot");
+    assert_eq!(cell, slot, "a load of a cell overwrites one slot, as a load of memory does");
     let word = slot.checked_sub(record).expect("an overwritten slot adds a word");
     assert!(word > 0);
     for _ in 0..3 {
         step_cost(&mut executor); // setjmp, comparison, branch
     }
     let jump = step_cost(&mut executor);
-    // DESIGN's non-local-jump journal: target position, stack pointer, count, old result slot;
-    // even zero discarded frames have a count beside the marks. No struct sizes/padding are pinned.
-    assert!(jump > record + 4 * word, "the discarded-frame side entry also occupies journal space");
+    // DESIGN's non-local-jump journal: target position, stack pointer, count, old result slot.
+    assert_eq!(jump, record + 4 * word, "a jump that discards no frame journals four words");
     assert_eq!(executor.run(), Outcome::Returned(Some(0)));
 }

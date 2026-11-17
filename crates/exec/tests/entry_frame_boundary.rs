@@ -3,16 +3,10 @@
 //! is eight bytes per named value (`docs/DESIGN.md`; parameters, block parameters and results, counted by
 //! hand below), reserved down from the top of memory and never below the end of the static data. Where it
 //! does not fit, the run is `stack_overflow` before its first step; where it fits, the run ends as with
-//! ample memory, except that a callee whose own frame does not fit faults at its call. Each case is also
-//! stepped against the independent whole-world reference (`oracle_support::worlds`).
-
-#[allow(dead_code, reason = "this test uses the whole-world reference only")]
-mod oracle_support;
+//! ample memory, except that a callee whose own frame does not fit faults at its call.
 
 use bennett_exec::{Executor, Options, Outcome};
 use bennett_ir::Fault;
-use oracle_support::worlds::{Model, basis};
-use oracle_support::worlds_executor::{compare, observed_one_of, observed_reference};
 
 const FUNCTIONS: &str = r#"
 func @none() {
@@ -43,13 +37,6 @@ entry:
  qfree %q
  ret 4
 }
-func @history() -> i8 {
-entry:
- %h = mark
- %v = add i8 1, 2
- rewind %h
- ret 7
-}
 func @calls() -> i8 {
 entry:
  %v = call @narrow(i8 5)
@@ -64,7 +51,6 @@ const ENTRIES: &[(&str, &[u64], u64, u64, Outcome)] = &[
     ("mixed", &[u64::MAX, 1, 41], 4, 0, Outcome::Returned(Some(42))),
     ("blocks", &[254], 3, 0, Outcome::Returned(Some(255))),
     ("quantum", &[], 1, 0, Outcome::Returned(Some(4))),
-    ("history", &[], 2, 0, Outcome::Returned(Some(7))),
     ("calls", &[], 1, 1, Outcome::Returned(Some(5))),
 ];
 
@@ -103,20 +89,13 @@ fn every_memory_size_around_each_entry_frame_agrees_with_the_count_and_the_refer
                         assert_eq!(back, initial, "@{name} memory {memory}: reversal restores the start");
                     }
                 }
-                compare(&module, name, args, 64, true);
-                let model = Model::new(&module, name);
-                let args128: Vec<u128> = args.iter().map(|&n| n.into()).collect();
-                let reference = observed_reference(&model, basis(model.initial(name, &args128)), 64);
-                let mut e = Executor::new(&module, f, args, Options::default()).expect("start");
-                e.run();
-                assert!(observed_one_of(&model, &reference, &e.snapshot()), "@{name} memory {memory}");
                 cases += 1;
             }
         }
     }
     // Per data layout: 19 sizes for frames of 16 bytes or more (four entries), 18 for the two 8-byte frames
     // and 10 for the empty one, whose sizes below the floor do not exist.
-    assert_eq!(cases, 3 * (4 * 19 + 2 * 18 + 10));
+    assert_eq!(cases, 3 * (3 * 19 + 2 * 18 + 10));
 }
 
 /// A memory that is only static data: the zero-slot entry fits and runs; one with a slot does not.

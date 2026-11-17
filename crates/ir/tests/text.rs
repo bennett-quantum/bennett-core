@@ -242,102 +242,45 @@ fn zero_extents_must_fit_memory_without_overlapping() {
     assert!(load("memory 64\ndata 16 = zero 0\ndata 16 = i8 1\n").is_ok(), "an empty extent overlaps nothing");
 }
 
+/// Ordinary code does not read a register as an integer: a call passing a register to an integer parameter,
+/// directly or indirectly, or a branch passing one to a block parameter, is a type mismatch; only `apply`
+/// reads its argument registers. A register parameter takes the handle.
 #[test]
-fn mark_and_rewind_read_write_and_validate() {
-    let text = "func @f(q8 %r, q2 %s, i8 %v) {\nentry:\n %h = mark\n %g = mark\n rewind %g\n \
-                rewind %h keep (%v -> %r, i2 -1 -> %s, i8 0 -> %r)\n ret\n}\n";
-    let module = read(text).expect("reads");
-    let written = write(&module);
-    assert!(written.contains("%h = mark\n"), "{written}");
-    assert!(written.contains("rewind %g\n"), "{written}");
-    assert!(written.contains("rewind %h keep (%v -> %r, i2 3 -> %s, i8 0 -> %r)\n"), "{written}");
-    assert_eq!(read(&written).as_ref(), Ok(&module));
-    validate(module).expect("valid");
-    for statement in [
-        "mark",
-        "%h = mark 3",
-        "%x = rewind %h",
-        "rewind",
-        "rewind %h keep",
-        "rewind %h keep ()",
-        "rewind %h keep (%v %r)",
-        "rewind %h keep (%v -> %r",
-        "rewind %h keep (3 -> %r)",
-        "rewind %h keep (%v -> 3)",
-        "rewind %h keep (%v -> %r,)",
-    ] {
-        let text = format!("func @f(q8 %r, i8 %v) {{\nentry:\n %h = mark\n {statement}\n ret\n}}\n");
-        assert!(read(&text).is_err(), "accepted {statement}");
-    }
-    let body = |statements: &str| format!("func @f(q8 %r, q4 %s, i8 %v, i64 %n) {{\nentry:\n{statements}\n ret\n}}\n");
-    assert_eq!(problems(&body(" rewind %n")), vec![Problem::NotAMark("n".into())]);
-    assert_eq!(problems(&body(" %h = add i64 %n, 1\n rewind %h")), vec![Problem::NotAMark("h".into())]);
-    assert!(matches!(
-        problems(&body(" %h = mark\n rewind %h keep (%v -> %s)")).as_slice(),
-        [Problem::TypeMismatch { .. }]
-    ));
-    assert!(matches!(
-        problems(&body(" %h = mark\n rewind %h keep (%v -> %v)")).as_slice(),
-        [Problem::TypeMismatch { .. }]
-    ));
-    assert!(matches!(
-        problems(&body(" %h = mark\n rewind %h keep (%s -> %s)")).as_slice(),
-        [Problem::TypeMismatch { .. }]
-    ));
-    assert!(matches!(problems(&body(" rewind %h\n %h = mark")).as_slice(), [Problem::NotDominated(_)]));
-    // A handle is opaque since 2026-11-16 (it could be compared before): only a rewind may use it, and only a
-    // mark's own slot rewinds (more in `history_rules.rs`).
-    assert_eq!(
-        problems(&body(" %h = mark\n %same = icmp eq i64 %h, %n\n rewind %h")),
-        vec![Problem::HandleUse("h".into())]
-    );
-    let text = "func @f() {\nentry:\n %h = mark\n br next(%h)\nnext(i64 %k):\n rewind %k\n ret\n}\n";
-    assert_eq!(problems(text), vec![Problem::NotAMark("k".into()), Problem::HandleUse("h".into())]);
-}
-
-/// A call may pass a register to an integer parameter of its width: ordinary code reads the register as an
-/// integer (`docs/DESIGN.md`, "Worlds"). A register of another width, or one passed to a branch target, is
-/// still a type mismatch; a register parameter still takes the handle.
-#[test]
-fn a_call_reads_a_register_passed_to_an_integer_parameter() {
+fn a_call_does_not_read_a_register_passed_to_an_integer_parameter() {
     let callee = "func @g(i4 %x) -> i4 {\nentry:\n ret %x\n}\nfunc @h(q4 %x) {\nentry:\n ret\n}\n";
     let body = |statements: &str| {
         format!(
             "{callee}func @f(q4 %q, q2 %p) {{\nentry:\n{statements}\n ret\n}}\nfunc @t(i4 %x) {{\nentry:\n ret\n}}\n"
         )
     };
-    for valid in [" %v = call @g(%q)", " call @h(%q)", " %f = faddr @g\n %v = call_indirect fn(i4) -> i4 %f(%q)"] {
-        assert!(load(&body(valid)).is_ok(), "{valid}");
+    assert!(load(&body(" call @h(%q)")).is_ok());
+    for invalid in [" %v = call @g(%q)", " %v = call @g(%p)", " %f = faddr @g\n %v = call_indirect fn(i4) -> i4 %f(%q)"]
+    {
+        assert!(matches!(problems(&body(invalid)).as_slice(), [Problem::TypeMismatch { .. }]), "{invalid}");
     }
-    assert!(matches!(problems(&body(" %v = call @g(%p)")).as_slice(), [Problem::TypeMismatch { .. }]));
     let text = format!("{callee}func @f(q4 %q) {{\nentry:\n br next(%q)\nnext(i4 %x):\n ret\n}}\n");
     assert!(matches!(problems(&text).as_slice(), [Problem::TypeMismatch { .. }]));
 }
 
 #[test]
 fn gates_at_addresses_read_write_and_validate() {
-    use bennett_ir::{Inst, KeepTarget, Place};
+    use bennett_ir::{Inst, Place};
     let text = "memory 64\nfunc @f(q2 %q, i64 %p, i8 %v) {\nentry:\n h [%p:3]\n x %q[1] ctrl [16], %q[0]\n \
-                rz(0.5) [%p] ctrl [%p:9]\n x %q[1] ctrl %q[0]\n %h = mark\n rewind %h keep (%v -> [%p], i2 1 -> %q, \
-                i12 5 -> [40])\n ret\n}\n";
+                rz(0.5) [%p] ctrl [%p:9]\n x %q[1] ctrl %q[0]\n ret\n}\n";
     let module = read(text).expect("reads");
     let insts = &module.functions[0].blocks[0].insts;
     assert!(matches!(&insts[0], Inst::GateAt { target: Place::Memory { bit: 3, .. }, .. }));
     assert!(matches!(&insts[1], Inst::GateAt { target: Place::Register(_), controls, .. } if controls.len() == 2));
     // A gate whose qubits are all in registers is the register gate it always was.
     assert!(matches!(&insts[3], Inst::Gate { .. }));
-    let Inst::Rewind { keep, .. } = &insts[5] else { panic!("a rewind") };
-    assert!(matches!(keep[0].target, KeepTarget::Memory(_)) && matches!(keep[1].target, KeepTarget::Register(_)));
     let written = write(&module);
     for line in ["h [%p:3]\n", "x %q[1] ctrl [16], %q\n", "rz(0.5) [%p] ctrl [%p:9]\n"] {
         assert!(written.contains(line), "{line}: {written}");
     }
-    assert!(written.contains("rewind %h keep (%v -> [%p], i2 1 -> %q, i12 5 -> [40])\n"), "{written}");
     assert_eq!(read(&written).as_ref(), Ok(&module));
     validate(module).expect("valid");
-    for statement in ["h [%p", "h [%p:]", "h [:3]", "h [%p:3:4]", "h [%p:256]", "h []", "rewind %h keep (%v -> [%p:1])"]
-    {
-        let text = format!("func @f(i64 %p, i8 %v) {{\nentry:\n %h = mark\n {statement}\n ret\n}}\n");
+    for statement in ["h [%p", "h [%p:]", "h [:3]", "h [%p:3:4]", "h [%p:256]", "h []"] {
+        let text = format!("func @f(i64 %p, i8 %v) {{\nentry:\n {statement}\n ret\n}}\n");
         assert!(read(&text).is_err(), "accepted {statement}");
     }
     let body = |statements: &str| format!("func @f(q4 %s, i8 %v, i64 %n) {{\nentry:\n{statements}\n ret\n}}\n");
@@ -346,14 +289,6 @@ fn gates_at_addresses_read_write_and_validate() {
     // The same bit through different address operands is a run-time alias (`qubit_alias`), not an error.
     assert!(load(&body(" x [%n:2] ctrl [16:2]")).is_ok());
     assert!(matches!(problems(&body(" h [%v]")).as_slice(), [Problem::TypeMismatch { .. }]));
-    assert!(matches!(
-        problems(&body(" %h = mark\n rewind %h keep (%s -> [%n])")).as_slice(),
-        [Problem::TypeMismatch { .. }]
-    ));
-    assert!(matches!(
-        problems(&body(" %h = mark\n rewind %h keep (%v -> [%v])")).as_slice(),
-        [Problem::TypeMismatch { .. }]
-    ));
     // Built directly, a `GateAt` with no qubit in memory would be written and read back as a `Gate`.
     let mut module = read(&body(" x %s[1] ctrl %s[0]")).expect("reads");
     let Inst::Gate { gate, target, controls } = module.functions[0].blocks[0].insts[0].clone() else {
@@ -407,4 +342,17 @@ fn measure_at_an_address_reads_writes_and_validates() {
     assert!(matches!(problems(&body(" %m = measure i8 [%r]\n ret %m")).as_slice(), [Problem::TypeMismatch { .. }]));
     assert!(matches!(problems(&body(" %m = measure i16 [%p]\n ret %m")).as_slice(), [Problem::TypeMismatch { .. }]));
     assert!(load(&body(" %m = measure i8 [%p]\n ret %m")).is_ok());
+}
+
+/// `mark`, `rewind` and the call with a fault value (`%y, %c = call ... budget B`) were removed on
+/// 2026-11-17: the reader no longer knows them.
+#[test]
+fn the_removed_history_forms_are_not_read() {
+    let callee = "func @g() -> i8 {\nentry:\n ret 0\n}\n";
+    for statement in
+        [" %h = mark", " %h = mark budget 4", " rewind %h", " %y, %c = call @g() budget 4", " %c = call @g() budget 4"]
+    {
+        let text = format!("{callee}func @f(i64 %h) {{\nentry:\n{statement}\n ret\n}}\n");
+        assert!(read(&text).is_err(), "accepted {statement}");
+    }
 }

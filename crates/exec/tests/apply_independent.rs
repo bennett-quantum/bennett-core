@@ -1,6 +1,5 @@
-//! Independent attacks on the region boundary, with analytic answers and the whole-world model.
+//! Independent attacks on the region boundary, with analytic answers.
 mod common;
-use common::oracle_support;
 
 use bennett_exec::{Options, Outcome, RunError};
 use bennett_ir::Fault;
@@ -45,17 +44,11 @@ fn strict_fault_uses_the_first_original_configuration() {
     );
 }
 
-// A region that marks and rewinds inside itself. Its handles are opaque (the maintainer's decision of
-// 2026-11-16, `docs/SYNTAX.md`, "History"): the region that returned its mark's value, the witness of F1
-// and F4 before, is refused by the validator (`HANDLE_WITNESS`).
-const MARK_VALUE: &str = r#"
+// A region whose function returns 2.
+const RETURNS_TWO: &str = r#"
 memory 512
 func @f() -> i64 {
 entry:
-    %m = mark budget -1
-    %n = mark budget -1
-    rewind %n
-    rewind %m
     ret 2
 }
 func @main() {
@@ -67,34 +60,8 @@ entry:
 }
 "#;
 
-const HANDLE_WITNESS: &str = "memory 512\nfunc @f() -> i64 {\nentry:\n    %m = mark budget -1\n    ret %m\n}\n";
-
-fn refused_for_its_handle(text: &str, handle: &str) {
-    match bennett_ir::load(text) {
-        Err(bennett_ir::LoadError::Invalid(errors)) => {
-            assert!(
-                errors.0.iter().all(|e| e.problem == bennett_ir::Problem::HandleUse(handle.into())),
-                "{errors}\n{text}"
-            );
-        }
-        other => panic!("expected the handle %{handle} refused, got {other:?}\n{text}"),
-    }
-}
-
-#[test]
-fn region_mark_values_are_independent_of_the_callers_journal() {
-    // Since handles are opaque nothing a region computes can depend on one: the witness is refused.
-    refused_for_its_handle(HANDLE_WITNESS, "m");
-    let module = load(MARK_VALUE);
-    for reversible in [false, true] {
-        let mut e = executor(&module, "main", &[], Options { reversible, ..bounded() });
-        assert_eq!(e.run(), Outcome::Returned(None));
-        assert_eq!(e.snapshot().quantum.amplitudes[0].0, [2, 0], "reversible={reversible}");
-    }
-}
-
-// Cell stores and inner rewinds run under the region's rules. The function reads both cells after
-// their values have diverged, writes an overlapping i16, un-runs it, then jumps through a callee.
+// Cell loads and stores run under the region's rules. The function reads both cells after their values
+// have diverged, writes an overlapping i16, then jumps through a callee.
 const MIXED: &str = r#"
 memory 4096
 data 0 = i16 513
@@ -114,7 +81,6 @@ done:
 func @f(i2 %x) -> i8 {
 entry:
     %a = load i8 0
-    %m = mark budget -1
     %b = load i8 1
     %w = zext i8 %b to i16
     store i16 %w, 0
@@ -127,7 +93,6 @@ long:
     store i8 %t, 80
     br join
 join:
-    rewind %m
     %b2 = load i8 1
     %x8 = zext i2 %x to i8
     %sum = add i8 %a, %b2
@@ -154,33 +119,20 @@ entry:
 }
 "#;
 
-fn reference_case(text: &str, args: &[u64]) {
-    use oracle_support::worlds::{Model, basis};
-    use oracle_support::worlds_executor::assert_worlds;
+/// Runs `main(args)` reversibly, allowing region faults, to its return, and reverses it to its entry.
+fn runs_and_reverses(text: &str, args: &[u64]) {
     let p = load(text);
-    let model = Model::new(&p, "main");
-    let initial = model.initial("main", &args.iter().map(|&n| n.into()).collect::<Vec<_>>());
-    let expected = model.run_joined(basis(initial), 300);
     let mut e = executor(&p, "main", args, Options { reversible: true, allow_region_faults: true, ..bounded() });
     let entry = e.snapshot();
     assert_eq!(e.run(), Outcome::Returned(None));
-    assert_worlds(&model, &expected, &e.snapshot());
     e.reverse().expect("reverses");
     assert_same_state(&e.snapshot(), &entry, "full reverse");
 }
 
 #[test]
-fn memory_splits_rewinds_jumps_and_each_worlds_budget_match_the_reference() {
+fn cell_loads_stores_and_jumps_in_a_region_run_and_reverse_at_every_budget() {
     for budget in [0, 1, 3, 5, 8, 12, 16, 20, 24, 28, 32, 40, 64] {
-        reference_case(MIXED, &[budget]);
-    }
-}
-
-#[test]
-#[ignore = "extended budget sweep: cargo test -p bennett-exec --test apply_independent all_region_budget_boundaries -- --ignored --nocapture"]
-fn all_region_budget_boundaries() {
-    for budget in 0..=64 {
-        reference_case(MIXED, &[budget]);
+        runs_and_reverses(MIXED, &[budget]);
     }
 }
 
@@ -226,7 +178,7 @@ fn quantum_instructions_reached_through_calls_fault_inside_the_region() {
         let mut e = executor(&p, "main", &[], Options { allow_region_faults: true, ..bounded() });
         assert_eq!(e.run(), Outcome::Returned(None));
         assert_eq!(e.snapshot().quantum.amplitudes[0].0, [0, fault.code()]);
-        reference_case(&text, &[]);
+        runs_and_reverses(&text, &[]);
     }
 }
 
@@ -274,7 +226,7 @@ fn amplitude_peak_probe() {
 
 #[test]
 fn two_identical_regions_must_xor_the_same_result() {
-    let text = MARK_VALUE.replace("    ret\n}", "    apply @f() -> %o, %e budget 10\n    ret\n}");
+    let text = RETURNS_TWO.replace("    ret\n}", "    apply @f() -> %o, %e budget 10\n    ret\n}");
     let p = load(&text);
     let mut e = executor(&p, "main", &[], Options { reversible: true, ..bounded() });
     assert_eq!(e.run(), Outcome::Returned(None));
@@ -308,25 +260,14 @@ fn strict_budget_faults_leave_the_pre_apply_state_and_reverse() {
 }
 
 #[test]
-fn allowed_cell_fault_codes_and_private_writes_match_the_reference() {
-    reference_case(CELL_FAULT_ORDER, &[]);
-}
-
-#[test]
-fn regions_in_existing_worlds_and_rewind_replay_match_the_reference() {
-    let text = MIXED
-        .replace("func @f(i2 %x)", "func @id(i2 %x) -> i2 {\nentry:\n    ret %x\n}\nfunc @f(i2 %x)")
-        .replace("    apply @f(%x)", "    %outer = mark budget -1\n    %read = call @id(%x)\n    apply @f(%read)")
-        .replace("    ret\n}", "    rewind %outer\n    ret\n}");
-    for budget in [0, 12, 24, 32, 64] {
-        reference_case(&text, &[budget]);
-    }
+fn allowed_cell_fault_codes_and_private_writes_run_and_reverse() {
+    runs_and_reverses(CELL_FAULT_ORDER, &[]);
 }
 
 #[test]
 fn physical_return_addresses_and_an_entry_frame_that_cannot_fit() {
     let text = MIXED.replace("    %j8 = trunc i32 %j to i8", "    %ra = retaddr 1\n    %low = trunc i64 %ra to i32\n    %jr = xor i32 %j, %low\n    %j8 = trunc i32 %jr to i8");
-    reference_case(&text, &[80]);
+    runs_and_reverses(&text, &[80]);
     let small = r#"
 memory 64
 func @f(i2 %x) -> i2 {
@@ -350,7 +291,7 @@ entry:
     ret
 }
 "#;
-    reference_case(small, &[]);
+    runs_and_reverses(small, &[]);
     let p = load(small);
     let mut e = executor(&p, "main", &[], Options { allow_region_faults: true, ..bounded() });
     assert_eq!(e.run(), Outcome::Returned(None));
@@ -373,7 +314,7 @@ fn more_than_65536_configurations_have_the_analytic_answer() {
         assert_eq!(c[2..], [c[1] ^ 3, 0]);
         assert!((a.re - expected).abs() < 1e-15 && a.im == 0.0);
     }
-    println!("131072 exact configuration images, amplitudes within 1e-15, both modes compared");
+    println!("131072 exact configuration images, amplitudes within 1e-15");
 }
 
 #[test]
@@ -381,167 +322,32 @@ fn apply_through_an_ordinary_call_keeps_the_real_caller_frames() {
     let text = MIXED.replace("func @main(i64 %budget)", "func @driver(i64 %budget)")
         + "\nfunc @main(i64 %budget) {\nentry:\n    call @driver(%budget)\n    ret\n}\n";
     for budget in [0, 24, 80] {
-        reference_case(&text, &[budget]);
+        runs_and_reverses(&text, &[budget]);
     }
 }
 
-// The reference model and branch enumeration agree on a region that marks and rewinds inside itself. (The
-// mark's value, which this compared before handles became opaque, is no longer a program's to see.)
-#[test]
-fn reference_apply_mark_value_matches_branch_enumeration() {
-    refused_for_its_handle(HANDLE_WITNESS, "m");
-    let p = load(MARK_VALUE);
-    let model = oracle_support::worlds::Model::new(&p, "main");
-    let reference = model.run_joined(oracle_support::worlds::basis(model.initial("main", &[])), 20);
-    let mut e = executor(&p, "main", &[], bounded());
-    assert_eq!(e.run(), Outcome::Returned(None));
-    let branch_value = e.snapshot().quantum.amplitudes[0].0[0];
-    assert_eq!(branch_value, 2);
-    for w in reference.keys() {
-        assert_eq!(w.quantum[0], branch_value, "reference's public result must equal enumeration");
-    }
-}
-
-// All assertions inspect ordinary results and the entire public world, including memory, slots,
-// amplitudes and frames. The reference's private snapshots are never compared with executor records.
-fn mark_observation_case(body: &str, expected: [u64; 4]) -> usize {
-    use oracle_support::worlds::{Model, basis};
-    use oracle_support::worlds_executor::assert_worlds;
-    let mut runs = 0;
-    for repetitions in [1, 2] {
-        let applies = "    apply @f(%x) -> %o, %e budget 100\n".repeat(repetitions);
-        let text = format!(
-            r#"
-memory 2048
-func @leaf(i2 %x) -> i64 {{
-entry:
-    %m = mark budget -1
-    store i2 %x, 8
-    rewind %m
-    %r = zext i2 %x to i64
-    ret %r
-}}
-func @f(i2 %x) -> i64 {{
-entry:
-{body}
-}}
-func @main() {{
-entry:
-    %x = qalloc 2
-    h %x[0]
-    ry(0.7) %x[1]
-    s %x[0]
-    %o = qalloc 64
-    x %o[4]
-    %e = qalloc 5
-{applies}
-    ret
-}}
-"#
-        );
-        let p = load(&text);
-        let model = Model::new(&p, "main");
-        let reference = model.run_joined(basis(model.initial("main", &[])), 100);
-        for w in reference.keys() {
-            let x = w.quantum[0] as usize;
-            let answer = if repetitions == 1 { expected[x] ^ 16 } else { 16 };
-            assert_eq!(w.quantum[1..], [answer, 0], "analytic result for x={x}, repeats={repetitions}: {body}");
-        }
-        for reversible in [false, true] {
-            let mut e = executor(&p, "main", &[], Options { reversible, ..bounded() });
-            let initial = e.snapshot();
-            assert_eq!(e.run(), Outcome::Returned(None));
-            assert_worlds(&model, &reference, &e.snapshot());
-            if reversible {
-                e.reverse().expect("mark-observing apply reverses");
-                assert_same_state(&e.snapshot(), &initial, "mark-observing apply full reverse");
-            }
-            runs += 1;
-        }
-    }
-    runs
-}
-
-#[test]
-fn fresh_region_mark_numbers_can_be_returned_stored_branched_on_and_called() {
-    // Before handles became opaque (2026-11-16) these bodies observed the private fresh-journal numbering.
-    // Now each is refused by name; the region's marks and rewinds still run, in a callee as well.
-    for body in [
-        "%m = mark budget -1\nret %m",
-        "%m = mark budget -1\nstore i64 %m, 0\n%r = load i64 0\nret %r",
-        "%m = mark budget -1\n%ok = icmp eq i64 %m, 2\nbr %ok, yes, no\nyes:\nret 37\nno:\nret 99",
-        "%m = mark budget -1\n%r = call @g(%m)\nret %r",
-    ] {
-        let text = format!(
-            "memory 512\nfunc @g(i64 %v) -> i64 {{\nentry:\nret %v\n}}\nfunc @f(i2 %x) -> i64 {{\nentry:\n{body}\n}}\n"
-        );
-        refused_for_its_handle(&text, "m");
-    }
-    let runs = mark_observation_case("%r = call @leaf(%x)\nret %r", [0, 1, 2, 3]);
-    assert_eq!(runs, 4);
-    println!("{runs} runs of a region whose callee marks and rewinds, four configurations each, reversed");
-}
-
-#[test]
-fn relative_region_mark_numbers_match_all_modes_through_rewind_and_replay() {
-    // DESIGN History/Worlds: calls, returns, jumps, marks and rewinds are journalled steps.
-    // Subtract marks so the caller's journal origin cancels. Rewinding retains the mark and
-    // replaces everything after it with one rewind record; undoing an inner rewind replays it.
-    // Since handles are opaque the bodies return a value of x, not a difference of marks (which the
-    // validator refuses, above); the marks, rewinds and replays are the same.
-    let cases = [
-        (
-            "%m = mark budget -1\nstore i2 %x, 0\nrewind %m\n%n = mark budget -1\n%d = zext i2 %x to i64\nret %d",
-            [0, 1, 2, 3],
-        ),
-        (
-            "%m = mark budget -1\n%n = mark budget -1\nrewind %n\nrewind %m\n%p = mark budget -1\n%d = zext i2 %x to i64\nret %d",
-            [0, 1, 2, 3],
-        ),
-        (
-            "%m = mark budget -1\nrewind %m\nrewind %m\n%n = mark budget -1\n%d = zext i2 %x to i64\nret %d",
-            [0, 1, 2, 3],
-        ),
-        ("%m = mark budget -1\n%n = call @leaf(%x)\n%d = add i64 %n, 1\nret %d", [1, 2, 3, 4]),
-        ("%p = faddr @leaf\n%m = mark budget -1\n%n = call_indirect fn(i2) -> i64 %p(%x)\nret %n", [0, 1, 2, 3]),
-        (
-            "%m = mark budget -1\n%zero = icmp eq i2 %x, 0\nbr %zero, short, long\nshort:\nbr join\nlong:\nstore i2 %x, 0\nbr join\njoin:\n%n = mark budget -1\n%v = load i8 0\n%d = zext i8 %v to i64\nret %d",
-            [0, 1, 2, 3],
-        ),
-    ];
-    let runs: usize = cases.into_iter().map(|(body, expected)| mark_observation_case(body, expected)).sum();
-    assert_eq!(runs, 24);
-    println!("{runs} origin-independent mark observations, four configurations each, and reversal");
-}
-
-// The whole class of F1: what the region's function observes of its history is that of a run on a journal
-// of its own, whose first record is the call (`docs/DESIGN.md`, "History"), never the caller's. Since
-// handles are opaque (2026-11-16) it observes no mark's value at all (the validator's `HandleUse`); the
-// bodies keep the marks, rewinds, splits and callees that made those values differ and return values of
-// their arguments and memory. Each body runs after caller prefixes that
-// journal different amounts (gates, marks, an earlier `apply`, a split of worlds) , reversible or
-// not; the state must not depend on the prefix, an `apply` twice must be no `apply`, and every
-// reversible run must reverse to its entry.
+// What the region's function observes is that of a run on a journal and memory of its own, never the
+// caller's history. Each body runs after caller prefixes that journal different amounts (gates, an earlier
+// `apply`), reversible or not; the state must not depend on the prefix, an `apply` twice must be no
+// `apply`, and every reversible run must reverse to its entry.
 const REGION_BODIES: &[&str] = &[
-    // A mark, then a constant.
-    "    %m = mark budget -1\n    ret 2\n",
-    // Nested marks, a rewind of the inner one, a mark after it.
-    "    %m1 = mark budget -1\n    %m2 = mark budget -1\n    store i8 100, 8\n    rewind %m2\n    %m3 = mark budget -1\n    %x64 = zext i2 %x to i64\n    %s = shl i64 %x64, 8\n    %r = or i64 %s, 2\n    ret %r\n",
-    // A load of a qubit in memory (a split in history, private memory in the enumeration), paths of
-    // different lengths, then a mark.
-    "    %a = load i8 0\n    %c = icmp eq i8 %a, 0\n    br %c, p, q\np:\n    %u = add i8 %a, 1\n    br q\nq:\n    %m = mark budget -1\n    %x64 = zext i2 %x to i64\n    %a64 = zext i8 %a to i64\n    %r = add i64 %a64, %x64\n    ret %r\n",
-    // A mark in a callee of the region.
+    // A constant.
+    "    ret 2\n",
+    // A store to private memory, then a value of x.
+    "    store i8 100, 8\n    %x64 = zext i2 %x to i64\n    %s = shl i64 %x64, 8\n    %r = or i64 %s, 2\n    ret %r\n",
+    // A load of a qubit in memory (its value in each run's private memory), paths of different lengths.
+    "    %a = load i8 0\n    %c = icmp eq i8 %a, 0\n    br %c, p, q\np:\n    %u = add i8 %a, 1\n    br q\nq:\n    %x64 = zext i2 %x to i64\n    %a64 = zext i8 %a to i64\n    %r = add i64 %a64, %x64\n    ret %r\n",
+    // A callee of the region.
     "    %k = zext i2 %x to i64\n    %r = call @g(%k)\n    ret %r\n",
-    // A mark and its rewind on one path only, then a mark (its value, unseen now, differs by path).
-    "    %c = icmp eq i2 %x, 1\n    br %c, p, q\np:\n    %m = mark budget -1\n    store i2 %x, 8\n    rewind %m\n    br q\nq:\n    %n = mark budget -1\n    %v = load i8 8\n    %r = zext i8 %v to i64\n    ret %r\n",
+    // A store on one path only, then a load of it.
+    "    %c = icmp eq i2 %x, 1\n    br %c, p, q\np:\n    store i2 %x, 8\n    br q\nq:\n    %v = load i8 8\n    %r = zext i8 %v to i64\n    ret %r\n",
 ];
 
 const REGION_PREFIXES: &[&str] = &[
     "",
-    "    %p = mark budget -1\n",
-    "    %p = mark budget -1\n    x %t\n    x %t\n    %q = mark budget -1\n",
+    "    x %t\n    x %t\n",
     "    apply @zero(%x) -> %t, %te budget 8\n",
-    "    %p = mark budget -1\n    apply @zero(%x) -> %t, %te budget 8\n    x %t\n    x %t\n",
+    "    apply @zero(%x) -> %t, %te budget 8\n    x %t\n    x %t\n",
 ];
 
 fn region_program(body: &str, prefix: &str, applies: usize) -> String {
@@ -554,7 +360,6 @@ entry:
 }}
 func @g(i64 %k) -> i64 {{
 entry:
-    %m = mark budget -1
     %r = add i64 %k, 4
     ret %r
 }}
@@ -616,18 +421,15 @@ fn what_a_region_sees_of_its_history_does_not_depend_on_the_caller() {
     }
 }
 
-// The results of the bodies above, analytically, after every prefix. (This checked the marks' values by
-// the documents' count before handles became opaque; that count is now the executor's own, unseen by a
-// program, and `public_marks_count_reading_calls_once_even_with_repeated_register_arguments` checks it in
-// the executor's slots, outside a region.)
+// The results of the bodies above, analytically, after every prefix.
 #[test]
-fn region_mark_values_count_from_the_call_into_the_region() {
-    // Body 4: the store on the path x = 1 is un-run, so memory at 8 is 0 on every path.
+fn region_results_are_the_analytic_values_after_every_prefix() {
+    // Body 4: only the run for x = 1 stores x at 8, in its own private memory.
     for (body, expected) in [
         (REGION_BODIES[0], [2; 4]),
         (REGION_BODIES[1], [2, 1 << 8 | 2, 2 << 8 | 2, 3 << 8 | 2]),
         (REGION_BODIES[3], [4, 5, 6, 7]),
-        (REGION_BODIES[4], [0; 4]),
+        (REGION_BODIES[4], [0, 1, 0, 0]),
     ] {
         for prefix in REGION_PREFIXES {
             let state = final_state(&region_program(body, prefix, 1), true);
@@ -641,7 +443,7 @@ fn region_mark_values_count_from_the_call_into_the_region() {
 }
 
 // The whole class of F2: a strict region fault is the first faulting configuration's, in the order of the
-// configurations as they were before the `apply` (`docs/DESIGN.md`, "`apply` as mark, call, rewind-keep"),
+// configurations as they were before the `apply`,
 // whatever the region writes to the qubits in memory it read. Two cells (byte 0 in four values, byte 1 in two),
 // rewritten in place by every kind of permutation (none, XOR, increment, swap, reversal), and every
 // assignment of outcomes to the eight configurations a salt chooses.

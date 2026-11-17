@@ -5,7 +5,6 @@
 
 mod error;
 mod function;
-mod rewound;
 
 use std::collections::HashSet;
 use std::ops::Deref;

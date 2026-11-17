@@ -112,49 +112,6 @@ fn one_apply_has_the_expected_mapping_phase_and_private_memory_on_all_eight_bran
     assert_eq!(exec.stats().region_faults, 0);
     assert_each_step_reverses(COPIED, "coherent", &[], Outcome::Returned(None));
 }
-
-const REWIND: &str = r#"
-memory 16384
-func @throw(i64 %b) {
-entry:
-    %p = alloca 64
-    store i64 999, %p
-    effect 88
-    longjmp %b, 7
-}
-func @work(i64 %buf) -> i32 {
-entry:
-    %local = mark
-    store i64 4660, 16
-    %r = setjmp %buf
-    %first = icmp eq i32 %r, 0
-    br %first, go, done
-go:
-    call @throw(%buf)
-    ret 99
-done:
-    ret %r
-}
-func @main() -> i64 {
-entry:
-    %sp = stacksave
-    %h = mark
-    %buf = alloca 32
-    %v = call @work(%buf)
-    rewind %h
-    %after = stacksave
-    %dirty = load i64 16
-    %difference = sub i64 %sp, %after
-    %both = or i64 %dirty, %difference
-    ret %both
-}
-"#;
-
-#[test]
-fn outer_rewind_replays_a_jump_and_its_nested_mark_exactly() {
-    assert_each_step_reverses(REWIND, "main", &[], Outcome::Returned(Some(0)));
-}
-
 #[test]
 fn only_the_branch_that_tries_to_escape_its_region_faults_and_strict_apply_is_atomic() {
     let text = r#"

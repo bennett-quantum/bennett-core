@@ -1,32 +1,26 @@
 //! Qubits in memory (`docs/DESIGN.md`, "Qubits in memory"): gates that take addresses.
 //!
-//! The memory of a basis state is the world's memory, except at the bytes that hold qubits, the
+//! The memory of a basis state is the classical memory, except at the bytes that hold qubits, the
 //! **cells**, whose values are the configuration's. A cell is an 8-qubit register column bound to a byte
 //! address (`QuantumState::cells`, part of the register table); the classical memory under a cell holds 0.
 //! The first gate at a byte that is not a cell **promotes** it: a fresh column is allocated, the byte's
 //! value is XORed into it, and the memory byte becomes 0. The gate's record journals the promotion
-//! (address and old byte), so un-running the gate un-promotes: the inverse gate, then the byte XORed out,
-//! the column un-allocated, the byte written back. That is the un-run of an allocation, with the same check
-//! as for a register allocated since a mark: the column must hold the promoted byte in every configuration,
-//! else the un-run would discard configurations (`Mismatch`, so a rewind faults `bad_rewind`); below a
-//! world's split point the check is off and the un-allocation keeps the part where it holds (its adjoint).
+//! (address and old byte), so undoing the gate un-promotes: the inverse gate, then the byte XORed out,
+//! the column un-allocated, the byte written back.
 //!
-//! Ordinary code that touches a cell (a load, a store, a jump record) reads it as an integer, as a call
-//! reads a register: where the configurations disagree on the cells the world splits first, one world per
-//! value. Then a load gives the cells' values, and a store XORs the old value out of each cell's column and
-//! the new one in (the cell stays a cell). The journal notes each cell touched with the byte it holds after
-//! the step; un-running the step checks it is still there, as for a register read. A classical base byte
-//! is never quantum: promotion writes 0 into this world's memory, and a cell is a column.
+//! Ordinary code that touches a cell (a load, a store, a jump record) outside `apply` reads its value when
+//! every configuration agrees on it; where they disagree the simulator stops
+//! (`RunError::SuperposedMemoryRead`), what such a read is to be being undecided. A store XORs the old value
+//! out of each cell's column and the new one in (the cell stays a cell). Inside `apply` each configuration's
+//! run sees the cells' values in its private memory instead.
 
 use std::ops::Range;
 
 use bennett_ir::{Fault, Gate, Inst, Place, Width};
 
-use crate::executor::{Executor, Halt};
+use crate::executor::{Executor, Halt, RunError};
 use crate::gates;
-use crate::history::Mismatch;
-use crate::journal::{Journal, Undo};
-use crate::leftover::Leftover;
+use crate::journal::Undo;
 use crate::quantum::QubitRef;
 
 /// A qubit of a gate, resolved: a register qubit, or a bit of a memory byte.
@@ -67,14 +61,7 @@ impl<'m> Executor<'m> {
     fn promote(&mut self, address: u64) -> u8 {
         let mut old = [0];
         self.memory.read_into(address as usize..address as usize + 1, &mut old);
-        // Running again a promotion whose un-run left the byte's register over takes the register back.
-        let record = self.next_record();
-        let take =
-            self.take_back_at(record, |kind| matches!(kind, Leftover::Promotion { address: a, .. } if a == address));
-        let handle = match take {
-            Some(take) => self.take_allocation_back(take.id, Width::BYTE),
-            None => self.quantum.allocate(Width::BYTE),
-        };
+        let handle = self.quantum.allocate(Width::BYTE);
         let column = self.quantum.resolve(handle).expect("a fresh register is live");
         self.quantum.xor_register(column, u64::from(old[0]));
         self.memory.write(address as usize, &[0]);
@@ -82,8 +69,8 @@ impl<'m> Executor<'m> {
         old[0]
     }
 
-    /// Undoes `promote` of the cell at `address`, whose byte was `old`. The column must hold `old` in
-    /// every configuration for this to invert the promotion; elsewhere only that part is kept.
+    /// Undoes `promote` of the cell at `address`, whose byte was `old`: the column holds `old` in every
+    /// configuration again once every later step is undone.
     fn unpromote(&mut self, address: u64, old: u8) {
         let column = self.quantum.cell(address).expect("an un-promoted byte is a cell");
         self.quantum.xor_register(column, u64::from(old));
@@ -136,21 +123,9 @@ impl<'m> Executor<'m> {
         Ok(())
     }
 
-    /// Un-runs the `GateAt` or `GateAtPromoted` record on top of the journal, unless a byte it promoted no
-    /// longer holds its old value in every configuration (`checked`): then it changes nothing. Below a
-    /// world's split point (`deferred`) that check is made on the sum of the worlds' parts instead: this
-    /// part notes its failing configurations (`Executor::defer`) and keeps the others (the adjoint).
-    ///
-    /// Outside strict mode (`regardless`) no check is made: each promoted byte whose qubits do not hold its old
-    /// value, and in a joint un-run (`Executor::joint`) every promoted byte, leaves its register's content over
-    /// in a wire (`leftover.rs`).
-    pub(crate) fn unrun_gate_at(
-        &mut self,
-        checked: bool,
-        deferred: bool,
-        regardless: bool,
-        promoting: bool,
-    ) -> Result<(), Mismatch> {
+    /// Undoes the `GateAt` or `GateAtPromoted` record on top of the journal: the inverse gate, then the
+    /// promotions undone, the latest first.
+    pub(crate) fn undo_gate_at(&mut self, promoting: bool) {
         let Inst::GateAt { gate, target, controls } = self.retreat() else { unreachable!("a GateAt record") };
         let places = std::iter::once(target).chain(controls);
         let resolved: Vec<Resolved> =
@@ -159,83 +134,38 @@ impl<'m> Executor<'m> {
         // Undoing returns to a state the run held, so the configuration limit is not applied.
         let inverse = gates::matrix(gates::inverse(*gate));
         self.quantum.apply_gate(&inverse, qubits[0], &qubits[1..], None).expect("no limit");
-        let journal = self.journal.as_ref().expect("undoing needs a journal");
-        let count = if promoting { journal.word_from_top(0) as usize } else { 0 };
-        let promoted: Vec<(u64, u8)> = (1..=count)
-            .map(|depth| journal.word_from_top(depth))
-            .map(|word| ((word >> 8) as u64, word as u8))
-            .collect();
-        let record = journal.records() - 1;
-        if (checked || deferred) && !promoted.is_empty() {
-            let expected: Vec<(usize, u64)> = promoted
-                .iter()
-                .map(|&(byte, old)| (self.quantum.cell(byte).expect("a promoted byte is a cell"), u64::from(old)))
-                .collect();
-            let failing = self.quantum.failing(|config| expected.iter().any(|&(column, old)| config[column] != old));
-            if checked && !failing.is_empty() {
-                let forward = gates::matrix(*gate);
-                self.quantum.apply_gate(&forward, qubits[0], &qubits[1..], None).expect("no limit");
-                self.advance();
-                return Err(Mismatch);
-            }
-            if deferred {
-                self.defer(Undo::GateAtPromoted, failing);
-            }
+        if !promoting {
+            return;
         }
         let journal = self.journal.as_mut().expect("undoing needs a journal");
-        journal.pop();
-        if promoting {
-            journal.pop_word();
+        let count = journal.pop_word() as usize;
+        // The words list the latest promotion last, so they pop latest first.
+        let promoted: Vec<u128> = (0..count).map(|_| journal.pop_word()).collect();
+        for word in promoted {
+            self.unpromote((word >> 8) as u64, word as u8);
         }
-        for _ in 0..count {
-            journal.pop_word();
-        }
-        // `promoted` lists the latest promotion first.
-        let joint = regardless && self.joint();
-        for &(byte, old) in &promoted {
-            let column = self.quantum.cell(byte).expect("a promoted byte is a cell");
-            if regardless && (joint || !self.quantum.failing(|config| config[column] != u64::from(old)).is_empty()) {
-                self.leave_promotion_over(record, byte, old);
-            } else {
-                self.unpromote(byte, old);
-            }
-        }
-        Ok(())
     }
 
-    /// Reads the cells among the bytes of `range` before an ordinary access: splits the world by their
-    /// values if its configurations disagree, every new world running `step` itself. Returns the cells
-    /// (address, column) and whether this world split from others here. A coherent region's branch
-    /// enumerated on private memory sees the cells' values there instead, so it touches no cell.
-    pub(crate) fn read_cells(
-        &mut self,
-        range: Range<usize>,
-        step: &dyn Fn(&mut Self) -> Result<(), Fault>,
-    ) -> (Vec<(u64, usize)>, bool) {
+    /// The cells among the bytes of `range` that an ordinary access outside `apply` touches, each of whose
+    /// configurations must agree on its value. Inside `apply` each configuration's run holds the cells'
+    /// values in its private memory, so it touches no cell.
+    pub(crate) fn read_cells(&self, range: Range<usize>) -> Result<Vec<(u64, usize)>, RunError> {
         if self.materialised || !self.quantum.has_cells() {
-            return (Vec::new(), false);
+            return Ok(Vec::new());
         }
         let cells = self.quantum.cells_in(range.start as u64..range.end as u64);
-        if cells.is_empty() {
-            return (cells, false);
+        if cells.iter().any(|&(_, column)| self.quantum.partition(&[column]).len() > 1) {
+            return Err(RunError::SuperposedMemoryRead);
         }
-        // Running again an access whose un-run left wires over: those cells are read from their wires, after the
-        // world split by the others, so that every world split off takes back its own copy of each wire.
-        let wired = self.wired_cells(&cells);
-        let columns: Vec<usize> =
-            cells.iter().map(|&(_, column)| column).filter(|column| !wired.contains(column)).collect();
-        let split = self.split(&columns, step) || self.splitting;
-        self.take_cells_back(&wired);
-        (cells, split)
+        Ok(cells)
     }
 
     /// The bytes at `range` as ordinary code sees them, after `read_cells`: memory, with each cell's
-    /// value (the same in every configuration of this world) in place of its byte.
+    /// value (the same in every configuration) in place of its byte.
     pub(crate) fn read_view(&self, range: Range<usize>, cells: &[(u64, usize)], out: &mut [u8]) {
         self.memory.read_into(range.clone(), out);
         for &(address, column) in cells {
-            let taken = self.cell_reads.iter().find(|&&(taken, _)| taken == column).map(|&(_, byte)| byte);
-            out[address as usize - range.start] = taken.unwrap_or(self.quantum.first_value(column) as u8);
+            out[address as usize - range.start] = self.quantum.first_value(column) as u8;
         }
     }
 
@@ -252,39 +182,7 @@ impl<'m> Executor<'m> {
         self.memory.write(start, &bytes);
     }
 
-    /// Journals the cells a step touched, each with the byte at its offset in `bytes` (from `start`):
-    /// what un-running the step must find there.
-    pub(crate) fn note_cells(&mut self, cells: &[(u64, usize)], start: usize, bytes: &[u8], split: bool) {
-        // The bytes read from wires taken back served this access only.
-        self.cell_reads.clear();
-        if let Some(journal) = &mut self.journal {
-            for &(address, column) in cells {
-                journal.push_cell(column, bytes[address as usize - start], split);
-            }
-        }
-    }
-
-    /// The configurations where a cell the last record's step touched no longer holds the byte noted.
-    pub(crate) fn cells_no_longer_held(&self) -> crate::quantum::Amplitudes {
-        let journal = self.journal.as_ref().expect("undoing needs a journal");
-        let entries = journal.cells_of(journal.records() - 1);
-        self.quantum.failing(|config| entries.iter().any(|entry| config[entry.column] != u64::from(entry.value)))
-    }
-
-    /// Drops the cell entries of the record just popped (now at index `records()`); below an access that
-    /// split the world, a rewind's un-run is of this world's part of a shared state.
-    pub(crate) fn pop_cell_entries(&mut self) {
-        let journal = self.journal.as_mut().expect("undoing needs a journal");
-        let record = journal.records();
-        while let Some(entry) = journal.pop_cell_of(record) {
-            if entry.split && self.rewinding > 0 {
-                self.partial = true;
-                self.pending |= self.deferring;
-            }
-        }
-    }
-
-    /// Writes each cell's value in `config` into memory, for a coherent region's branch on that
+    /// Writes each cell's value in `config` into memory, for a coherent region's run for that
     /// configuration, or 0 back (`config` `None`) after it.
     pub(crate) fn materialise_cells(&mut self, cells: &[(u64, usize)], config: Option<&[u64]>) {
         for &(address, column) in cells {
@@ -296,12 +194,5 @@ impl<'m> Executor<'m> {
     /// The cells for a region to materialise, outside a region.
     pub(crate) fn region_cells(&self) -> Vec<(u64, usize)> {
         if self.in_region { Vec::new() } else { self.quantum.cells().iter().map(|(&a, &c)| (a, c)).collect() }
-    }
-}
-
-impl Journal {
-    /// Whether the top record has cell entries.
-    pub(crate) fn top_has_cells(&self) -> bool {
-        self.records() > 0 && !self.cells_of(self.records() - 1).is_empty()
     }
 }

@@ -4,8 +4,8 @@
 use std::fmt::{self, Write};
 
 use crate::{
-    Block, DataItem, DataSegment, Function, Gate, Inst, KeepTarget, MeasureSource, Module, Operand, Param, Place,
-    Qubit, Signature, Slot, Target, Terminator, Type,
+    Block, DataItem, DataSegment, Function, Gate, Inst, MeasureSource, Module, Operand, Param, Place, Qubit, Signature,
+    Slot, Target, Terminator, Type,
 };
 
 /// Writes a module in its text form.
@@ -82,12 +82,8 @@ impl Writer<'_> {
     }
 
     fn inst(&mut self, f: &Function, inst: &Inst) -> fmt::Result {
-        for (i, dst) in inst.results().enumerate() {
-            let separator = if i == 0 { "" } else { ", " };
-            write!(self.out, "{separator}%{}", f.slot_names[dst.index()])?;
-        }
-        if inst.results().next().is_some() {
-            self.out.push_str(" = ");
+        if let Some(dst) = inst.result() {
+            write!(self.out, "%{} = ", f.slot_names[dst.index()])?;
         }
         let op = |operand: &Operand| OperandText { function: f, operand: *operand, typed: false };
         let name = |slot: &Slot| SlotText(f, *slot);
@@ -117,11 +113,6 @@ impl Writer<'_> {
                 write!(self.out, "call @{}", self.module.function(*callee).name)?;
                 write_args(self.out, f, args)
             }
-            Inst::CallBudget { callee, args, budget, .. } => {
-                write!(self.out, "call @{}", self.module.function(*callee).name)?;
-                write_args(self.out, f, args)?;
-                write!(self.out, " budget {}", op(budget))
-            }
             Inst::CallIndirect { signature, target, args, .. } => {
                 self.out.push_str("call_indirect ");
                 write_signature(self.out, signature)?;
@@ -147,25 +138,6 @@ impl Writer<'_> {
                 write!(self.out, "apply @{}", self.module.function(*callee).name)?;
                 write_args(self.out, f, args)?;
                 write!(self.out, " -> {}, {} budget {}", name(out), name(fault), op(budget))
-            }
-            Inst::Mark { budget: None, .. } => write!(self.out, "mark"),
-            Inst::Mark { budget: Some(budget), .. } => write!(self.out, "mark budget {}", op(budget)),
-            Inst::Rewind { mark, keep } => {
-                write!(self.out, "rewind {}", name(mark))?;
-                for (i, pair) in keep.iter().enumerate() {
-                    let separator = if i == 0 { " keep (" } else { ", " };
-                    let value = OperandText { function: f, operand: pair.value, typed: true };
-                    match pair.target {
-                        KeepTarget::Register(register) => {
-                            write!(self.out, "{separator}{value} -> {}", name(&register))?
-                        }
-                        KeepTarget::Memory(address) => write!(self.out, "{separator}{value} -> [{}]", op(&address))?,
-                    }
-                }
-                if !keep.is_empty() {
-                    self.out.push(')');
-                }
-                Ok(())
             }
         }
     }

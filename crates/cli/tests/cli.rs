@@ -68,13 +68,13 @@ fn a_region_fault_is_reported_by_name_unless_allowed() {
     assert_eq!(output.status.code(), Some(1));
     let text = stdout(&output);
     assert!(text.contains("region fault: apply @triangle faulted (budget) on 1 of 1 branches"), "{text}");
-    assert!(text.contains("region faults: 1 apply executions faulted on some branch"), "{text}");
+    assert!(text.contains("region faults: 1 apply executions faulted for some argument value"), "{text}");
 
     let output = bennett(&["run", "fault.bn", "--arg", "5", "--allow-region-faults"]);
     assert_eq!(output.status.code(), Some(0));
     let text = stdout(&output);
     assert!(text.contains("result: 261\n"), "out 5, fault code 1: {text}");
-    assert!(text.contains("region faults (allowed): 1 apply executions faulted on some branch"), "{text}");
+    assert!(text.contains("region faults (allowed): 1 apply executions faulted for some argument value"), "{text}");
 
     let output = bennett(&["run", "fault.bn", "--arg", "2"]);
     assert_eq!(output.status.code(), Some(0), "no region fault: {}", stdout(&output));
@@ -96,20 +96,6 @@ fn a_negative_result_wider_than_64_bits_is_printed_signed() {
         let text = stdout(&output);
         assert!(text.contains(&format!("result: {expected}\n")), "@{entry}: {text}");
     }
-}
-
-#[test]
-fn history_example_reports_the_executed_unrun_and_replay_counts() {
-    let output = bennett(&["run", "history.bn", "--entry", "copy", "--arg", "7", "--stats"]);
-    let text = stdout(&output);
-    assert_eq!(output.status.code(), Some(0), "{text}");
-    assert!(text.contains("result: 5632\n"), "{text}");
-    assert!(text.contains("history: 5 steps un-run by rewind, 0 run again"), "{text}");
-    let output = bennett(&["run", "history.bn", "--entry", "nest", "--stats"]);
-    let text = stdout(&output);
-    assert_eq!(output.status.code(), Some(0), "{text}");
-    assert!(text.contains("result: 3\n"), "{text}");
-    assert!(text.contains("history: 2 steps un-run by rewind, 0 run again"), "{text}");
 }
 
 #[test]

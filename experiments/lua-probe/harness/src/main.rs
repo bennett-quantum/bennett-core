@@ -41,21 +41,17 @@ fn main() {
                 frames.last_mut().expect("frame").inst += 1;
                 assert_eq!(after.classical.frames, frames);
                 assert_eq!(after.quantum.registers, before.quantum.registers);
-                assert!(after.worlds.is_empty());
                 assert!(after.quantum.cells.is_empty());
                 assert!(after.quantum.amplitudes.iter().all(|(c, _)| c[2] == 0));
                 let now = exec.stats();
                 assert_eq!(now.region_faults, 0);
-                assert_eq!(now.overlay_bytes, 0);
                 assert_eq!(now.live_qubits, old.live_qubits);
                 println!(
-                    "oracle steps {} runs {} work {} journal {} overlay {} copied {}",
+                    "oracle steps {} runs {} work {} journal {}",
                     now.region_steps - old.region_steps,
                     now.region_cost.runs - old.region_cost.runs,
                     now.region_cost.work - old.region_cost.work,
                     now.region_cost.journal_bytes - old.region_cost.journal_bytes,
-                    now.region_cost.overlay_bytes - old.region_cost.overlay_bytes,
-                    now.region_cost.copied_bytes - old.region_cost.copied_bytes,
                 );
             } else if let Some(outcome) = exec.step() {
                 break outcome;
@@ -70,7 +66,6 @@ fn main() {
         exec.reverse().expect("reverse");
         let restored = exec.snapshot();
         assert_eq!(restored.classical, initial.classical);
-        assert_eq!(restored.worlds, initial.worlds);
         let distance = restored.quantum.distance(&initial.quantum).expect("same registers");
         assert!(distance < 1e-12, "reverse amplitude distance {distance}");
         println!("reverse identical {distance:e}");

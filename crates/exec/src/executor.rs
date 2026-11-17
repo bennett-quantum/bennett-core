@@ -11,13 +11,11 @@ use crate::memory::Memory;
 use crate::quantum::QuantumState;
 use crate::region::RegionCost;
 use crate::snapshot::{ClassicalSnapshot, QuantumSnapshot, Snapshot};
-use crate::worlds::{Defect, Status, World};
 
 /// How to run.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Options {
     /// The most steps the run may take; the next step faults with [`Fault::Budget`]. `None` is unbounded.
-    /// Steps a `rewind` runs again are charged to it too ([`Stats::replay_charged`]).
     pub budget: Option<u64>,
     /// The most basis configurations the quantum state may hold; a gate that would exceed it stops the run
     /// with [`RunError::ConfigurationLimit`]. `None` is unbounded. Each configuration costs memory and time
@@ -28,18 +26,18 @@ pub struct Options {
     pub seed: u64,
     /// Whether to keep the undo journal, so that the run can be reversed.
     pub reversible: bool,
-    /// Whether an `apply` may fault on some of its branches and the run continue. By default (`false`) the
-    /// first such `apply` stops the run with [`RunError::RegionFault`]: a program cannot detect a fault on
-    /// only some branches with certainty, and the other branches continue with the interference gone, so
-    /// a run that went on would look like a success. Set it for programs that inspect their fault
-    /// registers on purpose. Either way the faults are counted in [`Stats`].
+    /// Whether an `apply` may fault for some values of its arguments and the run continue. By default
+    /// (`false`) the first such `apply` stops the run with [`RunError::RegionFault`]: a program cannot detect
+    /// a fault for only some argument values with certainty, and the other values continue with the
+    /// interference gone, so a run that went on would look like a success. Set it for programs that inspect
+    /// their fault registers on purpose. Either way the faults are counted in [`Stats`].
     pub allow_region_faults: bool,
     /// Whether to run the machine's meaning instead of the simulator's strict mode (the default,
     /// `docs/DESIGN.md`, "Strict mode"). Strict mode adds diagnostics no device can make, as a sanitizer
-    /// does: an `apply` or a world faulting on only some branches stops the run, and `qfree` of a register
-    /// that is not zero faults `dirty_free`. On the machine a fault on some branches is a fault code the
-    /// program may measure (as with `allow_region_faults`), and the qubits of a dirty `qfree` are left
-    /// over: kept, never released, counted in [`Stats::leftover_qubits`], the toolchain's warning.
+    /// does: an `apply` faulting for only some argument values stops the run, and `qfree` of a register that
+    /// is not zero faults `dirty_free`. On the machine a fault for some argument values is a fault code the
+    /// program may measure (as with `allow_region_faults`), and the qubits of a dirty `qfree` are left over:
+    /// kept, never released, counted in [`Stats::leftover_qubits`], the toolchain's warning.
     pub machine_meaning: bool,
 }
 
@@ -57,7 +55,7 @@ pub enum Outcome {
 
 /// A limit or check of the simulator that a run reached. Unlike a [`Fault`], it is not part of the
 /// program's meaning: another simulator, or the same one with a larger limit or the check switched off,
-/// would continue.
+/// would continue. No program can read it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum RunError {
     /// A gate would raise the number of basis configurations above the run's limit.
@@ -66,56 +64,32 @@ pub enum RunError {
         /// The limit the run was given ([`Options::max_configurations`]).
         limit: usize,
     },
-    /// An `apply` faulted on at least one branch, and the run does not allow region faults
-    /// ([`Options::allow_region_faults`]). The simulator sees every branch; a program could not.
-    #[error("region fault: an apply faulted ({fault}) on {branches} of {configurations} branches")]
+    /// An `apply` faulted for at least one value of its arguments, and the run does not allow region faults
+    /// ([`Options::allow_region_faults`]). The simulator sees every configuration; a program could not.
+    #[error("region fault: an apply faulted ({fault}) on {branches} of {configurations} basis configurations")]
     RegionFault {
         /// The applied function.
         callee: FuncId,
-        /// The fault of the first faulting branch, in configuration order.
+        /// The fault of the first faulting configuration, in configuration order.
         fault: Fault,
         /// The number of basis configurations on which the function faulted.
         branches: usize,
         /// The number of basis configurations it ran on.
         configurations: usize,
     },
-    /// A world faulted while other worlds go on, and the run does not allow region faults
-    /// ([`Options::allow_region_faults`]): as for an `apply`, a program cannot detect a fault on only some
-    /// worlds with certainty. The faulting world is as it was before its step; worlds before it in the
-    /// executor's order have taken this tick's step.
-    #[error("world fault: one of {worlds} worlds faulted ({fault}) while others go on")]
-    WorldFault {
-        /// The fault.
-        fault: Fault,
-        /// The number of worlds.
-        worlds: usize,
-    },
-    /// A world reached, by a rewind, a machine state that another world had reached by a rewind and
-    /// already left. Whether the two interfere depends on a choice not yet made (`docs/DESIGN.md`,
-    /// "Worlds"), so the simulator stops instead of guessing. The state is the one after the rewind.
-    #[error("a world rewound to a state another world had already left; the schedule cannot align them")]
-    Unaligned,
-    /// When every world had stopped (to measure, or at the end), their summed squared amplitudes were not
-    /// 1: a step that un-ran shared history in one world's part was not unitary on the whole state (it
-    /// freed or un-allocated a register that was not zero there). A rewind's deferred checks refuse such an
-    /// un-run first (`bad_rewind`); this is the backstop. The state is kept as it is.
-    #[error("the worlds' summed probability is {0} parts per billion away from 1: an un-run step was not unitary")]
-    NormLost(u64),
+    /// Ordinary code outside `apply` read memory bytes that hold qubits (a load, a store, a jump record)
+    /// whose basis configurations disagree on their value. Not built: what such a read is to be is not yet
+    /// decided (`HANDOFF.md`, "Questions for the maintainer"), so the simulator stops instead of choosing.
+    /// Bytes whose configurations all agree are read as memory.
+    #[error("ordinary code read memory bytes holding qubits whose basis configurations disagree")]
+    SuperposedMemoryRead,
 }
 
 /// Why a step did not complete: a fault of the program or a limit of the simulator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Halt {
     Fault(Fault),
-    /// A fault the simulator found by looking at every configuration of the state at once (a `longjmp` whose
-    /// record is held in qubits that disagree). No device can make such a check, so it is never delivered to a
-    /// program as a fault code: no call with a budget catches it and no `apply` XORs it into its fault
-    /// register. It ends the world with the fault (the debt of `docs/DESIGN.md`, "Qubits in memory", "Not
-    /// yet"); in strict mode, with other worlds going on, it stops the run as any world's fault does.
-    Inspected(Fault),
     Stop(RunError),
-    /// The world was observed not to be there and is dropped (a measurement in another world).
-    Discard,
 }
 
 impl From<Fault> for Halt {
@@ -185,17 +159,6 @@ pub enum ReverseError {
 pub struct Stats {
     /// Steps taken by the run, not counting steps inside coherent regions.
     pub steps: u64,
-    /// Steps run again by `rewind`s taken as steps of the run, charged to its budget with `steps`: a step
-    /// faults with [`Fault::Budget`] once `steps + replay_charged` reaches the budget, and a rewind whose
-    /// running again would pass it faults with it, changing nothing (`docs/DESIGN.md`, "History", Cost).
-    /// Not counting coherent regions, whose worlds charge their own budgets. It never goes back but on a
-    /// reversal to the start.
-    pub replay_charged: u64,
-    /// The machine's time: the steps the current world (the latest, with several) took going forward, a
-    /// rewind of a mark with a budget counting the whole budget (`docs/DESIGN.md`, "The mark's budget").
-    /// Unlike `steps`, which counts the simulator's ticks, it does not tell branches apart that wait at
-    /// such a rewind. It never goes back but on a reversal to the start.
-    pub clock: u64,
     /// The run's step budget, if it has one.
     pub budget: Option<u64>,
     /// The run's limit on basis configurations, if it has one.
@@ -212,45 +175,15 @@ pub struct Stats {
     pub region_fault_weight: f64,
     /// The largest weight of the faulting configurations in any one of those executions.
     pub region_fault_max_weight: f64,
-    /// The size of the undo journal, in reversible mode or once a `mark` has run.
+    /// The size of the undo journal, in reversible mode.
     pub journal_bytes: Option<usize>,
-    /// Steps undone by `rewind`, including those undone again inside steps run again.
-    pub rewound_steps: u64,
-    /// Steps run again to undo an earlier `rewind`: by a later `rewind` that reaches back past it, or by
-    /// reversal. With `steps` and `rewound_steps` this is the work the history instructions cost.
-    pub rerun_steps: u64,
-    /// The number of worlds now: whole machine states in superposition (`docs/DESIGN.md`, "Worlds").
-    pub worlds: usize,
-    /// The most worlds at once.
-    pub peak_worlds: usize,
-    /// Steps taken, summed over the worlds that took them: `steps` counts ticks, in which every running
-    /// world takes one step.
-    pub world_steps: u64,
-    /// Worlds that split off because ordinary code read a register whose configurations disagree.
-    pub splits: u64,
-    /// Worlds that merged into another because both became the same machine state.
-    pub merges: u64,
-    /// Bytes of memory copied by splits: each new world copies the overlay of the world it splits from,
-    /// the bytes that world wrote since it shares the base (`docs/DESIGN.md`, "Memory as an overlay");
-    /// never the memory itself.
-    pub split_memory_bytes: u64,
-    /// Bytes of journal copied by splits: each new world copies the journal of the world it splits from.
-    pub split_journal_bytes: u64,
-    /// Bytes the worlds' overlays hold now, summed: where each world's memory differs from the shared
-    /// base. Zero with one world, whose writes are the base.
-    pub overlay_bytes: usize,
-    /// The most bytes the overlays held at once, sampled after every tick of several worlds.
-    pub peak_overlay_bytes: usize,
-    /// Times the host or a measurement observed which of several worlds the machine is in: the history
-    /// those worlds carried was still entangled (the warning of `docs/DESIGN.md`, "What is promised").
-    pub observations: u64,
-    /// Memory bytes that hold qubits now, the most in any one world (`docs/DESIGN.md`, "Qubits in memory").
-    /// Each is an 8-qubit register, counted in `live_qubits` too.
+    /// Memory bytes that hold qubits now (`docs/DESIGN.md`, "Qubits in memory"). Each is an 8-qubit
+    /// register, counted in `live_qubits` too.
     pub memory_qubit_bytes: usize,
     /// Qubits allocated now, those left over included.
     pub live_qubits: u32,
-    /// Qubits left over now, the most in any one world: kept by a `qfree` of a register that was not
-    /// zero, outside strict mode ([`Options::machine_meaning`]). Each is a warning: history left behind.
+    /// Qubits left over now: kept by a `qfree` of a register that was not zero, outside strict mode
+    /// ([`Options::machine_meaning`]). Each is a warning.
     pub leftover_qubits: u32,
     /// The most qubits allocated at once.
     pub peak_live_qubits: u32,
@@ -273,10 +206,6 @@ pub struct Frame {
     pub base: usize,
     /// The stack pointer when the frame was entered, restored when it returns.
     pub entry_stack_pointer: u64,
-    /// For the frame of a function entered by a call with a budget (`CallBudget`): the steps it has left.
-    /// Every step taken while it is live counts, every step undone gives its count back
-    /// (`docs/DESIGN.md`, "The call with a fault value").
-    pub guard: Option<u64>,
 }
 
 /// Bytes of stack a frame reserves per slot. A slot holds a value of up to 128 bits, but nearly all are
@@ -286,7 +215,6 @@ pub(crate) const SLOT_BYTES: u64 = 8;
 /// Executes a valid module, forward and, in reversible mode, backward.
 pub struct Executor<'m> {
     pub(crate) module: &'m ValidModule,
-    /// This world's memory: the classical base every world shares and its overlay (`memory.rs`).
     pub(crate) memory: Memory,
     /// The slots of every frame, each frame a contiguous window. Values above the live frames are dead.
     pub(crate) slots: Vec<u128>,
@@ -298,36 +226,18 @@ pub struct Executor<'m> {
     pub(crate) journal: Option<Journal>,
     pub(crate) outcome: Option<Outcome>,
     pub(crate) steps: u64,
-    /// The current world's clock: the steps it took going forward, a rewind of a mark with a budget
-    /// counting that budget. Time, not machine state (`docs/DESIGN.md`, "The mark's budget").
-    pub(crate) clock: u64,
-    /// Steps run again by rewinds taken as steps, charged to the budget (`Stats::replay_charged`).
-    pub(crate) charged: u64,
-    /// Whether a rewind taken as a step is un-running, so that the steps run again are charged.
-    pub(crate) charging: bool,
-    /// Whether a call with a budget has run: only then are the frames' budgets counted.
-    pub(crate) any_guard: bool,
-    /// Whether steps count in the frames' budgets: not while a failed rewind runs forward again what it
-    /// un-ran, which gave nothing back.
-    pub(crate) counting: bool,
-    /// Whether running again under `charging` would have passed the budget: the rewind faults `budget`.
-    pub(crate) budget_spent: bool,
     pub(crate) budget: Option<u64>,
     pub(crate) max_configurations: Option<usize>,
     /// The depth of the frames belonging to whoever started the current run: 0 for the program, the
     /// caller's depth inside a coherent region.
     pub(crate) base_depth: usize,
     pub(crate) in_region: bool,
-    /// The journal records below the coherent region running, which its marks do not count: the caller's
-    /// history (`history.rs`). Zero: a region runs on a journal of its own.
-    pub(crate) region_records: usize,
     /// Whether the current run is a coherent region's run for one basis configuration, on private memory,
     /// which holds the values that configuration gives the qubits in memory (`region.rs`).
     pub(crate) materialised: bool,
-    /// What computing regions cost, and the most journal and overlay bytes the current region run held.
+    /// What computing regions cost, and the most journal bytes the current region run held.
     pub(crate) region_cost: RegionCost,
     pub(crate) run_journal_peak: usize,
-    pub(crate) run_overlay_peak: usize,
     /// A journal kept for reuse by coherent regions, which always run reversibly.
     pub(crate) spare_journal: Journal,
     /// A buffer for argument values, kept to avoid allocating per call.
@@ -337,83 +247,13 @@ pub struct Executor<'m> {
     pub(crate) allow_region_faults: bool,
     /// The simulator's strict mode (`Options::machine_meaning` off).
     pub(crate) strict: bool,
-    /// What the rewinds un-running now left over in the current world, running regardless outside strict mode,
-    /// the innermost's last (`leftover.rs`). Per world: a world that splits off during the un-run carries what
-    /// was left over so far.
-    pub(crate) leftovers_made: Vec<crate::leftover::TakeBack>,
-    /// What the rewind being undone left over, to take back where its steps run again (`leftover.rs`). Per
-    /// world: a world that splits off while they run again takes back its own copy of each wire.
-    pub(crate) taking_back: Vec<crate::leftover::TakeBack>,
-    /// Whether the current world's last rewind left wires over that are settled only once the worlds it joins
-    /// have merged (`Executor::resolve_leftovers`).
-    pub(crate) unresolved: bool,
-    /// Whether the current world's last step ended it with a fault found by inspecting the state
-    /// ([`Halt::Inspected`]): read by a region, which must not make it a fault code.
-    pub(crate) inspected: bool,
-    /// For the rewind taken as a step in progress inside calls with a budget: the least room they had at it and
-    /// the replay charge then (`Executor::charged`). Running again past the room stops, as past the run's budget.
-    pub(crate) guard_room: Option<(u64, u64)>,
-    /// The bytes an access running again reads from the wires it took back, by cell column (`leftover.rs`).
-    pub(crate) cell_reads: Vec<(usize, u8)>,
     pub(crate) region_faults: u64,
     pub(crate) region_fault_weight: f64,
     pub(crate) region_fault_max_weight: f64,
     /// The journal-content observer, when turned on. It only copies what steps already journalled.
     pub(crate) journal_measurement: Option<Collector>,
-    /// Whether the run was started reversible, so that `step_back` may undo it. A run that is not keeps a
-    /// journal anyway from its first `mark`, for `rewind`.
+    /// Whether the run was started reversible, so that `step_back` may undo it.
     pub(crate) reversible: bool,
-    pub(crate) rewound_steps: u64,
-    pub(crate) rerun_steps: u64,
-    /// The current world's status, when there are several.
-    pub(crate) status: Status,
-    /// Every world when there are several, `None` at the current one's index; empty for one world.
-    pub(crate) worlds: Vec<Option<World>>,
-    pub(crate) current: usize,
-    /// Worlds that split off during the step in progress and have finished it.
-    pub(crate) forked: Vec<World>,
-    /// How a run of several worlds ended; with one world, `outcome` says it.
-    pub(crate) run_outcome: Option<Outcome>,
-    /// Hashes of states parked worlds left while other worlds went on (`RunError::Unaligned`).
-    pub(crate) departed: Vec<u64>,
-    /// Whether a run of several worlds was observed, which reversal cannot cross.
-    pub(crate) observed: bool,
-    /// Un-runs of a register read that found the register no longer holding the value read.
-    pub(crate) mismatches: u64,
-    pub(crate) splits: u64,
-    pub(crate) merges: u64,
-    pub(crate) observations: u64,
-    pub(crate) world_steps: u64,
-    pub(crate) peak_worlds: usize,
-    /// Overlay bytes copied by splits, and journal bytes.
-    pub(crate) split_memory_bytes: u64,
-    pub(crate) split_journal_bytes: u64,
-    /// The bytes of slots copied where a world split (the slot stack as it is then, the frames of callees
-    /// live at the split included).
-    pub(crate) split_slot_bytes: u64,
-    /// The most overlay bytes all worlds held at once, sampled where worlds are put back after a tick.
-    pub(crate) peak_overlay_bytes: usize,
-    pub(crate) peak_world_configurations: usize,
-    /// The configurations of the worlds other than the current one, while it steps among several.
-    pub(crate) others_configurations: usize,
-    /// How deep in running steps again to undo a rewind the executor is.
-    pub(crate) rerunning: u32,
-    /// How deep in rewinds' un-runs the executor is.
-    pub(crate) rewinding: u32,
-    /// Whether the current world's rewind has un-run past a read that split it, so that it now un-runs its
-    /// part of a state shared with other worlds (`history.rs`).
-    pub(crate) partial: bool,
-    /// Whether the world being made by a split is running its first step.
-    pub(crate) splitting: bool,
-    /// Whether a rewind taken as a step (not run again or un-run by another) is un-running: below a split
-    /// point its checks are then deferred to the sum of the worlds' parts (`worlds.rs`).
-    pub(crate) deferring: bool,
-    /// The current world's checks deferred below its split point, not yet made on the sum.
-    pub(crate) deferred: Vec<Defect>,
-    /// Copies of worlds as they were before rewinds whose deferred checks are not yet made.
-    pub(crate) backups: Vec<World>,
-    /// Whether the current world is the result of a rewind whose deferred checks are not yet made.
-    pub(crate) pending: bool,
 }
 
 impl<'m> Executor<'m> {
@@ -434,67 +274,24 @@ impl<'m> Executor<'m> {
             journal: None,
             outcome: None,
             steps: 0,
-            clock: 0,
-            charged: 0,
-            charging: false,
-            budget_spent: false,
-            any_guard: false,
-            counting: true,
             budget: options.budget,
             max_configurations: options.max_configurations,
             base_depth: 0,
             in_region: false,
-            region_records: 0,
             materialised: false,
             region_cost: RegionCost::default(),
             run_journal_peak: 0,
-            run_overlay_peak: 0,
             spare_journal: Journal::default(),
             scratch: Vec::new(),
             rng: ChaCha8Rng::seed_from_u64(options.seed),
             region_steps: 0,
             allow_region_faults: options.allow_region_faults || options.machine_meaning,
             strict: !options.machine_meaning,
-            leftovers_made: Vec::new(),
-            taking_back: Vec::new(),
-            unresolved: false,
-            inspected: false,
-            guard_room: None,
-            cell_reads: Vec::new(),
             region_faults: 0,
             region_fault_weight: 0.0,
             region_fault_max_weight: 0.0,
             journal_measurement: None,
             reversible: options.reversible,
-            rewound_steps: 0,
-            rerun_steps: 0,
-            status: Status::Running,
-            worlds: Vec::new(),
-            current: 0,
-            forked: Vec::new(),
-            run_outcome: None,
-            departed: Vec::new(),
-            observed: false,
-            mismatches: 0,
-            splits: 0,
-            merges: 0,
-            observations: 0,
-            world_steps: 0,
-            peak_worlds: 1,
-            split_memory_bytes: 0,
-            split_journal_bytes: 0,
-            split_slot_bytes: 0,
-            peak_overlay_bytes: 0,
-            peak_world_configurations: 0,
-            others_configurations: 0,
-            rerunning: 0,
-            rewinding: 0,
-            partial: false,
-            splitting: false,
-            deferring: false,
-            deferred: Vec::new(),
-            backups: Vec::new(),
-            pending: false,
         };
         let args: Vec<u128> = args.iter().map(|&arg| u128::from(arg)).collect();
         if let Err(fault) = executor.push_frame(entry, &args) {
@@ -504,20 +301,8 @@ impl<'m> Executor<'m> {
         Ok(executor)
     }
 
-    /// Executes one step, unless the run has ended; returns the outcome once it has. With several worlds,
-    /// one step is one tick: every running world takes a step.
+    /// Executes one step, unless the run has ended; returns the outcome once it has.
     pub fn step(&mut self) -> Option<Outcome> {
-        if self.in_region {
-            return self.step_world();
-        }
-        if self.has_worlds() {
-            return self.tick();
-        }
-        self.step_alone()
-    }
-
-    /// One step of the current world alone: the machine as it is without worlds.
-    pub(crate) fn step_world(&mut self) -> Option<Outcome> {
         if self.outcome.is_some() {
             return self.outcome;
         }
@@ -535,25 +320,17 @@ impl<'m> Executor<'m> {
                 if self.in_region {
                     let journal = self.journal.as_ref().map_or(0, Journal::bytes);
                     self.run_journal_peak = self.run_journal_peak.max(journal);
-                    self.run_overlay_peak = self.run_overlay_peak.max(self.memory.overlay_len());
-                } else {
-                    self.world_steps += 1;
                 }
             }
             Err(Halt::Fault(fault)) => self.outcome = Some(Outcome::Faulted(fault)),
-            Err(Halt::Inspected(fault)) => {
-                self.inspected = true;
-                self.outcome = Some(Outcome::Faulted(fault));
-            }
             Err(Halt::Stop(error)) => self.outcome = Some(Outcome::Stopped(error)),
-            Err(Halt::Discard) => unreachable!("a single world is never observed away"),
         }
         self.outcome
     }
 
-    /// Whether the budget is spent: the steps taken and the steps run again charged to it reach it.
+    /// Whether the budget is spent: the steps taken reach it.
     pub(crate) fn budget_reached(&self) -> bool {
-        self.budget.is_some_and(|budget| self.steps.saturating_add(self.charged) >= budget)
+        self.budget.is_some_and(|budget| self.steps >= budget)
     }
 
     /// Steps until the run ends.
@@ -572,12 +349,6 @@ impl<'m> Executor<'m> {
         if !self.reversible {
             return Err(ReverseError::NotReversible);
         }
-        if self.observed {
-            return Err(ReverseError::PastMeasurement);
-        }
-        if self.has_worlds() {
-            return self.step_back_worlds();
-        }
         let journal = self.journal.as_ref().ok_or(ReverseError::NotReversible)?;
         if matches!(self.outcome, Some(Outcome::Faulted(_) | Outcome::Stopped(_))) && !self.frames.is_empty() {
             self.outcome = None;
@@ -587,15 +358,7 @@ impl<'m> Executor<'m> {
             Some(Undo::Measure) => Err(ReverseError::PastMeasurement),
             Some(_) => {
                 self.undo_last();
-                // After several worlds, ticks and records need not match one for one; none is left once
-                // the journal is empty.
                 self.steps = self.steps.saturating_sub(1);
-                if self.journal.as_ref().is_some_and(|journal| journal.last().is_none()) {
-                    self.steps = 0;
-                    self.charged = 0;
-                    self.clock = 0;
-                }
-                self.adopt_forks(Status::Running);
                 Ok(true)
             }
         }
@@ -612,41 +375,34 @@ impl<'m> Executor<'m> {
 
     /// How the run ended, or `None` while it is running.
     pub fn outcome(&self) -> Option<Outcome> {
-        if self.has_worlds() { self.run_outcome } else { self.outcome }
+        self.outcome
     }
 
-    /// The console output so far; with several worlds, the first world's.
+    /// The console output so far.
     pub fn tape(&self) -> &[u8] {
-        self.world_states()[0].tape
+        &self.tape
     }
 
     /// A copy of the whole state, for comparison by a test harness or a report.
-    /// With several worlds, the first is `classical` and `quantum` and the others are in `worlds`.
     pub fn snapshot(&self) -> Snapshot {
-        let mut worlds = self.world_states().into_iter().map(|world| Snapshot {
+        Snapshot {
             classical: ClassicalSnapshot {
-                memory: world.memory.to_vec(),
-                frames: world.frames.to_vec(),
-                slots: world.slots.to_vec(),
-                stack_pointer: world.stack_pointer,
-                tape: world.tape.to_vec(),
-                outcome: world.outcome,
+                memory: self.memory.to_vec(),
+                frames: self.frames.clone(),
+                slots: self.slots[..self.live_top()].to_vec(),
+                stack_pointer: self.stack_pointer,
+                tape: self.tape.clone(),
+                outcome: self.outcome,
                 steps: self.steps,
             },
-            quantum: QuantumSnapshot::of(world.quantum),
-            worlds: Vec::new(),
-        });
-        let mut first = worlds.next().expect("at least one world");
-        first.worlds = worlds.collect();
-        first
+            quantum: QuantumSnapshot::of(&self.quantum),
+        }
     }
 
     /// The counts of the run so far.
     pub fn stats(&self) -> Stats {
         Stats {
             steps: self.steps,
-            replay_charged: self.charged,
-            clock: self.max_clock(),
             budget: self.budget,
             max_configurations: self.max_configurations,
             region_steps: self.region_steps,
@@ -654,31 +410,13 @@ impl<'m> Executor<'m> {
             region_faults: self.region_faults,
             region_fault_weight: self.region_fault_weight,
             region_fault_max_weight: self.region_fault_max_weight,
-            journal_bytes: self.journals().into_iter().flatten().map(Journal::bytes).reduce(|a, b| a + b),
-            rewound_steps: self.rewound_steps,
-            rerun_steps: self.rerun_steps,
-            worlds: self.worlds.len().max(1),
-            peak_worlds: self.peak_worlds,
-            world_steps: self.world_steps,
-            splits: self.splits,
-            merges: self.merges,
-            observations: self.observations,
-            split_memory_bytes: self.split_memory_bytes,
-            split_journal_bytes: self.split_journal_bytes,
-            overlay_bytes: self.overlay_bytes(),
-            peak_overlay_bytes: self.peak_overlay_bytes.max(self.overlay_bytes()),
-            memory_qubit_bytes: self.quantum_states().iter().map(|q| q.cells().len()).max().unwrap_or(0),
-            live_qubits: self.quantum_states().iter().map(|q| q.live_qubits()).max().unwrap_or(0),
-            leftover_qubits: self.quantum_states().iter().map(|q| q.leftover_qubits()).max().unwrap_or(0),
-            peak_live_qubits: self.quantum_states().iter().map(|q| q.peak_qubits()).max().unwrap_or(0),
-            configurations: self.quantum_states().iter().map(|q| q.amplitudes().len()).sum(),
-            peak_configurations: self
-                .quantum_states()
-                .iter()
-                .map(|q| q.peak_configurations())
-                .max()
-                .unwrap_or(0)
-                .max(self.peak_world_configurations),
+            journal_bytes: self.journal.as_ref().map(Journal::bytes),
+            memory_qubit_bytes: self.quantum.cells().len(),
+            live_qubits: self.quantum.live_qubits(),
+            leftover_qubits: self.quantum.leftover_qubits(),
+            peak_live_qubits: self.quantum.peak_qubits(),
+            configurations: self.quantum.amplitudes().len(),
+            peak_configurations: self.quantum.peak_configurations(),
         }
     }
 

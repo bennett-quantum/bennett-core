@@ -6,179 +6,17 @@ use bennett_ir::{
     Target, Terminator, Type, Width,
 };
 
-use crate::executor::{Executor, Frame, Halt, Outcome, RunError, SLOT_BYTES};
+use crate::executor::{Executor, Frame, Halt, Outcome, SLOT_BYTES};
 use crate::gates;
 use crate::journal::Undo;
-use crate::leftover::Leftover;
 use crate::quantum::QubitRef;
 
 /// `alloca` results are aligned to this many bytes, the size of the widest value.
 const STACK_ALIGN: u64 = 8;
 
 impl<'m> Executor<'m> {
-    /// Executes the instruction or terminator at the top frame's position. Going forward (not running a
-    /// step again) the world's clock counts the step, and a mark's budget that is spent faults it first.
+    /// Executes the instruction or terminator at the top frame's position.
     pub(crate) fn execute(&mut self) -> Result<(), Halt> {
-        if self.rerunning == 0 && self.rewinding == 0 {
-            let deadline = self.journal.as_ref().and_then(|journal| journal.mark_deadline(self.region_records));
-            if deadline.is_some_and(|deadline| self.clock >= deadline) {
-                // A call with a budget spent at the same step ends first, the outermost as below: a catch
-                // below it would count a step its frame has no budget for.
-                if let Some(depth) = self.spent_guard() {
-                    return self.catch(depth, Fault::Budget);
-                }
-                return self.fault_or_catch(Fault::Budget);
-            }
-            self.clock += 1;
-        }
-        if !self.any_guard || !self.counting {
-            return self.execute_step();
-        }
-        // Inside calls with a budget: the outermost whose budget is spent ends with `budget`; a fault returns
-        // to the innermost; every frame live before the step counts it (a callee's return included).
-        if let Some(depth) = self.spent_guard() {
-            return self.catch(depth, Fault::Budget);
-        }
-        let before = self.frames.len();
-        self.count_guards(before, 1, false);
-        match self.execute_step() {
-            Ok(()) => Ok(()),
-            Err(halt) => {
-                // The step changed nothing; nor does its count.
-                self.count_guards(before, 1, true);
-                match halt {
-                    Halt::Fault(fault) => self.fault_or_catch(fault),
-                    // A fault the simulator found by inspecting the state is never a call's fault code.
-                    Halt::Stop(_) | Halt::Discard | Halt::Inspected(_) => Err(halt),
-                }
-            }
-        }
-    }
-
-    /// Closes the budgets of the marks of frames just left (`Journal::close_left`).
-    fn frames_left(&mut self) {
-        if let Some(journal) = &mut self.journal {
-            journal.close_left(self.frames.len());
-        }
-    }
-
-    /// The least number of steps any live call with a budget has left, if one is live.
-    pub(crate) fn guard_left(&self) -> Option<u64> {
-        if !self.any_guard || !self.counting {
-            return None;
-        }
-        self.guards().filter_map(|depth| self.frames[depth].guard).min()
-    }
-
-    /// The outermost live call with a budget whose budget is spent, if one is.
-    fn spent_guard(&self) -> Option<usize> {
-        if !self.any_guard || !self.counting {
-            return None;
-        }
-        self.guards().find(|&depth| self.frames[depth].guard == Some(0))
-    }
-
-    /// The indices of the live frames of callees of calls with a budget, outermost first.
-    pub(crate) fn guards(&self) -> impl Iterator<Item = usize> + '_ {
-        (self.base_depth..self.frames.len()).filter(|&depth| self.frames[depth].guard.is_some())
-    }
-
-    /// Whether the current step runs inside a call with a budget: the region's rules apply.
-    pub(crate) fn guarded(&self) -> bool {
-        self.any_guard && self.guards().next().is_some()
-    }
-
-    /// Counts `steps` (or, undoing, gives them back) in the budgets of the frames below `live`.
-    pub(crate) fn count_guards(&mut self, live: usize, steps: u64, back: bool) {
-        let live = live.min(self.frames.len());
-        for frame in &mut self.frames[self.base_depth.min(live)..live] {
-            if let Some(left) = &mut frame.guard {
-                *left = if back { *left + steps } else { *left - steps };
-            }
-        }
-    }
-
-    /// A fault: returned to the innermost call with a budget as its code, else the step's fault.
-    fn fault_or_catch(&mut self, fault: Fault) -> Result<(), Halt> {
-        match self.guards().last() {
-            Some(depth) if self.any_guard => self.catch(depth, fault),
-            Some(_) | None => Err(fault.into()),
-        }
-    }
-
-    /// Ends the call with a budget whose callee's frame is at `depth` with `fault`: its frames are discarded,
-    /// the caller's result is 0 and its fault code the fault's. A step of the frames below. In strict mode a
-    /// fault while other worlds go on stops the run instead, as a world's fault does: the simulator's
-    /// checks are never delivered to a program as a fault code.
-    fn catch(&mut self, depth: usize, fault: Fault) -> Result<(), Halt> {
-        self.deliver_fault(depth, fault)?;
-        self.count_guards(depth, 1, false);
-        Ok(())
-    }
-
-    /// The catch of a fault at `depth` (`catch`), but for counting its step: the frames from `depth` up are
-    /// discarded (none, for a callee whose frame did not fit), and the call with a budget at the top frame's
-    /// position gets the code.
-    fn deliver_fault(&mut self, depth: usize, fault: Fault) -> Result<(), Halt> {
-        if !self.in_region && !self.allow_region_faults && self.others_go_on() {
-            return Err(Halt::Stop(RunError::WorldFault { fault, worlds: self.worlds.len() }));
-        }
-        let discarded = self.frames.len() - depth;
-        for index in (depth..self.frames.len()).rev() {
-            let frame = self.frames[index];
-            self.record_word(pack_position(frame.func, frame.block, frame.inst));
-            self.record_word(u128::from(frame.entry_stack_pointer));
-            self.record_word(frame.guard.map_or(0, |left| u128::from(left) + 1));
-        }
-        self.record_word(u128::from(self.stack_pointer));
-        self.record_word(discarded as u128);
-        if discarded > 0 {
-            self.stack_pointer = self.frames[depth].entry_stack_pointer;
-            self.frames.truncate(depth);
-            self.frames_left();
-        }
-        let caller = *self.top();
-        match &self.function(caller.func).block(caller.block).insts[caller.inst] {
-            Inst::CallBudget { dst, fault: code, .. } => {
-                if let Some(dst) = dst {
-                    self.write_slot(*dst, 0);
-                }
-                self.write_slot(*code, u128::from(fault.code()));
-            }
-            Inst::Apply { .. }
-            | Inst::Binary { .. }
-            | Inst::Compare { .. }
-            | Inst::Select { .. }
-            | Inst::Cast { .. }
-            | Inst::Load { .. }
-            | Inst::Store { .. }
-            | Inst::Alloca { .. }
-            | Inst::StackSave { .. }
-            | Inst::StackRestore { .. }
-            | Inst::Setjmp { .. }
-            | Inst::ReturnAddress { .. }
-            | Inst::Call { .. }
-            | Inst::CallIndirect { .. }
-            | Inst::FuncAddr { .. }
-            | Inst::Effect { .. }
-            | Inst::Qalloc { .. }
-            | Inst::Qfree { .. }
-            | Inst::Gate { .. }
-            | Inst::GateAt { .. }
-            | Inst::Measure { .. }
-            | Inst::Mark { .. }
-            | Inst::Rewind { .. } => unreachable!("a frame with a budget was entered by a call with a budget"),
-        }
-        if let Some(journal) = &mut self.journal {
-            journal.push_jump(discarded);
-        }
-        self.record(Undo::Catch);
-        self.advance();
-        Ok(())
-    }
-
-    /// Executes the step at the top frame's position.
-    fn execute_step(&mut self) -> Result<(), Halt> {
         let frame = *self.top();
         let block = self.function(frame.func).block(frame.block);
         match block.insts.get(frame.inst) {
@@ -211,78 +49,51 @@ impl<'m> Executor<'m> {
             Inst::StackSave { dst } => self.produce(*dst, u128::from(self.stack_pointer)),
             Inst::ReturnAddress { dst, level } => self.produce(*dst, u128::from(self.return_address(*level))),
             Inst::StackRestore { pointer } => self.stack_restore(self.read_word(pointer))?,
-            Inst::Call { callee, args, .. } => self.call(*callee, args, None)?,
-            Inst::CallBudget { callee, args, budget, .. } => {
-                self.call_with_budget(*callee, args, self.read_word(budget))?;
-            }
+            Inst::Call { callee, args, .. } => self.call(*callee, args)?,
             Inst::CallIndirect { signature, target, args, .. } => {
                 let callee = self.module.function_at(self.read_word(target));
                 let callee = callee.filter(|&f| self.function(f).has_signature(signature)).ok_or(Fault::BadIndirect)?;
-                self.call(callee, args, None)?;
+                self.call(callee, args)?;
             }
             Inst::Setjmp { dst, buffer } => self.setjmp(*dst, self.read_word(buffer))?,
             Inst::Effect { byte } => {
-                if self.in_region || self.guarded() {
+                if self.in_region {
                     return Err(Fault::EffectInRegion.into());
                 }
                 self.tape.push(self.read(byte) as u8);
                 self.record(Undo::Effect);
                 self.advance();
             }
-            Inst::Mark { dst, budget } => self.mark(*dst, budget.as_ref()),
-            Inst::Rewind { mark, keep } => self.rewind(*mark, keep)?,
-            _ if self.in_region || self.guarded() => return Err(Fault::QuantumInRegion.into()),
+            _ if self.in_region => return Err(Fault::QuantumInRegion.into()),
             Inst::Qalloc { dst, width } => {
-                // Running again a `qalloc` whose un-run left its register over takes the register back.
-                let take = self.take_back_at(self.next_record(), |kind| kind == Leftover::Allocation);
-                let handle = match take {
-                    Some(take) => self.take_allocation_back(take.id, *width),
-                    None => self.quantum.allocate(*width),
-                };
+                let handle = self.quantum.allocate(*width);
                 self.write_slot(*dst, u128::from(handle));
                 self.record(Undo::Qalloc);
                 self.advance();
             }
             Inst::Qfree { register } => {
                 let id = self.quantum.resolve(self.handle(*register))?;
-                if self.partial && self.strict {
-                    let nonzero = self.quantum.failing(|config| config[id] != 0);
-                    self.defer(Undo::Qfree, nonzero);
-                }
                 // `dirty_free` is a check of the simulator's strict mode: on the machine the qubits are left
-                // over, going forward and when the step runs again alike. On one world's part of a shared
-                // state (steps run again below a split point, inside a rewind's un-run) they are left over
-                // whatever the part holds, so that the parts' register tables agree; the same un-run takes them
-                // back where it un-runs this step. In strict mode the check is deferred to the sum of the parts
-                // as before (`history.rs`).
-                if !self.strict && (self.partial || !self.quantum.failing(|config| config[id] != 0).is_empty()) {
+                // over.
+                if !self.strict && !self.quantum.failing(|config| config[id] != 0).is_empty() {
                     self.quantum.leave(id);
                     self.record(Undo::Leftover);
                 } else {
-                    self.quantum.free(id, !self.partial)?;
+                    self.quantum.free(id)?;
                     self.record(Undo::Qfree);
                 }
                 self.advance();
             }
             Inst::Gate { gate, target, controls } => {
-                let limit = self.max_configurations.map(|limit| limit.saturating_sub(self.others_configurations));
-                self.gate(*gate, target, controls, limit)?;
+                self.gate(*gate, target, controls, self.max_configurations)?;
                 self.record(Undo::Gate);
                 self.advance();
             }
             Inst::GateAt { gate, target, controls } => {
-                let limit = self.max_configurations.map(|limit| limit.saturating_sub(self.others_configurations));
-                self.gate_at(*gate, target, controls, limit)?;
+                self.gate_at(*gate, target, controls, self.max_configurations)?;
             }
             Inst::Measure { dst, source: MeasureSource::Memory { width, address } } => {
                 let range = self.memory_range(self.read_word(address), *width)?;
-                // As for a register: a measurement reached while running again is refused (below).
-                if self.rerunning > 0 {
-                    return Err(Fault::BadRewind.into());
-                }
-                if self.has_worlds() {
-                    self.observe_world()?;
-                }
                 let value = self.measure_memory(range, *width);
                 self.write_slot(*dst, value);
                 self.record(Undo::Measure);
@@ -290,15 +101,6 @@ impl<'m> Executor<'m> {
             }
             Inst::Measure { dst, source: MeasureSource::Register(register) } => {
                 let id = self.quantum.resolve(self.handle(*register))?;
-                // Steps run again to undo a rewind ran before without a measurement (a rewind refuses
-                // across one), so one reached now is on a path the history does not describe: refuse it
-                // before anything is sampled or observed.
-                if self.rerunning > 0 {
-                    return Err(Fault::BadRewind.into());
-                }
-                if self.has_worlds() {
-                    self.observe_world()?;
-                }
                 let value = self.quantum.measure(id, &mut self.rng);
                 self.write_slot(*dst, u128::from(value));
                 self.record(Undo::Measure);
@@ -326,7 +128,7 @@ impl<'m> Executor<'m> {
             }
             Terminator::Return(value) => self.ret(value.map(|value| self.read(&value))),
             Terminator::Exit(value) => {
-                if self.in_region || self.guarded() {
+                if self.in_region {
                     return Err(Fault::ExitInRegion.into());
                 }
                 let ty = match value {
@@ -342,11 +144,7 @@ impl<'m> Executor<'m> {
                 self.record(Undo::Finish);
             }
             Terminator::Longjmp { buffer, value } => {
-                let buffer = self.read_word(buffer);
-                if self.jump_record_disagrees(buffer) {
-                    return Err(Halt::Inspected(Fault::BadLongjmp));
-                }
-                self.longjmp(buffer, self.read(value))?;
+                self.longjmp(self.read_word(buffer), self.read(value))?;
             }
             Terminator::Fault(fault) => return Err((*fault).into()),
         }
@@ -381,9 +179,9 @@ impl<'m> Executor<'m> {
 
     /// Writes a jump record naming the top frame and this `setjmp` at `buffer`, and gives 0. Bytes of the
     /// buffer that hold qubits are read first (`cells.rs`).
-    fn setjmp(&mut self, dst: Slot, buffer: u64) -> Result<(), Fault> {
+    fn setjmp(&mut self, dst: Slot, buffer: u64) -> Result<(), Halt> {
         let range = self.jump_record_range(buffer)?;
-        let (cells, split) = self.read_cells(range.clone(), &|executor| executor.setjmp(dst, buffer));
+        let cells = self.read_cells(range.clone())?;
         let record = self.jump_record();
         let mut old = [0u8; JUMP_RECORD_BYTES as usize];
         self.read_view(range.clone(), &cells, &mut old);
@@ -391,7 +189,6 @@ impl<'m> Executor<'m> {
         self.record_word(u128::from_le_bytes(low.try_into().expect("16 bytes")));
         self.record_word(u128::from_le_bytes(high.try_into().expect("16 bytes")));
         self.write_view(range.start, &record, &old, &cells);
-        self.note_cells(&cells, range.start, &record, split);
         self.write_slot(dst, 0);
         self.record(Undo::Setjmp);
         self.advance();
@@ -402,26 +199,10 @@ impl<'m> Executor<'m> {
     /// result: discards the frames above it and sets the stack pointer back to where the `setjmp` left it.
     /// Every field is checked against the live frames, so a record that names no live frame of this run
     /// (a frame that returned, or one outside a coherent region) faults instead of jumping.
-    /// Whether the jump record at `buffer` is held in bytes holding qubits whose configurations disagree. A
-    /// record in such bytes is read without splitting: worlds that disagreed on it would jump to different
-    /// targets, and some could fault while others go on (a debt, `docs/DESIGN.md`, "Qubits in memory").
-    /// Where the configurations disagree it names no single target, and the `longjmp` faults
-    /// `bad_longjmp`: a fault found by looking at every configuration at once ([`Halt::Inspected`]).
-    fn jump_record_disagrees(&self, buffer: u64) -> bool {
-        let Ok(range) = self.jump_record_range(buffer) else { return false };
-        !self.materialised
-            && self
-                .quantum
-                .cells_in(range.start as u64..range.end as u64)
-                .iter()
-                .any(|&(_, column)| self.quantum.partition(&[column]).len() > 1)
-    }
-
-    fn longjmp(&mut self, buffer: u64, value: u128) -> Result<(), Fault> {
+    fn longjmp(&mut self, buffer: u64, value: u128) -> Result<(), Halt> {
         let range = self.jump_record_range(buffer)?;
         let mut record = [0u8; JUMP_RECORD_BYTES as usize];
-        let cells =
-            if self.materialised { Vec::new() } else { self.quantum.cells_in(range.start as u64..range.end as u64) };
+        let cells = self.read_cells(range.clone())?;
         self.read_view(range.clone(), &cells, &mut record);
         let mut words = [0u64; 4];
         for (word, chunk) in words.iter_mut().zip(record.as_chunks::<8>().0) {
@@ -431,25 +212,24 @@ impl<'m> Executor<'m> {
         let depth = (frame_word & u64::from(u32::MAX)) as usize;
         let (func, block, inst) =
             (FuncId((frame_word >> 32) as u32), BlockId(position as u32), (position >> 32) as usize);
-        // Inside a call with a budget a jump may not leave its callee's frame.
-        let floor = self.guards().last().unwrap_or(self.base_depth);
-        if depth < floor || depth >= self.frames.len() {
-            return Err(Fault::BadLongjmp);
+        // Inside a coherent region a jump may not leave the region.
+        if depth < self.base_depth || depth >= self.frames.len() {
+            return Err(Fault::BadLongjmp.into());
         }
         let target = self.frames[depth];
         if target.func != func || target.entry_stack_pointer != entry_stack_pointer {
-            return Err(Fault::BadLongjmp);
+            return Err(Fault::BadLongjmp.into());
         }
         let function = self.function(func);
         let dst = match function.blocks.get(block.0 as usize).and_then(|b| b.insts.get(inst)) {
             Some(Inst::Setjmp { dst, .. }) => *dst,
-            _ => return Err(Fault::BadLongjmp),
+            _ => return Err(Fault::BadLongjmp.into()),
         };
         // Within the target frame's allocations, at or above where its allocations stand now.
         let allocations_top = target.entry_stack_pointer - function.slot_count() as u64 * SLOT_BYTES;
         let lowest = self.frames.get(depth + 1).map_or(self.stack_pointer, |frame| frame.entry_stack_pointer);
         if stack_pointer < lowest || stack_pointer > allocations_top {
-            return Err(Fault::BadLongjmp);
+            return Err(Fault::BadLongjmp.into());
         }
         let discarded = self.frames.len() - depth - 1;
         for index in (depth + 1..self.frames.len()).rev() {
@@ -461,16 +241,11 @@ impl<'m> Executor<'m> {
         self.record_word(u128::from(self.stack_pointer));
         self.record_word(discarded as u128);
         self.frames.truncate(depth + 1);
-        self.frames_left();
         self.stack_pointer = stack_pointer;
         let top = self.top_mut();
         top.block = block;
         top.inst = inst;
         self.write_slot(dst, value);
-        self.note_cells(&cells, range.start, &record, false);
-        if let Some(journal) = &mut self.journal {
-            journal.push_jump(discarded);
-        }
         self.record(Undo::Longjmp);
         self.advance();
         Ok(())
@@ -530,8 +305,7 @@ impl<'m> Executor<'m> {
 
     /// Measures the `width` bits from bit 0 of the integer at `range` (its bytes, little-endian): the bits
     /// of bytes that hold qubits are sampled jointly and the state collapsed onto them, only those bits;
-    /// the bits of other bytes are the memory's, as a load reads them, with nothing to sample. Called with
-    /// one world (`observe_world` first).
+    /// the bits of other bytes are the memory's, as a load reads them, with nothing to sample.
     fn measure_memory(&mut self, range: std::ops::Range<usize>, width: Width) -> u128 {
         let mut bytes = [0u8; 16];
         self.memory.read_into(range.clone(), &mut bytes[..range.len()]);
@@ -555,21 +329,20 @@ impl<'m> Executor<'m> {
     }
 
     /// `dst = load width address`. Bytes that hold qubits are read as a register is read (`cells.rs`).
-    fn load(&mut self, dst: Slot, width: Width, address: &'m Operand) -> Result<(), Fault> {
+    fn load(&mut self, dst: Slot, width: Width, address: &'m Operand) -> Result<(), Halt> {
         let range = self.memory_range(self.read_word(address), width)?;
-        let (cells, split) = self.read_cells(range.clone(), &|executor| executor.load(dst, width, address));
+        let cells = self.read_cells(range.clone())?;
         let mut bytes = [0; 16];
         self.read_view(range.clone(), &cells, &mut bytes[..range.len()]);
-        self.note_cells(&cells, range.start, &bytes, split);
         self.produce(dst, u128::from_le_bytes(bytes) & width.mask());
         Ok(())
     }
 
     /// `store width value, address`. Bytes that hold qubits are read first, then each gets the new value
     /// XORed over the old one (`cells.rs`).
-    fn store(&mut self, width: Width, value: u128, address: u64) -> Result<(), Fault> {
+    fn store(&mut self, width: Width, value: u128, address: u64) -> Result<(), Halt> {
         let range = self.memory_range(address, width)?;
-        let (cells, split) = self.read_cells(range.clone(), &|executor| executor.store(width, value, address));
+        let cells = self.read_cells(range.clone())?;
         if cells.is_empty() {
             let old = self.read_bytes(range.clone());
             self.write_bytes(range, value);
@@ -580,7 +353,6 @@ impl<'m> Executor<'m> {
             let new = value.to_le_bytes();
             self.write_view(range.start, &new[..range.len()], &old[..range.len()], &cells);
             self.record_word(u128::from_le_bytes(old));
-            self.note_cells(&cells, range.start, &new, split);
         }
         self.record(Undo::Store);
         self.advance();
@@ -614,92 +386,13 @@ impl<'m> Executor<'m> {
         Ok(())
     }
 
-    /// The call of a call with a budget, at the top frame's position. A callee whose frame does not fit faults inside the call, as an applied
-    /// function's does: the code is the call's, in every world alike (the frame is tried before any read
-    /// splits).
-    pub(crate) fn call_with_budget(&mut self, callee: FuncId, args: &'m [Operand], budget: u64) -> Result<(), Halt> {
-        match self.call(callee, args, Some(budget)) {
-            Err(Fault::StackOverflow) => self.deliver_fault(self.frames.len(), Fault::StackOverflow),
-            entered => Ok(entered?),
-        }
-    }
-
-    /// Calls `callee`. An argument that is a register passed to an integer parameter reads the register
-    /// as an integer: if the world's configurations disagree on its value, the world splits into one world
-    /// per value first (`docs/DESIGN.md`, "Worlds"), and the journal notes the read, which un-running the
-    /// call checks.
-    /// With a `guard`, the callee's frame gets that budget (a call with a budget): in every world, those
-    /// that split off at its read included.
-    fn call(&mut self, callee: FuncId, args: &'m [Operand], guard: Option<u64>) -> Result<(), Fault> {
-        let function = self.function(callee);
-        let mut reads = Vec::new();
-        for (index, (arg, param)) in args.iter().zip(&function.params).enumerate() {
-            if let (Operand::Slot(slot), Type::Int(_)) = (arg, param.ty)
-                && matches!(self.slot_type(*slot), Type::Qreg(_))
-            {
-                reads.push((index, self.quantum.resolve(self.handle(*slot))?, param.slot));
-            }
-        }
-        // Running again a call whose un-run left the wire of a read over takes the wire back: the read's value
-        // is the wire XOR the register, the same in every configuration, and splits nothing (`leftover.rs`).
-        // The world splits by the call's other reads first, so that every world split off takes back its own
-        // copy of the wire (until 2026-11-17 running again refused there).
-        let mut wired: Vec<(usize, usize, bennett_ir::Slot)> = Vec::new();
-        if !self.taking_back.is_empty() {
-            let record = self.next_record();
-            let leftover = |column| {
-                move |take: &crate::leftover::TakeBack| take.record == record && take.kind == Leftover::Read { column }
-            };
-            let (with, without): (Vec<_>, Vec<_>) =
-                reads.into_iter().partition(|&(_, column, _)| self.taking_back.iter().any(leftover(column)));
-            if !with.is_empty() {
-                self.frame_fits(callee)?;
-            }
-            (wired, reads) = (with, without);
-        }
-        let mut split = false;
-        if !reads.is_empty() {
-            // A call that cannot enter faults in every world alike, before any splits.
-            self.frame_fits(callee)?;
-            let columns: Vec<usize> = reads.iter().map(|&(_, column, _)| column).collect();
-            split = self.split(&columns, &|executor| executor.call(callee, args, guard)) || self.splitting;
-        }
-        let record = self.next_record();
-        let mut taken: Vec<(usize, usize, bennett_ir::Slot, usize)> = Vec::with_capacity(wired.len());
-        for (arg, column, slot) in wired {
-            let take = self.take_back_at(record, |kind| kind == Leftover::Read { column });
-            taken.push((arg, column, slot, take.expect("a wire was found for this read").id));
-        }
+    /// Calls `callee` with the values of `args`.
+    fn call(&mut self, callee: FuncId, args: &'m [Operand]) -> Result<(), Fault> {
         let mut values = std::mem::take(&mut self.scratch);
         values.clear();
         values.extend(args.iter().map(|arg| self.read(arg)));
-        // The reads, in the order of the arguments, as the journal noted them the first time.
-        let mut noted: Vec<(usize, usize, bennett_ir::Slot, bool)> = Vec::with_capacity(reads.len() + taken.len());
-        if !reads.is_empty() {
-            // A world's part that a deferred check emptied (`Executor::defer`) reads zero: it carries no
-            // amplitude, and its sum with the other parts decides.
-            let config = self.quantum.amplitudes().keys().next();
-            for &(index, column, slot) in &reads {
-                values[index] = config.map_or(0, |config| u128::from(config[column]));
-                noted.push((index, column, slot, split));
-            }
-        }
-        for &(index, column, slot, wire) in &taken {
-            values[index] = self.take_read_back(wire, column);
-            noted.push((index, column, slot, false));
-        }
-        noted.sort_unstable_by_key(|&(index, ..)| index);
-        if let Some(journal) = &mut self.journal {
-            for (_, column, slot, split) in noted {
-                journal.push_read(column, slot, split);
-            }
-        }
         let pushed = self.push_frame(callee, &values);
         self.scratch = values;
-        if pushed.is_ok() && guard.is_some() {
-            self.any_guard = true;
-            self.top_mut().guard = guard;
-        }
         pushed
     }
 
@@ -725,14 +418,7 @@ impl<'m> Executor<'m> {
             self.record_word(old);
         }
         let entry_stack_pointer = std::mem::replace(&mut self.stack_pointer, new_sp);
-        self.frames.push(Frame {
-            func,
-            block: bennett_ir::BlockId(0),
-            inst: 0,
-            base,
-            entry_stack_pointer,
-            guard: None,
-        });
+        self.frames.push(Frame { func, block: bennett_ir::BlockId(0), inst: 0, base, entry_stack_pointer });
         self.record(Undo::Call);
         Ok(())
     }
@@ -763,22 +449,14 @@ impl<'m> Executor<'m> {
             return;
         }
         let callee = self.frames.pop().expect("a returning frame exists");
-        self.frames_left();
         self.record_word(u128::from(callee.func.0) << 32 | u128::from(callee.block.0));
         self.record_word(u128::from(self.stack_pointer));
-        if let Some(left) = callee.guard {
-            self.record_word(u128::from(left));
-        }
         self.stack_pointer = callee.entry_stack_pointer;
         let caller = *self.top();
         let call = &self.function(caller.func).block(caller.block).insts[caller.inst];
         if let Some(dst) = call.result() {
             let value = value.expect("the validator lets a call name a result only if the callee returns one");
             self.write_slot(dst, value);
-        }
-        // A call with a budget gives the fault code 0 on a return.
-        if let Some(code) = call.fault_result() {
-            self.write_slot(code, 0);
         }
         self.record(Undo::Return);
         self.advance();

@@ -374,23 +374,6 @@ pub enum Inst {
         /// The result; allowed only when the callee returns a value, which may be ignored.
         dst: Option<Slot>,
     },
-    /// `[dst,] fault = call @callee(args) budget b`: a call with the region's rules attached
-    /// (`docs/DESIGN.md`, "The call with a fault value"): `callee` runs for at most `b` steps of the world's
-    /// clock, may not reach an effect, an `exit` or a quantum instruction, nor jump below its own frame; a
-    /// fault inside it returns to the caller with `dst` 0 and `fault` the fault's code, a return with
-    /// `fault` 0.
-    CallBudget {
-        /// The function called.
-        callee: FuncId,
-        /// The arguments, as for `call`.
-        args: Vec<Operand>,
-        /// The result; allowed only when the callee returns a value, which may be ignored.
-        dst: Option<Slot>,
-        /// The fault code, an integer of [`Fault::CODE_WIDTH`](crate::Fault::CODE_WIDTH) bits: 0 on a return.
-        fault: Slot,
-        /// The `i64` step budget.
-        budget: Operand,
-    },
     /// `[dst =] call_indirect fn(params) [-> result] target(args)`.
     CallIndirect {
         /// The signature the target must have.
@@ -467,34 +450,6 @@ pub enum Inst {
         /// The `i64` step budget of each run of the callee.
         budget: Operand,
     },
-    /// `dst = mark [budget b]`: remembers the current point of the history, as an `i64` handle for
-    /// `rewind`. With a budget, each world takes at most `b` steps from the mark while it is in the history,
-    /// and a rewind of it costs `b` (`docs/DESIGN.md`, "The mark's budget"). See `docs/DESIGN.md`, "History:
-    /// `mark` and `rewind`".
-    Mark {
-        /// The handle.
-        dst: Slot,
-        /// The `i64` step budget, if the mark has one.
-        budget: Option<Operand>,
-    },
-    /// `rewind mark [keep (value -> register, ...)]`: XORs each kept value into its register, then un-runs
-    /// every step since `mark`, and continues after the rewind.
-    Rewind {
-        /// The handle, defined by a `mark` of the same function.
-        mark: Slot,
-        /// The values copied out before the un-run.
-        keep: Vec<Keep>,
-    },
-}
-
-/// One `value -> target` pair of a `rewind`: the value is XORed into the target on every basis
-/// configuration.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Keep {
-    /// An integer as wide as the register, or of any width for memory.
-    pub value: Operand,
-    /// Where the value is XORed in.
-    pub target: KeepTarget,
 }
 
 /// What a `measure` reads.
@@ -512,16 +467,6 @@ pub enum MeasureSource {
     },
 }
 
-/// Where a `rewind` keeps a value.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum KeepTarget {
-    /// A register handle.
-    Register(Slot),
-    /// The memory qubits from bit 0 of the byte at this `i64` address on, as many as the value is wide,
-    /// little-endian (`docs/DESIGN.md`, "Qubits in memory").
-    Memory(Operand),
-}
-
 impl Inst {
     /// The slot the instruction defines, if any.
     pub fn result(&self) -> Option<Slot> {
@@ -537,53 +482,16 @@ impl Inst {
             | Inst::Setjmp { dst, .. }
             | Inst::FuncAddr { dst, .. }
             | Inst::Qalloc { dst, .. }
-            | Inst::Measure { dst, .. }
-            | Inst::Mark { dst, .. } => Some(*dst),
-            Inst::Call { dst, .. } | Inst::CallIndirect { dst, .. } | Inst::CallBudget { dst, .. } => *dst,
+            | Inst::Measure { dst, .. } => Some(*dst),
+            Inst::Call { dst, .. } | Inst::CallIndirect { dst, .. } => *dst,
             Inst::Store { .. }
             | Inst::StackRestore { .. }
             | Inst::Effect { .. }
             | Inst::Qfree { .. }
             | Inst::Gate { .. }
             | Inst::GateAt { .. }
-            | Inst::Apply { .. }
-            | Inst::Rewind { .. } => None,
+            | Inst::Apply { .. } => None,
         }
-    }
-
-    /// The fault code a call with a budget defines besides its result, if the instruction is one.
-    pub fn fault_result(&self) -> Option<Slot> {
-        match self {
-            Inst::CallBudget { fault, .. } => Some(*fault),
-            Inst::Binary { .. }
-            | Inst::Compare { .. }
-            | Inst::Select { .. }
-            | Inst::Cast { .. }
-            | Inst::Load { .. }
-            | Inst::Store { .. }
-            | Inst::Alloca { .. }
-            | Inst::StackSave { .. }
-            | Inst::StackRestore { .. }
-            | Inst::Setjmp { .. }
-            | Inst::ReturnAddress { .. }
-            | Inst::Call { .. }
-            | Inst::CallIndirect { .. }
-            | Inst::FuncAddr { .. }
-            | Inst::Effect { .. }
-            | Inst::Qalloc { .. }
-            | Inst::Qfree { .. }
-            | Inst::Gate { .. }
-            | Inst::GateAt { .. }
-            | Inst::Measure { .. }
-            | Inst::Apply { .. }
-            | Inst::Mark { .. }
-            | Inst::Rewind { .. } => None,
-        }
-    }
-
-    /// Every slot the instruction defines: its result, then a call with a budget's fault code.
-    pub fn results(&self) -> impl Iterator<Item = Slot> {
-        self.result().into_iter().chain(self.fault_result())
     }
 
     /// Calls `visit` with every slot the instruction reads.
@@ -613,20 +521,11 @@ impl Inst {
             Inst::StackRestore { pointer } => operand(pointer),
             Inst::Setjmp { buffer, .. } => operand(buffer),
             Inst::Call { args, .. } => args.iter().for_each(operand),
-            Inst::CallBudget { args, budget, .. } => {
-                args.iter().for_each(&mut operand);
-                operand(budget);
-            }
             Inst::CallIndirect { target, args, .. } => {
                 operand(target);
                 args.iter().for_each(operand);
             }
             Inst::Effect { byte } => operand(byte),
-            Inst::Mark { budget, .. } => {
-                if let Some(budget) = budget {
-                    operand(budget);
-                }
-            }
             Inst::FuncAddr { .. } | Inst::Qalloc { .. } | Inst::StackSave { .. } | Inst::ReturnAddress { .. } => {}
             Inst::Qfree { register } | Inst::Measure { source: MeasureSource::Register(register), .. } => {
                 operand(&Operand::Slot(*register))
@@ -649,16 +548,6 @@ impl Inst {
                 operand(&Operand::Slot(*out));
                 operand(&Operand::Slot(*fault));
                 operand(budget);
-            }
-            Inst::Rewind { mark, keep } => {
-                operand(&Operand::Slot(*mark));
-                for pair in keep {
-                    operand(&pair.value);
-                    match pair.target {
-                        KeepTarget::Register(register) => operand(&Operand::Slot(register)),
-                        KeepTarget::Memory(address) => operand(&address),
-                    }
-                }
             }
         }
     }

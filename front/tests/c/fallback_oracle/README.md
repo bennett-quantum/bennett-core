@@ -26,7 +26,7 @@ analytically. Its coherent operation is a native basis permutation applied to
 input amplitudes; its round trip is U-adjoint Z U then H q, with an explicit check
 that repeating the fixture's U implements its inverse. No global-phase quotient:
 complex amplitudes and signs must agree. The device adapter checks every extra
-register is zero and there is one world before projecting to named C variables.
+register is zero before projecting to named C variables.
 
 DESIGN.md, “What is promised when history is left behind”, permits full state
 assertions only for the documented coherent class or after an un-run. Therefore:
@@ -50,33 +50,23 @@ assertions only for the documented coherent class or after an un-run. Therefore:
   unspecified. The expected distribution sums squared input amplitudes by native
   measured result, rather than adding amplitudes across hidden histories. The
   device's distribution is read **exactly** from its state just before the
-  measurements, for every column and both superposed preparations: each world's
-  weight on each configuration of q/r/y, keyed by that world's own image, other
-  registers summed over (rule 1, branch by branch). Then 512 seeded runs check the
+  measurements, for every column and both superposed preparations: the weight of
+  each configuration of q/r/y, keyed by the image, other registers summed over. Then 512 seeded runs check the
   measurement path itself, and the eight columns are run to their exact results. Once
   accepted, each case must emit a history/coherence warning. Diagnostics from
   successful lowering are retained and tested, rather than lost by the usual
   lower-text helper. Values are checked **before** checking warnings.
-- `native_c_regions_under_marks_match_keep_and_restore_memory` lowers the six
-  ordinary memory-writing bodies without quantum markers, then adds a **test-only
-  device IR** mark/call/rewind-keep envelope. The native result is bit 1 of cell 0;
-  q/r remain, this bit is XOR-kept into y, and everything in the ordinary C region
-  is un-run; the whole twelve-byte image is kept as well, into a 64-bit and a
-  32-bit register, so every write the region made, guard bytes included, is
-  compared with native on every branch. The mark's budget is the front's region
-  budget plus 2 (its call and rewind), never unbounded.
-  With S y inside the mark, the expected operation is S-adjoint X^f S,
-  including its opposite imaginary signs on y=0 and y=1. Original dense matrix
-  gates/permutations cross-check it, and all memory must be restored exactly.
-  In addition, those **same lowered ordinary C functions** run in seven-qubit
-  `apply` envelopes under both the original dense interpreter and the device,
-  compared to native results, and the whole image runs through the dense
-  interpreter four bits at a time (24 nibbles) with q in uniform superposition (its 13-qubit
-  cap). Thus the original interpreter's arithmetic,
-  memory, branch and call evaluation also cross-check the native reference,
-  without hitting its allocation cap.
-  This validates the oracle/adapter now; it does not claim the front accepts
-  these C programs under qubit control or exposes C mark/rewind markers.
+- `native_c_regions_under_apply_match_native_and_the_dense_oracle` lowers the six
+  ordinary memory-writing bodies without quantum markers and runs them in
+  seven-qubit `apply` envelopes under both the original dense interpreter and the
+  device, compared to native results (with S y around the `apply`, the expected
+  operation is S-adjoint X^f S, cross-checked by the dense matrix gates and
+  permutations), and the whole twelve-byte image, guard bytes included, runs
+  through the dense interpreter four bits at a time (24 nibbles) with q in uniform
+  superposition (its 13-qubit cap). This validates the oracle/adapter now; it does
+  not claim the front accepts these C programs under qubit control. (Until
+  2026-11-17 they also ran under a test-only `mark`/`rewind` envelope, removed with
+  those instructions.)
 
 `coherent_xor` and `coherent_nested` preserve measured refusals even inside the
 documented class: Boolean `y ^= q && !r` and nested `if (q) if (r) y ^= 1` are
@@ -124,13 +114,13 @@ Native and device use the same clang, target, include path and fixture body; the
 native build only adds `-DNATIVE` (the `main` driver, and X as a Boolean toggle in
 `coherent_gate`).
 
-**Seeded wrong results** (`mod seeded`): a hand-written, fallback-shaped device
-program for `store.c` (a call reads q, the worlds split, the store runs verbatim)
-is accepted, and needs its warning; mutants of it and of the lowered programs
-must be rejected: a wrong weight and a swapped basis state that occur only in
-superposition, a leaked byte, a leftover ordinary write in a coherent program in
-all three modes, a wrong phase, a swapped state and a global phase in a coherent
-program, a wrong r-dependent write and a missed un-run in a marked region. An
+**Seeded wrong results** (`mod seeded`): mutants of the lowered programs must be
+rejected: a leftover ordinary write in a coherent program in all three modes, a
+wrong phase, a swapped state and a global phase in a coherent program, and a wrong
+r-dependent write or a stray write beside the cells in an applied region. The
+seeds on a hand-written, fallback-shaped `store.c` (a call read q) were removed on
+2026-11-17 with the reading of registers by ordinary code; they return with the
+route that replaces the fallback, on a program the model expresses. An
 independent testing pass found that the first version of this harness accepted
 four of them: the 512-sample tolerance (0.075) exceeds every q = 1 branch's weight
 (0.0296), preparation 8 gives y equal weights so a swapped y is invisible to any
@@ -138,8 +128,8 @@ measurement, the coherent projection ignored ordinary memory (and the measured
 check ran at O0 only), and the region kept one bit, the same for both values of r
 in four of the six regions. Each is now a regression test.
 
-Open integration details for step 4: no C mark/rewind marker is documented yet;
-the exact source and wording of the warning are not frozen. The current acceptance
+Open integration details for the route that replaces the fallback (`HANDOFF.md`,
+"Next steps", 4): the exact source and wording of the warning are not frozen. The current acceptance
 assertion requires a successful front diagnostic containing `warning` and
 `history`, `entangl`, or `coherence`. If the public warning is delivered at runtime,
 connect the CLI's actual diagnostic here; executor observation counters alone

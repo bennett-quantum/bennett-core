@@ -70,7 +70,6 @@ fn observe(module: &bennett_ir::ValidModule, name: &str, reversible: bool) {
         exec.reverse().expect("reverse");
         let restored = exec.snapshot();
         assert_eq!(restored.classical, before.classical);
-        assert_eq!(restored.worlds, before.worlds);
         let distance = restored.quantum.distance(&before.quantum).expect("same register table");
         assert!(distance < 1e-12, "amplitude distance {distance}");
         println!("reverse identical, amplitude distance {distance:e}");

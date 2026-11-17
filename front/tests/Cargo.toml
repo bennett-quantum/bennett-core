@@ -12,7 +12,6 @@ num-complex.workspace = true
 
 [dev-dependencies]
 nalgebra = { version = "0.33", default-features = false, features = ["std"] }
-rpds = "1.2"
 
 [lints]
 workspace = true

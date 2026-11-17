@@ -91,10 +91,7 @@ fn assert_vector(actual: &Vector, expected: &Vector, context: &str) {
     }
 }
 
-/// The step budget of every region the front writes for these fixtures, and of
-/// the test's own marked envelope (with 2 more for its call and rewind, as the
-/// text idiom of `apply` has them): never an unbounded mark where a rewind
-/// follows a read of a qubit.
+/// The step budget of every region the front writes for these fixtures, and of the test's own `apply`s.
 const REGION_BUDGET: u64 = 100_000;
 
 /// A device program, with the address of the fixtures' whole twelve-byte image
@@ -125,7 +122,6 @@ impl Device {
     /// returned and the whole image from the machine's memory. The cells it
     /// returned must be those of the memory.
     fn finished(&self, returned: u64, world: &Snapshot, context: &str) -> u128 {
-        assert!(world.worlds.is_empty(), "{context}: the host observes one world at the end");
         let image = native::Image { bits: (returned & 7) as usize, memory: self.image(world) };
         assert_eq!(returned >> 3, u64::from(u32::from_le_bytes(image.cells())), "{context}: returned cells");
         image.measured()
@@ -148,13 +144,13 @@ fn at_measure(module: &ValidModule, world: &Snapshot) -> bool {
     })
 }
 
-/// Runs `experiment(basis)` until every world stands at a measurement, none taken.
+/// Runs `experiment(basis)` until it stands at a measurement, none taken.
 fn run_to_measure(device: &Device, basis: usize) -> Snapshot {
     let module = &device.module;
     let mut exec = Executor::new(module, entry(module, "experiment"), &[basis as u64], options(0)).expect("starts");
     loop {
         let snapshot = exec.snapshot();
-        if at_measure(module, &snapshot) && snapshot.worlds.iter().all(|world| at_measure(module, world)) {
+        if at_measure(module, &snapshot) {
             return snapshot;
         }
         if let Some(outcome) = exec.step() {
@@ -183,14 +179,13 @@ fn named_bits(config: &[u64], columns: [usize; 3]) -> usize {
 }
 
 /// Project only explicitly named C variables. Every other live register must be
-/// zero, and there must be one world: discarded garbage cannot hide bad coherence.
+/// zero: discarded garbage cannot hide bad coherence.
 /// The coherent class writes no ordinary memory (the native images keep it), so
 /// a lowered fixture's whole image must still hold its initial bytes: a leaked
 /// write, also one just outside the cells, or a write whose un-run was missed,
 /// is a wrong result here.
 fn projected(device: &Device, basis: usize) -> Vector {
     let snapshot = run_to_measure(device, basis);
-    assert!(snapshot.worlds.is_empty(), "coherent class must have no un-run history worlds at measurement");
     assert!(snapshot.quantum.cells.is_empty(), "adapter needs a named-address mapping for memory qubits");
     if device.image.is_some() {
         assert_eq!(device.image(&snapshot), INITIAL_IMAGE, "WRONG RESULT basis {basis}: ordinary memory changed");
@@ -210,20 +205,16 @@ fn projected(device: &Device, basis: usize) -> Vector {
 
 /// The exact probability of each measured result (q, r, y and the whole image,
 /// packed as `native::Image::measured` packs them), from the device state just
-/// before the measurements: every world's weight on every configuration, keyed
-/// by that world's own image. Other registers (history the toolchain kept) are summed
-/// over. Rule 1 of DESIGN.md's "What is promised when history is left behind"
-/// fixes these weights branch by branch, whatever coherence survives.
+/// before the measurements: every configuration's weight, keyed by the image.
+/// Other registers (history the toolchain kept) are summed over.
 fn born(device: &Device, basis: usize) -> BTreeMap<u128, f64> {
     let snapshot = run_to_measure(device, basis);
     let mut probabilities = BTreeMap::new();
-    for world in std::iter::once(&snapshot).chain(&snapshot.worlds) {
-        assert!(world.quantum.cells.is_empty(), "adapter needs a named-address mapping for memory qubits");
-        let columns = columns(&device.module, world);
-        let memory = native::Image { bits: 0, memory: device.image(world) }.measured();
-        for (config, amplitude) in &world.quantum.amplitudes {
-            *probabilities.entry(memory | named_bits(config, columns) as u128).or_default() += amplitude.norm_sqr();
-        }
+    assert!(snapshot.quantum.cells.is_empty(), "adapter needs a named-address mapping for memory qubits");
+    let columns = columns(&device.module, &snapshot);
+    let memory = native::Image { bits: 0, memory: device.image(&snapshot) }.measured();
+    for (config, amplitude) in &snapshot.quantum.amplitudes {
+        *probabilities.entry(memory | named_bits(config, columns) as u128).or_default() += amplitude.norm_sqr();
     }
     probabilities.retain(|_, p: &mut f64| *p > 1e-14);
     probabilities
@@ -479,7 +470,7 @@ fn waiting_case(name: &str) {
 macro_rules! waiting {
     ($($name:ident),* $(,)?) => {$(
         #[test]
-        #[ignore = "waiting for HANDOFF step 4: controlled stores/writing calls or destructive updates are refused; inventory prints the measured refusal"]
+        #[ignore = "waiting for the route that replaces the fallback (HANDOFF, Next steps 4): controlled stores/writing calls or destructive updates are refused; inventory prints the measured refusal"]
         fn $name() { waiting_case(stringify!($name)); }
     )*};
 }
@@ -498,31 +489,26 @@ mod waiting_for_fallback {
         waiting_case("coherent_nested");
     }
     #[test]
-    #[ignore = "waiting for HANDOFF step 4: loop trip count depends on a qubit and writes memory"]
+    #[ignore = "waiting for the route that replaces the fallback (HANDOFF, Next steps 4): loop trip count depends on a qubit and writes memory"]
     fn variable_trip_loop() {
         waiting_case("loop");
     }
 }
 
-/// Test-only integration adapter, NOT a claim that C can express an un-run yet.
-/// Lower only ordinary C, surround it with the documented device history idiom,
-/// and compare to native output values with private memory restored.
+/// Ordinary C regions (the fixtures' CLASSICAL_REGION builds) run under `apply`, in the device and in the
+/// independent dense interpreter, against native results; not a claim that the front emits them.
 #[test]
-fn native_c_regions_under_marks_match_keep_and_restore_memory() {
+fn native_c_regions_under_apply_match_native_and_the_dense_oracle() {
     for name in REGIONS {
         let lowered = lower(name, "region", CLANG_FLAGS, &[], &["-DCLASSICAL_REGION"]).expect("ordinary C lowers");
-        check_region(name, &lowered.text, "");
+        check_region(name, &lowered.text);
     }
-    println!(
-        "54 ordinary-C marked regions agree with native keep + un-run (the whole four-cell image kept) and dense conjugation; memory restored exactly; 48 x 4 nibbles agree in the dense interpreter"
-    );
 }
 
 const REGIONS: [&str; 6] = ["store", "memcpy", "memset", "user_write", "nested", "loop"];
 
-/// `region` is the lowered CLASSICAL_REGION build of fixture `name`; `after`
-/// is device text placed after the rewind (empty except in seeded tests).
-fn check_region(name: &str, region: &str, after: &str) {
+/// `region` is the lowered CLASSICAL_REGION build of fixture `name`.
+fn check_region(name: &str, region: &str) {
     use bennett_ir::{FixedGate, Gate};
     let native = &natives()[name];
     let image = native.region_image();
@@ -535,36 +521,7 @@ fn check_region(name: &str, region: &str, after: &str) {
         } else {
             "ry(0.7) %q[0]\nh %q[1]\ns %q[1]\nh %y\nt %y\n".into()
         };
-        // y gets the conjugated bit, k and g the whole image (its low 64 bits
-        // and its high 32, guard bytes included): every byte the region wrote
-        // is compared on every branch, not one bit of one cell. The mark's
-        // budget is the front's region budget plus the call and the rewind.
-        let budget = REGION_BUDGET + 2;
-        let text = format!(
-            "{region}\nfunc @oracle_adapter() {{\nentry:\n%q = qalloc 2\n%y = qalloc 1\n%k = qalloc 64\n%g = qalloc 32\n{prep}%m = mark budget {budget}\n%v = call @result(%q)\n%s = lshr i128 %v, 33\n%b = trunc i128 %s to i1\n%lo = trunc i128 %v to i64\n%h = lshr i128 %v, 64\n%hi = trunc i128 %h to i32\ns %y\nrewind %m keep (%b -> %y, %lo -> %k, %hi -> %g)\n{after}ret\n}}\n"
-        );
-        let module = bennett_ir::load(&text).expect("marked adapter valid");
-        let mut e = Executor::new(&module, entry(&module, "oracle_adapter"), &[], options(0)).expect("starts");
-        let before = e.snapshot();
-        assert_eq!(e.run(), Outcome::Returned(None), "{name} basis {basis}");
-        let snapshot = e.snapshot();
-        assert!(snapshot.worlds.is_empty(), "{name}: worlds must merge after un-run");
-        assert_eq!(snapshot.classical.memory, before.classical.memory, "{name}: region memory restored");
         let expected = native::unrun_keep(native::prepared(basis), native.kept());
-        let split = |whole: u128| [whole as u64, (whole >> 64) as u64];
-        for (config, amplitude) in &snapshot.quantum.amplitudes {
-            let kept = u128::from(config[2]) | u128::from(config[3]) << 64;
-            assert!(
-                amplitude.norm() < 1e-12 || kept == image[config[0] as usize],
-                "WRONG RESULT marked {name} basis {basis}: image {kept:#x} kept where native gives {:#x}",
-                image[config[0] as usize]
-            );
-        }
-        let actual = std::array::from_fn(|b| {
-            let [lo, hi] = split(image[b & 3]);
-            snapshot.quantum.amplitude(&[(b & 3) as u64, (b >> 2) as u64, lo, hi])
-        });
-        assert_vector(&actual, &expected, &format!("marked {name} basis {basis}"));
         // The existing dense interpreter can also execute these exact
         // lowered C bodies via apply (seven allocated qubits total).
         // This independently checks native C against its scalar evaluator,
@@ -586,7 +543,6 @@ fn check_region(name: &str, region: &str, after: &str) {
         }
         assert_vector(&interpreted_vector, &expected, &format!("dense C interpreter {name}"));
         let applied = bennett_front_tests::state_before_first_measurement(&apply_module, "dense_c_adapter", &[]);
-        assert!(applied.worlds.is_empty());
         assert!(applied.quantum.amplitudes.iter().all(|(config, _)| config[2] == 0));
         let applied_vector = std::array::from_fn(|b| applied.quantum.amplitude(&[(b & 3) as u64, (b >> 2) as u64, 0]));
         assert_vector(&applied_vector, &expected, &format!("device C apply {name}"));
@@ -662,104 +618,6 @@ mod seeded {
             .unwrap_or_default()
     }
 
-    /// What a fallback could plausibly give for `store.c`: a call reads q (the
-    /// worlds split) and stores 7 into cells[0] where q is 1, the program
-    /// otherwise verbatim. `seeded` runs only from preparations 8 and 9, so a
-    /// mutation there is wrong in superposition only, right on every column.
-    fn hand_store(seeded: &str) -> String {
-        format!(
-            "memory 65556\n; @image\ndata 16 = \"\\xa5\\x5a\\xc3\\x3c\\x01\\x02\\x03\\x00\\x96\\x69\\xf0\\x0f\"\n\
-func @store_update(i8 %q) {{\nentry:\n%t = icmp ne i8 %q, 0\nbr %t, write, done\nwrite:\nstore i8 7, {CELL0}\nbr done\ndone:\nret\n}}\n\
-func @experiment(i32 %basis) -> i64 {{\nentry:\n%q = qalloc 8\n%r = qalloc 8\n%y = qalloc 8\n\
-%column = icmp ult i32 %basis, 8\nbr %column, c0, superposed\n\
-superposed:\n%complex = icmp eq i32 %basis, 8\nbr %complex, complex, real\n\
-complex:\nry(0.7) %q[0]\nh %r[0]\ns %r[0]\nh %y[0]\nt %y[0]\nbr update\n\
-real:\nry(0.7) %q[0]\nry(1.3) %r[0]\nry(2.2) %y[0]\nbr update\n\
-c0:\n%b0 = and i32 %basis, 1\n%n0 = icmp eq i32 %b0, 0\nbr %n0, c1, x0\nx0:\nx %q[0]\nbr c1\n\
-c1:\n%b1 = and i32 %basis, 2\n%n1 = icmp eq i32 %b1, 0\nbr %n1, c2, x1\nx1:\nx %r[0]\nbr c2\n\
-c2:\n%b2 = and i32 %basis, 4\n%n2 = icmp eq i32 %b2, 0\nbr %n2, update, x2\nx2:\nx %y[0]\nbr update\n\
-update:\ncall @store_update(%q)\nbr %column, measure, seeded\nseeded:\n{seeded}br measure\n\
-measure:\n%mq = measure %q\n%mr = measure %r\n%my = measure %y\n\
-%q64 = zext i8 %mq to i64\n%r64 = zext i8 %mr to i64\n%y64 = zext i8 %my to i64\n\
-%r1 = shl i64 %r64, 1\n%y2 = shl i64 %y64, 2\n%a = or i64 %q64, %r1\n%bits = or i64 %a, %y2\n\
-%c = load i32 {CELL0}\n%c64 = zext i32 %c to i64\n%cs = shl i64 %c64, 3\n%v = or i64 %bits, %cs\nret %v\n}}\n"
-        )
-    }
-
-    /// Where `hand_store` places the image, and its cells[0].
-    const IMAGE: usize = 16;
-    const CELL0: usize = IMAGE + native::CELLS.start;
-
-    fn store(seeded: &str) -> Device {
-        Device::lowered(&hand_store(seeded))
-    }
-
-    #[test]
-    fn a_correct_fallback_shaped_store_is_accepted_and_needs_its_warning() {
-        let n = &natives()["store"];
-        let correct = store("");
-        // Two worlds at the measurement: the exact weights are read across worlds.
-        assert_eq!(run_to_measure(&correct, 8).worlds.len(), 1);
-        check_measured(&correct, n, "hand store");
-        let warned = Lowered { text: hand_store(""), diagnostics: "warning: history left entangled".into() };
-        assert_eq!(check_accepted("store", false, &warned), Ok(()));
-        let silent = Lowered { text: hand_store(""), diagnostics: String::new() };
-        assert!(check_accepted("store", false, &silent).expect_err("no warning").contains("missing history"));
-    }
-
-    /// Found by this pass: the 512-sample check's 0.075 tolerance exceeds the
-    /// weight of every q = 1 branch (0.0296), so the original harness accepted
-    /// both of these; the exact weights reject them.
-    #[test]
-    fn a_wrong_weight_in_superposition_only_is_rejected() {
-        let n = &natives()["store"];
-        let message = rejected(|| check_measured(&store("ry(0.5) %y[0] ctrl %q[0]\n"), n, "rotated"));
-        assert!(message.contains("WRONG RESULT rotated: preparation 8"), "{message}");
-    }
-
-    /// Found by this pass: preparation 8 gives y equal weights, so y swapped on
-    /// the q = 1 branches changes no measured distribution; preparation 9 does.
-    #[test]
-    fn a_swapped_basis_state_in_superposition_only_is_rejected() {
-        let n = &natives()["store"];
-        let message = rejected(|| check_measured(&store("x %y[0] ctrl %q[0]\n"), n, "swapped"));
-        assert!(message.contains("WRONG RESULT swapped: preparation 9"), "{message}");
-    }
-
-    #[test]
-    fn a_leaked_byte_in_superposition_only_is_rejected() {
-        let n = &natives()["store"];
-        let message = rejected(|| check_measured(&store(&format!("store i8 9, {}\n", CELL0 + 3)), n, "leaked"));
-        assert!(message.contains("WRONG RESULT leaked"), "{message}");
-    }
-
-    /// The guard bytes (HANDOFF's "Known weak spots"): the harness compared the
-    /// four cells only, so a stray write just before or just past them, in
-    /// superposition only, was accepted. Now the whole image is compared.
-    #[test]
-    fn a_stray_write_beside_the_cells_is_rejected() {
-        let n = &natives()["store"];
-        for (side, address) in [("before", CELL0 - 1), ("past", CELL0 + 4)] {
-            let context = format!("stray {side}");
-            let message = rejected(|| check_measured(&store(&format!("store i8 9, {address}\n")), n, &context));
-            assert!(message.contains(&format!("WRONG RESULT {context}")), "{message}");
-        }
-    }
-
-    /// The native side reads the guard bytes too: a native build that writes
-    /// just past the cells (`-DSTRAY_WRITE`) gives other images, and a correct
-    /// device program no longer agrees with it.
-    #[test]
-    fn a_native_stray_write_beside_the_cells_is_seen() {
-        let stray = Native::compile_with("store", "stray", &["-O0", "-DSTRAY_WRITE"]);
-        for (image, clean) in stray.images.iter().zip(&natives()["store"].images) {
-            assert_eq!(image.cells(), clean.cells(), "the stray write leaves the cells alone");
-            assert_eq!(image.memory[native::CELLS.end], clean.memory[native::CELLS.end] ^ 0x10);
-        }
-        let message = rejected(|| check_measured(&store(""), &stray, "native stray"));
-        assert!(message.contains("WRONG RESULT native stray"), "{message}");
-    }
-
     fn gate_text(mode: &str) -> String {
         let (flags, extra) = match mode {
             "o2" => (CLANG_O2_FLAGS, &[][..]),
@@ -819,31 +677,26 @@ measure:\n%mq = measure %q\n%mr = measure %r\n%my = measure %y\n\
         assert!(message.contains("global"), "{message}");
     }
 
-    /// Found by this pass: the region adapter kept bit 1 of cells[0], which is
-    /// the same for both values of r in memcpy, user_write, nested and loop, so
-    /// a wrong r-dependent write passed. The whole image is now kept.
+    /// A wrong write in an applied region, or a stray write beside the cells: the region's whole image,
+    /// guard bytes included, is compared nibble by nibble in the dense interpreter, so each is seen.
     #[test]
-    fn a_wrong_write_or_a_missed_unrun_in_a_marked_region_is_rejected() {
+    fn a_wrong_write_in_an_applied_region_is_rejected() {
         let lowered = |name: &str| {
             lower(name, "seeded.region", CLANG_FLAGS, &[], &["-DCLASSICAL_REGION"]).expect("ordinary C lowers").text
         };
         let nested = lowered("nested");
         let wrong = nested.replacen("xor i8 %v.1, 7", "xor i8 %v.1, 6", 1);
         assert_ne!(wrong, nested, "nested's r-dependent write is where the seed expects it");
-        let message = rejected(|| check_region("nested", &wrong, ""));
-        assert!(message.contains("WRONG RESULT marked nested"), "{message}");
+        let message = rejected(|| check_region("nested", &wrong));
+        assert!(message.contains("WRONG RESULT"), "{message}");
         let store = lowered("store");
         let cells = image_address(&store).expect("image") + native::CELLS.start;
-        let message = rejected(|| check_region("store", &store, &format!("store i8 7, {cells}\n")));
-        assert!(message.contains("region memory restored"), "{message}");
-        // A stray write beside the cells inside the region, un-run with it:
-        // only the kept image, guard bytes included, can see it.
         let entry = "func @result(i2 %basis) -> i128 {\nentry:\n";
         assert_eq!(store.matches(entry).count(), 1, "the region's entry is where the seed expects it");
         for address in [cells - 1, cells + 4] {
             let stray = store.replacen(entry, &format!("{entry}    store i8 9, {address}\n"), 1);
-            let message = rejected(|| check_region("store", &stray, ""));
-            assert!(message.contains("WRONG RESULT marked store"), "{address}: {message}");
+            let message = rejected(|| check_region("store", &stray));
+            assert!(message.contains("WRONG RESULT"), "{address}: {message}");
         }
     }
 }

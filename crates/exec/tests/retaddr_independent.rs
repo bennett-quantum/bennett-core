@@ -1,9 +1,5 @@
-//! Independent exact device addresses, including per-branch frames in a region.
-#[allow(dead_code, reason = "shared independent whole-world helpers")]
-mod oracle_support;
+//! Independent exact device addresses, including each configuration's frames in a region.
 use bennett_exec::{Executor, Options, Outcome};
-use oracle_support::worlds::{Model, basis};
-use oracle_support::worlds_executor::assert_worlds;
 
 fn options() -> Options {
     Options { reversible: true, budget: Some(10000), ..Options::default() }
@@ -41,9 +37,6 @@ fn generated_frame_levels_direct_and_indirect_have_exact_addresses_and_un_run() 
                 ((u64::from(caller) + 1) << 32) | if caller % 2 == 0 { 5 } else { 4 }
             };
             assert_eq!(e.run(), Outcome::Returned(Some(expected.into())), "depth {depth}, level {level}");
-            let model = Model::new(&p, &name);
-            let reference = model.run_joined(basis(model.initial(&name, &[])), 1000);
-            assert_worlds(&model, &reference, &e.snapshot());
             e.reverse().expect("reverse");
             assert_eq!(e.snapshot().classical, start.classical);
             count += 1;
@@ -109,9 +102,6 @@ fn each_region_branch_reads_its_own_call_site_and_the_frames_below_it() {
         assert!((amp.re - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-12);
     }
     assert_eq!(s.quantum.amplitudes.len(), 2);
-    let model = Model::new(&p, "main");
-    let reference = model.run_joined(basis(model.initial("main", &[])), 1000);
-    assert_worlds(&model, &reference, &s);
     e.reverse().expect("reverse region");
     assert_eq!(e.snapshot().classical, start.classical);
     assert!(e.snapshot().quantum.distance(&start.quantum).is_some_and(|d| d < 1e-12));

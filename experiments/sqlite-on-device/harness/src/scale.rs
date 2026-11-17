@@ -126,7 +126,6 @@ pub fn run(module: &ValidModule, args: &[String]) {
                     assert_eq!(new.classical.slots, old.classical.slots);
                     assert_eq!(new.classical.tape, old.classical.tape);
                     assert_eq!(new.quantum.registers, old.quantum.registers);
-                    assert!(new.worlds.is_empty());
                     oracle(&mut expected, &bits);
                     deviation = deviation.max(compare(&new.quantum, &expected));
                     let now = exec.stats();
@@ -134,16 +133,13 @@ pub fn run(module: &ValidModule, args: &[String]) {
                     // Reversible outer execution retains one Apply tag so reversing
                     // can replay the oracle; the callee history itself is gone.
                     assert_eq!(now.journal_bytes, stats.journal_bytes.map(|bytes| bytes + 1));
-                    assert_eq!(now.overlay_bytes, 0);
-                    assert_eq!(now.worlds, 1);
                     assert_eq!(now.live_qubits, stats.live_qubits);
                     calls += 1;
                     println!(
-                        "oracle {calls} steps {} work {} journal {} overlay {} runs {}",
+                        "oracle {calls} steps {} work {} journal {} runs {}",
                         now.region_steps - stats.region_steps,
                         now.region_cost.work - stats.region_cost.work,
                         now.region_cost.journal_bytes - stats.region_cost.journal_bytes,
-                        now.region_cost.overlay_bytes - stats.region_cost.overlay_bytes,
                         now.region_cost.runs - stats.region_cost.runs
                     );
                     if mode == "grover" {
@@ -158,7 +154,6 @@ pub fn run(module: &ValidModule, args: &[String]) {
                     assert_eq!(old.classical.stack_pointer, fixed.classical.stack_pointer);
                     assert_eq!(old.classical.tape, fixed.classical.tape);
                     assert_eq!(exec.stats().live_qubits, bits.len().ilog2());
-                    assert!(old.worlds.is_empty());
                     let success: f64 = old
                         .quantum
                         .amplitudes
@@ -202,7 +197,6 @@ pub fn run(module: &ValidModule, args: &[String]) {
         exec.reverse().expect("reverse");
         let restored = exec.snapshot();
         assert_eq!(restored.classical, before.classical);
-        assert_eq!(restored.worlds, before.worlds);
         assert!(restored.quantum.distance(&before.quantum).expect("register table") < 1e-12);
         assert_eq!(exec.stats().journal_bytes, Some(0));
         println!("reverse_seconds {:.6}", start.elapsed().as_secs_f64());

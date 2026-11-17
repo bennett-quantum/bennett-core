@@ -39,26 +39,20 @@ pub fn run(module: &ValidModule, names: &str) {
                     assert_eq!(after.classical.slots, before.classical.slots);
                     assert_eq!(after.classical.tape, before.classical.tape);
                     assert_eq!(after.quantum.registers, before.quantum.registers);
-                    assert!(after.worlds.is_empty());
                     assert!(after.quantum.cells.is_empty());
                     assert!(after.quantum.amplitudes.iter().all(|(c, _)| c[2] == 0));
                     let now = exec.stats();
                     assert_eq!(now.region_faults, 0);
                     assert_eq!(now.journal_bytes, old.journal_bytes);
-                    assert_eq!(now.overlay_bytes, 0);
                     assert_eq!(now.live_qubits, old.live_qubits);
-                    assert_eq!(now.worlds, 1);
                     calls += 1;
                     println!(
-                        "oracle {calls} region_steps {} runs {} work {} journal {} overlay {} copied {} retained_journal {:?} retained_overlay {} live_qubits {}",
+                        "oracle {calls} region_steps {} runs {} work {} journal {} retained_journal {:?} live_qubits {}",
                         now.region_steps - old.region_steps,
                         now.region_cost.runs - old.region_cost.runs,
                         now.region_cost.work - old.region_cost.work,
                         now.region_cost.journal_bytes - old.region_cost.journal_bytes,
-                        now.region_cost.overlay_bytes - old.region_cost.overlay_bytes,
-                        now.region_cost.copied_bytes - old.region_cost.copied_bytes,
                         now.journal_bytes,
-                        now.overlay_bytes,
                         now.live_qubits,
                     );
                 }
@@ -66,7 +60,6 @@ pub fn run(module: &ValidModule, names: &str) {
                     assert_eq!(before.classical.memory, fixed.classical.memory);
                     assert_eq!(before.classical.stack_pointer, fixed.classical.stack_pointer);
                     assert_eq!(before.classical.tape, fixed.classical.tape);
-                    assert!(before.worlds.is_empty());
                     assert!(before.quantum.cells.is_empty());
                     assert_eq!(exec.stats().live_qubits + 5, exec.stats().peak_live_qubits);
                     for (config, amplitude) in &before.quantum.amplitudes {

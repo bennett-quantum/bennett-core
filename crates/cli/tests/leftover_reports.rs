@@ -1,11 +1,12 @@
-//! Leaving history behind must warn even when detailed statistics were not requested.
+//! Qubits left over by a dirty `qfree` on the machine must warn even when detailed statistics were not
+//! requested.
 
 use std::process::Command;
 
 #[test]
 fn only_nonzero_leftovers_warn_and_the_warning_counts_the_qubits() {
     let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/leftovers.bn");
-    for (entry, leftovers) in [("clean", 0), ("dirty", 2), ("rewind", 1)] {
+    for (entry, leftovers) in [("clean", 0), ("dirty", 2)] {
         let output = Command::new(env!("CARGO_BIN_EXE_bennett"))
             .args(["run", fixture, "--entry", entry, "--machine-meaning", "--budget", "20"])
             .output()

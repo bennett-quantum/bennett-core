@@ -13,9 +13,6 @@ pub struct Snapshot {
     pub classical: ClassicalSnapshot,
     /// The quantum state; compared within a numerical tolerance.
     pub quantum: QuantumSnapshot,
-    /// Every world after the first, in the executor's order, when there are several
-    /// (`docs/DESIGN.md`, "Worlds"); each has no worlds of its own.
-    pub worlds: Vec<Snapshot>,
 }
 
 /// Memory, frames, live slots, stack pointer, console tape, outcome and step count.

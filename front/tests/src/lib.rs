@@ -225,7 +225,6 @@ pub fn registers(module: &ValidModule, name: &str) -> Vec<String> {
             | Inst::Setjmp { .. }
             | Inst::ReturnAddress { .. }
             | Inst::Call { .. }
-            | Inst::CallBudget { .. }
             | Inst::CallIndirect { .. }
             | Inst::FuncAddr { .. }
             | Inst::Effect { .. }
@@ -233,9 +232,7 @@ pub fn registers(module: &ValidModule, name: &str) -> Vec<String> {
             | Inst::Gate { .. }
             | Inst::GateAt { .. }
             | Inst::Measure { .. }
-            | Inst::Apply { .. }
-            | Inst::Mark { .. }
-            | Inst::Rewind { .. } => None,
+            | Inst::Apply { .. } => None,
         })
         .collect()
 }

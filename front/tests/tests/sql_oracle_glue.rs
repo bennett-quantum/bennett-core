@@ -72,7 +72,6 @@ fn generated_sql_entries_preserve_memory_reverse_and_match_grover_amplitudes() {
                         if matches!(inst, Some(bennett_ir::Inst::Measure { .. })) {
                             assert_eq!(before.classical.memory[0], 91);
                             assert!(before.classical.memory[1..4].iter().all(|&v| v == 0));
-                            assert!(before.worlds.is_empty());
                             assert_eq!(exec.stats().live_qubits, n.ilog2());
                             let theta = (1.0 / (n as f64).sqrt()).asin();
                             for row in 0..n {
@@ -110,7 +109,6 @@ fn generated_sql_entries_preserve_memory_reverse_and_match_grover_amplitudes() {
                 exec.reverse().expect("full reverse");
                 let restored = exec.snapshot();
                 assert_eq!(restored.classical, initial.classical);
-                assert_eq!(restored.worlds, initial.worlds);
                 assert!(restored.quantum.distance(&initial.quantum).expect("register table") < 1e-12);
             }
         }

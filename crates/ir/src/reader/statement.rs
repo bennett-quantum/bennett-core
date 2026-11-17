@@ -4,8 +4,8 @@ use super::error::{Failure, ReadErrorKind};
 use super::lexer::Token;
 use super::{Parser, Scope};
 use crate::{
-    BinOp, BlockId, CastOp, Fault, FixedGate, FuncId, Gate, Inst, Keep, KeepTarget, MeasureSource, Operand, Place,
-    Predicate, Qubit, Rotation, Signature, Slot, SwitchCase, Target, Terminator, Type, Width,
+    BinOp, BlockId, CastOp, Fault, FixedGate, FuncId, Gate, Inst, MeasureSource, Operand, Place, Predicate, Qubit,
+    Rotation, Signature, Slot, SwitchCase, Target, Terminator, Type, Width,
 };
 
 /// The mnemonics that end a block.
@@ -20,16 +20,6 @@ pub(super) enum Statement {
 impl<'s> Parser<'s> {
     /// `[%name =] MNEMONIC ...` up to the end of the line.
     pub(super) fn statement(&mut self, scope: &mut Scope<'s>) -> Result<Statement, Failure> {
-        // `%a, %b = call ... budget B` defines two values: the result and the fault code.
-        let pair = match (self.cursor.peek(), self.cursor.peek_nth(1), self.cursor.peek_nth(2)) {
-            (Some(Token::Local(name)), Some(Token::Comma), Some(Token::Local(_))) => {
-                let offset = self.cursor.offset();
-                self.cursor.advance();
-                self.cursor.advance();
-                Some(Slot(scope.slots.define(name, offset)?))
-            }
-            _ => None,
-        };
         let dst = match (self.cursor.peek(), self.cursor.peek_nth(1)) {
             (Some(Token::Local(name)), Some(Token::Equals)) => {
                 let offset = self.cursor.offset();
@@ -37,22 +27,11 @@ impl<'s> Parser<'s> {
                 self.cursor.advance();
                 Some(Slot(scope.slots.define(name, offset)?))
             }
-            _ if pair.is_some() => return Err(unexpected_word(self.cursor.offset(), "`%name =`", "a pair")),
             _ => None,
         };
         let offset = self.cursor.offset();
         let mnemonic = self.cursor.word("an instruction")?;
         let line = Line { dst, offset };
-        if let Some(first) = pair {
-            // Only a call with a budget defines two values.
-            let callee = (mnemonic == "call").then(|| self.function_use()).transpose()?;
-            let Some(callee) = callee else { return Err(unexpected_word(offset, "`call`", mnemonic)) };
-            let args = self.arguments(scope)?;
-            self.cursor.expect(Token::Word("budget"), "`budget`")?;
-            let budget = self.operand(scope, Width::WORD)?;
-            let fault = line.result("call")?;
-            return Ok(Statement::Inst(Inst::CallBudget { callee, args, dst: Some(first), fault, budget }));
-        }
         let statement = self.statement_body(scope, mnemonic, line)?;
         self.cursor.end_of_line()?;
         Ok(statement)
@@ -109,12 +88,7 @@ impl<'s> Parser<'s> {
             "call" => {
                 let callee = self.function_use()?;
                 let args = self.arguments(scope)?;
-                if self.cursor.eat(Token::Word("budget")) {
-                    let budget = self.operand(scope, Width::WORD)?;
-                    Inst::CallBudget { callee, args, dst: None, fault: line.result("call")?, budget }
-                } else {
-                    Inst::Call { callee, args, dst: line.dst }
-                }
+                Inst::Call { callee, args, dst: line.dst }
             }
             "call_indirect" => self.call_indirect(scope, line.dst)?,
             "faddr" => Inst::FuncAddr { dst: line.result("faddr")?, func: self.function_use()? },
@@ -144,20 +118,6 @@ impl<'s> Parser<'s> {
             "apply" => {
                 line.no_result("apply")?;
                 self.apply(scope)?
-            }
-            "mark" => {
-                let dst = line.result("mark")?;
-                let budget = if self.cursor.peek() == Some(Token::Word("budget")) {
-                    self.cursor.expect(Token::Word("budget"), "`budget`")?;
-                    Some(self.operand(scope, Width::WORD)?)
-                } else {
-                    None
-                };
-                Inst::Mark { dst, budget }
-            }
-            "rewind" => {
-                line.no_result("rewind")?;
-                self.rewind(scope)?
             }
             _ if TERMINATORS.contains(&mnemonic) => {
                 if line.dst.is_some() {
@@ -313,32 +273,6 @@ impl<'s> Parser<'s> {
         self.cursor.expect(Token::Word("budget"), "`budget`")?;
         let budget = self.operand(scope, Width::WORD)?;
         Ok(Inst::Apply { callee, args, out, fault, budget })
-    }
-
-    /// `rewind %mark [keep (VALUE -> %register | [ADDRESS], ...)]`
-    fn rewind(&mut self, scope: &mut Scope<'s>) -> Result<Inst, Failure> {
-        let mark = self.slot_use(scope, "a mark")?;
-        let mut keep = Vec::new();
-        if self.cursor.eat(Token::Word("keep")) {
-            self.cursor.expect(Token::LParen, "`(`")?;
-            loop {
-                let value = self.typed_operand(scope)?;
-                self.cursor.expect(Token::Arrow, "`->`")?;
-                let target = if self.cursor.eat(Token::LBracket) {
-                    let address = self.operand(scope, Width::WORD)?;
-                    self.cursor.expect(Token::RBracket, "`]`")?;
-                    KeepTarget::Memory(address)
-                } else {
-                    KeepTarget::Register(self.slot_use(scope, "a register or `[ADDRESS]`")?)
-                };
-                keep.push(Keep { value, target });
-                if self.cursor.eat(Token::RParen) {
-                    break;
-                }
-                self.cursor.expect(Token::Comma, "`,` or `)`")?;
-            }
-        }
-        Ok(Inst::Rewind { mark, keep })
     }
 
     /// `switch iN value, CASE: target, ..., default: target`
