@@ -14,6 +14,79 @@ use crate::quantum::QuantumState;
 use crate::worlds::{Defect, Status, World};
 
 #[test]
+fn a_bounded_nonzero_allocation_un_run_makes_progress() {
+    let module = bennett_ir::load(
+        "memory 128
+func @main() {
+entry:
+    %q = qalloc 1
+    %h = mark
+    %t = qalloc 1
+    x %t ctrl %q
+    rewind %h keep (i1 1 -> %q)
+    ret
+}",
+    )
+    .expect("valid program");
+    let mut e = Executor::new(
+        &module,
+        module.function_named("main").expect("entry"),
+        &[],
+        Options { reversible: true, machine_meaning: true, budget: Some(8), ..Options::default() },
+    )
+    .expect("starts");
+    for _ in 0..4 {
+        assert_eq!(e.step(), None);
+    }
+    assert_eq!(e.frames[0].inst, 4);
+    // The rewind's keep changes q from 0 to 1. Undoing the controlled X then leaves t = 1,
+    // so the next inverse step must leave t over and pop its allocation record. Call these inverse
+    // steps individually: a no-op must fail an assertion instead of hanging unwind_to_mark's loop.
+    e.quantum.xor_register(0, 1);
+    e.rewinding = 1;
+    let records = e.journal.as_ref().expect("journal").records();
+    assert_eq!(e.unrun_last(true), Ok(()));
+    assert_eq!(e.journal.as_ref().expect("journal").records(), records - 1);
+    assert_eq!(e.unrun_last(true), Ok(()));
+    assert_eq!(e.journal.as_ref().expect("journal").records(), records - 2);
+    assert_eq!(e.frames[0].inst, 2);
+    assert_eq!(e.stats().leftover_qubits, 1);
+    assert_eq!(e.leftovers_made.len(), 1);
+}
+
+#[test]
+fn a_bounded_step_and_reverse_restore_the_captured_state() {
+    let module = bennett_ir::load(
+        "memory 64
+func @main() -> i8 {
+entry:
+    %x = add i8 17, 25
+    ret %x
+}",
+    )
+    .expect("valid program");
+    let mut e = Executor::new(
+        &module,
+        module.function_named("main").expect("entry"),
+        &[],
+        Options { reversible: true, budget: Some(4), ..Options::default() },
+    )
+    .expect("starts");
+    let entry = e.snapshot();
+    assert_eq!(e.step(), None);
+    let after_add = e.snapshot();
+    assert_ne!(after_add.classical.frames, entry.classical.frames);
+    assert_eq!(after_add.classical.slots, [42]);
+    assert_eq!((e.stats().steps, e.stats().world_steps), (1, 1));
+    assert_eq!(e.step(), Some(Outcome::Returned(Some(42))));
+    assert_eq!(e.step_back(), Ok(true));
+    assert_eq!(e.snapshot(), after_add);
+    assert_eq!(e.step_back(), Ok(true));
+    assert_eq!(e.snapshot(), entry);
+    assert_eq!(e.step_back(), Ok(false));
+}
+
+#[test]
 fn restoring_a_step_inside_a_budgeted_call_does_not_spend_its_budget() {
     let module = bennett_ir::load(
         "memory 128
