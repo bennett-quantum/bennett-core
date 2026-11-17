@@ -263,7 +263,9 @@ an empty device program (`front/src/main.cpp`, `readInput`).
 - **Conditional jumps, joins and loops that depend on a qubit** are outlined into ordinary functions and
   applied. They may not write memory yet: the front refuses such a write (decided, not built: it will keep
   its value in qubits at the bytes it writes; `HANDOFF.md`, "Next steps, in order", 4).
-- **Quantum operations under such a condition are predicated** (`Predicate.h`). For each basis configuration
+- **Code without gates under such a condition that writes qubit variables is one applied function** for all
+  the variables it writes, its loops and nested loops included ("Code under a qubit" below; `RegionResults.h`).
+- **Quantum operations under such a condition are predicated** otherwise (`Predicate.h`). For each basis configuration
   the outlined code runs one path; its gates and stores are moved after it, in a topological order of the
   code, each acting only where its path reaches it. A gate becomes a gate controlled by "this configuration
   reaches it"; a store `x = v` becomes `x ^= (reached ? v ^ x : 0)`, or, when that still reads x, the
@@ -280,10 +282,12 @@ an empty device program (`front/src/main.cpp`, `readInput`).
   after the `apply`), so the codes of two faults never cancel. A fault the run was allowed to go past stays in
   its register until the release, which drops it (the partial trace, "Releasing a register" below); the
   simulator reports that release.
-- **The budget** (`--region-budget`) is the `B` of every `apply` the front writes. The front writes one `apply`
-  per update of a qubit variable, so an update inside an ordinary loop is one `apply` per pass, each with its
-  own `B`; a loop the front outlines whole (or a function called whole) runs under one `apply` and one `B`
-  ("Next steps" in `HANDOFF.md` has the route to one `apply` for the whole loop).
+- **The budget** (`--region-budget`) is the `B` of every `apply` the front writes. Code whose control flow
+  depends on a qubit, a loop whose trip count depends on one included, runs under one `apply` and one `B` for
+  everything it does (or, for several results, a pair of `apply`s that each run all of it), as does a
+  function called whole. An update of a qubit variable inside a loop of the control program, whose trip count is
+  an ordinary value, is one `apply` per pass: separate computations, one after another, not one computation
+  cut up (the maintainer's decision of 2026-11-17).
 - **Each qubit variable is Known** (it holds an ordinary value: fresh, assigned, just measured) **or Quantum.**
 - **What it cannot do yet it refuses by name**, with the source location: a qubit-dependent value used by
   ordinary code or by an access with an effect of its own (an atomic update, a volatile or atomic read, even
@@ -396,6 +400,50 @@ Two things the first C programs taught:
   dirty discard needs a *variable* that outlives the computation.
 - "The operands are still there" is not enough to uncompute; they must be unchanged. A value read from a qubit
   before a gate and used after it cannot be uncomputed, and is refused.
+
+## Code under a qubit
+
+Control code cannot branch on a value that depends on a qubit, so the front takes the smallest single-entry,
+single-exit piece of code around such a branch or join (`Outline.h`). What happens to it depends on what it
+contains. Without gates and without stores into qubit variables it is one ordinary function, applied once, with
+one budget, whatever loops and calls it contains. With gates it is predicated (above). **Without gates but with
+stores into qubit variables** it is also one applied function, for all the variables it writes
+(`RegionResults.h`), with one budget for everything it does, loops and nested loops included; the front creates
+no loop, counter or bound that is not in the C, and none of the code's loops stays in the control program.
+
+For each qubit variable `y` the code writes, the applied function returns `final XOR start`: the variable's value
+where the code ends XOR its value where it begins, computed for each definite value of what the code reads, with
+`y` in a private local of the applied function that starts at
+
+- **its known value**, when the variable holds an ordinary value before the code (it is fresh, was assigned an
+  ordinary value, or was just measured): the code may then read and overwrite `y` as it likes; or
+- **0**, when the code only accumulates into `y` by XOR: every value it computes from `y` is `y XOR d` for a `d`
+  that does not read `y` (loads of `y`, XOR with what does not read `y`, extensions, truncations and masks that
+  keep the bits `y` may hold, `!=` and `==` between values of at most one bit, joins of such values on
+  conditions that do not read `y`), and nothing else uses them. Then the code's control flow does not depend
+  on `y`, and its final value is `y XOR` its final value from 0.
+
+The variable is then XORed with that result: `final XOR start XOR start = final`. One result is one `apply` into
+the variable, the variable being the target. Several share a fresh register `N`: one `apply` into `N`, a CNOT
+from each bit of `N` into the bit of its variable, the same `apply` again, `qfree N`. Neither `apply` has a
+written variable among its arguments (their starting values are ordinary values or 0), and the variables the
+code only reads are not changed between the two, so the second `apply` computes the same value and returns `N`
+to 0. Each `apply` runs the whole code: two runs of `B` steps however many results.
+
+Anything else is refused by name: a variable whose value before the code is not known and which the code does
+more with than XOR into it would need its old value kept. Without a loop in the code, predication may still
+handle such a store (an in-place bijection); with one, the message says the old value would have to be kept,
+which is the retained form of a store under a qubit (not built yet: "Next steps" in `HANDOFF.md`). A value the
+code leaves for later code that was read from a variable after the code wrote it is refused too, as
+predication refuses it. clang `-O2`'s own vectoriser can turn an accumulation into vector lanes, which the front
+does not follow; the tests disable it in that loop (`front/tests/c/region_whole.c`).
+
+Acceptance (`front/tests/tests/region_whole.rs`): two nested loops whose trip counts depend on a three-qubit
+register `x`, XORing into two variables of values the front does not know and counting into a third, agree
+with native C for all eight values of `x` at O0, O2 and with `--taint-all`, every other register back at 0; so
+do the parity of `x` accumulated into a `_Bool` and an overwrite in a loop of a variable of known value. The
+smallest budget for all values is 128 steps; at 127 the longest runs fault, the others do not. The control
+program has no loop left.
 
 ## Applied calls
 

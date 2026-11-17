@@ -4,6 +4,7 @@
 #include "Markers.h"
 
 #include <llvm/ADT/PostOrderIterator.h>
+#include <algorithm>
 #include <llvm/Analysis/CFG.h>
 #include <llvm/Analysis/ValueTracking.h>
 #include <llvm/IR/ConstantRange.h>
@@ -211,6 +212,12 @@ void ControlAnalysis::checkUses(Storage &storage) {
         }
         for (User *qubitUser : call->users()) {
           auto *gate = dyn_cast<CallBase>(qubitUser);
+          if (gate && isGateCall(gate) && gate->getArgOperand(0) != call) {
+            std::optional<OperandBundleUse> controls = gate->getOperandBundle(qubitControlBundle);
+            if (controls && std::find(controls->Inputs.begin(), controls->Inputs.end(), call) != controls->Inputs.end()) {
+              continue; // a control qubit of the gate: read, not changed
+            }
+          }
           bool asQubit = gate && isGateCall(gate) && gate->getArgOperand(0) == call;
           for (unsigned i = 1; asQubit && i < gate->arg_size(); ++i) {
             asQubit = gate->getArgOperand(i) != call;

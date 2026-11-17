@@ -39,6 +39,11 @@ bool isGateCall(const llvm::Value *value);
 // branches where the bundle's single i1 operand is 1.
 inline constexpr const char *controlBundle = "bennett.control";
 
+// The name of the operand bundle that names a gate's control qubits directly: each operand is a call of
+// `bennett_bit`, and the gate acts where all of them are 1. `bennett-front` writes it for the CNOTs that copy
+// a register's bits into the variables they belong to (RegionResults.h).
+inline constexpr const char *qubitControlBundle = "bennett.qubits";
+
 // Checks every function named bennett_*: it must be a known marker, only declared, with the marker's
 // signature, and without attributes that would let LLVM delete, merge or speculate its calls. With
 // `floatsAreBits` (after floatsToIntegers, SoftFloat.h) a rotation's angle is the `i64` of its bits.

@@ -29,6 +29,10 @@ qubit variable are:
   (`x += y; x *= 3; x = ~x; x++;`). x is computed afresh into a temporary and the old value is
   uncomputed with the inverse.
 
+Code under a condition that depends on a qubit, without gates, may write qubit variables freely when their
+values before it are known, and may XOR into the others, with loops whose trip counts depend on qubits and
+nested loops included: it is applied whole, with one budget (`docs/DESIGN.md`, "Code under a qubit").
+
 Any other write would discard x's old value, and is refused. When the function returns, a variable whose
 value is known is returned to 0 first; any other is released as it is: the partial trace (`docs/DESIGN.md`,
 "Releasing a register"). Where the variable is still entangled with others, they are left in a mixture and
@@ -113,7 +117,8 @@ the condition in ordinary memory.
 
 Each is refused with `not handled yet: <what>, at <file:line:col>`: under the control of a value that
 depends on a qubit, a call of a function that has gates, a measurement, a gate whose condition reads the
-gate's own variable, a quantum operation inside a loop (fully unrolled loops work), a write to memory, a
+gate's own variable, a gate inside a loop (fully unrolled loops work), a write of a qubit variable inside a
+loop that does more than XOR into it when its value before is not known, a write to memory, a
 call of a function that may write memory, or a volatile read; a branch on such a value whose arms do not
 rejoin before the function returns; an update of a qubit variable that is not a bijection listed above
 (`x = x * x`, `x += x`): that needs the old value kept, which has no form yet; a qubit variable passed to a

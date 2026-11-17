@@ -4,6 +4,7 @@
 #include "InPlace.h"
 #include "Markers.h"
 #include "Predicate.h"
+#include "RegionResults.h"
 #include "Taint.h"
 
 #include <llvm/Analysis/DominanceFrontier.h>
@@ -251,8 +252,13 @@ void outlineAround(Function &function, Instruction *seed, ControlAnalysis &analy
     }
   }
 
-  // Gates and stores into qubit variables move after the region, each acting where its path reaches it.
+  // Without gates, the region is one applied function for all the qubit variables it writes; otherwise (or
+  // when a variable it writes is neither known before it nor only XORed into, and it has no loop) its gates
+  // and stores move after it, each acting where its path reaches it.
   if (hasQuantumOperations(blocks, analysis)) {
+    if (!hasGates(blocks) && applyRegionWhole(function, blocks, region->getExit(), analysis)) {
+      return;
+    }
     predicateRegion(function, blocks, region->getExit(), analysis);
     return;
   }

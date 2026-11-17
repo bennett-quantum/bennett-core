@@ -735,6 +735,19 @@ std::string ControlWriter::slice(const Slice &slice, const Value *root, const St
 // the gate's own variable, or the gate would change what controls it, and every qubit variable it reads must
 // be unchanged between the read and the gate, since the gate reads the registers as they are there.
 void ControlWriter::controlledGate(const CallBase &call, const Access &target, const std::string &gate) {
+  if (std::optional<OperandBundleUse> qubits = call.getOperandBundle(qubitControlBundle)) {
+    std::string controls;
+    for (const Use &qubit : qubits->Inputs) {
+      Access control = *analysis.access(qubit.get());
+      if (control.storage == target.storage) {
+        fail("internal: a gate controlled by a qubit of its own variable");
+      }
+      controls += (controls.empty() ? " ctrl " : ", ") + registers.at(control.storage) + "[" +
+                  std::to_string(control.bit) + "]";
+    }
+    line(gate + controls);
+    return;
+  }
   std::optional<OperandBundleUse> bundle = call.getOperandBundle(controlBundle);
   if (!bundle) {
     line(gate);

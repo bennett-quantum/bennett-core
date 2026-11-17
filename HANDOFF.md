@@ -313,11 +313,19 @@ explicitly after the separate musl build.
    decision, then each a landable step with its tests and documents true in the same step, in this order:
    0. **Done:** the two defects of the diagnostics found by the testing pass over applied calls ("Applied calls
       (2026-11-17)", the end).
-   1. **Rule B.** Code without gates, written inline, whose control flow depends on a qubit and which assigns to
-      qubit variables becomes one `apply` with one budget (one pair of `apply`s for several results), lifting
-      today's refusal. Tested with two nested loops whose trip counts depend on a qubit register. The front
-      creates no loop, counter or bound that is not in the C; a loop with an ordinary, definite trip count may
-      keep one small `apply` per pass.
+   1. **Done: rule B** (`docs/DESIGN.md`, "Code under a qubit"; `front/src/RegionResults.h`). Code without
+      gates, written inline, whose control flow depends on a qubit and which writes qubit variables is one
+      applied function with one budget for all of it (one `apply` for one result, a pair with CNOTs between them
+      for several), when each variable it writes has a known value before it or is only XORed into. Two nested
+      loops whose trip counts depend on a three-qubit register agree with native C for all eight values at O0,
+      O2 and with `--taint-all`; the smallest budget is 128 steps and 127 faults the longest runs only; the
+      control program keeps no loop. A loop with an ordinary trip count keeps one small `apply` per pass, as
+      decided. Still refused, with the route in the message: a variable of unknown value that such a loop does
+      more with than XOR into (it needs the retained form of step 3, or an inverse of the loop). Not built: a
+      qubit-dependent value carried irreversibly around a loop of the control program (`y = g(y, q, i)` with
+      an ordinary trip count), which the design note would merge into one `apply` too; it is refused today
+      unless the update is an in-place bijection, and the retained form of step 3 will accept it pass by pass,
+      keeping one old value per pass.
    2. **Rule C.** Loops containing gates: the trip count stays an ordinary value written in the C; the condition
       is computed once into a qubit, or the loop's ordinary part is one applied function returning a table of
       control bits for the gates, cleared by the same `apply`; the ordinary loop stays in the control code. No
@@ -739,7 +747,7 @@ Each recommendation was taken ("Decisions the maintainer took on 2026-11-16, in 
 | A call through another prototype where x86-64 does not determine what is read: the upper half of a 32-bit value, a missing argument that is read, an integer from a floating-point register, a variadic floating-point argument without `%al`, a narrow argument that is not the extension the callee relies on (named fault `unreachable` when the call runs); a direct call whose argument differs from its parameter only in register class (native -O0 and -O2 disagree) | Nothing to remove: the native result is not determined (`docs/DESIGN.md`, "Calls through a prototype"). Conservative, removable by a finer model where named: a variadic floating-point argument after an unread named one, a call whose result is used only by dead code before the optimiser, values in memory read at another place |
 | A qubit-dependent call of a function that uses `setjmp` | The front's own effect summary of `setjmp` (writes only its buffer) when deciding what runs coherently (`docs/DESIGN.md`, "Non-local jumps") |
 | `__float128`; `powi` on `_Float16`/`__bf16`; `#pragma STDC FENV_ACCESS` (with it musl's `ilogb`/`ilogbl` in the corpus accuracy checks; libgcc's `__divxc3` itself works); non-default rounding modes and floating-point flags | Step 5 above |
-| A store under qubit control outside a call; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control that LLVM does not unroll fully | A call with qubit-dependent arguments, whatever it writes, is applied whole since step 6 ("Applied calls (2026-11-17)"). For the rest, the decision of about 15:35 UTC, rules B, C and A in that order ("Next steps, in order", 4): code without gates under a qubit as one `apply`; gate loops with an ordinary trip count; stores that keep their value in qubits at the bytes written, an overwrite that cannot be erased keeping the old value in qubits released by `qfree` |
+| A store under qubit control outside a call; an update with no known inverse; a value needed after it changed; qubit variables in structs, heap objects or passed to functions; gates in a loop under qubit control that LLVM does not unroll fully | A call with qubit-dependent arguments, whatever it writes, is applied whole since step 6 ("Applied calls (2026-11-17)"). Code without gates under a qubit that writes qubit variables of known value or XORs into them is one `apply` since rule B. For the rest, the decision of about 15:35 UTC, rules C and A in that order ("Next steps, in order", 4): gate loops with an ordinary trip count; stores that keep their value in qubits at the bytes written, an overwrite that cannot be erased keeping the old value in qubits released by `qfree` |
 | A qubit-dependent value used by ordinary code or printed; measurement under control | Channels |
 | A qubit-dependent call, to a function that may write memory, whose result is unused; two such calls in one computation when one may write memory; quantum operations in `main` of a program linked with musl | "Applied calls (2026-11-17)": nothing to remove for the first (applied, it would do nothing); one register per call for the second; classifying control functions through indirect calls, or a startup that calls `main` directly, for the third |
 | Non-empty inline assembly; code without source | An emulator of the real machine, compiled as an ordinary program |
@@ -787,7 +795,8 @@ the ordinary frontend run without changing its domain or assertions.
 ## Known weak spots
 
 - **Two findings of the front audit of 2026-11-17 on loops** (decided at about 15:35 UTC; step 4 of "Next
-  steps"). (1)
+  steps"; code under a qubit without gates is one `apply` since rule B, so a loop whose trip count depends on a
+  qubit never runs one `apply` per pass). (1)
   The front writes one `apply` per update of a qubit variable, so `for (i = 0; i < n; i++) y ^= f(q, i) & 1;`
   is `n` applications, each with its own budget and fault register, where one `apply` of the whole loop's XOR
   with one budget would do; a loop inside a function that only reads memory, called with arguments that depend
