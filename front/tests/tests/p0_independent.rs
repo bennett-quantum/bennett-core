@@ -43,7 +43,7 @@ fn matrix() -> &'static [PathBuf; 2] {
 #[test]
 fn expanded_x87_matrix_and_integer_boundaries_agree_at_both_optimization_levels() {
     for program in matrix() {
-        for mode in ["matrix", "powers", "integers", "floating"] {
+        for mode in ["matrix", "powers", "rounding", "integers", "floating"] {
             let output = Command::new(program).arg(mode).output().expect("native probe executes");
             let report = String::from_utf8_lossy(&output.stdout);
             assert!(output.status.success(), "{program:?} {mode}: {report}");
@@ -80,7 +80,6 @@ fn powi_one_preserves_an_unsupported_encoding() {
 }
 
 #[test]
-#[ignore = "defect: roundevenl of a tiny unnormal gives NaN instead of native glibc's zero"]
 fn roundeven_of_an_unnormal_matches_native_software() {
     witness("roundeven_unnormal");
 }

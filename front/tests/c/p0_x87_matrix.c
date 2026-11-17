@@ -3,6 +3,7 @@
  * natively with renamed symbols. No copy of the runtime's encoding classifier is used as the oracle.
  * Raw 80-bit equality excludes six ABI padding bytes. Out-of-range integer conversions are measured
  * as target behavior, not claimed to be defined C. Noncanonical fmal/roundl/half truncation are known debts.
+ * Mode `rounding` puts glibc's software roundevenl against the runtime on every 16-bit sign and exponent.
  */
 #include <math.h>
 #include <stdint.h>
@@ -106,13 +107,14 @@ static void unary(void) {
   LD("trunc",truncl(a),rt_truncl(a));
   LD("rint",rintl(a),rt_rintl(a));
   LD("nearbyint",nearbyintl(a),rt_nearbyintl(a));
-  /* glibc roundevenl is software on this target, unlike rintl. Its noncanonical debt has a
-     separate ignored witness. Keep canonical inputs in the regression sweep. */
+  /* glibc roundevenl is software on this target, unlike rintl; the runtime follows it on every encoding.
+     roundl, fmal and the half/bfloat truncations are software too and still differ on noncanonical
+     encodings (known debts), so only canonical inputs meet them here. */
   uint16_t e; U m;
   memcpy(&e,(const char *)&a+8,2); memcpy(&m,(const void *)&a,8);
+  LD("roundeven",__builtin_roundevenl(a),rt_roundevenl(a));
   if (((e & 0x7fff) == 0 && !(m >> 63)) || ((e & 0x7fff) != 0 && (m >> 63)))
   {
-    LD("roundeven",__builtin_roundevenl(a),rt_roundevenl(a));
     LD("round",roundl(a),rt_roundl(a));
     LD("fma-x11",fmal(a,1.L,1.L),rt_fmal(a,1.L,1.L));
     LD("fma-11x",fmal(1.L,1.L,a),rt_fmal(1.L,1.L,a));
@@ -195,9 +197,31 @@ static void floating(void) {
     LD("from-sf",(long double)vf,rt___extendsfxf2(vf));
   }
 }
+static void rounding(void) {
+  /* glibc's software rounding against the runtime on every exponent, both signs, with significands that
+     put a set bit, a half or a carry at each place the binary point can be (noncanonical ones included:
+     without the integer bit, or with it at exponent 0). */
+  U ms[]={0,1,2,3,0x7fffffffULL,0x80000000ULL,0x80000001ULL,0xffffffffULL,0x100000000ULL,0x180000000ULL,
+          0x3fffffffffffffffULL,0x4000000000000000ULL,0x4000000000000001ULL,0x7fffffffffffffffULL,
+          0x8000000000000000ULL,0x8000000000000001ULL,0x8000000080000000ULL,0x8000000100000000ULL,
+          0xc000000000000000ULL,0xc000000000000001ULL,0xfffffffeffffffffULL,~0ULL};
+  U r=0x2545f4914f6cdd1dULL;
+  for(unsigned e=0;e<0x10000;e++) {
+    ai=e;
+    for(unsigned m=0;m<sizeof(ms)/sizeof(*ms)+4;m++) {
+      U bits;
+      if(m<sizeof(ms)/sizeof(*ms)) bits=ms[m];
+      else {r^=r<<13;r^=r>>7;r^=r<<17;bits=r;}
+      long double v=0; uint16_t se=e; bi=m;
+      memcpy(&v,&bits,8); memcpy((char *)&v+8,&se,2); memcpy((void *)&a,&v,16);
+      LD("roundeven",__builtin_roundevenl(a),rt_roundevenl(a));
+    }
+  }
+}
 int main(int argc,char **argv) {
   setup(); current=argc>1?argv[1]:"matrix";
   if(!strcmp(current,"integers")) integers();
+  else if(!strcmp(current,"rounding")) rounding();
   else if(!strcmp(current,"floating")) floating();
   else for(ai=0;ai<count;ai++) {
     memcpy((void *)&a,&values[ai],16);

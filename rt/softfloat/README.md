@@ -125,7 +125,7 @@ are exact, including NaN bits and excluding the six ABI padding bytes.
   canonical encodings. All classes meet every other class on both sides. **2,388,054 checks per level**:
   add/sub/mul/div, their results fed to addition, all six comparisons and unordered, `fminl`/`fmaxl` and
   their results fed to arithmetic, sqrt/floor/ceil/trunc/rint/nearbyint, and conversions to/from float,
-  double and signed/unsigned 32/64/128-bit integers. Canonical cases also cover round/roundeven/fma and
+  double and signed/unsigned 32/64/128-bit integers, and roundeven. Canonical cases also cover round/fma and
   half/bfloat truncation. **3,894 powers** per level (exponents -17,-4,-3,-2,-1,0,1,2,3,4,17 on every
   input, noncanonical ones at exponent 1 included since that defect was fixed), **120 integer boundary
   conversions**, and
@@ -150,7 +150,7 @@ before asserting, so a failure at the first level does not hide the second.
 |---|---|---|
 | `powi_one_preserves_a_pseudo_denormal_encoding` | `powi(x,1)`: native preserves exponent 0, runtime changed it to 1 | Fixed (below); runs by default |
 | `powi_one_preserves_an_unsupported_encoding` | Native returns the unsupported argument unchanged; runtime replaced it with indefinite | Fixed (below); runs by default |
-| `roundeven_of_an_unnormal_matches_native_software` | For exponent 1/significand 1, glibc returns +0, runtime NaN; adding 1 preserves the difference | Medium; wrong numerical result, O0/O2 |
+| `roundeven_of_an_unnormal_matches_native_software` | For exponent 1/significand 1, glibc returns +0, runtime NaN; adding 1 preserves the difference | Fixed (below); runs by default |
 | `a_pseudo_denormal_is_finite` | Native true, device false at O0; O2 agrees | Medium; wrong branch predicate |
 | `an_unsupported_encoding_is_nan` | Native true, device false at O0; O2 agrees | Medium; wrong branch predicate |
 
@@ -163,7 +163,17 @@ fix and pass after it; the matrix's powers no longer skip noncanonical inputs at
 each level, 470 differ with the early return moved to `m == 2`). Cost, one comparison per call:
 `float_long_double.c` 2,119,358 to 2,119,622 steps at `-O0` and 1,842,776 to 1,843,040 at `-O2`;
 `float_long_double_programs.c` unchanged (84,573 and 81,703).
-`roundevenl` examines the encoding in software, as `roundl` does. Native aggregate classification uses
+`roundevenl` examines the encoding in software, as `roundl` does. **Fixed:** the runtime's `roundevenl`
+read its operand as x87 does and rounded with SoftFloat; glibc's (ldbl-96) rounds the significand as an
+integer at the binary point the exponent places and never reads the integer bit. The runtime now does the
+same for every noncanonical encoding below the largest exponent (`roundeven_face_value` in `libgcc.c`,
+glibc's quirks included: an unnormal at exponent 0x3FFE whose low 32 significand bits are not 0 rounds to
+1, an unnormal can round to an unnormal zero), and keeps SoftFloat for the rest. A new matrix mode,
+`rounding`, puts glibc against the runtime on all 65,536 sign/exponent words with 26 significands each
+(22 fixed at every binary-point place, 4 random): **1,703,936 agree at each level**, and the main matrix
+now meets `roundevenl` on all 354 inputs (2,388,177 checks). Dropping the low-word half of the 0x3FFE test
+gives 26 differences. Cost: 44 steps on `float_long_double.c` at each level (2,119,666 and 1,843,084),
+`float_long_double_programs.c` unchanged. Native aggregate classification uses
 x87 comparisons at O0 where the front's bit classification has different answers. The individual
 `is.fpclass` masks and `fpclassify` are retained as passing probes, not conflated with those C predicates.
 The already documented `roundl`, half and bfloat software differences each now have a minimal ignored

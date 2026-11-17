@@ -1302,10 +1302,10 @@ the ordinary frontend run without changing its domain or assertions.
 ## Known weak spots
 
 - Independent conformance testing of the noncanonical x87/input fixes: `front/tests/tests/p0_independent.rs`
-  has ignored defect witnesses for `roundevenl` of a tiny unnormal giving NaN instead of glibc's zero, and
-  `isfinite`/`isnan` differing at clang `-O0` (the same classification witnesses pass at `-O2`); `powi(x, 1)`
-  now returns noncanonical encodings unchanged, as libgcc does (fixed 2026-11-17, its two witnesses run by
-  default). Routes: follow glibc's software encoding tests for `roundevenl`; make the front's classification
+  has ignored defect witnesses for `isfinite`/`isnan` differing at clang `-O0` (the same classification
+  witnesses pass at `-O2`). Fixed on 2026-11-17, their witnesses run by default: `powi(x, 1)` returns
+  noncanonical encodings unchanged, as libgcc does; `roundevenl` follows glibc's software bit operations on
+  them (every sign and exponent compared natively). Route: make the front's classification
   follow the native x87 comparison where clang emits one. The already documented `roundl` and half/bfloat
   software conversion differences now have minimal ignored witnesses too. All witnesses were run and failed.
   Exact coverage and excluded cases: `rt/softfloat/README.md`, "Independent conformance pass".

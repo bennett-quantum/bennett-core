@@ -524,17 +524,60 @@ long double fmal(long double a, long double b, long double c) {
 }
 
 /* Rounding to an integral value: rint and nearbyint in the current mode, which is always to nearest. */
-#define ROUND(name, mode)                                                                                  \
+#define ROUND_SSE(name, mode)                                                                              \
   float name##f(float a) { return of_f32(f32_roundToInt(f32_of(a), mode, false)); }                       \
-  double name(double a) { return of_f64(f64_roundToInt(f64_of(a), mode, false)); }                       \
+  double name(double a) { return of_f64(f64_roundToInt(f64_of(a), mode, false)); }
+#define ROUND(name, mode)                                                                                  \
+  ROUND_SSE(name, mode)                                                                                    \
   long double name##l(long double a) { return of_x80(extF80_roundToInt(x80_of(a), mode, false)); }
 ROUND(floor, softfloat_round_min)
 ROUND(ceil, softfloat_round_max)
 ROUND(trunc, softfloat_round_minMag)
 ROUND(round, softfloat_round_near_maxMag)
-ROUND(roundeven, softfloat_round_near_even)
+ROUND_SSE(roundeven, softfloat_round_near_even)
 ROUND(rint, softfloat_round_near_even)
 ROUND(nearbyint, softfloat_round_near_even)
+
+/* roundevenl. The native program calls glibc's, which is software (sysdeps/ieee754/ldbl-96), not x87's
+ * frndint: it rounds the significand as an integer at the bit where the exponent puts the binary point and
+ * clears the bits below, and it never reads the integer bit, so it takes an encoding no arithmetic produces
+ * at face value. Below the largest exponent this follows it bit for bit (measured against glibc on every
+ * sign and exponent: `front/tests/c/p0_x87_matrix.c`, mode `rounding`). From exponent 0x3FFF + 63 the
+ * value is returned. From 0x3FFF the significand is rounded to even in place, a carry out of it giving
+ * 0x8000000000000000 with the exponent one higher, so an unnormal stays an unnormal unless a carry reaches
+ * the integer bit. At 0x3FFE the result is 1 (signed) when the high 32 bits of the significand exceed
+ * 0x80000000 or the low 32 bits are not 0, glibc's test for the interval (0.5, 1), which an unnormal can
+ * pass. Below, a zero of the same sign. At the largest exponent glibc returns x + x, an x87 addition, which
+ * reads a pseudo-infinity or pseudo-NaN as an invalid operand: the indefinite, as `x80_of` gives.
+ * Canonical operands take SoftFloat's rounding, which gives the same results on them. */
+static extFloat80_t roundeven_face_value(extFloat80_t x) {
+  uint_fast16_t exponent = x.signExp & 0x7FFF;
+  uint16_t sign = x.signExp & 0x8000;
+  if (exponent >= 0x3FFF + 63) return x;
+  if (exponent >= 0x3FFF) {
+    uint64_t one = UINT64_C(1) << (0x3FFF + 63 - exponent), half = one >> 1;
+    if (x.signif & (one | (half - 1))) {
+      x.signif += half;
+      if (x.signif < half) {
+        x.signif = UINT64_C(0x8000000000000000);
+        ++x.signExp;
+      }
+    }
+    x.signif &= ~(one - 1);
+    return x;
+  }
+  if (exponent == 0x3FFE && ((x.signif >> 32) > 0x80000000 || (uint32_t)x.signif)) {
+    return (extFloat80_t){.signif = UINT64_C(0x8000000000000000), .signExp = (uint16_t)(sign | 0x3FFF)};
+  }
+  return (extFloat80_t){.signif = 0, .signExp = sign};
+}
+long double roundevenl(long double a) {
+  extFloat80_t x = x80_bits(a);
+  if (__builtin_expect(noncanonical80(x), 0) && (x.signExp & 0x7FFF) != 0x7FFF) {
+    return of_x80(roundeven_face_value(x));
+  }
+  return of_x80(extF80_roundToInt(x80_of(a), softfloat_round_near_even, false));
+}
 
 /* fmin and fmax (`llvm.minnum`, `llvm.maxnum`): what clang's x86-64 code computes for them, which is not a
  * call but SSE's minsd/maxsd with a NaN test (X86ISelLowering's combineFMinNumFMaxNum): fmin(x, y) is
