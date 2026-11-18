@@ -24,6 +24,7 @@ impl From<ApplyError> for Failure {
 pub(super) enum Refusal {
     UnprovedLoop,
     IncompatibleJoins,
+    RepeatedContinuation,
     UnequalCharges,
 }
 
@@ -32,6 +33,7 @@ impl Refusal {
         match self {
             Self::UnprovedLoop => "qubit-dependent loop without a program-proved pass count",
             Self::IncompatibleJoins => "qubit-dependent routes do not share a supported continuation",
+            Self::RepeatedContinuation => "conditional routes would emit shared code more than once",
             Self::UnequalCharges => "unequal route lengths can exhaust the budget after a join",
         }
     }
@@ -159,12 +161,20 @@ impl Controls<'_, '_> {
         let yes_mask = self.circuit.and(route.enabled, condition);
         let no_mask = self.circuit.and(route.enabled, condition.not());
         let parent_mask = route.enabled;
-        let yes = self.transfer(route.clone(), yes, yes_mask);
-        let no = self.transfer(route, no, no_mask);
         self.boundaries.extend(join.map(|point| Boundary { point, proved_loop: false }));
         if self.flow.can_revisit(route_block, |block| self.boundaries.iter().any(|stop| stop.point.block == block)) {
             return Err(Failure::Control(Refusal::UnprovedLoop));
         }
+        if yes_mask != ZERO
+            && no_mask != ZERO
+            && self.flow.shares_code(yes.block, no.block, |block| {
+                self.boundaries.iter().filter(|stop| stop.point.block == block).map(|stop| stop.point.index).min()
+            })
+        {
+            return Err(Failure::Control(Refusal::RepeatedContinuation));
+        }
+        let yes = self.transfer(route.clone(), yes, yes_mask);
+        let no = self.transfer(route, no, no_mask);
         let yes = self.follow(yes)?;
         let no = self.follow(no)?;
         self.boundaries.truncate(self.boundaries.len() - usize::from(join.is_some()));

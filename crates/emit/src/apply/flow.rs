@@ -70,6 +70,42 @@ impl<'a> Flow<'a> {
         false
     }
 
+    // A common block before either route stops would be lowered twice.
+    // An entry boundary contributes no instructions. A boundary inside a
+    // block still allows the instructions before it to be emitted.
+    pub(super) fn shares_code(
+        &self,
+        left: BlockId,
+        right: BlockId,
+        stop_index: impl Fn(BlockId) -> Option<usize>,
+    ) -> bool {
+        let mut visited = vec![None; self.graph.node_count()];
+        for (route, start) in [left, right].into_iter().enumerate() {
+            let mut work = vec![NodeIndex::new(start.index())];
+            while let Some(node) = work.pop() {
+                if node == self.exit {
+                    continue;
+                }
+                let stop = stop_index(BlockId(node.index() as u32));
+                if stop == Some(0) {
+                    continue;
+                }
+                let owner = &mut visited[node.index()];
+                if let Some(previous) = *owner {
+                    if previous != route {
+                        return true;
+                    }
+                    continue;
+                }
+                *owner = Some(route);
+                if stop.is_none() {
+                    work.extend(self.graph.neighbors(node));
+                }
+            }
+        }
+        false
+    }
+
     pub(super) fn shift_loop(&self, block: BlockId) -> Option<ShiftLoop<'a>> {
         self.loops[block.index()]
     }
