@@ -831,3 +831,6 @@ entry:
         compare_controls(&module, 6, mode, |x| (x % 11, 0));
     }
 }
+
+#[path = "mulmod.rs"]
+mod mulmod;

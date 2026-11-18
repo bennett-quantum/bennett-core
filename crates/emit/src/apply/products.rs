@@ -73,7 +73,8 @@ mod tests {
 
     #[test]
     fn product_counts_and_clears_its_work_wires() {
-        for (left, right, width) in [(1, 1, 2), (4, 4, 4), (4, 4, 8), (6, 3, 9), (64, 64, 128)] {
+        for (left, right, width) in [(1, 1, 2), (4, 4, 4), (4, 4, 8), (6, 3, 9), (6, 6, 12), (8, 8, 16), (64, 64, 128)]
+        {
             let args = (left + right) as u64;
             let input = |start: u64, n| {
                 (start..start + n as u64)

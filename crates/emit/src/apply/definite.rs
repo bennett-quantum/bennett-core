@@ -61,7 +61,7 @@ fn fold_inst(
     }
 }
 
-/// The required constant inputs for a shift or multiply. A literal needs no data-flow proof.
+/// The required constant input for a shift. A literal needs no data-flow proof.
 pub(super) fn requirement(inst: &Inst) -> Option<(BinOp, &'static str)> {
     let Inst::Binary { op, rhs, .. } = inst else { return None };
     match op {

@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn remainder_counts_and_clears_its_work_wires() {
-        for (p, m) in [(3, 2), (8, 3), (128, 64)] {
+        for (p, m) in [(3, 2), (8, 3), (8, 4), (12, 6), (16, 8), (128, 64)] {
             let width = p.max(m);
             let inputs = |start, count| {
                 (start..start + count as u64)
@@ -121,7 +121,7 @@ mod tests {
 
     #[test]
     fn zero_predicate_counts_and_clears_its_work_wires() {
-        for width in [2, 3, 64] {
+        for width in [2, 3, 4, 6, 8, 64] {
             let input = (0..width as u64).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
             let mut circuit = Circuit::new(width as u64);
             let result = vec![is_zero(&mut circuit, &input)];

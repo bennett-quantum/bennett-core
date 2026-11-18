@@ -355,8 +355,9 @@ when clearing the result.
 
 **Unsigned remainder.** Read the dividend from high bit to low bit. Each new bit
 doubles the current remainder and adds the bit. A trial subtraction, with one extra
-high bit, selects the difference when the candidate is at least the divisor. Below
-a nonzero divisor this step leaves the next remainder below it. A known modulus makes
+high bit, selects the difference when the candidate is at least the divisor. The
+previous remainder is below a nonzero divisor, so one subtraction suffices for the new
+remainder to stay below it. A known modulus makes
 bits above its maximum residue definite zero. A power-of-two modulus takes only the
 low bits. The gadget copies its result and reverses the work, including on inputs
 with divisor zero.
@@ -470,6 +471,42 @@ checks every 8-bit input at budgets 0 through 45, with zero and patterned destin
 all 4,096 inputs to the 12-bit draining example at budget 85, with patterned destinations.
 For 8, 9 and 10 short-circuit pairs with early returns, automatic mode emits the same
 gate lists as forced dispatch, with 3,343, 4,544 and 5,999 gates respectively.
+
+**Arithmetic counts.** The table counts native Toffolis for each gadget, including
+the reversal that clears its own work wires after copying the result. For a product
+of two words with distinct variable bits, `P` counts bit pairs in the retained columns,
+`F` counts full adders that produce a carry and `H` counts half adders that produce a
+carry. The product uses `2(P + 2F + H)` Toffolis, or `6w² − 6w` for two words of width
+`w ≥ 2` with a double-width result. The general remainder uses `6pm` for a dividend
+with `p` possible significant bits and a divisor with `m`. The zero test for a divisor
+of `m` distinct variable bits uses `2(m − 1)` for `m ≥ 1`. A known nonzero modulus
+needs no zero-test gates, and a power-of-two modulus needs no reduction gates.
+
+| Operand width `w` | Product, `6w² − 6w` | Remainder, `p = 2w, m = w` | Variable divisor zero test, `2(w − 1)` |
+|---:|---:|---:|---:|
+| 4 | 72 | 192 | 6 |
+| 6 | 180 | 432 | 10 |
+| 8 | 336 | 768 | 14 |
+| 64 | 24,192 | 49,152 | 126 |
+
+The complete `mulmod` applies a double-width product followed by remainder with
+modulus `2^w − 3` held in an ordinary value. Both modes emit the same gate list at
+`B = 7`. Reversing both gadgets after copying the result gives
+`2((6w² − 6w) + 6(2w)w) = 36w² − 12w` Toffolis. Peak qubits include both inputs,
+the output and the fault register.
+
+| Operand width `w` | One-qubit gates | Two-qubit gates | Toffolis | Peak qubits | Depth |
+|---:|---:|---:|---:|---:|---:|
+| 4 | 780 | 1,436 | 528 | 282 | 754 |
+| 6 | 1,748 | 3,402 | 1,224 | 612 | 1,622 |
+| 8 | 3,100 | 6,200 | 2,208 | 1,070 | 2,814 |
+| 64 | 196,860 | 422,336 | 146,688 | 65,862 | 166,110 |
+
+Run `cargo test -p bennett-emit --test apply controlled_apply::mulmod -- --nocapture`
+to repeat the measurements. At widths 4, 6 and 8 the simulator compares exact
+amplitudes with direct evaluation at budgets 6, 7 and 8. The bit-level runner checks
+all operand pairs at those widths and 128 sampled pairs and five corner pairs at
+width 64. It checks unchanged inputs, XOR into the two destinations, and zero scratch.
 
 `bennett run --device count` uses the compiler for each `apply` it reaches. Pass
 `--apply-circuit auto` to run the same gates on the simulator, or `--apply-circuit step-machine`
