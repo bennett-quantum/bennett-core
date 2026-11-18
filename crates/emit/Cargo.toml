@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 bennett-ir.workspace = true
 bennett-exec.workspace = true
+petgraph.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
 

@@ -1,6 +1,8 @@
 //! The state of an applied frame and the transition for one instruction.
 
-use bennett_ir::{BinOp, BlockId, Fault, FuncId, Gate, Inst, Operand, Slot, Target, Terminator, Type, ValidModule};
+use bennett_ir::{
+    BinOp, BlockId, Fault, FuncId, Gate, Inst, Operand, Slot, SwitchCase, Target, Terminator, Type, ValidModule,
+};
 
 use super::arithmetic;
 use super::bits::{Bit, Circuit, Word, ZERO, constant};
@@ -96,6 +98,12 @@ impl<'a> Frame<'a> {
                     return Err(frame.error(Point { block: BlockId(block as u32), index }, op.mnemonic(), route));
                 }
             }
+            if let Terminator::Switch { value, .. } = &body.term
+                && frame.constants.get(value).is_none()
+            {
+                let point = Point { block: BlockId(block as u32), index: body.insts.len() };
+                return Err(frame.error(point, "switch", "multiway dispatch in the step machine"));
+            }
         }
         Ok(frame)
     }
@@ -109,9 +117,13 @@ impl<'a> Frame<'a> {
                 }
             }
             let (operation, route) = match &block.term {
-                Terminator::Jump(_) | Terminator::Branch { .. } | Terminator::Return(Some(_)) => continue,
+                Terminator::Jump(_)
+                | Terminator::Branch { .. }
+                | Terminator::Switch { .. }
+                | Terminator::Return(Some(_)) => {
+                    continue;
+                }
                 Terminator::Return(None) => ("void ret", "integer results"),
-                Terminator::Switch { .. } => ("switch", "multiway dispatch"),
                 Terminator::Exit(_) => ("exit", "explicit instruction faults"),
                 Terminator::Longjmp { .. } => ("longjmp", "non-local control and memory"),
                 Terminator::Fault(_) => ("fault", "explicit instruction faults"),
@@ -189,12 +201,14 @@ impl<'a> Frame<'a> {
                 Bit::Constant(false) => Step::Jump(if_false),
                 bit @ Bit::Wire(..) => Step::Branch(bit, if_true, if_false),
             },
+            Terminator::Switch { value, cases, default, .. } => {
+                let value = self.constants.get(value).expect("checked the switch selector before lowering");
+                Step::Jump(switch_target(value, cases, default))
+            }
             Terminator::Return(Some(value)) => Step::Return(read(value)),
-            Terminator::Return(None)
-            | Terminator::Switch { .. }
-            | Terminator::Exit(_)
-            | Terminator::Longjmp { .. }
-            | Terminator::Fault(_) => unreachable!("checked the terminators before lowering"),
+            Terminator::Return(None) | Terminator::Exit(_) | Terminator::Longjmp { .. } | Terminator::Fault(_) => {
+                unreachable!("checked the terminators before lowering")
+            }
         })
     }
 
@@ -204,6 +218,10 @@ impl<'a> Frame<'a> {
         }
         Point::entry(target.block)
     }
+}
+
+pub(super) fn switch_target<'a>(value: u128, cases: &'a [SwitchCase], default: &'a Target) -> &'a Target {
+    cases.iter().find(|case| case.value == value).map_or(default, |case| &case.target)
 }
 
 fn unsupported(inst: &Inst) -> Option<(&'static str, &'static str)> {
@@ -219,7 +237,7 @@ fn unsupported(inst: &Inst) -> Option<(&'static str, &'static str)> {
         },
         Inst::Compare { .. } | Inst::Select { .. } | Inst::Cast { .. } => return None,
         Inst::Load { .. } => ("load", "applied memory"),
-        Inst::Store { .. } => ("store", "applied memory"),
+        Inst::Store { .. } => ("store", "memory in the step machine"),
         Inst::Alloca { .. } => ("alloca", "applied stack operations"),
         Inst::StackSave { .. } => ("stacksave", "applied stack operations"),
         Inst::StackRestore { .. } => ("stackrestore", "applied stack operations"),

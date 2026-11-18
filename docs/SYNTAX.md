@@ -156,10 +156,11 @@ once C functions can take qubits through pointers.
 Writes in an applied function are undone. Place calls that must share state inside one applied
 function so they see each other's writes on its private copy of memory.
 
-The gate compiler for `apply` covers a subset of integer instructions, including branches
-and loops with qubit-dependent conditions. Its choice of construction leaves the text form
-and the meaning of the budget the same. The counter uses it automatically and the simulator
-accepts `--apply-circuit auto`. See "Gate emitter" in [DESIGN.md](DESIGN.md#apply).
+The gate compiler for `apply` covers a subset of integer instructions. It can use control
+gates for qubit-dependent choices and loops with a proved pass count, or dispatch instructions
+with a single clock for the rest of the apply. A `switch` needs a proved definite selector.
+The counter uses the compiler automatically and the simulator accepts `--apply-circuit auto`.
+See "Gate emitter" in [DESIGN.md](DESIGN.md#apply).
 
 ## Whole-run exit
 

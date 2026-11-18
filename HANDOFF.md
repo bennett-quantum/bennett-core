@@ -9,10 +9,11 @@ measure. The earlier `bennett-*` repositories are a read-only archive. Vision: `
 C with a few marker calls (`docs/MARKERS.md`) goes through stock `clang` 18, then `bennett-front` (C++ over LLVM 18), which writes a
 *device program* (`crates/ir`: ordinary code plus quantum instructions), which the *executor* (`crates/exec`) runs. The executor is a
 simulator of the model in `docs/DESIGN.md`. The device interface and counter are available.
-The gate emitter compiles applied integer functions, including loops whose control depends on qubits,
-with one clock for the whole `apply`. The counting device uses it, and the simulator offers it through
+The gate emitter compiles applied integer functions with one step budget for the whole `apply`.
+Qubit-dependent choices and loops with a proved pass count can use control gates directly. The counting device uses it, and the simulator offers it through
 `--apply-circuit auto` or `--apply-circuit step-machine`. The default simulator evaluates applied functions
-directly. The emitter refuses calls, private memory and stack operations, `switch`, `or`, division
+directly. The emitter refuses calls, private memory and stack operations, switches without a
+proved definite selector, `or`, division
 and remainder, shifts or multiplies that lack a proved constant amount or factor, and instructions
 such as `fault` that still need named fault handling. See `docs/DESIGN.md`, "Not yet".
 
@@ -33,7 +34,7 @@ What works, one line each (the commit-by-commit table is in `docs/RECORDS.md`, p
 
 Run each in the foreground, from the repository root (`CARGO_BUILD_JOBS=3` on the shared laptop):
 
-- `cargo test`: 368 passed, 0 failed, 5 ignored (each names its reason: heavy reference, generated runs, witnesses of recorded defects); about 10 s, no LLVM needed.
+- `cargo test`: 377 passed, 0 failed, 5 ignored (each names its reason: heavy reference, generated runs, witnesses of recorded defects); about 10 s, no LLVM needed.
 - `front/test.sh` (needs LLVM 18, clang 18, CMake): 345 passed, 0 failed, 22 ignored (each names its reason: the fallback oracle's waiting test, the SQLite acceptance, the North Star ladder runs, musl-linked checks that need `rt/musl/build.py` first, heavy runs, witnesses of recorded debts); it also compiles the C++ header and classifies the 88 LLVM attribute kinds.
 - `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check`: both clean on 2026-11-18 (`scripts/check.sh`: tree guards 3,642 files, 0 problems).
 - `scripts/check.sh` runs all four plus the tree guards (`docs/CHECKS.md`).
@@ -101,7 +102,13 @@ Newest first; quotes are the maintainer's words.
 
 ## In flight
 
-No gate-emitter implementation or review is in flight. The step specification in `docs/APPLY-STEP.md`
+Control-gate lowering is on `wip/sol62-m3m4` for independent review. The tests compare
+amplitudes for a choice inside a definite-count loop, unequal routes to a shared return, and
+shift loops of widths 2 to 6, including a nested example. The bit-level runner checked all 256
+inputs at budgets 0 through 45 for the 8-bit shift loop with both control gates and the step
+machine. The counts table in DESIGN records both constructions.
+
+The step specification in `docs/APPLY-STEP.md`
 landed in `81a19f4` and is linked from DESIGN and the step tests. The loop emitter landed in
 `506788f`, `09fdd28`, `aa6c733` and `28a1c00`. It follows definite control, uses one clock
 for general qubit-dependent jumps, saves decisions for one proved loop, and runs on the counting
@@ -133,7 +140,9 @@ In order:
 
 | Refused today | What removes it |
 |---|---|
-| Emitted `apply` using calls, private memory, stack operations, remaining arithmetic or explicit instruction faults | Gate compiler routes in `docs/DESIGN.md`, "Not yet" |
+| Emitted `apply` using calls, loads, stack operations, remaining arithmetic or explicit instruction faults | Gate compiler routes in `docs/DESIGN.md`, "Not yet" |
+| Emitted `apply` using a store | Memory in the step machine |
+| Emitted `apply` using a switch without a proved definite selector | Multiway dispatch in the step machine |
 | Remaining runtime operations: locks, links, directory enumeration, block transport, permissions and metadata, image loader, allocation exhaustion | The runtime debts below |
 | A call through another prototype where x86-64 does not determine what is read (upper half of a 32-bit value, a missing argument that is read, an integer from a floating-point register, a variadic floating-point argument without `%al`, a narrow argument not extended as the callee relies on); `musttail` with a by-value argument | Nothing: the native result is not determined (`docs/DESIGN.md`, "Calls through a prototype") |
 | A qubit-dependent call of a function that uses `setjmp`; a `setjmp` in a function with qubit variables; a function that uses `stackrestore` run coherently | The front's own effect summary of `setjmp`; resumption edges from every later call and `longjmp` in its facts (`docs/DESIGN.md`, "Non-local jumps") |

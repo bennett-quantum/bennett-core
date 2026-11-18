@@ -300,19 +300,46 @@ executor's step counts (`Stats`, `RegionCost`) count instructions, not gates; th
 function while its next instruction is definite. It represents each bit as a constant or the
 value of a qubit, and computes new bits by reversible gates into scratch qubits. It handles
 addition, subtraction, AND, XOR, shifts and multiplication with a definite shift or factor,
-integer comparisons, select, casts, jumps and return. A jump reads all its incoming values
+integer comparisons, select, casts, jumps, switches with a proved definite selector and return.
+A jump reads all its incoming values
 before assigning the block parameters. Entry stack overflow takes precedence over the budget
 test. Every successful instruction, including a jump or return, costs one step. The compiler
 XORs only the first result or fault code into its destination, then reverses every forward
 gate and releases the scratch in zero.
 
-A **program point** is a position naming the next instruction. At the first
-qubit-dependent jump, the compiler switches to a step machine. It carries one dispatch bit for
-each possible program point, set for the definite inputs whose next instruction is there. Each
-tick reads only the preceding frame. An instruction's dispatch bit controls its writes and which
-successor receives the active bit. Incoming edges to the same point are mutually exclusive, so
-XOR joins their dispatch bits. Returned inputs have no active point and keep their frozen
-result. At the budget boundary each still-active input gets the code `budget`.
+A **program point** is a position naming the next instruction. At a qubit-dependent
+conditional jump the compiler tries to emit **control gates**. It combines the condition
+and its complement with the control that reached the jump. Each resulting control enables
+the gates of one alternative. If the alternatives rejoin, the compiler selects the slots
+from the enabled route and emits the continuation once. Its analysis looks for the nearest
+common continuation of the routes to a return. A loop whose test stays definite can use
+this construction for a choice in its body.
+
+At a join the compiler keeps the smallest and largest possible step counts. If it can
+still charge the next instruction at the largest count, every enabled input may attempt it.
+If even the smallest count has spent the budget, all enabled inputs get `budget`. If
+the counts straddle the next attempt, the compiler abandons the control gates and uses
+the step machine for the qubit-dependent part of the whole function. This preserves the
+first return or fault for each input. Gates from the abandoned construction are removed
+before compilation continues.
+
+A **proved pass count** comes from the program. For a test of whether a block parameter
+is zero, the compiler checks that every route from the nonzero outcome back to the test
+passes a logical right shift by one of that pass's parameter. A word of width `w` must
+then be zero after at most `w` passes. Each emitted pass uses one control formed by
+combining the previous pass's running inputs with the new test. Exits are collected at
+the shared continuation, which is subject to the same budget check as any join. Proved
+counts can nest. A loop with a qubit-dependent exit and no such proof uses the step
+machine or the single-loop construction below. A route still cycling without a program
+proof at the budget boundary also uses the step machine, so an enclosing proved loop
+cannot copy a schedule whose length comes from the budget.
+
+The **step machine** carries one dispatch bit for each possible program point, set for
+the definite inputs whose next instruction is there. Each tick reads only the preceding
+frame. An instruction's dispatch bit controls its writes and which successor receives
+the active bit. Incoming edges to the same point are mutually exclusive, so XOR joins
+their dispatch bits. Returned inputs have no active point and keep their frozen result.
+At the budget boundary each still-active input gets the code `budget`.
 
 The clock starts with the number of steps left after the definite prefix, counting the first
 qubit-dependent jump as the first tick. It is shared by all loops. The gates in a tick cover
@@ -326,8 +353,10 @@ on the routes is total and uses neither memory nor calls. The proof counts the i
 on both routes, including their jumps and the return. At each test, a return is considered only
 if its whole exit route fits in the steps left. A saved decision prevents an earlier return
 from contributing again. A still-running input with no remaining affordable return must
-exhaust the budget, because the skipped instructions cannot fault. The step machine handles
-other shapes. Compilation reports which construction it used and why.
+exhaust the budget, because the skipped instructions cannot fault. Compilation reports
+the construction and its reason. A store needs memory in the step machine, even when
+its address and value are definite. A switch without a proved definite selector needs
+multiway dispatch in the step machine. Both are refused before any gates of the apply.
 
 A pass count proved from the program may be used at any nesting depth. For example, a
 logical right shift of a `w`-bit loop variable by one on each pass makes it zero after at most
@@ -352,6 +381,39 @@ counts layers of gates on disjoint qubits.
 Run `cargo test -p bennett-emit --test apply collatz_eight_bit_budget_sweep_and_counts -- --ignored --exact --nocapture`
 to repeat the sweep and counts.
 
+The next counts use the same convention and include the argument, eight result and five fault
+qubits in the peak. The ordinary loop adds the three-bit input on odd inputs and subtracts it
+on even inputs, three times. The unequal routes reach a shared return after two or three steps.
+The shift loops return the bit length of the input, taking `4 + 5k` steps for `k` passes.
+The nested example shifts a two-bit word and reruns the three-bit shift loop in each outer pass.
+Each measurement uses a budget that allows every input to return.
+
+| Example and budget | Construction | One-qubit gates | Two-qubit gates | Toffolis | Peak qubits | Depth |
+|---|---|---:|---:|---:|---:|---:|
+| Ordinary loop, 31 | Control gates | 948 | 104 | 612 | 170 | 1,265 |
+| Ordinary loop, 31 | Step machine | 460 | 326 | 354 | 181 | 639 |
+| Unequal routes, 3 | Control gates | 3 | 0 | 0 | 14 | 1 |
+| Unequal routes, 3 | Step machine | 6 | 6 | 0 | 14 | 12 |
+| 2-bit shift, 14 | Control gates | 56 | 12 | 32 | 30 | 72 |
+| 2-bit shift, 14 | Step machine | 78 | 19 | 53 | 35 | 81 |
+| 3-bit shift, 19 | Control gates | 132 | 24 | 80 | 51 | 142 |
+| 3-bit shift, 19 | Step machine | 134 | 49 | 132 | 62 | 165 |
+| 4-bit shift, 24 | Control gates | 212 | 40 | 147 | 76 | 225 |
+| 4-bit shift, 24 | Step machine | 190 | 95 | 242 | 99 | 273 |
+| 5-bit shift, 29 | Control gates | 320 | 60 | 235 | 108 | 335 |
+| 5-bit shift, 29 | Step machine | 254 | 157 | 383 | 146 | 405 |
+| 6-bit shift, 34 | Control gates | 436 | 84 | 341 | 145 | 457 |
+| 6-bit shift, 34 | Step machine | 326 | 235 | 555 | 203 | 561 |
+| 8-bit shift, 44 | Control gates | 700 | 144 | 608 | 234 | 750 |
+| 8-bit shift, 44 | Step machine | 494 | 439 | 992 | 347 | 945 |
+| Nested shifts, 53 | Control gates | 348 | 126 | 433 | 167 | 539 |
+| Nested shifts, 53 | Step machine | 1,468 | 2,810 | 5,169 | 1,675 | 1,527 |
+
+Run `cargo test -p bennett-emit --test apply controlled_apply -- --nocapture` for the counts and
+boundary checks. The simulator compares amplitudes with direct evaluation at the return
+boundaries for shift widths 2 through 6 and for the nested example. The bit-level runner
+checks every 8-bit input at budgets 0 through 45, with zero and patterned destinations.
+
 `bennett run --device count` uses the compiler for each `apply` it reaches. Pass
 `--apply-circuit auto` to run the same gates on the simulator, or `--apply-circuit step-machine`
 to select instruction dispatch whenever control depends on qubits. These modes implement the
@@ -359,11 +421,12 @@ machine's fault semantics, writing fault codes into the program's register. The 
 simulator run is `bennett run --machine-meaning` with its default direct evaluation.
 
 Before consulting the budget, the emitter checks all instructions in the applied function.
-Shift amounts and multiplication factors must fold to definite bits, including bits made
-constant by operations on register inputs. The proof joins the bits delivered to each block
-parameter. When a conditional jump folds to a constant, it joins only the selected edge.
-Conflicting values across visits need a more precise analysis of definite control. The refusal
-for given arguments is the same at every budget, including zero.
+Shift amounts, multiplication factors and switch selectors must fold to definite bits,
+including bits made constant by operations on register inputs. The proof joins the bits
+delivered to each block parameter. When a conditional jump or switch folds to a constant,
+it joins only the selected edge. Conflicting values across visits need a more precise
+analysis of definite control. Instruction refusals for given arguments apply at every
+budget, including zero.
 
 The controller resolves the targets and arguments first, keeping dangling and aliased
 handles as enclosing faults. It checks entry frame space, then builds and validates the
@@ -1461,9 +1524,10 @@ its own).
 | Refused inside emitted `apply` | Construction needed |
 |---|---|
 | `or`, division and remainder, shifts by qubit values, multiplication of two qubit values | Remaining integer gates, including conditional arithmetic faults |
-| `switch` | Dispatch to each matching successor and the default successor |
+| `switch` without a proved definite selector | Multiway dispatch in the step machine |
 | Direct and indirect calls, `faddr`, `retaddr` | Applied call frames and targets |
-| `load`, `store`, `alloca`, `stacksave`, `stackrestore` | Private memory and stack state |
+| `store` | Memory in the step machine |
+| `load`, `alloca`, `stacksave`, `stackrestore` | Private memory and stack state |
 | `setjmp`, `longjmp` | Private memory and non-local control transfer |
 | `fault`, `effect`, `exit`, quantum instructions and nested `apply` | Emit the named first fault on reaching the instruction |
 
