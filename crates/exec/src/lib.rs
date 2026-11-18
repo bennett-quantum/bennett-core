@@ -29,7 +29,7 @@ mod region;
 mod snapshot;
 mod wire_storage;
 
-pub use device::{BlockOp, Device, GateBlock, GateOp, Wire};
+pub use device::{BlockOp, Device, GateBlock, GateBlockKey, GateOp, Wire};
 pub use executor::{DeviceRun, Executor, Frame, Options, Outcome, ReverseError, RunError, StartError, Stats};
 pub use journal::Undo;
 pub use measure::{

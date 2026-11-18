@@ -2,7 +2,7 @@
 
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use bennett_ir::Gate;
 
@@ -63,6 +63,31 @@ struct BlockDefinition {
     ops: Vec<BlockOp>,
 }
 
+/// A cache key for a gate block. It does not keep the block's commands alive.
+#[derive(Debug)]
+pub struct GateBlockKey(Weak<BlockDefinition>);
+
+impl GateBlockKey {
+    /// Whether an owner still holds the block definition.
+    pub fn is_live(&self) -> bool {
+        self.0.strong_count() != 0
+    }
+}
+
+impl PartialEq for GateBlockKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.ptr_eq(&other.0)
+    }
+}
+
+impl Eq for GateBlockKey {}
+
+impl Hash for GateBlockKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.as_ptr().hash(state);
+    }
+}
+
 impl GateBlock {
     /// Define a block of gates over wires allocated by the caller.
     pub fn new(name: impl Into<String>, gates: impl IntoIterator<Item = GateOp>) -> Self {
@@ -77,6 +102,11 @@ impl GateBlock {
     /// The name for a device or writer that records this block.
     pub fn name(&self) -> &str {
         &self.0.name
+    }
+
+    /// Get a cache key that stops being live when the last definition owner goes away.
+    pub fn key(&self) -> GateBlockKey {
+        GateBlockKey(Arc::downgrade(&self.0))
     }
 
     /// Commands in execution order.
