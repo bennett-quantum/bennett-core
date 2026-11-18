@@ -343,7 +343,8 @@ cannot copy a schedule whose length comes from the budget.
 proved zero as one. Zero extension keeps its added bits definite. For a product
 the emitter caps the working width at the bit length of the product of the
 operand bounds, or the declared width if that bound overflows. Bits above the working
-width are represented as literal zero and allocate no qubits.
+width are represented as literal zero and allocate no qubits. The operand analysis keeps
+these high zeros for later proofs without generating the product gates.
 
 **Products of qubit-held words.** Each bit pair contributes one AND to the column
 of its two indices' sum. A half adder reduces two column bits and a full adder reduces

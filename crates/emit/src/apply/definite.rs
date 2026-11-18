@@ -5,9 +5,9 @@ use std::collections::BTreeMap;
 use bennett_exec::Wire;
 use bennett_ir::{BinOp, BlockId, Inst, Operand, Slot, Terminator, Width};
 
-use super::arithmetic;
-use super::bits::{Bit, Circuit, Word, constant, definite};
+use super::bits::{Bit, Circuit, Word, ZERO, constant, definite};
 use super::symbolic::{Frame, switch_target, visit_possible_targets};
+use super::{arithmetic, ranges, remainders};
 
 fn fold_inst(
     inst: &Inst,
@@ -21,12 +21,18 @@ fn fold_inst(
         Inst::Binary { op, lhs, rhs, .. } => {
             let left = read(lhs)?;
             let right = read(rhs)?;
-            let mut word = arithmetic::fold_binary(circuit, *op, &left, &right).unwrap_or_else(unknown);
-            if *op == BinOp::Urem && definite(&right) != Some(0) {
-                let width = super::remainders::result_bits(&left, &right);
-                word[width..].fill(super::bits::ZERO);
-            }
-            Some(word)
+            Some(arithmetic::fold_binary(circuit, *op, &left, &right).unwrap_or_else(|| {
+                let mut word = unknown();
+                if *op == BinOp::Mul {
+                    let width =
+                        ranges::product_bits(ranges::unsigned_max(&left), ranges::unsigned_max(&right), word.len());
+                    word[width..].fill(ZERO);
+                } else if *op == BinOp::Urem && definite(&right) != Some(0) {
+                    let width = remainders::result_bits(&left, &right);
+                    word[width..].fill(ZERO);
+                }
+                word
+            }))
         }
         Inst::Compare { pred, lhs, rhs, .. } => {
             Some(vec![arithmetic::compare(circuit, *pred, &read(lhs)?, &read(rhs)?)])

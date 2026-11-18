@@ -706,6 +706,41 @@ no:
 mod calls;
 
 #[test]
+fn a_product_bound_proves_high_bits_for_a_shift() {
+    let module = control_example(
+        r#"
+memory 1024
+func @f(i2 %x) -> i8 {
+entry:
+    %lo = and i2 %x, 1
+    %hi = lshr i2 %x, 1
+    %a = zext i2 %lo to i8
+    %b = zext i2 %hi to i8
+    %product = mul i8 %a, %b
+    %upper = lshr i8 %product, 1
+    %base = shl i8 7, %upper
+    %result = add i8 %base, %product
+    ret %result
+}
+"#,
+        2,
+        "",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=10 {
+            compare_controls(
+                &module,
+                budget,
+                mode,
+                |x| {
+                    if budget < 9 { (0, 1) } else { (7 + ((x & 1) * (x >> 1)), 0) }
+                },
+            );
+        }
+    }
+}
+
+#[test]
 fn multiply_two_qubit_words_at_the_return_boundary() {
     let module = control_example(
         r#"

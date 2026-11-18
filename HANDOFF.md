@@ -112,8 +112,8 @@ and bad indirect addresses and signatures. Copied arguments preserve proved bits
 including the high zeros of a zero extension used to resolve an indirect address.
 The planner copies sites reachable from entry. Untaken indirect calls need no
 target proof.
-Unsigned bounds keep the high bits of
-narrowly bounded products at literal zero, including in a 128-bit destination. Qubit-held
+Unsigned bounds prove high product bits zero for subsequent operations and keep those
+bits off the circuit, including in a 128-bit destination. Qubit-held
 products use column reductions with their own work wires cleared. Their Toffoli counts
 are checked through a full 64-by-64-bit product. Unsigned remainder clears its work
 wires and distinguishes a reached zero divisor from budget exhaustion, including
