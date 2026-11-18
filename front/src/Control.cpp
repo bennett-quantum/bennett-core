@@ -121,9 +121,17 @@ private:
   void exchangedStores(const StoreInst &first, const MDNode &group);
   std::set<const StoreInst *> exchangedDone;
   // Whether `old`, the value `target` holds at `store`, can be computed again there: a computation the control
-  // program can apply (collect) whose qubit variables, `target` not among them, are unchanged since they were read,
+  // program can apply (collect) whose qubit variables, `target` not among them, are unchanged since they were read
+  // or held there a value that can be computed again in turn (collect with knownLoads computes it in their place),
   // and whose calls see the same memory.
-  bool recomputable(const Value *old, const Storage &target, const Instruction &store) const;
+  bool recomputable(const Value *old, const Storage &target, const Instruction &store) const {
+    std::set<const Value *> active;
+    return recomputable(old, target, store, active);
+  }
+  // The same, with the values whose computations are being checked (`active`), so that a load recorded as
+  // holding a value computed from itself is not followed in a cycle.
+  bool recomputable(const Value *old, const Storage &target, const Instruction &store,
+                    std::set<const Value *> &active) const;
 
   void release(const Instruction &ret);
   void controlledGate(const CallBase &call, const Access &target, const std::string &gate);
@@ -640,10 +648,16 @@ void ControlWriter::exchangedStores(const StoreInst &first, const MDNode &group)
   }
 }
 
-bool ControlWriter::recomputable(const Value *old, const Storage &target, const Instruction &store) const {
-  if (!analysis.dominators.dominates(old, &store)) {
-    return false;
+bool ControlWriter::recomputable(const Value *old, const Storage &target, const Instruction &store,
+                                 std::set<const Value *> &active) const {
+  if (!analysis.dominators.dominates(old, &store) || !active.insert(old).second) {
+    return false; // or a cycle: `old` is being checked further up
   }
+  struct Leave {
+    std::set<const Value *> &active;
+    const Value *old;
+    ~Leave() { active.erase(old); }
+  } leave{active, old};
   std::set<const Value *> seen;
   std::vector<const Value *> work{old};
   std::vector<const CallBase *> calls;
@@ -660,6 +674,13 @@ bool ControlWriter::recomputable(const Value *old, const Storage &target, const 
         continue; // it read a known ordinary value, passed in
       }
       if (!source || source->storage == &target || !analysis.unchangedBetween(load, &store, source->storage)) {
+        // It read a value computed from registers unchanged since, which collect (with knownLoads) computes
+        // again in its place, as here.
+        Fact fact = source && source->offset == 0 ? analysis.before(load, source->storage) : Fact{};
+        if (fact.kind == Fact::Computed && widthOf(load->getType(), load) == source->storage->bits &&
+            recomputable(fact.value, *source->storage, store, active)) {
+          continue;
+        }
         return false;
       }
       continue;

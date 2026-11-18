@@ -879,3 +879,39 @@ fn loop_overwrite_of_a_value_a_gate_changed_is_refused() {
     measure_objects(&mut body, &[("y".to_owned(), 2)]);
     check_refused("loop-overwrite-after-gate", &body, "whose value before the loop is neither known nor computable");
 }
+
+// Generated case 253 of seed 0x0b7e11a5d1ff0007 (O2): the first region exchanges cell0, whose old value was
+// stored before it, so cell0 then holds the region's final value, computed from that old value. LLVM forwards
+// the value to the second region, which overwrites cell0: clearing the value it held computes the old value
+// again too. Clean: nothing kept.
+#[test]
+fn later_region_overwrites_an_exchanged_value() {
+    check_witness(
+        "overwrite-after-exchange",
+        2,
+        r#"
+static uint32_t cell0[2] = {3186690542ULL, 11};
+static uint32_t cell1[2] = {11, 2704361132ULL};
+packet entry(unsigned prep, unsigned n, unsigned column) {
+    unsigned char q = PREPARE(prep);
+    HBIT(q, 0);
+    HBIT(q, 1);
+    cell0[0] = 17ULL * q + 3;
+    if ((q & 1U) != 0) {
+        cell0[0] ^= 9969435993843179127ULL + 3ULL * q;
+        cell1[1] ^= 14202344268543918937ULL;
+        #pragma clang loop unroll(disable)
+        for (unsigned j = 0; j < 3U; ++j) cell1[1] ^= (j + 1U) * (q + 3U);
+    }
+    if ((q & 2U) != 0) {
+        cell0[0] ^= 3756836512046373768ULL + 3ULL * q;
+    }
+    packet key = bennett_measure(&q);
+    packet v0 = bennett_measure_bytes(&cell0[0], 4);
+    packet v1 = bennett_measure_bytes(&cell1[1], 4);
+    return key | (v0 << 8) | (v1 << 40);
+}
+"#,
+        None,
+    );
+}

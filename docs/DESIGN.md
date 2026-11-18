@@ -487,7 +487,8 @@ all of them), then every exchange, then every clearing. The results XORed into t
 before the exchanges too. `n` is cleared with the old value where it was known, or by computing it again where
 it is a value computed from registers unchanged since it was stored, none of them a variable of the group (the
 clearing of a store by recomputation, `ControlWriter::recomputable`: a value stored before the code, returned by
-an applied call, or left by earlier code under a qubit applied whole). Then `n` returns to 0 for every definite
+an applied call, or left by earlier code under a qubit applied whole, an exchanged variable's final value,
+computed from its old value computed again, among them). Then `n` returns to 0 for every definite
 value of what the code reads, nothing is kept, and the code's loops, nested loops and calls run inside the
 applied function under its one budget: one run of the whole code for each exchanged variable, and one
 computation of each old value. An old value that is neither known nor computable again is refused by name: it would have to

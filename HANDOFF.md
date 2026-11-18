@@ -1787,3 +1787,15 @@ qubit" (exchanged variables) and "Overwrites that keep the old value".
 Capped run (400 cases, seed `0x87196caa251d0f43`): accepted 332 → 370, declined 68 → 30, compared 2,172 →
 2,392, failed 0 → 0. Declines of the loop update 45 → 6, all now the case whose old value is neither known nor
 computable again (step 3).
+
+**A later overwrite of an exchanged value (found by the capped run of step 3 on the second seed, a defect of
+step 2).** Generated case 253 of seed `0x0b7e11a5d1ff0007` (O2), refused before step 2, was accepted by it with
+one register of 32 qubits released nonzero in a program marked clean: the first region exchanges `cell0`, whose
+old value (`17 * q + 3`, stored before) it clears by computing it again, so `cell0` then holds the region's
+final value, a function of that old value; LLVM forwards it to a second region that overwrites `cell0` (the
+shape of the fix above), and clearing it there needs the old value computed again as well. `recomputable`
+refused a computation that reads its own target's earlier value, although `collect` (with `knownLoads`), which
+builds the clearing, computes such a read again from the value recorded for it. Fix (`front/src/Control.cpp`):
+`recomputable` accepts a read whose variable has changed, or is the target, when the value recorded there can be
+computed again in turn (guarded against cycles). Test: `later_region_overwrites_an_exchanged_value` (the
+generated program; one nonzero release before, none after, values equal to native C, all three modes).
