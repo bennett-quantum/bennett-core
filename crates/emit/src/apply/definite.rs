@@ -73,6 +73,12 @@ fn literal(operand: &Operand) -> bool {
     matches!(operand, Operand::Const(_))
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Edges {
+    Selected,
+    All,
+}
+
 #[derive(Default)]
 pub(super) struct Constants(Vec<Option<Word>>);
 
@@ -84,7 +90,16 @@ impl Constants {
         }
     }
 
-    pub(super) fn analyze(frame: &Frame<'_>, input: &ApplyInput<'_>) -> Self {
+    pub(super) fn add_fallback(&mut self, fallback: Self) {
+        // A fact proved over every edge holds on the selected edges as well.
+        for (current, candidate) in self.0.iter_mut().zip(fallback.0) {
+            if current.as_deref().and_then(definite).is_none() && candidate.as_deref().and_then(definite).is_some() {
+                *current = candidate;
+            }
+        }
+    }
+
+    pub(super) fn analyze(frame: &Frame<'_>, input: &ApplyInput<'_>, edges: Edges) -> Self {
         let function = frame.module.function(frame.callee);
         if !function.blocks.iter().any(|block| {
             matches!(&block.term, Terminator::Switch { value: Operand::Slot(_), .. })
@@ -137,7 +152,9 @@ impl Constants {
                         }
                     }
                 };
-                if let Terminator::Branch { cond, if_true, if_false } = &block.term {
+                if edges == Edges::All {
+                    block.term.visit_targets(transfer);
+                } else if let Terminator::Branch { cond, if_true, if_false } = &block.term {
                     if let Some(word) = read(&local, cond) {
                         match word[0] {
                             Bit::Constant(choice) => transfer(if choice { if_true } else { if_false }),

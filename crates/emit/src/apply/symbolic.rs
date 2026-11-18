@@ -6,7 +6,7 @@ use bennett_ir::{
 
 use super::arithmetic;
 use super::bits::{Bit, Circuit, Word, ZERO, constant};
-use super::definite::{Constants, requirement};
+use super::definite::{Constants, Edges, requirement};
 use super::{ApplyError, ApplyInput, Argument};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -87,25 +87,35 @@ impl<'a> Frame<'a> {
     pub(super) fn check(input: &ApplyInput<'a>) -> Result<Self, ApplyError> {
         let mut frame = Self { module: input.module, callee: input.callee, constants: Constants::default() };
         frame.check_instructions()?;
-        frame.constants = Constants::analyze(&frame, input);
-        for (block, body) in frame.module.function(frame.callee).blocks.iter().enumerate() {
+        frame.constants = Constants::analyze(&frame, input, Edges::Selected);
+        if frame.check_operands().is_err() {
+            // The whole-function check can need a fact in a block skipped by a definite jump.
+            let fallback = Constants::analyze(&frame, input, Edges::All);
+            frame.constants.add_fallback(fallback);
+            frame.check_operands()?;
+        }
+        Ok(frame)
+    }
+
+    fn check_operands(&self) -> Result<(), ApplyError> {
+        for (block, body) in self.module.function(self.callee).blocks.iter().enumerate() {
             for (index, inst) in body.insts.iter().enumerate() {
                 let Some((op, route)) = requirement(inst) else { continue };
                 let Inst::Binary { lhs, rhs, .. } = inst else {
                     unreachable!("the requirement is for a binary operation")
                 };
-                if frame.constants.get(rhs).is_none() && (op != BinOp::Mul || frame.constants.get(lhs).is_none()) {
-                    return Err(frame.error(Point { block: BlockId(block as u32), index }, op.mnemonic(), route));
+                if self.constants.get(rhs).is_none() && (op != BinOp::Mul || self.constants.get(lhs).is_none()) {
+                    return Err(self.error(Point { block: BlockId(block as u32), index }, op.mnemonic(), route));
                 }
             }
             if let Terminator::Switch { value, .. } = &body.term
-                && frame.constants.get(value).is_none()
+                && self.constants.get(value).is_none()
             {
                 let point = Point { block: BlockId(block as u32), index: body.insts.len() };
-                return Err(frame.error(point, "switch", "multiway dispatch in the step machine"));
+                return Err(self.error(point, "switch", "multiway dispatch in the step machine"));
             }
         }
-        Ok(frame)
+        Ok(())
     }
 
     fn check_instructions(&self) -> Result<(), ApplyError> {

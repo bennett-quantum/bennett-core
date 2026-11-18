@@ -403,8 +403,10 @@ Before consulting the budget, the emitter checks all instructions in the applied
 Shift amounts, multiplication factors and switch selectors must fold to definite bits,
 including bits made constant by operations on register inputs. The proof joins the bits
 delivered to each block parameter. When a conditional jump or switch folds to a constant,
-it joins only the selected edge. Conflicting values across visits need a more precise
-analysis of definite control. Instruction refusals for given arguments apply at every
+it joins only the selected edge. If that analysis leaves an operand without a proof, a
+second analysis follows every edge. This can recover a constant for an instruction the
+whole-function check examines in a bypassed block. Conflicting values across visits need
+a more precise analysis of definite control. Instruction refusals for given arguments apply at every
 budget, including zero.
 
 The controller resolves the targets and arguments first, keeping dangling and aliased
