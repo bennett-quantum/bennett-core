@@ -2,6 +2,7 @@
 
 #include "CallerPosition.h"
 #include "Diagnostic.h"
+#include "HeldBytes.h"
 #include "Markers.h"
 #include "MovedLoop.h"
 #include "Normalise.h"
@@ -67,12 +68,13 @@ struct Param {
 class Predicator {
 public:
   Predicator(Function &function, const std::vector<BasicBlock *> &region, BasicBlock *exit,
-             ControlAnalysis &analysis);
+             ControlAnalysis &analysis, const std::set<const Function *> &control);
   void run();
 
 private:
   Function &fn;
   ControlAnalysis &analysis;
+  const std::set<const Function *> &control;
   BasicBlock *entry;                // the region's entry
   std::vector<BasicBlock *> blocks; // in a topological order of the region's strongly connected components
   std::set<const BasicBlock *> inRegion;
@@ -119,6 +121,7 @@ private:
   // The ordinary part of the condition on which the region enters `loop`, computed at `b`: the loop's own
   // guard among the tests on the way, which LLVM may have merged into the branch on a qubit.
   Value *entryGuard(Loop *loop, IRBuilder<> &b, ValueToValueMapTy &map);
+  void requireOrdinaryGuardLoads(Value *condition) const;
   // The ordinary conjuncts of `branch`'s condition where it takes its true (`onTrue`) or false edge, or null
   // if it has none.
   Value *ordinaryPart(const BranchInst *branch, bool onTrue, IRBuilder<> &b, ValueToValueMapTy &map);
@@ -130,8 +133,9 @@ private:
 };
 
 Predicator::Predicator(Function &function, const std::vector<BasicBlock *> &region, BasicBlock *exit,
-                       ControlAnalysis &analysis)
-    : fn(function), analysis(analysis), entry(region.front()), inRegion(region.begin(), region.end()), exit(exit) {
+                       ControlAnalysis &analysis, const std::set<const Function *> &control)
+    : fn(function), analysis(analysis), control(control), entry(region.front()), inRegion(region.begin(), region.end()),
+      exit(exit) {
   ReversePostOrderTraversal<Function *> order(&function);
   for (BasicBlock *block : order) {
     if (inRegion.count(block)) {
@@ -648,6 +652,33 @@ Value *Predicator::recomputed(Value *value, IRBuilder<> &b, ValueToValueMapTy &m
   return copy;
 }
 
+void Predicator::requireOrdinaryGuardLoads(Value *condition) const {
+  // LLVM may speculate an allocated-memory read from a short-circuit guard
+  // before the qubit test. In the device that byte might now hold qubits.
+  std::set<const Instruction *> seen;
+  std::vector<Value *> work{condition};
+  while (!work.empty()) {
+    auto *inst = dyn_cast<Instruction>(work.back());
+    work.pop_back();
+    if (!inst || !seen.insert(inst).second) {
+      continue;
+    }
+    if (auto *load = dyn_cast<LoadInst>(inst); load && !inRegion.count(load->getParent()) &&
+                                                !analysis.basedOn(load->getPointerOperand())) {
+      std::vector<LoadInst *> candidates{load};
+      keepOrdinaryLoads(candidates, *load, control);
+      if (candidates.empty()) {
+        notHandled("a moved gate loop uses a load in its entry guard whose bytes are not proved ordinary "
+                   "(route: keep the conditional read inside one applied function for the table of control bits)",
+                   load);
+      }
+    }
+    for (Use &operand : inst->operands()) {
+      work.push_back(operand.get());
+    }
+  }
+}
+
 Value *Predicator::entryGuard(Loop *loop, IRBuilder<> &b, ValueToValueMapTy &map) {
   // Every test on the way into the loop decides it: each conditional branch, from the loop's predecessor up
   // through the region to the branch that enters the region, one of whose edges every path to the header
@@ -667,6 +698,7 @@ Value *Predicator::entryGuard(Loop *loop, IRBuilder<> &b, ValueToValueMapTy &map
     if (branch && branch->isConditional() && branch->getSuccessor(0) != branch->getSuccessor(1)) {
       for (bool onTrue : {true, false}) {
         if (dominators.dominates(BasicBlockEdge(from, branch->getSuccessor(onTrue ? 0 : 1)), header)) {
+          requireOrdinaryGuardLoads(branch->getCondition());
           if (Value *part = ordinaryPart(branch, onTrue, b, map)) {
             guard = guard ? b.CreateAnd(guard, part) : part;
           }
@@ -1072,8 +1104,8 @@ bool hasQuantumOperations(const std::vector<BasicBlock *> &blocks, const Control
 }
 
 void predicateRegion(Function &function, const std::vector<BasicBlock *> &blocks, BasicBlock *exit,
-                     ControlAnalysis &analysis) {
-  Predicator(function, blocks, exit, analysis).run();
+                     ControlAnalysis &analysis, const std::set<const Function *> &control) {
+  Predicator(function, blocks, exit, analysis, control).run();
 }
 
 } // namespace bennett

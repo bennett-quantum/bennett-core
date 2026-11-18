@@ -788,7 +788,9 @@ loop (each conditional branch one of whose edges every path to the loop takes): 
 loop's own guard into the branch on the qubit, and put code of its own between them (a nested loop's guard
 hoisted into a block before the outer loop). The loop also runs for the configurations whose path would not
 reach it, with every gate disabled there. The front checks the ordinary instructions in the loop and those it
-recomputes to enter the loop. It refuses moved memory accesses, calls, and division or remainder without
+recomputes to enter the loop. LLVM can hoist a load from a short-circuit guard ahead of the qubit test.
+The front follows guard inputs to these earlier loads and checks their addresses against preceding
+accesses and calls that may leave qubits there. A load whose bytes cannot be proved ordinary is refused. It refuses moved memory accesses, calls, and division or remainder without
 a divisor proved nonzero independently of the original qubit condition. A nonzero constant or a bitwise OR
 with a nonzero constant supplies that proof. Each cycle must have a unit-step counter that reaches its
 loop-invariant exit bound without wrapping. A strict comparison must match the step direction. An

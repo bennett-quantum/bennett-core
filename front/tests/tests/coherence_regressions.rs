@@ -642,3 +642,38 @@ fn replay_of_a_helper_with_private_stack_storage_clears_the_word() {
     }
     .agrees(0, &[256, 257], &return_address_readout(), 0);
 }
+
+#[test]
+fn a_moved_gate_loop_refuses_a_hoisted_guard_load_that_may_hold_qubits() {
+    Program {
+        name: "gate-hoisted-held-guard",
+        declarations: r#"
+uint8_t held[2] = {0, 1};
+__attribute__((noinline)) void fill(void) {
+    uint8_t r = 0;
+    XBIT(r, 0);
+    held[0] = r;
+    XBIT(r, 0);
+}
+"#,
+        body: r#"
+    ZBIT(q, 1);
+    uint8_t y = 0;
+    if (prep == 1) fill();
+    ZBIT(q, 1);
+    if (q && held[0]) {
+        #pragma clang loop unroll(disable)
+        for (unsigned i = 0; i < n; ++i) XBIT(y, 0);
+    }
+    packet key = READ(q);
+    packet target = READ(y);
+    return key | (target << 8) | ((packet)READ_BYTES(held[0], 1) << 16);
+"#,
+        qubits: 1,
+    }
+    .refused(
+        1,
+        &[65536, 1],
+        "not handled yet: a moved gate loop uses a load in its entry guard whose bytes are not proved ordinary",
+    );
+}
