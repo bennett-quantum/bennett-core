@@ -24,6 +24,8 @@ const SEED: u64 = 0x8719_6caa_251d_0f43;
 const SHORT_CASES: usize = generator::SHORT_CASES;
 const EXTRA_SEED_MASK: u64 = 0xe911_2825_44ba_3983;
 const STATE_SEED_MASK: u64 = 0xdba2_4ce8_b7e9_8163;
+const LOOP_SEED_MASK: u64 = 0x384e_2b7a_97dd_5c1f;
+const LOOP_UPDATE: &str = " in a loop under the control of a value that depends on a qubit,";
 const LONG_TIME: Duration = Duration::from_secs(15 * 60);
 const MODES: [(&str, &[&str], &[&str]); 3] =
     [("o0", CLANG_FLAGS, &[]), ("o2", CLANG_O2_FLAGS, &[]), ("taint", CLANG_FLAGS, &["--taint-all"])];
@@ -81,15 +83,35 @@ enum Expectation {
     AppliedWrite(&'static str),
     ConditionalWrite,
     Retained(u32),
+    LoopClean,
+    LoopRetained { object: &'static str, bits: u32 },
 }
 
 impl Expectation {
     fn clean(&self) -> bool {
-        matches!(self, Self::Values { clean: true } | Self::Clean | Self::AppliedWrite(_))
+        matches!(self, Self::Values { clean: true } | Self::Clean | Self::AppliedWrite(_) | Self::LoopClean)
+    }
+
+    fn loop_overwrite(&self) -> bool {
+        matches!(self, Self::LoopClean | Self::LoopRetained { .. })
+    }
+
+    fn retained_bits(&self) -> u32 {
+        match self {
+            Self::Retained(bits) | Self::LoopRetained { bits, .. } => *bits,
+            _ => 0,
+        }
+    }
+
+    fn expected_loop_decline(&self, reason: &str) -> bool {
+        let Self::LoopRetained { object, .. } = self else { return false };
+        reason.starts_with(&format!("not handled yet: an update of qubit variable '{object}'{LOOP_UPDATE}"))
+            && reason.contains("whose value before the loop is neither known nor computable again")
+            && reason.contains("its old value would have to be kept in the fresh register and released: not built yet")
     }
 
     fn check_diagnostics(&self, diagnostics: &str) -> Result<(), String> {
-        let expected = match self {
+        let expected: [&str; 2] = match self {
             Self::AppliedWrite(object) => {
                 ["warning: the call of @write_cell depends on a qubit and is applied whole", object]
             }
@@ -97,7 +119,11 @@ impl Expectation {
                 "warning: the overwrite of qubit variable 'x'",
                 &format!("keeps the old value in {bits} qubits each time it runs"),
             ],
-            Self::Values { .. } | Self::Clean | Self::ConditionalWrite => return Ok(()),
+            Self::LoopRetained { object, bits } => [
+                &format!("warning: the overwrite of qubit variable '{object}'{LOOP_UPDATE}"),
+                &format!("keeps the old value in {bits} qubits each time it runs"),
+            ],
+            Self::Values { .. } | Self::Clean | Self::ConditionalWrite | Self::LoopClean => return Ok(()),
         };
         if !diagnostics.lines().any(|line| expected.iter().all(|part| line.contains(part))) {
             return Err(format!("missing warning containing {expected:?}: {diagnostics:?}"));
@@ -143,13 +169,16 @@ struct Results {
     state: state::Counts,
     failed: usize,
     declined: BTreeMap<String, usize>,
+    loop_accepted: usize,
+    loop_state: usize,
+    loop_declined: usize,
 }
 
 impl Results {
     fn print(&self, seed: u64, elapsed: Duration) {
         let declined: usize = self.declined.values().sum();
         println!(
-            "seed={seed:#018x} generated={} accepted={} declined={declined} compared={} clean={} state={} phase={} return_to_zero={} retained={} failed={} elapsed={:.2}s",
+            "seed={seed:#018x} generated={} accepted={} declined={declined} compared={} clean={} state={} phase={} return_to_zero={} retained={} failed={} elapsed={:.2}s loop_accepted={} loop_state={} loop_declined={}",
             self.generated,
             self.accepted,
             self.compared,
@@ -159,7 +188,10 @@ impl Results {
             self.state.return_to_zero,
             self.state.retained,
             self.failed,
-            elapsed.as_secs_f64()
+            elapsed.as_secs_f64(),
+            self.loop_accepted,
+            self.loop_state,
+            self.loop_declined,
         );
         for (reason, count) in &self.declined {
             println!("  {count:5} {reason}");
@@ -195,9 +227,8 @@ fn compare(
                     stats.nonzero_releases, stats.nonzero_release_weight
                 ));
             }
-            if let Expectation::Retained(bits) = case.expectation
-                && (stats.nonzero_releases, stats.leftover_qubits) != (1, bits)
-            {
+            let bits = case.expectation.retained_bits();
+            if bits != 0 && (stats.nonzero_releases, stats.leftover_qubits) != (1, bits) {
                 return Err(format!(
                     "packet {column}, measurement seed {seed}, register={input}: expected one release keeping {bits} qubits, got {} releases keeping {} qubits",
                     stats.nonzero_releases, stats.leftover_qubits
@@ -228,12 +259,19 @@ fn try_case(case: &Case, name: &str, mode: usize, results: &mut Results) -> Resu
         {
             let reason = error.trim_end().rsplit_once(", at ").map_or(error.trim_end(), |(reason, _)| reason);
             *results.declined.entry(reason.to_owned()).or_default() += 1;
+            if reason.starts_with("not handled yet: an update of qubit variable ") && reason.contains(LOOP_UPDATE) {
+                results.loop_declined += 1;
+            }
             if matches!(case.expectation, Expectation::ConditionalWrite)
                 && !reason.contains("a call to @write_cell, which may write memory,")
             {
                 return Err(format!("expected the refusal of a conditional writing call: {reason}"));
             }
-            if matches!(case.expectation, Expectation::Clean | Expectation::AppliedWrite(_) | Expectation::Retained(_))
+            if matches!(
+                case.expectation,
+                Expectation::Clean | Expectation::AppliedWrite(_) | Expectation::Retained(_) | Expectation::LoopClean
+            ) || (matches!(case.expectation, Expectation::LoopRetained { .. })
+                && !case.expectation.expected_loop_decline(reason))
             {
                 return Err(format!("expected the front to lower the program: {reason}"));
             }
@@ -243,6 +281,7 @@ fn try_case(case: &Case, name: &str, mode: usize, results: &mut Results) -> Resu
     };
     results.accepted += 1;
     results.clean += usize::from(case.expectation.clean());
+    results.loop_accepted += usize::from(case.expectation.loop_overwrite());
     let module = bennett_ir::load(&text).map_err(|error| format!("front emitted an invalid program: {error}"))?;
     let native = native_build(&source, name, &["-DNATIVE"]);
     let table = case.native_table(&native);
@@ -251,13 +290,15 @@ fn try_case(case: &Case, name: &str, mode: usize, results: &mut Results) -> Resu
         return Err("accepted a call that may write memory under a qubit-dependent condition".to_owned());
     }
     case.expectation.check_diagnostics(&diagnostics)?;
-    let retained_bits = match case.expectation {
-        Expectation::Retained(bits) => bits,
-        _ => 0,
-    };
+    let retained_bits = case.expectation.retained_bits();
     if case.expectation.clean() || retained_bits > 0 {
         let check = case.state.as_ref().expect("generated clean or retained case has a state check");
-        state::compare(check, &module, &table, case.trips, retained_bits, &mut results.state)?;
+        let before = results.state.total;
+        let checked = state::compare(check, &module, &table, case.trips, retained_bits, &mut results.state);
+        if case.expectation.loop_overwrite() {
+            results.loop_state += results.state.total - before;
+        }
+        checked?;
     }
     Ok(())
 }
@@ -299,7 +340,7 @@ fn measure_objects(body: &mut String, objects: &[(String, u32)]) -> (u64, Vec<Fi
     (packets.len() as u64, fields)
 }
 
-// The original fixed prefix, then one case from each state recipe.
+// The original fixed prefix, then one case from each loop overwrite recipe.
 #[test]
 fn short_randomized_differential() {
     campaign("qubit-differential-short", SEED, Some(SHORT_CASES), None, None);
@@ -325,6 +366,7 @@ fn campaign(name: &str, seed: u64, limit: Option<usize>, time: Option<Duration>,
     let mut original = ChaCha8Rng::seed_from_u64(seed);
     let mut extra = ChaCha8Rng::seed_from_u64(seed ^ EXTRA_SEED_MASK);
     let mut state = ChaCha8Rng::seed_from_u64(seed ^ STATE_SEED_MASK);
+    let mut loops = ChaCha8Rng::seed_from_u64(seed ^ LOOP_SEED_MASK);
     let start = Instant::now();
     let mut results = Results::default();
     println!("seed={seed:#018x} case limit={limit:?} time limit={time:?} replay={replay:?}");
@@ -332,8 +374,10 @@ fn campaign(name: &str, seed: u64, limit: Option<usize>, time: Option<Duration>,
         if limit.is_some_and(|limit| results.generated >= limit) || time.is_some_and(|time| start.elapsed() >= time) {
             break;
         }
-        let case = generator::generate(index, &mut original, &mut extra, &mut state);
-        if replay.is_some_and(|selected| index < selected) {
+        let case = generator::generate(index, &mut original, &mut extra, &mut state, &mut loops);
+        if replay.is_some_and(|selected| index < selected)
+            || (time.is_none() && (generator::SHORT_PREFIX..generator::LOOP_START).contains(&index))
+        {
             continue;
         }
         let mode = index % MODES.len();

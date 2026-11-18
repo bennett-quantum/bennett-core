@@ -7,21 +7,31 @@ use rand_chacha::ChaCha8Rng;
 
 use super::{Case, Check, Expectation, Field, MODES, Preparation, hadamards, measure_objects, prepare};
 
+#[path = "loops.rs"]
+mod loops;
+
 const EXTRA_SHAPES: usize = 7;
 const STATE_SHAPES: usize = 4;
 const BASE_CASES: usize = 2 * MODES.len() * EXTRA_SHAPES;
-const BLOCK_CASES: usize = BASE_CASES + MODES.len() * STATE_SHAPES;
-pub(super) const SHORT_CASES: usize = BASE_CASES + STATE_SHAPES;
+pub(super) const LOOP_START: usize = BASE_CASES + MODES.len() * STATE_SHAPES;
+const BLOCK_CASES: usize = LOOP_START + MODES.len() * loops::SHAPES;
+pub(super) const SHORT_PREFIX: usize = BASE_CASES + STATE_SHAPES;
+pub(super) const SHORT_CASES: usize = SHORT_PREFIX + loops::SHAPES;
 
-/// Full rounds of all three modes. The two existing streams still generate the same
-/// programs in the same modes, with rounds of state recipes between blocks.
+/// Full rounds of all three modes. Each stream still generates the same programs
+/// in the same modes when more recipes are appended to the block.
 pub(super) fn generate(
     index: usize,
     original: &mut ChaCha8Rng,
     extra: &mut ChaCha8Rng,
     state: &mut ChaCha8Rng,
+    loops: &mut ChaCha8Rng,
 ) -> Case {
     let within_block = index % BLOCK_CASES;
+    if within_block >= LOOP_START {
+        // Eight recipes rotate across three modes, visiting each pair in one block.
+        return loops::generate((within_block - LOOP_START) % loops::SHAPES, loops);
+    }
     if within_block >= BASE_CASES {
         // Four recipes rotate across three modes, visiting each pair in one block.
         return match (within_block - BASE_CASES) % STATE_SHAPES {
