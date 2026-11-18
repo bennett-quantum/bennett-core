@@ -4,23 +4,24 @@ use bennett_ir::{
     BinOp, BlockId, Fault, FuncId, Gate, Inst, Operand, Slot, SwitchCase, Target, Terminator, Type, ValidModule,
 };
 
+use super::ApplyError;
 use super::arithmetic;
 use super::bits::{Bit, Circuit, Word, ZERO, constant};
 use super::definite::{Constants, Scope, requirement};
-use super::{ApplyError, ApplyInput, Argument};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct Point {
+    pub(super) copy: usize,
     pub(super) block: BlockId,
     pub(super) index: usize,
 }
 
 impl Point {
     pub(super) fn entry(block: BlockId) -> Self {
-        Self { block, index: 0 }
+        Self { copy: 0, block, index: 0 }
     }
 
-    fn next(self) -> Self {
+    pub(super) fn next(self) -> Self {
         Self { index: self.index + 1, ..self }
     }
 }
@@ -36,6 +37,8 @@ pub(super) enum Step<'a> {
     Jump(&'a Target),
     Branch(Bit, &'a Target, &'a Target),
     Return(Word),
+    Transfer(Point, Vec<(Slot, Word)>),
+    Fault(Fault),
 }
 
 pub(super) struct Frame<'a> {
@@ -52,15 +55,12 @@ impl<'a> Frame<'a> {
         }
     }
 
-    pub(super) fn initial(&self, input: &ApplyInput<'_>) -> Vec<Word> {
+    pub(super) fn initial(&self, args: impl IntoIterator<Item = Word>) -> Vec<Word> {
         let function = self.module.function(self.callee);
         let mut slots =
             (0..function.slot_count()).map(|index| vec![ZERO; self.slot_width(Slot(index as u32))]).collect::<Vec<_>>();
-        for (param, argument) in function.params.iter().zip(input.args) {
-            slots[param.slot.index()] = match argument {
-                Argument::Value(value) => constant(*value, slots[param.slot.index()].len()),
-                Argument::Register(wires) => wires.clone().map(|wire| Bit::Wire(wire, false)).collect(),
-            };
+        for (param, value) in function.params.iter().zip(args) {
+            slots[param.slot.index()] = value;
         }
         slots
     }
@@ -87,8 +87,12 @@ impl<'a> Frame<'a> {
         ApplyError::Unsupported { callee: self.callee, block: point.block, index: point.index, operation, route }
     }
 
-    pub(super) fn check(input: &ApplyInput<'a>) -> Result<Self, ApplyError> {
-        let mut frame = Self { module: input.module, callee: input.callee, constants: Constants::default() };
+    pub(super) fn known(&self, operand: &Operand) -> Option<u128> {
+        self.constants.get(operand)
+    }
+
+    pub(super) fn check(module: &'a ValidModule, callee: FuncId, input: &[Word]) -> Result<Self, ApplyError> {
+        let mut frame = Self { module, callee, constants: Constants::default() };
         frame.check_instructions()?;
         frame.constants = Constants::analyze(&frame, input, Scope::Reachable);
         if frame.check_operands(&[]).is_err() {
@@ -122,13 +126,13 @@ impl<'a> Frame<'a> {
                     unreachable!("the requirement is for a binary operation")
                 };
                 if constant_value(rhs).is_none() && (op != BinOp::Mul || constant_value(lhs).is_none()) {
-                    return Err(self.error(Point { block, index }, op.mnemonic(), route));
+                    return Err(self.error(Point { block, index, copy: 0 }, op.mnemonic(), route));
                 }
             }
             if let Terminator::Switch { value, .. } = &body.term
                 && constant_value(value).is_none()
             {
-                let point = Point { block, index: body.insts.len() };
+                let point = Point { block, index: body.insts.len(), copy: 0 };
                 return Err(self.error(point, "switch", "multiway dispatch in the step machine"));
             }
         }
@@ -140,22 +144,18 @@ impl<'a> Frame<'a> {
             let block_id = BlockId(index as u32);
             for (index, inst) in block.insts.iter().enumerate() {
                 if let Some((operation, route)) = unsupported(inst) {
-                    return Err(self.error(Point { block: block_id, index }, operation, route));
+                    return Err(self.error(Point { block: block_id, index, copy: 0 }, operation, route));
                 }
             }
             let (operation, route) = match &block.term {
-                Terminator::Jump(_)
-                | Terminator::Branch { .. }
-                | Terminator::Switch { .. }
-                | Terminator::Return(Some(_)) => {
+                Terminator::Jump(_) | Terminator::Branch { .. } | Terminator::Switch { .. } | Terminator::Return(_) => {
                     continue;
                 }
-                Terminator::Return(None) => ("void ret", "integer results"),
                 Terminator::Exit(_) => ("exit", "explicit instruction faults"),
                 Terminator::Longjmp { .. } => ("longjmp", "non-local control and memory"),
                 Terminator::Fault(_) => ("fault", "explicit instruction faults"),
             };
-            return Err(self.error(Point { block: block_id, index: block.insts.len() }, operation, route));
+            return Err(self.error(Point { block: block_id, index: block.insts.len(), copy: 0 }, operation, route));
         }
         Ok(())
     }
@@ -199,6 +199,7 @@ impl<'a> Frame<'a> {
                     )
                 }
                 Inst::Cast { op, dst, value, to, .. } => (*dst, arithmetic::cast(*op, read(value), to.bits() as usize)),
+                Inst::FuncAddr { dst, func } => (*dst, constant(u128::from(func.address()), u64::BITS as usize)),
                 Inst::Load { .. }
                 | Inst::Store { .. }
                 | Inst::Alloca { .. }
@@ -208,7 +209,6 @@ impl<'a> Frame<'a> {
                 | Inst::ReturnAddress { .. }
                 | Inst::Call { .. }
                 | Inst::CallIndirect { .. }
-                | Inst::FuncAddr { .. }
                 | Inst::Effect { .. }
                 | Inst::Qalloc { .. }
                 | Inst::Qfree { .. }
@@ -216,7 +216,7 @@ impl<'a> Frame<'a> {
                 | Inst::GateAt { .. }
                 | Inst::Measure { .. }
                 | Inst::Apply { .. } => {
-                    unreachable!("checked the instruction set before lowering")
+                    unreachable!("checked instructions and handled calls before lowering")
                 }
             };
             return Ok(Step::Write(point.next(), dst, result));
@@ -286,9 +286,7 @@ fn unsupported(inst: &Inst) -> Option<(&'static str, &'static str)> {
         Inst::StackRestore { .. } => ("stackrestore", "applied stack operations"),
         Inst::Setjmp { .. } => ("setjmp", "non-local control and memory"),
         Inst::ReturnAddress { .. } => ("retaddr", "applied call frames"),
-        Inst::Call { .. } => ("call", "applied calls"),
-        Inst::CallIndirect { .. } => ("call_indirect", "applied indirect calls"),
-        Inst::FuncAddr { .. } => ("faddr", "applied calls"),
+        Inst::Call { .. } | Inst::CallIndirect { .. } | Inst::FuncAddr { .. } => return None,
         Inst::Effect { .. } => ("effect", "explicit instruction faults"),
         Inst::Qalloc { .. } => ("qalloc", "explicit instruction faults"),
         Inst::Qfree { .. } => ("qfree", "explicit instruction faults"),

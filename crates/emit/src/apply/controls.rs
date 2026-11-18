@@ -138,6 +138,7 @@ impl Controls<'_, '_> {
                     self.copies.returned.push((route.enabled, word));
                     return Ok(None);
                 }
+                Step::Transfer(..) | Step::Fault(_) => unreachable!("calls use the step machine"),
                 Step::Branch(condition, yes, no) => {
                     if !self.choices.insert(point.block) {
                         return Err(Failure::Control(Refusal::UnprovedLoop));

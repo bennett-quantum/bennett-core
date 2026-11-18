@@ -12,7 +12,9 @@ simulator of the model in `docs/DESIGN.md`. The device interface and counter are
 The gate emitter compiles applied integer functions with one step budget for the whole `apply`.
 Qubit-dependent choices and loops with a proved pass count can use control gates directly. The counting device uses it, and the simulator offers it through
 `--apply-circuit auto` or `--apply-circuit step-machine`. The default simulator evaluates applied functions
-directly. The emitter refuses calls, private memory and stack operations, switches without a
+directly. Integer calls copy their frames and use the shared budget. The emitter refuses
+recursive calls, unproved indirect targets, excessive call expansion, private memory
+and stack operations, switches without a
 proved definite selector, `or`, division
 and remainder, shifts or multiplies that lack a proved constant amount or factor, and instructions
 such as `fault` that still need named fault handling. See `docs/DESIGN.md`, "Not yet".
@@ -102,7 +104,12 @@ Newest first; quotes are the maintainer's words.
 
 ## In flight
 
-Control-gate lowering and its review fixes are on `wip/sol62-m3m4-rebased`. Operand analyses
+Call lowering is on `wip/sol62-m4`. Both emission modes matched direct evaluation for
+two continuations into a copied callee and two visits to one site. Stack tests cover
+the seven-byte and eight-byte entry cases at budget zero, nested frame reservations,
+and bad indirect addresses and signatures.
+
+Control-gate lowering and its review fixes landed in `e34d256`. Operand analyses
 recover constants for whole-function checking on untaken edges. Only reachable
 predecessors contribute to the first proof of each operand, which is the proof used to
 emit gates. The analyses for bypassed blocks propagate unknown inputs before supplying
@@ -136,10 +143,8 @@ returns 1 at budget 14 and writes `budget` at 13 for `x = y = 1`.
 ## Next steps
 
 In order:
-1. **Prove when a qubit-dependent choice can directly control the gates of its alternatives.**
-   Use that proof to skip instruction dispatch for those choices.
-2. Extend gate compilation with **applied call frames and addresses** and the remaining multiply and
-   remainder operations needed for modular arithmetic.
+1. Add unsigned value bounds in the gate emitter.
+2. Emit unsigned multiply and remainder and measure the modular arithmetic.
 3. **Shor's algorithm for 15 and 21 from plain C.** Measure the unfused program first. Compare Toffoli count and peak qubits with a textbook-class hand-built circuit using the same registers, aiming for a factor of two or less on both. Record depth too.
 4. **Applied memory**: add private memory and stack operations, with the corresponding first-fault rules.
 5. Then what the old plan left undone: rule A at an address that depends on a qubit (declare the region, then exchange one addressed element, at a cost of the region's size times the element's width per access); a second implementation of the device language (grow the reference that runs `apply` by its construction, `crates/exec/tests/compute_copy_reference/`); the floating-point environment through SoftFloat's state, `__float128` and the remaining intrinsics; the runtime debts below; Grover over a SQL query written in plain C; the optimiser and cost model (`opt`, not started).
@@ -149,7 +154,9 @@ In order:
 
 | Refused today | What removes it |
 |---|---|
-| Emitted `apply` using calls, loads, stack operations, remaining arithmetic or explicit instruction faults | Gate compiler routes in `docs/DESIGN.md`, "Not yet" |
+| Emitted `apply` using recursive calls or more than 16,384 copied slots and program points | Shared call frames and return positions |
+| Emitted `call_indirect` without one proved definite address | Address proofs across visits or dispatch among supported addresses |
+| Emitted `apply` using loads, stack operations, register-valued call signatures, `retaddr`, remaining arithmetic or explicit instruction faults | Gate compiler routes in `docs/DESIGN.md`, "Not yet" |
 | Emitted `apply` using a store | Memory in the step machine |
 | Emitted `apply` using a switch without a proved definite selector | Multiway dispatch in the step machine |
 | Remaining runtime operations: locks, links, directory enumeration, block transport, permissions and metadata, image loader, allocation exhaustion | The runtime debts below |

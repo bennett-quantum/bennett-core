@@ -8,7 +8,6 @@ use bennett_ir::{BinOp, BlockId, Inst, Operand, Slot, Terminator, Width};
 use super::arithmetic;
 use super::bits::{Bit, Circuit, Word, constant, definite};
 use super::symbolic::{Frame, switch_target, visit_possible_targets};
-use super::{ApplyInput, Argument};
 
 fn fold_inst(
     inst: &Inst,
@@ -36,6 +35,8 @@ fn fold_inst(
                     .collect(),
             ),
         },
+        Inst::FuncAddr { func, .. } => Some(constant(u128::from(func.address()), u64::BITS as usize)),
+        Inst::Call { .. } | Inst::CallIndirect { .. } => Some(unknown()),
         Inst::Load { .. }
         | Inst::Store { .. }
         | Inst::Alloca { .. }
@@ -43,9 +44,6 @@ fn fold_inst(
         | Inst::StackRestore { .. }
         | Inst::Setjmp { .. }
         | Inst::ReturnAddress { .. }
-        | Inst::Call { .. }
-        | Inst::CallIndirect { .. }
-        | Inst::FuncAddr { .. }
         | Inst::Effect { .. }
         | Inst::Qalloc { .. }
         | Inst::Qfree { .. }
@@ -107,28 +105,29 @@ impl Constants {
         self.reachable.get(block.index()).copied().unwrap_or(false)
     }
 
-    pub(super) fn analyze(frame: &Frame<'_>, input: &ApplyInput<'_>, scope: Scope) -> Self {
+    pub(super) fn analyze(frame: &Frame<'_>, inputs: &[Word], scope: Scope) -> Self {
         let function = frame.module.function(frame.callee);
         if !function.blocks.iter().any(|block| {
             matches!(&block.term, Terminator::Switch { value: Operand::Slot(_), .. })
-                || block.insts.iter().any(|inst| requirement(inst).is_some())
+                || block.insts.iter().any(|inst| {
+                    requirement(inst).is_some() || matches!(inst, Inst::Call { .. } | Inst::CallIndirect { .. })
+                })
         }) {
             return Self::default();
         }
         let mut slots = vec![None; function.slot_count()];
         let mut arguments = BTreeMap::new();
-        for (parameter, argument) in function.params.iter().zip(input.args) {
-            let bennett_ir::Type::Int(width) = parameter.ty else { unreachable!("checked the circuit interface") };
-            let word = match argument {
-                Argument::Value(value) => constant(*value, width.bits() as usize),
-                Argument::Register(wires) => wires
-                    .clone()
-                    .map(|wire| {
+        for (parameter, input) in function.params.iter().zip(inputs) {
+            let word = input
+                .iter()
+                .map(|&bit| match bit {
+                    Bit::Constant(_) => bit,
+                    Bit::Wire(wire, inverted) => {
                         let next = arguments.len() as Wire;
-                        Bit::Wire(*arguments.entry(wire).or_insert(next), false)
-                    })
-                    .collect(),
-            };
+                        Bit::Wire(*arguments.entry(wire).or_insert(next), inverted)
+                    }
+                })
+                .collect();
             slots[parameter.slot.index()] = Some(word);
         }
 
@@ -158,7 +157,7 @@ impl Constants {
                     Operand::Slot(slot) => local.get(slot).or(slots[slot.index()].as_ref()).cloned(),
                 };
                 for inst in &block.insts {
-                    let result = inst.result().expect("a supported instruction produces a value");
+                    let Some(result) = inst.result() else { continue };
                     if let Some(word) = fold_inst(inst, |op| read(&local, op), &mut circuit, || unknown_word(result)) {
                         local.insert(result, word);
                     }

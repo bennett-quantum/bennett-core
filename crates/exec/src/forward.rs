@@ -396,7 +396,7 @@ impl<'m> Executor<'m> {
 
     /// The stack pointer below a new frame of `func`, if it fits on the stack.
     pub(crate) fn frame_fits(&self, func: FuncId) -> Result<u64, Fault> {
-        let frame_bytes = (self.function(func).slot_count() as u64).checked_mul(SLOT_BYTES);
+        let frame_bytes = crate::frame_bytes(self.function(func).slot_count());
         let lowered = frame_bytes.and_then(|bytes| self.stack_pointer.checked_sub(bytes));
         lowered.filter(|&sp| sp >= self.stack_floor).ok_or(Fault::StackOverflow)
     }

@@ -114,6 +114,7 @@ fn apply_input<'a>(
         fault: width + 8..width + 13,
         budget,
         entry_fault: None,
+        stack_available: 0,
         scratch_start: width + 13,
     }
 }
@@ -700,3 +701,6 @@ no:
         }
     }
 }
+
+#[path = "calls.rs"]
+mod calls;

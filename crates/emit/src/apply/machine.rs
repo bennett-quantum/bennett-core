@@ -5,7 +5,8 @@ use std::collections::{BTreeMap, btree_map::Entry};
 use bennett_ir::{Fault, Slot, Target};
 
 use super::bits::{Bit, Circuit, ONE, Word, ZERO};
-use super::symbolic::{Frame, Point, Step};
+use super::calls::Program;
+use super::symbolic::{Point, Step};
 use super::{ApplyError, Copies};
 
 type Dispatch = BTreeMap<Point, Bit>;
@@ -13,7 +14,7 @@ type Writes = BTreeMap<Slot, Vec<(Bit, Word)>>;
 
 pub(super) fn run(
     circuit: &mut Circuit,
-    frame: &Frame<'_>,
+    program: &Program<'_>,
     slots: &mut [Word],
     start: Point,
     remaining: u64,
@@ -29,21 +30,28 @@ pub(super) fn run(
         let mut next = Dispatch::new();
         let mut writes = Writes::new();
         for (point, enabled) in dispatch {
-            match frame.step(circuit, slots, point)? {
+            match program.step(circuit, slots, point)? {
                 Step::Write(successor, dst, word) => {
                     writes.entry(dst).or_default().push((enabled, word));
                     activate(circuit, &mut next, successor, enabled);
                 }
                 Step::Jump(target) => {
-                    jump(circuit, frame, slots, &mut next, &mut writes, target, enabled);
+                    jump(circuit, program, slots, &mut next, &mut writes, (point, target), enabled);
                 }
                 Step::Branch(condition, yes, no) => {
                     let take_yes = circuit.and(enabled, condition);
                     let take_no = circuit.and(enabled, condition.not());
-                    jump(circuit, frame, slots, &mut next, &mut writes, yes, take_yes);
-                    jump(circuit, frame, slots, &mut next, &mut writes, no, take_no);
+                    jump(circuit, program, slots, &mut next, &mut writes, (point, yes), take_yes);
+                    jump(circuit, program, slots, &mut next, &mut writes, (point, no), take_no);
                 }
                 Step::Return(word) => copies.returned.push((enabled, word)),
+                Step::Fault(fault) => copies.faulted.push((enabled, fault)),
+                Step::Transfer(successor, incoming) => {
+                    for (dst, word) in incoming {
+                        writes.entry(dst).or_default().push((enabled, word));
+                    }
+                    activate(circuit, &mut next, successor, enabled);
+                }
             }
         }
 
@@ -86,18 +94,18 @@ fn activate(circuit: &mut Circuit, dispatch: &mut Dispatch, point: Point, enable
 
 fn jump(
     circuit: &mut Circuit,
-    frame: &Frame<'_>,
+    program: &Program<'_>,
     slots: &[Word],
     dispatch: &mut Dispatch,
     writes: &mut Writes,
-    target: &Target,
+    (point, target): (Point, &Target),
     enabled: Bit,
 ) {
     if enabled == ZERO {
         return;
     }
-    for (dst, value) in frame.incoming(slots, target) {
+    for (dst, value) in program.incoming(slots, point, target) {
         writes.entry(dst).or_default().push((enabled, value));
     }
-    activate(circuit, dispatch, Point::entry(target.block), enabled);
+    activate(circuit, dispatch, Point { copy: point.copy, ..Point::entry(target.block) }, enabled);
 }

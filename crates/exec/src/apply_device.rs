@@ -36,8 +36,15 @@ pub struct ApplyInput<'a> {
     pub budget: u64,
     /// Any failure reserving the applied frame, before the first instruction.
     pub entry_fault: Option<Fault>,
+    /// Stack bytes available below the applied entry frame, if it fit.
+    pub stack_available: u64,
     /// First free wire above all wires live on the device.
     pub scratch_start: Wire,
+}
+
+/// Stack bytes reserved by a frame with this many slots.
+pub fn frame_bytes(slots: usize) -> Option<u64> {
+    u64::try_from(slots).ok()?.checked_mul(crate::executor::SLOT_BYTES)
 }
 
 /// A reason gate compilation could not proceed. No device commands have been sent.

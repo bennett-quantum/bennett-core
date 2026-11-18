@@ -107,7 +107,7 @@ impl<'a> Loop<'a> {
                 }
                 Step::Jump(target) => frame.jump(slots, target),
                 Step::Return(word) => return Ok(Some(word)),
-                Step::Branch(..) => unreachable!("proved a straight path"),
+                Step::Branch(..) | Step::Transfer(..) | Step::Fault(_) => unreachable!("proved a straight path"),
             };
         }
         Ok(None)

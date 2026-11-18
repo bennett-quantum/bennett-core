@@ -146,8 +146,8 @@ the fault `budget` for that value only; a console write
 These marker rules describe direct simulation, including applied calls and private memory.
 The counting device and the simulator's `--apply-circuit` option compile applied integer code
 to gates. Qubit-dependent choices and loops with a proved pass count can use control gates
-under the same budget. The compiler reports applied calls and memory operations as refusals
-with their routes in [DESIGN.md](DESIGN.md#not-yet).
+under the same budget. Integer calls use copied frames and share the enclosing apply's budget.
+The compiler reports unsupported calls and memory operations as refusals with their routes in [DESIGN.md](DESIGN.md#not-yet).
 
 Natively `f`'s writes would remain. Where the front sees that code after the call reads memory the call writes
 (a global variable, or memory passed to it by pointer, read directly or by a function called directly), it

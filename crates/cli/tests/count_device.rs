@@ -22,14 +22,14 @@ fn counts_native_and_rewritten_gates() {
 }
 
 #[test]
-fn rejects_apply_by_name() {
+fn counts_the_applied_calls_in_the_thesis_example() {
     let output = count(&["thesis.bn"]);
-    assert_eq!(output.status.code(), Some(2));
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = String::from_utf8_lossy(&output.stdout);
-    assert!(text.contains("stopped: cannot emit call in @g at then instruction 0: needs applied calls\n"), "{text}");
-    assert!(text.contains("steps: 4\n"), "{text}");
+    assert_eq!(text.matches("copied calls use the shared step machine").count(), 2, "{text}");
+    assert!(text.contains("steps: 11\n"), "{text}");
     assert!(
-        text.contains("one-qubit gates: 1\ntwo-qubit gates: 0\nToffoli gates: 0\npeak qubits: 14\ndepth: 1\n"),
+        text.contains("one-qubit gates: 2\ntwo-qubit gates: 4\nToffoli gates: 0\npeak qubits: 14\ndepth: 6\n"),
         "{text}"
     );
 }

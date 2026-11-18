@@ -118,6 +118,7 @@ impl<'m> Executor<'m> {
                 Input::Register(column) => Argument::Register(range(column)),
             })
             .collect::<Vec<_>>();
+        let entry = self.frame_fits(callee);
         let input = ApplyInput {
             module: self.module,
             callee,
@@ -125,7 +126,8 @@ impl<'m> Executor<'m> {
             out: range(out),
             fault: range(fault),
             budget: self.read_word(budget),
-            entry_fault: self.frame_fits(callee).err(),
+            entry_fault: entry.err(),
+            stack_available: entry.map_or(0, |sp| sp - self.stack_floor),
             scratch_start: wire(self.quantum.registers().len(), 0),
         };
         let compiler = context.compiler.as_deref_mut().expect("gate compiler selected");

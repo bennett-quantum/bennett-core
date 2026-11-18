@@ -67,6 +67,7 @@ entry:
         fault: 10..15,
         budget: 12,
         entry_fault: None,
+        stack_available: 0,
         scratch_start: 15,
     };
     let compiled = compile_apply(input).expect("arithmetic on qubit words");
@@ -107,6 +108,7 @@ done:
         fault: 4..9,
         budget: 0,
         entry_fault: None,
+        stack_available: 0,
         scratch_start: 9,
     };
     for (budget, steps, result) in [(0, 0, 16), (5, 5, 16), (6, 6, 9), (7, 6, 9)] {
@@ -146,6 +148,7 @@ entry:
         fault: 192..197,
         budget: 8,
         entry_fault: None,
+        stack_available: 0,
         scratch_start: 197,
     })
     .expect("wide arithmetic");
@@ -194,6 +197,7 @@ done(i1 %result):
                 fault: 5..10,
                 budget,
                 entry_fault: None,
+                stack_available: 0,
                 scratch_start: 10,
             },
             ApplyMode::StepMachine,
@@ -264,6 +268,7 @@ join(i3 %a, i3 %b):
         fault: 10..15,
         budget: 10,
         entry_fault: None,
+        stack_available: 0,
         scratch_start: 15,
     };
     for (mode, construction) in [
@@ -338,6 +343,7 @@ fn compile_collatz(module: &bennett_ir::ValidModule, width: u64, budget: u64, mo
             fault: width + 8..width + 13,
             budget,
             entry_fault: None,
+            stack_available: 0,
             scratch_start: width + 13,
         },
         mode,
@@ -578,6 +584,7 @@ done(i3 %result):
             fault: 6..11,
             budget,
             entry_fault: None,
+            stack_available: 0,
             scratch_start: 11,
         })
         .expect("the shift and factor are definite");
@@ -690,6 +697,7 @@ entry:
         fault: 3..8,
         budget: 2,
         entry_fault: None,
+        stack_available: 0,
         scratch_start: u64::MAX - 1,
     };
     let compiled = compile_apply(input.clone()).expect("last addressable scratch wire");
@@ -735,6 +743,7 @@ fn register_expressions_can_fold_to_constant_shift_amounts_and_factors() {
                         fault: 8..13,
                         budget,
                         entry_fault: None,
+                        stack_available: 0,
                         scratch_start: 13,
                     },
                     mode,
@@ -781,6 +790,7 @@ shift(i4 %amount):
                         fault: 4..9,
                         budget,
                         entry_fault: None,
+                        stack_available: 0,
                         scratch_start: 9,
                     },
                     mode,

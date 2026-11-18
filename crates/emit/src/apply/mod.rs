@@ -2,6 +2,7 @@
 
 mod arithmetic;
 mod bits;
+mod calls;
 mod controls;
 mod definite;
 mod flow;
@@ -16,7 +17,8 @@ use bennett_exec::{Device, GateBlock, RunError, Wire};
 use bennett_ir::{BlockId, Fault, Type, Width};
 
 use self::bits::{Bit, Circuit, ONE, Word, constant};
-use self::symbolic::{Frame, Point, Status, Step};
+use self::calls::Program;
+use self::symbolic::{Point, Status, Step};
 
 pub use bennett_exec::{ApplyError, ApplyInput, Argument};
 
@@ -142,9 +144,9 @@ pub fn compile_apply(input: ApplyInput<'_>) -> Result<CompiledApply, ApplyError>
 /// Compile an applied function with the requested choice of control constructions.
 pub fn compile_apply_with(input: ApplyInput<'_>, mode: ApplyMode) -> Result<CompiledApply, ApplyError> {
     check_interface(&input)?;
-    let frame = Frame::check(&input)?;
+    let (program, mut slots) = Program::check(&input)?;
+    let frame = program.root();
     let mut circuit = Circuit::new(input.scratch_start);
-    let mut slots = frame.initial(&input);
     let mut status = match input.entry_fault {
         Some(fault) => Status::Faulted(fault),
         None => Status::Running(Point::entry(BlockId(0))),
@@ -168,18 +170,29 @@ pub fn compile_apply_with(input: ApplyInput<'_>, mode: ApplyMode) -> Result<Comp
             }
             Status::Running(_) if spent == input.budget => status = Status::Faulted(Fault::Budget),
             Status::Running(point) => {
-                status = match frame.step(&mut circuit, &slots, point)? {
+                status = match program.step(&mut circuit, &slots, point)? {
                     Step::Write(next, dst, word) => {
                         slots[dst.index()] = word;
                         Status::Running(next)
                     }
-                    Step::Jump(target) => Status::Running(frame.jump(&mut slots, target)),
+                    Step::Jump(target) => Status::Running(program.jump(&mut slots, point, target)),
+                    Step::Transfer(next, writes) => {
+                        for (slot, word) in writes {
+                            slots[slot.index()] = word;
+                        }
+                        Status::Running(next)
+                    }
+                    Step::Fault(fault) => {
+                        status = Status::Faulted(fault);
+                        continue;
+                    }
                     Step::Branch(..) => {
                         let remaining = input.budget - spent;
                         let reason = match mode {
+                            ApplyMode::Automatic if program.has_calls() => "copied calls use the shared step machine",
                             ApplyMode::Automatic => {
                                 let checkpoint = circuit.checkpoint();
-                                let refusal = match controls::run(&mut circuit, &frame, &slots, point, remaining) {
+                                let refusal = match controls::run(&mut circuit, frame, &slots, point, remaining) {
                                     Ok((copies, proved_passes)) => {
                                         break (
                                             copies,
@@ -192,9 +205,9 @@ pub fn compile_apply_with(input: ApplyInput<'_>, mode: ApplyMode) -> Result<Comp
                                 };
                                 circuit.rewind(checkpoint);
                                 if refusal == controls::Refusal::UnprovedLoop
-                                    && let Some(plan) = saved::Loop::prove(&frame, point)
+                                    && let Some(plan) = saved::Loop::prove(frame, point)
                                 {
-                                    let (copies, decisions) = plan.run(&mut circuit, &frame, &mut slots, remaining)?;
+                                    let (copies, decisions) = plan.run(&mut circuit, frame, &mut slots, remaining)?;
                                     break (
                                         copies,
                                         Construction::SavedDecisions { decisions },
@@ -205,7 +218,7 @@ pub fn compile_apply_with(input: ApplyInput<'_>, mode: ApplyMode) -> Result<Comp
                             }
                             ApplyMode::StepMachine => "step machine requested for a qubit-dependent jump",
                         };
-                        let (copies, ticks) = machine::run(&mut circuit, &frame, &mut slots, point, remaining)?;
+                        let (copies, ticks) = machine::run(&mut circuit, &program, &mut slots, point, remaining)?;
                         break (copies, Construction::StepMachine { ticks }, reason);
                     }
                     Step::Return(word) => Status::Returned(word),

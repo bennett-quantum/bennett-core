@@ -339,6 +339,24 @@ machine or the single-loop construction below. A route still cycling without a p
 proof at the budget boundary also uses the step machine, so an enclosing proved loop
 cannot copy a schedule whose length comes from the budget.
 
+**Copied calls.** Each sequence of direct call sites has its own copy of the callee's
+slots and program points. Before building gates, the compiler counts one unit for each
+copied slot, instruction and terminator, with a limit of 16,384 units for an expanded call
+graph. The same site can run repeatedly using that copy. A successful call charges one
+step, reserves eight bytes per slot below the caller, zeros the new frame and assigns the
+arguments. A return charges one step, writes the result to the caller and continues
+after that site. Both operations use the same budget as the applied entry.
+An invalid definite address or signature gives `bad_indirect` before checking space
+for a callee. A failed frame reservation gives `stack_overflow`. The budget is checked
+before either instruction, and the entry frame check still comes before the first
+budget check.
+
+An indirect site with one proved definite address uses the same copy construction.
+Recursion and indirect sites without one proved address are refused before issuing
+gates. Address and argument proofs come from reachable code. A call result is unknown
+to the caller's operand proof. A qubit-dependent continuation in a function with copied
+calls uses the step machine.
+
 The **step machine** carries one dispatch bit for each possible program point, set for
 the definite inputs whose next instruction is there. Each tick reads only the preceding
 frame. An instruction's dispatch bit controls its writes and which successor receives
@@ -1543,7 +1561,9 @@ its own).
 |---|---|
 | `or`, division and remainder, shifts by qubit values, multiplication of two qubit values | Remaining integer gates, including conditional arithmetic faults |
 | `switch` without a proved definite selector | Multiway dispatch in the step machine |
-| Direct and indirect calls, `faddr`, `retaddr` | Applied call frames and targets |
+| Recursive calls or a call expansion above 16,384 copied slots and program points | Shared call frames and return positions |
+| `call_indirect` without one proved definite address | Prove the target across visits or dispatch among supported addresses |
+| Calls with register signatures, `retaddr` | Register-valued call frames and code addresses |
 | `store` | Memory in the step machine |
 | `load`, `alloca`, `stacksave`, `stackrestore` | Private memory and stack state |
 | `setjmp`, `longjmp` | Private memory and non-local control transfer |
