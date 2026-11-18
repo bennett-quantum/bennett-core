@@ -657,3 +657,12 @@ fn a_drained_inner_word_stays_zero_on_later_outer_passes() {
         }
     }
 }
+
+#[test]
+fn a_shift_by_zero_keeps_every_nonzero_input_running() {
+    let source = shift_loop(2).replace("lshr i2 %x, 1", "lshr i2 %x, 0");
+    let module = control_example(&source, 2, "");
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        compare_controls(&module, 20, mode, |x| if x == 0 { (0, 0) } else { (0, 1) });
+    }
+}
