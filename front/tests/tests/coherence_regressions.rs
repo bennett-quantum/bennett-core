@@ -72,7 +72,10 @@ impl Program<'_> {
     }
 
     fn native_table(&self, source: &std::path::Path, n: u64) -> Vec<u128> {
-        let executable = native_build(source, self.name, &["-DNATIVE"]);
+        // Level-one return addresses need the native caller's frame to survive optimisation.
+        let flags =
+            ["-DNATIVE", "-fno-omit-frame-pointer", "-mno-omit-leaf-frame-pointer", "-fno-optimize-sibling-calls"];
+        let executable = native_build(source, self.name, &flags);
         (1..=1 << self.qubits)
             .map(|prep| {
                 let output =
@@ -333,6 +336,59 @@ fn disabled_gate_loop_never_divides_by_zero() {
         qubits: 1,
     }
     .agrees(1, &[0, 257], &readout(&[0, 8]), 0);
+}
+
+#[test]
+#[ignore = "preparing the moved loop's control reads a qubit-held byte on a skipped path"]
+fn disabled_gate_loop_never_reads_a_held_byte_to_prepare_control() {
+    Program {
+        name: "gate-control-load",
+        declarations: r#"
+uint8_t held = 1;
+__attribute__((noinline)) void fill(void) {
+    uint8_t r = 0;
+    XBIT(r, 0);
+    held = r;
+    XBIT(r, 0);
+}
+"#,
+        body: r#"
+    uint8_t y = 0;
+    if (prep == 1) fill();
+    ZBIT(q, 1);
+    if (q && held) {
+        #pragma clang loop unroll(disable)
+        for (unsigned i = 0; i < n; ++i) XBIT(y, 0);
+    }
+    packet key = READ(q);
+    packet target = READ(y);
+    return key | (target << 8) | ((packet)READ_BYTES(held, 1) << 16);
+"#,
+        qubits: 1,
+    }
+    .agrees(1, &[65536, 65793], &readout(&[0, 8, 16]), 0);
+}
+
+#[test]
+#[ignore = "moving the helper into an applied function changes its caller's return address"]
+fn moved_helper_observes_the_original_callers_return_address() {
+    Program {
+        name: "return-address-ancestor",
+        declarations: r#"
+uintptr_t expected;
+__attribute__((noinline)) uint8_t check_caller(uint8_t q) {
+    return 5 + (q != 0 && (uintptr_t)__builtin_return_address(1) == expected);
+}
+"#,
+        body: r#"
+    expected = (uintptr_t)__builtin_return_address(0);
+    uint8_t x = check_caller(q);
+    packet value = READ(x);
+    return value | ((packet)READ(q) << 8);
+"#,
+        qubits: 1,
+    }
+    .agrees(0, &[5, 6 | (1 << 8)], &readout(&[0, 8]), 0);
 }
 
 const RETADDR_HELPER: &str = r#"
