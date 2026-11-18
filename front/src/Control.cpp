@@ -23,6 +23,7 @@
 #include "HeldBytes.h"
 #include "Markers.h"
 #include "Normalise.h"
+#include "RegionResults.h"
 #include "Taint.h"
 
 #include <llvm/ADT/StringExtras.h>
@@ -116,6 +117,9 @@ private:
   // fresh register, exchanged with the variable by CNOTs, and the register, now holding the old value, is
   // released (the partial trace), with a warning.
   void retainedOverwrite(const Storage &target, const Value *value, const StoreInst &store);
+  // The stores of a region's exchanged variables (RegionResults.h), from `first` on: stores by exchange.
+  void exchangedStores(const StoreInst &first, const MDNode &group);
+  std::set<const StoreInst *> exchangedDone;
   // Whether `old`, the value `target` holds at `store`, can be computed again there: a computation the control
   // program can apply (collect) whose qubit variables, `target` not among them, are unchanged since they were read,
   // and whose calls see the same memory.
@@ -422,6 +426,10 @@ void ControlWriter::measureBytes(const CallBase &call) {
 }
 
 void ControlWriter::store(const StoreInst &store) {
+  if (const MDNode *group = store.getMetadata(overwriteMetadata)) {
+    exchangedStores(store, *group);
+    return;
+  }
   const Storage &target = *analysis.access(store.getPointerOperand())->storage;
   const Value *value = store.getValueOperand();
   Fact fact = analysis.before(&store, &target);
@@ -555,6 +563,83 @@ void ControlWriter::retainedOverwrite(const Storage &target, const Value *value,
           &store);
 }
 
+// The stores by exchange of the variables a region read and overwrote in a loop (docs/DESIGN.md, "Code under a
+// qubit"): for each variable x of the group, with n a fresh register, `apply g(a, x_old) -> n` for every
+// variable before any exchange (each g reads the old values of all of them), then three CNOTs per bit exchange
+// n and x, so that x holds the final value and n the old one, and then n is cleared: by the old value where it
+// was known, or by computing it again where it is a value computed from registers unchanged since and not among
+// the group's (`recomputable`). Then n is 0 and released.
+void ControlWriter::exchangedStores(const StoreInst &first, const MDNode &group) {
+  if (exchangedDone.count(&first)) {
+    return;
+  }
+  std::vector<const StoreInst *> stores;
+  for (const Instruction &inst : *first.getParent()) {
+    const auto *store = dyn_cast<StoreInst>(&inst);
+    if (store && store->getMetadata(overwriteMetadata) == &group) {
+      stores.push_back(store);
+      exchangedDone.insert(store);
+    }
+  }
+  std::set<const Storage *> members;
+  for (const StoreInst *store : stores) {
+    members.insert(analysis.access(store->getPointerOperand())->storage);
+  }
+  std::vector<std::string> spares;
+  for (const StoreInst *store : stores) {
+    const Storage &target = *analysis.access(store->getPointerOperand())->storage;
+    std::string spare = fresh(target.alloca->getName().str() + ".old");
+    spares.push_back(spare);
+    line(spare + " = qalloc " + std::to_string(target.bits));
+    std::string args;
+    const Value *value = store->getValueOperand();
+    std::string callee = slice(collect(value, first), value, nullptr, target.bits, first, args);
+    apply(callee, args, spare, first);
+  }
+  for (size_t i = 0; i < stores.size(); ++i) {
+    const Storage &target = *analysis.access(stores[i]->getPointerOperand())->storage;
+    for (unsigned bit = 0; bit < target.bits; ++bit) {
+      std::string x = registers.at(&target) + "[" + std::to_string(bit) + "]";
+      std::string n = spares[i] + "[" + std::to_string(bit) + "]";
+      line("x " + n + " ctrl " + x);
+      line("x " + x + " ctrl " + n);
+      line("x " + n + " ctrl " + x);
+    }
+  }
+  for (size_t i = 0; i < stores.size(); ++i) {
+    const Storage &target = *analysis.access(stores[i]->getPointerOperand())->storage;
+    Fact old = analysis.before(&first, &target);
+    if (old.kind == Fact::Known && analysis.dominators.dominates(old.value, &first)) {
+      if (const auto *constant = dyn_cast<ConstantInt>(old.value)) {
+        for (unsigned bit = 0; bit < target.bits; ++bit) {
+          if (constant->getValue().getZExtValue() >> bit & 1) {
+            line("x " + spares[i] + "[" + std::to_string(bit) + "]");
+          }
+        }
+      } else {
+        apply(module.copyFunction(target.bits), converted(old.value, target.bits), spares[i], first);
+      }
+    } else {
+      std::optional<Slice> clearing;
+      if (old.kind == Fact::Computed && recomputable(old.value, target, first)) {
+        clearing = collect(old.value, first, true);
+      }
+      if (!clearing || std::any_of(clearing->quantum.begin(), clearing->quantum.end(),
+                                   [&](const Storage *storage) { return members.count(storage) != 0; })) {
+        notHandled("an update of qubit variable " + target.name +
+                       " in a loop under the control of a value that depends on a qubit, whose value before the "
+                       "loop is neither known nor computable again from registers unchanged since (its old value "
+                       "would have to be kept in the fresh register and released: not built yet, HANDOFF.md)",
+                   stores[i]);
+      }
+      std::string args;
+      std::string callee = slice(*clearing, old.value, nullptr, target.bits, first, args);
+      apply(callee, args, spares[i], first);
+    }
+    line("qfree " + spares[i]);
+  }
+}
+
 bool ControlWriter::recomputable(const Value *old, const Storage &target, const Instruction &store) const {
   if (!analysis.dominators.dominates(old, &store)) {
     return false;
@@ -635,7 +720,15 @@ void ControlWriter::xorInto(const Storage &target, const Value *value, const Ins
     return;
   }
   std::string args;
-  std::string callee = slice(collect(value, at), value, &target, target.bits, at, args);
+  Slice computation = collect(value, at);
+  // A load whose variable changed before `at` reads, there, the value the variable held where it was loaded: a
+  // known ordinary value, or one computed again from registers unchanged since (collect with knownLoads).
+  if (std::any_of(computation.loads.begin(), computation.loads.end(), [&](const LoadInst *load) {
+        return !analysis.unchangedBetween(load, &at, analysis.access(load->getPointerOperand())->storage);
+      })) {
+    computation = collect(value, at, true);
+  }
+  std::string callee = slice(computation, value, &target, target.bits, at, args);
   apply(callee, args, target, at);
 }
 

@@ -355,8 +355,11 @@ explicitly after the separate musl build.
       loops whose trip counts depend on a three-qubit register agree with native C for all eight values at O0,
       O2 and with `--taint-all`; the smallest budget is 151 steps and 150 faults the longest runs only; the
       control program keeps no loop. A loop with an ordinary trip count keeps one small `apply` per pass, as
-      decided. Still refused, with the route in the message: a variable of unknown value that such a loop does
-      more with than XOR into (it needs the retained form of step 3, or an inverse of the loop). Not built: a
+      decided. A variable of unknown value that such a loop reads and overwrites is exchanged (a store by
+      exchange with the whole code as the stored function) and its fresh register cleared where its old value
+      is known or can be computed again ("Code under a qubit: merged stores and updates in loops
+      (2026-11-18)"). Still refused, with the route in the message: such a variable whose old value is
+      neither (it needs its old value kept in the fresh register and released). Not built: a
       qubit-dependent value carried irreversibly around a loop of the control program (`y = g(y, q, i)` with
       an ordinary trip count), which the design note would merge into one `apply` too; it is refused today
       unless the update is an in-place bijection, and the retained form of step 3 will accept it pass by pass,
@@ -1756,3 +1759,31 @@ nothing. Test: `later_region_xors_into_a_forwarded_merged_store` (the generated 
 release before the fix, none after, values equal to native C, in all three modes). The replay of index 3960
 passes, its state check included. Capped run after the fix (400 cases, the same seed): accepted 332, declined
 68, compared 2,172, failed 0, as before it (this case lies beyond the first 400).
+
+**An update in a loop under a qubit-dependent value, old value known or recomputable (step 2).** Before, a
+variable that code under a qubit with a loop read and overwrote, whose value before the code was neither known
+nor only XORed into, was refused ("... which the loop does more with than XOR into it (its old value would have
+to be kept: not built yet)"); the randomised test declined about 800 programs a seed with it. Now such a
+variable is *exchanged* (`front/src/RegionResults.cpp`, `front/src/Control.cpp`, `exchangedStores`): the one
+applied function of the code takes its old value as an argument and returns its final value in a word of its
+own; the control program applies every exchanged variable's final value into a fresh register while all old
+values are still in place (the code's other results first), exchanges each register with its variable by
+CNOTs, and clears each register by the old value where it was known or by computing it again where it is a
+value computed from registers unchanged since and not of the group (`recomputable`, the clearing the stores
+under a qubit already use). The code's loops run inside the applied function under its one budget: one run of
+the whole code per exchanged variable. Where the old value is neither, the front refuses by name with the
+route (step 3). A second shape the tests met: LLVM keeps a loop's variables in registers through the loop and
+stores them after it, so the loop writes nothing and a store after it may read a variable stored just before;
+that read was refused ("... is used after the variable changed"), and is now computed again from registers
+unchanged since (`ControlWriter::xorInto`, only when a read is stale). Tests (`qubit_differential.rs`,
+`loop_overwrite_*`): an old value stored before the loop, returned by an applied call, written by earlier code
+under a qubit (two exchanged variables beside an accumulator, so the group and its order are exercised), and
+the promoted form; values equal to native C for every value of a three-qubit register in all three modes,
+nothing released that is not 0, the state before measurement equal to the prediction (a Z on one qubit);
+refused by name after a gate on the variable. Each failed on the code before (refused: four with the old
+message, the promoted form with "used after the variable changed"). Documents: `docs/DESIGN.md`, "Code under a
+qubit" (exchanged variables) and "Overwrites that keep the old value".
+
+Capped run (400 cases, seed `0x87196caa251d0f43`): accepted 332 → 370, declined 68 → 30, compared 2,172 →
+2,392, failed 0 → 0. Declines of the loop update 45 → 6, all now the case whose old value is neither known nor
+computable again (step 3).

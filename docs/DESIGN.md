@@ -463,12 +463,41 @@ and the variable's value before the code is known: its result is `final XOR star
 `final`, and the store goes. Otherwise the store stays, and the value is computed again by the `apply` that
 writes it (below, a debt).
 
-Anything else is refused by name: a variable whose value before the code is not known and which the code does
-more with than XOR into it would need its old value kept. Without a loop in the code, predication may still
-handle such a store (an in-place bijection); with one, the message says the old value would have to be kept,
-which is the retained form of a store under a qubit (not built yet: "Next steps" in `HANDOFF.md`). A value the
-code leaves for later code that was read from a variable after the code wrote it is refused too, as
-predication refuses it. clang `-O2`'s own vectoriser can turn an accumulation into vector lanes, which the front
+A variable whose value before the code is not known and which the code does more with than XOR into it is
+an overwrite of its old value. Without a loop in the code, predication handles such a store (an in-place
+bijection, or the forms of "Overwrites that keep the old value"). With a loop, the variable is **exchanged**:
+it is a store by exchange ("Overwrites that keep the old value") whose stored function `g` is the whole code,
+with the variable's old value among its arguments. The applied function starts the variable's private local at
+that argument and returns its final value, in a word of its own; with `x` the variable and `n` a fresh
+register of its width,
+
+```
+n = qalloc w
+apply @code(a, x, word) -> n        for each definite value: n = final value of x
+x n[b] ctrl x[b]                    three CNOTs per bit exchange n and x:
+x x[b] ctrl n[b]                    x = final, n = x_old
+x n[b] ctrl x[b]
+n ^= x_old                          clear n: see below
+qfree n                             n is 0
+```
+
+Several exchanged variables of one piece of code share the one applied function and take one fresh register
+each: every final value is applied first, while all the old values are still in their variables (each run reads
+all of them), then every exchange, then every clearing. The results XORed into their variables are applied
+before the exchanges too. `n` is cleared with the old value where it was known, or by computing it again where
+it is a value computed from registers unchanged since it was stored, none of them a variable of the group (the
+clearing of a store by recomputation, `ControlWriter::recomputable`: a value stored before the code, returned by
+an applied call, or left by earlier code under a qubit applied whole). Then `n` returns to 0 for every definite
+value of what the code reads, nothing is kept, and the code's loops, nested loops and calls run inside the
+applied function under its one budget: one run of the whole code for each exchanged variable, and one
+computation of each old value. An old value that is neither known nor computable again is refused by name: it would have to
+be kept in `n` and released (the retained form, not built yet: "Next steps" in `HANDOFF.md`).
+
+A value the code leaves for later code that was read from a variable after the code wrote it is refused too,
+as predication refuses it. Where LLVM keeps a loop's variables in registers through the loop and stores them
+after it, the code writes nothing and each store after it may read a variable stored just before; such a read
+reads, there, the value the variable held where it was read, computed again from registers unchanged since
+(`ControlWriter::xorInto`). clang `-O2`'s own vectoriser can turn an accumulation into vector lanes, which the front
 does not follow; the tests disable it in that loop (`front/tests/c/region_whole.c`).
 
 A value the code leaves for later code is one of its results even when no instruction of the code computes
@@ -493,6 +522,13 @@ counter's stores are among those LLVM moves out of the loops). The smallest budg
 at 150 the longest runs fault, the others do not. Results of 64 + 32 + 16 + 8 bits from one loop take one
 applied function, one `apply` into the 64-bit variable and one pair for the other three, and agree with a hand
 computation for every value of a three-qubit register in all three modes.
+Exchanged variables (`front/tests/tests/qubit_differential.rs`, `loop_overwrite_*`): a loop whose trip count
+depends on a three-qubit register overwrites a variable whose old value was stored before it, returned by an
+applied call, or written (two variables, beside an accumulator) by earlier code under a qubit, and the form
+LLVM keeps in registers through the loop; each agrees with native C for every value of the register in all
+three modes, with nothing released that is not 0, and its state before measurement has native C's values with
+the preparation's amplitudes and phases (a Z on one qubit), every other register at 0. The same loop after a
+gate on the variable is refused by name.
 `front/tests/tests/qubit_differential.rs` compares seeded short C programs (conditional stores, updates, short
 loops and helpers under a two- or three-qubit register) with native C for every definite value of the
 register; among its fixed cases, joins of constants and of values from before the code, a store LLVM merged at
@@ -570,7 +606,9 @@ runs (the warning counts per executed overwrite). If an applied function faults 
 interference between those values and the rest can be lost when the fault register is released.
 
 This is the form for qubit variables in registers; stores into memory reach it through their shadows (next
-section).
+section). Code under a qubit applied whole that reads and overwrites a variable in a loop uses the same
+exchange with the whole code as `g` ("Code under a qubit", exchanged variables); there the register is cleared
+when the old value is known or can be computed again, and the case where it can be neither is still refused.
 
 Acceptance: `front/tests/tests/retained.rs` (`x = x * x`, `x += x`, `x = x / 3`, `x = 5`, a conditional
 square on a three-qubit `x`: the weights of the values of `x` are those of C, at O0, O2 and with

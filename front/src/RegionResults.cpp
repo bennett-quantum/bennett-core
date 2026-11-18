@@ -43,6 +43,9 @@ struct Written {
   // When the moved store's value is a phi of the region's exit: its edges from the region, taken before the
   // exit block is split.
   std::vector<std::pair<BasicBlock *, Value *>> incoming{};
+  // Read and overwritten in a loop of the region, its value before the region neither known nor only XORed into:
+  // its old value is an argument, its field is its final value, stored by exchange (Control.cpp).
+  bool exchanged = false;
 };
 
 // The bits a variable may hold: up to its highest bit that may be 1.
@@ -65,6 +68,7 @@ private:
   BasicBlock *exit;
   std::vector<Written> written;
   std::vector<const Storage *> read; // qubit variables the region reads and does not write
+  std::vector<const Written *> exchanged; // the written variables whose old values are arguments
   std::vector<Value *> inputs;       // values defined outside the region that it uses
   std::map<const BasicBlock *, std::set<const BasicBlock *>> later; // blocks reachable inside the region
 
@@ -210,11 +214,14 @@ bool RegionWhole::precedes(const Instruction *a, const Instruction *b) const {
 }
 
 // The values the copy receives, in its parameters' order: the region's inputs, then the registers of the
-// variables it only reads, loaded here.
+// variables it only reads and the old values of those it exchanges, loaded here.
 std::vector<Value *> RegionWhole::arguments(IRBuilder<> &b) const {
   std::vector<Value *> args(inputs.begin(), inputs.end());
   for (const Storage *storage : read) {
     args.push_back(b.CreateLoad(b.getIntNTy(storage->bits), storage->alloca));
+  }
+  for (const Written *field : exchanged) {
+    args.push_back(b.CreateLoad(b.getIntNTy(field->storage->bits), field->storage->alloca));
   }
   return args;
 }
@@ -297,6 +304,9 @@ Function *RegionWhole::copy(const std::vector<std::vector<const Written *>> &wor
   for (const Storage *storage : read) {
     types.push_back(IntegerType::get(context, storage->bits));
   }
+  for (const Written *field : exchanged) {
+    types.push_back(IntegerType::get(context, field->storage->bits));
+  }
   if (words.size() > 1) {
     types.push_back(Type::getInt32Ty(context));
   }
@@ -322,7 +332,10 @@ Function *RegionWhole::copy(const std::vector<std::vector<const Written *>> &wor
     Type *type = IntegerType::get(context, w.storage->bits);
     locals[w.storage] = b.CreateAlloca(type);
     Value *start = ConstantInt::get(type, 0);
-    if (w.known) {
+    if (w.exchanged) {
+      auto at = std::find(exchanged.begin(), exchanged.end(), &w) - exchanged.begin();
+      start = copy->getArg(unsigned(inputs.size() + read.size() + at));
+    } else if (w.known) {
       Value *known = isa<Constant>(w.known) ? w.known : static_cast<Value *>(map[w.known]);
       start = b.CreateZExtOrTrunc(known, type);
     }
@@ -387,7 +400,11 @@ Function *RegionWhole::copy(const std::vector<std::vector<const Written *>> &wor
   for (const std::vector<const Written *> &fields : words) {
     Value *word = ConstantInt::get(result, 0);
     for (const Written *field : fields) {
-      Value *change = b.CreateXor(finalValue(*field, b, map), starts[field->storage]);
+      // An exchanged variable's field is its final value; any other's, final XOR start.
+      Value *change = finalValue(*field, b, map);
+      if (!field->exchanged) {
+        change = b.CreateXor(change, starts[field->storage]);
+      }
       word = b.CreateOr(word, b.CreateShl(b.CreateZExt(change, result), field->offset));
     }
     values.push_back(word);
@@ -602,16 +619,18 @@ bool RegionWhole::run() {
         (isa<Constant>(fact.value) || analysis.dominators.dominates(fact.value, first))) {
       w.known = fact.value;
     } else if (!accumulated(*storage)) {
-      if (cyclic()) {
-        notHandled("an update of qubit variable " + storage->name +
-                       " in a loop under the control of a value that depends on a qubit, whose value before the "
-                       "loop is not known and which the loop does more with than XOR into it (its old value "
-                       "would have to be kept: not built yet)",
-                   storage->mutations.front());
+      if (!cyclic()) {
+        return false;
       }
-      return false;
+      // Read and overwritten in a loop: a store by exchange, with the old value among the arguments.
+      w.exchanged = true;
     }
     written.push_back(w);
+  }
+  for (const Written &w : written) {
+    if (w.exchanged) {
+      exchanged.push_back(&w);
+    }
   }
 
   // One edge into the region's entry, so that its phis have one value from outside; one block after it.
@@ -663,9 +682,13 @@ bool RegionWhole::run() {
 
   // Fields, grouped into result words of at most 64 bits: one register each, all of them returned by one
   // applied function, which takes the word's number when there are several.
-  std::vector<std::vector<const Written *>> words(1);
-  unsigned used = 0;
+  // An exchanged variable's field is a word of its own: its fresh register holds its old value afterwards.
+  std::vector<std::vector<const Written *>> words;
+  unsigned used = maxResultBits;
   for (Written &w : written) {
+    if (w.exchanged) {
+      continue;
+    }
     if (used + w.storage->bits > maxResultBits) {
       words.emplace_back();
       used = 0;
@@ -673,6 +696,9 @@ bool RegionWhole::run() {
     w.offset = used;
     used += w.storage->bits;
     words.back().push_back(&w);
+  }
+  for (const Written *field : exchanged) {
+    words.push_back({field});
   }
   // A register of whole bytes, as a qubit variable is (Taint.h): 8, 16, 32 or 64 bits.
   auto width = [](const std::vector<const Written *> &fields) {
@@ -684,15 +710,20 @@ bool RegionWhole::run() {
   Module &module = *fn.getParent();
   IRBuilder<> b(after->getTerminator());
   b.SetCurrentDebugLocation(writes.empty() ? DebugLoc() : (*writes.begin())->mutations.front()->getDebugLoc());
+  const std::vector<Value *> loaded = arguments(b);
+  auto evaluateWord = [&](size_t index) {
+    std::vector<Value *> args = loaded;
+    if (words.size() > 1) {
+      args.push_back(b.getInt32(unsigned(index)));
+    }
+    return b.CreateCall(whole, args);
+  };
   for (size_t index = 0; index < words.size(); ++index) {
     const std::vector<const Written *> &fields = words[index];
-    auto evaluate = [&] {
-      std::vector<Value *> args = arguments(b);
-      if (words.size() > 1) {
-        args.push_back(b.getInt32(unsigned(index)));
-      }
-      return b.CreateCall(whole, args);
-    };
+    if (fields.front()->exchanged) {
+      continue; // below, after every result that reads the old values
+    }
+    auto evaluate = [&] { return evaluateWord(index); };
     if (fields.size() == 1) {
       const Storage &target = *fields.front()->storage;
       Type *type = IntegerType::get(context, target.bits);
@@ -732,6 +763,27 @@ bool RegionWhole::run() {
       Value *change = b.CreateTrunc(b.CreateLShr(first, field->offset), bits);
       recordHolds(after->getTerminator(), field->storage->alloca,
                   b.CreateXor(b.CreateZExtOrTrunc(field->known, bits), change));
+    }
+  }
+  // The exchanged variables: each final value is stored whole into its variable, the stores one group, which the
+  // control program carries out as stores by exchange: every final value applied into a fresh register first,
+  // then each exchanged with its variable, then each register cleared (Control.cpp). Every value is computed
+  // before the first store, from the old values loaded above.
+  if (!exchanged.empty()) {
+    MDNode *group = MDNode::getDistinct(context, {});
+    std::vector<std::pair<const Written *, Value *>> finals;
+    for (size_t index = 0; index < words.size(); ++index) {
+      if (words[index].front()->exchanged) {
+        const Written *field = words[index].front();
+        Type *type = IntegerType::get(context, field->storage->bits);
+        finals.emplace_back(field, b.CreateZExtOrTrunc(evaluateWord(index), type));
+      }
+    }
+    for (const auto &[field, value] : finals) {
+      const std::vector<Instruction *> &mutations = field->storage->mutations;
+      auto site = std::find_if(mutations.begin(), mutations.end(), [&](const Instruction *m) { return inside(m); });
+      b.SetCurrentDebugLocation((site != mutations.end() ? *site : mutations.front())->getDebugLoc());
+      b.CreateStore(value, field->storage->alloca)->setMetadata(overwriteMetadata, group);
     }
   }
   // The moved stores are done by the results; what they stored is no longer used after the region.

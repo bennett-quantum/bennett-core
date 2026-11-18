@@ -11,6 +11,12 @@
 // - 0, when every value the region computes from y is `y XOR d` for a d that does not read y (y is only
 //   accumulated into by XOR): then `final(y) = y XOR final(0)`.
 //
+// A variable that is neither, read and overwritten in a loop of the region, is *exchanged*: its old value is an
+// argument of the applied function, which returns its final value in a word of its own, and the variable is
+// written by exchange (docs/DESIGN.md, "Overwrites that keep the old value", with the whole region as the
+// stored function): applied into a fresh register, exchanged with the variable by CNOTs, the register then
+// holding the old value, cleared by computing that value again (Control.cpp).
+//
 // One result is XORed into its variable by one `apply`. Several share a fresh register N: `apply` into N, a
 // CNOT from each bit of N into its variable, the same `apply` again (its arguments are unchanged, so N returns
 // to 0), release N. Results of more than 64 bits are words of at most 64 bits, one register each, all returned
@@ -31,14 +37,17 @@ namespace bennett {
 
 class ControlAnalysis;
 
+// The metadata kind of the stores of a region's exchanged variables (above): one node per region, shared by its
+// stores, which follow one another and are carried out together as stores by exchange (Control.cpp).
+inline constexpr const char *overwriteMetadata = "bennett.overwrite";
+
 // Whether `blocks` contain a gate.
 bool hasGates(const std::vector<llvm::BasicBlock *> &blocks);
 
 // Replaces the region `blocks` (entry first; its edges out of the region all go to `exit`), which contains no
 // gate and stores into qubit variables, as described above, and returns true. Returns false, changing
 // nothing, when a variable the region writes is neither known before it nor only accumulated into by XOR and
-// the region has no cycle (predication may still handle it); refuses by name in the same case when the region
-// has a cycle.
+// the region has no cycle (predication may still handle it); with a cycle, such a variable is exchanged.
 bool applyRegionWhole(llvm::Function &function, const std::vector<llvm::BasicBlock *> &blocks, llvm::BasicBlock *exit,
                       ControlAnalysis &analysis);
 

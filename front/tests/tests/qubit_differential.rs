@@ -768,3 +768,114 @@ packet entry(unsigned prep, unsigned n, unsigned column) {
         None,
     );
 }
+
+// A program the front must lower in all three modes: its values equal native C for every definite value of the
+// register, nothing is released that is not zero, and its state before measurement is native C's table with the
+// preparation's amplitudes and phases, every spare register at zero.
+fn check_state(name: &str, case: &Case) {
+    let source = write_c(name, &case.source());
+    let native = native_build(&source, name, &["-DNATIVE"]);
+    let table = case.native_table(&native);
+    let check = case.state.as_ref().expect("a state check");
+    for (mode, cflags, flags) in MODES {
+        let name = format!("{name}-{mode}");
+        let text = lower_text(&source, &name, cflags, flags).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let module = bennett_ir::load(&text).expect("valid program");
+        compare(case, &module, &table, &mut 0).unwrap_or_else(|error| panic!("{name}: {error}"));
+        state::compare(check, &module, &table, case.trips, 0, &mut state::Counts::default())
+            .unwrap_or_else(|error| panic!("{name}: state: {error}"));
+    }
+}
+
+// An update in a loop whose trip count depends on the register, of a variable the loop reads and overwrites:
+// its old value was written before the loop, computed from the register, which the loop does not change. A gate
+// on another variable (`r`, left at 0) keeps the earlier writes out of the loop's code. The loop is one applied
+// function; the variable's old value is exchanged into a fresh register and cleared by computing it again.
+fn loop_overwrite(
+    name: &str,
+    qubits: u32,
+    globals: &str,
+    locals: &str,
+    before: &str,
+    code: &str,
+    objects: &[(&str, u32)],
+) {
+    let mut body = format!(
+        "{globals}packet entry(unsigned prep, unsigned n, unsigned column) {{\n    unsigned char r = 0;\n{locals}{}    \
+         ZBIT(q, 1);\n{before}\n    ZBIT(r, 0);\n    #pragma clang loop unroll(disable)\n{code}\n",
+        prepare(qubits)
+    );
+    let objects: Vec<(String, u32)> = objects.iter().map(|&(object, bytes)| (object.to_owned(), bytes)).collect();
+    let (packets, fields) = measure_objects(&mut body, &objects);
+    let mut check = Check::new(fields);
+    check.preparation.z = 2;
+    let case = Case { state: Some(check), ..Case::values(body, qubits, 0, packets, true) };
+    check_state(name, &case);
+}
+
+#[test]
+fn loop_overwrite_of_a_value_stored_before_the_loop() {
+    loop_overwrite(
+        "loop-overwrite-straight",
+        3,
+        "uint16_t y = 9;\n",
+        "",
+        "    y = 7U * q + 1U;",
+        "    for (unsigned t = q; t != 0; --t) y = y * 3U + t;",
+        &[("y", 2)],
+    );
+}
+
+// LLVM keeps these variables in registers through the loop (scalar promotion) and stores them after it: the
+// loop writes nothing, and each store after it reads the old value of a variable stored just before.
+#[test]
+fn loop_overwrite_promoted_to_values_beside_an_accumulator() {
+    loop_overwrite(
+        "loop-overwrite-two",
+        3,
+        "uint32_t a = 5;\n",
+        "    uint8_t z = 3;\n    uint16_t w = 0;\n",
+        "    a = 11U * q + 2U;\n    z = q ^ 6U;",
+        "    for (unsigned t = q + 1U; t != 0; t >>= 1) { a = a * 5U + t; z = (uint8_t)(z * z + t); w ^= t; }",
+        &[("a", 4), ("z", 1), ("w", 2)],
+    );
+}
+
+#[test]
+fn loop_overwrite_of_values_an_earlier_region_wrote() {
+    loop_overwrite(
+        "loop-overwrite-after-region",
+        3,
+        "uint16_t y = 4;\nuint8_t u = 1;\nuint16_t w = 0;\n",
+        "",
+        "    if (q & 1U) { y = 5U * q + 1U; u = q + 7U; }",
+        "    for (unsigned t = q; t != 0; --t) { y = y * 3U + t; u = (uint8_t)(u * t + 1U); w ^= t << 3; }",
+        &[("y", 2), ("u", 1), ("w", 2)],
+    );
+}
+
+#[test]
+fn loop_overwrite_of_a_value_an_applied_call_returned() {
+    loop_overwrite(
+        "loop-overwrite-after-call",
+        3,
+        "uint16_t y = 4;\n__attribute__((noinline)) static uint16_t spread(unsigned x) { return (uint16_t)(x * 4099U + 17U); }\n",
+        "",
+        "    y = spread(q);",
+        "    for (unsigned t = q; t != 0; --t) y = (uint16_t)(y * y + t);",
+        &[("y", 2)],
+    );
+}
+
+// The old value is neither known nor computable again (a gate changed the variable): refused by name with the
+// route, until it is kept in the fresh register and released.
+#[test]
+fn loop_overwrite_of_a_value_a_gate_changed_is_refused() {
+    let mut body = format!(
+        "packet entry(unsigned prep, unsigned n, unsigned column) {{\n    uint16_t y = 9;\n{}    y = 7U * q + 1U;\n    \
+         XBIT(y, 0);\n    #pragma clang loop unroll(disable)\n    for (unsigned t = q; t != 0; --t) y = y * 3U + t;\n",
+        prepare(2)
+    );
+    measure_objects(&mut body, &[("y".to_owned(), 2)]);
+    check_refused("loop-overwrite-after-gate", &body, "whose value before the loop is neither known nor computable");
+}
