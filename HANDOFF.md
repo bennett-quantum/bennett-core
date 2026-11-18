@@ -28,7 +28,8 @@ condition, and one applied function for all results of code under a qubit, resul
 stores LLVM moves out of the code included. The independent testing pass over rule A at memory (`22bd3bc`)
 left five ignored witnesses in `front/tests/tests/held_span_independent.rs`, all fixed since, and a sixth
 defect, older, was found and fixed on the way ("Fixes after the testing pass over rule A in memory
-(2026-11-18)"). Nothing of this work is running.
+(2026-11-18)"). Running now: one more independent testing pass, over those fixes (`7462959`: the aliasing
+analysis, the support of results of two held objects, the recomputed old value) and rule A at memory as a whole.
 
 ## Resumed on 2026-11-17
 
@@ -751,6 +752,14 @@ padded clock and its caller's mark; A mark's budget once its frame is left.
   that overwrite); (c) the control program keeps, in ordinary memory, a flag per object saying whether its bytes
   hold qubits, and the front writes both forms (no new instruction). Recommendation: (a) now, (c) when a program
   needs it.
+- **A function the host may call, with pointer arguments, while memory holds qubits (2026-11-18, rule A at
+  memory; taken, cheap to reverse).** The front cannot see the calls the host makes to a function with external
+  linkage, so it treats such a function as callable with any pointers: two of its pointer arguments may name the
+  same bytes, and either may name a global it reads. Where that could reach bytes holding qubits, the call, the
+  access or the second object is refused by name with the route (`docs/DESIGN.md`, "Code under a qubit").
+  Alternatives: (a) as taken; (b) treat the entry functions the tests and the host name as the only external
+  callers, with the arguments they pass; (c) a check at run time of the addresses, choosing one shadow or two.
+  Recommendation: (a) now, (c) when a program needs it.
 - **The table of control bits for a gate loop whose passes decide on qubit-dependent values carried between
   passes (2026-11-17, rule C, not built; nothing taken).** `t = x; for (i = 0; i < n; i++) { if (t & 1)
   h(y); t = step(t); }` with `n` an ordinary run-time value. The decided form is one applied function
