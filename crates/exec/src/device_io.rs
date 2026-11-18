@@ -118,9 +118,7 @@ impl Device for Simulator<'_> {
     }
 
     fn discard(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
-        for (column, mask) in self.masks(wires)? {
-            self.state.discard(column, mask);
-        }
+        self.state.discard(self.masks(wires)?);
         Ok(())
     }
 
@@ -322,6 +320,30 @@ mod tests {
         assert_eq!(state.configurations(), 4, "each of two retained values has both live outcomes");
         assert_eq!(state.leftover_qubits(), 1);
         assert!(state.amplitudes().values().all(|coefficient| (coefficient.norm_sqr() - 0.25).abs() < 1e-12));
+    }
+
+    #[test]
+    fn one_cross_column_discard_records_one_union_probability() {
+        for entangled in [false, true] {
+            let mut state = QuantumState::default();
+            let mut rng = ChaCha8Rng::seed_from_u64(0);
+            let mut sim = Simulator { state: &mut state, rng: &mut rng, limit: None, reserved_column: None };
+            sim.allocate(0..65).expect("two storage columns");
+            let x = Gate::Fixed(FixedGate::X);
+            if entangled {
+                sim.gate(GateOp { kind: Gate::Fixed(FixedGate::H), target: 63, controls: &[] })
+                    .expect("prepare Bell pair");
+                sim.gate(GateOp { kind: x, target: 64, controls: &[63] }).expect("correlate both wires");
+            } else {
+                sim.gate(GateOp { kind: x, target: 63, controls: &[] }).expect("set bit 63");
+                sim.gate(GateOp { kind: x, target: 64, controls: &[] }).expect("set bit 64");
+            }
+            sim.discard(63..65).expect("one discard");
+            let expected = if entangled { 0.5 } else { 1.0 };
+            assert!((state.nonzero_release_weight - expected).abs() < 1e-12);
+            assert_eq!(state.nonzero_releases, 1);
+            assert_eq!(state.leftover_qubits(), 2);
+        }
     }
 
     #[test]
