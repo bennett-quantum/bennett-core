@@ -93,14 +93,22 @@ impl<'a> Frame<'a> {
         self.constants.get(operand)
     }
 
-    pub(super) fn check(module: &'a ValidModule, callee: FuncId, input: &[Word]) -> Result<Self, ApplyError> {
+    pub(super) fn known_bits(&self, operand: &Operand) -> Option<Word> {
+        self.constants.word(operand)
+    }
+
+    pub(super) fn check(
+        module: &'a ValidModule,
+        callee: FuncId,
+        input: impl Iterator<Item = Option<Word>> + Clone,
+    ) -> Result<Self, ApplyError> {
         let mut frame = Self { module, callee, constants: Constants::default() };
         frame.check_instructions()?;
-        frame.constants = Constants::analyze(&frame, input, Scope::Reachable);
+        frame.constants = Constants::analyze(&frame, input.clone(), Scope::Reachable);
         if frame.check_operands(&[]).is_err() {
             // Facts from bypassed blocks are used only to check unreachable instructions.
             // Emission continues to use the proofs from entry.
-            let literal_edges = Constants::analyze(&frame, input, Scope::LiteralEdges);
+            let literal_edges = Constants::analyze(&frame, input.clone(), Scope::LiteralEdges);
             if frame.check_operands(&[&literal_edges]).is_err() {
                 // Untaken edges can still supply constants needed to validate their targets.
                 let all_edges = Constants::analyze(&frame, input, Scope::EveryBlock);

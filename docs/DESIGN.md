@@ -381,7 +381,9 @@ budget check.
 
 An indirect site with one proved definite address uses the same copy construction.
 Recursion and indirect sites without one proved address are refused before issuing
-gates. Address and argument proofs come from reachable code. A call result is unknown
+gates. Address and argument proofs come from reachable code. A copied frame keeps the
+caller's proved literal bits and equalities between argument bits across all visits to
+the call site. A call result is unknown
 to the caller's operand proof. A qubit-dependent continuation in a function with copied
 calls uses the step machine.
 

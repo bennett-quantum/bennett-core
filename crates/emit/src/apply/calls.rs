@@ -47,7 +47,7 @@ impl<'a> Program<'a> {
                 Argument::Register(wires) => wires.clone().map(|wire| Bit::Wire(wire, false)).collect(),
             })
             .collect::<Vec<_>>();
-        let root = Frame::check(input.module, input.callee, &args)?;
+        let root = Frame::check(input.module, input.callee, args.iter().cloned().map(Some))?;
         let mut slots = root.initial(args);
         let mut program = Self {
             copies: vec![Copy {
@@ -149,32 +149,15 @@ impl<'a> Program<'a> {
             return Err(error("a smaller copy expansion (limit: 16384 slots and program points)"));
         }
 
-        let mut wire = 0;
-        let proofs = function
-            .params
-            .iter()
-            .zip(args)
-            .map(|(param, arg)| {
-                let Type::Int(width) = param.ty else {
-                    return Err(error("integer call signatures"));
-                };
-                let width = width.bits() as usize;
-                Ok(match parent.frame.known(arg) {
-                    Some(value) => constant(value, width),
-                    None => (0..width)
-                        .map(|_| {
-                            let bit = Bit::Wire(wire, false);
-                            wire += 1;
-                            bit
-                        })
-                        .collect(),
-                })
-            })
-            .collect::<Result<Vec<_>, ApplyError>>()?;
-        if matches!(function.result, Some(Type::Qreg(_))) {
+        if function.params.iter().any(|param| matches!(param.ty, Type::Qreg(_)))
+            || matches!(function.result, Some(Type::Qreg(_)))
+        {
             return Err(error("integer call signatures"));
         }
-        let frame = Frame::check(input.module, callee, &proofs)?;
+        // These facts hold across every visit in the caller copy. The frame
+        // remaps their wire identities together, preserving shared input bits.
+        let proofs = args.iter().map(|arg| parent.frame.known_bits(arg));
+        let frame = Frame::check(input.module, callee, proofs)?;
         let available_stack =
             parent.available_stack.and_then(|bytes| bytes.checked_sub(frame_bytes(function.slot_count())?));
         let caller = Some((at.next(), dst.map(|slot| parent.slot(slot))));

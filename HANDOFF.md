@@ -108,7 +108,9 @@ Copied calls and unsigned arithmetic are on `wip/sol62-m4` for independent revie
 Both emission modes matched direct evaluation for
 two continuations into a copied callee and two visits to one site. Stack tests cover
 the seven-byte and eight-byte entry cases at budget zero, nested frame reservations,
-and bad indirect addresses and signatures. Unsigned bounds keep the high bits of
+and bad indirect addresses and signatures. Copied arguments preserve proved bits,
+including the high zeros of a zero extension used to resolve an indirect address.
+Unsigned bounds keep the high bits of
 narrowly bounded products at literal zero, including in a 128-bit destination. Qubit-held
 products use column reductions with their own work wires cleared. Their Toffoli counts
 are checked through a full 64-by-64-bit product. Unsigned remainder clears its work

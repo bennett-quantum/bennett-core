@@ -8,6 +8,42 @@ use super::{
 };
 
 #[test]
+fn copied_arguments_keep_proved_high_bits() {
+    let module = control_example(
+        r#"
+memory 4096
+func @f(i1 %x) -> i8 {
+entry:
+    %wide = zext i1 %x to i64
+    %result = call @relay(%wide)
+    ret %result
+}
+func @relay(i64 %wide) -> i8 {
+entry:
+    %high = lshr i64 %wide, 1
+    %base = faddr @leaf
+    %address = add i64 %base, %high
+    %result = call_indirect fn(i64) -> i8 %address(%wide)
+    ret %result
+}
+func @leaf(i64 %wide) -> i8 {
+entry:
+    %low = trunc i64 %wide to i8
+    %result = add i8 %low, 7
+    ret %result
+}
+"#,
+        1,
+        "",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=12 {
+            compare_controls(&module, budget, mode, |x| if budget < 11 { (0, 1) } else { (7 + x, 0) });
+        }
+    }
+}
+
+#[test]
 fn two_call_sites_keep_distinct_continuations() {
     let module = control_example(
         r#"

@@ -107,11 +107,18 @@ impl Constants {
         }
     }
 
+    pub(super) fn word(&self, operand: &Operand) -> Option<Word> {
+        match operand {
+            Operand::Const(value) => Some(constant(value.value(), value.width().bits() as usize)),
+            Operand::Slot(slot) => self.slots.get(slot.index())?.clone(),
+        }
+    }
+
     pub(super) fn reaches(&self, block: BlockId) -> bool {
         self.reachable.get(block.index()).copied().unwrap_or(false)
     }
 
-    pub(super) fn analyze(frame: &Frame<'_>, inputs: &[Word], scope: Scope) -> Self {
+    pub(super) fn analyze(frame: &Frame<'_>, inputs: impl Iterator<Item = Option<Word>>, scope: Scope) -> Self {
         let function = frame.module.function(frame.callee);
         if !function.blocks.iter().any(|block| {
             matches!(&block.term, Terminator::Switch { value: Operand::Slot(_), .. })
@@ -130,23 +137,31 @@ impl Constants {
         }
         let mut slots = vec![None; function.slot_count()];
         let mut arguments = BTreeMap::new();
+        let mut next_argument_wire = 0;
         for (parameter, input) in function.params.iter().zip(inputs) {
-            let word = input
-                .iter()
-                .map(|&bit| match bit {
-                    Bit::Constant(_) => bit,
-                    Bit::Wire(wire, inverted) => {
-                        let next = arguments.len() as Wire;
-                        Bit::Wire(*arguments.entry(wire).or_insert(next), inverted)
-                    }
-                })
-                .collect();
+            let mut fresh = || {
+                let wire = next_argument_wire;
+                next_argument_wire += 1;
+                wire
+            };
+            let word = match input {
+                Some(word) => word
+                    .into_iter()
+                    .map(|bit| match bit {
+                        Bit::Constant(_) => bit,
+                        Bit::Wire(wire, inverted) => {
+                            Bit::Wire(*arguments.entry(wire).or_insert_with(&mut fresh), inverted)
+                        }
+                    })
+                    .collect(),
+                None => (0..frame.slot_width(parameter.slot)).map(|_| Bit::Wire(fresh(), false)).collect(),
+            };
             slots[parameter.slot.index()] = Some(word);
         }
 
         // Immutable argument bits keep their identities. Other unknown bits get distinct
         // slot identities at block boundaries, where different loop visits can meet.
-        let argument_wires = arguments.len() as Wire;
+        let argument_wires = next_argument_wire;
         let slot_width = Wire::from(Width::MAX_BITS);
         let scratch = argument_wires + slot_width * slots.len() as Wire;
         let unknown_bit =
