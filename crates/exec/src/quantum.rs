@@ -12,6 +12,7 @@ use bennett_ir::{Fault, Width};
 use num_complex::Complex64;
 use rand::Rng;
 
+use crate::device_io::qubit;
 use crate::executor::RunError;
 use crate::gates::Matrix;
 
@@ -58,6 +59,8 @@ pub(crate) struct QuantumState {
     amplitudes: BTreeMap<Config, Complex64>,
     peak_qubits: u32,
     peak_configurations: usize,
+    pub(crate) nonzero_releases: u64,
+    pub(crate) nonzero_release_weight: f64,
     /// The memory bytes that hold qubits ("cells", `docs/DESIGN.md`, "Qubits in memory"): byte address to
     /// the column of the 8-qubit register that holds the byte's value. Part of the register table.
     cells: BTreeMap<u64, usize>,
@@ -69,23 +72,40 @@ pub(crate) struct QuantumState {
 impl Default for QuantumState {
     /// No registers: one empty configuration with amplitude 1.
     fn default() -> Self {
-        let amplitudes = BTreeMap::from([(Config::default(), Complex64::new(1.0, 0.0))]);
-        QuantumState {
-            registers: Vec::new(),
-            columns: 0,
-            amplitudes,
-            peak_qubits: 0,
+        Self {
+            amplitudes: BTreeMap::from([(Config::default(), Complex64::new(1.0, 0.0))]),
             peak_configurations: 1,
-            cells: BTreeMap::new(),
-            leftovers: Vec::new(),
+            ..Self::without_simulator()
         }
     }
 }
 
 impl QuantumState {
-    /// Allocates a register of `width` qubits in |0⟩ and returns its handle: the generation in the high
-    /// half, the id in the low half.
+    /// Register and cell bookkeeping for a run using an external device.
+    pub(crate) fn without_simulator() -> Self {
+        Self {
+            registers: Vec::new(),
+            columns: 0,
+            amplitudes: BTreeMap::new(),
+            peak_qubits: 0,
+            peak_configurations: 0,
+            nonzero_releases: 0,
+            nonzero_release_weight: 0.0,
+            cells: BTreeMap::new(),
+            leftovers: Vec::new(),
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn allocate(&mut self, width: Width) -> u64 {
+        let handle = self.reserve(width);
+        self.ensure_column(handle_id(handle));
+        handle
+    }
+
+    /// Reserves a register of `width` qubits and returns its handle: the generation in the high
+    /// half, the id in the low half.
+    pub(crate) fn reserve(&mut self, width: Width) -> u64 {
         let id = self.registers.iter().position(|r| r.width.is_none()).unwrap_or(self.registers.len());
         if id == self.registers.len() {
             self.registers.push(RegisterState { generation: 0, width: None });
@@ -94,11 +114,29 @@ impl QuantumState {
         register.generation = register.generation.wrapping_add(1);
         register.width = Some(width);
         let handle = u64::from(register.generation) << 32 | id as u64;
+        self.peak_qubits = self.peak_qubits.max(self.live_qubits());
+        handle
+    }
+
+    pub(crate) fn ensure_column(&mut self, id: usize) {
         if id >= self.columns {
             self.set_columns(id + 1);
         }
-        self.peak_qubits = self.peak_qubits.max(self.live_qubits());
-        handle
+    }
+
+    /// The simulator alone inspects releases and keeps a purification when needed.
+    pub(crate) fn discard(&mut self, id: usize) {
+        if self.is_zero(id) {
+            self.free(id);
+        } else {
+            self.nonzero_releases += 1;
+            self.nonzero_release_weight += self.nonzero_weight(id);
+            self.leave(id);
+        }
+    }
+
+    pub(crate) fn just_left_over(&self, id: usize) -> bool {
+        self.leftovers.last() == Some(&id)
     }
 
     /// Undoes `allocate`: the register's column is dropped and the id gets its previous generation.
@@ -109,7 +147,7 @@ impl QuantumState {
         self.amplitudes.retain(|config, _| config[id] == 0);
         let register = &mut self.registers[id];
         register.generation = register.generation.wrapping_sub(1);
-        self.release(id);
+        self.retire(id);
         // Ids that were never allocated before are forgotten again, as `allocate` found them.
         while self.registers.last().is_some_and(|r| r.width.is_none() && r.generation == 0) {
             self.registers.pop();
@@ -163,7 +201,7 @@ impl QuantumState {
     /// Frees the register, which is zero in every configuration: its column goes, which is exact.
     pub(crate) fn free(&mut self, id: usize) {
         debug_assert!(self.is_zero(id), "only a register zero in every configuration is freed");
-        self.release(id);
+        self.retire(id);
     }
 
     /// Keeps the register's qubits as left over instead of freeing them: its handle goes stale (the
@@ -203,7 +241,7 @@ impl QuantumState {
         }
     }
 
-    fn release(&mut self, id: usize) {
+    pub(crate) fn retire(&mut self, id: usize) {
         self.registers[id].width = None;
         let columns = self.registers.iter().rposition(|r| r.width.is_some()).map_or(0, |last| last + 1);
         if columns != self.columns {
@@ -239,12 +277,12 @@ impl QuantumState {
         &mut self,
         matrix: &Matrix,
         target: QubitRef,
-        controls: &[QubitRef],
+        controls: &[crate::Wire],
         limit: Option<usize>,
     ) -> Result<(), RunError> {
         let mut next = BTreeMap::new();
         for (config, &amplitude) in &self.amplitudes {
-            if !controls.iter().all(|control| control.is_set(config)) {
+            if !controls.iter().all(|&control| qubit(control).is_set(config)) {
                 accumulate(&mut next, config.clone(), amplitude);
                 continue;
             }
@@ -274,11 +312,6 @@ impl QuantumState {
             (config, amplitude)
         };
         self.amplitudes = std::mem::take(&mut self.amplitudes).into_iter().map(xor).collect();
-    }
-
-    /// Samples the value of register `id` and collapses the state onto it.
-    pub(crate) fn measure(&mut self, id: usize, rng: &mut impl Rng) -> u64 {
-        self.measure_bits(&[(id, u64::MAX)], rng)[0]
     }
 
     /// Samples, jointly, the bits `mask` of each column `column` in `picks` and collapses the state onto the
@@ -333,6 +366,11 @@ impl QuantumState {
 
     pub(crate) fn peak_qubits(&self) -> u32 {
         self.peak_qubits
+    }
+
+    /// The simulator's count of stored basis configurations.
+    pub(crate) fn configurations(&self) -> usize {
+        self.amplitudes.len()
     }
 
     pub(crate) fn peak_configurations(&self) -> usize {

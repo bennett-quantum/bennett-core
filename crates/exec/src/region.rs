@@ -54,6 +54,7 @@ impl<'m> Executor<'m> {
         let (out, fault, inputs) = self.region_operands(args, out, fault)?;
         let budget = self.read_word(budget);
         let mut values = Vec::with_capacity(inputs.len());
+        // This evaluation is the simulator's implementation of apply. It requires amplitudes.
         let original = self.quantum.take_amplitudes();
         self.measure_begin_apply(callee);
         let mut outcomes = Vec::with_capacity(original.len());

@@ -12,6 +12,8 @@
 mod arith;
 mod backward;
 mod cells;
+mod device;
+mod device_io;
 mod executor;
 mod forward;
 mod gates;
@@ -26,7 +28,8 @@ mod recompute_independent_tests;
 mod region;
 mod snapshot;
 
-pub use executor::{Executor, Frame, Options, Outcome, ReverseError, RunError, StartError, Stats};
+pub use device::{Device, GateOp, Wire};
+pub use executor::{DeviceRun, Executor, Frame, Options, Outcome, ReverseError, RunError, StartError, Stats};
 pub use journal::Undo;
 pub use measure::{
     Alignment, ApplyClassification, ApplyJournal, BranchJournal, CallPathStep, ChainRecovery, ClassifiedPosition,

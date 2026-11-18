@@ -6,10 +6,10 @@ use bennett_ir::{
     Target, Terminator, Type, Width,
 };
 
+use crate::device::Wire;
+use crate::device_io::{wire, wires};
 use crate::executor::{Executor, Frame, Halt, Outcome, SLOT_BYTES};
-use crate::gates;
 use crate::journal::Undo;
-use crate::quantum::QubitRef;
 
 /// `alloca` results are aligned to this many bytes, the size of the widest value.
 const STACK_ALIGN: u64 = 8;
@@ -66,24 +66,17 @@ impl<'m> Executor<'m> {
             }
             _ if self.in_region => return Err(Fault::QuantumInRegion.into()),
             Inst::Qalloc { dst, width } => {
-                let handle = self.quantum.allocate(*width);
+                let handle = self.allocate_register(*width)?;
                 self.write_slot(*dst, u128::from(handle));
                 self.record(Undo::Qalloc);
                 self.advance();
             }
             Inst::Qfree { register } => {
-                // The partial trace: the register is dropped unexamined, whatever it holds. How the simulator
-                // stores the result is its own choice (`docs/DESIGN.md`, "Releasing a register").
                 let id = self.quantum.resolve(self.handle(*register))?;
-                if self.quantum.is_zero(id) {
-                    self.quantum.free(id);
-                    self.record(Undo::Qfree);
-                } else {
-                    self.nonzero_releases += 1;
-                    self.nonzero_release_weight += self.quantum.nonzero_weight(id);
-                    self.quantum.leave(id);
-                    self.record(Undo::Leftover);
-                }
+                let Type::Qreg(width) = self.slot_type(*register) else { unreachable!("validated register") };
+                self.release_register(id, width)?;
+                // The simulator's journal takes back a kept column or recreates a zero column.
+                self.record(if self.quantum.just_left_over(id) { Undo::Leftover } else { Undo::Qfree });
                 self.advance();
             }
             Inst::Gate { gate, target, controls } => {
@@ -96,14 +89,16 @@ impl<'m> Executor<'m> {
             }
             Inst::Measure { dst, source: MeasureSource::Memory { width, address } } => {
                 let range = self.memory_range(self.read_word(address), *width)?;
-                let value = self.measure_memory(range, *width);
+                let value = self.measure_memory(range, *width)?;
                 self.write_slot(*dst, value);
                 self.record(Undo::Measure);
                 self.advance();
             }
             Inst::Measure { dst, source: MeasureSource::Register(register) } => {
                 let id = self.quantum.resolve(self.handle(*register))?;
-                let value = self.quantum.measure(id, &mut self.rng);
+                let Type::Qreg(width) = self.slot_type(*register) else { unreachable!("validated register") };
+                let range = wires(id, width.bits());
+                let value = self.device_measure(std::slice::from_ref(&range))?[0];
                 self.write_slot(*dst, u128::from(value));
                 self.record(Undo::Measure);
                 self.advance();
@@ -306,34 +301,31 @@ impl<'m> Executor<'m> {
     /// of bytes that hold qubits are sampled jointly and the state collapsed onto them, only those bits;
     /// the bits of other bytes are the memory's, as a load reads them, with nothing to sample. A byte whose
     /// eight bits are all measured stops holding qubits: it is ordinary memory again, holding the result.
-    fn measure_memory(&mut self, range: std::ops::Range<usize>, width: Width) -> u128 {
+    fn measure_memory(&mut self, range: std::ops::Range<usize>, width: Width) -> Result<u128, Halt> {
         let mut bytes = [0u8; 16];
         self.memory.read_into(range.clone(), &mut bytes[..range.len()]);
         let cells = self.quantum.cells_in(range.start as u64..range.end as u64);
         if !cells.is_empty() {
-            let bits = u64::from(width.bits());
-            let picks: Vec<(usize, u64)> = cells
+            let picks: Vec<_> = cells
                 .iter()
                 .map(|&(address, column)| {
-                    let low = (address - range.start as u64) * 8;
-                    let mask = if bits >= low + 8 { 0xff } else { (1u64 << (bits - low)) - 1 };
-                    (column, mask)
+                    let low = (address - range.start as u64) as u32 * 8;
+                    wires(column, (width.bits() - low).min(8))
                 })
                 .collect();
-            let values = self.quantum.measure_bits(&picks, &mut self.rng);
-            for ((&(address, column), &(_, mask)), value) in cells.iter().zip(&picks).zip(values) {
+            let values = self.device_measure(&picks)?;
+            for ((&(address, column), pick), value) in cells.iter().zip(&picks).zip(values) {
                 bytes[address as usize - range.start] = value as u8;
-                // A byte whose eight bits were all measured is definite again: it becomes ordinary memory holding
-                // the result, its column (now holding that value in every configuration) cleared and released.
-                if mask == 0xff {
-                    self.quantum.xor_register(column, value);
-                    self.quantum.free(column);
+                // A fully measured byte becomes ordinary memory again, holding the outcome.
+                if pick.end - pick.start == 8 {
+                    self.xor_register(column, value)?;
+                    self.release_register(column, Width::BYTE)?;
                     self.quantum.bind_cell(address, None);
                     self.memory.write(address as usize, &[value as u8]);
                 }
             }
         }
-        u128::from_le_bytes(bytes) & width.mask()
+        Ok(u128::from_le_bytes(bytes) & width.mask())
     }
 
     /// `dst = load width address`. A byte that holds qubits faults (`cells.rs`).
@@ -472,11 +464,11 @@ impl<'m> Executor<'m> {
         if controls.iter().enumerate().any(|(k, c)| *c == target || controls[..k].contains(c)) {
             return Err(Fault::QubitAlias.into());
         }
-        Ok(self.quantum.apply_gate(&gates::matrix(gate), target, &controls, limit)?)
+        Ok(self.device_gate(gate, target, &controls, limit)?)
     }
 
-    fn qubit(&self, qubit: &Qubit) -> Result<QubitRef, Fault> {
-        Ok(QubitRef { column: self.quantum.resolve(self.handle(qubit.register))?, bit: qubit.bit })
+    fn qubit(&self, qubit: &Qubit) -> Result<Wire, Fault> {
+        Ok(wire(self.quantum.resolve(self.handle(qubit.register))?, qubit.bit))
     }
 }
 
