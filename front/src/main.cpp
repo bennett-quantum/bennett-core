@@ -226,6 +226,15 @@ int main(int argc, char **argv) {
   runPipeline(*module, "cgscc(function-attrs)", false);
   verify(*module, "after outlining");
 
+  bennett::Options options;
+  options.regionBudget = regionBudget;
+  options.stackBytes = stackBytes;
+  options.taintAll = taintAll;
+  bennett::ModuleWriter writer(*module, options, control);
+  std::string text = writer.write();
+
+  // Device generation can still refuse a program. Keep both requested
+  // output paths untouched until it succeeds.
   if (!emitLLVM.empty()) {
     std::error_code code;
     raw_fd_ostream file(emitLLVM, code, sys::fs::OF_Text);
@@ -234,13 +243,6 @@ int main(int argc, char **argv) {
     }
     module->print(file, nullptr);
   }
-
-  bennett::Options options;
-  options.regionBudget = regionBudget;
-  options.stackBytes = stackBytes;
-  options.taintAll = taintAll;
-  bennett::ModuleWriter writer(*module, options, control);
-  std::string text = writer.write();
 
   std::error_code code;
   raw_fd_ostream out(output, code, sys::fs::OF_Text);

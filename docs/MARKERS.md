@@ -183,6 +183,8 @@ or pass the caller's identity as a separate argument to a caller-independent hel
 
 ## Not handled yet
 
+A named lowering refusal leaves any requested device and LLVM output files untouched.
+
 Each is refused with `not handled yet: <what>, at <file:line:col>`: under the control of a value that
 depends on a qubit, a call of a function that has gates, a measurement, a gate whose condition reads the
 gate's own variable, a gate inside a loop whose number of passes depends on a qubit (write it as an ordinary

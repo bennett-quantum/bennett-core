@@ -677,3 +677,43 @@ __attribute__((noinline)) void fill(void) {
         "not handled yet: a moved gate loop uses a load in its entry guard whose bytes are not proved ordinary",
     );
 }
+
+#[test]
+fn a_late_refusal_preserves_both_requested_output_files() {
+    use bennett_front_tests::{REGION_BUDGET, STACK_BYTES, bitcode, front, out_dir, root};
+
+    let program = Program {
+        name: "refused-output",
+        declarations: RETADDR_HELPER,
+        body: &RETADDR_USE.replace("QUALIFIER", "volatile"),
+        qubits: 1,
+    };
+    let source = program.source();
+    let include = format!("-I{}", root().join("front/include").display());
+    for (mode, clang, flags) in MODES {
+        let name = format!("{}-{mode}", program.name);
+        let input = bitcode(&source, &name, &[clang, &[include.as_str()]].concat());
+        let device = out_dir().join(format!("{name}.bn"));
+        let llvm = out_dir().join(format!("{name}.ll"));
+        std::fs::write(&device, b"existing device output\n").expect("create device sentinel");
+        std::fs::write(&llvm, b"existing LLVM output\n").expect("create LLVM sentinel");
+        let output = Command::new(front())
+            .arg(input)
+            .arg("-o")
+            .arg(&device)
+            .arg("--emit-llvm")
+            .arg(&llvm)
+            .args([format!("--region-budget={REGION_BUDGET}"), format!("--stack-bytes={STACK_BYTES}")])
+            .args(flags)
+            .output()
+            .expect("run front");
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success() && diagnostic.starts_with("not handled yet: replaying a computation"),
+            "{name}: {diagnostic}"
+        );
+        assert_eq!(std::fs::read(device).expect("read device sentinel"), b"existing device output\n");
+        assert_eq!(std::fs::read(llvm).expect("read LLVM sentinel"), b"existing LLVM output\n");
+        assert!(output.stdout.is_empty(), "{name}: unexpected standard output");
+    }
+}

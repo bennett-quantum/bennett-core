@@ -163,6 +163,8 @@ In order:
 | Quantum operations in `main` of a program linked with musl | Classify control functions through indirect calls, or a startup that calls `main` directly |
 | Non-empty inline assembly; code without source; integers wider than 128 bits | An emulator of the real machine, compiled as an ordinary program; a type legaliser for wide integers |
 
+A lowering refusal leaves both requested output paths untouched, including optional LLVM output.
+
 ## Debts
 
 One line each, with the route:

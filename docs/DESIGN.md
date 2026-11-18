@@ -1154,6 +1154,9 @@ A caller's position can change even while the arguments and memory stay the same
 overwrite in this case, keep and release the old word explicitly, or pass the caller's identity as a
 separate argument to the computation that is replayed.
 
+Device generation finishes before the front opens the device output or the optional LLVM output.
+A named lowering refusal leaves both output paths untouched.
+
 ## Decided in code
 
 - Memory: the stack grows down from the top; data starts at address 16; address 0 is never a function (a function's
