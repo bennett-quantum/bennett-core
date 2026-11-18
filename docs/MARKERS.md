@@ -179,14 +179,12 @@ at its original site before the region and the local has only direct accesses an
 initializers. The route for unproved work is to compute
 the ordinary part inside one applied function for the table of control bits in [DESIGN.md](DESIGN.md#code-under-a-qubit).
 
-A caller-sensitive helper stays at its ordinary call site. The front refuses even one moved evaluation
-if the helper or a function it can call reads a return or frame address or exposes a potentially stack-based
-pointer by storing, comparing, returning or converting it to an integer. Pointers may select private
-storage and go to callees proved caller-independent. Compute the sensitive value at its ordinary site
-and pass it in. For an overwrite, keep and release the old value or pass the caller's identity explicitly
-to a caller-independent helper. The check can also refuse linked library calls. For example, a comparison
-of a pointer returned by `malloc` or `realloc` does not have a proof that the address is global or null,
-and musl's variadic `printf` stores a frame pointer for its argument list.
+A caller-sensitive helper can move into one applied evaluation or one outlined result. Repeated
+evaluations need caller independence, including copies for separate stores, words, or gate
+conditions. The check follows callees. A return or frame address, or a potentially stack-based
+pointer that is stored as a value, compared, returned or converted to an integer, can expose caller
+position. Keep and release the old value or pass the caller's identity explicitly when clearing
+an overwrite would need another evaluation.
 
 ## Not handled yet
 

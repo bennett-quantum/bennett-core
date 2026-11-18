@@ -105,8 +105,8 @@ private:
   Function *copy(Instruction *op, Result result, const Value *known, std::vector<Param> &params);
   void refuseStale(Function *copy, const std::vector<Param> &params, const Instruction *op) const;
   bool readsVariable(Function *copy, const std::vector<Param> &params, const Storage *storage) const;
-  CallInst *call(Function *copy, const std::vector<Param> &params, IRBuilder<> &b, const Instruction &site,
-                 const char *context = nullptr);
+  CallInst *call(Function *copy, const std::vector<Param> &params, IRBuilder<> &b);
+  bool hasLiveOutput() const;
   Value *qubitPointer(Value *pointer, IRBuilder<> &b) const;
   void moveGate(CallBase *gate, IRBuilder<> &b);
   void moveStore(StoreInst *store, IRBuilder<> &b);
@@ -527,9 +527,7 @@ bool Predicator::readsVariable(Function *copy, const std::vector<Param> &params,
 
 // The call of `copy` where the operation now is: unused parameters get an undefined value, and the qubit
 // variables are read here.
-CallInst *Predicator::call(Function *copy, const std::vector<Param> &params, IRBuilder<> &b,
-                          const Instruction &site, const char *context) {
-  requireCallerIndependent(*copy, site, context);
+CallInst *Predicator::call(Function *copy, const std::vector<Param> &params, IRBuilder<> &b) {
   std::vector<Value *> args;
   for (size_t i = 0; i < params.size(); ++i) {
     Argument *arg = copy->getArg(unsigned(i));
@@ -603,7 +601,8 @@ void Predicator::moveGate(CallBase *gate, IRBuilder<> &b) {
   }
   std::vector<OperandBundleDef> bundles;
   if (!returnsConstant(when, true)) {
-    bundles.emplace_back(controlBundle, std::vector<Value *>{call(when, params, b, *gate)});
+    requireCallerIndependent(*when, *gate);
+    bundles.emplace_back(controlBundle, std::vector<Value *>{call(when, params, b)});
   } else {
     when->eraseFromParent();
   }
@@ -861,20 +860,23 @@ void Predicator::moveLoop(GateLoop &gates, IRBuilder<> &b) {
                  gate);
     }
   }
-  const char *conditionContext = " when evaluating a moved gate-loop condition";
   if (returnsConstant(when, false)) {
     kind = Kind::Never;
   } else if (returnsConstant(when, true)) {
     kind = Kind::Always;
   } else if (returnsOneQubit(when, params)) {
     kind = Kind::Qubit;
-    value = call(when, params, b, *gates.gates.front(), conditionContext);
+    if (ops.size() != gates.gates.size() || hasLiveOutput()) {
+      requireCallerIndependent(*when, *gates.gates.front(), " when evaluating a moved gate-loop condition");
+    }
+    value = call(when, params, b);
   } else {
+    requireCallerIndependent(*when, *gates.gates.front(), " when evaluating a moved gate-loop condition");
     IRBuilder<> top(&*fn.getEntryBlock().getFirstInsertionPt());
     qubit = top.CreateAlloca(b.getInt8Ty(), nullptr, "condition");
     qubit->setMetadata(qubitMetadata, MDNode::get(context, {}));
     Value *old = b.CreateLoad(b.getInt8Ty(), qubit);
-    Value *enabled = call(when, params, b, *gates.gates.front(), conditionContext);
+    Value *enabled = call(when, params, b);
     b.CreateStore(b.CreateXor(old, b.CreateZExt(enabled, b.getInt8Ty())), qubit);
   }
 
@@ -945,7 +947,7 @@ void Predicator::moveLoop(GateLoop &gates, IRBuilder<> &b) {
   b.SetInsertPoint(cont->getTerminator());
   if (kind == Kind::Variable) {
     Value *old = b.CreateLoad(b.getInt8Ty(), qubit);
-    Value *enabled = call(when, params, b, *gates.gates.front(), conditionContext);
+    Value *enabled = call(when, params, b);
     b.CreateStore(b.CreateXor(old, b.CreateZExt(enabled, b.getInt8Ty())), qubit);
   } else if (kind != Kind::Qubit && when->use_empty()) {
     when->eraseFromParent();
@@ -965,7 +967,12 @@ void Predicator::moveStore(StoreInst *store, IRBuilder<> &b) {
       change->eraseFromParent(); // the store never changes the variable
       return;
     }
-    CallInst *delta = call(change, params, b, *store);
+    // A single store can replace the region when the original has no live
+    // output. Otherwise it can share a source call with another evaluator.
+    if (ops.size() != 1 || hasLiveOutput()) {
+      requireCallerIndependent(*change, *store);
+    }
+    CallInst *delta = call(change, params, b);
     Value *old = b.CreateLoad(targetType, target->alloca);
     b.CreateStore(b.CreateXor(old, delta), target->alloca);
     return;
@@ -980,7 +987,8 @@ void Predicator::moveStore(StoreInst *store, IRBuilder<> &b) {
                    "becomes straight-line code",
                store);
   }
-  CallInst *value = call(update, params, b, *store);
+  requireCallerIndependent(*update, *store);
+  CallInst *value = call(update, params, b);
   b.CreateStore(value, target->alloca);
   InlineFunctionInfo info;
   InlineResult inlined = InlineFunction(*value, info);
@@ -1013,6 +1021,16 @@ void Predicator::removeOperations() {
       }
     }
   }
+}
+
+bool Predicator::hasLiveOutput() const {
+  return !after->phis().empty() || any_of(blocks, [&](const BasicBlock *block) {
+           return any_of(*block, [&](const Instruction &inst) {
+             return any_of(inst.users(), [&](const User *user) {
+               return !inRegion.count(cast<Instruction>(user)->getParent());
+             });
+           });
+         });
 }
 
 void Predicator::run() {
@@ -1100,15 +1118,7 @@ void Predicator::run() {
   removeOperations();
 
   // What is left computes only the values the region passes on. If there are none, it goes.
-  bool liveOut = !after->phis().empty();
-  for (BasicBlock *block : blocks) {
-    for (Instruction &inst : *block) {
-      for (User *user : inst.users()) {
-        liveOut = liveOut || !inRegion.count(cast<Instruction>(user)->getParent());
-      }
-    }
-  }
-  if (!liveOut) {
+  if (!hasLiveOutput()) {
     for (BasicBlock *pred : SmallVector<BasicBlock *, 4>(predecessors(entry))) {
       if (!inRegion.count(pred)) {
         pred->getTerminator()->replaceSuccessorWith(entry, after);

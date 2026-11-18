@@ -2,8 +2,7 @@
 //! ordinary code, queried under `apply` with a key that depends on a three-qubit register, written in C
 //! (`experiments/sqlite-on-device/applied.c`). Each of the SQL oracle's eight queries, for each of the eight
 //! row values, is compared with the native driver's result, and the classical memory, the database
-//! included, is the same before and after each `apply`. The front may refuse this input when it
-//! cannot prove that SQLite's callees are caller-independent.
+//! included, is the same before and after each `apply`.
 use bennett_exec::Options;
 use bennett_front_tests::{options, out_dir, registers, root, state_around_first_apply};
 use num_complex::Complex64;
@@ -32,7 +31,7 @@ fn checked(command: &mut Command) -> std::process::Output {
 #[test]
 #[ignore = "needs the SQLite 3.54.1 amalgamation; run: SQLITE_DIR=<dir> front/test.sh --test sqlite_applied -- \
             --ignored --nocapture; measured 2026-11-17: 84 s (builds 54 s, front 26 s, eight queries 0.2 s each)"]
-fn sqlite_queries_under_apply_match_native_or_are_refused_by_name() {
+fn sqlite_queries_under_apply_from_c_match_native_for_each_row() {
     let sqlite = std::env::var("SQLITE_DIR").expect("set SQLITE_DIR to the SQLite amalgamation directory");
     let workspace = root().canonicalize().expect("workspace");
     let experiment = workspace.join("experiments/sqlite-on-device");
@@ -82,27 +81,16 @@ fn sqlite_queries_under_apply_match_native_or_are_refused_by_name() {
     let linked = build.join("applied-linked.bc");
     checked(Command::new("llvm-link-18").arg(build.join("link/linked.bc")).arg(&applied).arg("-o").arg(&linked));
     let program = build.join("applied.bn");
-    let front = Command::new(workspace.join("target/front/bennett-front"))
-        .arg(&linked)
-        .arg("-o")
-        .arg(&program)
-        .arg(format!("--stack-bytes={STACK_BYTES}"))
-        .arg(format!("--region-budget={QUERY_BUDGET}"))
-        .output()
-        .expect("run front");
+    let front = checked(
+        Command::new(workspace.join("target/front/bennett-front"))
+            .arg(&linked)
+            .arg("-o")
+            .arg(&program)
+            .arg(format!("--stack-bytes={STACK_BYTES}"))
+            .arg(format!("--region-budget={QUERY_BUDGET}")),
+    );
     let diagnostics = String::from_utf8_lossy(&front.stderr);
     println!("front: {:.1} s; diagnostics: {diagnostics:?}", lowering.elapsed().as_secs_f64());
-    if !front.status.success() {
-        assert_eq!(front.status.code(), Some(3), "{diagnostics}");
-        assert!(
-            diagnostics
-                .lines()
-                .any(|line| line
-                    .starts_with("not handled yet: moving a computation that can observe its caller's position")),
-            "{diagnostics}"
-        );
-        return;
-    }
     let module = bennett_ir::load(&std::fs::read_to_string(&program).expect("device text")).expect("valid");
 
     let weight = Complex64::new(1.0 / (ROWS as f64).sqrt(), 0.0);

@@ -84,6 +84,16 @@ struct Slice {
   std::vector<std::pair<const LoadInst *, const Value *>> computed;
 };
 
+enum class SliceUse { Once, Replay, Invert };
+
+void requireReplayable(const Slice &slice, const Instruction &at) {
+  for (const Instruction *inst : slice.body) {
+    if (const auto *call = dyn_cast<CallBase>(inst)) {
+      requireCallerIndependent(*call, at);
+    }
+  }
+}
+
 class ControlWriter : public BodyWriter {
 public:
   ControlWriter(ModuleWriter &module, Function &function)
@@ -121,8 +131,6 @@ private:
   // The stores of a region's exchanged variables (RegionResults.h), from `first` on: stores by exchange.
   void exchangedStores(const StoreInst &first, const MDNode &group);
   std::set<const StoreInst *> exchangedDone;
-  // Slices can emit the same source call at several device positions, including
-  // when clearing an old word, inverting an update or clearing a predicate.
   // Whether `old`, the value `target` holds at `store`, can be computed again there: a computation the control
   // program can apply (collect) whose qubit variables, `target` not among them, are unchanged since they were read
   // or held there a value that can be computed again in turn (collect with knownLoads computes it in their place),
@@ -161,7 +169,11 @@ private:
   // The function computing `root` at `sink` into a register of `bits` bits: the variable `target`, or a
   // fresh register when it is null.
   std::string slice(const Slice &slice, const Value *root, const Storage *target, unsigned bits,
-                    const Instruction &sink, std::string &args, bool flipProved = false);
+                    const Instruction &sink, std::string &args, SliceUse use = SliceUse::Once,
+                    const Instruction *consumer = nullptr);
+  // A one-shot slice must consume every use of a relocated call's result.
+  void requireSingleEvaluation(const Slice &slice, const Value *root, const Instruction &sink,
+                               const Instruction &consumer) const;
   // Refuses by name a load of the slice, other than of `target`, whose variable may change between the load
   // and `sink`: what is computed at `sink` reads the registers as they are there, not as they were read.
   void requireCurrent(const Slice &slice, const Storage *target, const Instruction &sink);
@@ -473,11 +485,14 @@ void ControlWriter::store(const StoreInst &store) {
         current = current && analysis.unchangedBetween(load, &store, &target);
       }
     }
-    if (readsItself && current && provesFlip(computation, value, target)) {
-      std::string args;
-      std::string callee = slice(computation, value, &target, target.bits, store, args, true);
-      apply(callee, args, target, store);
-      return;
+    if (readsItself && current) {
+      requireReplayable(computation, store);
+      if (provesFlip(computation, value, target)) {
+        std::string args;
+        std::string callee = slice(computation, value, &target, target.bits, store, args, SliceUse::Invert);
+        apply(callee, args, target, store);
+        return;
+      }
     }
   }
   if (!known && fact.kind == Fact::Computed && recomputable(fact.value, target, store)) {
@@ -495,7 +510,8 @@ void ControlWriter::store(const StoreInst &store) {
     });
     if (!readsItself) {
       std::string args;
-      std::string callee = slice(collect(fact.value, store, true), fact.value, &target, target.bits, store, args);
+      std::string callee =
+          slice(collect(fact.value, store, true), fact.value, &target, target.bits, store, args, SliceUse::Replay);
       apply(callee, args, target, store);
       if (!next) {
         xorClassical(target, value, store);
@@ -605,7 +621,7 @@ void ControlWriter::exchangedStores(const StoreInst &first, const MDNode &group)
     line(spare + " = qalloc " + std::to_string(target.bits));
     std::string args;
     const Value *value = store->getValueOperand();
-    std::string callee = slice(collect(value, first), value, nullptr, target.bits, first, args);
+    std::string callee = slice(collect(value, first), value, nullptr, target.bits, first, args, SliceUse::Once, store);
     apply(callee, args, spare, first);
   }
   for (size_t i = 0; i < stores.size(); ++i) {
@@ -652,7 +668,7 @@ void ControlWriter::exchangedStores(const StoreInst &first, const MDNode &group)
         continue;
       }
       std::string args;
-      std::string callee = slice(*clearing, old.value, nullptr, target.bits, first, args);
+      std::string callee = slice(*clearing, old.value, nullptr, target.bits, first, args, SliceUse::Replay);
       apply(callee, args, spares[i], first);
     }
     line("qfree " + spares[i]);
@@ -796,7 +812,6 @@ void ControlWriter::requireApplicable(const CallBase &call) const {
                "or is called through a pointer",
                &call);
   }
-  requireCallerIndependent(call, call);
 }
 
 bool ControlWriter::sliceable(const Value *value) const {
@@ -1032,18 +1047,85 @@ void ControlWriter::requireCurrent(const Slice &slice, const Storage *target, co
   }
 }
 
+void ControlWriter::requireSingleEvaluation(const Slice &slice, const Value *root, const Instruction &sink,
+                                           const Instruction &consumer) const {
+  if (none_of(slice.body, [](const Instruction *inst) { return isa<CallBase>(inst); })) {
+    return;
+  }
+  std::set<const Value *> body(slice.body.begin(), slice.body.end());
+  if (const auto *store = dyn_cast<StoreInst>(&consumer)) {
+    // The XOR store lowers only its delta. The original XOR still connects
+    // that delta's uses to the one store that consumes it.
+    const auto *xorValue = dyn_cast<BinaryOperator>(store->getValueOperand());
+    if (xorValue && xorValue->getOpcode() == Instruction::Xor &&
+        (xorValue->getOperand(0) == root || xorValue->getOperand(1) == root)) {
+      body.insert(xorValue);
+    }
+  }
+
+  // A previous value substituted for a register load is already a replay,
+  // including values recovered through `recordHolds` rather than an SSA use.
+  std::set<const Value *> replayed;
+  SmallVector<const Value *, 8> work;
+  for (const auto &[load, previous] : slice.computed) {
+    work.push_back(previous);
+  }
+  while (!work.empty()) {
+    const Value *value = resolve(work.pop_back_val());
+    if (body.count(value) && replayed.insert(value).second) {
+      for (const Use &operand : cast<Instruction>(value)->operands()) {
+        work.push_back(operand.get());
+      }
+    }
+  }
+
+  for (const Instruction *inst : slice.body) {
+    const auto *call = dyn_cast<CallBase>(inst);
+    if (!call) {
+      continue;
+    }
+    bool exclusive = !replayed.count(call) &&
+                     (call->getParent() == sink.getParent() || !cyclic.count(sink.getParent()));
+    bool reachesConsumer = false;
+    std::set<const Value *> seen{call};
+    work.push_back(call);
+    while (exclusive && !work.empty()) {
+      const Value *value = work.pop_back_val();
+      for (const User *user : value->users()) {
+        if (user == &consumer) {
+          reachesConsumer = true;
+        } else if (!body.count(user)) {
+          exclusive = false;
+        } else if (seen.insert(user).second) {
+          work.push_back(user);
+        }
+      }
+    }
+    if (!exclusive || !reachesConsumer) {
+      requireCallerIndependent(*call, sink);
+    }
+    work.clear();
+  }
+}
+
 // The function computing `root` from its leaves: ordinary values (passed in) and qubit variables (whose
 // registers are passed in and read as integers). Every instruction of the computation dominates the sink,
 // so the function computes exactly what the control program would have computed there. Loads of the
 // target itself read 0: they occur only where provesFlip has shown that this gives the XOR form.
 std::string ControlWriter::slice(const Slice &slice, const Value *root, const Storage *target, unsigned bits,
-                                 const Instruction &sink, std::string &args, bool flipProved) {
+                                 const Instruction &sink, std::string &args, SliceUse use,
+                                 const Instruction *consumer) {
+  if (use == SliceUse::Once) {
+    requireSingleEvaluation(slice, root, sink, consumer ? *consumer : sink);
+  } else if (use == SliceUse::Replay) {
+    requireReplayable(slice, sink);
+  }
   requireCurrent(slice, target, sink);
   bool inPlace = false;
   for (const LoadInst *load : slice.loads) {
     inPlace = inPlace || analysis.access(load->getPointerOperand())->storage == target;
   }
-  if (inPlace && !flipProved) {
+  if (inPlace && use != SliceUse::Invert) {
     notHandled("an update of qubit variable " + target->name + " computed from its own value; only `" +
                    plainName(*target) + " ^= expression` without it, and in-place bijections, are handled",
                &sink);
@@ -1151,6 +1233,7 @@ void ControlWriter::controlledGate(const CallBase &call, const Access &target, c
                    &call);
       }
     }
+    requireReplayable(computation, call);
     // Literal controls name the registers as they are at the gate, as the computed condition reads them.
     requireCurrent(computation, nullptr, call);
     if (std::optional<std::vector<std::pair<std::string, bool>>> qubits = literals(computation, condition)) {
@@ -1178,7 +1261,7 @@ void ControlWriter::controlledGate(const CallBase &call, const Access &target, c
       return;
     }
     std::string args;
-    std::string callee = slice(computation, condition, nullptr, 1, call, args);
+    std::string callee = slice(computation, condition, nullptr, 1, call, args, SliceUse::Replay);
     apply(callee, args, qubit, call);
   };
   compute();

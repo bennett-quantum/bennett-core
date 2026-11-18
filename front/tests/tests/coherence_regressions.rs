@@ -407,7 +407,7 @@ fn return_address_readout() -> state::Check {
     check
 }
 
-const CALLER_REPLAY_REFUSAL: &str = "not handled yet: moving a computation that can observe its caller's position through a return or stack address (route: keep the old value and release it, or pass the caller's identity as an argument)";
+const CALLER_REPLAY_REFUSAL: &str = "not handled yet: replaying a computation that can observe its caller's position through a return or stack address (route: keep the old value and release it, or pass the caller's identity as an argument)";
 
 #[test]
 fn clearing_a_predicate_by_replaying_a_return_address_is_refused() {
@@ -537,7 +537,10 @@ fn repeating_a_region_that_reads_a_return_address_for_multiple_results_is_refuse
 }
 
 #[test]
-fn moving_a_return_address_is_refused_even_with_a_retained_overwrite() {
+fn overwriting_a_return_address_after_a_gate_traces_it() {
+    let mut check = readout(&[0, 8]);
+    // The nonzero value is an opaque device address. Only its equality to zero is needed.
+    check.retained = Some(vec![0, 1]);
     Program {
         name: "return-address-retained",
         declarations: RETADDR_HELPER,
@@ -550,7 +553,7 @@ fn moving_a_return_address_is_refused_even_with_a_retained_overwrite() {
 "#,
         qubits: 1,
     }
-    .refused(0, &[0, 1], CALLER_REPLAY_REFUSAL);
+    .agrees(0, &[0, 1], &check, 64);
 }
 
 #[test]
@@ -706,7 +709,7 @@ fn a_late_refusal_preserves_both_requested_output_files() {
             .expect("run front");
         let diagnostic = String::from_utf8_lossy(&output.stderr);
         assert!(
-            !output.status.success() && diagnostic.starts_with("not handled yet: moving a computation"),
+            !output.status.success() && diagnostic.starts_with("not handled yet: replaying a computation"),
             "{name}: {diagnostic}"
         );
         assert_eq!(std::fs::read(device).expect("read device sentinel"), b"existing device output\n");
@@ -934,6 +937,46 @@ packet entry(unsigned prep, unsigned n, unsigned column) {
             let wanted = u128::from_str_radix(stdout.trim(), 16).expect("native packet");
             let (found, _) = run_with_stats(&module, "entry", &[prep, 1, 0], 0);
             assert_eq!(found, Outcome::Returned(Some(wanted)), "{mode} prep={prep}");
+        }
+    }
+}
+
+#[test]
+fn a_single_region_result_can_move_a_return_address_call() {
+    for (name, region, body) in [
+        (
+            "single-outlined-return-address",
+            "entry.region.0",
+            r#"
+    ZBIT(q, 1);
+    unsigned result = 0;
+    #pragma clang loop unroll(disable)
+    for (unsigned t = q; t; --t) result ^= f(t) != 0;
+    volatile uint64_t y = result;
+    packet key = READ(q);
+    return key | ((packet)READ(y) << 8);
+"#,
+        ),
+        (
+            "single-whole-region-return-address",
+            "entry.whole",
+            r#"
+    ZBIT(q, 1);
+    uint64_t y = 0;
+    ZBIT(y, 1);
+    #pragma clang loop unroll(disable)
+    for (unsigned t = q; t; --t) y ^= f(t) != 0;
+    packet key = READ(q);
+    return key | ((packet)READ(y) << 8);
+"#,
+        ),
+    ] {
+        Program { name, declarations: RETADDR_HELPER, body, qubits: 1 }.agrees(0, &[0, 257], &readout(&[0, 8]), 0);
+        for (mode, _, _) in MODES {
+            let path = bennett_front_tests::out_dir().join(format!("{name}-{mode}.bn"));
+            let text = std::fs::read_to_string(path).expect("read lowered program");
+            assert_eq!(text.matches("call @f(").count(), 1, "{name}-{mode}");
+            assert_eq!(text.matches(&format!("call @{region}(")).count(), 1, "{name}-{mode}");
         }
     }
 }

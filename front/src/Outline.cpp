@@ -152,7 +152,15 @@ void splitOutputs(Function &region, const SetVector<Value *> &inputs, const SetV
       fail("internal: an outlined region writes memory, at " + locationOf(&inst));
     }
   }
-  std::vector<Value *> args(call->arg_begin(), call->arg_begin() + count);
+  // Extracting into a single used output replaces the original call. Multiple
+  // used outputs each evaluate the extracted body.
+  const auto firstCell = call->arg_begin() + count;
+  if (count_if(make_range(firstCell, call->arg_end()), [](const Use &cell) {
+        return any_of(cell->users(), [](const User *user) { return isa<LoadInst>(user); });
+      }) > 1) {
+    requireCallerIndependent(region, *call, " when splitting the outputs of a read-only region");
+  }
+  std::vector<Value *> args(call->arg_begin(), firstCell);
   IRBuilder<> b(call);
   std::vector<Value *> cells;
   for (unsigned k = 0; k < outputs.size(); ++k) {
@@ -167,7 +175,6 @@ void splitOutputs(Function &region, const SetVector<Value *> &inputs, const SetV
     if (reloads.empty()) {
       continue;
     }
-    requireCallerIndependent(region, *call, " when splitting the outputs of a read-only region");
     Function *variant = outputVariant(region, count, outputs, k);
     CallInst *value = b.CreateCall(variant, args, outputs[k]->getName());
     for (LoadInst *reload : reloads) {

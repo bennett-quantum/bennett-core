@@ -98,9 +98,7 @@ fn mismatched_calls_preserve_native_values_and_amplitudes_under_qubit_control() 
                 Ok(text) => text,
                 Err(error) if shape == 3 => {
                     assert!(
-                        error.starts_with(
-                            "not handled yet: moving a computation that can observe its caller's position"
-                        ) || (error.contains("a call that depends on a qubit") && error.contains("writes memory")),
+                        error.contains("a call that depends on a qubit") && error.contains("writes memory"),
                         "{tag}: {error}"
                     );
                     continue;

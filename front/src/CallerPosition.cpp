@@ -168,7 +168,7 @@ void requireIndependent(Observation observed, const Instruction &at, const char 
   if (observed == Observation::None) {
     return;
   }
-  std::string message = "moving a computation that can observe its caller's position through a return or stack address "
+  std::string message = "replaying a computation that can observe its caller's position through a return or stack address "
                         "(route: keep the old value and release it, or pass the caller's identity as an argument)";
   if (observed == Observation::Indirect) {
     message += " through a possible indirect target";

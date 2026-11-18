@@ -1,6 +1,6 @@
 //! `__builtin_return_address` (`front/tests/c/retaddr.c`): each `ra_*` function on 32 inputs against the same
 //! file compiled natively, from unoptimised and optimised clang output and with `--taint-all`; whole runs
-//! un-run back to their start; refusal of a moved return-address call (`docs/DESIGN.md`, "Return addresses").
+//! un-run back to their start; a return address under qubit control (`docs/DESIGN.md`, "Return addresses").
 
 use std::collections::BTreeMap;
 use std::process::Command;
@@ -85,7 +85,8 @@ fn every_function_un_runs_to_the_start() {
     }
 }
 
-/// Applying a caller-sensitive function even once would move it from its ordinary call site.
+/// A function that reads its return address is called under qubit control: it runs coherently, and every
+/// branch sees the same non-null address.
 #[test]
 fn a_return_address_under_qubit_control() {
     let source = write_c(
@@ -96,10 +97,16 @@ fn a_return_address_under_qubit_control() {
          return (int)(bennett_measure(&x) * 16 + bennett_measure(&y));\n}\n",
     );
     for flags in [CLANG_FLAGS, CLANG_O2_FLAGS] {
-        let error = lower_text(&source, "retaddr_controlled", flags, &[]).expect_err("named refusal");
-        assert!(
-            error.starts_with("not handled yet: moving a computation that can observe its caller's position"),
-            "{flags:?}: {error}"
-        );
+        let text = lower_text(&source, "retaddr_controlled", flags, &[]).expect("lowers");
+        assert!(text.contains(" = retaddr 0") && text.contains("apply @"), "{flags:?}: runs coherently\n{text}");
+        let module = lower(&source, "retaddr_controlled", flags, &[]);
+        let mut seen = std::collections::BTreeSet::new();
+        for seed in 0..16 {
+            match run(&module, "main", &[], seed) {
+                Outcome::Returned(Some(value)) => seen.insert(value),
+                other => panic!("{flags:?} seed {seed}: {other:?}"),
+            };
+        }
+        assert_eq!(seen, [1, 18].into(), "{flags:?}: y = x + 1 on both branches");
     }
 }

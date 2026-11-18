@@ -696,7 +696,7 @@ packet entry(unsigned prep, unsigned n, unsigned column) {
     return key | (v << 8);
 }
 "#;
-    check_witness("escaped-local", 1, escaped, Some("moving a computation that can observe its caller's position"));
+    check_witness("escaped-local", 1, escaped, Some("reads memory that may change before its result is used"));
 }
 
 #[test]

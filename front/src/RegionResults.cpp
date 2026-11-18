@@ -85,6 +85,7 @@ private:
   Function *copy(const std::vector<std::vector<const Written *>> &words, unsigned bits);
   std::vector<Value *> arguments(IRBuilder<> &b) const;
   void xorInto(IRBuilder<> &b, AllocaInst *target, Type *type, Value *value) const;
+  bool hasOtherOutputs() const;
   void removeStores();
 };
 
@@ -465,6 +466,35 @@ void RegionWhole::xorInto(IRBuilder<> &b, AllocaInst *target, Type *type, Value 
   b.CreateStore(b.CreateXor(old, value), target);
 }
 
+bool RegionWhole::hasOtherOutputs() const {
+  // Moved stores and the result phis used only by them are removed after the
+  // whole-region evaluation. Any other live output may keep the source body.
+  std::set<const User *> removed;
+  for (const Written &field : written) {
+    if (field.moved) {
+      removed.insert(field.moved);
+    }
+  }
+  for (const BasicBlock *block : {exit->getSingleSuccessor(), exit}) {
+    for (bool changed = true; block && changed;) {
+      changed = false;
+      for (const PHINode &phi : block->phis()) {
+        if (all_of(phi.users(), [&](const User *user) { return removed.count(user); })) {
+          changed |= removed.insert(&phi).second;
+        }
+      }
+    }
+  }
+  if (any_of(exit->phis(), [&](const PHINode &phi) { return !removed.count(&phi) && !phi.hasConstantValue(); })) {
+    return true;
+  }
+  return any_of(blocks, [&](const BasicBlock *block) {
+    return any_of(*block, [&](const Instruction &inst) {
+      return any_of(inst.users(), [&](const User *user) { return !inside(user) && !removed.count(user); });
+    });
+  });
+}
+
 // The region's stores into qubit variables leave it. What remains computes only the values the region passes
 // on; if there are none, it goes.
 void RegionWhole::removeStores() {
@@ -710,7 +740,9 @@ bool RegionWhole::run() {
   LLVMContext &context = fn.getContext();
   Module &module = *fn.getParent();
   const Instruction *site = writes.empty() ? blocks.front()->getTerminator() : (*writes.begin())->mutations.front();
-  requireCallerIndependent(*whole, *site);
+  if (words.size() != 1 || words.front().size() != 1 || hasOtherOutputs()) {
+    requireCallerIndependent(*whole, *site);
+  }
   IRBuilder<> b(after->getTerminator());
   b.SetCurrentDebugLocation(site->getDebugLoc());
   const std::vector<Value *> loaded = arguments(b);
