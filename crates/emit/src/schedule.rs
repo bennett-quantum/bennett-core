@@ -1,5 +1,6 @@
 //! A block's depth as a max-plus transformation of the incoming wire layers.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use bennett_exec::{GateOp, RunError, Wire};
@@ -18,7 +19,7 @@ fn include(row: &mut Row, input: Input, weight: u128) {
 }
 
 /// Each changed layer is a maximum of input layers plus offsets. Missing rows are identities.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Schedule {
     rows: HashMap<Input, Row>,
 }
@@ -77,7 +78,7 @@ impl Schedule {
     }
 
     pub(crate) fn apply_repeated(
-        mut self,
+        &self,
         mut times: u64,
         layers: &mut HashMap<Wire, u128>,
         depth: &mut u128,
@@ -92,13 +93,14 @@ impl Schedule {
             })
             .collect();
         let mut latest = *depth;
+        let mut schedule = Cow::Borrowed(self);
         while times != 0 {
             if times & 1 != 0 {
-                self.apply(&mut changed, &mut latest)?;
+                schedule.apply(&mut changed, &mut latest)?;
             }
             times >>= 1;
             if times != 0 {
-                self = self.squared();
+                schedule = Cow::Owned(schedule.squared());
             }
         }
         layers.extend(changed);

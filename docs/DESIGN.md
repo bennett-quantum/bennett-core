@@ -151,8 +151,10 @@ of the controls into the last scratch wire. The wrapper applies the gate with th
 ladder and releases the scratch in zero. The named gate and its rotation angle pass through unchanged.
 
 A caller can define a named gate block once and call or repeat it through the device interface.
-The default expands its operations. The counting device multiplies gate totals by the repetition count and
-composes gate layers using the dependencies on the incoming wire layers. Block scratch is allocated and
+The default expands its operations. The counting device caches one summary per immutable block
+definition, multiplies its gate totals by the repetition count and composes its gate layers using the
+dependencies on the incoming wire layers. The lowering wrapper reuses lowered blocks while the set
+of allocated wires stays fixed. Block scratch is allocated and
 released inside one call, so repetition keeps the peak of a single call at the same starting allocation.
 
 `bennett run --device count` reports gate totals, peak allocated qubits including scratch, and depth.

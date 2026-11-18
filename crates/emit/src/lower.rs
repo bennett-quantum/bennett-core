@@ -1,6 +1,6 @@
 //! Expand gates beyond the logical device's native controls.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::ops::Range;
 
 use bennett_exec::{BlockOp, Device, GateBlock, GateOp, RunError, Wire};
@@ -45,12 +45,22 @@ fn lower(gate: GateOp<&[Wire]>, live: &BTreeSet<Wire>, ops: &mut Vec<BlockOp>) -
 pub struct LowerControls<D> {
     inner: D,
     live: BTreeSet<Wire>,
+    blocks: HashMap<GateBlock, GateBlock>,
 }
 
 impl<D> LowerControls<D> {
     /// Wrap a device before allocating any wires.
     pub fn new(inner: D) -> Self {
-        Self { inner, live: BTreeSet::new() }
+        Self { inner, live: BTreeSet::new(), blocks: HashMap::new() }
+    }
+
+    fn end_wires(&mut self, wires: Range<Wire>) {
+        if !wires.is_empty() {
+            self.blocks.clear();
+            for wire in wires {
+                self.live.remove(&wire);
+            }
+        }
     }
 
     /// Inspect the inner device, for example to read its gate counts.
@@ -62,7 +72,10 @@ impl<D> LowerControls<D> {
 impl<D: Device> Device for LowerControls<D> {
     fn allocate(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
         self.inner.allocate(wires.clone())?;
-        self.live.extend(wires);
+        if !wires.is_empty() {
+            self.blocks.clear();
+            self.live.extend(wires);
+        }
         Ok(())
     }
 
@@ -88,17 +101,13 @@ impl<D: Device> Device for LowerControls<D> {
 
     fn discard(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
         self.inner.discard(wires.clone())?;
-        for wire in wires {
-            self.live.remove(&wire);
-        }
+        self.end_wires(wires);
         Ok(())
     }
 
     fn release_zero(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
         self.inner.release_zero(wires.clone())?;
-        for wire in wires {
-            self.live.remove(&wire);
-        }
+        self.end_wires(wires);
         Ok(())
     }
 
@@ -106,9 +115,12 @@ impl<D: Device> Device for LowerControls<D> {
         if times == 0 {
             return Ok(());
         }
+        if let Some(lowered) = self.blocks.get(block) {
+            return self.inner.repeat(lowered, times);
+        }
         let mut live = self.live.clone();
         let mut ops = Vec::new();
-        for op in &block.ops {
+        for op in block.ops() {
             match op {
                 BlockOp::Gate(gate) if !native(gate.borrowed()) => {
                     lower(gate.borrowed(), &live, &mut ops)?;
@@ -124,6 +136,9 @@ impl<D: Device> Device for LowerControls<D> {
             }
             ops.push(op.clone());
         }
-        self.inner.repeat(&GateBlock { name: block.name.clone(), ops }, times)
+        let lowered = GateBlock::from_ops(block.name(), ops);
+        self.inner.repeat(&lowered, times)?;
+        self.blocks.insert(block.clone(), lowered);
+        Ok(())
     }
 }

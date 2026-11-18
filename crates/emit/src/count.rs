@@ -1,5 +1,6 @@
 //! Count gates and live wires without keeping a quantum state.
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::iter::{Repeat, from_fn, repeat};
 use std::ops::Range;
@@ -61,50 +62,39 @@ impl Counts {
     }
 }
 
-/// Counts native gates. Measurement takes one bit from the supplied iterator per qubit.
-pub struct CountingDevice<I = Repeat<bool>> {
-    bits: I,
-    outcomes: Vec<bool>,
-    layers: HashMap<Wire, u128>,
+/// A block's resources and layer dependencies, independent of the live wires around a call.
+struct BlockSummary {
+    schedule: Schedule,
     counts: Counts,
+    inputs: HashSet<Wire>,
+    scratch_wires: HashSet<Wire>,
 }
 
-impl<I: Iterator<Item = bool>> CountingDevice<I> {
-    /// Use the given measurement source. If it runs out, measurement stops the run.
-    pub fn new(bits: I) -> Self {
-        Self { bits, outcomes: Vec::new(), layers: HashMap::new(), counts: Counts::default() }
-    }
-
-    /// Resources counted so far.
-    pub fn counts(&self) -> Counts {
-        self.counts
-    }
-
-    /// Bits returned by measurements so far, in the order they were consumed.
-    pub fn outcomes(&self) -> &[bool] {
-        &self.outcomes
-    }
-
-    fn summarize(&self, block: &GateBlock) -> Result<(Schedule, Counts), RunError> {
+impl BlockSummary {
+    fn new(block: &GateBlock) -> Result<Self, RunError> {
         let mut counts = Counts::default();
         let mut schedule = Schedule::default();
+        let mut inputs = HashSet::new();
         let mut scratch = HashSet::new();
-        for op in &block.ops {
+        let mut scratch_wires = HashSet::new();
+        for op in block.ops() {
             match op {
                 BlockOp::Allocate(wires) => {
                     for wire in wires.clone() {
-                        if self.layers.contains_key(&wire) || !scratch.insert(wire) {
+                        if !scratch.insert(wire) {
                             return Err(RunError::Device("block allocates a live wire"));
                         }
+                        scratch_wires.insert(wire);
                         schedule.allocate(wire);
                     }
-                    counts.peak_qubits = counts.peak_qubits.max(self.layers.len() + scratch.len());
+                    counts.peak_qubits = counts.peak_qubits.max(scratch.len());
                 }
                 BlockOp::Gate(gate) => {
-                    let live = |wire: &Wire| self.layers.contains_key(wire) || scratch.contains(wire);
-                    if !std::iter::once(&gate.target).chain(&gate.controls).all(live) {
-                        return Err(RunError::Device("block uses an unallocated wire"));
-                    }
+                    inputs.extend(
+                        std::iter::once(gate.target)
+                            .chain(gate.controls.iter().copied())
+                            .filter(|wire| !scratch.contains(wire)),
+                    );
                     counts.gate(gate.borrowed())?;
                     schedule.gate(gate);
                 }
@@ -122,7 +112,59 @@ impl<I: Iterator<Item = bool>> CountingDevice<I> {
         if !scratch.is_empty() {
             return Err(RunError::Device("block leaves scratch allocated"));
         }
-        Ok((schedule, counts))
+        Ok(Self { schedule, counts, inputs, scratch_wires })
+    }
+
+    fn repeat(&self, times: u64, layers: &mut HashMap<Wire, u128>, counts: &mut Counts) -> Result<(), RunError> {
+        if self.scratch_wires.iter().any(|wire| layers.contains_key(wire)) {
+            return Err(RunError::Device("block allocates a live wire"));
+        }
+        if !self.inputs.iter().all(|wire| layers.contains_key(wire)) {
+            return Err(RunError::Device("block uses an unallocated wire"));
+        }
+        let mut per_call = self.counts;
+        per_call.peak_qubits += layers.len();
+        let mut total = *counts;
+        total.add_block(per_call, times)?;
+        self.schedule.apply_repeated(times, layers, &mut total.depth)?;
+        *counts = total;
+        Ok(())
+    }
+}
+
+/// Counts native gates. Measurement takes one bit from the supplied iterator per qubit.
+pub struct CountingDevice<I = Repeat<bool>> {
+    bits: I,
+    outcomes: Vec<bool>,
+    layers: HashMap<Wire, u128>,
+    counts: Counts,
+    blocks: HashMap<GateBlock, BlockSummary>,
+    #[cfg(test)]
+    summaries_built: usize,
+}
+
+impl<I: Iterator<Item = bool>> CountingDevice<I> {
+    /// Use the given measurement source. If it runs out, measurement stops the run.
+    pub fn new(bits: I) -> Self {
+        Self {
+            bits,
+            outcomes: Vec::new(),
+            layers: HashMap::new(),
+            counts: Counts::default(),
+            blocks: HashMap::new(),
+            #[cfg(test)]
+            summaries_built: 0,
+        }
+    }
+
+    /// Resources counted so far.
+    pub fn counts(&self) -> Counts {
+        self.counts
+    }
+
+    /// Bits returned by measurements so far, in the order they were consumed.
+    pub fn outcomes(&self) -> &[bool] {
+        &self.outcomes
     }
 
     fn end_wires(&mut self, wires: Range<Wire>) {
@@ -192,12 +234,56 @@ impl<I: Iterator<Item = bool>> Device for CountingDevice<I> {
 
     fn repeat(&mut self, block: &GateBlock, times: u64) -> Result<(), RunError> {
         if times > 0 {
-            let (schedule, block_counts) = self.summarize(block)?;
-            let mut counts = self.counts;
-            counts.add_block(block_counts, times)?;
-            schedule.apply_repeated(times, &mut self.layers, &mut counts.depth)?;
-            self.counts = counts;
+            let summary = match self.blocks.entry(block.clone()) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => {
+                    let summary = BlockSummary::new(block)?;
+                    #[cfg(test)]
+                    {
+                        self.summaries_built += 1;
+                    }
+                    entry.insert(summary)
+                }
+            };
+            summary.repeat(times, &mut self.layers, &mut self.counts)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::LowerControls;
+
+    #[test]
+    fn calls_reuse_a_summary_across_layer_and_unrelated_allocation_changes() {
+        let mut device = CountingDevice::default();
+        device.allocate(0..1).expect("input");
+        let block = GateBlock::new("flip", [GateOp { kind: Gate::Fixed(FixedGate::X), target: 0, controls: vec![] }]);
+        device.call(&block).expect("first call counts");
+        device.allocate(1..3).expect("unrelated wires");
+        device.call(&block.clone()).expect("clones share the summary");
+        assert_eq!(device.summaries_built, 1);
+        assert_eq!(device.counts().depth, 2);
+        assert_eq!(device.counts().peak_qubits, 3);
+        device.discard(0..1).expect("input gone");
+        assert_eq!(device.call(&block), Err(RunError::Device("block uses an unallocated wire")));
+        assert_eq!(device.summaries_built, 1);
+    }
+
+    #[test]
+    fn repeated_lowered_calls_reuse_the_definition_with_the_same_wire_placement() {
+        let mut device = LowerControls::new(CountingDevice::default());
+        device.allocate(0..3).expect("inputs");
+        let block = GateBlock::new(
+            "two controls",
+            [GateOp { kind: Gate::Fixed(FixedGate::H), target: 2, controls: vec![0, 1] }],
+        );
+        device.call(&block).expect("first call lowers");
+        device.call(&block).expect("call again");
+        assert_eq!(device.inner().summaries_built, 1);
+        assert_eq!(device.inner().counts().two_qubit, 2);
+        assert_eq!(device.inner().counts().toffoli, 4);
     }
 }
