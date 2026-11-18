@@ -289,15 +289,15 @@ mod tests {
         sim.gate(GateOp { kind: x, target: 1, controls: &[0] }).expect("Bell pair");
         assert_eq!(sim.release_zero(0..1), Err(RunError::Device("release_zero requires zero wires")));
         sim.discard(0..1).expect("keep the partial trace");
-        let block = GateBlock {
-            name: "reuse released wire".into(),
-            ops: vec![
+        let block = GateBlock::from_ops(
+            "reuse released wire",
+            [
                 BlockOp::Allocate(0..1),
                 BlockOp::Gate(GateOp { kind: x, target: 0, controls: vec![1] }),
                 BlockOp::Gate(GateOp { kind: x, target: 0, controls: vec![1] }),
                 BlockOp::ReleaseZero(0..1),
             ],
-        };
+        );
         sim.repeat(&block, 2).expect("use clean scratch without disturbing the live neighbour");
         sim.gate(GateOp { kind: Gate::Fixed(FixedGate::H), target: 1, controls: &[] }).expect("rotate live neighbour");
         assert_eq!(state.configurations(), 4, "each of two retained values has both live outcomes");

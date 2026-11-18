@@ -145,15 +145,15 @@ fn block_repetition_matches_expansion_with_lowering_and_scratch() {
 fn scratch_only_gates_contribute_to_depth_without_carrying_layers_to_the_next_call() {
     use bennett_exec::BlockOp;
 
-    let block = GateBlock {
-        name: "scratch only".into(),
-        ops: vec![
+    let block = GateBlock::from_ops(
+        "scratch only",
+        [
             BlockOp::Allocate(0..1),
             BlockOp::Gate(owned_x(0, &[])),
             BlockOp::Gate(owned_x(0, &[])),
             BlockOp::ReleaseZero(0..1),
         ],
-    };
+    );
     let mut device = CountingDevice::default();
     device.repeat(&block, 300).expect("repeat");
     assert_eq!(
@@ -175,10 +175,7 @@ fn empty_ranges_have_the_same_effect_in_counted_and_expanded_blocks() {
         BlockOp::ReleaseZero(equal.clone()),
     ];
     for gate in [owned_x(0, &[]), GateOp { kind: Gate::Fixed(FixedGate::H), target: 0, controls: vec![1, 2] }] {
-        let block = GateBlock {
-            name: "empty allocations".into(),
-            ops: ops.iter().cloned().chain([BlockOp::Gate(gate)]).collect(),
-        };
+        let block = GateBlock::from_ops("empty allocations", ops.iter().cloned().chain([BlockOp::Gate(gate)]));
         let mut counted = CountingDevice::default();
         let mut expanded = CountingDevice::default();
         for device in [&mut counted, &mut expanded] {
@@ -186,7 +183,7 @@ fn empty_ranges_have_the_same_effect_in_counted_and_expanded_blocks() {
             device.discard(equal.clone()).expect("empty discard");
         }
         let compact = counted.call(&block);
-        let direct = block.ops.iter().try_for_each(|op| op.send(&mut expanded));
+        let direct = block.ops().iter().try_for_each(|op| op.send(&mut expanded));
         assert_eq!(compact, direct);
         assert_eq!(counted.counts(), expanded.counts());
         for device in [&mut counted, &mut expanded] {

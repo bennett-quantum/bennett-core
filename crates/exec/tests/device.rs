@@ -155,16 +155,16 @@ fn the_default_device_commands_expand_a_named_block() {
     let mut device = Recorder::default();
     device.allocate(0..2).expect("input wires");
     let copy = |target, control| GateOp { kind: Gate::Fixed(FixedGate::X), target, controls: vec![control] };
-    let block = GateBlock {
-        name: "copy through scratch".into(),
-        ops: vec![
+    let block = GateBlock::from_ops(
+        "copy through scratch",
+        [
             BlockOp::Allocate(2..3),
             BlockOp::Gate(copy(2, 0)),
             BlockOp::Gate(copy(1, 2)),
             BlockOp::Gate(copy(2, 0)),
             BlockOp::ReleaseZero(2..3),
         ],
-    };
+    );
     device.call(&block).expect("call");
     device.repeat(&block, 2).expect("two more calls");
     let one_call = [

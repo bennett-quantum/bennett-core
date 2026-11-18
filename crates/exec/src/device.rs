@@ -1,6 +1,8 @@
 //! Commands issued by the classical controller to a quantum device.
 
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
+use std::sync::Arc;
 
 use bennett_ir::Gate;
 
@@ -51,19 +53,49 @@ impl BlockOp {
 }
 
 /// A named, reusable sequence without measurements. Scratch lifetimes must fit within one call.
-/// Callers define the value once and pass it by reference to `call` and `repeat`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct GateBlock {
-    /// The name for a device or writer that records this block.
-    pub name: String,
-    /// Commands in execution order.
-    pub ops: Vec<BlockOp>,
+/// Clones refer to the same immutable definition, so devices can cache it by identity.
+#[derive(Clone, Debug)]
+pub struct GateBlock(Arc<BlockDefinition>);
+
+#[derive(Debug)]
+struct BlockDefinition {
+    name: String,
+    ops: Vec<BlockOp>,
 }
 
 impl GateBlock {
     /// Define a block of gates over wires allocated by the caller.
     pub fn new(name: impl Into<String>, gates: impl IntoIterator<Item = GateOp>) -> Self {
-        Self { name: name.into(), ops: gates.into_iter().map(BlockOp::Gate).collect() }
+        Self::from_ops(name, gates.into_iter().map(BlockOp::Gate))
+    }
+
+    /// Define a block that can allocate and release local scratch.
+    pub fn from_ops(name: impl Into<String>, ops: impl IntoIterator<Item = BlockOp>) -> Self {
+        Self(Arc::new(BlockDefinition { name: name.into(), ops: ops.into_iter().collect() }))
+    }
+
+    /// The name for a device or writer that records this block.
+    pub fn name(&self) -> &str {
+        &self.0.name
+    }
+
+    /// Commands in execution order.
+    pub fn ops(&self) -> &[BlockOp] {
+        &self.0.ops
+    }
+}
+
+impl PartialEq for GateBlock {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for GateBlock {}
+
+impl Hash for GateBlock {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Arc::as_ptr(&self.0).hash(state);
     }
 }
 
@@ -89,7 +121,7 @@ pub trait Device {
     /// Execute a gate block `times` times. A device may process the repetition as one command.
     fn repeat(&mut self, block: &GateBlock, times: u64) -> Result<(), RunError> {
         for _ in 0..times {
-            for op in &block.ops {
+            for op in block.ops() {
                 op.send(self)?;
             }
         }
