@@ -114,7 +114,7 @@ straightforward expansion into ordinary code; none reads or acts on a qubit:
 - **Forward.** The executor counts one step per executed instruction and terminator. The program carries no
   metering code. A run may be given a step limit (`Options::budget`, `bennett run --budget`), a parameter of the
   run like its memory size.
-- **Reverse.** In reversible mode each step appends to an undo journal exactly what it overwrites: the old value
+- **Reverse.** In the simulator’s reversible mode each step appends to an undo journal exactly what it overwrites: the old value
   of a slot, the old bytes of a store, the predecessor of a control transfer, the stack pointer. Reversal pops
   the journal. The journal is a few machine words per step and never holds a copy of the whole state. Console
   output goes to a tape and is unwound with it. Gates are undone by their inverses and an `apply` by applying
@@ -125,10 +125,22 @@ straightforward expansion into ordinary code; none reads or acts on a qubit:
   program is worth having for its own sake, and "forward then back returns to the start" is one of the
   independent checks in the defence in depth: exactly in memory, slots, frames and output, and up to `f64`
   rounding in the amplitudes, since gates are undone by their inverses in floating point.
-- **Quantum state** is a sparse map from basis configuration (the values of all live registers) to a complex
+- **The simulator’s quantum state** is a sparse map from basis configuration (the values of all live registers) to a complex
   amplitude. Gates act on amplitudes. This is numerical (f64), and is evidence, not proof.
-- **`measure`** samples with a seeded generator and keeps only the configurations that agree with the outcome,
+- **The simulator’s `measure`** samples with a seeded generator and keeps only the configurations that agree with the outcome,
   rescaled. It names a register, or `N` bits at an address (`measure iN [ADDR]`, "Qubits in memory").
+
+### What a device carries out
+
+The executor's classical controller allocates zeroed wires, issues named gates with their target and
+controls, measures wires and releases them by partial trace. The controller assigns wire identities
+and keeps track of register handles and memory cells. Measurement is the only operation that returns
+quantum data. The sparse simulator preserves its seeded sampling of a whole set of bits in one draw.
+A device can instead measure the individual qubits.
+
+`Executor::run_on` runs the controller on a supplied device. The simulator provides reversal, snapshots,
+configuration limits and release diagnostics. It also evaluates `apply` using its stored state. A module
+with `apply` is refused by other devices until that instruction can be lowered to gates.
 
 ### `apply`
 
@@ -1029,7 +1041,7 @@ partial trace of a register entangled with others leaves them in a mixture; a pr
 interference back returns the register to zero first (uncomputes it), as the front does for every qubit
 variable whose value it knows.
 
-How the simulator stores the result (`crates/exec/src/forward.rs`, `quantum.rs`) is its own affair:
+How the simulator stores the result (`crates/exec/src/quantum.rs`) is its own affair:
 
 - If the register is zero in every stored configuration, its column is removed.
 - Otherwise the column is kept, unnamed (its generation moves on, so no handle names it) and never reused.

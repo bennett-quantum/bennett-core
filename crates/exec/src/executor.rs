@@ -5,6 +5,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use thiserror::Error;
 
+use crate::device::Device;
 use crate::journal::{Journal, Undo};
 use crate::measure::Collector;
 use crate::memory::Memory;
@@ -47,18 +48,18 @@ pub enum Outcome {
     Returned(Option<u128>),
     /// Execution stopped with a named fault. The state is as it was before the faulting step.
     Faulted(Fault),
-    /// The simulator stopped the run at one of its own limits or checks; the program has no result. The
-    /// state is as it was before the step that would have exceeded the limit or failed the check.
+    /// A device failed or the simulator stopped the run at one of its own limits or checks.
+    /// On a simulator stop, the state is as it was before the step.
     Stopped(RunError),
 }
 
-/// A limit or check of the simulator that a run reached: the simulator's own stop. Unlike a [`Fault`], it is
-/// not part of the program's meaning: another simulator, or the same one with a larger limit or the check
-/// switched off, would continue. No program can read it: it ends the run, and it never arises inside an
-/// applied function, where the quantum steps it concerns fault `quantum_in_region` first, so it can never
-/// become a fault code (`docs/DESIGN.md`, "The simulator's own stops and reports").
+/// A device command failure or a simulator stop. This ends the run without becoming a fault code
+/// the program can read. Quantum steps inside an applied function fault `quantum_in_region` first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum RunError {
+    /// A device command failed.
+    #[error("{0}")]
+    Device(&'static str),
     /// A gate would raise the number of basis configurations above the run's limit.
     #[error("a gate would raise the number of basis configurations above the limit of {limit}")]
     ConfigurationLimit {
@@ -105,6 +106,9 @@ pub enum StartError {
     /// The requested entry function is not in the module.
     #[error("there is no entry function {0}")]
     InvalidEntry(u32),
+    /// External devices need a lowering for every applied function.
+    #[error("apply is not lowered to gates yet")]
+    ApplyNotLowered,
     /// The module's memory cannot be allocated on this host.
     #[error("cannot allocate {0} bytes of memory")]
     MemoryTooLarge(u64),
@@ -214,6 +218,17 @@ pub struct Frame {
 /// 64 bits or less, so a slot is accounted as one 64-bit word.
 pub(crate) const SLOT_BYTES: u64 = 8;
 
+/// The classical result of a forward run on a device.
+#[derive(Debug)]
+pub struct DeviceRun {
+    /// How the run ended.
+    pub outcome: Outcome,
+    /// Steps completed before the run ended.
+    pub steps: u64,
+    /// The console output.
+    pub tape: Vec<u8>,
+}
+
 /// Executes a valid module, forward and, in reversible mode, backward.
 pub struct Executor<'m> {
     pub(crate) module: &'m ValidModule,
@@ -225,6 +240,7 @@ pub struct Executor<'m> {
     pub(crate) stack_floor: u64,
     pub(crate) tape: Vec<u8>,
     pub(crate) quantum: QuantumState,
+    pub(crate) device: Option<&'m mut dyn Device>,
     pub(crate) journal: Option<Journal>,
     pub(crate) outcome: Option<Outcome>,
     pub(crate) steps: u64,
@@ -244,8 +260,6 @@ pub struct Executor<'m> {
     pub(crate) rng: ChaCha8Rng,
     pub(crate) region_steps: u64,
     pub(crate) allow_region_faults: bool,
-    pub(crate) nonzero_releases: u64,
-    pub(crate) nonzero_release_weight: f64,
     pub(crate) region_faults: u64,
     pub(crate) region_fault_weight: f64,
     pub(crate) region_fault_max_weight: f64,
@@ -259,6 +273,40 @@ impl<'m> Executor<'m> {
     /// Prepares to run `entry` on `args`: memory holds the data image and the entry frame is pushed. If
     /// the entry frame does not fit on the stack the run has already faulted.
     pub fn new(module: &'m ValidModule, entry: FuncId, args: &[u64], options: Options) -> Result<Self, StartError> {
+        Self::start(module, entry, args, options, None)
+    }
+
+    /// Runs the same classical controller on a fresh device. The module must contain no `apply`.
+    /// Wires still live when execution stops remain allocated on the device.
+    pub fn run_on(
+        module: &'m ValidModule,
+        entry: FuncId,
+        args: &[u64],
+        budget: Option<u64>,
+        device: &mut dyn Device,
+    ) -> Result<DeviceRun, StartError> {
+        if module
+            .functions
+            .iter()
+            .flat_map(|f| &f.blocks)
+            .flat_map(|b| &b.insts)
+            .any(|inst| matches!(inst, bennett_ir::Inst::Apply { .. }))
+        {
+            return Err(StartError::ApplyNotLowered);
+        }
+        let mut executor =
+            Executor::start(module, entry, args, Options { budget, ..Options::default() }, Some(device))?;
+        let outcome = executor.run();
+        Ok(DeviceRun { outcome, steps: executor.steps, tape: executor.tape })
+    }
+
+    fn start(
+        module: &'m ValidModule,
+        entry: FuncId,
+        args: &[u64],
+        options: Options,
+        device: Option<&'m mut dyn Device>,
+    ) -> Result<Self, StartError> {
         let function = module.functions.get(entry.index()).ok_or(StartError::InvalidEntry(entry.0))?;
         check_arguments(function, args)?;
         let mut executor = Executor {
@@ -269,7 +317,8 @@ impl<'m> Executor<'m> {
             stack_pointer: module.memory_size,
             stack_floor: module.static_end(),
             tape: Vec::new(),
-            quantum: QuantumState::default(),
+            quantum: if device.is_some() { QuantumState::without_simulator() } else { QuantumState::default() },
+            device,
             journal: None,
             outcome: None,
             steps: 0,
@@ -284,8 +333,6 @@ impl<'m> Executor<'m> {
             rng: ChaCha8Rng::seed_from_u64(options.seed),
             region_steps: 0,
             allow_region_faults: options.allow_region_faults || options.machine_meaning,
-            nonzero_releases: 0,
-            nonzero_release_weight: 0.0,
             region_faults: 0,
             region_fault_weight: 0.0,
             region_fault_max_weight: 0.0,
@@ -382,7 +429,7 @@ impl<'m> Executor<'m> {
         &self.tape
     }
 
-    /// A copy of the whole state, for comparison by a test harness or a report.
+    /// A simulator snapshot, for comparison by a test harness or a report.
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
             classical: ClassicalSnapshot {
@@ -413,10 +460,10 @@ impl<'m> Executor<'m> {
             memory_qubit_bytes: self.quantum.cells().len(),
             live_qubits: self.quantum.live_qubits(),
             leftover_qubits: self.quantum.leftover_qubits(),
-            nonzero_releases: self.nonzero_releases,
-            nonzero_release_weight: self.nonzero_release_weight,
+            nonzero_releases: self.quantum.nonzero_releases,
+            nonzero_release_weight: self.quantum.nonzero_release_weight,
             peak_live_qubits: self.quantum.peak_qubits(),
-            configurations: self.quantum.amplitudes().len(),
+            configurations: self.quantum.configurations(),
             peak_configurations: self.quantum.peak_configurations(),
         }
     }
