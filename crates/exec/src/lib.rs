@@ -28,7 +28,7 @@ mod recompute_independent_tests;
 mod region;
 mod snapshot;
 
-pub use device::{Device, GateOp, Wire};
+pub use device::{BlockOp, Device, GateBlock, GateOp, Wire};
 pub use executor::{DeviceRun, Executor, Frame, Options, Outcome, ReverseError, RunError, StartError, Stats};
 pub use journal::Undo;
 pub use measure::{
