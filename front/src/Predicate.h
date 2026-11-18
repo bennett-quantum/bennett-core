@@ -24,7 +24,6 @@
 // count or decisions depend on a qubit is refused by name.
 #pragma once
 
-#include <set>
 #include <vector>
 
 namespace llvm {
@@ -44,6 +43,6 @@ bool hasQuantumOperations(const std::vector<llvm::BasicBlock *> &blocks, const C
 // cannot do: a loop with gates whose trip count or decisions depend on a qubit, a measurement, a gate whose
 // condition reads its own qubit variable.
 void predicateRegion(llvm::Function &function, const std::vector<llvm::BasicBlock *> &blocks,
-                     llvm::BasicBlock *exit, ControlAnalysis &analysis, const std::set<const llvm::Function *> &control);
+                     llvm::BasicBlock *exit, ControlAnalysis &analysis);
 
 } // namespace bennett

@@ -336,7 +336,7 @@ void outlineAround(Function &function, Instruction *seed, ControlAnalysis &analy
         }
       }
     }
-    predicateRegion(function, blocks, region->getExit(), analysis, control);
+    predicateRegion(function, blocks, region->getExit(), analysis);
     return;
   }
   if (variablePosition) {

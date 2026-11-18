@@ -172,8 +172,9 @@ the condition in ordinary memory.
 A gate loop with an ordinary count can move out of qubit control when its ordinary work is proved safe,
 finite without counter wrap, and free of visible effects. The counter's start and bound must be fixed
 before qubit control. The moved loop takes the same passes it would take with its gates enabled. Moved memory accesses,
-calls, and division or remainder without a proved nonzero divisor are refused. A guard load that
-LLVM has hoisted is refused if its bytes cannot be proved ordinary. The route is to compute
+calls, and division or remainder without a proved nonzero divisor are refused. The front also checks loads on paths to the loop, including tests that rejoin and
+reads LLVM hoisted out of a test. It requires proof that the bytes of a potentially skipped read
+are always ordinary. The route is to compute
 the ordinary part inside one applied function for the table of control bits in [DESIGN.md](DESIGN.md#code-under-a-qubit).
 
 A caller-sensitive helper stays at its ordinary call site. The front refuses even one moved evaluation

@@ -671,7 +671,7 @@ __attribute__((noinline)) void fill(void) {
     .refused(
         1,
         &[65536, 1],
-        "not handled yet: a moved gate loop uses a load in its entry guard whose bytes are not proved ordinary",
+        "not handled yet: a moved gate loop may read bytes not proved ordinary before its gates",
     );
 }
 
@@ -865,4 +865,40 @@ __attribute__((noinline)) uintptr_t f(uint8_t q) {
         qubits: 1,
     }
     .refused(1, &[0, 0], CALLER_REPLAY_REFUSAL);
+}
+
+#[test]
+fn a_moved_gate_loop_checks_loads_on_paths_that_rejoin_before_it() {
+    Program {
+        name: "gate-load-before-rejoin",
+        declarations: r#"
+uint8_t held[2] = {0, 1};
+__attribute__((noinline)) void fill(void) {
+    uint8_t r = 0;
+    XBIT(r, 0);
+    held[0] = r;
+    XBIT(r, 0);
+}
+"#,
+        body: r#"
+    ZBIT(q, 1);
+    uint8_t y = 0;
+    if (prep == 1) fill();
+    ZBIT(q, 1);
+    uint8_t z = 0;
+    if (q && held[0]) { ZBIT(z, 0); } else if (!column) goto done;
+    #pragma clang loop unroll(disable)
+    for (unsigned i = 0; i < 4; ++i) XBIT(y, 0);
+done: ;
+    packet key = READ(q);
+    packet target = READ(y);
+    return key | (target << 8) | ((packet)READ_BYTES(held[0], 1) << 16);
+"#,
+        qubits: 1,
+    }
+    .refused(
+        1,
+        &[65536, 1],
+        "not handled yet: a moved gate loop may read bytes not proved ordinary before its gates",
+    );
 }

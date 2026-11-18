@@ -789,8 +789,11 @@ loop's own guard into the branch on the qubit, and put code of its own between t
 hoisted into a block before the outer loop). The loop also runs for the configurations whose path would not
 reach it, with every gate disabled there. The front checks the ordinary instructions in the loop and those it
 recomputes to enter the loop. LLVM can hoist a load from a short-circuit guard ahead of the qubit test.
-The front follows guard inputs to these earlier loads and checks their addresses against preceding
-accesses and calls that may leave qubits there. A load whose bytes cannot be proved ordinary is refused. It refuses moved memory accesses, calls, and division or remainder without
+The front checks ordinary reads in the loop, along the paths to it, and in the definitions of the
+values those paths use. This includes tests whose paths rejoin and loads LLVM hoisted out of a test.
+A read whose execution the move could extend must have a proved ordinary address. An in-bounds
+read from an immutable global has that proof. Reads through calls need a proof too.
+The front refuses moved memory accesses, calls, and division or remainder without
 a divisor proved nonzero independently of the original qubit condition. A nonzero constant or a bitwise OR
 with a nonzero constant supplies that proof. Each cycle needs a unit-step counter whose start and
 loop-invariant exit bound are fixed before the qubit-dependent condition. A strict comparison must
