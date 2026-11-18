@@ -1,6 +1,6 @@
 # HANDOFF
 
-State on 2026-11-18, about 02:25 UTC: **nothing of this work is running.** Resumed by the maintainer on
+State on 2026-11-18, about 04:05 UTC: **nothing of this work is running.** Resumed by the maintainer on
 2026-11-17; see "Resumed on 2026-11-17" below before anything else. The tree implements the model stated in
 `docs/DESIGN.md`, "The model": ordinary code; the quantum instructions it issues (`qalloc`, gates, `measure`, `qfree` as the partial trace), naming qubits in
 registers or at memory addresses (a derived form, defined in DESIGN by its expansion), with the named fault
@@ -33,15 +33,20 @@ defect, older, was found and fixed on the way ("Fixes after the testing pass ove
 ("Fixes after the last testing pass over held memory (2026-11-18)"). A randomised differential test against
 native C (`18c1973`, `front/tests/tests/qubit_differential.rs`) then found one cause of wrong results in
 accepted programs, a value selected where control flow joins after code under a qubit, and three refusals or
-messages wider than the rules, all fixed since ("Fixes after the randomised differential test (2026-11-18)");
-those fixes have had no independent pass.
+messages wider than the rules, all fixed since ("Fixes after the randomised differential test (2026-11-18)").
+The test was then widened to the shapes it had left out (`663f78d`), and its 15-minute runs on `main` with two
+seeds found no wrong result, no run-time error and no nonzero release in a program marked clean, before and
+after the widening; one shape is still refused where the rules accept it ("Randomised differential runs
+(2026-11-18)").
 
 Which commits of code under a qubit have had an independent testing pass:
 
 - tested: `eae3a86`, `d65f156`, `6a0a47a` (by `03ae832`); `ed3cfaa`, `d3a1efe`, `231bea2`, `31246c1` (by
   `22bd3bc`); `7462959` (by `d11c934`); `8668d4a`, `cb4c315` (by `18c1973`, the randomised differential test);
-- not tested by an independent pass: `49e747f`, `59644f6` (the fixes of what `18c1973` found) and the HANDOFF commit
-  after them. The orchestrator's long randomised run on `main` follows; the next independent pass starts there.
+  `49e747f`, `59644f6`, `30b3149` (by the 15-minute runs of `18c1973`'s generator on `30b3149` and of the widened
+  generator `663f78d` on `663f78d`, two seeds each);
+- not covered by an independent check: the widened generator `663f78d` itself (test-only; its sensitivity was
+  shown on the front before `49e747f`) and this HANDOFF commit. The next independent pass starts there.
 
 ## Resumed on 2026-11-17
 
@@ -1644,3 +1649,64 @@ any write may come between it and its use, whether or not the write can reach wh
 call's reach (`Aliasing`) with each intervening write's). In the capped run 8 programs were still refused with
 "reads memory that may change before its result is used"; in those looked at the call is an outlined region of
 code under a qubit that reads global variables, not a helper (older, not investigated).
+
+## Randomised differential runs (2026-11-18)
+
+The test `front/tests/tests/qubit_differential.rs` (generator in `qubit_differential/generator.rs`) writes small
+seeded C programs in the class the front accepts and compares the device's result with native C for every
+definite value of the prepared register and every result packet, at O0, O2 and with `--taint-all`. `663f78d`
+added recipes for gate loops under a qubit-dependent condition with ordinary trip counts, calls with
+qubit-dependent arguments to a function that writes memory the caller reads later (the front's warning
+checked), calls that write memory under a qubit-dependent condition (the named refusal checked), results of
+120 and 152 bits in four objects, an object written in two regions or before and inside one, the overwrite that
+keeps its old value (its warning and exactly one nonzero release of that many qubits checked), and bytes measured
+by the program and then used as ordinary memory. It still leaves out independent quantum inputs, phases and
+interference, large loop counts, uncertain aliasing, variable offsets, memory copies and calls to outside code.
+The default run takes a few seconds; the 15-minute run is ignored:
+
+```sh
+BENNETT_RANDOM_SEED=0x87196caa251d0f43 \
+  cargo test -p bennett-front-tests --test qubit_differential long_randomized_differential -- --ignored --exact --nocapture
+```
+
+A run is clean when it shows no wrong result, no run-time error in an accepted program and no nonzero release
+in a program marked clean. Runs of 15 minutes each on a shared machine (counts differ with load):
+
+| Front | Generator | Seed | Generated | Accepted | Declined | Compared | Wrong | Refused where expected to lower |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| `cb4c315` | `18c1973` | `0x87196caa251d0f43` | 7,235 | 4,892 | 2,343 | 32,136 | 21 | (not checked) |
+| `49e747f` | `18c1973` | `0x87196caa251d0f43` | 6,616 | 4,459 | 2,157 | 29,344 | 0 | (not checked) |
+| `30b3149` | `18c1973` | `0x87196caa251d0f43` | 6,781 | 5,050 | 1,731 | 33,316 | 0 | (not checked) |
+| `30b3149` | `18c1973` | `0x0b7e11a5d1ff0007` | 6,813 | 5,064 | 1,749 | 32,968 | 0 | (not checked) |
+| `663f78d` | `663f78d` | `0x87196caa251d0f43` | 6,575 | 5,234 | 1,341 | 34,376 | 0 | 29 |
+| `663f78d` | `663f78d` | `0x0b7e11a5d1ff0007` | 6,578 | 5,243 | 1,335 | 34,276 | 0 | 28 |
+
+The widened generator makes its ignored long run fail on the last column, which counts refusals, not wrong
+results.
+
+Known failing shape (refused where the rules accept it), witness
+`merged_held_store_can_use_the_value_before_the_exchange` (ignored, fails on `main`): `if (!q) a = 5; else { a
+^= q; b += q; }` with `a` and `b` globals. LLVM merges the two stores to `a` at the join; the value at the join
+is outlined into a call that reads `a`, and the front places the exchange that moves `a` into its qubit
+variable between that call and the store of its result, so the check that the memory the call reads is
+unchanged refuses it ("a call that depends on a qubit and reads memory that may change before its result is
+used"; the memory-unchanged check in `front/src/Control.cpp` and `front/src/Taint.cpp`). All 57 refusals
+counted in the last column carry this message and come from the recipe that writes an object in two regions;
+the one read in full is this shape. Route: give the outlined computation the
+value of `a` from before the exchange, so it does not read the bytes then held.
+
+Debts, as a measure of what the front does not accept yet (declines in the last run, seed `0x87196caa251d0f43`,
+then `0x0b7e11a5d1ff0007`; messages grouped over object, width and offset; most of the second line is the
+generator's recipe that expects this refusal):
+
+| Decline (each begins `not handled yet:`) | Count |
+|---|---:|
+| an update of a qubit variable in a loop under a qubit-dependent condition, whose value before the loop is not known and which the loop does more with than XOR into it | 809, 795 |
+| a call that may write memory, controlled by a value that depends on a qubit (a call that fills memory named at the call) | 470, 470 |
+| a call that depends on a qubit and reads memory that may change before its result is used (the shape above included) | 42, 45 |
+| an update of a qubit variable under a qubit-dependent condition that neither XORs into it nor becomes straight-line code | 18, 22 |
+| a call that depends on a qubit, whose result is not used, to a function that may write memory | 2, 2 |
+| an access through a pointer that may reach bytes while they hold qubits | 0, 1 |
+
+None of these was work for this run; the routes are in `docs/DESIGN.md` ("Code under a qubit", "Applied
+calls", "Memory written under a qubit") and in "Fixes after the randomised differential test (2026-11-18)".
