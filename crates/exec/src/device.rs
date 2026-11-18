@@ -68,7 +68,7 @@ impl GateBlock {
 }
 
 /// A destination for quantum commands. Callers supply free wires for allocation and live wires for
-/// other commands. A failed command stops the forward run.
+/// other commands. Empty allocation and release ranges have no effect. A failed command stops the forward run.
 pub trait Device {
     /// Allocate the given consecutive wires in zero.
     fn allocate(&mut self, wires: Range<Wire>) -> Result<(), RunError>;
