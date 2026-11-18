@@ -510,9 +510,8 @@ entry:
 "#;
 
 #[test]
-fn qubit_shift_and_multiplier_refusals_do_not_depend_on_budget() {
+fn qubit_shift_refusals_do_not_depend_on_budget() {
     for (operation, route) in [
-        ("mul", "a proved constant multiplication factor"),
         ("shl", "a proved constant shift amount"),
         ("lshr", "a proved constant shift amount"),
         ("ashr", "a proved constant shift amount"),

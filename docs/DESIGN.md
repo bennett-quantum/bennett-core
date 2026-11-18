@@ -299,7 +299,7 @@ executor's step counts (`Stats`, `RegionCost`) count instructions, not gates; th
 **Gate emitter.** The compiler in `emit` follows the applied
 function while its next instruction is definite. It represents each bit as a constant or the
 value of a qubit, and computes new bits by reversible gates into scratch qubits. It handles
-addition, subtraction, AND, XOR, shifts and multiplication with a definite shift or factor,
+addition, subtraction, AND, XOR, shifts by a definite amount and multiplication,
 integer comparisons, select, casts, jumps, switches with a proved definite selector and return.
 A jump reads all its incoming values
 before assigning the block parameters. Entry stack overflow takes precedence over the budget
@@ -340,10 +340,18 @@ proof at the budget boundary also uses the step machine, so an enclosing proved 
 cannot copy a schedule whose length comes from the budget.
 
 **Unsigned value bounds.** A word's maximum is obtained by treating every bit not
-proved zero as one. Zero extension keeps its added bits definite. For a product by a
-constant the emitter caps the working width at the bit length of the product of the
+proved zero as one. Zero extension keeps its added bits definite. For a product
+the emitter caps the working width at the bit length of the product of the
 operand bounds, or the declared width if that bound overflows. Bits above the working
 width are represented as literal zero and allocate no qubits.
+
+**Products of qubit-held words.** Each bit pair contributes one AND to the column
+of its two indices' sum. A half adder reduces two column bits and a full adder reduces
+three, keeping the sum bit in that column and passing the carry to the next column.
+Only the declared low bits matter. The gadget reserves its result, computes the
+product, copies it to the result and reverses the computation. Its work wires return
+to zero and can be reused by the next gadget. The full `apply` also reverses this gadget
+when clearing the result.
 
 **Copied calls.** Each sequence of direct call sites has its own copy of the callee's
 slots and program points. Before building gates, the compiler counts one unit for each
@@ -457,7 +465,7 @@ machine's fault semantics, writing fault codes into the program's register. The 
 simulator run is `bennett run --machine-meaning` with its default direct evaluation.
 
 Before consulting the budget, the emitter checks all instructions in the applied function.
-Shift amounts, multiplication factors and switch selectors must fold to definite bits,
+Shift amounts and switch selectors must fold to definite bits,
 including bits made constant by operations on register inputs. The first analysis starts
 at the entry block and joins the bits delivered by edges it can reach. When a conditional
 jump or switch folds to a constant, it follows the selected edge. If the condition
@@ -1565,7 +1573,7 @@ its own).
 
 | Refused inside emitted `apply` | Construction needed |
 |---|---|
-| `or`, division and remainder, shifts by qubit values, multiplication of two qubit values | Remaining integer gates, including conditional arithmetic faults |
+| `or`, division and remainder, shifts by qubit values | Remaining integer gates, including conditional arithmetic faults |
 | `switch` without a proved definite selector | Multiway dispatch in the step machine |
 | Recursive calls or a call expansion above 16,384 copied slots and program points | Shared call frames and return positions |
 | `call_indirect` without one proved definite address | Prove the target across visits or dispatch among supported addresses |

@@ -138,6 +138,14 @@ join(i3 %k):
             }
 
             for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+                if operation == "mul" {
+                    compare_controls(&module, budget, mode, |x| {
+                        let odd = x & 1;
+                        let k = (2 * x * odd) & 7;
+                        if budget < 6 + 2 * odd { (0, 1) } else { ((x * k) & 7, 0) }
+                    });
+                    continue;
+                }
                 match compile_apply_with(apply_input(&module, &args, 3, budget), mode) {
                     Ok(circuit) => incorrectly_accepted.push((operation, budget, mode, circuit.construction)),
                     Err(ApplyError::Unsupported { operation: actual, .. }) => assert_eq!(actual, operation),

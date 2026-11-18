@@ -6,7 +6,10 @@ mod calls;
 mod controls;
 mod definite;
 mod flow;
+#[cfg(test)]
+mod gadget_tests;
 mod machine;
+mod products;
 mod ranges;
 mod saved;
 mod symbolic;

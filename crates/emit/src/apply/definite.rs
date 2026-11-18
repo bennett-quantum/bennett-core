@@ -19,7 +19,7 @@ fn fold_inst(
         // Missing inputs can arrive on a later visit. An operation with known
         // operands that cannot be folded contributes an unknown value now.
         Inst::Binary { op, lhs, rhs, .. } => {
-            Some(arithmetic::binary(circuit, *op, &read(lhs)?, &read(rhs)?).unwrap_or_else(unknown))
+            Some(arithmetic::fold_binary(circuit, *op, &read(lhs)?, &read(rhs)?).unwrap_or_else(unknown))
         }
         Inst::Compare { pred, lhs, rhs, .. } => {
             Some(vec![arithmetic::compare(circuit, *pred, &read(lhs)?, &read(rhs)?)])
@@ -56,9 +56,8 @@ fn fold_inst(
 
 /// The required constant inputs for a shift or multiply. A literal needs no data-flow proof.
 pub(super) fn requirement(inst: &Inst) -> Option<(BinOp, &'static str)> {
-    let Inst::Binary { op, lhs, rhs, .. } = inst else { return None };
+    let Inst::Binary { op, rhs, .. } = inst else { return None };
     match op {
-        BinOp::Mul if !literal(lhs) && !literal(rhs) => Some((*op, "a proved constant multiplication factor")),
         BinOp::Shl | BinOp::Lshr | BinOp::Ashr if !literal(rhs) => Some((*op, "a proved constant shift amount")),
         BinOp::Add
         | BinOp::Sub
@@ -110,7 +109,13 @@ impl Constants {
         if !function.blocks.iter().any(|block| {
             matches!(&block.term, Terminator::Switch { value: Operand::Slot(_), .. })
                 || block.insts.iter().any(|inst| {
-                    requirement(inst).is_some() || matches!(inst, Inst::Call { .. } | Inst::CallIndirect { .. })
+                    requirement(inst).is_some()
+                        || matches!(
+                            inst,
+                            Inst::Call { .. }
+                                | Inst::CallIndirect { .. }
+                                | Inst::Binary { op: BinOp::Mul, lhs: Operand::Slot(_), rhs: Operand::Slot(_), .. }
+                        )
                 })
         }) {
             return Self::default();

@@ -704,3 +704,26 @@ no:
 
 #[path = "calls.rs"]
 mod calls;
+
+#[test]
+fn multiply_two_qubit_words_at_the_return_boundary() {
+    let module = control_example(
+        r#"
+memory 1024
+func @f(i8 %input) -> i8 {
+entry:
+    %left = and i8 %input, 15
+    %right = lshr i8 %input, 4
+    %product = mul i8 %left, %right
+    ret %product
+}
+"#,
+        8,
+        "",
+    );
+    for budget in [3, 4, 5] {
+        for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+            compare_controls(&module, budget, mode, |x| if budget < 4 { (0, 1) } else { ((x & 15) * (x >> 4), 0) });
+        }
+    }
+}

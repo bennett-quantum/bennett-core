@@ -122,10 +122,8 @@ impl<'a> Frame<'a> {
             };
             for (index, inst) in body.insts.iter().enumerate() {
                 let Some((op, route)) = requirement(inst) else { continue };
-                let Inst::Binary { lhs, rhs, .. } = inst else {
-                    unreachable!("the requirement is for a binary operation")
-                };
-                if constant_value(rhs).is_none() && (op != BinOp::Mul || constant_value(lhs).is_none()) {
+                let Inst::Binary { rhs, .. } = inst else { unreachable!("the requirement is for a binary operation") };
+                if constant_value(rhs).is_none() {
                     return Err(self.error(Point { block, index, copy: 0 }, op.mnemonic(), route));
                 }
             }
@@ -168,7 +166,7 @@ impl<'a> Frame<'a> {
                 Inst::Binary { op, dst, lhs, rhs, .. } => {
                     let mut left = read(lhs);
                     let mut right = read(rhs);
-                    if requirement(inst).is_some() {
+                    if requirement(inst).is_some() || *op == BinOp::Mul {
                         // A slot can contain other values when this point is inactive.
                         // Use the proven value for each input that executes the instruction.
                         if let Some(value) = self.constants.get(rhs) {

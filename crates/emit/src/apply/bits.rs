@@ -42,6 +42,7 @@ pub(super) fn definite(word: &[Bit]) -> Option<u128> {
 pub(super) struct Circuit {
     start: Wire,
     next: Option<Wire>,
+    peak: Option<Wire>,
     gates: Vec<GateOp>,
     enabled: Bit,
     control_scratch: Option<Wire>,
@@ -49,19 +50,21 @@ pub(super) struct Circuit {
 
 pub(super) struct Checkpoint {
     next: Option<Wire>,
+    peak: Option<Wire>,
     gates: usize,
     control_scratch: Option<Wire>,
 }
 
 impl Circuit {
     pub(super) fn new(start: Wire) -> Self {
-        Self { start, next: Some(start), gates: Vec::new(), enabled: ONE, control_scratch: None }
+        Self { start, next: Some(start), peak: Some(start), gates: Vec::new(), enabled: ONE, control_scratch: None }
     }
 
     pub(super) fn fresh(&mut self) -> Wire {
         // A range ending at MAX is valid. Allocating MAX itself would need an end past it.
         let wire = self.next.unwrap_or(Wire::MAX);
         self.next = wire.checked_add(1);
+        self.peak = self.peak.zip(self.next).map(|(peak, next)| peak.max(next));
         wire
     }
 
@@ -70,11 +73,12 @@ impl Circuit {
     }
 
     pub(super) fn checkpoint(&self) -> Checkpoint {
-        Checkpoint { next: self.next, gates: self.gates.len(), control_scratch: self.control_scratch }
+        Checkpoint { next: self.next, peak: self.peak, gates: self.gates.len(), control_scratch: self.control_scratch }
     }
 
     pub(super) fn rewind(&mut self, checkpoint: Checkpoint) {
         self.next = checkpoint.next;
+        self.peak = checkpoint.peak;
         self.gates.truncate(checkpoint.gates);
         self.control_scratch = checkpoint.control_scratch;
     }
@@ -189,12 +193,31 @@ impl Circuit {
         }
     }
 
+    // Reserve the result before computing, then clear and reuse all later wires.
+    pub(super) fn clean_word(&mut self, width: usize, compute: impl FnOnce(&mut Self) -> Word) -> Word {
+        let result: Vec<_> = (0..width).map(|_| self.fresh()).collect();
+        let temporary = self.next;
+        let control_scratch = self.control_scratch;
+        let start = self.forward_len();
+        let computed = compute(self);
+        let end = self.forward_len();
+        for (&wire, value) in result.iter().zip(computed) {
+            self.xor_into(wire, value, ONE);
+        }
+        for index in (start..end).rev() {
+            self.gates.push(self.gates[index].clone());
+        }
+        self.next = temporary;
+        self.control_scratch = control_scratch;
+        result.into_iter().map(|wire| Bit::Wire(wire, false)).collect()
+    }
+
     pub(super) fn forward_len(&self) -> usize {
         self.gates.len()
     }
 
     pub(super) fn finish(mut self, forward_len: usize, name: &str) -> Result<GateBlock, ApplyError> {
-        let scratch = self.start..self.next.ok_or(ApplyError::WireSpace)?;
+        let scratch = self.start..self.peak.ok_or(ApplyError::WireSpace)?;
         self.gates.reserve(forward_len);
         for index in (0..forward_len).rev() {
             self.gates.push(self.gates[index].clone());

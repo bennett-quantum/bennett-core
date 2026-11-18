@@ -3,6 +3,7 @@
 use bennett_ir::{BinOp, CastOp, Predicate};
 
 use super::bits::{Bit, Circuit, ONE, Word, ZERO, definite};
+use super::products;
 use super::ranges::{product_bits, unsigned_max};
 
 pub(super) fn binary(circuit: &mut Circuit, op: BinOp, left: &[Bit], right: &[Bit]) -> Option<Word> {
@@ -15,13 +16,21 @@ pub(super) fn binary(circuit: &mut Circuit, op: BinOp, left: &[Bit], right: &[Bi
             let (word, factor) = match (definite(left), definite(right)) {
                 (Some(factor), _) => (right, factor),
                 (None, Some(factor)) => (left, factor),
-                (None, None) => return None,
+                (None, None) => return Some(products::multiply(circuit, left, right)),
             };
             multiply(circuit, word, factor)
         }
         BinOp::Shl | BinOp::Lshr | BinOp::Ashr => shift(op, left, definite(right)?),
         BinOp::Udiv | BinOp::Sdiv | BinOp::Urem | BinOp::Srem | BinOp::Or => return None,
     })
+}
+
+// The operand proof needs constant folding, without emitting a general product.
+pub(super) fn fold_binary(circuit: &mut Circuit, op: BinOp, left: &[Bit], right: &[Bit]) -> Option<Word> {
+    if op == BinOp::Mul && definite(left).is_none() && definite(right).is_none() {
+        return None;
+    }
+    binary(circuit, op, left, right)
 }
 
 fn add(circuit: &mut Circuit, left: &[Bit], right: impl Iterator<Item = Bit>, mut carry: Bit) -> Word {
