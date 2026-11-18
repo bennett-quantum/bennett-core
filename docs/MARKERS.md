@@ -136,9 +136,10 @@ arguments for which `f` needs more than the budget gives the fault `budget` for 
 (`__bennett_effect`, or a musl `printf` of a line, which writes stdout out) or `exit` inside gives `effect_in_region` or
 `exit_in_region` for the values that reach it. `docs/DESIGN.md`, "Applied calls", says what this means.
 
-The default simulator evaluates applied calls. The standalone gate compiler currently handles
-a subset of integer instructions and qubit-dependent loops in the device program, with a
-specialised circuit for one proved loop. Integration with the controller is the next step.
+These marker rules describe direct simulation, including applied calls and private memory.
+The counting device and the simulator's `--apply-circuit` option compile applied integer code
+to gates. The compiler reports applied calls and memory operations as refusals with their routes
+in [DESIGN.md](DESIGN.md#not-yet).
 
 Natively `f`'s writes would remain. Where the front sees that code after the call reads memory the call writes
 (a global variable, or memory passed to it by pointer, read directly or by a function called directly), it

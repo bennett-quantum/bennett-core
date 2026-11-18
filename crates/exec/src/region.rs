@@ -10,6 +10,8 @@ use std::collections::BTreeMap;
 
 use bennett_ir::{Fault, FuncId, Operand, Slot, Type};
 
+use crate::apply_device::{AppliedCircuit, ApplyInput, Argument};
+use crate::device_io::{DeviceContext, wire, wires};
 use crate::executor::{Executor, Halt, Outcome, RunError};
 use crate::journal::Journal;
 use crate::quantum::Config;
@@ -91,6 +93,49 @@ impl<'m> Executor<'m> {
             permuted.insert(config, amplitude);
         }
         self.quantum.replace_amplitudes(permuted);
+        Ok(())
+    }
+
+    /// Resolves and compiles the whole operation before sending any commands for it.
+    pub(crate) fn apply_gates(
+        &mut self,
+        callee: FuncId,
+        args: &[Operand],
+        out: Slot,
+        fault: Slot,
+        budget: &Operand,
+        context: &mut DeviceContext<'_>,
+    ) -> Result<(), Halt> {
+        let (out, fault, inputs) = self.region_operands(args, out, fault)?;
+        let range = |column: usize| {
+            let register = &self.quantum.registers()[column];
+            wires(column, register.width.expect("resolved register is live").bits())
+        };
+        let args = inputs
+            .into_iter()
+            .map(|input| match input {
+                Input::Value(value) => Argument::Value(value),
+                Input::Register(column) => Argument::Register(range(column)),
+            })
+            .collect::<Vec<_>>();
+        let input = ApplyInput {
+            module: self.module,
+            callee,
+            args: &args,
+            out: range(out),
+            fault: range(fault),
+            budget: self.read_word(budget),
+            entry_fault: self.frame_fits(callee).err(),
+            scratch_start: wire(self.quantum.registers().len(), 0),
+        };
+        let compiler = context.compiler.as_deref_mut().expect("gate compiler selected");
+        let block = compiler.compile(input.clone())?;
+        let circuit = AppliedCircuit::check(&input, &block)?;
+        if let Some(device) = context.external.as_deref_mut() {
+            AppliedCircuit::send(&block, device)?;
+        } else {
+            circuit.simulate(&mut self.quantum)?;
+        }
         Ok(())
     }
 

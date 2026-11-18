@@ -54,8 +54,11 @@ impl<'m> Executor<'m> {
                 let Inst::Apply { callee, args, out, fault, budget } = self.retreat() else {
                     unreachable!("an apply record")
                 };
-                // A coherent region is its own inverse.
-                self.apply(*callee, args, *out, *fault, budget).expect("an apply that ran forward runs again");
+                // The operation is its own inverse, including fault codes written by a gate circuit.
+                let allow = std::mem::replace(&mut self.allow_region_faults, true);
+                let result = self.apply(*callee, args, *out, *fault, budget);
+                self.allow_region_faults = allow;
+                result.expect("an apply that ran forward runs again");
             }
             Undo::Setjmp => {
                 let Inst::Setjmp { buffer, .. } = self.retreat() else { unreachable!("a setjmp record") };

@@ -4,11 +4,11 @@
 mod bits;
 
 use bennett_emit::{
-    ApplyInput, ApplyMode, Argument, CompiledApply, Construction, CountingDevice, compile_apply, compile_apply_with,
+    ApplyError, ApplyInput, ApplyMode, Argument, CompiledApply, Construction, CountingDevice, compile_apply,
+    compile_apply_with,
 };
-use bennett_exec::BlockOp;
-use bennett_exec::Device;
-use bennett_ir::{Fault, load};
+use bennett_exec::{BlockOp, Device, Executor, GateBlock, GateOp, Options, Outcome, RunError};
+use bennett_ir::{BlockId, Fault, FixedGate, Gate, load};
 use bits::Layout;
 
 fn gates(compiled: &CompiledApply, x: usize, y: usize) -> (Vec<bennett_exec::GateOp>, Layout) {
@@ -158,8 +158,7 @@ entry:
 
 #[test]
 fn nested_loops_share_the_clock_after_the_definite_prefix() {
-    let module = load(
-        r#"
+    let source = r#"
 memory 1024
 func @f(i2 %x, i2 %y) -> i1 {
 entry:
@@ -181,9 +180,8 @@ outer(i2 %left, i1 %parity):
 done(i1 %result):
     ret %result
 }
-"#,
-    )
-    .expect("valid nested loops");
+"#;
+    let module = load(source).expect("valid nested loops");
     for budget in [1, 2, 3, 13, 14, 15, 35] {
         let compiled = compile_apply(ApplyInput {
             module: &module,
@@ -205,6 +203,36 @@ done(i1 %result):
             let steps = 3 + x * (6 + 5 * y);
             if steps <= u128::from(budget) { (x * y) & 1 } else { 2 }
         });
+    }
+    let main = r#"
+func @main(i64 %budget) {
+entry:
+    %x = qalloc 2
+    %y = qalloc 2
+    x %x[0]
+    x %y[0]
+    %out = qalloc 1
+    %fault = qalloc 5
+    apply @f(%x, %y) -> %out, %fault budget %budget
+    ret
+}
+"#;
+    let module = load(&format!("{source}{main}")).expect("nested-loop program");
+    let entry = module.function_named("main").expect("entry");
+    for (budget, out, fault) in [(13, 0, 1), (14, 1, 0)] {
+        let options = Options { machine_meaning: true, ..Options::default() };
+        let mut reference = Executor::new(&module, entry, &[budget], options).expect("reference");
+        let mut emitted = Executor::new(&module, entry, &[budget], options).expect("simulator");
+        let mut compiler = |input: ApplyInput<'_>| {
+            let compiled = compile_apply(input)?;
+            assert_eq!(compiled.construction, Construction::StepMachine { ticks: budget - 1 });
+            Ok(compiled.block)
+        };
+        assert_eq!(reference.run(), Outcome::Returned(None));
+        assert_eq!(emitted.run_emitted(&mut compiler), Outcome::Returned(None));
+        let expected = reference.snapshot();
+        assert_eq!(expected.quantum.amplitudes[0].0, [1, 1, out, fault]);
+        assert_eq!(emitted.snapshot(), expected);
     }
 }
 
@@ -380,4 +408,140 @@ fn collatz_eight_bit_budget_sweep_and_counts() {
             }
         }
     }
+}
+
+#[test]
+fn collatz_circuits_match_machine_meaning_after_each_apply() {
+    for width in 2..=5 {
+        let hadamards = (0..width).map(|bit| format!("    h %arg[{bit}]\n")).collect::<String>();
+        let module = load(&format!(
+            "{}\nfunc @main(i64 %budget) {{\nentry:\n    %arg = qalloc {width}\n{hadamards}{}",
+            collatz_source(width),
+            r#"
+    %witness = qalloc 1
+    x %witness ctrl %arg[0]
+    s %witness
+    %out = qalloc 8
+    %fault = qalloc 5
+    x %out[2]
+    x %fault[4]
+    apply @collatz(%arg) -> %out, %fault budget %budget
+    apply @collatz(%arg) -> %out, %fault budget %budget
+    ret
+}
+"#,
+        ))
+        .expect("valid superposition program");
+        let entry = module.function_named("main").expect("entry");
+        let longest = (1..1 << width).map(|x| collatz(x).0).max().expect("terminating inputs");
+        for budget in [4, 5, 14, collatz_return(longest)] {
+            for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+                let machine = Options { machine_meaning: true, ..Options::default() };
+                let mut reference = Executor::new(&module, entry, &[budget], machine).expect("reference");
+                let options = Options { reversible: true, ..Options::default() };
+                let mut emitted = Executor::new(&module, entry, &[budget], options).expect("gate simulator");
+                let initial = emitted.snapshot();
+                let mut selections = Vec::new();
+                let mut compiler = |input: ApplyInput<'_>| {
+                    let compiled = compile_apply_with(input, mode)?;
+                    selections.push(compiled.construction);
+                    Ok(compiled.block)
+                };
+                loop {
+                    let expected = reference.step();
+                    let actual = emitted.step_emitted(&mut compiler);
+                    let detail = (width, budget, mode, reference.stats().steps);
+                    assert_eq!(actual, expected, "{detail:?}");
+                    assert_eq!(emitted.snapshot(), reference.snapshot(), "{detail:?}");
+                    if let Some(outcome) = actual {
+                        assert_eq!(outcome, Outcome::Returned(None));
+                        break;
+                    }
+                }
+                let expected = match mode {
+                    ApplyMode::Automatic => {
+                        Construction::SavedDecisions { decisions: budget.checked_sub(5).map_or(0, |rest| rest / 9 + 1) }
+                    }
+                    ApplyMode::StepMachine => Construction::StepMachine { ticks: budget - 3 },
+                };
+                assert_eq!(selections, [expected, expected]);
+                emitted.reverse().expect("the two applied gate operations can be undone");
+                let after_reverse = emitted.snapshot();
+                assert_eq!(after_reverse.classical, initial.classical);
+                let distance = after_reverse.quantum.distance(&initial.quantum).expect("registers restored");
+                assert!(distance < 1e-15, "reversing Hadamards rounds by {distance:e}");
+            }
+        }
+    }
+}
+
+const DEVICE_PROGRAM: &str = r#"
+memory 512
+func @f(i4 %x) -> i4 {
+entry:
+    %sum = add i4 %x, 3
+    INSTRUCTION
+    ret %answer
+}
+func @main() {
+entry:
+    %arg = qalloc 4
+    %out = qalloc 4
+    %fault = qalloc 5
+    apply @f(%arg) -> %out, %fault budget 3
+    ret
+}
+"#;
+
+#[test]
+fn refuses_a_qubit_multiplier_before_sending_any_circuit_commands() {
+    let module = load(&DEVICE_PROGRAM.replace("INSTRUCTION", "%answer = mul i4 %sum, %x")).expect("valid program");
+    let entry = module.function_named("main").expect("entry");
+    let mut counter = CountingDevice::default();
+    let mut compiler = |input: ApplyInput<'_>| Ok(compile_apply(input)?.block);
+    let run = Executor::run_on_with_apply(&module, entry, &[], None, &mut counter, &mut compiler).expect("device run");
+    let expected = Some(Outcome::Stopped(RunError::Apply(ApplyError::Unsupported {
+        callee: module.function_named("f").expect("callee"),
+        block: BlockId(0),
+        index: 1,
+        operation: "mul",
+        route: "multiplication of two qubit words",
+    })));
+    assert_eq!(Some(run.outcome), expected);
+    assert_eq!(run.steps, 3);
+    assert_eq!(counter.counts().peak_qubits, 13);
+    assert_eq!(counter.counts().depth, 0);
+    assert_eq!(counter.counts().zero_released_qubits, 0);
+
+    let mut simulator = Executor::new(&module, entry, &[], Options::default()).expect("simulator");
+    for _ in 0..3 {
+        assert_eq!(simulator.step_emitted(&mut compiler), None);
+    }
+    let mut before = simulator.snapshot();
+    assert_eq!(simulator.step_emitted(&mut compiler), expected);
+    before.classical.outcome = expected;
+    assert_eq!(simulator.snapshot(), before);
+}
+
+#[test]
+fn rejects_a_late_invalid_gate_before_issuing_the_circuit() {
+    let module = load(&DEVICE_PROGRAM.replace("INSTRUCTION", "%answer = xor i4 %sum, 6")).expect("valid program");
+    let entry = module.function_named("main").expect("entry");
+    let mut counter = CountingDevice::default();
+    let mut compiler = |input: ApplyInput<'_>| {
+        let target = input.out.start;
+        let valid = compile_apply(input)?;
+        let mut ops = valid.block.ops().to_vec();
+        ops.insert(
+            ops.len() - 1,
+            BlockOp::Gate(GateOp { kind: Gate::Fixed(FixedGate::X), target, controls: vec![target] }),
+        );
+        Ok(GateBlock::from_ops("invalid circuit", ops))
+    };
+    let run = Executor::run_on_with_apply(&module, entry, &[], None, &mut counter, &mut compiler).expect("device run");
+    assert_eq!(run.outcome, Outcome::Stopped(RunError::Device("apply circuit repeats a wire in one gate")));
+    assert_eq!(run.steps, 3);
+    assert_eq!(counter.counts().peak_qubits, 13);
+    assert_eq!(counter.counts().depth, 0);
+    assert_eq!(counter.counts().zero_released_qubits, 0);
 }

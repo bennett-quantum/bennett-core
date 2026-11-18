@@ -3,11 +3,13 @@
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use bennett_emit::{CountingDevice, LowerControls, seeded_bits};
-use bennett_exec::{Executor, Options, Outcome, ReverseError, RunError, Snapshot, Stats};
+use bennett_emit::{ApplyMode, CountingDevice, LowerControls, compile_apply_with, seeded_bits};
+use bennett_exec::{
+    ApplyCompiler, ApplyError, ApplyInput, Executor, Options, Outcome, ReverseError, RunError, Snapshot, Stats,
+};
 use bennett_ir::{Const, FuncId, Type, ValidModule};
 
-use crate::{CliError, DeviceKind, RunArgs};
+use crate::{ApplyCircuit, CliError, DeviceKind, RunArgs};
 
 pub(crate) fn run(args: &RunArgs) -> Result<ExitCode, CliError> {
     let module = crate::load(&args.file)?;
@@ -24,7 +26,8 @@ fn run_count(module: &ValidModule, entry: FuncId, values: &[u64], args: &RunArgs
         return Err(CliError::CountReverse);
     }
     let mut device = LowerControls::new(CountingDevice::new(seeded_bits(args.seed)));
-    let run = Executor::run_on(module, entry, values, args.budget, &mut device)?;
+    let mut compiler = gate_compiler(args.apply_circuit.unwrap_or(ApplyCircuit::Auto));
+    let run = Executor::run_on_with_apply(module, entry, values, args.budget, &mut device, &mut compiler)?;
     report_result(module, entry, run.outcome, 0.0);
     report_io(&run.tape, run.steps);
     let counts = device.inner().counts();
@@ -37,6 +40,19 @@ fn run_count(module: &ValidModule, entry: FuncId, values: &[u64], args: &RunArgs
     println!("peak qubits: {}", counts.peak_qubits);
     println!("depth: {}", counts.depth);
     Ok(exit_status(run.outcome))
+}
+
+fn gate_compiler(choice: ApplyCircuit) -> impl ApplyCompiler {
+    let mode = match choice {
+        ApplyCircuit::Auto => ApplyMode::Automatic,
+        ApplyCircuit::StepMachine => ApplyMode::StepMachine,
+    };
+    move |input: ApplyInput<'_>| {
+        let function = &input.module.function(input.callee).name;
+        let compiled = compile_apply_with(input, mode)?;
+        println!("apply @{function} uses {} ({})", compiled.construction, compiled.reason);
+        Ok(compiled.block)
+    }
 }
 
 fn run_simulator(module: &ValidModule, entry: FuncId, values: &[u64], args: &RunArgs) -> Result<ExitCode, CliError> {
@@ -52,7 +68,10 @@ fn run_simulator(module: &ValidModule, entry: FuncId, values: &[u64], args: &Run
     let entry_state = executor.snapshot();
 
     let started = Instant::now();
-    let outcome = executor.run();
+    let outcome = match args.apply_circuit {
+        Some(choice) => executor.run_emitted(&mut gate_compiler(choice)),
+        None => executor.run(),
+    };
     let forward = Timed { steps: executor.stats().steps, time: started.elapsed() };
     let stats = executor.stats();
     report_result(module, entry, outcome, stats.region_fault_max_weight);
@@ -112,6 +131,14 @@ fn report_result(module: &ValidModule, entry: FuncId, outcome: Outcome, region_f
             module.function(callee).name,
             region_fault_weight
         ),
+        Outcome::Stopped(RunError::Apply(ApplyError::Unsupported { callee, block, index, operation, route })) => {
+            let function = module.function(callee);
+            println!(
+                "stopped: cannot emit {operation} in @{} at {} instruction {index}: needs {route}",
+                function.name,
+                function.block(block).name,
+            );
+        }
         Outcome::Stopped(error) => println!("stopped: {error}"),
     }
 }

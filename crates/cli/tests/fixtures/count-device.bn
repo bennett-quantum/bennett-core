@@ -51,3 +51,30 @@ entry:
     %new = qalloc 1
     ret %new
 }
+
+func @countdown(i2 %start) -> i2 {
+entry:
+    br test(%start, i2 0)
+test(i2 %left, i2 %count):
+    %done = icmp eq i2 %left, 0
+    br %done, finish, more
+more:
+    %next = sub i2 %left, 1
+    %inc = add i2 %count, 1
+    br test(%next, %inc)
+finish:
+    ret %count
+}
+
+func @applied_countdown(i64 %budget) -> i2 {
+entry:
+    %x = qalloc 2
+    x %x[0]
+    x %x[1]
+    %out = qalloc 2
+    x %out[1]
+    %fault = qalloc 5
+    apply @countdown(%x) -> %out, %fault budget %budget
+    %result = measure %out
+    ret %result
+}

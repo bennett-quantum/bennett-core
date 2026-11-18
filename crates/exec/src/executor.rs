@@ -5,6 +5,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use thiserror::Error;
 
+use crate::apply_device::{ApplyCompiler, ApplyError};
 use crate::device::Device;
 use crate::device_io::DeviceContext;
 use crate::journal::{Journal, Undo};
@@ -61,6 +62,9 @@ pub enum RunError {
     /// A device command failed.
     #[error("{0}")]
     Device(&'static str),
+    /// Gate compilation refused an applied function.
+    #[error(transparent)]
+    Apply(#[from] ApplyError),
     /// A gate would raise the number of basis configurations above the run's limit.
     #[error("a gate would raise the number of basis configurations above the limit of {limit}")]
     ConfigurationLimit {
@@ -108,7 +112,7 @@ pub enum StartError {
     #[error("there is no entry function {0}")]
     InvalidEntry(u32),
     /// External devices need a lowering for every applied function.
-    #[error("apply is not lowered to gates yet")]
+    #[error("the controller was started without an apply gate compiler")]
     ApplyNotLowered,
     /// The module's memory cannot be allocated on this host.
     #[error("cannot allocate {0} bytes of memory")]
@@ -276,7 +280,7 @@ impl<'m> Executor<'m> {
         Self::start(module, entry, args, options, true)
     }
 
-    /// Runs the same classical controller on a fresh device. The module must contain no `apply`.
+    /// Runs the controller on a fresh device without a compiler for `apply`. The module must contain no `apply`.
     /// Wires still live when execution stops remain allocated on the device.
     pub fn run_on(
         module: &'m ValidModule,
@@ -294,8 +298,32 @@ impl<'m> Executor<'m> {
         {
             return Err(StartError::ApplyNotLowered);
         }
+        Self::run_on_device(module, entry, args, budget, device, None)
+    }
+
+    /// Runs the controller on a fresh device, using the compiler when execution reaches an `apply`.
+    /// Wires still live when execution stops remain allocated on the device.
+    pub fn run_on_with_apply(
+        module: &'m ValidModule,
+        entry: FuncId,
+        args: &[u64],
+        budget: Option<u64>,
+        device: &mut dyn Device,
+        compiler: &mut dyn ApplyCompiler,
+    ) -> Result<DeviceRun, StartError> {
+        Self::run_on_device(module, entry, args, budget, device, Some(compiler))
+    }
+
+    fn run_on_device<'device>(
+        module: &'m ValidModule,
+        entry: FuncId,
+        args: &[u64],
+        budget: Option<u64>,
+        device: &'device mut dyn Device,
+        compiler: Option<&'device mut dyn ApplyCompiler>,
+    ) -> Result<DeviceRun, StartError> {
         let mut executor = Executor::start(module, entry, args, Options { budget, ..Options::default() }, false)?;
-        let outcome = executor.run_with(&mut DeviceContext { external: Some(device), limit: None });
+        let outcome = executor.run_with(&mut DeviceContext { external: Some(device), compiler, limit: None });
         Ok(DeviceRun { outcome, steps: executor.steps, tape: executor.tape })
     }
 
@@ -347,7 +375,12 @@ impl<'m> Executor<'m> {
 
     /// Executes one step, unless the run has ended; returns the outcome once it has.
     pub fn step(&mut self) -> Option<Outcome> {
-        self.step_with(&mut DeviceContext { external: None, limit: self.max_configurations })
+        self.step_with(&mut DeviceContext { limit: self.max_configurations, ..DeviceContext::default() })
+    }
+
+    /// Executes one simulator step, compiling `apply` to gates with the machine's fault semantics.
+    pub fn step_emitted(&mut self, compiler: &mut dyn ApplyCompiler) -> Option<Outcome> {
+        self.step_with(&mut DeviceContext { external: None, compiler: Some(compiler), limit: self.max_configurations })
     }
 
     fn step_with(&mut self, context: &mut DeviceContext<'_>) -> Option<Outcome> {
@@ -383,7 +416,12 @@ impl<'m> Executor<'m> {
 
     /// Steps until the run ends.
     pub fn run(&mut self) -> Outcome {
-        self.run_with(&mut DeviceContext { external: None, limit: self.max_configurations })
+        self.run_with(&mut DeviceContext { limit: self.max_configurations, ..DeviceContext::default() })
+    }
+
+    /// Runs the simulator to completion, compiling `apply` to gates with the machine's fault semantics.
+    pub fn run_emitted(&mut self, compiler: &mut dyn ApplyCompiler) -> Outcome {
+        self.run_with(&mut DeviceContext { external: None, compiler: Some(compiler), limit: self.max_configurations })
     }
 
     fn run_with(&mut self, context: &mut DeviceContext<'_>) -> Outcome {

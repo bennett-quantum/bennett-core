@@ -40,6 +40,9 @@ struct RunArgs {
     /// The quantum device.
     #[arg(long, value_enum, default_value_t = DeviceKind::Simulator)]
     device: DeviceKind,
+    /// Compile applied functions to gates. Counting defaults to auto and the simulator defaults to evaluation.
+    #[arg(long, value_enum)]
+    apply_circuit: Option<ApplyCircuit>,
     /// The function to run.
     #[arg(long, default_value = "main")]
     entry: String,
@@ -79,6 +82,12 @@ struct RunArgs {
 enum DeviceKind {
     Simulator,
     Count,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ApplyCircuit {
+    Auto,
+    StepMachine,
 }
 
 /// Why a command could not do its work.

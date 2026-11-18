@@ -43,11 +43,11 @@ pub(crate) struct QubitRef {
 }
 
 impl QubitRef {
-    fn is_set(self, config: &[u64]) -> bool {
+    pub(crate) fn is_set(self, config: &[u64]) -> bool {
         config[self.column] >> self.bit & 1 == 1
     }
 
-    fn assign(self, config: &mut [u64], value: bool) {
+    pub(crate) fn assign(self, config: &mut [u64], value: bool) {
         let mask = 1 << self.bit;
         config[self.column] = if value { config[self.column] | mask } else { config[self.column] & !mask };
     }

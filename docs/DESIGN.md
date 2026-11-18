@@ -140,9 +140,12 @@ sampling of a whole set of bits in one draw. Wire bindings allow a measurement o
 storage columns or address only part of a column. A partial discard keeps any needed purification
 without retiring the neighbouring live wires. A device can measure the individual qubits in a set.
 
-`Executor::run_on` runs the controller on a supplied device. The simulator provides reversal, snapshots,
-configuration limits and release diagnostics. It also evaluates `apply` using its stored state. A module
-with `apply` is refused by other devices with “apply is not lowered to gates yet.”
+`Executor::run_on` runs the controller on a supplied device for modules without `apply`.
+`Executor::run_on_with_apply` takes a gate compiler and invokes it when the controller reaches an
+`apply`. The simulator provides reversal, snapshots, configuration limits and release diagnostics.
+Its default mode evaluates applied functions directly. Its gate mode runs the emitted X, CNOT and
+Toffoli gates on batches of definite configurations, carrying each complex amplitude unchanged.
+It verifies that scratch is zero before installing the resulting state.
 
 The target is an ideal logical quantum computer with one- and two-qubit gates, Toffoli gates and on-demand
 allocation and measurement. The wrapper forwards gates with zero or one control and X with two controls.
@@ -217,8 +220,8 @@ Control needs no special form at this level: `if (q) y = f(3)` is an `apply` who
 loops and calls nest: a step of a loop inside a loop inside a callee counts against the same `B` as any other.
 There is no bound per loop. `B` is an operand, so it may be an ordinary value computed at run time; like every
 ordinary value it is definite when the `apply` executes, so the circuit a device runs for this `apply` (below)
-is fixed before it starts. That circuit repeats one step circuit, the same each time, `B` times, so nested
-loops cost nothing beyond the steps they take.
+is fixed before it starts. One clock covers all the steps. The gate emitter specialises each tick
+to the ordinary instructions that can be current, so nested loops add work within a tick.
 
 **Why a device can carry it out.** Write the state of a run of `@f` as a string of `s` bits: its slots,
 frames, stack pointer, position, memory, and whether it is running, has returned a result or has stopped with
@@ -275,7 +278,7 @@ state, all returned to 0, that is at most a constant times `B` times (the size o
 gates. These are upper bounds for this construction; nothing here says a cheaper circuit cannot exist. The
 executor's step counts (`Stats`, `RegionCost`) count instructions, not gates; they are not a cost on a device.
 
-**Gate emitter.** The standalone compiler in `emit` follows the applied
+**Gate emitter.** The compiler in `emit` follows the applied
 function while its next instruction is definite. It represents each bit as a constant or the
 value of a qubit, and computes new bits by reversible gates into scratch qubits. It handles
 addition, subtraction, AND, XOR, shifts and multiplication with a definite shift or factor,
@@ -325,9 +328,18 @@ counts layers of gates on disjoint qubits.
 Run `cargo test -p bennett-emit --test apply collatz_eight_bit_budget_sweep_and_counts -- --ignored --exact --nocapture`
 to repeat the sweep and counts.
 
-Compilation completes before any commands are sent. Calls, memory, division and the other
-instructions outside this subset are refused with the operation, its location, and the
-construction it needs. The controller does not yet use this standalone compiler.
+`bennett run --device count` uses the compiler for each `apply` it reaches. Pass
+`--apply-circuit auto` to run the same gates on the simulator, or `--apply-circuit step-machine`
+to select instruction dispatch whenever control depends on qubits. These modes implement the
+machine's fault semantics, writing fault codes into the program's register. The reference
+simulator run is `bennett run --machine-meaning` with its default direct evaluation.
+
+The controller resolves the targets and arguments first, keeping dangling and aliased
+handles as enclosing faults. It checks entry frame space, then builds and validates the
+whole circuit before sending an allocation or gate for that `apply`. A compiler refusal ends
+the run as a device error, identifies the applied function, operation and program point,
+and leaves the result and fault registers as supplied. The remaining constructions are
+listed under "Not yet".
 
 **Faults for some argument values.** With a fault register that starts at 0, measuring it afterwards finds a
 fault with probability equal to the total weight of the faulting configurations, and the state collapses onto
@@ -1377,6 +1389,15 @@ example list, allowed-hit count, mutation percentage, or performance threshold. 
 The optimiser, lowering the full device language to gates, certificates, target descriptions, a binary
 format, memory written under qubit control that outlives the `apply`, and recomputation shared between
 conditions (each predicated operation computes and clears its own).
+
+| Refused inside emitted `apply` | Construction needed |
+|---|---|
+| `or`, division and remainder, shifts by qubit values, multiplication of two qubit values | Remaining integer gates, including conditional arithmetic faults |
+| `switch` | Dispatch to each matching successor and the default successor |
+| Direct and indirect calls, `faddr`, `retaddr` | Applied call frames and targets |
+| `load`, `store`, `alloca`, `stacksave`, `stackrestore` | Private memory and stack state |
+| `setjmp`, `longjmp` | Private memory and non-local control transfer |
+| `fault`, `effect`, `exit`, quantum instructions and nested `apply` | Emit the named first fault on reaching the instruction |
 
 ## Open questions
 

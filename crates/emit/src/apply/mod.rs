@@ -10,80 +10,12 @@ use std::fmt;
 use std::ops::Range;
 
 use bennett_exec::{Device, GateBlock, RunError, Wire};
-use bennett_ir::{BlockId, Fault, FuncId, Type, ValidModule};
+use bennett_ir::{BlockId, Fault, Type, Width};
 
 use self::bits::{Bit, Circuit, ONE, Word, constant};
 use self::symbolic::{Frame, Point, Status, Step};
 
-/// An argument resolved by the ordinary controller.
-#[derive(Clone, Debug)]
-pub enum Argument {
-    /// A definite ordinary value.
-    Value(u128),
-    /// The wires holding the argument bits, least significant first.
-    Register(Range<Wire>),
-}
-
-/// The resolved inputs and destinations of one applied function.
-#[derive(Clone, Debug)]
-pub struct ApplyInput<'a> {
-    /// The validated module containing the function.
-    pub module: &'a ValidModule,
-    /// The function to apply.
-    pub callee: FuncId,
-    /// Arguments in parameter order.
-    pub args: &'a [Argument],
-    /// Result wires, least significant first.
-    pub out: Range<Wire>,
-    /// Fault-code wires, least significant first.
-    pub fault: Range<Wire>,
-    /// Steps available to the whole function.
-    pub budget: u64,
-    /// Any failure reserving the applied frame, before the first instruction.
-    pub entry_fault: Option<Fault>,
-    /// First free wire above all wires live on the device.
-    pub scratch_start: Wire,
-}
-
-/// A reason gate compilation could not proceed. No device commands have been sent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ApplyError {
-    /// The supplied argument or destination wire ranges do not match the interface.
-    Interface,
-    /// The circuit exhausted the wire address space.
-    WireSpace,
-    /// The instruction at the given program point needs a construction not implemented yet.
-    Unsupported {
-        /// Applied function.
-        callee: FuncId,
-        /// Block containing the instruction.
-        block: BlockId,
-        /// Zero-based instruction index, counting the terminator after the instructions.
-        index: usize,
-        /// Name of the operation.
-        operation: &'static str,
-        /// Construction needed to emit it.
-        route: &'static str,
-    },
-}
-
-impl fmt::Display for ApplyError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Interface => f.write_str("invalid applied circuit interface"),
-            Self::WireSpace => f.write_str("applied circuit exhausted the wire address space"),
-            Self::Unsupported { callee, block, index, operation, route } => {
-                write!(
-                    f,
-                    "cannot emit {operation} at function {}, block {}, instruction {index}: needs {route}",
-                    callee.0, block.0
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for ApplyError {}
+pub use bennett_exec::{ApplyError, ApplyInput, Argument};
 
 /// The control construction selected for one applied function.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,6 +32,16 @@ pub enum Construction {
         /// Number of decisions about whether to continue.
         decisions: u64,
     },
+}
+
+impl fmt::Display for Construction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Definite => f.write_str("definite control"),
+            Self::StepMachine { ticks } => write!(f, "step machine ({ticks} ticks)"),
+            Self::SavedDecisions { decisions } => write!(f, "saved decisions ({decisions} decisions)"),
+        }
+    }
 }
 
 /// Which constructions the compiler may consider.
@@ -135,33 +77,34 @@ impl CompiledApply {
     }
 }
 
-impl ApplyInput<'_> {
-    fn check_interface(&self) -> Result<(), ApplyError> {
-        let function = self.module.functions.get(self.callee.index()).ok_or(ApplyError::Interface)?;
-        let Some(Type::Int(result)) = function.result else { return Err(ApplyError::Interface) };
-        let length = |range: &Range<Wire>| range.end.saturating_sub(range.start);
-        let disjoint = |a: &Range<Wire>, b: &Range<Wire>| a.end <= b.start || b.end <= a.start;
-        if length(&self.out) != u64::from(result.bits())
-            || length(&self.fault) < u64::from(Fault::CODE_WIDTH.bits())
-            || !disjoint(&self.out, &self.fault)
-            || self.out.end.max(self.fault.end) > self.scratch_start
-            || self.args.len() != function.params.len()
+fn check_interface(input: &ApplyInput<'_>) -> Result<(), ApplyError> {
+    let function = input.module.functions.get(input.callee.index()).ok_or(ApplyError::Interface)?;
+    let Some(Type::Int(result)) = function.result else { return Err(ApplyError::Interface) };
+    let length = |range: &Range<Wire>| range.end.saturating_sub(range.start);
+    let disjoint = |a: &Range<Wire>, b: &Range<Wire>| a.end <= b.start || b.end <= a.start;
+    let max_qubits = u64::from(Width::MAX_QUBITS);
+    if length(&input.out) != u64::from(result.bits())
+        || length(&input.out) > max_qubits
+        || !(u64::from(Fault::CODE_WIDTH.bits())..=max_qubits).contains(&length(&input.fault))
+        || !disjoint(&input.out, &input.fault)
+        || input.out.end.max(input.fault.end) > input.scratch_start
+        || input.args.len() != function.params.len()
+    {
+        return Err(ApplyError::Interface);
+    }
+    for (arg, param) in input.args.iter().zip(&function.params) {
+        let Type::Int(width) = param.ty else { return Err(ApplyError::Interface) };
+        if let Argument::Register(wires) = arg
+            && (length(wires) != u64::from(width.bits())
+                || length(wires) > max_qubits
+                || wires.end > input.scratch_start
+                || !disjoint(wires, &input.out)
+                || !disjoint(wires, &input.fault))
         {
             return Err(ApplyError::Interface);
         }
-        for (arg, param) in self.args.iter().zip(&function.params) {
-            let Type::Int(width) = param.ty else { return Err(ApplyError::Interface) };
-            if let Argument::Register(wires) = arg
-                && (length(wires) != u64::from(width.bits())
-                    || wires.end > self.scratch_start
-                    || !disjoint(wires, &self.out)
-                    || !disjoint(wires, &self.fault))
-            {
-                return Err(ApplyError::Interface);
-            }
-        }
-        Ok(())
     }
+    Ok(())
 }
 
 #[derive(Default)]
@@ -189,7 +132,7 @@ pub fn compile_apply(input: ApplyInput<'_>) -> Result<CompiledApply, ApplyError>
 
 /// Compile an applied function with the requested choice of control constructions.
 pub fn compile_apply_with(input: ApplyInput<'_>, mode: ApplyMode) -> Result<CompiledApply, ApplyError> {
-    input.check_interface()?;
+    check_interface(&input)?;
     let frame = Frame { module: input.module, callee: input.callee };
     frame.check()?;
     let mut circuit = Circuit::new(input.scratch_start);

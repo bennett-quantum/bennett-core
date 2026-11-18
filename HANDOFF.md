@@ -9,8 +9,9 @@ measure. The earlier `bennett-*` repositories are a read-only archive. Vision: `
 C with a few marker calls (`docs/MARKERS.md`) goes through stock `clang` 18, then `bennett-front` (C++ over LLVM 18), which writes a
 *device program* (`crates/ir`: ordinary code plus quantum instructions), which the *executor* (`crates/exec`) runs. The executor is a
 simulator of the model in `docs/DESIGN.md`. The device interface and counter are available.
-The gate emitter can compile applied integer functions and loops as a standalone operation.
-The device controller still evaluates `apply` only in the simulator.
+The gate emitter compiles applied integer functions and loops for the counting device and for
+the simulator with `--apply-circuit auto`. The default simulator evaluates applied functions
+directly.
 
 What works, one line each (the commit-by-commit table is in `docs/RECORDS.md`, part two):
 
@@ -29,7 +30,7 @@ What works, one line each (the commit-by-commit table is in `docs/RECORDS.md`, p
 
 Run each in the foreground, from the repository root (`CARGO_BUILD_JOBS=3` on the shared laptop):
 
-- `cargo test`: 357 passed, 0 failed, 5 ignored (each names its reason: heavy reference, generated runs, witnesses of recorded defects); about 10 s, no LLVM needed.
+- `cargo test`: 361 passed, 0 failed, 5 ignored (each names its reason: heavy reference, generated runs, witnesses of recorded defects); about 10 s, no LLVM needed.
 - `front/test.sh` (needs LLVM 18, clang 18, CMake): 345 passed, 0 failed, 22 ignored (each names its reason: the fallback oracle's waiting test, the SQLite acceptance, the North Star ladder runs, musl-linked checks that need `rt/musl/build.py` first, heavy runs, witnesses of recorded debts); it also compiles the C++ header and classifies the 88 LLVM attribute kinds.
 - `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check`: both clean on 2026-11-18 (`scripts/check.sh`: tree guards 3,642 files, 0 problems).
 - `scripts/check.sh` runs all four plus the tree guards (`docs/CHECKS.md`).
@@ -76,8 +77,10 @@ Newest first; quotes are the maintainer's words.
 
 The device interface and step tests have landed. The gate compiler on `wip/sol62-loops-m2`
 follows definite control, uses a single clock for general qubit-dependent jumps, and saves
-decisions for one proved loop. The 8-bit Collatz bit runner checked all 256 inputs at 253
-budgets with both constructions. The next step connects the compiler to the device controller.
+decisions for one proved loop. All four steps are on the branch for landing. The 8-bit Collatz
+bit runner checked all 256 inputs at 253 budgets with both constructions. The simulator matched
+the reference amplitudes exactly after each applied circuit for widths 2 to 5. The nested loop
+returns 1 at budget 14 and writes `budget` at 13 for `x = y = 1`.
 
 - Device support: an interface between the executor and its quantum simulator (so the simulator can be replaced); a counting device that only counts qubits and gates; rewriting of gates with many controls for a machine with one- and two-qubit gates and the Toffoli gate; a bit-level circuit runner that checks reversible gate lists against independent references.
 - `wip/sol62-stepspec` (landed): tests pinning an exact statement of what an applied function does for one definite input, step by step, and a change that makes the slots of a new frame zero.
@@ -86,10 +89,12 @@ budgets with both constructions. The next step connects the compiler to the devi
 ## Next steps
 
 In order:
-1. **The gate emitter**: turn a device program into gates for an ideal machine with one- and two-qubit gates, the Toffoli gate, and qubits allocated and measured on demand. The interface and the counting device of `wip/sol62-device` are its first parts.
-2. **`apply` as gates**: when control is definite, just follow it; where a choice depends on a qubit, controls on the gates of each side; and, as the general form, a step machine (the construction in `docs/DESIGN.md`, "`apply`") with one step bound for the whole applied function.
-3. **Loops first**: a Collatz function (a loop whose number of passes depends on its input, under one bound) is the acceptance test.
-4. **Shor's algorithm for 15 and 21 from plain C**, as the benchmark against hand-built circuits (qubits, gates, depth).
+1. **Controls for qubit-dependent choices**: prove when a choice can become a control on the gates
+   of its bodies without instruction dispatch.
+2. **Applied calls and arithmetic**: extend gate compilation with call frames, addresses and the
+   multiply and remainder operations needed for modular arithmetic.
+3. **Shor's algorithm for 15 and 21 from plain C**, as the benchmark against hand-built circuits (qubits, gates, depth).
+4. **Applied memory**: add private memory and stack operations, with the corresponding first-fault rules.
 5. Then what the old plan left undone: the table of control bits for a gate loop deciding on carried values (question 5); rule A at an address that depends on a qubit (plan: declare the region, then exchange one addressed element, cost the region's size times the element's width per access); a stateful library whose writes must survive (k applied calls on qubit-held memory run with nothing kept when the calls' arguments are kept and memory starts known: k(k+1)/2 evaluations call by call, k as one applied function); a second implementation of the device language (grow the reference that runs `apply` by its construction, `crates/exec/tests/compute_copy_reference/`); the floating-point environment through SoftFloat's state, `__float128` and the remaining intrinsics; the runtime debts below; Grover over a SQL query written in plain C; the optimiser and cost model (`opt`, not started).
 6. The next independent testing pass starts at the first commit in "Which commits no independent check has covered".
 
@@ -97,6 +102,7 @@ In order:
 
 | Refused today | What removes it |
 |---|---|
+| Emitted `apply` using calls, private memory, stack operations, remaining arithmetic or explicit instruction faults | Gate compiler routes in `docs/DESIGN.md`, "Not yet" |
 | Remaining runtime operations: locks, links, directory enumeration, block transport, permissions and metadata, image loader, allocation exhaustion | The runtime debts below |
 | A call through another prototype where x86-64 does not determine what is read (upper half of a 32-bit value, a missing argument that is read, an integer from a floating-point register, a variadic floating-point argument without `%al`, a narrow argument not extended as the callee relies on); `musttail` with a by-value argument | Nothing: the native result is not determined (`docs/DESIGN.md`, "Calls through a prototype") |
 | A qubit-dependent call of a function that uses `setjmp`; a `setjmp` in a function with qubit variables; a function that uses `stackrestore` run coherently | The front's own effect summary of `setjmp`; resumption edges from every later call and `longjmp` in its facts (`docs/DESIGN.md`, "Non-local jumps") |
@@ -152,6 +158,10 @@ Each is taken in the cheapest way to reverse, as stated, until answered. Last 20
 - **Single-loop proof.** Taken: recognise one conditional test and straight continuing and
   exiting routes with provably lowerable integer operations. Recommend broadening the proof
   to additional total control-flow shapes only when a measured program needs it.
+
+- **Simulator entry point for emitted gates.** Taken: opt in with `--apply-circuit auto`
+  or `--apply-circuit step-machine`. Recommend keeping direct evaluation as the default while its
+  instruction coverage and strict fault diagnostics exceed the gate compiler's.
 
 ## Which commits no independent check has covered
 

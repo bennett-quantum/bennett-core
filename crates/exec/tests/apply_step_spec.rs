@@ -2,6 +2,7 @@
 
 mod common;
 
+use bennett_emit::{ApplyInput, ApplyMode, compile_apply_with};
 use bennett_exec::{Options, Outcome, RunError, Snapshot};
 use bennett_ir::{Fault, ValidModule};
 use common::{bounded, entry, executor, load};
@@ -43,9 +44,24 @@ fn check(module: &ValidModule, args: &[u64], expected: &[&[u64]], steps: u64) ->
     snapshot
 }
 
-fn single(body: &str, budget: u64, expected: (u64, u64), steps: u64) {
+fn single(body: &str, budget: u64, expected: (u64, u64), steps: u64) -> (ValidModule, Snapshot) {
     let module = load(&format!("memory 128\nfunc @applied() -> i8 {{\nentry:\n{body}\n}}\n{APPLY}"));
-    check(&module, &[budget], &[&[expected.0, expected.1]], steps);
+    let expected = check(&module, &[budget], &[&[expected.0, expected.1]], steps);
+    (module, expected)
+}
+
+fn check_emitted(module: &ValidModule, args: &[u64], expected: &Snapshot) {
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        let mut gates = executor(module, "main", args, options());
+        let mut compiler = |input: ApplyInput<'_>| Ok(compile_apply_with(input, mode)?.block);
+        assert_eq!(gates.run_emitted(&mut compiler), expected.classical.outcome.expect("reference ran"));
+        assert_eq!(&gates.snapshot(), expected, "arguments {args:?}, {mode:?}");
+    }
+}
+
+fn single_emitted(body: &str, budget: u64, expected: (u64, u64), steps: u64) {
+    let (module, expected) = single(body, budget, expected, steps);
+    check_emitted(&module, &[budget], &expected);
 }
 
 #[test]
@@ -146,7 +162,9 @@ apply_now:
         (4, (7, 0, 2), (7, 0, 3)),
     ] {
         for (input, (out, fault, steps)) in [(0, zero), (1, one)] {
-            check(&module, &[budget, input], &[&[input, out, fault]], steps);
+            let args = [budget, input];
+            let expected = check(&module, &args, &[&[input, out, fault]], steps);
+            check_emitted(&module, &args, &expected);
         }
     }
 }
@@ -164,7 +182,8 @@ entry:
     // The caller reserves 24 bytes. One static byte leaves seven or eight bytes for the applied slot.
     for (memory, code) in [(32, 6), (33, 1)] {
         let module = load(&format!("memory {memory}\n{source}{APPLY}"));
-        check(&module, &[0], &[&[0, code]], 0);
+        let expected = check(&module, &[0], &[&[0, code]], 0);
+        check_emitted(&module, &[0], &expected);
         let mut strict = executor(&module, "main", &[0], bounded());
         let fault = Fault::from_code(code).expect("the test uses a named fault");
         assert_eq!(
@@ -181,8 +200,7 @@ entry:
 
 #[test]
 fn a_back_edge_reads_both_parameters_before_writing_either() {
-    single(
-        r#"
+    let body = r#"
     br loop(i8 0, i8 1, i1 0)
 loop(i8 %a, i8 %b, i1 %again):
     br %again, done, loop(%b, %a, i1 1)
@@ -190,11 +208,10 @@ done:
     %left = shl i8 %a, 4
     %pair = or i8 %left, %b
     ret %pair
-"#,
-        6,
-        (16, 0),
-        6,
-    );
+"#;
+    single(body, 6, (16, 0), 6);
+    // The two fields are disjoint, so XOR gives the same pair with the emitted instruction set.
+    single_emitted(&body.replace("or i8", "xor i8"), 6, (16, 0), 6);
 }
 
 #[test]
@@ -248,7 +265,10 @@ fn integer_instructions_use_the_declared_width() {
         ("sext i4 8 to i8", 248),
         ("trunc i16 0xabcd to i8", 205),
     ] {
-        single(&format!("    %v = {instruction}\n    ret %v"), 2, (expected, 0), 2);
+        let (module, expected) = single(&format!("    %v = {instruction}\n    ret %v"), 2, (expected, 0), 2);
+        if !matches!(instruction.split_ascii_whitespace().next(), Some("udiv" | "urem" | "sdiv" | "srem" | "or")) {
+            check_emitted(&module, &[2], &expected);
+        }
     }
     for instruction in ["udiv", "urem", "sdiv", "srem"] {
         single(&format!("    %v = {instruction} i8 7, 0\n    ret %v"), 1, (0, 2), 0);
@@ -265,14 +285,14 @@ fn integer_instructions_use_the_declared_width() {
         ("sgt", 0),
         ("sge", 0),
     ] {
-        single(
+        single_emitted(
             &format!("    %c = icmp {predicate} i8 255, 1\n    %v = zext i1 %c to i8\n    ret %v"),
             3,
             (expected, 0),
             3,
         );
     }
-    single(
+    single_emitted(
         "    %v = lshr i128 0x7b000000000000000000000000000000, 120\n    %byte = trunc i128 %v to i8\n    ret %byte",
         3,
         (123, 0),
@@ -815,7 +835,8 @@ entry:
 }
 "#,
     );
-    check(&module, &[10], &[&[0, 7, 0], &[1, 8, 0]], 8);
+    let expected = check(&module, &[10], &[&[0, 7, 0], &[1, 8, 0]], 8);
+    check_emitted(&module, &[10], &expected);
 }
 
 #[test]
@@ -930,6 +951,7 @@ entry:
         assert_eq!(run.stats().region_steps, 0);
         before.classical.outcome = run.outcome();
         assert_eq!(run.snapshot(), before);
+        check_emitted(&module, &[], &before);
     }
     let module = load(
         &source
@@ -937,7 +959,8 @@ entry:
             .replace("budget 0", "budget 2")
             .replace("    %out = qalloc 8", "    x %input[0]\n    %out = qalloc 8"),
     );
-    check(&module, &[], &[&[1, 2, 0]], 2);
+    let expected = check(&module, &[], &[&[1, 2, 0]], 2);
+    check_emitted(&module, &[], &expected);
 }
 
 #[test]

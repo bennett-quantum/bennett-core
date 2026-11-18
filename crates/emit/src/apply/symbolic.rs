@@ -1,6 +1,6 @@
 //! The state of an applied frame and the transition for one instruction.
 
-use bennett_ir::{BinOp, BlockId, Fault, FuncId, Inst, Operand, Slot, Target, Terminator, Type, ValidModule};
+use bennett_ir::{BinOp, BlockId, Fault, FuncId, Gate, Inst, Operand, Slot, Target, Terminator, Type, ValidModule};
 
 use super::arithmetic;
 use super::bits::{Bit, Circuit, Word, ZERO, constant};
@@ -203,7 +203,13 @@ fn unsupported(inst: &Inst) -> Option<(&'static str, &'static str)> {
         Inst::Effect { .. } => ("effect", "explicit instruction faults"),
         Inst::Qalloc { .. } => ("qalloc", "explicit instruction faults"),
         Inst::Qfree { .. } => ("qfree", "explicit instruction faults"),
-        Inst::Gate { .. } | Inst::GateAt { .. } => ("gate", "explicit instruction faults"),
+        Inst::Gate { gate, .. } | Inst::GateAt { gate, .. } => {
+            let operation = match gate {
+                Gate::Fixed(gate) => gate.mnemonic(),
+                Gate::Rotate(axis, _) => axis.mnemonic(),
+            };
+            (operation, "explicit instruction faults")
+        }
         Inst::Measure { .. } => ("measure", "explicit instruction faults"),
         Inst::Apply { .. } => ("apply", "explicit instruction faults"),
     })

@@ -9,6 +9,7 @@
 //! a faulted one alike. A coherent region (`apply`) runs its callee once for each definite value of its
 //! argument registers, on private memory, and XORs the result into its target (`region`).
 
+mod apply_device;
 mod arith;
 mod backward;
 mod cells;
@@ -29,6 +30,7 @@ mod region;
 mod snapshot;
 mod wire_storage;
 
+pub use apply_device::{ApplyCompiler, ApplyError, ApplyInput, Argument};
 pub use device::{BlockOp, Device, GateBlock, GateBlockKey, GateOp, Wire};
 pub use executor::{DeviceRun, Executor, Frame, Options, Outcome, ReverseError, RunError, StartError, Stats};
 pub use journal::Undo;

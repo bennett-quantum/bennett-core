@@ -104,7 +104,11 @@ impl<'m> Executor<'m> {
                 self.advance();
             }
             Inst::Apply { callee, args, out, fault, budget } => {
-                self.apply(*callee, args, *out, *fault, budget)?;
+                if context.compiler.is_some() {
+                    self.apply_gates(*callee, args, *out, *fault, budget, context)?;
+                } else {
+                    self.apply(*callee, args, *out, *fault, budget)?;
+                }
                 self.record(Undo::Apply);
                 self.advance();
             }

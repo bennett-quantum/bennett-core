@@ -7,6 +7,7 @@ use std::ops::Range;
 use bennett_ir::{FixedGate, Gate, Width};
 use rand_chacha::ChaCha8Rng;
 
+use crate::apply_device::ApplyCompiler;
 use crate::device::{Device, GateOp, Wire};
 use crate::executor::{Executor, RunError};
 use crate::quantum::{QuantumState, QubitRef};
@@ -25,6 +26,7 @@ pub(crate) fn wires(column: usize, count: u32) -> Range<Wire> {
 #[derive(Default)]
 pub(crate) struct DeviceContext<'a> {
     pub(crate) external: Option<&'a mut dyn Device>,
+    pub(crate) compiler: Option<&'a mut dyn ApplyCompiler>,
     pub(crate) limit: Option<usize>,
 }
 

@@ -25,8 +25,13 @@ fn counts_native_and_rewritten_gates() {
 fn rejects_apply_by_name() {
     let output = count(&["thesis.bn"]);
     assert_eq!(output.status.code(), Some(2));
-    assert_eq!(String::from_utf8_lossy(&output.stderr), "error: apply is not lowered to gates yet\n");
-    assert!(output.stdout.is_empty());
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("stopped: cannot emit call in @g at then instruction 0: needs applied calls\n"), "{text}");
+    assert!(text.contains("steps: 4\n"), "{text}");
+    assert!(
+        text.contains("one-qubit gates: 1\ntwo-qubit gates: 0\nToffoli gates: 0\npeak qubits: 14\ndepth: 1\n"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -68,5 +73,31 @@ fn counts_print_consumed_outcomes_in_order() {
         assert!(text.contains(&format!("measurement outcomes: {outcomes}\n")), "{text}");
         assert!(text.contains(&format!("measurement source: synthetic bits (seed {seed})\n")), "{text}");
         assert!(text.contains(&format!("one-qubit gates: {gates}\n")), "{text}");
+    }
+}
+
+#[test]
+fn executes_and_reports_applied_loop_circuits() {
+    let fixture = "../crates/cli/tests/fixtures/count-device.bn";
+    let selected = [
+        ("auto", "saved decisions (4 decisions)", "one proved loop with fixed continuation and exit charges"),
+        ("step-machine", "step machine (17 ticks)", "step machine requested for a qubit-dependent jump"),
+    ];
+    for (mode, construction, reason) in selected {
+        let args = [fixture, "--entry", "applied_countdown", "--arg", "19", "--apply-circuit", mode];
+        let counted = count(&args);
+        let simulated = Command::new(env!("CARGO_BIN_EXE_bennett"))
+            .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples"))
+            .args(["run", "--device", "simulator"])
+            .args(args)
+            .output()
+            .expect("ran simulator");
+        for output in [&counted, &simulated] {
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            let text = String::from_utf8_lossy(&output.stdout);
+            assert!(text.starts_with(&format!("apply @countdown uses {construction} ({reason})\n")), "{text}");
+            assert!(text.contains("steps: 9\n"), "{text}");
+        }
+        assert!(String::from_utf8_lossy(&simulated.stdout).contains("result: 1\n"));
     }
 }
