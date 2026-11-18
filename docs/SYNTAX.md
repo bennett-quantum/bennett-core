@@ -144,6 +144,9 @@ mismatch. Only `apply` reads its argument registers, for each definite value of 
 be among an `apply`'s arguments, nor be one register. A call can return a handle to its caller. Returning a register from the
 selected entry ends the run successfully with no scalar host result. The CLI reports its declared width.
 
+The standalone gate compiler for `apply` currently covers integer instructions and definite
+control only. See "Gate emitter, definite control" in [DESIGN.md](DESIGN.md#apply).
+
 ## Whole-run exit
 
 `exit %status` or `exit i32 5` is a terminator. Its operand must be an integer; constants name their width

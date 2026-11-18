@@ -1,0 +1,210 @@
+//! The state of an applied frame and the transition for one instruction.
+
+use bennett_ir::{BinOp, BlockId, Fault, FuncId, Inst, Operand, Slot, Target, Terminator, Type, ValidModule};
+
+use super::arithmetic;
+use super::bits::{Bit, Circuit, Word, ZERO, constant};
+use super::{ApplyError, ApplyInput, Argument};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct Point {
+    pub(super) block: BlockId,
+    pub(super) index: usize,
+}
+
+impl Point {
+    pub(super) fn entry(block: BlockId) -> Self {
+        Self { block, index: 0 }
+    }
+
+    fn next(self) -> Self {
+        Self { index: self.index + 1, ..self }
+    }
+}
+
+pub(super) enum Status {
+    Running(Point),
+    Returned(Word),
+    Faulted(Fault),
+}
+
+pub(super) enum Step<'a> {
+    Write(Point, Slot, Word),
+    Jump(&'a Target),
+    Branch,
+    Return(Word),
+}
+
+pub(super) struct Frame<'a> {
+    pub(super) module: &'a ValidModule,
+    pub(super) callee: FuncId,
+}
+
+impl<'a> Frame<'a> {
+    pub(super) fn initial(&self, input: &ApplyInput<'_>) -> Vec<Word> {
+        let function = self.module.function(self.callee);
+        let mut slots = (0..function.slot_count())
+            .map(|index| match self.module.slot_type(self.callee, Slot(index as u32)) {
+                Type::Int(width) => vec![ZERO; width.bits() as usize],
+                Type::Qreg(_) => vec![ZERO; u64::BITS as usize],
+            })
+            .collect::<Vec<_>>();
+        for (param, argument) in function.params.iter().zip(input.args) {
+            slots[param.slot.index()] = match argument {
+                Argument::Value(value) => constant(*value, slots[param.slot.index()].len()),
+                Argument::Register(wires) => wires.clone().map(|wire| Bit::Wire(wire, false)).collect(),
+            };
+        }
+        slots
+    }
+
+    fn read(slots: &[Word], operand: &Operand) -> Word {
+        match operand {
+            Operand::Const(value) => constant(value.value(), value.width().bits() as usize),
+            Operand::Slot(slot) => slots[slot.index()].clone(),
+        }
+    }
+
+    pub(super) fn incoming(&self, slots: &[Word], target: &Target) -> Vec<(Slot, Word)> {
+        self.module
+            .function(self.callee)
+            .block(target.block)
+            .params
+            .iter()
+            .zip(&target.args)
+            .map(|(param, argument)| (param.slot, Self::read(slots, argument)))
+            .collect()
+    }
+
+    pub(super) fn error(&self, point: Point, operation: &'static str, route: &'static str) -> ApplyError {
+        ApplyError::Unsupported { callee: self.callee, block: point.block, index: point.index, operation, route }
+    }
+
+    pub(super) fn check(&self) -> Result<(), ApplyError> {
+        for (index, block) in self.module.function(self.callee).blocks.iter().enumerate() {
+            let block_id = BlockId(index as u32);
+            for (index, inst) in block.insts.iter().enumerate() {
+                if let Some((operation, route)) = unsupported(inst) {
+                    return Err(self.error(Point { block: block_id, index }, operation, route));
+                }
+            }
+            let (operation, route) = match &block.term {
+                Terminator::Jump(_) | Terminator::Branch { .. } | Terminator::Return(Some(_)) => continue,
+                Terminator::Return(None) => ("void ret", "integer results"),
+                Terminator::Switch { .. } => ("switch", "multiway dispatch"),
+                Terminator::Exit(_) => ("exit", "explicit instruction faults"),
+                Terminator::Longjmp { .. } => ("longjmp", "non-local control and memory"),
+                Terminator::Fault(_) => ("fault", "explicit instruction faults"),
+            };
+            return Err(self.error(Point { block: block_id, index: block.insts.len() }, operation, route));
+        }
+        Ok(())
+    }
+
+    pub(super) fn step(&self, circuit: &mut Circuit, slots: &[Word], point: Point) -> Result<Step<'a>, ApplyError> {
+        let block = self.module.function(self.callee).block(point.block);
+        let read = |operand| Self::read(slots, operand);
+        if let Some(inst) = block.insts.get(point.index) {
+            let (dst, result) = match inst {
+                Inst::Binary { op, dst, lhs, rhs, .. } => {
+                    let result = arithmetic::binary(circuit, *op, &read(lhs), &read(rhs)).ok_or_else(|| {
+                        let route = if *op == BinOp::Mul {
+                            "multiplication of two qubit words"
+                        } else {
+                            "shifts by a qubit word"
+                        };
+                        self.error(point, op.mnemonic(), route)
+                    })?;
+                    (*dst, result)
+                }
+                Inst::Compare { pred, dst, lhs, rhs, .. } => {
+                    (*dst, vec![arithmetic::compare(circuit, *pred, &read(lhs), &read(rhs))])
+                }
+                Inst::Select { dst, cond, if_true, if_false, .. } => {
+                    let condition = read(cond)[0];
+                    (
+                        *dst,
+                        read(if_true)
+                            .into_iter()
+                            .zip(read(if_false))
+                            .map(|(a, b)| circuit.select(condition, a, b))
+                            .collect(),
+                    )
+                }
+                Inst::Cast { op, dst, value, to, .. } => (*dst, arithmetic::cast(*op, read(value), to.bits() as usize)),
+                Inst::Load { .. }
+                | Inst::Store { .. }
+                | Inst::Alloca { .. }
+                | Inst::StackSave { .. }
+                | Inst::StackRestore { .. }
+                | Inst::Setjmp { .. }
+                | Inst::ReturnAddress { .. }
+                | Inst::Call { .. }
+                | Inst::CallIndirect { .. }
+                | Inst::FuncAddr { .. }
+                | Inst::Effect { .. }
+                | Inst::Qalloc { .. }
+                | Inst::Qfree { .. }
+                | Inst::Gate { .. }
+                | Inst::GateAt { .. }
+                | Inst::Measure { .. }
+                | Inst::Apply { .. } => {
+                    unreachable!("checked the instruction set before lowering")
+                }
+            };
+            return Ok(Step::Write(point.next(), dst, result));
+        }
+        Ok(match &block.term {
+            Terminator::Jump(target) => Step::Jump(target),
+            Terminator::Branch { cond, if_true, if_false } => match read(cond)[0] {
+                Bit::Constant(true) => Step::Jump(if_true),
+                Bit::Constant(false) => Step::Jump(if_false),
+                Bit::Wire(..) => Step::Branch,
+            },
+            Terminator::Return(Some(value)) => Step::Return(read(value)),
+            Terminator::Return(None)
+            | Terminator::Switch { .. }
+            | Terminator::Exit(_)
+            | Terminator::Longjmp { .. }
+            | Terminator::Fault(_) => unreachable!("checked the terminators before lowering"),
+        })
+    }
+
+    pub(super) fn jump(&self, slots: &mut [Word], target: &Target) -> Point {
+        for (dst, value) in self.incoming(slots, target) {
+            slots[dst.index()] = value;
+        }
+        Point::entry(target.block)
+    }
+}
+
+fn unsupported(inst: &Inst) -> Option<(&'static str, &'static str)> {
+    Some(match inst {
+        Inst::Binary { op, .. } => match op {
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::And | BinOp::Xor | BinOp::Shl | BinOp::Lshr | BinOp::Ashr => {
+                return None;
+            }
+            BinOp::Or => (op.mnemonic(), "remaining integer operations"),
+            BinOp::Udiv | BinOp::Sdiv | BinOp::Urem | BinOp::Srem => {
+                (op.mnemonic(), "division and remainder with faults")
+            }
+        },
+        Inst::Compare { .. } | Inst::Select { .. } | Inst::Cast { .. } => return None,
+        Inst::Load { .. } => ("load", "applied memory"),
+        Inst::Store { .. } => ("store", "applied memory"),
+        Inst::Alloca { .. } => ("alloca", "applied stack operations"),
+        Inst::StackSave { .. } => ("stacksave", "applied stack operations"),
+        Inst::StackRestore { .. } => ("stackrestore", "applied stack operations"),
+        Inst::Setjmp { .. } => ("setjmp", "non-local control and memory"),
+        Inst::ReturnAddress { .. } => ("retaddr", "applied call frames"),
+        Inst::Call { .. } => ("call", "applied calls"),
+        Inst::CallIndirect { .. } => ("call_indirect", "applied indirect calls"),
+        Inst::FuncAddr { .. } => ("faddr", "applied calls"),
+        Inst::Effect { .. } => ("effect", "explicit instruction faults"),
+        Inst::Qalloc { .. } => ("qalloc", "explicit instruction faults"),
+        Inst::Qfree { .. } => ("qfree", "explicit instruction faults"),
+        Inst::Gate { .. } | Inst::GateAt { .. } => ("gate", "explicit instruction faults"),
+        Inst::Measure { .. } => ("measure", "explicit instruction faults"),
+        Inst::Apply { .. } => ("apply", "explicit instruction faults"),
+    })
+}

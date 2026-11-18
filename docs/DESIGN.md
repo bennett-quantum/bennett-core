@@ -203,7 +203,7 @@ quantum instruction is the fault `quantum_in_region`, `effect` is `effect_in_reg
 `exit_in_region`, each an ordinary stop of the run of `@f`. This is the lifted-oracle contract of the North
 Star (§4.2).
 
-The executor is written to compute it so, and only so (`crates/exec/src/region.rs`); that it does is a claim
+The executor evaluates it directly (`crates/exec/src/region.rs`); that it does is a claim
 about the tree, checked by its tests ("Tests"), among them an independent reference that carries out the
 construction below on small functions. For each basis configuration of nonzero amplitude it runs `@f` on
 that configuration's argument values, with an undo journal of its own, until it finishes or has taken `B`
@@ -274,6 +274,21 @@ depending on the arguments must reach every byte). With `B + 1` records of `s` q
 state, all returned to 0, that is at most a constant times `B` times (the size of the step circuit plus `s`)
 gates. These are upper bounds for this construction; nothing here says a cheaper circuit cannot exist. The
 executor's step counts (`Stats`, `RegionCost`) count instructions, not gates; they are not a cost on a device.
+
+**Gate emitter, definite control.** The standalone compiler in `emit` follows the applied
+function while its next instruction is definite. It represents each bit as a constant or the
+value of a qubit, and computes new bits by reversible gates into scratch qubits. It handles
+addition, subtraction, AND, XOR, shifts and multiplication with a definite shift or factor,
+integer comparisons, select, casts, jumps and return. A jump reads all its incoming values
+before assigning the block parameters. Entry stack overflow takes precedence over the budget
+test. Every successful instruction, including a jump or return, costs one step. The compiler
+XORs only the first result or fault code into its destination, then reverses every forward
+gate and releases the scratch in zero.
+
+Compilation completes before any commands are sent. A qubit-dependent jump needs dispatch
+on a qubit-dependent program point. Calls, memory, division and the other instructions outside
+this subset are refused with the operation, its location, and the construction it needs.
+The controller does not yet use this standalone compiler.
 
 **Faults for some argument values.** With a fault register that starts at 0, measuring it afterwards finds a
 fault with probability equal to the total weight of the faulting configurations, and the state collapses onto
@@ -1320,8 +1335,7 @@ example list, allowed-hit count, mutation percentage, or performance threshold. 
 
 ## Not yet
 
-The optimiser, a lowering of the device program to a circuit (the executor simulates the model's rules; it
-does not compile to gates), any cost beyond step and qubit counts, certificates, target descriptions, a binary
+The optimiser, lowering the full device language to gates, certificates, target descriptions, a binary
 format, memory written under qubit control that outlives the `apply`, and recomputation shared between
 conditions (each predicated operation computes and clears its own).
 

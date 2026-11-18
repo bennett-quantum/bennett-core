@@ -8,8 +8,9 @@ The restart of Bennett in one workspace, grown from the thesis program outward: 
 measure. The earlier `bennett-*` repositories are a read-only archive. Vision: `docs/NorthStar.md`; working design: `docs/DESIGN.md`.
 C with a few marker calls (`docs/MARKERS.md`) goes through stock `clang` 18, then `bennett-front` (C++ over LLVM 18), which writes a
 *device program* (`crates/ir`: ordinary code plus quantum instructions), which the *executor* (`crates/exec`) runs. The executor is a
-simulator of the model in `docs/DESIGN.md`, not a compiler to gates: no lowering of a device program to a circuit exists on `main`
-yet. Nothing is running; one git branch is under review (see "In flight").
+simulator of the model in `docs/DESIGN.md`. The device interface and counter are available.
+The gate emitter can compile applied integer functions with definite control as a standalone
+operation. The device controller still evaluates `apply` only in the simulator.
 
 What works, one line each (the commit-by-commit table is in `docs/RECORDS.md`, part two):
 
@@ -73,9 +74,11 @@ Newest first; quotes are the maintainer's words.
 
 ## In flight
 
-One git branch is under review: `wip/sol62-device`, not on `main`. The other, `wip/sol62-stepspec`, has landed (`90f7305`, `6155161`, `5fc7386`).
+The device interface and step tests have landed. Gate compilation with definite control is
+the first step on `wip/sol62-loops-m2`. The next step is a circuit that dispatches instructions
+when a jump depends on qubits.
 
-- `wip/sol62-device`: an interface between the executor and its quantum simulator (so the simulator can be replaced); a counting device that only counts qubits and gates; rewriting of gates with many controls for a machine with one- and two-qubit gates and the Toffoli gate; a bit-level circuit runner that checks reversible gate lists against independent references.
+- Device support: an interface between the executor and its quantum simulator (so the simulator can be replaced); a counting device that only counts qubits and gates; rewriting of gates with many controls for a machine with one- and two-qubit gates and the Toffoli gate; a bit-level circuit runner that checks reversible gate lists against independent references.
 - `wip/sol62-stepspec` (landed): tests pinning an exact statement of what an applied function does for one definite input, step by step, and a change that makes the slots of a new frame zero.
 - Never to be landed: `wip/fallback-step3`, `wip/sol-mutants-machine`, `wip/sol-mutants-machine-partial` (they build on the removed `mark`/`rewind` machinery).
 
