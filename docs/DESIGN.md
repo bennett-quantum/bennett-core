@@ -24,6 +24,8 @@ the code teaches us something, and say why in the commit.
 
 ## The model
 
+The [model paper](paper/README.md) gives the mathematical background and marks the earlier `mark` and `rewind` design.
+
 The device program is ordinary code that issues the operations of the standard quantum circuit model, plus one
 construction of its own, `apply`. Terms used below:
 

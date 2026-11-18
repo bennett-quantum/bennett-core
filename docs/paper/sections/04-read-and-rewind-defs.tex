@@ -1,0 +1,651 @@
+This section defines the new instructions and their elementary
+well-posedness properties. The first subsection makes a coherent read one
+joint tick whose sampled value is stored in $C$ and used by later ticks,
+with stopping replaced by a fixed schedule. The second is needed for the
+equivalence in Section~\ref{sec:primitives}: it shows an observed, adaptive
+protocol is already described by retaining its measurement copies and
+tracing at the end. The third is the heart of the paper: keep is a
+controlled XOR $K$ from the machine register to quantum targets, a marked
+term denotes $U^\dagger KU$, and a \emph{menu} is the one data-dependent
+construction admitted by these structured terms---a fixed finite direct
+sum $\sum_i\proj i_D\otimes\mathcal U_{P_i}$, with the selector register
+$D$ retained, not a data-dependent mark. Soundness, restoration and
+resources for these definitions are Sections~\ref{sec:soundness}--%
+\ref{sec:resources}, respectively; equivalence of the nine basic
+instructions, which excludes coherent reads and marks, is
+Section~\ref{sec:primitives} and can be read before those three sections.
+The separate conditional bounded dynamic interpreter is
+Section~\ref{sec:tierB}.
+
+\subsection{Coherent reads and a fixed stopping schedule}
+
+\begin{definition}[Read instruction, return, and continuation]\label{def:read}
+Primitive 10 is exactly a read-mode tick, at its decoded program position.
+Before such a tick, its input value is not made available to $f$ by an
+external parameter. Later ordinary ticks use the stored value in $C$.
+Bounded fragments share that same $C$ and obey the global cell discipline
+of Definition~\ref{def:joint-tick}. Intervening gates are composed in their
+actual order, including gates changing an earlier read input.
+Run a fragment for its supplied number of ticks. Its ordinary return,
+stop or fault status selects idle updates for subsequent ticks, but even
+an idle update uses the completed $F_t$. The schedule never stops by
+observing a coherent status bit. A separate final timeout tick, included
+in a declared timeout horizon $T\geq1$, has its own total update
+$f_\tau(c,z)=h_\tau(c)$, where $h_\tau(c)$ is obtained from $c$ by
+replacing the status field by $\sigma_{\mathrm{to}}$ if it equals
+$\sigma_{\mathrm{act}}$, and otherwise preserving every bit of $c$,
+on every configuration code. Its decoder
+is identically idle. Thus $S_{T-1}=F_{T-1}^{\tau}$ uses $h_\tau$ in
+the snapshot formula and $D_{T-1}=\id$; only $S_0,\ldots,S_{T-2}$
+use the ordinary device pair $(d,f)$. The final tick has its own blank
+$J_{T-1},B_{T-1}$, counted among the $T$ ticks. It is a total unitary
+by the same snapshot inverse. It is an explicitly scheduled snapshot
+operation, not an assertion that the device's time-independent $f$
+can infer the end of its horizon. Without a declared timeout horizon a
+fixed term has only its explicitly listed atoms.
+
+For a specified continuation address $\ell$ whose binary code fits
+the program-position field, define $h_\ell(c)$ by
+replacing just the program-position bits with the binary code of $\ell$
+and preserving every other bit, on \emph{all} codes. A continuation atom
+uses a fresh $s$-bit $J$ and the same snapshot formula with $f=h_\ell$.
+On blank $J$ it installs $\ell$ and retains the previous configuration.
+It is a total permutation, including on nonblank $J$.
+A structured source block with that continuation denotes the marked
+operation below followed by this explicit atom. Its continuation record
+is part of $M$ until all enclosing inverses finish. Cleanliness of the
+marked operation does not imply cleanliness of this subsequent update.
+\end{definition}
+
+In particular, ordinary code after a read acts as a family of reversible
+operations controlled by the read register, in the sense of
+Lemma~\ref{lem:read-product}, while the operations preserve its
+computational-basis sectors. A gate changing that register removes this
+guarantee: the controlled description applies to the preceding segment,
+and the read register can be entangled with the machine register.
+Theorem~\ref{thm:sA-four} is an explicit four-qubit calculation of the
+failure, using copying atoms rather than full-snapshot read ticks.
+
+\begin{lemma}[Preserved read register]\label{lem:read-product}
+Consider a fixed tick sequence whose only actions on a factor $X\subseteq Q$
+are uses as CNOT controls for reads, and whose other operations preserve
+each computational-basis sector of $X$. Then on $X L$, where $L$ is all
+remaining retained wires, its unitary has the form
+\[
+ U=\sum_x\proj x_X\otimes V_x,\qquad
+ V_x=V_{x,T-1}\cdots V_{x,0}.
+\]
+Each $V_{x,t}$ is obtained by substituting $x$ in the actual tick circuit;
+it is not an independently supplied oracle. If no gates on other data
+occur and all other actions are Boolean, these are permutation unitaries.
+\end{lemma}
+\begin{proof}
+ \step{r2read-sector}{Every tick restricts to a unitary $V_{x,t}$ in
+ each fixed-$x$ sector.}
+ \begin{proof}\pf\ The hypothesis gives an invariant sector. Its
+ finite dimension and the unitary tick imply the restriction maps it
+ onto itself. Substitution of $x$ computes this restriction.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ Multiply the sector sums using
+ $\proj x\proj y=0$ for $x\ne y$. Products of permutations are
+ permutations. A gate changing $X$ violates the hypothesis and gives
+ no such formula for the entire sequence.\end{proof}
+\end{proof}
+
+\subsection{Bounded adaptivity and its retained interpretation}
+
+\begin{definition}[Bounded adaptive protocol and outputs]\label{def:adaptive}
+A protocol is the device data of Definition~\ref{def:device}, an initial
+valid classical configuration $c_{\rm in}$ whose live flags identify
+exactly the input list, and a horizon of $T\geq1$ ticks including timeout.
+A measurement-outcome sequence is \emph{reachable} from $c_{\rm in}$ if
+the successive configurations obtained by starting at $c_{\rm in}$ and
+applying $f$ with those sampled bits (zero at non-measurement ticks) are
+the configurations at which those samples are taken; the final tick uses
+$h_\tau$ as specified below.
+For every $c$, the decoder range excludes read mode: an intended read
+or any other mode violation must select fault with update $c_{\rm fault}$.
+All live-flag requirements of Definition~\ref{def:device} hold for every
+code, not just for a selected input. There are no marks. At the first
+$T-1$ ticks the classical configuration selects the quantum operation,
+then $f$ updates it. The last tick uses exactly the idle decoder and
+$h_\tau$ of Definition~\ref{def:read}, on both interpretations.
+Measurement of wire $i$ has outcomes $z=0,1$ and
+unnormalized update $\rho\mapsto P_{i,z}\rho P_{i,z}$, where
+$P_{i,z}=\proj z_i\otimes\id$ on other wires. Its outcome is supplied
+to $f$ in sample bit zero, with other sample bits zero.
+Allocation selects a never-used zero factor in a pool reserved
+in advance; the live flags forbid operations on unallocated factors.
+At most $T$ allocations are needed beyond the input list. Terminal data
+are padded as above. Designated quantum output wires $O\subseteq Q$ are
+fixed, and for every measurement-outcome sequence reachable from
+$c_{\rm in}$ every wire in $O$ is live in the final configuration $c_T$;
+the classical output is
+the total specified bit string $o(c_T)$, which includes any requested
+outcome, memory and console fields. All pool wires outside $O$, including
+live non-output wires, are traced in this output instrument. These rules
+define it by finite repeated composition and summation over outcomes.
+
+To retain the protocol use exactly $S_{T-1}\cdots S_0$, with the last
+factor defined by $h_\tau$, on the input state and the reserved zero
+non-input pool, records and samples, with $C$ initialized to $c_{\rm in}$.
+Copy $o(C)$ into a fresh output register
+$Y$ by its total XOR evaluator, and copy $Y$ into a retained register $E_Y$.
+The environment is exactly the complement of $OY$ in the entire retained
+list: in particular it contains $Q\setminus O$, $C$, all $J_t,B_t$,
+$E_Y$, and evaluation workspace. The second copy makes $Y$
+classical after that environment is traced. This specifies the output
+extraction, rather than merely observing measurement samples.
+\end{definition}
+
+\begin{lemma}[Bounded deferred observation, proved here]\label{lem:deferred}
+For a protocol satisfying all the global decoder and live-flag restrictions
+and the $T\geq1$ timeout convention in Definition~\ref{def:adaptive},
+the retained construction there is an isometry.
+Tracing its designated environment gives exactly the protocol's output
+instrument, including classical outputs, for inputs with any reference.
+\end{lemma}
+\begin{proof}
+ \step{r2defer-expand}{After $t$ ticks the retained vector can be written
+ $\sum_{\zeta} A_{t,\zeta}\ket\psi\otimes\ket{e_{t,\zeta}}$, where
+ $\zeta$ is the length-$t$ list of sampled bits, padded by zeros at
+ nonmeasurement ticks. Distinct possible lists have orthogonal retained
+ sample registers. $A_{t,\zeta}$ is the ordered product of the protocol's
+ selected gates and measurement projectors on the reserved pool, composed
+ with the initial zero embedding of its non-input wires; its configuration is the
+ deterministic configuration prescribed by those samples.}
+ \begin{proof}
+  \step{r2defer-base}{The assertion holds at $t=0$.}
+  \begin{proof}\pf\ There is one empty list, the initial zero embedding,
+  and the specified initial configuration and blank records.\end{proof}
+  \step{r2defer-next}{The assertion at $t$ implies it at $t+1$.}
+\begin{proof}
+ \step{r2defer-next-hyp}{\assume{The asserted expansion holds at
+ $t<T$.}\prove{It holds after the next scheduled tick.}}
+ \begin{proof}
+  \step{r2defer-next-timeout}{\case{$t=T-1$.}}
+  \begin{proof}\pf\ The scheduled quantum action is identity and
+  the new sample is zero. The snapshot applies exactly $h_\tau$
+  and stores the old configuration, giving the prescribed next
+  configuration without altering the quantum product.\end{proof}
+  \step{r2defer-next-gate}{\case{$t<T-1$ and the decoder selects
+  gate mode.}}
+  \begin{proof}\pf\ Multiply each summand by the selected gate.
+  The sample is zero; the snapshot computes $f(c,0)$ and stores $c$.
+  This is the corresponding protocol step.\end{proof}
+  \step{r2defer-next-measure}{\case{$t<T-1$ and the decoder selects
+  measurement mode on wire $i$.}}
+  \begin{proof}\pf\ The copying isometry is
+  $v\mapsto\sum_{z=0}^1P_{i,z}v\otimes\ket z_{B_t}$,
+  with unused sample bits zero. The snapshot stores the old
+  configuration and computes precisely the next one from $z$.
+  These are the two projector terms of the protocol update.\end{proof}
+  \step{r2defer-next-allocate}{\case{$t<T-1$ and the decoder selects
+  allocation mode.}}
+  \begin{proof}\pf\ Its zero live flag implies the factor is a
+  non-input factor initially zero and never acted on: ordinary
+  updates preserve flags, allocation only changes zero to one,
+  and every quantum action requires a one flag. A fault is terminal
+  and cannot be followed by allocation. The factor is therefore
+  still zero. The identity quantum action and prescribed flag update,
+  with zero sample, implement allocation from the reserved pool.\end{proof}
+  \step{r2defer-next-other}{\case{$t<T-1$ and the decoder selects
+  fault, ordinary or idle mode.}}
+  \begin{proof}\pf\ These modes have identity quantum action,
+  zero new sample and their specified updates. Their snapshots
+  store the old configuration. Read mode is excluded on every code.\end{proof}
+  \step{r2defer-next-orthogonal}{Distinct extended sample lists
+  have orthogonal retained sample registers.}
+  \begin{proof}\pf\ Distinct old lists differ in an old retained
+  sample bit. Equal old lists with different new samples differ
+  in $B_t$. No case erases these bits.\end{proof}
+  \qedstep
+  \begin{proof}\pf\ The cases exhaust the schedule and permitted
+  modes. Each appends the correct gate or projector and deterministic
+  configuration update; \stepref{r2defer-next-orthogonal} establishes
+  the required orthogonality. Sum over the old sample lists.\end{proof}
+ \end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{r2defer-next-hyp}.\end{proof}
+\end{proof}
+  \qedstep
+  \begin{proof}\pf\ Finite induction using
+  \stepref{r2defer-base} and \stepref{r2defer-next}.\end{proof}
+ \end{proof}
+ \step{r2defer-output}{Tracing the environment gives the required instrument.}
+ \begin{proof}\pf\ Orthogonality of the samples removes cross terms
+ for different lists in \stepref{r2defer-expand}. The extra copy of
+ $o(c_T)$ removes off-diagonal classical output labels. The remaining
+ terms are exactly $A_{T,\zeta}\rho A_{T,\zeta}^\dagger$ grouped by
+ $o(c_T)$, with all $Q\setminus O$ wires traced, as in the definition.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ The initial embeddings and subsequent unitaries are
+ isometries. The calculation in \stepref{r2defer-output} applies to
+ matrix units by linearity, and every operator acts as identity on a
+ reference. It therefore applies to all density operators with references.
+ No unsupplied measurement theorem is used.\end{proof}
+\end{proof}
+
+\subsection{Structured marks, allocation types, and a finite menu}
+
+\begin{definition}[Keep]\label{def:keep}
+For the specified current machine list $M$ of $m_M$ bits, choose a total
+Boolean circuit $v:\{0,1\}^{m_M}\to\{0,1\}^{|r|}$ and a fixed ordered
+list $r$ of distinct quantum wires disjoint from $M$. Set
+\[
+ K_{v,r}=\sum_{u\in\{0,1\}^{m_M}}X_r^{v(u)}\otimes\proj u_M,
+ \qquad X_r^z=\bigotimes_i X_{r_i}^{z_i},                 \tag{2}
+\]
+with identity on all other wires. A keep list is a finite product of
+these maps. Different entries may share target wires; repeated XORs
+have their usual meaning. Every target is in the register context of
+its enclosing mark. There is no computed-address exception in this
+definition. Targets used by the body are allowed, without a cleanliness
+promise. A standalone use is a circuit atom with the same typing.
+\end{definition}
+
+\begin{lemma}[Keep well-posedness]\label{lem:keep}
+Every keep list is a unitary involution and has a clean finite-alphabet
+implementation.
+\end{lemma}
+\begin{proof}
+ \step{r2keep-sectors}{In a fixed $u$ sector each entry is a product
+ of Pauli $X$ operators; all entries commute and square to identity.}
+ \begin{proof}\pf\ Every entry preserves $M$, and $X^2=\id$ on each
+ target. Overlaps merely add their exponents modulo two.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ Sum over the orthogonal $u$ sectors for unitarity
+ and the involution identity. Evaluate $v$, XOR its output into $r$,
+ and uncompute by Lemma~\ref{lem:synthesis}; $M$ is preserved.\end{proof}
+\end{proof}
+
+We use \emph{Tier~A} for the class defined next: marks and their pairings are
+fixed in the syntax, hence known to the classical control computer before any
+quantum input. \emph{Tier~B} is the data-dependent analogue, in which
+whether a rewind is reached and which mark it names can depend on values read
+from qubits. Section~\ref{sec:tierB} defines a bounded interpreter and proves
+conditional results under a supplied certificate; constructing such a
+certificate for general dynamic programs remains open
+(Sections~\ref{sec:tierB} and \ref{sec:open-problems}).
+
+\begin{definition}[Tier~A, fixed-space terms and typed outer programs]
+\label{def:tiera}
+Fix a retained list $L=QM$. An atom is an occurrence-labelled elementary
+quantum gate from $\mathcal G^{\pm}$ (or the explicitly declared ideal
+alphabet), a joint tick of Definition~\ref{def:joint-tick}, a continuation atom, a specified
+completed RTM step, or a finite composition of these. Each is a specified
+logical unitary, with an exact clean implementation where finite-alphabet
+resources are claimed. Boolean elementary gates on machine bits are
+also atoms by Lemma~\ref{lem:synthesis}.
+Every atom specifies a support list contained in $L$ and acts as identity
+on its complement. An RTM atom's support is its specified
+$m_{\rm RTM}$-bit encoding register. For a joint-tick atom the supplied
+decoder, on \emph{every} $c$, excludes measurement and allocation modes;
+mode violations must instead select fault with update $c_{\rm fault}$.
+Read mode is allowed, with all the live-flag conditions of
+Definition~\ref{def:device}. The explicitly scheduled timeout snapshot
+of Definition~\ref{def:read} is also an allowed joint-tick atom.
+Atom labels include syntactic occurrence identifiers: two written copies
+of a tick receive distinct recording cells even if their instruction
+data agree. Adjoint expansion retains the original occurrence identifiers.
+The grammar, interpreted on the \emph{same} $L$, is
+\[
+ P::=I\mid a\mid P;P\mid \mathsf{mark}\{P\}\mathsf{rewind}\ K.
+\]
+Denote the last constructor by $\mathsf M(P,K)$ and its term denotation
+by $\mathcal U_P$. Set
+\[
+ \mathcal U_I=\id,
+ \quad\mathcal U_a=A_a,
+ \quad\mathcal U_{P;R}=\mathcal U_R\mathcal U_P,
+ \quad\mathcal U_{\mathsf M(P,K)}
+   =\mathcal U_P^\dagger K\mathcal U_P.       \tag{3}
+\]
+The sans-serif $\mathsf M(P,K)$ is a term constructor, not the register $M$.
+The mark is a static delimiter in machine 1. Inverting a completed inner
+term takes its complete adjoint, including its keep. A source block with
+post-rewind address $\ell$ is, by definition,
+$\mathsf M(P,K);\mathsf{cont}_\ell$, with the atom of
+Definition~\ref{def:read}. The first operation has exactly the denotation
+$\mathcal U_P^\dagger K\mathcal U_P$; it need not restore the machine-held
+position. Position restoration requires a separately proved condition
+on the allowed input space. The second operation installs $\ell$ when
+its own fresh record is blank, retaining the previous configuration,
+regardless of the position left by the first operation.
+
+For changing register lists the outer grammar is
+$E::=I_L\mid A_B\mid\mathsf{run}_L(P)\mid E;E$,
+with types $I_L:L\to L$, $A_B:L\to LB$ for globally fresh $B$,
+$\mathsf{run}_L(P):L\to L$, and composition only when the middle
+lists coincide. Its denotations are respectively identity, zero embedding,
+$\mathcal U_P$, and ordered composition. Outputs are a
+designated subset; dropping is performed afterward on its complement.
+All logical records and implementation workspace are allocated before
+their enclosing run. Disjoint recording cells are assigned to syntactic
+occurrences, not to the number of gates in the expanded circuit.
+There is a padding rule: a term $P$ on $L$ may be used on $LZ$ for any
+disjoint list $Z$, by lifting every atom and keep with tensor identity;
+its denotation is $\mathcal U_P\otimes\id_Z$. In particular
+$\mathsf{run}_{LZ}(P\otimes I_Z)$ is the logical run after allocating
+workspace. A physical implementation may use $Z$, and agrees with this
+logical run on zero $Z$ by Definition~\ref{def:scratch}; equality on
+other $Z$ states is not required.
+
+\emph{Restrictions of this tier:} no allocation, drop, observed measurement,
+external console observation, or actual stop inside a marked body. Bounded
+idle statuses and updates of an unobserved console tape are allowed.
+Every mark instance and pairing is static. A loop or call containing marks
+is covered only if it has a supplied fixed finite syntactic expansion;
+data-dependent numbers of mark visits and general recursive calls are
+excluded. Bounded loops without marks can be joint-tick fragments.
+Source allocation inside a mark is not automatically admitted by this
+grammar. Pre-reserving its wires is a correction requiring a separate
+zero-input justification, not equality on arbitrary wire states.
+\end{definition}
+
+\begin{lemma}[Algebraic typing of structured terms]\label{lem:term-types}
+Every finite fixed-space term of Definition~\ref{def:tiera} denotes a
+total unitary. Every well-typed outer term denotes an isometry into its
+entire retained output space. These conclusions concern the algebraic
+denotation, without an assertion about compilation cost or source coverage.
+\end{lemma}
+\begin{proof}
+ \step{r2types-induction}{Every fixed-space term denotes a unitary.}
+ \begin{proof}
+  \step{r2types-base}{\case{The term is identity or an atom.}}
+  \begin{proof}\pf\ Identity is unitary. Elementary gates, completed
+  permutations and joint ticks are unitary by their matrices,
+  Lemmas~\ref{lem:completion} and \ref{lem:joint}. The continuation
+  has the snapshot inverse, and finite compositions of atoms multiply
+  unitaries.\end{proof}
+  \step{r2types-sequence}{\case{The term is $P;R$, and the assertion
+  holds for its proper subterms.}}
+  \begin{proof}\pf\ The product of the two unitary denotations has
+  inverse the reversed product of their adjoints.\end{proof}
+  \step{r2types-mark}{\case{The term is $\mathsf M(P,K)$, and the
+  assertion holds for $P$.}}
+  \begin{proof}\pf\ Put $U=\mathcal U_P$. By
+  Lemma~\ref{lem:keep}, $K$ is unitary; multiplication gives
+  \[
+   (U^\dagger KU)^\dagger(U^\dagger KU)=\id.
+  \]
+  The opposite product also equals identity.\end{proof}
+  \qedstep
+  \begin{proof}\pf\ Structural induction on the finite syntax, by
+  \stepref{r2types-base}, \stepref{r2types-sequence}, and
+  \stepref{r2types-mark}.\end{proof}
+ \end{proof}
+ \step{r2types-outer}{Every well-typed outer term is an isometry.}
+ \begin{proof}\pf\ Identity and run are isometries by
+ \stepref{r2types-induction}. Allocation satisfies $A_B^\dagger A_B=\id$
+ because $\ket0_B$ has unit norm. If $V^\dagger V=\id$ and
+ $W^\dagger W=\id$ with matching middle lists, then
+ $(WV)^\dagger WV=V^\dagger V=\id$. Structural induction gives
+ the assertion.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{r2types-induction} and
+ \stepref{r2types-outer}.\end{proof}
+\end{proof}
+
+\begin{lemma}[Moving an unused allocation earlier]\label{lem:reserve}
+Let $B$ be fresh, and let a finite circuit segment $V$ before its
+allocation act on $L$ alone. Then
+$(V\otimes\id_B)A_B=A_BV$. Consequently finitely many allocations can
+be moved to the start of a forward circuit if none of their names is used
+before its original allocation. The equality is of embeddings with
+$B$ initialized to zero, not of an inverse allocation with a unitary.
+\end{lemma}
+\begin{proof}
+ \step{r2reserve-tensor}{Both sides send $\psi$ to $V\psi\otimes\ket0_B$.}
+ \begin{proof}\pf\ Substitute the definition of $A_B$ and the
+ tensor-product action on distinct factors.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ Move each fresh allocation across each earlier
+ operation by \stepref{r2reserve-tensor}. There are finitely many such
+ pairs. This proves the equality on the stated input space only.
+ It does not define an adjoint deletion inside a marked body.\end{proof}
+\end{proof}
+
+\begin{definition}[Restricted menu; dynamic source semantics remains open]
+\label{def:tierb}
+Let $D$ be a $d$-qubit selector disjoint from a common retained payload
+$L$. Choose $0\leq j\leq2^d$ and Tier~A terms $P_0,\ldots,P_{j-1}$
+on $L$. For the implementation claim, each term must supply an explicit
+exact clean circuit over $\mathcal G^{\pm}$, with its actual matrix
+phase, on the same zero-initialized workspace list after padding.
+An ideal-alphabet term without such a supplied circuit is excluded from
+that claim; the algebraic direct sum still exists for any total payload
+unitaries. No general exact controlled-rotation synthesis is presumed.
+All $D$ wires are preserved throughout this operation and retained for
+every enclosing inverse. Define
+\[
+ \mathsf{SELECT}=
+ \sum_{i<j}\proj i_D\otimes\mathcal U_{P_i}+
+ \sum_{j\leq i<2^d}\proj i_D\otimes\id_L.                  \tag{4}
+\]
+Implement this by enumerating the $j$ circuit lists, controlling each
+elementary gate on $D=i$. The schedule is fixed; shorter lists may be
+padded with identity. No selected circuit acts on $D$. If $D$ was
+computed earlier, that computation is an explicit reversible operation
+with retained records; no erasure of $D$ is implied by selection.
+
+The finite-menu extension of the Tier~A syntax admits this construction
+as a derived atom $\mathsf{sel}_\nu(P_0,\ldots,P_{j-1})$ on $DL$,
+with identity on any other named factors. Its support contains $D,L$;
+the global machine list includes $D$ and the payload's machine factors.
+The entries here are base Tier~A terms, not menus, so this rule is not
+circular. A derived atom may occur in a sequence or a marked body.
+Every payload tick and continuation has its own globally fresh occurrence
+identifier across all entries and menu occurrences. Reversing this atom
+reverses its entire controlled circuit with the same identifiers and
+selector wires; it introduces no new cells. Its cost as an atom is the
+length of that supplied controlled circuit. Its internal payload ticks
+and continuations are counted once for logical record allocation.
+
+More generally a supplied list of $N\geq0$ total \emph{unitaries}
+$S_t:\cH_L\to\cH_L$ is a finite unitary schedule. Calling a member
+``rewind'' supplies no source semantics. Such arbitrary schedules are
+not a definition of dynamic mark/rewind and carry no equivalence claim.
+The construction admitted by this definition is (4), with its stated
+static menu. Theorems~\ref{thm:tB-sound} and \ref{thm:tB-cost} separately
+prove bounded dynamic-interpreter soundness and costs under the supplied
+certificate of Definition~\ref{def:tB-cert}. A translation of source-level
+mutable mark stacks, repeated visits, and data-dependent inverse stopping
+into that certified interpreter remains open
+(Open problem~\ref{prob:tB-compiler}).
+\end{definition}
+
+\begin{lemma}[Menu well-posedness]\label{lem:menu}
+Under Definition~\ref{def:tierb}, if the payload terms denote unitaries,
+(4) is a unitary on $DL$. For the supplied exact finite-alphabet lists
+required there, its specified controlled implementation has the same
+logical action, with zero workspace restored. Adding such derived atoms
+to Tier~A preserves the conclusions of Lemma~\ref{lem:term-types}.
+\end{lemma}
+\begin{proof}
+ \step{r2menu-blocks}{The summands have disjoint selector sectors
+ covering $\cH_D$, and unitary payloads.}
+ \begin{proof}\pf\ Capacity $j\leq2^d$ makes every projector defined;
+ the binary basis resolves identity. Multiply (4) by its adjoint in
+ either order to obtain identity.\end{proof}
+ \step{r2menu-implementation}{In sector $i<j$ precisely list $i$ acts,
+ with its specified phase; in other sectors every gate is identity.}
+ \begin{proof}\pf\ The equality predicates depend only on the
+ unchanged $D$. Lemma~\ref{lem:synthesis} controls each elementary
+ gate exactly, and Lemma~\ref{lem:scratch} restores workspace. No
+ independent scalar phase may be discarded from a selected list.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{r2menu-blocks} and
+ \stepref{r2menu-implementation}, followed by linearity across sectors.
+ For the extension, the new atom case is \stepref{r2menu-blocks};
+ the product, marked-term and outer-isometry induction steps in
+ Lemma~\ref{lem:term-types} are unchanged. For implementations use
+ \stepref{r2menu-implementation} and Lemma~\ref{lem:scratch}.
+ \end{proof}
+\end{proof}
+
+\subsection{Costs, certificates and cleanliness: definitions used later}
+The definitions in this subsection are used in Sections~\ref{sec:primitives}--%
+\ref{sec:resources}. They are collected here, next to the marked terms they
+describe; no result is asserted in this subsection.
+
+\begin{definition}[Tick selection cost]\label{def:selection-cost}
+For the data of Definitions~\ref{def:device} and \ref{def:adaptive}, write
+\[
+\mathcal R=\beta+\Delta+s+k+(q^2+kq+1)(s+k+1).
+\]
+The supplied sizes include Boolean-circuit input and output ports. Uniform families and unary numerical bounds have the meaning of Definition~\ref{def:rtm}.
+\end{definition}
+
+\begin{remark}[Explicit corrections to the primitive list]\label{rem:corrections}
+The corrections to the nine instructions that the equivalence requires
+are listed, with their justifications, in Section~\ref{sec:summary}; the
+additional restrictions for marked code are those of
+Definition~\ref{def:tiera} for Tier~A and
+Definition~\ref{def:tB-cert} for the conditional Tier~B interpretation.
+\end{remark}
+
+\begin{definition}[Expansion and cost model]\label{def:costs}
+Assign every atom and keep an explicit clean circuit over $\mathcal G^{\pm}$
+of length $c_a,c_K$. One gate in this alphabet costs one sequential gate
+tick (a gate tick, the time unit, is not a joint tick $S_t$; one joint
+tick costs many gate ticks), with no parallel execution assumed. Define the unsimplified expansion
+by concatenation and by body, keep, reversed adjoint body for a mark.
+Let $C(P)$ be its gate count, $L(P)$ the sum of all $c_a,c_K$ over
+syntactic occurrences counted once, and $d(P)$ the maximum number of
+enclosing marks: zero on atoms and identity, maximum under sequence,
+and one plus body depth at a mark. A zero-initialized scratch pool of
+width $a_*$ is the maximum local implementation workspace.
+
+Let $n_{\rm tick}(P)$ count distinct syntactic joint-tick occurrences,
+$n_{\rm cont}(P)$ continuation occurrences, and $q_{\rm new}(P)$ declared
+fresh data wires in the enclosing typed outer program. With one shared
+$s$-bit configuration and $m_{\rm extra}$ explicitly declared other
+logical wires (including any RTM or Boolean-value registers), the derived
+logical machine size for the snapshot construction is
+\[
+ m_M=s+(s+k)n_{\rm tick}(P)+s n_{\rm cont}(P)+m_{\rm extra}.
+\]
+For the menu extension, each derived menu atom is one leaf of cost
+equal to its compiled controlled-list length in $C(P),L(P),d(P)$.
+Its payload occurrences contribute to $n_{\rm tick},n_{\rm cont}$ for
+record allocation, but their gate costs are not counted again outside
+the atom cost. For selectors of widths $\delta_\nu$, add
+$\sum_\nu\delta_\nu$ fresh disjoint selector wires to
+the displayed machine size unless already included in $m_{\rm extra}$,
+and count the records of their explicit computations once. The same
+selector names are retained under adjoints. Selectors computed temporarily during
+one tick are clean scratch and are not retained logical selectors.
+Compiler time means steps of a multitape classical TM, with explicit
+output gate list and binary wire labels; it is distinct from gate ticks.
+\end{definition}
+
+
+\begin{definition}[Approximation certificates]\label{def:certificates}
+For a fixed expanded list of $N_g\ge1$ unitary factors $A_i$, a certificate procedure supplies, for every rational $0<\eta<1$, a clean $\mathcal G^{\pm}$ implementation of a logical unitary $\widetilde A_i$ with
+\[
+\|\widetilde A_i-A_i\|\le\eta,\qquad
+\text{length}\le c_*\log^\alpha(2+1/\eta),
+\]
+where $c_*>0$, $\alpha\ge0$ are fixed independently of $i,N_g,\eta$.
+The error concerns actual matrices, including the entire controlled matrix when present. Inverses use adjoints of the same chosen approximating circuits. Occurrences inside inverses and controls are counted in $N_g$.
+\end{definition}
+
+\begin{remark}[Scope of the approximation hypothesis]\label{rem:sk}
+The certificate hypothesis above is an explicit restriction: no
+unconditional approximation theorem for arbitrary additional gates is
+proved here. Its removal for arbitrary effectively specified bounded-arity
+gates over $\mathcal G$, with all control phases accounted for, remains
+an open synthesis task.
+Dawson--Nielsen's instruction-set hypothesis is a finite inverse-closed
+subset of $SU(d)$ whose generated subgroup is dense in $SU(d)$; their Theorem~1 gives
+operator-norm length $O(\log^c(1/\eta))$ for fixed $d$
+\cite[Definition~1, PDF p.~2; Theorem~1, PDF p.~4]{DawsonNielsen2006}.
+This statement is not applied literally to $\{H,T,\operatorname{CNOT}\}$:
+its determinants and inverse closure do not satisfy those hypotheses.
+The exact controlled finite gates needed above were instead constructed
+in Lemma~\ref{lem:synthesis}. No approximation step relies on an
+unread source or on discarding a control-dependent phase.
+\end{remark}
+
+\begin{definition}[Cleanliness, reached subspaces, and restoration]
+\label{def:clean}
+For a fixed unit vector $\ket{m_0}_M$, define
+$E\psi=\psi\otimes\ket{m_0}$ and $P_0=EE^\dagger$.
+A unitary $W$ is clean on this input space if $WE=EV$ for a unitary
+$V$ on $Q$. For a particular input density operator the weaker condition
+is support of its final state in $\operatorname{ran}E$.
+For nested use let $\mathcal S\subseteq\cH_L$ be a specified reached
+subspace with orthogonal projection $P_{\mathcal S}$. It is computed
+mathematically as the image of the initial allowed subspace under the
+fully specified preceding isometry, or it can be a supplied containing
+subspace. It need not factor across data and machine registers.
+Given a designated reusable auxiliary factor $A\subseteq L$, put
+$P_A=\id_{L\setminus A}\otimes\proj0_A$. Reset on $\mathcal S$ means
+$(\id-P_A)WP_{\mathcal S}=0$; for reuse the incoming subspace must
+also satisfy $\mathcal S\subseteq\operatorname{ran}P_A$.
+For an initially entangled machine factor, preservation of its reduced
+state is a different condition, called marginal restoration, and does
+not authorize replacing it by fresh zeros or tracing it before an inverse.
+
+Cleanliness here concerns the logical machine register $M$. It is a
+different property from a \emph{clean implementation}
+(Definition~\ref{def:scratch}), which concerns only implementation
+workspace $Z$: a marked operation can have a clean implementation while
+leaving $M$ entangled with $Q$ (Theorem~\ref{thm:sA-four}), and
+Theorem~\ref{thm:sA-sound} asserts the former kind of statement, not
+cleanliness of $M$. In phrases such as ``clean XOR'' or ``clean CNOT'',
+clean means that the auxiliary factors of the stated initialized
+computation return to their initial vectors; it is not merely a
+workspace assertion.
+\end{definition}
+
+
+\begin{definition}[Restricted delayed-erasure comparison]\label{def:delayed}
+For $1\leq j\leq d$ let
+$f_j:\{0,1\}^{b_{j-1}}\to\{0,1\}^{b_j}$ be deterministic.
+A specified total unitary evaluator $A_j$ of cost $a_j$ preserves its
+input and, with output and workspace zero, writes
+$(f_j(x),g_j(x))$ in computational basis into an output of $b_j$ bits
+and private workspace of $u_j$ bits. It touches no other factors.
+Copying that output into a disjoint external target costs $k_j$;
+compute, copy, inverse gives a composite XOR unitary of cost
+$o_j=2a_j+k_j$. The eager composite at level $j$ computes the previous
+composite into a zero intermediate, applies the level-$j$ XOR unitary,
+and inverts the previous composite. The delayed construction evaluates $A_1,\ldots,A_d$ on
+distinct retained intermediates and workspaces, copies the last value,
+then inverts $A_d,\ldots,A_1$. Targets are never evaluator inputs and no
+other gate changes the retained values during these sequences.
+Theorem~\ref{thm:resA-delayed} uses these compositions under a more general
+evaluator hypothesis, (RA8) there, of which the basis-valued $g_j(x)$ above
+is the special case $\ket{\gamma_{j,x}}=\ket{g_j(x)}$.
+\end{definition}
+
+
+\begin{remark}[Open point: remaining scope]\label{problem:remaining}
+Theorems~\ref{thm:tB-sound}--\ref{thm:tB-cost} give conditional bounded
+interpreter results, a static specialization, and the exact disposal
+criterion. They do not construct a certified interpreter for general
+dynamic source mark/rewind, data-dependent repeated mark visits or an
+inverse stopped at a coherent mark identifier
+(Open problem~\ref{prob:tB-compiler}). The full-snapshot form of the
+four-qubit example also remains open.
+They also do not settle general phase-correct approximation certificates
+for arbitrary additional gates or an optimal recursive resource bound.
+Source allocation within a marked body requires a proved reservation
+translation and remains excluded from Tier~A as stated.
+The proved deferred-observation lemma concerns bounded adaptive protocols
+without marks. It does not authorize observed measurement inside a
+reversible marked body.
+These open points carry no proof step in the settled results.
+An optimal time--space trade-off for general intervening quantum gates,
+including a transformation to delayed erasure, also remains open.
+\end{remark}
+
+\begin{remark}[Collected restrictions]\label{rem:r3-restrictions}
+The complete restrictions are collected in Section~\ref{sec:summary}.
+They include the supplied-circuit and final-instrument scope of the
+nine-instruction equivalence, the static Tier~A rules, and the conditional
+Tier~B certificate and implementation hypotheses; none is inferred from
+an instruction name alone.
+\end{remark}

@@ -1,0 +1,195 @@
+
+\subsection{Recursive soundness with retained registers}
+
+\begin{theorem}[Structured soundness]\label{thm:sA-sound}
+Fix the finite retained list $L=QM$ of Definition~\ref{def:tiera}.
+Let $P$ be a finite term of its fixed-space grammar, with the specified
+\emph{total} atom completions and total keep functions. Impose all the
+restrictions in that definition, including static mark pairing and no
+allocation, drop, observed measurement, external console observation, or
+actual stop inside a marked body. Then $\mathcal U_P$ is a uniquely
+specified unitary on all of $\cH_L$, at every finite nesting depth
+(the algebraic part is Lemma~\ref{lem:term-types}; new here are the clean
+implementations and the menu extension).
+In particular, tick decoders obey Definition~\ref{def:device} and
+exclude measurement and allocation modes on every configuration code;
+continuation addresses fit their field. A declared timeout horizon
+includes its explicitly scheduled final snapshot and its records.
+For every marked subterm, with $U=\mathcal U_R$,
+\[
+ \mathcal U_{\mathsf M(R,K)}=U^\dagger KU,
+ \qquad (U^\dagger KU)^\dagger=U^\dagger K^\dagger U.
+\]
+In particular, gates changing previously read qubits are permitted.
+
+If each atom has a specified exact clean implementation over
+$\mathcal G^{\pm}$, the recursively expanded circuit implements
+$\psi\mapsto\mathcal U_P\psi\otimes\ket0_Z$ for every logical input
+$\psi$, with implementation workspace $Z$ initialized to zero. All
+logical records remain in $L$. No action on nonzero $Z$ is asserted.
+Well-typed outer programs of Definition~\ref{def:tiera} denote isometries
+on the entire retained output, and tracing designated output complements
+gives channels, also on inputs entangled with an external reference.
+
+The same conclusions hold for the extension by occurrence-typed derived
+menu atoms of Definition~\ref{def:tierb}, including their use in
+sequences, marked bodies and outer runs. Selectors are disjoint from
+payloads and retained for enclosing inverses, entries are base Tier~A
+terms, and all capacity, occurrence and phase hypotheses there apply.
+The implementation conclusion requires the supplied exact clean
+$\mathcal G^{\pm}$ lists for menu entries. No exact finite-alphabet
+implementation of an arbitrary ideal-angle atom is asserted. Joint
+ticks, Boolean atoms, the listed controlled gates and keeps have such
+implementations by Lemmas~\ref{lem:joint}, \ref{lem:synthesis}
+and \ref{lem:keep}; other admitted atoms retain the explicit
+implementation hypothesis. These assertions
+supply neither ordinary forward semantics for nonblank logical records
+nor cleanliness of $M$, and cover no unrestricted dynamic source marks.
+\end{theorem}
+\begin{proof}
+ \step{sA-sound-ind}{Each derived menu atom is a specified total
+ unitary, with a clean implementation under the stated list hypothesis.}
+ \begin{proof}\pf\ Its entries are base Tier~A terms and hence total
+ unitaries by Lemma~\ref{lem:term-types}. Lemma~\ref{lem:menu}
+ applies to their direct sum and, when supplied, their exact circuit
+ lists. This establishes the additional atom case without assuming
+ anything about a term containing menus.
+ \end{proof}
+ \step{sA-sound-struct}{Every fixed-space term, also in the menu
+ extension, is a uniquely specified total unitary; if its atoms have
+ the specified implementations, it and its adjoint have finite clean
+ implementations.}
+ \begin{proof}
+  \step{sA-sound-base}{\case{$P=I$ or $P=a$.}}
+  \begin{proof}
+   \step{sA-sound-base-total}{The denotation is a specified total unitary.}
+\begin{proof}
+ \step{sA-sound-base-total-gates}{\case{Identity or an elementary gate.}}
+ \begin{proof}\pf\ Their matrices are unitary, including the
+ explicitly declared ideal matrices. Tensor identity on the
+ complementary retained wires.\end{proof}
+ \step{sA-sound-base-total-machine}{\case{A completed RTM step or
+ ordinary joint tick.}}
+ \begin{proof}\pf\ Lemmas~\ref{lem:completion} and \ref{lem:joint}
+ establish totality on the specified supports, with identity on the
+ complement. The tick restrictions on every code are supplied data,
+ rather than promises about particular inputs.\end{proof}
+ \step{sA-sound-base-total-cont}{\case{A continuation.}}
+ \begin{proof}\pf\ The map $(c,j)\mapsto(j\oplus h_\ell(c),c)$
+ has inverse $(c',j')\mapsto(j',c'\oplus h_\ell(j'))$.
+ Substitution in either order cancels two copies of $h_\ell$.
+ No position-restoration claim about a preceding mark is used.
+ \end{proof}
+ \step{sA-sound-base-total-timeout}{\case{A scheduled timeout snapshot.}}
+ \begin{proof}\pf\ The same inverse calculation with $h_\tau$
+ in place of $h_\ell$, leaving the sample register unchanged,
+ makes this a total permutation and hence a unitary.\end{proof}
+ \step{sA-sound-base-total-boolean}{\case{A Boolean atom.}}
+ \begin{proof}\pf\ Lemma~\ref{lem:synthesis} supplies its
+ implementation, with the specified total logical action.\end{proof}
+ \step{sA-sound-base-total-menu}{\case{A derived menu.}}
+ \begin{proof}\pf\ Apply \stepref{sA-sound-ind}, which establishes
+ its specified total unitary before the structural induction.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ These cases give the allowed atoms. A finite
+ composition of unitary atoms has inverse the product of their
+ inverses in reverse order, by adjacent cancellation. Thus any
+ supplied finite composition also has its specified total action.
+ \end{proof}
+\end{proof}
+   \qedstep
+   \begin{proof}\pf\ The empty list implements identity. For an atom
+   use its assumed clean circuit. Lemma~\ref{lem:scratch} gives its
+   clean adjoint circuit by reversal. The gate alphabet is closed under
+   adjoints, since $H$ and CNOT are self-adjoint and both $T,T^\dagger$
+   are available.
+   \end{proof}
+  \end{proof}
+  \step{sA-sound-seq}{\case{$P=R;S$, with both assertions true for
+  its proper subterms.}}
+  \begin{proof}
+   \step{sA-sound-seq-unit}{Writing $U=\mathcal U_R$ and
+   $V=\mathcal U_S$, the denotation $VU$ is unitary.}
+   \begin{proof}\pf\ $(VU)^\dagger(VU)=U^\dagger V^\dagger VU=\id$
+   and $(VU)(VU)^\dagger=VUU^\dagger V^\dagger=\id$.
+   \end{proof}
+   \qedstep
+   \begin{proof}\pf\ Concatenate the circuit for $R$ with that for
+   $S$. Each returns workspace to zero on every logical input, so
+   Lemma~\ref{lem:scratch} permits padded shared workspace. Reverse
+   the resulting circuit for the adjoint. Finite concatenation preserves
+   finiteness and the actual matrix phases.
+   \end{proof}
+  \end{proof}
+  \step{sA-sound-mark}{\case{$P=\mathsf M(R,K)$, with both assertions
+  true for $R$.}}
+  \begin{proof}
+   \step{sA-sound-mark-unit}{For $U=\mathcal U_R$, $W=U^\dagger KU$
+   is unitary and $W^\dagger=U^\dagger K^\dagger U$.}
+   \begin{proof}\pf\ Lemma~\ref{lem:keep} makes $K$ unitary.
+   Reversal of factors under the adjoint gives the claimed identity;
+   multiplication gives $W^\dagger W=U^\dagger K^\dagger KU=\id$
+   and $WW^\dagger=U^\dagger KK^\dagger U=\id$.
+   \end{proof}
+   \step{sA-sound-mark-circuit}{The ordered list for $R$, then $K$,
+   then the reversed adjoint list for $R$, implements $W$ cleanly.}
+   \begin{proof}\pf\ The induction hypothesis supplies both lists
+   for $R$. Lemma~\ref{lem:keep} supplies the keep circuit. Each is
+   clean on the full logical space, so its successor receives zero
+   workspace regardless of the logical state produced by $K$.
+   Lemma~\ref{lem:scratch} permits their composition and reversal.
+   Reversing the full list includes the keeps of completed inner terms.
+   \end{proof}
+   \qedstep
+   \begin{proof}\pf\ By \stepref{sA-sound-mark-unit} and
+   \stepref{sA-sound-mark-circuit}. No part of this calculation requires
+   preservation of a previously read register or blank logical records.
+   \end{proof}
+  \end{proof}
+  \qedstep
+  \begin{proof}\pf\ These are all constructors of the finite grammar.
+  Structural induction therefore proves the assertions and uniqueness:
+  every constructor applies a specified operation to its already specified
+  proper subterms.
+  \end{proof}
+ \end{proof}
+ \step{sA-sound-outer}{Every well-typed outer program is an isometry.}
+ \begin{proof}\pf\ For an allocation $A_B$, $A_B^\dagger A_B=\id$
+ because the appended zero vector has norm one. Identity and run are
+ isometries by \stepref{sA-sound-struct}. For composable isometries
+ $V_1,V_2$, $(V_2V_1)^\dagger V_2V_1=V_1^\dagger V_1=\id$.
+ Here the fixed-space induction holds for each finite list separately,
+ so each run uses its own current list. A term on a smaller list may
+ be lifted by the tensor-identity rule of Definition~\ref{def:tiera}.
+ Induction on the typed outer grammar proves the assertion, also with
+ derived menus admitted as atoms. A physical run using allocated
+ workspace agrees with the lifted logical run on zero workspace by the padding rule of Definition~\ref{def:tiera}, with Definition~\ref{def:scratch} supplying the zero-workspace equality for each implementation; no equality off that subspace is used.
+ \end{proof}
+ \step{sA-sound-trace}{Tracing a designated complement of an isometry
+ gives a channel, including on inputs with a reference.}
+ \begin{proof}\pf\ For an isometry $V:\cH_{\rm in}\to\cH_O\otimes
+ \cH_F$, choose an orthonormal basis $(f_j)$ of $F$ and set
+ $B_j=(\id_O\otimes\bra{f_j})V$. Partial trace is
+ $\Phi(\rho)=\sum_jB_j\rho B_j^\dagger$ and
+ $\sum_jB_j^\dagger B_j=V^\dagger V=\id$. Each summand remains
+ positive after tensoring with any identity, and the last equality
+ preserves trace. This proves complete positivity and trace preservation.
+ \end{proof}
+ \step{sA-sound-menu}{The finite-menu extension is sound.}
+ \begin{proof}\pf\ The derived atom case was established in
+ \stepref{sA-sound-ind} and included in \stepref{sA-sound-struct}.
+ Its adjoint is the same selector sum with each payload replaced by
+ its adjoint. Reversing its controlled circuit preserves the selector
+ and reuses the same occurrence-labelled records, as required by
+ Definition~\ref{def:tierb}; Lemma~\ref{lem:scratch} proves clean
+ reversal. Thus the sequence and marked cases already apply to it.
+ Outer composition and tracing apply by
+ \stepref{sA-sound-outer} and \stepref{sA-sound-trace}.
+ \end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{sA-sound-struct}--\stepref{sA-sound-menu}.
+ All reasoning is on total operators; no interpretation of a nonblank
+ record, or of an operation outside the grammar, is inferred.
+ \end{proof}
+\end{proof}
+

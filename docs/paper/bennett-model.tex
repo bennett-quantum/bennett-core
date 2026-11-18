@@ -1,0 +1,145 @@
+\documentclass[11pt,a4paper]{article}
+\pdfinfoomitdate=1
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=28mm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+% amsthm supplies theorem styles; pf2 supplies every proof environment.
+% Release the three conflicting amsthm definitions before loading pf2.
+\let\proof\relax
+\let\endproof\relax
+\let\qed\relax
+% Obtain pf2.sty from https://lamport.azurewebsites.net/latex/latex.html
+% and put it beside this file or on the TeX input path.
+\IfFileExists{pf2.sty}{\usepackage{pf2}}{%
+  \PackageError{bennett-model}{pf2.sty is required}{%
+    Download pf2.sty from Leslie Lamport's LaTeX packages page:\MessageBreak
+    https://lamport.azurewebsites.net/latex/latex.html\MessageBreak
+    Put the file beside bennett-model.tex or on the TeX input path.}%
+}
+\pfshortnumbers
+\pfshortindent
+\usepackage{microtype}
+\usepackage[hidelinks,unicode]{hyperref}
+\urlstyle{same}
+
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{example}[theorem]{Example}
+\newtheorem{counterexample}[theorem]{Counterexample}
+\newtheorem{assumption}[theorem]{Assumption}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+\newtheorem{convention}[theorem]{Convention}
+\newtheorem{problem}[theorem]{Open problem}
+
+\newcommand{\ket}[1]{\lvert #1\rangle}
+\newcommand{\bra}[1]{\langle #1\rvert}
+\newcommand{\proj}[1]{\ket{#1}\bra{#1}}
+\DeclareMathOperator{\tr}{Tr}
+\newcommand{\id}{\mathbb{I}}
+\newcommand{\reg}[1]{\mathsf{#1}}
+\newcommand{\cH}{\mathcal{H}}
+\newcommand{\cL}{\mathcal{L}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\eps}{\varepsilon}
+
+\newcommand{\notedsection}[3]{%
+  \section[#1]{#1\protect\footnotemark}\label{#2}\footnotetext{#3}}
+\newcommand{\earlierforms}{the earlier \texttt{mark} and \texttt{rewind} forms}
+
+\title{Mark, rewind and keep in the quantum circuit model:\\
+  definitions, equivalence, soundness, cleanliness and resources}
+\author{Working draft}
+\date{}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+We define classical control (a deterministic Turing machine), finite
+reversible-Turing-machine encodings, and quantum circuits with fresh
+$\ket0$ allocation and drop by partial trace, stating every result first
+for the retained isometry on all qubits. For devices presented as explicit
+total classical circuits with finite capacities and an input-independent
+time bound, the nine basic classical and quantum instructions are
+equivalent to the circuit model in the sense of equality of final
+instruments (not of output or stopping times), with explicit overheads;
+exact equivalence fails for arbitrary rotation angles, and approximation
+is proved under stated effective-data hypotheses. Mark, keep and rewind
+with pairings fixed in the syntax then denote total unitaries
+$U^\dagger KU$ at every finite nesting depth, with fixed total completions
+and no allocation, drop, observed measurement, external console observation
+or actual stop inside a marked body; whether
+the auxiliary register is thereby restored is a separate question, for
+which we prove exact tests, a sufficient condition, and a four-qubit
+counterexample to universal restoration. The prescribed recursive
+expansion doubles work per nesting level, tightly for that expansion
+(these are not lower bounds for optimal equivalent circuits); a
+restricted delayed-erasure construction and an exact test for deleting
+inner inverses are proved. For a bounded dynamic interpreter with all
+registers retained, a supplied certificate gives unitary soundness and
+exact undo under whole-sector matching encodings and routing obligations.
+We also prove a static specialization, an exact collective pure-factorization
+test for disposal from a fixed pure initial interpreter state, a timing-record
+counterexample and conditional per-tick circuit costs. Compiling general
+data-dependent mark/rewind into such a certified interpreter remains open.
+\end{abstract}
+
+\noindent\textbf{Status of this paper.}
+Sections~\ref{sec:circuit-model}, \ref{sec:machines} and \ref{sec:primitives}
+describe the foundations of today's device language: ordinary code,
+allocation, gates, measurement and release by partial trace.
+Today's \texttt{apply} computes an ordinary function for each definite
+value of its arguments, copies the result into a target register by XOR
+and undoes the computation.
+Sections~\ref{sec:intro} and \ref{sec:instructions} introduce that
+compute, copy, undo idea in the earlier design.
+Sections~\ref{sec:instructions} and \ref{sec:soundness}--\ref{sec:tierB}
+study \earlierforms, and Sections~\ref{sec:intro}, \ref{sec:open-problems}
+and \ref{sec:summary} also discuss them.
+The instructions were removed on 17 November 2026. The theorems for the
+earlier forms still hold, and the forms can be recovered from commit
+\texttt{f81a70a}. The paper's open problems in Section~\ref{sec:open-problems}
+stand.
+
+\tableofcontents
+
+\notedsection{Introduction}{sec:intro}
+  {Part of this section introduces \earlierforms.}
+\input{sections/00-intro}
+\section{Quantum circuit model}\label{sec:circuit-model}
+\input{sections/01-circuit-model}
+\section{Classical and reversible Turing machines}\label{sec:machines}
+\input{sections/02-machines}
+\notedsection{Coherent reads, mark, rewind and keep}{sec:instructions}
+  {This section defines \earlierforms.}
+\input{sections/04-read-and-rewind-defs}
+\section{Equivalence of the basic primitives}\label{sec:primitives}
+\input{sections/03-primitives-equivalence}
+\notedsection{Soundness for structured programs (Tier~A)}{sec:soundness}
+  {This section studies \earlierforms.}
+\input{sections/05-soundness-tierA}
+\notedsection{Cleanliness and disposal of auxiliary registers}{sec:cleanliness}
+  {This section studies \earlierforms.}
+\input{sections/06-cleanliness}
+\notedsection{Resources for structured programs (Tier~A)}{sec:resources}
+  {This section studies \earlierforms.}
+\input{sections/07-resources-tierA}
+\notedsection{Dynamic control (Tier~B)}{sec:tierB}
+  {This section studies \earlierforms.}
+\input{sections/08-tierB}
+\notedsection{Open problems}{sec:open-problems}
+  {Some of these open problems concern \earlierforms.}
+\input{sections/09-open-problems}
+\notedsection{Summary of results, restrictions and corrections}{sec:summary}
+  {Part of this section summarizes results on \earlierforms.}
+\input{sections/10-summary}
+
+\input{sections/biblio}
+\end{document}

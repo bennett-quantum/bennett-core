@@ -1,0 +1,1083 @@
+\subsection{The nine basic instructions}
+The instruction list being compared with the circuit model is the following.
+\begin{enumerate}
+\item Integer arithmetic and comparison on named values.
+\item Reading and writing classical memory.
+\item Conditional jump.
+\item Function call and return.
+\item Stop with an outcome.
+\item Write one byte to a console output tape.
+\item Allocate fresh zero qubits.
+\item Apply $H$, $T$, and controlled $X$ (CNOT), with optional ideal rotations treated separately.
+\item Computational-basis measurement with an ordinary recorded result available to later classical control.
+\end{enumerate}
+Instructions 1--6 refer to the complete bounded classical functions and capacities supplied in Definition~\ref{def:device}. The quantum instructions and their observed or retained interpretations are fixed in Definitions~\ref{def:circuit} and \ref{def:adaptive}. Coherent reads and marked computations are additional instructions, outside this nine-instruction equivalence.
+
+\subsection{The meaning and cost of bounded equivalence}
+
+\begin{definition}[The equivalence asserted here]\label{eqv:def}
+Two bounded descriptions are observationally equivalent if their channels
+to the same ordered quantum output $O$ and classical outcome register $Y$
+agree, including after tensoring with an arbitrary reference identity.
+Both descriptions have the same ordered input list. Observational equivalence is equality of the final instruments on $OY$; it does not assert that a console byte is produced at the same tick, that a run stops at the same tick, or that any intermediate classical value is available to an external reader before the final output.
+The classical register is diagonal in the computational basis. Thus this
+is equality of instruments with their outcome labels retained, not merely
+equality of outcome probabilities. Before taking any partial trace we
+specify an isometry on every input, including all inaccessible factors.
+Different implementations may have different environment registers;
+equality of their entire retained vectors is not part of observational
+equivalence. When implementing a particular specified retained construction,
+we do assert equality of that construction's isometry, with additional
+zero-output workspace.
+
+Every allocation counted below is a one-qubit allocation. A larger
+allocation is expanded into these. A circuit description includes ordered
+input, output, and inaccessible lists and any classical output labels.
+Gate cost counts elementary gates, not zero embeddings or partial traces.
+Classical time is multitape Turing-machine time with an explicit output
+description, not unit-cost arithmetic on words of arbitrary length.
+\end{definition}
+
+\begin{lemma}[Cost of the specified joint tick]\label{eqv:tick-cost}
+For the data of Definition~\ref{def:device}, define $\mathcal R$ as in
+Definition~\ref{def:selection-cost}. One ordinary joint tick and its adjoint have exact
+clean implementations of $O(\mathcal R)$ gates and $O(\mathcal R)$
+workspace qubits over $\mathcal G^{\pm}$. The logical cells $J_t,B_t$
+are additional to that workspace. The decoder always emits the canonical
+layout of Definition~\ref{def:device}; a malformed intended action emits
+canonical fault, not malformed output requiring a subsequent repair.
+The separately scheduled timeout is treated in Theorem~\ref{eqv:forward}.
+\end{lemma}
+\begin{proof}
+ \step{eqv-tick-update}{The snapshot factor costs
+ $O(\beta+s+k)$ gates and workspace.}
+ \begin{proof}\pf\ Compute $f(C,B_t)$ into $J_t$ by the XOR evaluator
+ of Lemma~\ref{lem:synthesis}, restoring its workspace. Swap $C,J_t$
+ with $3s$ CNOTs. This is exactly $F_t$, on all inputs, by its formula
+ in Definition~\ref{def:joint-tick}.\end{proof}
+ \step{eqv-tick-decode}{The selected quantum action has a clean circuit
+ of size $O(\Delta+(q^2+kq+1)(s+k+1))$.}
+ \begin{proof}
+  \step{eqv-tick-flags}{One may form all relevant action flags using
+  $O(\Delta+(q^2+kq+1)(s+k+1))$ Boolean gates and temporary bits.}
+  \begin{proof}\pf\ Evaluate the canonical decoder. Enumerate its
+  $O(q^2+1)$ gate/measurement actions and its $kq$ read
+  position/address pairs. Each test compares mode and gate tags and
+  at most two $a_q$-bit addresses; a read test also compares its
+  fixed position with the $a_k$-bit read length. Its cost is
+  $O(a_q+a_k+1)=O(s+k+1)$, using $s\geq a_q$ and $a_k\leq k$.
+  Unused canonical fields are already zero and need no repeated test.
+  Measurement selects sample bit zero; a read selects its listed bit.
+  Decoder ports are counted in $\Delta$. For $q=0$ every
+  quantum-action flag is false. All flags depend only on pre-tick $C$.
+  \end{proof}
+  \step{eqv-tick-actions}{Apply the flagged operations and erase all
+ flags and decoded data.}
+\begin{proof}
+ \step{eqv-tick-actions-cost}{Each of the $O(q^2+kq+1)$ enumerated
+ operations has an exact constant-cost controlled implementation.}
+ \begin{proof}\pf\ Each is controlled-$H$, controlled-$T$ or
+ controlled-CNOT, including the CNOT from a sampled pool wire to
+ $B_t$. Apply Lemma~\ref{lem:synthesis}, with constant workspace.
+ \end{proof}
+ \step{eqv-tick-actions-gate}{\assume{On a computational-basis
+ sector of $C$, the decoder selects gate or measurement mode.}
+ \prove{The flagged product applies the selected operation exactly once.}}
+ \begin{proof}\pf\ The decoder enables at most one operation.
+ Enumerate a one-wire gate once for each wire $i$, using its first
+ address field. Its second field is canonically zero and is not
+ tested again. Thus the selected operation is applied exactly once.
+ \end{proof}
+ \step{eqv-tick-actions-read}{\assume{On a computational-basis
+ sector of $C$, the decoder selects read mode.}\prove{The flagged
+ product is precisely the prescribed read-copying operation.}}
+ \begin{proof}\pf\ Precisely the listed read copies are enabled.
+ Their targets are distinct bits of $B_t$, disjoint from their pool
+ controls. These CNOTs commute even for repeated pool addresses,
+ so their enumeration order does not change the specified read.
+ \end{proof}
+ \step{eqv-tick-actions-idle}{\assume{On a computational-basis
+ sector of $C$, the decoder selects any remaining mode.}
+ \prove{The flagged product is identity on $QB_t$.}}
+ \begin{proof}\pf\ No gate, measurement or read flag is enabled;
+ the selected quantum action is identity.\end{proof}
+ \step{eqv-tick-actions-clean}{All flags and decoded data can be
+ erased with the asserted resource bound.}
+ \begin{proof}\pf\ Their input $C$ is unchanged. Reverse their
+ evaluations to restore zero workspace. Reversible Boolean evaluation
+ changes the Boolean counts by a constant factor; input/output-port
+ cost is absorbed by $\Delta+s+k$ and the displayed bound in
+ \stepref{eqv-tick-flags}.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ The three conditional action statements cover
+ every decoder mode on every basis sector of $C$; linearity gives
+ the selected action on arbitrary inputs. Steps
+ \stepref{eqv-tick-actions-cost} and \stepref{eqv-tick-actions-clean}
+ give its implementation and erasure.\end{proof}
+\end{proof}
+  \qedstep
+  \begin{proof}\pf\ By \stepref{eqv-tick-flags} and
+  \stepref{eqv-tick-actions}.\end{proof}
+ \end{proof}
+ \qedstep
+ \begin{proof}\pf\ Add \stepref{eqv-tick-update} and
+ \stepref{eqv-tick-decode}. Lemma~\ref{lem:scratch} permits shared
+ workspace and circuit reversal. No quantum random-access operation
+ occurs in this construction.\end{proof}
+\end{proof}
+
+\begin{theorem}[Device to circuit, with explicit classical cost]
+\label{eqv:forward}
+Let an instance satisfy Definitions~\ref{def:device},
+\ref{def:joint-tick}, and \ref{def:adaptive}, with no primitives 10 or 11.
+Assume $T\geq1$ consists of $T-1$ ordinary ticks and the separately
+scheduled final timeout with designated codes $\sigma_{\mathrm{act}}$,
+$\sigma_{\mathrm{to}}$. Every forward tick uses distinct blank records.
+The initial $c_{\rm in}$ is valid with exactly the input wires live;
+read mode is excluded on every configuration code. The canonical total
+decoder and update obey all-code live checks and flag preservation.
+The fixed output list $O$ is live in the final configuration for every
+reachable measurement-outcome sequence; earlier allocation of its wires
+is allowed. The entire complement of $OY$ is traced at output.
+All bounds, total circuits and initial
+classical bits are supplied explicitly. Let $y=|Y|$ be the number of output bits of $o$, and let $d$ be the
+bit length of those supplied descriptions, including unary bounds.
+There is a finite retained circuit implementing exactly the specified
+isometry, with at most
+\[
+ G=O(T\mathcal R),\qquad
+ Q_*=q+s+T(s+k)+2y+O(\mathcal R)
+\]
+gates and qubits respectively. Preparing $c_{\rm in}$ is included in
+$G$. The gate alphabet is $\mathcal G^{\pm}$; using $\mathcal G$ instead
+gives $G_{\mathcal G}\leq7G_{\mathcal G^{\pm}}$. After partial trace its instrument is
+observationally equivalent to the device's, on arbitrary quantum inputs.
+
+For some absolute constant $c$, the construction, after receipt of the
+data, takes at most
+\[
+ c(d+G+Q_*+1)^4
+\]
+classical steps, where $G,Q_*$ can be replaced by the explicit upper
+bounds from this proof. A uniform data generator's runtime must be
+added to this bound. A direct classical controller evaluating the
+supplied Boolean circuits during an observed execution takes at most
+\[
+ O\bigl(T(d+\beta+\Delta+s+k+q+y+1)^4\bigr)
+\]
+classical steps, apart from the physical quantum operations. These are
+deliberately conservative bounds, including binary address processing.
+Uniform families therefore remain uniform; polynomially bounded data
+generated in polynomial time give polynomially uniform circuits.
+\end{theorem}
+\begin{proof}
+ \step{eqv-fwd-reserve}{There is an isometric initialization of the
+ input and all required ancillary factors.}
+ \begin{proof}\pf\ Keep the specified live input factors, append
+ the other $q$-pool factors, $C,J_t,B_t,Y,E_Y$ and workspace in zero,
+ and apply $X$ to the nonzero bits of $c_{\rm in}$. This costs $O(s)$
+ gates by $X=HT^4H$. The initialization is an isometry on every input.
+ A pool factor with live flag zero has not been acted on before its allocation: it is initially a non-input zero factor, every quantum action requires live flag one, every update other than allocation and sending to $c_{\mathrm{fault}}$ preserves all live flags, allocation changes one zero flag to one, and $c_{\mathrm{fault}}$ is terminal so no allocation follows it. Hence the factor is still zero at allocation, and Lemma~\ref{lem:reserve} justifies moving that allocation to this initialisation.\end{proof}
+ \step{eqv-fwd-circuit}{The tick product and output extraction have
+ the asserted gate and qubit bounds.}
+\begin{proof}
+ \step{eqv-fwd-circuit-ordinary}{The $T-1$ ordinary ticks use
+ $O((T-1)\mathcal R)$ gates and shared clean workspace.}
+ \begin{proof}\pf\ Apply Lemma~\ref{eqv:tick-cost} with separate
+ $J_t,B_t$ for every tick. Lemma~\ref{lem:scratch} permits reuse
+ of the clean implementation workspace.\end{proof}
+ \step{eqv-fwd-circuit-timeout}{The final tick implements
+ $F^\tau_{T-1}$ with $O(s+k)$ gates and workspace.}
+ \begin{proof}\pf\ Compare status with $\sigma_{\mathrm{act}}$ and
+ conditionally replace it by $\sigma_{\mathrm{to}}$, preserving
+ all other bits. This is $h_\tau$ on every code, including invalid
+ ones, and has Boolean size $O(s)$. XOR-evaluate it into $J_{T-1}$
+ and swap $C,J_{T-1}$ by Lemma~\ref{lem:synthesis}. Leave
+ $QB_{T-1}$ unchanged. This also covers $T=1$, with no ordinary
+ tick. The last records are among the $T$ reserved pairs.\end{proof}
+ \step{eqv-fwd-circuit-output}{Output extraction costs
+ $O(\Delta+s+y)$ gates and workspace.}
+ \begin{proof}\pf\ Compute $o(C)$ into $Y$ with its clean XOR
+ evaluator and copy $Y$ into $E_Y$. Lemma~\ref{lem:synthesis}
+ bounds the evaluator, and the copy uses $y$ CNOTs. Output ports
+ are counted in $\Delta$, so $y\leq\Delta$.\end{proof}
+ \step{eqv-fwd-circuit-count}{The retained logical list has exactly
+ $q+s+T(s+k)+2y$ factors.}
+ \begin{proof}\pf\ Count $Q,C$, the $T$ disjoint pairs $J_t,B_t$,
+ and $Y,E_Y$. Implementation workspace is additional and shared
+ cleanly by the preceding constructions.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ Since $T\geq1$, the initialization from
+ \stepref{eqv-fwd-reserve} and extraction costs are absorbed in
+ $O(T\mathcal R)$. Add the $O(\mathcal R)$ shared workspace
+ to \stepref{eqv-fwd-circuit-count}.\end{proof}
+\end{proof}
+ \step{eqv-fwd-defer}{Tracing the specified environment yields exactly
+ the device instrument.}
+ \begin{proof}
+  \pf\ This is Lemma~\ref{lem:deferred} with the tick costs of
+  Lemma~\ref{eqv:tick-cost}; we spell out the expansion once more because
+  the gate count is read off it.
+  \step{eqv-fwd-expand}{For a pure input $\psi$, the final retained
+  vector, before output copying, has form
+  $\sum_z A_z\psi\otimes\ket{e_z}$, with orthonormal $e_z$ for
+  different sampled-bit lists $z$, padded by zeros at nonmeasurement
+  ticks, including the final tick. Here $A_z=B_zE_{\rm in}$, where
+  $E_{\rm in}\psi=\psi\otimes\ket0_{Q\setminus L_{\rm in}}$ and
+  $B_z$ is the ordered product on $Q$ of selected gates and projectors.}
+\begin{proof}
+ \step{eqv-fwd-expand-initial}{At $t=0$ the quantum map is
+ $E_{\rm in}$, with configuration $c_{\rm in}$ and blank records.}
+ \begin{proof}\pf\ This is the initialization in
+ \stepref{eqv-fwd-reserve}.\end{proof}
+ \step{eqv-fwd-expand-suffices}{\suffices{Verify that every scheduled
+ tick has the corresponding action in the finite induction of
+ Lemma~\ref{lem:deferred}.}}
+ \begin{proof}\pf\ That induction starts with the embedding and
+ configuration in \stepref{eqv-fwd-expand-initial} and retains
+ precisely the sample and snapshot registers used here.\end{proof}
+ \step{eqv-fwd-expand-measure}{\case{An ordinary tick measures
+ wire $i$.}}
+ \begin{proof}\pf\ The copying CNOT maps $v$ to
+ $P_{i,0}v\otimes\ket0+P_{i,1}v\otimes\ket1$.
+ Subsequent choices are controlled by deterministically updated $C$;
+ old samples and snapshots remain retained.\end{proof}
+ \step{eqv-fwd-expand-allocate}{\case{An ordinary tick allocates
+ a wire.}}
+ \begin{proof}\pf\ Its zero live flag implies this non-input
+ factor has never been acted on: every quantum action requires a
+ one flag, flags cannot be reset except by fault, and fault is
+ terminal. It remains zero, as required for the reserved-pool
+ allocation.\end{proof}
+ \step{eqv-fwd-expand-gate}{\case{An ordinary tick selects a gate.}}
+ \begin{proof}\pf\ Its selected matrix is applied on $Q$ and
+ multiplies the ordered product; its sample stays zero and the
+ snapshot implements the supplied deterministic update.\end{proof}
+ \step{eqv-fwd-expand-other}{\case{An ordinary tick has any remaining
+ permitted mode.}}
+ \begin{proof}\pf\ The quantum action is identity and the sample
+ is zero. Its snapshot performs the specified update. Read mode
+ is excluded by hypothesis.\end{proof}
+ \step{eqv-fwd-expand-timeout}{\case{The final tick.}}
+ \begin{proof}\pf\ Its quantum action is identity, its sample is
+ zero, and $c_T=h_\tau(c_{T-1})$, also when $T=1$.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ These are exactly the finite-induction cases,
+ yielding $B_zE_{\rm in}$ and deterministic configuration and record
+ bits $e_z$. Distinct lists differ in a retained sample bit, hence
+ their basis record vectors are orthogonal and have unit norm.
+ \end{proof}
+\end{proof}
+  \step{eqv-fwd-trace}{The reduced output is
+  \[
+   \sum_z \tr_{Q\setminus O}(A_z\rho A_z^\dagger)
+       \otimes\proj{o(c_T(z))}_Y.
+  \]}
+  \begin{proof}\pf\ The retained samples erase the cross terms
+  between unequal strings under partial trace. Copying the output to
+  $E_Y$ gives its orthogonal classical label. Equal output labels are
+  summed, not identified coherently. The formula holds for matrix
+  units and hence for all density operators; tensoring every step
+  with a reference identity changes none of the calculations.
+  This also proves the bounded deferred-observation claim here
+  without an external measurement theorem.\end{proof}
+  \qedstep
+  \begin{proof}\pf\ The displayed sum is the definition of sequential
+  composition and grouping of the device's instrument.\end{proof}
+ \end{proof}
+ \step{eqv-fwd-time}{The claimed classical bounds and uniformity hold.}
+\begin{proof}
+ \step{eqv-fwd-time-emission}{Emitting $G$ gates with scans and
+ binary counter arithmetic fits within $O((d+G+Q_*+1)^3)$ steps.}
+ \begin{proof}\pf\ For each gate scan the supplied description and
+ output so far once. Each emitted gate has
+ $O(\log(Q_*+2))$ address bits; the output length is
+ $O(G\log(Q_*+2))$. The scans and arithmetic on counters of at most
+ $d+G+Q_*+1$ bits cost at most a constant times
+ $(d+G+Q_*+1)^2$ per gate. Sum over $G$ gates and include the
+ initial input scan.\end{proof}
+ \step{eqv-fwd-time-construction}{The complete construction costs
+ at most $c(d+G+Q_*+1)^4$ for an absolute $c$.}
+ \begin{proof}\pf\ Evaluate or translate a topologically ordered
+ Boolean circuit by scanning its description and stored values for
+ each gate. Binary counters and comparisons have at most the
+ description length. Per tick enumerate at most $O(\mathcal R)$
+ flags and gates; locate operands by full scans and emit the gates
+ as in \stepref{eqv-fwd-time-emission}. The unary bounds are part
+ of $d$ and the explicit gate and wire bounds may be used for
+ $G,Q_*$. Thus this fixed work per tick and its repeated scans are
+ absorbed by enlarging the absolute constant in the displayed
+ fourth power.\end{proof}
+ \step{eqv-fwd-time-controller}{The observed controller costs
+ $O(T(d+\beta+\Delta+s+k+q+y+1)^4)$ steps.}
+ \begin{proof}\pf\ At each observed tick use the same full-scan
+ Boolean evaluation and address comparisons on the supplied
+ descriptions and current stored values. The last tick uses the
+ $O(s)$ circuit for $h_\tau$. The displayed fourth power bounds
+ one tick, including binary address processing; sum over $T$ ticks.
+ Physical quantum operations are excluded from this classical count.
+ \end{proof}
+ \step{eqv-fwd-time-uniform}{These constructions preserve uniformity
+ and polynomial uniformity with the stated qualifications.}
+ \begin{proof}\pf\ Every scan and enumeration has an explicitly
+ bounded length and is specified by a single machine. Compose it
+ with the data generator and add that generator's runtime. If data
+ and their generation are polynomially bounded, the displayed
+ construction bound is polynomial as well.\end{proof}
+ \step{eqv-fwd-time-adjoint}{Using $\mathcal G$ instead of
+ $\mathcal G^{\pm}$ costs at most a factor of seven.}
+ \begin{proof}\pf\ $T^\dagger=T^7$ exactly, including phase;
+ substitute seven $T$ gates for each $T^\dagger$ and leave every
+ other gate unchanged.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{eqv-fwd-time-construction}--\stepref{eqv-fwd-time-adjoint}.
+ \end{proof}
+\end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{eqv-fwd-reserve},
+ \stepref{eqv-fwd-circuit}, \stepref{eqv-fwd-defer}, and
+ \stepref{eqv-fwd-time}.\end{proof}
+\end{proof}
+
+\begin{theorem}[Circuit to device]\label{eqv:reverse}
+Let a finite well-typed circuit over $\mathcal G$ have $g$ gates,
+$a$ one-qubit fresh allocations, $n_{\rm in}$ inputs and $b$ designated
+terminal computational-basis measurements. Names are never reused;
+no gate acts on an inaccessible name. Quantum outputs and measurement
+labels are specified. Put
+\[
+ q=n_{\rm in}+a,\quad N=g+a+b+1,\quad
+ w=8+\lceil\log_2(N+q+b+2)\rceil.
+\]
+There is an observationally equivalent device using primitives 1--9,
+with $p=N,T=N+1,h=o_{\max}=B_{\rm mem}=0,L_{\rm slot}=b+1$,
+$k=1$, and width $w$. Its $N$ source
+instructions are gates, allocations, measurements and stop; the extra
+tick performs timeout or terminal padding. Its quantum execution uses
+exactly $g$ original gates, $a$ allocations, $b$ measurements and a
+pool of $q$ wires. Dropped factors are retained and omitted from the
+output, so this is not a simulation of storage reclamation.
+
+For an input description of $d_0$ bits, set
+${\mathfrak m}=d_0+N+q+(b+1)w+1$. One can choose
+$s=(b+2)w+q+2\leq(b+2)w+q+8$ and
+$\beta+\Delta=O(N(s+w+1))\subseteq O({\mathfrak m}^3)$,
+construct the device description in $O({\mathfrak m}^6)$
+classical steps, and execute its classical controller in
+$O((N+1){\mathfrak m}^6)$ steps. Applying Theorem~\ref{eqv:forward} also gives a
+fully retained circuit of $O((N+1){\mathfrak m}^3)$ gates and
+$O(q+(N+1){\mathfrak m}+{\mathfrak m}^3)$ qubits. All constants are independent of the
+circuit instance. The translation preserves uniformity and polynomial
+uniformity.
+\end{theorem}
+\begin{proof}
+ \step{eqv-rev-drop}{Replace every drop by retaining an inaccessible
+ factor, with no later operation on that factor.}
+ \begin{proof}\pf\ For an operator $X$ on $LE$ and a later map
+ $\Phi$ on $L$, expansion in matrix units on $E$ gives
+ $\tr_E((\Phi\otimes\id_E)(X))=\Phi(\tr_E X)$.
+ No later operation acts on a dropped factor: drop removes a name permanently and no gate acts on an inaccessible name.
+Iterating this identity moves all partial traces to the output.
+ On all retained factors the circuit is an isometry before any
+ terminal observation, with measurement dilation given by copying
+ into fresh outcome factors.\end{proof}
+ \step{eqv-rev-device}{The literal instruction list has the stated
+ bounded implementation with a total decoder and update.}
+\begin{proof}
+ \step{eqv-rev-device-layout}{\pick\ the following instruction list,
+ configuration fields, validity predicate and initial code.}
+ \begin{proof}
+  \step{eqv-rev-device-list}{Number the gates, allocations and measurements
+  in their given order as $0,\ldots,N-2$, and append stop at $N-1$.}
+  \begin{proof}\pf\ There are $g+a+b=N-1$ operations before stop,
+  so this gives exactly $p=N$ instruction positions.\end{proof}
+  \step{eqv-rev-device-fields}{Use $b+1$ word slots, one $w$-bit
+  position, $q$ live flags and two status bits, with $00$ active,
+  $01$ stopped, $10$ fault and $11$ timeout. All other fields have
+  width zero; literal quantum identifiers reside in the instructions.}
+  \begin{proof}\pf\ The first $b$ words hold measurement results;
+  the last word is the outcome, with no duplicated outcome field.
+  These fields have total width $(b+2)w+q+2$. The specified $w$
+  accommodates the instruction positions and literal identifiers.
+  Memory, stack and console capacities are zero, as asserted.\end{proof}
+  \step{eqv-rev-device-valid}{Let $c_{\rm fault}$ have status $10$
+  and every other bit zero. A code is valid precisely when its
+  position is below $N$ and its status is not $10$, or it equals
+  $c_{\rm fault}$. Slots and flags have no further range restrictions.}
+  \begin{proof}\pf\ This is a predicate on every configuration
+  string and includes $c_{\rm fault}$. Among valid codes, status
+  $00$ is active; statuses $01$, $11$, and the single code
+  $c_{\rm fault}$ are terminal. These alternatives partition the
+  valid codes.\end{proof}
+  \step{eqv-rev-device-initial}{Initially position, slots and status
+  are zero, and exactly the input live flags are one.}
+  \begin{proof}\pf\ Since $N\geq1$, position zero is below $N$;
+  status $00$ makes this a valid active configuration with the
+  prescribed input live list.\end{proof}
+  \qedstep
+  \begin{proof}\pf\ The preceding explicit choices give the
+  required finite data.\end{proof}
+ \end{proof}
+ \step{eqv-rev-device-rules}{\assume{$c$ is any configuration code
+ and $z$ is any one-bit sample.}\prove{The following decoder and
+ update rules are defined and meet the all-code conditions.}}
+ \begin{proof}
+  \step{eqv-rev-device-invalid}{\case{$c$ is invalid.}}
+  \begin{proof}\pf\ Emit canonical fault and set $f(c,z)=c_{\rm fault}$
+  for every $z$. This gives the required fault behavior without
+  a quantum action.\end{proof}
+  \step{eqv-rev-device-terminal}{\case{$c$ is valid and terminal.}}
+  \begin{proof}\pf\ Emit canonical idle and preserve the entire
+  code, independently of $z$, as required for terminal padding.\end{proof}
+  \step{eqv-rev-device-active}{\case{$c$ is active.}}
+  \begin{proof}
+   \step{eqv-rev-device-select}{Compare position with the instruction
+   literals and check the selected instruction's operands.}
+   \begin{proof}\pf\ Validity makes exactly one position literal
+   match. Allocation requires its flag zero; gates and measurements
+   require all operand flags one. CNOT operands are distinct by the
+   supplied circuit's typing. A failed check emits canonical fault
+   and sets $f(c,z)=c_{\rm fault}$ for every $z$.\end{proof}
+   \step{eqv-rev-device-allocate}{\case{The selected allocation passes
+   its check.}}
+   \begin{proof}\pf\ Emit its allocation code, set just its zero
+   live flag to one and advance position. The quantum action is
+   identity on its reserved factor; all other flags are preserved
+   and the update ignores $z$.\end{proof}
+   \step{eqv-rev-device-gate}{\case{The selected gate passes its check.}}
+   \begin{proof}\pf\ Emit the gate and its live operands and
+   advance position. Preserve all flags and ignore $z$.\end{proof}
+   \step{eqv-rev-device-measure}{\case{The selected measurement passes
+   its check.}}
+   \begin{proof}\pf\ Emit its first address only and sample into
+   $B_t[0]$. Write sample bit zero into the low bit of its designated
+   word, zero that word's other bits and advance position. Preserve
+   all live flags. The destination is the slot for the measurement's
+   designated output order and belongs solely to $f$.\end{proof}
+   \step{eqv-rev-device-stop}{\case{The selected instruction is stop.}}
+   \begin{proof}\pf\ Emit ordinary mode, set status $01$, set the
+   outcome word to zero and retain position and all live flags.
+   The update ignores $z$.\end{proof}
+   \qedstep
+   \begin{proof}\pf\ A failed check and the four successful
+   instruction cases exhaust the active codes. Advancing position
+   occurs only before the final stop position, hence stays below $N$.
+   Each nonallocation update preserves all flags unless it produces
+   $c_{\rm fault}$.\end{proof}
+  \end{proof}
+  \qedstep
+  \begin{proof}\pf\ Invalid, valid terminal and active codes exhaust
+  all strings, by \stepref{eqv-rev-device-layout}.\end{proof}
+ \end{proof}
+ \step{eqv-rev-device-canonical}{The decoder outputs are canonical
+ and read mode never occurs.}
+ \begin{proof}\pf\ Use the prescribed 3-bit mode, 2-bit gate tag
+ ($0,1,2$ for $H,T,\operatorname{CNOT}$), $a_q$-bit addresses
+ and $a_k$-bit length, with $k=1$. Set every unused address, gate,
+ length and read field to zero. The cases in
+ \stepref{eqv-rev-device-rules} use only the listed canonical modes
+ with legal live operands; none selects read.\end{proof}
+ \step{eqv-rev-device-output}{The output circuit and timeout have
+ the specified form.}
+ \begin{proof}\pf\ Set $o(c)$ to the low bits of the first $b$
+ word slots in their designated order, on every code. The outcome
+ word is internal and not part of $Y$. Follow the $N$ ordinary
+ ticks by the separate $h_\tau$ snapshot with
+ $\sigma_{\mathrm{act}}=00$, $\sigma_{\mathrm{to}}=11$;
+ this gives $T=N+1$ exactly.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ The explicit tests, bit selections and constant
+ assignments above are total Boolean circuits. Their cases verify
+ all global conditions of Definition~\ref{def:device}.\end{proof}
+\end{proof}
+ \step{eqv-rev-size}{The advertised finite costs hold.}
+\begin{proof}
+ \step{eqv-rev-size-width}{The layout has $s=(b+2)w+q+2=O({\mathfrak m})$
+ bits, with $s\geq a_q$ and $N,w=O({\mathfrak m})$.}
+ \begin{proof}\pf\ Count the fields in \stepref{eqv-rev-device}.
+ The definition of ${\mathfrak m}$ includes $(b+1)w$, $q$ and $N$; also
+ $w\leq(b+1)w$. The specified logarithmic width bounds $a_q$.\end{proof}
+ \step{eqv-rev-size-flags}{The validity test costs $O(s+w)$ and
+ the literal selection tests cost $O(Nw)$.}
+ \begin{proof}\pf\ Test position below $N$, status and equality
+ with $c_{\rm fault}$ by linear-size bit comparisons. Each position
+ equality costs $O(w)$; that literal's live tests cost $O(1)$.
+ Compute the disjoint selection flags once, including the invalid
+ and terminal cases.\end{proof}
+ \step{eqv-rev-size-circuits}{Including ports,
+ $\beta+\Delta=O(N(s+w+1))\subseteq O({\mathfrak m}^3)$.}
+ \begin{proof}\pf\ For each of the $s$ update output bits, select
+ the preserved bit, specified literal or sampled bit by ANDs with
+ the flags and their XOR sum. This costs $O(Ns)$; invalid cases
+ select $c_{\rm fault}$ and terminal cases copy $c$. Select the
+ decoder's literal canonical codes of width $6+3a_q=O(w+1)$
+ in the same manner. Output extraction copies $b$ low sample bits.
+ Add the tests in \stepref{eqv-rev-size-flags} and the ports.
+ In fact $N,s,w=O({\mathfrak m})$ gives $O({\mathfrak m}^2)$ Boolean gates.\end{proof}
+ \step{eqv-rev-size-time}{Emission costs $O({\mathfrak m}^6)$ classical steps;
+ evaluation costs $O((N+1){\mathfrak m}^6)$.}
+ \begin{proof}\pf\ Emit one Boolean gate at a time, scanning the
+ supplied description and output so far and doing binary counter
+ arithmetic. There are $O({\mathfrak m}^2)$ gates with
+ $O(\log({\mathfrak m}+2))$-bit addresses. Each full scan and its counter
+ arithmetic cost $O({\mathfrak m}^2\log({\mathfrak m}+2)+{\mathfrak m}^2)$, so complete emission
+ fits in $O({\mathfrak m}^6)$. The same repeated-scan procedure evaluates the
+ circuits at each of $N+1$ ticks within $O((N+1){\mathfrak m}^6)$ steps.
+ No enumeration of $2^s$ configurations is used.\end{proof}
+ \step{eqv-rev-size-retained}{The fully retained bounds in the
+ theorem follow from Theorem~\ref{eqv:forward}.}
+ \begin{proof}\pf\ Here $k=1$, $y=b$, $q,s=O({\mathfrak m})$ and
+ $\beta+\Delta=O({\mathfrak m}^3)$, so
+ $\mathcal R=\beta+\Delta+s+k+(q^2+kq+1)(s+k+1)=O({\mathfrak m}^3)$.
+ Substitute $T=N+1$ into the forward theorem: gates are
+ $O((N+1){\mathfrak m}^3)$ and qubits are $O(q+(N+1){\mathfrak m}+{\mathfrak m}^3)$.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{eqv-rev-size-width}--\stepref{eqv-rev-size-retained}.
+ \end{proof}
+\end{proof}
+ \step{eqv-rev-equality}{The output instruments agree.}
+ \begin{proof}\pf\ Induction over the literal instructions shows
+ that each allocated factor is zero, each gate has the same ordered
+ operands and matrix, and each sampled bit is recorded in its
+ designated slot. Induction on the instructions maintains the invariant that the live flags are one exactly on the input names together with the names allocated so far: fresh names are never reused, so an allocation flag is zero, and well-typedness gives every gate and measured wire among those names. Hence no check fails and fault is unreachable from the specified initial configuration. Stop precedes timeout. Classical
+ output extraction selects exactly the requested labels. The
+ retained snapshots may differ from the circuit's own environment,
+ but Lemma~\ref{lem:deferred} and \stepref{eqv-rev-drop} give equality
+ of the designated instruments, also with references.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{eqv-rev-device},
+ \stepref{eqv-rev-size}, and \stepref{eqv-rev-equality}.
+ The explicitly bounded transformations are single classical
+ algorithms, so composing them with a uniform generator proves
+ the uniformity assertions.\end{proof}
+\end{proof}
+
+\begin{corollary}[Coverage of bounded adaptive circuits]\label{eqv:adaptive-circuits}
+Let a bounded adaptive controller be presented directly as device data satisfying Definitions~\ref{def:device} and \ref{def:adaptive}: explicit total decoder, update and output circuits, a fixed horizon $T\ge1$ including the separate final timeout, and a fixed output list live at final time for every reachable outcome list. Assume
+a valid specified initial state with exactly the input wires live,
+and total controller data obeying the canonical decoder, all-code
+live-flag discipline, terminal padding, and all-code exclusion of read
+mode in Definitions~\ref{def:device} and \ref{def:adaptive}.
+Use fresh blank records and trace the entire complement of $OY$.
+These circuit instruments and the
+bounded devices are equivalent in both directions, with polynomial
+overhead in the horizon, pool size, classical capacity, and supplied
+Boolean-circuit sizes. Purifications are retained before taking outputs.
+Gates in $\mathcal G^{\pm}$ are admitted after exact $T^\dagger=T^7$
+expansion and adjustment of the horizon. Ideal rotations instead require
+the separate approximation theorem and its certificate-generation costs.
+This corollary concerns formal device data; it does not identify an
+unspecified source-language executor with those data.
+\end{corollary}
+\begin{proof}
+ \step{eqv-ac-encode}{The supplied controller has finite device data.}
+ \begin{proof}\pf\ These are the supplied total decoder, update and output circuits in the hypothesis, with their canonical encoding, initial live set, horizon and separate final timeout. Definitions~\ref{def:device} and \ref{def:adaptive} therefore apply directly.\end{proof}
+ \step{eqv-ac-translate}{Both required simulations follow.}
+ \begin{proof}\pf\ Theorem~\ref{eqv:forward} gives the circuit simulation of these data. Theorem~\ref{eqv:reverse} gives the device simulation of every finite circuit over $\mathcal G$ with terminal observations, and composing it with the device presentation just given yields the stated two-direction equivalence, with inaccessible factors retained until the final partial trace.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ Compose the polynomial bounds in
+ Theorems~\ref{eqv:forward} and \ref{eqv:reverse}. This statement does
+ not give a succinct encoding to an exponentially large explicitly
+ supplied schedule. 
+ \end{proof}
+\end{proof}
+
+\subsection{Why the restrictions cannot be suppressed}
+
+\begin{proposition}[Finite capacity and stopping restrictions]
+\label{eqv:restrictions}
+An instance with fixed console capacity $o_{\max}$ cannot implement the family
+whose output tape is $n$ zero bytes for every $n$. Width-$w$ modular
+addition is not unbounded integer addition. Primitives 1--9 alone
+do not ensure termination, and no horizon obtained by truncating a given unbounded execution and reporting timeout need preserve that execution's instrument. Defining a timeout is therefore an
+additional specification, unless a sufficient bound has been proved.
+\end{proposition}
+\begin{proof}
+ \step{eqv-rest-capacity}{The output-tape family exceeds fixed capacity.}
+ \begin{proof}\pf\ At $n=o_{\max}+1$ its required length exceeds $o_{\max}$;
+ Definition~\ref{def:device} requires overflow behavior instead. Independently, a fixed instance has a fixed output circuit $o$ of fixed output width, so the same conclusion holds for $n$ larger than that width in bits.
+ Growing instances can reserve $n$ bytes.\end{proof}
+ \step{eqv-rest-width}{The two addition operations differ.}
+ \begin{proof}\pf\ On $2^w-1$ and $1$, modular addition returns
+ $0$, whereas integer addition returns $2^w$. The theorem preserves
+ whichever total function is supplied, not an unspecified alternative.
+ Multiword arithmetic is permitted only with its memory and Boolean
+ cost included.\end{proof}
+ \step{eqv-rest-time}{There need not be a sufficient finite horizon.}
+ \begin{proof}\pf\ A conditional jump with an always true condition
+ back to itself never reaches stop. For a terminating-with-probability-one
+ example, initialize a qubit to zero, apply $H$, measure, stop on $1$,
+ and on $0$ repeat $H$ and measurement on the now-zero qubit. After
+ $r$ trials the probability of no stop is $2^{-r}>0$, by multiplication
+ of the conditional probabilities $1/2$. A cutoff reporting timeout
+ has that positive extra outcome, while the unbounded run stops
+ with probability one since $2^{-r}\to0$. The conclusion concerns
+ the cutoff rule; a different circuit may reproduce a particular
+ unbounded program's final output by other means.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{eqv-rest-capacity},
+ \stepref{eqv-rest-width}, and \stepref{eqv-rest-time}.\end{proof}
+\end{proof}
+
+\begin{counterexample}[Exact finite-alphabet equivalence cannot include
+arbitrary angles]\label{eqv:exact-obstruction}
+Start with $\ket0$, apply $H R_z(\theta)H$, and measure, where
+$\theta=2\arccos(1/\sqrt3)$ is a computable real with this finite
+description. The probability of outcome zero is $1/3$. No finite
+bounded adaptive circuit over $\mathcal G$, with every quantum wire
+initially in a computational-basis state, zero-initialized allocations,
+deterministic classical data, and computational-basis measurements and with output probabilities given by the unconditional instrument (no postselection or conditional renormalisation),
+has this same output distribution, even allowing auxiliary qubits and
+partial traces. No additional quantum state or random classical seed
+is supplied as input.
+\end{counterexample}
+\begin{proof}
+ \step{eqv-ring-amplitudes}{Every amplitude of an unnormalized vector
+ conditional on a finite measurement string belongs to
+ $\mathcal A=\mathbb Z[1/\sqrt2,i]$.}
+ \begin{proof}\pf\ Initial basis amplitudes are integers. Entries
+ of $H,T,\operatorname{CNOT}$, basis projectors, and zero embeddings
+ belong to this ring. Finite matrix multiplication and addition
+ preserve the ring. For each fixed measurement string adaptivity
+ selects one such finite product, without conditional normalization.
+\end{proof}
+ \step{eqv-ring-probabilities}{Every rational output probability of
+ such a circuit is dyadic.}
+ \begin{proof}\pf\ An element of $\mathcal A$ has form
+ $(a+b\sqrt2+i(c+d\sqrt2))/2^m$ with integer $a,b,c,d$ and $m\geq0$.
+ Its squared modulus belongs to $\mathbb Z[1/2,\sqrt2]$. Sum these
+ squared moduli over unobserved basis values and the finite set of
+ measurement strings assigned to the output. This still gives
+ $(u+v\sqrt2)/2^j$ for integers $u,v,j$, $j\geq0$. If it is rational,
+ irrationality of $\sqrt2$ implies $v=0$. The rational number is
+ therefore dyadic.\end{proof}
+ \step{eqv-ring-ideal}{The stated ideal circuit gives a nondyadic
+ probability.}
+ \begin{proof}\pf\ Its zero amplitude is $\cos(\theta/2)$, so its
+ zero probability is $\cos^2(\theta/2)=1/3$. If $1/3=u/2^j$ then
+ $3u=2^j$, impossible since $3$ does not divide a power of $2$.
+\end{proof}
+ \qedstep
+ \begin{proof}\pf\ The exact equality of instruments would imply
+ equality of this probability, contradicting
+ \stepref{eqv-ring-probabilities} and \stepref{eqv-ring-ideal}.
+ This refutes the unrestricted exact claim, not
+ the finite-alphabet equivalence of Theorems~\ref{eqv:forward} and \ref{eqv:reverse}.\end{proof}
+\end{proof}
+
+\subsection{Phase-sensitive approximation}
+
+\begin{lemma}[From retained isometry error to output error]
+\label{eqv:error-lemma}
+Let $V,W$ be isometries with the same finite input and retained output
+spaces. Apply to their outputs the same channel made of isometric
+initializations, unitary gates, classical-output copying and partial
+traces. The resulting channels $\Phi_V,\Phi_W$ satisfy
+$d_{\rm out}(\Phi_V,\Phi_W)\leq2\|V-W\|$.
+\end{lemma}
+\begin{proof}
+ \step{eqv-error-product}{For every input state $\rho$ including a
+ reference, the retained density operators differ in trace norm by
+ at most $2\|V-W\|$.}
+ \begin{proof}\pf\ Suppress identity factors on the reference and
+ write their difference as
+ $(V-W)\rho V^\dagger+W\rho(V^\dagger-W^\dagger)$.
+ For matrices $A,X,B$, $\|AXB\|_1\leq\|A\|\|X\|_1\|B\|$:
+ expand $X$ in singular-value rank-one terms and use the triangle
+ inequality and $\|uv^\dagger\|_1=\|u\|\|v\|$.
+ Now $\|V\|=\|W\|=\|\rho\|_1=1$, and tensoring an operator
+ with an identity leaves its operator norm unchanged.\end{proof}
+ \step{eqv-error-trace}{The prescribed common output operations
+ cannot increase that trace norm.}
+ \begin{proof}\pf\ Unitary conjugation and isometric embedding
+ preserve singular values apart from added zeros. For Hermitian
+ $X$, the identity
+ $\|X\|_1=\max_{-I\leq B\leq I}\tr(BX)$ follows by diagonalizing
+ $X$ and choosing its sign matrix. Consequently
+ $\|\tr_E X\|_1\leq\|X\|_1$, since each admissible output $B$
+ lifts to admissible $B\otimes I_E$. Copying a classical output
+ before tracing is an isometric embedding followed by a unitary.
+ Apply these facts successively, also with a retained reference.
+\end{proof}
+ \qedstep
+ \begin{proof}\pf\ Take the supremum in Definition~\ref{def:registers}
+ after \stepref{eqv-error-product} and \stepref{eqv-error-trace}.
+\end{proof}
+\end{proof}
+
+\begin{theorem}[Quantified approximation with the stated certificates]
+\label{eqv:approx}
+Under exactly the certificate hypotheses of
+Definition~\ref{def:certificates}, take $N_g\geq1$ unitary factors on the
+common retained logical register. For every factor $A_i$ and rational
+$0<\eta<1$, assume a uniform procedure supplies a clean implementation
+of a logical unitary $\widetilde A_i$ with actual-matrix error at most
+$\eta$ and length at most $c_*\log^\alpha(2+1/\eta)$, where
+$c_*>0,\alpha\geq0$ are fixed independently of $i,N_g,\eta$. Every controlled
+factor is included as its entire controlled matrix, and every repeated
+or inverse occurrence is counted. Let $\epsilon$ be rational with
+$0<\epsilon<1$ and set $\eta=\epsilon/(2N_g)$. Then the output error and gate count satisfy:
+\[
+ d_{\rm out}(\Phi,\widetilde\Phi)\leq\epsilon,
+ \qquad G_{\rm app}=O\bigl(N_g\log^\alpha(2+N_g/\epsilon)\bigr).
+\]
+The retained isometry error is at most $\epsilon/2$ on the specified
+zero-workspace input subspace. If the logical retained width is $n_L$
+and the largest certificate workspace is $a_*$, sufficient width is
+$n_L+a_*$. Unused workspace may be removed, giving
+$a_*=O(\log^\alpha(2+N_g/\epsilon))$ for gate-list certificates.
+
+Let $\tau_i(\eta)$ be the time taken to produce the explicit certificate
+circuit for occurrence $i$, and $d_1$ the bit length of the expanded
+logical description and request. A classical construction-time bound is
+\[
+ \sum_{i=1}^{N_g}\tau_i(\eta)
+   +O\bigl((d_1+G_{\rm app}+n_L+a_*+1)^4\bigr).
+\]
+No polynomial bound on the first term follows merely from uniformity.
+Whenever a factor is used in reverse, reverse the same chosen
+approximating circuit, rather than choose an unrelated approximation.
+Repeated use is counted with multiplicity in $N_g$.
+\end{theorem}
+\begin{proof}
+ \step{eqv-app-product}{The products of logical unitaries differ by
+ at most $N_g\eta$ in operator norm.}
+ \begin{proof}\pf\ Index the factors by their occurrences in the expanded list; where an occurrence is the inverse of an earlier chosen factor, take for it the adjoint of that same approximating circuit, so the hypothesis is applied once per distinct factor and adjunction supplies the inverse occurrences. For $U=A_{N_g}\cdots A_1$ and
+ $\widetilde U=\widetilde A_{N_g}\cdots\widetilde A_1$, insert and
+ subtract the intermediate products replacing one factor at a time.
+ Each resulting summand is a product of unitary factors and one
+ difference $\widetilde A_i-A_i$. Submultiplicativity and the
+ triangle inequality bound the sum by $N_g\eta$.
+ Also $\|\widetilde A_i^\dagger-A_i^\dagger\|
+ =\|\widetilde A_i-A_i\|$, so the same estimate applies to every
+ inverse occurrence. Controlled factors are covered by the expressly
+ required bound on their entire actual matrix.\end{proof}
+ \step{eqv-app-space}{The physical circuit has this action on its
+ zero-workspace subspace and the claimed space and gate costs.}
+ \begin{proof}\pf\ Lemma~\ref{lem:scratch} permits all clean
+ implementations, including adjoints, to reuse workspace of the
+ maximum width. Their restriction is precisely $\widetilde U$;
+ no bound on arbitrary nonzero workspace states is asserted.
+ Add the $N_g$ length bounds. Every elementary gate touches at most
+ two wires, so a certificate of length $l$ needs at most $2l$
+ distinct touched ancillary wires. Delete untouched ancillary wires
+ before taking the maximum.\end{proof}
+ \step{eqv-app-output}{The final error is at most $\epsilon$.}
+ \begin{proof}\pf\ The initialized ideal and approximating
+ isometries differ by at most $N_g\eta=\epsilon/2$ by
+ \stepref{eqv-app-product} and \stepref{eqv-app-space}.
+ Lemma~\ref{eqv:error-lemma} applies to the same specified output
+ extraction and trace.\end{proof}
+ \step{eqv-app-time}{The classical-time assertion holds.}
+ \begin{proof}\pf\ Put ${\mathfrak m}=d_1+G_{\rm app}+n_L+a_*+1$. After certificate production, the emitting machine writes one gate at a time, scanning the supplied description and output so far once and doing binary counter arithmetic on at most ${\mathfrak m}$ bits. Each scan and arithmetic cost at most $O({\mathfrak m}^2)$ steps, so $G_{\rm app}\le {\mathfrak m}$ gates cost $O({\mathfrak m}^3)$ steps after an initial scan; the displayed fourth power also covers relabelling and reversal.
+Run each supplied uniform procedure, then
+ concatenate, relabel and reverse its finite gate lists where
+ required. Full scans and binary counter arithmetic have the
+ displayed conservative polynomial cost, as in
+ Theorem~\ref{eqv:forward}. The hypotheses place no growth bound
+ on the procedures' individual runtimes $\tau_i$.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{eqv-app-space},
+ \stepref{eqv-app-output}, and \stepref{eqv-app-time}.
+ An irrational error tolerance admits a smaller rational request;
+ uniform input requests themselves are rational by
+ Definition~\ref{def:rtm}.\end{proof}
+\end{proof}
+
+\begin{counterexample}[Removing phases before a control is invalid]
+\label{eqv:phase-obstruction}
+The one-qubit matrices $I$ and $-I$ have zero distance modulo scalar
+phase. Their singly controlled matrices, on a control initialized to
+$\ket+=(\ket0+\ket1)/\sqrt2$ and any target, give respectively
+$\ket+$ and $\ket-=(\ket0-\ket1)/\sqrt2$ on the control. Their
+output channels have $d_{\rm out}=2$.
+\end{counterexample}
+\begin{proof}
+ \step{eqv-phase-block}{The controlled matrices are $I$ and
+ $Z\otimes I$.}
+ \begin{proof}\pf\ Insert $I$ and $-I$ into
+ $\proj0\otimes I+\proj1\otimes A$.\end{proof}
+ \step{eqv-phase-distance}{Their outputs have trace distance $2$.}
+ \begin{proof}\pf\ The two displayed control vectors are
+ orthogonal. The difference of their projectors has eigenvalues
+ $1,-1$ and hence trace norm $2$. The distance between any two
+ states is at most $2$ by the triangle inequality.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{eqv-phase-block} and
+ \stepref{eqv-phase-distance}.\end{proof}
+\end{proof}
+
+\subsection{A local-source synthesis guarantee with actual phases}
+Everything from here through Theorem~\ref{eqv:rotations} concerns only
+the optional ideal rotations; the exact equivalence above is already
+complete without it. The care below is needed because phases discarded
+before adding a control change the controlled operation
+(Counterexample~\ref{eqv:phase-obstruction}).
+
+
+\begin{lemma}[An inverse-closed determinant-one instruction set]
+\label{eqv:su2-set}
+Define the following actual one-qubit matrices, with $S=T^2$:
+\[
+ V=SHTHS^\dagger,\quad J=VSV^\dagger,\quad
+ A=T^\dagger HTH,\quad B=J^\dagger A J,
+ \quad\mathcal F=\{A,A^\dagger,B,B^\dagger\}.
+\]
+This is a fixed finite inverse-closed subset of $SU(2)$ whose generated
+subgroup is dense in $SU(2)$, and each element has a constant-length exact-phase
+implementation over $\mathcal G^{\pm}$ without workspace.
+\end{lemma}
+\begin{proof}
+ \step{eqv-su-matrices}{These are the two determinant-one rotations
+ in Boykin et al., Section 3, equations (5)--(6), PDF p.~4.}
+ \begin{proof}\pf\ Direct multiplication, also used in
+ Lemma~\ref{lem:synthesis}, gives $VZV^\dagger=H$ and hence
+ $J^2=H$. Algebraically, $\sigma_x^{1/4}=H\sigma_z^{1/4}H=HTH$ and $\sigma_z^{1/2}=S$ under the cited power definitions, so $V=SHTHS^\dagger=\sigma_z^{1/2}\sigma_x^{1/4}\sigma_z^{-1/2}=\sigma_y^{1/4}$ and therefore $J=VSV^\dagger=\sigma_y^{1/4}\sigma_z^{1/2}\sigma_y^{-1/4}$, which is the cited definition of $H^{1/2}$. More precisely $J$ acts by $1$ and $i$ on the $+1$ and
+ $-1$ eigenspaces of $H$, respectively. Thus $J$ is exactly the
+ paper's $H^{1/2}$ under its spectral convention in Section 2
+ \cite[PDF pp.~3--4, power identities preceding Section~3]{BoykinEtAl1999}.
+ Its $\sigma_z^{1/4}$ is $T$ and its $\sigma_x^{1/4}$ is $HTH$.
+ Substitution in the cited equations gives $A$ and $B$, with no
+ omitted scalar multiplier.\end{proof}
+ \step{eqv-su-density}{The group generated by $A,B$ is dense in
+ $SU(2)$.}
+ \begin{proof}\pf\ The local proof in
+ \cite[Section 3, PDF p.~4, equations (7)--(12)]{BoykinEtAl1999}
+ gives these two matrices as rotations through an irrational multiple
+ of $\pi$ about orthogonal axes, and expresses each $SU(2)$ matrix
+ as three rotations about those axes. Powers approximate each of
+ the three rotations by equations (10)--(11); if the three approximating powers are within $\epsilon/3$ of the three factors in operator norm, the telescoping estimate for a product of three unitaries puts their product within $\epsilon$ of the target. This is the
+ precise density assertion used here.\end{proof}
+ \step{eqv-su-hypotheses}{All other instruction-set hypotheses hold.}
+ \begin{proof}\pf\ The matrices are unitary products, and
+ $\det A=e^{-i\pi/4}(-1)e^{i\pi/4}(-1)=1$;
+ conjugation gives $\det B=1$. Adjoints have determinant one too.
+ Inverses are explicitly included. Each displayed word and its
+ adjoint has constant length; $S^{\pm1}=T^{\pm2}$ and $H^\dagger=H$.
+\end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{eqv-su-density} and
+ \stepref{eqv-su-hypotheses}. This application uses actual
+ determinant-one matrices, not a claim that the original
+ $H,T,\operatorname{CNOT}$ already satisfy $SU(d)$ hypotheses.
+\end{proof}
+\end{proof}
+
+\begin{theorem}[Certified approximation for the optional rotations]
+\label{eqv:rotations}
+For $U\in SU(2)$ given by an effective entry-approximation procedure,
+and rational $0<\eta<1$, an exact-phase word over $\mathcal G^{\pm}$
+approximates $U$ within $\eta$ in operator norm, with length
+$O(\log^4(2+1/\eta))$. A uniform procedure finds such a word.
+The same statement holds for its singly controlled matrix with
+constant clean workspace. In particular it supplies the certificates
+of Theorem~\ref{eqv:approx} for the optional $R_z(\theta)$ gates when each such gate is supplied with the dyadic entry-approximation procedure hypothesised above for its matrix, their adjoints and their singly controlled
+versions. A fixed bound on the number of controls can also be allowed,
+with constants depending on that bound.
+
+For completeness a conservative explicit classical-time guarantee is
+available without assuming a unit-cost real-number model. Encode
+$\eta=u/v$ by positive binary integers $0<u<v$ separated by delimiters;
+reduction to lowest terms is not required. Let $r_\eta$ be the full
+request length. For this bit-time bound require the entry procedure to
+return dyadic approximations $\tilde U$ of the four complex entries with $|\tilde U_{ij}-U_{ij}|\le2^{-b}$ in complex modulus for each entry,
+using $O(b)$ bits per entry. Let $\mu_U(b)$ bound its full multitape-TM
+cost, including reading $U$ and writing those approximations; conversion
+from any other entry representation must be charged in $\mu_U$.
+There are absolute constants such that, putting
+\[
+ m=\min\{j\geq1:2^{-j}\leq\eta\},\quad
+ \delta=2^{-m},\quad b=m+10,\quad
+ L_{\max}=\lceil C_{\mathcal F}(m+4)^4\rceil,
+\]
+where $C_{\mathcal F}$ is a fixed constant for $\mathcal F$, exhaustive certified
+search takes
+\[
+ O\bigl((r_\eta+1)^3+\mu_U(b)+4^{L_{\max}+1}(L_{\max}+b+1)^6\bigr)
+\]
+classical steps and emits a word of length $O(L_{\max})$.
+Here $\delta\leq\eta<2\delta$, so
+$L_{\max}=O(\log^4(2+1/\eta))$. Arbitrarily long binary rational requests
+are allowed and their processing cost is included.
+This time bound is not claimed polynomial in $\log(1/\eta)$.
+No runtime bound on $\mu_U$ follows merely from computability of
+the angle. General effectively specified $U(d)$ matrices with arbitrary
+scalar phases are not included in this theorem.
+\end{theorem}
+\begin{proof}
+ \step{eqv-rot-sk}{The word-length guarantee applies with actual
+ operator norm and exponent at most $4$.}
+\begin{proof}
+ \step{eqv-rot-sk-apply}{Dawson--Nielsen's length theorem applies
+ to $\mathcal F$ at dimension $2$ and accuracy $\delta/8$.}
+ \begin{proof}\pf\ Lemma~\ref{eqv:su2-set} supplies a finite,
+ inverse-closed instruction set dense in $SU(2)$. These are
+ Definition 1's hypotheses for Theorem 1
+ \cite[PDF pp.~2, 4]{DawsonNielsen2006}. Both the dimension and
+ instruction set are fixed, so the length bound is uniform in $U$.
+ \end{proof}
+ \step{eqv-rot-sk-norm}{The guarantee is in actual operator norm,
+ with exponent less than $4$.}
+ \begin{proof}\pf\ The norm convention on PDF p.~3 is operator
+ norm without identifying scalar phases. Section 3, equation (8),
+ PDF p.~7 gives exponent $\log5/\log(3/2)\simeq3.97<4$.
+ \end{proof}
+ \step{eqv-rot-sk-bound}{\pick\ a fixed constant $C_{\mathcal F}$ giving
+ $L_{\max}=\lceil C_{\mathcal F}(m+4)^4\rceil$ as an upper bound for every $m\geq1$.}
+ \begin{proof}\pf\ The cited asymptotic bound supplies a uniform
+ constant at sufficiently small accuracies. At any fixed larger
+ accuracy, density gives open balls centered at words covering
+ $SU(2)$; compactness gives a finite subcover and hence a finite
+ maximum word length. Enlarge the constant to cover the remaining
+ accuracies. Since $\delta/8=2^{-(m+3)}$, the displayed fourth
+ power bounds all these lengths.\end{proof}
+ \step{eqv-rot-sk-expand}{Elementary expansion preserves the norm
+ guarantee and gives length $O(L_{\max})$.}
+ \begin{proof}\pf\ Each of the finitely many $\mathcal F$ letters
+ expands into its fixed exact-phase word. Substitution leaves the
+ product matrix unchanged and multiplies length by at most a fixed
+ constant.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{eqv-rot-sk-apply}--\stepref{eqv-rot-sk-expand}.
+ \end{proof}
+\end{proof}
+ \step{eqv-rot-search}{There is a certified finite search with the
+ advertised bit cost.}
+ \begin{proof}
+  \step{eqv-rot-request}{Computing $m,\delta,b,L_{\max}$ costs
+  $O((r_\eta+1)^3)$ steps.}
+  \begin{proof}\pf\ Read the entire delimited request. Test
+  $2^j u\geq v$ for successive $j$, starting at $1$, by binary
+  shifts and comparisons. The first successful $j$ is $m$ and
+  $m\leq r_\eta$. Even full scans and grade-school integer
+  arithmetic for the fixed fourth power fit the displayed bound.
+  Minimality gives $\delta\leq\eta<2\delta$.
+  \end{proof}
+  \step{eqv-rot-candidates}{Each candidate has a certified distance
+  upper bound within $\delta/8$ of its true Frobenius distance,
+  at cost $O((L_{\max}+b+1)^6)$.}
+\begin{proof}
+ \step{eqv-rot-candidates-exact}{A candidate of at most $L_{\max}$ letters
+ has an exact representation with $O(L_{\max}+1)$-bit coefficients.}
+ \begin{proof}\pf\ Enumerate words in $\mathcal F$ by increasing
+ length. Entries of their elementary expansions lie in
+ $\mathbb Z[1/\sqrt2,i]$, represented by four integer coefficients
+ and a power-of-two denominator. Multiplication by a fixed letter
+ uses a fixed number of integer operations and increases bit length
+ by at most a constant. Choose a fixed $c_0$ so all coefficient
+ lengths are at most $c_0L_{\max}+c_0$.\end{proof}
+ \step{eqv-rot-candidates-matrices}{There are rational approximations
+ $\widetilde W,\widetilde U$ with certified Frobenius errors
+ $e_W\leq2^{-b-2}$ and $e_U\leq2^{1-b}$.}
+ \begin{proof}\pf\ Bisect rationally to approximate $\sqrt2$ with
+ error at most $2^{-(c_0L_{\max}+b+c_0+4)}$. Multiplication by any coefficient
+ contributes at most $2^{-b-4}$. In the four-coefficient representation
+ each real or imaginary component has one such irrational term;
+ thus an entry error is at most $\sqrt2\,2^{-b-4}$ and the
+ Frobenius error is at most $2\sqrt2\,2^{-b-4}\leq2^{-b-2}$.
+ The four target approximations, computed once at $b=m+10$, each
+ have complex-modulus error at most $2^{-b}$, giving $e_U\leq2^{1-b}$.
+ \end{proof}
+ \step{eqv-rot-candidates-suffices}{\suffices{Find a rational upper
+ bound $u$ for $\|\widetilde W-\widetilde U\|_F$ exceeding it
+ by at most $2^{-b}$, and return $u+e_W+e_U$ within the advertised arithmetic cost.}}
+ \begin{proof}\pf\ The triangle inequality makes this an upper
+ bound for $\|W-U\|_F$. Its excess is at most
+ $2(e_W+e_U)+2^{-b}\leq(11/2)2^{-b}<\delta/8$, since
+ $b=m+10$ and $\delta=2^{-m}$. The stipulated cost gives the
+ remaining resource claim.\end{proof}
+ \step{eqv-rot-candidates-root}{Such a rational $u$ is obtained by
+ bisection without a positive lower bound on the norm.}
+ \begin{proof}\pf\ Sum exactly the squares of the eight real
+ components of $\widetilde W-\widetilde U$. The sum is rational.
+ Both exact matrices are unitary, so their Frobenius distance is at
+ most $2\sqrt2$; the stated approximation errors put the approximated
+ distance in $[0,4]$. Bisect this interval using exact comparisons
+ of squared midpoints with the sum, until its width is at most
+ $2^{-b}$. Its upper endpoint is the required $u$, also when the
+ sum is zero.\end{proof}
+ \step{eqv-rot-candidates-cost}{The per-candidate arithmetic costs
+ $O((L_{\max}+b+1)^6)$ multitape steps.}
+ \begin{proof}\pf\ Exact multiplication of the $O(L_{\max})$ fixed
+ letters, the two bisections and the fixed-size matrix arithmetic
+ use polynomially many integer operations. There are $O(L_{\max}+b+1)$
+ bisections and $O(L_{\max}+b+1)$-bit intermediate integers: rational
+ approximations may use dyadic denominators, and only a fixed
+ number of their squares and products are combined. Full scans,
+ grade-school multiplication and division are bounded by the stated
+ conservative sixth power. The target evaluation is charged once
+ as $\mu_U(b)$ in the enclosing proof.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{eqv-rot-candidates-matrices},
+ \stepref{eqv-rot-candidates-suffices},
+ \stepref{eqv-rot-candidates-root} and
+ \stepref{eqv-rot-candidates-cost}.\end{proof}
+\end{proof}
+  \step{eqv-rot-accept}{Some word of at most $L_{\max}$ letters is accepted,
+  and every accepted word meets the original request.}
+  \begin{proof}\pf\ Accept precisely when the rational upper bound
+  is less than $\delta$. Since operator norm is at most Frobenius
+  norm, acceptance certifies error below $\delta\leq\eta$.
+  Step~\stepref{eqv-rot-sk} supplies a word with operator error
+  below $\delta/8$, hence Frobenius error below
+  $\sqrt2\delta/8$. Its computed upper bound is at most
+  $(\sqrt2+1)\delta/8<\delta$, so it is accepted. Comparisons
+  are rational with a strict margin; no exact real equality is tested.
+  \end{proof}
+  \qedstep
+  \begin{proof}\pf\ There are fewer than $4^{L_{\max}+1}$ candidates.
+  Add \stepref{eqv-rot-request}, the single cost $\mu_U(b)$,
+  and the per-candidate cost in \stepref{eqv-rot-candidates};
+  \stepref{eqv-rot-accept} guarantees termination. For a uniform
+  implementation one may simply enumerate increasing lengths until
+  acceptance; $L_{\max}$ is an upper bound, not a required stopping test.
+  \end{proof}
+ \end{proof}
+ \step{eqv-rot-control}{Controlled approximations preserve the
+ phase-sensitive estimate.}
+ \begin{proof}\pf\ For a word $W$ approximating $U$, replace each
+ elementary gate by its exact controlled implementation from
+ Lemma~\ref{lem:synthesis}. Their product is
+ $\proj0\otimes I+\proj1\otimes W$, with no extra phase.
+ Its difference from the controlled $U$ is
+ $\proj1\otimes(W-U)$, of norm $\|W-U\|$.
+ Workspace is constant and clean. For a fixed number of controls,
+ compute their conjunction by a finite Toffoli circuit, control
+ the whole word, then undo the conjunction; the control inputs
+ are preserved, so the workspace returns to zero.\end{proof}
+ \step{eqv-rot-angles}{The optional gates satisfy the entry hypotheses.}
+ \begin{proof}\pf\ $R_z(\theta)$ has determinant one exactly, and its inverse is $R_z(-\theta)$, whose entries are the complex conjugates of the supplied approximations. Reversing the same approximating circuit gives the required correlated adjoint choice in Theorem~\ref{eqv:approx}. No entry procedure is derived here from a description of $\theta$ alone; Definition~\ref{def:circuit} requires that procedure explicitly, with its cost charged to $\mu_U$.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{eqv-rot-sk},
+ \stepref{eqv-rot-search}, \stepref{eqv-rot-control}, and
+ \stepref{eqv-rot-angles}. Approximate universality does not replace
+ the exact obstruction in Counterexample~\ref{eqv:exact-obstruction}.
+\end{proof}
+\end{proof}
+
+\begin{remark}[What the equivalence does and does not say]\label{eqv:status}
+Theorems~\ref{eqv:forward} and \ref{eqv:reverse} establish the bounded equivalence of Definition~\ref{eqv:def} with its stipulated finite capacities,
+separately scheduled timeout, actual gate alphabet, and output-instrument meaning of
+equivalence. They make explicit that state preparation and extraction
+are included using $T\geq1$, that literal-table compilation need not
+enumerate all configurations, and that drop does not reclaim storage.
+The converse supplies the explicit layout bound
+$s\leq(b+2)w+q+8$ and comparison bound $O(N(s+w+1))$.
+The global canonical-decoder and live-flag conditions of
+Definition~\ref{def:device},
+all-code exclusion of read mode, valid initial configuration, initially
+exact input live set, final-time liveness of $O$ on every reachable
+outcome sequence, blank distinct forward records, and trace of the
+entire complement of $OY$ are hypotheses throughout. They are not
+claims about arbitrary controllers with the same instruction names.
+Theorem~\ref{eqv:approx} proves the approximation conditional on Definition~\ref{def:certificates}, specifying its additional classical and
+workspace costs. Theorem~\ref{eqv:rotations} discharges the certificates
+for the optional one-qubit determinant-one rotations and bounded
+controls, charging the full binary rational request length and dyadic
+entry-computation cost in its explicit time bound. It does not remove
+that hypothesis for every additional
+matrix of arbitrary arity or scalar phase. The inverse-closed set
+actually used for Solovay--Kitaev is $\mathcal F\subset SU(2)$;
+replacing $T^\dagger$ by $T^7$ afterward is exact. None of these
+statements imports a general dynamic mark or stopping semantics. Observational equivalence preserves final instruments only, not the tick at which a byte is written or a run stops. The certificate words for ideal rotations are found by exhaustive certified search with the exponential-in-$L_{\max}$ time bound of Theorem~\ref{eqv:rotations}; polynomial classical synthesis time in $\log(1/\eta)$ is not proved here, and certificates for matrices beyond determinant-one one-qubit rotations with a fixed number of controls remain a hypothesis of Theorem~\ref{eqv:approx}.
+\end{remark}

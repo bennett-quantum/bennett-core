@@ -1,0 +1,907 @@
+Soundness (Section~\ref{sec:soundness}) says a marked term is a unitary;
+it does not say the machine register can be discarded. This section and
+Definition~\ref{def:scratch} separate five assertions. A \emph{clean
+implementation} restores only its workspace $Z$, without a reset promise
+for logical records. A \emph{clean unitary} returns $M$ to its exact
+initial vector, $WE=EA$, so $M$ may be dropped and the induced operation
+on $Q$ is the unitary $A$. \emph{Reset of a factor $F$ on a subspace
+$\mathcal S$} means only that $F$ is $\ket0$ after $W$ for inputs in
+$\mathcal S$---the right notion inside a larger computation, where
+$\mathcal S$ is whatever the preceding steps actually reach.
+\emph{Marginal restoration} means only that $M$'s reduced state is
+unchanged, which permits neither deletion nor replacement by fresh zeros
+when $M$ is correlated with data. Finally the reduced operation on $Q$
+can be unitary while $M$ ends in a fixed vector $\eta\neq m_0$ ((SA2)):
+discarding $M$ is then harmless for $Q$ alone, but $M$ has not been reset
+and cannot be reused as blank. Theorems~\ref{thm:sA-clean} and
+\ref{thm:sA-recursive} give exact tests for logical restoration, subspace
+reset and marginal restoration; Counterexample~\ref{ex:sA-rec-limits}
+shows the limits of their implications. The collective disposal test for
+the dynamic interpreter in Theorem~\ref{thm:tB-clean} has the same
+fixed-pure-factor scope as (SA2).
+
+\subsection{Exact tests for cleanliness and for a unitary reduced channel}
+
+\begin{theorem}[Exact cleanliness]\label{thm:sA-clean}
+Let $Q,M$ be finite registers, $\ket{m_0}_M$ a fixed unit vector,
+$E\psi=\psi\otimes\ket{m_0}$ and $P_0=EE^\dagger$ as in
+Definition~\ref{def:clean}. Let $U,K$ be total unitaries on $QM$, and
+put $W=U^\dagger KU$, $\Pi=UP_0U^\dagger$. The following are equivalent:
+\begin{enumerate}
+ \item $WE=EA$ for a unitary $A$ on $Q$;
+ \item $(\id-P_0)WE=0$;
+ \item $(\id-\Pi)K\Pi=0$;
+ \item $[K,\Pi]=0$, where $[K,\Pi]=K\Pi-\Pi K$.
+\end{enumerate}
+When these hold, $A=E^\dagger WE$ is unique. Equivalently, for every
+input density operator $\rho$ on $Q$, the final state
+$WE\rho E^\dagger W^\dagger$ has $M$ marginal $\proj{m_0}$.
+For a single input density operator $\rho$, this return condition is exactly
+\[
+ \tr\bigl[(\id-P_0)WE\rho E^\dagger W^\dagger\bigr]=0.       \tag{SA1}
+\]
+For every finite untouched reference $R$, the reference forms use
+$E\otimes\id_R$, $W\otimes\id_R$, $A\otimes\id_R$ and
+$P_0\otimes\id_R$, with factors reordered by their names. In (SA1)
+the input may then be any density operator on $QR$, including an
+entangled one. The universal equivalences are unchanged.
+
+The channel $\Phi(\rho)=\tr_M(WE\rho E^\dagger W^\dagger)$ on $Q$
+is unitary if and only if there are a unitary $A$ on $Q$ and a fixed
+unit vector $\eta\in\cH_M$ such that
+\[
+ WE\psi=A\psi\otimes\eta\quad\hbox{for every }\psi\in\cH_Q.
+                                                               \tag{SA2}
+\]
+Here $\eta$ need not be $m_0$: a unitary reduced channel need not be clean.
+If (SA2) holds, then tensoring it with $\id_R$ gives
+$(W\otimes\id_R)(E\otimes\id_R)\Psi=(A\otimes\id_R)\Psi\otimes\eta$ for
+every $\Psi\in\cH_{QR}$, and the reduced channel on $QR$ is conjugation
+by $A\otimes\id_R$. Conversely, items 1–4 and the (SA2) equivalence for
+the tensored data follow by applying this theorem with $QR$ in place of
+$Q$ and $U\otimes\id_R$, $K\otimes\id_R$ in place of $U$, $K$; the
+uniqueness in item 1 then forces the induced unitary on $QR$ to be
+$A\otimes\id_R$.
+\end{theorem}
+\begin{proof}
+ \step{sA-clean-restrict}{Conditions 1 and 2 are equivalent, with the
+ stated unique $A$.}
+ \begin{proof}
+  \step{sA-clean-12}{\assume{Condition 1.}\prove{Condition 2.}}
+  \begin{proof}\pf\ $(\id-P_0)E=0$, so multiply $WE=EA$ by
+  $\id-P_0$ on the left.
+  \end{proof}
+  \step{sA-clean-21}{\assume{Condition 2.}\prove{Condition 1.}}
+  \begin{proof}
+   \step{sA-clean-A}{Set $A=E^\dagger WE$. Then $EA=WE$ and
+   $A^\dagger A=\id_Q$.}
+   \begin{proof}\pf\ Condition 2 says $P_0WE=WE$, whence
+   $EA=P_0WE=WE$ and
+   $A^\dagger A=E^\dagger W^\dagger P_0WE=E^\dagger E=\id_Q$.
+   \end{proof}
+   \qedstep
+   \begin{proof}\pf\ A square isometry on a finite-dimensional space
+   is surjective: its kernel is zero, so its rank equals the dimension.
+   Thus also $AA^\dagger=\id_Q$. Multiplication by $E^\dagger$ shows
+   uniqueness.
+   \end{proof}
+  \end{proof}
+  \qedstep
+  \begin{proof}\pf\ By \stepref{sA-clean-12} and
+  \stepref{sA-clean-21}.
+  \end{proof}
+ \end{proof}
+ \step{sA-clean-conjugate}{Conditions 2 and 3 are equivalent.}
+ \begin{proof}\pf\ The range of $E$ is the range of $P_0$, so
+ condition 2 is equivalent to $(\id-P_0)WP_0=0$. Conjugate this
+ equality by $U$ and substitute $W=U^\dagger KU$ to obtain
+ $(\id-\Pi)K\Pi=0$. Conjugation is invertible.
+ \end{proof}
+ \step{sA-clean-commute}{Conditions 3 and 4 are equivalent.}
+ \begin{proof}
+  \step{sA-clean-invariant}{\assume{Condition 3.}
+  \prove{$K\operatorname{ran}\Pi=\operatorname{ran}\Pi$.}}
+  \begin{proof}\pf\ Condition 3 gives inclusion. The restriction of
+  the unitary $K$ is injective, so its image has the same finite
+  dimension as $\operatorname{ran}\Pi$, proving equality.
+  \end{proof}
+  \step{sA-clean-reduce}{Under condition 3 the orthogonal complement
+  of $\operatorname{ran}\Pi$ is invariant too.}
+  \begin{proof}\pf\ For $x\perp\operatorname{ran}\Pi$ and
+  $y\in\operatorname{ran}\Pi$, write $y=Kz$ with
+  $z\in\operatorname{ran}\Pi$ using \stepref{sA-clean-invariant}.
+  Then $\langle y,Kx\rangle=\langle z,x\rangle=0$.
+  Thus $K$ preserves both summands of the orthogonal decomposition,
+  and commutes with their projection $\Pi$.
+  \end{proof}
+  \qedstep
+  \begin{proof}\pf\ This proves 3 implies 4. Conversely
+  $K\Pi=\Pi K$ implies $(\id-\Pi)K\Pi=0$ by multiplication.
+  \end{proof}
+ \end{proof}
+ \step{sA-clean-one}{Equation (SA1) is equivalent to return of $M$
+ for that input.}
+ \begin{proof}
+  \step{sA-clean-positive}{For a positive operator $\sigma$, and an
+  orthogonal projection $P$, $\tr[(\id-P)\sigma]=0$ if and only if
+  $\operatorname{supp}\sigma\subseteq\operatorname{ran}P$.}
+  \begin{proof}\pf\ A spectral decomposition
+  $\sigma=\sum_j\lambda_j\proj{v_j}$ with $\lambda_j>0$ on its
+  support gives the trace as
+  $\sum_j\lambda_j\|(\id-P)v_j\|^2$. Its nonnegative summands
+  vanish precisely when every $v_j$ lies in that range.
+  \end{proof}
+  \qedstep
+  \begin{proof}\pf\ Apply \stepref{sA-clean-positive} to
+  $\sigma=WE\rho E^\dagger W^\dagger$ and $P=P_0$.
+  Support in $\cH_Q\otimes\ket{m_0}$ is equivalent to marginal
+  $\proj{m_0}$: one direction follows by partial trace; the other
+  follows from
+  $\id-P_0=\id_Q\otimes(\id_M-\proj{m_0})$ and
+  $\tr[(\id-P_0)\sigma]
+  =\tr[(\id_M-\proj{m_0})\tr_Q\sigma]$.
+  Testing all pure inputs yields condition 2. Tensoring these
+  identities with $\id_R$ gives the stated reference form; the
+  implication back to the unreferenced test uses a one-dimensional $R$. Conversely, items 1--4 and the (SA2) equivalence for the tensored data follow by applying this theorem with $QR$ in place of $Q$ and $U\otimes\id_R$, $K\otimes\id_R$ in place of $U$, $K$; the uniqueness in item 1 then forces the induced unitary on $QR$ to be $A\otimes\id_R$.
+  \end{proof}
+ \end{proof}
+ \step{sA-clean-channel}{The reduced channel is unitary exactly under (SA2).}
+ \begin{proof}
+  \step{sA-clean-channel-if}{\assume{Equation (SA2).}
+  \prove{$\Phi(\rho)=A\rho A^\dagger$.}}
+  \begin{proof}\pf\ Expand $\rho$ in matrix units and trace the
+  fixed factor $\proj\eta$, whose trace is one.
+  \end{proof}
+  \step{sA-clean-channel-only}{\assume{$\Phi(\rho)=A\rho A^\dagger$
+  for a unitary $A$ and every $\rho$.}\prove{Equation (SA2).}}
+  \begin{proof}
+   \step{sA-clean-basis}{\pick\ an orthonormal basis
+   $e_1,\ldots,e_d$ of $Q$. With $V=(A^\dagger\otimes\id_M)WE$,
+   there are unit vectors $\eta_j$ such that $Ve_j=e_j\otimes\eta_j$.}
+   \begin{proof}\pf\ A finite Hilbert space has an orthonormal basis.
+   The $Q$ marginal of $\proj{Ve_j}$ is $\proj{e_j}$; the support
+   argument of \stepref{sA-clean-one}, with the factors exchanged,
+   forces $Ve_j$ into $\ket{e_j}\otimes\cH_M$. Norm preservation
+   makes $\eta_j$ unit.
+   \end{proof}
+   \step{sA-clean-same}{Every $\eta_j$ is the same vector.}
+   \begin{proof}\pf\ If $i\ne j$, apply the unchanged $Q$ marginal
+   property of $V$ to $(e_i+e_j)/\sqrt2$. Its $(i,j)$ matrix element
+   is $\langle\eta_j,\eta_i\rangle/2$, and must be $1/2$.
+   Hence $\|\eta_i-\eta_j\|^2=2-2\operatorname{Re}
+   \langle\eta_j,\eta_i\rangle=0$. For $d=1$ there is just one
+   vector and the assertion already holds.
+   \end{proof}
+   \qedstep
+   \begin{proof}\pf\ Set $\eta=\eta_1$ and extend the basis
+   equality by linearity; multiply $V$ by $A\otimes\id_M$.
+   \end{proof}
+  \end{proof}
+  \qedstep
+  \begin{proof}\pf\ By \stepref{sA-clean-channel-if} and
+  \stepref{sA-clean-channel-only}.
+  \end{proof}
+ \end{proof}
+ \qedstep
+ \begin{proof}\pf\ The four equivalences follow from
+ \stepref{sA-clean-restrict}--\stepref{sA-clean-commute}; the
+ input and channel assertions follow from \stepref{sA-clean-one}
+ and \stepref{sA-clean-channel}.
+ \end{proof}
+\end{proof}
+
+\begin{definition}[Logical occurrences and retained segments]
+\label{def:sA-reset-points}
+For a finite fixed-space term define two annotated ordered expansions
+$\mathcal E_+(P)$ and $\mathcal E_-(P)$. Lists here are in execution
+order; the minus sign denotes the adjoint. Identity gives an empty list.
+For an atom $a$ the lists are $(A_a)$ and $(A_a^\dagger)$.
+For a sequence, concatenate in the orders
+\[
+ \mathcal E_+(R;S)=(\mathcal E_+(R),\mathcal E_+(S)),\qquad
+ \mathcal E_-(R;S)=(\mathcal E_-(S),\mathcal E_-(R)).
+\]
+For each expanded occurrence of a marked term set
+\[
+ \mathcal E_\epsilon(\mathsf M(R,K))
+   =[\mathcal E_+(R),K_\epsilon,\mathcal E_-(R)]_{o,\epsilon},
+ \qquad K_+=K,\quad K_-=K^\dagger,
+ \quad\epsilon\in\{+,-\}.
+\]
+The brackets are annotations, not operations: $o$ distinguishes the
+individual occurrence in the finite expansion, even when several
+occurrences come from the same syntactic subterm. Its entry is immediately
+before its bracketed list, its exit immediately after. A \emph{marked
+reset point} is that exit together with its annotated occurrence and
+a specified retained factor $F_o$ to test for zero. The atom and record
+identifiers stay those of the original syntax in both expansions.
+Outer allocations are left as zero embeddings, outer sequences are
+concatenated, and each run is replaced by its plus expansion.
+Atoms, including derived menu atoms, are indivisible at this logical
+level: no marked occurrences inside their supplied implementations or
+inside the menu entries are enumerated here.
+
+More generally, in a specified retained circuit of total unitary gates
+and fresh zero embeddings, a \emph{segment} is a consecutive list of
+operations with entry and exit boundaries, possibly the empty list.
+Its product is an isometry $V:\cH_A\to\cH_B$ on its typed input
+and output lists. This definition also applies to a supplied physical
+implementation, using its full register lists including workspace.
+Thus a boundary inside an implemented atom or keep has a meaning only
+after that implementation has been specified. A reset test certifies
+the state already produced there; it inserts no operation and deletes
+no register.
+\end{definition}
+
+\begin{theorem}[Recursive reset and marginal-restoration tests]
+\label{thm:sA-recursive}
+Let $L$ be a finite retained register list, $U,K$ total unitaries on it,
+$W=U^\dagger KU$, and $\mathcal S\subseteq\cH_L$ a specified subspace
+with orthogonal projection $P_{\mathcal S}$. Let $F\subseteq L$ be the
+auxiliary factor proposed for reset, and set
+$P_F=\id_{L\setminus F}\otimes\proj0_F$ (the projector $P_A$ of
+Definition~\ref{def:clean}, with $F$ in place of $A$). For arbitrary sublists,
+these tensor expressions use the canonical permutation of factors from
+their order in $L$ into the displayed order, and are transported back
+by its inverse. The same convention applies to $M'$ below.
+Then $F$ is zero after $W$ on every input
+supported on $\mathcal S$ if and only if
+\[
+ (\id-UP_FU^\dagger)KU P_{\mathcal S}=0.                  \tag{SA3}
+\]
+For reuse as an initially blank record the additional incoming condition
+$\mathcal S\subseteq\operatorname{ran}P_F$ is required. If
+$\mathcal S=\operatorname{ran}P_F$, (SA3) is equivalent to
+$[K,UP_FU^\dagger]=0$.
+
+Let $M'\subseteq L$ instead be a factor whose marginal is to be restored,
+with no product-state assumption. Fix a basis of $M'$ and its matrix
+units $B_{ij}=\ket i\bra j$. Preservation of the joint reduced state
+on $M'$ and every finite untouched external reference $R$, for every
+joint density operator supported on $\mathcal S\otimes\cH_R$ under
+$W\otimes\id_R$, is equivalent to
+\[
+ P_{\mathcal S}W^\dagger(\id_{L\setminus M'}\otimes B_{ij})
+ WP_{\mathcal S}
+ =P_{\mathcal S}(\id_{L\setminus M'}\otimes B_{ij})
+ P_{\mathcal S}\quad\hbox{for all }i,j.                 \tag{SA4}
+\]
+
+For any specified segment isometry $V:\cH_A\to\cH_B$, input
+subspace $\mathcal S\subseteq\cH_A$, and factor $F\subseteq B$,
+set $P_F^B=\id_{B\setminus F}\otimes\proj0_F$. Reset at its exit
+on every input supported on $\mathcal S$ is equivalent to
+\[
+ (\id_B-P_F^B)VP_{\mathcal S}=0.                       \tag{SA3a}
+\]
+This includes physical segment boundaries inside atoms, with all
+workspace included in $A,B$ and no zero-workspace assumption there.
+
+For a finite Tier~A term or typed outer program, also with the derived
+menus of Definition~\ref{def:tierb}, fix an initial subspace
+$\mathcal S_0$ and a finite collection of marked reset points as
+defined in Definition~\ref{def:sA-reset-points}. Marked occurrences inside the entries of a derived menu atom are not
+marked reset points at this logical level; a boundary there is tested by
+(SA3a) on the corresponding segment of the specified controlled circuit,
+with the selector included in its register lists. For occurrence $(o,\epsilon)$ of $\mathsf M(R,K)$, let $L_o$ be the
+register list at its entry in the expansion of the whole program, let
+$U$ and $K_\epsilon$ denote the denotations of $R$ and of the central
+operation on $L_o$ (tensor-identity lifts of
+Definition~\ref{def:tiera} included), let $F_o\subseteq L_o$, and let
+$J_o$ be the ordered product of all expansion operations before its
+entry, so that the exact entry subspace is
+$\mathcal S_o=J_o\mathcal S_0$. Equation (SA3), with $K_\epsilon$ in
+place of $K$, is jointly necessary and sufficient for zero at all
+those exits for every allowed initial input. For the keeps of
+Definition~\ref{def:keep}, $K^\dagger=K$, but the plus and minus
+occurrences can have different entry subspaces. For any specified retained circuit with a specified initial subspace
+$\mathcal S_0^{\mathrm{circ}}$ of its own input list (for a clean
+implementation of a term, $\mathcal S_0\otimes\ket0_Z$ with workspace
+named), the same conjunction assertion holds for a finite collection of
+segment exits tested by (SA3a), with each segment's input subspace the
+exact image of $\mathcal S_0^{\mathrm{circ}}$ under the prefix ending at
+that segment's entry. These assertions include inputs supported on
+$\mathcal S_0\otimes\cH_R$ and untouched references.
+Replacing exact entry subspaces by containing subspaces preserves
+sufficiency; necessity for actual reachable inputs is then not asserted.
+No equivalence between final cleanliness and cleanliness of every
+syntactic subterm is claimed. Blank-record use requires
+zero at its actual entry, supplied by fresh zero allocation, an earlier
+proved reset and preservation until use, or another proof of that entry
+condition. Neither (SA4) nor a reset alone permits deletion of a factor
+still required by an enclosing inverse.
+\end{theorem}
+\begin{proof}
+ \step{sA-rec-reset}{Reset on $\mathcal S$ is equivalent to (SA3).}
+ \begin{proof}
+  \step{sA-rec-support}{Reset on every density operator supported on
+  $\mathcal S$ is equivalent to $(\id-P_F)WP_{\mathcal S}=0$.}
+  \begin{proof}\pf\ Test rank-one inputs $\proj\psi$ with
+  $\psi\in\mathcal S$. Their output has zero $F$ marginal exactly
+  when $W\psi\in\operatorname{ran}P_F$, by the positive-support
+  calculation in Theorem~\ref{thm:sA-clean}. This gives the operator
+  equality; its converse for mixed inputs follows by a spectral
+  decomposition supported on $\mathcal S$.
+  \end{proof}
+  \qedstep
+  \begin{proof}\pf\ Multiply the equality of
+  \stepref{sA-rec-support} by $U$ on the left, use
+  $U(\id-P_F)=(\id-UP_FU^\dagger)U$ and $UW=KU$.
+  Multiplication by $U$ is reversible, proving the equivalence.
+  \end{proof}
+ \end{proof}
+ \step{sA-rec-full}{For $\mathcal S=\operatorname{ran}P_F$ the
+ commutator criterion is equivalent.}
+ \begin{proof}\pf\ Set $\Pi_F=UP_FU^\dagger$. Equation (SA3)
+ becomes $(\id-\Pi_F)K\Pi_F=0$ after right multiplication by
+ $U^\dagger$. The finite-dimensional invariant-subspace argument in
+ Theorem~\ref{thm:sA-clean} gives $[K,\Pi_F]=0$ and its converse.
+ \end{proof}
+ \step{sA-rec-marginal}{Marginal restoration is equivalent to (SA4).}
+ \begin{proof}
+  \step{sA-rec-marginal-need}{\assume{Restoration for all states
+  supported on $\mathcal S$.}\prove{Equation (SA4).}}
+  \begin{proof}\pf\ Write
+  $D=W^\dagger(\id\otimes B_{ij})W-\id\otimes B_{ij}$.
+  Equality of the marginals implies $\langle\psi,D\psi\rangle=0$
+  for every $\psi\in\mathcal S$, by homogeneity from normalized
+  inputs. For $u,v\in\mathcal S$, apply this to $u+v$ and $u+iv$,
+  and subtract the diagonal terms: one obtains respectively
+  $\langle u,Dv\rangle+\langle v,Du\rangle=0$ and
+  $i\langle u,Dv\rangle-i\langle v,Du\rangle=0$.
+  Hence both cross terms vanish, without requiring $D$ Hermitian.
+  Thus $P_{\mathcal S}DP_{\mathcal S}=0$.
+  \end{proof}
+  \step{sA-rec-marginal-suff}{\assume{Equation (SA4).}
+  \prove{Restoration including every external reference $R$.}}
+  \begin{proof}\pf\ For any matrix $C$ on $R$, tensor the compressed
+  equality with $C$. Every joint density operator $\sigma$ with support
+  in $\mathcal S\otimes\cH_R$ satisfies
+  \[
+   \tr\!\left[\sigma\bigl(W^\dagger(\id\otimes B_{ij})W
+          -\id\otimes B_{ij}\bigr)\otimes C\right]=0.
+  \]
+  Matrix units $B_{ij}$ and matrix units $C$ span all operators on
+  $M'R$. Equality of their expectations is equality of the reduced
+  density operators. This proves the claimed restoration.
+  \end{proof}
+  \qedstep
+  \begin{proof}\pf\ Necessity holds by taking the reference
+  one-dimensional in \stepref{sA-rec-marginal-need}; sufficiency is
+  \stepref{sA-rec-marginal-suff}.
+  \end{proof}
+ \end{proof}
+ \step{sA-rec-segment}{The general segment criterion is (SA3a), also
+ with untouched references.}
+ \begin{proof}\pf\ For a unit vector $\psi\in\mathcal S$, the
+ isometric output $V\psi$ has zero $F$ marginal exactly when
+ $(\id_B-P_F^B)V\psi=0$, by the positive-support argument of
+ Theorem~\ref{thm:sA-clean}. Testing all such vectors gives (SA3a);
+ spectral decomposition proves its converse for density operators.
+ Tensoring the zero operator with $\id_R$ gives the same assertion
+ on $\mathcal S\otimes\cH_R$. Conversely a one-dimensional reference
+ recovers (SA3a). No intermediate workspace condition was used.
+ \end{proof}
+ \step{sA-rec-prefix}{Exact entry subspaces can be determined without
+ assuming any intermediate cleanliness.}
+ \begin{proof}
+  \step{sA-rec-prefix-rules}{For a fixed-space term define
+  $\mathcal T_P(\mathcal S)=\mathcal U_P\mathcal S$. Then
+  \[
+  \begin{aligned}
+   \mathcal T_I(\mathcal S)&=\mathcal S,\\
+   \mathcal T_a(\mathcal S)&=A_a\mathcal S,\\
+   \mathcal T_{P;R}(\mathcal S)&=\mathcal T_R(\mathcal T_P(\mathcal S)),\\
+   \mathcal T_{\mathsf M(P,K)}(\mathcal S)
+      &=\mathcal U_P^\dagger K\mathcal U_P\mathcal S.
+  \end{aligned}
+  \]}
+  \begin{proof}\pf\ Substitute the denotations in
+  Definition~\ref{def:tiera}, also for the derived menu atom case.
+  For an outer allocation use $A_B\mathcal S$; for an adjoint atom
+  use $A_a^\dagger\mathcal S$. At an annotated occurrence
+  $(o,\epsilon)$ of $\mathsf M(P,K)$, the body starts in
+  $\mathcal S_o$, its central operation starts in
+  $\mathcal U_P\mathcal S_o$, and the inverse body starts in
+  $K_\epsilon\mathcal U_P\mathcal S_o$.
+  The expansion rules multiply to $\mathcal U_P^\dagger
+  K_\epsilon\mathcal U_P$: for the minus occurrence this is
+  $(\mathcal U_P^\dagger K\mathcal U_P)^\dagger$, as proved in
+  Theorem~\ref{thm:sA-sound}. The reversed sequence rule likewise
+  multiplies to the adjoint. Induction on the term therefore validates
+  both signed expansions, including every nested occurrence. Prefixes
+  inside an inverse body are evaluated from its actual entry subspace.
+  \end{proof}
+  \step{sA-rec-prefix-projector}{If a prefix isometry is $V$ and the
+  initial subspace is $\mathcal S_0$, its exact entry projector is
+  $VP_{\mathcal S_0}V^\dagger$.}
+  \begin{proof}\pf\ This operator is self-adjoint and its square is
+  itself because $V^\dagger V=\id$. Its range is precisely
+  $V\mathcal S_0$. Each logical prefix is a product of total unitary
+  atoms, keeps, their adjoints, and zero embeddings; a physical prefix
+  is a product of total gates and zero embeddings. Each is an isometry
+  by the same multiplication as in Theorem~\ref{thm:sA-sound}.
+  Moreover every density operator $\rho$ supported on $V\mathcal S_0$
+  is reached from $V^\dagger\rho V$, which has trace one, is supported
+  on $\mathcal S_0$, and is taken back to $\rho$ by $V$.
+  The same statements hold after tensoring with $\id_R$.
+  \end{proof}
+  \qedstep
+  \begin{proof}\pf\ The syntax and its expansion are finite, so
+  \stepref{sA-rec-prefix-rules} and \stepref{sA-rec-prefix-projector}
+  determine every requested entry subspace by finitely many operations
+  on the specified finite matrices. For a supplied physical circuit,
+  take its actual gate prefixes on all registers, including workspace.
+  These are exact algebraic prescriptions; no efficient procedure for
+  deciding their zero equalities is claimed.
+  \end{proof}
+ \end{proof}
+ \step{sA-rec-all}{The tests have exactly the asserted logical scope.}
+\begin{proof}
+ \step{sA-rec-all-mark}{\assume{The specified exit is a marked
+ occurrence.}\prove{Its (SA3) test with $K_\epsilon$ is necessary
+ and sufficient for zero at that exit for every allowed initial state.}}
+ \begin{proof}\pf\ Step~\stepref{sA-rec-prefix} identifies the
+ actual operator as $U^\dagger K_\epsilon U$ and makes every state
+ on the exact entry subspace reachable. Apply
+ \stepref{sA-rec-reset} with $K_\epsilon$; Lemma~\ref{lem:keep}
+ gives $K_-=K_+$ for a keep. The resulting test is equivalent to
+ zero at this exit for every allowed initial state.\end{proof}
+ \step{sA-rec-all-segment}{\assume{The specified exit is another
+ segment exit.}\prove{Its (SA3a) test on the exact entry subspace
+ is necessary and sufficient for zero there for every allowed initial state.}}
+ \begin{proof}\pf\ Step~\stepref{sA-rec-segment} gives exactly
+ the zero-exit test on its entry subspace. Reachability from
+ \stepref{sA-rec-prefix} makes it necessary and sufficient for
+ every allowed initial state.\end{proof}
+ \step{sA-rec-all-conjunction}{The finite conjunction requires exactly
+ that all specified exits be zero for every allowed initial state,
+ also in the reference forms.}
+ \begin{proof}\pf\ Apply \stepref{sA-rec-all-mark} and
+ \stepref{sA-rec-all-segment} separately to each exit. Universal
+ quantification over initial states commutes with finite conjunction.
+ Reference forms follow from \stepref{sA-rec-segment} and
+ \stepref{sA-rec-prefix}.\end{proof}
+ \step{sA-rec-all-containing}{\assume{$\mathcal S\subseteq
+ \widehat{\mathcal S}$.}\prove{Vanishing on $\widehat{\mathcal S}$
+ implies vanishing on $\mathcal S$.}}
+ \begin{proof}\pf\ Every vector in $\mathcal S$ is a vector in
+ $\widehat{\mathcal S}$, so restriction of the zero operator to
+ $\mathcal S$ is zero.\end{proof}
+ \step{sA-rec-all-entry}{Forward-entry blankness is an additional
+ support condition, and the tests do not specify missing factors
+ in later inverses.}
+ \begin{proof}\pf\ Definition~\ref{def:clean} requires incoming
+ support on the zero-auxiliary subspace. A prior reset establishes
+ that support only if intervening operations preserve it. Every
+ tested equality is an equality of retained operators, whose
+ domains still contain all retained factors. It therefore supplies
+ no action on a register list from which a factor has been removed.
+ \end{proof}
+ \qedstep
+ \begin{proof}\pf\ The preceding steps establish the scope and
+ entry requirements without assuming intermediate cleanliness.
+ \end{proof}
+\end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{sA-rec-reset}--\stepref{sA-rec-all}.
+ \end{proof}
+\end{proof}
+
+\begin{counterexample}[Limits of local reset tests]\label{ex:sA-rec-limits}
+The following finite Tier~A examples show that (i) replacing a reached
+subspace by the whole zero-auxiliary subspace can destroy necessity,
+and the commutator criterion need not be necessary on a proper subspace;
+(ii) final cleanliness does not imply cleanliness of every inner mark;
+(iii) marginal restoration does not permit discarding correlations; and
+(iv) a unitary reduced channel need not reset to its initial machine state.
+Without an incoming-zero hypothesis, the full-space commutator alone
+need not even imply reset on a specified input subspace.
+In (i)--(ii) let $Q=r$, $M=a$, and use
+\[
+ U=\operatorname{CNOT}_{r\to a},\qquad
+ K=\operatorname{CNOT}_{a\to r},\qquad
+ P_a=\id_r\otimes\proj0_a.
+\]
+Here and below $K_{0,t}$ denotes the single keep entry with target $t$
+and constant-zero Boolean function on the entire machine list.
+In (iii) take $Q=q$, $M'=a$, and $\mathcal S$ spanned by
+$\Omega=(\ket{00}+\ket{11})_{qa}/\sqrt2$, with $U=\id$ and
+$K=K_{0,q}=\id$, so $W=U^\dagger KU=\id$.
+In (iv) take $Q=r$, $M=a$ initially zero, body $U$ as above and constant
+keep $K=X_r$.
+\end{counterexample}
+\begin{proof}
+ \step{sA-limits-swap}{$U^\dagger KU=\operatorname{SWAP}_{ra}$.}
+ \begin{proof}\pf\ On a basis pair $(y,z)$ in order $r,a$, the
+ three CNOTs give successively $(y,z\oplus y)$,
+ $(z,z\oplus y)$, and $(z,y)$. These are the SWAP basis values;
+ linearity gives the operator equality.
+ \end{proof}
+ \step{sA-limits-subspace}{Item (i): the reached-subspace test need
+ not agree with the full zero-subspace test.}
+ \begin{proof}\pf\ For $\mathcal S=\operatorname{span}\{\ket{00}\}$,
+ SWAP fixes its vector, so reset holds. But
+ $\ket{10}\in\operatorname{ran}P_a$ is taken to $\ket{01}$,
+ outside that range. Thus reset fails on the containing space
+ $\operatorname{ran}P_a$, and Theorem~\ref{thm:sA-recursive}
+ gives $[K,UP_aU^\dagger]\ne0$. This also proves that a containing
+ subspace test is not necessary for actual reachable inputs.
+ For the same SWAP, the subspace spanned by $\ket{01}$ resets to
+ $a=0$, but is not initially blank: reset alone does not establish
+ the incoming-zero requirement. Separately, take $U=\id$ and
+ $K=K_{0,r}=\id$ with
+ that same input subspace. Then $[K,UP_aU^\dagger]=0$ while $a$
+ remains one, disproving sufficiency of the commutator without the
+ incoming-zero hypothesis.
+ \end{proof}
+ \step{sA-limits-nesting}{Item (ii): final cleanliness does not imply
+ inner cleanliness.}
+ \begin{proof}\pf\ Let $R=\mathsf M(U,K)$, identifying the displayed
+ Boolean gate $U$ with its atom, and let $K_0=K_{0,r}$.
+ The nested term $\mathsf M(R,K_0)$ has denotation
+ $\mathcal U_R^\dagger\mathcal U_R=\id$. It is therefore clean on
+ every $r$ input with $a=0$. Nevertheless, its inner forward term
+ $R$ takes input $\ket{10}$ to $\ket{01}$ by
+ \stepref{sA-limits-swap}, so that inner mark is not clean.
+ No logical cell is discarded or reused as blank in this example.
+ \end{proof}
+ \step{sA-limits-reference}{Item (iii): marginal restoration does not
+ permit discarding correlations.}
+ \begin{proof}\pf\ Identity satisfies (SA4) on every subspace and
+ leaves the $a$ marginal of $\proj\Omega$ equal to $\id_a/2$.
+ Dropping $a$ and allocating a fresh wire $a'$ in zero gives
+ $(\id_q/2)\otimes\proj0_{a'}$. After identifying its two-dimensional
+ space with that of $a$ solely to compare states, this differs from
+ $\proj\Omega$:
+ its expectation of $\proj\Omega$ is $1/4$, whereas the original
+ expectation is $1$. Even replacement by a state with the same
+ marginal $\id_a/2$ gives $\id_{qa}/4$ and the same discrepancy.
+ Thus preservation of a marginal does not preserve the joint state
+ under deletion and replacement.
+ \end{proof}
+ \step{sA-limits-unitary}{Item (iv): a unitary reduced channel need
+ not reset the machine.}
+ \begin{proof}\pf\ With the constant keep $X_r$, conjugation by
+ $\operatorname{CNOT}_{r\to a}$ gives $W=X_rX_a$: on a basis pair
+ $(y,z)$ the result is $(y\oplus1,z\oplus1)$. Hence
+ $W(\psi_r\ket0_a)=X\psi_r\ket1_a$. The reduced channel is
+ conjugation by $X$, but $a$ is never returned to zero.
+ \end{proof}
+ \qedstep
+ \begin{proof}\pf\ Steps \stepref{sA-limits-subspace}--\stepref{sA-limits-unitary}
+ establish the four assertions. All keeps are of
+ Definition~\ref{def:keep}, including constant-zero and constant-one
+ Boolean functions, and each body is identity or an explicitly
+ displayed Boolean-gate term admitted by Definition~\ref{def:tiera}.
+ \end{proof}
+\end{proof}
+
+\subsection{A classical sufficient condition and its limits}
+
+The compute--copy--uncompute organization is stated in Bennett's abstract
+\cite[abstract, journal p.~525, PDF p.~1]{Bennett1973}.
+The following quantum extension and its limitations are proved directly.
+
+\begin{theorem}[Compute--copy--uncompute with an untouched target]
+\label{thm:sA-classical}
+Let $X,r,M$ be finite pairwise disjoint registers, and let $m_0$ be a
+computational-basis configuration of $M$. Suppose $U=U_{XM}\otimes\id_r$
+is a total unitary, and for every computational-basis value $x$ of $X$
+there are a unit vector $\phi_x\in\cH_X$ and a computational-basis
+configuration $m_x$ of $M$ such that, in order $X,M$,
+\[
+ U_{XM}(\ket x\ket{m_0})=\ket{\phi_x}\ket{m_x}.          \tag{SA5}
+\]
+Let $v:\{0,1\}^{|M|}\to\{0,1\}^{|r|}$ be a total Boolean function
+with the specified finite circuit of Definition~\ref{def:keep}, and
+let $K=K_{v,r}$, with $M$ the whole keep-control list. Any additional
+machine controls must be included in $M$ and in (SA5).
+Then $U^\dagger KU$ is clean and induces the unitary
+\[
+ \ket{x,y}\longmapsto\ket{x,y\oplus v(m_x)}             \tag{SA6}
+\]
+on $Xr$, for every quantum input on $Xr$ and any external reference.
+The action on inputs with $M$ in $\ket{m_0}$, and hence (SA6),
+depends only on (SA5) and independence of $r$, not on the choice of
+total extension of $U_{XM}$ away from these inputs. No independence of
+the total operator $U^\dagger KU$ on other input states is asserted.
+
+In particular, (SA5) holds with $\phi_x=\ket x$ for a classical
+computation preserving the input register $X$. It also
+holds whenever $U_{XM}$ is a total computational-basis permutation,
+including a fixed finite computation composed only of reversible classical
+steps, independent of the unread keep target $r$. Literal preservation
+of $X$ is therefore unnecessary for the stronger sufficient condition.
+
+Two enlargements of this universal claim are false. First, allowing
+non-basis machine output in (SA5) fails for $X$ empty, $M=a$, $m_0=0$,
+$U=H_a\otimes\id_r$, $K=\operatorname{CNOT}_{a\to r}$:
+\[
+ W\ket{0,0}_{ar}=
+   (\ket0_a\ket+_r+\ket1_a\ket-_r)/\sqrt2,
+ \qquad\ket\pm=(\ket0\pm\ket1)/\sqrt2.                \tag{SA7}
+\]
+Second, allowing $U\ket{x,y,m_0}=\ket{x,y,m_{x,y}}$ to depend on the
+keep target fails for $M=a$, $U=\operatorname{CNOT}_{r\to a}$,
+$K=\operatorname{CNOT}_{a\to r}$: input $\ket{1,0}_{ra}$ ends at
+$\ket{0,1}_{ra}$. These are counterexamples to enlarged universal
+claims, not necessity claims for each individual clean operation.
+For an entangled-output failure upon allowing unrestricted outputs in
+place of (SA5), see the separately proved Theorem~\ref{thm:sA-four}.
+\end{theorem}
+\begin{proof}
+ \step{sA-class-basis}{For every basis pair $(x,y)$ the three stages
+ have the asserted action.}
+ \begin{proof}
+  \step{sA-class-compute}{The forward stage gives
+  $\ket{\phi_x}_X\ket y_r\ket{m_x}_M$.}
+  \begin{proof}\pf\ This is (SA5) and $U$ acting as identity on $r$.
+  \end{proof}
+  \step{sA-class-copy}{The keep gives
+  $\ket{\phi_x}_X\ket{y\oplus v(m_x)}_r\ket{m_x}_M$.}
+  \begin{proof}\pf\ The machine factor is one basis configuration,
+  so in the sector sum defining $K$ only its $m_x$ summand acts.
+  \end{proof}
+  \step{sA-class-uncompute}{The inverse gives
+  $\ket x_X\ket{y\oplus v(m_x)}_r\ket{m_0}_M$.}
+  \begin{proof}\pf\ Total unitarity and (SA5) imply
+  $U_{XM}^\dagger(\ket{\phi_x}\ket{m_x})=\ket x\ket{m_0}$.
+  Independence of $r$ permits applying this equality to the modified
+  target value. No unspecified forward value of $U_{XM}$ is used.
+  \end{proof}
+  \qedstep
+  \begin{proof}\pf\ Compose \stepref{sA-class-compute}--\stepref{sA-class-uncompute}.
+  \end{proof}
+ \end{proof}
+ \step{sA-class-unitary}{The induced operation on $Xr$, with $M$
+ initially in $\ket{m_0}$, is unitary on every $Xr$ input and is
+ independent of the total extension.}
+ \begin{proof}\pf\ For a fixed $x$, XOR by $v(m_x)$ permutes the
+ basis of $r$ and squares to identity. Consequently (SA6) is a
+ permutation of the full basis of $Xr$. The equality in
+ \stepref{sA-class-basis} extends by linearity, also after tensoring
+ an identity on a reference. Its expression uses only $m_x$; the
+ inverse equality there holds for every unitary extension agreeing
+ with (SA5). Thus $M$ is returned to $m_0$ with the claimed induced
+ unitary.
+ \end{proof}
+ \step{sA-class-permutation}{Reversible classical steps with an
+ untouched target satisfy the sufficient condition.}
+ \begin{proof}\pf\ A finite product of computational-basis
+ permutations is a computational-basis permutation. For each input
+ $(x,m_0)$ its output is one basis pair $(z_x,m_x)$, so take
+ $\phi_x=\ket{z_x}$. This verifies (SA5), whether or not $z_x=x$.
+ \end{proof}
+ \step{sA-class-H}{Equation (SA7) disproves deletion of the basis-output
+ requirement.}
+ \begin{proof}\pf\ On $\ket{00}_{ar}$ the forward $H_a$ gives
+ $(\ket{00}+\ket{10})/\sqrt2$. The keep gives
+ $(\ket{00}+\ket{11})/\sqrt2$. Applying $H_a$ again gives
+ $(\ket{00}+\ket{10}+\ket{01}-\ket{11})/2$, which is (SA7).
+ Its $a=1$ probability is $1/2$. The forward machine state was the
+ non-basis vector $\ket+$, while the keep target was untouched by $U$.
+ \end{proof}
+ \step{sA-class-target}{The target-dependent example disproves deletion
+ of the unread-target requirement.}
+ \begin{proof}\pf\ The three CNOTs give
+ $\ket{10}_{ra}\mapsto\ket{11}_{ra}\mapsto\ket{01}_{ra}
+ \mapsto\ket{01}_{ra}$. Thus $a$ is one at the end although it
+ was initially zero. The forward rule is nevertheless the
+ basis-valued rule $\ket{y,0}\mapsto\ket{y,y}$.
+ \end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{sA-class-basis}--\stepref{sA-class-target}.
+ The failures arise after deleting the indicated hypothesis; they do
+ not contradict the sufficient statement with all hypotheses retained.
+ \end{proof}
+\end{proof}
+
+\subsection{A four-qubit two-copy circuit, its leakage, and its channels}
+
+\begin{theorem}[Four-qubit calculation]\label{thm:sA-four}
+Let $q,r,a,b$ be distinct qubits, with $Q=qr$ and $M=ab$ initially
+$\ket{00}$. The copying operations below are the explicit Boolean-gate
+atoms of Definition~\ref{def:tiera}, not the full-snapshot source-read
+translation of Definition~\ref{def:joint-tick}. Set
+\[
+ U=\operatorname{CNOT}_{q\to b}H_q\operatorname{CNOT}_{q\to a},
+ \quad K=\operatorname{CNOT}_{b\to r},\quad W=U^\dagger KU,
+ \quad P_\pm=\proj\pm_r.
+\]
+Define $E_{00}\xi=\xi_{qr}\otimes\ket{00}_{ab}$. On every input
+$\xi\in\cH_{qr}$,
+\[
+ WE_{00}\xi=B_0\xi\otimes\ket{00}_{ab}
+             +B_1\xi\otimes\ket{10}_{ab},\qquad
+ B_0=\id_q\otimes P_+,\quad B_1=X_q\otimes P_-.         \tag{SA8}
+\]
+For any finite untouched reference $R$, the same equality holds for
+$\xi\in\cH_{qrR}$ with $W,E_{00},B_0,B_1$ each tensored with
+$\id_R$, and the factors canonically reordered by their names.
+Consequently the following assertions hold.
+\begin{enumerate}
+ \item For $r$ initially $0$ and every unit vector $\psi_q$, the final
+ state, in order $q,r,a,b$, is
+ \[
+  \frac{\ket\psi_q\ket+_r\ket0_a+
+              X\ket\psi_q\ket-_r\ket1_a}{\sqrt2}
+          \otimes\ket0_b.                              \tag{SA9}
+ \]
+ The probability that $M\ne00$ is $1/2$, independently of the input
+ density operator of $q$ and of any reference: the reference input
+ is $\rho_{qR}\otimes\proj0_r$, with $\rho_{qR}$ arbitrary.
+ The factor $b$ is always zero.
+ \item Dropping $M$ gives the channel on $qr$
+ \[
+  \Phi(\sigma)=B_0\sigma B_0^\dagger+B_1\sigma B_1^\dagger.
+                                                               \tag{SA10}
+ \]
+ It is not a unitary channel on the full space $\cH_{qr}$. For $r=0$,
+ \[
+  \Phi(\rho\otimes\proj0_r)
+   =\tfrac12\rho\otimes P_++\tfrac12X\rho X\otimes P_-.
+                                                               \tag{SA11}
+ \]
+ Every pure $q$ input yields a rank-two $qr$ output of purity $1/2$.
+ \item For any fixed density operator $\tau$ initializing $r$, with
+ product input $\rho_q\otimes\tau_r$, put
+ $p_\pm=\tr(P_\pm\tau)$. Then
+ \[
+ \begin{split}
+  \Phi(\rho\otimes\tau)&=p_+\rho\otimes P_+
+                         +p_-X\rho X\otimes P_-,\\
+  \tr_r\Phi(\rho\otimes\tau)&=p_+\rho+p_-X\rho X.
+ \end{split}                                                  \tag{SA12}
+ \]
+ The channel in the second line is unitary on $q$ if and only if
+ $\tau=P_+$ or $\tau=P_-$. The map from $q$ to retained $qr$ in
+ the first line is isometric if and only if the same condition holds;
+ the word unitary here applies only after identifying the fixed $r$
+ factor with a one-dimensional space. For $\tau=P_+$ the action is
+ identity on $q$ and $M$ resets. For $\tau=P_-$ the action is $X$
+ on $q$ and $M$ is the fixed state $\ket{10}$, so it does not reset.
+ \item When $r=0$, the $q$ marginal is $(\rho+X\rho X)/2$.
+ It equals $\rho$ precisely when $X\rho X=\rho$; among pure states
+ these are exactly the $X$ eigenstates. This does not make (SA11)
+ pure. If the intervening $H_q$ is omitted, the marked operation on
+ the same initialized machine is instead CNOT from $q$ to $r$,
+ with $M$ reset on every $qr$ input.
+\end{enumerate}
+Moreover
+$U(\ket0_q\ket{00}_{ab})
+=(\ket0_q\ket{00}_{ab}+\ket1_q\ket{01}_{ab})/\sqrt2$, which is not a
+product vector across $q$ and $ab$; hence, with $X=q$, $M=ab$ and target
+$r$ untouched by $U$, unrestricted forward outputs cannot replace (SA5)
+in Theorem~\ref{thm:sA-classical}.
+The example therefore refutes universal cleanliness for Tier~A, even
+with an unread keep target, while preserving its total unitary soundness.
+\end{theorem}
+\begin{proof}
+ \step{sA-four-conjugate}{On the full four-qubit space,
+ $W=P_+\otimes\id_{qab}+P_-\otimes X_qX_aZ_b$, with the
+ tensor factors placed on their indicated wires.}
+ \begin{proof}
+  \step{sA-four-K}{$K=P_+\otimes\id_{qab}+P_-\otimes Z_b$,
+  with identities on $q,a$ in the second summand.}
+  \begin{proof}\pf\ The target Pauli $X_r$ acts by $+1$ on
+  $\ket+$ and by $-1$ on $\ket-$. In the latter sector,
+  controlled-$X_r$ contributes $(-1)^b$, the action of $Z_b$.
+  \end{proof}
+  \step{sA-four-Z}{$U^\dagger Z_bU=X_qX_aZ_b$.}
+  \begin{proof}\pf\ Conjugating $Z_b$ by
+  $\operatorname{CNOT}_{q\to b}$ gives $Z_qZ_b$: on a basis
+  pair the multiplier is $(-1)^{b\oplus q}=(-1)^b(-1)^q$.
+  Next $H_qZ_qH_q=X_q$ by the matrices in
+  Definition~\ref{def:circuit}. Finally conjugating $X_q$ by
+  $\operatorname{CNOT}_{q\to a}$ gives $X_qX_a$, because
+  the basis pair $(q,a)$ becomes $(q\oplus1,a\oplus1)$.
+  The other factors commute with gates on disjoint wires.
+  \end{proof}
+  \qedstep
+  \begin{proof}\pf\ $U$ does not act on $r$, so conjugate
+  \stepref{sA-four-K} by $U$ and use \stepref{sA-four-Z}.
+  \end{proof}
+ \end{proof}
+ \step{sA-four-isometry}{Equation (SA8) holds.}
+ \begin{proof}\pf\ In \stepref{sA-four-conjugate}, the first
+ summand leaves $\ket{00}_{ab}$ fixed. The second takes it to
+ $\ket{10}_{ab}$, since $Z_b\ket0_b=\ket0_b$ and
+ $X_a\ket0_a=\ket1_a$. The remaining operators are $B_0,B_1$.
+ Each identity remains valid after tensoring with a reference identity.
+ \end{proof}
+ \step{sA-four-state}{Equation (SA9) and the leakage probability hold.}
+ \begin{proof}\pf\ Substitute $\xi=\psi\otimes\ket0_r$ in
+ (SA8) and use $P_\pm\ket0=\ket\pm/\sqrt2$.
+ The two machine vectors in (SA8) are orthogonal, and
+ $B_1^\dagger B_1=\id_q\otimes P_-$. Thus the $a=1$
+ probability for any $qr$ input $\sigma$ is
+ $\tr[(\id_q\otimes P_-)\sigma]$. For $r=0$ this is $1/2$,
+ even if $q$ has a reference, since its input trace is one.
+ Both summands have $b=0$.
+ \end{proof}
+ \step{sA-four-channel}{Equations (SA10)--(SA12) hold and define
+ trace-preserving completely positive maps.}
+ \begin{proof}\pf\ Tracing the orthogonal machine vectors in
+ (SA8) removes their cross terms and yields (SA10).
+ Moreover $B_0^\dagger B_0+B_1^\dagger B_1
+ =\id_q\otimes(P_++P_-)=\id_{qr}$; the Kraus calculation in
+ Theorem~\ref{thm:sA-sound} proves the channel properties.
+ For every density operator $\tau$ on $r$,
+ $P_\pm\tau P_\pm=\tr(P_\pm\tau)P_\pm$ because these
+ projectors have rank one. Substitution gives (SA12); taking
+ $\tau=\proj0$ gives $p_+=p_-=1/2$ and (SA11).
+ \end{proof}
+ \step{sA-four-rank}{The full $qr$ channel is not unitary, and every
+ pure input on $q$ with $r=0$ has the asserted rank and purity.}
+ \begin{proof}\pf\ In (SA11) for $\rho=\proj\psi$, the unit
+ vectors $\psi\otimes\ket+$ and $X\psi\otimes\ket-$ are
+ orthogonal because their $r$ factors are orthogonal. The two nonzero
+ eigenvalues are $1/2,1/2$, so the rank is two and purity is
+ $1/4+1/4=1/2$. Unitary conjugation preserves rank-one projections,
+ whereas this channel takes the pure input $\proj\psi\otimes\proj0$
+ to rank two. It cannot be unitary on $qr$.
+ \end{proof}
+ \step{sA-four-unitary-when}{The exact unitary and isometric conditions
+ for a fixed target input are those in assertion 3.}
+ \begin{proof}
+  \step{sA-four-extreme}{\case{$p_+=1$ or $p_-=1$.}}
+  \begin{proof}\pf\ Positivity of $\tau$ and its zero expectation
+ on the complementary projection force its support into the respective
+ rank-one eigenspace, by the positive-support argument of
+ Theorem~\ref{thm:sA-clean}. Thus $\tau=P_+$ or $P_-$ respectively.
+ Equation (SA8) becomes $\psi\ket+\ket{00}$ or
+ $X\psi\ket-\ket{10}$ respectively. These are the stated isometries,
+ induced unitaries on $q$, and machine outputs.
+  \end{proof}
+  \step{sA-four-interior}{\case{$0<p_+<1$, so $0<p_-<1$.}}
+  \begin{proof}\pf\ For input $\rho=\proj0_q$, the $q$ output
+  in (SA12) is $p_+\proj0+p_-\proj1$, of rank two; it cannot
+  be a unitary channel. The retained $qr$ output has two nonzero
+  eigenvalues $p_+,p_-$ on orthogonal vectors, so the map from $q$
+  to $qr$ cannot be isometric either. The cases exhaust all possible
+  $p_\pm$ because they are nonnegative and sum to one.
+  \end{proof}
+  \qedstep
+  \begin{proof}\pf\ By \stepref{sA-four-extreme} and
+  \stepref{sA-four-interior}.
+  \end{proof}
+ \end{proof}
+ \step{sA-four-fixed}{The fixed states of the $q$ marginal for $r=0$
+ are exactly those asserted.}
+ \begin{proof}\pf\ The equality $(\rho+X\rho X)/2=\rho$ is
+ equivalent to $X\rho X=\rho$. For a rank-one projection this
+ says $X\psi=\lambda\psi$ for a scalar of modulus one; applying
+ $X$ twice gives $\lambda^2=1$. Conversely either $X$ eigenstate
+ satisfies the equality. The rank calculation in
+ \stepref{sA-four-rank} still applies to its retained $qr$ output.
+ \end{proof}
+ \step{sA-four-noH}{Deleting the intermediate Hadamard gives a clean
+ CNOT on $qr$.}
+ \begin{proof}\pf\ Put $U_0=\operatorname{CNOT}_{q\to b}
+ \operatorname{CNOT}_{q\to a}$. On every basis input
+ $\ket{x,y,0,0}_{qrab}$, the forward circuit gives
+ $\ket{x,y,x,x}$. The keep gives $\ket{x,y\oplus x,x,x}$,
+ and the inverse gives $\ket{x,y\oplus x,0,0}$.
+ Linear extension proves the claimed action on arbitrary $qr$ inputs.
+ \end{proof}
+ \step{sA-four-product-limit}{The forward body can entangle data
+ and machine while leaving the keep target untouched.}
+ \begin{proof}\pf\ On $\ket0_q\ket{00}_{ab}$ its action is
+ $(\ket0_q\ket{00}_{ab}+\ket1_q\ket{01}_{ab})/\sqrt2$.
+ Tracing $ab$ gives $\id_q/2$, of rank two, whereas a product pure
+ vector has rank-one $q$ marginal. Thus this forward vector is not
+ of the form (SA5). The operator $U$ never acts on $r$, yet for
+ $r=0$ the leakage is $1/2$ by \stepref{sA-four-state}. Hence
+ unrestricted forward outputs cannot replace (SA5) in the universal
+ cleanliness assertion. This does not claim (SA5) necessary for each
+ individually clean operation.
+ \end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{sA-four-isometry}--\stepref{sA-four-product-limit}.
+ The nonzero leakage in \stepref{sA-four-state} disproves universal
+ cleanliness, while all factors are total unitaries covered by
+ Theorem~\ref{thm:sA-sound}. Their explicit copying atoms do not
+ supply an equality with a different source-read translation.
+ \end{proof}
+\end{proof}

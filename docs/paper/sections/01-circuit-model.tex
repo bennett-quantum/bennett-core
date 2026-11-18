@@ -1,0 +1,77 @@
+\begin{definition}[Types and observable equality]\label{def:registers}
+A register list $L$ is a finite ordered list of distinct wire names, with
+$\cH_L=(\C^2)^{\otimes |L|}$. Subregisters are ordered subsets; juxtaposition
+of disjoint lists denotes tensor product. Products of operators act from
+right to left. A width-$w$ value is a binary string, also interpreted as
+an unsigned integer in $\{0,\ldots,2^w-1\}$; $\oplus$ is bitwise XOR.
+A density operator is a positive operator of trace one. A channel is a
+completely positive trace-preserving linear map. An instrument is a finite
+family of completely positive trace-nonincreasing maps summing to a channel.
+For channels with the same input and output, define
+\[
+ d_{\rm out}(\Phi,\Psi)=
+ \sup_{R,\rho}\|((\Phi-\Psi)\otimes\id_R)(\rho)\|_1,
+\]
+where $R$ ranges over finite reference registers and $\rho$ over density
+operators on the input and $R$; $\|A\|_1=\tr\sqrt{A^\dagger A}$.
+An instrument is compared as a channel retaining its orthogonal outcome
+labels. The operator norm is $\|A\|=\sup_{\|v\|=1}\|Av\|$.
+All bounds and circuit descriptions are independent of the unknown input.
+\end{definition}
+
+\begin{definition}[Machine 3 and fresh names]\label{def:circuit}
+Machine 3 is the finite quantum circuit model with labelled gates
+\[
+ H=2^{-1/2}\begin{pmatrix}1&1\\1&-1\end{pmatrix},\quad
+ T=\operatorname{diag}(1,e^{i\pi/4}),\quad
+ \operatorname{CNOT}\ket{a,b}=\ket{a,b\oplus a}.
+\]
+Write $\mathcal G=\{H,T,\operatorname{CNOT}\}$,
+$\mathcal G^{\pm}=\mathcal G\cup\{T^\dagger\}$,
+$Z=T^4$, $X=HZH$, and $S=T^2$.
+Exactly two additional register transformations are allowed:
+\[
+ A_B:\cH_L\longrightarrow\cH_{LB},\quad
+ A_B\ket\psi=\ket\psi\ket{0^{|B|}},\qquad
+ D_B(\rho)=\tr_B\rho\quad(B\subseteq L).
+\]
+The names in $B$ in $A_B$ have never occurred earlier in the description.
+Drop removes names from the accessible list permanently; later allocations
+use new names. The circuit data designate an accessible output list $O$.
+In the retained interpretation, a dropped factor is moved to an inaccessible
+list $E$ and kept, with no subsequent operation on it. Thus the denotation
+is first an isometry $V:\cH_{L_{\rm in}}\to\cH_{OE}$ and then the channel
+$\rho\mapsto\tr_E(V\rho V^\dagger)$.
+An optional ideal alphabet adds the actual matrices
+$R_z(\theta)=\operatorname{diag}(e^{-i\theta/2},e^{i\theta/2})$.
+An angle is supplied by a finite description together with a procedure
+that, on input $b$, outputs dyadic approximations to the four complex
+entries of $R_z(\theta)$ within $2^{-b}$ (the entry procedure of
+Theorem~\ref{eqv:rotations}, whose cost is charged there). A description
+without such a procedure does not define an ideal gate in this paper.
+Their controlled versions use these matrices including their phases;
+$T$ is not identified with $R_z(\pi/4)$ under a control.
+
+Terminal computational-basis observation is part of the circuit model,
+not an additional register transformation. Before choosing $O$, let $A$
+be the final accessible list. The data may designate an ordered list
+$(i_1,\ldots,i_b)$ of wires in $A$ to measure (repetitions allowed).
+For $y\in\{0,1\}^b$ set
+$P_y=\prod_{j=1}^b(\proj{y_j}_{i_j}\otimes\id)$.
+Let $E_0$ be the list of previously dropped wires, disjoint from $A$.
+If $V_0:\cH_{L_{\rm in}}\to\cH_{AE_0}$ is the retained circuit
+isometry before observation, the
+instrument on $O\subseteq A$ is
+\[
+ \rho\longmapsto\tr_{(AE_0)\setminus O}
+       (P_yV_0\rho V_0^\dagger P_y),\qquad y\in\{0,1\}^b,
+\]
+where projectors act as identity on $E_0$. Its retained form first
+copies each $i_j$ into
+a fresh zero wire $Y_j$ by CNOT, then copies $Y$ into a fresh zero
+$E_Y$. Selecting $OY$ and tracing its complement gives the displayed
+instrument with orthogonal classical labels $y$. Without observation
+the earlier output isometry notation is unchanged; with observation
+it has output $OY$ and the complementary retained environment.
+\end{definition}
+

@@ -1,0 +1,959 @@
+
+\subsection{Exact resources of the prescribed expansion}
+
+\begin{remark}[Reading the resource bounds]
+The content of Theorem~\ref{thm:resA-resources} for most readers is (RA1),
+(RA2) and (RA4): in the expansion that literally writes body, keep,
+reversed body at every mark, work doubles per nesting level, exactly;
+retained wires do not multiply, because inverses reuse the same named
+records. Two warnings govern everything in this section. First, ``tight''
+always means tight for that prescribed, unsimplified expansion: with an
+empty keep the expanded circuit can already denote the identity, so
+nothing here lower-bounds the best equivalent circuit, parallel depth,
+or time at bounded space. Second, the remaining clause, (RA3), is a
+routine but lengthy verification that a classical Turing machine can
+print the expansion without random access; it is logically separate from
+(RA1)--(RA2) and can be skipped on a first reading. No pebble-game
+trade-off continuum is proved in this paper: the only proved alternatives
+to eager expansion are the restricted delayed construction of
+Theorem~\ref{thm:resA-delayed} and deletion of an inner inverse exactly
+when the commutator test (RA9) (or its subspace form (RA10)) holds.
+\end{remark}
+
+\begin{theorem}[Expansion resources, not optimal synthesis]
+\label{thm:resA-resources}
+Assume all hypotheses of Theorem~\ref{thm:sA-sound}, including finite
+static syntax, total completions, retained logical registers, the
+exclusions of Definition~\ref{def:tiera}, and specified exact clean
+circuits over $\mathcal G^{\pm}$. Use Definition~\ref{def:costs}, with
+no cancellation or circuit simplification. In particular all tick
+decoders satisfy the canonical-field, live-flag and fault requirements
+on every code, and exclude allocation and measurement modes on every
+code. Marks pair statically; marked bodies contain no allocation, drop,
+observed measurement, external console observation or actual stop.
+The menu extension requires base Tier~A entries with supplied exact
+finite-alphabet lists and retained disjoint selectors. A compiled menu
+is one leaf for $C,L,d$ and for the following sum: its payload gate
+costs are not counted again. For an atom occurrence $v$
+let $h(v)$ count its enclosing marks. For a keep occurrence $v$ let
+$h(v)$ count its strictly enclosing marks, excluding the mark whose
+keep it is. Write $c_v$ for its supplied circuit length. Then
+\[
+ \begin{gathered}
+ C(I)=0,\qquad C(a)=c_a,\qquad C(P;R)=C(P)+C(R),\\
+ C(\mathsf M(P,K))=2C(P)+c_K,\qquad
+ C(P)=\sum_v2^{h(v)}c_v\leq2^{d(P)}L(P).             \tag{RA1}
+ \end{gathered}
+\]
+The sum is an exact count, hence both an upper and a matching lower
+bound for this expansion. Under serial execution, time in gate ticks is
+$C(P)$ by the definition of that unit. Define $q_{\rm in}$ as the
+number of data input wires in the enclosing outer program, so that its
+fixed data pool has $q=q_{\rm in}+q_{\rm new}(P)$ wires.
+Classical preparation of the supplied gate lists is a separate cost;
+every gate in those lists is included in the execution count.
+
+For the snapshot representation assume one shared $s$-bit configuration,
+common sample width $k\geq1$, and common upper bounds $\beta,\Delta$
+on the device circuits of Definition~\ref{def:device} across all tick
+occurrences. Use globally distinct syntactic records. A sufficient
+total wire count is
+\[
+ \begin{split}
+ N(P)={}&q_{\rm in}+q_{\rm new}(P)+s+(s+k)n_{\rm tick}(P)\\
+       &{}+s n_{\rm cont}(P)+m_{\rm extra}
+         +\sum_\nu\delta_\nu+a_* .
+ \end{split}                                         \tag{RA2}
+\]
+Here the sum counts disjoint retained menu selectors of widths
+$\delta_\nu$, excluded from $m_{\rm extra}$ by convention in this
+display. Every payload tick and continuation occurrence is counted once
+for record allocation, across all entries and menu occurrences. If a retained
+selector is computed by a subterm of $P$, that subterm's tick and continuation
+records are already included in $n_{\rm tick}(P)$ and $n_{\rm cont}(P)$,
+any other logical wires it retains are included in $m_{\rm extra}$,
+and its clean scratch is included in $a_{\rm other}$ (or in the tick
+and keep terms of (RA2a) when it consists of those constructions).
+A selector supplied from outside $P$ contributes only its retained width
+$\delta_\nu$ here; the cost of computing it is not part of this display. Inverses reuse these names.
+The maximum local clean scratch requirement is $a_*$. For the concrete
+implementations constructed below it can be chosen to satisfy
+\[
+ a_*\leq\max\left\{
+ a_{\rm other},\ c_0(\beta+\Delta+s+k+1),\
+ \max_K c_0\kappa_K,\
+ \max_\nu\bigl(a_\nu^{\rm pay}+c_0(\delta_\nu+1)\bigr)
+ \right\}.                                         \tag{RA2a}
+\]
+The absolute constant $c_0$ is sufficiently large. For a keep $K$,
+$\kappa_K$ is the maximum, over its Boolean constituent circuits, of
+one plus gate count plus input and output widths; an empty maximum
+is zero. The number $a_\nu^{\rm pay}$ is the maximum clean workspace
+of the supplied entry lists. Its base Tier~A constituents obey the
+same bounds without the menu term. The declared number $a_{\rm other}$
+bounds scratch for all other supplied atoms, including completed RTM
+steps; no complexity bound for arbitrary supplied completions is assumed.
+If arbitrary supplied circuits are used instead of these constructions,
+their declared scratch widths must replace the corresponding bounds.
+If every non-input wire in (RA2) is freshly zero-initialized and each
+initialization costs one tick, add $N(P)-q_{\rm in}$ ticks; preparation
+of a nonzero initial machine configuration is additional.
+For
+\[
+ \mathcal R=\beta+\Delta+s+k+(q^2+kq+1)(s+k+1),
+\]
+a supplied fragment of $T_0$ joint ticks, including any declared timeout
+tick, has $T_0(s+k)$
+record bits and an implementation of $O(T_0\mathcal R)$ gates, before
+multiplication by enclosing-mark factors in (RA1). The claim of ordinary
+behavior at each forward tick additionally requires its logical records
+blank at that use. A static menu with $0\leq j\leq2^\delta$ entries
+of supplied exact clean $\mathcal G^{\pm}$ lengths $g_i$ and
+a preserved $\delta$-bit selector disjoint from all payload and scratch
+wires costs
+$O(\sum_{i<j}g_i+j(\delta+1))$ gates, with clean scratch for one
+selector flag and its computation of width $O(\delta+1)$, in addition
+to the maximum payload scratch used simultaneously with that flag.
+
+Use an explicit uncompressed ordered syntax tree encoded in prefix order
+by constructor tokens with their arities and delimited atom/keep lists. Gate descriptions
+are nonempty finite strings with a constant-width gate tag and binary
+wire labels. If $\sigma$ is the total bit length of this input and
+$\ell$ the maximum gate-description length (zero if there are no gates),
+a multitape classical TM can print the
+expansion in
+\[
+ O((\sigma+C(P)+1)^3(\ell+1)^2)                       \tag{RA3}
+\]
+steps. This deliberately loose bound excludes construction of the supplied
+lists, and does not assume unit-cost random access.
+For $P_0=a$, $c_a>0$, and $P_{j+1}=\mathsf M(P_j,K)$ with a fixed
+keep circuit of length $c_K\geq0$,
+\[
+ C(P_j)=2^jc_a+(2^j-1)c_K.                            \tag{RA4}
+\]
+Thus the exponential dependence on nesting depth is attained for the
+specified expansion. These statements give no lower bound on the
+smallest equivalent circuit, circuit depth under parallel execution,
+or optimal time under a space restriction.
+\end{theorem}
+\begin{proof}
+ \step{resA-count-ind}{The recurrences and weighted sum (RA1) hold.}
+ \begin{proof}
+  \step{resA-count-base}{\case{Identity or an atom.}}
+  \begin{proof}\pf\ Identity prints no gates. An atom prints its
+  supplied list once, and has $h=0$.\end{proof}
+  \step{resA-count-seq}{\case{A sequence, with the assertion for its
+  two proper subterms.}}
+  \begin{proof}\pf\ Concatenation adds lengths and retains each
+  occurrence's number of enclosing marks.\end{proof}
+  \step{resA-count-mark}{\case{$\mathsf M(P,K)$, with the assertion
+  for $P$.}}
+  \begin{proof}\pf\ The list is the body, keep, and reversed adjoint
+  body. The alphabet is closed under adjoints, so reversal preserves
+  length. Every body occurrence has one additional enclosing mark and
+  appears twice as often; the new keep appears once with $h=0$.
+  This proves both the recurrence and the weighted sum.\end{proof}
+  \qedstep
+  \begin{proof}\pf\ Structural induction gives the equality. For
+  every occurrence $h(v)\leq d(P)$ and $c_v\geq0$, so summing
+  $2^{h(v)}c_v\leq2^{d(P)}c_v$ gives the inequality.\end{proof}
+ \end{proof}
+ \step{resA-count-wires}{Equation (RA2) suffices without assuming
+ logical machine cleanliness.}
+\begin{proof}
+ \step{resA-count-wires-logical}{The logical-wire contribution in
+ (RA2) counts each required retained factor once.}
+ \begin{proof}\pf\ Count the data wires, shared $s$-bit
+ configuration, one $s+k$-bit cell per joint-tick occurrence, one
+ $s$-bit cell per continuation occurrence and declared extra logical
+ wires. An occurrence's adjoint reuses its names, so repetitions
+ in (RA1) add no wires. All logical wires remain present.\end{proof}
+ \step{resA-count-wires-selectors}{Menu selectors and payload records
+ have exactly the declared additional allocation.}
+ \begin{proof}\pf\ Add the disjoint selector widths explicitly.
+ Selector-computation records and other logical wires are already
+ included in the declared counts. Although a menu gate list is
+ one leaf, its payload record declarations remain logical wires
+ and are counted as stipulated in (RA2).\end{proof}
+ \step{resA-count-wires-scratch}{One implementation pool of width
+ $a_*$ suffices independently of logical-record reset.}
+ \begin{proof}\pf\ Every atom/keep implementation and its inverse
+ restores implementation scratch on every logical input.
+ Lemma~\ref{lem:scratch} therefore permits sequential reuse of
+ a pool of the maximum width. This assumption concerns
+ implementation scratch, not cleanliness of logical machine records.
+ \end{proof}
+ \step{resA-count-wires-init}{The optional zero-initialization charge
+ is $N(P)-q_{\rm in}$.}
+ \begin{proof}\pf\ These are exactly the non-input wires in (RA2),
+ each charged one tick under the stated convention. Preparation of
+ a nonzero machine configuration is additional.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ Add \stepref{resA-count-wires-logical}--\stepref{resA-count-wires-scratch}
+ for the declared allocation. The following construction bounds the
+ scratch width; \stepref{resA-count-wires-init} gives the optional
+ initialization cost.\end{proof}
+\end{proof}
+ \step{resA-count-tick}{The asserted tick and menu bounds hold.}
+ \begin{proof}
+  \step{resA-count-ticklocal}{One joint tick costs $O(\mathcal R)$.}
+  \begin{proof}
+   \pf\ We reuse the circuit of Lemma~\ref{eqv:tick-cost}, here with the
+   sharper simultaneous-scratch count needed for (RA2a).
+   \step{resA-count-decoder}{For a device tick, its quantum action
+ $D_t$ has gate cost
+ $O(\Delta+(q^2+kq+1)(s+k+1))$ and scratch
+ $O(\Delta+s+k+1)$.}
+\begin{proof}
+ \step{resA-count-decoder-eval}{Computing the decoder costs
+ $O(\Delta)$ gates and workspace.}
+ \begin{proof}\pf\ Apply Lemma~\ref{lem:synthesis} to the canonical
+ decoder on unchanged $C$; $\Delta$ includes its input and output
+ ports. No global validity test is added: canonical output, legal
+ live operands and fault handling on every code are hypotheses.
+ Measurement and allocation modes are excluded here.\end{proof}
+ \step{resA-count-decoder-predicates}{There are $O(q^2+kq+1)$
+ predicates, each of size and workspace $O(s+k+1)$.}
+ \begin{proof}
+  \step{resA-count-decoder-gatepred}{There are $O(q^2+1)$ gate
+  predicates, each of Boolean size $O(a_q+1)$.}
+  \begin{proof}\pf\ Enumerate $O(q^2+1)$ gate actions. A predicate
+  compares only mode, gate tag and at most two addresses. Equality
+  is a conjunction of bit comparisons, of size $O(a_q+1)$.\end{proof}
+  \step{resA-count-decoder-readpred}{There are $kq$ read
+  predicates, each of Boolean size $O(a_q+a_k+1)$.}
+  \begin{proof}\pf\ Enumerate $kq$ position/address pairs. Test mode,
+  the one read address and whether the fixed position is below the
+  read length. Scan the length from most to least significant bit,
+  retaining equality and less-than bits. This has Boolean size
+  $O(a_q+a_k+1)$.\end{proof}
+  \qedstep
+  \begin{proof}\pf\ Definition~\ref{def:device} gives $a_q\leq s$,
+  and $a_k=\lceil\log_2(k+1)\rceil\leq k$ for $k\geq1$.
+  Lemma~\ref{lem:synthesis} gives the same order of workspace,
+  independently of the entire decoder's width.\end{proof}
+ \end{proof}
+ \step{resA-count-decoder-apply}{Each selected action has constant
+ additional gate cost and scratch.}
+ \begin{proof}\pf\ Hold its predicate flag and apply controlled-$H$,
+ controlled-$T$ or controlled-CNOT by Lemma~\ref{lem:synthesis}.
+ Targets lie in $QB_t$, disjoint from $C$, decoder, flag and evaluator
+ workspace. Gate mode selects one gate; read mode selects its listed
+ copies, whose distinct sample targets make their order immaterial.
+ \end{proof}
+ \step{resA-count-decoder-erase}{One predicate computation and
+ constant gate scratch suffice alongside the decoder word.}
+ \begin{proof}\pf\ Erase each predicate before reusing its workspace;
+ its decoder inputs have not changed. After all actions erase the
+ decoder, whose input $C$ has not changed. Each erasure is the
+ inverse evaluation and has the same cost.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ Sum the gate costs over
+ $O(q^2+kq+1)$ predicates and add decoder evaluation and erasure.
+ Sequential reuse in \stepref{resA-count-decoder-erase} gives
+ scratch $O(\Delta+s+k+1)$.\end{proof}
+\end{proof}
+   \step{resA-count-update}{The update and the timeout obey the
+   remaining asserted bounds.}
+   \begin{proof}\pf\ After $D_t$, evaluate $f(C,B_t)$ into $J_t$,
+   undo its Boolean workspace, then swap $C,J_t$. By
+   Lemma~\ref{lem:synthesis} this costs $O(\beta+s+k)$ gates and
+   scratch; a swap is three CNOTs per bit. It is the required $F_t$
+   even on nonblank logical records. The separate timeout has
+   $D_t=\id$ and update $h_\tau$: equality of the status with its
+   active code, followed by conditional constant replacement, has
+   $O(s)$ Boolean size. The same snapshot construction costs
+   $O(s+k)$ and keeps its declared $s+k$ recording bits. A continuation
+   replaces a fixed position field and costs $O(s)$ gates and scratch.
+   Each is bounded by the tick term in (RA2a).\end{proof}
+   \qedstep
+   \begin{proof}\pf\ By \stepref{resA-count-decoder} and
+   \stepref{resA-count-update}, sequential reuse gives $O(\mathcal R)$
+   gates and $O(\beta+\Delta+s+k+1)$ scratch per tick.
+   The $T_0$ listed ticks, including any timeout, have distinct cells.
+   Their lengths add; blankness for forward interpretation is exactly
+   the promise in Definition~\ref{def:joint-tick}.\end{proof}
+  \end{proof}
+  \step{resA-count-menu}{A menu entry costs $O(g_i+\delta+1)$.}
+\begin{proof}
+ \step{resA-count-menu-flag}{Compute equality of the selector with
+ $i$ in one flag using $O(\delta+1)$ gates and workspace.}
+ \begin{proof}\pf\ Conjoin the bit equalities and apply the clean
+ Boolean evaluator of Lemma~\ref{lem:synthesis}. The capacity
+ $j\leq2^\delta$ makes every $i<j$ a selector value, including
+ the zero-width selector when it has an entry.\end{proof}
+ \step{resA-count-menu-control}{Hold the flag while controlling the
+ $g_i$ elementary gates, at constant overhead per gate.}
+ \begin{proof}\pf\ Each supplied gate is $H,T,T^\dagger$ or CNOT.
+ Lemma~\ref{lem:synthesis} supplies its exact controlled version.
+ Selector and predicate workspace are disjoint from all targets,
+ including payload implementation wires. Thus simultaneous
+ workspace is $a_\nu^{\rm pay}+O(\delta+1)$, including the
+ constant scratch of the controlled elementary gate.\end{proof}
+ \step{resA-count-menu-false}{\assume{The flag is zero.}
+ \prove{The complete controlled list is identity in this sector.}}
+ \begin{proof}\pf\ Every controlled gate is identity in this
+ sector; consequently the complete list is identity.\end{proof}
+ \step{resA-count-menu-true}{\assume{The flag is one.}
+ \prove{The complete controlled list equals the supplied payload
+ circuit, including its phase, and restores its implementation scratch.}}
+ \begin{proof}\pf\ The controlled list is exactly the supplied
+ clean payload circuit, including its phase. Its implementation
+ scratch is zero after the complete list.\end{proof}
+ \step{resA-count-menu-reuse}{Erase the flag and reuse the scratch
+ for the next entry.}
+ \begin{proof}\pf\ The selector has not changed, so inverse
+ evaluation erases the flag. The two sectors above restore payload
+ scratch; linearity gives the same restoration on arbitrary selector
+ superpositions. Lemma~\ref{lem:scratch} permits sequential reuse.
+ \end{proof}
+ \qedstep
+ \begin{proof}\pf\ Add flag computation and erasure to the $g_i$
+ controlled gates, then sum over entries for the asserted menu bound.
+ Only supplied exact finite lists are used, so this covers no
+ ideal-angle payload lacking such a list.\end{proof}
+\end{proof}
+  \step{resA-count-keep}{The remaining scratch bounds in (RA2a) hold.}
+  \begin{proof}\pf\ For each Boolean constituent of a keep use the
+  evaluator of Lemma~\ref{lem:synthesis} directly into the disjoint
+  XOR target and erase its stored Boolean gate values. Its cost and
+  scratch are $O(\kappa_K)$. Constituent keeps execute sequentially,
+  so their maximum scratch suffices. Arbitrary other atom scratch is
+  the supplied bound $a_{\rm other}$. Menu entries are base terms;
+  Lemma~\ref{lem:scratch} bounds their scratch by the maximum of
+  their base constituents. These observations and the preceding two
+  steps establish (RA2a) for one fixed sufficiently large $c_0$.
+  \end{proof}
+  \qedstep
+  \begin{proof}\pf\ By \stepref{resA-count-ticklocal} and
+  \stepref{resA-count-menu} and \stepref{resA-count-keep}.\end{proof}
+ \end{proof}
+ \step{resA-count-compile}{A sequential-tape compiler has bound (RA3).}
+ \begin{proof}
+  \step{resA-compile-encoding}{\pick\ $N$ syntax-node identifiers
+ of common width $N+1$, a child-before-parent order, and fixed-width
+ gate fields of width $w=O(\ell+1)$. They can be prepared in
+ $O((\sigma+1)^3)$ multitape steps, with $N=O(\sigma+1)$.}
+\begin{proof}
+ \step{resA-compile-encoding-ids}{There are $N=O(\sigma+1)$ nodes;
+ assign the $i$th constructor the identifier $1^i0^{N+1-i}$.}
+ \begin{proof}\pf\ Count constructor tokens in one input scan.
+ Each consumes input symbols. The displayed distinct unary strings
+ all have width $N+1$, and writing all of them costs $O((N+1)^2)$.
+ \end{proof}
+ \step{resA-compile-encoding-order}{A stack scan emits each node
+ after its children, in $O((\sigma+1)^2)$ steps.}
+ \begin{proof}
+  \step{resA-compile-encoding-frames}{Use fixed-width $O(N+1)$ frames
+  holding the identifier, constructor tag, up to two child identifiers
+  and the number of children still awaited.}
+  \begin{proof}\pf\ The prefix encoding supplies each constructor's
+  arity. All identifier fields have width $N+1$, and the remaining
+  fields have bounded width. Keep the stack head at its top.\end{proof}
+  \step{resA-compile-encoding-leaf}{\assume{A leaf is completed.}
+  \prove{Its record can be emitted, its frame popped, and its
+  identifier recorded in the current parent frame, if any.}}
+  \begin{proof}\pf\ It awaits no child. Emit its record, pop its
+  frame and record its identifier in the current parent frame, if
+  there is one.\end{proof}
+  \step{resA-compile-encoding-child}{\assume{A nonleaf receives a
+  completed child's identifier.}\prove{The child can be recorded;
+  on the last child the node can be emitted and popped after all
+  its children, and its identifier passed to its parent.}}
+  \begin{proof}\pf\ Store the identifier and decrease the number
+  awaited. On the last child, emit and pop the parent frame and
+  pass its identifier to its parent. Thus all children have already
+  been emitted when a node is emitted.\end{proof}
+  \qedstep
+  \begin{proof}\pf\ Each frame is pushed and popped once; there
+  are $O(N)$ events. Reading or updating its constant number of
+  fields, copying an identifier and returning the auxiliary tape
+  head cost $O(N+1)$ per event. Add the input scan.\end{proof}
+ \end{proof}
+ \step{resA-compile-encoding-lists}{The owner-indexed tape of padded
+ supplied lists has length $O((\sigma+1)^2)$.}
+ \begin{proof}\pf\ Copy each delimited list under its owner
+ identifier when encountered. Their original total length and the
+ number of gates are at most $\sigma$, since descriptions are
+ nonempty. A scan finds $\ell$; right-padding and copying cost
+ $O((\sigma+1)(\ell+1))$. Owner headers cost $O((N+1)^2)$.
+ Since $N,\ell\leq O(\sigma+1)$, the stated length follows.
+ Fixed delimiters distinguish padded field ends.\end{proof}
+ \step{resA-compile-encoding-lookup}{Retrieving a node's supplied
+ list costs $O((\sigma+1)^2)$; all such retrievals cost
+ $O((\sigma+1)^3)$.}
+ \begin{proof}\pf\ Rewind and scan the owner-indexed tape.
+ Compare unary fields synchronously and return the query head in
+ $O(N+1)$ per header. This is proportional to header length, so
+ it is included in the complete scan. Sum the tape-length bound
+ over the $N$ nodes; charge each retrieval to its node below.\end{proof}
+ \step{resA-compile-encoding-adjoint}{Adjoint conversion changes
+ only a constant number of tag symbols in a gate field.}
+ \begin{proof}\pf\ The constant-width tag ranges over
+ $\{H,T,T^\dagger,\mathrm{CNOT}\}$. Its adjoint is a fixed table
+ in finite control. Wire labels are unchanged, including the two
+ labels of self-adjoint CNOT.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ The preceding scans use a fixed finite number
+ of tapes and no indexed access. They prepare the stated choices
+ within $O((\sigma+1)^3)$ steps, with the subsequent list retrievals
+ bounded separately by \stepref{resA-compile-encoding-lookup}.\end{proof}
+\end{proof}
+  \step{resA-compile-size}{For every processed node $R$,
+  $C(R)\leq C(P)$; the expansion table has length at most
+  $T=O((\sigma+1)(C(P)(\ell+1)+\sigma+1))$.}
+  \begin{proof}\pf\ Every child length is at most its parent's
+  length by (RA1) and nonnegativity. Following the finite ancestor
+  chain proves the first assertion. Encode an expansion-table entry
+  as its width-$(N+1)$ identifier, a delimiter, its expanded gate
+  fields, and an end delimiter; table delimiters are distinct from
+  gate symbols. Each entry has length $O(N+1+C(P)w)$. There are
+  at most $N$ entries, giving $T$. Empty lists still have a header
+  and an end delimiter.\end{proof}
+  \step{resA-compile-node}{One node's expanded list is constructed
+  and appended in $O(T+(\sigma+1)^2+(C(P)+1)(\ell+1)^2+1)$ steps.}
+  \begin{proof}
+   \step{resA-compile-lookup}{Every child lookup costs $O(T)$ steps.}
+   \begin{proof}\pf\ Rewind the table tape and scan it sequentially.
+   At each header compare its identifier against the query tape, then
+   rewind the query head. This takes $O(N+1)$ per header. A failed
+   match skips the entry, scanning each field once; a successful match
+   copies the list to a separate tape as it is scanned. The header
+   comparison and head return cost is bounded by a constant times
+   header length. Thus a complete lookup, including the initial rewind,
+   costs $O(T)$, not $O(NT)$. There are at most two child lookups
+   per node.\end{proof}
+   \step{resA-compile-reverse}{Reversed adjoint copying of an $m$-gate
+   list costs $O((m+1)w^2)$.}
+   \begin{proof}\pf\ First scan to the end, costing $O((m+1)w)$.
+   From the end of each fixed-width gate field move left to its start,
+   copy its symbols left-to-right to the output while changing its tag
+   to the adjoint tag, then move left by at most $2w+O(1)$ to the
+   preceding field's start. A fixed-width position counter may cost
+   $O(w)$ per copied symbol even under a unary representation; resetting
+   it costs $O(w)$ per field. This gives the stated conservative
+   $O((m+1)w^2)$ bound including head movements. Each gate is visited
+   once, in reverse gate order, while its wire-label bits retain their
+   order. The zero-gate case only reads the delimiters.\end{proof}
+   \qedstep
+   \begin{proof}\pf\ Identity emits an empty list; an atom copies
+   its supplied list; a sequence concatenates its two retrieved lists;
+   a mark concatenates its body, supplied keep, and the reversed
+   adjoint body. Locating the node's supplied list on the owner-indexed
+   tape costs $O((\sigma+1)^2)$ by \stepref{resA-compile-encoding}.
+   Only a constant number of tapes are needed because
+   this is one node at a time, after its children have been stored.
+   Every relevant supplied list and child list has at most $C(P)$
+   gates. Sequential copying and the preceding reversal bound control
+   all work except lookup. Rewinding the table and moving to its end
+   to append the new entry takes $O(T)$ further steps. Apply
+   \stepref{resA-compile-lookup} and \stepref{resA-compile-reverse}.
+   \end{proof}
+  \end{proof}
+  \step{resA-compile-total}{The total bound is (RA3), including
+  $C(P)=0$.}
+  \begin{proof}\pf\ Process the prepared order once. If $t_i$ is
+  the cumulative time after $i$ nodes, the preceding step gives
+  $t_{i+1}-t_i=O(T+(\sigma+1)^2+(C(P)+1)(\ell+1)^2+1)$ uniformly in $i$.
+  Sum over $N=O(\sigma+1)$ nodes and add preprocessing and the final
+  root-list copy. The result is
+  \[
+   O\bigl((\sigma+1)T+(\sigma+1)^3+
+       (\sigma+1)(C(P)+1)(\ell+1)^2\bigr).
+  \]
+  Substitute the bound on $T$ from \stepref{resA-compile-size};
+  each summand is bounded by a constant times
+  $(\sigma+C(P)+1)^3(\ell+1)^2$. When $C(P)=0$, there are still
+  only $N$ node-processing events; empty body lists are stored once,
+  not recursively regenerated for their two uses.\end{proof}
+  \qedstep
+  \begin{proof}\pf\ By \stepref{resA-compile-encoding}--\stepref{resA-compile-total}.
+  \end{proof}
+ \end{proof}
+ \step{resA-count-tight}{Equation (RA4) and the claimed limitations hold.}
+ \begin{proof}\pf\ The recurrence is $C_{j+1}=2C_j+c_K$ with
+ $C_0=c_a$. Substitution and induction give (RA4). In particular,
+ $C_j\geq2^jc_a$. Each counted gate must occur in an unchanged
+ prescribed list, proving its matching lower bound and serial time.
+ Printing requires at least one output action per gate because each
+ gate description is nonempty. Definition~\ref{def:keep} permits a
+ finite product with no entries: choose its empty circuit, so
+ $K=\id$ and $c_K=0$. Already $P_1$ denotes
+ $A_a^\dagger A_a=\id$, and every $P_j$, $j\geq1$, denotes
+ identity. Its optimal gate count is zero although the expansion has
+ $2^jc_a$ gates. Therefore an optimal-circuit lower bound does not
+ follow. With $c_K=0$ the upper bound $2^dL$ itself is attained.
+ \end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{resA-count-ind}--\stepref{resA-count-tight}
+ and the clean correctness of the expansion in
+ Theorem~\ref{thm:sA-sound}.\end{proof}
+\end{proof}
+
+\subsection{Retaining intermediate computations}
+
+\begin{theorem}[Time versus retained workspace]
+\label{thm:resA-delayed}
+Let $d\geq1$, let $b_0,\ldots,b_d,u_1,\ldots,u_d$ be nonnegative
+integer widths, and let
+$f_j:\{0,1\}^{b_{j-1}}\to\{0,1\}^{b_j}$ be total deterministic
+functions. Let $X,R$ be disjoint external registers with
+$|X|=b_0$, $|R|=b_d$. Supply total evaluator circuits $A_j$ of lengths
+$a_j$ over $\mathcal G^{\pm}$, counted as in Definition~\ref{def:costs}.
+On input $\ket x\ket{0^{b_j}}\ket{0^{u_j}}$ they produce
+$\ket x\ket{f_j(x)}\ket{g_j(x)}$ for specified Boolean strings
+$g_j(x)$ of width $u_j$. All evaluator implementation wires are included
+in $u_j$; there is no additional implementation pool in this theorem.
+For each $j$ supply a scratch-free $\mathcal G^{\pm}$ circuit of length
+$k_j$ acting only on a $b_j$-bit output and a disjoint $b_j$-bit target,
+with exact action $\ket{z,y}\mapsto\ket{z,y\oplus z}$ on every input.
+The usual $b_j$ CNOTs are an admissible such list. Inverse lists have
+the same length because this gate alphabet is adjoint-closed.
+All evaluator output and private wires initially are zero.
+Each evaluator acts only on its own input, output and private wires.
+Only intermediate outputs, never the final external target, become
+inputs of later evaluators. Earlier evaluator private wires remain
+untouched until their specified inverse. No additional operation changes
+retained values. Use the eager and delayed compositions of
+Definition~\ref{def:delayed}, under these explicit hypotheses.
+Let $F_j=f_j\circ\cdots\circ f_1$.
+
+Both the eager and delayed constructions implement, on all states of
+$XR$ with their specified auxiliary zero initialization, the same retained
+isometry after padding their auxiliary lists to a common width and
+permuting auxiliary factors to identify their names:
+\[
+ \ket{x,y}\ket0\longmapsto
+ \ket{x,y\oplus F_d(x)}\ket0,                         \tag{RA5}
+\]
+including arbitrary external references. They need not be the same
+unitary on nonzero auxiliary inputs. The exact unsimplified gate counts
+and sufficient allocated auxiliary widths, excluding $X,R$, are
+\[
+ \begin{gathered}
+ o_j=2a_j+k_j,\qquad E_1=o_1,\qquad E_j=2E_{j-1}+o_j,\\
+ E_d=\sum_{j=1}^d2^{d-j}o_j,\qquad
+ D_d=2\sum_{j=1}^da_j+k_d.                            \tag{RA6}
+ \end{gathered}
+\]
+\[
+ W_E=\sum_{j<d}b_j+\max_{1\leq j\leq d}(b_j+u_j),
+ \qquad W_D=\sum_{j\leq d}(b_j+u_j).                 \tag{RA7}
+\]
+These are serial gate times as well as gate counts. If, uniformly in
+$d,j$, $0<\alpha\leq a_j\leq A$ and $0\leq k_j\leq K$ for fixed
+constants, then $E_d=\Theta(2^d)$ and $D_d=\Theta(d)$.
+There is no universal strict separation between the two space counts;
+they are sufficient allocations, not space lower bounds.
+
+The same conclusions, including exact counts, hold for quantum
+private outputs if the evaluator hypothesis is replaced by
+\[
+ A_j\bigl(\ket x\ket{0^{b_j}}\ket{0^{u_j}}\bigr)
+   =\ket x\ket{f_j(x)}\ket{\gamma_{j,x}},             \tag{RA8}
+\]
+where each $\gamma_{j,x}$ is any unit vector, with the same widths,
+alphabet, copying, locality, zero-initialization and no-intervention
+assumptions. Thus quantum phases and non-basis private states are
+permitted. The restrictions are exact preservation of the basis input,
+an exact computational-basis output $f_j(x)$, and a product private
+factor for each basis input. Disturbed inputs or an output entangled
+with its private factor on a basis input are excluded.
+\end{theorem}
+\begin{proof}
+ \step{resA-delay-oracle}{A compute--copy--inverse application of
+ $A_j$ realizes a clean XOR by $f_j$ on its input and disjoint target.}
+ \begin{proof}\pf\ On the basis input $\ket{x,y}$ and zero local
+ wires, (RA8) gives
+ $\ket x\ket{f_j(x)}\ket{\gamma_{j,x}}\ket y$.
+ Copying changes only the last factor to $\ket{y\oplus f_j(x)}$.
+ Applying $A_j^\dagger$ to the first three factors gives exactly
+ $\ket x\ket0\ket0$, by total unitarity and (RA8).
+ Linearity proves the assertion on arbitrary input/target states.
+ The classical hypothesis is the special case
+ $\gamma_{j,x}=\ket{g_j(x)}$.\end{proof}
+ \step{resA-delay-eager}{The eager construction realizes (RA5).}
+ \begin{proof}
+  \step{resA-delay-eagerbase}{\case{$j=1$.}}
+  \begin{proof}\pf\ Use \stepref{resA-delay-oracle}.\end{proof}
+  \step{resA-delay-eagernext}{\assume{The previous composite is a
+  clean XOR by $F_{j-1}$.}\prove{The level-$j$ composite is a clean
+  XOR by $F_j$.}}
+  \begin{proof}\pf\ Compute $F_{j-1}(x)$ into a zero intermediate.
+  By the induction hypothesis every private wire used for that operation
+  is reset. Apply the clean composite for $f_j$ with that intermediate as
+  input and the current external target as target. It preserves the
+  intermediate and changes the target by $f_j(F_{j-1}(x))$.
+  Invert the previous composite to erase the intermediate; it acts
+  independently of the changed target. This proves the basis action
+  and zero restoration, then linearity proves the full isometry.\end{proof}
+  \qedstep
+  \begin{proof}\pf\ Induction using
+  \stepref{resA-delay-eagerbase} and \stepref{resA-delay-eagernext}.
+  \end{proof}
+ \end{proof}
+ \step{resA-delay-late}{The delayed construction realizes (RA5).}
+ \begin{proof}\pf\ Fix $x$ and write $z_0=x$, $z_j=f_j(z_{j-1})$.
+ After all forward evaluators, the retained vector is
+ $\ket x\bigotimes_{j=1}^d
+ (\ket{z_j}\ket{\gamma_{j,z_{j-1}}})$, with the target unchanged.
+ This follows by induction from (RA8) and locality. Copy $z_d$ into
+ the target. The factors of the last evaluator still have exactly
+ its forward output, so its inverse erases them. Repeat in reverse
+ order; every earlier input was preserved. The target is outside all
+ these inverses. Hence all local wires are zero and (RA5) holds on
+ each basis pair. Extend linearly and tensor with identity on a reference.
+ No private vector is copied or discarded.\end{proof}
+ \step{resA-delay-counts}{Equations (RA6)--(RA7) hold.}
+\begin{proof}
+ \step{resA-delay-counts-oracle}{The $j$th compute--copy--inverse composite has length
+ $o_j=2a_j+k_j$.}
+ \begin{proof}\pf\ Count its length-$a_j$ evaluator, length-$k_j$
+ copy and length-$a_j$ inverse. Adjoint closure preserves list length.
+ \end{proof}
+ \step{resA-delay-counts-eager}{The eager counts are
+ $E_1=o_1$, $E_j=2E_{j-1}+o_j$ and
+ $E_d=\sum_{j=1}^d2^{d-j}o_j$.}
+ \begin{proof}\pf\ The eager procedure uses the preceding
+ composite twice and the current compute--copy--inverse composite once. The base is one
+ oracle. Substituting the sum for $E_{j-1}$ into the recurrence
+ doubles its coefficients and appends $o_j$, proving the formula
+ by induction.\end{proof}
+ \step{resA-delay-counts-delayed}{The delayed count is
+ $D_d=2\sum_{j=1}^da_j+k_d$.}
+ \begin{proof}\pf\ Each evaluator and its inverse occurs exactly
+ once, and only the last copy occurs. Sum their list lengths.
+ \end{proof}
+ \step{resA-delay-counts-pool}{The eager procedure can share a local
+ pool of width $\max_j(b_j+u_j)$.}
+ \begin{proof}\pf\ Keep all intermediate outputs outside this
+ pool. Step~\stepref{resA-delay-eager} restores the pool before
+ the level-$j$ compute--copy--inverse composite; \stepref{resA-delay-oracle} restores it
+ before the preceding composite's inverse. Lemma~\ref{lem:scratch}
+ gives zero restoration on that inverse pass as well. Induction
+ therefore justifies each reuse at every level. Pad unused pool
+ wires by identity.\end{proof}
+ \step{resA-delay-counts-widths}{The sufficient widths are
+ $W_E=\sum_{j<d}b_j+\max_j(b_j+u_j)$ and
+ $W_D=\sum_{j\leq d}(b_j+u_j)$.}
+ \begin{proof}\pf\ For eager execution add the reserved intermediate
+ wires to the shared pool of \stepref{resA-delay-counts-pool}.
+ Delayed execution reserves a separate $b_j+u_j$ block for each
+ evaluator. Neither allocation counts $X,R$. Renaming wires of
+ a zero pool incurs no gates.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ The first three steps give (RA6);
+ \stepref{resA-delay-counts-widths} gives (RA7).\end{proof}
+\end{proof}
+ \step{resA-delay-orders}{The time orders and space qualifications hold.}
+ \begin{proof}\pf\ The assumptions bound $o_j$ between $2\alpha$
+ and $2A+K$. Sum $\sum_{j=1}^d2^{d-j}=2^d-1$ to obtain the eager
+ order. Also $2\alpha d\leq D_d\leq2Ad+K$, proving the delayed
+ order. For $b_j=b$, $u_j=u$, the displayed widths are
+ $db+u$ and $d(b+u)$. They coincide when $u=0$ and differ by
+ $(d-1)u$ otherwise. For general varying widths the sufficient
+ formula $W_E$ need not even be less than $W_D$; no inequality
+ between them has been used.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{resA-delay-oracle}--\stepref{resA-delay-orders}.
+ Classical basis private outputs satisfy (RA8), so this also proves
+ the original restricted delayed-erasure target with its hypotheses.
+ \end{proof}
+\end{proof}
+
+\subsection{The exact condition for deleting an inner inverse}
+
+\begin{theorem}[A quantum deletion criterion and exact savings]
+\label{thm:resA-deletion}
+Let $A,P,B$ be specified total unitaries on a common finite retained
+list $L=QM$, realized by Tier~A terms; let $K,K'$ be keeps of
+Definition~\ref{def:keep}. There are no allocation, drop or observed
+measurement operations in these terms. Consider the nested expression
+\[
+ \mathsf M\bigl(A;\mathsf M(P,K);B,K'\bigr).
+\]
+Here and below the same letters denote the terms' logical unitaries.
+Delete the inner inverse $P^\dagger$ after $K$, retaining its records
+until the outer inverse, to obtain $\mathsf M(A;P;K;B,K')$, where
+$K$ is now a standalone atom. Write
+\[
+ U=BP^\dagger KPA,\quad V=BKPA,\quad H_0=B^\dagger K'B,
+ \quad W=U^\dagger K'U,\quad \widetilde W=V^\dagger K'V.
+\]
+Then, with exact matrix phases,
+\[
+ W=\widetilde W\quad\Longleftrightarrow\quad
+ [P,H_0]=0.                                          \tag{RA9}
+\]
+In particular it suffices that there is a tensor decomposition
+$\cH_L=\cH_S\otimes\cH_{L\setminus S}$ over disjoint wire lists
+with $P=P_S\otimes\id$ and $H_0=\id\otimes H_{L\setminus S}$,
+even if $A,P,B$ contain quantum gates. More generally,
+for any specified input isometry $J:\cH_{\rm in}\to\cH_L$,
+equality of the retained isometries $WJ=\widetilde WJ$ is equivalent to
+\[
+ (PH_0P^\dagger-H_0)KPAJ=0.                          \tag{RA10}
+\]
+This weaker condition may suffice when (RA9) fails. These statements
+are about retained operators first; any identical final partial trace
+then preserves equality. They imply no reset of logical records on
+their own and do not identify unequal dilations merely from equal
+output channels.
+
+For the resource assertion assume supplied exact clean circuits over
+the adjoint-closed alphabet $\mathcal G^{\pm}$ as in
+Definition~\ref{def:costs}. If $a,p,b,k,k'$ are the lengths of the
+supplied expansions for $A,P,B,K,K'$, the two unsimplified counts are respectively
+\[
+ 2(a+2p+k+b)+k',\qquad 2(a+p+k+b)+k',                 \tag{RA11}
+\]
+so precisely $2p$ gates and serial ticks are saved whenever the
+transformation is justified. On a fixed retained $n$-wire logical list,
+both can be implemented with $n+a_*^{\rm old}$ wires. Here
+$a_*^{\rm old}$ is the original list's maximum local clean scratch;
+the modified list uses only occurrences from that list, so
+$a_*^{\rm new}\leq a_*^{\rm old}$.
+Thus this local rule alone does not force a space increase. If it
+replaces previously certified reuse of logical zero cells, those cells
+must instead be retained separately or that reuse proved valid anew.
+\end{theorem}
+\begin{proof}
+ \step{resA-delete-factor}{Put $F=KPA$. Then
+ $W=F^\dagger PH_0P^\dagger F$ and
+ $\widetilde W=F^\dagger H_0F$.}
+ \begin{proof}\pf\ Substitute $U=BP^\dagger F$ and $V=BF$
+ in the definitions and reverse factors under the adjoint.\end{proof}
+ \step{resA-delete-full}{Equation (RA9) holds.}
+ \begin{proof}\pf\ $F$ is unitary. Multiplying the two expressions
+ in \stepref{resA-delete-factor} on the left by $F$ and right by
+ $F^\dagger$ shows that equality is equivalent to
+ $PH_0P^\dagger=H_0$. Multiplication on the right by $P$ makes
+ this equivalent to $PH_0=H_0P$. Operators on disjoint tensor factors
+ commute, proving the stated sufficient special case.\end{proof}
+ \step{resA-delete-subspace}{Equation (RA10) is equivalent to
+ $WJ=\widetilde WJ$.}
+ \begin{proof}\pf\ Subtract the expressions in
+ \stepref{resA-delete-factor}, multiply by $J$ on the right and
+ by the invertible $F$ on the left. The result is exactly (RA10).
+ The equality remains true when tensored with a reference identity;
+ linearity and a final partial trace give the corresponding channel
+ equality. Neither calculation asserts a zero record output.\end{proof}
+ \step{resA-delete-resources}{The exact counts are (RA11).}
+ \begin{proof}\pf\ The original outer body has length
+ $a+2p+k+b$; the modified body has length $a+p+k+b$.
+ Each is followed by its keep and its complete inverse, so apply
+ (RA1). The logical names are unchanged; Lemma~\ref{lem:scratch}
+ supplies the common clean scratch pool. Deletion removes occurrences
+ both in the forward body and in its outer inverse; it introduces no
+ new local implementation, proving the scratch inequality.
+ Its hypothesis concerns
+ implementation scratch, and does not certify logical cell reuse.
+ \end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{resA-delete-full}--\stepref{resA-delete-resources}.
+ \end{proof}
+\end{proof}
+
+\begin{corollary}[Certified removal at multiple levels]
+\label{cor:resA-flat}
+Let a finite base Tier~A term, without derived menu atoms, have one
+outermost mark with keep $K_*$. All resource lists are exact clean
+$\mathcal G^{\pm}$ lists counted without simplification.
+Let $S$ be the sum of supplied gate lengths of every atom and every
+inner keep, each counted once. Suppose its expanded outer body can
+be reduced to the list visiting each such occurrence once by successive
+deletions of inner inverse lists. At each deletion, in the current
+body write the unitary as $BP^\dagger F$, where the removed list
+implements $P^\dagger$, and require
+$[P,B^\dagger K_*B]=0$, or require (RA10) with $F$ in place of $KPA$
+for the same fixed input embedding $J$. Retain every logical wire and
+keep the supplied exact clean local circuits. Then the final outer
+operation agrees with the original (on all retained inputs in the
+commutator case, or on $J$ in the embedding case). Its count is
+$2S+c_{K_*}$. Each deletion of a length-$p$ inverse list saves exactly
+$2p$ gates. The time is therefore linear in this once-counted body size,
+conditional on all the stated tests; no universal deletion rule is asserted.
+\end{corollary}
+\begin{proof}
+ \step{resA-flat-one}{Each deletion preserves the specified equality.}
+ \begin{proof}\pf\ The proof of Theorem~\ref{thm:resA-deletion}
+ uses $F$ only as a unitary factor, so applies to the current factorization.
+ Its two outer lists differ in length by twice the deleted length.
+ \end{proof}
+ \step{resA-flat-all}{The final count is $2S+c_{K_*}$.}
+ \begin{proof}\pf\ Equality is transitive through the finite
+ sequence of deletions. By hypothesis the final body contains each
+ designated occurrence once, so has length $S$. Its outer expansion
+ consists of this list, $K_*$, and its reversed adjoint list.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{resA-flat-one} and \stepref{resA-flat-all}.
+ \end{proof}
+\end{proof}
+
+\begin{counterexample}[A clean inner evaluation does not justify deletion]
+\label{ex:resA-quantum}
+Use five distinct qubits $q,r,t,a,b$, with $Q=qrt$, $M=ab$,
+$A=\id$, and
+\[
+ P=\operatorname{CNOT}_{q\to a},\quad
+ K=\operatorname{CNOT}_{a\to r},\quad
+ B=\operatorname{CNOT}_{q\to b}H_q,\quad
+ K'=\operatorname{CNOT}_{b\to t}.                     \tag{RA12}
+\]
+The Boolean copying gates here are explicit atoms, not full snapshot
+translations of source reads. All atoms and keeps are total and allowed.
+On the subspace supported on $a=0$, namely pure inputs
+$\ket\psi_{qrtb}\otimes\ket0_a$ with factors placed by name and
+their density-operator extensions, the inner marked operation
+$P^\dagger KP$ is a clean CNOT from $q$ to $r$.
+Nevertheless deleting its
+inverse changes the outer retained isometry and even the reduced channel
+on $qrt$. Here each channel uses the fixed isometry
+$E:\cH_{qrt}\to\cH_{qrtab}$,
+$E\psi=\psi_{qrt}\otimes\ket{00}_{ab}$ with factors placed by name,
+then the respective retained operator, then $\tr_{ab}$; as channels
+they are $\rho\mapsto\tr_{ab}(WE\rho E^\dagger W^\dagger)$ and
+the same with $\widetilde W$. Let $\Pi_\pm=\proj\pm_t$ with
+$\ket\pm=(\ket0\pm\ket1)/\sqrt2$. With identities and tensor
+positions implicit, the full retained operators are
+\[
+ W=\Pi_++\Pi_-X_qX_rZ_b,\qquad
+ \widetilde W=\Pi_++\Pi_-X_qX_aZ_b.                  \tag{RA13}
+\]
+For the input $\ket{00000}_{qrtab}$, their outputs, written in order
+$q,r,t,a,b$, are respectively
+\[
+ \begin{split}
+ W\ket{00000}&=
+ (\ket{00}_{qr}\ket+_t+\ket{11}_{qr}\ket-_t)
+               \ket{00}_{ab}/\sqrt2,\\
+ \widetilde W\ket{00000}&=
+ (\ket{00}_{qr}\ket+_t\ket0_a+
+  \ket{10}_{qr}\ket-_t\ket1_a)\ket0_b/\sqrt2.
+ \end{split}                                        \tag{RA14}
+\]
+In the first case the probability $r=1$ is $1/2$; in the second it is
+zero, including after $M$ is traced. The prescribed counts are $11$
+and $9$ gates, both on five logical wires with zero implementation
+scratch. Omitting the Hadamard in $B$ makes the deletion valid on all
+retained inputs. Thus its failure here depends on the intervening
+quantum gate, rather than merely on nonzero initial auxiliary values.
+\end{counterexample}
+\begin{proof}
+ \step{resA-ex-inner}{The inner marked operation is
+ $R=P^\dagger KP=\operatorname{CNOT}_{a\to r}
+                       \operatorname{CNOT}_{q\to r}$.}
+ \begin{proof}\pf\ On a basis triple $(q,a,r)=(x,z,y)$, the three
+ gates give $(x,z\oplus x,y)$, then
+ $(x,z\oplus x,y\oplus z\oplus x)$, then
+ $(x,z,y\oplus z\oplus x)$. This is the stated product.
+ For $z=0$ it changes only $r$ by XOR with $x$ and restores $a$;
+ linear extension gives cleanliness on the entire stated $a=0$
+ subspace, including entanglement with untouched factors or a reference.
+ \end{proof}
+ \step{resA-ex-outer}{The conjugated outer keep is
+ $H_0=B^\dagger K'B=\Pi_++\Pi_-X_qZ_b$.}
+ \begin{proof}\pf\ $K'=\Pi_++\Pi_-Z_b$, since its target $X_t$
+ has eigenvalues $+1,-1$. Conjugating $Z_b$ by
+ $\operatorname{CNOT}_{q\to b}$ gives $Z_qZ_b$, as follows by
+ multiplying a basis vector by $(-1)^{b\oplus q}$.
+ Conjugation by $H_q$ changes $Z_q$ to $X_q$.\end{proof}
+ \step{resA-ex-two}{Equation (RA13) holds.}
+ \begin{proof}\pf\ The original operator is $R^\dagger H_0R$.
+ In the expression for $R$ from \stepref{resA-ex-inner}, its
+ $a\to r$ factor commutes with $X_q$, and conjugation by its
+ $q\to r$ factor sends $X_q$ to $X_qX_r$ by direct basis action.
+ For the modified body $V=BKP$, its outer operation is
+ $P^\dagger K^\dagger H_0KP$. The keep $K$ commutes with $X_q$,
+ whereas conjugation by $P$ sends $X_q$ to $X_qX_a$. All these
+ gates commute with $Z_b$ and $\Pi_\pm$. Substitute into
+ \stepref{resA-ex-outer} to obtain (RA13).\end{proof}
+ \step{resA-ex-input}{Equation (RA14), the probabilities, and the
+ failure of the commutator test follow.}
+ \begin{proof}\pf\ Apply (RA13) to the all-zero basis vector, using
+ $\Pi_\pm\ket0_t=\ket\pm_t/\sqrt2$ and $Z_b\ket0_b=\ket0_b$.
+ The two displayed summands in either output are orthogonal and have
+ squared norm $1/2$. In the original output only the second has
+ $r=1$; in the modified output both have $r=0$.
+ Moreover $PH_0P^\dagger=\Pi_++\Pi_-X_qX_aZ_b\ne H_0$,
+ so (RA9) fails.\end{proof}
+ \step{resA-ex-noH}{Without $H_q$ the deletion is valid, and the
+ counts with $H_q$ are $11$ and $9$.}
+ \begin{proof}\pf\ Without $H_q$, the conjugated keep is
+ $\Pi_++\Pi_-Z_qZ_b$, which commutes with $P$ because CNOT
+ preserves its control's $Z_q$ and does not touch $b,t$.
+ Apply (RA9). With $H_q$, the lengths in (RA11) are
+ $(a,p,b,k,k')=(0,1,2,1,1)$, giving $11$ and $9$.
+ All five wires were explicitly listed and only elementary H and
+ CNOT gates occur.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{resA-ex-inner}--\stepref{resA-ex-noH}.
+ \end{proof}
+\end{proof}
+
+\subsection{Small exact resource instances}
+
+\begin{example}[Three depths with explicit circuit lists]
+\label{ex:resA-counts}
+In family N let $P_0=\operatorname{CNOT}_{q\to a}$,
+$P_{j+1}=\mathsf M(P_j,\operatorname{CNOT}_{a\to r})$ on
+$Q=qr$, $M=a$. Each supplied atom and keep has cost one; there
+are three logical wires and no implementation scratch.
+In family D let all $b_j=u_j=1$, $f_j(x)=x$, and let evaluator $A_j$
+apply CNOT from its input to its zero output, then CNOT from that input
+to its zero private bit. Thus $a_j=2$, $k_j=1$, $o_j=5$.
+The external input and target are one qubit each. Workspace below means
+the allocated sufficient widths (RA7), not an optimal width. All counts
+include every gate of the prescribed lists, even cancellable pairs.
+\[
+\begin{array}{c|rrr|rrrr|rr}
+ d& L_N&C_N&n_N&E_D&D_D&W_E&W_D&n_E&n_D\\\hline
+ 1&2&3 &3& 5 &5 &2&2&4&4\\
+ 2&3&7 &3&15 &9 &3&4&5&6\\
+ 3&4&15&3&35&13 &4&6&6&8
+\end{array}                                         \tag{RA15}
+\]
+Here $n_N$ is total logical width of family N, and $n_E,n_D$ add the
+two external qubits to family D's auxiliary widths. Serial gate time
+is the corresponding gate-count column. Both family D procedures
+realize the clean CNOT from their external input to their final target.
+\end{example}
+\begin{proof}
+ \step{resA-table-N}{The three family N rows are correct.}
+ \begin{proof}\pf\ There is one original atom and $d$ keeps, so
+ $L_N=d+1$. Equation (RA4) with $c_a=c_K=1$ gives
+ $C_N=2^{d+1}-1=3,7,15$. The gates use only $q,a,r$ and require
+ no scratch; inverse repetitions do not add wires.\end{proof}
+ \step{resA-table-D}{The three family D rows are correct.}
+ \begin{proof}\pf\ On input $(x,0,0)$ each evaluator yields
+ $(x,x,x)$, verifying its classical hypothesis and its cost two.
+ A one-bit copy has cost one. Substitute into (RA6)--(RA7):
+ $E_D=5(2^d-1)$, $D_D=4d+1$, $W_E=d+1$, $W_D=2d$.
+ For $d=1,2,3$ these are exactly the displayed integers.
+ Adding the external two wires gives $n_E=d+3$ and $n_D=2d+2$.
+ The composite Boolean function is identity, so (RA5) is clean CNOT.
+ \end{proof}
+ \qedstep
+ \begin{proof}\pf\ By \stepref{resA-table-N} and \stepref{resA-table-D}.
+ \end{proof}
+\end{proof}
+
+\begin{remark}[Scope of the resource comparison]
+The exponential lower count here is for a prescribed expansion, not for
+quantum or reversible computation as a model. The delayed construction
+has a proved retained semantics under its explicit hypotheses, including
+its quantum extension (RA8). For arbitrary intervening gates, (RA9) or
+(RA10) is a separate obligation at each proposed deletion; (RA12)
+shows why cleanliness of an inner mark alone is insufficient. No
+pebble-game theorem or unverified external reference carries a proof
+step here. General optimal time--space trade-offs and unrestricted
+dynamic mark control are not settled by these results.
+The evaluator comparison requires exact basis outputs and a preserved
+input even in (RA8), includes all evaluator wires in $u_j$, and uses
+scratch-free XOR-copy lists. The multiple-deletion corollary is restricted
+to base Tier~A terms without menus. The general resource theorem permits
+menus only with supplied exact finite-alphabet lists and the once-only
+gate/record accounting stated there. All restrictions collected in
+Remark~\ref{rem:r3-restrictions} continue to apply.
+\end{remark}

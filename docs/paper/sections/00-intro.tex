@@ -1,0 +1,35 @@
+We study a computation described using exactly three machines: a deterministic Turing machine that supplies classical control, a reversible Turing machine whose finite encoded states can be used coherently, and a quantum circuit with fresh zero qubits and partial trace. The second machine is a convenient way to describe reversible classical operations on quantum registers; it adds no primitive physical operation. Every finite instance specifies its register sizes and running-time bound before receiving the unknown quantum input (the bound is part of the supplied data; no termination bound is inferred from the instruction list). We first retain all auxiliary qubits and describe an isometry, and only afterward take partial traces to obtain the observable instrument.
+
+The central instruction pair has a direct operator meaning. If a delimited computation implements a total unitary $U$, and a reversible copying operation $K$ writes a specified Boolean function of its machine register into designated quantum targets by XOR, the complete operation is $U^\dagger KU$. A mark identifies the start of the delimited computation; rewind applies the inverse circuit after this copying operation, called keep. These terms do not imply that the machine register is restored. In particular, a gate changing a previously read qubit can prevent restoration even when the keep target was untouched by the forward computation.
+
+Primitive~10 has the controlled-reversible meaning of
+Lemma~\ref{lem:read-product} when the subsequent operations preserve the
+read register's computational-basis sectors. A gate changing that register
+removes this guarantee; the full joint unitary and its retained records
+then specify the semantics.
+
+Theorems~\ref{eqv:forward} and \ref{eqv:reverse} make the equivalence of the nine basic classical and quantum instructions precise for bounded uniform families and final instruments, with explicit overheads. Theorem~\ref{thm:sA-sound} proves soundness for any finite nesting of statically paired marks, allowing quantum gates between each mark and rewind. Theorem~\ref{thm:sA-clean} gives necessary and sufficient tests for
+restoration on the whole initialised input space and characterises when
+the reduced operation is nevertheless unitary; Theorem~\ref{thm:sA-recursive}
+gives the corresponding tests on specified reached subspaces and at nested
+reset points. Theorem~\ref{thm:sA-classical} gives a sufficient condition---product
+output with computational-basis machine factor and a forward operation
+independent of the keep target---which in particular covers reversible
+classical computations; Theorem~\ref{thm:sA-four} gives an explicit four-qubit failure of universal restoration. Finite-alphabet exact equivalence excludes arbitrary ideal angles; Theorems~\ref{eqv:approx} and \ref{eqv:rotations} state the separate approximation guarantees and their effective-data assumptions.
+
+Theorems~\ref{thm:resA-resources}--\ref{thm:resA-deletion} prove prescribed-expansion resource counts, a restricted delayed-erasure comparison and the exact inner-inverse deletion criterion; Counterexample~\ref{ex:resA-quantum} gives its five-qubit limitation. The tight exponential count concerns the prescribed expansion alone, with no lower bound for optimal equivalent circuits. Allocation, drop, observed measurement, external console observation and actual stop inside marked computations are excluded from the structured soundness theorem. No pebble-game trade-off continuum is proved. The full list of hypotheses and limitations is collected in Section~\ref{sec:summary}; Section~\ref{sec:open-problems} records the unresolved questions. These are mathematical statements about the model defined here, rather than a correctness claim for a particular software executor.
+
+For dynamic control, Theorem~\ref{thm:tB-sound} proves a conditional result. A supplied certificate must verify the interpreter's local rules, orthogonal rule domains and orthogonal rule ranges, retained records, matching forward and undo encodings, and every reached state, including after keep. Under these hypotheses a fixed, bounded run is unitary on all retained logical registers, and undo with its specified routing is the exact adjoint of the recorded completed operation. A supplied clean implementation of the whole tick restores its workspace at each tick; this does not imply reset of the retained logical records. Theorem~\ref{thm:tB-A} includes Tier~A as a static clock schedule with its original machine registers retained; this specialization constructs no dynamic certificate.
+
+Theorem~\ref{thm:tB-clean} gives the exact synchronization and disposal criterion: from a fixed pure initial machine state and for every data input, all retained interpreter information must finish in one fixed pure state independent of the data if tracing it is to leave a unitary data channel. Equal completion times alone do not ensure this. In Counterexample~\ref{ex:tB-delay}, undo restores the target at two different completion ticks, but the remaining timing record distinguishes the data values; disposing of it decoheres a superposition. Theorem~\ref{thm:tB-cost} charges each tick for scanning the instruction table, journal and mark stack, plus the supplied Boolean, quantum-action and clock circuits; a bounded run uses exactly $T$ tick circuits.
+
+Here and below, \emph{source} refers to a hypothetical program text using
+the instruction names listed in Section~\ref{sec:primitives}, before translation
+into the terms defined here; no such text is given a general translation or
+semantics in this paper.
+
+Compiling general dynamic source mark/rewind into an interpreter satisfying that certificate remains open. In particular, no general translation for data-dependent repeated visits or an inverse stopped at a coherent mark identifier is proved (Open problem~\ref{prob:tB-compiler}). The conditional interpreter results do not establish such a source compiler or correctness of the existing executor.
+
+Every proof uses Lamport's hierarchical notation~\cite[Section~3, PDF pp.~9--11]{Lamport2012}.
+To typeset the proofs, obtain the original \texttt{pf2.sty} from
+\href{https://lamport.azurewebsites.net/latex/latex.html}{Lamport's LaTeX packages page}.

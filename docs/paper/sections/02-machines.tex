@@ -1,0 +1,340 @@
+\subsection{The classical control computer and reversible computation}
+
+\begin{definition}[Machines 1 and 2; uniform descriptions]\label{def:rtm}
+Machine 1 is a deterministic multitape Turing machine with finite control
+and alphabet and partial transition function, with designated stopping
+states. It generates descriptions and handles genuinely observed classical
+data. A family is uniform when one such machine on $1^n$ and classical
+parameters outputs the complete finite instance and all its bounds.
+For polynomial uniformity its output time and the numerical bounds are
+polynomial in $n$ and the lengths of classical inputs. Resource parameters
+used in compilation estimates are encoded in unary; wire addresses and
+Boolean circuit descriptions are binary. A time bound supplied in binary (a horizon, in the sense of
+Definitions~\ref{def:read} and \ref{def:adaptive}) still has the same
+numerical execution cost, which may be exponential in its encoding length. Approximation requests are positive rational numbers.
+
+Machine 2 is a deterministic reversible multitape Turing machine:
+commands on each tape either read and replace a symbol or move the head
+by $-1,0,1$ without reading or writing; distinct commands have disjoint
+domains and disjoint ranges. Its global transition $\delta$ is partial
+and injective. This is Bennett's quadruple convention
+\cite[pp.~526--527, definition preceding the main theorem]{Bennett1973}.
+For a finite encoding choose, on each bilateral tape, the window
+$\{0,\ldots,S_0-1\}$, with $S_0\geq1$, and heads in that window.
+For $k$ tapes, alphabet $\Gamma$, and control set $F$, use
+\[
+ m_{\rm RTM}=kS_0\lceil\log_2|\Gamma|\rceil+
+ k\lceil\log_2 S_0\rceil+\lceil\log_2|F|\rceil
+\]
+bits, with padding if needed. Invalid codes and transitions leaving the
+window are excluded from the domain $D$ of the restricted $\delta$.
+On $\{0,1\}^{m_{\rm RTM}}\setminus D$ fix the lexicographic bijection
+to the complement of $\delta(D)$; together with $\delta$ this defines
+$\widehat\delta$. Its permutation matrix is the specified completion.
+On excluded codes this is only a completion, not a fault-reporting TM
+simulation. Any assertion of agreement with the original TM requires
+every applied forward transition to remain in $D$. No such promise is
+needed for unitarity or for applying the completed inverse.
+The simulation in Definition~\ref{def:device} below uses explicit circuits
+instead of this potentially expensive completion. There is no autonomous
+cyclic scheduler in the present definition.
+\end{definition}
+
+\begin{lemma}[Finite completion]\label{lem:completion}
+The completion $\widehat\delta$ is a permutation and hence defines a
+unitary on its entire finite register.
+\end{lemma}
+\begin{proof}
+ \step{r2comp-size}{$|D|=|\delta(D)|$.}
+ \begin{proof}\pf\ The restriction is injective with image $\delta(D)$.
+ \end{proof}
+ \step{r2comp-complement}{The ordered complements have equal size and
+ their prescribed correspondence is bijective.}
+ \begin{proof}\pf\ Subtract the equality in \stepref{r2comp-size} from
+ the size of the common ambient finite set.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ The domains partition the set, and their images
+ partition it into two disjoint sets, each mapped bijectively. A
+ permutation takes an orthonormal basis to an orthonormal basis.\end{proof}
+\end{proof}
+
+\begin{definition}[Clean implementation workspace]\label{def:scratch}
+An implementation of a logical unitary $A$ on $L$ is a total circuit
+unitary $\widetilde A$ on $LZ$ satisfying
+\[
+ \widetilde A(\ket\psi\ket{0^{|Z|}})=
+ A\ket\psi\ket{0^{|Z|}}\quad\hbox{for every }\ket\psi\in\cH_L.
+\]
+$Z$ is called clean workspace. This is a zero-input, zero-output
+condition, not the assertion $\widetilde A=A\otimes\id_Z$ on other
+workspace inputs. Logical recording cells are part of $L$, not $Z$.
+For disjoint additional wires $Z'$, the padding of an operator $A$ is
+$A\otimes\id_{Z'}$, with factors placed by their names. Padding a
+clean implementation in this way preserves its defining equality.
+\end{definition}
+
+\begin{lemma}[Workspace and inverses]\label{lem:scratch}
+Clean implementations compose, admit clean implementations of their
+adjoints by circuit reversal, and may reuse the same zero workspace after
+padding its width to the maximum required width.
+\end{lemma}
+\begin{proof}
+ \step{r2scratch-invariant}{The subspace $\cH_L\otimes\ket0_Z$ is mapped
+ onto itself by $\widetilde A$.}
+ \begin{proof}\pf\ Its restriction is the unitary $A$ under the
+ isometric identification $\psi\mapsto\psi\otimes\ket0$.\end{proof}
+ \step{r2scratch-inverse}{$\widetilde A^\dagger(A\psi\otimes\ket0)
+ =\psi\otimes\ket0$.}
+ \begin{proof}\pf\ Apply $\widetilde A^\dagger$ to the defining equality;
+ surjectivity of $A$ covers every logical input.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ After each forward or inverse implementation the
+ workspace is zero by the definition and \stepref{r2scratch-inverse}.
+ Pad each workspace by tensor identity on the unused part of a common
+ maximum-width pool. Its unused wires stay zero. Induction over the
+ finite list proves composition and reuse.\end{proof}
+\end{proof}
+
+\begin{lemma}[Exact finite control and Boolean evaluation]\label{lem:synthesis}
+NOT, CNOT, Toffoli, controlled-$H$, controlled-$T^{\pm1}$, and
+controlled-CNOT have constant-size exact-phase implementations over
+$\mathcal G^{\pm}$ with constant clean workspace. If a total Boolean
+function $f:\{0,1\}^u\to\{0,1\}^v$ is supplied by an acyclic circuit
+of $\beta$ AND, XOR, and NOT gates, then
+$\ket{x,y}\mapsto\ket{x,y\oplus f(x)}$ has a clean implementation of
+size and workspace $O(\beta+u+v)$. For a total Boolean predicate $p$ on
+a register $X$ and a unitary $U$ on a disjoint target $R$, suppose
+controlled-$U$ has a specified clean implementation. Computing $p(x)$
+into a fresh flag, applying controlled-$U$, and undoing the predicate
+implements $\sum_x\proj x_X\otimes U^{p(x)}$.
+The controlled implementation acts on neither $X$ nor the predicate
+evaluation workspace, apart from using the flag as an unchanged control.
+\end{lemma}
+\begin{proof}
+ \step{r2synth-toffoli}{Toffoli has an exact implementation.}
+ \begin{proof}
+  \step{r2synth-phase}{For bits $a,b,c$,
+  $4abc=a+b+c-(a\oplus b)-(a\oplus c)-(b\oplus c)
+  +(a\oplus b\oplus c)$ as integers.}
+  \begin{proof}\pf\ Substitute $a\oplus b=a+b-2ab$ and
+  $a\oplus b\oplus c=a+b+c-2ab-2ac-2bc+4abc$.\end{proof}
+  \step{r2synth-ccz}{There is a diagonal circuit with multiplier
+  $(-1)^{abc}$ and zero-output workspace.}
+  \begin{proof}\pf\ Compute the seven indicated parities into zero
+  wires with CNOTs. Apply $T$ for positive coefficients and $T^\dagger$
+  for negative coefficients, then erase the parities by reversing their
+  CNOTs. The phase is $e^{i\pi(4abc)/4}$ by
+  \stepref{r2synth-phase}.\end{proof}
+  \qedstep
+  \begin{proof}\pf\ Conjugate the third wire by $H$ before and after
+  \stepref{r2synth-ccz}; $HZH=X$.\end{proof}
+ \end{proof}
+ \step{r2synth-controls}{The asserted controlled gates have exact phases.}
+ \begin{proof}\pf\ Controlled-CNOT is Toffoli. For controlled-$T$,
+ compute the AND of control and target into a zero wire, apply $T$ there,
+ then uncompute; replace $T$ by $T^\dagger$ for its inverse. Put
+ $V=SHTHS^\dagger$. Direct matrix multiplication gives $VZV^\dagger=H$.
+ Thus $(\id\otimes V)\operatorname{CZ}(\id\otimes V^\dagger)$ is
+ controlled-$H$, with $\operatorname{CZ}=(\id\otimes H)
+ \operatorname{CNOT}(\id\otimes H)$. Scalar phases of $V$ cancel in
+ this displayed expression. NOT is $HT^4H$.\end{proof}
+ \step{r2synth-evaluate}{The Boolean evaluator has the asserted bounds.}
+ \begin{proof}\pf\ Store each circuit gate's value in a fresh zero
+ bit in topological order: AND by Toffoli, XOR by two CNOTs, NOT by
+ CNOT followed by NOT on the new bit. Copy output bits into $y$, then
+ undo the stored evaluations in reverse topological order. This uses
+ $O(\beta+u+v)$ gates and bits
+ and preserves $x$ on every logical input.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ The construction for a predicate is the evaluator
+ of \stepref{r2synth-evaluate}, the supplied controlled implementation,
+ and the inverse evaluator. On $\ket x\ket\psi\ket0$ their successive
+ logical values are $(x,\psi,p(x))$, $(x,U^{p(x)}\psi,p(x))$, and
+ $(x,U^{p(x)}\psi,0)$. Linearity and Lemma~\ref{lem:scratch} give the
+ asserted operator and zero workspace.\end{proof}
+\end{proof}
+
+\subsection{A total joint device tick}
+
+A \emph{device} below is not a fourth machine. It is finite classical data,
+supplied by Machine~1, that couples that control to Machine~3: at each
+scheduled step (a \emph{tick}) the data select at most one quantum operation
+and then update the classical configuration, with the previous configuration
+retained so the step is a total unitary. Machine~2 enters only through its
+completed permutation steps, admitted as atoms in Section~\ref{sec:instructions}.
+
+\begin{definition}[Finite device data, not an implicit instruction table]
+\label{def:device}
+A register in the computational-basis state $\ket{0\cdots0}$ is called
+\emph{blank}. A device instance supplies the following finite data. The quantum pool
+$Q$ has $q$ named wires. Its classical configuration $C$ has $s$ bits,
+including program position, word slots, memory, stack, quantum identifiers
+and live flags, console tape and length, status, and outcome. Parameters
+$w\geq8,B_{\rm mem},L_{\rm slot},h,o_{\max},p$ bound word width, memory bytes, word slots, call depth,
+console bytes, and instruction positions respectively. Their field layout
+and a validity predicate on all $s$-bit strings are part of the data.
+A canonical valid fault configuration $c_{\rm fault}$ and an initial
+configuration $c_{\rm in}$ are supplied.
+The data also designate one active status code
+$\sigma_{\mathrm{act}}$ and one timeout status code
+$\sigma_{\mathrm{to}}$, each of the status-field width.
+
+Crucially the data include total Boolean circuits for a decoder $d(c)$,
+an update $f(c,z)$, and an output extraction $o(c)$. The word $z$ has a
+fixed width $k\geq1$, the maximum read width. Write $[q]=\{0,\ldots,q-1\}$.
+The decoder's semantic codomain is the disjoint union
+\[
+ \begin{split}
+ \mathcal D={}&\{\mathsf{ordinary},\mathsf{idle},\mathsf{fault}\}
+ \sqcup\{\mathsf{gate}(g,i,j):g\in\{H,T,\operatorname{CNOT}\}\}\\
+ &\sqcup\{\mathsf{read}(r;i_0,\ldots,i_{r-1}):0\leq r\leq k\}
+ \sqcup\{\mathsf{measure}(i),\mathsf{allocate}(i):i\in[q]\}.
+ \end{split}
+\]
+In gate and read modes all used addresses belong to $[q]$; CNOT has
+$i\ne j$; read lists may repeat addresses. A one-wire gate uses
+only $i$. The fixed binary layout, in order, is a 3-bit mode tag (the
+seven displayed modes in order, starting at zero), a 2-bit gate tag
+($H,T,\operatorname{CNOT}$ numbered $0,1,2$), two address fields, a
+read-length field, and $k$ read-address fields. Measurement and allocation
+use the first address field; one-wire gates do likewise. Address width is
+$a_q=\max(1,\lceil\log_2(q+1)\rceil)$; length width is
+$a_k=\lceil\log_2(k+1)\rceil$. Unused fields are zero. Thus decoder
+width is $5+(k+2)a_q+a_k$. No alternative redundant encoding is admitted.
+The supplied Boolean decoder always outputs a canonical code in
+$\mathcal D$; a malformed intended action must instead encode fault.
+A read XORs wire $i_j$ into sample bit $j$, starting at bit zero;
+measurement XORs wire $i$ into sample bit zero only. The sample's other
+bits are untouched, hence zero on a blank sample. Sample destinations
+in $C$ are determined by $f$ alone, not by additional decoder fields.
+
+For every configuration code, a gate, read, or measurement may address
+only wires whose live flags are one. Allocation selects a zero live
+flag and sets just that flag to one; its quantum action is identity on
+that preallocated factor. Except when sending to $c_{\rm fault}$, all
+other updates preserve live flags for every $z$; allocation preserves
+the other flags. There is no deallocation instruction. Invalid codes,
+addresses, repeated gate operands, exhausted capacities, mode violations,
+or illegal instructions have decoder fault, identity quantum action,
+and $f(c,z)=c_{\rm fault}$ for every $z$. The fault configuration is valid
+and terminal. These are requirements on the total supplied circuits,
+not an implicit run-time repair. In particular no gate may precede
+allocation of its operand in a valid forward execution.
+Valid terminal configurations have idle decoder and $f(c,z)=c$.
+For ordinary, gate, allocation and idle modes, $f$ is independent of $z$.
+For read and measurement it writes the sampled value into its specified
+destination and performs the specified program-position update.
+
+All remaining behavior is supplied by the circuits, including which
+operands are immediate or indirect, signed comparison, shift directions,
+division, call-frame layout, console overflow, and every output bit on
+invalid encodings. No theorem identifies unspecified choices.
+For example modular addition means addition modulo $2^w$ only if that
+equation is imposed on the supplied circuit. This parametrization fixes
+one operator for every complete instance. Instruction names 1--6 mean
+the corresponding classical functions when the instance implements them;
+no efficiency of an arbitrary supplied function is presumed.
+The circuit for $f$ includes instruction selection and has size $\beta$.
+Let $\Delta$ bound the sum of sizes of decoder and output circuits,
+including their input and output ports. The encoding has
+$s\geq a_q$; in particular the live-flag field contains $q$ bits.
+\end{definition}
+
+For a first reading, keep one small schematic instance in mind. Take a
+pool of two wires, a configuration $C$ holding a two-bit program position,
+two live flags and a status bit, with the other required fields padded to
+the device layout. Total circuits $d,f$ decode position $0$ as $H$ on
+wire $0$ and advance to position $1$, decode position $1$ as halted/idle,
+and send every other position code to the fault configuration, subject to
+the validity and live-flag checks above. Nothing in what follows depends on
+the size of the fields: a device is simply a finite classical control
+state $C$ together with total Boolean circuits saying, for \emph{every}
+value of $C$, which single quantum operation (if any) happens next and
+what $C$ becomes. The binary layout and the every-code conditions exist
+so that this statement has no undefined cases when $C$ itself is later
+held in qubits.
+
+One classical update $c\mapsto f(c,z)$ is in general many-to-one, so it
+has no inverse and no unitary. The construction below makes it reversible
+by retaining the old configuration in a fresh register $J_t$ before
+overwriting $C$. The map
+$(c,j,z)\mapsto(j\oplus f(c,z),c,z)$ is then a permutation of \emph{all}
+basis states, blank or not, with the displayed inverse; that totality is
+what later lets a rewind act after a keep has moved the state outside the
+image of the forward steps on blank records. The price is the distinction
+used throughout: the operator is a unitary unconditionally, but it means
+``perform the classical update'' only on blank $J_t,B_t$, where the full
+tick acts as $(c,0,0)\mapsto(f(c,z),c,z)$ on the machine factors.
+The order in $S_t=F_tD_t$ is essential: the quantum operation $D_t$ is
+selected by the configuration \emph{before} the tick, and only afterwards
+does $F_t$ change that configuration.
+
+\begin{definition}[Snapshot, sampling, and ordering]\label{def:joint-tick}
+For each scheduled tick $t$ reserve distinct registers $J_t$ of $s$ bits
+and $B_t$ of $k$ bits, initially zero. They are retained. Define
+\[
+ F_t:\ket{c,j,z}\longmapsto
+       \ket{j\oplus f(c,z),c,z}_{C J_t B_t},\qquad
+ F_t^{-1}:\ket{c',j',z}\longmapsto
+       \ket{j',c'\oplus f(j',z),z}.
+\]
+Define $G_c$ on $QB_t$ using the \emph{pre-tick} decoder: the selected
+gate in gate mode; CNOTs from selected pool wires to the designated
+positions of $B_t$ in read or measurement mode; identity in all other
+modes. In particular coherent read and measurement have the same retained
+copying operation, but only the latter has an observational interpretation.
+The joint tick on the full retained list is
+\[
+ D_t=\sum_{c\in\{0,1\}^s}\proj c_C\otimes G_c,
+ \qquad S_t=F_tD_t.                         \tag{1}\label{eq:tick}
+\]
+No decoder field changes during $D_t$. The update follows the quantum
+action, so an address changed by $f$ cannot change that action's operand.
+The logical machine register $M$ includes $C$, every $J_t,B_t$, and any
+other explicit retained records; implementation workspace is separate.
+For an ordinary tick with blank records,
+$(c,0,0)\mapsto(f(c,0),c,0)$. For a read of basis value $x$ it is
+$(c,0,0)\mapsto(f(c,x),c,x)$, with the read pool wires unchanged.
+
+All syntactic tick occurrences of a complete term receive globally
+distinct $J_t,B_t$ names, including occurrences in sequential fragments
+and different marked bodies. Expanding a term's adjoint uses the same
+names as the term, in inverse order; it allocates no new record.
+The ordinary interpretation of a forward tick requires its records blank
+at that application. If a nonblank cell is encountered the completed
+unitary still applies, but it is not asserted to implement the ordinary
+update. Fresh cells may be reused only with a proved zero-restoration
+condition. Every name possibly read by an enclosing inverse is retained.
+\end{definition}
+
+\begin{lemma}[Joint tick well-posedness]\label{lem:joint}
+Equation~\eqref{eq:tick} is a total unitary with inverse
+$D_t^\dagger F_t^{-1}$, independent of blank-record promises. It has a
+clean implementation over $\mathcal G^{\pm}$. On blank records it has
+the stated ordinary and coherent-read actions.
+\end{lemma}
+\begin{proof}
+ \step{r2joint-permutation}{$F_t^{-1}F_t=F_tF_t^{-1}=\id$.}
+ \begin{proof}\pf\ Substitute the displayed binary formulas and use
+ $a\oplus a=0$, while $z$ is preserved.\end{proof}
+ \step{r2joint-controlled}{$D_t$ is unitary.}
+ \begin{proof}\pf\ Each $G_c$ is a product of unitary gates and the
+ projectors $\proj c$ are orthogonal and sum to identity. Hence both
+ $D_t^\dagger D_t$ and $D_tD_t^\dagger$ equal identity.\end{proof}
+ \step{r2joint-implementation}{Both factors have clean implementations.}
+ \begin{proof}\pf\ Evaluate $f(c,z)$ by Lemma~\ref{lem:synthesis}, XOR
+ it into $J_t$, restore workspace, and swap $C,J_t$ using three CNOTs
+ per pair. For $D_t$, compute the decoder into workspace, enumerate
+ gate/measurement actions and read position/address pairs, compute
+ their selection predicates, apply each controlled gate, and uncompute.
+ For reads, the predicate also tests that the position is below the
+ decoded length. The decoder depends only on the unchanged $C$;
+ selected read operations are controlled-CNOTs. Uncompute the decoder.
+ Lemmas~\ref{lem:synthesis} and \ref{lem:scratch} apply.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ Multiply the inverses from
+ \stepref{r2joint-permutation} and \stepref{r2joint-controlled} in reverse
+ order. Substitution of $j=z=0$ gives the stated forward actions.
+ \stepref{r2joint-implementation} supplies the realization.\end{proof}
+\end{proof}
+

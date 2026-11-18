@@ -1,0 +1,873 @@
+% Tier~B: a certified bounded semantics, not a source compiler.
+\subsection{A bounded reversible interpreter: scope and obligations}
+
+\begin{remark}[Status of the extension]\label{rem:tB-status}\label{target:tierB}
+Definition~\ref{def:tierb} admits a static menu only. The following is
+an additional, conditional semantics for a bounded dynamic interpreter.
+It specifies what an implementation certificate must establish; it does
+not assert that every source program, or the existing executor, has such
+a certificate. In particular a supplied sequence of unitary matrices
+without the journal and routing obligations below is insufficient.
+Every dynamic source interpretation and implementation bound below is
+conditional on the supplied certificate and, for circuit costs, the
+specified implementation. The static clock schedule and the algebraic
+disposal test do not construct a dynamic certificate. General dynamic
+source rewind, including the unconditional source-level extension in
+Remark~\ref{problem:remaining}, remains open.
+\end{remark}
+
+\begin{definition}[Finite interpreter state]\label{def:tB-state}
+Fix a finite quantum data register $Q$, an ordinary-work register $A$
+encoded in qubits, a program $P$ of length $\ell\geq1$, and integers
+$T\geq0$, $N\geq1$, $d\geq0$, and $w\geq1$.
+All are supplied independently of the unknown input.
+The interpreter register is
+\[
+ M=A\,C\,J\,S\,R\,Z\,\Gamma.
+\]
+Here $C$ contains the program position, direction/mode and finite
+control; $J$ has $N$ journal cells of $w$ bits and a cursor;
+$S$ has $d$ mark cells and a stack pointer; $R$ retains return addresses,
+visit identifiers, saved cursors and any other routing information;
+$Z$ is implementation workspace; and $\Gamma$ is a clock. All pointer,
+identifier and counter widths are explicit. One mark cell records a
+mark identifier, an activation identifier, a visit identifier, the
+journal cursor, and a continuation address. Each field fits its declared
+width. Repeated visits use distinct live identifiers or a proved reversible
+reuse rule. Integers are finite binary strings; overflow is never silently
+ignored.
+
+A journal entry identifies a specified total unitary, its sign (forward
+or adjoint), its operands and recording cells, and the old bits needed
+to invert an ordinary update. A record of a gate includes its actual
+matrix phase. No quantum state is copied into a journal: ordinary
+basis information is copied coherently, and gates are specified by
+classical descriptors. Descriptors needed later are retained or recovered
+by proved reversible operations. Reading $Q$ means controlled reversible
+copying into machine bits. Positions, modes, mark identifiers, cursors and
+budgets may consequently be in superposition. The controlled-reversible
+reading of primitive~10 has the preserved-sector scope of
+Lemma~\ref{lem:read-product}; subsequent gates changing a read register
+do not give a controlled description of the entire run.
+
+All wires are reserved initially. There is no observed measurement,
+drop, allocation, external output observation or physical stopping during
+the $T$ ticks. Output tapes, faults and timeout indicators are retained
+registers. A claim of successful source behavior requires that capacities,
+valid mark identifiers, blank-cell conditions and the supplied horizon
+suffice on the entire allowed input subspace. Completion on other states
+is part of the semantics, not a claim of successful source execution.
+\end{definition}
+
+\begin{definition}[Local rules and their certificate]\label{def:tB-cert}
+Write $B=QACJSR$ for the logical state without clock or clean workspace.
+The set of local rules is finite. A certificate names a linear initial
+subspace $\mathcal S_{\rm cert}\subseteq
+\mathcal H_B\otimes\operatorname{span}\{\ket0_\Gamma\}$;
+in an implementation its initial
+embedding also appends $\ket0_Z$. The clock is omitted in the autonomous
+case. The reachable-subspace condition in item 5 applies to this entire
+linear space, not merely to a set of basis inputs. If capacity overflow,
+an exhausted journal or stack, or an invalid mark identifier is reachable
+within $T$ ticks, the instance has no certificate for successful source
+execution on that subspace.
+A local rule $e$ consists of an input projector $D_e$ on $B$ and a
+partial isometry $V_e$ with
+\[
+ V_e^\dagger V_e=D_e,\qquad V_eV_e^\dagger=E_e.
+\]
+Input projectors for different rules are orthogonal, and so are their
+output projectors $E_e$. These are \emph{separate obligations}.
+Rules are selected by computational-basis mode, position, journal and
+mark fields, including coherently computed predicates. Predicates that
+are not already machine bits must first be computed reversibly.
+Their computation and eventual erasure are themselves included in the
+rules. Quantum gates can act within a selected sector.
+
+Each rule supplies explicit coordinate identifications of its input and
+output subspaces with the same finite payload space $\mathcal L_e$,
+\[
+ I_e^-:\mathcal L_e\longrightarrow\mathcal H_B,
+ \quad I_e^+:\mathcal L_e\longrightarrow\mathcal H_B,
+ \quad V_e=I_e^+F_e(I_e^-)^\dagger,                 \tag{B1}
+\]
+where $I_e^-$ and $I_e^+$ are isometries onto
+$\operatorname{ran}D_e$ and $\operatorname{ran}E_e$, respectively, and $F_e$ is
+a specified total unitary. The coordinate identifications are explicit
+basis encodings, not unspecified identifications of abstract spaces.
+They include every live journal cell and every retained old value.
+The forward ordinary action of $F_e$ requires the stated blank cells;
+on other codes its chosen total completion still defines the operation.
+The snapshot tick of Definition~\ref{def:joint-tick} is one possible
+$F_e$; its inverse is the stated $D_t^\dagger F_t^{-1}$, including its
+sampling and snapshot registers, not just the inverse data gate.
+
+A certificate verifies the following instruction meanings on a specified
+input subspace and all its reachable states through tick $T$.
+\begin{enumerate}
+\item A forward rule performs its stated completed step and records the
+information needed for its inverse, including control changes. A mark
+pushes the tuple of Definition~\ref{def:tB-state} reversibly.
+\item A keep is the total XOR operation of Definition~\ref{def:keep};
+its controlling machine fields are preserved during that operation.
+The subsequent change to undo mode retains its old control information.
+\item An undo rule selects the last entry above the named mark. If that
+entry denotes $F_e$ in (B1), the undo rule has isometric coordinate
+encodings $\bar I_e^+,\bar I_e^-$ onto its input and output sectors,
+respectively, and is exactly
+\[
+ \bar V_e=\bar I_e^- F_e^\dagger(\bar I_e^+)^\dagger.          \tag{B2}
+\]
+The bars permit different direction and continuation labels, subject to
+the following matching requirement on the entire retained payload.
+Write $\bar D_e=\bar V_e^\dagger\bar V_e$ and
+$\bar E_e=\bar V_e\bar V_e^\dagger$. There are specified isometries
+$\Lambda_e^+:\operatorname{ran}E_e\to\operatorname{ran}\bar D_e$
+and $\Lambda_e^-:\operatorname{ran}\bar E_e\to\operatorname{ran}D_e$,
+onto those sectors, such that
+\[
+ \bar I_e^+=\Lambda_e^+ I_e^+,
+ \qquad I_e^-=\Lambda_e^-\bar I_e^-
+ \quad\hbox{on all of }\mathcal L_e.                 \tag{B2a}
+\]
+Every routing or mode operation taking a forward output sector to its
+undo input sector realizes $\Lambda_e^+$ on the whole sector; the
+corresponding routing after undo realizes $\Lambda_e^-$ on the whole
+undo output sector. These are payload-coordinate identities also for
+vectors produced by a keep, not only for ordinary forward outputs.
+Consecutive recorded entries must admit a common retained payload space
+after identity padding. If the specified isometry $J_i$ routes the output of entry $i$ to
+the input of entry $i+1$, the specified encodings obey
+$J_i I_i^+=I_{i+1}^-$ on that whole space; the reverse routing obeys
+$J_i^\dagger I_{i+1}^-=I_i^+$. All these routings retain every live
+record and are among the certified operations. Their costs are charged.
+The full operator $F_e^\dagger$,
+including its journal and control action, is required. A signed adjoint
+entry is undone with $F_e$. An inner rewind is represented by its entire
+reversible operation, including its keep and routing, or by its sequence
+of elementary signed entries; a compound entry is not a unit-cost gate.
+\item Undo continues one elementary entry at a time until the recorded
+cursor of the coherently named mark is reached. Equality is a reversible
+Boolean test. Changing mode and installing a continuation preserve all
+information needed to undo those changes. Popped records are retained
+until they have been reversibly cleared. Repeated use of a mark and undo
+of an earlier rewind obey these same rules; neither operation licenses
+re-execution of different, newly selected instructions.
+\item For every $0\leq t\leq T$, every vector in
+$W^t\mathcal S_{\rm cert}$ lies in the sum of the asserted rule
+domains, and each of its sector components satisfies the assertion for
+that rule. Here $W$ is the logical tick specified below; in (B3) use
+the input projectors $\proj c_\Gamma\otimes D_{c,e}$ for the
+clock-$c$ rules, and in the autonomous case use $D_e$.
+In an implementation whose single tick $W$ has the supplied clean
+implementation $\widetilde W$ of Theorem~\ref{thm:tB-sound}, all
+statements are lifted with the fixed zero workspace factor
+$\ket0_Z$, which $\widetilde W$ restores at every tick. Thus this condition includes superpositions over
+different rule sectors, every post-keep state and every partial undo.
+Formula (B2) and the matching identities (B2a) must hold
+on that whole domain, not just on states obtained with an empty keep.
+All rules have orthogonal ranges as stipulated above. A stopped logical
+output may idle only through a reversible rule, retaining any timing
+information it requires.
+\end{enumerate}
+The identifications in (B1)--(B2a), the domain/range assertions, and
+reachable-subspace assertions are mathematical proof obligations for an
+instance. They are not established merely by naming an instruction.
+For an efficient circuit claim, a total clean circuit realizing all
+rules and their complement must additionally be supplied.
+\end{definition}
+
+\begin{remark}[Why the range obligation matters]\label{rem:tB-range}
+For a map specified only on blank records, the allowed input and its
+image need not be invariant under keep. The inverse on that image then
+has no prescribed action after keep. A total $F_e$ fixes the algebraic
+inverse, but a state outside a claimed ordinary sector need not have the
+intended cursor, mark or continuation. Extending $F_e$ alone does not
+prove the reachable-subspace obligation. Likewise, retaining an extra
+copy of a control decision can prevent erasure: reversing the data gates
+while leaving that copy is not reversal of the full forward operation.
+\end{remark}
+
+\begin{lemma}[Exact extension criterion]\label{lem:tB-extension}
+Let $\mathcal H$ be finite dimensional and let $D_1,\ldots,D_k$ be
+orthogonal projectors with pairwise orthogonal ranges. For each $i$ let
+$V_i$ be an isometry from $D_i\mathcal H$ into $\mathcal H$, extended
+by zero on the orthogonal complement. There exists a unitary $U$ on
+$\mathcal H$ with $UD_i=V_i$ for every $i$ if and only if the ranges
+of the $V_i$ are pairwise orthogonal. The assertion does not impose a
+gate-alphabet or efficiency condition on $U$.
+\end{lemma}
+\begin{proof}
+ \step{tB-ext-necessary}{\assume{Such a $U$ exists.}
+ \prove{The ranges of the $V_i$ are pairwise orthogonal.}}
+ \begin{proof}\pf\ For $x\in D_i\mathcal H$ and
+ $y\in D_j\mathcal H$ with $i\ne j$,
+ $\langle V_ix,V_jy\rangle=\langle Ux,Uy\rangle
+ =\langle x,y\rangle=0$.\end{proof}
+ \step{tB-ext-sufficient}{\assume{The ranges are pairwise orthogonal.}
+ \prove{Such a $U$ exists.}}
+ \begin{proof}\pf\ The direct sum of the $V_i$ is an isometry on
+ $\sum_iD_i\mathcal H$. Its input and output dimensions are equal.
+ Specify orthonormal bases of their equal-dimensional orthogonal
+ complements and map one basis to the other. Combining the two maps
+ gives a unitary with the required restrictions.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ The two implications establish the equivalence.
+ \end{proof}
+\end{proof}
+
+\begin{definition}[One fixed tick and bounded idle]\label{def:tB-tick}
+Set $D=\sum_eD_e$, $E=\sum_eE_e$ and $V=\sum_eV_e$.
+A completion is a \emph{specified} unitary isomorphism
+$V_\perp:(\id-D)\mathcal H_B\to(\id-E)\mathcal H_B$,
+extended by zero elsewhere. Put $U=V+V_\perp$.
+In the circuit version this completion must have its supplied clean
+implementation; finite-dimensional existence is no efficiency claim.
+One may supply such rules and a completion $U_c$ for each clock value
+$c$, for example to reserve clock-indexed recording cells and bounded
+idle intervals.
+In that case $D_{c,e}$ and $V_{c,e}$ denote the input projector and
+partial isometry of the clock-$c$ copy of rule $e$, and $U_c$ is the
+specified completion formed from them as above.
+Choose $L_{\Gamma}=2^b>T$, let $\Gamma$ have $b$ bits initially
+zero, and define the single fixed logical tick
+\[
+ W=\sum_{c=0}^{L_{\Gamma}-1}\ket{c+1\bmod L_{\Gamma}}\bra c_\Gamma\otimes U_c.
+                                                               \tag{B3}
+\]
+Identical $U_c=U$ give the time-independent microcode special case.
+A finite autonomous microcode that is already a total unitary can
+instead omit the separate clock ($b=0$); a stated horizon still applies.
+In (B3) idle may have $U_c=\id$, but the clock still advances bijectively.
+The logical run is exactly $W^T$. When a clean implementation of $W$
+is supplied, its implementation workspace $Z$ returns to zero each tick.
+There is no amplitude-dependent choice of the number of physical ticks.
+Logical completion times, mark visits and undo lengths may differ.
+The clock has no wrap during the promised interval; outside it the
+cyclic continuation is still part of the unitary specification.
+\end{definition}
+
+\begin{theorem}[Conditional dynamic soundness and exact undo]
+\label{thm:tB-sound}
+Assume Definitions~\ref{def:tB-state}--\ref{def:tB-tick}, including all
+certificate obligations, specified completions and the full reachable
+input subspace $\mathcal S_{\rm cert}$. In particular assume the
+matching-encoding identities (B2a), their whole-sector routing
+realizations, and the consecutive-entry identifications of
+Definition~\ref{def:tB-cert}, including after every keep.
+Then $W^T$ is unitary on all retained logical registers.
+If the single tick $W$ itself has a supplied clean implementation
+$\widetilde W$ on $B\Gamma Z$ in the sense of
+Definition~\ref{def:scratch}, namely
+$\widetilde W(\psi\otimes\ket0_Z)=W\psi\otimes\ket0_Z$ for every
+$\psi$, then $T$ concatenations give a clean implementation with
+\[
+ (\widetilde W)^T(\psi\otimes\ket0_Z)
+       =W^T\psi\otimes\ket0_Z\quad\hbox{for every }\psi.
+\]
+No clean implementation of $W$ is inferred here from clean
+implementations of the separate $U_c$ alone.
+On the certified subspace it executes the specified dynamic instructions.
+Each undo together with its specified label routing is the exact adjoint
+of its corresponding completed forward operation: on all of
+$\mathcal L_e$,
+\[
+ \Lambda_e^-\bar V_e\Lambda_e^+ I_e^+
+       = I_e^-F_e^\dagger.                              \tag{B2b}
+\]
+This includes arbitrary intervening gates, completed inner rewinds and
+unequal ticks of arrival at an undo instruction, provided the certificate
+obligations hold after those operations. The statement does not assert
+cleanliness or a certificate for every source program. General dynamic
+source rewind remains open (Open problem~\ref{prob:tB-compiler}).
+\end{theorem}
+\begin{proof}
+ \step{tB-unit-partial}{$V^\dagger V=D$ and $VV^\dagger=E$.}
+ \begin{proof}\pf\ For $e\ne f$, orthogonality of output sectors gives
+ $V_e^\dagger V_f=0$, and orthogonality of input sectors gives
+ $V_eV_f^\dagger=0$. Sum the defining diagonal identities.\end{proof}
+ \step{tB-unit-complete}{The completion exists and $U$ is unitary.}
+ \begin{proof}\pf\ The preceding step gives equal ranks of $D,E$.
+ Their orthogonal complements have equal finite dimension. Choose and
+ specify orthonormal bases on those complements and map one to the other.
+ Orthogonality eliminates cross terms, so
+ $U^\dagger U=D+(\id-D)=\id$ and $UU^\dagger=\id$.
+ This argument alone gives no efficient finite-alphabet synthesis.
+ Indeed, when the complementary sector is nonzero, exact synthesis of
+every prescribed completion over a fixed finite alphabet is
+impossible: each finite circuit over that alphabet, with any finite
+number of clean workspace wires, is specified by a finite string of
+gate names and wire numerals, so these circuits and their exact
+logical restrictions form a countable set; whereas, for fixed unit
+vectors in the two complementary sectors, mapping the first to
+$e^{i\theta}$ times the second and extending by one fixed basis map
+elsewhere gives uncountably many distinct unitary completions of the
+same $V$ as $\theta$ ranges over $[0,2\pi)$.
+ \end{proof}
+ \step{tB-unit-clock}{$W$ and $W^T$ are unitary.}
+ \begin{proof}\pf\ Distinct summands of (B3) have orthogonal clock
+ inputs and outputs. Therefore $W^\dagger W=WW^\dagger=\id$.
+ A finite product of this unitary is unitary. For $b=0$ use the preceding
+ step directly. If $\widetilde W$ is supplied as hypothesized, induction
+ on $t$ gives $(\widetilde W)^t(\psi\ket0_Z)=W^t\psi\ket0_Z$:
+ the preceding tick restores zero workspace, so the defining equality
+ applies to $W^t\psi$ at the next tick. This also covers $t=0$.
+ This product assertion is the elementary part of soundness.\end{proof}
+ \step{tB-unit-inverse}{Undo together with its specified label routing
+ reverses the entire local completed step.}
+ \begin{proof}
+  \step{tB-unit-cancel}{Equation (B2b) holds on all of $\mathcal L_e$;
+  the routed undo equals $V_e^\dagger$ on $\operatorname{ran}E_e$.}
+  \begin{proof}\pf\ For any $v\in\mathcal L_e$, (B2a) and (B2) give
+  \[
+  \begin{split}
+   \Lambda_e^-\bar V_e\Lambda_e^+ I_e^+v
+    &=\Lambda_e^-\bar V_e\bar I_e^+v\\
+    &=\Lambda_e^-\bar I_e^-F_e^\dagger v
+      =I_e^-F_e^\dagger v=V_e^\dagger I_e^+v.
+  \end{split}
+  \]
+  The second equality uses
+  $(\bar I_e^+)^\dagger\bar I_e^+=\id$; the last uses (B1).
+  Since $I_e^+$ is onto, this proves the sector equality. Taking
+  $v=F_eu$ gives $I_e^-u$, the original forward input. The same
+  equality holds for every other $v$, including the post-keep vector,
+  by the whole-sector routing hypothesis.\end{proof}
+  \step{tB-unit-sequence}{For a recorded sequence
+  $F_1,\ldots,F_k$ on a common retained payload, with identity padding
+  and matching routing identifications included, the inverse payload action is
+  $F_1^\dagger\cdots F_k^\dagger$.}
+  \begin{proof}\pf\ For $k=0$ the product is identity. For $k>0$,
+  write the vector at the last forward output as $I_k^+v$.
+  Step~\stepref{tB-unit-cancel} takes it to
+  $I_k^-F_k^\dagger v$. If $k>1$, the certified reverse routing
+  $J_{k-1}^\dagger$ takes this to $I_{k-1}^+F_k^\dagger v$.
+  Induction on the remaining $k-1$ entries gives
+  $I_1^-F_1^\dagger\cdots F_k^\dagger v$.
+  Forward routing $J_i I_i^+=I_{i+1}^-$ gives the forward payload
+  product $F_k\cdots F_1$ by the same induction. Thus the two
+  payload products are adjoints. The reachable-subspace obligation
+  justifies every sector component used, including after keeps;
+  the identities do not assume $v$ has a blank-record origin.
+  An inner completed operation $A^\dagger K A$ has adjoint
+  $A^\dagger K^\dagger A$ by multiplication of adjoints. The same
+  identity applies to its retained control operations.\end{proof}
+  \qedstep
+  \begin{proof}\pf\ These identities are operator identities on the
+  certified sectors. Inserting gates or a keep changes the vector to
+  which the inverse is applied, not the inverse matrix. Returning the
+  original vector additionally requires undoing all inserted operations;
+  $F^\dagger K F$ need not be identity.\end{proof}
+ \end{proof}
+ \step{tB-unit-dynamic}{Different arrival times require no observation.}
+ \begin{proof}\pf\ At any tick decompose the vector by the orthogonal
+ rule-domain projectors. Apply the specified linear map to each component
+ and sum. Induction over the fixed $T$ ticks uses the reachable-domain
+ obligation at each stage. The selected mark and cursor comparisons are
+ machine-register operations. No common number of logical undo entries
+ is assumed.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ The preceding steps prove the stated algebraic and
+ certified operational assertions. Verification of domains, disjoint
+ ranges, (B2) and the whole-sector matching in (B2a), rather than
+ multiplication of unitaries, is the
+ substantive implementation obligation.\end{proof}
+\end{proof}
+
+\begin{remark}[The physical tick is not reversed by advancing its clock]
+An undo-mode application of $W$ is not the global operator $W^\dagger$:
+the clock in (B3) still advances. The exact-inverse assertion concerns
+the completed logical operation and its explicit encodings, including
+all of its destroyed-information records. Reversing a physical tick,
+clock included, requires $W^\dagger$. Omitting this distinction would
+make the exact-inverse claim false even for a classical counter.
+\end{remark}
+
+\subsection{The static specialization and the disposal criterion}
+
+\begin{theorem}[Embedding Tier~A, with its machine registers retained]
+\label{thm:tB-A}
+Let $P_A$ be a finite fixed-space Tier~A term satisfying all applicable
+hypotheses of Theorem~\ref{thm:sA-sound}, with
+its supplied expansion into logical atoms, keeps and adjoint logical
+atoms $A_0,\ldots,A_{n-1}$ in execution order, each a total unitary on
+$L_A=QM_A$, with $A_{n-1}\cdots A_0=\mathcal U_{P_A}$.
+This is the logical expansion on $L_A$, not its elementary clean circuit
+on $L_AZ$. It includes the original occurrence-labelled records and
+any specified continuation atoms. Choose $L_{\Gamma}=2^b>T\geq n$ and a fresh
+counter $\Gamma$ initially zero, and let $M_B$ be any disjoint auxiliary
+register in a fixed unit vector $\ket{m_B}$. Take
+$U_c=A_c\otimes\id_{M_B}$ for $0\leq c<n$ and
+$U_c=\id_{L_AM_B}$ for $n\leq c<L_{\Gamma}$.
+Then this is a static specialization of the tick form (B3), with no
+dynamic mark or undo instruction executed, and for every $\psi_{L_A}$,
+\[
+ W^T(\psi_{L_A}\otimes\ket{m_B}\ket0_\Gamma)
+ =\mathcal U_{P_A}\psi_{L_A}\otimes\ket{m_B}\ket T_\Gamma.
+                                                               \tag{B4}
+\]
+The fixed list already specifies every action; no separate mutable mark
+stack is used. This theorem supplies no certificate under
+Definition~\ref{def:tB-cert}. Any dynamic source interpretation would
+additionally require that certificate, whose general construction remains
+open (Open problem~\ref{prob:tB-compiler}).
+Here a clean implementation concerns only $Z$ as in
+Definition~\ref{def:scratch}; logical cleanliness would restore $M_A$
+exactly, in the sense of Definition~\ref{def:clean}.
+Classical control alone does \emph{not} imply $M_A$ is clean, nor does it
+make an arbitrary implementation's extra records independent of $Q$.
+Equation (B4) is an existence statement for this implementation.
+\end{theorem}
+\begin{proof}
+ \step{tB-A-word}{The expanded list has product $\mathcal U_{P_A}$.}
+ \begin{proof}\pf\ The logical recursion in Definition~\ref{def:tiera}
+ and Theorem~\ref{thm:sA-sound} expands identity as an empty list, an
+ atom as itself, and a sequence by concatenation. A marked body expands
+ as its logical list, its keep, and the reversed adjoint logical list
+ using the same record names. Structural induction gives the displayed
+ product on all of $\mathcal H_{L_A}$. This never substitutes the
+ action of an elementary implementation on nonzero workspace.
+ Distinct counter inputs and outputs make the summands of (B3)
+ orthogonal. No dynamic certificate is asserted for this schedule.
+ \end{proof}
+ \step{tB-A-counter}{After $t\leq T$ ticks the clock equals $t$ and
+ the logical action is $U_{t-1}\cdots U_0$.}
+ \begin{proof}\pf\ Induct on $t$ using (B3), starting with the empty
+ product. The assumption $T<L_{\Gamma}$ excludes wrap.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ At $T$ the last $T-n$ factors are identity.
+ Combine the preceding steps. Nothing erases $M_A$; its cleanliness is
+ the separate condition in Theorem~\ref{thm:sA-clean}.\end{proof}
+\end{proof}
+
+\begin{theorem}[Exact synchronization and disposal]\label{thm:tB-clean}
+Let $W$ be a finite unitary interpreter tick, let $T\geq0$, initialize
+all of $M$ in a fixed pure state $m_0$, and allow every input on $Q$.
+For a dynamic source application, $W$ and its interpretation must be
+supplied under the certificate hypotheses of Theorem~\ref{thm:tB-sound}.
+To claim that interpretation for every input considered here, under
+the identification $QM=B\Gamma Z$ of
+Definitions~\ref{def:tB-state}--\ref{def:tB-cert} with factors placed
+by name, the fixed vector $m_0$ must have clock factor
+$\ket0_\Gamma$ and workspace factor $\ket0_Z$, the tick must be the
+logical tick $W$ of Theorem~\ref{thm:tB-sound} (respectively its
+supplied clean implementation $\widetilde W$ when $Z$ is retained
+in $M$), and $E_0\mathcal H_Q$, with the $Z$ factor suppressed as
+in Definition~\ref{def:tB-cert}, must be contained in
+$\mathcal S_{\rm cert}$.
+The algebraic test below applies to any such finite unitary, without
+constructing that certificate; general dynamic source rewind remains
+open (Open problem~\ref{prob:tB-compiler}).
+Set $E_0\psi=\psi\otimes m_0$ and $V=W^TE_0$.
+For a specified unit vector $\eta\in\mathcal H_M$ the following are
+equivalent:
+\begin{enumerate}
+\item There is a unitary $A$ on $Q$ such that $V\psi=A\psi\otimes\eta$
+for every $\psi$.
+\item $(\id_Q\otimes(\id_M-\proj\eta))V=0$.
+\item The final $M$ marginal is $\proj\eta$ for every input density
+operator on $Q$.
+\end{enumerate}
+Moreover the reduced channel $\rho\mapsto\tr_M(V\rho V^\dagger)$ is
+unitary if and only if these conditions hold for some fixed pure $\eta$.
+They continue to hold with an arbitrary untouched finite reference.
+This disposal test is weaker than logical reset: $\eta$ need not equal
+$m_0$. A clean implementation restores its workspace $Z$, but does not
+by that fact restore the other logical interpreter factors.
+Thus clock, position, journal, stack \emph{and all other retained
+interpreter information} must collectively factor in a fixed pure state
+if disposal is to implement a unitary on arbitrary $Q$.
+Equal completion times alone are not a sufficient condition: the fixed
+finite schedule of Theorem~\ref{thm:sA-four}, with keep target initially
+zero, has one endpoint time while its final machine vectors
+$\ket{00}$ and $\ket{10}$ remain correlated with the data, so collective
+factorization fails there.
+For a preserved computational-basis input with an orthonormal output
+family, if
+\[
+ V\ket x=\ket{f_x}\ket{m_x},
+\]
+then an input matrix element $\ket x\bra y$ is sent after disposal to
+$\langle m_y|m_x\rangle\ket{f_x}\bra{f_y}$. In particular orthogonal
+clock/position records erase that off-diagonal element.
+\end{theorem}
+\begin{proof}
+ \step{tB-clean-12}{Conditions 1 and 2 are equivalent.}
+ \begin{proof}\pf\ Condition 1 implies 2 by projection. Under 2 set
+ $A=(\id_Q\otimes\bra\eta)V$. Then $V\psi=A\psi\otimes\eta$
+ for every $\psi$, and
+ $A^\dagger A=V^\dagger V=\id$. Equal finite input and output
+ dimensions make $A$ unitary.\end{proof}
+ \step{tB-clean-23}{Conditions 2 and 3 are equivalent.}
+ \begin{proof}\pf\ Condition 2 implies the stated pure marginal.
+ Conversely apply 3 to every pure input. The squared norm of its
+ component orthogonal to $Q\otimes\eta$ is the expectation of
+ $\id\otimes(\id-\proj\eta)$, hence zero.\end{proof}
+ \step{tB-clean-channel}{A unitary reduced channel implies a fixed pure
+ environment vector.}
+ \begin{proof}\pf\ If the reduced channel is conjugation by $A$,
+ each pure output $V\ket i$ has $Q$ marginal
+ $A\ket i\bra iA^\dagger$. The squared norm of its component
+ orthogonal to $\operatorname{span}\{A\ket i\}\otimes\mathcal H_M$
+ is the expectation of the complementary projection, hence zero.
+ Therefore $V\ket i=A\ket i\otimes\eta_i$ for a unit vector
+ $\eta_i$, on an orthonormal input basis. Density matrices span the
+ full operator space: diagonal matrix units are pure projections and
+ off-diagonal units are linear combinations of projections onto
+ $(\ket i\pm\ket j)/\sqrt2$ and $(\ket i\pm i\ket j)/\sqrt2$.
+ Channel equality thus holds on $\ket i\bra j$ and gives
+ \[
+ \langle\eta_j|\eta_i\rangle A\ket i\bra jA^\dagger
+       =A\ket i\bra jA^\dagger.
+ \]
+ The rank-one operator on the right is nonzero, so the scalar is one.
+ Hence $\|\eta_i-\eta_j\|^2
+ =2-2\operatorname{Re}\langle\eta_j|\eta_i\rangle=0$.
+ If $\dim Q=1$ there is only one vector. Conversely a common
+ vector gives conjugation by $A$ on tracing.\end{proof}
+ \step{tB-clean-elements}{The stated matrix-element formula holds.}
+ \begin{proof}\pf\ Take the partial trace of
+ $\ket{f_x}\bra{f_y}\otimes\ket{m_x}\bra{m_y}$.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ Combine the steps. Tensoring the operator equality
+ in condition 1 with the reference identity proves the reference claim.
+ The equal-time failure follows from the nonzero, orthogonal machine
+ terms and rank-two output proved in Theorem~\ref{thm:sA-four}.
+ The condition is collective: constant individual mixed marginals do
+ not establish factorization of the joint machine register.\end{proof}
+\end{proof}
+
+\begin{counterexample}[Exact undo at unequal ticks]\label{ex:tB-delay}
+There are four qubits, in order $q,r,p_1,p_0$. The data are $Q=qr$;
+$M=p_1p_0$ is a compact encoding of position, mode, the one-entry journal
+and elapsed idle time. There is a single fixed mark, hence its identifier
+and stack need zero additional bits. No separate clock or workspace is
+used. Define $p=2p_1+p_0$, and the following complete permutations and
+gate bits:
+\[
+\begin{array}{c|rrrr|rrrr}
+ &\pi(0)&\pi(1)&\pi(2)&\pi(3)&a(0)&a(1)&a(2)&a(3)\\\hline
+ q=0&1&2&3&0&1&1&0&0\\
+ q=1&1&3&0&2&1&0&0&1
+\end{array}
+\]
+The single fixed tick is
+\[
+ W\ket{q,r,p}=\ket{q,r\oplus a_q(p),\pi_q(p)}.          \tag{B5}
+\]
+At $p=0$ it performs a forward $X_r$ and records it in the position
+encoding. For $q=0$ it undoes that entry at the second tick ($p=1$);
+for $q=1$ it waits at $p=1$ and undoes at the third tick ($p=3$).
+Completion is $p=2$ in either case. The transition $2\to3$ for $q=0$
+is an idle tick recording elapsed completion time. Remaining transitions
+complete the finite cycles; only $T=3$ ticks are claimed as execution.
+For arbitrary amplitudes $\alpha,\beta$ and an arbitrary unit vector
+$\chi\in\mathcal H_r$,
+\[
+ W^3\bigl((\alpha\ket0+\beta\ket1)_q\chi_r\ket0_p\bigr)
+ =\alpha\ket0_q\chi_r\ket3_p+
+   \beta\ket1_q\chi_r\ket2_p.                         \tag{B6}
+\]
+For $q=\ket+$ disposal of $p$ yields
+$\tfrac12\id_q\otimes\proj\chi_r$, although each executed undo is
+exact and $r$ is restored. The two completion ticks are 2 and 3.
+\end{counterexample}
+\begin{proof}
+ \step{tB-delay-unit}{Equation (B5) is a permutation unitary.}
+ \begin{proof}\pf\ For each unchanged $q$, $\pi_q$ is a permutation.
+ From its output recover $p=\pi_q^{-1}(p')$ and then
+ $r=r'\oplus a_q(p)$. This gives a unique inverse on all 16 basis states.
+ Thus rule domains and ranges are disjoint.\end{proof}
+ \step{tB-delay-evolve}{Equation (B6) holds.}
+ \begin{proof}\pf\ For $q=0$, positions are $0,1,2,3$ and data gates
+ are $X,X,\id$. For $q=1$, positions are $0,1,3,2$ and gates are
+ $X,\id,X$. Both products are identity. Apply linearity. The inverse
+ data action is $X^\dagger=X$. The compressed register $p$ is used
+ only through the displayed total unitary (B5); no exhibition of this
+ example as a certificate instance of Definition~\ref{def:tB-cert}
+ is required for the disposal calculation.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ The final machine states are orthogonal, so
+ Theorem~\ref{thm:tB-clean} removes the cross terms. For $q=\ket+$
+ the reduced $q$ state has purity $1/2$.\end{proof}
+\end{proof}
+
+\begin{lemma}[The global clock and absorbing completion]
+Assume the clock initialization and tick (B3). Also let $U$ be any
+unitary and $u,v$ any vectors in its Hilbert space.
+For every initial state $\Phi\otimes\ket0_\Gamma$, the global clock
+of (B3) is always the fixed basis
+state $\ket T$ at the endpoint. It cannot itself cause the loss in (B6).
+A data-dependent local elapsed-time register or position can do so.
+Furthermore, if $Uu=v$ and $Uv=v$, then $u=v$.
+\end{lemma}
+\begin{proof}
+ \step{tB-absorbing-clock}{At tick $t\leq T$, the clock factors as
+ $\ket t$ from all other registers.}
+ \begin{proof}\pf\ Induction in (B3) advances every input vector's
+ clock by one, independent of its other registers. There is no wrap
+ since $T<L_{\Gamma}$. A fixed pure factor has no correlations to discard.
+ \end{proof}
+ \step{tB-absorbing-injective}{$Uu=Uv$ implies $u=v$.}
+ \begin{proof}\pf\ Multiply by $U^\dagger$.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ Apply the preceding two steps; the local-position
+ obstruction is Example~\ref{ex:tB-delay}.\end{proof}
+\end{proof}
+
+\begin{remark}[Checked halting and synchronization context]\label{rem:tB-halting}
+Bernstein--Vazirani define exact halting by no final configurations before
+$T$ and only final configurations at $T$
+\cite[Definition 3.5.1, PDF p.~14]{BernsteinVazirani1997}.
+Their synchronization theorem applies to polynomial-time classical
+$f$ with output length depending only on input length. It supplies a
+stationary normal-form reversible machine computing $(x,f(x))$ in time
+depending only on input length
+\cite[Theorem 4.1.3, PDF p.~17]{BernsteinVazirani1997}.
+Its phrase ``whose running time depends only on the length of $x$''
+does not supply a synchronization theorem for arbitrary coherent
+mark selection after gates.
+
+Linden--Popescu's specified auxiliary evolution retains elapsed stopping
+time; they write ``ancilla contains a record of the time since the
+computation halted''
+\cite[PDF p.~2, equations (7)--(11) and text after (9)]{LindenPopescu1998}.
+Example~\ref{ex:tB-delay} gives a finite bounded instance of the relevant
+entanglement obstruction. We use neither a general nonexistence claim
+nor a claim that unequal durations always destroy coherence.
+
+Ozawa proves equality of monitored and unmonitored output probabilities
+under his assumptions (I)--(III), including invariant halted tape output
+\cite[PDF p.~2, equation (11); proof pp.~2--4,
+equations (12)--(14) and following]{Ozawa1998}.
+The phrase ``no more changes the halt qubit nor the tape string'' is
+assumption (II), equation (6), on PDF p.~2. Equality of that output
+distribution is distinct from unitary preservation of arbitrary quantum
+output and does not contradict (B6).
+Shi questions the composition argument for a particular universal-machine
+proposal \cite[PDF pp.~7--8, Section 5, equations (12)--(14)]{Shi2002}.
+This is contextual, not a theorem precluding bounded reversible circuits.
+No halting paper carries a proof step of the results above.
+\end{remark}
+
+\subsection{Circuit costs and the unresolved compilation problem}
+
+\begin{definition}[Explicit circuit cost parameters]\label{def:tB-cost}
+For the following implementation bound, assume a supplied reversible
+microcode circuit for (B3). It fetches a $w$-bit instruction from a
+fixed classical table of length $\ell$ at an $a$-bit quantum address,
+where $a=\lceil\log_2(\ell+1)\rceil$; out-of-range fetch returns a
+specified default. This is a coherent circuit lookup, not an oracle
+or assumed quantum random-access memory. It uses at most $\kappa$
+journal accesses and at most $\kappa$ mark-stack accesses per tick,
+where $\kappa$ is an absolute constant independent of
+$\ell,a,w,N,d,u,v,\beta,g,b,h,z,q$ and $T$; it is part of the
+constant hidden in $O(\cdot)$ in (B7). The cell width is at most $w$,
+capacities $N$ and $d$, and binary cursor widths
+$u=\lceil\log_2(N+1)\rceil$, $v=\lceil\log_2(d+1)\rceil$.
+Take $w$ large enough for every descriptor and mark tuple.
+
+Let $g$ be the sum of lengths of the supplied elementary action circuits
+that are coherently selected during one tick, including all wire-address
+selection, controlled gates, keeps and inverses. Let $\beta$ bound the
+sum of sizes, including all input and output ports, of the other Boolean
+circuits \emph{and their supplied inverse
+routing computations}. These circuits must implement the certificate,
+including behavior on invalid codes and completion. A table depending
+on the clock is charged at its actual additional size in $\beta$ or $g$.
+Let $h$ be all other logical machine bits and let $z$ bound reusable clean
+workspace for the supplied component circuits. No small value of
+$g,\beta,h,z$ follows from the existence of an abstract completion.
+\end{definition}
+
+\begin{theorem}[Conditional implementation cost]\label{thm:tB-cost}
+Assume a certificate satisfying Definition~\ref{def:tB-cert}, its
+specified tick and completion, and all supplied clean-circuit and
+access hypotheses of Definition~\ref{def:tB-cost}. The following bound
+is conditional on those data; it supplies no general dynamic source
+compiler, which remains open (Open problem~\ref{prob:tB-compiler}).
+A scan implementation of one tick has
+\[
+ G_{\rm tick}=O\bigl(\ell(a+w)+N(u+w)+d(v+w)
+                  +\beta+g+b+w+1\bigr).                    \tag{B7}
+\]
+A sufficient total qubit count, including the input $q=|Q|$, is
+\[
+ q+h+(N+d)w+a+u+v+b+
+ O(z+a+u+v+w+b+1).                                        \tag{B8}
+\]
+Here $h$ includes $A$, direction flags and retained routing records;
+workspace for Boolean evaluation must already be included in $z$.
+$T$ ticks cost $O(TG_{\rm tick})$ gates with the same wires.
+The circuit always consists of exactly $T$ copies of the tick circuit.
+A component in an idle rule sector still passes through that circuit;
+no count of padded ticks for an individual sector component is subtracted
+from the gate total. For a general input vector different sector
+components may be idle at different ticks, so no single nonidle count
+need exist. Separately, the static embedding of Theorem~\ref{thm:tB-A}
+has $n$ scheduled logical-factor ticks and $T-n$ padding ticks, compared
+with the direct Tier~A list of the $n$ logical factors $A_c$.
+That schedule's factors are not counted as unit-cost elementary gates;
+applying (B7) to any implementation requires all its circuit hypotheses.
+A quantum-position interpreter therefore has
+fetch and routing overhead even with classical control.
+\end{theorem}
+\begin{proof}
+ \step{tB-cost-fetch}{Instruction lookup costs $O(\ell(a+w))$.}
+ \begin{proof}\pf\ For each classical address $i$, reversibly compute
+ the equality flag $[p=i]$ using $O(a)$ elementary Boolean gates and
+ clean scratch, XOR the fixed $w$-bit word controlled by that flag,
+ and undo the flag. Only one address can match. If no address matches,
+ one further $O(a)$ range test and an $O(w)$ controlled XOR install
+ the specified default word, after which the flag is uncomputed.
+ Since $\ell\geq1$, this is absorbed by $O(\ell(a+w))$. Apply
+ Lemma~\ref{lem:synthesis}; reversing the circuit erases a fetched
+ descriptor when its inputs have been restored. A descriptor cannot
+ be erased using a modified address without that restoration.\end{proof}
+ \step{tB-cost-memory}{The stated journal and stack terms suffice.}
+ \begin{proof}\pf\ Scan all $N$ journal cells, compute each cursor
+ equality flag in $O(u)$ gates, and perform the required controlled
+ bitwise XORs or swaps in $O(w)$ gates. Reverse the flag computation.
+ The analogous scan of $d$ mark cells costs $O(d(v+w))$.
+ The absolute access bound $\kappa$ absorbs repetitions of these scans.
+ Cursor increments, decrements and comparisons use linear-size
+ reversible binary arithmetic with retained carries uncomputed.
+ The supplied microcode guarantees the required blank cells or retains
+ their old values; a scan does not implement irreversible deletion.\end{proof}
+ \step{tB-cost-rest}{The other terms and qubit count suffice.}
+ \begin{proof}\pf\ Coherently control the supplied gate lists and
+ evaluate the remaining Boolean circuits, charging $g$ and $\beta$.
+ For the clock, evaluate the successor with a linear-size ripple
+ circuit into a blank $b$-bit register, swap registers, and erase the
+ old value by evaluating the predecessor into it. Boolean evaluation
+ uses Lemma~\ref{lem:synthesis}; this costs $O(b+1)$ gates and clean
+ workspace. Store the named cells and cursors, the $h$ other
+ logical bits, a fetched word and a reusable set of equality/carry
+ scratch bits. The clean component-workspace bound is $z$.
+ This gives (B7)--(B8).\end{proof}
+ \qedstep
+ \begin{proof}\pf\ Repeat the same circuit $T$ times and reuse its
+ zero-output workspace. For a superposition, there is
+ one circuit consisting of $T$ ticks, not a sum of execution times over basis
+ inputs.\end{proof}
+\end{proof}
+
+\begin{proposition}[Nesting costs in this semantics]\label{prop:tB-nesting}
+Assume elementary signed journal entries, the certificate and explicit
+tick-cost hypotheses of Theorem~\ref{thm:tB-cost}, and a fixed horizon
+$T$. The bound contains no factor depending on nesting depth except
+through its parameters $T,\ell,a,N,u,d,v,\beta,g,b,w,h,z$;
+in particular it does not bound $T$ by a polynomial in the source
+description. This conditional count supplies no general dynamic source
+rewind construction, which remains open.
+For the static family $P_0=a$ and
+$P_{j+1}=\mathsf{mark}\{P_j\}\mathsf{rewind}\ K$, if the prescribed
+expansion executes every elementary body gate and its adjoint and makes
+no cancellations, its number $n_j$ of payload gate applications is
+\[
+ n_{j+1}=2n_j+k,\qquad n_j=2^jn_0+(2^j-1)k,                \tag{B9}
+\]
+where $n_0$ and $k$ are the lengths of the atom and keep circuits.
+Any interpreter executing this list with at most one payload gate per
+tick has $T\geq n_j$. This is a tight count for that expansion, not a
+lower bound for all equivalent implementations. With $N=O(T)$ journal
+capacity, (B7) gives the total scan bound
+\[
+ O\bigl(T^2(u+w)+
+ T(\ell(a+w)+d(v+w)+\beta+g+b+w+1)\bigr),
+\]
+so no automatic linear-in-$T$ bound is obtained. Keeping a journal
+does not itself remove (B9).
+\end{proposition}
+\begin{proof}
+ \step{tB-nesting-global}{The total circuit has $T$ copies of its tick.}
+ \begin{proof}\pf\ This is its definition and
+ Theorem~\ref{thm:tB-cost}. Nesting affects the parameters and $T$,
+ not an additional multiplication of this count.\end{proof}
+ \step{tB-nesting-count}{Equation (B9) holds.}
+ \begin{proof}\pf\ A marked expansion prints its body once, its
+ $k$ keep gates once, and the adjoint body once. This gives the
+ recurrence. Induction on $j$ gives the displayed solution.
+ The circuit itself attains that count; serial execution cannot use
+ fewer ticks than the number of gates it is required to execute.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ Combine the steps and substitute $N=O(T)$ in
+ (B7). No optimal-synthesis or general delayed-erasure theorem follows.
+\end{proof}
+\end{proof}
+
+\subsection{Small exact instances and outstanding obligations}
+
+\begin{example}[Finite matrices for independent checking]\label{ex:tB-table}
+In each example below $p$ is a binary encoded cyclic instruction
+counter, initially zero. It also encodes the fixed mode, journal
+occupancy and fixed single-mark control; no unlisted auxiliary wire is
+used. For a gate list $(G_0,\ldots,G_{L_{\Gamma}-1})$, notation
+$[G_0,\ldots,G_{L_{\Gamma}-1}]$ means the complete unitary
+$\sum_{p=0}^{L_{\Gamma}-1}\ket{p+1\bmod L_{\Gamma}}\bra p\otimes G_p$.
+A fixed mark identifier needs no separate storage. These compressed
+examples test algebraic and timing claims, not a variable-size stack
+compiler.
+\[
+\begin{array}{c|c|c|c|l}
+\text{case}&Q&M&T&\text{tick and endpoint from zero machine state}\\\hline
+\mathrm{I}&q&p\ (1\text{ bit})&2&[X,X]:\ \psi\ket0\mapsto\psi\ket0\\
+\mathrm{II}&q&p\ (2\text{ bits})&3&[H,X,H,\id]:\ \psi\ket0\mapsto Z\psi\ket3\\
+\mathrm{III}&qr&p\ (2\text{ bits})&3&\text{(B5)--(B6); unequal completion ticks}\\
+\mathrm{IV}&q&p\ (3\text{ bits})&7&[H,X,H,X,H,X,H,\id]:\
+ \psi\ket0\mapsto -X\psi\ket7
+\end{array}
+\]
+Case I uses two qubits, II three, and III--IV four. Case II is
+$H^\dagger XH=Z$; case IV is an outer rewind with inner completed
+operation $HXH=Z$ and outer keep $X$.
+The minus sign in IV is part of the specified matrix and must not be
+removed if the operation is later controlled.
+\end{example}
+\begin{proof}
+ \step{tB-table-unit}{Each displayed tick is unitary.}
+ \begin{proof}\pf\ Each counter input has a unique counter output,
+ and its attached data gate is unitary. Case III was proved in
+ Example~\ref{ex:tB-delay}.\end{proof}
+ \step{tB-table-products}{The endpoints are as stated.}
+ \begin{proof}\pf\ Apply the attached gates in counter order.
+ $X^2=\id$, $HXH=Z$, and $ZXZ=-X$ by the two-by-two matrices.
+ The counter ends at the indicated value.\end{proof}
+ \qedstep
+ \begin{proof}\pf\ The steps establish the table for every data
+ input, including inputs entangled with an untouched reference.\end{proof}
+\end{proof}
+
+\begin{problem}[A compiler and a source simulation theorem]
+\label{prob:tB-compiler}
+For general bounded source programs with repeated dynamic mark visits,
+construct the explicit coordinate encodings, local rules and efficient
+completion in Definition~\ref{def:tB-cert}, and prove the reachable-domain
+and disjoint-range obligations. This is not proved here. In particular,
+after a keep changes a previously read input, newly executing the source
+code can choose different instructions or fail to reach the saved visit.
+It is not thereby the inverse of the recorded computation. A successful
+translation must recover the exact old operation including its control,
+or specify a different total completion and state the resulting semantic
+change. Inspections of nonzero amplitudes, discarding a clock and taking
+only a maximal deadline are not reversible Boolean operations on a
+computational-basis state without additional records and a proof.
+No equivalence with the executor's scheduling, rollback or budget rules
+is established by this section.
+\end{problem}
+
+\begin{problem}[Synchronization, resources and unrestricted execution]
+A source-level sufficient condition, proved for dynamic marks and arbitrary
+intervening gates, which guarantees the factorization in
+Theorem~\ref{thm:tB-clean}, remains open. Equal padded durations do not
+clear the journal or mark stack. Extending the bounded construction to
+an unknown unbounded runtime is not accomplished by the finite cyclic
+clock. No efficient finite-alphabet synthesis of an arbitrary abstract
+completion is asserted; exact synthesis of a prescribed arbitrary
+completion need not exist over the finite alphabet, so a circuit claim
+must supply its completion and circuit together, as in
+Definition~\ref{def:tB-cert}. Finally, a general transformation
+removing exponential repeated undo while retaining arbitrary quantum
+keeps, with a proved time--space trade-off, is not supplied. The exact
+count (B9) is not an impossibility result for such a transformation.
+\end{problem}
