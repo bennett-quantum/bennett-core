@@ -496,10 +496,10 @@ entry:
 #[test]
 fn qubit_shift_and_multiplier_refusals_do_not_depend_on_budget() {
     for (operation, route) in [
-        ("mul", "multiplication of two qubit words"),
-        ("shl", "shifts by a qubit word"),
-        ("lshr", "shifts by a qubit word"),
-        ("ashr", "shifts by a qubit word"),
+        ("mul", "a proved constant multiplication factor"),
+        ("shl", "a proved constant shift amount"),
+        ("lshr", "a proved constant shift amount"),
+        ("ashr", "a proved constant shift amount"),
     ] {
         let source = DEVICE_PROGRAM
             .replace("func @main()", "func @main(i64 %budget)")
@@ -697,4 +697,87 @@ entry:
     let empty = compile_apply(ApplyInput { budget: 0, ..boundary }).expect("zero scratch at the boundary");
     empty.send(&mut counter).expect("issue a budget fault with zero scratch");
     assert_eq!(counter.counts().zero_released_qubits, 1);
+}
+
+#[test]
+fn register_expressions_can_fold_to_constant_shift_amounts_and_factors() {
+    let cases = [
+        ("    %k = and i4 %x, 0", "shl", true),
+        ("    %k = xor i4 %x, %x", "lshr", true),
+        ("    %k = and i4 %x, 0", "mul", false),
+        ("    %mixed = and i4 %x, 14\n    %low = trunc i4 %mixed to i1\n    %k = zext i1 %low to i4", "shl", true),
+        ("    %sum = add i4 %x, 3\n    %alias = lshr i4 %sum, 0\n    %k = xor i4 %alias, %sum", "lshr", true),
+    ];
+    for (expression, op, preserves_input) in cases {
+        let source = format!(
+            "memory 512\nfunc @f(i4 %x) -> i4 {{\nentry:\n{expression}\n    %result = {op} i4 %x, %k\n    ret %result\n}}\n"
+        );
+        let module = load(&source).expect("valid applied arithmetic");
+        let boundary = u64::try_from(expression.lines().count()).expect("expression length") + 2;
+        for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+            for budget in [0, boundary - 1, boundary] {
+                let compiled = compile_apply_with(
+                    ApplyInput {
+                        module: &module,
+                        callee: module.function_named("f").expect("callee"),
+                        args: &[Argument::Register(0..4)],
+                        out: 4..8,
+                        fault: 8..13,
+                        budget,
+                        entry_fault: None,
+                        scratch_start: 13,
+                    },
+                    mode,
+                )
+                .unwrap_or_else(|error| panic!("{op}, budget {budget}: {error}"));
+                check(&compiled, 4, 9, |x| {
+                    if budget < boundary {
+                        1 << 4
+                    } else if preserves_input {
+                        x
+                    } else {
+                        0
+                    }
+                });
+            }
+        }
+    }
+}
+
+#[test]
+fn ordinary_branch_selects_the_constant_shift_amount() {
+    let module = load(
+        r#"
+memory 512
+func @f(i1 %ordinary) -> i4 {
+entry:
+    br %ordinary, shift(i4 1), shift(i4 2)
+shift(i4 %amount):
+    %result = shl i4 1, %amount
+    ret %result
+}
+"#,
+    )
+    .expect("valid ordinary branch");
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for (ordinary, expected) in [(1, 2), (0, 4)] {
+            for budget in [0, 2, 3] {
+                let compiled = compile_apply_with(
+                    ApplyInput {
+                        module: &module,
+                        callee: module.function_named("f").expect("callee"),
+                        args: &[Argument::Value(ordinary)],
+                        out: 0..4,
+                        fault: 4..9,
+                        budget,
+                        entry_fault: None,
+                        scratch_start: 9,
+                    },
+                    mode,
+                )
+                .expect("the ordinary argument fixes the taken edge");
+                check(&compiled, 0, 9, |_| if budget < 3 { 1 << 4 } else { expected });
+            }
+        }
+    }
 }
