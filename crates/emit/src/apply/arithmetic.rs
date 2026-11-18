@@ -3,6 +3,7 @@
 use bennett_ir::{BinOp, CastOp, Predicate};
 
 use super::bits::{Bit, Circuit, ONE, Word, ZERO, definite};
+use super::ranges::{product_bits, unsigned_max};
 
 pub(super) fn binary(circuit: &mut Circuit, op: BinOp, left: &[Bit], right: &[Bit]) -> Option<Word> {
     Some(match op {
@@ -41,12 +42,14 @@ fn add(circuit: &mut Circuit, left: &[Bit], right: impl Iterator<Item = Bit>, mu
 }
 
 fn multiply(circuit: &mut Circuit, word: &[Bit], mut factor: u128) -> Word {
-    let mut product = vec![ZERO; word.len()];
+    let width = product_bits(unsigned_max(word), factor, word.len());
+    let mut product = vec![ZERO; width];
     while factor != 0 {
-        let shifted = shift(BinOp::Shl, word, u128::from(factor.trailing_zeros()));
+        let shifted = shift(BinOp::Shl, &word[..width], u128::from(factor.trailing_zeros()));
         product = add(circuit, &product, shifted.into_iter(), ZERO);
         factor &= factor - 1;
     }
+    product.resize(word.len(), ZERO);
     product
 }
 
@@ -96,4 +99,22 @@ pub(super) fn cast(op: CastOp, mut value: Word, width: usize) -> Word {
     let pad = if op == CastOp::Sext { value[value.len() - 1] } else { ZERO };
     value.resize(width, pad);
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixed_products_keep_proved_high_bits_zero() {
+        let mut circuit = Circuit::new(4);
+        let mut input = (0..4).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
+        input.resize(128, ZERO);
+        let product = multiply(&mut circuit, &input, 11);
+        // 15 * 11 is 165. The high 120 bits are definite even though the
+        // arithmetic instruction and its result are both 128 bits wide.
+        assert_eq!(&product[8..], &[ZERO; 120]);
+        assert_ne!(product[7], ZERO);
+        assert_eq!(product_bits(1 << 127, 2, 128), 128);
+    }
 }

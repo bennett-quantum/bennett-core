@@ -7,6 +7,7 @@ mod controls;
 mod definite;
 mod flow;
 mod machine;
+mod ranges;
 mod saved;
 mod symbolic;
 

@@ -339,6 +339,12 @@ machine or the single-loop construction below. A route still cycling without a p
 proof at the budget boundary also uses the step machine, so an enclosing proved loop
 cannot copy a schedule whose length comes from the budget.
 
+**Unsigned value bounds.** A word's maximum is obtained by treating every bit not
+proved zero as one. Zero extension keeps its added bits definite. For a product by a
+constant the emitter caps the working width at the bit length of the product of the
+operand bounds, or the declared width if that bound overflows. Bits above the working
+width are represented as literal zero and allocate no qubits.
+
 **Copied calls.** Each sequence of direct call sites has its own copy of the callee's
 slots and program points. Before building gates, the compiler counts one unit for each
 copied slot, instruction and terminator, with a limit of 16,384 units for an expanded call
