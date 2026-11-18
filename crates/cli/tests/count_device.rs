@@ -101,3 +101,16 @@ fn executes_and_reports_applied_loop_circuits() {
         assert!(String::from_utf8_lossy(&simulated.stdout).contains("result: 1\n"));
     }
 }
+
+#[test]
+fn simulator_peak_includes_apply_scratch() {
+    let fixture = "../crates/cli/tests/fixtures/count-device.bn";
+    let simulated = Command::new(env!("CARGO_BIN_EXE_bennett"))
+        .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples"))
+        .args(["run", fixture, "--entry", "tiny_circuit", "--apply-circuit", "auto", "--stats"])
+        .output()
+        .expect("ran simulator");
+    assert!(simulated.status.success(), "{}", String::from_utf8_lossy(&simulated.stderr));
+    let text = String::from_utf8_lossy(&simulated.stdout);
+    assert!(text.contains("qubits: 9 live, 11 peak, 0 left over"), "{text}");
+}

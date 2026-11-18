@@ -210,6 +210,7 @@ impl AppliedCircuit {
             result.extend(batch);
         }
         state.replace_amplitudes(result);
+        state.note_qubit_peak(self.scratch);
         Ok(fault_weight)
     }
 }

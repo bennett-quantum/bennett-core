@@ -147,7 +147,8 @@ Its default mode evaluates applied functions directly. Its gate mode runs the em
 Toffoli gates on batches of definite configurations, carrying each complex amplitude unchanged.
 It verifies that scratch is zero before installing the resulting state. To report faulting
 applies and their weights, it sums the squared amplitudes of the input configurations
-whose fault destination changed by XOR.
+whose fault destination changed by XOR. Peak qubits include the circuit's private scratch
+while the circuit runs.
 
 The target is an ideal logical quantum computer with one- and two-qubit gates, Toffoli gates and on-demand
 allocation and measurement. The wrapper forwards gates with zero or one control and X with two controls.

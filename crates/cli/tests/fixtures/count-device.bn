@@ -78,3 +78,24 @@ entry:
     %result = measure %out
     ret %result
 }
+
+func @apply_tiny(i1 %choose, i1 %left, i1 %right) -> i1 {
+entry:
+    br %choose, good, spin
+good:
+    %both = and i1 %left, %right
+    ret %both
+spin:
+    br spin
+}
+
+func @tiny_circuit() {
+entry:
+    %c = qalloc 1
+    %x = qalloc 1
+    %y = qalloc 1
+    %out = qalloc 1
+    %fault = qalloc 5
+    apply @apply_tiny(%c, %x, %y) -> %out, %fault budget 3
+    ret
+}

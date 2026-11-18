@@ -117,7 +117,7 @@ impl QuantumState {
         register.generation = register.generation.wrapping_add(1);
         register.width = Some(width);
         let handle = u64::from(register.generation) << 32 | id as u64;
-        self.peak_qubits = self.peak_qubits.max(self.live_qubits());
+        self.note_qubit_peak(0);
         handle
     }
 
@@ -435,6 +435,12 @@ impl QuantumState {
 
     pub(crate) fn live_qubits(&self) -> u32 {
         self.registers.iter().filter_map(|r| r.width).map(Width::bits).sum()
+    }
+
+    /// Include private circuit scratch in the peak even when the simulator packs it separately.
+    pub(crate) fn note_qubit_peak(&mut self, scratch: usize) {
+        let scratch = u32::try_from(scratch).unwrap_or(u32::MAX);
+        self.peak_qubits = self.peak_qubits.max(self.live_qubits().saturating_add(scratch));
     }
 
     pub(crate) fn peak_qubits(&self) -> u32 {

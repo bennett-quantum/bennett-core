@@ -196,7 +196,7 @@ pub struct Stats {
     /// The weight (summed squared amplitude) of the configurations where the released register was not zero,
     /// summed over those executions.
     pub nonzero_release_weight: f64,
-    /// The most qubits allocated at once.
+    /// Peak allocated qubits, including scratch for simulated applied circuits.
     pub peak_live_qubits: u32,
     /// Basis configurations with nonzero amplitude now.
     pub configurations: usize,
