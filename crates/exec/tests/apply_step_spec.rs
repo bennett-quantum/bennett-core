@@ -1,4 +1,4 @@
-//! Hand-calculated definite outcomes and step counts for the applied-run rules.
+//! Hand-calculated cases from the [`apply` step specification](../../../docs/APPLY-STEP.md).
 
 mod common;
 

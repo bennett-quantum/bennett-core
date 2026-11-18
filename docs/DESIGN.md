@@ -186,6 +186,8 @@ and sample larger registers with a fixed seed.
 `out` and `fault` are registers (`fault` at least 5 qubits wide) and may not appear among the arguments. The
 function `@f` is the **applied function**; some fault and option names call it a *region*.
 
+`apply` must follow the rule for each instruction's step cost and effect in the [step specification](APPLY-STEP.md).
+
 **Meaning.** For each definite value `a` of the argument registers, run `@f(a)` for exactly `B` steps on a
 private copy of memory as it stands, starting from a fresh frame above the caller's:
 
@@ -1330,9 +1332,9 @@ conditions (each predicated operation computes and clears its own).
   instructions count is undecided.
 - **The adjoint of an applied computation that is not its own inverse.** Gates under qubit control and
   bijective in-place updates are done (above) without one.
-- **Memory written under qubit control that later code reads.** Decided on 2026-11-17, not built: such a store
-  keeps its value in qubits at the bytes it writes, and measuring those bytes makes them ordinary memory again
-  (`HANDOFF.md`, "Decisions in force"; the plan and its record: `docs/RECORDS.md`, "Next steps, in order").
+- **Memory written under qubit control that later code reads.** The front lowers supported stores whose value
+  or execution depends on a qubit by keeping the value in qubits. Measuring all eight bits of a byte that holds
+  qubits makes it ordinary memory again, holding the result. See [Memory written under a qubit](#memory-written-under-a-qubit).
 - **Keeping what ordinary code overwrote under a qubit, and un-running it later.** `apply` computes, copies the
   result out and un-runs at once. An update with no known inverse (`x = x * x`) and a conditional boot need the
   kept values to outlive the `apply`. Decided on 2026-11-17, not built: such an overwrite is accepted, the old
