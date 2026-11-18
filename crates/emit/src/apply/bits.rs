@@ -41,18 +41,19 @@ pub(super) fn definite(word: &[Bit]) -> Option<u128> {
 
 pub(super) struct Circuit {
     start: Wire,
-    next: Wire,
+    next: Option<Wire>,
     gates: Vec<GateOp>,
 }
 
 impl Circuit {
     pub(super) fn new(start: Wire) -> Self {
-        Self { start, next: start, gates: Vec::new() }
+        Self { start, next: Some(start), gates: Vec::new() }
     }
 
     pub(super) fn fresh(&mut self) -> Wire {
-        let wire = self.next;
-        self.next = self.next.saturating_add(1);
+        // A range ending at MAX is valid. Allocating MAX itself would need an end past it.
+        let wire = self.next.unwrap_or(Wire::MAX);
+        self.next = wire.checked_add(1);
         wire
     }
 
@@ -149,10 +150,7 @@ impl Circuit {
     }
 
     pub(super) fn finish(mut self, forward_len: usize, name: &str) -> Result<GateBlock, ApplyError> {
-        if self.next == Wire::MAX {
-            return Err(ApplyError::WireSpace);
-        }
-        let scratch = self.start..self.next;
+        let scratch = self.start..self.next.ok_or(ApplyError::WireSpace)?;
         self.gates.reserve(forward_len);
         for index in (0..forward_len).rev() {
             self.gates.push(self.gates[index].clone());

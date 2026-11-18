@@ -30,7 +30,7 @@ What works, one line each (the commit-by-commit table is in `docs/RECORDS.md`, p
 
 Run each in the foreground, from the repository root (`CARGO_BUILD_JOBS=3` on the shared laptop):
 
-- `cargo test`: 365 passed, 0 failed, 5 ignored (each names its reason: heavy reference, generated runs, witnesses of recorded defects); about 10 s, no LLVM needed.
+- `cargo test`: 366 passed, 0 failed, 5 ignored (each names its reason: heavy reference, generated runs, witnesses of recorded defects); about 10 s, no LLVM needed.
 - `front/test.sh` (needs LLVM 18, clang 18, CMake): 345 passed, 0 failed, 22 ignored (each names its reason: the fallback oracle's waiting test, the SQLite acceptance, the North Star ladder runs, musl-linked checks that need `rt/musl/build.py` first, heavy runs, witnesses of recorded debts); it also compiles the C++ header and classifies the 88 LLVM attribute kinds.
 - `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check`: both clean on 2026-11-18 (`scripts/check.sh`: tree guards 3,642 files, 0 problems).
 - `scripts/check.sh` runs all four plus the tree guards (`docs/CHECKS.md`).
@@ -81,7 +81,8 @@ for one proved loop. The follow-up on `wip/sol62-loops-m2` checks shift and mult
 across the whole applied function before using the budget and reports the weight of emitted
 faults, including with nonzero fault destinations. The emitted simulator includes circuit
 scratch in its peak qubit count. The CLI checks the gates sent by the controller against a
-hand-counted applied circuit. The 8-bit Collatz
+hand-counted applied circuit. The scratch allocator accepts the final representable
+half-open wire range. The follow-up is on the branch for landing. The 8-bit Collatz
 bit runner checked all 256 inputs at 253 budgets with both constructions. The simulator matched
 the reference amplitudes exactly after each applied circuit for widths 2 to 5. The nested loop
 returns 1 at budget 14 and writes `budget` at 13 for `x = y = 1`.

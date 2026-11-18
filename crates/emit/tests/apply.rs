@@ -658,3 +658,43 @@ entry:
         assert_eq!(emitted.step_emitted(&mut compiler), Some(Outcome::Returned(None)));
     }
 }
+
+#[test]
+fn scratch_range_can_end_at_the_maximum_wire() {
+    let module = load(
+        r#"
+memory 128
+func @f(i1 %x, i1 %y) -> i1 {
+entry:
+    %both = and i1 %x, %y
+    ret %both
+}
+"#,
+    )
+    .expect("valid AND");
+    let input = ApplyInput {
+        module: &module,
+        callee: module.function_named("f").expect("callee"),
+        args: &[Argument::Register(0..1), Argument::Register(1..2)],
+        out: 2..3,
+        fault: 3..8,
+        budget: 2,
+        entry_fault: None,
+        scratch_start: u64::MAX - 1,
+    };
+    let compiled = compile_apply(input.clone()).expect("last addressable scratch wire");
+    let scratch = u64::MAX - 1..u64::MAX;
+    assert_eq!(compiled.block.ops().first(), Some(&BlockOp::Allocate(scratch.clone())));
+    assert_eq!(compiled.block.ops().last(), Some(&BlockOp::ReleaseZero(scratch)));
+    let mut counter = CountingDevice::default();
+    counter.allocate(0..8).expect("allocate interface");
+    compiled.send(&mut counter).expect("use the last addressable wire");
+    assert_eq!(counter.counts().peak_qubits, 9);
+    assert_eq!(counter.counts().zero_released_qubits, 1);
+
+    let boundary = ApplyInput { scratch_start: u64::MAX, ..input };
+    assert_eq!(compile_apply(boundary.clone()).expect_err("a further wire cannot fit"), ApplyError::WireSpace);
+    let empty = compile_apply(ApplyInput { budget: 0, ..boundary }).expect("zero scratch at the boundary");
+    empty.send(&mut counter).expect("issue a budget fault with zero scratch");
+    assert_eq!(counter.counts().zero_released_qubits, 1);
+}
