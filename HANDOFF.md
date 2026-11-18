@@ -129,7 +129,9 @@ Control-gate lowering and its review fixes landed in `e34d256`. Operand analyses
 recover constants for whole-function checking on untaken edges. Only reachable
 predecessors contribute to the first proof of each operand, which is the proof used to
 emit gates. The analyses for bypassed blocks propagate unknown inputs before supplying
-a proof and can follow literal decisions within that code. Conditional
+a proof and can follow literal or proved computed decisions within that code. Tests
+cover computed decisions in blocks bypassed by a copied argument bound or a product
+bound. Conditional
 routes that would duplicate shared code fall back to the step machine. The overlap check
 follows only the selected edge of a literal decision. A proved zero-test
 exit carries the zero into its continuation. The six-bit outer and inner draining example

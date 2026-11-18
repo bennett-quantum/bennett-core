@@ -532,10 +532,12 @@ becomes unknown on a later visit, every possible target can contribute. An instr
 that cannot be folded with its known inputs contributes an unknown value. An input whose
 facts have yet to arrive is held pending. Additional analyses check operands in bypassed
 blocks. One follows the selected target of a literal conditional or switch. Another can
-follow every edge to recover constants supplied only on untaken edges. Any values still
-pending in these analyses become unknown and are propagated before a proof is accepted.
-Emission uses only the analysis from the entry block. Conflicting values across visits need a more precise analysis of definite control. Instruction refusals for given arguments apply at every
-budget, including zero.
+follow every edge to recover constants supplied only on untaken edges. A third follows
+the selected target when a computed condition or switch selector folds to a constant.
+Any values still pending in these analyses become unknown and are propagated before a
+proof is accepted. Emission uses only the analysis from the entry block. Conflicting
+values across visits need a more precise analysis of definite control. Instruction
+refusals for given arguments apply at every budget, including zero.
 
 The controller resolves the targets and arguments first, keeping dangling and aliased
 handles as enclosing faults. It checks entry frame space, then builds and validates the

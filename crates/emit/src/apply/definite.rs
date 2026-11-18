@@ -95,8 +95,10 @@ fn literal(operand: &Operand) -> bool {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Scope {
     Reachable,
+    // Each validation scope starts from all blocks and differs in which edges it follows.
     LiteralEdges,
-    EveryBlock,
+    AllEdges,
+    ComputedEdges,
 }
 
 #[derive(Default)]
@@ -173,7 +175,7 @@ impl Constants {
         let unknown_bit =
             |slot: Slot, index| Bit::Wire(argument_wires + slot_width * Wire::from(slot.0) + index as Wire, false);
         let unknown_word = |slot| (0..frame.slot_width(slot)).map(|index| unknown_bit(slot, index)).collect();
-        // Reachability grows with the value facts. For example, a loop can
+        // Entry reachability grows with the value facts. For example, a loop can
         // first deliver a constant condition and later make both outcomes possible.
         let every_block = scope != Scope::Reachable;
         let mut reachable = vec![every_block; function.blocks.len()];
@@ -208,7 +210,7 @@ impl Constants {
                         }
                     }
                 };
-                if scope == Scope::EveryBlock {
+                if scope == Scope::AllEdges {
                     block.term.visit_targets(transfer);
                 } else if scope == Scope::LiteralEdges {
                     visit_possible_targets(&block.term, transfer);

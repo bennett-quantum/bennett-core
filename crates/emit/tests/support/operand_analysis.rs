@@ -215,3 +215,64 @@ done:
         }
     }
 }
+
+fn check_computed_choice_in_bypassed_code(prefix: &str, return_at: u64) {
+    let source = format!(
+        r#"
+{prefix}
+bypassed:
+    %equal = icmp eq i8 %word, %word
+    br %equal, shift(i8 1), shift(i8 2)
+shift(i8 %distance):
+    %shifted = shl i8 %word, %distance
+    ret %shifted
+done:
+    ret 7
+}}
+"#
+    );
+    let module = control_example(&source, 1, "");
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=return_at + 1 {
+            compare_controls(&module, budget, mode, |_| if budget < return_at { (0, 1) } else { (7, 0) });
+        }
+    }
+}
+
+#[test]
+fn a_call_bound_preserves_the_computed_choice_in_a_bypassed_block() {
+    check_computed_choice_in_bypassed_code(
+        r#"
+memory 1024
+func @f(i1 %input) -> i8 {
+entry:
+    %argument = zext i1 %input to i8
+    %result = call @helper(%argument)
+    ret %result
+}
+func @helper(i8 %word) -> i8 {
+entry:
+    %high = lshr i8 %word, 1
+    %fits = icmp eq i8 %high, 0
+    br %fits, done, bypassed
+"#,
+        7,
+    );
+}
+
+#[test]
+fn a_product_bound_preserves_the_computed_choice_in_a_bypassed_block() {
+    check_computed_choice_in_bypassed_code(
+        r#"
+memory 1024
+func @f(i1 %input) -> i8 {
+entry:
+    %word = zext i1 %input to i8
+    %square = mul i8 %word, %word
+    %high = lshr i8 %square, 1
+    %fits = icmp eq i8 %high, 0
+    br %fits, done, bypassed
+"#,
+        6,
+    );
+}

@@ -109,16 +109,24 @@ impl<'a> Frame<'a> {
         let mut frame = Self { module, callee, constants: Constants::default() };
         frame.check_instructions()?;
         frame.constants = Constants::analyze(&frame, input.clone(), Scope::Reachable);
-        if frame.check_operands(&[]).is_err() {
-            // Facts from bypassed blocks are used only to check unreachable instructions.
-            // Emission continues to use the proofs from entry.
-            let literal_edges = Constants::analyze(&frame, input.clone(), Scope::LiteralEdges);
-            if frame.check_operands(&[&literal_edges]).is_err() {
-                // Untaken edges can still supply constants needed to validate their targets.
-                let all_edges = Constants::analyze(&frame, input, Scope::EveryBlock);
-                frame.check_operands(&[&literal_edges, &all_edges])?;
-            }
+        if frame.check_operands(&[]).is_ok() {
+            return Ok(frame);
         }
+
+        // These proofs stay local to validation. Emission reads the entry proof
+        // stored in the frame.
+        let literal_edges = Constants::analyze(&frame, input.clone(), Scope::LiteralEdges);
+        if frame.check_operands(&[&literal_edges]).is_ok() {
+            return Ok(frame);
+        }
+        // Even an untaken edge can supply operands needed to validate its target.
+        let all_edges = Constants::analyze(&frame, input.clone(), Scope::AllEdges);
+        if frame.check_operands(&[&literal_edges, &all_edges]).is_ok() {
+            return Ok(frame);
+        }
+        // A computed condition can select one of two conflicting incoming values.
+        let computed_edges = Constants::analyze(&frame, input, Scope::ComputedEdges);
+        frame.check_operands(&[&literal_edges, &all_edges, &computed_edges])?;
         Ok(frame)
     }
 
