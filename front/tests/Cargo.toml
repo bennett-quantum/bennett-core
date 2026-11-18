@@ -12,6 +12,8 @@ num-complex.workspace = true
 
 [dev-dependencies]
 nalgebra = { version = "0.33", default-features = false, features = ["std"] }
+rand.workspace = true
+rand_chacha.workspace = true
 
 [lints]
 workspace = true

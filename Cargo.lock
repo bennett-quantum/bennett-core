@@ -103,6 +103,8 @@ dependencies = [
  "bennett-ir",
  "nalgebra",
  "num-complex",
+ "rand",
+ "rand_chacha",
 ]
 
 [[package]]
