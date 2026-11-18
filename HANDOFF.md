@@ -14,7 +14,7 @@ Qubit-dependent choices and loops with a proved pass count can use control gates
 `--apply-circuit auto` or `--apply-circuit step-machine`. The default simulator evaluates applied functions
 directly. Integer calls copy their frames and use the shared budget. The emitter handles
 qubit-held multiplication and unsigned remainder with up to 128 bits in an integer slot.
-It refuses recursive calls, unproved indirect targets, excessive call expansion, private
+It refuses reachable recursive calls and unproved indirect targets, excessive call expansion, private
 memory and stack operations, switches without a proved definite selector, `or`, division,
 signed remainder, shifts without a proved constant amount, and instructions such as
 `fault` that still need named fault handling. See `docs/DESIGN.md`, "Not yet".
@@ -110,6 +110,8 @@ two continuations into a copied callee and two visits to one site. Stack tests c
 the seven-byte and eight-byte entry cases at budget zero, nested frame reservations,
 and bad indirect addresses and signatures. Copied arguments preserve proved bits,
 including the high zeros of a zero extension used to resolve an indirect address.
+The planner copies sites reachable from entry. Untaken indirect calls need no
+target proof.
 Unsigned bounds keep the high bits of
 narrowly bounded products at literal zero, including in a 128-bit destination. Qubit-held
 products use column reductions with their own work wires cleared. Their Toffoli counts

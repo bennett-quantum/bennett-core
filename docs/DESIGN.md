@@ -379,12 +379,12 @@ for a callee. A failed frame reservation gives `stack_overflow`. The budget is c
 before either instruction, and the entry frame check still comes before the first
 budget check.
 
-An indirect site with one proved definite address uses the same copy construction.
-Recursion and indirect sites without one proved address are refused before issuing
-gates. Address and argument proofs come from reachable code. A copied frame keeps the
-caller's proved literal bits and equalities between argument bits across all visits to
-the call site. A call result is unknown
-to the caller's operand proof. A qubit-dependent continuation in a function with copied
+The planner creates copies only for sites the entry analysis can reach. An indirect
+site with one proved definite address uses the same copy construction. Reachable
+recursive calls and indirect sites without one proved address are refused before
+issuing gates. A copied frame keeps the caller's proved literal bits and equalities
+between argument bits across all visits to the call site. A call result is unknown to
+the caller's operand proof. A qubit-dependent continuation in a function with copied
 calls uses the step machine.
 
 The **step machine** carries one dispatch bit for each possible program point, set for

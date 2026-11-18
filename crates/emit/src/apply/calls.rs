@@ -65,8 +65,12 @@ impl<'a> Program<'a> {
             let func = program.copies[index].frame.callee;
             let source = input.module.function(func);
             for (block, body) in source.blocks.iter().enumerate() {
+                let block = BlockId(block as u32);
+                if !program.copies[index].frame.reaches(block) {
+                    continue;
+                }
                 for (inst, instruction) in body.insts.iter().enumerate() {
-                    let point = Point { copy: index, block: BlockId(block as u32), index: inst };
+                    let point = Point { copy: index, block, index: inst };
                     let site = match instruction {
                         Inst::Call { callee, args, dst } => {
                             let child = program.child(input, point, *callee, args, (*dst, "call"), &mut slots)?;

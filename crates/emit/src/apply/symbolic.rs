@@ -97,6 +97,10 @@ impl<'a> Frame<'a> {
         self.constants.word(operand)
     }
 
+    pub(super) fn reaches(&self, block: BlockId) -> bool {
+        self.constants.reaches(block)
+    }
+
     pub(super) fn check(
         module: &'a ValidModule,
         callee: FuncId,
@@ -224,6 +228,8 @@ impl<'a> Frame<'a> {
                 }
                 Inst::Cast { op, dst, value, to, .. } => (*dst, arithmetic::cast(*op, read(value), to.bits() as usize)),
                 Inst::FuncAddr { dst, func } => (*dst, constant(u128::from(func.address()), u64::BITS as usize)),
+                Inst::Call { .. } => return Err(self.error(point, "call", "a planned call copy")),
+                Inst::CallIndirect { .. } => return Err(self.error(point, "call_indirect", "a planned call copy")),
                 Inst::Load { .. }
                 | Inst::Store { .. }
                 | Inst::Alloca { .. }
@@ -231,8 +237,6 @@ impl<'a> Frame<'a> {
                 | Inst::StackRestore { .. }
                 | Inst::Setjmp { .. }
                 | Inst::ReturnAddress { .. }
-                | Inst::Call { .. }
-                | Inst::CallIndirect { .. }
                 | Inst::Effect { .. }
                 | Inst::Qalloc { .. }
                 | Inst::Qfree { .. }
@@ -240,7 +244,7 @@ impl<'a> Frame<'a> {
                 | Inst::GateAt { .. }
                 | Inst::Measure { .. }
                 | Inst::Apply { .. } => {
-                    unreachable!("checked instructions and handled calls before lowering")
+                    unreachable!("checked instructions before lowering")
                 }
             };
             return Ok(Step::Write(point.next(), dst, result));

@@ -44,6 +44,42 @@ entry:
 }
 
 #[test]
+fn bypassed_indirect_calls_need_no_target_proof() {
+    for condition in ["1", "%same"] {
+        let source = format!(
+            r#"
+memory 4096
+func @f(i1 %x) -> i8 {{
+entry:
+    br %x, choose, early
+choose:
+    %same = icmp eq i1 %x, %x
+    br {condition}, done, cold
+cold:
+    %address = faddr @leaf
+    %result = call_indirect fn() -> i8 %address()
+    ret %result
+early:
+    ret 7
+done:
+    ret 8
+}}
+func @leaf() -> i8 {{
+entry:
+    ret 9
+}}
+"#
+        );
+        let module = control_example(&source, 1, "");
+        for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+            for budget in 0..=6 {
+                compare_controls(&module, budget, mode, |x| if budget < 2 + 2 * x { (0, 1) } else { (7 + x, 0) });
+            }
+        }
+    }
+}
+
+#[test]
 fn two_call_sites_keep_distinct_continuations() {
     let module = control_example(
         r#"
