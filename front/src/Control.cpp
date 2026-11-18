@@ -238,6 +238,9 @@ void ControlWriter::apply(const std::string &callee, const std::string &args, co
 }
 
 void ControlWriter::instruction(const Instruction &inst) {
+  if (isHolds(&inst)) {
+    return; // a record for the analysis (Taint.h)
+  }
   if (isExchange(&inst)) {
     exchange(cast<CallBase>(inst));
     return;

@@ -1737,3 +1737,22 @@ front before and after the step: accepted 330 → 332, declined 70 → 68, compa
 failures 1 → 0 (the one failure before was this refusal, which the recipe counts). Declines of "reads memory
 that may change before its result is used" 2 → 0; of the update in a loop under a qubit-dependent value whose
 old value would have to be kept 45 → 45.
+
+**A nonzero release in a program marked clean.** The 15-minute run on `8cbccd1` (seed `0x87196caa251d0f43`,
+index 3960, O0) found one: two regions under `q & 2` and `q & 5`, the first writing `cell0` (a loop of XORs) and
+`cell1` (`^=`), the second XORing into both by values that do not read them; for the definite input 5 one
+register of 8 qubits was released nonzero, with the warning that an overwrite of `cell1` keeps its old value, in
+all three modes (seen). The generator's marking is right (DESIGN's accumulation rule), so the front was wrong.
+Cause: LLVM forwarded the first region's value of `cell1` (a value selected at its join) to the second region's
+read, so the second region writes `cell1 = c ? e ^ P : cell1` with `P` that value, not a load of `cell1`; that is
+an overwrite whose old value must be cleared. It could have been, by computing it again: after the first region
+`cell1` holds its known start XOR its field of the region's result. But the first region had two results, which
+go through a shared fresh register and CNOTs, and after the CNOTs the front recorded `cell1`'s value as unknown;
+with one result, XORed straight into the variable, the same value was already recorded. Fix
+(`front/src/RegionResults.cpp`, `front/src/Taint.h`): after the pair of `apply`s around a shared register, each
+variable whose start was known is recorded as holding start XOR its field (`bennett.holds`, a record for the
+analysis that emits no code), so the later overwrite clears the old value by computing it again and keeps
+nothing. Test: `later_region_xors_into_a_forwarded_merged_store` (the generated program as it was; one nonzero
+release before the fix, none after, values equal to native C, in all three modes). The replay of index 3960
+passes, its state check included. Capped run after the fix (400 cases, the same seed): accepted 332, declined
+68, compared 2,172, failed 0, as before it (this case lies beyond the first 400).

@@ -442,6 +442,10 @@ from each bit of `N` into the bit of its variable, the same `apply` again, `qfre
 written variable among its arguments (their starting values are ordinary values or 0), and the variables the
 code only reads are not changed between the two, so the second `apply` computes the same value and returns `N`
 to 0. Each `apply` runs the whole code: two runs of `B` steps however many results fit in one register.
+Afterwards a variable whose value before the code was known holds that value XOR its field of the result, a
+value the front can compute again from the registers the code read while they are unchanged, as after one
+`apply` into the variable: a later overwrite of it clears the old value by computing it again and keeps
+nothing (the front records the value for its analysis, `bennett.holds` in `Taint.h`, which emits no code).
 
 A register holds at most 64 qubits. When the results take more bits, they are packed into words of at most 64
 bits, each a register of its own, and the one applied function takes the word's number as an ordinary argument

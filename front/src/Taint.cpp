@@ -196,6 +196,9 @@ void ControlAnalysis::checkUses(Storage &storage) {
         storage.mutations.push_back(inst);
         continue;
       }
+      if (isHolds(inst) && cast<CallBase>(inst)->getArgOperand(0) == pointer && offset == 0) {
+        continue; // a record, no change
+      }
       if (auto *store = dyn_cast<StoreInst>(inst)) {
         uint64_t size = layout.getTypeStoreSize(store->getValueOperand()->getType()).getFixedValue();
         if (store->getValueOperand() == pointer) {
@@ -343,6 +346,14 @@ void ControlAnalysis::transfer(const Instruction &inst, std::vector<Fact> &facts
       facts[indexOf(storage)] = !whole           ? Fact{Fact::Quantum, nullptr}
                                 : tainted(value) ? Fact{Fact::Computed, value}
                                                  : Fact{Fact::Known, value};
+    }
+    return;
+  }
+  if (isHolds(&inst)) {
+    const auto *call = cast<CallBase>(&inst);
+    if (const Storage *storage = basedOn(call->getArgOperand(0))) {
+      Value *value = call->getArgOperand(1);
+      facts[indexOf(storage)] = tainted(value) ? Fact{Fact::Computed, value} : Fact{Fact::Known, value};
     }
     return;
   }
@@ -531,6 +542,36 @@ bool ControlAnalysis::memoryUnchangedBetween(const Instruction *from, const Inst
     }
   }
   return true;
+}
+
+} // namespace bennett
+
+namespace bennett {
+
+namespace {
+
+constexpr const char *holdsPrefix = "bennett.holds.";
+
+} // namespace
+
+void recordHolds(Instruction *before, AllocaInst *variable, Value *value) {
+  Module &module = *before->getModule();
+  LLVMContext &context = module.getContext();
+  std::string name = holdsPrefix + std::to_string(value->getType()->getIntegerBitWidth());
+  FunctionCallee callee =
+      module.getOrInsertFunction(name, Type::getVoidTy(context), PointerType::get(context, 0), value->getType());
+  if (auto *function = dyn_cast<Function>(callee.getCallee())) {
+    function->setDoesNotThrow();
+    function->setDoesNotAccessMemory();
+    function->addFnAttr(Attribute::WillReturn);
+  }
+  CallInst::Create(callee, {variable, value}, "", before);
+}
+
+bool isHolds(const Value *value) {
+  const auto *call = dyn_cast_or_null<CallBase>(value);
+  const Function *callee = call ? call->getCalledFunction() : nullptr;
+  return callee && callee->getName().starts_with(holdsPrefix);
 }
 
 } // namespace bennett

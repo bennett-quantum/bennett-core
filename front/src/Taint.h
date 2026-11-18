@@ -52,6 +52,13 @@ struct Access {
 // The metadata kind that makes an alloca a qubit variable without a marker: the front's own temporaries.
 inline constexpr const char *qubitMetadata = "bennett.qubit";
 
+// A record for the analysis, which the control program does not execute: `bennett.holds(ptr variable, iN value)`
+// says that the qubit variable, of N bits, holds `value` there (Known if it is ordinary, Computed if it depends on
+// a qubit). The front writes it where it changed a variable by gates whose result it knows (RegionResults.h).
+void recordHolds(llvm::Instruction *before, llvm::AllocaInst *variable, llvm::Value *value);
+// Whether `value` is such a record.
+bool isHolds(const llvm::Value *value);
+
 struct Fact {
   // Computed: the variable holds `value`, a value that depends on a qubit, stored whole and not changed since; the
   // front may compute it again from the registers it was computed from, where those are unchanged.

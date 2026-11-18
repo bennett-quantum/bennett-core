@@ -732,3 +732,39 @@ packet entry(unsigned prep, unsigned n, unsigned column) {
         "reads memory that may change before its result is used",
     );
 }
+
+// Generated case 3960 of seed 0x87196caa251d0f43: LLVM merges the first region's stores to cell1 at its
+// join and forwards that value to the second region's read of cell1, so the second region XORs into a value that
+// is cell1's, not into a load of it. Clean: nothing kept, every spare register back at zero.
+#[test]
+fn later_region_xors_into_a_forwarded_merged_store() {
+    check_witness(
+        "forwarded-merged-store",
+        3,
+        r#"
+static uint16_t cell0[2] = {21020ULL, 11};
+packet entry(unsigned prep, unsigned n, unsigned column) {
+    uint8_t cell1 = 40ULL;
+    unsigned char q = PREPARE(prep);
+    HBIT(q, 0);
+    HBIT(q, 1);
+    HBIT(q, 2);
+    if ((q & 2U) != 0) {
+        cell0[0] = 11516135566429171499ULL;
+        #pragma clang loop unroll(disable)
+        for (unsigned j = 0; j < 3U; ++j) cell0[0] ^= (j + 1U) * (q + 3U);
+        cell1 ^= 13776561470214499436ULL + 3ULL * q;
+    }
+    if ((q & 5U) != 0) {
+        cell0[0] ^= 16469043345442188988ULL + 3ULL * q;
+        cell1 ^= 7182442279589044698ULL + 3ULL * q;
+    }
+    packet key = bennett_measure(&q);
+    packet v0 = bennett_measure_bytes(&cell0[0], 2);
+    packet v1 = bennett_measure_bytes(&cell1, 1);
+    return key | (v0 << 8) | (v1 << 24);
+}
+"#,
+        None,
+    );
+}

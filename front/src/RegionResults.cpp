@@ -705,7 +705,8 @@ bool RegionWhole::run() {
     IRBuilder<> top(&*fn.getEntryBlock().getFirstInsertionPt());
     AllocaInst *results = top.CreateAlloca(type, nullptr, fn.getName() + ".results");
     results->setMetadata(qubitMetadata, MDNode::get(context, {}));
-    xorInto(b, results, type, b.CreateZExtOrTrunc(evaluate(), type));
+    Value *first = evaluate();
+    xorInto(b, results, type, b.CreateZExtOrTrunc(first, type));
     FunctionCallee bit = module.getOrInsertFunction("bennett_bit", PointerType::get(context, 0),
                                                     PointerType::get(context, 0), b.getInt32Ty());
     FunctionCallee x = module.getOrInsertFunction("bennett_x", b.getVoidTy(), PointerType::get(context, 0));
@@ -720,6 +721,18 @@ bool RegionWhole::run() {
       }
     }
     xorInto(b, results, type, b.CreateZExtOrTrunc(evaluate(), type));
+    // A variable with a known start now holds start XOR its field, a value computed from registers unchanged here:
+    // recorded, so that a later overwrite can clear it by computing it again (a result XORed in directly is a store
+    // of that value already).
+    for (const Written *field : fields) {
+      if (!field->known) {
+        continue;
+      }
+      Type *bits = IntegerType::get(context, field->storage->bits);
+      Value *change = b.CreateTrunc(b.CreateLShr(first, field->offset), bits);
+      recordHolds(after->getTerminator(), field->storage->alloca,
+                  b.CreateXor(b.CreateZExtOrTrunc(field->known, bits), change));
+    }
   }
   // The moved stores are done by the results; what they stored is no longer used after the region.
   for (Written &w : written) {
