@@ -3,6 +3,7 @@
 mod arithmetic;
 mod bits;
 mod machine;
+mod saved;
 mod symbolic;
 
 use std::fmt;
@@ -94,6 +95,21 @@ pub enum Construction {
         /// Ticks after the definite prefix, including the first qubit-dependent jump.
         ticks: u64,
     },
+    /// A proof covered the first outcome of one loop and no instruction dispatch is needed.
+    SavedDecisions {
+        /// Number of decisions about whether to continue.
+        decisions: u64,
+    },
+}
+
+/// Which constructions the compiler may consider.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ApplyMode {
+    /// Prefer saved decisions when a loop proof succeeds.
+    #[default]
+    Automatic,
+    /// Use the step machine at the first qubit-dependent jump, even for a proved loop.
+    StepMachine,
 }
 
 /// Gates and the instruction charges of the construction.
@@ -105,6 +121,8 @@ pub struct CompiledApply {
     pub definite_steps: u64,
     /// Control construction used for the circuit.
     pub construction: Construction,
+    /// Why the compiler selected this construction.
+    pub reason: &'static str,
 }
 
 impl CompiledApply {
@@ -164,8 +182,13 @@ impl Copies {
     }
 }
 
-/// Follow definite control, switching to the step machine at a qubit-dependent jump.
+/// Follow definite control, then try saved decisions before the general step machine.
 pub fn compile_apply(input: ApplyInput<'_>) -> Result<CompiledApply, ApplyError> {
+    compile_apply_with(input, ApplyMode::Automatic)
+}
+
+/// Compile an applied function with the requested choice of control constructions.
+pub fn compile_apply_with(input: ApplyInput<'_>, mode: ApplyMode) -> Result<CompiledApply, ApplyError> {
     input.check_interface()?;
     let frame = Frame { module: input.module, callee: input.callee };
     frame.check()?;
@@ -176,13 +199,21 @@ pub fn compile_apply(input: ApplyInput<'_>) -> Result<CompiledApply, ApplyError>
         None => Status::Running(Point::entry(BlockId(0))),
     };
     let mut spent = 0;
-    let (copies, construction) = loop {
+    let (copies, construction, reason) = loop {
         match status {
             Status::Returned(word) => {
-                break (Copies { returned: vec![(ONE, word)], faulted: Vec::new() }, Construction::Definite);
+                break (
+                    Copies { returned: vec![(ONE, word)], faulted: Vec::new() },
+                    Construction::Definite,
+                    "control stays definite",
+                );
             }
             Status::Faulted(code) => {
-                break (Copies { returned: Vec::new(), faulted: vec![(ONE, code)] }, Construction::Definite);
+                break (
+                    Copies { returned: Vec::new(), faulted: vec![(ONE, code)] },
+                    Construction::Definite,
+                    "control stays definite",
+                );
             }
             Status::Running(_) if spent == input.budget => status = Status::Faulted(Fault::Budget),
             Status::Running(point) => {
@@ -193,9 +224,23 @@ pub fn compile_apply(input: ApplyInput<'_>) -> Result<CompiledApply, ApplyError>
                     }
                     Step::Jump(target) => Status::Running(frame.jump(&mut slots, target)),
                     Step::Branch(..) => {
-                        let (copies, ticks) =
-                            machine::run(&mut circuit, &frame, &mut slots, point, input.budget - spent)?;
-                        break (copies, Construction::StepMachine { ticks });
+                        let remaining = input.budget - spent;
+                        let reason = match mode {
+                            ApplyMode::Automatic => {
+                                if let Some(plan) = saved::Loop::prove(&frame, point) {
+                                    let (copies, decisions) = plan.run(&mut circuit, &frame, &mut slots, remaining)?;
+                                    break (
+                                        copies,
+                                        Construction::SavedDecisions { decisions },
+                                        "one proved loop with fixed continuation and exit charges",
+                                    );
+                                }
+                                "qubit-dependent jump without a single-loop proof"
+                            }
+                            ApplyMode::StepMachine => "step machine requested for a qubit-dependent jump",
+                        };
+                        let (copies, ticks) = machine::run(&mut circuit, &frame, &mut slots, point, remaining)?;
+                        break (copies, Construction::StepMachine { ticks }, reason);
                     }
                     Step::Return(word) => Status::Returned(word),
                 };
@@ -209,5 +254,6 @@ pub fn compile_apply(input: ApplyInput<'_>) -> Result<CompiledApply, ApplyError>
         block: circuit.finish(forward, &input.module.function(input.callee).name)?,
         definite_steps: spent,
         construction,
+        reason,
     })
 }

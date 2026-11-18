@@ -48,7 +48,7 @@ pub fn exhaustive(gates: &[GateOp], layout: Layout, f: impl Fn(u128) -> u128) ->
     };
     let x_values = domain(layout.x)?;
     let y_values = domain(layout.y)?;
-    check(gates, layout, (0..x_values).flat_map(|x| (0..y_values).map(move |y| (x, y))), f)
+    check_states(gates, layout, (0..x_values).flat_map(|x| (0..y_values).map(move |y| (x, y))), f)
 }
 
 /// Check seeded samples of x and y. Each register may contain up to 128 bits.
@@ -63,7 +63,7 @@ pub fn sampled(
     let x_mask = mask(layout.x)?;
     let y_mask = mask(layout.y)?;
     let inputs = (0..samples).map(|_| (rng.random::<u128>() & x_mask, rng.random::<u128>() & y_mask));
-    check(gates, layout, inputs, f)
+    check_states(gates, layout, inputs, f)
 }
 
 fn mask(width: usize) -> Result<u128, String> {
@@ -79,7 +79,8 @@ fn pack(wires: &mut [u64], value: u128, lane: usize) {
     }
 }
 
-fn check(
+/// Check a chosen sequence of input and initial destination words.
+pub fn check_states(
     gates: &[GateOp],
     layout: Layout,
     mut inputs: impl Iterator<Item = (u128, u128)>,

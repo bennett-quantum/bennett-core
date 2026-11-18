@@ -298,6 +298,33 @@ qubit-dependent jump as the first tick. It is shared by all loops. The gates in 
 the possible instructions once each, so nesting adds instructions to the schedule. When no
 possible point remains, the machine can stop early.
 
+For one proved loop the compiler can use **saved decisions**, a sequence of bits recording
+whether each definite input is still running at each loop test. The proof recognises one
+conditional test with one straight route back to it and another to a return. Every instruction
+on the routes is total and uses neither memory nor calls. The proof counts the instructions
+on both routes, including their jumps and the return. At each test, a return is considered only
+if its whole exit route fits in the steps left. A saved decision prevents an earlier return
+from contributing again. A still-running input with no remaining affordable return must
+exhaust the budget, because the skipped instructions cannot fault. The step machine handles
+other shapes. Compilation reports which construction it used and why.
+
+The 8-bit Collatz test uses a 14-bit trajectory word and an 8-bit update count. It returns
+after `5 + 9k` steps for `k` updates. The maximum trajectory value is 13,120 and the longest
+terminating input takes 127 updates. Zero never returns. The bit-level runner checked all 256
+inputs at 253 distinct budgets, including immediately before, at and after each terminating
+input's return. It checked both zero and patterned destinations, unchanged inputs, and zero
+scratch. At `B = 1,148`, the following counts include the forward gates, the output and fault
+XORs, and all inverse gates. The peak includes the 21 input, output and fault qubits. Depth
+counts layers of gates on disjoint qubits.
+
+| Construction | One-qubit gates | Two-qubit gates | Toffolis | Peak qubits | Depth |
+|---|---:|---:|---:|---:|---:|
+| Step machine (1,145 ticks after 3 definite steps) | 8,410 | 53,269 | 65,688 | 26,888 | 44,745 |
+| Saved decisions (128 decisions after 3 definite steps) | 7,136 | 28,513 | 19,258 | 14,330 | 3,729 |
+
+Run `cargo test -p bennett-emit --test apply collatz_eight_bit_budget_sweep_and_counts -- --ignored --exact --nocapture`
+to repeat the sweep and counts.
+
 Compilation completes before any commands are sent. Calls, memory, division and the other
 instructions outside this subset are refused with the operation, its location, and the
 construction it needs. The controller does not yet use this standalone compiler.

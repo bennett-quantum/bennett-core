@@ -58,7 +58,7 @@ impl<'a> Frame<'a> {
         slots
     }
 
-    fn read(slots: &[Word], operand: &Operand) -> Word {
+    pub(super) fn read(slots: &[Word], operand: &Operand) -> Word {
         match operand {
             Operand::Const(value) => constant(value.value(), value.width().bits() as usize),
             Operand::Slot(slot) => slots[slot.index()].clone(),

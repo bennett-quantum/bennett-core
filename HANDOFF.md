@@ -29,7 +29,7 @@ What works, one line each (the commit-by-commit table is in `docs/RECORDS.md`, p
 
 Run each in the foreground, from the repository root (`CARGO_BUILD_JOBS=3` on the shared laptop):
 
-- `cargo test`: 356 passed, 0 failed, 4 ignored (each names its reason: heavy reference, generated runs, witnesses of recorded defects); about 10 s, no LLVM needed.
+- `cargo test`: 357 passed, 0 failed, 5 ignored (each names its reason: heavy reference, generated runs, witnesses of recorded defects); about 10 s, no LLVM needed.
 - `front/test.sh` (needs LLVM 18, clang 18, CMake): 345 passed, 0 failed, 22 ignored (each names its reason: the fallback oracle's waiting test, the SQLite acceptance, the North Star ladder runs, musl-linked checks that need `rt/musl/build.py` first, heavy runs, witnesses of recorded debts); it also compiles the C++ header and classifies the 88 LLVM attribute kinds.
 - `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check`: both clean on 2026-11-18 (`scripts/check.sh`: tree guards 3,642 files, 0 problems).
 - `scripts/check.sh` runs all four plus the tree guards (`docs/CHECKS.md`).
@@ -75,8 +75,9 @@ Newest first; quotes are the maintainer's words.
 ## In flight
 
 The device interface and step tests have landed. The gate compiler on `wip/sol62-loops-m2`
-follows definite control and uses a single clock for qubit-dependent jumps, including nested
-loops. The next step is saved decisions for one proved loop.
+follows definite control, uses a single clock for general qubit-dependent jumps, and saves
+decisions for one proved loop. The 8-bit Collatz bit runner checked all 256 inputs at 253
+budgets with both constructions. The next step connects the compiler to the device controller.
 
 - Device support: an interface between the executor and its quantum simulator (so the simulator can be replaced); a counting device that only counts qubits and gates; rewriting of gates with many controls for a machine with one- and two-qubit gates and the Toffoli gate; a bit-level circuit runner that checks reversible gate lists against independent references.
 - `wip/sol62-stepspec` (landed): tests pinning an exact statement of what an applied function does for one definite input, step by step, and a change that makes the slots of a new frame zero.
@@ -147,6 +148,10 @@ Each is taken in the cheapest way to reverse, as stated, until answered. Last 20
 11. **`printf("%a")` of a subnormal double**: the device prints musl's spelling (`0x1p-1074`), native glibc prints `0x0.0000000000001p-1022`; both conform to C. Taken: unchanged, witness ignored (`front/tests/tests/printf_hex_float.rs`). Recommend: follow glibc by an overlay of musl's hexadecimal path in `fmt_fp` (low priority), or record musl's spelling as the device's.
 12. **Two options doing the same thing**: `--machine-meaning` and `--allow-region-faults` (stop at an `apply` faulting for some argument values). Taken: both kept. Recommend: keep one.
 13. **NaN payload rule.** Two NaN results agree when each carries the payload of one of the operands' NaNs or the default NaN's, sign free (needed: without the default NaN 1,476 of 164,096 `__divdc3` tuples fail). Taken. Recommend: keep.
+
+- **Single-loop proof.** Taken: recognise one conditional test and straight continuing and
+  exiting routes with provably lowerable integer operations. Recommend broadening the proof
+  to additional total control-flow shapes only when a measured program needs it.
 
 ## Which commits no independent check has covered
 

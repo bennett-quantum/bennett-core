@@ -137,8 +137,8 @@ arguments for which `f` needs more than the budget gives the fault `budget` for 
 `exit_in_region` for the values that reach it. `docs/DESIGN.md`, "Applied calls", says what this means.
 
 The default simulator evaluates applied calls. The standalone gate compiler currently handles
-a subset of integer instructions and qubit-dependent loops in the device program. It is not
-yet connected to the controller.
+a subset of integer instructions and qubit-dependent loops in the device program, with a
+specialised circuit for one proved loop. Integration with the controller is the next step.
 
 Natively `f`'s writes would remain. Where the front sees that code after the call reads memory the call writes
 (a global variable, or memory passed to it by pointer, read directly or by a function called directly), it

@@ -3,8 +3,11 @@
 #[path = "support/bits.rs"]
 mod bits;
 
-use bennett_emit::{ApplyInput, Argument, CompiledApply, compile_apply};
+use bennett_emit::{
+    ApplyInput, ApplyMode, Argument, CompiledApply, Construction, CountingDevice, compile_apply, compile_apply_with,
+};
 use bennett_exec::BlockOp;
+use bennett_exec::Device;
 use bennett_ir::{Fault, load};
 use bits::Layout;
 
@@ -194,11 +197,8 @@ done(i1 %result):
         })
         .expect("emit both loops under one clock");
         assert_eq!(compiled.definite_steps, 1);
-        let expected = if budget == 1 {
-            bennett_emit::Construction::Definite
-        } else {
-            bennett_emit::Construction::StepMachine { ticks: budget - 1 }
-        };
+        let expected =
+            if budget == 1 { Construction::Definite } else { Construction::StepMachine { ticks: budget - 1 } };
         assert_eq!(compiled.construction, expected);
         check(&compiled, 4, 6, |input| {
             let (x, y) = (input & 3, input >> 2);
@@ -234,10 +234,150 @@ join(i3 %a, i3 %b):
         scratch_start: 15,
     })
     .expect("emit two edges to one successor");
-    assert_eq!(compiled.construction, bennett_emit::Construction::StepMachine { ticks: 3 });
+    assert_eq!(compiled.construction, Construction::StepMachine { ticks: 3 });
     check(&compiled, 7, 8, |input| {
         let x = (input >> 1) & 7;
         let y = input >> 4;
         if input & 1 != 0 { x.wrapping_sub(y) & 7 } else { y.wrapping_sub(x) & 7 }
     });
+}
+
+const COLLATZ_FIRST_RETURN: u64 = 5;
+const COLLATZ_CONTINUATION: u64 = 9;
+const COLLATZ_PEAK_VALUE: u128 = 13_120;
+const COLLATZ_LONGEST: u64 = 127;
+const COLLATZ_BUDGET: u64 = COLLATZ_FIRST_RETURN + COLLATZ_CONTINUATION * COLLATZ_LONGEST;
+
+fn collatz_source(width: usize) -> String {
+    format!(
+        r#"
+memory 1024
+func @collatz(i{width} %input) -> i8 {{
+entry:
+    %wide = zext i{width} %input to i14
+    br test(%wide, i8 0)
+test(i14 %n, i8 %steps):
+    %done = icmp eq i14 %n, 1
+    br %done, finish, more
+more:
+    %odd = trunc i14 %n to i1
+    %half = lshr i14 %n, 1
+    %triple = mul i14 %n, 3
+    %odd_next = add i14 %triple, 1
+    %next = select i14 %odd, %odd_next, %half
+    %inc = add i8 %steps, 1
+    br test(%next, %inc)
+finish:
+    ret %steps
+}}
+"#,
+    )
+}
+
+fn collatz(mut n: u128) -> (u64, u128) {
+    assert_ne!(n, 0, "zero never returns");
+    let mut updates = 0;
+    let mut peak = n;
+    while n != 1 {
+        n = if n.is_multiple_of(2) { n / 2 } else { 3 * n + 1 };
+        peak = peak.max(n);
+        updates += 1;
+    }
+    (updates, peak)
+}
+
+fn collatz_return(updates: u64) -> u64 {
+    COLLATZ_FIRST_RETURN + COLLATZ_CONTINUATION * updates
+}
+
+fn compile_collatz(module: &bennett_ir::ValidModule, width: u64, budget: u64, mode: ApplyMode) -> CompiledApply {
+    compile_apply_with(
+        ApplyInput {
+            module,
+            callee: module.function_named("collatz").expect("Collatz function"),
+            args: &[Argument::Register(0..width)],
+            out: width..width + 8,
+            fault: width + 8..width + 13,
+            budget,
+            entry_fault: None,
+            scratch_start: width + 13,
+        },
+        mode,
+    )
+    .expect("compile Collatz")
+}
+
+fn check_collatz(compiled: &CompiledApply, width: usize, budget: u64, updates: &[u64]) {
+    let (gates, layout) = gates(compiled, width, 13);
+    // Every input, with both zero and patterned nonzero initial destinations.
+    let inputs = (0..1u128 << width).flat_map(|input| [(input, 0), (input, (input * 151 + 0x12a5) & 0x1fff)]);
+    bits::check_states(&gates, layout, inputs, |x| {
+        if x != 0 && collatz_return(updates[x as usize]) <= budget { u128::from(updates[x as usize]) } else { 1 << 8 }
+    })
+    .unwrap_or_else(|error| panic!("budget {budget}, {:?}: {error}", compiled.construction));
+}
+
+#[test]
+fn saved_decisions_preserve_first_returns_at_exact_collatz_cutoffs() {
+    let module = load(&collatz_source(3)).expect("valid Collatz function");
+    let updates = std::iter::once(0).chain((1..8).map(|x| collatz(x).0)).collect::<Vec<_>>();
+    for budget in [4, 5, 13, 14, 15, 31, 32, 33] {
+        for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+            let compiled = compile_collatz(&module, 3, budget, mode);
+            assert_eq!(compiled.definite_steps, 3);
+            match mode {
+                ApplyMode::Automatic => assert_eq!(
+                    compiled.construction,
+                    Construction::SavedDecisions { decisions: budget.checked_sub(5).map_or(0, |rest| rest / 9 + 1) },
+                ),
+                ApplyMode::StepMachine => {
+                    assert_eq!(compiled.construction, Construction::StepMachine { ticks: budget - 3 })
+                }
+            }
+            check_collatz(&compiled, 3, budget, &updates);
+        }
+    }
+}
+
+#[test]
+// Run with: cargo test -p bennett-emit --test apply collatz_eight_bit_budget_sweep_and_counts -- --ignored --exact --nocapture
+#[ignore = "compiles both circuits at every distinct return boundary and runs all 256 definite inputs"]
+fn collatz_eight_bit_budget_sweep_and_counts() {
+    let module = load(&collatz_source(8)).expect("valid Collatz function");
+    let trajectories = (1..256).map(collatz).collect::<Vec<_>>();
+    let peak = trajectories.iter().map(|&(_, peak)| peak).max();
+    let longest = trajectories.iter().map(|&(updates, _)| updates).max();
+    assert_eq!(peak, Some(COLLATZ_PEAK_VALUE));
+    assert_eq!(longest, Some(COLLATZ_LONGEST));
+    let updates = std::iter::once(0).chain(trajectories.iter().map(|&(updates, _)| updates)).collect::<Vec<_>>();
+    let budgets = [0, 1, 2, 3]
+        .into_iter()
+        .chain(updates[1..].iter().flat_map(|&updates| {
+            let end = collatz_return(updates);
+            [end - 1, end, end + 1]
+        }))
+        .collect::<std::collections::BTreeSet<_>>();
+    println!("{} distinct budgets, 256 inputs, two destination words per input", budgets.len());
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for &budget in &budgets {
+            let compiled = compile_collatz(&module, 8, budget, mode);
+            check_collatz(&compiled, 8, budget, &updates);
+            if budget == COLLATZ_BUDGET {
+                let mut device = CountingDevice::default();
+                device.allocate(0..21).expect("interface wires");
+                compiled.send(&mut device).expect("count native gates");
+                let counts = device.counts();
+                println!("{:?}: {counts:?}", compiled.construction);
+                let measured =
+                    [counts.one_qubit, counts.two_qubit, counts.toffoli, counts.peak_qubits as u128, counts.depth];
+                let recorded = match mode {
+                    ApplyMode::Automatic => [7_136, 28_513, 19_258, 14_330, 3_729],
+                    ApplyMode::StepMachine => [8_410, 53_269, 65_688, 26_888, 44_745],
+                };
+                assert_eq!(measured, recorded);
+                assert_eq!(counts.zero_released_qubits, counts.peak_qubits as u128 - 21);
+                assert_eq!(counts.discarded_qubits, 0);
+            }
+        }
+    }
 }

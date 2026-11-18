@@ -145,7 +145,8 @@ be among an `apply`'s arguments, nor be one register. A call can return a handle
 selected entry ends the run successfully with no scalar host result. The CLI reports its declared width.
 
 The standalone gate compiler for `apply` covers a subset of integer instructions, including
-branches and loops with qubit-dependent conditions. See "Gate emitter" in [DESIGN.md](DESIGN.md#apply).
+branches and loops with qubit-dependent conditions. It can use saved decisions for one
+proved loop. See "Gate emitter" in [DESIGN.md](DESIGN.md#apply).
 
 ## Whole-run exit
 
