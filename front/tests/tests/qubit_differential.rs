@@ -15,6 +15,8 @@ use rand_chacha::ChaCha8Rng;
 
 #[path = "qubit_differential/generator.rs"]
 mod generator;
+#[path = "qubit_differential/held_pass.rs"]
+mod held_pass;
 #[path = "qubit_differential/state.rs"]
 mod state;
 
