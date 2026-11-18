@@ -494,12 +494,16 @@ needs no zero-test gates, and a power-of-two modulus needs no reduction gates.
 
 The complete `mulmod` applies a double-width product followed by remainder with
 modulus `2^w − 3` held in an ordinary value. Both modes emit the same gate list at
-`B = 7`. Reversing both gadgets after copying the result gives
-`2((6w² − 6w) + 6(2w)w) = 36w² − 12w` Toffolis. Peak qubits include both inputs,
-the output and the fault register.
+`B = 7`. For `3 ≤ w ≤ 64`, reversing both gadgets after copying the result gives
+`2((6w² − 6w) + 6(2w)w) = 36w² − 12w` Toffolis. At width two the modulus is
+one, so the remainder takes no gates and the complete circuit uses 24 Toffolis
+for the product and its reversal. Peak qubits include both inputs, the output and
+the fault register.
 
 | Operand width `w` | One-qubit gates | Two-qubit gates | Toffolis | Peak qubits | Depth |
 |---:|---:|---:|---:|---:|---:|
+| 2 | 0 | 24 | 24 | 23 | 34 |
+| 3 | 440 | 765 | 288 | 165 | 440 |
 | 4 | 780 | 1,436 | 528 | 282 | 754 |
 | 6 | 1,748 | 3,402 | 1,224 | 612 | 1,622 |
 | 8 | 3,100 | 6,200 | 2,208 | 1,070 | 2,814 |
@@ -508,7 +512,7 @@ the output and the fault register.
 Run `cargo test -p bennett-emit --test apply controlled_apply::mulmod -- --nocapture`
 to repeat the measurements. At widths 4, 6 and 8 the simulator compares exact
 amplitudes with direct evaluation at budgets 6, 7 and 8. The bit-level runner checks
-all operand pairs at those widths and 128 sampled pairs and five corner pairs at
+all operand pairs at widths 2, 3, 4, 6 and 8, and 128 sampled pairs and five corner pairs at
 width 64. It checks unchanged inputs, XOR into the two destinations, and zero scratch.
 
 `bennett run --device count` uses the compiler for each `apply` it reaches. Pass

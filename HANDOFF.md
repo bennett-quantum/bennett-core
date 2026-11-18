@@ -122,6 +122,8 @@ match direct evaluation on amplitudes around the return and pass the bit-level c
 for every operand pair. A 64-by-64-bit mulmod using an internal 128-bit product passed
 sampled and corner inputs and uses 146,688 Toffolis and 65,862 peak qubits. The
 arithmetic counts in DESIGN include each gadget's formula and the full apply counts.
+The two-bit example reduces modulo one, uses 24 Toffolis, and has an exhaustive
+bit-level check along with the three-bit example at the formula's lower boundary.
 
 Control-gate lowering and its review fixes landed in `e34d256`. Operand analyses
 recover constants for whole-function checking on untaken edges. Only reachable

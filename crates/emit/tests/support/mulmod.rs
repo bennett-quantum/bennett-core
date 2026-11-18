@@ -97,8 +97,8 @@ entry:
 }
 
 #[test]
-fn mulmod_permutation_and_count_from_four_to_sixty_four_bits() {
-    for width in [4, 6, 8, 64] {
+fn mulmod_permutation_and_count_from_two_to_sixty_four_bits() {
+    for width in [2, 3, 4, 6, 8, 64] {
         let module = load(&source(width)).expect("valid applied mulmod");
         let n = modulus(width);
         let w = width as u64;
@@ -122,7 +122,8 @@ fn mulmod_permutation_and_count_from_four_to_sixty_four_bits() {
         auto.send(&mut counter).expect("count native gates");
         let counts = counter.counts();
         let w_terms = u128::from(w);
-        assert_eq!(counts.toffoli, 36 * w_terms * w_terms - 12 * w_terms);
+        let expected_toffolis = if width == 2 { 24 } else { 36 * w_terms * w_terms - 12 * w_terms };
+        assert_eq!(counts.toffoli, expected_toffolis);
         assert_eq!(counts.discarded_qubits, 0);
         assert_eq!(counts.zero_released_qubits, counts.peak_qubits as u128 - u128::from(input.scratch_start));
         println!("mulmod i{width} modulo {n}: {counts:?}");
