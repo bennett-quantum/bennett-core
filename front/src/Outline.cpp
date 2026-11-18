@@ -169,7 +169,7 @@ void splitOutputs(Function &region, const SetVector<Value *> &inputs, const SetV
       continue;
     }
     if (emittedOutput) {
-      requireCallerIndependent(region, *call);
+      requireCallerIndependent(region, *call, " when splitting the outputs of a read-only region");
     }
     emittedOutput = true;
     Function *variant = outputVariant(region, count, outputs, k);

@@ -43,27 +43,9 @@ bool exposesStackAddress(const Instruction &inst) {
   });
 }
 
-bool canObserveCallerPosition(const Function *function, const Module &module) {
-  SmallPtrSet<const Function *, 32> seen;
-  SmallVector<const Function *, 8> work;
-  bool consideredIndirectTargets = false;
-  auto addIndirectTargets = [&] {
-    if (!consideredIndirectTargets) {
-      // An unresolved target can name any emitted function, even one whose
-      // address came from an ordinary input.
-      for (const Function &target : module) {
-        if (!target.isDeclaration()) {
-          work.push_back(&target);
-        }
-      }
-      consideredIndirectTargets = true;
-    }
-  };
-  if (function) {
-    work.push_back(function);
-  } else {
-    addIndirectTargets();
-  }
+bool observesThroughDirectCalls(const Function &root, SmallPtrSetImpl<const Function *> &seen,
+                                bool &unresolved) {
+  SmallVector<const Function *, 8> work{&root};
   while (!work.empty()) {
     const Function *next = work.pop_back_val();
     if (!seen.insert(next).second) {
@@ -83,31 +65,60 @@ bool canObserveCallerPosition(const Function *function, const Module &module) {
       if (const auto *callee = directTarget(*call)) {
         work.push_back(callee);
       } else {
-        addIndirectTargets();
+        unresolved = true;
       }
     }
   }
   return false;
 }
 
-void requireCallerIndependent(const Function *function, const Module &module, const Instruction &at) {
-  if (canObserveCallerPosition(function, module)) {
-    notHandled("replaying a computation that can observe its caller's position through a return or stack address "
-               "(route: keep the old value and release it, or pass the caller's identity as an argument)",
-               &at);
+enum class Observation { None, Direct, Indirect };
+
+Observation observation(const Function *function, const Module &module) {
+  SmallPtrSet<const Function *, 32> seen;
+  bool unresolved = !function;
+  if (function && observesThroughDirectCalls(*function, seen, unresolved)) {
+    return Observation::Direct;
   }
+  // An unresolved target can name any emitted function, even one whose
+  // address came from an ordinary input.
+  if (unresolved && any_of(module, [&](const Function &target) {
+        return !target.isDeclaration() && observesThroughDirectCalls(target, seen, unresolved);
+      })) {
+    return Observation::Indirect;
+  }
+  return Observation::None;
+}
+
+void requireCallerIndependent(const Function *function, const Module &module, const Instruction &at,
+                              const char *context) {
+  Observation observed = observation(function, module);
+  if (observed == Observation::None) {
+    return;
+  }
+  std::string message = "replaying a computation that can observe its caller's position through a return or stack address "
+                        "(route: keep the old value and release it, or pass the caller's identity as an argument)";
+  if (observed == Observation::Indirect) {
+    message += " through a possible indirect target";
+  }
+  if (context) {
+    message += context;
+  }
+  notHandled(message, &at);
 }
 
 } // namespace
 
-bool canObserveCallerPosition(const Function &function) { return canObserveCallerPosition(&function, *function.getParent()); }
+bool canObserveCallerPosition(const Function &function) {
+  return observation(&function, *function.getParent()) != Observation::None;
+}
 
-void requireCallerIndependent(const Function &function, const Instruction &at) {
-  requireCallerIndependent(&function, *function.getParent(), at);
+void requireCallerIndependent(const Function &function, const Instruction &at, const char *context) {
+  requireCallerIndependent(&function, *function.getParent(), at, context);
 }
 
 void requireCallerIndependent(const CallBase &call, const Instruction &at) {
-  requireCallerIndependent(directTarget(call), *call.getModule(), at);
+  requireCallerIndependent(directTarget(call), *call.getModule(), at, nullptr);
 }
 
 } // namespace bennett

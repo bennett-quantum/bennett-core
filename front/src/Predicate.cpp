@@ -837,7 +837,7 @@ void Predicator::moveLoop(GateLoop &gates, IRBuilder<> &b) {
     kind = Kind::Qubit;
     value = call(when, params, b);
   } else {
-    requireCallerIndependent(*when, *gates.gates.front());
+    requireCallerIndependent(*when, *gates.gates.front(), " when evaluating a moved gate-loop condition");
     IRBuilder<> top(&*fn.getEntryBlock().getFirstInsertionPt());
     qubit = top.CreateAlloca(b.getInt8Ty(), nullptr, "condition");
     qubit->setMetadata(qubitMetadata, MDNode::get(context, {}));

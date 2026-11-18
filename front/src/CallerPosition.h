@@ -10,7 +10,8 @@ class Instruction;
 namespace bennett {
 
 bool canObserveCallerPosition(const llvm::Function &function);
-void requireCallerIndependent(const llvm::Function &function, const llvm::Instruction &at);
+void requireCallerIndependent(const llvm::Function &function, const llvm::Instruction &at,
+                              const char *context = nullptr);
 void requireCallerIndependent(const llvm::CallBase &call, const llvm::Instruction &at);
 
 } // namespace bennett

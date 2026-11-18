@@ -717,3 +717,85 @@ fn a_late_refusal_preserves_both_requested_output_files() {
         assert!(output.stdout.is_empty(), "{name}: unexpected standard output");
     }
 }
+
+fn check_replay_diagnostic(program: Program<'_>, site: &str) {
+    let source = program.source();
+    for (mode, clang, flags) in MODES {
+        let name = format!("{}-{mode}", program.name);
+        let refusal = lower_text_with_diagnostics(&source, &name, clang, flags).expect_err("named refusal");
+        assert!(refusal.starts_with(&format!("{CALLER_REPLAY_REFUSAL} {site}")), "{name}: {refusal}");
+    }
+}
+
+#[test]
+fn replay_diagnostic_names_a_possible_indirect_target() {
+    check_replay_diagnostic(
+        Program {
+            name: "caller-indirect-target",
+            declarations: r#"
+__attribute__((noinline)) uintptr_t observe(uint8_t q) {
+    return q ? (uintptr_t)__builtin_return_address(0) : 0;
+}
+uintptr_t (*callback)(uint8_t) = observe;
+__attribute__((noinline, pure)) uintptr_t f(uint8_t q) { return callback(q); }
+"#,
+            body: r#"
+    ZBIT(q, 1);
+    uintptr_t address = f(q);
+    volatile uint64_t x = address, y = address + n;
+    uint64_t first = READ(x);
+    uint64_t second = READ(y);
+    return (first + n) ^ second;
+"#,
+            qubits: 1,
+        },
+        "through a possible indirect target",
+    );
+}
+
+#[test]
+fn replay_diagnostic_names_read_only_output_splitting() {
+    check_replay_diagnostic(
+        Program {
+            name: "caller-split-outputs",
+            declarations: RETADDR_HELPER,
+            body: r#"
+    ZBIT(q, 1);
+    uint64_t x, y;
+    if (q) {
+        uintptr_t address = f(q);
+        x = address + n;
+        y = address ^ n;
+    } else {
+        x = 10;
+        y = 7;
+    }
+    volatile uint64_t first = x, second = y;
+    return (READ(first) - n) ^ (READ(second) ^ n);
+"#,
+            qubits: 1,
+        },
+        "when splitting the outputs of a read-only region",
+    );
+}
+
+#[test]
+fn replay_diagnostic_names_the_generated_gate_loop_condition() {
+    check_replay_diagnostic(
+        Program {
+            name: "caller-inside-loop-condition",
+            declarations: RETADDR_HELPER,
+            body: r#"
+    ZBIT(q, 1);
+    uint8_t y = 0;
+    if (q && ((f(q) >> 32) & 1)) {
+        #pragma clang loop unroll(disable)
+        for (unsigned i = 0; i < n; ++i) XBIT(y, 0);
+    }
+    return READ(y);
+"#,
+            qubits: 1,
+        },
+        "when evaluating a moved gate-loop condition",
+    );
+}

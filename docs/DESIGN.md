@@ -1143,7 +1143,9 @@ one instruction that reads the frames:
 The front writes `retaddr N` for `llvm.returnaddress(N)` in the default address space. A single applied
 evaluation can read a return address. When the front would evaluate the same computation at another
 site, it refuses an observation of a return or stack address in the function or anywhere it can call. An unresolved indirect
-call may reach any function in the module. This check also covers clearing old words, inverting an
+call may reach any function in the module. The diagnostic identifies when this fallback supplied
+the refusal. It also identifies refusals when splitting read-only outputs or evaluating a moved
+gate-loop condition. This check also covers clearing old words, inverting an
 update, clearing the condition of a gate or gate loop, and repeating a region for several results.
 When predication copies a region for separate conditional operations, the front tracks each source
 call through the copies it emits. A caller-sensitive call can appear in only one of those copies.

@@ -178,7 +178,8 @@ the ordinary part inside one applied function for the table of control bits in [
 A helper may read a return address in one applied evaluation. The front refuses a repeated evaluation
 when the helper or a function it can call reads a return address, observes a frame address, or converts a pointer
 whose address may depend on the stack to an integer, including when separate predicated
-stores would repeat one source call. Keep and release the old value explicitly,
+stores would repeat one source call. A refusal can name a possible indirect target, read-only
+output splitting, or evaluation of a moved gate-loop condition. Keep and release the old value explicitly,
 or pass the caller's identity as a separate argument to a caller-independent helper.
 
 ## Not handled yet
