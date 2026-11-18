@@ -8,6 +8,7 @@ use super::ApplyError;
 use super::arithmetic;
 use super::bits::{Bit, Circuit, Word, ZERO, constant};
 use super::definite::{Constants, Scope, requirement};
+use super::remainders;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct Point {
@@ -38,6 +39,7 @@ pub(super) enum Step<'a> {
     Branch(Bit, &'a Target, &'a Target),
     Return(Word),
     Transfer(Point, Vec<(Slot, Word)>),
+    CheckedWrite(Point, Slot, Word, Bit, Fault),
     Fault(Fault),
 }
 
@@ -163,6 +165,22 @@ impl<'a> Frame<'a> {
         let read = |operand| Self::read(slots, operand);
         if let Some(inst) = block.insts.get(point.index) {
             let (dst, result) = match inst {
+                Inst::Binary { op: BinOp::Urem, dst, lhs, rhs, .. } => {
+                    let dividend = read(lhs);
+                    let mut divisor = read(rhs);
+                    if let Some(value) = self.constants.get(rhs) {
+                        divisor = constant(value, divisor.len());
+                    }
+                    let zero = remainders::is_zero(circuit, &divisor);
+                    if zero == super::bits::ONE {
+                        return Ok(Step::Fault(Fault::DivideByZero));
+                    }
+                    let result = remainders::reduce(circuit, &dividend, &divisor);
+                    if zero != ZERO {
+                        return Ok(Step::CheckedWrite(point.next(), *dst, result, zero, Fault::DivideByZero));
+                    }
+                    (*dst, result)
+                }
                 Inst::Binary { op, dst, lhs, rhs, .. } => {
                     let mut left = read(lhs);
                     let mut right = read(rhs);
@@ -268,13 +286,19 @@ pub(super) fn visit_possible_targets<'a>(term: &'a Terminator, mut visit: impl F
 fn unsupported(inst: &Inst) -> Option<(&'static str, &'static str)> {
     Some(match inst {
         Inst::Binary { op, .. } => match op {
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::And | BinOp::Xor | BinOp::Shl | BinOp::Lshr | BinOp::Ashr => {
+            BinOp::Add
+            | BinOp::Sub
+            | BinOp::Mul
+            | BinOp::And
+            | BinOp::Xor
+            | BinOp::Shl
+            | BinOp::Lshr
+            | BinOp::Ashr
+            | BinOp::Urem => {
                 return None;
             }
             BinOp::Or => (op.mnemonic(), "remaining integer operations"),
-            BinOp::Udiv | BinOp::Sdiv | BinOp::Urem | BinOp::Srem => {
-                (op.mnemonic(), "division and remainder with faults")
-            }
+            BinOp::Udiv | BinOp::Sdiv | BinOp::Srem => (op.mnemonic(), "division and remainder with faults"),
         },
         Inst::Compare { .. } | Inst::Select { .. } | Inst::Cast { .. } => return None,
         Inst::Load { .. } => ("load", "applied memory"),

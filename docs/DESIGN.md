@@ -299,7 +299,7 @@ executor's step counts (`Stats`, `RegionCost`) count instructions, not gates; th
 **Gate emitter.** The compiler in `emit` follows the applied
 function while its next instruction is definite. It represents each bit as a constant or the
 value of a qubit, and computes new bits by reversible gates into scratch qubits. It handles
-addition, subtraction, AND, XOR, shifts by a definite amount and multiplication,
+addition, subtraction, AND, XOR, shifts by a definite amount, multiplication and unsigned remainder,
 integer comparisons, select, casts, jumps, switches with a proved definite selector and return.
 A jump reads all its incoming values
 before assigning the block parameters. Entry stack overflow takes precedence over the budget
@@ -352,6 +352,19 @@ Only the declared low bits matter. The gadget reserves its result, computes the
 product, copies it to the result and reverses the computation. Its work wires return
 to zero and can be reused by the next gadget. The full `apply` also reverses this gadget
 when clearing the result.
+
+**Unsigned remainder.** Read the dividend from high bit to low bit. Each new bit
+doubles the current remainder and adds the bit. A trial subtraction, with one extra
+high bit, selects the difference when the candidate is at least the divisor. Below
+a nonzero divisor this step leaves the next remainder below it. A known modulus makes
+bits above its maximum residue definite zero. A power-of-two modulus takes only the
+low bits. The gadget copies its result and reverses the work, including on inputs
+with divisor zero.
+
+A separate zero test makes a reached `urem` fault with `divide_by_zero` for exactly
+those inputs. A failed input writes only the fault code and stops before any later
+instruction. A successful attempt costs one step. At a conditional fault the step
+machine advances only the successful inputs, with the same remaining budget.
 
 **Copied calls.** Each sequence of direct call sites has its own copy of the callee's
 slots and program points. Before building gates, the compiler counts one unit for each
@@ -1573,7 +1586,7 @@ its own).
 
 | Refused inside emitted `apply` | Construction needed |
 |---|---|
-| `or`, division and remainder, shifts by qubit values | Remaining integer gates, including conditional arithmetic faults |
+| `or`, division, signed remainder and shifts by qubit values | Remaining integer gates, including conditional arithmetic faults |
 | `switch` without a proved definite selector | Multiway dispatch in the step machine |
 | Recursive calls or a call expansion above 16,384 copied slots and program points | Shared call frames and return positions |
 | `call_indirect` without one proved definite address | Prove the target across visits or dispatch among supported addresses |

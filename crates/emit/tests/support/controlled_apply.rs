@@ -727,3 +727,107 @@ entry:
         }
     }
 }
+
+#[test]
+fn remainder_faults_only_on_reached_zero_divisors() {
+    let body = r#"
+    %a = trunc i6 %input to i3
+    %top = lshr i6 %input, 3
+    %d = trunc i6 %top to i3
+    %r = urem i3 %a, %d
+    %out = zext i3 %r to i8
+    ret %out
+"#;
+    for conditional in [false, true] {
+        let split = if conditional {
+            "    %odd = trunc i6 %input to i1\n    br %odd, divide, idle\nidle:\n    ret 7\ndivide:\n"
+        } else {
+            ""
+        };
+        let source = format!("memory 1024\nfunc @f(i6 %input) -> i8 {{\nentry:\n{split}{body}}}\n");
+        let module = control_example(&source, 6, "");
+        for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+            for budget in 0..=9 {
+                compare_controls(&module, budget, mode, |x| {
+                    if conditional && x & 1 == 0 {
+                        return if budget < 3 { (0, 1) } else { (7, 0) };
+                    }
+                    let divisor = x >> 3;
+                    let prefix = if conditional { 2 } else { 0 };
+                    if budget < prefix + 4 {
+                        (0, 1)
+                    } else if divisor == 0 {
+                        (0, 2)
+                    } else if budget < prefix + 6 {
+                        (0, 1)
+                    } else {
+                        ((x & 7) % divisor, 0)
+                    }
+                });
+            }
+        }
+    }
+
+    let inside_call = body.replace("urem i3 %a, %d", "call @residue(%a, %d)");
+    let source = format!(
+        r#"
+memory 1024
+func @f(i6 %input) -> i8 {{
+entry:
+{inside_call}}}
+func @residue(i3 %a, i3 %d) -> i3 {{
+entry:
+    %r = urem i3 %a, %d
+    ret %r
+}}
+"#
+    );
+    let module = control_example(&source, 6, "");
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=9 {
+            compare_controls(&module, budget, mode, |x| {
+                let divisor = x >> 3;
+                if budget < 5 {
+                    (0, 1)
+                } else if divisor == 0 {
+                    (0, 2)
+                } else if budget < 8 {
+                    (0, 1)
+                } else {
+                    ((x & 7) % divisor, 0)
+                }
+            });
+        }
+    }
+
+    let module =
+        control_example("memory 128\nfunc @f(i8 %input) -> i8 {\nentry:\n %r = urem i8 %input, 0\n ret %r\n}", 8, "");
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in [0, 1, 2] {
+            compare_controls(&module, budget, mode, |_| (0, if budget == 0 { 1 } else { 2 }));
+        }
+    }
+}
+
+#[test]
+fn a_remainder_bound_proves_high_bits_even_in_a_wide_slot() {
+    let module = control_example(
+        r#"
+memory 1024
+func @f(i8 %input) -> i8 {
+entry:
+    %wide = zext i8 %input to i128
+    %r = urem i128 %wide, 11
+    %amount = lshr i128 %r, 4
+    %shifted = shl i128 %r, %amount
+    %out = trunc i128 %shifted to i8
+    ret %out
+}
+"#,
+        8,
+        "",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        compare_controls(&module, 6, mode, |x| (x % 11, 0));
+    }
+}

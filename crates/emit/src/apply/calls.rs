@@ -227,6 +227,9 @@ impl<'a> Program<'a> {
         let step = copy.frame.step(circuit, local, point)?;
         Ok(match step {
             Step::Write(next, dst, word) => Step::Write(next, copy.slot(dst), word),
+            Step::CheckedWrite(next, dst, word, enabled, fault) => {
+                Step::CheckedWrite(next, copy.slot(dst), word, enabled, fault)
+            }
             Step::Jump(_) | Step::Branch(..) | Step::Return(_) | Step::Transfer(..) | Step::Fault(_) => step,
         })
     }

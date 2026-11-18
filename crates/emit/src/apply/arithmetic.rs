@@ -27,6 +27,9 @@ pub(super) fn binary(circuit: &mut Circuit, op: BinOp, left: &[Bit], right: &[Bi
 
 // The operand proof needs constant folding, without emitting a general product.
 pub(super) fn fold_binary(circuit: &mut Circuit, op: BinOp, left: &[Bit], right: &[Bit]) -> Option<Word> {
+    if op == BinOp::Urem {
+        return definite(left)?.checked_rem(definite(right)?).map(|value| super::bits::constant(value, left.len()));
+    }
     if op == BinOp::Mul && definite(left).is_none() && definite(right).is_none() {
         return None;
     }

@@ -138,7 +138,21 @@ impl Controls<'_, '_> {
                     self.copies.returned.push((route.enabled, word));
                     return Ok(None);
                 }
-                Step::Transfer(..) | Step::Fault(_) => unreachable!("calls use the step machine"),
+                Step::Transfer(..) => unreachable!("calls use the step machine"),
+                Step::Fault(fault) => {
+                    self.copies.faulted.push((route.enabled, fault));
+                    return Ok(None);
+                }
+                Step::CheckedWrite(next, dst, word, failed, fault) => {
+                    let faulted = self.circuit.and(route.enabled, failed);
+                    self.copies.faulted.push((faulted, fault));
+                    route.enabled = self.circuit.and(route.enabled, failed.not());
+                    if route.enabled == ZERO {
+                        return Ok(None);
+                    }
+                    route.slots[dst.index()] = word;
+                    route.point = next;
+                }
                 Step::Branch(condition, yes, no) => {
                     if !self.choices.insert(point.block) {
                         return Err(Failure::Control(Refusal::UnprovedLoop));

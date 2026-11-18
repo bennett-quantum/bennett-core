@@ -11,6 +11,7 @@ mod gadget_tests;
 mod machine;
 mod products;
 mod ranges;
+mod remainders;
 mod saved;
 mod symbolic;
 
@@ -186,6 +187,20 @@ pub fn compile_apply_with(input: ApplyInput<'_>, mode: ApplyMode) -> Result<Comp
                         }
                         Status::Running(next)
                     }
+                    Step::CheckedWrite(next, dst, word, failed, fault) => {
+                        // The attempt has been emitted. Only successful inputs
+                        // move to the next instruction and spend one step.
+                        slots[dst.index()] = word;
+                        let remaining = input.budget - spent - 1;
+                        let (mut copies, ticks) =
+                            machine::run(&mut circuit, &program, &mut slots, (next, failed.not()), remaining)?;
+                        copies.faulted.push((failed, fault));
+                        break (
+                            copies,
+                            Construction::StepMachine { ticks: ticks + 1 },
+                            "qubit-dependent remainder fault",
+                        );
+                    }
                     Step::Fault(fault) => {
                         status = Status::Faulted(fault);
                         continue;
@@ -222,7 +237,8 @@ pub fn compile_apply_with(input: ApplyInput<'_>, mode: ApplyMode) -> Result<Comp
                             }
                             ApplyMode::StepMachine => "step machine requested for a qubit-dependent jump",
                         };
-                        let (copies, ticks) = machine::run(&mut circuit, &program, &mut slots, point, remaining)?;
+                        let (copies, ticks) =
+                            machine::run(&mut circuit, &program, &mut slots, (point, ONE), remaining)?;
                         break (copies, Construction::StepMachine { ticks }, reason);
                     }
                     Step::Return(word) => Status::Returned(word),

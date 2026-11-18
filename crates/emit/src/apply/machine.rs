@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, btree_map::Entry};
 
 use bennett_ir::{Fault, Slot, Target};
 
-use super::bits::{Bit, Circuit, ONE, Word, ZERO};
+use super::bits::{Bit, Circuit, Word, ZERO};
 use super::calls::Program;
 use super::symbolic::{Point, Step};
 use super::{ApplyError, Copies};
@@ -16,11 +16,11 @@ pub(super) fn run(
     circuit: &mut Circuit,
     program: &Program<'_>,
     slots: &mut [Word],
-    start: Point,
+    start: (Point, Bit),
     remaining: u64,
 ) -> Result<(Copies, u64), ApplyError> {
     let mut copies = Copies::default();
-    let mut dispatch = Dispatch::from([(start, ONE)]);
+    let mut dispatch = Dispatch::from([start]);
     let mut ticks = 0;
     for _ in 0..remaining {
         if dispatch.is_empty() {
@@ -45,6 +45,13 @@ pub(super) fn run(
                     jump(circuit, program, slots, &mut next, &mut writes, (point, no), take_no);
                 }
                 Step::Return(word) => copies.returned.push((enabled, word)),
+                Step::CheckedWrite(successor, dst, word, failed, fault) => {
+                    let faulted = circuit.and(enabled, failed);
+                    let succeeded = circuit.and(enabled, failed.not());
+                    copies.faulted.push((faulted, fault));
+                    writes.entry(dst).or_default().push((succeeded, word));
+                    activate(circuit, &mut next, successor, succeeded);
+                }
                 Step::Fault(fault) => copies.faulted.push((enabled, fault)),
                 Step::Transfer(successor, incoming) => {
                     for (dst, word) in incoming {

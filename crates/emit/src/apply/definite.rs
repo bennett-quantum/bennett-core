@@ -19,7 +19,14 @@ fn fold_inst(
         // Missing inputs can arrive on a later visit. An operation with known
         // operands that cannot be folded contributes an unknown value now.
         Inst::Binary { op, lhs, rhs, .. } => {
-            Some(arithmetic::fold_binary(circuit, *op, &read(lhs)?, &read(rhs)?).unwrap_or_else(unknown))
+            let left = read(lhs)?;
+            let right = read(rhs)?;
+            let mut word = arithmetic::fold_binary(circuit, *op, &left, &right).unwrap_or_else(unknown);
+            if *op == BinOp::Urem && definite(&right) != Some(0) {
+                let width = super::remainders::result_bits(&left, &right);
+                word[width..].fill(super::bits::ZERO);
+            }
+            Some(word)
         }
         Inst::Compare { pred, lhs, rhs, .. } => {
             Some(vec![arithmetic::compare(circuit, *pred, &read(lhs)?, &read(rhs)?)])
@@ -115,6 +122,7 @@ impl Constants {
                             Inst::Call { .. }
                                 | Inst::CallIndirect { .. }
                                 | Inst::Binary { op: BinOp::Mul, lhs: Operand::Slot(_), rhs: Operand::Slot(_), .. }
+                                | Inst::Binary { op: BinOp::Urem, rhs: Operand::Slot(_), .. }
                         )
                 })
         }) {

@@ -15,8 +15,8 @@ Qubit-dependent choices and loops with a proved pass count can use control gates
 directly. Integer calls copy their frames and use the shared budget. The emitter refuses
 recursive calls, unproved indirect targets, excessive call expansion, private memory
 and stack operations, switches without a
-proved definite selector, `or`, division
-and remainder, shifts without a proved constant amount, and instructions
+proved definite selector, `or`, division, signed remainder, shifts without a proved
+constant amount, and instructions
 such as `fault` that still need named fault handling. See `docs/DESIGN.md`, "Not yet".
 
 What works, one line each (the commit-by-commit table is in `docs/RECORDS.md`, part two):
@@ -110,7 +110,9 @@ the seven-byte and eight-byte entry cases at budget zero, nested frame reservati
 and bad indirect addresses and signatures. Unsigned bounds keep the high bits of
 narrowly bounded products at literal zero, including in a 128-bit destination. Qubit-held
 products use column reductions with their own work wires cleared. Their Toffoli counts
-are checked through a full 64-by-64-bit product.
+are checked through a full 64-by-64-bit product. Unsigned remainder clears its work
+wires and distinguishes a reached zero divisor from budget exhaustion, including
+in a copied callee.
 
 Control-gate lowering and its review fixes landed in `e34d256`. Operand analyses
 recover constants for whole-function checking on untaken edges. Only reachable
@@ -146,8 +148,8 @@ returns 1 at budget 14 and writes `budget` at 13 for `x = y = 1`.
 ## Next steps
 
 In order:
-1. Emit unsigned remainder and its divide-by-zero fault.
-2. Check mulmod against direct evaluation and record the gate counts.
+1. Check mulmod against direct evaluation and record the gate counts.
+2. Review the emitter's call and arithmetic changes.
 3. **Shor's algorithm for 15 and 21 from plain C.** Measure the unfused program first. Compare Toffoli count and peak qubits with a textbook-class hand-built circuit using the same registers, aiming for a factor of two or less on both. Record depth too.
 4. **Applied memory**: add private memory and stack operations, with the corresponding first-fault rules.
 5. Then what the old plan left undone: rule A at an address that depends on a qubit (declare the region, then exchange one addressed element, at a cost of the region's size times the element's width per access); a second implementation of the device language (grow the reference that runs `apply` by its construction, `crates/exec/tests/compute_copy_reference/`); the floating-point environment through SoftFloat's state, `__float128` and the remaining intrinsics; the runtime debts below; Grover over a SQL query written in plain C; the optimiser and cost model (`opt`, not started).
