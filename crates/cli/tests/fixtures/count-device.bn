@@ -1,0 +1,25 @@
+memory 128
+func @main() {
+entry:
+    %q = qalloc 4
+    h %q[0]
+    h %q[1]
+    x %q[2] ctrl %q[0], %q[1]
+    z %q[3] ctrl %q[2], %q[1]
+    x %q[3] ctrl %q[0], %q[1], %q[2]
+    qfree %q
+    ret
+}
+
+func @adaptive() -> i1 {
+entry:
+    %q = qalloc 1
+    h %q
+    %m = measure %q
+    br %m, one, zero
+one:
+    x %q
+    ret %m
+zero:
+    ret %m
+}

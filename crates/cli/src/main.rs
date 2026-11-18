@@ -8,7 +8,7 @@ use std::process::ExitCode;
 
 use bennett_exec::StartError;
 use bennett_ir::LoadError;
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use thiserror::Error;
 
 /// Run and check Bennett device programs.
@@ -23,8 +23,8 @@ struct Cli {
 enum Command {
     /// Run a program and report its result or fault, console output and step count.
     ///
-    /// Exits with 0 when the program returns, 1 when it faults or (unless allowed) a coherent region faults
-    /// on some branch, 2 when it cannot be run or the simulator stops it at one of its limits.
+    /// Exits with 0 when the program returns, 1 when it faults or (unless allowed) an apply faults
+    /// for some argument value, and 2 when it cannot be run or stops at a device or simulator limit.
     Run(RunArgs),
     /// Read and validate a program. Exits with 0 when it is valid, 2 otherwise.
     Check {
@@ -37,6 +37,9 @@ enum Command {
 struct RunArgs {
     /// The program text.
     file: PathBuf,
+    /// The quantum device.
+    #[arg(long, value_enum, default_value_t = DeviceKind::Simulator)]
+    device: DeviceKind,
     /// The function to run.
     #[arg(long, default_value = "main")]
     entry: String,
@@ -61,7 +64,7 @@ struct RunArgs {
     /// same as --allow-region-faults.
     #[arg(long)]
     machine_meaning: bool,
-    /// The seed for `measure`.
+    /// The seed for simulator sampling or synthetic counting-device measurements.
     #[arg(long, value_name = "N", default_value_t = 0)]
     seed: u64,
     /// Run forward, then backward, and report whether the state returned to the entry state.
@@ -70,6 +73,12 @@ struct RunArgs {
     /// Report throughput, journal size, qubits and basis configurations.
     #[arg(long)]
     stats: bool,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum DeviceKind {
+    Simulator,
+    Count,
 }
 
 /// Why a command could not do its work.
@@ -85,6 +94,8 @@ enum CliError {
     ArgumentCount { function: String, expected: usize, found: usize },
     #[error("argument {index} ({value}) does not fit in {ty}")]
     ArgumentRange { index: usize, value: i128, ty: bennett_ir::Type },
+    #[error("--reverse requires the simulator")]
+    CountReverse,
     #[error("{0}")]
     Start(#[from] StartError),
 }

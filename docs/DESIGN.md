@@ -142,8 +142,32 @@ sampling of a whole set of bits in one draw. A device can measure the individual
 configuration limits and release diagnostics. It also evaluates `apply` using its stored state. A module
 with `apply` is refused by other devices with “apply is not lowered to gates yet.”
 
+The target is an ideal logical quantum computer with one- and two-qubit gates, Toffoli gates and on-demand
+allocation and measurement. The wrapper forwards gates with zero or one control and X with two controls.
+For any other gate with `k` controls, it uses `k - 1` scratch wires. A ladder of Toffolis computes the AND
+of the controls into the last scratch wire. The wrapper applies the gate with that one control, reverses the
+ladder and releases the scratch in zero. The named gate and its rotation angle pass through unchanged.
+
 A caller can define a named gate block once and call or repeat it through the device interface.
-The default expands its operations. Block scratch is allocated and released in zero within one call.
+The default expands its operations. The counting device multiplies gate totals by the repetition count and
+composes gate layers using the dependencies on the incoming wire layers. Block scratch is allocated and
+released inside one call, so repetition keeps the peak of a single call at the same starting allocation.
+
+`bennett run --device count` reports gate totals, peak allocated qubits including scratch, and depth.
+A gate's layer is one plus the latest layer on any of its wires. Allocation starts a fresh wire at layer
+zero. Measurements contribute no gate layers. The CLI takes synthetic measurement bits from a seeded
+generator (`--seed`, default 0) and prints the source. Counts describe the execution for those bits.
+The library counter also accepts a fixed sequence or a source that always gives zero.
+
+| Example | One-qubit gates | Two-qubit gates | Toffolis | Peak qubits | Depth |
+|---|---:|---:|---:|---:|---:|
+| `calls.bn` | 0 | 0 | 0 | 0 | 0 |
+| `exit.bn` | 1 | 0 | 0 | 1 | 1 |
+| `retaddr.bn` | 0 | 0 | 0 | 0 | 0 |
+| `setjmp.bn` | 0 | 0 | 0 | 0 | 0 |
+| `sum.bn --arg 10` | 0 | 0 | 0 | 0 | 0 |
+
+These are the examples without `apply`. Each uses the default entry and seed.
 
 ### `apply`
 

@@ -1,0 +1,137 @@
+//! Phase-sensitive comparison of primitive and rewritten gates on the sparse simulator.
+
+use std::fmt::Write;
+use std::ops::Range;
+
+use bennett_emit::LowerControls;
+use bennett_exec::{Device, Executor, GateBlock, GateOp, Options, Outcome, QuantumSnapshot, RunError, Wire};
+use bennett_ir::{FixedGate, Gate, Rotation};
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha8Rng;
+
+#[derive(Default)]
+struct Program {
+    instructions: String,
+    scratch: Range<Wire>,
+}
+
+impl Program {
+    fn place(&self, wire: Wire) -> String {
+        if self.scratch.contains(&wire) { format!("%s[{}]", wire - self.scratch.start) } else { format!("%q[{wire}]") }
+    }
+
+    fn simulate(&self, input_width: u64) -> QuantumSnapshot {
+        let text = format!("memory 128\nfunc @main() {{\nentry:\n{}ret\n}}", self.instructions);
+        let module = bennett_ir::load(&text).unwrap_or_else(|error| panic!("{error}\n{text}"));
+        let mut executor =
+            Executor::new(&module, module.function_named("main").expect("entry"), &[], Options::default())
+                .expect("started");
+        assert_eq!(executor.run(), Outcome::Returned(None));
+        assert_eq!(executor.stats().live_qubits, input_width as u32);
+        assert_eq!(executor.stats().nonzero_releases, 0, "{text}");
+        executor.snapshot().quantum
+    }
+}
+
+impl Device for Program {
+    fn allocate(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
+        let width = wires.end - wires.start;
+        let name = if wires.start == 0 {
+            "q"
+        } else {
+            self.scratch = wires;
+            "s"
+        };
+        writeln!(self.instructions, "%{name} = qalloc {width}").expect("string");
+        Ok(())
+    }
+
+    fn gate(&mut self, gate: GateOp<&[Wire]>) -> Result<(), RunError> {
+        let kind = match gate.kind {
+            Gate::Fixed(kind) => kind.mnemonic().to_owned(),
+            Gate::Rotate(axis, angle) => format!("{}({angle:.17})", axis.mnemonic()),
+        };
+        let target = self.place(gate.target);
+        write!(self.instructions, "{kind} {target}").expect("string");
+        if !gate.controls.is_empty() {
+            let controls = gate.controls.iter().map(|&wire| self.place(wire)).collect::<Vec<_>>().join(", ");
+            write!(self.instructions, " ctrl {controls}").expect("string");
+        }
+        self.instructions.push('\n');
+        Ok(())
+    }
+
+    fn measure(&mut self, _wire: Wire) -> Result<bool, RunError> {
+        unreachable!("the compared circuits are unitary")
+    }
+
+    fn discard(&mut self, _wires: Range<Wire>) -> Result<(), RunError> {
+        unreachable!("the lowering uses only zero releases")
+    }
+
+    fn release_zero(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
+        assert_eq!(wires, self.scratch);
+        self.instructions.push_str("qfree %s\n");
+        Ok(())
+    }
+}
+
+fn prepare(device: &mut impl Device, width: u64, rng: &mut ChaCha8Rng) {
+    device.allocate(0..width).expect("inputs");
+    for target in 0..width {
+        for axis in [Rotation::Ry, Rotation::Rz] {
+            let angle = rng.random_range(-3.0..3.0);
+            device.gate(GateOp { kind: Gate::Rotate(axis, angle), target, controls: &[] }).expect("rotation");
+        }
+        if target > 0 {
+            let control = rng.random_range(0..target);
+            device.gate(GateOp { kind: Gate::Fixed(FixedGate::X), target, controls: &[control] }).expect("CNOT");
+        }
+    }
+}
+
+#[test]
+fn every_gate_and_control_count_preserve_amplitudes_and_release_clean_scratch() {
+    let gates =
+        FixedGate::ALL.iter().copied().map(Gate::Fixed).chain(
+            Rotation::ALL.iter().copied().flat_map(|axis| [-1.89, 0.713].map(|angle| Gate::Rotate(axis, angle))),
+        );
+    for (index, kind) in gates.enumerate() {
+        for target in 0..=5 {
+            let controls: Vec<Wire> = (0..target).collect();
+            let gate = GateOp { kind, target, controls: controls.as_slice() };
+            for sample in 0..3 {
+                let seed = (100 * index as u64) + 10 * target + sample;
+                let mut native = Program::default();
+                let mut rewritten = LowerControls::new(Program::default());
+                prepare(&mut native, target + 1, &mut ChaCha8Rng::seed_from_u64(seed));
+                prepare(&mut rewritten, target + 1, &mut ChaCha8Rng::seed_from_u64(seed));
+                native.gate(gate).expect("original");
+                rewritten.gate(gate).expect("rewritten");
+
+                let original = native.simulate(target + 1);
+                let lowered = rewritten.inner().simulate(target + 1);
+                for (config, _) in original.amplitudes.iter().chain(&lowered.amplitudes) {
+                    let distance = (original.amplitude(config) - lowered.amplitude(config)).norm();
+                    assert!(distance <= 1e-12, "{kind:?}, {target} controls, sample {sample}, {config:?}: {distance}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn decoded_cnot_uses_the_transmitted_target_and_control() {
+    let mut lowered = LowerControls::new(Program::default());
+    lowered.allocate(0..2).expect("wires");
+    let x = Gate::Fixed(FixedGate::X);
+    lowered.gate(GateOp { kind: x, target: 0, controls: &[] }).expect("input |01>");
+    let block = GateBlock::new("copy", [GateOp { kind: x, target: 1, controls: vec![0] }]);
+    lowered.repeat(&block, 3).expect("expanded CNOT block");
+    assert_eq!(lowered.inner().instructions.matches(" ctrl ").count(), 3);
+    // Program uses a text writer, then the independent IR reader and sparse executor decode it.
+    let state = lowered.inner().simulate(2);
+    assert_eq!(state.amplitudes.len(), 1);
+    assert_eq!(state.amplitude(&[3]).re, 1.0);
+    assert_eq!(state.amplitude(&[3]).im, 0.0);
+}

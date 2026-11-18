@@ -11,7 +11,8 @@ model").
 | Module | What it is | State |
 |---|---|---|
 | `ir` | the device program: one data structure, one reader/writer, one validator | step 2 |
-| `exec` | the executor, a simulator of the model: forward, reverse (undo journal), `apply` (evaluated for each definite value of its arguments), gates, qubits in memory | step 2 |
+| `exec` | the classical controller and sparse simulator: forward, reverse (undo journal), `apply` (evaluated for each definite value of its arguments), gates, qubits in memory | step 2 |
+| `emit` | controlled gate lowering and counts for a logical quantum device | M0 |
 | `cli` | `bennett run`, `bennett check` | step 2 |
 | `front` | `bennett-front` (C++, LLVM 18): bitcode with marker calls to `ir` text; taint, outlining, lowering | step 3 |
 | `opt` | optimiser and cost model | not started |
@@ -20,6 +21,7 @@ model").
 ```sh
 cargo test                                   # Rust + guard witnesses, in seconds; Python 3, no LLVM
 cargo run -p bennett -- run examples/thesis.bn
+cargo run -p bennett -- run examples/calls.bn --device count
 front/test.sh                                # builds bennett-front, runs its tests (LLVM 18, clang 18, CMake)
 ```
 
