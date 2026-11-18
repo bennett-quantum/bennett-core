@@ -74,9 +74,17 @@ pub fn clang() -> PathBuf {
 }
 
 fn run_tool(command: &mut Command) -> Result<String, String> {
+    tool_output(command).map(|(stdout, _)| stdout)
+}
+
+fn tool_output(command: &mut Command) -> Result<(String, String), String> {
     let output = command.output().unwrap_or_else(|e| panic!("cannot run {command:?}: {e}"));
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    if output.status.success() { Ok(String::from_utf8_lossy(&output.stdout).into_owned()) } else { Err(stderr) }
+    if output.status.success() {
+        Ok((String::from_utf8_lossy(&output.stdout).into_owned(), stderr))
+    } else {
+        Err(stderr)
+    }
 }
 
 /// How `clang` compiles C for the front end: unoptimised but optimisable, since `bennett-front` runs its
@@ -90,6 +98,16 @@ pub fn lower_text(source: &Path, name: &str, clang_flags: &[&str], front_flags: 
     lower_text_with_budget(source, name, clang_flags, front_flags, REGION_BUDGET)
 }
 
+/// Like [`lower_text`], with the front's diagnostic output on successful lowering.
+pub fn lower_text_with_diagnostics(
+    source: &Path,
+    name: &str,
+    clang_flags: &[&str],
+    front_flags: &[&str],
+) -> Result<(String, String), String> {
+    lower_text_and_diagnostics(source, name, clang_flags, front_flags, REGION_BUDGET)
+}
+
 /// [`lower_text`] with a region budget of `region_budget` steps.
 pub fn lower_text_with_budget(
     source: &Path,
@@ -98,6 +116,16 @@ pub fn lower_text_with_budget(
     front_flags: &[&str],
     region_budget: u64,
 ) -> Result<String, String> {
+    lower_text_and_diagnostics(source, name, clang_flags, front_flags, region_budget).map(|(text, _)| text)
+}
+
+fn lower_text_and_diagnostics(
+    source: &Path,
+    name: &str,
+    clang_flags: &[&str],
+    front_flags: &[&str],
+    region_budget: u64,
+) -> Result<(String, String), String> {
     let dir = out_dir();
     let bitcode = dir.join(format!("{name}.bc"));
     let program = dir.join(format!("{name}.bn"));
@@ -113,7 +141,7 @@ pub fn lower_text_with_budget(
             .arg(&bitcode),
     )
     .unwrap_or_else(|e| panic!("clang failed on {source:?}:\n{e}"));
-    run_tool(
+    let (_, diagnostics) = tool_output(
         Command::new(front())
             .arg(&bitcode)
             .arg("-o")
@@ -122,7 +150,8 @@ pub fn lower_text_with_budget(
             .arg(format!("--stack-bytes={STACK_BYTES}"))
             .args(front_flags),
     )?;
-    Ok(std::fs::read_to_string(&program).unwrap_or_else(|e| panic!("cannot read {program:?}: {e}")))
+    let text = std::fs::read_to_string(&program).unwrap_or_else(|e| panic!("cannot read {program:?}: {e}"));
+    Ok((text, diagnostics))
 }
 
 /// Compiles `source` to bitcode with `clang_flags` and returns the file, named after `name`.

@@ -7,12 +7,18 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use bennett_exec::Outcome;
-use bennett_front_tests::{CLANG_FLAGS, CLANG_O2_FLAGS, lower_text, native_build, run_with_stats, write_c};
-use rand::{Rng, SeedableRng};
+use bennett_front_tests::{
+    CLANG_FLAGS, CLANG_O2_FLAGS, lower_text, lower_text_with_diagnostics, native_build, run_with_stats, write_c,
+};
+use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
+#[path = "qubit_differential/generator.rs"]
+mod generator;
+
 const SEED: u64 = 0x8719_6caa_251d_0f43;
-const SHORT_CASES: usize = 48;
+const SHORT_CASES: usize = 2 * MODES.len() * generator::EXTRA_SHAPES;
+const EXTRA_SEED_MASK: u64 = 0xe911_2825_44ba_3983;
 const LONG_TIME: Duration = Duration::from_secs(15 * 60);
 const MODES: [(&str, &[&str], &[&str]); 3] =
     [("o0", CLANG_FLAGS, &[]), ("o2", CLANG_O2_FLAGS, &[]), ("taint", CLANG_FLAGS, &["--taint-all"])];
@@ -25,6 +31,7 @@ typedef unsigned __int128 packet;
 #include <stdlib.h>
 #define PREPARE(n) ((unsigned char)prep)
 #define HBIT(q, b) ((void)0)
+#define XBIT(q, b) ((q) ^= 1U << (b))
 #define bennett_measure(p) (*(p))
 static uint64_t bennett_measure_bytes(const void *p, unsigned n) {
     const unsigned char *bytes = p;
@@ -36,6 +43,7 @@ static uint64_t bennett_measure_bytes(const void *p, unsigned n) {
 #include "bennett.h"
 #define PREPARE(n) 0
 #define HBIT(q, b) bennett_h(bennett_bit(&(q), (b)))
+#define XBIT(q, b) bennett_x(bennett_bit(&(q), (b)))
 #endif
 "#;
 const DRIVER: &str = r#"
@@ -54,10 +62,45 @@ struct Case {
     qubits: u32,
     trips: u64,
     packets: u64,
-    clean: bool,
+    expectation: Expectation,
+}
+
+enum Expectation {
+    Values { clean: bool },
+    Clean,
+    AppliedWrite(&'static str),
+    ConditionalWrite,
+    Retained(u32),
+}
+
+impl Expectation {
+    fn clean(&self) -> bool {
+        matches!(self, Self::Values { clean: true } | Self::Clean | Self::AppliedWrite(_))
+    }
+
+    fn check_diagnostics(&self, diagnostics: &str) -> Result<(), String> {
+        let expected = match self {
+            Self::AppliedWrite(object) => {
+                ["warning: the call of @write_cell depends on a qubit and is applied whole", object]
+            }
+            Self::Retained(bits) => [
+                "warning: the overwrite of qubit variable 'x'",
+                &format!("keeps the old value in {bits} qubits each time it runs"),
+            ],
+            Self::Values { .. } | Self::Clean | Self::ConditionalWrite => return Ok(()),
+        };
+        if !diagnostics.lines().any(|line| expected.iter().all(|part| line.contains(part))) {
+            return Err(format!("missing warning containing {expected:?}: {diagnostics:?}"));
+        }
+        Ok(())
+    }
 }
 
 impl Case {
+    fn values(body: String, qubits: u32, trips: u64, packets: u64, clean: bool) -> Self {
+        Self { body, qubits, trips, packets, expectation: Expectation::Values { clean } }
+    }
+
     fn native_table(&self, executable: &Path) -> Vec<Vec<u128>> {
         (0..self.packets)
             .map(|column| {
@@ -131,10 +174,18 @@ fn compare(
                     expected.get(input).map(|word| format!("{word:#034x}"))
                 ));
             }
-            if case.clean && stats.nonzero_releases != 0 {
+            if case.expectation.clean() && stats.nonzero_releases != 0 {
                 return Err(format!(
                     "packet {column}, measurement seed {seed}, register={input}: {} nonzero releases (weight {})",
                     stats.nonzero_releases, stats.nonzero_release_weight
+                ));
+            }
+            if let Expectation::Retained(bits) = case.expectation
+                && (stats.nonzero_releases, stats.leftover_qubits) != (1, bits)
+            {
+                return Err(format!(
+                    "packet {column}, measurement seed {seed}, register={input}: expected one release keeping {bits} qubits, got {} releases keeping {} qubits",
+                    stats.nonzero_releases, stats.leftover_qubits
                 ));
             }
             if !seen[input] {
@@ -155,22 +206,35 @@ fn compare(
 fn try_case(case: &Case, name: &str, mode: usize, results: &mut Results) -> Result<(), String> {
     let (_, cflags, flags) = MODES[mode];
     let source = write_c(name, &case.source());
-    let text = match lower_text(&source, name, cflags, flags) {
-        Ok(text) => text,
+    let (text, diagnostics) = match lower_text_with_diagnostics(&source, name, cflags, flags) {
+        Ok(lowered) => lowered,
         Err(error)
             if error.starts_with("not handled yet: ") || (error.starts_with("error: ") && error.contains(", at ")) =>
         {
             let reason = error.trim_end().rsplit_once(", at ").map_or(error.trim_end(), |(reason, _)| reason);
             *results.declined.entry(reason.to_owned()).or_default() += 1;
+            if matches!(case.expectation, Expectation::ConditionalWrite)
+                && !reason.contains("a call to @write_cell, which may write memory,")
+            {
+                return Err(format!("expected the refusal of a conditional writing call: {reason}"));
+            }
+            if matches!(case.expectation, Expectation::Clean | Expectation::AppliedWrite(_) | Expectation::Retained(_))
+            {
+                return Err(format!("expected the front to lower the program: {reason}"));
+            }
             return Ok(());
         }
         Err(error) => return Err(format!("front failed without a refusal: {error:?}")),
     };
     results.accepted += 1;
-    results.clean += usize::from(case.clean);
+    results.clean += usize::from(case.expectation.clean());
     let module = bennett_ir::load(&text).map_err(|error| format!("front emitted an invalid program: {error}"))?;
     let native = native_build(&source, name, &["-DNATIVE"]);
-    compare(case, &module, &case.native_table(&native), &mut results.compared)
+    compare(case, &module, &case.native_table(&native), &mut results.compared)?;
+    if matches!(case.expectation, Expectation::ConditionalWrite) {
+        return Err("accepted a call that may write memory under a qubit-dependent condition".to_owned());
+    }
+    case.expectation.check_diagnostics(&diagnostics)
 }
 
 fn prepare(qubits: u32) -> String {
@@ -204,105 +268,7 @@ fn measure_objects(body: &mut String, objects: &[(String, u32)]) -> u64 {
     packets.len() as u64
 }
 
-fn condition(random: &mut ChaCha8Rng, qubits: u32) -> String {
-    let mask = random.random_range(1..1_u32 << qubits);
-    format!("(q & {mask}U) {} 0", if random.random_bool(0.25) { "==" } else { "!=" })
-}
-
-fn generate(random: &mut ChaCha8Rng) -> Case {
-    let qubits = random.random_range(2..=3);
-    let mut body = String::new();
-    let mut locals = String::new();
-    let mut objects = Vec::new();
-    for i in 0..random.random_range(1..=3) {
-        let (bits, initial) = match random.random_range(0..4) {
-            0 => (8, u64::from(random.random::<u8>())),
-            1 => (16, u64::from(random.random::<u16>())),
-            2 => (32, u64::from(random.random::<u32>())),
-            _ => (64, random.random()),
-        };
-        let name = format!("cell{i}");
-        let storage = random.random_range(0..3);
-        let object = if storage == 2 {
-            let index = random.random_range(0..2);
-            let values = if index == 0 { format!("{initial}ULL, 11") } else { format!("11, {initial}ULL") };
-            writeln!(body, "static uint{bits}_t {name}[2] = {{{values}}};").expect("write array");
-            format!("{name}[{index}]")
-        } else {
-            let decl = if storage == 0 { &mut locals } else { &mut body };
-            writeln!(decl, "    uint{bits}_t {name} = {initial}ULL;").expect("write object");
-            name
-        };
-        objects.push((object, bits / 8));
-    }
-
-    let call = random.random_bool(0.3);
-    if call {
-        let expression = format!("((uint64_t)x * {}ULL) ^ {}ULL", random.random::<u32>(), random.random::<u64>());
-        writeln!(body, "__attribute__((noinline)) static uint64_t helper(unsigned x) {{").expect("write helper");
-        if random.random_bool(0.5) {
-            writeln!(body, "    volatile uint64_t scratch = {expression}; scratch ^= 9; return scratch;")
-                .expect("write helper");
-        } else {
-            writeln!(body, "    return {expression};").expect("write helper");
-        }
-        body.push_str("}\n");
-    }
-    body.push_str("packet entry(unsigned prep, unsigned n, unsigned column) {\n");
-    body.push_str(&locals);
-    body.push_str(&prepare(qubits));
-
-    // A straight write before the first region brings that object into the region already held.
-    let mut written = vec![false; objects.len()];
-    let mut clean = true;
-    if random.random_bool(0.45) {
-        let i = random.random_range(0..objects.len());
-        written[i] = true;
-        let expression = if call { "helper(q)" } else { "17ULL * q + 3" };
-        writeln!(body, "    {} = {expression};", objects[i].0).expect("write straight store");
-    } else if call {
-        let i = random.random_range(0..objects.len());
-        written[i] = true;
-        writeln!(body, "    {} = helper(q);", objects[i].0).expect("write applied call");
-    }
-
-    let regions = 1 + usize::from(random.random_bool(0.45));
-    for _ in 0..regions {
-        writeln!(body, "    if ({}) {{", condition(random, qubits)).expect("write condition");
-        let mut region_writes = Vec::new();
-        for _ in 0..random.random_range(1..=objects.len()) {
-            let i = random.random_range(0..objects.len());
-            // The clean check covers known starting values, including multiple writes in one
-            // region. Repeated writes across separate regions can require unbuilt cleanup.
-            clean &= !written[i];
-            region_writes.push(i);
-            let op = ["=", "=", "+=", "^=", "-="][random.random_range(0..5)];
-            let value = random.random::<u64>();
-            let expression =
-                if random.random_bool(0.6) { format!("{value}ULL + 3ULL * q") } else { format!("{value}ULL") };
-            writeln!(body, "        {} {op} {expression};", objects[i].0).expect("write update");
-            if random.random_bool(0.28) {
-                let bound = ["3U", "n", "(q & 3U)"][random.random_range(0..3)];
-                body.push_str("        #pragma clang loop unroll(disable)\n");
-                writeln!(
-                    body,
-                    "        for (unsigned j = 0; j < {bound}; ++j) {} ^= (j + 1U) * (q + 3U);",
-                    objects[i].0
-                )
-                .expect("write loop");
-            }
-        }
-        for i in region_writes {
-            written[i] = true;
-        }
-        body.push_str("    }\n");
-    }
-    let packets = measure_objects(&mut body, &objects);
-    Case { body, qubits, trips: random.random_range(0..=3), packets, clean }
-}
-
-// This fixed prefix precedes the known wrong results from a later conditional in-place
-// update and from conditional stores merged by LLVM. The ignored witnesses exercise both.
+// Each added recipe runs in every compiler mode in this fixed prefix.
 #[test]
 fn short_randomized_differential() {
     campaign("qubit-differential-short", SEED, Some(SHORT_CASES), None);
@@ -322,13 +288,14 @@ fn long_randomized_differential() {
 }
 
 fn campaign(name: &str, seed: u64, limit: Option<usize>, time: Option<Duration>) {
-    let mut random = ChaCha8Rng::seed_from_u64(seed);
+    let mut original = ChaCha8Rng::seed_from_u64(seed);
+    let mut extra = ChaCha8Rng::seed_from_u64(seed ^ EXTRA_SEED_MASK);
     let start = Instant::now();
     let mut results = Results::default();
     println!("seed={seed:#018x} case limit={limit:?} time limit={time:?}");
     while limit.is_none_or(|limit| results.generated < limit) && time.is_none_or(|time| start.elapsed() < time) {
         let index = results.generated;
-        let case = generate(&mut random);
+        let case = generator::generate(index, &mut original, &mut extra);
         let mode = index % MODES.len();
         results.generated += 1;
         let case_name = format!("{name}-{index}");
@@ -353,7 +320,7 @@ fn campaign(name: &str, seed: u64, limit: Option<usize>, time: Option<Duration>)
 }
 
 fn targeted(body: String, trips: u64, packets: u64, clean: bool) -> Case {
-    Case { body, qubits: 2, trips, packets, clean }
+    Case::values(body, 2, trips, packets, clean)
 }
 
 fn check_target(name: &str, case: &Case, refusal: Option<&str>) {
@@ -496,7 +463,7 @@ fn join_selects_the_value_of_the_path_taken() {
 
 // A reduced witness, in all three modes.
 fn check_witness(name: &str, qubits: u32, body: &str, refusal: Option<&str>) {
-    check_target(name, &Case { body: body.to_owned(), qubits, trips: 0, packets: 1, clean: true }, refusal);
+    check_target(name, &Case::values(body.to_owned(), qubits, 0, 1, true), refusal);
 }
 
 #[test]
@@ -661,5 +628,32 @@ packet entry(unsigned prep, unsigned n, unsigned column) {
 "#
         ),
         Some("whose result is not used, to a function that may write memory"),
+    );
+}
+
+// Class (iv): LLVM merges the stores to a at their join. The outlined value reads a,
+// but its emission site is after the exchange that moves a into its shadow.
+// See ControlWriter::collect and ControlAnalysis::memoryUnchangedBetween.
+#[test]
+#[ignore = "the front refuses the merged store after outlining a read of its own bytes"]
+fn merged_held_store_can_use_the_value_before_the_exchange() {
+    check_witness(
+        "merged-held-store-after-exchange",
+        2,
+        r#"
+uint8_t a = 43, b = 9;
+packet entry(unsigned prep, unsigned n, unsigned column) {
+    unsigned char q = PREPARE(prep);
+    HBIT(q, 0);
+    HBIT(q, 1);
+    if (!q) a = 5;
+    else { a ^= q; b += q; }
+    packet key = bennett_measure(&q);
+    packet first = bennett_measure_bytes(&a, 1);
+    packet second = bennett_measure_bytes(&b, 1);
+    return key | (first << 8) | (second << 16);
+}
+"#,
+        None,
     );
 }
