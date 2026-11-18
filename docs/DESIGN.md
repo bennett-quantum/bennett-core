@@ -38,14 +38,16 @@ construction of its own, `apply`. Terms used below:
   **purification**), and that is how the simulator stores it ("Releasing a register").
 - A **gate** is a unitary (a norm-preserving linear map) on the amplitudes; a gate that permutes basis
   configurations is a classical reversible gate.
-- A **step** is one executed instruction or terminator of the device program.
+- A **step** is one executed instruction or terminator of the device program. A **terminator** ends a
+  block of instructions by transferring control or finishing the current call or run.
 - A **named fault** is a way for ordinary code to end: a code from 1 to 31 (`crates/ir/src/fault.rs`), part of
   the result, never a crash.
 
 The model has three parts.
 
 1. **Ordinary code**: integer arithmetic, memory, jumps, calls, console output, stop. Every operation is a
-   total function of the machine state (its slots, frames, stack pointer, position, memory and output), with
+   total function of the machine state (named values stored in **slots**, active calls stored in **frames**,
+   the **stack pointer** below which the stack grows, the current position, memory and output), with
    named faults where C would be undefined. Ordinary code is defined on definite values: outside `apply` it
    holds them; under `apply` it runs for each definite value of the arguments, and a device carries all of
    those runs at once on qubits ("Why a device can carry it out", below).
@@ -129,28 +131,31 @@ straightforward expansion into ordinary code; none reads or acts on a qubit:
   program is worth having for its own sake, and "forward then back returns to the start" is one of the
   independent checks in the defence in depth: exactly in memory, slots, frames and output, and up to `f64`
   rounding in the amplitudes, since gates are undone by their inverses in floating point.
-- **The simulator’s quantum state** is a sparse map from basis configuration (the values of all live registers) to a complex
-  amplitude. Gates act on amplitudes. This is numerical (f64), and is evidence, not proof.
+- **The simulator’s quantum state** stores basis configurations with nonzero amplitudes, using `f64`
+  for each amplitude's real and imaginary parts. A stored configuration is a list of integers.
+  A **column** is one position in that list holding the bits of a register. Columns for discarded
+  qubits can remain alongside live columns. Tracing them out of the purification gives the live state.
 - **The simulator’s `measure`** samples with a seeded generator and keeps only the configurations that agree with the outcome,
   rescaled. It names a register, or `N` bits at an address (`measure iN [ADDR]`, "Qubits in memory").
 
 ### What a device carries out
 
-The executor's classical controller allocates zeroed wires, issues named gates with their target and
-controls, measures wires, discards them by partial trace or releases them after clearing them to zero.
-The controller assigns wire identities and keeps track of register handles and memory cells.
+The executor's classical controller allocates zeroed wires (individually addressed qubits), issues named
+gates with their target and controls, measures wires, discards them by partial trace or releases them
+after clearing them to zero. It keeps track of wire identities, register handles and bytes holding qubits.
 Measurement is the only operation that returns quantum data. The sparse simulator preserves its seeded
-sampling of a whole set of bits in one draw. Wire bindings allow a measurement or release to cross
-storage columns or address only part of a column. A partial discard keeps any needed purification
-without retiring the neighbouring live wires. A device can measure the individual qubits in a set.
+sampling of a whole set of bits in one draw. Each wire names a bit of a simulator column, so a measurement
+or release can span columns or select part of one. If the discarded part of a column is nonzero in any
+stored configuration, the simulator keeps it in an unnamed column. On a partial discard the remaining bits
+stay live in their original column. A device can measure the individual qubits in a set.
 
 `Executor::run_on` runs the controller on a supplied device for modules without `apply`.
 `Executor::run_on_with_apply` takes a gate compiler and invokes it when the controller reaches an
 `apply`. The simulator provides reversal, snapshots, configuration limits and release diagnostics.
 Its default mode evaluates applied functions directly. Its gate mode runs the emitted X, CNOT and
 Toffoli gates on batches of definite configurations, carrying each complex amplitude unchanged.
-It verifies that scratch is zero before installing the resulting state. To report faulting
-applies and their weights, it sums the squared amplitudes of the input configurations
+It verifies that scratch qubits (temporary circuit storage) are zero before installing the resulting state.
+To report faulting applies and their weights, it sums the squared amplitudes of the input configurations
 whose fault destination changed by XOR. Peak qubits include the circuit's private scratch
 while the circuit runs.
 
@@ -238,8 +243,7 @@ Control needs no special form at this level: `if (q) y = f(3)` is an `apply` who
 loops and calls nest: a step of a loop inside a loop inside a callee counts against the same `B` as any other.
 There is no bound per loop. `B` is an operand, so it may be an ordinary value computed at run time; like every
 ordinary value it is definite when the `apply` executes, so the circuit a device runs for this `apply` (below)
-is fixed before it starts. One clock covers all the steps. The gate emitter specialises each tick
-to the ordinary instructions that can be current, so nested loops add work within a tick.
+is fixed before it starts. One clock covers all the steps.
 
 **Why a device can carry it out.** Write the state of a run of `@f` as a string of `s` bits: its slots,
 frames, stack pointer, position, memory, and whether it is running, has returned a result or has stopped with
@@ -296,27 +300,38 @@ state, all returned to 0, that is at most a constant times `B` times (the size o
 gates. These are upper bounds for this construction; nothing here says a cheaper circuit cannot exist. The
 executor's step counts (`Stats`, `RegionCost`) count instructions, not gates; they are not a cost on a device.
 
-**Gate emitter.** The compiler in `emit` follows the applied
-function while its next instruction is definite. It represents each bit as a constant or the
-value of a qubit, and computes new bits by reversible gates into scratch qubits. It handles
-addition, subtraction, AND, XOR, shifts by a definite amount, multiplication and unsigned remainder,
-integer comparisons, select, casts, jumps, switches with a proved definite selector and return.
-A jump reads all its incoming values
-before assigning the block parameters. Entry stack overflow takes precedence over the budget
-test. Every successful instruction, including a jump or return, costs one step. The compiler
-XORs only the first result or fault code into its destination, then reverses every forward
-gate and releases the scratch in zero. A proved definite condition selects its jump during
-emission, even if inactive inputs have other values in the condition's slot.
+**Gate emitter.** A **program point** identifies a function copy (the applied entry or the function
+at a particular sequence of call sites), a block, and the index of its instruction or terminator.
+In the **definite prefix**, all definite argument assignments still running share one next point.
+The slot values there can still depend on qubits. A **proved constant** bit has the same value
+for every assignment reaching its point on every visit. The compiler can use a proved constant
+condition to select a jump even if other assignments have a different value in that slot.
+The compiler represents each bit as a constant, a qubit's value or its complement. It computes
+new bits by reversible gates into scratch qubits.
 
-A **program point** is a position naming the next instruction. At a qubit-dependent
-conditional jump the compiler tries to emit **control gates**. It combines the condition
-and its complement with the control that reached the jump. Each resulting control enables
-the gates of one alternative. If the alternatives rejoin, the compiler selects the slots
-from the enabled route and emits the continuation once. Its analysis looks for the nearest
-common continuation of the routes to a return, using only the selected target of each
-literal conditional or switch. If both routes could emit shared code before reaching a common stop, the compiler uses the step machine. This covers
-short-circuit tests whose early returns bypass the shared code. A loop whose test stays
-definite can use control gates for a choice in its body.
+The emitter's full instruction subset is `add`, `sub`, `mul`, `and`, `xor`, `urem`, shifts
+(`shl`, `lshr`, `ashr`) by a proved constant amount, `icmp`, `select`, `zext`, `sext`, `trunc`,
+`faddr`, unconditional and conditional `br`, `switch` with a proved constant selector, `ret`,
+and direct `call` and `call_indirect` as described under "Copied calls" below. Calls take integer
+parameters and may return an integer or no value. The [refusal table](#not-yet) gives the excluded
+operations and the limits on calls. A jump reads all incoming values before assigning block
+parameters. Entry stack overflow takes precedence over the budget test. Every successful instruction
+or terminator costs one step.
+
+In automatic mode, a qubit-dependent conditional jump can use **control gates**. A **guard** is a bit
+that is one exactly on the definite argument assignments that take a route. The compiler combines
+the incoming guard with the condition or its complement to form the two new guards. Each controls
+the gates for its route, and the route's slot values are meaningful only where its guard is one.
+If the routes rejoin, the compiler selects each assignment's slots from the enabled route and emits
+the continuation once. Its analysis looks for the nearest common continuation of the routes to a
+return, using only the selected target of each literal conditional or switch. If both routes could
+emit shared code before reaching a common stop, the compiler uses the step machine, which represents
+each assignment's current point with qubits. This covers short-circuit tests whose early returns bypass
+the shared code. A loop whose test stays definite can use control gates for a choice in its body.
+
+The compiler accumulates guarded returns and faults from different routes or steps. For each
+definite assignment, exactly one outcome guard is one. The circuit XORs that result or fault code
+into its destination, then reverses the computation and releases the scratch in zero.
 
 At a join the compiler keeps the smallest and largest possible step counts. If it can
 still charge the next instruction at the largest count, every enabled input may attempt it.
@@ -365,14 +380,18 @@ with divisor zero.
 
 A separate zero test makes a reached `urem` fault with `divide_by_zero` for exactly
 those inputs. A failed input writes only the fault code and stops before any later
-instruction. A successful attempt costs one step. At a conditional fault the step
-machine advances only the successful inputs, with the same remaining budget.
+instruction. A successful attempt costs one step. If the zero test depends on qubits in the
+definite prefix, the emitter records the fault under the zero-test guard and starts the step
+machine at the next point for the successful inputs, with one step spent.
+On a controlled route it records the fault under the route guard AND the zero test, then
+continues on that route with its guard narrowed to the successful inputs. In the step machine
+itself only the successful inputs receive a successor and the result write.
 
-**Copied calls.** Each sequence of direct call sites has its own copy of the callee's
-slots and program points. Before building gates, the compiler counts one unit for each
-copied slot, instruction and terminator, with a limit of 16,384 units for an expanded call
-graph. The same site can run repeatedly using that copy. A successful call charges one
-step, reserves eight bytes per slot below the caller, zeros the new frame and assigns the
+**Copied calls.** Each sequence of call sites has its own copy of the callee's slots and
+program points. Before building gates, the compiler counts one unit for each slot, instruction
+and terminator in the entry and each copy, including those in bypassed blocks. The same site
+can run repeatedly using its copy. A successful call charges one step, reserves eight bytes per
+slot below the caller, zeros the new frame and assigns the
 arguments. A return charges one step, writes the result to the caller and continues
 after that site. Both operations use the same budget as the applied entry.
 An invalid definite address or signature gives `bad_indirect` before checking space
@@ -388,29 +407,29 @@ between argument bits across all visits to the call site. A call result is unkno
 the caller's operand proof. A qubit-dependent continuation in a function with copied
 calls uses the step machine.
 
-The **step machine** carries one dispatch bit for each possible program point, set for
-the definite inputs whose next instruction is there. Each tick reads only the preceding
-frame. An instruction's dispatch bit controls its writes and which successor receives
-the active bit. Incoming edges to the same point are mutually exclusive, so XOR joins
-their dispatch bits. Returned inputs have no active point and keep their frozen result.
-At the budget boundary each still-active input gets the code `budget`.
+The **step machine** carries one **dispatch bit** per possible program point, set for the
+definite assignments whose next instruction or terminator is there. In one **tick** it evaluates
+the operation at each such point once from the slot values at the start of the tick. The
+dispatch bits guard the writes and successor points. Only after all reads does the machine
+install the new slot values and dispatch bits. Incoming edges to a point are mutually exclusive
+per assignment, so XOR joins their dispatch bits. A returned or faulted assignment stops
+dispatching. At the budget boundary each still-running assignment gets the code `budget`.
 
-The clock starts with the number of steps left after the definite prefix, counting the first
-qubit-dependent jump as the first tick. It is shared by all loops. The gates in a tick cover
-the possible instructions once each, so nesting adds instructions to the schedule. When no
-possible point remains, the machine can stop early.
+Dispatch uses the steps left after the definite prefix, with the first qubit-dependent jump
+itself counting as the first tick when it triggers dispatch. All loops share that budget.
+Nesting adds possible points to a tick. When no possible point remains, dispatch stops early.
 
-For one proved loop the compiler can use **saved decisions**, a sequence of bits recording
-whether each definite input is still running at each loop test. The proof recognises one
-conditional test with one straight route back to it and another to a return. Every instruction
-on the routes is total and uses neither memory nor calls. The proof counts the instructions
-on both routes, including their jumps and the return. At each test, a return is considered only
+When control gates encounter a loop without a proved pass count, the compiler can try
+**saved decisions**, bits recording whether each definite input is still running at each loop test.
+The entire function must have exactly one conditional jump, at the test. The test block and both
+routes may contain only `add`, `sub`, `and`, `xor`, `icmp`, `select`, `zext`, `sext`, `trunc`, `mul`
+with a literal operand, and shifts by a literal amount. The routes follow unconditional jumps, one back to the test
+and one to a return with a value. The proof counts both routes, including the test jump,
+the other jumps and the return. At each test, a return is considered only
 if its whole exit route fits in the steps left. A saved decision prevents an earlier return
 from contributing again. A still-running input with no remaining affordable return must
-exhaust the budget, because the skipped instructions cannot fault. Compilation reports
-the construction and its reason. A store needs memory in the step machine, even when
-its address and value are definite. A switch without a proved definite selector needs
-multiway dispatch in the step machine. Both are refused before any gates of the apply.
+exhaust the budget, because the skipped instructions cannot fault. Compilation reports the
+construction and its reason.
 
 A pass count proved from the program may be used at any nesting depth. For example, a
 logical right shift of a `w`-bit loop variable by one on each pass makes it zero after at most
@@ -523,28 +542,31 @@ to select instruction dispatch whenever control depends on qubits. These modes i
 machine's fault semantics, writing fault codes into the program's register. The reference
 simulator run is `bennett run --machine-meaning` with its default direct evaluation.
 
-Before consulting the budget, the emitter checks all instructions in the applied function.
-Shift amounts and switch selectors must fold to definite bits,
-including bits made constant by operations on register inputs. The first analysis starts
-at the entry block and joins the bits delivered by edges it can reach. When a conditional
-jump or switch folds to a constant, it follows the selected edge. If the condition
-becomes unknown on a later visit, every possible target can contribute. An instruction
-that cannot be folded with its known inputs contributes an unknown value. An input whose
-facts have yet to arrive is held pending. Additional analyses check operands in bypassed
-blocks. One follows the selected target of a literal conditional or switch. Another can
-follow every edge to recover constants supplied only on untaken edges. A third follows
-the selected target when a computed condition or switch selector folds to a constant.
-Any values still pending in these analyses become unknown and are propagated before a
-proof is accepted. Emission uses only the analysis from the entry block. Conflicting
-values across visits need a more precise analysis of definite control. Instruction
-refusals for given arguments apply at every budget, including zero.
+Before consulting the budget, the emitter checks every instruction and terminator in every
+planned function copy, including those in bypassed blocks. Shift amounts and switch selectors
+must fold to constants. In each operand analysis, a function copy has one global word of
+facts per slot, shared across blocks and visits. Within a block, an operand can use the word
+just computed there. An absent word means its facts are pending. The first word supplies the
+initial facts. When words meet, matching constants and matching argument bits survive. Conflicts
+and other computed qubit bits become unknown bits identified by slot and bit index.
+
+The main analysis starts at the entry and follows the selected edge when a conditional jump
+or switch folds to a constant, every possible edge when it is unknown, and waits when its
+operand is pending. Reachability can grow as more facts arrive. Validation can use three fallback
+passes for a missing constant only in a block the main analysis could not reach. Each starts with
+all blocks. The first follows just the selected edge for literal choices and all edges otherwise.
+The second follows all edges. The third follows the chosen edge for computed constants as in the
+main analysis. Each pass propagates unknown bits for any still-pending words
+before its proofs are accepted. Validation tries these proofs in order, keeping the earlier
+ones available. Emission uses the entry analysis alone. Refusals for given arguments apply
+at every budget, including zero.
 
 The controller resolves the targets and arguments first, keeping dangling and aliased
 handles as enclosing faults. It checks entry frame space, then builds and validates the
-whole circuit before sending an allocation or gate for that `apply`. A compiler refusal ends
-the run as a device error, identifies the applied function, operation and program point,
-and leaves the result and fault registers as supplied. The remaining constructions are
-listed under "Not yet".
+whole circuit before sending an allocation or gate for that `apply`. A compiler refusal stops
+the enclosing run and leaves the result and fault registers as supplied. An unsupported-operation
+error identifies the function, operation, block and instruction index, and the construction needed.
+Other compiler errors report an invalid circuit interface or exhausted wire address space.
 
 **Faults for some argument values.** With a fault register that starts at 0, measuring it afterwards finds a
 fault with probability equal to the total weight of the faulting configurations, and the state collapses onto
@@ -1634,15 +1656,17 @@ its own).
 
 | Refused inside emitted `apply` | Construction needed |
 |---|---|
-| `or`, division, signed remainder and shifts by qubit values | Remaining integer gates, including conditional arithmetic faults |
-| `switch` without a proved definite selector | Multiway dispatch in the step machine |
-| Recursive calls or a call expansion above 16,384 copied slots and program points | Shared call frames and return positions |
-| `call_indirect` without one proved definite address | Prove the target across visits or dispatch among supported addresses |
+| `or`, `udiv`, `sdiv`, `srem` | Remaining integer gates, including conditional arithmetic faults |
+| `shl`, `lshr`, `ashr` without a proved constant shift amount | Shifts controlled by the amount register |
+| `switch` without a proved constant selector | Multiway dispatch in the step machine |
+| Reachable recursive calls or adding a call copy that raises the total above 16,384 slots and program points | Shared call frames and return positions |
+| Reachable `call_indirect` without one proved constant address | Prove the target across visits or dispatch among supported addresses |
 | Calls with register signatures, `retaddr` | Register-valued call frames and code addresses |
 | `store` | Memory in the step machine |
 | `load`, `alloca`, `stacksave`, `stackrestore` | Private memory and stack state |
 | `setjmp`, `longjmp` | Private memory and non-local control transfer |
-| `fault`, `effect`, `exit`, quantum instructions and nested `apply` | Emit the named first fault on reaching the instruction |
+| `fault`, `effect`, `exit` | Emit the named first fault on reaching the instruction |
+| `qalloc`, `qfree`, gates (on registers or memory), `measure`, nested `apply` | Emit `quantum_in_region` on reaching the instruction |
 
 ## Open questions
 

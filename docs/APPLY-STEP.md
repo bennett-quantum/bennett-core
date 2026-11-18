@@ -5,21 +5,29 @@
 An argument to `apply @f(args) -> out, fault budget B` supplies an ordinary integer or the definite bits of a
 register, a group of qubits numbered from its low bit. [region.rs: input, apply] Validation requires exact integer
 parameter widths, an integer result matching `out` and a `fault` register at least five qubits wide. It rejects
-the same slot as both targets or as a target and an argument. [validate/function.rs: apply] [fault.rs: CODE_WIDTH]
+the same named value (slot) as both targets or as a target and an argument. [validate/function.rs: apply]
+[fault.rs: CODE_WIDTH]
 
 After the enclosing budget check, resolve `out`, `fault`, then the arguments in order. A stale handle, a stored
 identifier of a dead register, gives the enclosing run `dangling_register`. If the resolved targets coincide or
 either is an argument register, the enclosing run faults `qubit_alias`. Arguments may share a register.
 [executor.rs: step] [region.rs: region_operands, input] [quantum.rs: resolve]
 
-Start with the caller's frames, stack pointer, stack floor, and private flat byte memory. The circuit receives the
-caller’s memory image and the addresses of bytes that hold qubits. This set stays fixed because no quantum
-instruction can act inside. Stores only change private bytes. [region.rs: evaluate] [backward.rs: unwind]
-[forward.rs: execute_inst, store] [cells.rs: check_no_cells] The stack pointer is the address from which storage
-is reserved downwards. The floor is the highest static data end address or zero. [executor.rs: new] [module.rs: static_end]
+A function executes one block of instructions at a time. The block ends with a terminator that transfers
+control or finishes the run or call. A frame holds its function, program point (block and next instruction
+or terminator), entry stack pointer (before reservation), and a window of slots that store named values.
+[executor.rs: Frame, Executor, slot]
+The stack pointer is the address from which storage is reserved downwards. The floor is the highest end
+address of static data, or zero. [executor.rs: new] [module.rs: static_end]
 
-A frame holds its function, program point (block and next instruction or terminator), entry stack pointer
-(before reservation), and a window of slots, the storage for named values. [executor.rs: Frame, Executor, slot]
+Each definite run starts with the caller's frames, stack pointer, stack floor and byte memory. Its writes
+are private to that run. The addresses of bytes holding qubits stay fixed because quantum instructions fault
+before acting. Ordinary loads and stores at those bytes also fault. The direct simulator uses the caller's
+storage and undoes the changes in reverse order after each run. The gate emitter receives no run-time memory
+image or map of qubit addresses. For the stack checks it receives the entry fault, if any, and the number of
+bytes available below the entry frame if it fits. [region.rs: evaluate, apply_gates] [backward.rs: unwind]
+[forward.rs: execute_inst, store] [cells.rs: check_no_cells] [apply_device.rs: ApplyInput]
+
 Count one slot per named result and per function or block parameter, including unused ones. Integer slots hold
 1 to 128 bits. Register slots hold 64-bit handles to 1 to 64 qubits, so an applied result can be at most 64 bits
 while its intermediates may be wider. [reader/mod.rs: function, params, label] [reader/statement.rs: statement]
