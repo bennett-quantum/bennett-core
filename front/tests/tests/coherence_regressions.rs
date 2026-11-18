@@ -407,7 +407,7 @@ fn return_address_readout() -> state::Check {
     check
 }
 
-const CALLER_REPLAY_REFUSAL: &str = "not handled yet: replaying a computation that can observe its caller's position through a return address (route: keep the old value and release it, or pass the caller's identity as an argument)";
+const CALLER_REPLAY_REFUSAL: &str = "not handled yet: replaying a computation that can observe its caller's position through a return or stack address (route: keep the old value and release it, or pass the caller's identity as an argument)";
 
 #[test]
 fn clearing_a_predicate_by_replaying_a_return_address_is_refused() {
@@ -601,4 +601,44 @@ fn predicated_stores_cannot_repeat_the_same_caller_sensitive_call() {
         qubits: 1,
     }
     .refused(1, &[0, 0], CALLER_REPLAY_REFUSAL);
+}
+
+#[test]
+fn repeated_frame_and_local_addresses_are_refused() {
+    for (name, helper) in [
+        (
+            "address-of-frame",
+            "__attribute__((noinline)) uintptr_t f(uint8_t q) { return q ? (uintptr_t)__builtin_frame_address(0) : 0; }",
+        ),
+        (
+            "integer-address-of-local",
+            "__attribute__((noinline)) uintptr_t f(uint8_t q) { int local; return q ? (uintptr_t)&local : 0; }",
+        ),
+    ] {
+        Program {
+            name,
+            declarations: helper,
+            body: r#"
+    ZBIT(q, 1);
+    uintptr_t address = f(q);
+    volatile uint64_t x = address, y = address + n;
+    uint64_t first = READ(x);
+    uint64_t second = READ(y);
+    return (first + n) ^ second;
+"#,
+            qubits: 1,
+        }
+        .refused(1, &[0, 0], CALLER_REPLAY_REFUSAL);
+    }
+}
+
+#[test]
+fn replay_of_a_helper_with_private_stack_storage_clears_the_word() {
+    Program {
+        name: "caller-independent-private-stack",
+        declarations: "__attribute__((noinline)) uintptr_t f(uint8_t q) { volatile uintptr_t v = 3u * q; return v; }",
+        body: &RETADDR_USE.replace("QUALIFIER", "volatile"),
+        qubits: 1,
+    }
+    .agrees(0, &[256, 257], &return_address_readout(), 0);
 }

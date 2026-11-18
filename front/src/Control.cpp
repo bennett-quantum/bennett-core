@@ -808,7 +808,7 @@ bool ControlWriter::sliceable(const Value *value) const {
     const Function *callee = call->getCalledFunction();
     // An ordinary caller-sensitive result is already available at its
     // original call site, including when --taint-all is in use.
-    return module.isCoherent(callee) && !canReadReturnAddress(*callee);
+    return module.isCoherent(callee) && !canObserveCallerPosition(*callee);
   }
   return isa<BinaryOperator>(inst) || isa<ICmpInst>(inst) || isa<SelectInst>(inst) || isa<ZExtInst>(inst) ||
          isa<SExtInst>(inst) || isa<TruncInst>(inst) || isa<FreezeInst>(inst);

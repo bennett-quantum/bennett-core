@@ -483,7 +483,7 @@ an empty device program (`front/src/main.cpp`, `readInput`).
   (x is 0) then `apply @g -> x`; where `g` reads x, as `if (r) x = 7` stores `r ? x : 7`, that read is `v`'s
   computation. A load that read a known ordinary value (with `--taint-all` every load is treated as a qubit
   read) is given that value. Nothing is kept and no warning is written; the dataflow's third kind of fact,
-  `Computed`, records `v` (`Taint.h`). A replay that can read a return address in the callee or its
+  `Computed`, records `v` (`Taint.h`). A replay that can observe a return or stack address in the callee or its
   callees is refused (see "Return addresses").
 - **A one-bit update `x = e(x)` with `e(1) == e(0) ^ 1`** is `x ^= e(0)`. The identity is proved by LLVM's
   simplifier on two clones of `e`, or, where `e` reads no ordinary value and the other qubit variables it
@@ -990,7 +990,7 @@ under `apply` they run on the private copy and are undone with it.
   into a qubit variable or controls a gate, not where the call is. So the memory the call reads must be the
   same there (`ControlAnalysis::memoryUnchangedBetween`; refused by name otherwise), and a value used several
   times can be computed again for each use from the same memory. This also requires independence from
-  the caller's position. A replay that can read a return address is refused (see "Return addresses").
+  the caller's position. A replay that can observe a return or stack address is refused (see "Return addresses").
   The applied function's remaining loads and its callees' accesses are both checked. Loads moved before
   the region are passed in by value ("Conditional jumps, joins and loops" above).
   The memory a call reads is what it, and the functions it calls, may reach outside their own frames
@@ -1023,7 +1023,7 @@ under `apply` they run on the private copy and are undone with it.
   must survive, so only calls of functions that read memory at most are treated as computable coherently.
   A moved ordinary call does not count as one of "two calls that depend on a qubit". It runs before
   anything that depends on a qubit, using the memory present at its own site. Ordinary calls that can
-  read a return address are evaluated at their original site and passed in by value.
+  observe a return or stack address are evaluated at their original site and passed in by value.
 
 The acceptance target of the rule is SQLite (`experiments/sqlite-on-device`, stage 4): C entries that set a
 database up with ordinary code and then apply one query whose key depends on a three-qubit register; each of
@@ -1140,11 +1140,14 @@ one instruction that reads the frames:
 
 The front writes `retaddr N` for `llvm.returnaddress(N)` in the default address space. A single applied
 evaluation can read a return address. When the front would evaluate the same computation at another
-site, it refuses a return-address read in the function or anywhere it can call. An unresolved indirect
+site, it refuses an observation of a return or stack address in the function or anywhere it can call. An unresolved indirect
 call may reach any function in the module. This check also covers clearing old words, inverting an
 update, clearing the condition of a gate or gate loop, and repeating a region for several results.
 When predication copies a region for separate conditional operations, the front tracks each source
 call through the copies it emits. A caller-sensitive call can appear in only one of those copies.
+A frame address, including `__builtin_frame_address(0)`, can change with the caller's stack use.
+Converting a pointer to an integer is refused in a replay unless its underlying address is known
+to be static or null. A local used only as private storage can still be replayed.
 A caller's position can change even while the arguments and memory stay the same. To support an
 overwrite in this case, keep and release the old word explicitly, or pass the caller's identity as a
 separate argument to the computation that is replayed.

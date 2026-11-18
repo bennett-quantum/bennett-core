@@ -4,8 +4,10 @@
 
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/Analysis/ValueTracking.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/Module.h>
 
@@ -19,7 +21,29 @@ const Function *directTarget(const CallBase &call) {
   return dyn_cast<Function>(call.getCalledOperand()->stripPointerCastsAndAliases());
 }
 
-bool canReadReturnAddress(const Function *function, const Module &module) {
+bool exposesStackAddress(const Instruction &inst) {
+  if (const auto *address = dyn_cast<PtrToIntInst>(&inst)) {
+    SmallVector<const Value *, 4> objects;
+    getUnderlyingObjects(address->getPointerOperand(), objects);
+    // A pointer loaded from memory or passed to a callee can name a local
+    // in an applied frame. Only known static addresses are independent.
+    return objects.empty() || !all_of(objects, [](const Value *object) {
+             return isa<GlobalValue, ConstantPointerNull>(object);
+           });
+  }
+  const auto *intrinsic = dyn_cast<IntrinsicInst>(&inst);
+  if (!intrinsic || intrinsic->getIntrinsicID() != Intrinsic::stacksave) {
+    return false;
+  }
+  // The front lowers frameaddress(0) to stacksave. Saving the stack solely
+  // to restore it does not expose the address of the frame.
+  return any_of(intrinsic->users(), [](const User *user) {
+    const auto *use = dyn_cast<IntrinsicInst>(user);
+    return !use || (use->getIntrinsicID() != Intrinsic::stackrestore && !isa<DbgInfoIntrinsic>(use));
+  });
+}
+
+bool canObserveCallerPosition(const Function *function, const Module &module) {
   SmallPtrSet<const Function *, 32> seen;
   SmallVector<const Function *, 8> work;
   bool consideredIndirectTargets = false;
@@ -45,10 +69,13 @@ bool canReadReturnAddress(const Function *function, const Module &module) {
     if (!seen.insert(next).second) {
       continue;
     }
-    if (next->getIntrinsicID() == Intrinsic::returnaddress) {
+    if (next->getIntrinsicID() == Intrinsic::returnaddress || next->getIntrinsicID() == Intrinsic::frameaddress) {
       return true;
     }
     for (const Instruction &inst : instructions(*next)) {
+      if (exposesStackAddress(inst)) {
+        return true;
+      }
       const auto *call = dyn_cast<CallBase>(&inst);
       if (!call) {
         continue;
@@ -64,8 +91,8 @@ bool canReadReturnAddress(const Function *function, const Module &module) {
 }
 
 void requireCallerIndependent(const Function *function, const Module &module, const Instruction &at) {
-  if (canReadReturnAddress(function, module)) {
-    notHandled("replaying a computation that can observe its caller's position through a return address "
+  if (canObserveCallerPosition(function, module)) {
+    notHandled("replaying a computation that can observe its caller's position through a return or stack address "
                "(route: keep the old value and release it, or pass the caller's identity as an argument)",
                &at);
   }
@@ -73,7 +100,7 @@ void requireCallerIndependent(const Function *function, const Module &module, co
 
 } // namespace
 
-bool canReadReturnAddress(const Function &function) { return canReadReturnAddress(&function, *function.getParent()); }
+bool canObserveCallerPosition(const Function &function) { return canObserveCallerPosition(&function, *function.getParent()); }
 
 void requireCallerIndependent(const Function &function, const Instruction &at) {
   requireCallerIndependent(&function, *function.getParent(), at);
