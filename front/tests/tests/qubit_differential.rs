@@ -451,23 +451,55 @@ fn restrict_copy_to_an_offset_or_reloaded_in_a_loop() {
     }
 }
 
+// A value selected where control flow joins after code under a qubit, by the edge the code left on: constants,
+// values from before the code, a merged store, and a later update that reads it, in all three modes. The
+// objects are written before the gates, so that LLVM keeps the conditional stores as control flow.
+#[test]
+fn join_selects_the_value_of_the_path_taken() {
+    for (name, globals, locals, code, objects, trips) in [
+        ("join-later-add", "", "uint16_t a = 0;", "if (q & 2) a = 2;\n    if (q & 1) a += q;", vec![("a", 2)], 0),
+        (
+            "join-earlier-values",
+            "",
+            "uint16_t a = n + 5;",
+            "if (q & 2) a = n;\n    if (q & 1) a += q;",
+            vec![("a", 2)],
+            3,
+        ),
+        (
+            "join-merged-store",
+            "",
+            "uint8_t a = 1, b = 0;",
+            "if (!(q & 1)) { a = 2; b += 3; }\n    if (q & 1) a = 4;",
+            vec![("a", 1), ("b", 1)],
+            0,
+        ),
+        (
+            "join-three-ways",
+            "uint32_t g;\n",
+            "g = n;",
+            "if (q & 1) g = 3; else if (q & 2) g = 5 * n;\n    if (q != 2) g += q;",
+            vec![("g", 4)],
+            2,
+        ),
+    ] {
+        let mut body = format!(
+            "{globals}packet entry(unsigned prep, unsigned n, unsigned column) {{\n    {locals}\n{}    {code}\n",
+            prepare(2)
+        );
+        let objects: Vec<(String, u32)> =
+            objects.into_iter().map(|(object, bytes)| (object.to_owned(), bytes)).collect();
+        let packets = measure_objects(&mut body, &objects);
+        check_target(name, &targeted(body, trips, packets, false), None);
+    }
+}
+
+// A reduced witness, in all three modes.
 fn check_witness(name: &str, qubits: u32, body: &str, refusal: Option<&str>) {
-    let case = Case { body: body.to_owned(), qubits, trips: 0, packets: 1, clean: true };
-    let source = write_c(name, &case.source());
-    let text = match lower_text(&source, name, CLANG_FLAGS, &[]) {
-        Ok(text) => text,
-        Err(error) => {
-            assert!(refusal.is_some_and(|reason| error.contains(reason)), "{name}: {error}");
-            return;
-        }
-    };
-    let module = bennett_ir::load(&text).expect("valid program");
-    let native = native_build(&source, name, &["-DNATIVE"]);
-    compare(&case, &module, &case.native_table(&native), &mut 0).unwrap_or_else(|error| panic!("{name}: {error}"));
+    check_target(name, &Case { body: body.to_owned(), qubits, trips: 0, packets: 1, clean: true }, refusal);
 }
 
 #[test]
-#[ignore = "the second region can add to the value from a write that did not run"]
 fn later_region_adds_to_the_current_value() {
     check_witness(
         "later-region-add",
@@ -490,7 +522,6 @@ packet entry(unsigned prep, unsigned n, unsigned column) {
 }
 
 #[test]
-#[ignore = "the front loses the value selected by the two conditional stores"]
 fn merged_store_keeps_both_conditional_values() {
     check_witness(
         "merged-conditional-store",

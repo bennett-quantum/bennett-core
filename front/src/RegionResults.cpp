@@ -510,7 +510,13 @@ void RegionWhole::removeStores() {
     readAfterChange.erase(inst);
     inst->eraseFromParent();
   }
-  bool liveOut = false;
+  // The region passes on a value when one of its instructions is used after it, and when a phi where it ends
+  // selects by the edge it leaves on: that phi's value is decided by the path through the region even where
+  // every incoming value is a constant or defined before the region. The exit (`after`) is entered from the
+  // region's blocks only, so each of its phis that does not take one value on every edge is such a phi (the
+  // unused ones are gone, run()).
+  bool liveOut = std::any_of(exit->phis().begin(), exit->phis().end(),
+                             [](PHINode &phi) { return phi.hasConstantValue() == nullptr; });
   for (BasicBlock *block : blocks) {
     for (Instruction &inst : *block) {
       for (User *user : inst.users()) {

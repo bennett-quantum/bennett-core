@@ -462,12 +462,18 @@ code leaves for later code that was read from a variable after the code wrote it
 predication refuses it. clang `-O2`'s own vectoriser can turn an accumulation into vector lanes, which the front
 does not follow; the tests disable it in that loop (`front/tests/c/region_whole.c`).
 
+A value the code leaves for later code is one of its results even when no instruction of the code computes
+it: a value selected where the code ends by the edge it leaves on (an LLVM phi, a *join*, of constants or of
+values from before the code, as for `if (q) a = 2;` when LLVM keeps `a` in a register), whose value is decided
+by the path the code took. Such a join, like any value of the code used after it, keeps the code's control flow
+in place for the computation that uses it (below), and a store LLVM moved to the join is a store of that value.
+
 Debt: a value the code computes that later code uses in any other way (a plain local assigned in a loop under
-a qubit and used in arithmetic after it) is computed again, by a copy of the code inside the `apply` of the
-computation that uses it: the result is right, but that `apply` runs the code and its loops once more. Route:
-make the value a field of the code's results, held in a fresh qubit variable until its last use, then cleared by
-the same results computed again while their arguments are unchanged, or kept as an overwrite keeps its old
-value.
+a qubit and used in arithmetic after it, or such a join) is computed again, by a copy of the code inside the
+`apply` of the computation that uses it: the result is right, but that `apply` runs the code and its loops once
+more. Route: make the value a field of the code's results, held in a fresh qubit variable until its last use,
+then cleared by the same results computed again while their arguments are unchanged, or kept as an overwrite
+keeps its old value.
 
 Acceptance (`front/tests/tests/region_whole.rs`): two nested loops whose trip counts depend on a three-qubit
 register `x`, XORing into two variables of values the front does not know and counting into a third, agree
@@ -478,6 +484,10 @@ counter's stores are among those LLVM moves out of the loops). The smallest budg
 at 150 the longest runs fault, the others do not. Results of 64 + 32 + 16 + 8 bits from one loop take one
 applied function, one `apply` into the 64-bit variable and one pair for the other three, and agree with a hand
 computation for every value of a three-qubit register in all three modes.
+`front/tests/tests/qubit_differential.rs` compares seeded short C programs (conditional stores, updates, short
+loops and helpers under a two- or three-qubit register) with native C for every definite value of the
+register; among its fixed cases, joins of constants and of values from before the code, a store LLVM merged at
+a join, and a later update that reads a join agree with C in all three modes.
 
 **Gate loops.** A loop with gates under a condition that depends on a qubit stays a loop of the control
 program, run as written: the circuit model needs a definite list of gates, and the loop's trip count is an
