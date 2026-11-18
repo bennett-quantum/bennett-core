@@ -3,15 +3,41 @@
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
+use bennett_emit::{CountingDevice, LowerControls, seeded_bits};
 use bennett_exec::{Executor, Options, Outcome, ReverseError, RunError, Snapshot, Stats};
 use bennett_ir::{Const, FuncId, Type, ValidModule};
 
-use crate::{CliError, RunArgs};
+use crate::{CliError, DeviceKind, RunArgs};
 
 pub(crate) fn run(args: &RunArgs) -> Result<ExitCode, CliError> {
     let module = crate::load(&args.file)?;
     let entry = module.function_named(&args.entry).ok_or_else(|| CliError::NoEntry(args.entry.clone()))?;
     let values = entry_arguments(&module, entry, &args.args)?;
+    match args.device {
+        DeviceKind::Simulator => run_simulator(&module, entry, &values, args),
+        DeviceKind::Count => run_count(&module, entry, &values, args),
+    }
+}
+
+fn run_count(module: &ValidModule, entry: FuncId, values: &[u64], args: &RunArgs) -> Result<ExitCode, CliError> {
+    if args.reverse {
+        return Err(CliError::CountReverse);
+    }
+    let mut device = LowerControls::new(CountingDevice::new(seeded_bits(args.seed)));
+    let run = Executor::run_on(module, entry, values, args.budget, &mut device)?;
+    report_result(module, entry, run.outcome, 0.0);
+    report_io(&run.tape, run.steps);
+    let counts = device.inner().counts();
+    println!("measurement outcomes: synthetic bits (seed {})", args.seed);
+    println!("one-qubit gates: {}", counts.one_qubit);
+    println!("two-qubit gates: {}", counts.two_qubit);
+    println!("Toffoli gates: {}", counts.toffoli);
+    println!("peak qubits: {}", counts.peak_qubits);
+    println!("depth: {}", counts.depth);
+    Ok(exit_status(run.outcome))
+}
+
+fn run_simulator(module: &ValidModule, entry: FuncId, values: &[u64], args: &RunArgs) -> Result<ExitCode, CliError> {
     let options = Options {
         budget: args.budget,
         max_configurations: args.max_configurations,
@@ -20,24 +46,30 @@ pub(crate) fn run(args: &RunArgs) -> Result<ExitCode, CliError> {
         allow_region_faults: args.allow_region_faults,
         machine_meaning: args.machine_meaning,
     };
-    let mut executor = Executor::new(&module, entry, &values, options)?;
+    let mut executor = Executor::new(module, entry, values, options)?;
     let entry_state = executor.snapshot();
 
     let started = Instant::now();
     let outcome = executor.run();
     let forward = Timed { steps: executor.stats().steps, time: started.elapsed() };
     let stats = executor.stats();
-    report_outcome(&module, entry, outcome, executor.tape(), &stats);
+    report_result(module, entry, outcome, stats.region_fault_max_weight);
+    report_simulator_diagnostics(outcome, &stats);
+    report_io(executor.tape(), stats.steps);
 
     let reverse = args.reverse.then(|| reverse_and_report(&mut executor, &entry_state, &stats));
     if args.stats {
         report_stats(&stats, forward, reverse.flatten());
     }
-    Ok(match outcome {
+    Ok(exit_status(outcome))
+}
+
+fn exit_status(outcome: Outcome) -> ExitCode {
+    match outcome {
         Outcome::Returned(_) => ExitCode::SUCCESS,
         Outcome::Faulted(_) | Outcome::Stopped(RunError::RegionFault { .. }) => ExitCode::FAILURE,
         Outcome::Stopped(_) => ExitCode::from(2),
-    })
+    }
 }
 
 /// The entry arguments as canonical values of the parameter widths.
@@ -58,7 +90,7 @@ fn entry_arguments(module: &ValidModule, entry: FuncId, literals: &[i128]) -> Re
     function.params.iter().zip(literals).enumerate().map(convert).collect()
 }
 
-fn report_outcome(module: &ValidModule, entry: FuncId, outcome: Outcome, tape: &[u8], stats: &Stats) {
+fn report_result(module: &ValidModule, entry: FuncId, outcome: Outcome, region_fault_weight: f64) {
     match outcome {
         Outcome::Returned(None) => println!("result: none"),
         Outcome::Returned(Some(value)) => match module.function(entry).result {
@@ -73,10 +105,13 @@ fn report_outcome(module: &ValidModule, entry: FuncId, outcome: Outcome, tape: &
             "region fault: apply @{} faulted ({fault}) on {faulting} of {configurations} basis configurations, weight {:e}; \
              the program could not detect this with certainty (--allow-region-faults lets the run go on)",
             module.function(callee).name,
-            stats.region_fault_max_weight
+            region_fault_weight
         ),
         Outcome::Stopped(error) => println!("stopped: {error}"),
     }
+}
+
+fn report_simulator_diagnostics(outcome: Outcome, stats: &Stats) {
     if !matches!(outcome, Outcome::Stopped(RunError::RegionFault { .. })) && stats.region_faults > 0 {
         println!(
             "region faults (allowed): {} apply executions faulted for some argument value, total weight {:e}",
@@ -90,10 +125,13 @@ fn report_outcome(module: &ValidModule, entry: FuncId, outcome: Outcome, tape: &
             stats.nonzero_releases, stats.nonzero_release_weight, stats.leftover_qubits
         );
     }
+}
+
+fn report_io(tape: &[u8], steps: u64) {
     if !tape.is_empty() {
         println!("console: \"{}\"", tape.escape_ascii());
     }
-    println!("steps: {}", stats.steps);
+    println!("steps: {steps}");
 }
 
 /// Reverses the run and reports whether the state returned to `entry_state`; returns the timing.

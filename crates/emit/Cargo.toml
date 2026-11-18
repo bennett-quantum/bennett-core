@@ -1,0 +1,15 @@
+[package]
+name = "bennett-emit"
+version = "0.1.0"
+description = "Quantum device counting and gate lowering for Bennett"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bennett-ir.workspace = true
+bennett-exec.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+
+[lints]
+workspace = true

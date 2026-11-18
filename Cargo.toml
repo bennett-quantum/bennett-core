@@ -1,7 +1,7 @@
 [workspace]
-members = ["crates/ir", "crates/exec", "crates/cli", "front/tests"]
+members = ["crates/ir", "crates/exec", "crates/emit", "crates/cli", "front/tests"]
 # The front end's tests need LLVM and clang; `cargo test` alone stays fast and needs neither.
-default-members = ["crates/ir", "crates/exec", "crates/cli"]
+default-members = ["crates/ir", "crates/exec", "crates/emit", "crates/cli"]
 resolver = "3"
 
 [workspace.package]
@@ -11,6 +11,7 @@ publish = false
 [workspace.dependencies]
 bennett-ir = { path = "crates/ir" }
 bennett-exec = { path = "crates/exec" }
+bennett-emit = { path = "crates/emit" }
 clap = { version = "4.5", features = ["derive"] }
 fixedbitset = "0.5"
 logos = "0.15"

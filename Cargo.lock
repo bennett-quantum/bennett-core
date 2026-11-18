@@ -77,10 +77,21 @@ checksum = "3a8241f3ebb85c056b509d4327ad0358fbbba6ffb340bf388f26350aeda225b1"
 name = "bennett"
 version = "0.1.0"
 dependencies = [
+ "bennett-emit",
  "bennett-exec",
  "bennett-ir",
  "clap",
  "thiserror",
+]
+
+[[package]]
+name = "bennett-emit"
+version = "0.1.0"
+dependencies = [
+ "bennett-exec",
+ "bennett-ir",
+ "rand",
+ "rand_chacha",
 ]
 
 [[package]]
