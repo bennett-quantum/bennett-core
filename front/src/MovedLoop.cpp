@@ -5,6 +5,7 @@
 #include <llvm/Analysis/CFG.h>
 #include <llvm/Analysis/LoopInfo.h>
 #include <llvm/Analysis/ValueTracking.h>
+#include <llvm/IR/ConstantRange.h>
 #include <llvm/IR/Dominators.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/IntrinsicInst.h>
@@ -21,10 +22,68 @@ namespace {
 
 constexpr const char *tableRoute = " (route: compute the ordinary part inside one applied function for the table of control bits)";
 
-// A step of one in either direction visits every value at the device's wrapping integer width.
-// A comparison with a loop-invariant bound must eventually leave, even for a start value
-// that only reaches this loop with its gates disabled.
-bool exitsWithCounter(const Loop &loop, BasicBlock &exit, BasicBlock &latch) {
+// Use only comparisons that still execute in the moved code. Their ordinary
+// values are the device values, so this proof does not use LLVM poison flags.
+bool conditionProves(const Value *condition, bool onTrue, CmpInst::Predicate wanted, const Value *left,
+                     const Value *right, ConstantRange &possible) {
+  if (const auto *test = dyn_cast<ICmpInst>(condition)) {
+    auto predicate = onTrue ? test->getPredicate() : test->getInversePredicate();
+    const Value *compared = test->getOperand(1);
+    if (test->getOperand(1) == left) {
+      predicate = CmpInst::getSwappedPredicate(predicate);
+      compared = test->getOperand(0);
+    } else if (test->getOperand(0) != left) {
+      return false;
+    }
+    if (isa<ConstantInt>(right)) {
+      if (const auto *constant = dyn_cast<ConstantInt>(compared)) {
+        possible = possible.intersectWith(ConstantRange::makeExactICmpRegion(predicate, constant->getValue()));
+      }
+    }
+    return compared == right && CmpInst::isImpliedTrueByMatchingCmp(predicate, wanted);
+  }
+  const auto *op = dyn_cast<BinaryOperator>(condition);
+  return op && op->getOpcode() == (onTrue ? Instruction::And : Instruction::Or) &&
+         (conditionProves(op->getOperand(0), onTrue, wanted, left, right, possible) ||
+          conditionProves(op->getOperand(1), onTrue, wanted, left, right, possible));
+}
+
+bool entryProves(const Loop &loop, const Loop &root, const DominatorTree &dominators, CmpInst::Predicate predicate,
+                 const Value *left, const Value *right) {
+  if (const auto *l = dyn_cast<ConstantInt>(left)) {
+    if (const auto *r = dyn_cast<ConstantInt>(right)) {
+      return ICmpInst::compare(l->getValue(), r->getValue(), predicate);
+    }
+    std::swap(left, right);
+    predicate = CmpInst::getSwappedPredicate(predicate);
+  }
+  // Combine facts from successive entry tests. A peeled loop starting at 2, for
+  // example, may enter only after the bound was ruled out as 0, 1 and 2.
+  ConstantRange possible = ConstantRange::getFull(left->getType()->getIntegerBitWidth());
+  const BasicBlock *header = loop.getHeader();
+  for (auto *node = dominators.getNode(header)->getIDom(); node; node = node->getIDom()) {
+    const BasicBlock *block = node->getBlock();
+    if (!root.contains(block) && block != root.getLoopPredecessor()) {
+      break;
+    }
+    const auto *jump = dyn_cast<BranchInst>(block->getTerminator());
+    if (jump && jump->isConditional() && jump->getSuccessor(0) != jump->getSuccessor(1)) {
+      for (bool onTrue : {true, false}) {
+        if (dominators.dominates(BasicBlockEdge(block, jump->getSuccessor(onTrue ? 0 : 1)), header) &&
+            conditionProves(jump->getCondition(), onTrue, predicate, left, right, possible)) {
+          return true;
+        }
+      }
+    }
+  }
+  if (const auto *constant = dyn_cast<ConstantInt>(right)) {
+    return ConstantRange::makeExactICmpRegion(predicate, constant->getValue()).contains(possible);
+  }
+  return false;
+}
+
+bool exitsWithCounter(const Loop &loop, const Loop &root, const DominatorTree &dominators,
+                      BasicBlock &exit, BasicBlock &latch) {
   const auto *jump = dyn_cast<BranchInst>(exit.getTerminator());
   if (!jump || !jump->isConditional()) {
     return false;
@@ -44,8 +103,7 @@ bool exitsWithCounter(const Loop &loop, BasicBlock &exit, BasicBlock &latch) {
     std::swap(counter, bound);
     predicate = CmpInst::getSwappedPredicate(predicate);
   }
-  if (!counter->getType()->isIntegerTy() || !loop.isLoopInvariant(bound) ||
-      !(ICmpInst::isEquality(predicate) || ICmpInst::isStrictPredicate(predicate))) {
+  if (!counter->getType()->isIntegerTy() || !loop.isLoopInvariant(bound)) {
     return false;
   }
   for (const PHINode &phi : loop.getHeader()->phis()) {
@@ -53,9 +111,36 @@ bool exitsWithCounter(const Loop &loop, BasicBlock &exit, BasicBlock &latch) {
     if (counter != &phi && counter != next) {
       continue;
     }
-    if (match(next, m_c_Add(m_Specific(&phi), m_One())) ||
-        match(next, m_c_Add(m_Specific(&phi), m_AllOnes())) ||
-        match(next, m_Sub(m_Specific(&phi), m_One()))) {
+    bool increments = match(next, m_c_Add(m_Specific(&phi), m_One()));
+    bool decrements = !increments && (match(next, m_c_Add(m_Specific(&phi), m_AllOnes())) ||
+                                      match(next, m_Sub(m_Specific(&phi), m_One())));
+    if (!increments && !decrements) {
+      continue;
+    }
+    const Value *start = phi.getIncomingValueForBlock(loop.getLoopPredecessor());
+    if (predicate == ICmpInst::ICMP_NE) {
+      // An equality exit must be reachable without first wrapping the counter.
+      if (entryProves(loop, root, dominators, ICmpInst::ICMP_ULT,
+                      increments ? start : bound, increments ? bound : start)) {
+        return true;
+      }
+      continue;
+    }
+    bool risesToExit = increments && (predicate == ICmpInst::ICMP_ULT || predicate == ICmpInst::ICMP_SLT);
+    bool fallsToExit = decrements && (predicate == ICmpInst::ICMP_UGT || predicate == ICmpInst::ICMP_SGT);
+    if (!risesToExit && !fallsToExit) {
+      continue;
+    }
+    // A latch testing the next value must be safe even on the first step,
+    // before the comparison has excluded the extreme value.
+    if (counter == &phi) {
+      return true;
+    }
+    unsigned width = phi.getType()->getIntegerBitWidth();
+    bool isSigned = ICmpInst::isSigned(predicate);
+    APInt extreme = increments ? (isSigned ? APInt::getSignedMaxValue(width) : APInt::getMaxValue(width))
+                               : (isSigned ? APInt::getSignedMinValue(width) : APInt::getMinValue(width));
+    if (entryProves(loop, root, dominators, ICmpInst::ICMP_NE, start, ConstantInt::get(phi.getContext(), extreme))) {
       return true;
     }
   }
@@ -85,17 +170,23 @@ void requireSafeMovedLoopInstruction(const Instruction &inst) {
              &inst);
 }
 
-void requireFiniteMovedLoop(const Loop &root, const DominatorTree &dominators, const Instruction &gate) {
+void requireFiniteMovedLoop(BasicBlock &header, const Instruction &gate) {
+  DominatorTree dominators(*header.getParent());
+  LoopInfo loops(dominators);
+  const Loop *root = loops.getLoopFor(&header);
+  if (!root || root->getHeader() != &header) {
+    notHandled("a moved gate loop without a single ordinary loop header" + std::string(tableRoute), &gate);
+  }
   using Edge = std::pair<const BasicBlock *, const BasicBlock *>;
   std::set<Edge> counted;
-  for (const Loop *loop : root.getLoopsInPreorder()) {
+  for (const Loop *loop : root->getLoopsInPreorder()) {
     BasicBlock *latch = loop->getLoopLatch();
     SmallVector<BasicBlock *, 4> exits;
     loop->getExitingBlocks(exits);
-    if (!latch || !any_of(exits, [&](BasicBlock *exit) {
-          return dominators.dominates(exit, latch) && exitsWithCounter(*loop, *exit, *latch);
+    if (!latch || !loop->getLoopPredecessor() || !any_of(exits, [&](BasicBlock *exit) {
+          return dominators.dominates(exit, latch) && exitsWithCounter(*loop, *root, dominators, *exit, *latch);
         })) {
-      notHandled("a moved gate loop whose ordinary passes are not proved to terminate where its gates are disabled" +
+      notHandled("a moved gate loop whose ordinary passes are not proved to terminate without counter wrap where its gates are disabled" +
                      std::string(tableRoute),
                  &gate);
     }
@@ -105,7 +196,7 @@ void requireFiniteMovedLoop(const Loop &root, const DominatorTree &dominators, c
   SmallVector<Edge, 8> backedges;
   FindFunctionBackedges(*gate.getFunction(), backedges);
   for (const auto &edge : backedges) {
-    if (root.contains(edge.first) && root.contains(edge.second) && !counted.count(edge)) {
+    if (root->contains(edge.first) && root->contains(edge.second) && !counted.count(edge)) {
       notHandled("a moved gate loop with an ordinary cycle that can bypass its proved counters" + std::string(tableRoute),
                  &gate);
     }

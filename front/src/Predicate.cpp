@@ -254,7 +254,6 @@ size_t Predicator::gateLoop(Instruction *op) {
                "one place",
                op);
   }
-  requireFiniteMovedLoop(*loop, analysis.dominators, *op);
   gateLoops.push_back(GateLoop{loop, {}});
   return gateLoops.size() - 1;
 }
@@ -833,6 +832,7 @@ void Predicator::moveLoop(GateLoop &gates, IRBuilder<> &b) {
       }
     }
   }
+  requireFiniteMovedLoop(*header, *gates.gates.front());
   for (Instruction *gate : gates.gates) {
     auto *clone = cast<CallBase>(map[gate]);
     if (kind == Kind::Never) {

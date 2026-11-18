@@ -790,8 +790,9 @@ hoisted into a block before the outer loop). The loop also runs for the configur
 reach it, with every gate disabled there. The front checks the ordinary instructions in the loop and those it
 recomputes to enter the loop. It refuses moved memory accesses, calls, and division or remainder without
 a divisor proved nonzero independently of the original qubit condition. A nonzero constant or a bitwise OR
-with a nonzero constant supplies that proof. It also checks that every cycle has a counter that steps by one
-toward or past a loop-invariant exit test. This is a compile-time proof using wrapping integer arithmetic.
+with a nonzero constant supplies that proof. Each cycle must have a unit-step counter that reaches its
+loop-invariant exit bound without wrapping. A strict comparison must match the step direction. An
+equality exit also needs an ordering proof from the ordinary conditions that still guard the moved loop.
 For each definite value of what the condition reads, the result is the product of the gates the C applies there.
 Refused by name, each with its route:
 

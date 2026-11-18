@@ -2,15 +2,13 @@
 #pragma once
 
 namespace llvm {
-class DominatorTree;
+class BasicBlock;
 class Instruction;
-class Loop;
 }
 
 namespace bennett {
 
 void requireSafeMovedLoopInstruction(const llvm::Instruction &inst);
-void requireFiniteMovedLoop(const llvm::Loop &loop, const llvm::DominatorTree &dominators,
-                            const llvm::Instruction &gate);
+void requireFiniteMovedLoop(llvm::BasicBlock &header, const llvm::Instruction &gate);
 
 } // namespace bennett

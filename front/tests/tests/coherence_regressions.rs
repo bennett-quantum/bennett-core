@@ -381,7 +381,7 @@ fn moved_gate_loop_with_unproved_termination_is_refused() {
     .refused(
         8,
         &[0, 257],
-        "not handled yet: a moved gate loop whose ordinary passes are not proved to terminate where its gates are disabled",
+        "not handled yet: a moved gate loop whose ordinary passes are not proved to terminate without counter wrap where its gates are disabled",
     );
 }
 
@@ -554,4 +554,27 @@ fn overwriting_a_return_address_after_a_gate_traces_it() {
         qubits: 1,
     }
     .agrees(0, &[0, 1], &check, 64);
+}
+
+#[test]
+fn moved_gate_loop_cannot_wrap_a_counter_past_its_exit() {
+    Program {
+        name: "gate-counter-wrap",
+        declarations: "",
+        body: r#"
+    ZBIT(q, 1);
+    uint8_t y = 0;
+    if (q) {
+        #pragma clang loop unroll(disable)
+        for (uint64_t i = prep == 1 ? 2 : 0; i != n; ++i) XBIT(y, 0);
+    }
+    return READ(y);
+"#,
+        qubits: 1,
+    }
+    .refused(
+        1,
+        &[0, 1],
+        "not handled yet: a moved gate loop whose ordinary passes are not proved to terminate without counter wrap",
+    );
 }
