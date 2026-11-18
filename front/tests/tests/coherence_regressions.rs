@@ -282,8 +282,7 @@ fn gate_loop_with_a_held_load_in_the_same_function_is_refused() {
 }
 
 #[test]
-#[ignore = "the moved loop loads a qubit-held byte even with its gate disabled"]
-fn disabled_gate_loop_never_loads_a_held_byte() {
+fn moved_gate_loop_with_a_held_load_is_refused() {
     Program {
         name: "gate-load-callee",
         declarations: r#"
@@ -310,12 +309,15 @@ __attribute__((noinline)) void fill(void) {
 "#,
         qubits: 1,
     }
-    .agrees(1, &[65536, 65793], &readout(&[0, 8, 16]), 0);
+    .refused(
+        1,
+        &[65536, 65793],
+        "not handled yet: a moved gate loop would execute ordinary `load` even where its gates are disabled, without proof that it is safe and has no visible effect (route: compute the ordinary part inside one applied function for the table of control bits)",
+    );
 }
 
 #[test]
-#[ignore = "the moved loop divides by zero even with its gate disabled"]
-fn disabled_gate_loop_never_divides_by_zero() {
+fn moved_gate_loop_with_an_unproved_divisor_is_refused() {
     Program {
         name: "gate-divide",
         declarations: "",
@@ -332,7 +334,55 @@ fn disabled_gate_loop_never_divides_by_zero() {
 "#,
         qubits: 1,
     }
+    .refused(
+        1,
+        &[0, 257],
+        "not handled yet: a moved gate loop would execute ordinary `udiv` even where its gates are disabled, without proof that it is safe and has no visible effect (route: compute the ordinary part inside one applied function for the table of control bits)",
+    );
+}
+
+#[test]
+fn moved_gate_loop_with_a_provably_nonzero_divisor_stays_coherent() {
+    Program {
+        name: "gate-proved-divide",
+        declarations: "",
+        body: r#"
+    uint8_t y = 0;
+    if (q) {
+        #pragma clang loop unroll(disable)
+        for (unsigned i = 0; i < n; ++i)
+            if (((i + 1u) / (column | 1u)) & 1) XBIT(y, 0);
+    }
+    packet key = READ(q);
+    return key | ((packet)READ(y) << 8);
+"#,
+        qubits: 1,
+    }
     .agrees(1, &[0, 257], &readout(&[0, 8]), 0);
+}
+
+#[test]
+fn moved_gate_loop_with_unproved_termination_is_refused() {
+    Program {
+        name: "gate-unproved-termination",
+        declarations: "",
+        body: r#"
+    uint8_t y = 0;
+    if (q) {
+        #pragma clang loop unroll(disable)
+        for (unsigned i = 1; i != n; i *= 2)
+            XBIT(y, 0);
+    }
+    packet key = READ(q);
+    return key | ((packet)READ(y) << 8);
+"#,
+        qubits: 1,
+    }
+    .refused(
+        8,
+        &[0, 257],
+        "not handled yet: a moved gate loop whose ordinary passes are not proved to terminate where its gates are disabled",
+    );
 }
 
 const RETADDR_HELPER: &str = r#"

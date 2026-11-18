@@ -2,6 +2,7 @@
 
 #include "Diagnostic.h"
 #include "Markers.h"
+#include "MovedLoop.h"
 #include "Normalise.h"
 #include "Taint.h"
 
@@ -231,8 +232,12 @@ size_t Predicator::gateLoop(Instruction *op) {
                        "(not built yet)",
                    &inst);
       }
-      if (isGateCall(&inst) && cast<CallBase>(inst).getOperandBundle(controlBundle)) {
-        fail("internal: a controlled gate in a loop under a qubit-dependent condition");
+      if (isGateCall(&inst)) {
+        if (cast<CallBase>(inst).getOperandBundle(controlBundle)) {
+          fail("internal: a controlled gate in a loop under a qubit-dependent condition");
+        }
+      } else if (!isBitCall(&inst)) {
+        requireSafeMovedLoopInstruction(inst);
       }
       for (const User *user : inst.users()) {
         if (!loop->contains(cast<Instruction>(user))) {
@@ -248,6 +253,7 @@ size_t Predicator::gateLoop(Instruction *op) {
                "one place",
                op);
   }
+  requireFiniteMovedLoop(*loop, analysis.dominators, *op);
   gateLoops.push_back(GateLoop{loop, {}});
   return gateLoops.size() - 1;
 }
@@ -605,11 +611,12 @@ Value *Predicator::recomputed(Value *value, IRBuilder<> &b, ValueToValueMapTy &m
   if (Value *done = map.lookup(inst)) {
     return done;
   }
-  if (analysis.tainted(inst) || isa<PHINode>(inst) || inst->mayReadOrWriteMemory() || inst->isTerminator()) {
+  if (analysis.tainted(inst) || isa<PHINode>(inst) || inst->isTerminator()) {
     notHandled("a loop with gates under the control of a value that depends on a qubit, using a value computed "
                "under that control before the loop (not built yet)",
                at);
   }
+  requireSafeMovedLoopInstruction(*inst);
   Instruction *copy = inst->clone();
   for (Use &use : copy->operands()) {
     use.set(recomputed(use.get(), b, map, at));

@@ -4,6 +4,7 @@
 #include "HeldBytes.h"
 #include "InPlace.h"
 #include "Markers.h"
+#include "MovedLoop.h"
 #include "Predicate.h"
 #include "RegionResults.h"
 #include "Taint.h"
@@ -225,6 +226,20 @@ void outlineAround(Function &function, Instruction *seed, ControlAnalysis &analy
       blocks.push_back(member);
     }
   }
+  // These effects would be rejected before predication. For a gate loop, give the
+  // route for moving the ordinary work into its applied table computation.
+  auto inGateLoop = [&](const BasicBlock *block) {
+    const Loop *loop = analysis.loops.getLoopFor(block);
+    if (!loop || !region->contains(loop->getHeader())) {
+      return false;
+    }
+    while (loop->getParentLoop() && region->contains(loop->getParentLoop()->getHeader())) {
+      loop = loop->getParentLoop();
+    }
+    return llvm::any_of(loop->blocks(), [](const BasicBlock *member) {
+      return llvm::any_of(*member, [](const Instruction &inst) { return isGateCall(&inst); });
+    });
+  };
   std::vector<LoadInst *> loads;
   std::vector<LoadInst *> memoryLoads; // loads of ordinary memory at an address fixed before the region
   std::vector<Instruction *> memoryWrites; // stores into memory: its bytes will hold qubits (HeldBytes.h)
@@ -249,6 +264,9 @@ void outlineAround(Function &function, Instruction *seed, ControlAnalysis &analy
       // The region becomes an ordinary function applied coherently, whose memory is private to each run: a
       // store into memory that outlives it makes the bytes it writes hold qubits (HeldBytes.h). A call's
       // writes would be undone with it, unlike natively.
+      if (inst.mayWriteToMemory() && inGateLoop(member)) {
+        requireSafeMovedLoopInstruction(inst);
+      }
       if (auto *store = dyn_cast<StoreInst>(&inst); store && store->isSimple()) {
         memoryWrites.push_back(store);
         continue;

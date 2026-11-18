@@ -771,8 +771,8 @@ a join, a store LLVM merged at a join into memory whose span starts after the co
 all three modes; the same shape with the read of `a` in a helper the code calls is refused by name.
 
 **Gate loops.** A loop with gates under a condition that depends on a qubit stays a loop of the control
-program, run as written: the circuit model needs a definite list of gates, and the loop's trip count is an
-ordinary value written in the C, so the control program issues the gates of every pass, controlled by the
+program when the front can prove its ordinary execution safe, finite and free of visible effects.
+The loop's trip count is an ordinary value written in the C. The control program issues the gates of every pass, controlled by the
 condition that the code reaches the loop (`Predicate.h`). Nothing in the loop depends on a qubit (what does is
 refused, below), so which gates act in which pass is decided by the loop's own ordinary code, which the control
 program runs. The condition is computed once before the loop, by one `apply` into a fresh qubit (or is one
@@ -785,8 +785,12 @@ part of every test on the way into the loop, from the branch that enters the cod
 loop (each conditional branch one of whose edges every path to the loop takes): LLVM may have merged the
 loop's own guard into the branch on the qubit, and put code of its own between them (a nested loop's guard
 hoisted into a block before the outer loop). The loop also runs for the configurations whose path would not
-reach it, as ordinary code that writes no memory, its gates acting on none of them. For each definite value of
-what the condition reads the result is the product of the gates the C applies there.
+reach it, with every gate disabled there. The front checks the ordinary instructions in the loop and those it
+recomputes to enter the loop. It refuses moved memory accesses, calls, and division or remainder without
+a divisor proved nonzero independently of the original qubit condition. A nonzero constant or a bitwise OR
+with a nonzero constant supplies that proof. It also checks that every cycle has a counter that steps by one
+toward or past a loop-invariant exit test. This is a compile-time proof using wrapping integer arithmetic.
+For each definite value of what the condition reads, the result is the product of the gates the C applies there.
 Refused by name, each with its route:
 
 - a loop whose number of passes depends on a qubit: a circuit is a definite list of gates, so the number of
@@ -804,7 +808,9 @@ Refused by name, each with its route:
   whose gates change the tested register without ever changing whether the condition holds could later be
   accepted with one control qubit computed once and cleared by computing it again; everything else keeps a
   record of the passes, the retained case of an overwrite (not built);
-- a store into a qubit variable in such a loop (not built).
+- a store into a qubit variable in such a loop (not built);
+- ordinary work in a moved loop whose safety, termination or lack of visible effects cannot be proved.
+  Compute the ordinary part inside one applied function for the table of control bits.
 
 Acceptance (`front/tests/tests/gate_loops.rs`): the front audit's witness `if (q) for (i < n) x(y)`, and a
 computed condition with two gate sites, one on odd passes only, give the state computed by hand for n = 0, 1,
@@ -1526,6 +1532,10 @@ example list, allowed-hit count, mutation percentage, or performance threshold. 
 The optimiser, lowering the full device language to gates, certificates, target descriptions, a binary
 format, and recomputation shared between conditions (each predicated operation computes and clears
 its own).
+
+- **Ordinary work in a moved gate loop.** Compute the ordinary part inside one applied function for the
+  table of control bits. The function follows the original condition, so it does not execute ordinary
+  instructions on inputs where C skips them. The current front refuses work it cannot prove safe to move.
 
 | Refused inside emitted `apply` | Construction needed |
 |---|---|
