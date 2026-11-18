@@ -456,3 +456,29 @@ fn control_and_step_machine_counts() {
         [[348, 126, 433, 167, 539], [1468, 2810, 5169, 1675, 1527]],
     );
 }
+
+#[test]
+fn an_untaken_edge_supplies_constants_for_the_whole_function_check() {
+    for jump in ["br 1, done, cold(i8 2)", "br 0, cold(i8 2), done"] {
+        let source = format!(
+            r#"
+memory 1024
+func @f(i8 %input) -> i8 {{
+entry:
+    {jump}
+cold(i8 %amount):
+    %shifted = shl i8 %input, %amount
+    ret %shifted
+done:
+    ret %input
+}}
+"#
+        );
+        let module = control_example(&source, 8, "");
+        for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+            for budget in [0, 2] {
+                compare_controls(&module, budget, mode, |x| if budget == 0 { (0, 1) } else { (x, 0) });
+            }
+        }
+    }
+}
