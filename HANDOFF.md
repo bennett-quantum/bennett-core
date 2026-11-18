@@ -107,7 +107,8 @@ Newest first; quotes are the maintainer's words.
 Copied calls and unsigned arithmetic are on `wip/sol62-m4` for independent review.
 Both emission modes matched direct evaluation for
 two continuations into a copied callee and two visits to one site. Stack tests cover
-the seven-byte and eight-byte entry cases at budget zero, nested frame reservations,
+the seven-byte and eight-byte entry cases at budget zero, a grandchild that must
+reserve space below its parent,
 and bad indirect addresses and signatures. Copied arguments preserve proved bits,
 including the high zeros of a zero extension used to resolve an indirect address.
 The planner copies sites reachable from entry. Untaken indirect calls need no

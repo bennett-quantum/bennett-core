@@ -228,6 +228,64 @@ entry:
 }
 
 #[test]
+fn a_grandchild_reserves_stack_below_its_parent() {
+    for memory in [40, 48] {
+        let module = load(&format!(
+            r#"
+memory {memory}
+func @main(i64 %budget) {{
+entry:
+    %out = qalloc 8
+    %fault = qalloc 5
+    apply @f() -> %out, %fault budget %budget
+    ret
+}}
+func @f() -> i8 {{
+entry:
+    %result = call @middle()
+    ret %result
+}}
+func @middle() -> i8 {{
+entry:
+    %result = call @leaf(i8 7)
+    ret %result
+}}
+func @leaf(i8 %value) -> i8 {{
+entry:
+    ret %value
+}}
+"#
+        ))
+        .expect("valid nested calls");
+        let entry = module.function_named("main").expect("main function");
+        let options = Options { machine_meaning: true, ..Options::default() };
+        for budget in 0..=6 {
+            // Main reserves 24 bytes. Each of f, middle and leaf reserves eight more.
+            // The grandchild first attempts to enter at budget two.
+            let expected = if memory == 40 && budget >= 2 {
+                [0, 6]
+            } else if budget < 5 {
+                [0, 1]
+            } else {
+                [7, 0]
+            };
+            let mut direct = Executor::new(&module, entry, &[budget], options).expect("direct run");
+            assert_eq!(direct.run(), Outcome::Returned(None));
+            let state = direct.snapshot();
+            assert_eq!(state.quantum.amplitudes[0].0, expected, "{memory} bytes, B={budget}");
+            for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+                let mut emitted = Executor::new(&module, entry, &[budget], options).expect("gate run");
+                let mut compile = |input: ApplyInput<'_>| Ok(compile_apply_with(input, mode)?.block);
+                assert_eq!(emitted.run_emitted(&mut compile), Outcome::Returned(None));
+                let actual = emitted.snapshot();
+                assert_eq!(actual.quantum.amplitudes[0].0, expected, "{memory} bytes, B={budget}, {mode:?}");
+                assert_eq!(actual, state);
+            }
+        }
+    }
+}
+
+#[test]
 fn call_refusals_precede_every_gate_of_the_apply() {
     let mut tree = String::new();
     let levels = 14;
