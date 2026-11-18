@@ -1,6 +1,6 @@
 # HANDOFF
 
-State on 2026-11-18, about 01:30 UTC: **nothing of this work is running.** Resumed by the maintainer on
+State on 2026-11-18, about 02:25 UTC: **nothing of this work is running.** Resumed by the maintainer on
 2026-11-17; see "Resumed on 2026-11-17" below before anything else. The tree implements the model stated in
 `docs/DESIGN.md`, "The model": ordinary code; the quantum instructions it issues (`qalloc`, gates, `measure`, `qfree` as the partial trace), naming qubits in
 registers or at memory addresses (a derived form, defined in DESIGN by its expansion), with the named fault
@@ -30,14 +30,18 @@ left five ignored witnesses in `front/tests/tests/held_span_independent.rs`, all
 defect, older, was found and fixed on the way ("Fixes after the testing pass over rule A in memory
 (2026-11-18)"). The last independent testing pass, over those fixes and rule A at memory as a whole
 (`d11c934`), left three ignored witnesses in `front/tests/tests/held_regions_independent.rs`, all fixed since
-("Fixes after the last testing pass over held memory (2026-11-18)"); those fixes have had no independent pass.
+("Fixes after the last testing pass over held memory (2026-11-18)"). A randomised differential test against
+native C (`18c1973`, `front/tests/tests/qubit_differential.rs`) then found one cause of wrong results in
+accepted programs, a value selected where control flow joins after code under a qubit, and three refusals or
+messages wider than the rules, all fixed since ("Fixes after the randomised differential test (2026-11-18)");
+those fixes have had no independent pass.
 
 Which commits of code under a qubit have had an independent testing pass:
 
 - tested: `eae3a86`, `d65f156`, `6a0a47a` (by `03ae832`); `ed3cfaa`, `d3a1efe`, `231bea2`, `31246c1` (by
-  `22bd3bc`); `7462959` (by `d11c934`);
-- not tested by an independent pass: `8668d4a` (the fixes of the three defects `d11c934` found) and the HANDOFF
-  commit after it. The next independent pass starts there.
+  `22bd3bc`); `7462959` (by `d11c934`); `8668d4a`, `cb4c315` (by `18c1973`, the randomised differential test);
+- not tested by an independent pass: `49e747f`, `59644f6` (the fixes of what `18c1973` found) and the HANDOFF commit
+  after them. The orchestrator's long randomised run on `main` follows; the next independent pass starts there.
 
 ## Resumed on 2026-11-17
 
@@ -1590,3 +1594,53 @@ measuring callee reads "a call that may read or write memory of ..." and does no
 them; the refusals of a second shadow, of a measuring callee and of an escaped `restrict` copy are wider than
 what is unsafe (the routes above, under "Next steps", step 4, item 3); the full front suite prints an unused
 import warning in `front/tests/tests/thesis.rs`.
+
+## Fixes after the randomised differential test (2026-11-18)
+
+The randomised differential test `front/tests/tests/qubit_differential.rs` (`18c1973`: seeded short C programs in
+the accepted class, compared with native C for every definite value of the register, at O0, O2 and with
+`--taint-all`) found 21 wrong results in accepted programs in a 15-minute run on `cb4c315`, all of one cause, and
+left five ignored witnesses. Each was reproduced on the code before these fixes and each runs now in all three
+modes. Documents: `docs/DESIGN.md`, "Code under a qubit" and "Applied calls".
+
+- **A value selected where control flow joins was lost when code under a qubit was applied whole** (`if (q & 2)
+  a = 2; if (q & 1) a += q;` gave 3 for `q = 1`, C 1; `if (!q) { a = 2; b += 3; } if (q) a = 4;` gave 2 for
+  `q = 1`, C 4). Cause, in plain words: after the code's writes become one applied function, the front deletes
+  what is left of the code unless a value it computes is used later; it looked only at values computed by
+  instructions inside the code. A join where the code ends (an LLVM phi of the block after it) that selects by
+  the edge the code left on, of constants or of values from before the code, is decided by the path the code
+  took, but no instruction of the code computes it; the code was deleted and the join kept one of its incoming
+  values for every input. Fix (`front/src/RegionResults.cpp`, `RegionWhole::removeStores`): such a join keeps
+  the code's control flow, which is then outlined as any code whose value later code uses, the join a result
+  of that function; a store LLVM moved to the join is then an ordinary store of that value. Tests: the two
+  witnesses, now in all three modes, and `join_selects_the_value_of_the_path_taken` (constants, values from
+  before the code, a merged store, a three-way join); three of its four shapes give wrong values on the old code.
+- **A helper whose only memory is its own stack was refused as reading memory that may change, and as a second
+  call that may write memory.** Cause: the checks asked whether the callee accesses memory at all, wider than
+  the rule (the memory the call reads must be unchanged; two calls in one computation must not see each other's
+  writes). Fix (`front/src/Aliasing.cpp`, `reachesOutsideFrames`; `front/src/Control.cpp`): a call reads and
+  writes only memory its callees may reach outside their own frames; a local variable of a callee, written
+  directly or by a helper it calls through a pointer, is none. A callee local whose address escapes still counts.
+  Tests: the two witnesses, and `nested_private_frames_and_an_escaped_local` (the nested case is refused on the
+  old code).
+- **A call whose unused result LLVM removed got the generic message** ("used by ordinary code (measure it
+  first)"). Cause: a call returning nothing has no value that depends on a qubit, so it reached the check for
+  ordinary uses of its arguments. Fix (`front/src/Control.cpp`): such a call to an ordinary function that passes
+  nothing by address gets the message for a call whose result is not used (one with a pointer argument may
+  return its result through memory, `front/src/Abi.h`, and keeps the message it had).
+
+Commits: `49e747f` (the join), `59644f6` (the helper's frame and the message).
+
+Capped run of the long test after the fixes (`BENNETT_RANDOM_CASES=1600`, seed `0x87196caa251d0f43`, which covers
+indices 697, 885, 905, 967, 1288 and 1550 of the 21): generated 1,600, accepted 1,196, declined 404, compared
+8,084, wrong 0 (with the first fix alone: accepted 1,084, compared 7,296, wrong 0). The full 15-minute run
+follows on `main`.
+
+Debts: a join the code leaves for later code is computed again by a copy of the code in the `apply` that uses it
+(the existing debt in DESIGN, "Code under a qubit", whose route covers it); the refusal of an unused call whose
+callee writes only its own frame stays (applied, it would do nothing, as natively nothing observes those writes;
+accepting it is a widening, not taken); a call that does read memory outside its frames is still refused when
+any write may come between it and its use, whether or not the write can reach what it reads (route: compare the
+call's reach (`Aliasing`) with each intervening write's). In the capped run 8 programs were still refused with
+"reads memory that may change before its result is used"; in those looked at the call is an outlined region of
+code under a qubit that reads global variables, not a helper (older, not investigated).
