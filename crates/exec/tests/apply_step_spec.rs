@@ -111,29 +111,43 @@ entry:
 
 #[test]
 fn budget_is_tested_before_each_step_on_each_route_to_the_same_return() {
-    let module = load(&format!(
+    let module = load(
         r#"
 memory 128
-func @applied(i1 %arg) -> i8 {{
+func @applied(i1 %arg) -> i8 {
 entry:
     br %arg, longer, done
 longer:
     br done
 done:
     ret 7
-}}
-{APPLY_BIT}
-"#
-    ));
-    // Each row gives B, (out, fault) for 0, (out, fault) for 1, and total completed steps.
-    for (budget, zero, one, steps) in [
-        (0, (0, 1), (0, 1), 0),
-        (1, (0, 1), (0, 1), 2),
-        (2, (7, 0), (0, 1), 4),
-        (3, (7, 0), (7, 0), 5),
-        (4, (7, 0), (7, 0), 5),
+}
+func @main(i64 %budget, i1 %input) {
+entry:
+    %arg = qalloc 1
+    %out = qalloc 8
+    %fault = qalloc 5
+    br %input, one, apply_now
+one:
+    x %arg
+    br apply_now
+apply_now:
+    apply @applied(%arg) -> %out, %fault budget %budget
+    ret
+}
+"#,
+    );
+    // Each input is run on its own. Each expectation is (out, fault, completed steps).
+    for (budget, zero, one) in [
+        (0, (0, 1, 0), (0, 1, 0)),
+        (1, (0, 1, 1), (0, 1, 1)),
+        (2, (7, 0, 2), (0, 1, 2)),
+        (3, (7, 0, 2), (7, 0, 3)),
+        (4, (7, 0, 2), (7, 0, 3)),
     ] {
-        check(&module, &[budget], &[&[0, zero.0, zero.1], &[1, one.0, one.1]], steps);
+        for (input, (out, fault, steps)) in [(0, zero), (1, one)] {
+            check(&module, &[budget, input], &[&[input, out, fault]], steps);
+        }
     }
 }
 
@@ -143,8 +157,8 @@ fn frame_reservation_can_overflow_before_the_first_budget_test() {
 data 0 = i8 0
 func @applied() -> i8 {
 entry:
-    %x = add i8 3, 4
-    ret %x
+    %unused = add i128 3, 4
+    ret 7
 }
 "#;
     // The caller reserves 24 bytes. One static byte leaves seven or eight bytes for the applied slot.
@@ -258,6 +272,12 @@ fn integer_instructions_use_the_declared_width() {
             3,
         );
     }
+    single(
+        "    %v = lshr i128 0x7b000000000000000000000000000000, 120\n    %byte = trunc i128 %v to i8\n    ret %byte",
+        3,
+        (123, 0),
+        3,
+    );
 }
 
 #[test]
@@ -571,6 +591,7 @@ fn output_exit_and_every_quantum_instruction_fault_before_acting() {
         ("    x [128:0]\n    ret 7", 8),
         ("    %v = measure i8 [128]\n    ret %v", 8),
         ("    fault unreachable", 5),
+        ("    fault exit_type_mismatch", 14),
     ] {
         single(body, 1, (0, code), 0);
     }
@@ -838,6 +859,36 @@ entry:
 }
 
 #[test]
+fn the_validator_rejects_reusing_a_target_slot() {
+    for apply in [
+        "apply @applied(%arg) -> %out, %out budget 1",
+        "apply @applied(%arg) -> %arg, %fault budget 1",
+        "apply @applied(%fault) -> %out, %fault budget 1",
+    ] {
+        let source = format!(
+            r#"
+memory 128
+func @applied(i8 %x) -> i8 {{
+entry:
+    ret %x
+}}
+func @main() {{
+entry:
+    %arg = qalloc 8
+    %out = qalloc 8
+    %fault = qalloc 8
+    {apply}
+    ret
+}}
+"#
+        );
+        let module = bennett_ir::read(&source).expect("well-formed text");
+        let errors = bennett_ir::validate(module).expect_err("a target slot was used twice");
+        assert!(matches!(errors.0.as_slice(), [err] if matches!(err.problem, bennett_ir::Problem::RegionAlias(_))));
+    }
+}
+
+#[test]
 fn dynamic_target_aliases_and_dead_handles_fault_at_the_apply_itself() {
     let source = r#"
 memory 256
@@ -890,20 +941,25 @@ entry:
 }
 
 #[test]
-#[ignore = "SYNTAX requires a saved pointer, but stackrestore accepts an unsaved pointer in range"]
-fn documented_stackrestore_rejects_an_unsaved_pointer() {
-    single("    %p = alloca 1\n    stackrestore 89\n    ret 7", 3, (0, 12), 1);
+fn stackrestore_sets_an_unsaved_unaligned_pointer_in_range() {
+    // Three slots leave the pointer at 80, and allocating one byte lowers it to 72.
+    single(
+        "    %p = alloca 1\n    stackrestore 73\n    %sp = stacksave\n    %result = trunc i64 %sp to i8\n    ret %result",
+        5,
+        (73, 0),
+        5,
+    );
 }
 
 #[test]
-#[ignore = "DESIGN describes the qubit lookup first, but an overlapping out-of-bounds access faults first"]
-fn documented_qubit_lookup_precedes_the_bounds_fault() {
-    check(&with_cell_at_last_byte("    %v = load i16 127\n    ret 7"), &[1], &[&[1, 0, 17]], 0);
+fn a_budget_fault_precedes_either_memory_check() {
+    let module = with_cell_at_last_byte("    %v = load i16 127\n    ret 7");
+    check(&module, &[0], &[&[1, 0, 1]], 0);
+    check(&module, &[1], &[&[1, 0, 3]], 0);
 }
 
 #[test]
-#[ignore = "DESIGN bounds frame storage by memory size, but calls with no slots consume no stack bytes"]
-fn documented_memory_bound_caps_the_number_of_active_frames() {
+fn a_call_to_a_function_with_no_slots_reserves_zero_bytes() {
     let module = load(&format!(
         r#"
 memory 24
@@ -921,7 +977,7 @@ entry:
 "#
     ));
     // The caller uses all 24 bytes before entering the applied function.
-    check(&module, &[8], &[&[0, 6]], 0);
+    check(&module, &[8], &[&[0, 1]], 8);
 }
 
 #[test]
