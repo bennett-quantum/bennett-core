@@ -247,6 +247,10 @@ static stack bound.
 
 ## Stage 4: queries under `apply`, written in C
 
+The current front refuses the linked C entries when it cannot prove that SQLite's callees are
+caller-independent. The results below record the earlier stage 4 run. See [DESIGN.md](../../docs/DESIGN.md#applied-calls)
+for the current call rule.
+
 `applied.c` has one entry per query of the SQL oracle (`SQL_ORACLE=1`, eight queries, `NROWS=8`). Each calls
 the driver's `experiment_setup` (ordinary code: the database, its rows and all prepared statements), puts a
 three-qubit row register in uniform superposition and writes `result ^= experiment_query(Q, row)`, the

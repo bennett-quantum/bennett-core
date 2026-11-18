@@ -710,9 +710,7 @@ bool RegionWhole::run() {
   LLVMContext &context = fn.getContext();
   Module &module = *fn.getParent();
   const Instruction *site = writes.empty() ? blocks.front()->getTerminator() : (*writes.begin())->mutations.front();
-  if (words.size() > 1 || words.front().size() > 1) {
-    requireCallerIndependent(*whole, *site);
-  }
+  requireCallerIndependent(*whole, *site);
   IRBuilder<> b(after->getTerminator());
   b.SetCurrentDebugLocation(site->getDebugLoc());
   const std::vector<Value *> loaded = arguments(b);

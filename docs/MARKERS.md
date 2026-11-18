@@ -176,12 +176,14 @@ calls, and division or remainder without a proved nonzero divisor are refused. A
 LLVM has hoisted is refused if its bytes cannot be proved ordinary. The route is to compute
 the ordinary part inside one applied function for the table of control bits in [DESIGN.md](DESIGN.md#code-under-a-qubit).
 
-A helper may read a return address in one applied evaluation. The front refuses a repeated evaluation
-when the helper or a function it can call reads a return address, observes a frame address, or converts a pointer
-whose address may depend on the stack to an integer, including when separate predicated
-stores would repeat one source call. A refusal can name a possible indirect target, read-only
-output splitting, or evaluation of a moved gate-loop condition. Keep and release the old value explicitly,
-or pass the caller's identity as a separate argument to a caller-independent helper.
+A caller-sensitive helper stays at its ordinary call site. The front refuses even one moved evaluation
+if the helper or a function it can call reads a return or frame address or exposes a potentially stack-based
+pointer by storing, comparing, returning or converting it to an integer. Pointers may select private
+storage and go to callees proved caller-independent. Compute the sensitive value at its ordinary site
+and pass it in. For an overwrite, keep and release the old value or pass the caller's identity explicitly
+to a caller-independent helper. The check can also refuse linked library calls. For example, a comparison
+of a pointer returned by `malloc` or `realloc` does not have a proof that the address is global or null,
+and musl's variadic `printf` stores a frame pointer for its argument list.
 
 ## Not handled yet
 

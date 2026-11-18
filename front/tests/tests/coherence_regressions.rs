@@ -407,7 +407,7 @@ fn return_address_readout() -> state::Check {
     check
 }
 
-const CALLER_REPLAY_REFUSAL: &str = "not handled yet: replaying a computation that can observe its caller's position through a return or stack address (route: keep the old value and release it, or pass the caller's identity as an argument)";
+const CALLER_REPLAY_REFUSAL: &str = "not handled yet: moving a computation that can observe its caller's position through a return or stack address (route: keep the old value and release it, or pass the caller's identity as an argument)";
 
 #[test]
 fn clearing_a_predicate_by_replaying_a_return_address_is_refused() {
@@ -537,10 +537,7 @@ fn repeating_a_region_that_reads_a_return_address_for_multiple_results_is_refuse
 }
 
 #[test]
-fn overwriting_a_return_address_after_a_gate_traces_it() {
-    let mut check = readout(&[0, 8]);
-    // The nonzero value is an opaque device address. Only its equality to zero is needed.
-    check.retained = Some(vec![0, 1]);
+fn moving_a_return_address_is_refused_even_with_a_retained_overwrite() {
     Program {
         name: "return-address-retained",
         declarations: RETADDR_HELPER,
@@ -553,7 +550,7 @@ fn overwriting_a_return_address_after_a_gate_traces_it() {
 "#,
         qubits: 1,
     }
-    .agrees(0, &[0, 1], &check, 64);
+    .refused(0, &[0, 1], CALLER_REPLAY_REFUSAL);
 }
 
 #[test]
@@ -709,7 +706,7 @@ fn a_late_refusal_preserves_both_requested_output_files() {
             .expect("run front");
         let diagnostic = String::from_utf8_lossy(&output.stderr);
         assert!(
-            !output.status.success() && diagnostic.starts_with("not handled yet: replaying a computation"),
+            !output.status.success() && diagnostic.starts_with("not handled yet: moving a computation"),
             "{name}: {diagnostic}"
         );
         assert_eq!(std::fs::read(device).expect("read device sentinel"), b"existing device output\n");
@@ -818,4 +815,54 @@ fn a_moved_gate_loop_refuses_a_count_computed_under_the_condition() {
         qubits: 1,
     }
     .refused(1, &[0, 1], "not handled yet: a moved gate loop");
+}
+
+#[test]
+fn a_predicated_call_whose_result_is_used_after_the_region_is_refused() {
+    Program {
+        name: "caller-predicated-live-result",
+        declarations: RETADDR_HELPER,
+        body: r#"
+    ZBIT(q, 1);
+    volatile uint64_t x = 0;
+    uint8_t z = 0;
+    uintptr_t t = 0;
+    if (q) {
+        t = f(q);
+        x = t;
+        ZBIT(z, 0);
+    }
+    volatile uint64_t y = t;
+    uint64_t a = READ(x), b = READ(y);
+    return a ^ b;
+"#,
+        qubits: 1,
+    }
+    .refused(1, &[0, 0], CALLER_REPLAY_REFUSAL);
+}
+
+#[test]
+fn a_moved_call_cannot_store_a_stack_pointer_and_read_its_bytes() {
+    Program {
+        name: "caller-stack-pointer-bytes",
+        declarations: r#"
+__attribute__((noinline)) static unsigned part(const void *p, unsigned i) {
+    return ((const unsigned char *)p)[i];
+}
+__attribute__((noinline)) uintptr_t f(uint8_t q) {
+    int local;
+    void *p = &local;
+    return q ? part(&p, q - 1) : 0;
+}
+"#,
+        body: r#"
+    ZBIT(q, 1);
+    uintptr_t t = f(q);
+    volatile uint64_t x = t, y = t + n;
+    uint64_t a = READ(x), b = READ(y);
+    return (a + n) ^ b;
+"#,
+        qubits: 1,
+    }
+    .refused(1, &[0, 0], CALLER_REPLAY_REFUSAL);
 }

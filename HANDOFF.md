@@ -24,7 +24,7 @@ What works, one line each (the commit-by-commit table is in `docs/RECORDS.md`, p
 - Floating point: `float`, `double`, `long double` over Berkeley SoftFloat 3e (`rt/softfloat`), checked bit for bit against hardware; `_Float16`, `__bf16`, `fmal`, conversions to and from 128-bit integers; complex helpers from libgcc 13.3.0 (`rt/libgcc`).
 - C library: musl 1.2.5 vendored (`rt/musl`) at the system-call boundary, with its own startup and exit, journalled files, a run-input clock, an entropy image, signals a program sends itself.
 - Real C programs against native, standard output and exit status (`experiments/c-corpus/README.md`): GCC torture tests 1,574 agree, 1 refused by name; c-testsuite 219 agree, 1 over the step budget; GCC `ieee/` 64 agree, 3 refused; none wrong or crashing.
-- SQLite, unmodified, as a SQL oracle: run, reversed exactly, Grover amplitudes checked at N = 16 to 512; and applied from C to a key that depends on a qubit register (`experiments/sqlite-on-device`). Lua 5.4.9 through musl (`experiments/lua-probe`). C North Star rungs 1 to 3 pass (`experiments/northstar-ladder`).
+- SQLite, unmodified, as a SQL oracle: run, reversed exactly, Grover amplitudes checked at N = 16 to 512 (`experiments/sqlite-on-device`). The C entry for stage 4 now receives the caller-independence refusal. Lua 5.4.9 through musl (`experiments/lua-probe`). C North Star rungs 1 to 3 pass (`experiments/northstar-ladder`).
 - `apply` from C: a call whose arguments depend on a qubit, to an ordinary function, is applied whole with one budget; its writes are undone, only its result survives.
 - Code under a qubit (code whose control flow or stored value depends on a qubit): code without gates writing qubit variables is one `apply` (rule B); a gate loop with proved safe ordinary work stays a loop (rule C); stores into memory at a definite address keep their value in qubits at the bytes (rule A); an overwrite that cannot be erased is kept with a warning. A randomised test against native C (`front/tests/tests/qubit_differential.rs`) found no wrong result in its last runs.
 - Ten automatic checks and an opt-in pre-push hook (`docs/CHECKS.md`).
@@ -35,11 +35,11 @@ What works, one line each (the commit-by-commit table is in `docs/RECORDS.md`, p
 Run each in the foreground, from the repository root (`CARGO_BUILD_JOBS=3` on the shared laptop):
 
 - `cargo test`: 379 passed, 0 failed, 5 ignored (each names its reason: heavy reference, generated runs, witnesses of recorded defects); about 10 s, no LLVM needed.
-- `front/test.sh` (needs LLVM 18, clang 18, CMake): 345 passed, 0 failed, 22 ignored (each names its reason: the fallback oracle's waiting test, the SQLite acceptance, the North Star ladder runs, musl-linked checks that need `rt/musl/build.py` first, heavy runs, witnesses of recorded debts); it also compiles the C++ header and classifies the 88 LLVM attribute kinds.
+- `front/test.sh` (needs LLVM 18, clang 18, CMake): 345 passed, 0 failed, 22 ignored (each names its reason: the fallback oracle's waiting test, the SQLite compatibility check, the North Star ladder runs, musl-linked checks that need `rt/musl/build.py` first, heavy runs, witnesses of recorded debts); it also compiles the C++ header and classifies the 88 LLVM attribute kinds.
 - `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check`: both clean on 2026-11-18 (`scripts/check.sh`: tree guards 3,642 files, 0 problems).
 - `scripts/check.sh` runs all four plus the tree guards (`docs/CHECKS.md`).
 - Randomised differential run, 15 minutes, ignored by default: `BENNETT_RANDOM_SEED=0x87196caa251d0f43 cargo test -p bennett-front-tests --test qubit_differential long_randomized_differential -- --ignored --exact --nocapture`.
-- Applied SQLite, ignored (needs the SQLite sources): `SQLITE_DIR=<amalgamation directory> front/test.sh --test sqlite_applied -- --ignored --nocapture`.
+- Applied SQLite compatibility, ignored by default and currently refused by name (needs the SQLite sources): `SQLITE_DIR=<amalgamation directory> front/test.sh --test sqlite_applied -- --ignored --nocapture`.
 - Library and corpus runs: `python3 rt/musl/build.py`, then `python3 rt/musl/test.py`; corpora in `experiments/c-corpus/README.md`.
 
 ## The model in ten lines
@@ -159,7 +159,7 @@ In order:
 | A qubit-dependent value used by ordinary code or printed; ordinary code reading bytes that hold qubits | The programmer writes the measurement. For held bytes the front asks for `bennett_measure_bytes`. |
 | Measurement under control | Channels |
 | A call that fills memory named at the call, controlled by a qubit-dependent value; a qubit-dependent call whose result is unused to a function that may write memory; two such calls in one computation when one may write memory; a call that reads memory that may change before its result is used (when a write could reach it) | Nothing for the unused call (applied, it would do nothing); one register per call for two calls; compare the call's reach with each intervening write; none designed for a call that fills memory |
-| Repeating a computation that can observe a return or stack address, including a call shared by separate predicated stores | Keep the old value and release it, or pass the caller's identity as an argument (`docs/DESIGN.md`, "Return addresses") |
+| Moving a call that may observe a return or stack address, even for one evaluation | Compute it at its ordinary site and pass it in. Keep and release the old value or pass the caller's identity to a caller-independent computation (`docs/DESIGN.md`, "Return addresses") |
 | Quantum operations in `main` of a program linked with musl | Classify control functions through indirect calls, or a startup that calls `main` directly |
 | Non-empty inline assembly; code without source; integers wider than 128 bits | An emulator of the real machine, compiled as an ordinary program; a type legaliser for wide integers |
 

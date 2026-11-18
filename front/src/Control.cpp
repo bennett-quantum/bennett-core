@@ -123,7 +123,6 @@ private:
   std::set<const StoreInst *> exchangedDone;
   // Slices can emit the same source call at several device positions, including
   // when clearing an old word, inverting an update or clearing a predicate.
-  std::set<const CallBase *> emittedSliceCalls;
   // Whether `old`, the value `target` holds at `store`, can be computed again there: a computation the control
   // program can apply (collect) whose qubit variables, `target` not among them, are unchanged since they were read
   // or held there a value that can be computed again in turn (collect with knownLoads computes it in their place),
@@ -797,6 +796,7 @@ void ControlWriter::requireApplicable(const CallBase &call) const {
                "or is called through a pointer",
                &call);
   }
+  requireCallerIndependent(call, call);
 }
 
 bool ControlWriter::sliceable(const Value *value) const {
@@ -1099,9 +1099,6 @@ std::string ControlWriter::slice(const Slice &slice, const Value *root, const St
     writer.line(writer.slot(load) + " = trunc " + intType(bits) + " " + value + " to " + intType(width));
   }
   for (const Instruction *inst : slice.body) {
-    if (const auto *call = dyn_cast<CallBase>(inst); call && !emittedSliceCalls.insert(call).second) {
-      requireCallerIndependent(*call->getCalledFunction(), sink);
-    }
     writer.instruction(*inst);
   }
   if (widthOf(root->getType(), root) != bits) {

@@ -483,7 +483,7 @@ an empty device program (`front/src/main.cpp`, `readInput`).
   (x is 0) then `apply @g -> x`; where `g` reads x, as `if (r) x = 7` stores `r ? x : 7`, that read is `v`'s
   computation. A load that read a known ordinary value (with `--taint-all` every load is treated as a qubit
   read) is given that value. Nothing is kept and no warning is written; the dataflow's third kind of fact,
-  `Computed`, records `v` (`Taint.h`). A replay that can observe a return or stack address in the callee or its
+  `Computed`, records `v` (`Taint.h`). Moving a call that can observe a return or stack address in the callee or its
   callees is refused (see "Return addresses").
 - **A one-bit update `x = e(x)` with `e(1) == e(0) ^ 1`** is `x ^= e(0)`. The identity is proved by LLVM's
   simplifier on two clones of `e`, or, where `e` reads no ordinary value and the other qubit variables it
@@ -994,7 +994,7 @@ under `apply` they run on the private copy and are undone with it.
   into a qubit variable or controls a gate, not where the call is. So the memory the call reads must be the
   same there (`ControlAnalysis::memoryUnchangedBetween`; refused by name otherwise), and a value used several
   times can be computed again for each use from the same memory. This also requires independence from
-  the caller's position. A replay that can observe a return or stack address is refused (see "Return addresses").
+  the caller's position. A move that can change an observable return or stack address is refused (see "Return addresses").
   The applied function's remaining loads and its callees' accesses are both checked. Loads moved before
   the region are passed in by value ("Conditional jumps, joins and loops" above).
   The memory a call reads is what it, and the functions it calls, may reach outside their own frames
@@ -1029,10 +1029,12 @@ under `apply` they run on the private copy and are undone with it.
   anything that depends on a qubit, using the memory present at its own site. Ordinary calls that can
   observe a return or stack address are evaluated at their original site and passed in by value.
 
-The acceptance target of the rule is SQLite (`experiments/sqlite-on-device`, stage 4): C entries that set a
-database up with ordinary code and then apply one query whose key depends on a three-qubit register; each of
-eight queries gives the native result on each of the eight rows, and memory is unchanged across each `apply`
-(`front/tests/tests/sqlite_applied.rs`, ignored by default since it needs the SQLite sources).
+The acceptance target of the rule is SQLite (`experiments/sqlite-on-device`, stage 4). C entries set up a
+database in ordinary code, then apply one query whose key depends on a three-qubit register. An earlier
+front matched all eight native queries on all eight rows and preserved memory across each `apply`.
+The current front refuses the stage 4 C entry because it cannot prove caller independence for the linked
+callees. The optional test checks the named refusal or, if lowering succeeds, still compares results and
+memory. Applying the linked library needs a proof of caller independence for its pointer uses.
 
 ## Non-local jumps (`setjmp`, `longjmp`)
 
@@ -1136,27 +1138,29 @@ one instruction that reads the frames:
   it exactly, and running again gives the same address, since the frames are restored too.
 - **In an applied function** its frames sit on the run's own, so the applied function returns to its
   `apply` and a higher level reads the frames below. Those are the same for every argument value; the applied
-  function's own frames may differ between argument values, and each run reads its own. A function the front
-  outlines (`main.apply`) is a frame the native program does not have, so the address of a call made from it
-  is not the native one; it stays opaque, so nothing C defines depends on it.
+  function's own frames may differ between argument values, and each run reads its own. This is the
+  meaning in a device program. The C front end restricts moving caller-sensitive computations as described below.
 - **The journal-content observer** (`crates/exec/src/measure.rs`) does not credit a `retaddr` result as
   recomputable from live state, which keeps its counts an upper bound.
 
-The front writes `retaddr N` for `llvm.returnaddress(N)` in the default address space. A single applied
-evaluation can read a return address. When the front would evaluate the same computation at another
-site, it refuses an observation of a return or stack address in the function or anywhere it can call. An unresolved indirect
-call may reach any function in the module. The diagnostic identifies when this fallback supplied
-the refusal. It also identifies refusals when splitting read-only outputs or evaluating a moved
-gate-loop condition. This check also covers clearing old words, inverting an
-update, clearing the condition of a gate or gate loop, and repeating a region for several results.
-When predication copies a region for separate conditional operations, the front tracks each source
-call through the copies it emits. A caller-sensitive call can appear in only one of those copies.
-A frame address, including `__builtin_frame_address(0)`, can change with the caller's stack use.
-Converting a pointer to an integer is refused in a replay unless its underlying address is known
-to be static or null. A local used only as private storage can still be replayed.
-A caller's position can change even while the arguments and memory stay the same. To support an
-overwrite in this case, keep and release the old word explicitly, or pass the caller's identity as a
-separate argument to the computation that is replayed.
+The front writes `retaddr N` for `llvm.returnaddress(N)` in the default address space. A call
+that can observe its caller's position stays at its ordinary call site. The front refuses to move
+such a call into a predicated copy, an outlined region, an extracted expression, or an applied
+function, even for one evaluation. An unresolved indirect call can reach any defined function in
+the module. The diagnostic names when the indirect target check, the read-only output split,
+or the moved gate-loop condition supplied the refusal.
+
+The front checks the callee and its callees. It permits a pointer whose address may depend on
+the stack to select memory or stay a pointer in arithmetic and joins that do not expose its
+representation. It refuses stores of such pointers as values, integer conversions, comparisons,
+returns, and passing them to calls whose bodies cannot be proved caller-independent. A pointer
+proved to come from a global or to be null is independent of stack position. Return and frame
+address intrinsics expose position. A stack save used only by stack restore is permitted.
+Private stack storage remains eligible when its address stays private.
+
+Compute a caller-sensitive value at its ordinary site and pass it in as an argument. If an
+overwrite needs the old value, keep and release it or pass the caller identity explicitly to a
+caller-independent computation.
 
 Device generation finishes before the front opens the device output or the optional LLVM output.
 A named lowering refusal leaves both output paths untouched.
@@ -1561,8 +1565,8 @@ its own).
 - **Ordinary work in a moved gate loop.** Compute the ordinary part inside one applied function for the
   table of control bits. The function follows the original condition, so it does not execute ordinary
   instructions on inputs where C skips them. The current front refuses work it cannot prove safe to move.
-- **Replay of a caller-sensitive result.** Keep the old value and release it, or pass the caller's identity
-  as an argument so the replay sees the same identity at both sites.
+- **Moving a caller-sensitive call.** Compute the value at its ordinary site and pass it in. To clear an
+  overwrite, keep and release the old value or pass the caller's identity to a caller-independent helper.
 
 | Refused inside emitted `apply` | Construction needed |
 |---|---|

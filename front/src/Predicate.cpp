@@ -18,7 +18,6 @@
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
-#include <llvm/IR/ValueHandle.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/KnownBits.h>
 #include <llvm/Support/raw_ostream.h>
@@ -84,9 +83,6 @@ private:
   std::vector<Instruction *> ops;                                   // in the order they are moved
   std::vector<LoadInst *> loads;                                    // the region's loads of qubit variables
   std::map<const Instruction *, const Value *> knownValues;         // a store's target value, when known
-  // Track source calls through copies that survive simplification and are emitted.
-  std::map<const Function *, std::vector<const CallBase *>> copiedCalls;
-  std::map<const CallBase *, WeakVH> emittedCopies;
   std::set<const Value *> beforeControl; // values defined before the original region
   std::set<const Instruction *> readAfterChange; // loads that may read what an operation wrote
 
@@ -111,7 +107,8 @@ private:
   Function *copy(Instruction *op, Result result, const Value *known, std::vector<Param> &params);
   void refuseStale(Function *copy, const std::vector<Param> &params, const Instruction *op) const;
   bool readsVariable(Function *copy, const std::vector<Param> &params, const Storage *storage) const;
-  CallInst *call(Function *copy, const std::vector<Param> &params, IRBuilder<> &b);
+  CallInst *call(Function *copy, const std::vector<Param> &params, IRBuilder<> &b, const Instruction &site,
+                 const char *context = nullptr);
   Value *qubitPointer(Value *pointer, IRBuilder<> &b) const;
   void moveGate(CallBase *gate, IRBuilder<> &b);
   void moveStore(StoreInst *store, IRBuilder<> &b);
@@ -502,18 +499,6 @@ Function *Predicator::copy(Instruction *op, Result result, const Value *known, s
     fail("internal: a copy of a predicated region is broken:\n" + out2.str());
   }
   simplifyDeep(*copy);
-  auto &origins = copiedCalls[copy];
-  origins.clear();
-  for (BasicBlock *block : blocks) {
-    for (const Instruction &inst : *block) {
-      const auto *original = dyn_cast<CallBase>(&inst);
-      Value *mapped = original ? map.lookup(original) : nullptr;
-      const auto *survivor = dyn_cast_or_null<CallBase>(mapped);
-      if (survivor && survivor->getFunction() == copy) {
-        origins.push_back(original);
-      }
-    }
-  }
   return copy;
 }
 
@@ -541,13 +526,9 @@ bool Predicator::readsVariable(Function *copy, const std::vector<Param> &params,
 
 // The call of `copy` where the operation now is: unused parameters get an undefined value, and the qubit
 // variables are read here.
-CallInst *Predicator::call(Function *copy, const std::vector<Param> &params, IRBuilder<> &b) {
-  for (const CallBase *original : copiedCalls.at(copy)) {
-    auto [first, inserted] = emittedCopies.try_emplace(original, copy);
-    if (!inserted && first->second != copy) {
-      requireCallerIndependent(*original, *original);
-    }
-  }
+CallInst *Predicator::call(Function *copy, const std::vector<Param> &params, IRBuilder<> &b,
+                          const Instruction &site, const char *context) {
+  requireCallerIndependent(*copy, site, context);
   std::vector<Value *> args;
   for (size_t i = 0; i < params.size(); ++i) {
     Argument *arg = copy->getArg(unsigned(i));
@@ -621,7 +602,7 @@ void Predicator::moveGate(CallBase *gate, IRBuilder<> &b) {
   }
   std::vector<OperandBundleDef> bundles;
   if (!returnsConstant(when, true)) {
-    bundles.emplace_back(controlBundle, std::vector<Value *>{call(when, params, b)});
+    bundles.emplace_back(controlBundle, std::vector<Value *>{call(when, params, b, *gate)});
   } else {
     when->eraseFromParent();
   }
@@ -830,20 +811,21 @@ void Predicator::moveLoop(GateLoop &gates, IRBuilder<> &b) {
                  gate);
     }
   }
+  const char *conditionContext = " when evaluating a moved gate-loop condition";
   if (returnsConstant(when, false)) {
     kind = Kind::Never;
   } else if (returnsConstant(when, true)) {
     kind = Kind::Always;
   } else if (returnsOneQubit(when, params)) {
     kind = Kind::Qubit;
-    value = call(when, params, b);
+    value = call(when, params, b, *gates.gates.front(), conditionContext);
   } else {
-    requireCallerIndependent(*when, *gates.gates.front(), " when evaluating a moved gate-loop condition");
     IRBuilder<> top(&*fn.getEntryBlock().getFirstInsertionPt());
     qubit = top.CreateAlloca(b.getInt8Ty(), nullptr, "condition");
     qubit->setMetadata(qubitMetadata, MDNode::get(context, {}));
     Value *old = b.CreateLoad(b.getInt8Ty(), qubit);
-    b.CreateStore(b.CreateXor(old, b.CreateZExt(call(when, params, b), b.getInt8Ty())), qubit);
+    Value *enabled = call(when, params, b, *gates.gates.front(), conditionContext);
+    b.CreateStore(b.CreateXor(old, b.CreateZExt(enabled, b.getInt8Ty())), qubit);
   }
 
   // The loop, cloned between `pre` and `cont`, entered where its ordinary guard holds; what it uses from the
@@ -913,7 +895,8 @@ void Predicator::moveLoop(GateLoop &gates, IRBuilder<> &b) {
   b.SetInsertPoint(cont->getTerminator());
   if (kind == Kind::Variable) {
     Value *old = b.CreateLoad(b.getInt8Ty(), qubit);
-    b.CreateStore(b.CreateXor(old, b.CreateZExt(call(when, params, b), b.getInt8Ty())), qubit);
+    Value *enabled = call(when, params, b, *gates.gates.front(), conditionContext);
+    b.CreateStore(b.CreateXor(old, b.CreateZExt(enabled, b.getInt8Ty())), qubit);
   } else if (kind != Kind::Qubit && when->use_empty()) {
     when->eraseFromParent();
   }
@@ -932,7 +915,7 @@ void Predicator::moveStore(StoreInst *store, IRBuilder<> &b) {
       change->eraseFromParent(); // the store never changes the variable
       return;
     }
-    CallInst *delta = call(change, params, b);
+    CallInst *delta = call(change, params, b, *store);
     Value *old = b.CreateLoad(targetType, target->alloca);
     b.CreateStore(b.CreateXor(old, delta), target->alloca);
     return;
@@ -947,7 +930,7 @@ void Predicator::moveStore(StoreInst *store, IRBuilder<> &b) {
                    "becomes straight-line code",
                store);
   }
-  CallInst *value = call(update, params, b);
+  CallInst *value = call(update, params, b, *store);
   b.CreateStore(value, target->alloca);
   InlineFunctionInfo info;
   InlineResult inlined = InlineFunction(*value, info);

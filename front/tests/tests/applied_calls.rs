@@ -1,25 +1,23 @@
 //! Applied calls (`docs/DESIGN.md`, "Applied calls"): a call whose arguments depend on a qubit, to an ordinary
-//! function, is applied whole with one budget, whatever memory it writes, allocates or frees and whatever
-//! loops and calls it contains. Its writes are undone when it ends; only its result survives. Each argument
-//! value's result is compared with a native run of the same C in a fresh process.
+//! caller-independent function, is applied whole with one budget. Its writes are undone when it ends.
+//! Calls into library code that can expose a pointer whose origin is unknown are refused by name.
 use bennett_exec::{Executor, Options, Outcome, RunError, Snapshot};
 use bennett_front_tests::{
-    CLANG_FLAGS, CLANG_O2_FLAGS, c_dir, lower_text, native_build, options, out_dir, registers, root,
-    state_around_first_apply, write_c,
+    CLANG_FLAGS, CLANG_O2_FLAGS, c_dir, lower_text, options, out_dir, registers, root, state_around_first_apply,
+    write_c,
 };
 use bennett_ir::{Fault, ValidModule};
 use num_complex::Complex64;
 use std::path::Path;
 use std::process::Command;
 
-/// The step budget of every `apply` in the musl fixture: far above any argument value's need.
+/// A budget far above any argument value's need.
 const WORK_BUDGET: u64 = 1_000_000;
 /// The argument register of the musl fixture is three qubits in uniform superposition.
 const VALUES: u64 = 8;
 
-/// `source` linked with musl by `rt/musl/link.py` (the front included); the device text and the front's
-/// diagnostics.
-fn musl_link(source: &Path, name: &str, region_budget: u64) -> (String, String) {
+/// Lower an entry whose library calls fail the caller-independence proof.
+fn require_musl_refusal(source: &Path, name: &str) {
     let workspace = root().canonicalize().expect("workspace");
     let build = Command::new("python3").arg(workspace.join("rt/musl/build.py")).output().expect("musl build");
     assert!(build.status.success(), "{}", String::from_utf8_lossy(&build.stderr));
@@ -28,31 +26,18 @@ fn musl_link(source: &Path, name: &str, region_budget: u64) -> (String, String) 
         .arg(workspace.join("rt/musl/link.py"))
         .arg(source)
         .arg("-o")
-        .arg(&file)
-        .arg(format!("--region-budget={region_budget}"))
+        .arg(file)
+        .arg(format!("--region-budget={WORK_BUDGET}"))
         .arg(format!("--clang-flag=-I{}", workspace.join("front/include").display()))
         .arg("--clang-flag=-fno-discard-value-names")
         .output()
         .expect("musl link");
-    let diagnostics = String::from_utf8_lossy(&link.stderr).into_owned();
-    assert!(link.status.success(), "{diagnostics}");
-    (std::fs::read_to_string(&file).expect("device text"), diagnostics)
-}
-
-/// The native result for each argument value, each from a fresh process in an empty directory of its own
-/// (the fixture creates a file in its working directory).
-fn native_results(source: &Path, name: &str) -> Vec<u64> {
-    let executable = native_build(source, name, &["-DNATIVE"]);
-    (0..VALUES)
-        .map(|v| {
-            let dir = out_dir().join(format!("{name}.native-run-{v}"));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).expect("native run directory");
-            let output = Command::new(&executable).arg(v.to_string()).current_dir(&dir).output().expect("native run");
-            assert!(output.status.success(), "native {name}({v}): {output:?}");
-            String::from_utf8(output.stdout).expect("native output").trim().parse().expect("native result")
-        })
-        .collect()
+    let diagnostic = String::from_utf8_lossy(&link.stderr);
+    assert!(!link.status.success(), "{name}: lowered the caller-sensitive call");
+    assert!(
+        diagnostic.contains("not handled yet: moving a computation that can observe its caller's position"),
+        "{name}: {diagnostic}"
+    );
 }
 
 /// The columns of `entry`'s argument register `v`, result register `r` and the fault register of `r`'s
@@ -61,10 +46,6 @@ fn columns(module: &ValidModule, entry: &str) -> (usize, usize, usize) {
     let names = registers(module, entry);
     let at = |name: &str| names.iter().position(|n| n == name).unwrap_or_else(|| panic!("no %{name} in {names:?}"));
     (at("v"), at("r"), at("r.fault"))
-}
-
-fn work_source() -> std::path::PathBuf {
-    c_dir().join("applied/work.c")
 }
 
 /// Exactly the eight configurations (v, result of v, no fault), each with amplitude 1/sqrt(8), where
@@ -76,18 +57,7 @@ fn assert_applied(
     fault: Fault,
     context: &str,
 ) {
-    assert_applied_in(module, "applied_entry", state, expected, fault, context);
-}
-
-fn assert_applied_in(
-    module: &ValidModule,
-    entry: &str,
-    state: &Snapshot,
-    expected: &[(u64, Option<u64>)],
-    fault: Fault,
-    context: &str,
-) {
-    let (v, r, f) = columns(module, entry);
+    let (v, r, f) = columns(module, "applied_entry");
     assert_eq!(state.quantum.amplitudes.len(), expected.len(), "{context}: {:?}", state.quantum.amplitudes);
     let weight = 1.0 / (VALUES as f64).sqrt();
     for &(value, result) in expected {
@@ -104,32 +74,36 @@ fn assert_applied_in(
 }
 
 #[test]
-fn a_call_that_allocates_writes_files_and_loops_is_applied_whole_and_matches_native_for_each_value() {
-    let source = work_source();
-    let native = native_results(&source, "applied_work");
-    let (text, diagnostics) = musl_link(&source, "applied_work", WORK_BUDGET);
-    assert!(!diagnostics.contains("warning"), "nothing after the call reads what it writes: {diagnostics}");
-    let module = bennett_ir::load(&text).expect("valid device program");
-    let (before, after) = state_around_first_apply(&module, "applied_entry", options(0));
-    // Its heap, static buffer and file were written on the private memory of each run, and undone.
-    assert_eq!(after.classical.memory, before.classical.memory, "the applied call left a write behind");
-    assert_eq!(after.classical.tape, before.classical.tape);
-    let expected: Vec<(u64, Option<u64>)> = (0..VALUES).map(|v| (v, Some(native[v as usize]))).collect();
-    assert_applied(&module, &after, &expected, Fault::Budget, "applied work");
-    // The whole program runs in strict mode to its end: no value faulted.
-    let mut executor =
-        Executor::new(&module, module.function_named("applied_entry").expect("entry"), &[], options(3)).expect("start");
-    assert!(matches!(executor.run(), Outcome::Returned(Some(_))));
+fn comparing_the_result_of_malloc_in_an_applied_call_is_refused() {
+    require_musl_refusal(&c_dir().join("applied/work.c"), "applied_work");
 }
 
-/// The one budget covers the whole applied call, its nested loops, allocation and file operations included.
+/// The one budget covers both nested loops of the applied call.
 /// At the smallest budget that suffices for every value nothing faults; one step less faults exactly the
 /// values that need it all, with their result register untouched, and the others keep their native result.
 #[test]
 fn a_budget_too_small_for_some_values_faults_those_values_only() {
-    let source = work_source();
-    let native = native_results(&source, "applied_budget");
-    let (text, _) = musl_link(&source, "applied_budget", WORK_BUDGET);
+    let source = r#"#include "bennett.h"
+volatile unsigned counter;
+__attribute__((noinline)) unsigned work(unsigned v) {
+    for (unsigned i = 0; i <= v; ++i)
+        for (unsigned j = 0; j <= i; ++j)
+            ++counter;
+    return counter;
+}
+int applied_entry(void) {
+    unsigned char v = 0;
+    unsigned r = 0;
+    bennett_h(bennett_bit(&v, 0));
+    bennett_h(bennett_bit(&v, 1));
+    bennett_h(bennett_bit(&v, 2));
+    r ^= work(v);
+    return (int)(bennett_measure(&v) + bennett_measure(&r));
+}
+"#;
+    let path = write_c("applied_budget", source);
+    let text = bennett_front_tests::lower_text_with_budget(&path, "applied_budget", CLANG_FLAGS, &[], WORK_BUDGET)
+        .expect("lowers");
     // The device text with the applied call's budget replaced by `budget`.
     let with_budget = |budget: u64| {
         let line = text.lines().find(|l| l.contains("apply @applied_entry.apply(")).expect("the applied call");
@@ -157,7 +131,7 @@ fn a_budget_too_small_for_some_values_faults_those_values_only() {
     assert!(!faulted.is_empty() && (faulted.len() as u64) < VALUES, "budget {}: {faulted:?}", high - 1);
     let (_, after) = state_around_first_apply(&short, "applied_entry", lenient);
     let expected: Vec<(u64, Option<u64>)> =
-        (0..VALUES).map(|v| (v, (!faulted.contains(&v)).then(|| native[v as usize]))).collect();
+        (0..VALUES).map(|v| (v, (!faulted.contains(&v)).then_some((v + 1) * (v + 2) / 2))).collect();
     assert_applied(&short, &after, &expected, Fault::Budget, &format!("budget {}", high - 1));
     // In the simulator's strict mode the same apply stops the run, naming the fault and how many values had it.
     let mut strict =
@@ -205,22 +179,10 @@ int applied_entry(void) {
     }
 }
 
-/// musl's `printf` inside an applied call: a line is written out to the console, the named fault for every
-/// value; without a newline the output stays in musl's buffer, which is undone with the call's other writes.
+/// The variadic library call stores a pointer to its frame in its argument list.
 #[test]
-fn printf_of_a_line_inside_an_applied_call_faults_and_buffered_output_is_undone() {
-    let (text, _) = musl_link(&c_dir().join("applied/speak.c"), "applied_speak", WORK_BUDGET);
-    let module = bennett_ir::load(&text).expect("valid device program");
-    let lenient = Options { allow_region_faults: true, ..options(0) };
-    let (_, after) = state_around_first_apply(&module, "line_entry", lenient);
-    assert!(after.classical.tape.is_empty());
-    let faulted: Vec<(u64, Option<u64>)> = (0..VALUES).map(|v| (v, None)).collect();
-    assert_applied_in(&module, "line_entry", &after, &faulted, Fault::EffectInRegion, "printf of a line");
-    let (before, after) = state_around_first_apply(&module, "partial_entry", options(0));
-    assert_eq!(after.classical.memory, before.classical.memory);
-    assert_eq!(after.classical.tape, before.classical.tape);
-    let results: Vec<(u64, Option<u64>)> = (0..VALUES).map(|v| (v, Some(5 * v))).collect();
-    assert_applied_in(&module, "partial_entry", &after, &results, Fault::Budget, "buffered printf");
+fn storing_a_stack_address_in_printf_blocks_moving_the_call() {
+    require_musl_refusal(&c_dir().join("applied/speak.c"), "applied_speak");
 }
 
 /// A plain applied call that writes a global the caller reads afterwards: the program is lowered, the
@@ -338,27 +300,7 @@ int applied_entry(void) {
     }
 }
 
-/// The caller already owns an allocation and an open descriptor at apply entry. The applied function
-/// reallocates and frees the object, then duplicates the descriptor, changes the file and closes both
-/// descriptors. The caller can still use its original object and descriptor after the apply.
 #[test]
-fn apply_restores_an_existing_heap_object_file_and_shared_offset() {
-    let source = c_dir().join("applied/rollback.c");
-    let native = native_results(&source, "applied_rollback");
-    let (text, _) = musl_link(&source, "applied_rollback", WORK_BUDGET);
-    let module = bennett_ir::load(&text).expect("valid device program");
-    let (before, after) = state_around_first_apply(&module, "applied_entry", options(0));
-    assert!(before.classical.memory == after.classical.memory, "apply changed the working memory");
-    assert_eq!(after.classical.stack_pointer, before.classical.stack_pointer);
-    assert_eq!(after.classical.tape, before.classical.tape);
-
-    let expected: Vec<_> = native.iter().copied().enumerate().map(|(n, result)| (n as u64, Some(result))).collect();
-    assert_applied(&module, &after, &expected, Fault::Budget, "existing allocation and descriptor");
-    let mut executor =
-        Executor::new(&module, module.function_named("applied_entry").expect("entry"), &[], options(0)).expect("start");
-    let outcome = executor.run();
-    assert!(
-        matches!(outcome, Outcome::Returned(Some(result)) if native.contains(&(result as u64))),
-        "ordinary heap and descriptor probe: {outcome:?}"
-    );
+fn comparing_the_result_of_realloc_in_an_applied_call_is_refused() {
+    require_musl_refusal(&c_dir().join("applied/rollback.c"), "applied_rollback");
 }

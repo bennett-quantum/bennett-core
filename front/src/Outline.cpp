@@ -155,7 +155,6 @@ void splitOutputs(Function &region, const SetVector<Value *> &inputs, const SetV
   std::vector<Value *> args(call->arg_begin(), call->arg_begin() + count);
   IRBuilder<> b(call);
   std::vector<Value *> cells;
-  bool emittedOutput = false;
   for (unsigned k = 0; k < outputs.size(); ++k) {
     Value *cell = call->getArgOperand(count + k);
     cells.push_back(cell);
@@ -168,10 +167,7 @@ void splitOutputs(Function &region, const SetVector<Value *> &inputs, const SetV
     if (reloads.empty()) {
       continue;
     }
-    if (emittedOutput) {
-      requireCallerIndependent(region, *call, " when splitting the outputs of a read-only region");
-    }
-    emittedOutput = true;
+    requireCallerIndependent(region, *call, " when splitting the outputs of a read-only region");
     Function *variant = outputVariant(region, count, outputs, k);
     CallInst *value = b.CreateCall(variant, args, outputs[k]->getName());
     for (LoadInst *reload : reloads) {

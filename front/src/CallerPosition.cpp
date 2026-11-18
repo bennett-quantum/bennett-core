@@ -21,26 +21,83 @@ const Function *directTarget(const CallBase &call) {
   return dyn_cast<Function>(call.getCalledOperand()->stripPointerCastsAndAliases());
 }
 
-bool exposesStackAddress(const Instruction &inst) {
-  if (const auto *address = dyn_cast<PtrToIntInst>(&inst)) {
-    SmallVector<const Value *, 4> objects;
-    getUnderlyingObjects(address->getPointerOperand(), objects);
-    // A pointer loaded from memory or passed to a callee can name a local
-    // in an applied frame. Only known static addresses are independent.
-    return objects.empty() || !all_of(objects, [](const Value *object) {
-             return isa<GlobalValue, ConstantPointerNull>(object);
-           });
+bool containsPointer(Type *type) {
+  if (type->isPointerTy()) {
+    return true;
   }
-  const auto *intrinsic = dyn_cast<IntrinsicInst>(&inst);
-  if (!intrinsic || intrinsic->getIntrinsicID() != Intrinsic::stacksave) {
+  if (auto *array = dyn_cast<ArrayType>(type)) {
+    return containsPointer(array->getElementType());
+  }
+  if (auto *vector = dyn_cast<VectorType>(type)) {
+    return containsPointer(vector->getElementType());
+  }
+  if (auto *structure = dyn_cast<StructType>(type)) {
+    return any_of(structure->elements(), containsPointer);
+  }
+  return false;
+}
+
+bool knownStaticAddress(const Value *value) {
+  if (!value->getType()->isPointerTy()) {
     return false;
   }
-  // The front lowers frameaddress(0) to stacksave. Saving the stack solely
-  // to restore it does not expose the address of the frame.
-  return any_of(intrinsic->users(), [](const User *user) {
+  SmallVector<const Value *, 4> objects;
+  getUnderlyingObjects(value, objects);
+  return !objects.empty() && all_of(objects, [](const Value *object) {
+           return isa<GlobalValue, ConstantPointerNull>(object);
+         });
+}
+
+bool privateStackSave(const IntrinsicInst &save) {
+  return all_of(save.users(), [](const User *user) {
     const auto *use = dyn_cast<IntrinsicInst>(user);
-    return !use || (use->getIntrinsicID() != Intrinsic::stackrestore && !isa<DbgInfoIntrinsic>(use));
+    return use && (use->getIntrinsicID() == Intrinsic::stackrestore || isa<DbgInfoIntrinsic>(use));
   });
+}
+
+bool callerIndependentIntrinsic(const IntrinsicInst &call) {
+  Intrinsic::ID kind = call.getIntrinsicID();
+  if (kind == Intrinsic::stacksave) {
+    return privateStackSave(call);
+  }
+  if (kind == Intrinsic::stackrestore) {
+    const auto *save = dyn_cast<IntrinsicInst>(call.getArgOperand(0));
+    return save && save->getIntrinsicID() == Intrinsic::stacksave && privateStackSave(*save);
+  }
+  if (isa<DbgInfoIntrinsic>(call) || call.isLifetimeStartOrEnd()) {
+    return true;
+  }
+  // Simplifying the generated function can reintroduce integer intrinsics.
+  // These have only their explicit arguments as inputs.
+  static constexpr Intrinsic::ID independent[] = {
+      Intrinsic::assume, Intrinsic::experimental_noalias_scope_decl,
+      Intrinsic::sadd_with_overflow, Intrinsic::uadd_with_overflow, Intrinsic::ssub_with_overflow,
+      Intrinsic::usub_with_overflow, Intrinsic::smul_with_overflow, Intrinsic::umul_with_overflow,
+      Intrinsic::sadd_sat, Intrinsic::uadd_sat, Intrinsic::ssub_sat, Intrinsic::usub_sat,
+      Intrinsic::bitreverse, Intrinsic::smax, Intrinsic::smin, Intrinsic::umax, Intrinsic::umin,
+      Intrinsic::abs, Intrinsic::fshl, Intrinsic::fshr, Intrinsic::bswap, Intrinsic::ctpop,
+      Intrinsic::ctlz, Intrinsic::cttz,
+  };
+  return is_contained(independent, kind);
+}
+
+bool keepsPointerPrivate(const Instruction &inst, const Use &use) {
+  // An address can select private storage or be carried as a pointer. Treat
+  // every other use as observing its representation unless it is static.
+  if (isa<GetElementPtrInst, BitCastInst, AddrSpaceCastInst, PHINode, SelectInst, FreezeInst>(inst)) {
+    return use->getType()->isPointerTy() && inst.getType()->isPointerTy();
+  }
+  return (isa<LoadInst>(inst) && use.getOperandNo() == LoadInst::getPointerOperandIndex()) ||
+         (isa<StoreInst>(inst) && use.getOperandNo() == StoreInst::getPointerOperandIndex());
+}
+
+bool ordinaryDeviceInstruction(const Function &function) {
+  if (!function.getReturnType()->isVoidTy() || function.isVarArg() || function.arg_size() != 1) {
+    return false;
+  }
+  Type *operand = function.getArg(0)->getType();
+  return (function.getName() == "__bennett_effect" && operand->isIntegerTy(8)) ||
+         (function.getName() == "__bennett_exit" && operand->isIntegerTy(32));
 }
 
 bool observesThroughDirectCalls(const Function &root, SmallPtrSetImpl<const Function *> &seen,
@@ -51,21 +108,38 @@ bool observesThroughDirectCalls(const Function &root, SmallPtrSetImpl<const Func
     if (!seen.insert(next).second) {
       continue;
     }
-    if (next->getIntrinsicID() == Intrinsic::returnaddress || next->getIntrinsicID() == Intrinsic::frameaddress) {
-      return true;
+    if (next->isDeclaration()) {
+      if (ordinaryDeviceInstruction(*next)) {
+        continue; // The writer emits a device instruction with only an integer input.
+      }
+      return true; // no body to prove independent
     }
     for (const Instruction &inst : instructions(*next)) {
-      if (exposesStackAddress(inst)) {
-        return true;
-      }
-      const auto *call = dyn_cast<CallBase>(&inst);
-      if (!call) {
-        continue;
-      }
-      if (const auto *callee = directTarget(*call)) {
-        work.push_back(callee);
+      if (const auto *intrinsic = dyn_cast<IntrinsicInst>(&inst)) {
+        if (!callerIndependentIntrinsic(*intrinsic)) {
+          return true;
+        }
+      } else if (const auto *call = dyn_cast<CallBase>(&inst)) {
+        if (call->isInlineAsm() || call->hasOperandBundles()) {
+          return true;
+        }
+        // Passing pointers is permitted only if the called body is itself
+        // proved caller-independent. Include every possible indirect target.
+        if (const auto *callee = directTarget(*call)) {
+          if (callee->isDeclaration() && callee->getFunctionType() != call->getFunctionType()) {
+            return true;
+          }
+          work.push_back(callee);
+        } else {
+          unresolved = true;
+        }
       } else {
-        unresolved = true;
+        for (const Use &operand : inst.operands()) {
+          if (containsPointer(operand->getType()) && !knownStaticAddress(operand.get()) &&
+              !keepsPointerPrivate(inst, operand)) {
+            return true;
+          }
+        }
       }
     }
   }
@@ -90,13 +164,11 @@ Observation observation(const Function *function, const Module &module) {
   return Observation::None;
 }
 
-void requireCallerIndependent(const Function *function, const Module &module, const Instruction &at,
-                              const char *context) {
-  Observation observed = observation(function, module);
+void requireIndependent(Observation observed, const Instruction &at, const char *context) {
   if (observed == Observation::None) {
     return;
   }
-  std::string message = "replaying a computation that can observe its caller's position through a return or stack address "
+  std::string message = "moving a computation that can observe its caller's position through a return or stack address "
                         "(route: keep the old value and release it, or pass the caller's identity as an argument)";
   if (observed == Observation::Indirect) {
     message += " through a possible indirect target";
@@ -114,11 +186,17 @@ bool canObserveCallerPosition(const Function &function) {
 }
 
 void requireCallerIndependent(const Function &function, const Instruction &at, const char *context) {
-  requireCallerIndependent(&function, *function.getParent(), at, context);
+  requireIndependent(observation(&function, *function.getParent()), at, context);
 }
 
 void requireCallerIndependent(const CallBase &call, const Instruction &at) {
-  requireCallerIndependent(directTarget(call), *call.getModule(), at, nullptr);
+  if (const auto *intrinsic = dyn_cast<IntrinsicInst>(&call)) {
+    requireIndependent(callerIndependentIntrinsic(*intrinsic) ? Observation::None : Observation::Direct, at, nullptr);
+  } else if (call.isInlineAsm() || call.hasOperandBundles()) {
+    requireIndependent(Observation::Direct, at, nullptr);
+  } else {
+    requireIndependent(observation(directTarget(call), *call.getModule()), at, nullptr);
+  }
 }
 
 } // namespace bennett
