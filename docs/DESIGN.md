@@ -158,7 +158,8 @@ released inside one call, so repetition keeps the peak of a single call at the s
 `bennett run --device count` reports gate totals, peak allocated qubits including scratch, and depth.
 A gate's layer is one plus the latest layer on any of its wires. Allocation starts a fresh wire at layer
 zero. Measurements contribute no gate layers. The CLI takes synthetic measurement bits from a seeded
-generator (`--seed`, default 0) and prints the source. Counts describe the execution for those bits.
+generator (`--seed`, default 0) and prints the source and the consumed bits in order. Counts describe
+the execution for those bits.
 The library counter also accepts a fixed sequence or a source that always gives zero.
 
 | Example | One-qubit gates | Two-qubit gates | Toffolis | Peak qubits | Depth |

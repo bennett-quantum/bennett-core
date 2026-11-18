@@ -64,6 +64,7 @@ impl Counts {
 /// Counts native gates. Measurement takes one bit from the supplied iterator per qubit.
 pub struct CountingDevice<I = Repeat<bool>> {
     bits: I,
+    outcomes: Vec<bool>,
     layers: HashMap<Wire, u128>,
     counts: Counts,
 }
@@ -71,12 +72,17 @@ pub struct CountingDevice<I = Repeat<bool>> {
 impl<I: Iterator<Item = bool>> CountingDevice<I> {
     /// Use the given measurement source. If it runs out, measurement stops the run.
     pub fn new(bits: I) -> Self {
-        Self { bits, layers: HashMap::new(), counts: Counts::default() }
+        Self { bits, outcomes: Vec::new(), layers: HashMap::new(), counts: Counts::default() }
     }
 
     /// Resources counted so far.
     pub fn counts(&self) -> Counts {
         self.counts
+    }
+
+    /// Bits returned by measurements so far, in the order they were consumed.
+    pub fn outcomes(&self) -> &[bool] {
+        &self.outcomes
     }
 
     fn summarize(&self, block: &GateBlock) -> Result<(Schedule, Counts), RunError> {
@@ -159,7 +165,9 @@ impl<I: Iterator<Item = bool>> Device for CountingDevice<I> {
     }
 
     fn measure(&mut self, _wire: Wire) -> Result<bool, RunError> {
-        self.bits.next().ok_or(RunError::Device("measurement source exhausted"))
+        let outcome = self.bits.next().ok_or(RunError::Device("measurement source exhausted"))?;
+        self.outcomes.push(outcome);
+        Ok(outcome)
     }
 
     fn discard(&mut self, wires: Range<Wire>) -> Result<(), RunError> {

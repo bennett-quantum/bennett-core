@@ -19,6 +19,7 @@ fn counts_layers_on_live_wires_and_tracks_the_allocation_peak() {
     assert!(device.measure(3).expect("first bit"));
     assert!(!device.measure(3).expect("second bit"));
     assert_eq!(device.measure(3), Err(RunError::Device("measurement source exhausted")));
+    assert_eq!(device.outcomes(), &[true, false]);
 
     device.discard(2..4).expect("released");
     device.allocate(2..3).expect("fresh lifetime");
