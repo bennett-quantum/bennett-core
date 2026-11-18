@@ -269,8 +269,13 @@ an empty device program (`front/src/main.cpp`, `readInput`).
   `q && !r` by De Morgan into another `select`, so `(s ^ 1) ^ s` did not fold and `y ^= q && !r` was refused
   until 2026-11-17 (the fallback oracle's `coherent_xor`, and `coherent_nested` at O0).
 - **Conditional jumps, joins and loops that depend on a qubit** are outlined into ordinary functions and
-  applied. They may not write memory yet: the front refuses such a write (decided, not built: it will keep
-  its value in qubits at the bytes it writes; `HANDOFF.md`, "Next steps, in order", 4).
+  applied. A store into memory in them makes the bytes it writes hold qubits ("Memory written under a qubit"
+  below); a call in them that may write memory is refused by name. The control program applies an outlined
+  function where its value is used, which may be after memory it read has changed (a span of held bytes may
+  start in between), so its loads of ordinary memory at an address fixed before it, which may be made there
+  whatever path it takes (LLVM's `isSafeToLoadUnconditionally`), are made before it and passed in
+  (`Outline.cpp`): it uses the values from where it is. What its calls read stays theirs, and is checked
+  ("Applied calls", "Where the value is computed").
 - **Code without gates under such a condition that writes qubit variables is one applied function** for all
   the variables it writes, its loops and nested loops included ("Code under a qubit" below; `RegionResults.h`).
 - **Quantum operations under such a condition are predicated** otherwise (`Predicate.h`). For each basis configuration
@@ -487,7 +492,9 @@ computation for every value of a three-qubit register in all three modes.
 `front/tests/tests/qubit_differential.rs` compares seeded short C programs (conditional stores, updates, short
 loops and helpers under a two- or three-qubit register) with native C for every definite value of the
 register; among its fixed cases, joins of constants and of values from before the code, a store LLVM merged at
-a join, and a later update that reads a join agree with C in all three modes.
+a join, a store LLVM merged at a join into memory whose span starts after the code that reads it
+(`if (!q) a = 5; else { a ^= q; b += q; }` on globals), and a later update that reads a join agree with C in
+all three modes; the same shape with the read of `a` in a helper the code calls is refused by name.
 
 **Gate loops.** A loop with gates under a condition that depends on a qubit stays a loop of the control
 program, run as written: the circuit model needs a definite list of gates, and the loop's trip count is an
@@ -691,6 +698,8 @@ under `apply` they run on the private copy and are undone with it.
   into a qubit variable or controls a gate, not where the call is. So the memory the call reads must be the
   same there (`ControlAnalysis::memoryUnchangedBetween`; refused by name otherwise), and a value used several
   times is computed again for each use, each time from the same memory, so each time with the same result.
+  An outlined region's own loads of ordinary memory at a fixed address are made where the region is and
+  passed in ("Conditional jumps, joins and loops" above), so only what its calls read is checked.
   The memory a call reads is what it, and the functions it calls, may reach outside their own frames
   (`Aliasing::reachesOutsideFrames`): a local variable of a callee exists only in a frame the call creates, so a
   function whose only accesses are to its own local variables (a `volatile` scratch value, or one a helper it

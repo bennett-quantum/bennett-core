@@ -9,6 +9,7 @@
 #include "Taint.h"
 
 #include <llvm/Analysis/DominanceFrontier.h>
+#include <llvm/Analysis/Loads.h>
 #include <llvm/Analysis/PostDominators.h>
 #include <llvm/Analysis/RegionInfo.h>
 #include <llvm/IR/IRBuilder.h>
@@ -225,6 +226,7 @@ void outlineAround(Function &function, Instruction *seed, ControlAnalysis &analy
     }
   }
   std::vector<LoadInst *> loads;
+  std::vector<LoadInst *> memoryLoads; // loads of ordinary memory at an address fixed before the region
   std::vector<Instruction *> memoryWrites; // stores into memory: its bytes will hold qubits (HeldBytes.h)
   bool variablePosition = false;          // a load from a qubit variable at a position that is not constant
   for (BasicBlock *member : blocks) {
@@ -261,6 +263,11 @@ void outlineAround(Function &function, Instruction *seed, ControlAnalysis &analy
         loads.push_back(load);
       } else if (load && analysis.basedOn(load->getPointerOperand())) {
         variablePosition = true;
+      } else if (load && load->isSimple()) {
+        const auto *pointer = dyn_cast<Instruction>(load->getPointerOperand());
+        if (!pointer || !region->contains(pointer->getParent())) {
+          memoryLoads.push_back(load);
+        }
       }
     }
   }
@@ -318,9 +325,19 @@ void outlineAround(Function &function, Instruction *seed, ControlAnalysis &analy
                block);
   }
 
-  // Nothing in the region changes a qubit variable, so its loads read what they would read just before
-  // the region: hoist them there, and the region receives the values as arguments.
-  if (!loads.empty()) {
+  // Nothing in the region changes a qubit variable or writes memory, so its loads read what they would read just
+  // before the region: hoist them there, and the region receives the values as arguments. The control program
+  // computes the region's value where it is used (Control.cpp), which may be after memory the region read has
+  // changed (the span of bytes written there may start in between, HeldBytes.h): a load of ordinary memory at an
+  // address fixed before the region, which may be loaded there whatever path the region takes, is made where the
+  // region is, so the region uses the value from there.
+  const DataLayout &layout = function.getParent()->getDataLayout();
+  Instruction *top = &*region->getEntry()->getFirstInsertionPt();
+  erase_if(memoryLoads, [&](LoadInst *load) {
+    return !isSafeToLoadUnconditionally(load->getPointerOperand(), load->getType(), load->getAlign(), layout, top,
+                                        nullptr, &dominators);
+  });
+  if (!loads.empty() || !memoryLoads.empty()) {
     SmallVector<BasicBlock *, 4> outside;
     for (BasicBlock *pred : predecessors(region->getEntry())) {
       if (!region->contains(pred)) {
@@ -338,6 +355,9 @@ void outlineAround(Function &function, Instruction *seed, ControlAnalysis &analy
       LoadInst *hoisted = b.CreateLoad(load->getType(), pointer, load->getName());
       load->replaceAllUsesWith(hoisted);
       load->eraseFromParent();
+    }
+    for (LoadInst *load : memoryLoads) {
+      load->moveBefore(before->getTerminator());
     }
   }
 

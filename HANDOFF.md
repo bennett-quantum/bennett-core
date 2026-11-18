@@ -36,8 +36,8 @@ accepted programs, a value selected where control flow joins after code under a 
 messages wider than the rules, all fixed since ("Fixes after the randomised differential test (2026-11-18)").
 The test was then widened to the shapes it had left out (`663f78d`), and its 15-minute runs on `main` with two
 seeds found no wrong result, no run-time error and no nonzero release in a program marked clean, before and
-after the widening; one shape is still refused where the rules accept it ("Randomised differential runs
-(2026-11-18)").
+after the widening; the one shape it found refused where the rules accept it, a store merged at a join, is
+accepted since ("Code under a qubit: merged stores and updates in loops (2026-11-18)").
 
 Which commits of code under a qubit have had an independent testing pass:
 
@@ -1684,16 +1684,12 @@ in a program marked clean. Runs of 15 minutes each on a shared machine (counts d
 The widened generator makes its ignored long run fail on the last column, which counts refusals, not wrong
 results.
 
-Known failing shape (refused where the rules accept it), witness
-`merged_held_store_can_use_the_value_before_the_exchange` (ignored, fails on `main`): `if (!q) a = 5; else { a
-^= q; b += q; }` with `a` and `b` globals. LLVM merges the two stores to `a` at the join; the value at the join
-is outlined into a call that reads `a`, and the front places the exchange that moves `a` into its qubit
-variable between that call and the store of its result, so the check that the memory the call reads is
-unchanged refuses it ("a call that depends on a qubit and reads memory that may change before its result is
-used"; the memory-unchanged check in `front/src/Control.cpp` and `front/src/Taint.cpp`). All 57 refusals
-counted in the last column carry this message and come from the recipe that writes an object in two regions;
-the one read in full is this shape. Route: give the outlined computation the
-value of `a` from before the exchange, so it does not read the bytes then held.
+The shape behind the last column (refused where the rules accept it), witness
+`merged_held_store_can_use_the_value_before_the_exchange`: `if (!q) a = 5; else { a ^= q; b += q; }` with `a`
+and `b` globals. All 57 refusals counted there carried the message "a call that depends on a qubit and reads
+memory that may change before its result is used" and came from the recipe that writes an object in two
+regions. Accepted since; cause and fix in "Code under a qubit: merged stores and updates in loops
+(2026-11-18)".
 
 Debts, as a measure of what the front does not accept yet (declines in the last run, seed `0x87196caa251d0f43`,
 then `0x0b7e11a5d1ff0007`; messages grouped over object, width and offset; most of the second line is the
@@ -1710,3 +1706,34 @@ generator's recipe that expects this refusal):
 
 None of these was work for this run; the routes are in `docs/DESIGN.md` ("Code under a qubit", "Applied
 calls", "Memory written under a qubit") and in "Fixes after the randomised differential test (2026-11-18)".
+
+## Code under a qubit: merged stores and updates in loops (2026-11-18)
+
+**A store merged at a join (step 1).** Witness `merged_held_store_can_use_the_value_before_the_exchange`
+(`front/tests/tests/qubit_differential.rs`), refused on the code before this step in all three modes, seen.
+Cause, read in the IR after outlining: the region `if (!q) ... else { a ^= q; b += q; }` stores into `b`, so
+`b` is held before it; LLVM merged the two stores to `a` into one store at the join, after the region, of a
+value the region selects. The region is outlined into a function that loads the global `a` itself. The merged
+store then starts the span of `a` just before it, after the region, and the control program applies the
+outlined function where its value is stored, after the exchange that moved `a`'s bytes into its shadow: the
+check that the memory a call reads is unchanged between the call and that point refused it, rightly, since the
+applied function would then have read bytes holding qubits. Fix (`front/src/Outline.cpp`, `outlineAround`): an
+outlined region's loads of ordinary memory at an address fixed before it, which may be made there whatever
+path it takes (LLVM's `isSafeToLoadUnconditionally`), are made before the region and passed in, as its loads of
+qubit variables already were; the region uses the value of `a` from where it is, and reads no memory. What a
+call inside the region reads is still checked: `merged_held_store_read_by_a_helper_after_the_exchange_is_refused`
+(the same shape with the read of `a` in a helper the region calls) is refused by name in all three modes.
+Documents: `docs/DESIGN.md`, "From C to a device program" (conditional jumps, joins and loops; the sentence
+there that such code may not write memory was out of date), "Code under a qubit", "Applied calls".
+
+A consequence, named: a region that reads bytes at a fixed address only on some paths now reads them on every
+path, in the control program. Where an earlier call left those bytes holding qubits that read is the named
+fault `qubit_memory_access` for the whole run, where before it was that fault inside the `apply`, for the
+argument values whose path read them (a named fault either way; the front assumes such bytes ordinary where a
+span starts, "Questions for the maintainer").
+
+Capped run (`BENNETT_RANDOM_CASES=400`, seed `0x87196caa251d0f43`, `slot.sh heavy`), the same 400 cases on the
+front before and after the step: accepted 330 → 332, declined 70 → 68, compared 2,164 → 2,172, wrong 0 → 0,
+failures 1 → 0 (the one failure before was this refusal, which the recipe counts). Declines of "reads memory
+that may change before its result is used" 2 → 0; of the update in a loop under a qubit-dependent value whose
+old value would have to be kept 45 → 45.

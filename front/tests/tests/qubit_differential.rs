@@ -506,6 +506,17 @@ fn check_witness(name: &str, qubits: u32, body: &str, refusal: Option<&str>) {
     check_target(name, &Case::values(body.to_owned(), qubits, 0, 1, true), refusal);
 }
 
+// A program the front must refuse with `reason` in all three modes.
+fn check_refused(name: &str, body: &str, reason: &str) {
+    let source = write_c(name, &format!("{PRELUDE}{body}{DRIVER}"));
+    for (mode, cflags, flags) in MODES {
+        match lower_text(&source, &format!("{name}-{mode}"), cflags, flags) {
+            Ok(_) => panic!("{name}-{mode}: lowered, expected the refusal {reason:?}"),
+            Err(error) => assert!(error.contains(reason), "{name}-{mode}: {error}"),
+        }
+    }
+}
+
 #[test]
 fn later_region_adds_to_the_current_value() {
     check_witness(
@@ -671,11 +682,10 @@ packet entry(unsigned prep, unsigned n, unsigned column) {
     );
 }
 
-// Class (iv): LLVM merges the stores to a at their join. The outlined value reads a,
-// but its emission site is after the exchange that moves a into its shadow.
-// See ControlWriter::collect and ControlAnalysis::memoryUnchangedBetween.
+// LLVM merges the stores to a at their join, so the value at the join is outlined and stored after the region,
+// where the span of a starts. The control program computes the value where it is stored, after the exchange
+// that moves a into its shadow; the region's load of a is made where the region is and passed in.
 #[test]
-#[ignore = "the front refuses the merged store after outlining a read of its own bytes"]
 fn merged_held_store_can_use_the_value_before_the_exchange() {
     check_witness(
         "merged-held-store-after-exchange",
@@ -695,5 +705,30 @@ packet entry(unsigned prep, unsigned n, unsigned column) {
 }
 "#,
         None,
+    );
+}
+
+// The nearest shape that must stay refused: the region reads a in a helper it calls, which is applied where
+// the value is stored, after the exchange has changed a's bytes.
+#[test]
+fn merged_held_store_read_by_a_helper_after_the_exchange_is_refused() {
+    check_refused(
+        "merged-held-store-helper-read",
+        r#"
+uint8_t a = 43, b = 9;
+__attribute__((noinline)) static uint8_t mix(uint8_t x) { return a ^ x; }
+packet entry(unsigned prep, unsigned n, unsigned column) {
+    unsigned char q = PREPARE(prep);
+    HBIT(q, 0);
+    HBIT(q, 1);
+    if (!q) a = 5;
+    else { a = mix(q); b += q; }
+    packet key = bennett_measure(&q);
+    packet first = bennett_measure_bytes(&a, 1);
+    packet second = bennett_measure_bytes(&b, 1);
+    return key | (first << 8) | (second << 16);
+}
+"#,
+        "reads memory that may change before its result is used",
     );
 }
