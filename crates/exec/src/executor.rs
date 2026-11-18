@@ -510,3 +510,44 @@ fn initial_memory(module: &Module) -> Result<Memory, StartError> {
     }
     Ok(Memory::new(memory))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_reused_frame_reads_zero_before_definition() {
+        let module = bennett_ir::load(
+            r#"
+memory 64
+func @main() {
+entry:
+    call @callee()
+    call @callee()
+    ret
+}
+func @callee() {
+entry:
+    %local = shl i128 1, 100
+    ret
+}
+"#,
+        )
+        .expect("valid program");
+        let entry = module.function_named("main").expect("main");
+        for reversible in [false, true] {
+            let mut exec =
+                Executor::new(&module, entry, &[], Options { reversible, ..Options::default() }).expect("entry fits");
+            for _ in 0..4 {
+                assert_eq!(exec.step(), None);
+            }
+            assert_eq!(exec.slot(Slot(0)), 0, "the second call starts before writing its local");
+
+            if reversible {
+                assert!(exec.step_back().expect("undo the second call"));
+                assert!(exec.step_back().expect("undo the first return"));
+                assert_eq!(exec.slot(Slot(0)), 1 << 100, "undo restores the first call's local");
+            }
+        }
+    }
+}

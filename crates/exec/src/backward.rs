@@ -99,9 +99,8 @@ impl<'m> Executor<'m> {
 
     fn undo_call(&mut self) {
         let frame = self.frames.pop().expect("a pushed frame");
-        for param in self.function(frame.func).params.iter().rev() {
-            self.slots[frame.base + param.slot.index()] = self.pop_word();
-        }
+        let end = frame.base + self.function(frame.func).slot_count();
+        self.journal.as_mut().expect("undoing needs a journal").restore_words(&mut self.slots[frame.base..end]);
         self.stack_pointer = frame.entry_stack_pointer;
     }
 

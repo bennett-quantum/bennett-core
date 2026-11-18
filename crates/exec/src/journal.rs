@@ -19,7 +19,7 @@ pub enum Undo {
     StackRestore,
     /// An `effect`, undone by dropping the last console byte. No words.
     Effect,
-    /// A frame pushed by a call or by entering a region. Words: the old value of each parameter slot.
+    /// A frame pushed by a call or by entering a region. Words: the overwritten slot values, in slot order.
     Call,
     /// A branch. Words: the old value of each parameter slot of the target, then the source block.
     Jump,
@@ -70,6 +70,17 @@ impl Journal {
 
     pub(crate) fn push_word(&mut self, word: u128) {
         self.words.push(word);
+    }
+
+    pub(crate) fn push_words(&mut self, words: &[u128]) {
+        self.words.extend_from_slice(words);
+    }
+
+    /// Pops the last words, restoring them in their original order.
+    pub(crate) fn restore_words(&mut self, slots: &mut [u128]) {
+        let start = self.words.len() - slots.len();
+        slots.copy_from_slice(&self.words[start..]);
+        self.words.truncate(start);
     }
 
     pub(crate) fn last(&self) -> Option<Undo> {

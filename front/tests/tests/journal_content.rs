@@ -228,6 +228,7 @@ struct Summary {
 fn role_name(kind: Undo, role: WordRole) -> String {
     let role = match role {
         WordRole::CallParam(_) => "param".to_owned(),
+        WordRole::CallSlot(_) => "slot".to_owned(),
         WordRole::JumpParam(_) => "param".to_owned(),
         other => format!("{other:?}"),
     };

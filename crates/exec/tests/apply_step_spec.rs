@@ -981,7 +981,6 @@ entry:
 }
 
 #[test]
-#[ignore = "a jump record can skip a slot definition and expose dead slots left by a prior call"]
 fn documented_live_state_determines_the_result() {
     let module = load(
         r#"
@@ -1023,7 +1022,6 @@ entry:
 "#,
     );
     let mut before = None;
-    let mut outputs = Vec::new();
     for seed in 0..8 {
         let mut run = executor(&module, "main", &[], Options { seed, ..options() });
         for _ in 0..11 {
@@ -1036,8 +1034,6 @@ entry:
             before = Some(snapshot);
         }
         assert_eq!(run.run(), Outcome::Returned(None));
-        outputs.push(run.snapshot().quantum.amplitudes[0].0.clone());
+        assert_eq!(run.snapshot().quantum.amplitudes[0].0, [0, 0], "seed {seed}");
     }
-    // The caller's live state was the same for all seeds. The fault or result must be the same too.
-    assert!(outputs.windows(2).all(|pair| pair[0] == pair[1]), "out and fault by seed: {outputs:?}");
 }

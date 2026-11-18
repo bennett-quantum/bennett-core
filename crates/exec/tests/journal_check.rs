@@ -9,8 +9,8 @@ use common::{bounded, load};
 // Both branches overwrite cell 0 twice. The second store destroys a copy of %v, still in the same live
 // slot on BOTH branches. On b=1 it ALSO happens to equal both stack pointers. The extra copies
 // must not invalidate the common %v witness. Every journal word can be enumerated by hand:
-// Call [0], Slot [0], Store [0], Store [17 or 984], Finish []. Thus 4 positions:
-// 3 Same and 1 Recoverable, under both alignments.
+// Call [0, 0], Slot [0], Store [0], Store [17 or 984], Finish []. Thus 5 positions:
+// 4 Same and 1 Recoverable, under both alignments.
 const COPY_WITH_EXTRA_MATCHES: &str = "memory 1024
 func @f(i1 %b) -> i8 {
 entry:
@@ -42,7 +42,7 @@ fn additional_matching_stack_pointers_do_not_erase_a_live_slot_witness() {
         .branches
         .iter()
         .map(|branch| {
-            assert_eq!((branch.steps, branch.records, branch.words), (4, 5, 4));
+            assert_eq!((branch.steps, branch.records, branch.words), (4, 5, 5));
             branch
                 .entries
                 .iter()
@@ -73,8 +73,8 @@ fn additional_matching_stack_pointers_do_not_erase_a_live_slot_witness() {
 }
 
 /// Independent hand calculation covering every recovery rule. @f(0) journals
-/// Call[0], Slot[0], Store[0], Jump[0], Finish[]. @f(1) journals that same prefix,
-/// then Slot[0], Store[0], Store[3], Store[11], Jump[1], Finish[]. The four
+/// Call[0, 0, 0], Slot[0], Store[0], Jump[0], Finish[]. @f(1) journals that same prefix,
+/// then Slot[0], Store[0], Store[3], Store[11], Jump[1], Finish[]. The six
 /// shared words are Same; the four then-block writes recover by FirstWrite,
 /// StoreBase, Unchanged and LiveCopy respectively; the last Jump is control-only.
 #[test]
@@ -112,7 +112,8 @@ entry:
     let measurement = executor.take_journal_measurement().expect("on");
     let branches = &measurement.applies[0].branches;
     assert_eq!(branches.len(), 2);
-    for (branch, (steps, values)) in branches.iter().zip([(4, vec![0, 0, 0, 0]), (9, vec![0, 0, 0, 0, 0, 0, 3, 11, 1])])
+    for (branch, (steps, values)) in
+        branches.iter().zip([(4, vec![0, 0, 0, 0, 0, 0]), (9, vec![0, 0, 0, 0, 0, 0, 0, 0, 3, 11, 1])])
     {
         assert_eq!(branch.outcome, Outcome::Returned(Some(0)));
         assert_eq!((branch.steps, branch.records, branch.words), (steps, steps as usize + 1, values.len()));
@@ -120,8 +121,8 @@ entry:
     }
     let classifications = classify(&measurement);
     for positions in [&classifications[0].site_count, &classifications[0].call_path] {
-        assert_eq!(positions.len(), 9);
-        assert_eq!(positions.iter().filter(|p| p.class == WordClass::Same).count(), 4);
+        assert_eq!(positions.len(), 11);
+        assert_eq!(positions.iter().filter(|p| p.class == WordClass::Same).count(), 6);
         let recovered: Vec<_> =
             positions.iter().filter(|p| p.class == WordClass::Recoverable).map(|p| (p.site.pos, p.reason)).collect();
         assert_eq!(
@@ -139,6 +140,6 @@ entry:
             (control[0].role, control[0].same_where_present, control[0].branches_present),
             (WordRole::JumpSource, true, 1)
         );
-        assert_eq!(positions.iter().map(|p| p.instances).sum::<usize>(), 13);
+        assert_eq!(positions.iter().map(|p| p.instances).sum::<usize>(), 17);
     }
 }
