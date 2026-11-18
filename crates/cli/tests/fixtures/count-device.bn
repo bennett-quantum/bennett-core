@@ -16,8 +16,18 @@ entry:
     %q = qalloc 1
     h %q
     %m = measure %q
+    %next = measure %q
     br %m, one, zero
 one:
+    x %q
+    x %q
+    x %q
+    x %q
+    x %q
+    x %q
+    x %q
+    x %q
+    x %q
     x %q
     ret %m
 zero:

@@ -28,7 +28,9 @@ fn run_count(module: &ValidModule, entry: FuncId, values: &[u64], args: &RunArgs
     report_result(module, entry, run.outcome, 0.0);
     report_io(&run.tape, run.steps);
     let counts = device.inner().counts();
-    println!("measurement outcomes: synthetic bits (seed {})", args.seed);
+    println!("measurement source: synthetic bits (seed {})", args.seed);
+    let outcomes: String = device.inner().outcomes().iter().map(|&bit| if bit { '1' } else { '0' }).collect();
+    println!("measurement outcomes: {}", if outcomes.is_empty() { "none" } else { &outcomes });
     println!("one-qubit gates: {}", counts.one_qubit);
     println!("two-qubit gates: {}", counts.two_qubit);
     println!("Toffoli gates: {}", counts.toffoli);
