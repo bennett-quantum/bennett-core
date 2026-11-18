@@ -73,10 +73,10 @@ Newest first; quotes are the maintainer's words.
 
 ## In flight
 
-Two git branches are under review and are not on `main`; neither is to be landed before the review ends.
+Two git branches are under review; the part of the second that was only tests is on `main`. Nothing on them is to be landed before the review ends.
 
 - `wip/sol62-device`: an interface between the executor and its quantum simulator (so the simulator can be replaced); a counting device that only counts qubits and gates; rewriting of gates with many controls for a machine with one- and two-qubit gates and the Toffoli gate; a bit-level circuit runner that checks reversible gate lists against independent references.
-- `wip/sol62-stepspec`: tests pinning an exact statement of what an applied function does for one definite input, step by step; and a change that makes the slots of a new frame zero.
+- `wip/sol62-stepspec`: tests pinning an exact statement of what an applied function does for one definite input, step by step (these two commits, `90f7305` and `6155161`, are on `main` already); what is left on the branch is one change that makes the slots of a new frame zero.
 - Not to be landed ever: `wip/fallback-step3`, `wip/sol-mutants-machine`, `wip/sol-mutants-machine-partial` (they build on the removed `mark`/`rewind` machinery).
 
 ## Next steps
@@ -148,7 +148,8 @@ Each is taken in the cheapest way to reverse, as stated, until answered. Last 20
 ## Which commits no independent check has covered
 
 - `58d6e4b` (a fix: only its own tests and the 15-minute randomised runs on it have covered it). The next independent testing pass starts there.
-- Documents-only commits (`babaa5c`, `fc33dc9`, and the one that carries this file) and the generator commits, which are test-only and had their sensitivity shown on a deliberately changed scratch front.
+- `90f7305` and `6155161` (test-only: the step-rule tests from the work on `wip/sol62-stepspec`; no independent check yet).
+- Documents-only commits (`babaa5c`, `fc33dc9`, and the ones that carry this file) and the generator commits, which are test-only and had their sensitivity shown on a deliberately changed scratch front.
 - Everything else in code under a qubit has had an independent testing pass or the 15-minute randomised runs; the list, commit by commit, is in `docs/RECORDS.md`, part two ("The top of the old HANDOFF").
 
 ## Where the records are
