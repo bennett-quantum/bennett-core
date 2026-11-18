@@ -104,12 +104,11 @@ Newest first; quotes are the maintainer's words.
 
 ## In flight
 
-Copied calls and unsigned arithmetic are on `wip/sol62-m4` for independent review.
-Both emission modes matched direct evaluation for
-two continuations into a copied callee and two visits to one site. Stack tests cover
-the seven-byte and eight-byte entry cases at budget zero, a grandchild that must
-reserve space below its parent,
-and bad indirect addresses and signatures. Copied arguments preserve proved bits,
+The reviewed copied calls and unsigned arithmetic, with their fixes, are on `wip/sol62-m4`.
+Both emission modes matched direct evaluation for two continuations into a copied callee
+and two visits to one site. Tests cover the seven-byte and eight-byte entry cases at
+budget zero, space reserved below a grandchild's parent, and bad indirect addresses
+and signatures. Copied arguments preserve proved bits,
 including the high zeros of a zero extension used to resolve an indirect address.
 The planner copies sites reachable from entry. Untaken indirect calls need no
 target proof.
@@ -134,8 +133,9 @@ a proof and can follow literal decisions within that code. Conditional
 routes that would duplicate shared code fall back to the step machine. The overlap check
 follows only the selected edge of a literal decision. A proved zero-test
 exit carries the zero into its continuation. The six-bit outer and inner draining example
-schedules 12 body passes and 1,963 gates. A zero-shift regression checks that a
-nonzero word keeps running to the budget. The tests compare
+schedules 12 body passes and 1,963 gates. Regressions check that a zero shift and a
+literal switch selecting a default edge that leaves the word unchanged both keep a
+nonzero word running to the budget. The tests compare
 amplitudes for a choice inside a definite-count loop, unequal routes to a shared return, and
 shift loops of widths 2 to 6, including a nested example. The bit-level runner checked all 256
 inputs at budgets 0 through 45 for the 8-bit shift loop with both control gates and the step
@@ -160,8 +160,8 @@ returns 1 at budget 14 and writes `budget` at 13 for `x = y = 1`.
 ## Next steps
 
 In order:
-1. Independently review the emitter's copied calls, unsigned arithmetic and fault handling.
-2. Apply any review fixes and recheck the emitter.
+1. Run the landing checks for the emitter's copied calls, unsigned arithmetic and review fixes.
+2. Land the checked emitter commits.
 3. **Shor's algorithm for 15 and 21 from plain C.** Measure the unfused program first. Compare Toffoli count and peak qubits with a textbook-class hand-built circuit using the same registers, aiming for a factor of two or less on both. Record depth too.
 4. **Applied memory**: add private memory and stack operations, with the corresponding first-fault rules.
 5. Then what the old plan left undone: rule A at an address that depends on a qubit (declare the region, then exchange one addressed element, at a cost of the region's size times the element's width per access); a second implementation of the device language (grow the reference that runs `apply` by its construction, `crates/exec/tests/compute_copy_reference/`); the floating-point environment through SoftFloat's state, `__float128` and the remaining intrinsics; the runtime debts below; Grover over a SQL query written in plain C; the optimiser and cost model (`opt`, not started).

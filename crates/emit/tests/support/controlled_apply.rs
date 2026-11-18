@@ -660,6 +660,38 @@ fn a_drained_inner_word_stays_zero_on_later_outer_passes() {
 }
 
 #[test]
+fn a_literal_switch_default_can_keep_a_loop_running() {
+    let module = control_example(
+        r#"
+memory 1024
+func @f(i2 %x) -> i8 {
+entry:
+    br header(%x)
+header(i2 %word):
+    %nonzero = icmp ne i2 %word, 0
+    br %nonzero, choose, done
+choose:
+    switch i2 2, 1: advance, default: stay
+advance:
+    %half = lshr i2 %word, 1
+    br header(%half)
+stay:
+    br header(%word)
+done:
+    ret 7
+}
+"#,
+        2,
+        "",
+    );
+    for budget in 0..=17 {
+        for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+            compare_controls(&module, budget, mode, |x| if x == 0 && budget >= 4 { (7, 0) } else { (0, 1) });
+        }
+    }
+}
+
+#[test]
 fn a_shift_by_zero_keeps_every_nonzero_input_running() {
     let source = shift_loop(2).replace("lshr i2 %x, 1", "lshr i2 %x, 0");
     let module = control_example(&source, 2, "");

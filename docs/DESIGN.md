@@ -474,6 +474,8 @@ checks every 8-bit input at budgets 0 through 45, with zero and patterned destin
 all 4,096 inputs to the 12-bit draining example at budget 85, with patterned destinations.
 For 8, 9 and 10 short-circuit pairs with early returns, automatic mode emits the same
 gate lists as forced dispatch, with 3,343, 4,544 and 5,999 gates respectively.
+The literal-switch loop test selects the default edge back to an unchanged word.
+Nonzero inputs exhaust the budget in both modes because that edge never shifts the word.
 
 **Arithmetic counts.** The table counts native Toffolis for each gadget, including
 the reversal that clears its own work wires after copying the result. For a product
