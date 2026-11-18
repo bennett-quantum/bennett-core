@@ -3,7 +3,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Range;
 
-use bennett_exec::{BlockOp, Device, GateBlock, GateOp, RunError, Wire};
+use bennett_exec::{BlockOp, Device, GateBlock, GateBlockKey, GateOp, RunError, Wire};
 use bennett_ir::{FixedGate, Gate};
 
 const X: Gate = Gate::Fixed(FixedGate::X);
@@ -26,7 +26,7 @@ fn scratch_range(live: &BTreeSet<Wire>, count: u64) -> Result<Range<Wire>, RunEr
     }
 }
 
-fn lower(gate: GateOp<&[Wire]>, live: &BTreeSet<Wire>, ops: &mut Vec<BlockOp>) -> Result<(), RunError> {
+fn lower(gate: GateOp<&[Wire]>, live: &BTreeSet<Wire>, ops: &mut Vec<BlockOp>) -> Result<Range<Wire>, RunError> {
     let scratch = scratch_range(live, (gate.controls.len() - 1) as u64)?;
     let ladder = gate.controls[1..].iter().enumerate().map(|(index, &control)| {
         let target = scratch.start + index as u64;
@@ -37,15 +37,64 @@ fn lower(gate: GateOp<&[Wire]>, live: &BTreeSet<Wire>, ops: &mut Vec<BlockOp>) -
     ops.extend(ladder.clone());
     ops.push(BlockOp::Gate(GateOp { kind: gate.kind, target: gate.target, controls: vec![scratch.end - 1] }));
     ops.extend(ladder.rev());
-    ops.push(BlockOp::ReleaseZero(scratch));
-    Ok(())
+    ops.push(BlockOp::ReleaseZero(scratch.clone()));
+    Ok(scratch)
+}
+
+/// A lowered block remains valid until a current allocation occupies its generated scratch.
+enum LoweredBlock {
+    Native,
+    WithScratch { definition: GateBlock, scratch: BTreeSet<(Wire, Wire)> },
+}
+
+impl LoweredBlock {
+    fn available<'a>(&'a self, original: &'a GateBlock, live: &BTreeSet<Wire>) -> Option<&'a GateBlock> {
+        match self {
+            Self::Native => Some(original),
+            Self::WithScratch { definition, scratch } => {
+                scratch.iter().all(|&(start, end)| live.range(start..end).next().is_none()).then_some(definition)
+            }
+        }
+    }
+
+    fn new(block: &GateBlock, live: &BTreeSet<Wire>) -> Result<Self, RunError> {
+        let needs_lowering = block.ops().iter().any(|op| match op {
+            BlockOp::Gate(gate) => !native(gate.borrowed()),
+            BlockOp::Allocate(_) | BlockOp::ReleaseZero(_) => false,
+        });
+        if !needs_lowering {
+            return Ok(Self::Native);
+        }
+
+        let mut live = live.clone();
+        let mut ops = Vec::new();
+        let mut scratch = BTreeSet::new();
+        for op in block.ops() {
+            match op {
+                BlockOp::Gate(gate) if !native(gate.borrowed()) => {
+                    let wires = lower(gate.borrowed(), &live, &mut ops)?;
+                    scratch.insert((wires.start, wires.end));
+                    continue;
+                }
+                BlockOp::Allocate(wires) => live.extend(wires.clone()),
+                BlockOp::Gate(_) => {}
+                BlockOp::ReleaseZero(wires) => {
+                    for wire in wires.clone() {
+                        live.remove(&wire);
+                    }
+                }
+            }
+            ops.push(op.clone());
+        }
+        Ok(Self::WithScratch { definition: GateBlock::from_ops(block.name(), ops), scratch })
+    }
 }
 
 /// Lowers controlled gates using temporary qubits, forwarding other commands to the inner device.
 pub struct LowerControls<D> {
     inner: D,
     live: BTreeSet<Wire>,
-    blocks: HashMap<GateBlock, GateBlock>,
+    blocks: HashMap<GateBlockKey, LoweredBlock>,
 }
 
 impl<D> LowerControls<D> {
@@ -55,11 +104,8 @@ impl<D> LowerControls<D> {
     }
 
     fn end_wires(&mut self, wires: Range<Wire>) {
-        if !wires.is_empty() {
-            self.blocks.clear();
-            for wire in wires {
-                self.live.remove(&wire);
-            }
+        for wire in wires {
+            self.live.remove(&wire);
         }
     }
 
@@ -72,10 +118,7 @@ impl<D> LowerControls<D> {
 impl<D: Device> Device for LowerControls<D> {
     fn allocate(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
         self.inner.allocate(wires.clone())?;
-        if !wires.is_empty() {
-            self.blocks.clear();
-            self.live.extend(wires);
-        }
+        self.live.extend(wires);
         Ok(())
     }
 
@@ -115,30 +158,20 @@ impl<D: Device> Device for LowerControls<D> {
         if times == 0 {
             return Ok(());
         }
-        if let Some(lowered) = self.blocks.get(block) {
-            return self.inner.repeat(lowered, times);
+        let key = block.key();
+        if let Some(available) = self.blocks.get(&key).and_then(|lowered| lowered.available(block, &self.live)) {
+            return self.inner.repeat(available, times);
         }
-        let mut live = self.live.clone();
-        let mut ops = Vec::new();
-        for op in block.ops() {
-            match op {
-                BlockOp::Gate(gate) if !native(gate.borrowed()) => {
-                    lower(gate.borrowed(), &live, &mut ops)?;
-                    continue;
-                }
-                BlockOp::Allocate(wires) => live.extend(wires.clone()),
-                BlockOp::Gate(_) => {}
-                BlockOp::ReleaseZero(wires) => {
-                    for wire in wires.clone() {
-                        live.remove(&wire);
-                    }
-                }
-            }
-            ops.push(op.clone());
-        }
-        let lowered = GateBlock::from_ops(block.name(), ops);
-        self.inner.repeat(&lowered, times)?;
-        self.blocks.insert(block.clone(), lowered);
+        // Drop the obsolete definition before issuing the new one, so the inner device can prune it.
+        self.blocks.remove(&key);
+        self.blocks.retain(|key, _| key.is_live());
+        let lowered = LoweredBlock::new(block, &self.live)?;
+        let definition = match &lowered {
+            LoweredBlock::Native => block,
+            LoweredBlock::WithScratch { definition, .. } => definition,
+        };
+        self.inner.repeat(definition, times)?;
+        self.blocks.insert(key, lowered);
         Ok(())
     }
 }

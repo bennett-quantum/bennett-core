@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::iter::{Repeat, from_fn, repeat};
 use std::ops::Range;
 
-use bennett_exec::{BlockOp, Device, GateBlock, GateOp, RunError, Wire};
+use bennett_exec::{BlockOp, Device, GateBlock, GateBlockKey, GateOp, RunError, Wire};
 use bennett_ir::{FixedGate, Gate};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -138,7 +138,7 @@ pub struct CountingDevice<I = Repeat<bool>> {
     outcomes: Vec<bool>,
     layers: HashMap<Wire, u128>,
     counts: Counts,
-    blocks: HashMap<GateBlock, BlockSummary>,
+    blocks: HashMap<GateBlockKey, BlockSummary>,
     #[cfg(test)]
     summaries_built: usize,
 }
@@ -234,7 +234,11 @@ impl<I: Iterator<Item = bool>> Device for CountingDevice<I> {
 
     fn repeat(&mut self, block: &GateBlock, times: u64) -> Result<(), RunError> {
         if times > 0 {
-            let summary = match self.blocks.entry(block.clone()) {
+            let key = block.key();
+            if !self.blocks.contains_key(&key) {
+                self.blocks.retain(|key, _| key.is_live());
+            }
+            let summary = match self.blocks.entry(key) {
                 Entry::Occupied(entry) => entry.into_mut(),
                 Entry::Vacant(entry) => {
                     let summary = BlockSummary::new(block)?;
@@ -285,5 +289,50 @@ mod tests {
         assert_eq!(device.inner().summaries_built, 1);
         assert_eq!(device.inner().counts().two_qubit, 2);
         assert_eq!(device.inner().counts().toffoli, 4);
+    }
+
+    #[test]
+    fn unrelated_allocations_do_not_accumulate_summaries_for_one_block() {
+        for gate in [
+            GateOp { kind: Gate::Fixed(FixedGate::X), target: 2, controls: vec![] },
+            GateOp { kind: Gate::Fixed(FixedGate::H), target: 2, controls: vec![0, 1] },
+        ] {
+            let mut device = LowerControls::new(CountingDevice::default());
+            device.allocate(0..3).expect("input wires");
+            let is_x = gate.kind == Gate::Fixed(FixedGate::X);
+            let block = GateBlock::new("fixed block", [gate]);
+            for _ in 0..20_000 {
+                device.allocate(3..4).expect("unrelated wire");
+                device.call(&block).expect("call the same block");
+                device.release_zero(3..4).expect("release the unrelated wire");
+            }
+            assert_eq!(device.inner().counts().one_qubit, if is_x { 20_000 } else { 0 });
+            assert_eq!(device.inner().counts().two_qubit, if is_x { 0 } else { 20_000 });
+            assert_eq!(device.inner().blocks.len(), 1);
+            assert_eq!(device.inner().summaries_built, 1);
+            if is_x {
+                assert!(device.inner().blocks.contains_key(&block.key()));
+            }
+        }
+    }
+
+    #[test]
+    fn reassigned_scratch_does_not_retain_obsolete_summaries() {
+        let mut device = LowerControls::new(CountingDevice::default());
+        device.allocate(0..3).expect("input wires");
+        let block = GateBlock::new(
+            "two controls",
+            [GateOp { kind: Gate::Fixed(FixedGate::H), target: 2, controls: vec![0, 1] }],
+        );
+        device.call(&block).expect("first placement");
+        for wire in (Wire::MAX - 32..Wire::MAX).rev() {
+            device.allocate(wire..wire + 1).expect("claim the last scratch wire");
+            device.call(&block).expect("call with a new scratch location");
+            assert_eq!(device.inner().blocks.len(), 1);
+        }
+        assert_eq!(device.inner().summaries_built, 33);
+        assert_eq!(device.inner().counts().two_qubit, 33);
+        assert_eq!(device.inner().counts().toffoli, 66);
+        assert_eq!(device.inner().counts().peak_qubits, 36);
     }
 }
