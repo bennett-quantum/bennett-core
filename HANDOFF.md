@@ -1651,7 +1651,8 @@ accepting it is a widening, not taken); a call that does read memory outside its
 any write may come between it and its use, whether or not the write can reach what it reads (route: compare the
 call's reach (`Aliasing`) with each intervening write's). In the capped run 8 programs were still refused with
 "reads memory that may change before its result is used"; in those looked at the call is an outlined region of
-code under a qubit that reads global variables, not a helper (older, not investigated).
+code under a qubit that reads global variables, not a helper: such a region now makes those reads where it is
+("Code under a qubit: merged stores and updates in loops (2026-11-18)").
 
 ## Randomised differential runs (2026-11-18)
 
@@ -1707,8 +1708,9 @@ generator's recipe that expects this refusal):
 | a call that depends on a qubit, whose result is not used, to a function that may write memory | 2, 2 |
 | an access through a pointer that may reach bytes while they hold qubits | 0, 1 |
 
-None of these was work for this run; the routes are in `docs/DESIGN.md` ("Code under a qubit", "Applied
-calls", "Memory written under a qubit") and in "Fixes after the randomised differential test (2026-11-18)".
+The first row and the shape of the third are accepted since ("Code under a qubit: merged stores and updates in
+loops (2026-11-18)"); the routes of the others are in `docs/DESIGN.md` ("Code under a qubit", "Applied calls",
+"Memory written under a qubit") and in "Fixes after the randomised differential test (2026-11-18)".
 
 ## Code under a qubit: merged stores and updates in loops (2026-11-18)
 
