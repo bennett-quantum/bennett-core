@@ -87,6 +87,7 @@ private:
   // Track source calls through copies that survive simplification and are emitted.
   std::map<const Function *, std::vector<const CallBase *>> copiedCalls;
   std::map<const CallBase *, WeakVH> emittedCopies;
+  std::set<const Value *> beforeControl; // values defined before the original region
   std::set<const Instruction *> readAfterChange; // loads that may read what an operation wrote
 
   // A loop of the region whose gates stay in it: its trip count is ordinary, so the loop runs in the control
@@ -886,7 +887,7 @@ void Predicator::moveLoop(GateLoop &gates, IRBuilder<> &b) {
       }
     }
   }
-  requireFiniteMovedLoop(*header, *gates.gates.front());
+  requireFiniteMovedLoop(*header, *gates.gates.front(), beforeControl);
   for (Instruction *gate : gates.gates) {
     auto *clone = cast<CallBase>(map[gate]);
     if (kind == Kind::Never) {
@@ -993,6 +994,13 @@ void Predicator::run() {
     }
   }
   order();
+  if (!gateLoops.empty()) {
+    for (const Instruction &inst : instructions(fn)) {
+      if (!inRegion.count(inst.getParent()) && analysis.dominators.dominates(&inst, &entry->front())) {
+        beforeControl.insert(&inst);
+      }
+    }
+  }
   // What is known about a store's target, before the control flow changes.
   for (Instruction *op : ops) {
     if (auto *store = dyn_cast<StoreInst>(op)) {

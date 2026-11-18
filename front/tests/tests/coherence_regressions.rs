@@ -799,3 +799,23 @@ fn replay_diagnostic_names_the_generated_gate_loop_condition() {
         "when evaluating a moved gate-loop condition",
     );
 }
+
+#[test]
+fn a_moved_gate_loop_refuses_a_count_computed_under_the_condition() {
+    Program {
+        name: "gate-count-under-condition",
+        declarations: "",
+        body: r#"
+    ZBIT(q, 1);
+    uint8_t y = 0;
+    if (q) {
+        #pragma clang loop unroll(disable)
+        for (uint64_t i = (prep == 1 ? 0 : (UINT64_MAX - n) - 1); i < (UINT64_MAX - n); ++i)
+            XBIT(y, 0);
+    }
+    return READ(y);
+"#,
+        qubits: 1,
+    }
+    .refused(1, &[0, 1], "not handled yet: a moved gate loop");
+}

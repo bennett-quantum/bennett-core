@@ -165,7 +165,8 @@ fn gate_loop(random: &mut ChaCha8Rng) -> Case {
     let trips = random.random_range(0..=5);
     let inner_trips = random.random_range(0..=3);
     let site = random.random_range(0..=4);
-    let gate = if random.random_bool(0.5) {
+    let simple_count = random.random_bool(0.5);
+    let gate = if simple_count {
         format!("if (i == {site}U) XBIT(y, 0);")
     } else {
         format!(
@@ -186,7 +187,9 @@ fn gate_loop(random: &mut ChaCha8Rng) -> Case {
         prepare = prepare(qubits),
         condition = condition(random, qubits),
     );
-    Case { body, qubits, trips, packets: 1, expectation: Expectation::Clean, state: Some(Check::new(fields(&[0, 8]))) }
+    // The inner bound is computed under qubit control unless LLVM hoists it.
+    let expectation = if simple_count { Expectation::Clean } else { Expectation::GateLoopWithComputedCount };
+    Case { body, qubits, trips, packets: 1, expectation, state: Some(Check::new(fields(&[0, 8]))) }
 }
 
 fn applied_write(random: &mut ChaCha8Rng) -> Case {

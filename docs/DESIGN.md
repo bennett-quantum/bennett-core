@@ -792,10 +792,12 @@ recomputes to enter the loop. LLVM can hoist a load from a short-circuit guard a
 The front follows guard inputs to these earlier loads and checks their addresses against preceding
 accesses and calls that may leave qubits there. A load whose bytes cannot be proved ordinary is refused. It refuses moved memory accesses, calls, and division or remainder without
 a divisor proved nonzero independently of the original qubit condition. A nonzero constant or a bitwise OR
-with a nonzero constant supplies that proof. Each cycle must have a unit-step counter that reaches its
-loop-invariant exit bound without wrapping. A strict comparison must match the step direction. An
-equality exit also needs an ordering proof from the ordinary conditions that still guard the moved loop.
-For each definite value of what the condition reads, the result is the product of the gates the C applies there.
+with a nonzero constant supplies that proof. Each cycle needs a unit-step counter whose start and
+loop-invariant exit bound are fixed before the qubit-dependent condition. A strict comparison must
+match the step direction. If the exit test uses the next counter value or an equality comparison, the
+ordinary entry edges must prove that it cannot wrap. The moved loop runs, for every input to its
+ordinary code, the passes the C runs when the condition enables its gates. The disabled passes
+apply no gates.
 Refused by name, each with its route:
 
 - a loop whose number of passes depends on a qubit: a circuit is a definite list of gates, so the number of

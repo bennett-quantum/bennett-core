@@ -82,6 +82,7 @@ struct Case {
 enum Expectation {
     Values { clean: bool },
     Clean,
+    GateLoopWithComputedCount,
     AppliedWrite(&'static str),
     ConditionalWrite,
     Retained(u32),
@@ -91,7 +92,14 @@ enum Expectation {
 
 impl Expectation {
     fn clean(&self) -> bool {
-        matches!(self, Self::Values { clean: true } | Self::Clean | Self::AppliedWrite(_) | Self::LoopClean)
+        matches!(
+            self,
+            Self::Values { clean: true }
+                | Self::Clean
+                | Self::GateLoopWithComputedCount
+                | Self::AppliedWrite(_)
+                | Self::LoopClean
+        )
     }
 
     fn loop_overwrite(&self) -> bool {
@@ -125,7 +133,13 @@ impl Expectation {
                 &format!("warning: the overwrite of qubit variable '{object}'{LOOP_UPDATE}"),
                 &format!("keeps the old value in {bits} qubits each time it runs"),
             ],
-            Self::Values { .. } | Self::Clean | Self::ConditionalWrite | Self::LoopClean => return Ok(()),
+            Self::Values { .. }
+            | Self::Clean
+            | Self::GateLoopWithComputedCount
+            | Self::ConditionalWrite
+            | Self::LoopClean => {
+                return Ok(());
+            }
         };
         if !diagnostics.lines().any(|line| expected.iter().all(|part| line.contains(part))) {
             return Err(format!("missing warning containing {expected:?}: {diagnostics:?}"));
@@ -268,6 +282,12 @@ fn try_case(case: &Case, name: &str, mode: usize, results: &mut Results) -> Resu
                 && !reason.contains("a call to @write_cell, which may write memory,")
             {
                 return Err(format!("expected the refusal of a conditional writing call: {reason}"));
+            }
+            if matches!(case.expectation, Expectation::GateLoopWithComputedCount)
+                && !reason
+                    .starts_with("not handled yet: a moved gate loop whose ordinary passes are not proved to terminate")
+            {
+                return Err(format!("expected a proof of the moved loop count or a named refusal: {reason}"));
             }
             if matches!(
                 case.expectation,

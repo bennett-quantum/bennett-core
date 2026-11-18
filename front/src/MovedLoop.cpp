@@ -83,7 +83,7 @@ bool entryProves(const Loop &loop, const Loop &root, const DominatorTree &domina
 }
 
 bool exitsWithCounter(const Loop &loop, const Loop &root, const DominatorTree &dominators,
-                      BasicBlock &exit, BasicBlock &latch) {
+                      BasicBlock &exit, BasicBlock &latch, const std::set<const Value *> &available) {
   const auto *jump = dyn_cast<BranchInst>(exit.getTerminator());
   if (!jump || !jump->isConditional()) {
     return false;
@@ -118,6 +118,12 @@ bool exitsWithCounter(const Loop &loop, const Loop &root, const DominatorTree &d
       continue;
     }
     const Value *start = phi.getIncomingValueForBlock(loop.getLoopPredecessor());
+    auto fixedBeforeControl = [&](const Value *value) {
+      return isa<ConstantInt, Argument>(value) || available.count(value);
+    };
+    if (!fixedBeforeControl(start) || !fixedBeforeControl(bound)) {
+      continue;
+    }
     if (predicate == ICmpInst::ICMP_NE) {
       // An equality exit must be reachable without first wrapping the counter.
       if (entryProves(loop, root, dominators, ICmpInst::ICMP_ULT,
@@ -170,7 +176,8 @@ void requireSafeMovedLoopInstruction(const Instruction &inst) {
              &inst);
 }
 
-void requireFiniteMovedLoop(BasicBlock &header, const Instruction &gate) {
+void requireFiniteMovedLoop(BasicBlock &header, const Instruction &gate,
+                            const std::set<const Value *> &available) {
   DominatorTree dominators(*header.getParent());
   LoopInfo loops(dominators);
   const Loop *root = loops.getLoopFor(&header);
@@ -184,9 +191,9 @@ void requireFiniteMovedLoop(BasicBlock &header, const Instruction &gate) {
     SmallVector<BasicBlock *, 4> exits;
     loop->getExitingBlocks(exits);
     if (!latch || !loop->getLoopPredecessor() || !any_of(exits, [&](BasicBlock *exit) {
-          return dominators.dominates(exit, latch) && exitsWithCounter(*loop, *root, dominators, *exit, *latch);
+          return dominators.dominates(exit, latch) && exitsWithCounter(*loop, *root, dominators, *exit, *latch, available);
         })) {
-      notHandled("a moved gate loop whose ordinary passes are not proved to terminate without counter wrap where its gates are disabled" +
+      notHandled("a moved gate loop whose ordinary passes are not proved to terminate without counter wrap where its gates are disabled with a start and bound fixed before qubit control" +
                      std::string(tableRoute),
                  &gate);
     }
