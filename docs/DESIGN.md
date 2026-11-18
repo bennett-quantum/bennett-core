@@ -1,7 +1,7 @@
 # Design note
 
-A working note. It records what is decided for now and what is left open. Nothing here is a contract; change it when
-the code teaches us something, and say why in the commit.
+This note records the current implementation, the language's guarantees and the questions
+still open. Explain design changes in the commit.
 
 ## Principles
 
@@ -65,15 +65,17 @@ first `N` steps, for any `N`, are equivalent to a finite quantum circuit whose m
 end.
 Part 3 is not covered by that equivalence; why a device can carry it out is argued separately ("`apply`").
 
-Rotations take any angle written as a finite `f64` (`docs/SYNTAX.md`); a device with a finite gate set
-approximates them.
+Rotations accept any angle. Today angles are written as finite `f64` literals (`docs/SYNTAX.md`).
+The device language and C markers will also accept an ordinary value computed by the control program,
+as needed for the one-control-qubit Shor program. A device with a finite gate set approximates rotations.
 
 ## The device program (`ir`)
 
 A module is a list of functions, an initial memory image and a memory size.
 
 - **Values** are integers of any width from 1 to 128 bits. A pointer is an integer address into one flat byte memory.
-  A quantum register has at most 64 qubits.
+  A quantum register currently holds at most 64 qubits. Wider registers and objects with more than
+  8 bytes holding qubits are planned before running Shor above 64 bits.
   There are no floating-point values: floating point arrives as library code.
 - **Functions** have typed parameters and at most one result. Bodies are basic blocks in SSA form with block
   parameters. Every name is resolved to a dense index when the module is loaded; nothing is looked up by name at
@@ -156,6 +158,12 @@ For any other gate with `k` controls, it uses `k - 1` scratch wires. A ladder of
 of the controls into the last scratch wire. The wrapper applies the gate with that one control, reverses the
 ladder and releases the scratch in zero. The named gate and its rotation angle pass through unchanged.
 
+The benchmark is Shor's algorithm in plain C. Compare with a textbook-class hand-built circuit
+using the same registers. Both Toffoli count and peak qubits must be within a factor of two.
+Windowed circuits are a stretch target. Report the remaining factor against them. The long-term
+optimiser goal is to discover opportunities such as reusing a qubit after measuring it and
+match the textbook circuits.
+
 A caller can define a named gate block once and call or repeat it through the device interface.
 The default expands its operations. The counting device caches one summary per immutable block
 definition, multiplies its gate totals by the repetition count and composes its gate layers using the
@@ -192,6 +200,10 @@ and sample larger registers with a fixed seed.
 `out` and `fault` are registers (`fault` at least 5 qubits wide) and may not appear among the arguments. The
 function `@f` is the **applied function**; some fault and option names call it a *region*.
 
+To pass bits from memory today, copy them into a register with controlled X gates, apply the
+function, then undo those gates. Once C functions can take qubits through pointers, a derived
+argument form will name bits at an address and expand into those steps.
+
 `apply` must follow the rule for each instruction's step cost and effect in the [step specification](APPLY-STEP.md).
 
 **Meaning.** For each definite value `a` of the argument registers, run `@f(a)` for exactly `B` steps on a
@@ -201,7 +213,8 @@ private copy of memory as it stands, starting from a fresh frame above the calle
 - if it has stopped with a named fault `c`, or has not finished (`c` is then `budget`): `fault ^= c`, `out`
   unchanged.
 
-Then the private memory is discarded. The arguments are unchanged, so on the arguments and the pair
+Then the private memory is discarded, undoing all writes. Calls that must share their writes run
+inside one applied function. The arguments are unchanged, so on the arguments and the pair
 (`out`, `fault`) `apply` is the unitary that takes `|a, y, z⟩` to `|a, y ⊕ r, z⟩` for the values `a` where `@f`
 returns `r`, and to `|a, y, z ⊕ c⟩` where it ends with fault code `c`: a permutation of basis
 configurations, which undoes itself when applied again with the same memory and the same `B`. Inside `@f` a
@@ -259,8 +272,8 @@ hypotheses, and what in the tree they rest on:
   (`crates/exec/src/forward.rs`). So each step is a function of the run's definite state alone, and with its
   record a classical reversible circuit, taking basis states to basis states; the permutation comes from the
   record, not from the faults.
-- *The start is one basis state, the same for every argument value*: memory is definite before the `apply`,
-  because ordinary code cannot read a qubit. The validator refuses a register where an integer is expected
+- *The start is one basis state, the same for every argument value*: the part of memory accessible to the
+  applied function is definite. The validator refuses a register where an integer is expected
   (`docs/SYNTAX.md`, "Registers are not integers"), a `load` or `store` at a byte that holds qubits faults
   `qubit_memory_access`, and a measurement's outcome is a definite value. The fresh frame, the position and
   the records do not depend on the arguments.
@@ -314,6 +327,12 @@ from contributing again. A still-running input with no remaining affordable retu
 exhaust the budget, because the skipped instructions cannot fault. The step machine handles
 other shapes. Compilation reports which construction it used and why.
 
+A pass count proved from the program may be used at any nesting depth. For example, a
+logical right shift of a `w`-bit loop variable by one on each pass makes it zero after at most
+`w` passes. The whole applied function still uses `budget B` to determine whether it runs
+out of steps. The emitter may derive a pass count from that budget for one loop only.
+It may never repeat a budget-derived inner schedule for each budget-derived outer slot.
+
 The 8-bit Collatz test uses a 14-bit trajectory word and an 8-bit update count. It returns
 after `5 + 9k` steps for `k` updates. The maximum trajectory value is 13,120 and the longest
 terminating input takes 127 updates. Zero never returns. The bit-level runner checked all 256
@@ -357,7 +376,7 @@ the outcome found; nothing in the program learns more than that one measurement 
 configuration.
 It counts each `apply` execution that faulted for some configuration of nonzero amplitude, with their weight,
 in the run statistics. By default such an `apply` stops the run with the run error `region fault`, leaving the
-state as it was before the `apply`; `allow_region_faults` (`bennett run --allow-region-faults`) lets the run go
+state as it was before the `apply`. Either `--allow-region-faults` or `--machine-meaning` lets the run go
 on, for programs that read their fault registers on purpose (`examples/fault.bn`). Programs from `front` are
 always run with the stop in the tests. The stop is the simulator's ("The simulator's own stops and reports",
 below); the program's meaning is the fault code in the register.
@@ -382,6 +401,10 @@ an empty device program (`front/src/main.cpp`, `readInput`).
   and extensions across which ring operations keep their low bits (`InPlace.h`). The other operands must
   not read x. Anything else that overwrites x keeps x's old value in a register that is released at once
   ("Overwrites that keep the old value" below), unless the old value can be computed again (next).
+  After measuring the unfused Shor program, add a device form that specifies the update and its
+  inverse. Its expansion computes the new value into a fresh register, exchanges it for the old
+  value, and clears the old value by applying the inverse. The emitter can check the pair and fuse
+  those steps. In the long term the optimiser should discover these opportunities itself.
 - **An overwrite whose old value is a function of registers unchanged since** clears the variable by computing
   that value again. When x was last given a value `v` that depends on a qubit, by a whole store, and every
   qubit variable `v` reads (x not among them) is unchanged between the read and the overwrite, and every call
@@ -510,8 +533,8 @@ and utilities where they exist (`Abi.h`, `Normalise.h`):
   swaps the runtime at link time. Its global state: the rounding mode is never written and folds to
   round-to-nearest-even; the exception flags are never read (C reads them only through `<fenv.h>`, the C
   library's), its `softfloat_raiseFlags` does nothing, and the optimiser deletes them, so the routines write
-  no memory and run under qubit control. Runtime calls on constants are evaluated after the optimiser, so a
-  rotation's angle may be computed.
+  no memory and run under qubit control. Runtime calls on constants are evaluated after the optimiser,
+  so a rotation's angle may be a computed constant.
 - **Complex multiply and divide** (`Complex.h`): clang's calls of `__mulsc3`, `__divsc3`, `__muldc3`,
   `__divdc3`, `__mulxc3`, `__divxc3` go to libgcc's own sources (`rt/libgcc`, GCC 13.3.0 vendored unmodified,
   decided 2026-11-16), which are ordinary C on floating-point values: the helpers a program calls and does not
@@ -577,12 +600,13 @@ value the front can compute again from the registers the code read while they ar
 `apply` into the variable: a later overwrite of it clears the old value by computing it again and keeps
 nothing (the front records the value for its analysis, `bennett.holds` in `Taint.h`, which emits no code).
 
-A register holds at most 64 qubits. When the results take more bits, they are packed into words of at most 64
+A register currently holds at most 64 qubits. When the results take more bits, they are packed into words of at most 64
 bits, each a register of its own, and the one applied function takes the word's number as an ordinary argument
 and returns that word: every word is computed and the one asked for chosen at the end, so each run takes the
 same steps whichever word it returns. Each word is then one `apply` into its variable (a word of one variable)
 or a pair around a fresh register as above, with the same arguments and the same `B`: two runs of the whole
-code for each register. There is never a second copy of the code.
+code for each register. There is never a second copy of the code. The plan is to add wider registers
+and held objects before Shor above 64 bits.
 
 What LLVM moves out of the code is still the code's. When it promotes a variable that a loop of the code
 writes to a register (scalar promotion), the stores in the loop become one store after it, in the block where
@@ -699,10 +723,11 @@ Refused by name, each with its route:
   different program from `while (x > 0) { gates; x--; }`: it does not consume its loop variable, which keeps
   its value afterwards;
 - a loop whose passes decide on values that depend on a qubit carried from pass to pass (`t = x; for (i < n)
-  { if (t & 1) h(y); t = step(t); }`): route, one applied function returning a table of control bits for
-  all passes, computed before the loop and cleared after it by the same `apply` (not built: a table of one
-  bit per pass needs a register as wide as the number of passes, which here is a run-time value, and a
-  register's bit is named by a constant; `HANDOFF.md`, "Questions for the maintainer", question 5);
+  { if (t & 1) h(y); t = step(t); }`). First support constant counts when the table of control bits,
+  one bit per pass per gate site, fits in 64 bits. One `apply` computes the table before the loop and
+  the same `apply` clears it afterwards. Then support any ordinary count by recomputing that pass's
+  decision with one small `apply` per pass. Recomputing the prefixes takes about `n²/2` passes of work,
+  with a budget for each applied computation.
 - a gate in the loop on a variable the condition reads. The table form is correct when every gate leaves
   what the table function reads unchanged (those registers may be controls; targets elsewhere). A loop
   whose gates change the tested register without ever changing whether the condition holds could later be
@@ -763,7 +788,7 @@ memory a pointer argument points to, or a local variable, and their offsets (one
 where two objects may share bytes the front must know it; below): constant offsets, or, inside
 code under a qubit without gates (which is applied whole), the offsets LLVM's bound on a position allows (a
 loop over a small array, `memset`, `memcpy` of a length that depends on a qubit). The union of the bytes the
-writes of one object may touch, at most 8 (one register), gets a qubit variable of its width, its **shadow**
+writes of one object may touch, currently at most 8 (one register), gets a qubit variable of its width, its **shadow**
 `m`, for a stretch of the function, its **span**. With `p` the address of the bytes, `w` their width in bits
 and `v` their old value:
 
@@ -815,8 +840,9 @@ function the shadow takes `v` by XOR instead and the stack bytes are left as the
 qubits after the function returns; the exchange happens only before a measurement of all of them, after which
 `m` holds `v` and is returned to 0 with the function's other known variables.
 
-What is refused, by name: ordinary code that reads the bytes while they hold qubits (it asks for the
-measurement), a call that may read or write them meanwhile (given their address, or reaching their object
+What is refused, by name: ordinary code that needs a definite value from the bytes while they hold qubits
+(for printing, a jump or an exit code, the front asks the programmer to write the measurement), a call that
+may read or write them meanwhile (given their address, or reaching their object
 directly, as a function reading the global variable does), an access through another pointer that may reach
 them, stores under a qubit through two objects that may share bytes (the route for these two: a static
 function whose calls pass distinct objects or the same pointer, `restrict`, or a check of the addresses at run
@@ -825,10 +851,12 @@ that depends on a qubit that does not run before the code under a qubit on every
 route: one shadow from the earliest write, not built), a callee that measures them (route: measure them in the
 caller first; for the front, ending the span before a call whose only access to them is that measurement, not
 built), an access that touches them only in part, a
-position that is not constant outside code applied whole, more than 8 bytes of one object, an object the
+position that is not constant outside code applied whole, more than 8 bytes of one object (planned
+with wider registers), an object the
 front cannot name, and a store into memory in code that also has gates (each listed in `HANDOFF.md`, "What is refused"). The
 front assumes the bytes are ordinary where a span starts: if an earlier call left them holding qubits, the
-load of `v` is the fault `qubit_memory_access`, a named fault, never a wrong value. The bytes the front
+load of `v` faults as `qubit_memory_access`. The front refuses by name if an externally callable
+function's pointer arguments may alias bytes that hold qubits. The bytes the front
 cannot rule out are the bytes held: where LLVM's bound is wider than what the C writes (`memcpy` of 2 or 4
 bytes is bounded at 6), the extra bytes hold qubits with their old values. If an applied function faults for
 some argument values, interference between those values and the rest can be lost when the fault register is
@@ -861,7 +889,10 @@ applied whole; the writes it makes are undone when it ends, and only its result 
 function* is one of the program's functions that performs no quantum operation, directly or through anything
 it can call (`controlFunctions`, `Outline.h`). The rule follows from what `apply` is: for each definite value
 of the arguments the function runs on a private copy of memory, its result is XORed into the target, and the
-private memory is discarded. Nothing more is needed for a function that writes memory than for one that only
+private memory is discarded. This is the permanent meaning of an applied call. Calls that must share
+state are written inside one applied function, where they see each other's writes on the same private
+copy. If the caller reads that memory after the `apply`, it sees its value from before the `apply`.
+Nothing more is needed for a function that writes memory than for one that only
 reads it, and nothing about the function's size: musl's allocator, its stdio buffers, the file model, the
 clock counter and the entropy image are ordinary device code over device memory (`rt/musl/README.md`), so
 under `apply` they run on the private copy and are undone with it.
@@ -890,9 +921,9 @@ under `apply` they run on the private copy and are undone with it.
   result and the call, which passes nothing by address, returns nothing). Two such calls in one computation when one may write memory outside
   the frames of its own calls: under the rule each starts from the memory as it was, but in one applied
   function the second would see the first's writes; the route is one register for each call's result, computed and
-  cleared around the computation that uses it. A call under a qubit-dependent condition of a function that
-  may write memory (outlined, "Conditional jumps, joins and loops" above): its writes natively survive the
-  condition.
+  cleared around the computation that uses it when a program needs that shape. The front also refuses
+  a memory-writing call under a qubit-dependent condition ("Conditional jumps, joins and loops" above).
+  Its writes would survive the condition in native C.
 - **The rule is about calls**, so what a program computes depends on its calls reaching the front as calls.
   With the project's clang flags (`-O0 -Xclang -disable-O0-optnone`, `front/test.sh`) clang marks every
   function `noinline`, and the front's own pipeline removes `noinline` only together with `optnone`, so every
@@ -905,8 +936,8 @@ under `apply` they run on the private copy and are undone with it.
   where the front sees the case it says so: a warning (the program is still lowered) when the called function,
   or a function it calls directly, writes a global variable or memory passed to it by pointer that code after
   the call in the same function reads, directly or through a function it calls directly (`Applied.h`). Writes
-  through other pointers (into the heap, say) and reads through indirect calls are not followed, so the absence
-  of the warning proves nothing.
+  through other pointers (into the heap, say) and reads through indirect calls are not followed.
+  Extend the warning beyond direct callees when a program needs it.
 - **`--taint-all`** does not move an ordinary call with ordinary arguments into an `apply`: there its writes
   must survive, so only calls of functions that read memory at most are treated as computable coherently.
   Such a call does not count as one of "two calls that depend on a qubit", and in the applied function it
@@ -1066,7 +1097,8 @@ The front writes `retaddr N` for every `llvm.returnaddress(N)` in the default ad
 - Fault codes fit in 5 bits (`Fault::CODE_WIDTH`, widened from 4 on 2026-11-16, the maintainer's decision); a
   fault register is at least that wide, so every fault register of a program is a `q5` or wider. Fifteen of
   the 31 nonzero codes are used, the last `qubit_memory_access` (17); 11 was `dirty_free` and 15
-  `bad_rewind`, both removed on 2026-11-17, and stay unused.
+  `bad_rewind`, both removed on 2026-11-17. Those codes stay unused and the remaining codes keep their
+  numbers because programs may have measured the old codes.
 - `qfree` is the partial trace and never faults ("Releasing a register", below).
 - `measure` reads a whole register, or the `N` bits from bit 0 of the integer at an address.
 - The simulator's own stops and reports (dropped amplitudes of rounding size, the configuration limit, the
@@ -1110,9 +1142,10 @@ names.
   gate is undone, or until a `measure` at an address measures all eight of its bits: then it is ordinary
   memory again, holding the result (the maintainer's decision of 2026-11-17). Its qubits are in a definite
   state after that measurement, so the executor XORs the result out of them and releases them, which is
-  exact. A byte measured in part keeps holding qubits; nothing else gives a byte back (not its qubits
-  becoming definite otherwise, nor its stack frame returning). The rule reads no amplitude: a device keeps
-  it as a table of addresses, which a measurement result updates classically.
+  exact. A byte measured in part keeps holding qubits. Today it stays that way even if its qubits
+  become definite by other means or its stack frame returns. The planned device instruction
+  will drop the qubits in the addressed bytes unexamined by partial trace, as `qfree` does for a
+  register. A device tracks which bytes hold qubits in an ordinary table of addresses.
 - **Ordinary code touching a byte that holds qubits faults `qubit_memory_access`** (code 17; the maintainer's
   decision of 2026-11-17, "yes, it should be a fault to read qubits"): a `load` or `store` any byte of which
   holds qubits, a `setjmp` record written over one, a `longjmp` record read from one. It faults in every
@@ -1201,32 +1234,49 @@ ends the run with the fault `budget`, so a run given another limit is another ru
 because it looks at every configuration, is a diagnostic, as a sanitizer's is, and strict mode, which makes it,
 is the default. The one such check is the stop at an `apply` faulting for some values of its arguments.
 `allow_region_faults` (`--allow-region-faults`) and `Options::machine_meaning` (`--machine-meaning`) each turn
-it off, so the two options now do the same (`HANDOFF.md`, "Questions for the maintainer", question 12). Measured in
-`crates/exec/tests/strict.rs`: an `apply` out of budget stops strict mode and gives, seed by seed, what
-`allow_region_faults` gives.
+it off. Both options stay. In `crates/exec/tests/strict.rs`, an `apply` out of budget stops the run
+in strict mode. With `machine_meaning` the outcome matches `allow_region_faults` seed by seed.
 
 ## What is promised about coherence
 
-Decided by the maintainer on 2026-11-13, for ordinary code that overwrites values while it depends on qubits
-(what it overwrote, kept, is entangled with the data unless the program un-runs it):
+The guarantee for ordinary code that depends on qubits was set on 2026-11-13 and widened on
+2026-11-18. **Coherence** is the ability of amplitudes of different basis configurations to
+interfere. Keeping a record of an old value can prevent interference between configurations
+with different old values.
 
 1. **Classical results are exact.** If the state was classical before, the C code runs, and you measure, you get
    what the C program says. By linearity the same holds for each definite value of a superposition measured at
    once. For the device program this is what `apply` means ("`apply`"); that the front lowers C to a device
    program with the C program's meaning is the toolchain's own claim, checked against native builds
    ("From C to a device program"), not something the argument for `apply` shows.
-2. **Coherence is guaranteed for a documented class of updates**: gates, `^=`, the in-place bijections in
-   `docs/MARKERS.md`, and anything the program un-runs with everything it read unchanged since (rule 4). The
-   class may grow; it never shrinks.
+2. **Coherence is guaranteed for the shapes listed below.** The class may grow and may never shrink.
+   Name each added shape and mark every shape **proved** or **tested only**. The front must warn
+   when a program uses a tested-only shape. Supplying the missing proofs remains future work.
 3. **Everywhere else, how much coherence survives is unspecified.** The toolchain may keep more or less of what
    was overwritten as it sees fit. Leaving it entangled is not a bug and not refused; the toolchain warns.
 4. **Un-running code after something changed what it read or wrote** is likewise not refused. The result is
    unspecified and the toolchain warns.
 
-Today ordinary code acts on qubits only through `apply`, which keeps nothing of its run, so nothing overwritten
-is left entangled and rules 3 and 4 have nothing to apply to. The one loss of coherence a C program can meet is
-the release of a qubit variable whose value the front does not know (the partial trace, "Releasing a
-register"); the simulator reports it, the front does not warn.
+| Shape | Status | Guarantee |
+|---|---|---|
+| Gates | Proved | A gate is unitary and retains no record. |
+| `^=` when the expression does not read the target | Proved | XOR with a definite result is reversible, and `apply` clears its scratch. |
+| In-place bijections listed in `docs/MARKERS.md` | Proved | The inverse clears the old value in the temporary register. |
+| A computation run and then reversed with everything it read unchanged | Proved | The inverse operations undo the forward operations. |
+| A store at a definite address whose old value is known or can be recomputed | Proved | The exchange is unitary and clearing the old value returns the spare register to zero ("Memory written under a qubit"). |
+| Gate loops under a qubit with an ordinary trip count | Tested only | Each definite input gets the gates prescribed by the loop and the control register is cleared. |
+| Updates inside loops under a qubit, with the old value known or recomputable | Tested only | The resulting values retain the preparation's amplitudes and phases. |
+| Applied calls with qubit-dependent arguments | Tested only | On success the C lowering preserves the amplitudes and phases and keeps only the result of the call. The device-level `apply` construction is proved above. |
+| Overwrites that retain the old value, including those in loops | Tested only | Interference survives exactly between configurations with equal old values ("Overwrites that keep the old value"). The exchange and partial trace give this prediction, and the C lowering is tested against it. |
+
+These guarantees cover successful operations. Releasing a fault register can also remove
+interference between inputs that fault and those that succeed.
+
+The added shapes are covered by the state comparisons in `front/tests/tests/qubit_differential.rs`,
+which check phases as well as weights. The recorded test coverage and its limits are in
+`docs/RECORDS.md`, "Randomised differential runs". The front already warns when an overwrite
+keeps an old value. The warning for use of a tested-only shape and the missing proofs for gate
+loops, loop updates, applied calls and retained overwrites are tracked in `HANDOFF.md`, "Debts".
 
 ## Files, clock and entropy at the musl boundary
 
@@ -1268,6 +1318,10 @@ for each in `HANDOFF.md`, "Debts". Metadata uses a model device/inode identity, 
 timestamps, rather than borrowing host-dependent values. This does not implement all Linux filesystem
 semantics; allocation failure, permissions, metadata and namespace lifetime debts are recorded there.
 
+For the smallest positive subnormal double, musl currently prints `0x1p-1074` with `printf("%a")`.
+glibc prints `0x0.0000000000001p-1022`. Both spellings conform to C. Matching glibc through
+musl's hexadecimal formatting path is a low-priority debt (`front/tests/tests/printf_hex_float.rs`).
+
 `rt/musl/test-devices.py` is separate from the fast suites. It compares determined file results with
 native from the same byte image, clock conversion/wrap and tape consumption with an independent
 native C arithmetic oracle, and runs each device fixture forward and back against the executor's entry
@@ -1282,9 +1336,11 @@ original Bennett.jl's branch-free routines are kept as a later, cheaper alternat
 checked bit for bit against SoftFloat. Mathematics functions (`sin`, `exp`, `pow`, ...) come from the C
 library's own code; `sqrt` and `fma` from SoftFloat.
 
-What is promised: every result that is not a NaN is bit for bit what the native x86-64 build computes; a NaN
-result is a NaN. Which NaN, when several operands are NaNs, is unspecified, as in LLVM, whose optimiser commutes
-operands, and on the hardware, where it depends on the instruction form. Measured against this machine's SSE
+Non-NaN results agree bit for bit with the native x86-64 build. Two NaN results agree when each
+carries the payload (the extra bits of a NaN) of an operand's NaN, quieted if needed, or of the
+default NaN that an invalid operation produces. Their signs may differ. Including the default NaN
+accounts for 1,476 of 164,096 `__divdc3` test cases that would otherwise disagree.
+Measured against this machine's SSE
 and x87 (`front/tests/tests/softfloat.rs`): no other difference in any operation or conversion, NaN bits
 included, except for out-of-range conversions, which C leaves undefined. `long double` encodings no arithmetic
 produces (pseudo-denormals, unnormals, pseudo-infinities, pseudo-NaNs, written through memory) are read as x87
@@ -1397,8 +1453,8 @@ example list, allowed-hit count, mutation percentage, or performance threshold. 
 ## Not yet
 
 The optimiser, lowering the full device language to gates, certificates, target descriptions, a binary
-format, memory written under qubit control that outlives the `apply`, and recomputation shared between
-conditions (each predicated operation computes and clears its own).
+format, and recomputation shared between conditions (each predicated operation computes and clears
+its own).
 
 | Refused inside emitted `apply` | Construction needed |
 |---|---|
@@ -1416,16 +1472,10 @@ conditions (each predicated operation computes and clears its own).
   instructions count is undecided.
 - **The adjoint of an applied computation that is not its own inverse.** Gates under qubit control and
   bijective in-place updates are done (above) without one.
-- **Memory written under qubit control that later code reads.** The front lowers supported stores whose value
-  or execution depends on a qubit by keeping the value in qubits. Measuring all eight bits of a byte that holds
-  qubits makes it ordinary memory again, holding the result. See [Memory written under a qubit](#memory-written-under-a-qubit).
-- **Keeping what ordinary code overwrote under a qubit, and un-running it later.** `apply` computes, copies the
-  result out and un-runs at once. An update with no known inverse (`x = x * x`) and a conditional boot need the
-  kept values to outlive the `apply`. Decided on 2026-11-17, not built: such an overwrite is accepted, the old
-  value kept in spare qubits released by `qfree`, with a warning and the count of qubits kept. A narrow static
-  form of this has a proof and may be added with its check (`HANDOFF.md`, "Decisions in force"). Gates, allocation and measurement
-  inside code that is later un-run are not part of the model: a program wanting them writes the forward and
-  inverse gate sequences itself.
+- **Reversing ordinary code later.** A narrow static form of `mark` and `rewind`, with each mark
+  paired with its rewind in the text, has a proof and may be added with its check
+  (`HANDOFF.md`, "Decisions in force"). A program that needs to reverse gates writes the
+  forward and inverse sequences explicitly.
 - **Channels.** A dirty discard is the partial trace, measurement is described by effects, noise by channels; the
   finished Bennett covers them (maintainer, 2026-11-13). This step has unitaries, measurement and the partial
   trace (`qfree`, since 2026-11-17), the simulator keeping a purification. Nothing in
