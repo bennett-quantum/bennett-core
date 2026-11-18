@@ -3,7 +3,7 @@
 Working notes, kept as a record. Five independent proposals for the extension the device program lacks: code that is
 not a clean function, run under a qubit, with its history kept and with memory that stays in superposition. Astra
 and Muse were given only the problem; three Opus champions were each given one seed idea (A, B, C). The numbers in
-these notes are each proposal's own and were not recomputed. The outcome and the decisions are in `HANDOFF.md` and
+these notes are each proposal's own and were not recomputed. The outcome and the decisions are in `HANDOFF.md` ("Decisions in force") and
 `docs/DESIGN.md`.
 
 ## Muse [done]: two proposals

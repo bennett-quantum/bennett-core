@@ -1,6 +1,6 @@
 # journal-content: how much of a coherent region's history is irreducible
 
-Question (`HANDOFF.md`, "Journal content"; `docs/DESIGN.md`, "The next extension"): when ordinary code runs on
+Question (`docs/RECORDS.md`, "Next steps, in order", step 2; `docs/DESIGN.md`, "The next extension"): when ordinary code runs on
 every branch of a superposition, each step keeps what it destroys as history. How much of that history is the
 same on every branch, how much can be recovered from what the machine still holds, and how much is irreducible?
 And does the irreducible part stay constant or grow with the number of steps? The answer decides whether keeping

@@ -347,7 +347,7 @@ and utilities where they exist (`Abi.h`, `Normalise.h`):
   as the native call does: a match is called as above, or, where nothing is determined and the device call
   would run, stops with `unreachable`; any other target keeps the device's own check (`bad_indirect`). The
   comparisons cost calls through correctly typed pointers too: on the musl tests 107 to 353 steps (0.06% to
-  5%) and 5% to 16% more device code (`HANDOFF.md`, "Known weak spots").
+  5%) and 5% to 16% more device code (`docs/RECORDS.md`, "Known weak spots").
 - **Aggregate results of at most 128 bits of integer and floating-point fields** (`{ i64, i64 }`, how
   clang returns a small struct in two registers; SoftFloat's `extFloat80_t`) come back as one integer, the
   fields side by side, so code under a condition on a qubit can call such a function. **Other aggregate and vector
@@ -574,7 +574,7 @@ Refused by name, each with its route:
   { if (t & 1) h(y); t = step(t); }`): route, one applied function returning a table of control bits for
   all passes, computed before the loop and cleared after it by the same `apply` (not built: a table of one
   bit per pass needs a register as wide as the number of passes, which here is a run-time value, and a
-  register's bit is named by a constant; `HANDOFF.md`, "Questions for the maintainer");
+  register's bit is named by a constant; `HANDOFF.md`, "Questions for the maintainer", question 5);
 - a gate in the loop on a variable the condition reads. The table form is correct when every gate leaves
   what the table function reads unchanged (those registers may be controls; targets elsewhere). A loop
   whose gates change the tested register without ever changing whether the condition holds could later be
@@ -698,7 +698,7 @@ route: one shadow from the earliest write, not built), a callee that measures th
 caller first; for the front, ending the span before a call whose only access to them is that measurement, not
 built), an access that touches them only in part, a
 position that is not constant outside code applied whole, more than 8 bytes of one object, an object the
-front cannot name, and a store into memory in code that also has gates (each a debt in `HANDOFF.md`). The
+front cannot name, and a store into memory in code that also has gates (each listed in `HANDOFF.md`, "What is refused"). The
 front assumes the bytes are ordinary where a span starts: if an earlier call left them holding qubits, the
 load of `v` is the fault `qubit_memory_access`, a named fault, never a wrong value. The bytes the front
 cannot rule out are the bytes held: where LLVM's bound is wider than what the C writes (`memcpy` of 2 or 4
@@ -1073,7 +1073,7 @@ ends the run with the fault `budget`, so a run given another limit is another ru
 because it looks at every configuration, is a diagnostic, as a sanitizer's is, and strict mode, which makes it,
 is the default. The one such check is the stop at an `apply` faulting for some values of its arguments.
 `allow_region_faults` (`--allow-region-faults`) and `Options::machine_meaning` (`--machine-meaning`) each turn
-it off, so the two options now do the same (`HANDOFF.md`, "Questions for the maintainer"). Measured in
+it off, so the two options now do the same (`HANDOFF.md`, "Questions for the maintainer", question 12). Measured in
 `crates/exec/tests/strict.rs`: an `apply` out of budget stops strict mode and gives, seed by seed, what
 `allow_region_faults` gives.
 
@@ -1136,7 +1136,7 @@ memory. `/dev/null` and `/dev/zero` are present. Standard fd 0 is empty, fd 1 is
 console, and fd 2 retains its explicit nonempty-write fault even through duplication. Closing a standard
 fd makes its number reusable. There is no disk backend without a use for one; block devices, locks,
 links/symlinks, directory enumeration and unmapped system calls remain named faults, with the route
-for each in `HANDOFF.md`. Metadata uses a model device/inode identity, root ownership and zero
+for each in `HANDOFF.md`, "Debts". Metadata uses a model device/inode identity, root ownership and zero
 timestamps, rather than borrowing host-dependent values. This does not implement all Linux filesystem
 semantics; allocation failure, permissions, metadata and namespace lifetime debts are recorded there.
 
@@ -1210,7 +1210,7 @@ zero.
 The IR mnemonic tests (`crates/ir/tests/mnemonic_contract.rs`) specify all 36 words independently of
 the production macro, check each reader variant and writer instruction against that specification,
 and reject missing operands. Shared reader/writer swaps cannot hide behind a round trip. The explicit
-macro-expansion mutation trials and their failing tests are recorded in HANDOFF's IR/CLI mutation section.
+macro-expansion mutation trials and their failing tests are recorded in `docs/RECORDS.md`, "IR and CLI mutation pass (2026-11-16)".
 
 Independent machine-decision probes (`crates/exec/tests/machine_decisions/` and
 `crates/ir/tests/machine_decisions.rs`) cover every integer measurement width, partial-cell complex
@@ -1282,12 +1282,12 @@ conditions (each predicated operation computes and clears its own).
   bijective in-place updates are done (above) without one.
 - **Memory written under qubit control that later code reads.** Decided on 2026-11-17, not built: such a store
   keeps its value in qubits at the bytes it writes, and measuring those bytes makes them ordinary memory again
-  (`HANDOFF.md`, "Next steps, in order").
+  (`HANDOFF.md`, "Decisions in force"; the plan and its record: `docs/RECORDS.md`, "Next steps, in order").
 - **Keeping what ordinary code overwrote under a qubit, and un-running it later.** `apply` computes, copies the
   result out and un-runs at once. An update with no known inverse (`x = x * x`) and a conditional boot need the
   kept values to outlive the `apply`. Decided on 2026-11-17, not built: such an overwrite is accepted, the old
   value kept in spare qubits released by `qfree`, with a warning and the count of qubits kept. A narrow static
-  form of this has a proof and may be added with its check (`HANDOFF.md`). Gates, allocation and measurement
+  form of this has a proof and may be added with its check (`HANDOFF.md`, "Decisions in force"). Gates, allocation and measurement
   inside code that is later un-run are not part of the model: a program wanting them writes the forward and
   inverse gate sequences itself.
 - **Channels.** A dirty discard is the partial trace, measurement is described by effects, noise by channels; the

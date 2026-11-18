@@ -60,7 +60,7 @@ land. For unsupported forms, seed a semantic edit by hand and run the relevant e
 Scope and cost are explicit: cargo-mutants generates Rust mutations, not C++, Python, or shell
 mutations. Front/script edits therefore require recorded seeded edits and their actual failing check;
 the script's zero exit alone does not certify them. A front harness change also needs its LLVM-dependent
-suite. Automatic changed-line mutation for those languages remains a debt (see HANDOFF). Enumeration
+suite. Automatic changed-line mutation for those languages remains a debt (see HANDOFF, "Debts"). Enumeration
 and an individual small witness take seconds; a full changed-line run scales with the number of
 mutants and rebuild cost. No honest full mutation run has a size-independent seconds guarantee. Keep
 it out of `cargo test`; record its revision, command, caught/missed/unviable/timeout counts and elapsed

@@ -1,9 +1,8 @@
 # Salvage survey of the earlier workspace
 
 What in the archived `bennett-*` repositories demonstrably worked, the evidence for it, and what carrying
-each piece into this repository would cost. Ordered by the next step in `HANDOFF.md` that would use it
-(steps 1–6 there, then the optimiser, which is not started). The candidates are the ones `HANDOFF.md`
-names under "Queued, not started"; the hub's list of `wip/` branches was checked against them (§8).
+each piece into this repository would cost. Ordered by the next step of the plan of the time (`docs/RECORDS.md`, "Next steps, in order") that would use it
+(steps 1–6 there, then the optimiser, which is not started). The candidates are the ones that plan named; the hub's list of `wip/` branches was checked against them (§8).
 
 Method, 2026-11-15: every piece below was read in the archive (read-only). Where the evidence was cheap
 to re-run — a test suite that finishes in minutes against the checked-in artifacts, with build output
@@ -55,7 +54,7 @@ Ordinary C, compiled into the published runtime bitcode for LLVM 18 and 23 (`dis
   console transport as a call to an undefined marker; the comparison publication supplies Linux
   definitions instead (`src/device/transports.c`, `src/native/`).
 
-This maps closely onto the boundary already decided here (`HANDOFF.md`, 2026-11-15): one function
+This maps closely onto the boundary already decided here (`HANDOFF.md`, "Decisions in force", 2026-11-15): one function
 taking a syscall number, implemented by device effects, an arena and `exit`, everything else trapping
 by name. The stopped-in-flight runtime on `wip/rt-musl` implements write/writev to descriptor 1,
 empty stdin, close, brk/mmap over a 1 MiB arena, signal masking and exit — and traps on `open`/
@@ -122,8 +121,8 @@ the stopped runtime already serves musl's own allocator from the arena via brk/m
 
 ## 2. The stopped measurements: counters and the arithmetic that decides
 
-Step 2 asks for two measurements, and the journal-content one needs, in `HANDOFF.md`'s words, "a
-measurement hook in the executor that changes nothing when off". Two archive pieces bear on it;
+Step 2 asks for two measurements, and the journal-content one needs a
+measurement hook in the executor that changes nothing when off. Two archive pieces bear on it;
 neither is code to copy.
 
 **`bennett-vm`'s work counters** (`src/history_work.rs`, `src/execution_work.rs`, plus a third in
@@ -315,7 +314,7 @@ otherwise have: independent Fraction/integer oracles that import no implementati
 MPFR interval tests for libm, subnormal-binade sweeps, and the all-encodings half/bfloat exhaustion.
 Those are Python and test-only C++; they transfer at reading cost and apply unchanged to whatever
 implements `fmal`, the 128-bit conversions and the small formats — including the compiler-rt helpers
-since decided on for the complex multiply/divide routines (`HANDOFF.md`, 2026-11-15), whose own
+since decided on for the complex multiply/divide routines (`docs/RECORDS.md`, "Decisions the maintainer took on 2026-11-15: the two open choices"; since superseded by libgcc), whose own
 `__mulsc3`/`__divsc3` family the arith library does not provide in any case.
 
 ### 5.2 Bennett.jl's branch-free soft-float: the cheap port, for when branches cost

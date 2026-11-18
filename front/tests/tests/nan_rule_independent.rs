@@ -1,5 +1,6 @@
 //! Raw-sweep acceptance, independently constructed bit patterns. Requirement:
-//! HANDOFF's afternoon NaN decision and rt/libgcc/README.md's exact rule.
+//! the NaN decision of the afternoon of 2026-11-16 (`HANDOFF.md`, "Decisions in force") and
+//! rt/libgcc/README.md's exact rule.
 
 use std::path::Path;
 use std::process::Command;
