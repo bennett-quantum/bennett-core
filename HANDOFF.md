@@ -358,8 +358,8 @@ explicitly after the separate musl build.
       decided. A variable of unknown value that such a loop reads and overwrites is exchanged (a store by
       exchange with the whole code as the stored function) and its fresh register cleared where its old value
       is known or can be computed again ("Code under a qubit: merged stores and updates in loops
-      (2026-11-18)"). Still refused, with the route in the message: such a variable whose old value is
-      neither (it needs its old value kept in the fresh register and released). Not built: a
+      (2026-11-18)"), and where the old value is neither, the register keeps it and is released (the
+      retained form, with its warning and count). Not built: a
       qubit-dependent value carried irreversibly around a loop of the control program (`y = g(y, q, i)` with
       an ordinary trip count), which the design note would merge into one `apply` too; it is refused today
       unless the update is an in-place bijection, and the retained form of step 3 will accept it pass by pass,
@@ -1799,3 +1799,32 @@ builds the clearing, computes such a read again from the value recorded for it. 
 `recomputable` accepts a read whose variable has changed, or is the target, when the value recorded there can be
 computed again in turn (guarded against cycles). Test: `later_region_overwrites_an_exchanged_value` (the
 generated program; one nonzero release before, none after, values equal to native C, all three modes).
+
+**The retained case (step 3).** Where an exchanged variable's old value is neither known nor computable again
+(the variable was changed by a gate, or its old value was computed from a register that has changed since),
+its fresh register is released as it is by `qfree`, the partial trace (the maintainer's decision to accept an
+overwrite that cannot be erased and warn), with the warning naming the variable, the qubits kept each time the
+store runs (one register of the variable's width, per executed overwrite) and the sentence that if the applied
+function faults for some argument values, interference between those values and the rest can be lost when the
+fault register is released. In one group some registers are cleared and others kept. Nothing about the loop
+changes: the code is still one applied function under one budget. Tests (`qubit_differential.rs`,
+`loop_overwrite_*keeps*`, each refused on the code of step 2): after a gate on the variable, all old values
+different, equal in pairs, and one variable kept beside one cleared in the same loop; values equal to native C
+for every value of a three-qubit register in all three modes, the warning and its count, exactly one release
+that is not 0, of the variable's width, and the reduced state of the kept registers equal to the prediction
+(coherence exactly between the values whose old values are equal, the preparation's phases included).
+`region_whole.rs`'s refusal test of this shape is now `..._keeps_the_old_value` (old value 4 for every value of
+`x`: nothing lost, one release of 8 qubits). Documents: `docs/DESIGN.md`, "Code under a qubit" no longer names
+the case refused. Capped runs (400 cases each): seed `0x87196caa251d0f43` accepted 376, declined 24, compared
+2,436, failed 0; seed `0x0b7e11a5d1ff0007` accepted 374, declined 26, compared 2,364, failed 0; no decline of
+an update in a loop in either (the 6 left after step 2 on the first seed were recomputable, accepted since the
+fix above).
+
+Debts of these steps: each exchanged variable costs one run of the whole code (and one computation of its old
+value to clear it), where one fresh register for all of them would cost one (route: one register of all
+exchanged fields while they fit in 64 bits, each cleared by its old value shifted into its field); the
+retained-state comparison of the randomised test (`qubit_differential/state.rs`) covers measured registers, not
+bytes measured at an address, so the retained tests measure locals (route: count the cells' columns as outputs
+there); a value LLVM forwards from one piece of code under a qubit to a later one is recomputed by the later
+`apply` (the existing debt in DESIGN, "Code under a qubit"); the step-1 consequence named above (a fixed-address
+read on every path).

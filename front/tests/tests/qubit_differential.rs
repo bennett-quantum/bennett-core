@@ -867,17 +867,94 @@ fn loop_overwrite_of_a_value_an_applied_call_returned() {
     );
 }
 
-// The old value is neither known nor computable again (a gate changed the variable): refused by name with the
-// route, until it is kept in the fresh register and released.
-#[test]
-fn loop_overwrite_of_a_value_a_gate_changed_is_refused() {
+// The old value is neither known nor computable again (a gate changed the variable `x`): the fresh register keeps
+// it and is released (the partial trace), with the warning and its count. For each definite value of the register
+// the values are native C's; the reduced state of the kept registers keeps coherence exactly between the values
+// whose old values of `x` are equal. The other variables are locals, measured as registers.
+fn loop_retained(
+    name: &str,
+    globals: &str,
+    before: &str,
+    code: &str,
+    objects: &[(&str, u32)],
+    old: Vec<u64>,
+    bits: u32,
+) {
     let mut body = format!(
-        "packet entry(unsigned prep, unsigned n, unsigned column) {{\n    uint16_t y = 9;\n{}    y = 7U * q + 1U;\n    \
-         XBIT(y, 0);\n    #pragma clang loop unroll(disable)\n    for (unsigned t = q; t != 0; --t) y = y * 3U + t;\n",
-        prepare(2)
+        "{globals}packet entry(unsigned prep, unsigned n, unsigned column) {{\n    uint{bits}_t x = 9;\n{}    \
+         ZBIT(q, 1);\n{before}\n    XBIT(x, 0);\n    #pragma clang loop unroll(disable)\n{code}\n",
+        prepare(3)
     );
-    measure_objects(&mut body, &[("y".to_owned(), 2)]);
-    check_refused("loop-overwrite-after-gate", &body, "whose value before the loop is neither known nor computable");
+    body.push_str("    packet key = bennett_measure(&q);\n    packet kept = bennett_measure(&x);\n");
+    let mut packet = String::from("key | (kept << 8)");
+    let mut shifts = vec![0, 8];
+    let mut shift = 8 + bits;
+    for (i, (variable, bytes)) in objects.iter().enumerate() {
+        writeln!(body, "    packet v{i} = bennett_measure(&{variable});").expect("write measurement");
+        write!(packet, " | (v{i} << {shift})").expect("pack measurement");
+        shifts.push(shift);
+        shift += 8 * bytes;
+    }
+    writeln!(body, "    return {packet};\n}}").expect("write return");
+    let mut check = Check::new(shifts.iter().map(|&shift| Field { packet: 0, shift }).collect());
+    check.preparation.z = 2;
+    check.retained = Some(old);
+    let case =
+        Case { body, qubits: 3, trips: 0, packets: 1, expectation: Expectation::Retained(bits), state: Some(check) };
+    let source = write_c(name, &case.source());
+    let native = native_build(&source, name, &["-DNATIVE"]);
+    let table = case.native_table(&native);
+    for (mode, cflags, flags) in MODES {
+        let name = format!("{name}-{mode}");
+        let (text, diagnostics) = lower_text_with_diagnostics(&source, &name, cflags, flags)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        case.expectation.check_diagnostics(&diagnostics).unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert!(diagnostics.contains("in a loop under the control of a value that depends on a qubit"), "{name}");
+        let module = bennett_ir::load(&text).expect("valid program");
+        compare(&case, &module, &table, &mut 0).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let check = case.state.as_ref().expect("a state check");
+        state::compare(check, &module, &table, 0, bits, &mut state::Counts::default())
+            .unwrap_or_else(|error| panic!("{name}: state: {error}"));
+    }
+}
+
+#[test]
+fn loop_overwrite_of_a_value_a_gate_changed_keeps_it() {
+    loop_retained(
+        "loop-retained-distinct",
+        "",
+        "    x = 7U * q + 1U;",
+        "    for (unsigned t = q; t != 0; --t) x = x * 3U + t;",
+        &[],
+        (0..8).map(|q| (7 * q + 1) ^ 1).collect(),
+        16,
+    );
+}
+
+#[test]
+fn loop_overwrite_keeps_coherence_between_equal_old_values() {
+    loop_retained(
+        "loop-retained-equal",
+        "",
+        "    x = 5U + (q & 1U);",
+        "    for (unsigned t = q; t != 0; --t) x = (uint8_t)(x * x + t);",
+        &[],
+        (0..8).map(|q| (5 + (q & 1)) ^ 1).collect(),
+        8,
+    );
+}
+
+#[test]
+fn loop_overwrite_keeps_one_old_value_and_clears_the_other() {
+    loop_retained(
+        "loop-retained-beside-cleared",
+        "",
+        "    x = 3U * q + 2U;\n    uint16_t y = 11U * q + 5U;",
+        "    for (unsigned t = q; t != 0; --t) { x = (uint8_t)(x * 5U + t); y = (uint16_t)(y * y + x); }",
+        &[("y", 2)],
+        (0..8).map(|q| (3 * q + 2) ^ 1).collect(),
+        8,
+    );
 }
 
 // Generated case 253 of seed 0x0b7e11a5d1ff0007 (O2): the first region exchanges cell0, whose old value was

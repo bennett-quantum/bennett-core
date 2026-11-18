@@ -477,8 +477,8 @@ apply @code(a, x, word) -> n        for each definite value: n = final value of 
 x n[b] ctrl x[b]                    three CNOTs per bit exchange n and x:
 x x[b] ctrl n[b]                    x = final, n = x_old
 x n[b] ctrl x[b]
-n ^= x_old                          clear n: see below
-qfree n                             n is 0
+n ^= x_old                          where x_old is known or can be computed again (below)
+qfree n                             0 if cleared; otherwise the old value, dropped (partial trace)
 ```
 
 Several exchanged variables of one piece of code share the one applied function and take one fresh register
@@ -491,8 +491,13 @@ an applied call, or left by earlier code under a qubit applied whole, an exchang
 computed from its old value computed again, among them). Then `n` returns to 0 for every definite
 value of what the code reads, nothing is kept, and the code's loops, nested loops and calls run inside the
 applied function under its one budget: one run of the whole code for each exchanged variable, and one
-computation of each old value. An old value that is neither known nor computable again is refused by name: it would have to
-be kept in `n` and released (the retained form, not built yet: "Next steps" in `HANDOFF.md`).
+computation of each old value. An old value that is neither known nor computable again (`x` was changed by
+a gate, or computed from a register that has changed since) is kept: `n` is released as it is, by `qfree`, the
+partial trace, and the front warns, naming the variable and the qubits kept, one register of its width for
+each time the store runs (the retained form of "Overwrites that keep the old value", with what it loses: no
+interference between configurations whose old values of `x` differ, full coherence where they are equal; if
+the applied function faults for some argument values, interference between those values and the rest can be
+lost when the fault register is released). In one group some registers may be cleared and others kept.
 
 A value the code leaves for later code that was read from a variable after the code wrote it is refused too,
 as predication refuses it. Where LLVM keeps a loop's variables in registers through the loop and stores them
@@ -528,8 +533,11 @@ depends on a three-qubit register overwrites a variable whose old value was stor
 applied call, or written (two variables, beside an accumulator) by earlier code under a qubit, and the form
 LLVM keeps in registers through the loop; each agrees with native C for every value of the register in all
 three modes, with nothing released that is not 0, and its state before measurement has native C's values with
-the preparation's amplitudes and phases (a Z on one qubit), every other register at 0. The same loop after a
-gate on the variable is refused by name.
+the preparation's amplitudes and phases (a Z on one qubit), every other register at 0. After a gate on the
+variable (`loop_overwrite_*keeps*`): native C's values, the warning and its count, exactly one release that is
+not 0, of the variable's width, and the reduced state of the kept registers equal to the prediction, with
+coherence exactly between the register's values whose old values are equal (all different; equal in pairs; one
+variable kept beside one cleared in the same loop).
 `front/tests/tests/qubit_differential.rs` compares seeded short C programs (conditional stores, updates, short
 loops and helpers under a two- or three-qubit register) with native C for every definite value of the
 register; among its fixed cases, joins of constants and of values from before the code, a store LLVM merged at
@@ -609,7 +617,7 @@ interference between those values and the rest can be lost when the fault regist
 This is the form for qubit variables in registers; stores into memory reach it through their shadows (next
 section). Code under a qubit applied whole that reads and overwrites a variable in a loop uses the same
 exchange with the whole code as `g` ("Code under a qubit", exchanged variables); there the register is cleared
-when the old value is known or can be computed again, and the case where it can be neither is still refused.
+when the old value is known or can be computed again, and released as here, with the same warning, otherwise.
 
 Acceptance: `front/tests/tests/retained.rs` (`x = x * x`, `x += x`, `x = x / 3`, `x = 5`, a conditional
 square on a three-qubit `x`: the weights of the values of `x` are those of C, at O0, O2 and with

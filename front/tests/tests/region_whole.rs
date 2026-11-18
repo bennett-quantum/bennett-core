@@ -8,8 +8,8 @@ use std::sync::OnceLock;
 
 use bennett_exec::{Outcome, RunError};
 use bennett_front_tests::{
-    CLANG_FLAGS, CLANG_O2_FLAGS, c_dir, column, lower, lower_text, lower_text_with_budget, native_build, registers,
-    run, state_before_first_measurement, write_c,
+    CLANG_FLAGS, CLANG_O2_FLAGS, c_dir, column, lower, lower_text, lower_text_with_budget, lower_text_with_diagnostics,
+    native_build, registers, run, run_with_stats, state_before_first_measurement, write_c,
 };
 use bennett_ir::Fault;
 
@@ -204,12 +204,14 @@ fn one_budget_covers_both_loops_and_one_step_less_faults_the_longest_inputs() {
     assert!((1..VALUES as usize).contains(&short), "budget {}: {short} of {VALUES} values fault", SMALLEST_BUDGET - 1);
 }
 
+// The old value of y is not known after the gate: it is kept in a fresh register and released, with the warning.
+// It is 4 on every configuration, so nothing is lost; the release is of a register that is not zero.
 #[test]
-fn a_loop_that_does_more_than_xor_into_a_variable_of_unknown_value_is_refused_by_name() {
+fn a_loop_that_does_more_than_xor_into_a_variable_of_unknown_value_keeps_the_old_value() {
     let source = write_c(
-        "region-whole-refused",
+        "region-whole-retained",
         r#"#include "bennett.h"
-unsigned long long refused_entry(void) {
+unsigned long long retained_entry(void) {
     unsigned char x = 0, y = 0;
     bennett_h(bennett_bit(&x, 0));
     bennett_h(bennett_bit(&x, 1));
@@ -219,11 +221,28 @@ unsigned long long refused_entry(void) {
 }
 "#,
     );
-    let error = lower_text(&source, "region-whole-refused", CLANG_FLAGS, &[]).expect_err("refused");
-    assert!(
-        error.starts_with("not handled yet:")
-            && error.contains("'y'")
-            && error.contains("old value would have to be kept"),
-        "{error}"
-    );
+    for (mode, cflags, flags) in MODES {
+        let name = format!("region-whole-retained-{mode}");
+        let (text, diagnostics) =
+            lower_text_with_diagnostics(&source, &name, cflags, flags).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(
+            diagnostics.contains("the overwrite of qubit variable 'y'")
+                && diagnostics.contains("keeps the old value in 8 qubits each time it runs"),
+            "{name}: {diagnostics}"
+        );
+        let module = bennett_ir::load(&text).expect("valid program");
+        for seed in 0..16 {
+            let (outcome, stats) = run_with_stats(&module, "retained_entry", &[], seed);
+            let Outcome::Returned(Some(value)) = outcome else { panic!("{name}: {outcome:?}") };
+            let (x, y) = (value & 0xff, value >> 8);
+            let mut expected = 4_u8;
+            let mut t = x;
+            while t != 0 {
+                expected = expected.wrapping_mul(expected).wrapping_add(t as u8);
+                t >>= 1;
+            }
+            assert_eq!(y, u128::from(expected), "{name}: x={x}");
+            assert_eq!((stats.nonzero_releases, stats.leftover_qubits), (1, 8), "{name}: x={x}");
+        }
+    }
 }

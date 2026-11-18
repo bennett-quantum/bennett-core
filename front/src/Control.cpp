@@ -576,7 +576,8 @@ void ControlWriter::retainedOverwrite(const Storage &target, const Value *value,
 // variable before any exchange (each g reads the old values of all of them), then three CNOTs per bit exchange
 // n and x, so that x holds the final value and n the old one, and then n is cleared: by the old value where it
 // was known, or by computing it again where it is a value computed from registers unchanged since and not among
-// the group's (`recomputable`). Then n is 0 and released.
+// the group's (`recomputable`). Then n is 0 and released. Where the old value is neither, n keeps it and is
+// released at once (the retained form of "Overwrites that keep the old value"), with a warning.
 void ControlWriter::exchangedStores(const StoreInst &first, const MDNode &group) {
   if (exchangedDone.count(&first)) {
     return;
@@ -634,11 +635,18 @@ void ControlWriter::exchangedStores(const StoreInst &first, const MDNode &group)
       }
       if (!clearing || std::any_of(clearing->quantum.begin(), clearing->quantum.end(),
                                    [&](const Storage *storage) { return members.count(storage) != 0; })) {
-        notHandled("an update of qubit variable " + target.name +
-                       " in a loop under the control of a value that depends on a qubit, whose value before the "
-                       "loop is neither known nor computable again from registers unchanged since (its old value "
-                       "would have to be kept in the fresh register and released: not built yet, HANDOFF.md)",
-                   stores[i]);
+        // The retained form: n keeps the old value and is released as it is (the partial trace).
+        line("qfree " + spares[i]);
+        warning("the overwrite of qubit variable " + target.name +
+                    " in a loop under the control of a value that depends on a qubit, whose old value is neither "
+                    "known here nor computable again from what is kept, keeps the old value in " +
+                    std::to_string(target.bits) +
+                    " qubits each time it runs, released at once (the partial trace): interference between "
+                    "configurations with different old values is lost (coherence); if the applied function "
+                    "faults for some argument values, interference between those values and the rest can be "
+                    "lost when the fault register is released",
+                stores[i]);
+        continue;
       }
       std::string args;
       std::string callee = slice(*clearing, old.value, nullptr, target.bits, first, args);

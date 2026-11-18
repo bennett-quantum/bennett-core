@@ -15,7 +15,8 @@
 // argument of the applied function, which returns its final value in a word of its own, and the variable is
 // written by exchange (docs/DESIGN.md, "Overwrites that keep the old value", with the whole region as the
 // stored function): applied into a fresh register, exchanged with the variable by CNOTs, the register then
-// holding the old value, cleared by computing that value again (Control.cpp).
+// holding the old value, cleared by that value where it is known or can be computed again, and otherwise
+// released as it is, with a warning (Control.cpp).
 //
 // One result is XORed into its variable by one `apply`. Several share a fresh register N: `apply` into N, a
 // CNOT from each bit of N into its variable, the same `apply` again (its arguments are unchanged, so N returns
