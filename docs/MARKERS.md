@@ -175,7 +175,8 @@ calls, and division or remainder without a proved nonzero divisor are refused. T
 the ordinary part inside one applied function for the table of control bits in [DESIGN.md](DESIGN.md#code-under-a-qubit).
 
 A helper may read a return address in one applied evaluation. The front refuses a repeated evaluation
-when the helper or a function it can call reads a return address. Keep and release the old value explicitly,
+when the helper or a function it can call reads a return address, including when separate predicated
+stores would repeat one source call. Keep and release the old value explicitly,
 or pass the caller's identity as a separate argument to a caller-independent helper.
 
 ## Not handled yet

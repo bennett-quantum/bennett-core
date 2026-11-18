@@ -17,6 +17,7 @@
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/ValueHandle.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/KnownBits.h>
 #include <llvm/Support/raw_ostream.h>
@@ -81,6 +82,9 @@ private:
   std::vector<Instruction *> ops;                                   // in the order they are moved
   std::vector<LoadInst *> loads;                                    // the region's loads of qubit variables
   std::map<const Instruction *, const Value *> knownValues;         // a store's target value, when known
+  // Track source calls through copies that survive simplification and are emitted.
+  std::map<const Function *, std::vector<const CallBase *>> copiedCalls;
+  std::map<const CallBase *, WeakVH> emittedCopies;
   std::set<const Instruction *> readAfterChange; // loads that may read what an operation wrote
 
   // A loop of the region whose gates stay in it: its trip count is ordinary, so the loop runs in the control
@@ -104,7 +108,7 @@ private:
   Function *copy(Instruction *op, Result result, const Value *known, std::vector<Param> &params);
   void refuseStale(Function *copy, const std::vector<Param> &params, const Instruction *op) const;
   bool readsVariable(Function *copy, const std::vector<Param> &params, const Storage *storage) const;
-  CallInst *call(Function *copy, const std::vector<Param> &params, IRBuilder<> &b) const;
+  CallInst *call(Function *copy, const std::vector<Param> &params, IRBuilder<> &b);
   Value *qubitPointer(Value *pointer, IRBuilder<> &b) const;
   void moveGate(CallBase *gate, IRBuilder<> &b);
   void moveStore(StoreInst *store, IRBuilder<> &b);
@@ -493,6 +497,18 @@ Function *Predicator::copy(Instruction *op, Result result, const Value *known, s
     fail("internal: a copy of a predicated region is broken:\n" + out2.str());
   }
   simplifyDeep(*copy);
+  auto &origins = copiedCalls[copy];
+  origins.clear();
+  for (BasicBlock *block : blocks) {
+    for (const Instruction &inst : *block) {
+      const auto *original = dyn_cast<CallBase>(&inst);
+      Value *mapped = original ? map.lookup(original) : nullptr;
+      const auto *survivor = dyn_cast_or_null<CallBase>(mapped);
+      if (survivor && survivor->getFunction() == copy) {
+        origins.push_back(original);
+      }
+    }
+  }
   return copy;
 }
 
@@ -520,7 +536,13 @@ bool Predicator::readsVariable(Function *copy, const std::vector<Param> &params,
 
 // The call of `copy` where the operation now is: unused parameters get an undefined value, and the qubit
 // variables are read here.
-CallInst *Predicator::call(Function *copy, const std::vector<Param> &params, IRBuilder<> &b) const {
+CallInst *Predicator::call(Function *copy, const std::vector<Param> &params, IRBuilder<> &b) {
+  for (const CallBase *original : copiedCalls.at(copy)) {
+    auto [first, inserted] = emittedCopies.try_emplace(original, copy);
+    if (!inserted && first->second != copy) {
+      requireCallerIndependent(*original, *original);
+    }
+  }
   std::vector<Value *> args;
   for (size_t i = 0; i < params.size(); ++i) {
     Argument *arg = copy->getArg(unsigned(i));

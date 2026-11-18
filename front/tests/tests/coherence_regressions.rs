@@ -578,3 +578,27 @@ fn moved_gate_loop_cannot_wrap_a_counter_past_its_exit() {
         "not handled yet: a moved gate loop whose ordinary passes are not proved to terminate without counter wrap",
     );
 }
+
+#[test]
+fn predicated_stores_cannot_repeat_the_same_caller_sensitive_call() {
+    Program {
+        name: "predicated-shared-caller",
+        declarations: RETADDR_HELPER,
+        body: r#"
+    ZBIT(q, 1);
+    volatile uint64_t x = 0, y = 0;
+    uint8_t z = 0;
+    if (q) {
+        uintptr_t address = f(q);
+        x = address;
+        ZBIT(z, 0);
+        y = address;
+    }
+    uint64_t first = READ(x);
+    uint64_t second = READ(y);
+    return first ^ second;
+"#,
+        qubits: 1,
+    }
+    .refused(1, &[0, 0], CALLER_REPLAY_REFUSAL);
+}

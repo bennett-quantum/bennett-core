@@ -13,10 +13,33 @@ using namespace llvm;
 
 namespace bennett {
 
-bool canReadReturnAddress(const Function &function) {
+namespace {
+
+const Function *directTarget(const CallBase &call) {
+  return dyn_cast<Function>(call.getCalledOperand()->stripPointerCastsAndAliases());
+}
+
+bool canReadReturnAddress(const Function *function, const Module &module) {
   SmallPtrSet<const Function *, 32> seen;
-  SmallVector<const Function *, 8> work{&function};
+  SmallVector<const Function *, 8> work;
   bool consideredIndirectTargets = false;
+  auto addIndirectTargets = [&] {
+    if (!consideredIndirectTargets) {
+      // An unresolved target can name any emitted function, even one whose
+      // address came from an ordinary input.
+      for (const Function &target : module) {
+        if (!target.isDeclaration()) {
+          work.push_back(&target);
+        }
+      }
+      consideredIndirectTargets = true;
+    }
+  };
+  if (function) {
+    work.push_back(function);
+  } else {
+    addIndirectTargets();
+  }
   while (!work.empty()) {
     const Function *next = work.pop_back_val();
     if (!seen.insert(next).second) {
@@ -30,29 +53,34 @@ bool canReadReturnAddress(const Function &function) {
       if (!call) {
         continue;
       }
-      if (const auto *callee = dyn_cast<Function>(call->getCalledOperand()->stripPointerCastsAndAliases())) {
+      if (const auto *callee = directTarget(*call)) {
         work.push_back(callee);
-      } else if (!consideredIndirectTargets) {
-        // An unresolved target can name any emitted function, even one whose
-        // address came from an ordinary input.
-        for (const Function &target : *function.getParent()) {
-          if (!target.isDeclaration()) {
-            work.push_back(&target);
-          }
-        }
-        consideredIndirectTargets = true;
+      } else {
+        addIndirectTargets();
       }
     }
   }
   return false;
 }
 
-void requireCallerIndependent(const Function &function, const Instruction &at) {
-  if (canReadReturnAddress(function)) {
+void requireCallerIndependent(const Function *function, const Module &module, const Instruction &at) {
+  if (canReadReturnAddress(function, module)) {
     notHandled("replaying a computation that can observe its caller's position through a return address "
                "(route: keep the old value and release it, or pass the caller's identity as an argument)",
                &at);
   }
+}
+
+} // namespace
+
+bool canReadReturnAddress(const Function &function) { return canReadReturnAddress(&function, *function.getParent()); }
+
+void requireCallerIndependent(const Function &function, const Instruction &at) {
+  requireCallerIndependent(&function, *function.getParent(), at);
+}
+
+void requireCallerIndependent(const CallBase &call, const Instruction &at) {
+  requireCallerIndependent(directTarget(call), *call.getModule(), at);
 }
 
 } // namespace bennett

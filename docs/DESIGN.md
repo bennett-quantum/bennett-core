@@ -1143,6 +1143,8 @@ evaluation can read a return address. When the front would evaluate the same com
 site, it refuses a return-address read in the function or anywhere it can call. An unresolved indirect
 call may reach any function in the module. This check also covers clearing old words, inverting an
 update, clearing the condition of a gate or gate loop, and repeating a region for several results.
+When predication copies a region for separate conditional operations, the front tracks each source
+call through the copies it emits. A caller-sensitive call can appear in only one of those copies.
 A caller's position can change even while the arguments and memory stay the same. To support an
 overwrite in this case, keep and release the old word explicitly, or pass the caller's identity as a
 separate argument to the computation that is replayed.
