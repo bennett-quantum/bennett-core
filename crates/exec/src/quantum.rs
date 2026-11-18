@@ -12,9 +12,10 @@ use bennett_ir::{Fault, Width};
 use num_complex::Complex64;
 use rand::Rng;
 
-use crate::device_io::qubit;
+use crate::device_io::wires;
 use crate::executor::RunError;
 use crate::gates::Matrix;
+use crate::wire_storage::WireStorage;
 
 /// The values of every register column, one basis state.
 pub(crate) type Config = Box<[u64]>;
@@ -56,6 +57,7 @@ impl QubitRef {
 pub(crate) struct QuantumState {
     registers: Vec<RegisterState>,
     columns: usize,
+    pub(crate) device_wires: WireStorage,
     amplitudes: BTreeMap<Config, Complex64>,
     peak_qubits: u32,
     peak_configurations: usize,
@@ -86,6 +88,7 @@ impl QuantumState {
         Self {
             registers: Vec::new(),
             columns: 0,
+            device_wires: WireStorage::default(),
             amplitudes: BTreeMap::new(),
             peak_qubits: 0,
             peak_configurations: 0,
@@ -125,13 +128,57 @@ impl QuantumState {
     }
 
     /// The simulator alone inspects releases and keeps a purification when needed.
-    pub(crate) fn discard(&mut self, id: usize) {
-        if self.is_zero(id) {
+    pub(crate) fn discard(&mut self, id: usize, mask: u64) {
+        let dirty = !self.mask_is_zero(id, mask);
+        if dirty {
+            self.nonzero_releases += 1;
+            self.nonzero_release_weight += self.mask_weight(id, mask);
+        }
+        if mask == self.device_wires.mask(id) {
+            if dirty {
+                self.leave(id);
+            } else {
+                self.free(id);
+            }
+        } else {
+            self.release_part(id, mask, dirty);
+        }
+    }
+
+    pub(crate) fn release_zero(&mut self, id: usize, mask: u64) {
+        if mask == self.device_wires.mask(id) {
             self.free(id);
         } else {
-            self.nonzero_releases += 1;
-            self.nonzero_release_weight += self.nonzero_weight(id);
-            self.leave(id);
+            self.release_part(id, mask, false);
+        }
+    }
+
+    /// Unbind just these bits. Preserve a dirty subset in its own unnamed column so the remaining
+    /// live bits keep their values and correlations, and the released wire names can be used again.
+    fn release_part(&mut self, id: usize, mask: u64, keep: bool) {
+        let width = self.registers[id].width.expect("live column").bits();
+        let removed = mask.count_ones();
+        self.registers[id].width = Width::new(width - removed);
+        self.device_wires.unbind(id, mask);
+        if keep {
+            let handle = self.reserve(Width::new(removed).expect("released bits"));
+            let hidden = handle_id(handle);
+            self.ensure_column(hidden);
+            let positions: Vec<_> = (0..64).filter(|bit| mask >> bit & 1 == 1).collect();
+            self.amplitudes = self
+                .take_amplitudes()
+                .into_iter()
+                .map(|(mut config, amplitude)| {
+                    let old = config[id];
+                    config[hidden] = positions
+                        .iter()
+                        .enumerate()
+                        .fold(0, |value, (bit, &source)| value | ((old >> source & 1) << bit));
+                    config[id] &= !mask;
+                    (config, amplitude)
+                })
+                .collect();
+            self.leave(hidden);
         }
     }
 
@@ -193,9 +240,17 @@ impl QuantumState {
         self.amplitudes.keys().all(|config| config[id] == 0)
     }
 
-    /// The weight (summed squared amplitude) of the configurations where register `id` is not zero.
-    pub(crate) fn nonzero_weight(&self, id: usize) -> f64 {
-        self.amplitudes.iter().filter(|(config, _)| config[id] != 0).map(|(_, amplitude)| amplitude.norm_sqr()).sum()
+    /// Whether the selected bits are zero in every stored configuration.
+    pub(crate) fn mask_is_zero(&self, id: usize, mask: u64) -> bool {
+        self.amplitudes.keys().all(|config| config[id] & mask == 0)
+    }
+
+    fn mask_weight(&self, id: usize, mask: u64) -> f64 {
+        self.amplitudes
+            .iter()
+            .filter(|(config, _)| config[id] & mask != 0)
+            .map(|(_, amplitude)| amplitude.norm_sqr())
+            .sum()
     }
 
     /// Frees the register, which is zero in every configuration: its column goes, which is exact.
@@ -207,7 +262,8 @@ impl QuantumState {
     /// Keeps the register's qubits as left over instead of freeing them: its handle goes stale (the
     /// generation moves on, so no handle names it), its column and amplitudes stay, and its id is not reused.
     /// The stored state is then a purification of the state after the partial trace over the register.
-    pub(crate) fn leave(&mut self, id: usize) {
+    fn leave(&mut self, id: usize) {
+        self.device_wires.unbind(id, u64::MAX);
         let register = &mut self.registers[id];
         register.generation = register.generation.wrapping_add(1);
         self.leftovers.push(id);
@@ -219,6 +275,7 @@ impl QuantumState {
         self.leftovers.remove(index);
         let register = &mut self.registers[id];
         register.generation = register.generation.wrapping_sub(1);
+        self.device_wires.bind(id, wires(id, register.width.expect("kept column").bits()));
         u64::from(register.generation) << 32 | id as u64
     }
 
@@ -236,12 +293,14 @@ impl QuantumState {
     pub(crate) fn revive(&mut self, handle: u64, width: Width) {
         let id = handle_id(handle);
         self.registers[id].width = Some(width);
+        self.device_wires.bind(id, wires(id, width.bits()));
         if id >= self.columns {
             self.set_columns(id + 1);
         }
     }
 
     pub(crate) fn retire(&mut self, id: usize) {
+        self.device_wires.unbind(id, u64::MAX);
         self.registers[id].width = None;
         let columns = self.registers.iter().rposition(|r| r.width.is_some()).map_or(0, |last| last + 1);
         if columns != self.columns {
@@ -277,12 +336,12 @@ impl QuantumState {
         &mut self,
         matrix: &Matrix,
         target: QubitRef,
-        controls: &[crate::Wire],
+        controls: &[QubitRef],
         limit: Option<usize>,
     ) -> Result<(), RunError> {
         let mut next = BTreeMap::new();
         for (config, &amplitude) in &self.amplitudes {
-            if !controls.iter().all(|&control| qubit(control).is_set(config)) {
+            if !controls.iter().all(|&control| control.is_set(config)) {
                 accumulate(&mut next, config.clone(), amplitude);
                 continue;
             }

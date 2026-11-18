@@ -136,7 +136,9 @@ The executor's classical controller allocates zeroed wires, issues named gates w
 controls, measures wires, discards them by partial trace or releases them after clearing them to zero.
 The controller assigns wire identities and keeps track of register handles and memory cells.
 Measurement is the only operation that returns quantum data. The sparse simulator preserves its seeded
-sampling of a whole set of bits in one draw. A device can measure the individual qubits in that set.
+sampling of a whole set of bits in one draw. Wire bindings allow a measurement or release to cross
+storage columns or address only part of a column. A partial discard keeps any needed purification
+without retiring the neighbouring live wires. A device can measure the individual qubits in a set.
 
 `Executor::run_on` runs the controller on a supplied device. The simulator provides reversal, snapshots,
 configuration limits and release diagnostics. It also evaluates `apply` using its stored state. A module
