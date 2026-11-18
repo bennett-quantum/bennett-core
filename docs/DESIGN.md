@@ -169,6 +169,11 @@ The library counter also accepts a fixed sequence or a source that always gives 
 
 These are the examples without `apply`. Each uses the default entry and seed.
 
+The test tool in `crates/emit/tests/support/bits.rs` runs gate lists of X, CNOT and Toffoli on 64
+definite inputs at a time. It checks that a circuit preserves its input register, XORs a Rust
+reference result into the output register, and clears scratch. The checks exhaust small registers
+and sample larger registers with a fixed seed.
+
 ### `apply`
 
 `apply @f(args) -> out, fault budget B`. Each argument is an ordinary value or a register read as an integer;
