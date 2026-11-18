@@ -50,3 +50,22 @@ fn counts_identify_the_supplied_measurement_source() {
         assert!(text.contains(&format!("one-qubit gates: {gate_count}\n")), "{text}");
     }
 }
+
+#[test]
+fn returning_a_register_does_not_expose_a_storage_handle() {
+    let fixture = "../crates/cli/tests/fixtures/count-device.bn";
+    for entry in ["dirty_discard", "clean_discard"] {
+        let args = [fixture, "--entry", entry];
+        let simulated = Command::new(env!("CARGO_BIN_EXE_bennett"))
+            .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples"))
+            .arg("run")
+            .args(args)
+            .output()
+            .expect("ran simulator");
+        let counted = count(&args);
+        for output in [simulated, counted] {
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            assert_eq!(String::from_utf8_lossy(&output.stdout).lines().next(), Some("result: register (q1)"));
+        }
+    }
+}

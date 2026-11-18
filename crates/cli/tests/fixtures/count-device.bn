@@ -23,3 +23,21 @@ one:
 zero:
     ret %m
 }
+
+func @dirty_discard() -> q1 {
+entry:
+    %old = qalloc 1
+    x %old
+    qfree %old
+    %new = qalloc 1
+    ret %new
+}
+
+func @clean_discard() -> q1 {
+entry:
+    %old = qalloc 1
+    z %old
+    qfree %old
+    %new = qalloc 1
+    ret %new
+}

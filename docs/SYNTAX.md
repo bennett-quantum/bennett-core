@@ -141,7 +141,8 @@ one faults `qubit_memory_access`, inside an applied function too (`docs/DESIGN.m
 A register `%q` of type `qN` passed to a parameter of type `qN` passes the handle. Nowhere does a register stand
 for an integer in ordinary code: a `call`, `call_indirect` or branch passing one to an `iN` parameter is a type
 mismatch. Only `apply` reads its argument registers, for each definite value of them. `out` and `fault` may not
-be among an `apply`'s arguments, nor be one register.
+be among an `apply`'s arguments, nor be one register. A call can return a handle to its caller. Returning a register from the
+selected entry ends the run successfully with no scalar host result. The CLI reports its declared width.
 
 ## Whole-run exit
 

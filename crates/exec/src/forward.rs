@@ -442,6 +442,11 @@ impl<'m> Executor<'m> {
     /// Returns `value` to the caller, or finishes the run when the frame is the run's outermost.
     fn ret(&mut self, value: Option<u128>) {
         if self.frames.len() == self.base_depth + 1 {
+            // A host result exposes an integer only. Register handles stay inside the controller.
+            let value = match self.function(self.top().func).result {
+                Some(Type::Qreg(_)) => None,
+                Some(Type::Int(_)) | None => value,
+            };
             self.outcome = Some(Outcome::Returned(value));
             self.record(Undo::Finish);
             return;

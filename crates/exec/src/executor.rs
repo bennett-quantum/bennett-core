@@ -45,7 +45,7 @@ pub struct Options {
 /// How a run ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
-    /// The entry returned, or `exit` finished the run, with the result value if it has one.
+    /// The entry returned, or `exit` finished the run. Only integer results carry a scalar value.
     Returned(Option<u128>),
     /// Execution stopped with a named fault. The state is as it was before the faulting step.
     Faulted(Fault),
