@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use bennett_ir::{BinOp, BlockId, Function, Inst, Operand, Predicate, Target, Terminator};
+use bennett_ir::{BinOp, BlockId, Function, Inst, Operand, Predicate, Slot, Target, Terminator};
 use petgraph::algo::dominators::{Dominators, simple_fast};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::Reversed;
@@ -114,6 +114,7 @@ impl<'a> Flow<'a> {
 #[derive(Clone, Copy)]
 pub(super) struct ShiftLoop<'a> {
     pub(super) width: usize,
+    pub(super) tested: Slot,
     pub(super) condition: &'a Operand,
     pub(super) continue_when_true: bool,
     pub(super) continuing: &'a Target,
@@ -175,6 +176,7 @@ impl<'a> ShiftLoop<'a> {
 
         found_back_edge.then_some(Self {
             width: width.bits() as usize,
+            tested: block.params[parameter].slot,
             condition,
             continue_when_true,
             continuing,

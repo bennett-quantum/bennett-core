@@ -314,8 +314,10 @@ A **proved pass count** comes from the program. For a test of whether a block pa
 is zero, the compiler checks that every route from the nonzero outcome back to the test
 passes a logical right shift by one of that pass's parameter. A word of width `w` must
 then be zero after at most `w` passes. Each emitted pass uses one control formed by
-combining the previous pass's running inputs with the new test. Exits are collected at
-the shared continuation, which is subject to the same budget check as any join. Proved
+combining the previous pass's running inputs with the new test. On an exit the compiler
+records the tested word as zero before assigning the exit arguments. A later outer pass
+that receives this zero skips the drained inner loop's body. Exits are collected at the
+shared continuation, which is subject to the same budget check as any join. Proved
 counts can nest. A loop with a qubit-dependent exit and no such proof uses the step
 machine or the single-loop construction below. A route still cycling without a program
 proof at the budget boundary also uses the step machine, so an enclosing proved loop
@@ -366,8 +368,10 @@ The next counts use the same convention and include the argument, eight result a
 qubits in the peak. The ordinary loop adds the three-bit input on odd inputs and subtracts it
 on even inputs, three times. The unequal routes reach a shared return after two or three steps.
 The shift loops return the bit length of the input, taking `4 + 5k` steps for `k` passes.
-The nested example shifts a two-bit word and reruns the three-bit shift loop in each outer pass.
-Each measurement uses a budget that allows every input to return.
+One nested example shifts a two-bit word and reloads the three-bit inner input in each outer
+pass. The draining example instead carries the final value of its six-bit inner word across
+passes of a six-bit outer loop. It emits at most six body passes for each loop. Each measurement
+uses a budget that allows every input to return.
 
 | Example and budget | Construction | One-qubit gates | Two-qubit gates | Toffolis | Peak qubits | Depth |
 |---|---|---:|---:|---:|---:|---:|
@@ -375,25 +379,28 @@ Each measurement uses a budget that allows every input to return.
 | Ordinary loop, 31 | Step machine | 460 | 326 | 354 | 181 | 639 |
 | Unequal routes, 3 | Control gates | 3 | 0 | 0 | 14 | 1 |
 | Unequal routes, 3 | Step machine | 6 | 6 | 0 | 14 | 12 |
-| 2-bit shift, 14 | Control gates | 56 | 12 | 32 | 30 | 72 |
+| 2-bit shift, 14 | Control gates | 44 | 10 | 22 | 26 | 52 |
 | 2-bit shift, 14 | Step machine | 78 | 19 | 53 | 35 | 81 |
-| 3-bit shift, 19 | Control gates | 132 | 24 | 80 | 51 | 142 |
+| 3-bit shift, 19 | Control gates | 108 | 18 | 56 | 42 | 104 |
 | 3-bit shift, 19 | Step machine | 134 | 49 | 132 | 62 | 165 |
-| 4-bit shift, 24 | Control gates | 212 | 40 | 147 | 76 | 225 |
+| 4-bit shift, 24 | Control gates | 172 | 28 | 103 | 60 | 147 |
 | 4-bit shift, 24 | Step machine | 190 | 95 | 242 | 99 | 273 |
-| 5-bit shift, 29 | Control gates | 320 | 60 | 235 | 108 | 335 |
+| 5-bit shift, 29 | Control gates | 260 | 40 | 165 | 83 | 227 |
 | 5-bit shift, 29 | Step machine | 254 | 157 | 383 | 146 | 405 |
-| 6-bit shift, 34 | Control gates | 436 | 84 | 341 | 145 | 457 |
+| 6-bit shift, 34 | Control gates | 352 | 54 | 239 | 109 | 289 |
 | 6-bit shift, 34 | Step machine | 326 | 235 | 555 | 203 | 561 |
-| 8-bit shift, 44 | Control gates | 700 | 144 | 608 | 234 | 750 |
+| 8-bit shift, 44 | Control gates | 556 | 88 | 424 | 170 | 434 |
 | 8-bit shift, 44 | Step machine | 494 | 439 | 992 | 347 | 945 |
-| Nested shifts, 53 | Control gates | 348 | 126 | 433 | 167 | 539 |
+| Nested shifts, 53 | Control gates | 288 | 106 | 357 | 139 | 405 |
 | Nested shifts, 53 | Step machine | 1,468 | 2,810 | 5,169 | 1,675 | 1,527 |
+| Draining shifts, 85 | Control gates | 868 | 248 | 847 | 310 | 1,039 |
+| Draining shifts, 85 | Step machine | 4,744 | 9,342 | 18,285 | 5,614 | 4,939 |
 
 Run `cargo test -p bennett-emit --test apply controlled_apply -- --nocapture` for the counts and
 boundary checks. The simulator compares amplitudes with direct evaluation at the return
 boundaries for shift widths 2 through 6 and for the nested example. The bit-level runner
-checks every 8-bit input at budgets 0 through 45, with zero and patterned destinations.
+checks every 8-bit input at budgets 0 through 45, with zero and patterned destinations, and
+all 4,096 inputs to the 12-bit draining example at budget 85, with patterned destinations.
 For 8, 9 and 10 short-circuit pairs with early returns, automatic mode emits the same
 gate lists as forced dispatch, with 3,343, 4,544 and 5,999 gates respectively.
 

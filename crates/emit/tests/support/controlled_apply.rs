@@ -440,12 +440,12 @@ fn control_and_step_machine_counts() {
     );
     count_routes("meeting routes", MEETING_ROUTES, 1, &[], 3, [[3, 0, 0, 14, 1], [6, 6, 0, 14, 12]]);
     for (width, recorded) in [
-        (2, [[56, 12, 32, 30, 72], [78, 19, 53, 35, 81]]),
-        (3, [[132, 24, 80, 51, 142], [134, 49, 132, 62, 165]]),
-        (4, [[212, 40, 147, 76, 225], [190, 95, 242, 99, 273]]),
-        (5, [[320, 60, 235, 108, 335], [254, 157, 383, 146, 405]]),
-        (6, [[436, 84, 341, 145, 457], [326, 235, 555, 203, 561]]),
-        (8, [[700, 144, 608, 234, 750], [494, 439, 992, 347, 945]]),
+        (2, [[44, 10, 22, 26, 52], [78, 19, 53, 35, 81]]),
+        (3, [[108, 18, 56, 42, 104], [134, 49, 132, 62, 165]]),
+        (4, [[172, 28, 103, 60, 147], [190, 95, 242, 99, 273]]),
+        (5, [[260, 40, 165, 83, 227], [254, 157, 383, 146, 405]]),
+        (6, [[352, 54, 239, 109, 289], [326, 235, 555, 203, 561]]),
+        (8, [[556, 88, 424, 170, 434], [494, 439, 992, 347, 945]]),
     ] {
         count_routes(&format!("shift i{width}"), &shift_loop(width), width, &[], shift_return(width as u64), recorded);
     }
@@ -455,7 +455,15 @@ fn control_and_step_machine_counts() {
         5,
         &[],
         NESTED_SHIFTS_STEPS,
-        [[348, 126, 433, 167, 539], [1468, 2810, 5169, 1675, 1527]],
+        [[288, 106, 357, 139, 405], [1468, 2810, 5169, 1675, 1527]],
+    );
+    count_routes(
+        "draining shifts",
+        &draining_shifts(DRAINING_SHIFTS_WIDTH, DRAINING_SHIFTS_WIDTH),
+        2 * DRAINING_SHIFTS_WIDTH,
+        &[],
+        DRAINING_SHIFTS_STEPS,
+        [[868, 248, 847, 310, 1039], [4744, 9342, 18285, 5614, 4939]],
     );
 }
 
@@ -574,5 +582,78 @@ join(i8 %amount):
     for budget in [0, 5] {
         let error = compile_apply(apply_input(&module, &args, 8, budget)).expect_err("live amounts disagree");
         assert!(matches!(error, ApplyError::Unsupported { operation: "shl", .. }));
+    }
+}
+
+fn draining_shifts(outer: usize, inner: usize) -> String {
+    let width = outer + inner;
+    format!(
+        r#"
+memory 1024
+func @f(i{width} %input) -> i8 {{
+entry:
+    %x = trunc i{width} %input to i{outer}
+    %upper = lshr i{width} %input, {outer}
+    %y = trunc i{width} %upper to i{inner}
+    br outer(%x, i8 0, %y)
+outer(i{outer} %i, i8 %acc, i{inner} %remaining):
+    %outer_more = icmp ne i{outer} %i, 0
+    br %outer_more, start_inner, done
+start_inner:
+    br inner(%remaining, %acc)
+inner(i{inner} %j, i8 %count):
+    %inner_more = icmp ne i{inner} %j, 0
+    br %inner_more, inner_body, outer_latch
+inner_body:
+    %next_j = lshr i{inner} %j, 1
+    %inc = add i8 %count, 1
+    br inner(%next_j, %inc)
+outer_latch:
+    %next_i = lshr i{outer} %i, 1
+    br outer_back
+outer_back:
+    br outer(%next_i, %count, %j)
+done:
+    ret %acc
+}}
+"#
+    )
+}
+
+const DRAINING_SHIFTS_WIDTH: usize = 6;
+const DRAINING_SHIFTS_STEPS: u64 = 7 + 13 * DRAINING_SHIFTS_WIDTH as u64;
+
+#[test]
+fn a_drained_inner_word_stays_zero_on_later_outer_passes() {
+    let sides = DRAINING_SHIFTS_WIDTH;
+    let width = 2 * sides;
+    let module = load(&draining_shifts(sides, sides)).expect("valid nested shifts");
+    let args = [Argument::Register(0..width as u64)];
+    let input = apply_input(&module, &args, width, DRAINING_SHIFTS_STEPS);
+    let ample = compile_apply(ApplyInput { budget: 1000, ..input.clone() }).expect("emit at ample budget");
+    println!("drained {sides}-bit words: {}, {} gates", ample.construction, ample.block.ops().len() - 2);
+    assert_eq!(ample.construction, Construction::Controlled { proved_passes: width });
+    let exact = compile_apply(input).expect("emit at the longest return");
+    assert_eq!(exact.block.ops(), ample.block.ops());
+    let (gates, layout) = gates(&exact, width, 13);
+    bits::check_states(&gates, layout, (0..1 << width).map(|x| (x, 0x12a5)), |x| {
+        if x & ((1 << sides) - 1) == 0 { 0 } else { u128::from(bit_length((x >> sides) as u64)) }
+    })
+    .expect("all inputs keep the drained word's result and clear scratch");
+
+    let (outer, inner) = (2, 3);
+    let small = control_example(&draining_shifts(outer, inner), outer + inner, "");
+    let longest = 7 + 8 * outer as u64 + 5 * inner as u64;
+    for budget in [longest - 1, longest, longest + 1] {
+        for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+            let (construction, _) = compare_controls(&small, budget, mode, |x| {
+                let outer = bit_length(x & 3);
+                let inner = if outer == 0 { 0 } else { bit_length(x >> 2) };
+                if budget >= 7 + 8 * outer + 5 * inner { (inner, 0) } else { (0, 1) }
+            });
+            if budget >= longest && mode == ApplyMode::Automatic {
+                assert_eq!(construction, Construction::Controlled { proved_passes: outer + inner });
+            }
+        }
     }
 }

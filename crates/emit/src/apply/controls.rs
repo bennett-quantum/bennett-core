@@ -198,7 +198,11 @@ impl Controls<'_, '_> {
             };
             let exit_mask = self.circuit.and(route.enabled, continuation.not());
             if exit_mask != ZERO {
-                let exit = self.transfer(route.clone(), plan.exiting, exit_mask);
+                let mut exiting = route.clone();
+                // Every enabled exit saw zero. Carry that fact through the
+                // transfer, including when the tested word is an exit argument.
+                exiting.slots[plan.tested.index()].fill(ZERO);
+                let exit = self.transfer(exiting, plan.exiting, exit_mask);
                 exits = self.merge(exits, Some(exit), None)?;
             }
             route.enabled = self.circuit.and(route.enabled, continuation);
