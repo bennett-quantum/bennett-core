@@ -605,3 +605,56 @@ fn rejects_a_late_invalid_gate_before_issuing_the_circuit() {
     assert_eq!(counter.counts().depth, 0);
     assert_eq!(counter.counts().zero_released_qubits, 0);
 }
+
+#[test]
+fn emitted_fault_statistics_use_the_change_to_a_nonzero_destination() {
+    let module = load(
+        r#"
+memory 256
+func @f(i1 %x) -> i1 {
+entry:
+    br %x, done, spin
+done:
+    ret 1
+spin:
+    br spin
+}
+func @main() {
+entry:
+    %x = qalloc 1
+    h %x
+    s %x
+    %out = qalloc 1
+    %fault = qalloc 5
+    x %fault[0]
+    apply @f(%x) -> %out, %fault budget 2
+    apply @f(%x) -> %out, %fault budget 0
+    ret
+}
+"#,
+    )
+    .expect("valid fault program");
+    let entry = module.function_named("main").expect("entry");
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        let options = Options { machine_meaning: true, ..Options::default() };
+        let mut direct = Executor::new(&module, entry, &[], options).expect("direct evaluator");
+        let mut emitted = Executor::new(&module, entry, &[], options).expect("gate simulator");
+        let mut compiler = |input: ApplyInput<'_>| Ok(compile_apply_with(input, mode)?.block);
+        for (step, count, total, maximum) in [(7, 1, 0.5, 0.5), (8, 2, 1.5, 1.0)] {
+            while direct.stats().steps < step {
+                assert_eq!(direct.step(), None);
+                assert_eq!(emitted.step_emitted(&mut compiler), None);
+            }
+            assert_eq!(emitted.snapshot(), direct.snapshot());
+            let expected = direct.stats();
+            assert_eq!(expected.region_faults, count);
+            assert!((expected.region_fault_weight - total).abs() < 1e-12);
+            assert!((expected.region_fault_max_weight - maximum).abs() < 1e-12);
+            let actual = emitted.stats();
+            assert_eq!(actual.region_faults, expected.region_faults, "{mode:?}");
+            assert_eq!(actual.region_fault_weight, expected.region_fault_weight, "{mode:?}");
+            assert_eq!(actual.region_fault_max_weight, expected.region_fault_max_weight, "{mode:?}");
+        }
+        assert_eq!(emitted.step_emitted(&mut compiler), Some(Outcome::Returned(None)));
+    }
+}

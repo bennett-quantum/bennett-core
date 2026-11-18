@@ -133,8 +133,8 @@ impl<'m> Executor<'m> {
         let circuit = AppliedCircuit::check(&input, &block)?;
         if let Some(device) = context.external.as_deref_mut() {
             AppliedCircuit::send(&block, device)?;
-        } else {
-            circuit.simulate(&mut self.quantum)?;
+        } else if let Some(weight) = circuit.simulate(&mut self.quantum, fault)? {
+            self.record_region_fault_weight(weight);
         }
         Ok(())
     }
@@ -172,15 +172,19 @@ impl<'m> Executor<'m> {
     ) -> Option<RunError> {
         let &(_, _, code) = faulting.first()?;
         let weight: f64 = faulting.iter().map(|&(_, weight, _)| weight).sum();
-        self.region_faults += 1;
-        self.region_fault_weight += weight;
-        self.region_fault_max_weight = self.region_fault_max_weight.max(weight);
+        self.record_region_fault_weight(weight);
         (!self.allow_region_faults).then_some(RunError::RegionFault {
             callee,
             fault: code,
             faulting: faulting.len(),
             configurations,
         })
+    }
+
+    fn record_region_fault_weight(&mut self, weight: f64) {
+        self.region_faults += 1;
+        self.region_fault_weight += weight;
+        self.region_fault_max_weight = self.region_fault_max_weight.max(weight);
     }
 
     /// Runs `callee(args)` within `budget` steps on top of the current frames, then undoes the run.

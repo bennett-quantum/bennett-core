@@ -145,7 +145,9 @@ without retiring the neighbouring live wires. A device can measure the individua
 `apply`. The simulator provides reversal, snapshots, configuration limits and release diagnostics.
 Its default mode evaluates applied functions directly. Its gate mode runs the emitted X, CNOT and
 Toffoli gates on batches of definite configurations, carrying each complex amplitude unchanged.
-It verifies that scratch is zero before installing the resulting state.
+It verifies that scratch is zero before installing the resulting state. To report faulting
+applies and their weights, it sums the squared amplitudes of the input configurations
+whose fault destination changed by XOR.
 
 The target is an ideal logical quantum computer with one- and two-qubit gates, Toffoli gates and on-demand
 allocation and measurement. The wrapper forwards gates with zero or one control and X with two controls.

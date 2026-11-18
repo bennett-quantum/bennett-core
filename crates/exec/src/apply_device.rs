@@ -166,7 +166,8 @@ impl AppliedCircuit {
         Ok(())
     }
 
-    pub(crate) fn simulate(&self, state: &mut QuantumState) -> Result<(), RunError> {
+    /// Returns the total input weight whose fault code was XORed into the destination.
+    pub(crate) fn simulate(&self, state: &mut QuantumState, fault: usize) -> Result<Option<f64>, RunError> {
         let bindings = self
             .interface
             .iter()
@@ -177,6 +178,7 @@ impl AppliedCircuit {
         let mut wires = vec![0u64; one + 1];
         let mut source = state.amplitudes().iter();
         let mut result = BTreeMap::new();
+        let mut fault_weight = None;
         loop {
             let mut batch = source.by_ref().take(width).map(|(config, &amp)| (config.clone(), amp)).collect::<Vec<_>>();
             if batch.is_empty() {
@@ -196,14 +198,18 @@ impl AppliedCircuit {
             if wires[bindings.len()..one].iter().any(|&word| word != 0) {
                 return Err(RunError::Device("apply circuit left nonzero scratch"));
             }
-            for (lane, (config, _)) in batch.iter_mut().enumerate() {
+            for (lane, (config, amplitude)) in batch.iter_mut().enumerate() {
+                let old_fault = config[fault];
                 for (&word, &qubit) in wires.iter().zip(&bindings) {
                     qubit.assign(config, word >> lane & 1 != 0);
+                }
+                if config[fault] != old_fault {
+                    *fault_weight.get_or_insert(0.0) += amplitude.norm_sqr();
                 }
             }
             result.extend(batch);
         }
         state.replace_amplitudes(result);
-        Ok(())
+        Ok(fault_weight)
     }
 }
