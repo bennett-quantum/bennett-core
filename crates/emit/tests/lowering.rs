@@ -1,5 +1,6 @@
 //! Phase-sensitive comparison of primitive and rewritten gates on the sparse simulator.
 
+use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::ops::Range;
 
@@ -12,12 +13,15 @@ use rand_chacha::ChaCha8Rng;
 #[derive(Default)]
 struct Program {
     instructions: String,
-    scratch: Range<Wire>,
+    allocations: BTreeMap<Wire, (usize, Range<Wire>)>,
+    next_register: usize,
 }
 
 impl Program {
     fn place(&self, wire: Wire) -> String {
-        if self.scratch.contains(&wire) { format!("%s[{}]", wire - self.scratch.start) } else { format!("%q[{wire}]") }
+        let (_, (name, range)) = self.allocations.range(..=wire).next_back().expect("live wire");
+        assert!(range.contains(&wire), "wire {wire} is not live");
+        format!("%r{name}[{}]", wire - range.start)
     }
 
     fn simulate(&self, input_width: u64) -> QuantumSnapshot {
@@ -35,21 +39,21 @@ impl Program {
 
 impl Device for Program {
     fn allocate(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
+        if wires.is_empty() {
+            return Ok(());
+        }
         let width = wires.end - wires.start;
-        let name = if wires.start == 0 {
-            "q"
-        } else {
-            self.scratch = wires;
-            "s"
-        };
-        writeln!(self.instructions, "%{name} = qalloc {width}").expect("string");
+        let name = self.next_register;
+        self.next_register += 1;
+        assert!(self.allocations.insert(wires.start, (name, wires)).is_none());
+        writeln!(self.instructions, "%r{name} = qalloc {width}").expect("string");
         Ok(())
     }
 
     fn gate(&mut self, gate: GateOp<&[Wire]>) -> Result<(), RunError> {
         let kind = match gate.kind {
             Gate::Fixed(kind) => kind.mnemonic().to_owned(),
-            Gate::Rotate(axis, angle) => format!("{}({angle:.17})", axis.mnemonic()),
+            Gate::Rotate(axis, angle) => format!("{}({angle:?})", axis.mnemonic()),
         };
         let target = self.place(gate.target);
         write!(self.instructions, "{kind} {target}").expect("string");
@@ -70,8 +74,12 @@ impl Device for Program {
     }
 
     fn release_zero(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
-        assert_eq!(wires, self.scratch);
-        self.instructions.push_str("qfree %s\n");
+        if wires.is_empty() {
+            return Ok(());
+        }
+        let (name, allocated) = self.allocations.remove(&wires.start).expect("live allocation");
+        assert_eq!(wires, allocated);
+        writeln!(self.instructions, "qfree %r{name}").expect("string");
         Ok(())
     }
 }
@@ -134,4 +142,31 @@ fn decoded_cnot_uses_the_transmitted_target_and_control() {
     assert_eq!(state.amplitudes.len(), 1);
     assert_eq!(state.amplitude(&[3]).re, 1.0);
     assert_eq!(state.amplitude(&[3]).im, 0.0);
+}
+
+#[test]
+fn two_lowered_block_calls_have_independent_scratch_names() {
+    let mut lowered = LowerControls::new(Program::default());
+    lowered.allocate(0..3).expect("inputs");
+    let block = GateBlock::new(
+        "double controlled H",
+        [GateOp { kind: Gate::Fixed(FixedGate::H), target: 2, controls: vec![0, 1] }],
+    );
+    lowered.repeat(&block, 2).expect("two scratch lifetimes");
+    let state = lowered.inner().simulate(3);
+    assert_eq!(state.amplitude(&[0]).re, 1.0);
+}
+
+#[test]
+fn a_tiny_rotation_round_trips_through_the_test_writer() {
+    let mut output = Program::default();
+    output.allocate(0..1).expect("input");
+    let kind = Gate::Rotate(Rotation::Rx, 1e-18);
+    output.gate(GateOp { kind, target: 0, controls: &[] }).expect("gate");
+    let text = format!("memory 128\nfunc @main() {{\nentry:\n{}ret\n}}", output.instructions);
+    let module = bennett_ir::load(&text).expect("valid output");
+    let bennett_ir::Inst::Gate { gate, .. } = module.functions[0].blocks[0].insts[1] else {
+        panic!("expected a decoded rotation");
+    };
+    assert_eq!(gate, kind);
 }
