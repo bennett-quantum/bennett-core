@@ -405,9 +405,11 @@ simulator run is `bennett run --machine-meaning` with its default direct evaluat
 
 Before consulting the budget, the emitter checks all instructions in the applied function.
 Shift amounts, multiplication factors and switch selectors must fold to definite bits,
-including bits made constant by operations on register inputs. The proof joins the bits
-delivered to each block parameter. When a conditional jump or switch folds to a constant,
-it joins only the selected edge. If that analysis leaves an operand without a proof, a
+including bits made constant by operations on register inputs. The first analysis starts
+at the entry block and joins the bits delivered by edges it can reach. When a conditional
+jump or switch folds to a constant, it follows the selected edge. If the condition
+becomes unknown on a later visit, both outcomes can reach their targets. If that analysis
+leaves an operand without a proof, a
 second analysis follows every edge. This can recover a constant for an instruction the
 whole-function check examines in a bypassed block. Conflicting values across visits need
 a more precise analysis of definite control. Instruction refusals for given arguments apply at every
