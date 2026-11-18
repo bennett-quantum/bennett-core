@@ -253,7 +253,15 @@ an empty device program (`front/src/main.cpp`, `readInput`).
   by an odd constant, rotation, byte swap, a select whose condition does not read x, and the truncations
   and extensions across which ring operations keep their low bits (`InPlace.h`). The other operands must
   not read x. Anything else that overwrites x keeps x's old value in a register that is released at once
-  ("Overwrites that keep the old value" below).
+  ("Overwrites that keep the old value" below), unless the old value can be computed again (next).
+- **An overwrite whose old value is a function of registers unchanged since** clears the variable by computing
+  that value again. When x was last given a value `v` that depends on a qubit, by a whole store, and every
+  qubit variable `v` reads (x not among them) is unchanged between the read and the overwrite, and every call
+  in `v` sees the same memory there (`Control.cpp`, `recomputable`), the overwrite `x = g` is `apply @v -> x`
+  (x is 0) then `apply @g -> x`; where `g` reads x, as `if (r) x = 7` stores `r ? x : 7`, that read is `v`'s
+  computation. A load that read a known ordinary value (with `--taint-all` every load is treated as a qubit
+  read) is given that value. Nothing is kept and no warning is written; the dataflow's third kind of fact,
+  `Computed`, records `v` (`Taint.h`).
 - **A one-bit update `x = e(x)` with `e(1) == e(0) ^ 1`** is `x ^= e(0)`. The identity is proved by LLVM's
   simplifier on two clones of `e`, or, where `e` reads no ordinary value and the other qubit variables it
   reads have at most `maxEnumeratedSupportBits` (8) bits that may be 1, by folding both clones on every
@@ -515,8 +523,9 @@ count included, and a gate at pass 199 of 200 under a budget of 16 steps gives i
 ## Overwrites that keep the old value
 
 An overwrite of a qubit variable whose old value the front can neither XOR away (it is not known), undo by an
-inverse (the update is not a bijection it can invert) nor compute back from what is kept (`x = x * x`, `x =
-5` on an `x` in superposition, `*y = 0`) is accepted (the maintainer's decision of 2026-11-17). With `n` a
+inverse (the update is not a bijection it can invert) nor compute again from registers unchanged since it was
+stored (`x = x * x`, `x = 5` on an `x` prepared by gates, or computed from a variable that has changed since,
+`*y = 0`) is accepted (the maintainer's decision of 2026-11-17). With `n` a
 fresh register as wide as the variable `x` and `g` the stored value as an ordinary function of the qubit
 variables it reads (`x` among them, as an argument):
 
@@ -552,7 +561,8 @@ exact basis results, exact Born weights of every preparation, 512 samples, the w
 A store into memory whose value, or whether it runs, depends on a qubit makes the bytes it writes hold qubits
 and keeps its value in superposition there (the maintainer's decision of 2026-11-17); the compiler inserts no
 measurement. The front (`front/src/HeldBytes.h`) names the bytes by their object, a global variable, the
-memory a pointer argument points to, or a local variable, and their offsets: constant offsets, or, inside
+memory a pointer argument points to, or a local variable, and their offsets (one shadow per object, so
+where two objects may share bytes the front must know it; below): constant offsets, or, inside
 code under a qubit without gates (which is applied whole), the offsets LLVM's bound on a position allows (a
 loop over a small array, `memset`, `memcpy` of a length that depends on a qubit). The union of the bytes the
 writes of one object may touch, at most 8 (one register), gets a qubit variable of its width, its **shadow**
@@ -576,23 +586,39 @@ one budget ("Code under a qubit"); a store elsewhere is XORed in, inverted in pl
 fresh register that keeps the old value ("Overwrites that keep the old value", with its warning and count).
 Written out for one store `x = g(a, x)` this is the exchange form of a store at memory: the new value is
 applied into a fresh register, exchanged with the bytes by gates on address-named bits, and the register is
-returned to 0 because the old value is known (`v`, or a function of registers unchanged since, or computed
-back by an inverse); where none holds the old value is kept and dropped by `qfree`. The exchange maps definite
+returned to 0 because the old value is known (`v`, or a function of registers unchanged since, computed again,
+or computed back by an inverse); where none holds the old value is kept and dropped by `qfree`. The exchange maps definite
 states to definite states one to one, so the span is unitary on the registers and the bytes except where the
 retained form releases a register; the shadow starts at 0 and ends at 0 for each definite value of what it
 depends on, outside those releases.
 
 Where the span starts and ends. It starts before the first such write, outside the code under a qubit that
-contains it, and is moved earlier, to a block that dominates, until every access to the bytes sees one state on
-every path. It ends before each return and before each `bennett_measure_bytes` that touches the bytes (the
-programmer's measurement, `docs/MARKERS.md`): there the bytes get their value, and the measurement of whole
-bytes makes them ordinary memory again, holding the result ("Qubits in memory"). For a local variable of the
+contains it. It ends before each return and before each `bennett_measure_bytes` that touches the bytes (the
+programmer's measurement, `docs/MARKERS.md`): there the bytes get their value, and the bytes measured are
+ordinary memory again, holding the result ("Qubits in memory"); the others keep holding qubits, so ordinary
+code may then touch the measured bytes and not the others. Where a path on which the shadow still holds the
+bytes joins, outside code under a qubit, a path on which the span has ended (a measurement on one path, a
+return after the join), the span also ends on the edges from the first: the same exchange, on those edges.
+Any other disagreement between paths moves the start earlier, to a block that dominates, until every access
+to the bytes sees one state on every path.
+
+Which pointers may reach the bytes (`front/src/Aliasing.h`). What a pointer argument may point to is the union
+of what the calls of its function in the module pass; a function the host may call (external linkage), or one
+called through a pointer, may be given any address. A pointer the front cannot follow (loaded from memory,
+returned by a call) may point into any object whose address escapes. An argument never points into a local
+variable of its own call, and a `restrict` argument shares no bytes with another pointer. Where every call of
+a static function passes the same pointer for two arguments, the two are one object. A call reaches what its
+pointer arguments point to and what its callee, through the functions it calls, accesses. For a local variable of the
 function the shadow takes `v` by XOR instead and the stack bytes are left as they are, so they never hold
 qubits after the function returns; the exchange happens only before a measurement of all of them, after which
 `m` holds `v` and is returned to 0 with the function's other known variables.
 
 What is refused, by name: ordinary code that reads the bytes while they hold qubits (it asks for the
-measurement), a call given memory of the object meanwhile, an access that touches them only in part, a
+measurement), a call that may read or write them meanwhile (given their address, or reaching their object
+directly, as a function reading the global variable does), an access through another pointer that may reach
+them, stores under a qubit through two objects that may share bytes (the route for these two: a static
+function whose calls pass distinct objects or the same pointer, `restrict`, or a check of the addresses at run
+time, not built), an access that touches them only in part, a
 position that is not constant outside code applied whole, more than 8 bytes of one object, an object the
 front cannot name, and a store into memory in code that also has gates (each a debt in `HANDOFF.md`). The
 front assumes the bytes are ordinary where a span starts: if an earlier call left them holding qubits, the
@@ -608,8 +634,13 @@ twelve-byte image (guard bytes included, bytes that still hold qubits read from 
 definite input, with no register released that is not 0, and native C's exact weights of every result for
 the oracle's ten preparations, at O0, O2 and with `--taint-all`; a store under a qubit followed by its inverse
 under the same qubit leaves `q` unentangled (a Hadamard then gives 0 every time); a straight store of a value
-that depends on two qubits, a local array, and an overwrite that keeps its old value (8 qubits, the warning)
-give C's values; and the refusals.
+that depends on two qubits, a local array, an overwrite whose old value is computed again from the unchanged
+`q` (nothing kept), and the same after a gate on `q`, which keeps its old value (8 qubits, the warning), give
+C's values; and the refusals. `front/tests/tests/held_span_independent.rs`: whole and partial
+measurements, a span ended by a measurement on one path and a return on another, the overwrites that clear
+by computing the old value again (exact amplitudes, nothing kept) and the one that cannot, a region writing
+two objects (every bit of each change), pointers that may share bytes (refused by name; merged, distinct and
+`restrict` accepted with C's values), and a callee reading the global variable (refused by name).
 
 ## Applied calls
 

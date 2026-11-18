@@ -74,6 +74,12 @@ struct Slice {
   std::vector<const Value *> classical;      // ordinary values: passed in
   std::vector<const Storage *> quantum;      // qubit variables read: their registers are passed in
   std::vector<const LoadInst *> loads;       // the loads of those variables
+  // Loads of qubit variables that held a known ordinary value where they read it (`collect` with `knownLoads`):
+  // that value is passed in for them.
+  std::vector<std::pair<const LoadInst *, const Value *>> known;
+  // Loads of qubit variables that held a value computed from registers unchanged since (Fact::Computed), with
+  // `knownLoads`: that computation, in the body, stands for them.
+  std::vector<std::pair<const LoadInst *, const Value *>> computed;
 };
 
 class ControlWriter : public BodyWriter {
@@ -110,6 +116,11 @@ private:
   // fresh register, exchanged with the variable by CNOTs, and the register, now holding the old value, is
   // released (the partial trace), with a warning.
   void retainedOverwrite(const Storage &target, const Value *value, const StoreInst &store);
+  // Whether `old`, the value `target` holds at `store`, can be computed again there: a computation the control
+  // program can apply (collect) whose qubit variables, `target` not among them, are unchanged since they were read,
+  // and whose calls see the same memory.
+  bool recomputable(const Value *old, const Storage &target, const Instruction &store) const;
+
   void release(const Instruction &ret);
   void controlledGate(const CallBase &call, const Access &target, const std::string &gate);
   // The qubits whose conjunction `condition` is, if LLVM's simplifier proves it is one: each qubit of a
@@ -126,7 +137,12 @@ private:
   void apply(const std::string &callee, const std::string &args, const Storage &target, const Instruction &at) {
     apply(callee, args, registers.at(&target), at);
   }
-  Slice collect(const Value *root, const Instruction &sink);
+  // The computation of `root` at `sink`. With `knownLoads`, a load of a qubit variable that held a known ordinary
+  // value where it read it (knownAt) reads that value, and one that held a value it can compute again at `sink`
+  // (recomputable) reads that computation.
+  Slice collect(const Value *root, const Instruction &sink, bool knownLoads = false);
+  // The ordinary value `load` read, if its variable held one there that is still the same value at `sink`.
+  const Value *knownAt(const LoadInst &load, const Instruction &sink) const;
   // The function computing `root` at `sink` into a register of `bits` bits: the variable `target`, or a
   // fresh register when it is null.
   std::string slice(const Slice &slice, const Value *root, const Storage *target, unsigned bits,
@@ -431,6 +447,33 @@ void ControlWriter::store(const StoreInst &store) {
       return;
     }
   }
+  if (!known && fact.kind == Fact::Computed && recomputable(fact.value, target, store)) {
+    // The old value is a function of registers unchanged since it was stored: applied into the variable again it
+    // clears it (x ^= old), and the new value, with any read of the old one replaced by that computation, is
+    // XORed in. Nothing is kept.
+    bool coherent =
+        !isa<Constant>(value) && (analysis.tainted(value) || (module.options.taintAll && sliceable(value)));
+    std::optional<Slice> next;
+    if (coherent) {
+      next = collect(value, store, true);
+    }
+    bool readsItself = next && std::any_of(next->loads.begin(), next->loads.end(), [&](const LoadInst *load) {
+      return analysis.access(load->getPointerOperand())->storage == &target;
+    });
+    if (!readsItself) {
+      std::string args;
+      std::string callee = slice(collect(fact.value, store, true), fact.value, &target, target.bits, store, args);
+      apply(callee, args, target, store);
+      if (!next) {
+        xorClassical(target, value, store);
+        return;
+      }
+      std::string nextArgs;
+      std::string nextCallee = slice(*next, value, &target, target.bits, store, nextArgs);
+      apply(nextCallee, nextArgs, target, store);
+      return;
+    }
+  }
   if (!known) {
     retainedOverwrite(target, value, store);
     return;
@@ -498,6 +541,64 @@ void ControlWriter::retainedOverwrite(const Storage &target, const Value *value,
           &store);
 }
 
+bool ControlWriter::recomputable(const Value *old, const Storage &target, const Instruction &store) const {
+  if (!analysis.dominators.dominates(old, &store)) {
+    return false;
+  }
+  std::set<const Value *> seen;
+  std::vector<const Value *> work{old};
+  std::vector<const CallBase *> calls;
+  while (!work.empty()) {
+    const Value *value = resolve(work.back());
+    work.pop_back();
+    if (!seen.insert(value).second || isa<Constant>(value)) {
+      continue;
+    }
+    if (analysis.isQuantumLoad(value)) {
+      const auto *load = cast<LoadInst>(value);
+      std::optional<Access> source = analysis.access(load->getPointerOperand());
+      if (knownAt(*load, store)) {
+        continue; // it read a known ordinary value, passed in
+      }
+      if (!source || source->storage == &target || !analysis.unchangedBetween(load, &store, source->storage)) {
+        return false;
+      }
+      continue;
+    }
+    if (!analysis.tainted(value) && !(module.options.taintAll && sliceable(value))) {
+      continue; // an ordinary value; it dominates `old`, so `store`
+    }
+    const auto *inst = cast<Instruction>(value);
+    if (const auto *load = dyn_cast<LoadInst>(inst)) {
+      const auto *global = dyn_cast<GlobalVariable>(getUnderlyingObject(load->getPointerOperand()));
+      if (!global || !global->isConstant() || load->isVolatile()) {
+        return false;
+      }
+      work.push_back(load->getPointerOperand());
+    } else if (const auto *call = dyn_cast<CallBase>(inst)) {
+      if (isa<IntrinsicInst>(call) || !module.isApplicable(call->getCalledFunction()) ||
+          (!call->getCalledFunction()->doesNotAccessMemory() && !analysis.memoryUnchangedBetween(call, &store))) {
+        return false;
+      }
+      if (analysis.tainted(call)) {
+        calls.push_back(call);
+      }
+      for (const Use &arg : call->args()) {
+        work.push_back(arg.get());
+      }
+    } else if (sliceable(inst) || isa<GetElementPtrInst>(inst)) {
+      for (const Use &op : inst->operands()) {
+        work.push_back(op.get());
+      }
+    } else {
+      return false; // a phi among them: merged where ordinary control flow joins
+    }
+  }
+  return calls.size() < 2 || std::all_of(calls.begin(), calls.end(), [](const CallBase *call) {
+           return call->onlyReadsMemory();
+         });
+}
+
 void ControlWriter::xorConstant(const Storage &target, uint64_t value) {
   for (unsigned bit = 0; bit < target.bits; ++bit) {
     if (value >> bit & 1) {
@@ -560,7 +661,21 @@ bool ControlWriter::sliceable(const Value *value) const {
          isa<SExtInst>(inst) || isa<TruncInst>(inst) || isa<FreezeInst>(inst);
 }
 
-Slice ControlWriter::collect(const Value *root, const Instruction &sink) {
+const Value *ControlWriter::knownAt(const LoadInst &load, const Instruction &sink) const {
+  std::optional<Access> source = analysis.access(load.getPointerOperand());
+  if (!source || source->offset != 0) {
+    return nullptr;
+  }
+  Fact fact = analysis.before(&load, source->storage);
+  if (fact.kind != Fact::Known || !analysis.dominators.dominates(fact.value, &sink)) {
+    return nullptr;
+  }
+  // An instruction on a cycle may compute another value between the load and `sink`.
+  const auto *inst = dyn_cast<Instruction>(fact.value);
+  return inst && analysis.loops.getLoopFor(inst->getParent()) ? nullptr : fact.value;
+}
+
+Slice ControlWriter::collect(const Value *root, const Instruction &sink, bool knownLoads) {
   Slice slice;
   std::set<const Value *> seen;
   std::vector<const CallBase *> calls;
@@ -571,6 +686,20 @@ Slice ControlWriter::collect(const Value *root, const Instruction &sink) {
     }
     if (analysis.isQuantumLoad(value)) {
       const auto *load = cast<LoadInst>(value);
+      if (const Value *known = knownLoads ? knownAt(*load, sink) : nullptr) {
+        slice.known.push_back({load, known});
+        return;
+      }
+      if (knownLoads) {
+        std::optional<Access> source = analysis.access(load->getPointerOperand());
+        Fact fact = source && source->offset == 0 ? analysis.before(load, source->storage) : Fact{};
+        if (fact.kind == Fact::Computed && widthOf(load->getType(), load) == source->storage->bits &&
+            recomputable(fact.value, *source->storage, sink)) {
+          slice.computed.push_back({load, fact.value});
+          visit(fact.value);
+          return;
+        }
+      }
       slice.loads.push_back(load);
       const Storage *storage = analysis.access(load->getPointerOperand())->storage;
       if (std::find(slice.quantum.begin(), slice.quantum.end(), storage) == slice.quantum.end()) {
@@ -775,6 +904,16 @@ std::string ControlWriter::slice(const Slice &slice, const Value *root, const St
     writer.bind(value, name);
     params += (params.empty() ? "" : ", ") + intType(widthOf(value->getType(), value)) + " " + name;
     args += (args.empty() ? "" : ", ") + operand(value);
+  }
+  for (auto [load, value] : slice.computed) {
+    writer.alias(load, value);
+  }
+  for (auto [load, value] : slice.known) {
+    std::string name = writer.fresh("known");
+    unsigned width = widthOf(load->getType(), load);
+    writer.bind(load, name);
+    params += (params.empty() ? "" : ", ") + intType(width) + " " + name;
+    args += (args.empty() ? "" : ", ") + converted(value, width, false);
   }
   std::map<const Storage *, std::string> qubits;
   for (const Storage *storage : slice.quantum) {

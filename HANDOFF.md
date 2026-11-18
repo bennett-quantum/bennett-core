@@ -25,8 +25,10 @@ independent testing pass over rules B and C and the first part of
 rule A (`03ae832`) left four ignored witnesses in `front/tests/tests/rules_6b_independent.rs`, all fixed
 since ("Fixes after the testing pass over rules B and C (2026-11-17)"): a gate loop's guard and its
 condition, and one applied function for all results of code under a qubit, results wider than 64 bits and
-stores LLVM moves out of the code included. Nothing of this work is running. Next: the independent testing
-pass over rule A at memory.
+stores LLVM moves out of the code included. The independent testing pass over rule A at memory (`22bd3bc`)
+left five ignored witnesses in `front/tests/tests/held_span_independent.rs`, all fixed since, and a sixth
+defect, older, was found and fixed on the way ("Fixes after the testing pass over rule A in memory
+(2026-11-18)"). Nothing of this work is running.
 
 ## Resumed on 2026-11-17
 
@@ -377,7 +379,11 @@ explicitly after the separate musl build.
       (`front/tests/c/fallback_oracle/README.md`; the inventory checks 24 accepted fixture and mode
       combinations). `user_write` waits by decision (the route of a call that fills memory named at the
       call). Debts, each refused by name: a store into memory in code that also has
-      gates (route: predication of whole stores into the shadow, as for qubit variables); more than 8 bytes of
+      gates (route: predication of whole stores into the shadow, as for qubit variables); pointers that may
+      reach the same bytes as a span's object (a second object written under a qubit, an ordinary access
+      through another pointer; route: a check of the addresses at run time choosing one shadow or two, not
+      built; what removes it today is a static function whose calls pass distinct objects or the same pointer,
+      or `restrict`); a call that may read or write the held bytes; more than 8 bytes of
       one object (one shadow per 8 bytes); an access that touches the held bytes only in part; a position that
       is not constant outside code applied whole; an object the front cannot name (a pointer loaded from
       memory: step 4's region); a measurement of part of a local's held bytes. Not refused, documented: where
@@ -1480,3 +1486,47 @@ bits of results from one loop, one applied function, values checked in all three
 code before. Debt, in DESIGN: a value the code computes that later code uses other than by such a store (a plain
 local assigned in the loop and used in arithmetic after it) is still computed again by a copy of the code in
 the `apply` of its use; correct, one more run of the code.
+
+## Fixes after the testing pass over rule A in memory (2026-11-18)
+
+The independent testing pass over rule A at memory (`22bd3bc`) left five ignored witnesses in
+`front/tests/tests/held_span_independent.rs`; each was reproduced, each fails on the code before these fixes, and
+each runs now at O0, O2 and with `--taint-all`. Documents: `docs/DESIGN.md`, "From C to a device program",
+"Overwrites that keep the old value" and "Memory written under a qubit"; `front/src/HeldBytes.h`,
+`front/src/Aliasing.h`.
+
+- **A measured byte was still refused when the span had more bytes.** Cause: the span's state was one value for
+  all its bytes, and a measurement of part of them set it to "holds qubits". Fix (`front/src/HeldBytes.cpp`): after
+  the span ends the state names the bytes that still hold qubits; a measurement removes its bytes, and ordinary
+  code may touch the measured ones. The witness ran its program with the helper that forbids a register released
+  not 0, which this program releases (q keeps the value the measurement found): it uses the helper that reports it.
+- **A span ended by a measurement on one path and by a return on another was refused.** Cause: where the paths
+  join, "the shadow holds the bytes" met "the span has ended", a conflict that moving the start earlier cannot
+  settle. Fix: outside code under a qubit, the span ends on the edges from the paths where the shadow still holds
+  the bytes (the same exchange as before a return).
+- **A callee reading a held global variable was accepted; the run faulted `qubit_memory_access`.** Cause: only a
+  call's pointer arguments were checked. Fix (`front/src/Aliasing.cpp`): a call reaches what its arguments point to
+  and what its callee and the functions it calls access; one that may reach the held bytes is refused by name,
+  asking for the measurement.
+- **Two pointer arguments given the same byte opened two spans over it; the run faulted.** Cause: one shadow per
+  LLVM object, and objects were assumed never to share bytes. Fix: what each pointer may point to, from the calls of
+  its function in the module (any address for a function the host may call). Two objects written under a qubit that
+  may share bytes, or an access through another pointer that may reach held bytes, are refused by name with the
+  route; a static function whose calls pass the same pointer for two arguments has them made one object (C's last
+  write results), distinct objects and `restrict` arguments get one shadow each. The witness's function has external
+  linkage, so the host may call it with two different pointers or the same one: it now expects the refusal, and the
+  merged, distinct and `restrict` cases run.
+- **An overwrite whose old value is a function of an unchanged register took the retained form** (8 qubits,
+  interference lost). Cause: the dataflow's facts were "known ordinary value" or "unknown", so a variable holding a
+  value computed from a qubit had no old value the front could use. Fix (`front/src/Taint.h`, `Control.cpp`): a third
+  fact, the value stored whole; the overwrite applies that computation again into the variable (clearing it) when
+  every register it reads is unchanged and its calls see the same memory, then the new value; a read of the old
+  value in the new one (`if (r) a = 7`) is that computation, and with `--taint-all` a load that read a known value is
+  given it. Tests: the witness (P(q=1) = 0 after the final H, nothing kept), the controlled overwrite (exact
+  amplitudes), and one whose source register changed in between, which keeps the retained form and its 8 qubits.
+- **Found on the way, older: a region writing two objects drove wrong bits** (`if (q) { a = 5; b = 7; }` from
+  3 and 3 gave 7 and 7: a wrong ordinary result). Cause: the result word's fields drive only the bits a variable may
+  hold, and that support left out the old value the shadow takes at the exchange and put a store into part of a
+  shadow at bit 0 instead of at its bytes. Fix (`front/src/Taint.cpp`, `computeSupport`). Test:
+  `two_objects_written_in_one_region_get_every_bit_of_their_change`.
+

@@ -237,12 +237,13 @@ fn a_store_and_its_inverse_under_a_qubit_keep_the_interference() {
 }
 
 /// A store of a qubit-dependent value outside any condition, a local array written under a qubit (it becomes a
-/// qubit variable), and a store whose old value no clearing recovers (kept, with the warning and the count):
-/// each gives C's value for each value of the qubits, with C's weights.
+/// qubit variable), a store whose old value is computed again from the unchanged q (nothing kept), and the same
+/// after a gate on q, where it cannot be (kept, with the warning and the count): each gives C's value for each
+/// value of the qubits.
 #[test]
 fn straight_stores_local_arrays_and_kept_old_values_give_the_c_values() {
     // q, r in |+>; the result packs what C computes, so its distribution is exact.
-    let cases: [(&str, &str, fn(u64, u64) -> u64, bool); 3] = [
+    let cases: [(&str, &str, fn(u64, u64) -> u64, bool); 4] = [
         (
             "held-straight",
             "g[1] = q + 2 * r;\n    return bennett_measure_bytes(g, 4) | bennett_measure(&q) << 32 | bennett_measure(&r) << 33;",
@@ -256,8 +257,14 @@ fn straight_stores_local_arrays_and_kept_old_values_give_the_c_values() {
             false,
         ),
         (
-            "held-retained",
+            "held-recomputed",
             "if (q) g[0] = 7;\n    if (r) g[0] = 9;\n    return bennett_measure_bytes(g, 1) | bennett_measure(&q) << 8 | bennett_measure(&r) << 9;",
+            |q, r| if r == 1 { 9 } else if q == 1 { 7 } else { 1 } | q << 8 | r << 9,
+            false,
+        ),
+        (
+            "held-retained",
+            "if (q) g[0] = 7;\n    bennett_z(&q);\n    if (r) g[0] = 9;\n    return bennett_measure_bytes(g, 1) | bennett_measure(&q) << 8 | bennett_measure(&r) << 9;",
             |q, r| if r == 1 { 9 } else if q == 1 { 7 } else { 1 } | q << 8 | r << 9,
             true,
         ),

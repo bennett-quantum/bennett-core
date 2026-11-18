@@ -1,5 +1,6 @@
 #include "HeldBytes.h"
 
+#include "Aliasing.h"
 #include "Diagnostic.h"
 #include "Markers.h"
 #include "Taint.h"
@@ -17,6 +18,7 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
 #include <llvm/TargetParser/Triple.h>
+#include <llvm/Transforms/Utils/BasicBlockUtils.h>
 
 #include <algorithm>
 #include <map>
@@ -92,13 +94,12 @@ public:
   Holder(Function &function, ControlAnalysis &analysis)
       : fn(function), analysis(analysis), layout(function.getParent()->getDataLayout()),
         libraryImpl(Triple(function.getParent()->getTargetTriple())), library(libraryImpl), assumptions(function),
-        dominators(function), loops(dominators), evolution(function, library, assumptions, dominators, loops) {}
+        dominators(function), loops(dominators), evolution(function, library, assumptions, dominators, loops),
+        aliasing(*function.getParent()) {}
 
   void hold(const std::vector<Instruction *> &writes, Instruction *start, const std::set<const BasicBlock *> &region);
 
 private:
-  enum class State { None, Ordinary, Live, Held, Mixed };
-
   Function &fn;
   ControlAnalysis &analysis;
   const DataLayout &layout;
@@ -108,6 +109,7 @@ private:
   DominatorTree dominators;
   LoopInfo loops;
   ScalarEvolution evolution;
+  Aliasing aliasing;
 
   // The bytes `pointer` may name for an access of `size` bytes, from `object`'s start: exact for a constant
   // offset, LLVM's bound on the offset's values otherwise.
@@ -183,6 +185,18 @@ void Holder::hold(const std::vector<Instruction *> &writes, Instruction *start,
       found->second.first.end = std::max(found->second.first.end, range->end);
     }
   }
+  // One shadow per object: two objects whose bytes may be the same would take the same bytes twice.
+  for (size_t i = 0; i < order.size(); ++i) {
+    for (size_t j = i + 1; j < order.size(); ++j) {
+      if (aliasing.mayShare(fn, order[i], order[j])) {
+        notHandled("stores under a qubit through " + objectName(order[i]) + " and " + objectName(order[j]) +
+                       ", which may reach the same bytes (the front keeps one shadow per object and cannot tell "
+                       "them apart; route: a static function whose calls pass distinct objects or the same pointer "
+                       "for both, `restrict`, or a check of the addresses at run time: not built)",
+                   hulls.at(order[j]).second);
+      }
+    }
+  }
   for (Value *object : order) {
     auto [hull, first] = hulls.at(object);
     if (hull.end - hull.begin > maxHeldBytes) {
@@ -230,15 +244,32 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
   }
   starting.push_back(borrow);
 
-  // What an instruction is to this span.
-  enum class Role { Other, Start, End, EndWhole, Access, Passes, Return };
-  auto role = [&](Instruction &inst, const Range *&touched) -> Role {
-    touched = nullptr;
+  // The hull's bytes as a mask, bit i for the byte at hull.begin + i; `range`'s bytes within the hull.
+  const unsigned count = unsigned(hull.end - hull.begin);
+  const uint8_t all = uint8_t((1u << count) - 1);
+  auto bytesOf = [&](const Range &range) {
+    uint8_t mask = 0;
+    for (uint64_t at = std::max(range.begin, hull.begin); at < std::min(range.end, hull.end); ++at) {
+      mask |= uint8_t(1u << (at - hull.begin));
+    }
+    return mask;
+  };
+  // The exchanges this span put on edges where a path on which the shadow holds the bytes joins one on which the
+  // span has ended.
+  std::set<Instruction *> edgeEnds;
+
+  // What an instruction is to this span. `touched`: the bytes a measurement or an access names, when known.
+  enum class Role { Other, Start, End, EdgeEnd, Access, Shares, Passes, Return };
+  auto role = [&](Instruction &inst, std::optional<Range> &touched) -> Role {
+    touched.reset();
     if (&inst == borrow) {
       return Role::Start;
     }
     if (std::find(starting.begin(), starting.end(), &inst) != starting.end()) {
       return Role::Other;
+    }
+    if (edgeEnds.count(&inst)) {
+      return Role::EdgeEnd;
     }
     if (isa<ReturnInst>(inst)) {
       return Role::Return;
@@ -246,74 +277,102 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
     if (std::optional<Marker> marker = markerCall(&inst); marker && marker->kind == MarkerKind::MeasureBytes) {
       auto &call = cast<CallBase>(inst);
       Value *measured = call.getArgOperand(0);
-      const auto *count = dyn_cast<ConstantInt>(call.getArgOperand(1));
-      if (objectOf(measured) != object || !count) {
-        return objectOf(measured) ? Role::Other : Role::Passes;
+      Value *measuredObject = objectOf(measured);
+      if (measuredObject != object) {
+        return measuredObject && !aliasing.mayShare(fn, measured, object) ? Role::Other : Role::Passes;
       }
+      const auto *bytes = dyn_cast<ConstantInt>(call.getArgOperand(1));
       bool exact = false;
-      std::optional<Range> range = rangeOf(measured, count->getZExtValue(), object, exact);
+      std::optional<Range> range = bytes ? rangeOf(measured, bytes->getZExtValue(), object, exact) : std::nullopt;
       if (!range || !exact) {
         return Role::Passes;
       }
       if (!range->overlaps(hull)) {
         return Role::Other;
       }
-      return hull.within(*range) ? Role::EndWhole : Role::End;
+      touched = range;
+      return Role::End;
     }
-    if (Value *pointer = pointerOf(inst); pointer && objectOf(pointer) == object) {
-      return Role::Access;
-    }
-    if (auto *call = dyn_cast<CallBase>(&inst); call && !isExchange(call)) {
-      for (Value *arg : call->args()) {
-        if (arg->getType()->isPointerTy() && objectOf(arg) == object) {
-          return Role::Passes;
-        }
+    if (Value *pointer = pointerOf(inst)) {
+      if (objectOf(pointer) == object) {
+        bool exact = false;
+        touched = rangeOf(pointer, layout.getTypeStoreSize(accessType(inst)).getFixedValue(), object, exact);
+        return touched && !touched->overlaps(hull) ? Role::Other : Role::Access;
       }
+      return aliasing.mayShare(fn, pointer, object) ? Role::Shares : Role::Other;
+    }
+    if (auto *rmw = dyn_cast<AtomicRMWInst>(&inst)) {
+      return aliasing.mayShare(fn, rmw->getPointerOperand(), object) ? Role::Shares : Role::Other;
+    }
+    if (auto *exchanged = dyn_cast<AtomicCmpXchgInst>(&inst)) {
+      return aliasing.mayShare(fn, exchanged->getPointerOperand(), object) ? Role::Shares : Role::Other;
+    }
+    if (auto *call = dyn_cast<CallBase>(&inst); call && !isExchange(call) && !markerCall(call)) {
+      return aliasing.mayTouch(fn, *call, object) ? Role::Passes : Role::Other;
     }
     return Role::Other;
   };
-  auto overlapping = [&](Instruction &inst) {
-    bool exact = false;
-    uint64_t size = layout.getTypeStoreSize(accessType(inst)).getFixedValue();
-    std::optional<Range> range = rangeOf(pointerOf(inst), size, object, exact);
-    return !range || range->overlaps(hull);
+
+  // The bytes at a point: not taken yet (Before), held in the shadow (Live), given back to memory with `held` the
+  // bytes that still hold qubits there (Done; 0: all ordinary again), or different from path to path (Mixed).
+  struct State {
+    enum Kind { None, Before, Live, Done, Mixed } kind = None;
+    uint8_t held = 0;
+    bool operator==(const State &other) const { return kind == other.kind && held == other.held; }
+    bool operator!=(const State &other) const { return !(*this == other); }
+    bool holdsQubits() const { return kind == Live || (kind == Done && held != 0); }
   };
   auto merge = [](State a, State b) {
-    if (a == State::None || a == b) {
+    if (a.kind == State::None || a == b) {
       return b;
     }
-    if (b == State::None) {
+    if (b.kind == State::None) {
       return a;
     }
-    if (a == State::Live || b == State::Live || a == State::Mixed || b == State::Mixed) {
-      return State::Mixed;
+    if (a.kind == State::Live || b.kind == State::Live || a.kind == State::Mixed || b.kind == State::Mixed) {
+      return State{State::Mixed, 0};
     }
-    return State::Held; // ordinary on some paths, holding qubits on others: not ordinary
+    return State{State::Done, uint8_t(a.held | b.held)}; // ordinary on some paths, holding qubits on others
+  };
+  auto refuseHeld = [&](Instruction &inst, Role kind) {
+    if (kind == Role::Shares) {
+      notHandled("an access through a pointer that may reach " + describe(object, hull) +
+                     " while they hold qubits (the front keeps one shadow per object and cannot tell these pointers "
+                     "apart; route: a static function whose calls pass distinct objects, `restrict`, or a check of "
+                     "the addresses at run time: not built)",
+                 &inst);
+    }
+    bool call = !markerCall(&inst);
+    notHandled(std::string(call ? "a call that may read or write memory of " : "a measurement of memory of ") +
+                   objectName(object) + " while " + describe(object, hull) + " hold qubits (" +
+                   (call ? "measure them first with bennett_measure_bytes)"
+                         : "measure them at their own address, with a constant number of bytes)"),
+               &inst);
   };
 
-  // The state of the bytes at each block's entry; a conflict (the span would start twice, or end on some paths
-  // only, or an access sees a state that differs from path to path) moves the start up the dominator tree.
+  // The state of the bytes at each block's entry. A conflict (the span would start twice, or an access sees a
+  // state that differs from path to path) is settled by an exchange on each edge that leaves the shadow holding
+  // the bytes where it joins paths on which the span has ended, or else moves the start up the dominator tree.
   for (;;) {
     std::map<const BasicBlock *, State> entry;
     std::vector<BasicBlock *> blocks;
     for (BasicBlock &block : fn) {
       blocks.push_back(&block);
     }
-    entry[&fn.getEntryBlock()] = State::Ordinary;
+    entry[&fn.getEntryBlock()] = State{State::Before, 0};
     std::map<const BasicBlock *, State> exitState;
     bool changed = true;
     Instruction *conflict = nullptr;
     auto walk = [&](BasicBlock &block, State state, bool apply) {
       for (Instruction &inst : make_early_inc_range(block)) {
-        const Range *touched = nullptr;
+        std::optional<Range> touched;
         Role kind = role(inst, touched);
-        if (kind == Role::Access && !overlapping(inst)) {
-          kind = Role::Other;
-        }
         if (kind == Role::Other) {
           continue;
         }
-        if (state == State::Mixed || (kind == Role::Start && state != State::Ordinary)) {
+        bool startable = state.kind == State::Before || (state.kind == State::Done && state.held == 0);
+        if (state.kind == State::Mixed || (kind == Role::Start && !startable) ||
+            (kind == Role::EdgeEnd && state.kind != State::Live)) {
           conflict = conflict ? conflict : &inst;
           if (!apply) {
             continue;
@@ -323,44 +382,54 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
         case Role::Other:
           break;
         case Role::Start:
-          state = State::Live;
+          state = State{State::Live, 0};
+          break;
+        case Role::EdgeEnd:
+          state = State{State::Done, all};
           break;
         case Role::Return:
-        case Role::End:
-        case Role::EndWhole:
-          if (owned && kind == Role::End && state == State::Live && apply) {
-            notHandled("a measurement of part of " + describe(object, hull) +
-                           ", which were written under a qubit (measure all of them: the others would hold qubits "
-                           "in the stack frame after it returns)",
-                       &inst);
-          }
-          if (state == State::Live && apply && !(owned && kind == Role::Return)) {
-            // A local's stack bytes still hold its old value: the shadow takes it back, a value known here.
+          if (state.kind == State::Live && apply && !owned) {
             IRBuilder<> end(&inst);
-            end.CreateCall(exchange(), {shadow, addressAt(end), owned ? after : end.getInt64(0)});
-          }
-          if (kind != Role::Return && state == State::Live) {
-            state = kind == Role::EndWhole ? State::Ordinary : State::Held;
+            end.CreateCall(exchange(), {shadow, addressAt(end), end.getInt64(0)});
           }
           break;
+        case Role::End: {
+          uint8_t measured = bytesOf(*touched);
+          if (state.kind == State::Live) {
+            if (owned && measured != all && apply) {
+              notHandled("a measurement of part of " + describe(object, hull) +
+                             ", which were written under a qubit (measure all of them: the others would hold "
+                             "qubits in the stack frame after it returns)",
+                         &inst);
+            }
+            if (apply) {
+              // A local's stack bytes still hold its old value: the shadow takes it back, a value known here.
+              IRBuilder<> end(&inst);
+              end.CreateCall(exchange(), {shadow, addressAt(end), owned ? after : end.getInt64(0)});
+            }
+            state = State{State::Done, uint8_t(all & ~measured)};
+          } else if (state.kind == State::Done) {
+            state.held &= uint8_t(~measured);
+          }
+          break;
+        }
         case Role::Passes:
-          if (apply && (state == State::Live || state == State::Held)) {
-            bool call = !markerCall(&inst);
-            notHandled(std::string(call ? "a call that is given memory of " : "a measurement of memory of ") +
-                           objectName(object) + " while " + describe(object, hull) + " hold qubits (" +
-                           (call ? "measure them first with bennett_measure_bytes)"
-                                 : "measure them at their own address, with a constant number of bytes)"),
-                       &inst);
+        case Role::Shares:
+          if (apply && state.holdsQubits()) {
+            refuseHeld(inst, kind);
           }
           break;
         case Role::Access:
-          if (!apply || state == State::Ordinary) {
+          if (!apply || state.kind == State::Before) {
             break;
           }
-          if (state == State::Held) {
-            notHandled("ordinary code that touches " + describe(object, hull) +
-                           " after they were given qubits (measure them first with bennett_measure_bytes)",
-                       &inst);
+          if (state.kind == State::Done) {
+            if (!touched || (bytesOf(*touched) & state.held) != 0) {
+              notHandled("ordinary code that touches " + describe(object, hull) +
+                             " after they were given qubits (measure them first with bennett_measure_bytes)",
+                         &inst);
+            }
+            break; // bytes measured since: ordinary memory again
           }
           {
             Value *pointer = pointerOf(inst);
@@ -406,7 +475,7 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
           changed = true;
         }
         for (BasicBlock *succ : successors(block)) {
-          State merged = merge(entry.count(succ) ? entry[succ] : State::None, out);
+          State merged = merge(entry.count(succ) ? entry[succ] : State{}, out);
           if (!entry.count(succ) || entry[succ] != merged) {
             entry[succ] = merged;
             changed = true;
@@ -421,6 +490,41 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
         }
       }
       return;
+    }
+    // Paths on which the shadow still holds the bytes, joining paths on which the span has ended, outside code
+    // applied whole: the span ends on those edges too (the exchange, as before a return).
+    std::vector<std::pair<BasicBlock *, BasicBlock *>> edges;
+    for (BasicBlock *block : blocks) {
+      if (owned || region.count(block) || !entry.count(block) || entry[block].kind != State::Mixed) {
+        continue;
+      }
+      bool live = false;
+      bool done = false;
+      bool other = false;
+      for (BasicBlock *pred : predecessors(block)) {
+        auto found = exitState.find(pred);
+        if (found == exitState.end()) {
+          continue;
+        }
+        live |= found->second.kind == State::Live;
+        done |= found->second.kind == State::Done;
+        other |= (found->second.kind != State::Live && found->second.kind != State::Done) || region.count(pred);
+      }
+      if (live && done && !other) {
+        for (BasicBlock *pred : predecessors(block)) {
+          if (exitState.count(pred) && exitState[pred].kind == State::Live) {
+            edges.push_back({pred, block});
+          }
+        }
+      }
+    }
+    if (!edges.empty()) {
+      for (auto [from, to] : edges) {
+        BasicBlock *at = from->getSingleSuccessor() == to ? from : SplitEdge(from, to, &dominators, &loops);
+        IRBuilder<> end(at->getTerminator());
+        edgeEnds.insert(end.CreateCall(exchange(), {shadow, addressAt(end), end.getInt64(0)}));
+      }
+      continue;
     }
     BasicBlock *at = borrow->getParent();
     DomTreeNode *node = dominators.getNode(at);
@@ -447,6 +551,7 @@ bool isExchange(const Value *value) {
 
 void holdWrites(Function &function, const std::vector<Instruction *> &writes, Instruction *start,
                 const std::set<const BasicBlock *> &region, ControlAnalysis &analysis) {
+  mergeEqualArguments(function);
   Holder(function, analysis).hold(writes, start, region);
 }
 

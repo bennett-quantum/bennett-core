@@ -30,7 +30,7 @@ Fact meet(const Fact &a, const Fact &b) {
   if (b.kind == Fact::Unvisited) {
     return a;
   }
-  if (a.kind == Fact::Known && b.kind == Fact::Known && a.value == b.value) {
+  if (a.kind == b.kind && a.kind != Fact::Quantum && a.value == b.value) {
     return a;
   }
   return Fact{Fact::Quantum, nullptr};
@@ -80,7 +80,14 @@ void ControlAnalysis::computeSupport(bool gatesOnly) {
         if (gatesOnly) {
           continue;
         }
-        support |= (~computeKnownBits(store->getValueOperand(), layout).Zero).getZExtValue();
+        // At the bytes it writes: a store into part of a shadow (HeldBytes.h), at a position that is not
+        // constant inside code applied whole, may write any of them.
+        std::optional<Access> place = access(store->getPointerOperand());
+        uint64_t bits = (~computeKnownBits(store->getValueOperand(), layout).Zero).getZExtValue();
+        support |= !place ? ~uint64_t(0) : place->offset >= 8 ? 0 : bits << (8 * place->offset);
+      } else if (isExchange(mutation)) {
+        // The bytes' old value, which the shadow takes at the start of its span.
+        support |= (~computeKnownBits(cast<CallBase>(mutation)->getArgOperand(2), layout).Zero).getZExtValue();
       } else if (isGateCall(mutation)) {
         support |= uint64_t(1) << access(cast<CallBase>(mutation)->getArgOperand(0))->bit;
       }
@@ -333,8 +340,9 @@ void ControlAnalysis::transfer(const Instruction &inst, std::vector<Fact> &facts
       const DataLayout &layout = function.getParent()->getDataLayout();
       bool whole = target && target->offset == 0 && layout.getTypeStoreSizeInBits(value->getType()) == storage->bits;
       // A store into part of a variable: what it holds is not one value the front has (Quantum, the safe side).
-      facts[indexOf(storage)] =
-          tainted(value) || !whole ? Fact{Fact::Quantum, nullptr} : Fact{Fact::Known, value};
+      facts[indexOf(storage)] = !whole           ? Fact{Fact::Quantum, nullptr}
+                                : tainted(value) ? Fact{Fact::Computed, value}
+                                                 : Fact{Fact::Known, value};
     }
     return;
   }

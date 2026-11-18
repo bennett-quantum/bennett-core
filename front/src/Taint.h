@@ -5,7 +5,8 @@
 // of the variable's width. At each point of the function a qubit variable is either Known (in a basis
 // state whose value is an ordinary value available there: after its initial store, a classical store, or
 // a measurement) or Quantum. A load of a Quantum variable is tainted, and so is every value computed from a
-// tainted value. When unsure the analysis says Quantum and tainted, never less.
+// tainted value. When unsure the analysis says Quantum and tainted, never less. A variable that holds a tainted
+// value stored whole is Computed: Quantum to every use but the overwrite that clears it by computing it again.
 #pragma once
 
 #include <llvm/Analysis/LoopInfo.h>
@@ -52,9 +53,11 @@ struct Access {
 inline constexpr const char *qubitMetadata = "bennett.qubit";
 
 struct Fact {
-  enum Kind { Unvisited, Known, Quantum };
+  // Computed: the variable holds `value`, a value that depends on a qubit, stored whole and not changed since; the
+  // front may compute it again from the registers it was computed from, where those are unchanged.
+  enum Kind { Unvisited, Known, Computed, Quantum };
   Kind kind = Unvisited;
-  llvm::Value *value = nullptr; // when Known: the variable's value in the low `bits` bits
+  llvm::Value *value = nullptr; // when Known or Computed: the variable's value in the low `bits` bits
 };
 
 class ControlAnalysis {

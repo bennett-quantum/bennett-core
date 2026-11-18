@@ -30,6 +30,7 @@ add_executable(bennett-front
   src/Predicate.cpp
   src/RegionResults.cpp
   src/HeldBytes.cpp
+  src/Aliasing.cpp
   src/InPlace.cpp
   src/Startup.cpp
   src/SoftFloat.cpp

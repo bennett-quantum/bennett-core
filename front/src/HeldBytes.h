@@ -12,9 +12,14 @@
 //   code under a qubit without gates is one `apply` (RegionResults.h), its loops included; other stores are
 //   XORed in, inverted in place, or exchanged into a fresh register that keeps the old value (Control.cpp);
 // - at its end, before a return and before a `bennett_measure_bytes` of any of those bytes, the same exchange
-//   puts the value into the bytes and returns the shadow to 0. A measurement of whole bytes makes them ordinary
-//   memory again; the others keep holding qubits, and ordinary code in the function that reads them is refused
-//   (measure first).
+//   puts the value into the bytes and returns the shadow to 0. The bytes measured are ordinary memory again; the
+//   others keep holding qubits, and ordinary code in the function that touches them is refused (measure first).
+//   Where a path on which the shadow holds the bytes joins one on which the span has ended, outside code under a
+//   qubit, the span ends on the edges from the first too.
+//
+// One shadow per object: where another pointer, a call, or a second object written under a qubit may reach the
+// same bytes (Aliasing.h) while they hold qubits, it is refused by name. Two pointer arguments of a static
+// function that every call gives the same pointer are made one object first.
 //
 // Written as a whole, this is the exchange form of a store: the new value is applied into a fresh register,
 // exchanged with the bytes by gates on address-named bits, and the register is cleared because the old value

@@ -144,7 +144,11 @@ fn a_write_to_memory_under_qubit_control_is_refused_wherever_it_hides() {
         // these are refused because the bytes are too many to bound, or are passed to a call while they do.
         ("pointer", "int *p = &cells[n & 3]; if (q) *p = 7;", "at a position the front cannot bound"),
         ("memcpy", "if (q) memcpy(to, from + n, (unsigned)n * 8);", "at a position the front cannot bound"),
-        ("local", "int buf[2] = {0, 0}; if (q) buf[1] = 7; r = sum(buf);", "a call that is given memory of %buf"),
+        (
+            "local",
+            "int buf[2] = {0, 0}; if (q) buf[1] = 7; r = sum(buf);",
+            "a call that may read or write memory of %buf",
+        ),
         ("volatile_load", "int y = 0; if (q) y = device; r = y;", "a volatile or atomic load controlled"),
         ("address", "cells[q] = 7;", "used by ordinary code"),
     ];

@@ -254,7 +254,6 @@ unsigned entry(void) {
 }
 
 #[test]
-#[ignore = "the front tracks a whole shadow as held after measuring a strict subrange"]
 fn a_partially_measured_span_allows_ordinary_reads_of_the_measured_byte() {
     let source = write_c(
         "held-span-partial-read",
@@ -268,12 +267,17 @@ unsigned entry(void) {
 }
 "#,
     );
-    let module = lower(&source, "held-span-partial-read", CLANG_FLAGS, &[]);
-    assert!(matches!(run(&module, "entry", &[], 0), Outcome::Returned(Some(1 | 5))));
+    for (mode, clang_flags, flags) in MODES {
+        let module = lower(&source, &format!("held-span-partial-read-{mode}"), clang_flags, flags);
+        // q is left as the measurement found it and released with the other byte's qubits: not zero when q = 1.
+        for seed in 0..2 {
+            let (outcome, _) = run_with_stats(&module, "entry", &[], seed);
+            assert!(matches!(outcome, Outcome::Returned(Some(1 | 5))), "{mode}: {outcome:?}");
+        }
+    }
 }
 
 #[test]
-#[ignore = "a direct callee reading a held global bypasses the front's refusal"]
 fn a_direct_callee_cannot_read_a_held_global_with_ordinary_code() {
     let source = write_c(
         "held-span-direct-global-read",
@@ -287,19 +291,21 @@ unsigned entry(void) {
 }
 "#,
     );
-    match lower_text(&source, "held-span-direct-global-read", CLANG_FLAGS, &[]) {
-        Err(error) => assert!(error.contains("bennett_measure_bytes"), "{error}"),
-        Ok(text) => {
-            let module = bennett_ir::load(&text).expect("valid program");
-            let (outcome, _) = run_with_stats(&module, "entry", &[], 0);
-            panic!("front accepted an ordinary read of held bytes; executor returned {outcome:?}");
+    for (mode, clang_flags, flags) in MODES {
+        match lower_text(&source, &format!("held-span-direct-global-read-{mode}"), clang_flags, flags) {
+            Err(error) => assert!(error.contains("bennett_measure_bytes"), "{mode}: {error}"),
+            Ok(text) => {
+                let module = bennett_ir::load(&text).expect("valid program");
+                let (outcome, _) = run_with_stats(&module, "entry", &[], 0);
+                panic!("{mode}: front accepted an ordinary read of held bytes; executor returned {outcome:?}");
+            }
         }
     }
 }
 
 #[test]
-#[ignore = "separate spans for aliasing pointer arguments borrow the same byte twice"]
 fn two_pointer_arguments_can_write_the_same_definite_byte() {
+    // A function the host may call can be given the same byte twice: refused by name, with the route.
     let source = write_c(
         "held-span-alias",
         r#"#include "bennett.h"
@@ -311,13 +317,52 @@ __attribute__((noinline)) void write_byte(unsigned char *p, unsigned char *r) {
 unsigned entry(void) { write_byte(&a, &a); return bennett_measure_bytes(&a, 1); }
 "#,
     );
-    let module = lower(&source, "held-span-alias", CLANG_FLAGS, &[]);
-    let (outcome, _) = run_with_stats(&module, "entry", &[], 0);
-    assert_eq!(outcome, Outcome::Returned(Some(7)));
+    for (mode, clang_flags, flags) in MODES {
+        let error = lower_text(&source, &format!("held-span-alias-{mode}"), clang_flags, flags).expect_err("aliasing");
+        assert!(
+            error.starts_with("not handled yet:")
+                && error.contains("may reach the same bytes")
+                && error.contains("route"),
+            "{mode}: {error}"
+        );
+    }
+    // A static function whose only call passes the same pointer twice: one object, one shadow, C's last write. One
+    // whose calls pass distinct objects, or `restrict` pointers: one shadow each.
+    let cases = [
+        ("same", "static", "unsigned char *p, unsigned char *r", "write_byte(&a, &a)", 7, 3),
+        ("distinct", "static", "unsigned char *p, unsigned char *r", "write_byte(&a, &b)", 5, 7),
+        ("restrict", "", "unsigned char *restrict p, unsigned char *restrict r", "write_byte(&a, &b)", 5, 7),
+    ];
+    for (kind, linkage, params, call, first, second) in cases {
+        let name = format!("held-span-alias-{kind}");
+        let source = write_c(
+            &name,
+            &format!(
+                r#"#include "bennett.h"
+unsigned char a = 3, b = 3;
+__attribute__((noinline)) {linkage} void write_byte({params}) {{
+    _Bool q = 0; bennett_x(&q);
+    if (q) {{ *p = 5; *r = 7; }}
+}}
+unsigned entry(void) {{
+    {call};
+    return bennett_measure_bytes(&a, 1) | bennett_measure_bytes(&b, 1) << 8;
+}}
+"#
+            ),
+        );
+        for (mode, clang_flags, flags) in MODES {
+            let module = lower(&source, &format!("{name}-{mode}"), clang_flags, flags);
+            assert_eq!(
+                run_with_stats(&module, "entry", &[], 0).0,
+                Outcome::Returned(Some(first | second << 8)),
+                "{kind}, {mode}"
+            );
+        }
+    }
 }
 
 #[test]
-#[ignore = "a still-live source register suffices to recover the overwritten byte"]
 fn an_overwrite_can_clear_old_bytes_computed_from_an_unchanged_register() {
     let source = write_c(
         "held-span-recomputable",
@@ -335,22 +380,25 @@ unsigned entry(void) {
 }
 "#,
     );
-    let module = lower(&source, "held-span-recomputable", CLANG_FLAGS, &[]);
-    let state = state_before_first_measurement(&module, "entry", &[]);
-    let q = register_column(&module, &state, "q");
-    let probability_one: f64 = state
-        .quantum
-        .amplitudes
-        .iter()
-        .filter(|(values, _)| values[q] == 1)
-        .map(|(_, amplitude)| amplitude.norm_sqr())
-        .sum();
-    let (_, stats) = run_with_stats(&module, "entry", &[], 0);
-    assert!(
-        probability_one < 1e-12 && stats.leftover_qubits == 0,
-        "after the final H: P(q=1)={probability_one:.12}, retained qubits={}",
-        stats.leftover_qubits
-    );
+    for (mode, clang_flags, flags) in MODES {
+        let module = lower(&source, &format!("held-span-recomputable-{mode}"), clang_flags, flags);
+        let state = state_before_first_measurement(&module, "entry", &[]);
+        let q = register_column(&module, &state, "q");
+        let probability_one: f64 = state
+            .quantum
+            .amplitudes
+            .iter()
+            .filter(|(values, _)| values[q] == 1)
+            .map(|(_, amplitude)| amplitude.norm_sqr())
+            .sum();
+        let (outcome, stats) = run_with_stats(&module, "entry", &[], 0);
+        assert_eq!(outcome, Outcome::Returned(Some(3)), "{mode}");
+        assert!(
+            probability_one < 1e-12 && stats.leftover_qubits == 0,
+            "{mode}: after the final H: P(q=1)={probability_one:.12}, retained qubits={}",
+            stats.leftover_qubits
+        );
+    }
 }
 
 #[test]
@@ -437,7 +485,6 @@ unsigned entry(unsigned char *p, unsigned char *r, unsigned choose) {{
 }
 
 #[test]
-#[ignore = "a shared return rejects paths on which the shadow has already been exchanged"]
 fn an_ordinary_selector_can_end_the_span_at_a_marker_or_a_return() {
     let source = write_c(
         "held-span-marker-or-return",
@@ -454,9 +501,14 @@ unsigned entry(unsigned measure) {
 }
 "#,
     );
-    let module = lower(&source, "held-span-marker-or-return", CLANG_FLAGS, &[]);
-    assert_eq!(run_with_stats(&module, "entry", &[0], 0).0, Outcome::Returned(Some(17)));
-    assert!(matches!(run_with_stats(&module, "entry", &[1], 0).0, Outcome::Returned(Some(6 | 10))));
+    for (mode, clang_flags, flags) in MODES {
+        let module = lower(&source, &format!("held-span-marker-or-return-{mode}"), clang_flags, flags);
+        assert_eq!(run_with_stats(&module, "entry", &[0], 0).0, Outcome::Returned(Some(17)), "{mode}");
+        for seed in 0..2 {
+            let outcome = run_with_stats(&module, "entry", &[1], seed).0;
+            assert!(matches!(outcome, Outcome::Returned(Some(6 | 10))), "{mode}: {outcome:?}");
+        }
+    }
 }
 
 #[test]
@@ -484,5 +536,142 @@ unsigned entry(void) { return local(); }
             assert!(matches!(outcome, Outcome::Returned(Some(0x05_05_03 | 0x07_07_03))), "{mode}: {outcome:?}");
             assert!(executor.snapshot().quantum.cells.is_empty(), "{mode}: a byte still holds qubits after return");
         }
+    }
+}
+
+#[test]
+fn two_objects_written_in_one_region_get_every_bit_of_their_change() {
+    // One region writing two objects returns one word of results; each field drives the bits its object may hold:
+    // those of the old value its shadow takes, and those of a store into part of it at that part's bytes.
+    let source = write_c(
+        "held-span-two-objects",
+        r#"#include "bennett.h"
+unsigned char a[2] = {3, 3}, b = 3;
+unsigned entry(unsigned bit) {
+    _Bool q = 0;
+    if (bit) bennett_x(&q);
+    if (q) { a[0] = 1; a[1] = 0x45; b = 7; }
+    return bennett_measure_bytes(a, 2) | bennett_measure_bytes(&b, 1) << 16;
+}
+"#,
+    );
+    for (mode, clang_flags, flags) in MODES {
+        let module = lower(&source, &format!("held-span-two-objects-{mode}"), clang_flags, flags);
+        assert_eq!(run(&module, "entry", &[0], 0), Outcome::Returned(Some(0x03_0303)), "{mode}");
+        assert_eq!(run_with_stats(&module, "entry", &[1], 0).0, Outcome::Returned(Some(0x07_4501)), "{mode}");
+    }
+}
+
+#[test]
+fn an_ordinary_access_through_a_pointer_that_may_alias_held_bytes_is_refused() {
+    // In `entry`, which the host may call with `r` equal to `p`, reading `*r` as ordinary memory while `p`'s byte
+    // holds qubits could fault: refused by name. In the static `put`, whose only call passes `&a`, `p` never points
+    // to `other`, which stays ordinary.
+    let source = write_c(
+        "held-span-may-alias",
+        r#"#include "bennett.h"
+unsigned char a = 3, other = 9;
+__attribute__((noinline)) static unsigned put(unsigned char *p) {
+    _Bool q = 0; bennett_x(&q);
+    if (q) *p = 5;
+    unsigned seen = other;
+    return seen | (unsigned)bennett_measure_bytes(p, 1) << 8;
+}
+#ifdef ALIAS
+unsigned entry(unsigned char *p, unsigned char *r) {
+    _Bool q = 0; bennett_x(&q);
+    if (q) *p = 5;
+    unsigned seen = *r;
+    return seen | (unsigned)bennett_measure_bytes(p, 1) << 8;
+}
+#else
+unsigned entry(void) { return put(&a); }
+#endif
+"#,
+    );
+    for (mode, clang_flags, flags) in MODES {
+        let module = lower(&source, &format!("held-span-may-alias-{mode}"), clang_flags, flags);
+        assert_eq!(run_with_stats(&module, "entry", &[], 0).0, Outcome::Returned(Some(0x0509)), "{mode}");
+        let alias: Vec<_> = clang_flags.iter().copied().chain(["-DALIAS"]).collect();
+        let error =
+            lower_text(&source, &format!("held-span-may-alias-r-{mode}"), &alias, flags).expect_err("may alias");
+        assert!(
+            error.starts_with("not handled yet:") && error.contains("may reach") && error.contains("route"),
+            "{mode}: {error}"
+        );
+    }
+}
+
+#[test]
+fn an_overwrite_after_its_source_register_changed_keeps_the_old_value() {
+    // The old byte was computed from q, and q has changed since: it cannot be computed again, so it is retained.
+    let source = write_c(
+        "held-span-not-recomputable",
+        r#"#include "bennett.h"
+unsigned char a = 3;
+unsigned entry(void) {
+    _Bool q = 0;
+    bennett_h(&q);
+    if (q) a = 5;
+    bennett_h(&q);
+    a = 3;
+    unsigned byte = bennett_measure_bytes(&a, 1);
+    return byte | (unsigned)bennett_measure(&q) << 8;
+}
+"#,
+    );
+    for (mode, clang_flags, flags) in MODES {
+        let module = lower(&source, &format!("held-span-not-recomputable-{mode}"), clang_flags, flags);
+        let (outcome, stats) = run_with_stats(&module, "entry", &[], 0);
+        assert!(matches!(outcome, Outcome::Returned(Some(3 | 0x103))), "{mode}: {outcome:?}");
+        assert_eq!(stats.leftover_qubits, 8, "{mode}");
+    }
+}
+
+#[test]
+fn a_controlled_overwrite_reading_a_recomputable_old_value_keeps_the_interference() {
+    // `if (r) a = 7` stores `r ? a : 7`: the old byte, a function of the unchanged q, is cleared by computing it
+    // again, and the read of it in the new value is that computation. Where r = 1 the byte is 7 for both values
+    // of q, so the final H returns q to 0 there; where r = 0 q stays entangled with the byte.
+    let source = write_c(
+        "held-span-recomputable-controlled",
+        r#"#include "bennett.h"
+unsigned char a = 3;
+unsigned entry(void) {
+    _Bool q = 0, r = 0;
+    bennett_h(&q);
+    if (q) a = 5;
+    bennett_h(&r);
+    if (r) a = 7;
+    bennett_h(&q);
+    unsigned byte = bennett_measure_bytes(&a, 1);
+    return byte | (unsigned)bennett_measure(&q) << 8 | (unsigned)bennett_measure(&r) << 9;
+}
+"#,
+    );
+    let quarter = 0.5 * S;
+    for (mode, clang_flags, flags) in MODES {
+        let module = lower(&source, &format!("held-span-recomputable-controlled-{mode}"), clang_flags, flags);
+        let state = state_before_first_measurement(&module, "entry", &[]);
+        let cell = state.quantum.cells[0].1;
+        let [q, r] = ["q", "r"].map(|name| register_column(&module, &state, name));
+        let expected = BTreeMap::from([
+            ((0, 1, 7), C::new(S, 0.0)),
+            ((0, 0, 3), C::new(quarter, 0.0)),
+            ((1, 0, 3), C::new(quarter, 0.0)),
+            ((0, 0, 5), C::new(quarter, 0.0)),
+            ((1, 0, 5), C::new(-quarter, 0.0)),
+        ]);
+        // One amplitude per value of (q, r, byte): no other register distinguishes them.
+        let mut observed = BTreeMap::new();
+        for (values, amplitude) in &state.quantum.amplitudes {
+            let key = (values[q], values[r], values[cell]);
+            assert!(observed.insert(key, *amplitude).is_none(), "{mode}: {key:?} twice");
+        }
+        assert_eq!(observed.keys().collect::<Vec<_>>(), expected.keys().collect::<Vec<_>>(), "{mode}");
+        for (key, amplitude) in observed {
+            assert!((amplitude - expected[&key]).norm() < 1e-12, "{mode}, {key:?}: {amplitude}");
+        }
+        assert_eq!(run_with_stats(&module, "entry", &[], 0).1.leftover_qubits, 0, "{mode}");
     }
 }
