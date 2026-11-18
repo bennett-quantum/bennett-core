@@ -328,15 +328,15 @@ void outlineAround(Function &function, Instruction *seed, ControlAnalysis &analy
   // Nothing in the region changes a qubit variable or writes memory, so its loads read what they would read just
   // before the region: hoist them there, and the region receives the values as arguments. The control program
   // computes the region's value where it is used (Control.cpp), which may be after memory the region read has
-  // changed (the span of bytes written there may start in between, HeldBytes.h): a load of ordinary memory at an
-  // address fixed before the region, which may be loaded there whatever path the region takes, is made where the
-  // region is, so the region uses the value from there.
+  // changed (the span of bytes written there may start in between, HeldBytes.h). Read a fixed address where the
+  // region is only if LLVM says it is safe on every path and the front knows the bytes are ordinary there.
   const DataLayout &layout = function.getParent()->getDataLayout();
   Instruction *top = &*region->getEntry()->getFirstInsertionPt();
   erase_if(memoryLoads, [&](LoadInst *load) {
     return !isSafeToLoadUnconditionally(load->getPointerOperand(), load->getType(), load->getAlign(), layout, top,
                                         nullptr, &dominators);
   });
+  keepOrdinaryLoads(memoryLoads, *top, control);
   if (!loads.empty() || !memoryLoads.empty()) {
     SmallVector<BasicBlock *, 4> outside;
     for (BasicBlock *pred : predecessors(region->getEntry())) {

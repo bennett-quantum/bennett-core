@@ -321,10 +321,12 @@ an empty device program (`front/src/main.cpp`, `readInput`).
   applied. A store into memory in them makes the bytes it writes hold qubits ("Memory written under a qubit"
   below); a call in them that may write memory is refused by name. The control program applies an outlined
   function where its value is used, which may be after memory it read has changed (a span of held bytes may
-  start in between), so its loads of ordinary memory at an address fixed before it, which may be made there
-  whatever path it takes (LLVM's `isSafeToLoadUnconditionally`), are made before it and passed in
-  (`Outline.cpp`): it uses the values from where it is. What its calls read stays theirs, and is checked
-  ("Applied calls", "Where the value is computed").
+  start in between). It reads a fixed address before the region and passes the value in only if LLVM's
+  `isSafeToLoadUnconditionally` allows the read on every path and the front can establish that the bytes
+  are ordinary there (`Outline.cpp`, `HeldBytes.h`). The front checks fixed offsets within globals
+  against earlier exchanges, stores and quantum calls that can reach the same object, following incoming
+  control flow and callers. When it cannot establish that the bytes are ordinary, the load stays in the
+  applied function, subject to the memory checks in "Applied calls", "Where the value is computed".
 - **Code without gates under such a condition that writes qubit variables is one applied function** for all
   the variables it writes, its loops and nested loops included ("Code under a qubit" below; `RegionResults.h`).
 - **Quantum operations under such a condition are predicated** otherwise (`Predicate.h`). For each basis configuration
@@ -798,8 +800,8 @@ under `apply` they run on the private copy and are undone with it.
   into a qubit variable or controls a gate, not where the call is. So the memory the call reads must be the
   same there (`ControlAnalysis::memoryUnchangedBetween`; refused by name otherwise), and a value used several
   times is computed again for each use, each time from the same memory, so each time with the same result.
-  An outlined region's own loads of ordinary memory at a fixed address are made where the region is and
-  passed in ("Conditional jumps, joins and loops" above), so only what its calls read is checked.
+  The applied function's remaining loads and its callees' accesses are both checked. Loads moved before
+  the region are passed in by value ("Conditional jumps, joins and loops" above).
   The memory a call reads is what it, and the functions it calls, may reach outside their own frames
   (`Aliasing::reachesOutsideFrames`): a local variable of a callee exists only in a frame the call creates, so a
   function whose only accesses are to its own local variables (a `volatile` scratch value, or one a helper it
