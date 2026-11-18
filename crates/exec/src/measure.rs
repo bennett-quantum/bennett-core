@@ -67,8 +67,10 @@ pub enum WordRole {
     AllocaStack,
     /// The old stack pointer of a `StackRestore` record.
     StackRestore,
-    /// The old value of callee parameter `0` (by parameter position) in a `Call` record.
+    /// The old backing value of a callee parameter, by parameter position.
     CallParam(usize),
+    /// The old backing value of a non-parameter callee slot, by slot index.
+    CallSlot(usize),
     /// The old value of target parameter `0` (by parameter position) in a `Jump` record.
     JumpParam(usize),
     /// The source block of a `Jump` record.
@@ -126,8 +128,8 @@ pub struct LiveSource {
 pub enum WordWitness {
     /// No witness was found by the rules of this measurement.
     None,
-    /// The first dynamic write to that slot in its frame activation: the old value is the executor's
-    /// residue in a slot no code of this activation has defined, so there is no semantic value to keep.
+    /// The first dynamic write to a slot in its frame activation replaces its initial zero.
+    /// On frame entry the overwritten backing slots were outside the live state.
     FirstWrite,
     /// The step wrote the value that was already there, so it destroyed nothing.
     Unchanged,
@@ -664,6 +666,24 @@ fn slot_witness(first: bool, new: Option<u128>, value: u128, live: &[(LiveSource
     }
 }
 
+fn call_slot_words(words: &[u128], params: &[Slot]) -> Vec<WordInstance> {
+    words
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, value)| WordInstance {
+            role: params
+                .iter()
+                .position(|slot| slot.index() == index)
+                .map_or(WordRole::CallSlot(index), WordRole::CallParam),
+            value,
+            witness: WordWitness::FirstWrite,
+            recompute: None,
+            chain: None,
+        })
+        .collect()
+}
+
 impl Executor<'_> {
     /// Turns the journal-content measurement on for coherent regions run from now on. With
     /// `keep_raw`, every journal record of every branch is kept (what [`classify`] needs); without
@@ -725,7 +745,7 @@ impl Executor<'_> {
         let slot_count = function.slot_count();
         let param_slots: Vec<Slot> = function.params.iter().map(|param| param.slot).collect();
         let journal = self.journal.as_ref().expect("a region runs with a journal");
-        let words = journal.words().to_vec();
+        let words = call_slot_words(journal.words(), &param_slots);
         let site = Site { func: callee, block: BlockId(0), pos: SitePos::Entry };
         let collector = self.journal_measurement.as_mut().expect("checked above");
         let a_k = collector.next_a(site);
@@ -741,24 +761,7 @@ impl Executor<'_> {
             producers: vec![None; slot_count],
             slot_writes,
         });
-        let record = RecordInstance {
-            site,
-            kind: Undo::Call,
-            a_k,
-            b_k: a_k,
-            call_path: 0,
-            words: words
-                .into_iter()
-                .enumerate()
-                .map(|(index, value)| WordInstance {
-                    role: WordRole::CallParam(index),
-                    value,
-                    witness: WordWitness::FirstWrite,
-                    recompute: None,
-                    chain: None,
-                })
-                .collect(),
-        };
+        let record = RecordInstance { site, kind: Undo::Call, a_k, b_k: a_k, call_path: 0, words };
         collector.push_record(record);
     }
 
@@ -933,18 +936,7 @@ impl Executor<'_> {
                 recompute: None,
                 chain: None,
             }],
-            Undo::Call => info
-                .words
-                .iter()
-                .enumerate()
-                .map(|(index, &value)| WordInstance {
-                    role: WordRole::CallParam(index),
-                    value,
-                    witness: WordWitness::FirstWrite,
-                    recompute: None,
-                    chain: None,
-                })
-                .collect(),
+            Undo::Call => call_slot_words(&info.words, &info.callee_param_slots),
             Undo::Jump => {
                 let mut words = Vec::with_capacity(info.words.len());
                 for (index, &(slot, new)) in info.jump_params.iter().enumerate() {
@@ -1089,6 +1081,7 @@ impl Executor<'_> {
                 WordRole::AllocaStack
                 | WordRole::StackRestore
                 | WordRole::CallParam(_)
+                | WordRole::CallSlot(_)
                 | WordRole::JumpSource
                 | WordRole::ReturnPacked
                 | WordRole::ReturnStack

@@ -397,8 +397,7 @@ impl<'m> Executor<'m> {
         lowered.filter(|&sp| sp >= self.stack_floor).ok_or(Fault::StackOverflow)
     }
 
-    /// Enters `func` with `args`: reserves its frame on the stack and writes its parameters. The caller's
-    /// position stays on the call until the callee returns.
+    /// Enters `func` with zeroed slots and writes its parameters. The caller stays on the call until return.
     pub(crate) fn push_frame(&mut self, func: FuncId, args: &[u128]) -> Result<(), Fault> {
         let callee = self.function(func);
         let new_sp = self.frame_fits(func)?;
@@ -407,9 +406,14 @@ impl<'m> Executor<'m> {
         if self.slots.len() < end {
             self.slots.resize(end, 0);
         }
+        let slots = &mut self.slots[base..end];
+        if let Some(journal) = &mut self.journal {
+            // Undoing an earlier return or longjmp can bring these slots back to life.
+            journal.push_words(slots);
+        }
+        slots.fill(0);
         for (param, &value) in callee.params.iter().zip(args) {
-            let old = std::mem::replace(&mut self.slots[base + param.slot.index()], value);
-            self.record_word(old);
+            slots[param.slot.index()] = value;
         }
         let entry_stack_pointer = std::mem::replace(&mut self.stack_pointer, new_sp);
         self.frames.push(Frame { func, block: bennett_ir::BlockId(0), inst: 0, base, entry_stack_pointer });

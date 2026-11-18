@@ -17,8 +17,7 @@ const FAULT: &str = include_str!("../../../examples/fault.bn");
 /// Functions in order: `@inc` 0, `@f` 1, `@g` 2. Blocks of `@f`: entry 0, then 1, else 2, join 3.
 /// Blocks of `@g`: entry 0, hi 1, lo 2, loop 3, done 4. The wrappers apply each once to one qubit
 /// in uniform superposition, so every measurement below has exactly the two branches `b` = 0 and 1,
-/// and the slot a first write overwrites holds the 0 the slot stack was grown with (the first
-/// branch's unwind restores it for the second).
+/// and a first write to a local overwrites the zero established at frame entry.
 const HAND: &str = "memory 1024
 
 func @inc(i8 %x) -> i8 {
@@ -165,13 +164,13 @@ fn counts_without_raw_records_match_counts_with_them() {
     }
 }
 
-/// `@f` by hand. Branch `b = 0` journals, in order: entry Call [old %b = 0]; Alloca [0, old stack
+/// `@f` by hand. Input `b = 0` journals, in order: entry Call [0, 0, 0, 0]; Alloca [0, old stack
 /// pointer 960 = 1024 - 32 bytes of wrapper slots - 32 of `@f` slots]; Store [old cell byte 0];
-/// Jump from entry [source 0]; Jump from else [source 2]; Slot (the load) [0]; Call [old %x = 0];
+/// Jump from entry [source 0]; Jump from else [source 2]; Slot (the load) [0]; Call [0, 0];
 /// Slot in `@inc` [0]; Return [packed `@inc`/block 0, stack pointer 936 = 960 - 8 alloca bytes -
-/// 16 `@inc` slot bytes, old %r = 0]; Finish []. Branch `b = 1` replaces the else Jump with the
+/// 16 `@inc` slot bytes, old %r = 0]; Finish []. Input `b = 1` replaces the else Jump with the
 /// then block's Store [old cell byte 40] and Jump [source 1]. Aligned, the shared words all agree
-/// (Same: 11), the three branch-only words have no witness (Irreducible: the overwritten 40 is in
+/// (Same: 15), the three words present for just one input have no witness (Irreducible: the overwritten 40 is in
 /// no live slot — it was a constant operand — and a Jump source is control history), and no word
 /// needs the Recoverable class because every first write here overwrites the same 0.
 #[test]
@@ -183,10 +182,10 @@ fn the_hand_program_store_and_call() {
     assert_eq!(apply.branches.len(), 2);
     assert_eq!(apply.branches[0].args, [0]);
     assert_eq!(apply.branches[0].outcome, Outcome::Returned(Some(41)));
-    assert_eq!((apply.branches[0].steps, apply.branches[0].records, apply.branches[0].words), (9, 10, 12));
+    assert_eq!((apply.branches[0].steps, apply.branches[0].records, apply.branches[0].words), (9, 10, 16));
     assert_eq!(apply.branches[1].args, [1]);
     assert_eq!(apply.branches[1].outcome, Outcome::Returned(Some(42)));
-    assert_eq!((apply.branches[1].steps, apply.branches[1].records, apply.branches[1].words), (10, 11, 13));
+    assert_eq!((apply.branches[1].steps, apply.branches[1].records, apply.branches[1].words), (10, 11, 17));
     let (kinds0, values0): (Vec<_>, Vec<_>) =
         apply.branches[0].entries.iter().map(|r| (r.kind, r.words.iter().map(|w| w.value).collect::<Vec<_>>())).unzip();
     assert_eq!(
@@ -206,11 +205,22 @@ fn the_hand_program_store_and_call() {
     );
     assert_eq!(
         values0,
-        [vec![0], vec![0, 960], vec![0], vec![0], vec![2], vec![0], vec![0], vec![0], vec![0, 936, 0], vec![]]
+        [
+            vec![0, 0, 0, 0],
+            vec![0, 960],
+            vec![0],
+            vec![0],
+            vec![2],
+            vec![0],
+            vec![0, 0],
+            vec![0],
+            vec![0, 936, 0],
+            vec![]
+        ]
     );
     let classes = classify(measurement);
-    assert_eq!(counts(&classes[0].site_count), (11, 0, 3, 14), "alignment A");
-    assert_eq!(counts(&classes[0].call_path), (11, 0, 3, 14), "alignment B: both branches take the same call path");
+    assert_eq!(counts(&classes[0].site_count), (15, 0, 3, 18), "alignment A");
+    assert_eq!(counts(&classes[0].call_path), (15, 0, 3, 18), "alignment B: both branches take the same call path");
     let then_store = classes[0]
         .site_count
         .iter()
@@ -227,7 +237,7 @@ fn the_hand_program_store_and_call() {
 /// the jump is in no live slot (Irreducible — the loop-carried history); the second write of
 /// `%acc.next` journals 11 or 21, which the back-edge had just copied into `%acc`, still live
 /// (Recoverable by that one common source). Everything else agrees on both branches. Totals:
-/// 19 positions = 11 Same + 5 Recoverable + 3 Irreducible.
+/// 25 positions = 17 Same + 5 Recoverable + 3 Irreducible.
 #[test]
 fn the_hand_program_loop() {
     let module = load(HAND);
@@ -236,11 +246,11 @@ fn the_hand_program_loop() {
     let apply = &measurement.applies[0];
     assert_eq!(
         apply.branches.iter().map(|b| (b.steps, b.records, b.words)).collect::<Vec<_>>(),
-        [(11, 12, 16), (11, 12, 16)]
+        [(11, 12, 22), (11, 12, 22)]
     );
     let classes = classify(measurement);
     for positions in [&classes[0].site_count, &classes[0].call_path] {
-        assert_eq!(counts(positions), (11, 5, 3, 19));
+        assert_eq!(counts(positions), (17, 5, 3, 25));
         let acc_next_second = positions
             .iter()
             .find(|p| p.kind == Undo::Slot && p.site.pos == SitePos::Inst(0) && p.k == 1)
@@ -255,7 +265,7 @@ fn the_hand_program_loop() {
             .expect("the back-edge %acc");
         assert_eq!((acc_back_edge.class, acc_back_edge.distinct_values), (WordClass::Irreducible, 2));
         // The classification accounts for every word instance of both branch journals.
-        assert_eq!(positions.iter().map(|p| p.instances).sum::<usize>(), 32);
+        assert_eq!(positions.iter().map(|p| p.instances).sum::<usize>(), 44);
     }
 }
 
@@ -409,8 +419,8 @@ fn the_hand_program_with_recomputation() {
     let copy = classify(measurement);
     let recompute = bennett_exec::classify_with_recompute(measurement);
     for (old, new) in [(&copy[0].site_count, &recompute[0].site_count), (&copy[0].call_path, &recompute[0].call_path)] {
-        assert_eq!(counts(old), (11, 0, 3, 14));
-        assert_eq!(counts(new), (11, 0, 2, 14));
+        assert_eq!(counts(old), (15, 0, 3, 18));
+        assert_eq!(counts(new), (15, 0, 2, 18));
         let recovered: Vec<_> = new.iter().filter(|p| p.class == WordClass::Recomputed).collect();
         assert_eq!(recovered.len(), 1);
         assert_eq!(recovered[0].role, WordRole::Store);
@@ -518,7 +528,7 @@ fn chains_do_not_confuse_numeric_aliases_with_control_presence() {
     for tape in [false, true] {
         let classes = bennett_exec::classify_with_chains(m, tape);
         for positions in [&classes[0].site_count, &classes[0].call_path] {
-            assert_eq!(counts(positions), (13, 0, 2, 16));
+            assert_eq!(counts(positions), (19, 0, 2, 22));
             assert_eq!(positions.iter().filter(|p| p.class == WordClass::Recomputed).count(), 1);
             for p in positions.iter().filter(|p| p.role == WordRole::JumpSource && p.class == WordClass::Irreducible) {
                 assert!(!p.chain.as_ref().expect("control diagnostic").individually_recovered);
