@@ -43,11 +43,19 @@ pub(super) struct Circuit {
     start: Wire,
     next: Option<Wire>,
     gates: Vec<GateOp>,
+    enabled: Bit,
+    control_scratch: Option<Wire>,
+}
+
+pub(super) struct Checkpoint {
+    next: Option<Wire>,
+    gates: usize,
+    control_scratch: Option<Wire>,
 }
 
 impl Circuit {
     pub(super) fn new(start: Wire) -> Self {
-        Self { start, next: Some(start), gates: Vec::new() }
+        Self { start, next: Some(start), gates: Vec::new(), enabled: ONE, control_scratch: None }
     }
 
     pub(super) fn fresh(&mut self) -> Wire {
@@ -61,25 +69,61 @@ impl Circuit {
         self.gates.push(GateOp { kind: X, target, controls });
     }
 
+    pub(super) fn checkpoint(&self) -> Checkpoint {
+        Checkpoint { next: self.next, gates: self.gates.len(), control_scratch: self.control_scratch }
+    }
+
+    pub(super) fn rewind(&mut self, checkpoint: Checkpoint) {
+        self.next = checkpoint.next;
+        self.gates.truncate(checkpoint.gates);
+        self.control_scratch = checkpoint.control_scratch;
+    }
+
+    pub(super) fn under<T>(&mut self, enabled: Bit, emit: impl FnOnce(&mut Self) -> T) -> T {
+        debug_assert_eq!(self.enabled, ONE);
+        self.enabled = enabled;
+        let result = emit(self);
+        self.enabled = ONE;
+        result
+    }
+
     pub(super) fn xor_into(&mut self, target: Wire, value: Bit, enabled: Bit) {
-        let controls = match (value, enabled) {
-            (ZERO, _) | (_, ZERO) => return,
-            (ONE, ONE) => Vec::new(),
-            (Bit::Wire(w, neg), ONE) | (ONE, Bit::Wire(w, neg)) => vec![(w, neg)],
-            (Bit::Wire(a, neg_a), Bit::Wire(b, neg_b)) if a == b => {
-                if neg_a != neg_b {
-                    return;
+        let mut controls = Vec::new();
+        for bit in [value, enabled, self.enabled] {
+            match bit {
+                ZERO => return,
+                ONE => continue,
+                Bit::Wire(wire, inverted) => {
+                    if controls.contains(&(wire, !inverted)) {
+                        return;
+                    }
+                    if !controls.contains(&(wire, inverted)) {
+                        controls.push((wire, inverted));
+                    }
                 }
-                vec![(a, neg_a)]
             }
-            (Bit::Wire(a, neg_a), Bit::Wire(b, neg_b)) => vec![(a, neg_a), (b, neg_b)],
-        };
+        }
         for &(wire, inverted) in &controls {
             if inverted {
                 self.flip(wire, Vec::new());
             }
         }
-        self.flip(target, controls.iter().map(|&(wire, _)| wire).collect());
+        if let [(a, _), (b, _), (c, _)] = controls.as_slice() {
+            // Compute and clear the extra control using a single reusable qubit.
+            let scratch = match self.control_scratch {
+                Some(wire) => wire,
+                None => {
+                    let wire = self.fresh();
+                    self.control_scratch = Some(wire);
+                    wire
+                }
+            };
+            self.flip(scratch, vec![*a, *b]);
+            self.flip(target, vec![scratch, *c]);
+            self.flip(scratch, vec![*a, *b]);
+        } else {
+            self.flip(target, controls.iter().map(|&(wire, _)| wire).collect());
+        }
         for &(wire, inverted) in controls.iter().rev() {
             if inverted {
                 self.flip(wire, Vec::new());
@@ -109,8 +153,8 @@ impl Circuit {
             (Bit::Wire(a, neg_a), Bit::Wire(b, neg_b)) if a == b => Bit::Constant(neg_a != neg_b),
             (Bit::Wire(a, neg_a), Bit::Wire(b, neg_b)) => {
                 let wire = self.fresh();
-                self.flip(wire, vec![a]);
-                self.flip(wire, vec![b]);
+                self.xor_into(wire, Bit::Wire(a, false), ONE);
+                self.xor_into(wire, Bit::Wire(b, false), ONE);
                 Bit::Wire(wire, neg_a != neg_b)
             }
         }

@@ -2,7 +2,9 @@
 
 mod arithmetic;
 mod bits;
+mod controls;
 mod definite;
+mod flow;
 mod machine;
 mod saved;
 mod symbolic;
@@ -23,6 +25,11 @@ pub use bennett_exec::{ApplyError, ApplyInput, Argument};
 pub enum Construction {
     /// The next instruction was definite until the return or fault.
     Definite,
+    /// Qubit-dependent choices control gates directly, without instruction dispatch.
+    Controlled {
+        /// Number of emitted body passes for loops with program-proved counts.
+        proved_passes: usize,
+    },
     /// A qubit-dependent jump required instruction dispatch.
     StepMachine {
         /// Ticks after the definite prefix, including the first qubit-dependent jump.
@@ -39,6 +46,7 @@ impl fmt::Display for Construction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Definite => f.write_str("definite control"),
+            Self::Controlled { proved_passes } => write!(f, "control gates ({proved_passes} proved loop passes)"),
             Self::StepMachine { ticks } => write!(f, "step machine ({ticks} ticks)"),
             Self::SavedDecisions { decisions } => write!(f, "saved decisions ({decisions} decisions)"),
         }
@@ -48,7 +56,7 @@ impl fmt::Display for Construction {
 /// Which constructions the compiler may consider.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ApplyMode {
-    /// Prefer saved decisions when a loop proof succeeds.
+    /// Prefer control gates, then saved decisions for one fixed-charge loop.
     #[default]
     Automatic,
     /// Use the step machine at the first qubit-dependent jump, even for a proved loop.
@@ -126,7 +134,7 @@ impl Copies {
     }
 }
 
-/// Follow definite control, then try saved decisions before the general step machine.
+/// Follow definite control, then try control gates and saved decisions before instruction dispatch.
 pub fn compile_apply(input: ApplyInput<'_>) -> Result<CompiledApply, ApplyError> {
     compile_apply_with(input, ApplyMode::Automatic)
 }
@@ -170,7 +178,22 @@ pub fn compile_apply_with(input: ApplyInput<'_>, mode: ApplyMode) -> Result<Comp
                         let remaining = input.budget - spent;
                         let reason = match mode {
                             ApplyMode::Automatic => {
-                                if let Some(plan) = saved::Loop::prove(&frame, point) {
+                                let checkpoint = circuit.checkpoint();
+                                let refusal = match controls::run(&mut circuit, &frame, &slots, point, remaining) {
+                                    Ok((copies, proved_passes)) => {
+                                        break (
+                                            copies,
+                                            Construction::Controlled { proved_passes },
+                                            "qubit-dependent choices use controls within the shared budget",
+                                        );
+                                    }
+                                    Err(controls::Failure::Control(refusal)) => refusal,
+                                    Err(controls::Failure::Lowering(error)) => return Err(error),
+                                };
+                                circuit.rewind(checkpoint);
+                                if refusal == controls::Refusal::UnprovedLoop
+                                    && let Some(plan) = saved::Loop::prove(&frame, point)
+                                {
                                     let (copies, decisions) = plan.run(&mut circuit, &frame, &mut slots, remaining)?;
                                     break (
                                         copies,
@@ -178,7 +201,7 @@ pub fn compile_apply_with(input: ApplyInput<'_>, mode: ApplyMode) -> Result<Comp
                                         "one proved loop with fixed continuation and exit charges",
                                     );
                                 }
-                                "qubit-dependent jump without a single-loop proof"
+                                refusal.reason()
                             }
                             ApplyMode::StepMachine => "step machine requested for a qubit-dependent jump",
                         };

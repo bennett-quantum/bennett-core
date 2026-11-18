@@ -2,6 +2,8 @@
 
 #[path = "support/bits.rs"]
 mod bits;
+#[path = "support/controlled_apply.rs"]
+mod controlled_apply;
 
 use bennett_emit::{
     ApplyError, ApplyInput, ApplyMode, Argument, CompiledApply, Construction, CountingDevice, compile_apply,
@@ -183,16 +185,19 @@ done(i1 %result):
 "#;
     let module = load(source).expect("valid nested loops");
     for budget in [1, 2, 3, 13, 14, 15, 35] {
-        let compiled = compile_apply(ApplyInput {
-            module: &module,
-            callee: module.function_named("f").expect("f"),
-            args: &[Argument::Register(0..2), Argument::Register(2..4)],
-            out: 4..5,
-            fault: 5..10,
-            budget,
-            entry_fault: None,
-            scratch_start: 10,
-        })
+        let compiled = compile_apply_with(
+            ApplyInput {
+                module: &module,
+                callee: module.function_named("f").expect("f"),
+                args: &[Argument::Register(0..2), Argument::Register(2..4)],
+                out: 4..5,
+                fault: 5..10,
+                budget,
+                entry_fault: None,
+                scratch_start: 10,
+            },
+            ApplyMode::StepMachine,
+        )
         .expect("emit both loops under one clock");
         assert_eq!(compiled.definite_steps, 1);
         let expected =
@@ -251,7 +256,7 @@ join(i3 %a, i3 %b):
 "#,
     )
     .expect("valid join");
-    let compiled = compile_apply(ApplyInput {
+    let input = ApplyInput {
         module: &module,
         callee: module.function_named("f").expect("f"),
         args: &[Argument::Register(0..1), Argument::Register(1..4), Argument::Register(4..7)],
@@ -260,14 +265,19 @@ join(i3 %a, i3 %b):
         budget: 10,
         entry_fault: None,
         scratch_start: 15,
-    })
-    .expect("emit two edges to one successor");
-    assert_eq!(compiled.construction, Construction::StepMachine { ticks: 3 });
-    check(&compiled, 7, 8, |input| {
-        let x = (input >> 1) & 7;
-        let y = input >> 4;
-        if input & 1 != 0 { x.wrapping_sub(y) & 7 } else { y.wrapping_sub(x) & 7 }
-    });
+    };
+    for (mode, construction) in [
+        (ApplyMode::Automatic, Construction::Controlled { proved_passes: 0 }),
+        (ApplyMode::StepMachine, Construction::StepMachine { ticks: 3 }),
+    ] {
+        let compiled = compile_apply_with(input.clone(), mode).expect("emit two edges to one successor");
+        assert_eq!(compiled.construction, construction);
+        check(&compiled, 7, 8, |input| {
+            let x = (input >> 1) & 7;
+            let y = input >> 4;
+            if input & 1 != 0 { x.wrapping_sub(y) & 7 } else { y.wrapping_sub(x) & 7 }
+        });
+    }
 }
 
 const COLLATZ_FIRST_RETURN: u64 = 5;

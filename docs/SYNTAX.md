@@ -144,10 +144,11 @@ mismatch. Only `apply` reads its argument registers, for each definite value of 
 be among an `apply`'s arguments, nor be one register. A call can return a handle to its caller. Returning a register from the
 selected entry ends the run successfully with no scalar host result. The CLI reports its declared width.
 
-The gate compiler for `apply` covers a subset of integer instructions, including branches
-and loops with qubit-dependent conditions. Its choice of construction leaves the text form
-and the meaning of the budget the same. The counter uses it automatically and the simulator
-accepts `--apply-circuit auto`. See "Gate emitter" in [DESIGN.md](DESIGN.md#apply).
+The gate compiler for `apply` covers a subset of integer instructions. It can use control
+gates for qubit-dependent choices and loops with a proved pass count, or dispatch instructions
+with a single clock for the rest of the apply. A `switch` needs a proved definite selector.
+The counter uses the compiler automatically and the simulator accepts `--apply-circuit auto`.
+See "Gate emitter" in [DESIGN.md](DESIGN.md#apply).
 
 ## Whole-run exit
 

@@ -90,6 +90,7 @@ version = "0.1.0"
 dependencies = [
  "bennett-exec",
  "bennett-ir",
+ "petgraph",
  "rand",
  "rand_chacha",
 ]

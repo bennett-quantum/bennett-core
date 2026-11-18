@@ -7,7 +7,7 @@ use bennett_ir::{BinOp, Inst, Operand, Slot, Terminator, Width};
 
 use super::arithmetic;
 use super::bits::{Bit, Circuit, Word, constant, definite};
-use super::symbolic::Frame;
+use super::symbolic::{Frame, switch_target};
 use super::{ApplyInput, Argument};
 
 fn fold_inst(inst: &Inst, read: impl Fn(&Operand) -> Option<Word>, circuit: &mut Circuit) -> Option<Word> {
@@ -86,7 +86,10 @@ impl Constants {
 
     pub(super) fn analyze(frame: &Frame<'_>, input: &ApplyInput<'_>) -> Self {
         let function = frame.module.function(frame.callee);
-        if !function.blocks.iter().flat_map(|block| &block.insts).any(|inst| requirement(inst).is_some()) {
+        if !function.blocks.iter().any(|block| {
+            matches!(&block.term, Terminator::Switch { value: Operand::Slot(_), .. })
+                || block.insts.iter().any(|inst| requirement(inst).is_some())
+        }) {
             return Self::default();
         }
         let mut slots = vec![None; function.slot_count()];
@@ -142,6 +145,14 @@ impl Constants {
                                 transfer(if_true);
                                 transfer(if_false);
                             }
+                        }
+                    }
+                } else if let Terminator::Switch { value, cases, default, .. } = &block.term {
+                    if let Some(word) = read(&local, value) {
+                        if let Some(value) = definite(&word) {
+                            transfer(switch_target(value, cases, default));
+                        } else {
+                            block.term.visit_targets(transfer);
                         }
                     }
                 } else {

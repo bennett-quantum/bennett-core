@@ -12,7 +12,7 @@ model").
 |---|---|---|
 | `ir` | the device program: one data structure, one reader/writer, one validator | step 2 |
 | `exec` | the classical controller and sparse simulator: forward, reverse (undo journal), applied functions by evaluation or emitted gates, qubits in memory | step 2 |
-| `emit` | controlled gate lowering, circuit counts, and compilation of applied integer loops by instruction dispatch or saved decisions | M2 |
+| `emit` | controlled gate lowering, circuit counts, and compilation of applied integer functions | M3 |
 | `cli` | `bennett run`, `bennett check` | step 2 |
 | `front` | `bennett-front` (C++, LLVM 18): bitcode with marker calls to `ir` text; taint, outlining, lowering | step 3 |
 | `opt` | optimiser and cost model | not started |
@@ -25,8 +25,9 @@ cargo run -p bennett -- run examples/calls.bn --device count
 front/test.sh                                # builds bennett-front, runs its tests (LLVM 18, clang 18, CMake)
 ```
 
-Counting compiles supported applied integer functions, including loops, into gates. Run the same
-circuits on the simulator with `bennett run --apply-circuit auto program.bn`. Both devices accept
+Counting compiles supported applied integer functions into gates. It can use control gates for
+qubit-dependent choices and loops with program-proved pass counts. Run the same circuits on the
+simulator with `bennett run --apply-circuit auto program.bn`. Both devices accept
 `--apply-circuit step-machine` to select general instruction dispatch when control depends on qubits.
 The simulator defaults to direct evaluation, and `--machine-meaning` enables its fault-register semantics.
 The emitted subset and refusal routes are in [DESIGN.md](docs/DESIGN.md#apply).

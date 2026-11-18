@@ -138,8 +138,9 @@ arguments for which `f` needs more than the budget gives the fault `budget` for 
 
 These marker rules describe direct simulation, including applied calls and private memory.
 The counting device and the simulator's `--apply-circuit` option compile applied integer code
-to gates. The compiler reports applied calls and memory operations as refusals with their routes
-in [DESIGN.md](DESIGN.md#not-yet).
+to gates. Qubit-dependent choices and loops with a proved pass count can use control gates
+under the same budget. The compiler reports applied calls and memory operations as refusals
+with their routes in [DESIGN.md](DESIGN.md#not-yet).
 
 Natively `f`'s writes would remain. Where the front sees that code after the call reads memory the call writes
 (a global variable, or memory passed to it by pointer, read directly or by a function called directly), it
