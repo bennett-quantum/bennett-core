@@ -114,3 +114,17 @@ fn simulator_peak_includes_apply_scratch() {
     let text = String::from_utf8_lossy(&simulated.stdout);
     assert!(text.contains("qubits: 9 live, 11 peak, 0 left over"), "{text}");
 }
+
+#[test]
+fn counts_apply_commands_sent_by_the_controller() {
+    let fixture = "../crates/cli/tests/fixtures/count-device.bn";
+    let counted = count(&[fixture, "--entry", "tiny_circuit"]);
+    assert!(counted.status.success(), "{}", String::from_utf8_lossy(&counted.stderr));
+    let text = String::from_utf8_lossy(&counted.stdout);
+    // Two Toffolis compute the guarded AND, one copies the result, and two undo it.
+    // The complementary fault copy conjugates one controlled X by two X gates.
+    assert!(
+        text.contains("one-qubit gates: 2\ntwo-qubit gates: 1\nToffoli gates: 5\npeak qubits: 11\ndepth: 8\n"),
+        "{text}"
+    );
+}
