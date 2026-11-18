@@ -27,6 +27,7 @@ mod quantum;
 mod recompute_independent_tests;
 mod region;
 mod snapshot;
+mod wire_storage;
 
 pub use device::{BlockOp, Device, GateBlock, GateOp, Wire};
 pub use executor::{DeviceRun, Executor, Frame, Options, Outcome, ReverseError, RunError, StartError, Stats};
