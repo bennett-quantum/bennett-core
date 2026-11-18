@@ -37,6 +37,14 @@ struct Simulator<'a> {
     reserved_column: Option<usize>,
 }
 
+/// A masked fragment of one output word in the joint measurement key.
+struct MeasurementPart {
+    qubit: QubitRef,
+    mask: u64,
+    word: usize,
+    bit: u64,
+}
+
 impl Simulator<'_> {
     fn qubit(&self, wire: Wire) -> Result<QubitRef, RunError> {
         self.state.device_wires.qubit(wire).ok_or(RunError::Device("wire is not allocated"))
@@ -49,6 +57,29 @@ impl Simulator<'_> {
             *masks.entry(qubit.column).or_default() |= 1u64 << qubit.bit;
         }
         Ok(masks)
+    }
+
+    fn measurement_parts(&self, ranges: &[Range<Wire>]) -> Result<Vec<MeasurementPart>, RunError> {
+        let mut parts = Vec::new();
+        for (word, range) in ranges.iter().enumerate() {
+            let width = range.end.saturating_sub(range.start);
+            if width > 64 {
+                return Err(RunError::Device("measurement range exceeds 64 wires"));
+            }
+            // Read each run of contiguous storage from high to low. The key's fragment order
+            // then compares outcomes like the assembled little-endian word.
+            let mut remaining = width;
+            while remaining != 0 {
+                let qubit = self.qubit(range.start + remaining - 1)?;
+                let live = self.state.device_wires.mask(qubit.column);
+                let count = u64::from((live << (63 - qubit.bit)).leading_ones()).min(remaining);
+                let low = qubit.bit + 1 - count as u8;
+                let mask = (u64::MAX >> (64 - count)) << low;
+                remaining -= count;
+                parts.push(MeasurementPart { qubit: QubitRef { bit: low, ..qubit }, mask, word, bit: remaining });
+            }
+        }
+        Ok(parts)
     }
 }
 
@@ -105,25 +136,13 @@ impl Device for Simulator<'_> {
     }
 
     fn measure_many(&mut self, ranges: &[Range<Wire>]) -> Result<Vec<u64>, RunError> {
-        let mut picks = Vec::new();
-        let mut destinations = Vec::new();
-        for (word, range) in ranges.iter().enumerate() {
-            let width = range.end.saturating_sub(range.start);
-            if width > 64 {
-                return Err(RunError::Device("measurement range exceeds 64 wires"));
-            }
-            // Keep the same ordering of outcomes as a little-endian word, even across columns.
-            for bit in (0..width).rev() {
-                let qubit = self.qubit(range.start + bit)?;
-                picks.push((qubit.column, 1u64 << qubit.bit));
-                destinations.push((word, bit));
-            }
-        }
+        let parts = self.measurement_parts(ranges)?;
         let mut words = vec![0; ranges.len()];
-        if !picks.is_empty() {
-            let bits = self.state.measure_bits(&picks, self.rng);
-            for ((word, bit), value) in destinations.into_iter().zip(bits) {
-                words[word] |= u64::from(value != 0) << bit;
+        if !parts.is_empty() {
+            let picks: Vec<_> = parts.iter().map(|part| (part.qubit.column, part.mask)).collect();
+            let values = self.state.measure_bits(&picks, self.rng);
+            for (part, value) in parts.into_iter().zip(values) {
+                words[part.word] |= (value >> part.qubit.bit) << part.bit;
             }
         }
         Ok(words)
@@ -303,5 +322,18 @@ mod tests {
         assert_eq!(state.configurations(), 4, "each of two retained values has both live outcomes");
         assert_eq!(state.leftover_qubits(), 1);
         assert!(state.amplitudes().values().all(|coefficient| (coefficient.norm_sqr() - 0.25).abs() < 1e-12));
+    }
+
+    #[test]
+    fn a_whole_64_bit_register_uses_one_word_per_measurement_key() {
+        let mut state = QuantumState::default();
+        let mut rng = ChaCha8Rng::seed_from_u64(0);
+        let mut sim = Simulator { state: &mut state, rng: &mut rng, limit: None, reserved_column: None };
+        sim.allocate(0..64).expect("one full register");
+        let range = 0..64;
+        let parts = sim.measurement_parts(std::slice::from_ref(&range)).expect("valid measure");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].mask, u64::MAX);
+        assert_eq!(sim.measure_many(std::slice::from_ref(&range)), Ok(vec![0]));
     }
 }
