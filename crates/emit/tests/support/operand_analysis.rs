@@ -175,3 +175,35 @@ done:
         assert!(matches!(error, ApplyError::Unsupported { operation: "shl", .. }));
     }
 }
+
+#[test]
+fn dead_selected() {
+    for jump in [
+        "br 1, join(i8 1), join(i8 2)",
+        "br 0, join(i8 2), join(i8 1)",
+        "switch i8 1, 1: join(i8 1), default: join(i8 2)",
+    ] {
+        let source = format!(
+            r#"
+memory 1024
+func @f(i8 %input) -> i8 {{
+entry:
+    br 1, done, cold
+cold:
+    {jump}
+join(i8 %amount):
+    %shifted = shl i8 %input, %amount
+    ret %shifted
+done:
+    ret %input
+}}
+"#
+        );
+        let module = control_example(&source, 8, "");
+        for budget in [0, 4] {
+            for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+                compare_controls(&module, budget, mode, |x| if budget == 0 { (0, 1) } else { (x, 0) });
+            }
+        }
+    }
+}

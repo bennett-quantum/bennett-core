@@ -7,7 +7,7 @@ use bennett_ir::{BinOp, BlockId, Inst, Operand, Slot, Terminator, Width};
 
 use super::arithmetic;
 use super::bits::{Bit, Circuit, Word, constant, definite};
-use super::symbolic::{Frame, switch_target};
+use super::symbolic::{Frame, switch_target, visit_possible_targets};
 use super::{ApplyInput, Argument};
 
 fn fold_inst(
@@ -85,6 +85,7 @@ fn literal(operand: &Operand) -> bool {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Scope {
     Reachable,
+    LiteralEdges,
     EveryBlock,
 }
 
@@ -141,7 +142,8 @@ impl Constants {
         let unknown_word = |slot| (0..frame.slot_width(slot)).map(|index| unknown_bit(slot, index)).collect();
         // Reachability grows with the value facts. For example, a loop can
         // first deliver a constant condition and later make both outcomes possible.
-        let mut reachable = vec![scope == Scope::EveryBlock; function.blocks.len()];
+        let every_block = scope != Scope::Reachable;
+        let mut reachable = vec![every_block; function.blocks.len()];
         reachable[0] = true;
         loop {
             let mut changed = false;
@@ -175,6 +177,8 @@ impl Constants {
                 };
                 if scope == Scope::EveryBlock {
                     block.term.visit_targets(transfer);
+                } else if scope == Scope::LiteralEdges {
+                    visit_possible_targets(&block.term, transfer);
                 } else if let Terminator::Branch { cond, if_true, if_false } = &block.term {
                     if let Some(word) = read(&local, cond) {
                         match word[0] {
@@ -210,7 +214,7 @@ impl Constants {
                     *old = Some(word);
                 }
             }
-            if !changed && scope == Scope::EveryBlock {
+            if !changed && every_block {
                 // A cold cycle may have no entry value to start propagation. Give
                 // its remaining slots unknown values, then propagate those inputs
                 // before accepting any proof from this pass.

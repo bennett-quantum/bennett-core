@@ -94,8 +94,12 @@ impl<'a> Frame<'a> {
         if frame.check_operands(&[]).is_err() {
             // Facts from bypassed blocks are used only to check unreachable instructions.
             // Emission continues to use the proofs from entry.
-            let fallback = Constants::analyze(&frame, input, Scope::EveryBlock);
-            frame.check_operands(&[&fallback])?;
+            let literal_edges = Constants::analyze(&frame, input, Scope::LiteralEdges);
+            if frame.check_operands(&[&literal_edges]).is_err() {
+                // Untaken edges can still supply constants needed to validate their targets.
+                let all_edges = Constants::analyze(&frame, input, Scope::EveryBlock);
+                frame.check_operands(&[&literal_edges, &all_edges])?;
+            }
         }
         Ok(frame)
     }
@@ -251,6 +255,16 @@ impl<'a> Frame<'a> {
 
 pub(super) fn switch_target<'a>(value: u128, cases: &'a [SwitchCase], default: &'a Target) -> &'a Target {
     cases.iter().find(|case| case.value == value).map_or(default, |case| &case.target)
+}
+
+pub(super) fn visit_possible_targets<'a>(term: &'a Terminator, mut visit: impl FnMut(&'a Target)) {
+    if let Terminator::Branch { cond: Operand::Const(value), if_true, if_false } = term {
+        visit(if value.value() == 1 { if_true } else { if_false });
+    } else if let Terminator::Switch { value: Operand::Const(value), cases, default, .. } = term {
+        visit(switch_target(value.value(), cases, default));
+    } else {
+        term.visit_targets(visit);
+    }
 }
 
 fn unsupported(inst: &Inst) -> Option<(&'static str, &'static str)> {
