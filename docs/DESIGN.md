@@ -691,10 +691,15 @@ under `apply` they run on the private copy and are undone with it.
   into a qubit variable or controls a gate, not where the call is. So the memory the call reads must be the
   same there (`ControlAnalysis::memoryUnchangedBetween`; refused by name otherwise), and a value used several
   times is computed again for each use, each time from the same memory, so each time with the same result.
+  The memory a call reads is what it, and the functions it calls, may reach outside their own frames
+  (`Aliasing::reachesOutsideFrames`): a local variable of a callee exists only in a frame the call creates, so a
+  function whose only accesses are to its own local variables (a `volatile` scratch value, or one a helper it
+  calls fills through a pointer) reads no memory that can change, and its writes are seen by no other call.
 - **What the front refuses.** A call whose result is not used, to a function that may write memory: applied,
-  it would do nothing at all, while its writes are its only purpose. Two such calls in one computation when
-  one may write memory: under the rule each starts from the memory as it was, but in one applied function the
-  second would see the first's writes; the route is one register for each call's result, computed and
+  it would do nothing at all, while its writes are its only purpose (also when LLVM has removed the unused
+  result and the call, which passes nothing by address, returns nothing). Two such calls in one computation when one may write memory outside
+  the frames of its own calls: under the rule each starts from the memory as it was, but in one applied
+  function the second would see the first's writes; the route is one register for each call's result, computed and
   cleared around the computation that uses it. A call under a qubit-dependent condition of a function that
   may write memory (outlined, "Conditional jumps, joins and loops" above): its writes natively survive the
   condition.

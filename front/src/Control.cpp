@@ -157,6 +157,14 @@ private:
   bool sliceable(const Value *value) const;
   // Refuses by name a call with qubit-dependent arguments that cannot be applied whole (Applied.h).
   void requireApplicable(const CallBase &call) const;
+  // Refuses by name an applied call whose result is not used, to a function that may write memory.
+  void requireUsedResult(const CallBase &call) const;
+  // Whether `call` may read or write memory outside the frames of the functions it calls (Aliasing.h). Only
+  // such memory can change between the call and where its result is used, and only there can another call
+  // of the same computation see what it writes.
+  bool sharesMemory(const CallBase &call) const {
+    return !call.getCalledFunction()->doesNotAccessMemory() && module.aliasing().reachesOutsideFrames(fn, call);
+  }
 };
 
 // Stand-ins for the lines that allocate and release the entry fault registers.
@@ -243,13 +251,7 @@ void ControlWriter::instruction(const Instruction &inst) {
     bool readsRegister = load && analysis.access(load->getPointerOperand());
     if (const auto *call = dyn_cast<CallBase>(&inst)) {
       requireApplicable(*call);
-      // Applied whole where its result is stored: its writes are undone when it ends, so a call whose
-      // result nothing uses would do nothing at all.
-      if (!call->onlyReadsMemory() && call->use_empty()) {
-        notHandled("a call that depends on a qubit, whose result is not used, to a function that may write "
-                   "memory (applied, its writes would be undone; writes that must survive are not handled yet)",
-                   &inst);
-      }
+      requireUsedResult(*call);
       if (!call->onlyReadsMemory()) {
         module.appliedCalls().warnUndoneWrites(*call, analysis.dominators);
       }
@@ -279,6 +281,15 @@ void ControlWriter::instruction(const Instruction &inst) {
   if (std::optional<Marker> found = markerCall(&inst)) {
     marker(cast<CallBase>(inst), *found);
     return;
+  }
+  // A call with arguments that depend on a qubit whose result LLVM removed (it was not used): the call has no
+  // value to depend on a qubit, but it is still an applied call. One with a pointer argument may return its
+  // result through memory (a wide aggregate or a vector, Abi.h), so its result may be used.
+  if (const auto *call = dyn_cast<CallBase>(&inst);
+      call && !isa<IntrinsicInst>(call) && module.isApplicable(call->getCalledFunction()) &&
+      std::any_of(call->arg_begin(), call->arg_end(), [&](const Use &arg) { return analysis.tainted(arg.get()); }) &&
+      std::none_of(call->arg_begin(), call->arg_end(), [](const Use &arg) { return arg->getType()->isPointerTy(); })) {
+    requireUsedResult(*call);
   }
   classicalUse(inst);
   BodyWriter::instruction(inst);
@@ -577,7 +588,7 @@ bool ControlWriter::recomputable(const Value *old, const Storage &target, const 
       work.push_back(load->getPointerOperand());
     } else if (const auto *call = dyn_cast<CallBase>(inst)) {
       if (isa<IntrinsicInst>(call) || !module.isApplicable(call->getCalledFunction()) ||
-          (!call->getCalledFunction()->doesNotAccessMemory() && !analysis.memoryUnchangedBetween(call, &store))) {
+          (sharesMemory(*call) && !analysis.memoryUnchangedBetween(call, &store))) {
         return false;
       }
       if (analysis.tainted(call)) {
@@ -594,8 +605,8 @@ bool ControlWriter::recomputable(const Value *old, const Storage &target, const 
       return false; // a phi among them: merged where ordinary control flow joins
     }
   }
-  return calls.size() < 2 || std::all_of(calls.begin(), calls.end(), [](const CallBase *call) {
-           return call->onlyReadsMemory();
+  return calls.size() < 2 || std::all_of(calls.begin(), calls.end(), [&](const CallBase *call) {
+           return call->onlyReadsMemory() || !sharesMemory(*call);
          });
 }
 
@@ -639,6 +650,16 @@ std::string ControlWriter::converted(const Value *value, unsigned bits, bool typ
   line(result + " = " + (from > bits ? "trunc " : "zext ") + intType(from) + " " + operand(value) + " to " +
        intType(bits));
   return result;
+}
+
+// Applied whole where its result is stored: its writes are undone when it ends, so a call whose result nothing
+// uses would do nothing at all.
+void ControlWriter::requireUsedResult(const CallBase &call) const {
+  if (!call.onlyReadsMemory() && call.use_empty()) {
+    notHandled("a call that depends on a qubit, whose result is not used, to a function that may write "
+               "memory (applied, its writes would be undone; writes that must survive are not handled yet)",
+               &call);
+  }
 }
 
 void ControlWriter::requireApplicable(const CallBase &call) const {
@@ -727,7 +748,7 @@ Slice ControlWriter::collect(const Value *root, const Instruction &sink, bool kn
       requireApplicable(*call);
       // The applied function runs where the value is stored, not where the call was: it must start from the
       // same memory there.
-      if (!call->getCalledFunction()->doesNotAccessMemory() && !analysis.memoryUnchangedBetween(call, &sink)) {
+      if (sharesMemory(*call) && !analysis.memoryUnchangedBetween(call, &sink)) {
         notHandled("a call that depends on a qubit and reads memory that may change before its result is used",
                    inst);
       }
@@ -737,8 +758,8 @@ Slice ControlWriter::collect(const Value *root, const Instruction &sink, bool kn
       if (analysis.tainted(call)) {
         calls.push_back(call);
       }
-      if (calls.size() > 1 && std::any_of(calls.begin(), calls.end(), [](const CallBase *c) {
-            return !c->onlyReadsMemory();
+      if (calls.size() > 1 && std::any_of(calls.begin(), calls.end(), [&](const CallBase *c) {
+            return !c->onlyReadsMemory() && sharesMemory(*c);
           })) {
         notHandled("two calls that depend on a qubit in one computation, one of which may write memory (each would "
                    "have to start from the memory as it was)",

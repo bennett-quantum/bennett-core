@@ -284,6 +284,14 @@ bool Aliasing::mayTouch(const Function &function, const CallBase &call, const Va
   return meet(function, touchedBy(call), objectsOf(pointer));
 }
 
+bool Aliasing::reachesOutsideFrames(const Function &function, const CallBase &call) const {
+  Objects reached = touchedBy(call);
+  return std::any_of(reached.begin(), reached.end(), [&](const Value *object) {
+    const auto *local = dyn_cast<AllocaInst>(object);
+    return !local || local->getFunction() == &function;
+  });
+}
+
 bool mergeEqualArguments(Function &function) {
   if (!function.hasLocalLinkage()) {
     return false;

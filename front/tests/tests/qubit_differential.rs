@@ -551,7 +551,6 @@ __attribute__((noinline)) static uint8_t f(uint8_t x) {
 "#;
 
 #[test]
-#[ignore = "the front reports a memory change for a helper that reads only its own stack"]
 fn helper_with_private_stack_can_write_a_global_result() {
     check_witness(
         "helper-private-stack",
@@ -574,8 +573,49 @@ packet entry(unsigned prep, unsigned n, unsigned column) {
     );
 }
 
+// The frame of a helper written through a pointer by a helper it calls is still its own; a helper whose local's
+// address escapes into a global may not be moved past a write.
 #[test]
-#[ignore = "the front reports two applied calls when only its outlined region and one C helper run"]
+fn nested_private_frames_and_an_escaped_local() {
+    let nested = r#"
+__attribute__((noinline)) static void fill(volatile uint8_t *p, uint8_t x) { *p = x + 1; }
+__attribute__((noinline)) static uint8_t f(uint8_t x) {
+    volatile uint8_t t;
+    fill(&t, x);
+    return t;
+}
+uint8_t a;
+packet entry(unsigned prep, unsigned n, unsigned column) {
+    unsigned char q = PREPARE(prep);
+    HBIT(q, 0);
+    a = f(q);
+    packet key = bennett_measure(&q);
+    packet v = bennett_measure_bytes(&a, 1);
+    return key | (v << 8);
+}
+"#;
+    check_witness("nested-private-frame", 1, nested, None);
+    let escaped = r#"
+volatile uint8_t *volatile where;
+__attribute__((noinline)) static uint8_t f(uint8_t x) {
+    volatile uint8_t t = x;
+    where = &t;
+    return t;
+}
+uint8_t a;
+packet entry(unsigned prep, unsigned n, unsigned column) {
+    unsigned char q = PREPARE(prep);
+    HBIT(q, 0);
+    a = f(q);
+    packet key = bennett_measure(&q);
+    packet v = bennett_measure_bytes(&a, 1);
+    return key | (v << 8);
+}
+"#;
+    check_witness("escaped-local", 1, escaped, Some("reads memory that may change before its result is used"));
+}
+
+#[test]
 fn private_stack_helper_can_feed_an_outlined_region() {
     check_witness(
         "helper-feeds-region",
@@ -600,7 +640,6 @@ packet entry(unsigned prep, unsigned n, unsigned column) {
 }
 
 #[test]
-#[ignore = "the front asks for a measurement when the dead result of a private-stack helper is overwritten"]
 fn dead_private_stack_call_needs_a_specific_diagnostic() {
     check_witness(
         "dead-private-stack-call",

@@ -2,6 +2,7 @@
 // of the device program are in crates/ir.
 #pragma once
 
+#include "Aliasing.h"
 #include "Applied.h"
 
 #include <cstdint>
@@ -72,6 +73,8 @@ public:
   // What the module's functions write and read, for the warning about an applied call's undone writes;
   // computed on first use.
   const AppliedCalls &appliedCalls();
+  // Which memory the module's pointers and calls may reach (Aliasing.h); computed on first use.
+  const Aliasing &aliasing();
 
 private:
   llvm::Module &module;
@@ -81,6 +84,7 @@ private:
   std::map<const llvm::GlobalVariable *, uint64_t> addresses;
   std::map<unsigned, std::string> copies;
   std::unique_ptr<AppliedCalls> applied;
+  std::unique_ptr<Aliasing> reach;
   std::vector<std::string> generated;
   Namer functionNames;
   uint64_t staticEnd = 0;

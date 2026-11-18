@@ -34,6 +34,11 @@ public:
   // Whether `call` (in `function`) may read or write memory reached through `pointer`, directly or through the
   // functions it calls.
   bool mayTouch(const llvm::Function &function, const llvm::CallBase &call, const llvm::Value *pointer) const;
+  // Whether `call` (in `function`) may read or write memory other than the frames of the functions it calls:
+  // memory that exists before the call starts. A local variable of a function other than `function` exists
+  // only in a frame of the call's own (a fresh one for each call), so a callee whose only accesses are to its
+  // own local variables reaches none.
+  bool reachesOutsideFrames(const llvm::Function &function, const llvm::CallBase &call) const;
 
 private:
   // What an object set may hold besides named objects (globals and local variables).

@@ -180,6 +180,13 @@ const AppliedCalls &ModuleWriter::appliedCalls() {
   return *applied;
 }
 
+const Aliasing &ModuleWriter::aliasing() {
+  if (!reach) {
+    reach = std::make_unique<Aliasing>(module);
+  }
+  return *reach;
+}
+
 bool ModuleWriter::isApplicable(const Function *function) const {
   return function && !function->isDeclaration() && !isControl(function);
 }
