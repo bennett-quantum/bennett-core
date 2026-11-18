@@ -1,6 +1,6 @@
 # HANDOFF
 
-State on 2026-11-18, about 04:05 UTC: **nothing of this work is running.** Resumed by the maintainer on
+State on 2026-11-18, about 08:00 UTC: **nothing of this work is running.** Resumed by the maintainer on
 2026-11-17; see "Resumed on 2026-11-17" below before anything else. The tree implements the model stated in
 `docs/DESIGN.md`, "The model": ordinary code; the quantum instructions it issues (`qalloc`, gates, `measure`, `qfree` as the partial trace), naming qubits in
 registers or at memory addresses (a derived form, defined in DESIGN by its expansion), with the named fault
@@ -37,7 +37,15 @@ messages wider than the rules, all fixed since ("Fixes after the randomised diff
 The test was then widened to the shapes it had left out (`663f78d`), and its 15-minute runs on `main` with two
 seeds found no wrong result, no run-time error and no nonzero release in a program marked clean, before and
 after the widening; the one shape it found refused where the rules accept it, a store merged at a join, is
-accepted since ("Code under a qubit: merged stores and updates in loops (2026-11-18)").
+accepted since ("Code under a qubit: merged stores and updates in loops (2026-11-18)"). The test now also
+compares the quantum state before measurement with the exact prediction (`8cbccd1`: amplitudes and phases of
+every clean program, every other qubit back at 0, a register returned to 0 with certainty, the reduced state
+of the retained case), which found one nonzero release in a clean program, fixed (`f1686e6`). An update in a
+loop under a qubit-dependent value, the shape the test declined most often, is accepted since: cleared where
+its old value is known or computable again, kept with a warning otherwise (`42076be`, `ddbae76`, `4e41238`).
+An independent testing pass over these commits (`0e87e53`) found one run-time fault in an accepted program,
+fixed (`58d6e4b`). The 15-minute runs, the C corpora and the commits no independent check has covered:
+"Randomised differential runs (2026-11-18)".
 
 Which commits of code under a qubit have had an independent testing pass:
 
@@ -45,8 +53,12 @@ Which commits of code under a qubit have had an independent testing pass:
   `22bd3bc`); `7462959` (by `d11c934`); `8668d4a`, `cb4c315` (by `18c1973`, the randomised differential test);
   `49e747f`, `59644f6`, `30b3149` (by the 15-minute runs of `18c1973`'s generator on `30b3149` and of the widened
   generator `663f78d` on `663f78d`, two seeds each);
-- not covered by an independent check: the widened generator `663f78d` itself (test-only; its sensitivity was
-  shown on the front before `49e747f`) and this HANDOFF commit. The next independent pass starts there.
+- `b452eb7`, `f1686e6`, `42076be`, `ddbae76`, `4e41238` (by the targeted testing pass `0e87e53` and by the
+  15-minute runs of the generator with state checks and loop recipes, `e4a1104`, two seeds);
+- generators, test-only, each with its sensitivity shown on a deliberately changed scratch front: `663f78d`,
+  `8cbccd1` (state comparison), `e4a1104` (loop recipes);
+- not covered by an independent check: the fix `58d6e4b` (covered only by its own tests and the 15-minute runs
+  on it), `babaa5c` (HANDOFF only) and this HANDOFF commit. The next independent pass starts there.
 
 ## Resumed on 2026-11-17
 
@@ -250,8 +262,13 @@ musl-linked checks that need `rt/musl/build.py` first, heavy runs, and witnesses
 With musl linked, standard output and exit status compared with native (`experiments/c-corpus/README.md`):
 GCC's C torture tests **1,574 agree, 1 refused by name**, 81 skipped;
 c-testsuite **219 agree, 1 over the step budget**;
-GCC's `ieee/` **64 agree, 3 refused**, 1 skipped; **none wrong or crashing** (`1e06f2f`, 2026-11-16, night).
-All 1,944 programs compared by name with `64571ac`: exactly six `unreachable` faults become agreement
+GCC's `ieee/` **64 agree, 3 refused**, 1 skipped; **none wrong or crashing** (`babaa5c`, 2026-11-18, the same
+totals and the same named exceptions as at `1e06f2f` on 2026-11-16: GCC `990413-2` inline assembly, `ieee/`
+`cdivchkf`, `cdivchkd`, `cdivchkld` constrained floating point, c-testsuite `00040` at the step budget, `ieee/`
+`fp-cmp-7` skipped; wall times GCC 932 s, c-testsuite 150 s, `ieee/` 37 s). The per-program results of the
+`1e06f2f` run were not kept, so the 2026-11-18 run was compared with it by totals and named exceptions only,
+not program by program; its own per-program results are kept outside the repository as the next run's baseline.
+At `1e06f2f`: all 1,944 programs compared by name with `64571ac`: exactly six `unreachable` faults become agreement
 (GCC `fprintf-2`, `printf-2`, `user-printf`, `loop-2f`, `loop-2g`; c-testsuite `00187`); every other outcome
 and normalized reason is unchanged. The file/clock runtime supplies the previously missing operations. The
 old fault frames identify `clock_gettime` (228) in the three temporary-name programs and `open` (2) in
@@ -263,8 +280,7 @@ Three workers maximum, sequential runs under the shared heavy slot, musl linked,
 (queue excluded; shared machine, not a throughput comparison). Unchanged-outcome numeric pairs:
 1,850 up, one down (`complex-5`, 3,305 → 3,258), one unchanged (8-queens at the budget); medians extra steps /
 relative increase: GCC 8 / 0.3800%, c-testsuite 21 / 1.0106%, `ieee/` 8 / 0.3616%.
-Report and every moved case: `experiments/c-corpus/README.md`; ignored frozen binaries, complete native/device
-artifacts and comparisons: `.tmp/corpus-night/results-1e06f2f/` in the testing checkout. Previous prototype-call
+Report and every moved case: `experiments/c-corpus/README.md`. Previous prototype-call
 cost attribution and the `eeff78d` comparisons remain in the README's `64571ac` section. Without the library
 an earlier snapshot gives 1,521 / 52 refused, 151 / 68, 58 / 9.
 
@@ -1664,8 +1680,16 @@ qubit-dependent arguments to a function that writes memory the caller reads late
 checked), calls that write memory under a qubit-dependent condition (the named refusal checked), results of
 120 and 152 bits in four objects, an object written in two regions or before and inside one, the overwrite that
 keeps its old value (its warning and exactly one nonzero release of that many qubits checked), and bytes measured
-by the program and then used as ordinary memory. It still leaves out independent quantum inputs, phases and
-interference, large loop counts, uncertain aliasing, variable offsets, memory copies and calls to outside code.
+by the program and then used as ordinary memory. `8cbccd1` added the comparison of the quantum state before
+measurement (`qubit_differential/state.rs`): each measurement of a second, validated copy of the program is
+replaced by an exchange into a fresh register, and for every program marked clean the amplitudes must equal
+2^(-k/2) times the preparation's phase at |v>|native result for v> for each of the 2^k definite values v, with
+every other qubit 0 (tolerance 1e-12); recipes add a Z or S after the Hadamard gates, undo the preparation after
+a clean computation (the register must return to 0 with certainty), and compare the reduced state of the
+retained case (partial trace over the released qubits) with the prediction: coherence exactly between the
+values whose old values are equal. `e4a1104` added eight recipes for updates in loops under a qubit-dependent
+value (old value known, computable again, or kept). It still leaves out independent quantum inputs, large loop
+counts, uncertain aliasing, variable offsets, memory copies and calls to outside code.
 The default run takes a few seconds; the 15-minute run is ignored:
 
 ```sh
@@ -1673,8 +1697,8 @@ BENNETT_RANDOM_SEED=0x87196caa251d0f43 \
   cargo test -p bennett-front-tests --test qubit_differential long_randomized_differential -- --ignored --exact --nocapture
 ```
 
-A run is clean when it shows no wrong result, no run-time error in an accepted program and no nonzero release
-in a program marked clean. Runs of 15 minutes each on a shared machine (counts differ with load):
+A run is clean when it shows no wrong result, no run-time error in an accepted program, no nonzero release
+in a program marked clean and, since `8cbccd1`, no state that differs from the prediction. Runs of 15 minutes each on a shared machine (counts differ with load):
 
 | Front | Generator | Seed | Generated | Accepted | Declined | Compared | Wrong | Refused where expected to lower |
 |---|---|---|---:|---:|---:|---:|---:|---:|
@@ -1688,6 +1712,25 @@ in a program marked clean. Runs of 15 minutes each on a shared machine (counts d
 The widened generator makes its ignored long run fail on the last column, which counts refusals, not wrong
 results.
 
+With the state comparison (`8cbccd1`) and then the loop recipes (`e4a1104`); "State" counts state checks (of
+them, with a phase in the preparation / returned to 0 / retained case), "Failed" every failure of any kind:
+
+| Front | Generator | Seed | Generated | Accepted | Declined | Compared | State (phase / to 0 / retained) | Failed |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| `8cbccd1` | `8cbccd1` | `0x87196caa251d0f43` | 4,829 | 4,064 | 765 | 26,232 | 3,668 (801 / 267 / 535) | 20 |
+| `8cbccd1` | `8cbccd1` | `0x0b7e11a5d1ff0007` | 5,230 | 4,423 | 807 | 28,320 | 4,016 (867 / 289 / 580) | 19 |
+| `f1686e6` | `8cbccd1` | `0x87196caa251d0f43` | 5,764 | 4,880 | 884 | 31,344 | 4,417 (954 / 318 / 638) | 0 |
+| `f1686e6` | `8cbccd1` | `0x0b7e11a5d1ff0007` | 4,690 | 4,001 | 689 | 25,696 | 3,611 (777 / 259 / 520) | 0 |
+| `e4a1104` | `e4a1104` | `0x87196caa251d0f43` | 7,261 | 6,972 | 289 | 43,924 | 6,120 (2,101 / 279 / 837) | 0 |
+| `e4a1104` | `e4a1104` | `0x0b7e11a5d1ff0007` | 7,832 | 7,515 | 317 | 47,168 | 6,639 (2,239 / 300 / 902) | 0 |
+| `58d6e4b` | `e4a1104` | `0x87196caa251d0f43` | 8,297 | 7,965 | 332 | 50,056 | 6,999 (2,411 / 318 / 956) | 0 |
+| `58d6e4b` | `e4a1104` | `0x0b7e11a5d1ff0007` | 8,620 | 8,267 | 353 | 51,948 | 7,305 (2,462 / 330 / 992) | 0 |
+
+On `8cbccd1` the failures were the merged-store refusal (19 and 17) and three nonzero releases in programs
+marked clean, one cause (fixed in `f1686e6`). On `e4a1104` and `58d6e4b` the loop recipes' programs were all
+accepted (2,232 and 2,400; 2,544 and 2,640), each with its state check, and none declined. No run found a wrong
+result, a run-time error or a state different from the prediction.
+
 The shape behind the last column (refused where the rules accept it), witness
 `merged_held_store_can_use_the_value_before_the_exchange`: `if (!q) a = 5; else { a ^= q; b += q; }` with `a`
 and `b` globals. All 57 refusals counted there carried the message "a call that depends on a qubit and reads
@@ -1695,9 +1738,9 @@ memory that may change before its result is used" and came from the recipe that 
 regions. Accepted since; cause and fix in "Code under a qubit: merged stores and updates in loops
 (2026-11-18)".
 
-Debts, as a measure of what the front does not accept yet (declines in the last run, seed `0x87196caa251d0f43`,
-then `0x0b7e11a5d1ff0007`; messages grouped over object, width and offset; most of the second line is the
-generator's recipe that expects this refusal):
+Debts, as a measure of what the front does not accept yet (declines in the run on `663f78d`, seed
+`0x87196caa251d0f43`, then `0x0b7e11a5d1ff0007`; messages grouped over object, width and offset; most of the
+second line is the generator's recipe that expects this refusal; the run on `58d6e4b` below):
 
 | Decline (each begins `not handled yet:`) | Count |
 |---|---:|
@@ -1707,6 +1750,11 @@ generator's recipe that expects this refusal):
 | an update of a qubit variable under a qubit-dependent condition that neither XORs into it nor becomes straight-line code | 18, 22 |
 | a call that depends on a qubit, whose result is not used, to a function that may write memory | 2, 2 |
 | an access through a pointer that may reach bytes while they hold qubits | 0, 1 |
+
+In the run on `58d6e4b` (same grouping): a call that may write memory under a qubit-dependent condition 320,
+333; an update under a qubit-dependent condition that neither XORs into the variable nor becomes straight-line
+code 11, 18; a call whose result is not used to a function that may write memory 1, 1; an access through a
+pointer that may reach held bytes 0, 1; an update in a loop 0, 0; a call reading memory that may change 0, 0.
 
 The first row and the shape of the third are accepted since ("Code under a qubit: merged stores and updates in
 loops (2026-11-18)"); the routes of the others are in `docs/DESIGN.md` ("Code under a qubit", "Applied calls",
@@ -1827,5 +1875,16 @@ exchanged fields while they fit in 64 bits, each cleared by its old value shifte
 retained-state comparison of the randomised test (`qubit_differential/state.rs`) covers measured registers, not
 bytes measured at an address, so the retained tests measure locals (route: count the cells' columns as outputs
 there); a value LLVM forwards from one piece of code under a qubit to a later one is recomputed by the later
-`apply` (the existing debt in DESIGN, "Code under a qubit"); the step-1 consequence named above (a fixed-address
-read on every path).
+`apply` (the existing debt in DESIGN, "Code under a qubit"); a fixed-address read is made before the region only
+for fixed offsets in globals whose bytes the front shows are ordinary there, so a merged store reading other
+memory is still refused (route: the same proof for frames and heap objects).
+
+**A read moved before the region of bytes that hold qubits (found by the testing pass `0e87e53`).** Witness
+`held_pass::untaken_read_of_bytes_an_earlier_call_left_holding_qubits`: step 1 moved a load of a global before
+the region on LLVM's address safety alone, but an earlier call had left the global's byte holding qubits, so the
+moved load was the fault `qubit_memory_access` on every run although no prepared value reaches the read (all
+three modes; the program agreed with native C with step 1's `Outline.cpp` replaced by the one before it). Fix
+`58d6e4b` (`HeldBytes.h`, `keepOrdinaryLoads`): the load is moved only when the front shows the bytes are
+ordinary there (described above); otherwise it stays in the applied function, where a read of held bytes faults
+for the argument values that reach it only (a second test: 2 of 4 configurations). The witness passes in all
+three modes with its state check.
