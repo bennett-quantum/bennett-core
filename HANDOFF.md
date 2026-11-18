@@ -9,7 +9,7 @@ measure. The earlier `bennett-*` repositories are a read-only archive. Vision: `
 C with a few marker calls (`docs/MARKERS.md`) goes through stock `clang` 18, then `bennett-front` (C++ over LLVM 18), which writes a
 *device program* (`crates/ir`: ordinary code plus quantum instructions), which the *executor* (`crates/exec`) runs. The executor is a
 simulator of the model in `docs/DESIGN.md`, not a compiler to gates: no lowering of a device program to a circuit exists on `main`
-yet. Nothing is running; two git branches are under review (see "In flight").
+yet. Nothing is running; one git branch is under review (see "In flight").
 
 What works, one line each (the commit-by-commit table is in `docs/RECORDS.md`, part two):
 
@@ -73,11 +73,11 @@ Newest first; quotes are the maintainer's words.
 
 ## In flight
 
-Two git branches are under review; the part of the second that was only tests is on `main`. Nothing on them is to be landed before the review ends.
+One git branch is under review: `wip/sol62-device`, not on `main`. The other, `wip/sol62-stepspec`, has landed (`90f7305`, `6155161`, `5fc7386`).
 
 - `wip/sol62-device`: an interface between the executor and its quantum simulator (so the simulator can be replaced); a counting device that only counts qubits and gates; rewriting of gates with many controls for a machine with one- and two-qubit gates and the Toffoli gate; a bit-level circuit runner that checks reversible gate lists against independent references.
-- `wip/sol62-stepspec`: tests pinning an exact statement of what an applied function does for one definite input, step by step (these two commits, `90f7305` and `6155161`, are on `main` already); what is left on the branch is one change that makes the slots of a new frame zero.
-- Not to be landed ever: `wip/fallback-step3`, `wip/sol-mutants-machine`, `wip/sol-mutants-machine-partial` (they build on the removed `mark`/`rewind` machinery).
+- `wip/sol62-stepspec` (landed): tests pinning an exact statement of what an applied function does for one definite input, step by step, and a change that makes the slots of a new frame zero.
+- Never to be landed: `wip/fallback-step3`, `wip/sol-mutants-machine`, `wip/sol-mutants-machine-partial` (they build on the removed `mark`/`rewind` machinery).
 
 ## Next steps
 
@@ -148,7 +148,7 @@ Each is taken in the cheapest way to reverse, as stated, until answered. Last 20
 ## Which commits no independent check has covered
 
 - `58d6e4b` (a fix: only its own tests and the 15-minute randomised runs on it have covered it). The next independent testing pass starts there.
-- `90f7305` and `6155161` (test-only: the step-rule tests from the work on `wip/sol62-stepspec`; no independent check yet).
+- `5fc7386` (the new-frame change) and `90f7305`, `6155161` (test-only: the step-rule tests); all three came from `wip/sol62-stepspec`, and no independent check has covered them yet.
 - Documents-only commits (`babaa5c`, `fc33dc9`, and the ones that carry this file) and the generator commits, which are test-only and had their sensitivity shown on a deliberately changed scratch front.
 - Everything else in code under a qubit has had an independent testing pass or the 15-minute randomised runs; the list, commit by commit, is in `docs/RECORDS.md`, part two ("The top of the old HANDOFF").
 
