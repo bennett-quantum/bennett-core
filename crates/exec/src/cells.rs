@@ -19,7 +19,7 @@ use std::ops::Range;
 use bennett_ir::{Fault, Gate, Inst, Place, Width};
 
 use crate::device::Wire;
-use crate::device_io::wire;
+use crate::device_io::{DeviceContext, wire};
 use crate::executor::{Executor, Halt, RunError};
 use crate::gates;
 use crate::journal::Undo;
@@ -58,12 +58,12 @@ impl<'m> Executor<'m> {
 
     /// Makes the memory byte at `address` a cell: a fresh column holding its value, the byte 0. Returns
     /// the byte's old value.
-    fn promote(&mut self, address: u64) -> Result<u8, RunError> {
+    fn promote(&mut self, address: u64, context: &mut DeviceContext<'_>) -> Result<u8, RunError> {
         let mut old = [0];
         self.memory.read_into(address as usize..address as usize + 1, &mut old);
-        let handle = self.allocate_register(Width::BYTE)?;
+        let handle = self.allocate_register(Width::BYTE, context)?;
         let column = self.quantum.resolve(handle).expect("a fresh register is live");
-        self.xor_register(column, u64::from(old[0]))?;
+        self.xor_register(column, u64::from(old[0]), context)?;
         self.memory.write(address as usize, &[0]);
         self.quantum.bind_cell(address, Some(column));
         Ok(old[0])
@@ -79,7 +79,7 @@ impl<'m> Executor<'m> {
         self.memory.write(address as usize, &[old]);
     }
 
-    /// `gate target ctrl controls` with qubits in memory, within `limit` basis configurations. Faults
+    /// `gate target ctrl controls` with qubits in memory. Faults
     /// before changing anything for program faults; promotes the memory bytes that are not cells yet, journalling each, then
     /// applies the gate.
     pub(crate) fn gate_at(
@@ -87,7 +87,7 @@ impl<'m> Executor<'m> {
         gate: Gate,
         target: &Place,
         controls: &[Place],
-        limit: Option<usize>,
+        context: &mut DeviceContext<'_>,
     ) -> Result<(), Halt> {
         let places = std::iter::once(target).chain(controls);
         let resolved = places.map(|place| self.resolve_place(place)).collect::<Result<Vec<_>, _>>()?;
@@ -99,13 +99,13 @@ impl<'m> Executor<'m> {
             if let Resolved::Memory { byte, .. } = *place
                 && self.quantum.cell(byte).is_none()
             {
-                promoted.push((byte, self.promote(byte)?));
+                promoted.push((byte, self.promote(byte, context)?));
             }
         }
         let target = self.resolve_wire(resolved[0]);
         let controls: Vec<Wire> = resolved[1..].iter().map(|&place| self.resolve_wire(place)).collect();
-        if let Err(error) = self.device_gate(gate, target, &controls, limit) {
-            if self.device.is_none() {
+        if let Err(error) = self.device_gate(gate, target, &controls, context) {
+            if context.external.is_none() {
                 for &(byte, old) in promoted.iter().rev() {
                     self.unpromote(byte, old);
                 }
@@ -134,7 +134,8 @@ impl<'m> Executor<'m> {
             places.map(|place| self.resolve_place(place).expect("a gate that ran resolves again")).collect();
         let qubits: Vec<Wire> = resolved.iter().map(|&place| self.resolve_wire(place)).collect();
         // Undoing returns to a state the run held, so the configuration limit is not applied.
-        self.device_gate(gates::inverse(*gate), qubits[0], &qubits[1..], None).expect("no limit");
+        self.device_gate(gates::inverse(*gate), qubits[0], &qubits[1..], &mut DeviceContext::default())
+            .expect("no limit");
         if !promoting {
             return;
         }

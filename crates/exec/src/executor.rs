@@ -6,6 +6,7 @@ use rand_chacha::ChaCha8Rng;
 use thiserror::Error;
 
 use crate::device::Device;
+use crate::device_io::DeviceContext;
 use crate::journal::{Journal, Undo};
 use crate::measure::Collector;
 use crate::memory::Memory;
@@ -240,7 +241,6 @@ pub struct Executor<'m> {
     pub(crate) stack_floor: u64,
     pub(crate) tape: Vec<u8>,
     pub(crate) quantum: QuantumState,
-    pub(crate) device: Option<&'m mut dyn Device>,
     pub(crate) journal: Option<Journal>,
     pub(crate) outcome: Option<Outcome>,
     pub(crate) steps: u64,
@@ -273,7 +273,7 @@ impl<'m> Executor<'m> {
     /// Prepares to run `entry` on `args`: memory holds the data image and the entry frame is pushed. If
     /// the entry frame does not fit on the stack the run has already faulted.
     pub fn new(module: &'m ValidModule, entry: FuncId, args: &[u64], options: Options) -> Result<Self, StartError> {
-        Self::start(module, entry, args, options, None)
+        Self::start(module, entry, args, options, true)
     }
 
     /// Runs the same classical controller on a fresh device. The module must contain no `apply`.
@@ -294,9 +294,8 @@ impl<'m> Executor<'m> {
         {
             return Err(StartError::ApplyNotLowered);
         }
-        let mut executor =
-            Executor::start(module, entry, args, Options { budget, ..Options::default() }, Some(device))?;
-        let outcome = executor.run();
+        let mut executor = Executor::start(module, entry, args, Options { budget, ..Options::default() }, false)?;
+        let outcome = executor.run_with(&mut DeviceContext { external: Some(device), limit: None });
         Ok(DeviceRun { outcome, steps: executor.steps, tape: executor.tape })
     }
 
@@ -305,7 +304,7 @@ impl<'m> Executor<'m> {
         entry: FuncId,
         args: &[u64],
         options: Options,
-        device: Option<&'m mut dyn Device>,
+        simulate: bool,
     ) -> Result<Self, StartError> {
         let function = module.functions.get(entry.index()).ok_or(StartError::InvalidEntry(entry.0))?;
         check_arguments(function, args)?;
@@ -317,8 +316,7 @@ impl<'m> Executor<'m> {
             stack_pointer: module.memory_size,
             stack_floor: module.static_end(),
             tape: Vec::new(),
-            quantum: if device.is_some() { QuantumState::without_simulator() } else { QuantumState::default() },
-            device,
+            quantum: if simulate { QuantumState::default() } else { QuantumState::without_simulator() },
             journal: None,
             outcome: None,
             steps: 0,
@@ -349,6 +347,10 @@ impl<'m> Executor<'m> {
 
     /// Executes one step, unless the run has ended; returns the outcome once it has.
     pub fn step(&mut self) -> Option<Outcome> {
+        self.step_with(&mut DeviceContext { external: None, limit: self.max_configurations })
+    }
+
+    fn step_with(&mut self, context: &mut DeviceContext<'_>) -> Option<Outcome> {
         if self.outcome.is_some() {
             return self.outcome;
         }
@@ -357,7 +359,7 @@ impl<'m> Executor<'m> {
             return self.outcome;
         }
         let pending = self.measure_before_step();
-        match self.execute() {
+        match self.execute(context) {
             Ok(()) => {
                 if let Some(pending) = pending {
                     self.measure_after_step(pending);
@@ -381,8 +383,12 @@ impl<'m> Executor<'m> {
 
     /// Steps until the run ends.
     pub fn run(&mut self) -> Outcome {
+        self.run_with(&mut DeviceContext { external: None, limit: self.max_configurations })
+    }
+
+    fn run_with(&mut self, context: &mut DeviceContext<'_>) -> Outcome {
         loop {
-            if let Some(outcome) = self.step() {
+            if let Some(outcome) = self.step_with(context) {
                 return outcome;
             }
         }

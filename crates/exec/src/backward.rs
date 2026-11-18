@@ -3,6 +3,7 @@
 
 use bennett_ir::{BlockId, FuncId, Inst, Slot, Type};
 
+use crate::device_io::DeviceContext;
 use crate::executor::{Executor, Frame};
 use crate::forward::unpack_position;
 use crate::gates;
@@ -37,7 +38,8 @@ impl<'m> Executor<'m> {
                 // Undoing returns to a state the run already held, so the configuration limit is not
                 // applied: rounding residue must not make reversal fail.
                 let inverse = gates::inverse(*gate);
-                self.gate(inverse, target, controls, None).expect("a gate that ran forward runs inverted");
+                self.gate(inverse, target, controls, &mut DeviceContext::default())
+                    .expect("a gate that ran forward runs inverted");
             }
             Undo::Qfree => {
                 let Inst::Qfree { register } = self.retreat() else { unreachable!("a qfree record") };

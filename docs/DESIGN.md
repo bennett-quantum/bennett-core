@@ -133,14 +133,17 @@ straightforward expansion into ordinary code; none reads or acts on a qubit:
 ### What a device carries out
 
 The executor's classical controller allocates zeroed wires, issues named gates with their target and
-controls, measures wires and releases them by partial trace. The controller assigns wire identities
-and keeps track of register handles and memory cells. Measurement is the only operation that returns
-quantum data. The sparse simulator preserves its seeded sampling of a whole set of bits in one draw.
-A device can instead measure the individual qubits.
+controls, measures wires, discards them by partial trace or releases them after clearing them to zero.
+The controller assigns wire identities and keeps track of register handles and memory cells.
+Measurement is the only operation that returns quantum data. The sparse simulator preserves its seeded
+sampling of a whole set of bits in one draw. A device can measure the individual qubits in that set.
 
 `Executor::run_on` runs the controller on a supplied device. The simulator provides reversal, snapshots,
 configuration limits and release diagnostics. It also evaluates `apply` using its stored state. A module
-with `apply` is refused by other devices until that instruction can be lowered to gates.
+with `apply` is refused by other devices with “apply is not lowered to gates yet.”
+
+A caller can define a named gate block once and call or repeat it through the device interface.
+The default expands its operations. Block scratch is allocated and released in zero within one call.
 
 ### `apply`
 

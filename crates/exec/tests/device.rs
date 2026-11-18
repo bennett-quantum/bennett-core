@@ -11,7 +11,8 @@ enum Command {
     Allocate(Range<Wire>),
     Gate(GateOp),
     Measure(Wire),
-    Release(Range<Wire>),
+    Discard(Range<Wire>),
+    ReleaseZero(Range<Wire>),
 }
 
 #[derive(Default)]
@@ -40,8 +41,13 @@ impl Device for Recorder {
         self.bits.pop_front().ok_or(RunError::Device("measurement source exhausted"))
     }
 
-    fn release(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
-        self.commands.push(Command::Release(wires));
+    fn discard(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
+        self.commands.push(Command::Discard(wires));
+        Ok(())
+    }
+
+    fn release_zero(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
+        self.commands.push(Command::ReleaseZero(wires));
         Ok(())
     }
 }
@@ -92,9 +98,9 @@ fn register_and_memory_commands_observe_measurement_and_release() {
     expected.extend([
         x(65, vec![]),
         x(71, vec![]),
-        Command::Release(64..72),
+        Command::ReleaseZero(64..72),
         Command::Measure(0),
-        Command::Release(0..1),
+        Command::Discard(0..1),
     ]);
     assert_eq!(device.commands, expected);
 }
@@ -123,7 +129,7 @@ fn faults_and_device_stops_end_the_run_before_the_next_command() {
     let run = Executor::run_on(&module, module.function_named("main").expect("entry"), &[], None, &mut device)
         .expect("started");
     assert_eq!((run.outcome, run.steps), (Outcome::Faulted(Fault::DanglingRegister), 2));
-    assert_eq!(device.commands, [Command::Allocate(0..1), Command::Release(0..1)]);
+    assert_eq!(device.commands, [Command::Allocate(0..1), Command::Discard(0..1)]);
 
     let mut device = Recorder::default();
     let run = Executor::run_on(&module, module.function_named("measure").expect("entry"), &[], None, &mut device)
@@ -140,4 +146,36 @@ fn a_module_with_apply_is_refused_before_any_device_commands() {
         .expect_err("apply needs lowering");
     assert_eq!(error, StartError::ApplyNotLowered);
     assert!(device.commands.is_empty());
+}
+
+#[test]
+fn the_default_device_commands_expand_a_named_block() {
+    use bennett_exec::{BlockOp, GateBlock};
+
+    let mut device = Recorder::default();
+    device.allocate(0..2).expect("input wires");
+    let copy = |target, control| GateOp { kind: Gate::Fixed(FixedGate::X), target, controls: vec![control] };
+    let block = GateBlock {
+        name: "copy through scratch".into(),
+        ops: vec![
+            BlockOp::Allocate(2..3),
+            BlockOp::Gate(copy(2, 0)),
+            BlockOp::Gate(copy(1, 2)),
+            BlockOp::Gate(copy(2, 0)),
+            BlockOp::ReleaseZero(2..3),
+        ],
+    };
+    device.call(&block).expect("call");
+    device.repeat(&block, 2).expect("two more calls");
+    let one_call = [
+        Command::Allocate(2..3),
+        Command::Gate(copy(2, 0)),
+        Command::Gate(copy(1, 2)),
+        Command::Gate(copy(2, 0)),
+        Command::ReleaseZero(2..3),
+    ];
+    assert_eq!(device.commands.len(), 16);
+    for commands in device.commands[1..].chunks_exact(one_call.len()) {
+        assert_eq!(commands, one_call);
+    }
 }

@@ -23,6 +23,14 @@ pub(crate) fn qubit(wire: Wire) -> QubitRef {
     QubitRef { column: (wire / 64) as usize, bit: (wire % 64) as u8 }
 }
 
+/// Selects the device for the forward step. Borrowing an external device only for its run keeps
+/// the simulator executor independent of that device's lifetime and thread safety.
+#[derive(Default)]
+pub(crate) struct DeviceContext<'a> {
+    pub(crate) external: Option<&'a mut dyn Device>,
+    pub(crate) limit: Option<usize>,
+}
+
 /// Adapts the sparse simulator's register columns to device commands.
 struct Simulator<'a> {
     state: &'a mut QuantumState,
@@ -45,8 +53,13 @@ impl Device for Simulator<'_> {
         Ok(self.measure_many(std::slice::from_ref(&range))?[0] != 0)
     }
 
-    fn release(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
+    fn discard(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
         self.state.discard(qubit(wires.start).column);
+        Ok(())
+    }
+
+    fn release_zero(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
+        self.state.free(qubit(wires.start).column);
         Ok(())
     }
 
@@ -67,19 +80,19 @@ impl Device for Simulator<'_> {
 impl Executor<'_> {
     fn with_device<T>(
         &mut self,
-        limit: Option<usize>,
+        context: &mut DeviceContext<'_>,
         command: impl FnOnce(&mut dyn Device) -> Result<T, RunError>,
     ) -> Result<T, RunError> {
-        match self.device.as_deref_mut() {
+        match context.external.as_deref_mut() {
             Some(device) => command(device),
-            None => command(&mut Simulator { state: &mut self.quantum, rng: &mut self.rng, limit }),
+            None => command(&mut Simulator { state: &mut self.quantum, rng: &mut self.rng, limit: context.limit }),
         }
     }
 
-    pub(crate) fn allocate_register(&mut self, width: Width) -> Result<u64, RunError> {
+    pub(crate) fn allocate_register(&mut self, width: Width, context: &mut DeviceContext<'_>) -> Result<u64, RunError> {
         let handle = self.quantum.reserve(width);
         let column = self.quantum.resolve(handle).expect("fresh register");
-        self.with_device(None, |device| device.allocate(wires(column, width.bits())))?;
+        self.with_device(context, |device| device.allocate(wires(column, width.bits())))?;
         Ok(handle)
     }
 
@@ -88,32 +101,64 @@ impl Executor<'_> {
         kind: Gate,
         target: Wire,
         controls: &[Wire],
-        limit: Option<usize>,
+        context: &mut DeviceContext<'_>,
     ) -> Result<(), RunError> {
-        self.with_device(limit, |device| device.gate(GateOp { kind, target, controls }))
+        self.with_device(context, |device| device.gate(GateOp { kind, target, controls }))
     }
 
-    pub(crate) fn device_measure(&mut self, ranges: &[Range<Wire>]) -> Result<Vec<u64>, RunError> {
-        self.with_device(None, |device| device.measure_many(ranges))
+    pub(crate) fn device_measure(
+        &mut self,
+        ranges: &[Range<Wire>],
+        context: &mut DeviceContext<'_>,
+    ) -> Result<Vec<u64>, RunError> {
+        self.with_device(context, |device| device.measure_many(ranges))
     }
 
-    pub(crate) fn release_register(&mut self, column: usize, width: Width) -> Result<(), RunError> {
-        self.with_device(None, |device| device.release(wires(column, width.bits())))?;
-        if self.device.is_some() {
+    pub(crate) fn discard_register(
+        &mut self,
+        column: usize,
+        width: Width,
+        context: &mut DeviceContext<'_>,
+    ) -> Result<(), RunError> {
+        self.end_register(column, context, |device| device.discard(wires(column, width.bits())))
+    }
+
+    pub(crate) fn release_zero_register(
+        &mut self,
+        column: usize,
+        width: Width,
+        context: &mut DeviceContext<'_>,
+    ) -> Result<(), RunError> {
+        self.end_register(column, context, |device| device.release_zero(wires(column, width.bits())))
+    }
+
+    fn end_register(
+        &mut self,
+        column: usize,
+        context: &mut DeviceContext<'_>,
+        command: impl FnOnce(&mut dyn Device) -> Result<(), RunError>,
+    ) -> Result<(), RunError> {
+        self.with_device(context, command)?;
+        if context.external.is_some() {
             self.quantum.retire(column);
         }
         Ok(())
     }
 
     /// XOR a known word into a register. The simulator carries out these X gates as one permutation.
-    pub(crate) fn xor_register(&mut self, column: usize, value: u64) -> Result<(), RunError> {
-        if self.device.is_none() {
+    pub(crate) fn xor_register(
+        &mut self,
+        column: usize,
+        value: u64,
+        context: &mut DeviceContext<'_>,
+    ) -> Result<(), RunError> {
+        if context.external.is_none() {
             self.quantum.xor_register(column, value);
         } else {
             let mut pending = value;
             while pending != 0 {
                 let bit = pending.trailing_zeros() as u8;
-                self.device_gate(Gate::Fixed(FixedGate::X), wire(column, bit), &[], None)?;
+                self.device_gate(Gate::Fixed(FixedGate::X), wire(column, bit), &[], context)?;
                 pending &= pending - 1;
             }
         }
