@@ -305,7 +305,8 @@ A jump reads all its incoming values
 before assigning the block parameters. Entry stack overflow takes precedence over the budget
 test. Every successful instruction, including a jump or return, costs one step. The compiler
 XORs only the first result or fault code into its destination, then reverses every forward
-gate and releases the scratch in zero.
+gate and releases the scratch in zero. A proved definite condition selects its jump during
+emission, even if inactive inputs have other values in the condition's slot.
 
 A **program point** is a position naming the next instruction. At a qubit-dependent
 conditional jump the compiler tries to emit **control gates**. It combines the condition
@@ -436,11 +437,12 @@ Shift amounts, multiplication factors and switch selectors must fold to definite
 including bits made constant by operations on register inputs. The first analysis starts
 at the entry block and joins the bits delivered by edges it can reach. When a conditional
 jump or switch folds to a constant, it follows the selected edge. If the condition
-becomes unknown on a later visit, both outcomes can reach their targets. If that analysis
-leaves an operand without a proof, a
-second analysis follows every edge. This can recover a constant for an instruction the
-whole-function check examines in a bypassed block. Conflicting values across visits need
-a more precise analysis of definite control. Instruction refusals for given arguments apply at every
+becomes unknown on a later visit, every possible target can contribute. An instruction
+that cannot be folded with its known inputs contributes an unknown value. An input whose
+facts have yet to arrive is held pending. A second analysis can follow every edge to
+check operands in bypassed blocks. Any values still pending there become unknown and
+are propagated before that analysis supplies a proof. Emission uses only the first
+analysis. Conflicting values across visits need a more precise analysis of definite control. Instruction refusals for given arguments apply at every
 budget, including zero.
 
 The controller resolves the targets and arguments first, keeping dangling and aliased

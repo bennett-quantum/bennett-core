@@ -3,16 +3,25 @@
 use std::collections::BTreeMap;
 
 use bennett_exec::Wire;
-use bennett_ir::{BinOp, Inst, Operand, Slot, Terminator, Width};
+use bennett_ir::{BinOp, BlockId, Inst, Operand, Slot, Terminator, Width};
 
 use super::arithmetic;
 use super::bits::{Bit, Circuit, Word, constant, definite};
 use super::symbolic::{Frame, switch_target};
 use super::{ApplyInput, Argument};
 
-fn fold_inst(inst: &Inst, read: impl Fn(&Operand) -> Option<Word>, circuit: &mut Circuit) -> Option<Word> {
+fn fold_inst(
+    inst: &Inst,
+    read: impl Fn(&Operand) -> Option<Word>,
+    circuit: &mut Circuit,
+    unknown: impl FnOnce() -> Word,
+) -> Option<Word> {
     match inst {
-        Inst::Binary { op, lhs, rhs, .. } => arithmetic::binary(circuit, *op, &read(lhs)?, &read(rhs)?),
+        // Missing inputs can arrive on a later visit. An operation with known
+        // operands that cannot be folded contributes an unknown value now.
+        Inst::Binary { op, lhs, rhs, .. } => {
+            Some(arithmetic::binary(circuit, *op, &read(lhs)?, &read(rhs)?).unwrap_or_else(unknown))
+        }
         Inst::Compare { pred, lhs, rhs, .. } => {
             Some(vec![arithmetic::compare(circuit, *pred, &read(lhs)?, &read(rhs)?)])
         }
@@ -74,32 +83,30 @@ fn literal(operand: &Operand) -> bool {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Edges {
-    Selected,
-    All,
+pub(super) enum Scope {
+    Reachable,
+    EveryBlock,
 }
 
 #[derive(Default)]
-pub(super) struct Constants(Vec<Option<Word>>);
+pub(super) struct Constants {
+    slots: Vec<Option<Word>>,
+    reachable: Vec<bool>,
+}
 
 impl Constants {
     pub(super) fn get(&self, operand: &Operand) -> Option<u128> {
         match operand {
             Operand::Const(value) => Some(value.value()),
-            Operand::Slot(slot) => definite(self.0.get(slot.index())?.as_ref()?),
+            Operand::Slot(slot) => definite(self.slots.get(slot.index())?.as_ref()?),
         }
     }
 
-    pub(super) fn add_fallback(&mut self, fallback: Self) {
-        // A fact proved over every edge holds on the selected edges as well.
-        for (current, candidate) in self.0.iter_mut().zip(fallback.0) {
-            if current.as_deref().and_then(definite).is_none() && candidate.as_deref().and_then(definite).is_some() {
-                *current = candidate;
-            }
-        }
+    pub(super) fn reaches(&self, block: BlockId) -> bool {
+        self.reachable.get(block.index()).copied().unwrap_or(false)
     }
 
-    pub(super) fn analyze(frame: &Frame<'_>, input: &ApplyInput<'_>, edges: Edges) -> Self {
+    pub(super) fn analyze(frame: &Frame<'_>, input: &ApplyInput<'_>, scope: Scope) -> Self {
         let function = frame.module.function(frame.callee);
         if !function.blocks.iter().any(|block| {
             matches!(&block.term, Terminator::Switch { value: Operand::Slot(_), .. })
@@ -129,9 +136,12 @@ impl Constants {
         let argument_wires = arguments.len() as Wire;
         let slot_width = Wire::from(Width::MAX_BITS);
         let scratch = argument_wires + slot_width * slots.len() as Wire;
+        let unknown_bit =
+            |slot: Slot, index| Bit::Wire(argument_wires + slot_width * Wire::from(slot.0) + index as Wire, false);
+        let unknown_word = |slot| (0..frame.slot_width(slot)).map(|index| unknown_bit(slot, index)).collect();
         // Reachability grows with the value facts. For example, a loop can
         // first deliver a constant condition and later make both outcomes possible.
-        let mut reachable = vec![edges == Edges::All; function.blocks.len()];
+        let mut reachable = vec![scope == Scope::EveryBlock; function.blocks.len()];
         reachable[0] = true;
         loop {
             let mut changed = false;
@@ -146,8 +156,9 @@ impl Constants {
                     Operand::Slot(slot) => local.get(slot).or(slots[slot.index()].as_ref()).cloned(),
                 };
                 for inst in &block.insts {
-                    if let Some(word) = fold_inst(inst, |op| read(&local, op), &mut circuit) {
-                        local.insert(inst.result().expect("a supported instruction produces a value"), word);
+                    let result = inst.result().expect("a supported instruction produces a value");
+                    if let Some(word) = fold_inst(inst, |op| read(&local, op), &mut circuit, || unknown_word(result)) {
+                        local.insert(result, word);
                     }
                 }
                 // Read every incoming word before joining any update into the slot facts.
@@ -162,7 +173,7 @@ impl Constants {
                         }
                     }
                 };
-                if edges == Edges::All {
+                if scope == Scope::EveryBlock {
                     block.term.visit_targets(transfer);
                 } else if let Terminator::Branch { cond, if_true, if_false } = &block.term {
                     if let Some(word) = read(&local, cond) {
@@ -188,8 +199,7 @@ impl Constants {
                 for (slot, mut word) in local.into_iter().chain(incoming) {
                     let old = &mut slots[slot.index()];
                     for (index, bit) in word.iter_mut().enumerate() {
-                        let unknown =
-                            Bit::Wire(argument_wires + slot_width * Wire::from(slot.0) + index as Wire, false);
+                        let unknown = unknown_bit(slot, index);
                         if matches!(*bit, Bit::Wire(wire, _) if wire >= argument_wires)
                             || old.as_ref().is_some_and(|old| old[index] != *bit)
                         {
@@ -200,8 +210,19 @@ impl Constants {
                     *old = Some(word);
                 }
             }
+            if !changed && scope == Scope::EveryBlock {
+                // A cold cycle may have no entry value to start propagation. Give
+                // its remaining slots unknown values, then propagate those inputs
+                // before accepting any proof from this pass.
+                for (index, word) in slots.iter_mut().enumerate() {
+                    if word.is_none() {
+                        *word = Some(unknown_word(Slot(index as u32)));
+                        changed = true;
+                    }
+                }
+            }
             if !changed {
-                return Self(slots);
+                return Self { slots, reachable };
             }
         }
     }

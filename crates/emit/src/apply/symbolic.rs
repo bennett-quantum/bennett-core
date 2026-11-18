@@ -6,7 +6,7 @@ use bennett_ir::{
 
 use super::arithmetic;
 use super::bits::{Bit, Circuit, Word, ZERO, constant};
-use super::definite::{Constants, Edges, requirement};
+use super::definite::{Constants, Scope, requirement};
 use super::{ApplyError, ApplyInput, Argument};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -45,14 +45,17 @@ pub(super) struct Frame<'a> {
 }
 
 impl<'a> Frame<'a> {
+    pub(super) fn slot_width(&self, slot: Slot) -> usize {
+        match self.module.slot_type(self.callee, slot) {
+            Type::Int(width) => width.bits() as usize,
+            Type::Qreg(_) => u64::BITS as usize,
+        }
+    }
+
     pub(super) fn initial(&self, input: &ApplyInput<'_>) -> Vec<Word> {
         let function = self.module.function(self.callee);
-        let mut slots = (0..function.slot_count())
-            .map(|index| match self.module.slot_type(self.callee, Slot(index as u32)) {
-                Type::Int(width) => vec![ZERO; width.bits() as usize],
-                Type::Qreg(_) => vec![ZERO; u64::BITS as usize],
-            })
-            .collect::<Vec<_>>();
+        let mut slots =
+            (0..function.slot_count()).map(|index| vec![ZERO; self.slot_width(Slot(index as u32))]).collect::<Vec<_>>();
         for (param, argument) in function.params.iter().zip(input.args) {
             slots[param.slot.index()] = match argument {
                 Argument::Value(value) => constant(*value, slots[param.slot.index()].len()),
@@ -87,31 +90,41 @@ impl<'a> Frame<'a> {
     pub(super) fn check(input: &ApplyInput<'a>) -> Result<Self, ApplyError> {
         let mut frame = Self { module: input.module, callee: input.callee, constants: Constants::default() };
         frame.check_instructions()?;
-        frame.constants = Constants::analyze(&frame, input, Edges::Selected);
-        if frame.check_operands().is_err() {
-            // The whole-function check can need a fact in a block skipped by a definite jump.
-            let fallback = Constants::analyze(&frame, input, Edges::All);
-            frame.constants.add_fallback(fallback);
-            frame.check_operands()?;
+        frame.constants = Constants::analyze(&frame, input, Scope::Reachable);
+        if frame.check_operands(&[]).is_err() {
+            // Facts from bypassed blocks are used only to check unreachable instructions.
+            // Emission continues to use the proofs from entry.
+            let fallback = Constants::analyze(&frame, input, Scope::EveryBlock);
+            frame.check_operands(&[&fallback])?;
         }
         Ok(frame)
     }
 
-    fn check_operands(&self) -> Result<(), ApplyError> {
+    fn check_operands(&self, fallbacks: &[&Constants]) -> Result<(), ApplyError> {
         for (block, body) in self.module.function(self.callee).blocks.iter().enumerate() {
+            let block = BlockId(block as u32);
+            let constant_value = |operand| {
+                self.constants.get(operand).or_else(|| {
+                    if self.constants.reaches(block) {
+                        None
+                    } else {
+                        fallbacks.iter().find_map(|proof| proof.get(operand))
+                    }
+                })
+            };
             for (index, inst) in body.insts.iter().enumerate() {
                 let Some((op, route)) = requirement(inst) else { continue };
                 let Inst::Binary { lhs, rhs, .. } = inst else {
                     unreachable!("the requirement is for a binary operation")
                 };
-                if self.constants.get(rhs).is_none() && (op != BinOp::Mul || self.constants.get(lhs).is_none()) {
-                    return Err(self.error(Point { block: BlockId(block as u32), index }, op.mnemonic(), route));
+                if constant_value(rhs).is_none() && (op != BinOp::Mul || constant_value(lhs).is_none()) {
+                    return Err(self.error(Point { block, index }, op.mnemonic(), route));
                 }
             }
             if let Terminator::Switch { value, .. } = &body.term
-                && self.constants.get(value).is_none()
+                && constant_value(value).is_none()
             {
-                let point = Point { block: BlockId(block as u32), index: body.insts.len() };
+                let point = Point { block, index: body.insts.len() };
                 return Err(self.error(point, "switch", "multiway dispatch in the step machine"));
             }
         }
@@ -206,11 +219,17 @@ impl<'a> Frame<'a> {
         }
         Ok(match &block.term {
             Terminator::Jump(target) => Step::Jump(target),
-            Terminator::Branch { cond, if_true, if_false } => match read(cond)[0] {
-                Bit::Constant(true) => Step::Jump(if_true),
-                Bit::Constant(false) => Step::Jump(if_false),
-                bit @ Bit::Wire(..) => Step::Branch(bit, if_true, if_false),
-            },
+            Terminator::Branch { cond, if_true, if_false } => {
+                // A proved condition holds for every input that reaches this point,
+                // even when an inactive input has a different value in its slot.
+                let condition =
+                    self.constants.get(cond).map_or_else(|| read(cond)[0], |value| Bit::Constant(value == 1));
+                match condition {
+                    Bit::Constant(true) => Step::Jump(if_true),
+                    Bit::Constant(false) => Step::Jump(if_false),
+                    bit @ Bit::Wire(..) => Step::Branch(bit, if_true, if_false),
+                }
+            }
             Terminator::Switch { value, cases, default, .. } => {
                 let value = self.constants.get(value).expect("checked the switch selector before lowering");
                 Step::Jump(switch_target(value, cases, default))

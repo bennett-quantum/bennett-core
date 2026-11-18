@@ -666,3 +666,6 @@ fn a_shift_by_zero_keeps_every_nonzero_input_running() {
         compare_controls(&module, 20, mode, |x| if x == 0 { (0, 0) } else { (0, 1) });
     }
 }
+
+#[path = "operand_analysis.rs"]
+mod operand_analysis;
