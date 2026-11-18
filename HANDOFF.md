@@ -13,11 +13,14 @@ The gate emitter compiles applied integer functions with one step budget for the
 Qubit-dependent choices and loops with a proved pass count can use control gates directly. The counting device uses it, and the simulator offers it through
 `--apply-circuit auto` or `--apply-circuit step-machine`. The default simulator evaluates applied functions
 directly. Integer calls copy their frames and use the shared budget. The emitter handles
-qubit-held multiplication and unsigned remainder with up to 128 bits in an integer slot.
-It refuses reachable recursive calls and unproved indirect targets, excessive call expansion, private
+qubit-held unsigned multiplication and remainder with up to 128 bits in an integer slot.
+A reached zero divisor writes `divide_by_zero` to the fault register.
+The emitter refuses reachable recursive calls and unproved indirect targets, excessive call expansion, private
 memory and stack operations, switches without a proved definite selector, `or`, division,
 signed remainder, shifts without a proved constant amount, and instructions such as
 `fault` that still need named fault handling. See `docs/DESIGN.md`, "Not yet".
+M4's copied calls, value-range analysis, unsigned arithmetic and mulmod counts landed on `main` in
+`abd3c0d` through `6e5f755`, followed by `ccb534b`. Independent review findings were fixed and re-checked.
 
 What works, one line each (the commit-by-commit table is in `docs/RECORDS.md`, part two):
 
@@ -32,12 +35,30 @@ What works, one line each (the commit-by-commit table is in `docs/RECORDS.md`, p
 - Ten automatic checks and an opt-in pre-push hook (`docs/CHECKS.md`).
 - `mark` and `rewind` are gone; `f81a70a` is the last commit that contains them.
 
+### Known wrong results on `main`
+
+The front accepts these programs. Ignored failing witnesses are in `front/tests/tests/coherence_regressions.rs`.
+
+- Moving a gate loop out of a qubit-dependent condition runs ordinary work even for inputs where C skips the loop.
+  It can read a byte holding qubits and fault with `qubit_memory_access` where native C returns a value, divide by zero,
+  or run a `w`-bit counter for up to `2^w` passes where C runs none.
+- Replaying a computation that reads a return address at a second call site produces a different word.
+- A helper moved into an applied function sees the inserted frame when it asks for its caller's return address with
+  `__builtin_return_address(1)`. The helper returns 6 in native C and 5 on the device in `o0`, `o2` and `--taint-all`.
+- Preparing the control of a moved gate loop can read a byte holding qubits before the loop on a path where C skips
+  the read. Native C returns 65,536 and the device faults with `qubit_memory_access`.
+
+Refuse by name any transformation whose safety cannot be proved. The two fixes on `wip/sol62-shapes` tried deny-lists
+and then allow-lists. They remain unlanded after three independent review rounds still found wrong results. Start the
+next attempt with an allow-list for moved ordinary work whose counts and reads are computed before the condition, and
+refuse to relocate a helper that observes a return or stack address of itself or an ancestor.
+
 ## How to check it
 
 Run each in the foreground, from the repository root (`CARGO_BUILD_JOBS=3` on the shared laptop):
 
-- `cargo test`: 387 passed, 0 failed, 5 ignored (each names its reason: heavy reference, generated runs, witnesses of recorded defects); about 10 s, no LLVM needed.
-- `front/test.sh` (needs LLVM 18, clang 18, CMake): 345 passed, 0 failed, 22 ignored (each names its reason: the fallback oracle's waiting test, the SQLite acceptance, the North Star ladder runs, musl-linked checks that need `rt/musl/build.py` first, heavy runs, witnesses of recorded debts); it also compiles the C++ header and classifies the 88 LLVM attribute kinds.
+- `cargo test` passed 408 tests with 0 failures and 5 ignored. The ignored tests name their reasons, including heavy reference runs, generated runs and defect witnesses. The suite takes about 10 s after building and needs no LLVM.
+- `front/test.sh` passed 356 tests with 0 failures and 27 ignored. The ignored tests name their reasons, including the fallback oracle's waiting test, the SQLite acceptance, North Star ladder runs, musl-linked checks that need `rt/musl/build.py` first, heavy runs and defect witnesses. The script requires LLVM 18, clang 18 and CMake. It also compiles the C++ header and classifies the 88 LLVM attribute kinds.
 - `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check`: both clean on 2026-11-18 (`scripts/check.sh`: tree guards 3,642 files, 0 problems).
 - `scripts/check.sh` runs all four plus the tree guards (`docs/CHECKS.md`).
 - Randomised differential run, 15 minutes, ignored by default: `BENNETT_RANDOM_SEED=0x87196caa251d0f43 cargo test -p bennett-front-tests --test qubit_differential long_randomized_differential -- --ignored --exact --nocapture`.
@@ -102,9 +123,8 @@ Newest first; quotes are the maintainer's words.
 - **2026-11-15, the C runtime boundary.** Console output from C is `void __bennett_effect(char)` (an ordinary call); `exit v` ends the run from anywhere (`_Noreturn void __bennett_exit(int)`); the C library is musl 1.2.5 at the system-call boundary, anything not implemented traps by name. Zero-filled data is a compact `zero N` item in the text form.
 - **2026-11-13.** Coverage must end at 100%: no refusals in the end unless physics forbids it, and then the reason is stated; a "not handled yet" is a debt. Classical results are exact; coherence is guaranteed for a documented class and for anything un-run, elsewhere unspecified with a warning. Channels (partial trace, measurement by effects, noise) belong to the finished Bennett and nothing built now may make them impossible to add. The North Star was reviewed (13 kept, 10 reworded, 3 struck: `docs/NorthStar.md`).
 
-## In flight
+## Recent landings
 
-The reviewed copied calls and unsigned arithmetic, with their fixes, are on `wip/sol62-m4`.
 Both emission modes matched direct evaluation for two continuations into a copied callee
 and two visits to one site. Tests cover the seven-byte and eight-byte entry cases at
 budget zero, space reserved below a grandchild's parent, and bad indirect addresses
@@ -157,17 +177,19 @@ returns 1 at budget 14 and writes `budget` at 13 for `x = y = 1`.
 
 - Device support: an interface between the executor and its quantum simulator (so the simulator can be replaced); a counting device that only counts qubits and gates; rewriting of gates with many controls for a machine with one- and two-qubit gates and the Toffoli gate; a bit-level circuit runner that checks reversible gate lists against independent references.
 - `wip/sol62-stepspec` (landed): tests pinning an exact statement of what an applied function does for one definite input, step by step, and a change that makes the slots of a new frame zero.
+
+## In flight
+
+No emitter landing is pending.
+
 - Never to be landed: `wip/fallback-step3`, `wip/sol-mutants-machine`, `wip/sol-mutants-machine-partial` (they build on the removed `mark`/`rewind` machinery).
 
 ## Next steps
 
-In order:
-1. Run the landing checks for the emitter's copied calls, unsigned arithmetic and review fixes.
-2. Land the checked emitter commits.
-3. **Shor's algorithm for 15 and 21 from plain C.** Measure the unfused program first. Compare Toffoli count and peak qubits with a textbook-class hand-built circuit using the same registers, aiming for a factor of two or less on both. Record depth too.
-4. **Applied memory**: add private memory and stack operations, with the corresponding first-fault rules.
-5. Then what the old plan left undone: rule A at an address that depends on a qubit (declare the region, then exchange one addressed element, at a cost of the region's size times the element's width per access); a second implementation of the device language (grow the reference that runs `apply` by its construction, `crates/exec/tests/compute_copy_reference/`); the floating-point environment through SoftFloat's state, `__float128` and the remaining intrinsics; the runtime debts below; Grover over a SQL query written in plain C; the optimiser and cost model (`opt`, not started).
-6. The next independent testing pass starts at the first commit in "Which commits no independent check has covered".
+1. **Shor's algorithm for 15 and 21 from plain C.** Measure the unfused program first. Compare Toffoli count and peak qubits with a textbook-class hand-built circuit using the same registers, aiming for a factor of two or less on both. Record depth too.
+2. **Applied memory.** Add private memory and stack operations, with the corresponding first-fault rules.
+3. Finish rule A at an address that depends on a qubit (declare the region, then exchange one addressed element, at a cost of the region's size times the element's width per access); a second implementation of the device language (grow the reference that runs `apply` by its construction, `crates/exec/tests/compute_copy_reference/`); the floating-point environment through SoftFloat's state, `__float128` and the remaining intrinsics; the runtime debts below; Grover over a SQL query written in plain C; the optimiser and cost model (`opt`, not started).
+4. The next independent testing pass starts at the first commit in "Which commits no independent check has covered".
 
 ## What is refused, and what removes it
 
@@ -185,7 +207,7 @@ In order:
 | A floating-point operation that reads the subnormal mode in a function promising a non-IEEE mode (`-fdenormal-fp-math=preserve-sign`, `positive-zero`, `dynamic`, or the `-f32` forms) | The same, compared with native code run under MXCSR DAZ/FTZ |
 | Stores into memory in code under a qubit that also has gates; a held object of more than 8 bytes; an access touching held bytes only in part; a position not constant outside code applied whole; an object the front cannot name (a pointer loaded from memory); qubit variables in structs, heap objects or passed to functions | Routes in `docs/DESIGN.md`, "Memory written under a qubit", and wider registers and held objects below |
 | Pointers that may reach the same bytes as a held object (two objects written under a qubit that may share bytes; an ordinary access through another pointer; an escaped `restrict` copy); a call that may read or write held bytes, a callee that measures them included; a second shadow of bytes another write under a qubit still holds | A check of the addresses at run time choosing one shadow or two; ending the span before a call that only measures; one shadow from the earliest write. Today: a static function whose calls pass distinct objects, or `restrict` |
-| An access at an address that depends on a qubit | Next step 5 (declare the region) |
+| An access at an address that depends on a qubit | Next step 3 (declare the region) |
 | A gate loop whose number of passes depends on a qubit, or whose passes decide on qubit-dependent values carried between them; a gate on what its condition reads | An ordinary trip count written in C, the forms for a carried value below, or one control qubit computed once and cleared by computing it again for a gate that leaves its condition unchanged (`docs/DESIGN.md`, "Code under a qubit") |
 | An update of a qubit variable under a qubit-dependent condition that neither XORs into it nor becomes straight-line code | Routes in `docs/DESIGN.md`, "Code under a qubit" |
 | A qubit-dependent value used by ordinary code or printed; ordinary code reading bytes that hold qubits | The programmer writes the measurement. For held bytes the front asks for `bennett_measure_bytes`. |
@@ -196,7 +218,9 @@ In order:
 
 ## Debts
 
-One line each, with the route:
+- Validation refuses a shift whose amount is constant only after a computed choice on a bypassed block parameter, a case accepted before `4ff9b0e`. Seed bypassed-region entry parameters from incoming jumps before propagating computed choices.
+- A shift of zero with amounts that differ across incoming routes is refused, though it was accepted before `a800563`. Prove the zero result from the shifted operand even when the amount differs.
+- Call expansion has a fixed limit of 16,384 slots and program points, checked before emitting any gates for the `apply`. If a measured program reaches it, derive the limit from the program's own work count.
 - Emitter call results contribute no constant proof to the caller. Propagate proved results from copied callees to prove more indirect addresses, switches and shift amounts.
 - The measured mulmod computes a full product and keeps a history of trial subtractions. Compare the unfused circuit first, then evaluate a modular multiply construction that reuses work wires between arithmetic steps.
 - Dropping bytes that hold qubits. Add the device instruction that drops their qubits unexamined by partial trace.
@@ -228,8 +252,6 @@ One line each, with the route:
 
 ## Questions for the maintainer
 
-Beyond the three working notes below, there are no open questions.
-
 - **Single-loop proof.** Taken: recognise one conditional test and straight continuing and
   exiting routes with provably lowerable integer operations. Recommend broadening the proof
   to additional total control-flow shapes only when a measured program needs it.
@@ -243,17 +265,20 @@ Beyond the three working notes below, there are no open questions.
   conditional jump that folds to a constant contributes only its selected edge. Recommend
   keeping the proof conservative until a program needs more facts about definite control.
 
+- **Copy-expansion limit.** The emitter uses a fixed 16,384 units. Derive the limit from the program's own work count if a measured program hits it.
+
+- **Moved gate loops.** A loop guarded by a qubit-dependent condition runs for every input with its gates controlled. Even when the condition is definitely false and the ordinary bound is huge, the device runs passes that C skips. The proposed safeguards remain unlanded. Require the pass count and bound to be computed before the condition so every input takes the passes of the condition-true run. Refuse the transformation otherwise.
+
 ## Which commits no independent check has covered
 
 - `58d6e4b` (a fix: only its own tests and the 15-minute randomised runs on it have covered it). The next independent testing pass starts there.
 - `5fc7386` (the new-frame change) and `90f7305`, `6155161` (test-only: the step-rule tests); all three came from `wip/sol62-stepspec`, and no independent check has covered them yet.
 - Independent review covered `506788f` through `28a1c00`. Its re-check covered the five fixes
   (`4b252c8`, `204b671`, `2eef510`, `23642c2`, `d30cc93`) and confirmed a test for each that failed before the fix.
-- The re-check found that the operand check could refuse a shift amount or multiplication factor that was constant for all inputs.
-  `e6cc49f` restored constant folding in that check and has had its own tests and a reading of its diff, with independent review still pending.
-  The two 15-minute front-end and direct-simulator differential runs on `e6cc49f` had zero failures. Seed `0x87196caa251d0f43` generated 8,358 cases, accepted 8,024, declined 334, made 50,428 comparisons and 7,053 state checks, and accepted 2,568 loop recipes. Seed `0x0b7e11a5d1ff0007` generated 8,152 cases, accepted 7,820, declined 332, made 49,064 comparisons and 6,909 state checks, and accepted 2,496 loop recipes.
-- Independent checks have yet to cover the documents-only commits `babaa5c`, `fc33dc9`, `81a19f4` and the handoff updates, including this one.
-  The generator commits are test-only and had their sensitivity shown on a deliberately changed scratch front.
+- Independent review found no wrong values in `a800563`, `4370390`, `e34d256` or `e6cc49f`. Review and two re-checks covered `abd3c0d` through `6e5f755` and `ccb534b`.
+- The two 15-minute front-end and direct-simulator differential runs on `945275c` had zero failures. Seed `0x87196caa251d0f43` generated 8,397 cases, accepted 8,061, declined 336, made 50,656 comparisons and 7,084 state checks, and accepted 2,568 loop recipes. Seed `0x0b7e11a5d1ff0007` generated 4,863 cases, accepted 4,664, declined 199, made 29,372 comparisons and 4,093 state checks, and accepted 1,488 loop recipes. The second run processed fewer cases on a shared machine.
+- Independent checks have yet to cover the documents-only commits `babaa5c`, `fc33dc9`, `81a19f4`, `945275c` and the handoff updates, including this one. The emitter documents in `945275c` were reworded after an independent reading and checked against the code.
+- The witness commits `9d67d30` and `96c0944` are test-only. The generator commits are also test-only and had their sensitivity shown on a deliberately changed scratch front.
 - Everything else in code under a qubit has had an independent testing pass or the 15-minute randomised runs; the list, commit by commit, is in `docs/RECORDS.md`, part two ("The top of the old HANDOFF").
 
 ## Where the records are
