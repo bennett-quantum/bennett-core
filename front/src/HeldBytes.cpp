@@ -5,6 +5,8 @@
 #include "Markers.h"
 #include "Taint.h"
 
+#include <llvm/ADT/SmallPtrSet.h>
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/Analysis/AssumptionCache.h>
 #include <llvm/Analysis/LoopInfo.h>
 #include <llvm/Analysis/ScalarEvolution.h>
@@ -576,6 +578,65 @@ bool isExchange(const Value *value) {
   const auto *call = dyn_cast_or_null<CallBase>(value);
   const Function *callee = call ? call->getCalledFunction() : nullptr;
   return callee && callee->getName() == exchangeName;
+}
+
+void keepOrdinaryLoads(std::vector<LoadInst *> &loads, const Instruction &at,
+                       const std::set<const Function *> &control) {
+  // Start with globals, which have ordinary bytes when the device starts and whose address is independent of
+  // the frame. For other pointers the bytes could come from an earlier call or from a reused frame.
+  const DataLayout &layout = at.getModule()->getDataLayout();
+  erase_if(loads, [&](const LoadInst *load) {
+    int64_t offset;
+    const auto *global = dyn_cast<GlobalVariable>(
+        GetPointerBaseWithConstantOffset(load->getPointerOperand(), offset, layout));
+    if (!global || offset < 0 || !global->getValueType()->isSized()) {
+      return true;
+    }
+    TypeSize size = layout.getTypeAllocSize(global->getValueType());
+    TypeSize width = layout.getTypeStoreSize(load->getType());
+    return size.isScalable() || width.isScalable() || uint64_t(offset) > size.getFixedValue() ||
+           width.getFixedValue() > size.getFixedValue() - uint64_t(offset);
+  });
+  if (loads.empty()) {
+    return;
+  }
+  Aliasing aliasing(*at.getModule());
+  SmallVector<const Instruction *, 8> work{&at};
+  SmallPtrSet<const Instruction *, 32> seen;
+  while (!work.empty() && !loads.empty()) {
+    const Instruction *next = work.pop_back_val();
+    if (!seen.insert(next).second) {
+      continue;
+    }
+    const Function &function = *next->getFunction();
+    const BasicBlock &block = *next->getParent();
+    if (const Instruction *previous = next->getPrevNode()) {
+      if (const auto *call = dyn_cast<CallBase>(previous)) {
+        if (call->hasFnAttr(Attribute::ReturnsTwice)) {
+          // A longjmp may resume here from code the incoming edges do not describe.
+          loads.clear();
+        } else if (isExchange(call) || control.count(call->getCalledFunction())) {
+          erase_if(loads, [&](const LoadInst *load) {
+            return aliasing.mayTouch(function, *call, load->getPointerOperand());
+          });
+        }
+      } else if (const auto *store = dyn_cast<StoreInst>(previous)) {
+        erase_if(loads, [&](const LoadInst *load) {
+          return aliasing.mayShare(function, store->getPointerOperand(), load->getPointerOperand());
+        });
+      }
+      work.push_back(previous);
+    } else if (&block == &function.getEntryBlock()) {
+      // Control functions can only be called directly. Follow the callers as well as paths within this call.
+      for (const User *user : function.users()) {
+        work.push_back(cast<CallBase>(user));
+      }
+    } else {
+      for (const BasicBlock *predecessor : predecessors(&block)) {
+        work.push_back(predecessor->getTerminator());
+      }
+    }
+  }
 }
 
 void holdWrites(Function &function, const std::vector<Instruction *> &writes, Instruction *start,

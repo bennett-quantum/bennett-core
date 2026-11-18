@@ -1723,19 +1723,18 @@ store then starts the span of `a` just before it, after the region, and the cont
 outlined function where its value is stored, after the exchange that moved `a`'s bytes into its shadow: the
 check that the memory a call reads is unchanged between the call and that point refused it, rightly, since the
 applied function would then have read bytes holding qubits. Fix (`front/src/Outline.cpp`, `outlineAround`): an
-outlined region's loads of ordinary memory at an address fixed before it, which may be made there whatever
-path it takes (LLVM's `isSafeToLoadUnconditionally`), are made before the region and passed in, as its loads of
-qubit variables already were; the region uses the value of `a` from where it is, and reads no memory. What a
-call inside the region reads is still checked: `merged_held_store_read_by_a_helper_after_the_exchange_is_refused`
-(the same shape with the read of `a` in a helper the region calls) is refused by name in all three modes.
+outlined region reads `a` before the region and passes in its value because LLVM's
+`isSafeToLoadUnconditionally` permits the read on every path and the front establishes that the bytes of `a`
+are ordinary there. A companion test, `merged_held_store_read_by_a_helper_after_the_exchange_is_refused`,
+puts the read of `a` in a helper the region calls and checks the named refusal in all three modes.
 Documents: `docs/DESIGN.md`, "From C to a device program" (conditional jumps, joins and loops; the sentence
 there that such code may not write memory was out of date), "Code under a qubit", "Applied calls".
 
-A consequence, named: a region that reads bytes at a fixed address only on some paths now reads them on every
-path, in the control program. Where an earlier call left those bytes holding qubits that read is the named
-fault `qubit_memory_access` for the whole run, where before it was that fault inside the `apply`, for the
-argument values whose path read them (a named fault either way; the front assumes such bytes ordinary where a
-span starts, "Questions for the maintainer").
+When the front cannot establish that a fixed-address load reads ordinary bytes before the region, the load
+stays in the applied function. The proof in `HeldBytes.h` checks globals for earlier exchanges and for stores
+or quantum calls that may touch the same memory. It leaves other addresses and uncertain cases inside the
+applied function. In accepted code, a read of bytes left holding qubits by an earlier call faults
+`qubit_memory_access` inside the `apply` for each definite argument value that reaches it.
 
 Capped run (`BENNETT_RANDOM_CASES=400`, seed `0x87196caa251d0f43`, `slot.sh heavy`), the same 400 cases on the
 front before and after the step: accepted 330 → 332, declined 70 → 68, compared 2,164 → 2,172, wrong 0 → 0,

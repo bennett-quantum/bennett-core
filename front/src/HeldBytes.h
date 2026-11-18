@@ -38,6 +38,7 @@ namespace llvm {
 class BasicBlock;
 class Function;
 class Instruction;
+class LoadInst;
 class Value;
 } // namespace llvm
 
@@ -53,6 +54,11 @@ inline constexpr const char *heldMetadata = "bennett.held";
 // exchanges every bit of the shadow with the bit of memory at the same position from `address` (three CNOTs per
 // bit); `after` is the value the shadow holds afterwards (the bytes' old value, or 0).
 bool isExchange(const llvm::Value *value);
+
+// Keeps only loads whose bytes are known to be ordinary before `at`. An exchange may have already given
+// bytes qubits, and a store in code still being outlined can become an exchange.
+void keepOrdinaryLoads(std::vector<llvm::LoadInst *> &loads, const llvm::Instruction &at,
+                       const std::set<const llvm::Function *> &control);
 
 // Makes the bytes the stores `writes` may write hold qubits, as above. `start` is where the span starts at the
 // latest (before the code under a qubit, or before a store of a qubit-dependent value); `region` the blocks of

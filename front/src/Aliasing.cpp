@@ -154,7 +154,10 @@ Aliasing::Objects Aliasing::touchedBy(const CallBase &call) const {
   if (marker && marker->kind == MarkerKind::MeasureBytes) {
     return objectsOf(call.getArgOperand(0)); // the only marker that names memory: it reads the bytes it measures
   }
-  if (marker || isExchange(&call) || call.doesNotAccessMemory()) {
+  if (isExchange(&call)) {
+    return objectsOf(call.getArgOperand(1)); // the exchange touches the original bytes
+  }
+  if (marker || call.doesNotAccessMemory()) {
     return {};
   }
   // The memory this call's pointer arguments point to (its callee's own set says what those arguments may be for

@@ -124,9 +124,7 @@ packet entry(unsigned prep, unsigned n, unsigned column) {
     );
 }
 
-#[test]
-#[ignore = "fixed-address load faults even when no prepared value reaches the read"]
-fn untaken_read_of_bytes_an_earlier_call_left_holding_qubits() {
+fn read_of_bytes_an_earlier_call_left_holding_qubits(prepare_high_bit: bool) -> Case {
     let mut case = phased_case(
         r#"
 uint8_t source = 43;
@@ -140,6 +138,7 @@ packet entry(unsigned prep, unsigned n, unsigned column) {
     hold();
     uint8_t q = PREPARE(prep), x = 0;
     HBIT(q, 0); SBIT(q, 0);
+    if (n) HBIT(q, 1);
     if (q & 2U) x = source / (q + 1U);
     else x = 5;
     packet key = bennett_measure(&q);
@@ -148,12 +147,46 @@ packet entry(unsigned prep, unsigned n, unsigned column) {
     return key | (value << 8) | (bytes << 16);
 }
 "#,
-        0,
+        u64::from(prepare_high_bit),
         &[0, 8, 16],
     );
-    case.qubits = 1;
+    if !prepare_high_bit {
+        case.qubits = 1;
+    }
     case.state.as_mut().expect("state check").preparation.s = 1;
+    case
+}
+
+#[test]
+fn untaken_read_of_bytes_an_earlier_call_left_holding_qubits() {
+    let case = read_of_bytes_an_earlier_call_left_holding_qubits(false);
     check_phased("held-untaken-read", &case);
+}
+
+#[test]
+fn taken_read_of_bytes_an_earlier_call_left_holding_qubits_faults_inside_apply() {
+    let case = read_of_bytes_an_earlier_call_left_holding_qubits(true);
+    check_all_modes("held-taken-read", &case, |name, cflags, flags, source, _| {
+        let text = lower_text(source, name, cflags, flags)?;
+        let module = bennett_ir::load(&text).map_err(|error| error.to_string())?;
+        let (outcome, stats) = run_with_stats(&module, "entry", &[0, case.trips, 0], 0);
+        if !matches!(
+            outcome,
+            Outcome::Stopped(RunError::RegionFault {
+                fault: Fault::QubitMemoryAccess,
+                faulting: 2,
+                configurations: 4,
+                ..
+            })
+        ) || (stats.region_fault_weight - 0.5).abs() > 1e-12
+        {
+            return Err(format!(
+                "expected qubit_memory_access inside apply on two of four configurations at weight 0.5, got {outcome:?} at weight {}",
+                stats.region_fault_weight
+            ));
+        }
+        Ok(())
+    });
 }
 
 #[test]
