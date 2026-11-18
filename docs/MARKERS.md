@@ -44,8 +44,9 @@ line), which the program cannot see.
 
 A computation applied coherently (by `apply`, `docs/DESIGN.md`) may fault for some values of its arguments (a
 division by zero, an exhausted budget). `bennett run` stops at such an `apply` and reports it by name, unless it
-is run with `--allow-region-faults`; then the fault code stays in the fault register until the function
-returns, where the register is released (and the release reported).
+is run with `--allow-region-faults` or `--machine-meaning`. With either option the fault code stays
+in the fault register until the function returns, where the register is released and the release
+is reported.
 
 ## Memory written under a qubit
 
@@ -70,6 +71,8 @@ program writes with `bennett_measure_bytes`; the compiler never inserts one. Byt
 passed by pointer still hold qubits when the function returns; ordinary code elsewhere that reads them faults
 (`qubit_memory_access`), and so does a later function's first store under a qubit into them, which reads their
 old value (measure them first). A local's value is kept in qubits in a register, never in its stack bytes.
+The 8-byte limit applies today. Wider held objects and a device instruction to drop bytes' qubits
+unexamined are planned.
 
 ## Gates
 
@@ -89,8 +92,10 @@ void bennett_ry(_Bool *qubit, double theta);
 void bennett_rz(_Bool *qubit, double theta);
 ```
 
-Apply the gate to the qubit `qubit` points to. Rotations are `exp(-i theta sigma / 2)`; `theta` must be a
-constant (after optimisation). Matrices are those of the device program (`crates/exec/src/gates.rs`).
+Apply the gate to the qubit `qubit` points to. Rotations are `exp(-i theta sigma / 2)`. Today
+`theta` must be constant after optimisation. Accepting an ordinary angle computed at run time
+is planned for the marker and the device language. Matrices are those of the device program
+(`crates/exec/src/gates.rs`).
 
 ```c
 _Bool *bennett_bit(void *variable, unsigned bit);
@@ -131,8 +136,10 @@ A call whose arguments depend on a qubit, to a function of the program that perf
 that calls `f`, with one step budget (`--region-budget`) for everything `f` does, its loops, nested loops and
 calls included. `f` may write memory, allocate and free on the heap, keep static buffers and use files of the
 file model. For each definite value of the arguments it runs on a private copy of memory, and all it wrote is
-undone when it ends: **only its result survives**, XORed into the variable it is stored into. A value of the
-arguments for which `f` needs more than the budget gives the fault `budget` for that value only; a console write
+undone when it ends. **Only its result survives**, XORed into the variable it is stored into. This
+is the language rule. When several calls must share state, put them inside one function and
+apply that function. A value of the arguments for which `f` needs more than the budget gives
+the fault `budget` for that value only; a console write
 (`__bennett_effect`, or a musl `printf` of a line, which writes stdout out) or `exit` inside gives `effect_in_region` or
 `exit_in_region` for the values that reach it. `docs/DESIGN.md`, "Applied calls", says what this means.
 
@@ -166,8 +173,9 @@ the condition in ordinary memory.
 Each is refused with `not handled yet: <what>, at <file:line:col>`: under the control of a value that
 depends on a qubit, a call of a function that has gates, a measurement, a gate whose condition reads the
 gate's own variable, a gate inside a loop whose number of passes depends on a qubit (write it as an ordinary
-count and test the condition inside) or that decides on qubit-dependent values carried from pass to pass (a
-loop with an ordinary count and gates is kept as a loop, each gate controlled), a write of a qubit variable
+count and test the condition inside) or that decides on qubit-dependent values carried from pass to pass
+(the table for constant counts and the later form for any ordinary count are described in
+[DESIGN.md](DESIGN.md#code-under-a-qubit)), a write of a qubit variable
 inside a loop that does more than XOR into it when its value before is not known, a store to memory in code
 that also has gates, an atomic or volatile write, a call of a function that may write memory, or a volatile
 read; a store under a qubit into memory whose object the front cannot name (not a global variable, a pointer

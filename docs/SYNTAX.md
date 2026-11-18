@@ -51,9 +51,9 @@ terminator := br label[(typed, ...)]
             | fault NAME                                 ; budget, unreachable, ... (bennett_ir::Fault; 5-bit codes)
 ```
 
-Integers are decimal or `0x` hex and may be negative (two's complement at the type's width). An `ANGLE` is a
-decimal floating-point number that must be finite as an `f64`: a literal that overflows (`1e999`) is a read
-error, since the writer has no spelling for an infinite angle and the round-trip rule must hold. Strings
+Integers are decimal or `0x` hex and may be negative (two's complement at the type's width). An `ANGLE` is
+currently a decimal literal that must be finite as an `f64`. A literal that overflows (`1e999`) is a read
+error. A planned form will also accept an ordinary angle computed at run time. Strings
 accept `\n \t \r \0 \\ \" \xHH`. Names may be used before they are defined.
 
 ## Memory
@@ -136,6 +136,10 @@ and an address that is not an `i64`.
 Ordinary code does not touch a byte that holds qubits: a `load`, `store`, `setjmp` or `longjmp` touching
 one faults `qubit_memory_access`, inside an applied function too (`docs/DESIGN.md`, "Qubits in memory").
 
+Measuring all eight bits of a byte that holds qubits makes it ordinary memory again. A planned
+instruction will drop the qubits in addressed bytes unexamined by partial trace, as `qfree`
+does for registers.
+
 ## Registers are not integers
 
 A register `%q` of type `qN` passed to a parameter of type `qN` passes the handle. Nowhere does a register stand
@@ -143,6 +147,14 @@ for an integer in ordinary code: a `call`, `call_indirect` or branch passing one
 mismatch. Only `apply` reads its argument registers, for each definite value of them. `out` and `fault` may not
 be among an `apply`'s arguments, nor be one register. A call can return a handle to its caller. Returning a register from the
 selected entry ends the run successfully with no scalar host result. The CLI reports its declared width.
+
+Registers are currently limited to 64 qubits. Wider registers are planned. To apply a function to
+bits held at a memory address today, copy the bits into a register with controlled X gates, use
+`apply`, then undo the copy. An argument form for bits at an address will expand into those steps
+once C functions can take qubits through pointers.
+
+Writes in an applied function are undone. Place calls that must share state inside one applied
+function so they see each other's writes on its private copy of memory.
 
 The gate compiler for `apply` covers a subset of integer instructions, including branches
 and loops with qubit-dependent conditions. Its choice of construction leaves the text form

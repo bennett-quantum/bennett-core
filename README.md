@@ -6,7 +6,8 @@ runs classically, reversibly or coherently. Each piece of plumbing exists once, 
 The device program is the quantum circuit model driven by ordinary code: ordinary code issues `qalloc`, gates,
 `measure` and `qfree` (the partial trace), and `apply` runs an ordinary function for each definite value of its
 argument registers, within one step bound, XORing the result into a target register (`docs/DESIGN.md`, "The
-model").
+model"). Writes made inside an applied function are undone. Calls that must share writes belong in
+one applied function.
 
 | Module | What it is | State |
 |---|---|---|
@@ -28,7 +29,8 @@ front/test.sh                                # builds bennett-front, runs its te
 Counting compiles supported applied integer functions, including loops, into gates. Run the same
 circuits on the simulator with `bennett run --apply-circuit auto program.bn`. Both devices accept
 `--apply-circuit step-machine` to select general instruction dispatch when control depends on qubits.
-The simulator defaults to direct evaluation, and `--machine-meaning` enables its fault-register semantics.
+The simulator defaults to direct evaluation. Either `--machine-meaning` or `--allow-region-faults`
+lets a run continue after an `apply` faults for some argument values, with the fault code in its register.
 The emitted subset and refusal routes are in [DESIGN.md](docs/DESIGN.md#apply).
 
 A C program goes in through `clang` and `bennett-front` (the markers are in `docs/MARKERS.md`):
@@ -64,7 +66,7 @@ Constructors and destructors wrap `main` by default; `bennett-front --entry name
 startup entry (use the same `bennett run --entry name`). A C runtime that references the standard init/fini
 array bounds owns startup instead; the front supplies those arrays for it.
 
-The design, and what is deliberately left open, is in `docs/DESIGN.md`. It is a working note, not a contract.
+The current design and language guarantees are in `docs/DESIGN.md`.
 The text form of the device program is in `docs/SYNTAX.md`; `examples/` has one program per feature.
 
 The [SQLite device experiment](experiments/sqlite-on-device/README.md#larger-sql-oracles) checks
@@ -79,4 +81,4 @@ byte-exact reversal at both compiler inputs, under the unchanged resource cap. A
 interpreter agreed on rungs 1 and 2 until 2026-11-17, when it was removed with the forms it modelled
 (`HANDOFF.md`, "Debts"). The experiment records the profile, complete domains and measurements.
 
-Repository checks and the optional exact-revision pre-push hook: [docs/CHECKS.md](docs/CHECKS.md). The dated measurement and testing records are in [docs/RECORDS.md](docs/RECORDS.md); the current state, decisions and open questions are in `HANDOFF.md`.
+Repository checks and the optional exact-revision pre-push hook: [docs/CHECKS.md](docs/CHECKS.md). The dated measurement and testing records are in [docs/RECORDS.md](docs/RECORDS.md). The current state, decisions and next steps are in `HANDOFF.md`.
