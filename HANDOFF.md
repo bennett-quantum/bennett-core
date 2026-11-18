@@ -1,8 +1,8 @@
 # HANDOFF
 
-State on 2026-11-17, evening: **resumed by the maintainer the same day; see "Resumed on 2026-11-17" below
-before anything else.** The tree implements the model stated in `docs/DESIGN.md`, "The model": ordinary code;
-the quantum instructions it issues (`qalloc`, gates, `measure`, `qfree` as the partial trace), naming qubits in
+State on 2026-11-18, about 01:30 UTC: **nothing of this work is running.** Resumed by the maintainer on
+2026-11-17; see "Resumed on 2026-11-17" below before anything else. The tree implements the model stated in
+`docs/DESIGN.md`, "The model": ordinary code; the quantum instructions it issues (`qalloc`, gates, `measure`, `qfree` as the partial trace), naming qubits in
 registers or at memory addresses (a derived form, defined in DESIGN by its expansion), with the named fault
 `qubit_memory_access` when ordinary code touches a byte that holds qubits; and `apply`, evaluated for each
 definite value of its argument registers with one step bound `B` for the whole applied function. Steps 1 to 6
@@ -28,8 +28,16 @@ condition, and one applied function for all results of code under a qubit, resul
 stores LLVM moves out of the code included. The independent testing pass over rule A at memory (`22bd3bc`)
 left five ignored witnesses in `front/tests/tests/held_span_independent.rs`, all fixed since, and a sixth
 defect, older, was found and fixed on the way ("Fixes after the testing pass over rule A in memory
-(2026-11-18)"). Running now: one more independent testing pass, over those fixes (`7462959`: the aliasing
-analysis, the support of results of two held objects, the recomputed old value) and rule A at memory as a whole.
+(2026-11-18)"). The last independent testing pass, over those fixes and rule A at memory as a whole
+(`d11c934`), left three ignored witnesses in `front/tests/tests/held_regions_independent.rs`, all fixed since
+("Fixes after the last testing pass over held memory (2026-11-18)"); those fixes have had no independent pass.
+
+Which commits of code under a qubit have had an independent testing pass:
+
+- tested: `eae3a86`, `d65f156`, `6a0a47a` (by `03ae832`); `ed3cfaa`, `d3a1efe`, `231bea2`, `31246c1` (by
+  `22bd3bc`); `7462959` (by `d11c934`);
+- not tested by an independent pass: `8668d4a` (the fixes of the three defects `d11c934` found) and the HANDOFF
+  commit after it. The next independent pass starts there.
 
 ## Resumed on 2026-11-17
 
@@ -384,7 +392,13 @@ explicitly after the separate musl build.
       reach the same bytes as a span's object (a second object written under a qubit, an ordinary access
       through another pointer; route: a check of the addresses at run time choosing one shadow or two, not
       built; what removes it today is a static function whose calls pass distinct objects or the same pointer,
-      or `restrict`); a call that may read or write the held bytes; more than 8 bytes of
+      or `restrict`); a call that may read or write the held bytes, a callee that measures them included
+      (route: end the span before a call whose only access to the bytes is `bennett_measure_bytes`, not
+      built; today the caller measures them first); a second shadow of bytes another write under a qubit still
+      holds (an earlier store that does not run before the code under a qubit on every path, or that is in a
+      loop; route: one shadow from the earliest write, not built); a `restrict` argument whose address
+      escaped, while its bytes hold qubits, against any call or access that may follow escaped memory (route:
+      follow which escaped copies a callee may load, not built); more than 8 bytes of
       one object (one shadow per 8 bytes); an access that touches the held bytes only in part; a position that
       is not constant outside code applied whole; an object the front cannot name (a pointer loaded from
       memory: step 4's region); a measurement of part of a local's held bytes. Not refused, documented: where
@@ -416,7 +430,8 @@ explicitly after the separate musl build.
    This is the route for a stateful library whose writes must survive.
 
    Then one independent testing pass over steps 1 to 3 (rules B and C and the first part of rule A: `03ae832`,
-   its four defects fixed since; rule A at memory: next), and the reference that runs `apply` by its
+   its four defects fixed since; rule A at memory: `22bd3bc` and `d11c934`, their eight defects fixed since,
+   the last three by commits no independent pass has tested), and the reference that runs `apply` by its
    construction extended with the exchange form of rule A (done, `f81f2b7`; `docs/DESIGN.md`, "Tests"): the
    exchange with each way of clearing the spare register on exact amplitudes, a byte at a definite address
    included, and for an old value kept and for a fault inside an applied function every entry of the reduced
@@ -1569,3 +1584,9 @@ are refused by name, which their witnesses accept). Documents: `docs/DESIGN.md`,
   escaped; a pointer loaded from where that copy was stored is based on the argument, and C allows it to reach the
   bytes. Fix: such a pointer may reach the argument's bytes exactly when its address escapes. Test: the copy read
   back in the same function, refused (accepted and faulting on the old code).
+
+Debts found by this work, not fixed (diagnostics and refusals that may be over-cautious): the refusal of a
+measuring callee reads "a call that may read or write memory of ..." and does not say that the callee measures
+them; the refusals of a second shadow, of a measuring callee and of an escaped `restrict` copy are wider than
+what is unsafe (the routes above, under "Next steps", step 4, item 3); the full front suite prints an unused
+import warning in `front/tests/tests/thesis.rs`.
