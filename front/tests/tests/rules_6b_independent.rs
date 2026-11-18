@@ -477,3 +477,129 @@ unsigned entry(unsigned n) {{
         }
     }
 }
+
+#[test]
+fn nested_split_guards_and_late_gates_keep_the_complex_state_under_a_small_budget() {
+    let source = write_c(
+        "gate-loops-late-nested",
+        r#"#include "bennett.h"
+unsigned entry(unsigned n, unsigned m, unsigned site, unsigned enable) {
+    unsigned char x = 0;
+    _Bool y = 0;
+    bennett_h(bennett_bit(&x, 0));
+    bennett_h(bennett_bit(&x, 1));
+    bennett_s(bennett_bit(&x, 1));
+    if (enable && x == 2)
+        for (unsigned i = 0; i < n; ++i)
+            for (unsigned j = 0; j < m; ++j)
+                if (i == site && j == 1) {
+                    bennett_h(&y);
+                    bennett_s(&y);
+                } else if ((i ^ j) & 1) bennett_z(&y);
+    return (unsigned)(bennett_measure(&x) | bennett_measure(&y) << 8);
+}
+"#,
+    );
+    let region_budget = 16;
+    for (mode, clang, flags) in MODES {
+        let text =
+            lower_text_with_budget(&source, &format!("gate-loops-late-nested-{mode}"), clang, flags, region_budget)
+                .expect("lowers");
+        let module = bennett_ir::load(&text).expect("valid program");
+        let control = module.function(entry(&module, "entry"));
+        assert_eq!(loop_edges(control), 2, "{mode}: the two C loops stay in control code");
+        assert_eq!(module.functions.iter().map(measurement_count).sum::<usize>(), 2);
+        let applied: Vec<_> = before_measurements(control)
+            .filter_map(|inst| match inst {
+                Inst::Apply { callee, out, budget, .. } => Some((callee, out, budget)),
+                _ => None,
+            })
+            .collect();
+        assert!(matches!(applied.as_slice(), [compute, clear] if compute.1 == clear.1), "{mode}: {applied:?}");
+        for (callee, _, budget) in applied {
+            assert_eq!(loop_edges(module.function(*callee)), 0, "{mode}: no replay of a C loop");
+            assert!(matches!(budget, bennett_ir::Operand::Const(value) if value.value() == region_budget.into()));
+        }
+        for args @ [n, m, site, enable] in
+            [[0, 0, 0, 1], [0, 3, 0, 1], [200, 0, 199, 1], [200, 3, 199, 1], [200, 3, 199, 0], [200, 3, 200, 1]]
+        {
+            let mut expected = BTreeMap::new();
+            for x in 0..4 {
+                let amplitude = if x < 2 { C::new(0.5, 0.0) } else { C::new(0.0, 0.5) };
+                let mut y = [amplitude, C::new(0.0, 0.0)];
+                if x == 2 && enable != 0 {
+                    for i in 0..n {
+                        for j in 0..m {
+                            if i == site && j == 1 {
+                                y = [(y[0] + y[1]) * S, (y[0] - y[1]) * S * C::i()];
+                            } else if (i ^ j) & 1 != 0 {
+                                y[1] = -y[1];
+                            }
+                        }
+                    }
+                }
+                for (bit, value) in y.into_iter().enumerate().filter(|(_, value)| value.norm() > 1e-12) {
+                    expected.insert([x, bit as u64], value);
+                }
+            }
+            let outcome = run_bounded(&module, &args, 20_000);
+            assert!(matches!(outcome, Outcome::Returned(Some(_))), "{mode}, entry{args:?}: {outcome:?}");
+            check_state(&module, &args, ["x", "y"], &expected, mode);
+        }
+    }
+}
+
+#[test]
+fn wide_words_include_the_moved_overwrite_and_preserve_high_bit_values_and_phases() {
+    let source = write_c(
+        "rule-b-wide-moved-phase",
+        r#"#include "bennett.h"
+unsigned long long entry(unsigned i) {
+    unsigned char q = 0, d = 0x66;
+    unsigned short c = 0xabcd;
+    unsigned long long a = 0x1020304050607080ULL;
+    bennett_h(bennett_bit(&q, 0));
+    bennett_h(bennett_bit(&q, 1));
+    bennett_s(bennett_bit(&q, 1));
+    bennett_x(bennett_bit(&a, 61));
+    for (unsigned t = q; t != 0; t >>= 1) {
+        a ^= (1ULL << ((i + t) & 63)) | t;
+        c = (unsigned short)(c * 3u + (t ^ i));
+        d = (unsigned char)(d * 5u ^ t);
+    }
+    unsigned long long low = bennett_measure(&a);
+    unsigned long long rest = bennett_measure(&c) | bennett_measure(&d) << 16 | bennett_measure(&q) << 24;
+    return low ^ rest;
+}
+"#,
+    );
+    for (mode, clang, flags) in MODES {
+        let text = lower_text_with_budget(&source, &format!("rule-b-wide-moved-phase-{mode}"), clang, flags, 96)
+            .expect("lowers");
+        let module = bennett_ir::load(&text).expect("valid program");
+        for i in [0, 61, 62, 63, 255] {
+            let mut expected = BTreeMap::new();
+            for q in 0..4 {
+                let (mut a, mut c, mut d) = (0x3020_3040_5060_7080u64, 0xabcdu16, 0x66u8);
+                let mut t = q;
+                while t != 0 {
+                    a ^= (1 << ((i + t) & 63)) | t;
+                    c = c.wrapping_mul(3).wrapping_add((t ^ i) as u16);
+                    d = d.wrapping_mul(5) ^ t as u8;
+                    t >>= 1;
+                }
+                let amplitude = if q < 2 { C::new(0.5, 0.0) } else { C::new(0.0, 0.5) };
+                expected.insert([q, a, c.into(), d.into()], amplitude);
+            }
+            check_state(&module, &[i], ["q", "a", "c", "d"], &expected, mode);
+        }
+        let control = module.function(entry(&module, "entry"));
+        assert_eq!(loop_edges(control), 0, "{mode}: the C loop moved into the apply");
+        assert_eq!(module.functions.iter().map(measurement_count).sum::<usize>(), 4);
+        let functions_with_loops: Vec<_> = module.functions.iter().filter(|f| loop_edges(f) > 0).collect();
+        assert_eq!(functions_with_loops.len(), 1, "{mode}: only one copy of the C loop");
+        assert_eq!(loop_edges(functions_with_loops[0]), 1);
+        let applies = before_measurements(control).filter(|inst| matches!(inst, Inst::Apply { .. })).count();
+        assert_eq!(applies, 3, "{mode}: one wide result and the compute/clear pair for the moved stores");
+    }
+}
