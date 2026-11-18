@@ -4,6 +4,7 @@ use bennett_ir::{BinOp, BlockId, Fault, FuncId, Gate, Inst, Operand, Slot, Targe
 
 use super::arithmetic;
 use super::bits::{Bit, Circuit, Word, ZERO, constant};
+use super::definite::{Constants, requirement};
 use super::{ApplyError, ApplyInput, Argument};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -38,6 +39,7 @@ pub(super) enum Step<'a> {
 pub(super) struct Frame<'a> {
     pub(super) module: &'a ValidModule,
     pub(super) callee: FuncId,
+    constants: Constants,
 }
 
 impl<'a> Frame<'a> {
@@ -80,7 +82,25 @@ impl<'a> Frame<'a> {
         ApplyError::Unsupported { callee: self.callee, block: point.block, index: point.index, operation, route }
     }
 
-    pub(super) fn check(&self) -> Result<(), ApplyError> {
+    pub(super) fn check(input: &ApplyInput<'a>) -> Result<Self, ApplyError> {
+        let mut frame = Self { module: input.module, callee: input.callee, constants: Constants::default() };
+        frame.check_instructions()?;
+        frame.constants = Constants::analyze(&frame, input);
+        for (block, body) in frame.module.function(frame.callee).blocks.iter().enumerate() {
+            for (index, inst) in body.insts.iter().enumerate() {
+                let Some((op, route)) = requirement(inst) else { continue };
+                let Inst::Binary { lhs, rhs, .. } = inst else {
+                    unreachable!("the requirement is for a binary operation")
+                };
+                if frame.constants.get(rhs).is_none() && (op != BinOp::Mul || frame.constants.get(lhs).is_none()) {
+                    return Err(frame.error(Point { block: BlockId(block as u32), index }, op.mnemonic(), route));
+                }
+            }
+        }
+        Ok(frame)
+    }
+
+    fn check_instructions(&self) -> Result<(), ApplyError> {
         for (index, block) in self.module.function(self.callee).blocks.iter().enumerate() {
             let block_id = BlockId(index as u32);
             for (index, inst) in block.insts.iter().enumerate() {
@@ -107,14 +127,22 @@ impl<'a> Frame<'a> {
         if let Some(inst) = block.insts.get(point.index) {
             let (dst, result) = match inst {
                 Inst::Binary { op, dst, lhs, rhs, .. } => {
-                    let result = arithmetic::binary(circuit, *op, &read(lhs), &read(rhs)).ok_or_else(|| {
-                        let route = if *op == BinOp::Mul {
-                            "multiplication of two qubit words"
-                        } else {
-                            "shifts by a qubit word"
-                        };
-                        self.error(point, op.mnemonic(), route)
-                    })?;
+                    let mut left = read(lhs);
+                    let mut right = read(rhs);
+                    if requirement(inst).is_some() {
+                        // A slot can contain other values when this point is inactive.
+                        // Use the proven value for each input that executes the instruction.
+                        if let Some(value) = self.constants.get(rhs) {
+                            right = constant(value, right.len());
+                        }
+                        if *op == BinOp::Mul
+                            && let Some(value) = self.constants.get(lhs)
+                        {
+                            left = constant(value, left.len());
+                        }
+                    }
+                    let result =
+                        arithmetic::binary(circuit, *op, &left, &right).expect("checked operands before lowering");
                     (*dst, result)
                 }
                 Inst::Compare { pred, dst, lhs, rhs, .. } => {

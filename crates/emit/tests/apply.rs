@@ -494,33 +494,93 @@ entry:
 "#;
 
 #[test]
-fn refuses_a_qubit_multiplier_before_sending_any_circuit_commands() {
-    let module = load(&DEVICE_PROGRAM.replace("INSTRUCTION", "%answer = mul i4 %sum, %x")).expect("valid program");
-    let entry = module.function_named("main").expect("entry");
-    let mut counter = CountingDevice::default();
-    let mut compiler = |input: ApplyInput<'_>| Ok(compile_apply(input)?.block);
-    let run = Executor::run_on_with_apply(&module, entry, &[], None, &mut counter, &mut compiler).expect("device run");
-    let expected = Some(Outcome::Stopped(RunError::Apply(ApplyError::Unsupported {
-        callee: module.function_named("f").expect("callee"),
-        block: BlockId(0),
-        index: 1,
-        operation: "mul",
-        route: "multiplication of two qubit words",
-    })));
-    assert_eq!(Some(run.outcome), expected);
-    assert_eq!(run.steps, 3);
-    assert_eq!(counter.counts().peak_qubits, 13);
-    assert_eq!(counter.counts().depth, 0);
-    assert_eq!(counter.counts().zero_released_qubits, 0);
+fn qubit_shift_and_multiplier_refusals_do_not_depend_on_budget() {
+    for (operation, route) in [
+        ("mul", "multiplication of two qubit words"),
+        ("shl", "shifts by a qubit word"),
+        ("lshr", "shifts by a qubit word"),
+        ("ashr", "shifts by a qubit word"),
+    ] {
+        let source = DEVICE_PROGRAM
+            .replace("func @main()", "func @main(i64 %budget)")
+            .replace("budget 3", "budget %budget")
+            .replace("INSTRUCTION", &format!("%answer = {operation} i4 %sum, %x"));
+        let module = load(&source).expect("valid program");
+        let entry = module.function_named("main").expect("entry");
+        let expected = Outcome::Stopped(RunError::Apply(ApplyError::Unsupported {
+            callee: module.function_named("f").expect("callee"),
+            block: BlockId(0),
+            index: 1,
+            operation,
+            route,
+        }));
+        for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+            for budget in [0, 1, 2, 3, u64::MAX] {
+                let mut counter = CountingDevice::default();
+                let mut compiler = |input: ApplyInput<'_>| Ok(compile_apply_with(input, mode)?.block);
+                let run = Executor::run_on_with_apply(&module, entry, &[budget], None, &mut counter, &mut compiler)
+                    .expect("device run");
+                assert_eq!(run.outcome, expected, "{operation}, {mode:?}, B={budget}");
+                assert_eq!(run.steps, 3);
+                assert_eq!(counter.counts().peak_qubits, 13);
+                assert_eq!(counter.counts().depth, 0);
+                assert_eq!(counter.counts().zero_released_qubits, 0);
 
-    let mut simulator = Executor::new(&module, entry, &[], Options::default()).expect("simulator");
-    for _ in 0..3 {
-        assert_eq!(simulator.step_emitted(&mut compiler), None);
+                let mut simulator = Executor::new(&module, entry, &[budget], Options::default()).expect("simulator");
+                for _ in 0..3 {
+                    assert_eq!(simulator.step_emitted(&mut compiler), None);
+                }
+                let mut before = simulator.snapshot();
+                assert_eq!(simulator.step_emitted(&mut compiler), Some(expected));
+                before.classical.outcome = Some(expected);
+                assert_eq!(simulator.snapshot(), before);
+            }
+        }
     }
-    let mut before = simulator.snapshot();
-    assert_eq!(simulator.step_emitted(&mut compiler), expected);
-    before.classical.outcome = expected;
-    assert_eq!(simulator.snapshot(), before);
+}
+
+#[test]
+fn ordinary_factors_stay_definite_across_conditional_block_transfers() {
+    let module = load(
+        r#"
+memory 512
+func @f(i3 %x, i3 %factor) -> i3 {
+entry:
+    %cond = trunc i3 %x to i1
+    %fixed = add i3 %factor, 1
+    br %cond, scale(%fixed), done(%x)
+scale(i3 %k):
+    %product = mul i3 %x, %k
+    %shifted = shl i3 %product, %factor
+    br done(%shifted)
+done(i3 %result):
+    ret %result
+}
+"#,
+    )
+    .expect("valid program");
+    for budget in [0, 1, 6, 7, 8] {
+        let compiled = compile_apply(ApplyInput {
+            module: &module,
+            callee: module.function_named("f").expect("callee"),
+            args: &[Argument::Register(0..3), Argument::Value(1)],
+            out: 3..6,
+            fault: 6..11,
+            budget,
+            entry_fault: None,
+            scratch_start: 11,
+        })
+        .expect("the shift and factor are definite");
+        check(&compiled, 3, 8, |x| {
+            if x & 1 == 0 && budget >= 4 {
+                x
+            } else if x & 1 != 0 && budget >= 7 {
+                (4 * x) & 7
+            } else {
+                1 << 3
+            }
+        });
+    }
 }
 
 #[test]

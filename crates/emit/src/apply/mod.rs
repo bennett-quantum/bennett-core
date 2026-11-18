@@ -2,6 +2,7 @@
 
 mod arithmetic;
 mod bits;
+mod definite;
 mod machine;
 mod saved;
 mod symbolic;
@@ -133,8 +134,7 @@ pub fn compile_apply(input: ApplyInput<'_>) -> Result<CompiledApply, ApplyError>
 /// Compile an applied function with the requested choice of control constructions.
 pub fn compile_apply_with(input: ApplyInput<'_>, mode: ApplyMode) -> Result<CompiledApply, ApplyError> {
     check_interface(&input)?;
-    let frame = Frame { module: input.module, callee: input.callee };
-    frame.check()?;
+    let frame = Frame::check(&input)?;
     let mut circuit = Circuit::new(input.scratch_start);
     let mut slots = frame.initial(&input);
     let mut status = match input.entry_fault {

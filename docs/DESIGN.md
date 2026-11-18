@@ -334,6 +334,13 @@ to select instruction dispatch whenever control depends on qubits. These modes i
 machine's fault semantics, writing fault codes into the program's register. The reference
 simulator run is `bennett run --machine-meaning` with its default direct evaluation.
 
+Before consulting the budget, the emitter checks all instructions in the applied function.
+Shift amounts and constant multiplication factors must be provable from literals and
+ordinary inputs. The proof follows integer operations and joins the values delivered by every
+incoming edge to a block parameter. An amount or factor with conflicting values across
+visits needs a more precise analysis of definite control. The refusal for given arguments is
+the same at every budget, including zero.
+
 The controller resolves the targets and arguments first, keeping dangling and aliased
 handles as enclosing faults. It checks entry frame space, then builds and validates the
 whole circuit before sending an allocation or gate for that `apply`. A compiler refusal ends

@@ -30,7 +30,7 @@ What works, one line each (the commit-by-commit table is in `docs/RECORDS.md`, p
 
 Run each in the foreground, from the repository root (`CARGO_BUILD_JOBS=3` on the shared laptop):
 
-- `cargo test`: 361 passed, 0 failed, 5 ignored (each names its reason: heavy reference, generated runs, witnesses of recorded defects); about 10 s, no LLVM needed.
+- `cargo test`: 362 passed, 0 failed, 5 ignored (each names its reason: heavy reference, generated runs, witnesses of recorded defects); about 10 s, no LLVM needed.
 - `front/test.sh` (needs LLVM 18, clang 18, CMake): 345 passed, 0 failed, 22 ignored (each names its reason: the fallback oracle's waiting test, the SQLite acceptance, the North Star ladder runs, musl-linked checks that need `rt/musl/build.py` first, heavy runs, witnesses of recorded debts); it also compiles the C++ header and classifies the 88 LLVM attribute kinds.
 - `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check`: both clean on 2026-11-18 (`scripts/check.sh`: tree guards 3,642 files, 0 problems).
 - `scripts/check.sh` runs all four plus the tree guards (`docs/CHECKS.md`).
@@ -75,9 +75,10 @@ Newest first; quotes are the maintainer's words.
 
 ## In flight
 
-The device interface and step tests have landed. The gate compiler on `wip/sol62-loops-m2`
-follows definite control, uses a single clock for general qubit-dependent jumps, and saves
-decisions for one proved loop. All four steps are on the branch for landing. The 8-bit Collatz
+The device interface, step tests and loop emitter have landed. The gate compiler follows
+definite control, uses a single clock for general qubit-dependent jumps, and saves decisions
+for one proved loop. The follow-up on `wip/sol62-loops-m2` checks shift and multiply operands
+across the whole applied function before using the budget. The 8-bit Collatz
 bit runner checked all 256 inputs at 253 budgets with both constructions. The simulator matched
 the reference amplitudes exactly after each applied circuit for widths 2 to 5. The nested loop
 returns 1 at budget 14 and writes `budget` at 13 for `x = y = 1`.
@@ -162,6 +163,10 @@ Each is taken in the cheapest way to reverse, as stated, until answered. Last 20
 - **Simulator entry point for emitted gates.** Taken: opt in with `--apply-circuit auto`
   or `--apply-circuit step-machine`. Recommend keeping direct evaluation as the default while its
   instruction coverage and strict fault diagnostics exceed the gate compiler's.
+
+- **Constant operands in emitted arithmetic.** Taken: prove a single value across all
+  incoming edges and visits before selecting a shift or fixed-factor multiply. Recommend
+  keeping the proof conservative until a program needs more facts about definite control.
 
 ## Which commits no independent check has covered
 
