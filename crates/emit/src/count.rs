@@ -166,7 +166,7 @@ impl<I: Iterator<Item = bool>> Device for CountingDevice<I> {
         self.counts.discarded_qubits = self
             .counts
             .discarded_qubits
-            .checked_add(u128::from(wires.end - wires.start))
+            .checked_add(u128::from(wires.end.saturating_sub(wires.start)))
             .ok_or(RunError::Device("device count overflow"))?;
         self.end_wires(wires);
         Ok(())
@@ -176,7 +176,7 @@ impl<I: Iterator<Item = bool>> Device for CountingDevice<I> {
         self.counts.zero_released_qubits = self
             .counts
             .zero_released_qubits
-            .checked_add(u128::from(wires.end - wires.start))
+            .checked_add(u128::from(wires.end.saturating_sub(wires.start)))
             .ok_or(RunError::Device("device count overflow"))?;
         self.end_wires(wires);
         Ok(())

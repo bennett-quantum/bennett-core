@@ -160,3 +160,38 @@ fn scratch_only_gates_contribute_to_depth_without_carrying_layers_to_the_next_ca
         Counts { one_qubit: 600, peak_qubits: 1, depth: 2, zero_released_qubits: 300, ..Counts::default() }
     );
 }
+
+#[test]
+fn empty_ranges_have_the_same_effect_in_counted_and_expanded_blocks() {
+    use bennett_exec::BlockOp;
+
+    let equal = std::ops::Range { start: 2, end: 2 };
+    let reversed = std::ops::Range { start: 2, end: 1 };
+    let ops = [
+        BlockOp::Allocate(equal.clone()),
+        BlockOp::Allocate(reversed.clone()),
+        BlockOp::ReleaseZero(reversed.clone()),
+        BlockOp::ReleaseZero(equal.clone()),
+    ];
+    for gate in [owned_x(0, &[]), GateOp { kind: Gate::Fixed(FixedGate::H), target: 0, controls: vec![1, 2] }] {
+        let block = GateBlock {
+            name: "empty allocations".into(),
+            ops: ops.iter().cloned().chain([BlockOp::Gate(gate)]).collect(),
+        };
+        let mut counted = CountingDevice::default();
+        let mut expanded = CountingDevice::default();
+        for device in [&mut counted, &mut expanded] {
+            device.allocate(0..3).expect("live inputs");
+            device.discard(equal.clone()).expect("empty discard");
+        }
+        let compact = counted.call(&block);
+        let direct = block.ops.iter().try_for_each(|op| op.send(&mut expanded));
+        assert_eq!(compact, direct);
+        assert_eq!(counted.counts(), expanded.counts());
+        for device in [&mut counted, &mut expanded] {
+            device.discard(reversed.clone()).expect("reversed discard");
+            assert_eq!(device.counts().discarded_qubits, 0);
+            assert_eq!(device.counts().zero_released_qubits, 0);
+        }
+    }
+}
