@@ -69,6 +69,6 @@ The C portion of rung 1 passes exhaustively on the declared Int8 functions, and 
 output, exact reset and deterministic tape replay. Rung 2's ten original cases pass native agreement and
 byte-exact reversal at both compiler inputs, under the unchanged resource cap. An independent second
 interpreter agreed on rungs 1 and 2 until 2026-11-17, when it was removed with the forms it modelled
-(`HANDOFF.md`). The experiment records the profile, complete domains and measurements.
+(`HANDOFF.md`, "Debts"). The experiment records the profile, complete domains and measurements.
 
-Repository checks and the optional exact-revision pre-push hook: [docs/CHECKS.md](docs/CHECKS.md).
+Repository checks and the optional exact-revision pre-push hook: [docs/CHECKS.md](docs/CHECKS.md). The dated measurement and testing records are in [docs/RECORDS.md](docs/RECORDS.md); the current state, decisions and open questions are in `HANDOFF.md`.

@@ -4,7 +4,7 @@
 whole-world test reference, a model of `mark`, `rewind` and machine states in superposition; it was removed
 with them. Rungs 1 and 2 are now checked on `bennett-exec` against native only, and the runner runs those
 stages alone; the "both implementations" results below are the measurements of 2026-11-16/17 and are not
-repeated. Restoring the second implementation is a debt (`HANDOFF.md`, "Next steps"): an independent
+repeated. Restoring the second implementation is a debt (`HANDOFF.md`, "Debts"): an independent
 reference of the current device language, of which the planned reference that runs `apply` by its
 construction can be the start.
 

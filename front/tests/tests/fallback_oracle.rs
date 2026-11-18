@@ -510,7 +510,7 @@ mod waiting_for_fallback {
         acceptance_case("nested");
     }
     #[test]
-    #[ignore = "waiting by decision: a call under a qubit that writes memory (HANDOFF, Next steps 4: a call that fills memory named at the call)"]
+    #[ignore = "waiting by decision: a call under a qubit that writes memory (HANDOFF, What is refused: a call that fills memory named at the call)"]
     fn user_write() {
         acceptance_case("user_write");
     }
