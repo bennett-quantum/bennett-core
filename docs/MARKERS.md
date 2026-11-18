@@ -169,7 +169,9 @@ read; a store under a qubit into memory whose object the front cannot name (not 
 argument or a local variable), at a position it cannot bound, or into more than 8 bytes of one object; an
 access that touches bytes holding qubits only in part, or at a position that is not constant outside code
 applied whole; ordinary code that reads bytes holding qubits (measure them first), or a call given memory of
-an object while bytes of it hold qubits; a measurement of part of the bytes of a local written under a
+an object while bytes of it hold qubits, a callee that measures them included (measure them in the caller);
+a second write under a qubit that would hold bytes a first one still holds, where the first does not run before
+the code under a qubit on every path; a measurement of part of the bytes of a local written under a
 qubit; a branch on such a value whose arms do not
 rejoin before the function returns; a qubit variable passed to a
 function, or wider than 8 bytes; a write into part of a qubit variable; `bennett_measure_bytes` with a number

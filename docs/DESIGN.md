@@ -593,7 +593,9 @@ retained form releases a register; the shadow starts at 0 and ends at 0 for each
 depends on, outside those releases.
 
 Where the span starts and ends. It starts before the first such write, outside the code under a qubit that
-contains it. It ends before each return and before each `bennett_measure_bytes` that touches the bytes (the
+contains it. A store of a value that depends on a qubit that runs before the first code under a qubit on every
+path, and is in no loop (so no qubit controls it), is held first: a later write under a qubit into the same
+bytes is then an access to the same shadow, and the last write is the one the bytes keep, as in C. It ends before each return and before each `bennett_measure_bytes` that touches the bytes (the
 programmer's measurement, `docs/MARKERS.md`): there the bytes get their value, and the bytes measured are
 ordinary memory again, holding the result ("Qubits in memory"); the others keep holding qubits, so ordinary
 code may then touch the measured bytes and not the others. Where a path on which the shadow still holds the
@@ -606,9 +608,11 @@ Which pointers may reach the bytes (`front/src/Aliasing.h`). What a pointer argu
 of what the calls of its function in the module pass; a function the host may call (external linkage), or one
 called through a pointer, may be given any address. A pointer the front cannot follow (loaded from memory,
 returned by a call) may point into any object whose address escapes. An argument never points into a local
-variable of its own call, and a `restrict` argument shares no bytes with another pointer. Where every call of
+variable of its own call, and a `restrict` argument shares no bytes with another pointer unless its address
+escapes (a pointer loaded from where a copy of it was stored is based on it, and may reach its bytes). Where every call of
 a static function passes the same pointer for two arguments, the two are one object. A call reaches what its
-pointer arguments point to and what its callee, through the functions it calls, accesses. For a local variable of the
+pointer arguments point to and what its callee, through the functions it calls, accesses, a
+`bennett_measure_bytes` in a callee included (it reads the bytes it measures). For a local variable of the
 function the shadow takes `v` by XOR instead and the stack bytes are left as they are, so they never hold
 qubits after the function returns; the exchange happens only before a measurement of all of them, after which
 `m` holds `v` and is returned to 0 with the function's other known variables.
@@ -618,7 +622,11 @@ measurement), a call that may read or write them meanwhile (given their address,
 directly, as a function reading the global variable does), an access through another pointer that may reach
 them, stores under a qubit through two objects that may share bytes (the route for these two: a static
 function whose calls pass distinct objects or the same pointer, `restrict`, or a check of the addresses at run
-time, not built), an access that touches them only in part, a
+time, not built), a second shadow of the same bytes while the first holds them (an earlier store of a value
+that depends on a qubit that does not run before the code under a qubit on every path, or that is in a loop;
+route: one shadow from the earliest write, not built), a callee that measures them (route: measure them in the
+caller first; for the front, ending the span before a call whose only access to them is that measurement, not
+built), an access that touches them only in part, a
 position that is not constant outside code applied whole, more than 8 bytes of one object, an object the
 front cannot name, and a store into memory in code that also has gates (each a debt in `HANDOFF.md`). The
 front assumes the bytes are ordinary where a span starts: if an earlier call left them holding qubits, the
@@ -636,11 +644,17 @@ the oracle's ten preparations, at O0, O2 and with `--taint-all`; a store under a
 under the same qubit leaves `q` unentangled (a Hadamard then gives 0 every time); a straight store of a value
 that depends on two qubits, a local array, an overwrite whose old value is computed again from the unchanged
 `q` (nothing kept), and the same after a gate on `q`, which keeps its old value (8 qubits, the warning), give
-C's values; and the refusals. `front/tests/tests/held_span_independent.rs`: whole and partial
+C's values; an earlier straight store and later code under a qubit writing the same bytes (one shadow, the last
+write kept, nothing kept); and the refusals, a second shadow, a copy of a `restrict` argument read back and a
+callee that measures held bytes among them. `front/tests/tests/held_span_independent.rs`: whole and partial
 measurements, a span ended by a measurement on one path and a return on another, the overwrites that clear
 by computing the old value again (exact amplitudes, nothing kept) and the one that cannot, a region writing
 two objects (every bit of each change), pointers that may share bytes (refused by name; merged, distinct and
 `restrict` accepted with C's values), and a callee reading the global variable (refused by name).
+`front/tests/tests/held_regions_independent.rs`: two held objects of unequal width (exact amplitudes), a second
+region over held objects, gate barriers before an overwrite, pointer pairs and call chains, seeded short loops
+against native C, a straight store before a region writing the same byte (C's value), a callee measuring a
+held global and a callee reading a saved copy of a `restrict` argument (both refused by name).
 
 ## Applied calls
 

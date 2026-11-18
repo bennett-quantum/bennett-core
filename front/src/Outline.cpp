@@ -423,6 +423,9 @@ void outlineRegions(Function &function, bool taintAll, const std::set<const Func
     removeTrivialPhis(function);
     ControlAnalysis analysis(function, taintAll);
     Instruction *seed = analysis.seed();
+    if (seed && holdStraightWrite(function, analysis, seed)) {
+      continue; // its bytes are held before code under a qubit writes them too
+    }
     if (!seed) {
       if (holdStraightWrite(function, analysis) || finishHeld(function, analysis)) {
         continue;

@@ -1539,3 +1539,33 @@ each runs now at O0, O2 and with `--taint-all`. Documents: `docs/DESIGN.md`, "Fr
   shadow at bit 0 instead of at its bytes. Fix (`front/src/Taint.cpp`, `computeSupport`). Test:
   `two_objects_written_in_one_region_get_every_bit_of_their_change`.
 
+
+## Fixes after the last testing pass over held memory (2026-11-18)
+
+The independent testing pass over the fixes above and rule A at memory as a whole (`d11c934`) left three ignored
+witnesses in `front/tests/tests/held_regions_independent.rs`; each was reproduced, each fails on the code before
+these fixes, and each passes now at O0, O2 and with `--taint-all` (the first runs with C's value, the other two
+are refused by name, which their witnesses accept). Documents: `docs/DESIGN.md`, "Memory written under a qubit";
+`docs/MARKERS.md`; `front/src/HeldBytes.h`, `front/src/Aliasing.h`.
+
+- **An earlier straight store and a later region writing the same byte gave the earlier value** (C: `a = 5` then
+  `if (r) { a = 7; b = 9; }` gives 7; the device gave 5). Cause: the region's writes were held first, and the
+  straight store, held afterwards, opened a second shadow of the same byte whose span took the first shadow's
+  start as an ordinary access; both shadows were exchanged into the byte at the end. Fix
+  (`front/src/Outline.cpp`, `HeldBytes.cpp`): a store of a qubit-dependent value that runs before the first code
+  under a qubit on every path and is in no loop (no qubit can control it) is held first, so the region's write is
+  an access to the same shadow; and a span that meets another shadow's exchange of bytes it may hold, while they
+  hold qubits, is refused by name with the route (one shadow from the earliest write). Tests in
+  `memory_held.rs`: three shapes of earlier store and later region (C's values, nothing kept), and the order the
+  front cannot give one shadow (an earlier store under an ordinary condition), refused; on the old code it gave
+  wrong values.
+- **A callee measuring a held global read the cleared byte** (0 for 5). Cause: the summary of what a function
+  touches left out every marker call, `bennett_measure_bytes` included, which reads the memory it measures. Fix
+  (`front/src/Aliasing.cpp`): that marker reaches the objects its address may point into, so the call is refused by
+  name, asking for the measurement in the caller. Test: a measuring callee two calls down, refused (accepted and
+  wrong on the old code); callees measuring another global, or the bytes after the caller measured them, still run.
+- **A callee reading a saved copy of a `restrict` argument faulted `qubit_memory_access`.** Cause: a `restrict`
+  argument was taken never to share bytes with a pointer the front cannot follow, even when a copy of its address
+  escaped; a pointer loaded from where that copy was stored is based on the argument, and C allows it to reach the
+  bytes. Fix: such a pointer may reach the argument's bytes exactly when its address escapes. Test: the copy read
+  back in the same function, refused (accepted and faulting on the old code).

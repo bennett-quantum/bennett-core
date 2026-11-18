@@ -17,8 +17,8 @@
 //   Where a path on which the shadow holds the bytes joins one on which the span has ended, outside code under a
 //   qubit, the span ends on the edges from the first too.
 //
-// One shadow per object: where another pointer, a call, or a second object written under a qubit may reach the
-// same bytes (Aliasing.h) while they hold qubits, it is refused by name. Two pointer arguments of a static
+// One shadow per object: where another pointer, a call, a second object written under a qubit, or a second shadow
+// of the same object may reach the same bytes (Aliasing.h) while they hold qubits, it is refused by name. Two pointer arguments of a static
 // function that every call gives the same pointer are made one object first.
 //
 // Written as a whole, this is the exchange form of a store: the new value is applied into a fresh register,
@@ -62,8 +62,12 @@ void holdWrites(llvm::Function &function, const std::vector<llvm::Instruction *>
                 const std::set<const llvm::BasicBlock *> &region, ControlAnalysis &analysis);
 
 // Finds a store of a value that depends on a qubit into memory outside every qubit variable, in code no qubit
-// controls, and holds its bytes. Returns whether it found one.
-bool holdStraightWrite(llvm::Function &function, ControlAnalysis &analysis);
+// controls, and holds its bytes. Returns whether it found one. With `before` (the first branch, switch or phi
+// that depends on a qubit), only a store that runs before it on every path and is in no loop: such a store
+// cannot be controlled by a qubit, and holding it first gives a later write under a qubit into the same bytes
+// the same shadow.
+bool holdStraightWrite(llvm::Function &function, ControlAnalysis &analysis,
+                       const llvm::Instruction *before = nullptr);
 
 // After outlining: a store into part of a shadow in the control program becomes a store of the whole shadow
 // (the other bytes kept); a position that is not constant in a shadow, outside code applied whole, is refused.

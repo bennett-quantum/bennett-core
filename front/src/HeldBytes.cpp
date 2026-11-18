@@ -259,7 +259,7 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
   std::set<Instruction *> edgeEnds;
 
   // What an instruction is to this span. `touched`: the bytes a measurement or an access names, when known.
-  enum class Role { Other, Start, End, EdgeEnd, Access, Shares, Passes, Return };
+  enum class Role { Other, Start, End, EdgeEnd, Access, Shares, Passes, Shadowed, Return };
   auto role = [&](Instruction &inst, std::optional<Range> &touched) -> Role {
     touched.reset();
     if (&inst == borrow) {
@@ -307,7 +307,27 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
     if (auto *exchanged = dyn_cast<AtomicCmpXchgInst>(&inst)) {
       return aliasing.mayShare(fn, exchanged->getPointerOperand(), object) ? Role::Shares : Role::Other;
     }
-    if (auto *call = dyn_cast<CallBase>(&inst); call && !isExchange(call) && !markerCall(call)) {
+    if (isExchange(&inst)) {
+      // Another shadow's exchange (this span's own are Start, EdgeEnd, or not walked again once inserted): it
+      // must not take bytes this shadow may hold.
+      auto &call = cast<CallBase>(inst);
+      auto *other = dyn_cast<AllocaInst>(call.getArgOperand(0));
+      Value *address = call.getArgOperand(1);
+      if (other == shadow) {
+        return Role::Other;
+      }
+      auto *bytes = other ? dyn_cast<ArrayType>(other->getAllocatedType()) : nullptr;
+      if (objectOf(address) == object && bytes) {
+        bool exact = false;
+        std::optional<Range> range = rangeOf(address, bytes->getNumElements(), object, exact);
+        if (exact && range && !range->overlaps(hull)) {
+          return Role::Other;
+        }
+        return Role::Shadowed;
+      }
+      return aliasing.mayShare(fn, address, object) ? Role::Shadowed : Role::Other;
+    }
+    if (auto *call = dyn_cast<CallBase>(&inst); call && !markerCall(call)) {
       return aliasing.mayTouch(fn, *call, object) ? Role::Passes : Role::Other;
     }
     return Role::Other;
@@ -335,6 +355,14 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
     return State{State::Done, uint8_t(a.held | b.held)}; // ordinary on some paths, holding qubits on others
   };
   auto refuseHeld = [&](Instruction &inst, Role kind) {
+    if (kind == Role::Shadowed) {
+      notHandled("memory written under a qubit, " + describe(object, hull) +
+                     ", that another write under a qubit holds again while they hold qubits (the front keeps one "
+                     "shadow per object; it takes the earlier write first when that write comes before the code "
+                     "under a qubit on every path and outside a loop; route for other orders: one shadow from the "
+                     "earliest write, not built)",
+                 &inst);
+    }
     if (kind == Role::Shares) {
       notHandled("an access through a pointer that may reach " + describe(object, hull) +
                      " while they hold qubits (the front keeps one shadow per object and cannot tell these pointers "
@@ -415,6 +443,7 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
         }
         case Role::Passes:
         case Role::Shares:
+        case Role::Shadowed:
           if (apply && state.holdsQubits()) {
             refuseHeld(inst, kind);
           }
@@ -555,12 +584,15 @@ void holdWrites(Function &function, const std::vector<Instruction *> &writes, In
   Holder(function, analysis).hold(writes, start, region);
 }
 
-bool holdStraightWrite(Function &function, ControlAnalysis &analysis) {
+bool holdStraightWrite(Function &function, ControlAnalysis &analysis, const Instruction *before) {
   for (Instruction &inst : instructions(function)) {
     auto *store = dyn_cast<StoreInst>(&inst);
     if (!store || analysis.basedOn(store->getPointerOperand()) || !analysis.tainted(store->getValueOperand()) ||
         analysis.tainted(store->getPointerOperand())) {
       continue;
+    }
+    if (before && (!analysis.dominators.dominates(store, before) || analysis.loops.getLoopFor(store->getParent()))) {
+      continue; // it may run after `before`, or be controlled by it
     }
     holdWrites(function, {store}, store, {}, analysis);
     return true;

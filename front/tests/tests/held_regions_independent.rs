@@ -460,7 +460,6 @@ uint64_t entry(unsigned prep, unsigned unused) {
 }
 
 #[test]
-#[ignore = "a later controlled region exchanges the byte before the earlier straight store's shadow gives it back"]
 fn straight_store_then_two_object_region_preserves_the_last_write() {
     let name = "held-regions-overlapping-spans";
     let source = fixture(
@@ -503,7 +502,6 @@ fn assert_call_is_safe(name: &str, source: &Path) {
 }
 
 #[test]
-#[ignore = "a callee measuring a global reads its cleared bytes while the caller still holds its value in a shadow"]
 fn a_callee_cannot_measure_the_cleared_storage_of_a_live_shadow() {
     let name = "held-regions-callee-marker";
     let source = fixture(
@@ -525,7 +523,6 @@ uint64_t entry(unsigned unused, unsigned also_unused) {
 }
 
 #[test]
-#[ignore = "a callee can follow a saved copy of a restrict pointer and fault on held bytes"]
 fn a_saved_copy_of_a_restrict_pointer_can_reach_its_held_bytes() {
     let name = "held-regions-restrict-escape";
     let source = fixture(

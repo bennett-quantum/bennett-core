@@ -150,7 +150,11 @@ Aliasing::Objects Aliasing::objectsOf(const Value *pointer) const {
 }
 
 Aliasing::Objects Aliasing::touchedBy(const CallBase &call) const {
-  if (markerCall(&call) || isExchange(&call) || call.doesNotAccessMemory()) {
+  std::optional<Marker> marker = markerCall(&call);
+  if (marker && marker->kind == MarkerKind::MeasureBytes) {
+    return objectsOf(call.getArgOperand(0)); // the only marker that names memory: it reads the bytes it measures
+  }
+  if (marker || isExchange(&call) || call.doesNotAccessMemory()) {
     return {};
   }
   // The memory this call's pointer arguments point to (its callee's own set says what those arguments may be for
@@ -237,7 +241,8 @@ bool Aliasing::meet(const Function &function, const Objects &a, const Objects &b
   // An object from `named` may share bytes with an element of `other` that is one of the sentinels.
   auto reaches = [&](const Value *sentinel, const Value *object) {
     if (const auto *argument = dyn_cast<Argument>(object); argument && isRestrict(*argument)) {
-      return false;
+      // Only a pointer based on it may reach its bytes: one the front follows, or a copy of it that escaped.
+      return escapes(object);
     }
     const auto *local = dyn_cast<AllocaInst>(object);
     if (sentinel == anything) {

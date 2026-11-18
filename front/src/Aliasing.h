@@ -7,7 +7,9 @@
 // for a function the host may call (one with external linkage), or one called through a pointer, it is anything.
 // A pointer the front cannot follow (loaded from memory, returned by a call) may point into any object whose
 // address escapes (LLVM's capture tracking). An argument never points into a local variable of its own call, and
-// a `restrict` argument shares no bytes with another pointer. When unsure, the answer is "may share".
+// a `restrict` argument shares no bytes with another pointer unless its address escapes (a pointer loaded from
+// where a copy of it was stored is based on it). A call of `bennett_measure_bytes` reads the memory it measures.
+// When unsure, the answer is "may share".
 #pragma once
 
 #include <map>

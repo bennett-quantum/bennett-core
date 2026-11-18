@@ -333,3 +333,99 @@ fn memory_that_holds_qubits_is_refused_to_ordinary_code_and_the_rest_is_named() 
         assert!(error.contains(message), "{name}: {error}");
     }
 }
+
+/// A store of a qubit-dependent value that runs before code under a qubit on every path, outside a loop, and that
+/// code writing the same bytes: one shadow holds them from the earlier store, so the later write is the last one,
+/// as in C. Each case gives C's value for each value of the qubits; nothing is kept.
+#[test]
+fn an_earlier_straight_store_and_later_code_under_a_qubit_share_one_shadow() {
+    let cases: [(&str, &str, fn(u64, u64) -> u64); 3] = [
+        (
+            "held-straight-then-region",
+            "g[0] = 3 + 2 * q;\n    if (r) { g[0] = 7; h = 9; }\n    return bennett_measure_bytes(g, 1) | bennett_measure_bytes(&h, 1) << 8 | bennett_measure(&q) << 16 | bennett_measure(&r) << 17;",
+            |q, r| if r == 1 { 7 | 9 << 8 } else { (3 + 2 * q) | 13 << 8 } | q << 16 | r << 17,
+        ),
+        (
+            "held-straight-then-update",
+            "g[0] = q + 1;\n    if (r) g[0] += 4;\n    return bennett_measure_bytes(g, 1) | bennett_measure(&q) << 16 | bennett_measure(&r) << 17;",
+            |q, r| (q + 1 + 4 * r) | q << 16 | r << 17,
+        ),
+        (
+            "held-straight-two-bytes",
+            "g[0] = q; g[1] = q + 5;\n    if (r) g[1] = 2;\n    return bennett_measure_bytes(g, 2) | bennett_measure(&q) << 16 | bennett_measure(&r) << 17;",
+            |q, r| q | (if r == 1 { 2 } else { q + 5 }) << 8 | q << 16 | r << 17,
+        ),
+    ];
+    for (name, body, f) in cases {
+        let source = program(
+            name,
+            &format!(
+                "unsigned char h = 13;\nunsigned long long entry(void) {{\n    _Bool q = 0, r = 0; bennett_h(&q); bennett_h(&r);\n    {body}\n}}"
+            ),
+        );
+        for (mode, clang, flags) in MODES {
+            let module = lower(&source, &format!("{name}-{mode}"), clang, flags);
+            let mut seen = std::collections::BTreeSet::new();
+            for seed in 0..64 {
+                let (outcome, stats) = run_with_stats(&module, "entry", &[], seed);
+                assert_eq!(stats.nonzero_releases, 0, "{name} {mode}: releases");
+                seen.insert(returned(outcome, name));
+            }
+            let expected: std::collections::BTreeSet<u128> = (0..4).map(|b| u128::from(f(b & 1, b >> 1))).collect();
+            assert_eq!(seen, expected, "{name} {mode}");
+        }
+    }
+}
+
+/// What one shadow per object cannot do yet is refused by name, never run with a wrong value or a fault: an
+/// earlier store under an ordinary condition (it does not run before the code under a qubit on every path), which
+/// would give the same bytes a second shadow; a `restrict` argument whose copy escaped and is read back while its
+/// bytes hold qubits; a callee that measures held bytes of the caller.
+#[test]
+fn a_second_shadow_an_escaped_restrict_copy_and_a_measuring_callee_are_refused() {
+    let cases = [
+        (
+            "held-second-shadow",
+            "unsigned long long entry(unsigned c) {\n    _Bool q = 0, r = 0; bennett_h(&q); bennett_h(&r);\n    if (c & 1) g[0] = q + 1;\n    if (r) g[0] = 7;\n    return bennett_measure_bytes(g, 1) | bennett_measure(&q) << 8 | bennett_measure(&r) << 9;\n}",
+            "that another write under a qubit holds again",
+        ),
+        (
+            "held-restrict-copy",
+            "unsigned char *volatile saved;\n__attribute__((noinline)) unsigned writer(unsigned char *restrict p) {\n    saved = p;\n    _Bool q = 0; bennett_h(&q);\n    if (q) *p = 5;\n    unsigned char v = *saved;\n    return v + bennett_measure(&q);\n}\nunsigned long long entry(void) { return writer(g); }",
+            "an access through a pointer that may reach 1 byte at %p+0",
+        ),
+        (
+            "held-measuring-callee",
+            "__attribute__((noinline)) static unsigned long long snapshot(void) { return bennett_measure_bytes(g, 1); }\n__attribute__((noinline)) static unsigned long long middle(void) { return snapshot() + 1; }\nunsigned long long entry(void) {\n    _Bool q = 0; bennett_h(&q);\n    if (q) g[0] = 5;\n    return middle() | bennett_measure(&q) << 8;\n}",
+            "a call that may read or write memory of @g while 1 byte at @g+0 hold qubits",
+        ),
+    ];
+    for (name, body, message) in cases {
+        for (mode, clang, flags) in MODES {
+            let error = lower_text(&program(name, body), &format!("{name}-{mode}"), clang, flags)
+                .expect_err(&format!("{name} {mode}"));
+            assert!(error.contains(message), "{name} {mode}: {error}");
+        }
+    }
+}
+
+/// The refusals above are not over-cautious where the bytes cannot be reached: a callee that measures another
+/// global, and one that measures the bytes after the caller has measured them, run with C's values.
+#[test]
+fn callees_measuring_other_or_measured_bytes_still_run() {
+    let source = program(
+        "held-callee-measures-other",
+        "unsigned char k = 6;\n__attribute__((noinline)) static unsigned long long other(void) { return bennett_measure_bytes(&k, 1); }\n__attribute__((noinline)) static unsigned long long again(void) { return bennett_measure_bytes(g, 1); }\nunsigned long long entry(void) {\n    _Bool q = 0; bennett_h(&q);\n    if (q) g[0] = 5;\n    unsigned long long early = other();\n    unsigned long long held = bennett_measure_bytes(g, 1);\n    return early | held << 8 | again() << 16 | bennett_measure(&q) << 24;\n}",
+    );
+    for (mode, clang, flags) in MODES {
+        let module = lower(&source, &format!("held-callee-measures-other-{mode}"), clang, flags);
+        let mut seen = std::collections::BTreeSet::new();
+        for seed in 0..32 {
+            seen.insert(returned(run_with_stats(&module, "entry", &[], seed).0, mode));
+        }
+        let expected: std::collections::BTreeSet<u128> = (0..2u128)
+            .map(|q| 6 | (if q == 1 { 5 } else { 1 }) << 8 | (if q == 1 { 5 } else { 1 }) << 16 | q << 24)
+            .collect();
+        assert_eq!(seen, expected, "{mode}");
+    }
+}
