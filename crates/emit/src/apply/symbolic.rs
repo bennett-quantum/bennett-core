@@ -31,7 +31,7 @@ pub(super) enum Status {
 pub(super) enum Step<'a> {
     Write(Point, Slot, Word),
     Jump(&'a Target),
-    Branch,
+    Branch(Bit, &'a Target, &'a Target),
     Return(Word),
 }
 
@@ -159,7 +159,7 @@ impl<'a> Frame<'a> {
             Terminator::Branch { cond, if_true, if_false } => match read(cond)[0] {
                 Bit::Constant(true) => Step::Jump(if_true),
                 Bit::Constant(false) => Step::Jump(if_false),
-                Bit::Wire(..) => Step::Branch,
+                bit @ Bit::Wire(..) => Step::Branch(bit, if_true, if_false),
             },
             Terminator::Return(Some(value)) => Step::Return(read(value)),
             Terminator::Return(None)

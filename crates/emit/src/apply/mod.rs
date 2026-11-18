@@ -2,6 +2,7 @@
 
 mod arithmetic;
 mod bits;
+mod machine;
 mod symbolic;
 
 use std::fmt;
@@ -10,7 +11,7 @@ use std::ops::Range;
 use bennett_exec::{Device, GateBlock, RunError, Wire};
 use bennett_ir::{BlockId, Fault, FuncId, Type, ValidModule};
 
-use self::bits::{Circuit, ONE, constant};
+use self::bits::{Bit, Circuit, ONE, Word, constant};
 use self::symbolic::{Frame, Point, Status, Step};
 
 /// An argument resolved by the ordinary controller.
@@ -48,6 +49,8 @@ pub struct ApplyInput<'a> {
 pub enum ApplyError {
     /// The supplied argument or destination wire ranges do not match the interface.
     Interface,
+    /// The circuit exhausted the wire address space.
+    WireSpace,
     /// The instruction at the given program point needs a construction not implemented yet.
     Unsupported {
         /// Applied function.
@@ -67,6 +70,7 @@ impl fmt::Display for ApplyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Interface => f.write_str("invalid applied circuit interface"),
+            Self::WireSpace => f.write_str("applied circuit exhausted the wire address space"),
             Self::Unsupported { callee, block, index, operation, route } => {
                 write!(
                     f,
@@ -80,13 +84,27 @@ impl fmt::Display for ApplyError {
 
 impl std::error::Error for ApplyError {}
 
-/// Gates and the number of instructions charged while following definite control.
+/// The control construction selected for one applied function.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Construction {
+    /// The next instruction was definite until the return or fault.
+    Definite,
+    /// A qubit-dependent jump required instruction dispatch.
+    StepMachine {
+        /// Ticks after the definite prefix, including the first qubit-dependent jump.
+        ticks: u64,
+    },
+}
+
+/// Gates and the instruction charges of the construction.
 #[derive(Debug)]
 pub struct CompiledApply {
     /// Compute, copy and undo, including the scratch lifetime.
     pub block: GateBlock,
     /// Number of successful steps executed before return, fault or dynamic control.
     pub definite_steps: u64,
+    /// Control construction used for the circuit.
+    pub construction: Construction,
 }
 
 impl CompiledApply {
@@ -128,8 +146,25 @@ impl ApplyInput<'_> {
     }
 }
 
-/// Follow definite control, emitting gates for data that depend on qubits.
-/// A jump whose destination depends on qubits needs the step machine.
+#[derive(Default)]
+struct Copies {
+    returned: Vec<(Bit, Word)>,
+    faulted: Vec<(Bit, Fault)>,
+}
+
+impl Copies {
+    fn write(self, circuit: &mut Circuit, out: Range<Wire>, fault: Range<Wire>) {
+        for (enabled, value) in self.returned {
+            circuit.copy(out.clone(), &value, enabled);
+        }
+        for (enabled, code) in self.faulted {
+            let word = constant(u128::from(code.code()), Fault::CODE_WIDTH.bits() as usize);
+            circuit.copy(fault.clone(), &word, enabled);
+        }
+    }
+}
+
+/// Follow definite control, switching to the step machine at a qubit-dependent jump.
 pub fn compile_apply(input: ApplyInput<'_>) -> Result<CompiledApply, ApplyError> {
     input.check_interface()?;
     let frame = Frame { module: input.module, callee: input.callee };
@@ -141,33 +176,38 @@ pub fn compile_apply(input: ApplyInput<'_>) -> Result<CompiledApply, ApplyError>
         None => Status::Running(Point::entry(BlockId(0))),
     };
     let mut spent = 0;
-    while let Status::Running(point) = status {
-        if spent == input.budget {
-            status = Status::Faulted(Fault::Budget);
-            break;
-        }
-        status = match frame.step(&mut circuit, &slots, point)? {
-            Step::Write(next, dst, word) => {
-                slots[dst.index()] = word;
-                Status::Running(next)
+    let (copies, construction) = loop {
+        match status {
+            Status::Returned(word) => {
+                break (Copies { returned: vec![(ONE, word)], faulted: Vec::new() }, Construction::Definite);
             }
-            Step::Jump(target) => Status::Running(frame.jump(&mut slots, target)),
-            Step::Branch => return Err(frame.error(point, "br", "dispatch on a qubit-dependent program point")),
-            Step::Return(word) => Status::Returned(word),
-        };
-        spent += 1;
-    }
-    let forward = circuit.forward_len();
-    match status {
-        Status::Returned(word) => circuit.copy(input.out, &word, ONE),
-        Status::Faulted(fault) => {
-            let word = constant(u128::from(fault.code()), Fault::CODE_WIDTH.bits() as usize);
-            circuit.copy(input.fault, &word, ONE);
+            Status::Faulted(code) => {
+                break (Copies { returned: Vec::new(), faulted: vec![(ONE, code)] }, Construction::Definite);
+            }
+            Status::Running(_) if spent == input.budget => status = Status::Faulted(Fault::Budget),
+            Status::Running(point) => {
+                status = match frame.step(&mut circuit, &slots, point)? {
+                    Step::Write(next, dst, word) => {
+                        slots[dst.index()] = word;
+                        Status::Running(next)
+                    }
+                    Step::Jump(target) => Status::Running(frame.jump(&mut slots, target)),
+                    Step::Branch(..) => {
+                        let (copies, ticks) =
+                            machine::run(&mut circuit, &frame, &mut slots, point, input.budget - spent)?;
+                        break (copies, Construction::StepMachine { ticks });
+                    }
+                    Step::Return(word) => Status::Returned(word),
+                };
+                spent += 1;
+            }
         }
-        Status::Running(_) => unreachable!("the run ended before the result copy"),
-    }
+    };
+    let forward = circuit.forward_len();
+    copies.write(&mut circuit, input.out, input.fault);
     Ok(CompiledApply {
-        block: circuit.finish(forward, &input.module.function(input.callee).name),
+        block: circuit.finish(forward, &input.module.function(input.callee).name)?,
         definite_steps: spent,
+        construction,
     })
 }

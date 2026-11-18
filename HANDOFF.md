@@ -9,8 +9,8 @@ measure. The earlier `bennett-*` repositories are a read-only archive. Vision: `
 C with a few marker calls (`docs/MARKERS.md`) goes through stock `clang` 18, then `bennett-front` (C++ over LLVM 18), which writes a
 *device program* (`crates/ir`: ordinary code plus quantum instructions), which the *executor* (`crates/exec`) runs. The executor is a
 simulator of the model in `docs/DESIGN.md`. The device interface and counter are available.
-The gate emitter can compile applied integer functions with definite control as a standalone
-operation. The device controller still evaluates `apply` only in the simulator.
+The gate emitter can compile applied integer functions and loops as a standalone operation.
+The device controller still evaluates `apply` only in the simulator.
 
 What works, one line each (the commit-by-commit table is in `docs/RECORDS.md`, part two):
 
@@ -29,7 +29,7 @@ What works, one line each (the commit-by-commit table is in `docs/RECORDS.md`, p
 
 Run each in the foreground, from the repository root (`CARGO_BUILD_JOBS=3` on the shared laptop):
 
-- `cargo test`: 286 passed, 0 failed, 4 ignored (each names its reason: heavy reference, generated runs, witnesses of recorded defects); about 10 s, no LLVM needed.
+- `cargo test`: 356 passed, 0 failed, 4 ignored (each names its reason: heavy reference, generated runs, witnesses of recorded defects); about 10 s, no LLVM needed.
 - `front/test.sh` (needs LLVM 18, clang 18, CMake): 345 passed, 0 failed, 22 ignored (each names its reason: the fallback oracle's waiting test, the SQLite acceptance, the North Star ladder runs, musl-linked checks that need `rt/musl/build.py` first, heavy runs, witnesses of recorded debts); it also compiles the C++ header and classifies the 88 LLVM attribute kinds.
 - `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check`: both clean on 2026-11-18 (`scripts/check.sh`: tree guards 3,642 files, 0 problems).
 - `scripts/check.sh` runs all four plus the tree guards (`docs/CHECKS.md`).
@@ -74,9 +74,9 @@ Newest first; quotes are the maintainer's words.
 
 ## In flight
 
-The device interface and step tests have landed. Gate compilation with definite control is
-the first step on `wip/sol62-loops-m2`. The next step is a circuit that dispatches instructions
-when a jump depends on qubits.
+The device interface and step tests have landed. The gate compiler on `wip/sol62-loops-m2`
+follows definite control and uses a single clock for qubit-dependent jumps, including nested
+loops. The next step is saved decisions for one proved loop.
 
 - Device support: an interface between the executor and its quantum simulator (so the simulator can be replaced); a counting device that only counts qubits and gates; rewriting of gates with many controls for a machine with one- and two-qubit gates and the Toffoli gate; a bit-level circuit runner that checks reversible gate lists against independent references.
 - `wip/sol62-stepspec` (landed): tests pinning an exact statement of what an applied function does for one definite input, step by step, and a change that makes the slots of a new frame zero.

@@ -6,6 +6,6 @@ mod count;
 mod lower;
 mod schedule;
 
-pub use apply::{ApplyError, ApplyInput, Argument, CompiledApply, compile_apply};
+pub use apply::{ApplyError, ApplyInput, Argument, CompiledApply, Construction, compile_apply};
 pub use count::{CountingDevice, Counts, seeded_bits};
 pub use lower::LowerControls;

@@ -152,3 +152,92 @@ entry:
     })
     .expect("wide arithmetic, XOR destinations and scratch");
 }
+
+#[test]
+fn nested_loops_share_the_clock_after_the_definite_prefix() {
+    let module = load(
+        r#"
+memory 1024
+func @f(i2 %x, i2 %y) -> i1 {
+entry:
+    %first = icmp ne i2 %x, 0
+    br %first, inner(%x, %y, i1 0), done(i1 0)
+inner(i2 %i, i2 %j, i1 %z):
+    %more = icmp ne i2 %j, 0
+    br %more, flip, leave
+flip:
+    %toggled = xor i1 %z, 1
+    %next_j = sub i2 %j, 1
+    br inner(%i, %next_j, %toggled)
+leave:
+    %next_i = sub i2 %i, 1
+    br outer(%next_i, %z)
+outer(i2 %left, i1 %parity):
+    %again = icmp ne i2 %left, 0
+    br %again, inner(%left, %y, %parity), done(%parity)
+done(i1 %result):
+    ret %result
+}
+"#,
+    )
+    .expect("valid nested loops");
+    for budget in [1, 2, 3, 13, 14, 15, 35] {
+        let compiled = compile_apply(ApplyInput {
+            module: &module,
+            callee: module.function_named("f").expect("f"),
+            args: &[Argument::Register(0..2), Argument::Register(2..4)],
+            out: 4..5,
+            fault: 5..10,
+            budget,
+            entry_fault: None,
+            scratch_start: 10,
+        })
+        .expect("emit both loops under one clock");
+        assert_eq!(compiled.definite_steps, 1);
+        let expected = if budget == 1 {
+            bennett_emit::Construction::Definite
+        } else {
+            bennett_emit::Construction::StepMachine { ticks: budget - 1 }
+        };
+        assert_eq!(compiled.construction, expected);
+        check(&compiled, 4, 6, |input| {
+            let (x, y) = (input & 3, input >> 2);
+            let steps = 3 + x * (6 + 5 * y);
+            if steps <= u128::from(budget) { (x * y) & 1 } else { 2 }
+        });
+    }
+}
+
+#[test]
+fn coincident_successors_keep_their_own_parallel_arguments() {
+    let module = load(
+        r#"
+memory 128
+func @f(i1 %c, i3 %x, i3 %y) -> i3 {
+entry:
+    br %c, join(%x, %y), join(%y, %x)
+join(i3 %a, i3 %b):
+    %result = sub i3 %a, %b
+    ret %result
+}
+"#,
+    )
+    .expect("valid join");
+    let compiled = compile_apply(ApplyInput {
+        module: &module,
+        callee: module.function_named("f").expect("f"),
+        args: &[Argument::Register(0..1), Argument::Register(1..4), Argument::Register(4..7)],
+        out: 7..10,
+        fault: 10..15,
+        budget: 10,
+        entry_fault: None,
+        scratch_start: 15,
+    })
+    .expect("emit two edges to one successor");
+    assert_eq!(compiled.construction, bennett_emit::Construction::StepMachine { ticks: 3 });
+    check(&compiled, 7, 8, |input| {
+        let x = (input >> 1) & 7;
+        let y = input >> 4;
+        if input & 1 != 0 { x.wrapping_sub(y) & 7 } else { y.wrapping_sub(x) & 7 }
+    });
+}

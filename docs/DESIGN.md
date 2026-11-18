@@ -275,7 +275,7 @@ state, all returned to 0, that is at most a constant times `B` times (the size o
 gates. These are upper bounds for this construction; nothing here says a cheaper circuit cannot exist. The
 executor's step counts (`Stats`, `RegionCost`) count instructions, not gates; they are not a cost on a device.
 
-**Gate emitter, definite control.** The standalone compiler in `emit` follows the applied
+**Gate emitter.** The standalone compiler in `emit` follows the applied
 function while its next instruction is definite. It represents each bit as a constant or the
 value of a qubit, and computes new bits by reversible gates into scratch qubits. It handles
 addition, subtraction, AND, XOR, shifts and multiplication with a definite shift or factor,
@@ -285,10 +285,22 @@ test. Every successful instruction, including a jump or return, costs one step. 
 XORs only the first result or fault code into its destination, then reverses every forward
 gate and releases the scratch in zero.
 
-Compilation completes before any commands are sent. A qubit-dependent jump needs dispatch
-on a qubit-dependent program point. Calls, memory, division and the other instructions outside
-this subset are refused with the operation, its location, and the construction it needs.
-The controller does not yet use this standalone compiler.
+A **program point** is a position naming the next instruction. At the first
+qubit-dependent jump, the compiler switches to a step machine. It carries one dispatch bit for
+each possible program point, set for the definite inputs whose next instruction is there. Each
+tick reads only the preceding frame. An instruction's dispatch bit controls its writes and which
+successor receives the active bit. Incoming edges to the same point are mutually exclusive, so
+XOR joins their dispatch bits. Returned inputs have no active point and keep their frozen
+result. At the budget boundary each still-active input gets the code `budget`.
+
+The clock starts with the number of steps left after the definite prefix, counting the first
+qubit-dependent jump as the first tick. It is shared by all loops. The gates in a tick cover
+the possible instructions once each, so nesting adds instructions to the schedule. When no
+possible point remains, the machine can stop early.
+
+Compilation completes before any commands are sent. Calls, memory, division and the other
+instructions outside this subset are refused with the operation, its location, and the
+construction it needs. The controller does not yet use this standalone compiler.
 
 **Faults for some argument values.** With a fault register that starts at 0, measuring it afterwards finds a
 fault with probability equal to the total weight of the faulting configurations, and the state collapses onto

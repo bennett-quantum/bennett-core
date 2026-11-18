@@ -5,6 +5,8 @@ use std::ops::Range;
 use bennett_exec::{BlockOp, GateBlock, GateOp, Wire};
 use bennett_ir::{FixedGate, Gate};
 
+use super::ApplyError;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Bit {
     Constant(bool),
@@ -50,7 +52,7 @@ impl Circuit {
 
     pub(super) fn fresh(&mut self) -> Wire {
         let wire = self.next;
-        self.next += 1;
+        self.next = self.next.saturating_add(1);
         wire
     }
 
@@ -120,9 +122,20 @@ impl Circuit {
         if condition == ZERO {
             return no;
         }
-        let difference = self.xor(yes, no);
-        let change = self.and(condition, difference);
-        self.xor(no, change)
+        match (yes, no) {
+            (ZERO, bit) => self.and(condition.not(), bit),
+            (ONE, bit) => self.and(condition.not(), bit.not()).not(),
+            (bit, ZERO) => self.and(condition, bit),
+            (bit, ONE) => self.and(condition, bit.not()).not(),
+            (Bit::Wire(..), Bit::Wire(..)) if yes == no.not() => self.xor(no, condition),
+            (Bit::Wire(..), Bit::Wire(..)) => {
+                let wire = self.fresh();
+                self.xor_into(wire, no, ONE);
+                self.xor_into(wire, yes, condition);
+                self.xor_into(wire, no, condition);
+                Bit::Wire(wire, false)
+            }
+        }
     }
 
     pub(super) fn copy(&mut self, target: Range<Wire>, word: &[Bit], enabled: Bit) {
@@ -135,14 +148,19 @@ impl Circuit {
         self.gates.len()
     }
 
-    pub(super) fn finish(self, forward_len: usize, name: &str) -> GateBlock {
+    pub(super) fn finish(mut self, forward_len: usize, name: &str) -> Result<GateBlock, ApplyError> {
+        if self.next == Wire::MAX {
+            return Err(ApplyError::WireSpace);
+        }
         let scratch = self.start..self.next;
-        let inverse = self.gates[..forward_len].iter().rev().cloned().map(BlockOp::Gate).collect::<Vec<_>>();
+        self.gates.reserve(forward_len);
+        for index in (0..forward_len).rev() {
+            self.gates.push(self.gates[index].clone());
+        }
         let ops = [BlockOp::Allocate(scratch.clone())]
             .into_iter()
             .chain(self.gates.into_iter().map(BlockOp::Gate))
-            .chain(inverse)
             .chain([BlockOp::ReleaseZero(scratch)]);
-        GateBlock::from_ops(name, ops)
+        Ok(GateBlock::from_ops(name, ops))
     }
 }
