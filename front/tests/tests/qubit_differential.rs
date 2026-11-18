@@ -1,4 +1,4 @@
-//! Compare short C programs with native execution at every measured input value.
+//! Compare short C programs with native execution and check the simulated state before readout.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -15,10 +15,15 @@ use rand_chacha::ChaCha8Rng;
 
 #[path = "qubit_differential/generator.rs"]
 mod generator;
+#[path = "qubit_differential/state.rs"]
+mod state;
+
+use state::{Check, Field, Preparation};
 
 const SEED: u64 = 0x8719_6caa_251d_0f43;
-const SHORT_CASES: usize = 2 * MODES.len() * generator::EXTRA_SHAPES;
+const SHORT_CASES: usize = generator::SHORT_CASES;
 const EXTRA_SEED_MASK: u64 = 0xe911_2825_44ba_3983;
+const STATE_SEED_MASK: u64 = 0xdba2_4ce8_b7e9_8163;
 const LONG_TIME: Duration = Duration::from_secs(15 * 60);
 const MODES: [(&str, &[&str], &[&str]); 3] =
     [("o0", CLANG_FLAGS, &[]), ("o2", CLANG_O2_FLAGS, &[]), ("taint", CLANG_FLAGS, &["--taint-all"])];
@@ -32,6 +37,8 @@ typedef unsigned __int128 packet;
 #define PREPARE(n) ((unsigned char)prep)
 #define HBIT(q, b) ((void)0)
 #define XBIT(q, b) ((q) ^= 1U << (b))
+#define ZBIT(q, b) ((void)0)
+#define SBIT(q, b) ((void)0)
 #define bennett_measure(p) (*(p))
 static uint64_t bennett_measure_bytes(const void *p, unsigned n) {
     const unsigned char *bytes = p;
@@ -44,6 +51,8 @@ static uint64_t bennett_measure_bytes(const void *p, unsigned n) {
 #define PREPARE(n) 0
 #define HBIT(q, b) bennett_h(bennett_bit(&(q), (b)))
 #define XBIT(q, b) bennett_x(bennett_bit(&(q), (b)))
+#define ZBIT(q, b) bennett_z(bennett_bit(&(q), (b)))
+#define SBIT(q, b) bennett_s(bennett_bit(&(q), (b)))
 #endif
 "#;
 const DRIVER: &str = r#"
@@ -63,6 +72,7 @@ struct Case {
     trips: u64,
     packets: u64,
     expectation: Expectation,
+    state: Option<Check>,
 }
 
 enum Expectation {
@@ -98,7 +108,7 @@ impl Expectation {
 
 impl Case {
     fn values(body: String, qubits: u32, trips: u64, packets: u64, clean: bool) -> Self {
-        Self { body, qubits, trips, packets, expectation: Expectation::Values { clean } }
+        Self { body, qubits, trips, packets, expectation: Expectation::Values { clean }, state: None }
     }
 
     fn native_table(&self, executable: &Path) -> Vec<Vec<u128>> {
@@ -130,6 +140,7 @@ struct Results {
     accepted: usize,
     compared: usize,
     clean: usize,
+    state: state::Counts,
     failed: usize,
     declined: BTreeMap<String, usize>,
 }
@@ -138,11 +149,15 @@ impl Results {
     fn print(&self, seed: u64, elapsed: Duration) {
         let declined: usize = self.declined.values().sum();
         println!(
-            "seed={seed:#018x} generated={} accepted={} declined={declined} compared={} clean={} failed={} elapsed={:.2}s",
+            "seed={seed:#018x} generated={} accepted={} declined={declined} compared={} clean={} state={} phase={} return_to_zero={} retained={} failed={} elapsed={:.2}s",
             self.generated,
             self.accepted,
             self.compared,
             self.clean,
+            self.state.total,
+            self.state.phase,
+            self.state.return_to_zero,
+            self.state.retained,
             self.failed,
             elapsed.as_secs_f64()
         );
@@ -230,34 +245,50 @@ fn try_case(case: &Case, name: &str, mode: usize, results: &mut Results) -> Resu
     results.clean += usize::from(case.expectation.clean());
     let module = bennett_ir::load(&text).map_err(|error| format!("front emitted an invalid program: {error}"))?;
     let native = native_build(&source, name, &["-DNATIVE"]);
-    compare(case, &module, &case.native_table(&native), &mut results.compared)?;
+    let table = case.native_table(&native);
+    compare(case, &module, &table, &mut results.compared)?;
     if matches!(case.expectation, Expectation::ConditionalWrite) {
         return Err("accepted a call that may write memory under a qubit-dependent condition".to_owned());
     }
-    case.expectation.check_diagnostics(&diagnostics)
+    case.expectation.check_diagnostics(&diagnostics)?;
+    let retained_bits = match case.expectation {
+        Expectation::Retained(bits) => bits,
+        _ => 0,
+    };
+    if case.expectation.clean() || retained_bits > 0 {
+        let check = case.state.as_ref().expect("generated clean or retained case has a state check");
+        state::compare(check, &module, &table, case.trips, retained_bits, &mut results.state)?;
+    }
+    Ok(())
+}
+
+fn hadamards(out: &mut String, qubits: u32) {
+    for i in 0..qubits {
+        writeln!(out, "    HBIT(q, {i});").expect("write gate");
+    }
 }
 
 fn prepare(qubits: u32) -> String {
     let mut out = String::from("    unsigned char q = PREPARE(prep);\n");
-    for i in 0..qubits {
-        writeln!(out, "    HBIT(q, {i});").expect("write gate");
-    }
+    hadamards(&mut out, qubits);
     out
 }
 
 // Each packet carries the measured q in its lowest byte and up to 15 bytes of object data.
-fn measure_objects(body: &mut String, objects: &[(String, u32)]) -> u64 {
+fn measure_objects(body: &mut String, objects: &[(String, u32)]) -> (u64, Vec<Field>) {
     body.push_str("    packet key = bennett_measure(&q);\n");
     for (i, (object, bytes)) in objects.iter().enumerate() {
         writeln!(body, "    packet v{i} = bennett_measure_bytes(&{object}, {bytes});").expect("write measurement");
     }
     let mut packets = vec![String::from("key")];
+    let mut fields = vec![Field { packet: 0, shift: 0 }];
     let mut shift = 8;
     for (i, (_, bytes)) in objects.iter().enumerate() {
         if shift + 8 * bytes > 128 {
             packets.push(String::from("key"));
             shift = 8;
         }
+        fields.push(Field { packet: packets.len() - 1, shift });
         write!(packets.last_mut().expect("packet"), " | (v{i} << {shift})").expect("pack measurement");
         shift += 8 * bytes;
     }
@@ -265,18 +296,19 @@ fn measure_objects(body: &mut String, objects: &[(String, u32)]) -> u64 {
         writeln!(body, "    if (column == {column}) return {packet};").expect("select packet");
     }
     writeln!(body, "    return {};\n}}", packets.last().expect("last packet")).expect("write return");
-    packets.len() as u64
+    (packets.len() as u64, fields)
 }
 
-// Each added recipe runs in every compiler mode in this fixed prefix.
+// The original fixed prefix, then one case from each state recipe.
 #[test]
 fn short_randomized_differential() {
-    campaign("qubit-differential-short", SEED, Some(SHORT_CASES), None);
+    campaign("qubit-differential-short", SEED, Some(SHORT_CASES), None, None);
 }
 
 // Build the front with front/test.sh, then run:
 // cargo test -p bennett-front-tests --test qubit_differential long_randomized_differential -- --ignored --exact --nocapture
-// BENNETT_RANDOM_CASES caps the case count. BENNETT_RANDOM_SEED accepts a decimal or 0x-prefixed seed.
+// BENNETT_RANDOM_CASES caps the case count. BENNETT_RANDOM_INDEX replays one case.
+// BENNETT_RANDOM_SEED accepts a decimal or 0x-prefixed seed.
 #[test]
 #[ignore = "runs the differential generator for up to fifteen minutes"]
 fn long_randomized_differential() {
@@ -284,18 +316,26 @@ fn long_randomized_differential() {
     let seed = std::env::var("BENNETT_RANDOM_SEED").ok().map_or(SEED, |value| {
         value.strip_prefix("0x").map_or_else(|| value.parse(), |hex| u64::from_str_radix(hex, 16)).expect("seed")
     });
-    campaign("qubit-differential-long", seed, limit, Some(LONG_TIME));
+    let replay = std::env::var("BENNETT_RANDOM_INDEX").ok().map(|value| value.parse().expect("case index"));
+    campaign("qubit-differential-long", seed, limit, Some(LONG_TIME), replay);
 }
 
-fn campaign(name: &str, seed: u64, limit: Option<usize>, time: Option<Duration>) {
+fn campaign(name: &str, seed: u64, limit: Option<usize>, time: Option<Duration>, replay: Option<usize>) {
+    let limit = if replay.is_some() { Some(1) } else { limit };
     let mut original = ChaCha8Rng::seed_from_u64(seed);
     let mut extra = ChaCha8Rng::seed_from_u64(seed ^ EXTRA_SEED_MASK);
+    let mut state = ChaCha8Rng::seed_from_u64(seed ^ STATE_SEED_MASK);
     let start = Instant::now();
     let mut results = Results::default();
-    println!("seed={seed:#018x} case limit={limit:?} time limit={time:?}");
-    while limit.is_none_or(|limit| results.generated < limit) && time.is_none_or(|time| start.elapsed() < time) {
-        let index = results.generated;
-        let case = generator::generate(index, &mut original, &mut extra);
+    println!("seed={seed:#018x} case limit={limit:?} time limit={time:?} replay={replay:?}");
+    for index in 0.. {
+        if limit.is_some_and(|limit| results.generated >= limit) || time.is_some_and(|time| start.elapsed() >= time) {
+            break;
+        }
+        let case = generator::generate(index, &mut original, &mut extra, &mut state);
+        if replay.is_some_and(|selected| index < selected) {
+            continue;
+        }
         let mode = index % MODES.len();
         results.generated += 1;
         let case_name = format!("{name}-{index}");
@@ -358,7 +398,7 @@ fn straight_store_before_a_region_with_three_objects() {
             if wrapped { "static " } else { "" },
             prepare(2)
         );
-        let packets = measure_objects(&mut body, &[("a".into(), 2), ("b".into(), 1), ("c[1]".into(), 8)]);
+        let (packets, _) = measure_objects(&mut body, &[("a".into(), 2), ("b".into(), 1), ("c[1]".into(), 8)]);
         if wrapped {
             body.push_str(
                 "\npacket entry(unsigned prep, unsigned n, unsigned column) { return work(prep, n, column); }\n",
@@ -456,7 +496,7 @@ fn join_selects_the_value_of_the_path_taken() {
         );
         let objects: Vec<(String, u32)> =
             objects.into_iter().map(|(object, bytes)| (object.to_owned(), bytes)).collect();
-        let packets = measure_objects(&mut body, &objects);
+        let (packets, _) = measure_objects(&mut body, &objects);
         check_target(name, &targeted(body, trips, packets, false), None);
     }
 }

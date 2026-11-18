@@ -5,22 +5,52 @@ use std::fmt::Write as _;
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 
-use super::{Case, Expectation, MODES, measure_objects, prepare};
+use super::{Case, Check, Expectation, Field, MODES, Preparation, hadamards, measure_objects, prepare};
 
-pub(super) const EXTRA_SHAPES: usize = 7;
+const EXTRA_SHAPES: usize = 7;
+const STATE_SHAPES: usize = 4;
+const BASE_CASES: usize = 2 * MODES.len() * EXTRA_SHAPES;
+const BLOCK_CASES: usize = BASE_CASES + MODES.len() * STATE_SHAPES;
+pub(super) const SHORT_CASES: usize = BASE_CASES + STATE_SHAPES;
 
-/// Alternate full rounds of the three compiler modes. The original stores keep their own random
-/// stream and mode, so adding a shape here does not change their source or how they are lowered.
-pub(super) fn generate(index: usize, original: &mut ChaCha8Rng, extra: &mut ChaCha8Rng) -> Case {
-    let round = index / MODES.len();
+/// Full rounds of all three modes. The two existing streams still generate the same
+/// programs in the same modes, with rounds of state recipes between blocks.
+pub(super) fn generate(
+    index: usize,
+    original: &mut ChaCha8Rng,
+    extra: &mut ChaCha8Rng,
+    state: &mut ChaCha8Rng,
+) -> Case {
+    let within_block = index % BLOCK_CASES;
+    if within_block >= BASE_CASES {
+        // Four recipes rotate across three modes, visiting each pair in one block.
+        return match (within_block - BASE_CASES) % STATE_SHAPES {
+            0 => phase_store(state, "ZBIT"),
+            1 => phase_store(state, "SBIT"),
+            2 => return_to_zero(state),
+            3 => retained_store(state, true),
+            _ => unreachable!(),
+        };
+    }
+    let round = index / BLOCK_CASES * (BASE_CASES / MODES.len()) + within_block / MODES.len();
     if round.is_multiple_of(2) {
         return stores(original);
     }
     let extra_index = round / 2 * MODES.len() + index % MODES.len();
-    let recipe =
-        [gate_loop, applied_write, conditional_write, wide_results, repeated_store, retained_store, measured_bytes]
-            [extra_index % EXTRA_SHAPES];
+    let recipe = [
+        gate_loop,
+        applied_write,
+        conditional_write,
+        wide_results,
+        repeated_store,
+        |rng: &mut ChaCha8Rng| retained_store(rng, false),
+        measured_bytes,
+    ][extra_index % EXTRA_SHAPES];
     recipe(extra)
+}
+
+fn fields(shifts: &[u32]) -> Vec<Field> {
+    shifts.iter().map(|&shift| Field { packet: 0, shift }).collect()
 }
 
 fn condition(random: &mut ChaCha8Rng, qubits: u32) -> String {
@@ -91,11 +121,11 @@ fn stores(random: &mut ChaCha8Rng) -> Case {
         let mut region_writes = Vec::new();
         for _ in 0..random.random_range(1..=objects.len()) {
             let i = random.random_range(0..objects.len());
-            // The clean check covers known starting values, including multiple writes in one
-            // region. Repeated writes across separate regions can require unbuilt cleanup.
-            clean &= !written[i];
-            region_writes.push(i);
+            // DESIGN's whole-region rule permits known starting values and accumulation
+            // by XOR with values independent of the target, even after earlier regions.
             let op = ["=", "=", "+=", "^=", "-="][random.random_range(0..5)];
+            clean &= !written[i] || op == "^=";
+            region_writes.push(i);
             let value = random.random::<u64>();
             let expression =
                 if random.random_bool(0.6) { format!("{value}ULL + 3ULL * q") } else { format!("{value}ULL") };
@@ -116,8 +146,8 @@ fn stores(random: &mut ChaCha8Rng) -> Case {
         }
         body.push_str("    }\n");
     }
-    let packets = measure_objects(&mut body, &objects);
-    Case::values(body, qubits, random.random_range(0..=3), packets, clean)
+    let (packets, fields) = measure_objects(&mut body, &objects);
+    Case { state: Some(Check::new(fields)), ..Case::values(body, qubits, random.random_range(0..=3), packets, clean) }
 }
 
 fn gate_loop(random: &mut ChaCha8Rng) -> Case {
@@ -146,7 +176,7 @@ fn gate_loop(random: &mut ChaCha8Rng) -> Case {
         prepare = prepare(qubits),
         condition = condition(random, qubits),
     );
-    Case { body, qubits, trips, packets: 1, expectation: Expectation::Clean }
+    Case { body, qubits, trips, packets: 1, expectation: Expectation::Clean, state: Some(Check::new(fields(&[0, 8]))) }
 }
 
 fn applied_write(random: &mut ChaCha8Rng) -> Case {
@@ -179,7 +209,14 @@ fn applied_write(random: &mut ChaCha8Rng) -> Case {
         prepare = prepare(qubits),
     );
     // Native C evaluates the same call and then restores its writes, as apply does.
-    Case { body, qubits, trips: 0, packets: 1, expectation: Expectation::AppliedWrite(object) }
+    Case {
+        body,
+        qubits,
+        trips: 0,
+        packets: 1,
+        expectation: Expectation::AppliedWrite(object),
+        state: Some(Check::new(fields(&[0, 8]))),
+    }
 }
 
 fn conditional_write(random: &mut ChaCha8Rng) -> Case {
@@ -194,7 +231,14 @@ fn conditional_write(random: &mut ChaCha8Rng) -> Case {
         prepare = prepare(qubits),
         condition = condition(random, qubits),
     );
-    Case { body, qubits, trips: random.random_range(0..=3), packets: 1, expectation: Expectation::ConditionalWrite }
+    Case {
+        body,
+        qubits,
+        trips: random.random_range(0..=3),
+        packets: 1,
+        expectation: Expectation::ConditionalWrite,
+        state: None,
+    }
 }
 
 fn wide_results(random: &mut ChaCha8Rng) -> Case {
@@ -222,8 +266,15 @@ fn wide_results(random: &mut ChaCha8Rng) -> Case {
         prepare = prepare(qubits),
     )
     .expect("write region");
-    let packets = measure_objects(&mut body, &objects);
-    Case { body, qubits, trips: random.random_range(0..=3), packets, expectation: Expectation::Clean }
+    let (packets, fields) = measure_objects(&mut body, &objects);
+    Case {
+        body,
+        qubits,
+        trips: random.random_range(0..=3),
+        packets,
+        expectation: Expectation::Clean,
+        state: Some(Check::new(fields)),
+    }
 }
 
 fn repeated_store(random: &mut ChaCha8Rng) -> Case {
@@ -243,24 +294,34 @@ fn repeated_store(random: &mut ChaCha8Rng) -> Case {
         prepare = prepare(qubits),
         condition = condition(random, qubits),
     );
-    let packets = measure_objects(&mut body, &[("a".into(), 2), ("b".into(), 1)]);
+    let (packets, fields) = measure_objects(&mut body, &[("a".into(), 2), ("b".into(), 1)]);
     // Both forms know a's initial value and the second region only XORs into a.
-    Case { body, qubits, trips: 0, packets, expectation: Expectation::Clean }
+    Case { body, qubits, trips: 0, packets, expectation: Expectation::Clean, state: Some(Check::new(fields)) }
 }
 
-fn retained_store(random: &mut ChaCha8Rng) -> Case {
+fn retained_store(random: &mut ChaCha8Rng, phased: bool) -> Case {
     let qubits = random.random_range(2..=3);
     let bits = if random.random_bool(0.5) { 8 } else { 16 };
     let divisor = random.random_range(2..=5);
     let bit = random.random_range(0..=1);
+    let mut prepared = prepare(qubits);
+    let argument = if phased {
+        prepared.push_str("    SBIT(q, 1);\n");
+        "(q & 1U)"
+    } else {
+        "q"
+    };
     let body = format!(
         "packet entry(unsigned prep, unsigned n, unsigned column) {{\n    \
-             uint{bits}_t x = 0;\n{prepare}    \
-             x = 5U + q;\n    XBIT(x, {bit});\n    x /= {divisor}U;\n    \
+             uint{bits}_t x = 0;\n{prepared}    \
+             x = 5U + {argument};\n    XBIT(x, {bit});\n    x /= {divisor}U;\n    \
              packet key = bennett_measure(&q);\n    return key | ((packet)bennett_measure(&x) << 8);\n}}\n",
-        prepare = prepare(qubits),
     );
-    Case { body, qubits, trips: 0, packets: 1, expectation: Expectation::Retained(bits) }
+    let old = (0..1_u64 << qubits).map(|q| (5 + if phased { q & 1 } else { q }) ^ (1 << bit)).collect();
+    let mut check = Check::new(fields(&[0, 8]));
+    check.preparation.s = if phased { 2 } else { 0 };
+    check.retained = Some(old);
+    Case { body, qubits, trips: 0, packets: 1, expectation: Expectation::Retained(bits), state: Some(check) }
 }
 
 fn measured_bytes(random: &mut ChaCha8Rng) -> Case {
@@ -281,5 +342,44 @@ fn measured_bytes(random: &mut ChaCha8Rng) -> Case {
         prepare = prepare(qubits),
         condition = condition(random, qubits),
     );
-    Case { body, qubits, trips: 0, packets: 1, expectation: Expectation::Clean }
+    Case {
+        body,
+        qubits,
+        trips: 0,
+        packets: 1,
+        expectation: Expectation::Clean,
+        state: Some(Check { reuse_measured_byte: true, ..Check::new(fields(&[8, 24, 0])) }),
+    }
+}
+
+fn phase_store(random: &mut ChaCha8Rng, gate: &str) -> Case {
+    let qubits = random.random_range(2..=3);
+    let bit = random.random_range(0..qubits);
+    let mut body = format!(
+        "packet entry(unsigned prep, unsigned n, unsigned column) {{\n    uint16_t a = 0;\n{}    {gate}(q, {bit});\n    if (q & 1U) a = {}U * q;\n",
+        prepare(qubits),
+        random.random_range(1..=31),
+    );
+    let (packets, fields) = measure_objects(&mut body, &[("a".to_owned(), 2)]);
+    let mut check = Check::new(fields);
+    check.preparation =
+        if gate == "ZBIT" { Preparation { z: 1 << bit, s: 0 } } else { Preparation { z: 0, s: 1 << bit } };
+    Case { body, qubits, trips: 0, packets, expectation: Expectation::Clean, state: Some(check) }
+}
+
+fn return_to_zero(random: &mut ChaCha8Rng) -> Case {
+    let qubits = random.random_range(2..=3);
+    let mut body = format!(
+        "packet entry(unsigned prep, unsigned n, unsigned column) {{\n    unsigned char y = 0;\n{}    if (q & 1U) ZBIT(y, 0);\n    if (column != 0) {{\n",
+        prepare(qubits),
+    );
+    // DESIGN computes and clears the predicate for the gate. Z leaves the zero target
+    // unchanged, so the only explicit inverse is the Hadamard preparation of q.
+    hadamards(&mut body, qubits);
+    body.push_str(
+        "    }\n    packet key = bennett_measure(&q);\n    return key | ((packet)bennett_measure(&y) << 8);\n}\n",
+    );
+    let mut check = Check::new(fields(&[0, 8]));
+    check.return_to_zero = true;
+    Case { body, qubits, trips: 0, packets: 1, expectation: Expectation::Clean, state: Some(check) }
 }
