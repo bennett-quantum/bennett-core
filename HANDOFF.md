@@ -34,7 +34,7 @@ What works, one line each (the commit-by-commit table is in `docs/RECORDS.md`, p
 
 Run each in the foreground, from the repository root (`CARGO_BUILD_JOBS=3` on the shared laptop):
 
-- `cargo test`: 386 passed, 0 failed, 5 ignored (each names its reason: heavy reference, generated runs, witnesses of recorded defects); about 10 s, no LLVM needed.
+- `cargo test`: 387 passed, 0 failed, 5 ignored (each names its reason: heavy reference, generated runs, witnesses of recorded defects); about 10 s, no LLVM needed.
 - `front/test.sh` (needs LLVM 18, clang 18, CMake): 345 passed, 0 failed, 22 ignored (each names its reason: the fallback oracle's waiting test, the SQLite acceptance, the North Star ladder runs, musl-linked checks that need `rt/musl/build.py` first, heavy runs, witnesses of recorded debts); it also compiles the C++ header and classifies the 88 LLVM attribute kinds.
 - `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check`: both clean on 2026-11-18 (`scripts/check.sh`: tree guards 3,642 files, 0 problems).
 - `scripts/check.sh` runs all four plus the tree guards (`docs/CHECKS.md`).
@@ -107,7 +107,8 @@ recover constants for whole-function checking on untaken edges. Only reachable
 predecessors contribute to the first proof of each operand, which is the proof used to
 emit gates. The analyses for bypassed blocks propagate unknown inputs before supplying
 a proof and can follow literal decisions within that code. Conditional
-routes that would duplicate shared code fall back to the step machine. A proved zero-test
+routes that would duplicate shared code fall back to the step machine. The overlap check
+follows only the selected edge of a literal decision. A proved zero-test
 exit carries the zero into its continuation. The six-bit outer and inner draining example
 schedules 12 body passes and 1,963 gates. A zero-shift regression checks that a
 nonzero word keeps running to the budget. The tests compare

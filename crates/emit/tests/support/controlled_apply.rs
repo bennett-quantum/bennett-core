@@ -669,3 +669,34 @@ fn a_shift_by_zero_keeps_every_nonzero_input_running() {
 
 #[path = "operand_analysis.rs"]
 mod operand_analysis;
+
+#[test]
+fn phantom_overlap() {
+    for jump in ["br 1, a, no", "br 0, no, a", "switch i3 1, 1: a, default: no"] {
+        let source = format!(
+            r#"
+memory 1024
+func @f(i1 %input) -> i8 {{
+entry:
+    br %input, yes, no
+yes:
+    {jump}
+a:
+    ret 3
+no:
+    ret 7
+}}
+"#
+        );
+        let module = control_example(&source, 1, "");
+        for budget in 0..=5 {
+            for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+                let (construction, _) =
+                    compare_controls(&module, budget, mode, |x| if budget < 2 + x { (0, 1) } else { (7 - 4 * x, 0) });
+                if budget > 0 && mode == ApplyMode::Automatic {
+                    assert_eq!(construction, Construction::Controlled { proved_passes: 0 }, "{jump}, B={budget}");
+                }
+            }
+        }
+    }
+}

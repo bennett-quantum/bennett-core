@@ -313,8 +313,8 @@ conditional jump the compiler tries to emit **control gates**. It combines the c
 and its complement with the control that reached the jump. Each resulting control enables
 the gates of one alternative. If the alternatives rejoin, the compiler selects the slots
 from the enabled route and emits the continuation once. Its analysis looks for the nearest
-common continuation of the routes to a return. If both routes could emit shared code
-before reaching a common stop, the compiler uses the step machine. This covers
+common continuation of the routes to a return, using only the selected target of each
+literal conditional or switch. If both routes could emit shared code before reaching a common stop, the compiler uses the step machine. This covers
 short-circuit tests whose early returns bypass the shared code. A loop whose test stays
 definite can use control gates for a choice in its body.
 

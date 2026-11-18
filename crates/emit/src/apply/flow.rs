@@ -7,7 +7,7 @@ use petgraph::algo::dominators::{Dominators, simple_fast};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::Reversed;
 
-use super::symbolic::{Frame, Point};
+use super::symbolic::{Frame, Point, visit_possible_targets};
 
 pub(super) struct Flow<'a> {
     graph: DiGraph<(), ()>,
@@ -23,7 +23,7 @@ impl<'a> Flow<'a> {
         let nodes: Vec<_> = function.blocks.iter().map(|_| graph.add_node(())).collect();
         let exit = graph.add_node(());
         for (index, block) in function.blocks.iter().enumerate() {
-            block.term.visit_targets(|target| {
+            visit_possible_targets(&block.term, |target| {
                 graph.add_edge(nodes[index], nodes[target.block.index()], ());
             });
             if matches!(block.term, Terminator::Return(_)) {
@@ -170,7 +170,7 @@ impl<'a> ShiftLoop<'a> {
                 }
                 found_back_edge = true;
             } else if target.block != exiting.block && seen.insert(target.block) {
-                function.block(target.block).term.visit_targets(|edge| edges.push((target.block, edge)));
+                visit_possible_targets(&function.block(target.block).term, |edge| edges.push((target.block, edge)));
             }
         }
 
