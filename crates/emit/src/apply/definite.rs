@@ -129,9 +129,16 @@ impl Constants {
         let argument_wires = arguments.len() as Wire;
         let slot_width = Wire::from(Width::MAX_BITS);
         let scratch = argument_wires + slot_width * slots.len() as Wire;
+        // Reachability grows with the value facts. For example, a loop can
+        // first deliver a constant condition and later make both outcomes possible.
+        let mut reachable = vec![edges == Edges::All; function.blocks.len()];
+        reachable[0] = true;
         loop {
             let mut changed = false;
-            for block in &function.blocks {
+            for (index, block) in function.blocks.iter().enumerate() {
+                if !reachable[index] {
+                    continue;
+                }
                 let mut circuit = Circuit::new(scratch);
                 let mut local = BTreeMap::new();
                 let read = |local: &BTreeMap<Slot, Word>, operand: &Operand| match operand {
@@ -146,6 +153,9 @@ impl Constants {
                 // Read every incoming word before joining any update into the slot facts.
                 let mut incoming = Vec::new();
                 let mut transfer = |target: &bennett_ir::Target| {
+                    let reached = &mut reachable[target.block.index()];
+                    changed |= !*reached;
+                    *reached = true;
                     for (param, operand) in function.block(target.block).params.iter().zip(&target.args) {
                         if let Some(word) = read(&local, operand) {
                             incoming.push((param.slot, word));

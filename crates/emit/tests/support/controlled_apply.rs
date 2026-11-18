@@ -538,3 +538,41 @@ fn shared_short_circuit_suffixes_use_one_step_schedule() {
         .expect("return and clean scratch for each pair");
     }
 }
+
+#[test]
+fn a_bypassed_predecessor_cannot_change_a_reachable_block_parameter() {
+    let source = |decision| {
+        format!(
+            r#"
+memory 1024
+func @f(i8 %input) -> i8 {{
+entry:
+    {decision}
+live:
+    br join(i8 1)
+cold:
+    br join(i8 2)
+join(i8 %amount):
+    %shifted = shl i8 %input, %amount
+    ret %shifted
+}}
+"#
+        )
+    };
+    for jump in ["br 1, live, cold", "br 0, cold, live"] {
+        let module = control_example(&source(jump), 8, "");
+        for budget in [0, 3, 4] {
+            for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+                compare_controls(&module, budget, mode, |x| if budget < 4 { (0, 1) } else { (x << 1 & 255, 0) });
+            }
+        }
+    }
+
+    let source = source("%choose = trunc i8 %input to i1\n    br %choose, live, cold");
+    let module = load(&source).expect("valid function with two reachable predecessors");
+    let args = [Argument::Register(0..8)];
+    for budget in [0, 5] {
+        let error = compile_apply(apply_input(&module, &args, 8, budget)).expect_err("live amounts disagree");
+        assert!(matches!(error, ApplyError::Unsupported { operation: "shl", .. }));
+    }
+}
