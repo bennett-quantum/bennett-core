@@ -407,27 +407,133 @@ fn return_address_readout() -> state::Check {
     check
 }
 
+const CALLER_REPLAY_REFUSAL: &str = "not handled yet: replaying a computation that can observe its caller's position through a return address (route: keep the old value and release it, or pass the caller's identity as an argument)";
+
 #[test]
-fn replay_of_a_nonzero_return_address_test_clears_the_predicate() {
+fn clearing_a_predicate_by_replaying_a_return_address_is_refused() {
     Program {
         name: "return-address-predicate",
         declarations: RETADDR_HELPER,
         body: &RETADDR_USE.replace("QUALIFIER", ""),
         qubits: 1,
     }
-    .agrees(0, &[256, 257], &return_address_readout(), 0);
+    .refused(0, &[256, 257], CALLER_REPLAY_REFUSAL);
 }
 
 #[test]
-#[ignore = "replaying the full return address at a second call site leaves a nonzero word"]
-fn replay_of_a_full_return_address_clears_the_word() {
+fn clearing_a_word_by_replaying_a_return_address_is_refused() {
     Program {
         name: "return-address-word",
         declarations: RETADDR_HELPER,
         body: &RETADDR_USE.replace("QUALIFIER", "volatile"),
         qubits: 1,
     }
+    .refused(0, &[256, 257], CALLER_REPLAY_REFUSAL);
+}
+
+#[test]
+fn clearing_a_word_by_replaying_a_callee_that_reads_a_return_address_is_refused() {
+    Program {
+        name: "return-address-transitive",
+        declarations: r#"
+__attribute__((noinline)) uintptr_t observe(void) {
+    return (uintptr_t)__builtin_return_address(0);
+}
+__attribute__((noinline)) uintptr_t f(uint8_t q) {
+    return q ? observe() : 0;
+}
+"#,
+        body: &RETADDR_USE.replace("QUALIFIER", "volatile"),
+        qubits: 1,
+    }
+    .refused(0, &[256, 257], CALLER_REPLAY_REFUSAL);
+}
+
+#[test]
+fn replay_of_a_caller_independent_helper_clears_the_word() {
+    Program {
+        name: "caller-independent-word",
+        declarations: "__attribute__((noinline)) uintptr_t f(uint8_t q) { return 3u * q; }",
+        body: &RETADDR_USE.replace("QUALIFIER", "volatile"),
+        qubits: 1,
+    }
     .agrees(0, &[256, 257], &return_address_readout(), 0);
+}
+
+#[test]
+fn inverting_an_update_that_replays_a_return_address_is_refused() {
+    Program {
+        name: "return-address-inverse",
+        declarations: RETADDR_HELPER,
+        body: r#"
+    uint64_t x = 4;
+    ZBIT(x, 0);
+    x += f(q);
+    packet key = READ(q);
+    return key | ((packet)(READ(x) != 0) << 8);
+"#,
+        qubits: 1,
+    }
+    .refused(0, &[256, 257], CALLER_REPLAY_REFUSAL);
+}
+
+#[test]
+fn clearing_a_gate_loop_condition_by_replaying_a_return_address_is_refused() {
+    Program {
+        name: "return-address-loop-predicate",
+        declarations: RETADDR_HELPER,
+        body: r#"
+    uint8_t y = 0;
+    if (f(q)) {
+        #pragma clang loop unroll(disable)
+        for (unsigned i = 0; i < n; ++i) XBIT(y, 0);
+    }
+    packet key = READ(q);
+    return key | ((packet)READ(y) << 8);
+"#,
+        qubits: 1,
+    }
+    .refused(1, &[0, 257], CALLER_REPLAY_REFUSAL);
+}
+
+#[test]
+fn clearing_an_exchanged_word_by_replaying_a_return_address_is_refused() {
+    Program {
+        name: "return-address-exchanged-word",
+        declarations: &format!("{RETADDR_HELPER}\nuint64_t x;"),
+        body: r#"
+    x = f(q);
+    uint8_t fence = 0;
+    ZBIT(fence, 0);
+    #pragma clang loop unroll(disable)
+    for (unsigned t = q; t; --t)
+        x /= 3u;
+    packet key = READ(q);
+    return key | ((packet)(READ_BYTES(x, 8) != 0) << 8);
+"#,
+        qubits: 1,
+    }
+    .refused(0, &[0, 257], CALLER_REPLAY_REFUSAL);
+}
+
+#[test]
+fn repeating_a_region_that_reads_a_return_address_for_multiple_results_is_refused() {
+    Program {
+        name: "return-address-multiple-results",
+        declarations: &format!("{RETADDR_HELPER}\nuint64_t x; uint8_t y;"),
+        body: r#"
+    #pragma clang loop unroll(disable)
+    for (unsigned t = q; t; --t) {
+        x += f(t);
+        y += t;
+    }
+    packet key = READ(q);
+    packet first = READ_BYTES(x, 8) != 0;
+    return key | (first << 8) | ((packet)READ_BYTES(y, 1) << 16);
+"#,
+        qubits: 1,
+    }
+    .refused(0, &[0, 65793], CALLER_REPLAY_REFUSAL);
 }
 
 #[test]

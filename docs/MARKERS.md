@@ -174,6 +174,10 @@ finite and free of visible effects. Its gates still act only on enabled inputs. 
 calls, and division or remainder without a proved nonzero divisor are refused. The route is to compute
 the ordinary part inside one applied function for the table of control bits in [DESIGN.md](DESIGN.md#code-under-a-qubit).
 
+A helper may read a return address in one applied evaluation. The front refuses a repeated evaluation
+when the helper or a function it can call reads a return address. Keep and release the old value explicitly,
+or pass the caller's identity as a separate argument to a caller-independent helper.
+
 ## Not handled yet
 
 Each is refused with `not handled yet: <what>, at <file:line:col>`: under the control of a value that

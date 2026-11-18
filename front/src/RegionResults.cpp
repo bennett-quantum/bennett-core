@@ -1,5 +1,6 @@
 #include "RegionResults.h"
 
+#include "CallerPosition.h"
 #include "Diagnostic.h"
 #include "Markers.h"
 #include "Normalise.h"
@@ -708,8 +709,12 @@ bool RegionWhole::run() {
 
   LLVMContext &context = fn.getContext();
   Module &module = *fn.getParent();
+  const Instruction *site = writes.empty() ? blocks.front()->getTerminator() : (*writes.begin())->mutations.front();
+  if (words.size() > 1 || words.front().size() > 1) {
+    requireCallerIndependent(*whole, *site);
+  }
   IRBuilder<> b(after->getTerminator());
-  b.SetCurrentDebugLocation(writes.empty() ? DebugLoc() : (*writes.begin())->mutations.front()->getDebugLoc());
+  b.SetCurrentDebugLocation(site->getDebugLoc());
   const std::vector<Value *> loaded = arguments(b);
   auto evaluateWord = [&](size_t index) {
     std::vector<Value *> args = loaded;

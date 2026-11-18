@@ -483,7 +483,8 @@ an empty device program (`front/src/main.cpp`, `readInput`).
   (x is 0) then `apply @g -> x`; where `g` reads x, as `if (r) x = 7` stores `r ? x : 7`, that read is `v`'s
   computation. A load that read a known ordinary value (with `--taint-all` every load is treated as a qubit
   read) is given that value. Nothing is kept and no warning is written; the dataflow's third kind of fact,
-  `Computed`, records `v` (`Taint.h`).
+  `Computed`, records `v` (`Taint.h`). A replay that can read a return address in the callee or its
+  callees is refused (see "Return addresses").
 - **A one-bit update `x = e(x)` with `e(1) == e(0) ^ 1`** is `x ^= e(0)`. The identity is proved by LLVM's
   simplifier on two clones of `e`, or, where `e` reads no ordinary value and the other qubit variables it
   reads have at most `maxEnumeratedSupportBits` (8) bits that may be 1, by folding both clones on every
@@ -512,7 +513,8 @@ an empty device program (`front/src/main.cpp`, `readInput`).
   single qubits becomes the gate's controls (a CNOT, a Toffoli); any other is computed into a fresh
   qubit, controls the gate, and is computed again to clear it. A gate whose condition reads the gate's
   own variable, a value read before an operation of the outlined code changed it and needed after, and a
-  measurement are refused by name. A loop with gates is kept as a loop ("Code under a qubit", gate loops).
+  measurement are refused by name. A loop with gates is kept as a loop when its ordinary work is proved safe,
+  finite and free of visible effects ("Code under a qubit", gate loops).
 - **No new device instruction was needed** for any of this: gates take control lists, and `apply` XORs
   into any register.
 - **Every `apply` has a fault register of its own**, released when the function returns (inside a loop: right
@@ -986,7 +988,8 @@ under `apply` they run on the private copy and are undone with it.
 - **Where the value is computed.** The front applies the computation of a value where the value is stored
   into a qubit variable or controls a gate, not where the call is. So the memory the call reads must be the
   same there (`ControlAnalysis::memoryUnchangedBetween`; refused by name otherwise), and a value used several
-  times is computed again for each use, each time from the same memory, so each time with the same result.
+  times can be computed again for each use from the same memory. This also requires independence from
+  the caller's position. A replay that can read a return address is refused (see "Return addresses").
   The applied function's remaining loads and its callees' accesses are both checked. Loads moved before
   the region are passed in by value ("Conditional jumps, joins and loops" above).
   The memory a call reads is what it, and the functions it calls, may reach outside their own frames
@@ -1017,9 +1020,9 @@ under `apply` they run on the private copy and are undone with it.
   Extend the warning beyond direct callees when a program needs it.
 - **`--taint-all`** does not move an ordinary call with ordinary arguments into an `apply`: there its writes
   must survive, so only calls of functions that read memory at most are treated as computable coherently.
-  Such a call does not count as one of "two calls that depend on a qubit", and in the applied function it
-  runs before anything that depends on a qubit, so it reads memory as it is at its own site, never what an
-  applied call in the same computation wrote on the private copy.
+  A moved ordinary call does not count as one of "two calls that depend on a qubit". It runs before
+  anything that depends on a qubit, using the memory present at its own site. Ordinary calls that can
+  read a return address are evaluated at their original site and passed in by value.
 
 The acceptance target of the rule is SQLite (`experiments/sqlite-on-device`, stage 4): C entries that set a
 database up with ordinary code and then apply one query whose key depends on a three-qubit register; each of
@@ -1134,7 +1137,14 @@ one instruction that reads the frames:
 - **The journal-content observer** (`crates/exec/src/measure.rs`) does not credit a `retaddr` result as
   recomputable from live state, which keeps its counts an upper bound.
 
-The front writes `retaddr N` for every `llvm.returnaddress(N)` in the default address space.
+The front writes `retaddr N` for `llvm.returnaddress(N)` in the default address space. A single applied
+evaluation can read a return address. When the front would evaluate the same computation at another
+site, it refuses a return-address read in the function or anywhere it can call. An unresolved indirect
+call may reach any function in the module. This check also covers clearing old words, inverting an
+update, clearing the condition of a gate or gate loop, and repeating a region for several results.
+A caller's position can change even while the arguments and memory stay the same. To support an
+overwrite in this case, keep and release the old word explicitly, or pass the caller's identity as a
+separate argument to the computation that is replayed.
 
 ## Decided in code
 
@@ -1536,6 +1546,8 @@ its own).
 - **Ordinary work in a moved gate loop.** Compute the ordinary part inside one applied function for the
   table of control bits. The function follows the original condition, so it does not execute ordinary
   instructions on inputs where C skips them. The current front refuses work it cannot prove safe to move.
+- **Replay of a caller-sensitive result.** Keep the old value and release it, or pass the caller's identity
+  as an argument so the replay sees the same identity at both sites.
 
 | Refused inside emitted `apply` | Construction needed |
 |---|---|

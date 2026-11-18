@@ -18,6 +18,7 @@
 // diagnostics.
 
 #include "Applied.h"
+#include "CallerPosition.h"
 #include "Diagnostic.h"
 #include "Emit.h"
 #include "HeldBytes.h"
@@ -120,6 +121,9 @@ private:
   // The stores of a region's exchanged variables (RegionResults.h), from `first` on: stores by exchange.
   void exchangedStores(const StoreInst &first, const MDNode &group);
   std::set<const StoreInst *> exchangedDone;
+  // Slices can emit the same source call at several device positions, including
+  // when clearing an old word, inverting an update or clearing a predicate.
+  std::set<const CallBase *> emittedSliceCalls;
   // Whether `old`, the value `target` holds at `store`, can be computed again there: a computation the control
   // program can apply (collect) whose qubit variables, `target` not among them, are unchanged since they were read
   // or held there a value that can be computed again in turn (collect with knownLoads computes it in their place),
@@ -801,7 +805,10 @@ bool ControlWriter::sliceable(const Value *value) const {
     return false;
   }
   if (const auto *call = dyn_cast<CallBase>(inst)) {
-    return module.isCoherent(call->getCalledFunction());
+    const Function *callee = call->getCalledFunction();
+    // An ordinary caller-sensitive result is already available at its
+    // original call site, including when --taint-all is in use.
+    return module.isCoherent(callee) && !canReadReturnAddress(*callee);
   }
   return isa<BinaryOperator>(inst) || isa<ICmpInst>(inst) || isa<SelectInst>(inst) || isa<ZExtInst>(inst) ||
          isa<SExtInst>(inst) || isa<TruncInst>(inst) || isa<FreezeInst>(inst);
@@ -1092,6 +1099,9 @@ std::string ControlWriter::slice(const Slice &slice, const Value *root, const St
     writer.line(writer.slot(load) + " = trunc " + intType(bits) + " " + value + " to " + intType(width));
   }
   for (const Instruction *inst : slice.body) {
+    if (const auto *call = dyn_cast<CallBase>(inst); call && !emittedSliceCalls.insert(call).second) {
+      requireCallerIndependent(*call->getCalledFunction(), sink);
+    }
     writer.instruction(*inst);
   }
   if (widthOf(root->getType(), root) != bits) {
