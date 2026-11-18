@@ -127,13 +127,43 @@ impl QuantumState {
         }
     }
 
-    /// The simulator alone inspects releases and keeps a purification when needed.
-    pub(crate) fn discard(&mut self, id: usize, mask: u64) {
-        let dirty = !self.mask_is_zero(id, mask);
-        if dirty {
-            self.nonzero_releases += 1;
-            self.nonzero_release_weight += self.mask_weight(id, mask);
+    /// The simulator reports the probability that any of the selected bits is nonzero.
+    /// Each configuration contributes at most once, even when several columns are dirty.
+    pub(crate) fn discard(&mut self, masks: BTreeMap<usize, u64>) {
+        if masks.is_empty() {
+            return;
         }
+        let mut selected: Vec<_> = masks.into_iter().map(|(column, mask)| (column, mask, false)).collect();
+        let mut any_dirty = false;
+        let mut weight = 0.0;
+        for (config, amplitude) in &self.amplitudes {
+            let mut nonzero = false;
+            for (column, mask, dirty) in &mut selected {
+                if config[*column] & *mask != 0 {
+                    *dirty = true;
+                    nonzero = true;
+                }
+            }
+            if nonzero {
+                any_dirty = true;
+                weight += amplitude.norm_sqr();
+            }
+        }
+        if any_dirty {
+            self.nonzero_releases += 1;
+            // Rounding can place the sum marginally above one.
+            self.nonzero_release_weight += weight.min(1.0);
+        }
+        for (column, mask, dirty) in selected {
+            self.release_bits(column, mask, dirty);
+        }
+    }
+
+    pub(crate) fn release_zero(&mut self, id: usize, mask: u64) {
+        self.release_bits(id, mask, false);
+    }
+
+    fn release_bits(&mut self, id: usize, mask: u64, dirty: bool) {
         if mask == self.device_wires.mask(id) {
             if dirty {
                 self.leave(id);
@@ -142,14 +172,6 @@ impl QuantumState {
             }
         } else {
             self.release_part(id, mask, dirty);
-        }
-    }
-
-    pub(crate) fn release_zero(&mut self, id: usize, mask: u64) {
-        if mask == self.device_wires.mask(id) {
-            self.free(id);
-        } else {
-            self.release_part(id, mask, false);
         }
     }
 
@@ -243,14 +265,6 @@ impl QuantumState {
     /// Whether the selected bits are zero in every stored configuration.
     pub(crate) fn mask_is_zero(&self, id: usize, mask: u64) -> bool {
         self.amplitudes.keys().all(|config| config[id] & mask == 0)
-    }
-
-    fn mask_weight(&self, id: usize, mask: u64) -> f64 {
-        self.amplitudes
-            .iter()
-            .filter(|(config, _)| config[id] & mask != 0)
-            .map(|(_, amplitude)| amplitude.norm_sqr())
-            .sum()
     }
 
     /// Frees the register, which is zero in every configuration: its column goes, which is exact.
