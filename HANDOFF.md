@@ -9,9 +9,12 @@ measure. The earlier `bennett-*` repositories are a read-only archive. Vision: `
 C with a few marker calls (`docs/MARKERS.md`) goes through stock `clang` 18, then `bennett-front` (C++ over LLVM 18), which writes a
 *device program* (`crates/ir`: ordinary code plus quantum instructions), which the *executor* (`crates/exec`) runs. The executor is a
 simulator of the model in `docs/DESIGN.md`. The device interface and counter are available.
-The gate emitter compiles applied integer functions and loops for the counting device and for
-the simulator with `--apply-circuit auto`. The default simulator evaluates applied functions
-directly.
+The gate emitter compiles applied integer functions, including loops whose control depends on qubits,
+with one clock for the whole `apply`. The counting device uses it, and the simulator offers it through
+`--apply-circuit auto` or `--apply-circuit step-machine`. The default simulator evaluates applied functions
+directly. The emitter refuses calls, private memory and stack operations, `switch`, `or`, division
+and remainder, shifts or multiplies that lack a proved constant amount or factor, and instructions
+such as `fault` that still need named fault handling. See `docs/DESIGN.md`, "Not yet".
 
 What works, one line each (the commit-by-commit table is in `docs/RECORDS.md`, part two):
 
@@ -75,15 +78,15 @@ Newest first; quotes are the maintainer's words.
 
 ## In flight
 
-The device interface, step tests and loop emitter have landed. The gate compiler follows
-definite control, uses a single clock for general qubit-dependent jumps, and saves decisions
-for one proved loop. The follow-up on `wip/sol62-loops-m2` checks shift and multiply operands
-across the whole applied function before using the budget and reports the weight of emitted
-faults, including with nonzero fault destinations. The emitted simulator includes circuit
-scratch in its peak qubit count. The CLI checks the gates sent by the controller against a
-hand-counted applied circuit. The scratch allocator accepts the final representable
-half-open wire range. The follow-up is on the branch for landing. The 8-bit Collatz
-bit runner checked all 256 inputs at 253 budgets with both constructions. The simulator matched
+No gate-emitter implementation or review is in flight. The step specification in `docs/APPLY-STEP.md`
+landed in `81a19f4` and is linked from DESIGN and the step tests. The loop emitter landed in
+`506788f`, `09fdd28`, `aa6c733` and `28a1c00`. It follows definite control, uses one clock
+for general qubit-dependent jumps, saves decisions for one proved loop, and runs on the counting
+device and on the simulator. The fixes check shift and multiply operands across the whole applied
+function before using the budget and report emitted fault weights even with nonzero fault destinations.
+Simulator peak qubit counts include circuit scratch, the counting CLI test checks emitted gate totals,
+and the scratch allocator accepts the final representable wire range. The 8-bit Collatz bit runner
+checked all 256 inputs at 253 budgets with both constructions. The simulator matched
 the reference amplitudes exactly after each applied circuit for widths 2 to 5. The nested loop
 returns 1 at budget 14 and writes `budget` at 13 for `x = y = 1`.
 
@@ -94,10 +97,10 @@ returns 1 at budget 14 and writes `budget` at 13 for `x = y = 1`.
 ## Next steps
 
 In order:
-1. **Controls for qubit-dependent choices**: prove when a choice can become a control on the gates
-   of its bodies without instruction dispatch.
-2. **Applied calls and arithmetic**: extend gate compilation with call frames, addresses and the
-   multiply and remainder operations needed for modular arithmetic.
+1. **Prove when a qubit-dependent choice can directly control the gates of its alternatives.**
+   Use that proof to skip instruction dispatch for those choices.
+2. Extend gate compilation with **applied call frames and addresses** and the remaining multiply and
+   remainder operations needed for modular arithmetic.
 3. **Shor's algorithm for 15 and 21 from plain C**, as the benchmark against hand-built circuits (qubits, gates, depth).
 4. **Applied memory**: add private memory and stack operations, with the corresponding first-fault rules.
 5. Then what the old plan left undone: the table of control bits for a gate loop deciding on carried values (question 5); rule A at an address that depends on a qubit (plan: declare the region, then exchange one addressed element, cost the region's size times the element's width per access); a stateful library whose writes must survive (k applied calls on qubit-held memory run with nothing kept when the calls' arguments are kept and memory starts known: k(k+1)/2 evaluations call by call, k as one applied function); a second implementation of the device language (grow the reference that runs `apply` by its construction, `crates/exec/tests/compute_copy_reference/`); the floating-point environment through SoftFloat's state, `__float128` and the remaining intrinsics; the runtime debts below; Grover over a SQL query written in plain C; the optimiser and cost model (`opt`, not started).
@@ -177,7 +180,13 @@ Each is taken in the cheapest way to reverse, as stated, until answered. Last 20
 
 - `58d6e4b` (a fix: only its own tests and the 15-minute randomised runs on it have covered it). The next independent testing pass starts there.
 - `5fc7386` (the new-frame change) and `90f7305`, `6155161` (test-only: the step-rule tests); all three came from `wip/sol62-stepspec`, and no independent check has covered them yet.
-- Documents-only commits (`babaa5c`, `fc33dc9`, and the ones that carry this file) and the generator commits, which are test-only and had their sensitivity shown on a deliberately changed scratch front.
+- Independent review covered `506788f` through `28a1c00`. Its re-check covered the five fixes
+  (`4b252c8`, `204b671`, `2eef510`, `23642c2`, `d30cc93`) and confirmed a test for each that failed before the fix.
+- The re-check found that the operand check could refuse a shift amount or multiplication factor that was constant for all inputs.
+  `e6cc49f` restored constant folding in that check and has had its own tests and a reading of its diff, with independent review still pending.
+  The two 15-minute front-end and direct-simulator differential runs on `e6cc49f` had zero failures. Seed `0x87196caa251d0f43` generated 8,358 cases, accepted 8,024, declined 334, made 50,428 comparisons and 7,053 state checks, and accepted 2,568 loop recipes. Seed `0x0b7e11a5d1ff0007` generated 8,152 cases, accepted 7,820, declined 332, made 49,064 comparisons and 6,909 state checks, and accepted 2,496 loop recipes.
+- Independent checks have yet to cover the documents-only commits `babaa5c`, `fc33dc9`, `81a19f4` and the handoff updates, including this one.
+  The generator commits are test-only and had their sensitivity shown on a deliberately changed scratch front.
 - Everything else in code under a qubit has had an independent testing pass or the 15-minute randomised runs; the list, commit by commit, is in `docs/RECORDS.md`, part two ("The top of the old HANDOFF").
 
 ## Where the records are
