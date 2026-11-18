@@ -902,3 +902,38 @@ done: ;
         "not handled yet: a moved gate loop may read bytes not proved ordinary before its gates",
     );
 }
+
+#[test]
+fn a_moved_gate_loop_keeps_the_unconditional_volatile_read_of_a_private_count() {
+    let name = "gate-count-prior-volatile-local";
+    let body = r#"
+packet entry(unsigned prep, unsigned n, unsigned column) {
+    volatile unsigned saved = n;
+    n = saved;
+    uint8_t q = 0;
+    if (prep == 2) XBIT(q, 0);
+    else if (prep == 0) HBIT(q, 0);
+    ZBIT(q, 1);
+    uint8_t y = 0;
+    if (q) {
+        #pragma clang loop unroll(disable)
+        for (unsigned i = 0; i < n; ++i) XBIT(y, 0);
+    }
+    return READ(y);
+}
+"#;
+    let source = write_c(name, &format!("{PRELUDE}{body}{DRIVER}"));
+    let native = native_build(&source, name, &["-DNATIVE"]);
+    for (mode, clang, flags) in MODES {
+        let (text, _) = lower_text_with_diagnostics(&source, &format!("{name}-{mode}"), clang, flags).expect("lowers");
+        let module = bennett_ir::load(&text).expect("valid device program");
+        for prep in [1_u64, 2] {
+            let output = Command::new(&native).args([prep.to_string(), "1".into()]).output().expect("run native C");
+            assert!(output.status.success(), "{name}: {output:?}");
+            let stdout = std::str::from_utf8(&output.stdout).expect("native stdout");
+            let wanted = u128::from_str_radix(stdout.trim(), 16).expect("native packet");
+            let (found, _) = run_with_stats(&module, "entry", &[prep, 1, 0], 0);
+            assert_eq!(found, Outcome::Returned(Some(wanted)), "{mode} prep={prep}");
+        }
+    }
+}

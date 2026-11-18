@@ -174,7 +174,9 @@ finite without counter wrap, and free of visible effects. The counter's start an
 before qubit control. The moved loop takes the same passes it would take with its gates enabled. Moved memory accesses,
 calls, and division or remainder without a proved nonzero divisor are refused. The front also checks loads on paths to the loop, including tests that rejoin and
 reads LLVM hoisted out of a test. It requires proof that the bytes of a potentially skipped read
-are always ordinary. The route is to compute
+are always ordinary. A volatile read of a private local can still supply a count when the read stays
+at its original site before the region and the local has only direct accesses and ordinary entry
+initializers. The route for unproved work is to compute
 the ordinary part inside one applied function for the table of control bits in [DESIGN.md](DESIGN.md#code-under-a-qubit).
 
 A caller-sensitive helper stays at its ordinary call site. The front refuses even one moved evaluation

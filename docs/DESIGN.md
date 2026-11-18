@@ -792,7 +792,9 @@ recomputes to enter the loop. LLVM can hoist a load from a short-circuit guard a
 The front checks ordinary reads in the loop, along the paths to it, and in the definitions of the
 values those paths use. This includes tests whose paths rejoin and loads LLVM hoisted out of a test.
 A read whose execution the move could extend must have a proved ordinary address. An in-bounds
-read from an immutable global has that proof. Reads through calls need a proof too.
+read from an immutable global has that proof. An original volatile read can also stay where it
+always executes before the region when it reads a private local with direct accesses and ordinary
+initializers in the function's entry block. Reads through calls need a proof too.
 The front refuses moved memory accesses, calls, and division or remainder without
 a divisor proved nonzero independently of the original qubit condition. A nonzero constant or a bitwise OR
 with a nonzero constant supplies that proof. Each cycle needs a unit-step counter whose start and
@@ -1568,6 +1570,9 @@ its own).
 - **Ordinary work in a moved gate loop.** Compute the ordinary part inside one applied function for the
   table of control bits. The function follows the original condition, so it does not execute ordinary
   instructions on inputs where C skips them. The current front refuses work it cannot prove safe to move.
+- **Widened bounds in moved gate loops.** Prove that the wider bound is available before qubit control
+  and transfer the ordinary entry comparison through the widening. Until that proof is available,
+  use a counter and bound of the same width, or compute the table of control bits in one applied function.
 - **Moving a caller-sensitive call.** Compute the value at its ordinary site and pass it in. To clear an
   overwrite, keep and release the old value or pass the caller's identity to a caller-independent helper.
 

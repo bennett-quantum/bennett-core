@@ -119,6 +119,7 @@ private:
   Value *entryGuard(Loop *loop, IRBuilder<> &b, ValueToValueMapTy &map);
   void requireSafeLoopReads();
   void requireSafeLoopReadInputs(const Value *input);
+  bool readsPriorPrivateLocal(const LoadInst &load) const;
   std::set<const Value *> checkedLoopInputs;
   // The ordinary conjuncts of `branch`'s condition where it takes its true (`onTrue`) or false edge, or null
   // if it has none.
@@ -648,6 +649,25 @@ bool readsImmutableMemory(const LoadInst &load) {
          access.getFixedValue() <= object.getFixedValue() - uint64_t(offset);
 }
 
+bool Predicator::readsPriorPrivateLocal(const LoadInst &load) const {
+  const auto *local = dyn_cast<AllocaInst>(load.getPointerOperand());
+  // Volatile loads cannot be speculated. Require the original read before
+  // the region, with no alias and only ordinary initializers in the entry.
+  if (!load.isVolatile() || !beforeControl.count(&load) || !local || !local->isStaticAlloca() ||
+      local->getAllocatedType() != load.getType() || analysis.basedOn(local)) {
+    return false;
+  }
+  return all_of(local->users(), [&](const User *user) {
+    if (const auto *read = dyn_cast<LoadInst>(user)) {
+      return read->getPointerOperand() == local && read->getType() == load.getType();
+    }
+    const auto *store = dyn_cast<StoreInst>(user);
+    return store && store->getPointerOperand() == local && store->getValueOperand()->getType() == load.getType() &&
+           store->getParent()->isEntryBlock() && analysis.dominators.dominates(store, &load) &&
+           !analysis.tainted(store->getValueOperand());
+  });
+}
+
 void Predicator::requireSafeLoopReadInputs(const Value *input) {
   SmallVector<const Value *, 8> work{input};
   while (!work.empty()) {
@@ -658,7 +678,7 @@ void Predicator::requireSafeLoopReadInputs(const Value *input) {
     // A tracked qubit variable is read as a register. An ordinary load can
     // have been speculated by LLVM, even when it now dominates the region.
     if (const auto *load = dyn_cast<LoadInst>(inst)) {
-      if (!analysis.access(load->getPointerOperand()) && !readsImmutableMemory(*load)) {
+      if (!analysis.access(load->getPointerOperand()) && !readsImmutableMemory(*load) && !readsPriorPrivateLocal(*load)) {
         notHandled("a moved gate loop may read bytes not proved ordinary before its gates "
                    "(route: keep the conditional read inside one applied function for the table of control bits)",
                    load);
@@ -1008,12 +1028,12 @@ void Predicator::run() {
   }
   order();
   if (!gateLoops.empty()) {
-    requireSafeLoopReads();
     for (const Instruction &inst : instructions(fn)) {
       if (!inRegion.count(inst.getParent()) && analysis.dominators.dominates(&inst, &entry->front())) {
         beforeControl.insert(&inst);
       }
     }
+    requireSafeLoopReads();
   }
   // What is known about a store's target, before the control flow changes.
   for (Instruction *op : ops) {
