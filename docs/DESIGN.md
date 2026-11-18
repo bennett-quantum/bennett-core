@@ -297,8 +297,10 @@ conditional jump the compiler tries to emit **control gates**. It combines the c
 and its complement with the control that reached the jump. Each resulting control enables
 the gates of one alternative. If the alternatives rejoin, the compiler selects the slots
 from the enabled route and emits the continuation once. Its analysis looks for the nearest
-common continuation of the routes to a return. A loop whose test stays definite can use
-this construction for a choice in its body.
+common continuation of the routes to a return. If both routes could emit shared code
+before reaching a common stop, the compiler uses the step machine. This covers
+short-circuit tests whose early returns bypass the shared code. A loop whose test stays
+definite can use control gates for a choice in its body.
 
 At a join the compiler keeps the smallest and largest possible step counts. If it can
 still charge the next instruction at the largest count, every enabled input may attempt it.
@@ -392,6 +394,8 @@ Run `cargo test -p bennett-emit --test apply controlled_apply -- --nocapture` fo
 boundary checks. The simulator compares amplitudes with direct evaluation at the return
 boundaries for shift widths 2 through 6 and for the nested example. The bit-level runner
 checks every 8-bit input at budgets 0 through 45, with zero and patterned destinations.
+For 8, 9 and 10 short-circuit pairs with early returns, automatic mode emits the same
+gate lists as forced dispatch, with 3,343, 4,544 and 5,999 gates respectively.
 
 `bennett run --device count` uses the compiler for each `apply` it reaches. Pass
 `--apply-circuit auto` to run the same gates on the simulator, or `--apply-circuit step-machine`

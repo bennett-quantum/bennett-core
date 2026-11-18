@@ -1,5 +1,7 @@
 //! Controlled choices, program-proved loops, and their budget boundaries.
 
+use std::fmt::Write;
+
 use super::{
     ApplyError, ApplyInput, ApplyMode, Argument, BlockId, Construction, CountingDevice, Device, Executor, Options,
     Outcome, RunError, bits, compile_apply, compile_apply_with, gates, load,
@@ -480,5 +482,59 @@ done:
                 compare_controls(&module, budget, mode, |x| if budget == 0 { (0, 1) } else { (x, 0) });
             }
         }
+    }
+}
+
+fn short_circuit_pairs(pairs: usize) -> String {
+    let width = 2 * pairs;
+    let mut source = format!("memory 8192\nfunc @f(i{width} %input) -> i8 {{\nentry:\n    br first_0\n");
+    for index in 0..pairs {
+        let first = 2 * index;
+        let second = first + 1;
+        let next = index + 1;
+        writeln!(
+            source,
+            "first_{index}:
+    %low_{index} = lshr i{width} %input, {first}
+    %a_{index} = trunc i{width} %low_{index} to i1
+    br %a_{index}, second_{index}, first_{next}
+second_{index}:
+    %high_{index} = lshr i{width} %input, {second}
+    %b_{index} = trunc i{width} %high_{index} to i1
+    br %b_{index}, found, first_{next}"
+        )
+        .expect("write to a string");
+    }
+    write!(source, "first_{pairs}:\n    ret 7\nfound:\n    ret 3\n}}").expect("write to a string");
+    source
+}
+
+#[test]
+fn shared_short_circuit_suffixes_use_one_step_schedule() {
+    let mut circuits = Vec::new();
+    for pairs in [3, 8, 9, 10] {
+        let width = 2 * pairs;
+        let module = load(&short_circuit_pairs(pairs)).expect("valid short-circuit function");
+        let args = [Argument::Register(0..width as u64)];
+        let input = apply_input(&module, &args, width, (3 + 6 * pairs) as u64);
+        let auto = compile_apply(input.clone()).expect("automatic emission");
+        let forced = compile_apply_with(input, ApplyMode::StepMachine).expect("forced emission");
+        println!(
+            "pairs {pairs}: {} automatic, {} step-machine gates",
+            auto.block.ops().len() - 2,
+            forced.block.ops().len() - 2
+        );
+        circuits.push((pairs, auto, forced));
+    }
+    for (pairs, auto, forced) in circuits {
+        assert_eq!(auto.reason, "conditional routes would emit shared code more than once", "{pairs} pairs");
+        assert_eq!(auto.construction, forced.construction);
+        assert_eq!(auto.block.ops(), forced.block.ops());
+        let (gates, layout) = gates(&auto, 2 * pairs, 13);
+        let inputs = [0, 1, 2].into_iter().chain((0..pairs).map(|pair| 3 << (2 * pair)));
+        bits::check_states(&gates, layout, inputs.map(|x| (x, 0x12a5)), |x| {
+            if (0..pairs).any(|pair| x >> (2 * pair) & 3 == 3) { 3 } else { 7 }
+        })
+        .expect("return and clean scratch for each pair");
     }
 }
