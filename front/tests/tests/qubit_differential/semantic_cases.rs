@@ -119,6 +119,8 @@ fn ordinary_call_keeps_its_write_beside_an_applied_call() {
 }
 
 fn mixed_store(initial: u8, offset: u8, ordinary: Option<u8>) -> Case {
+    // Native C reads the volatile byte directly: the native measurement helper reads through a pointer
+    // without `volatile`, which is undefined for a volatile object.
     let otherwise = ordinary.map_or_else(String::new, |value| format!(" else cell = {value}U;"));
     let body = format!(
         r#"
@@ -133,7 +135,9 @@ __attribute__((noinline)) void choose_store(unsigned flag) {{
 
 packet entry(unsigned prep, unsigned n, unsigned column) {{
     choose_store(column);
+#ifndef NATIVE
     if (column) return (packet)bennett_measure_bytes((const void *)&cell, 1) << 8;
+#endif
     return (packet)cell << 8;
 }}
 "#,
