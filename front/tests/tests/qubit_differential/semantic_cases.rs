@@ -14,6 +14,9 @@ struct Family {
     switch: &'static str,
     recipes: &'static [Generate],
     modes: &'static [usize],
+    // The front handles the defect the family was written for: its cases also run in every front test run
+    // (`default_families_agree_with_native`).
+    by_default: bool,
 }
 
 // These recipes check semantics that depend on what clang hands to the front.
@@ -25,24 +28,44 @@ const FAMILIES: &[Family] = &[
         switch: "BENNETT_RANDOM_WRITING_CALLS",
         recipes: &[removed_call_argument, merged_writing_calls],
         modes: PROJECT_MODES,
+        by_default: true,
     },
-    Family { switch: "BENNETT_RANDOM_MIXED_STORES", recipes: &[merged_stores, skipped_store], modes: PROJECT_MODES },
-    Family { switch: "BENNETT_RANDOM_GUARDED_LOADS", recipes: &[mixed_guard_load], modes: PROJECT_MODES },
+    Family {
+        switch: "BENNETT_RANDOM_MIXED_STORES",
+        recipes: &[merged_stores, skipped_store],
+        modes: PROJECT_MODES,
+        by_default: false,
+    },
+    Family {
+        switch: "BENNETT_RANDOM_GUARDED_LOADS",
+        recipes: &[mixed_guard_load],
+        modes: PROJECT_MODES,
+        by_default: true,
+    },
     Family {
         switch: "BENNETT_RANDOM_GUARDED_GATE_LOOPS",
         recipes: &[unproved_division, skipped_read, proved_division],
         modes: ALL_MODES,
+        by_default: false,
     },
 ];
 
-pub(super) fn enabled_recipes() -> Vec<(Generate, usize)> {
+fn recipes(selected: impl Fn(&Family) -> bool) -> Vec<(Generate, usize)> {
     FAMILIES
         .iter()
-        .filter(|family| std::env::var_os(family.switch).is_some())
+        .filter(|family| selected(family))
         .flat_map(|family| {
             family.recipes.iter().flat_map(|&recipe| family.modes.iter().map(move |&mode| (recipe, mode)))
         })
         .collect()
+}
+
+pub(super) fn enabled_recipes() -> Vec<(Generate, usize)> {
+    recipes(|family| std::env::var_os(family.switch).is_some())
+}
+
+pub(super) fn default_recipes() -> Vec<(Generate, usize)> {
+    recipes(|family| family.by_default)
 }
 
 fn writing_call(initial: u8, written: u8, choice: Option<(u64, u8)>) -> Case {
@@ -111,13 +134,12 @@ fn agrees(name: &str, case: Case, modes: &[usize], expected: &[Vec<u128>]) {
 }
 
 #[test]
-#[ignore = "removing a qubit-dependent argument makes an applied call's global write survive"]
 fn removed_argument_keeps_the_call_applied() {
     agrees("removed-call-argument", writing_call(3, 7, None), PROJECT_MODES, &[vec![0x30000, 0x30101]]);
 }
 
 #[test]
-#[ignore = "merging ordinary and qubit-dependent calls undoes the ordinary call's global write"]
+#[ignore = "refused by name: the choice between the calls starts in the entry block (docs/DESIGN.md, \"Not yet\")"]
 fn ordinary_call_keeps_its_write_beside_an_applied_call() {
     agrees(
         "merged-writing-calls",
@@ -207,7 +229,6 @@ fn mixed_guard_load(random: &mut ChaCha8Rng) -> Case {
 }
 
 #[test]
-#[ignore = "the lowered qubit condition reads a qubit-held global that C skips by short-circuiting"]
 fn qubit_guard_short_circuits_the_global_load() {
     agrees("guarded-load", guarded_load(1, 0, false), PROJECT_MODES, &[vec![0x10000], vec![0x10100]]);
 }

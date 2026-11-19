@@ -10,8 +10,12 @@ use bennett_front_tests::{
 #[path = "qubit_differential/state.rs"]
 mod state;
 
-const MODES: [(&str, &[&str], &[&str]); 3] =
+type Mode<'a> = (&'a str, &'a [&'a str], &'a [&'a str]);
+const MODES: [Mode; 3] =
     [("o0", CLANG_FLAGS, &[]), ("o2", CLANG_O2_FLAGS, &[]), ("taint", CLANG_FLAGS, &["--taint-all"])];
+// What the language promises for C compiled with the project's flags; IR that clang -O2 changed first is
+// translated as it is handed over (docs/DESIGN.md, "What LLVM's passes may not change").
+const PROJECT_MODES: [Mode; 2] = [MODES[0], MODES[2]];
 
 const PRELUDE: &str = r#"
 #include <stdint.h>
@@ -544,7 +548,7 @@ fn a_gate_loop_without_a_found_count_is_issued_with_a_warning() {
 }
 
 #[test]
-#[ignore = "LLVM's optimiser reads the held byte before the qubit test that guards it, with or without a loop; needs the front to classify accesses before optimising"]
+#[ignore = "refused by name: the gate loop's control is computed under its condition before the loop"]
 fn disabled_gate_loop_never_reads_a_held_byte_to_prepare_control() {
     Program {
         name: "gate-control-load",
@@ -670,6 +674,17 @@ fn compare_ordinary_inputs(name: &str, declarations: &str, body: &str, expected:
 // With `keeps`, an overwrite whose old value cannot be cleared releases it, at most one register per run, and the
 // front warns that it keeps the old value; otherwise every released register is 0.
 fn compare_ordinary_inputs_keeping(name: &str, declarations: &str, body: &str, expected: [u128; 2], keeps: bool) {
+    compare_ordinary_inputs_in(name, declarations, body, expected, keeps, &MODES);
+}
+
+fn compare_ordinary_inputs_in(
+    name: &str,
+    declarations: &str,
+    body: &str,
+    expected: [u128; 2],
+    keeps: bool,
+    modes: &[Mode],
+) {
     let source = write_c(
         name,
         &format!(
@@ -686,7 +701,7 @@ fn compare_ordinary_inputs_keeping(name: &str, declarations: &str, body: &str, e
     assert_eq!(native, expected, "{name}");
 
     let mut failures = Vec::new();
-    for (mode, clang, flags) in MODES {
+    for &(mode, clang, flags) in modes {
         let name = format!("{name}-{mode}");
         let (text, diagnostics) = lower_text_with_diagnostics(&source, &name, clang, flags).expect("lowers");
         let module = bennett_ir::load(&text).expect("valid device program");
@@ -708,9 +723,8 @@ fn compare_ordinary_inputs_keeping(name: &str, declarations: &str, body: &str, e
 }
 
 #[test]
-#[ignore = "dropping a qubit argument lets one of two applied calls leave its write behind"]
 fn both_qubit_dependent_calls_undo_their_writes() {
-    compare_ordinary_inputs(
+    compare_ordinary_inputs_in(
         "two-call-writes",
         r#"
 unsigned input_seen, successor_seen;
@@ -732,14 +746,17 @@ __attribute__((noinline)) unsigned record_successor(unsigned x) {
     y ^= record_input(q);
     y ^= record_successor(q);
     unsigned value = READ(y);
+    (void)READ(q); // every register measured: none is released holding a value
     return value + 16u * (n && input_seen == successor_seen);
 "#,
         [3, 19],
+        false,
+        &PROJECT_MODES,
     );
 }
 
 #[test]
-#[ignore = "merging ordinary and qubit-dependent calls undoes the ordinary call's write"]
+#[ignore = "refused by name: the choice between the calls starts in the entry block (docs/DESIGN.md, \"Not yet\")"]
 fn an_ordinary_call_selected_by_a_condition_keeps_its_write() {
     compare_ordinary_inputs(
         "conditional-call-write",

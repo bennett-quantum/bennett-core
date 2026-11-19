@@ -2,7 +2,7 @@
 
 #include "Diagnostic.h"
 #include "Markers.h"
-#include "Normalise.h"
+#include "Passes.h"
 #include "Taint.h"
 
 #include <llvm/Analysis/ValueTracking.h>

@@ -14,8 +14,9 @@ class Module;
 
 namespace bennett {
 
-// The functions that perform quantum operations: those that call a marker or such a function.
-std::set<const llvm::Function *> controlFunctions(const llvm::Module &module);
+// The functions that perform quantum operations: those that call a marker or such a function. With
+// `refuseAddressTaken`, the address of such a function taken anywhere is refused by name.
+std::set<const llvm::Function *> controlFunctions(const llvm::Module &module, bool refuseAddressTaken = true);
 
 // Outlines every region of `function` that branches or merges on a value that depends on a qubit.
 void outlineRegions(llvm::Function &function, bool taintAll, const std::set<const llvm::Function *> &control);

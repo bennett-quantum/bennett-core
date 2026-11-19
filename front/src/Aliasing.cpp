@@ -269,6 +269,15 @@ bool Aliasing::meet(const Function &function, const Objects &a, const Objects &b
   return false;
 }
 
+void Aliasing::addObjectsOf(const Value *pointer, Objects &into) const {
+  Objects objects = objectsOf(pointer);
+  into.insert(objects.begin(), objects.end());
+}
+
+bool Aliasing::mayReach(const Function &function, const Value *pointer, const Objects &objects) const {
+  return !objects.empty() && meet(function, objectsOf(pointer), objects);
+}
+
 bool Aliasing::mayShare(const Function &function, const Value *a, const Value *b) const {
   const Value *baseA = getUnderlyingObject(a, 0);
   const Value *baseB = getUnderlyingObject(b, 0);

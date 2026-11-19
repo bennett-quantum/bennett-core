@@ -774,7 +774,8 @@ below); the program's meaning is the fault code in the register.
 ## From C to a device program (`front`)
 
 `front` is the only module that links LLVM. It reads the bitcode stock `clang` emits, runs LLVM's own pipeline
-(without vectorisers), and writes the text form; the reader and validator in `ir` check what it wrote. The marker
+(without vectorisers, and without letting it change what the language's rules depend on: "What LLVM's passes may
+not change" below), and writes the text form; the reader and validator in `ir` check what it wrote. The marker
 surface is `docs/MARKERS.md`. Input LLVM's reader cannot parse, stops on or crashes on (damaged metadata), or its
 verifier rejects, is named "the input is not valid LLVM IR" with status 2, and no device program is written; an empty file is LLVM's empty module and gives
 an empty device program (`front/src/main.cpp`, `readInput`).
@@ -818,7 +819,11 @@ an empty device program (`front/src/main.cpp`, `readInput`).
   are ordinary there (`Outline.cpp`, `HeldBytes.h`). The front checks fixed offsets within globals
   against earlier exchanges, stores and quantum calls that can reach the same object, following incoming
   control flow and callers. When it cannot establish that the bytes are ordinary, the load stays in the
-  applied function, subject to the memory checks in "Applied calls", "Where the value is computed".
+  applied function, subject to the memory checks in "Applied calls", "Where the value is computed". A read of
+  memory that may hold qubits is treated the same way: read before the region only where that proof holds
+  (the read then runs for inputs where C does not run it, and cannot fault there), otherwise kept in the
+  applied function under its conditional jumps, where the simplifier runs on the front's copies cannot
+  move it ("What LLVM's passes may not change" below).
 - **Code without gates under such a condition that writes qubit variables is one applied function** for all
   the variables it writes, its loops and nested loops included ("Code under a qubit" below; `RegionResults.h`).
 - **Quantum operations under such a condition are predicated** otherwise (`Predicate.h`). For each basis configuration
@@ -955,6 +960,67 @@ Two things the first C programs taught:
   dirty discard needs a *variable* that outlives the computation.
 - "The operands are still there" is not enough to uncompute; they must be unchanged. A value read from a qubit
   before a gate and used after it cannot be uncomputed, and is refused.
+
+## What LLVM's passes may not change
+
+LLVM's optimiser, and every simplifier the front runs on code it made, keep the behaviour of native C. The
+language has rules native C lacks: an ordinary read or write of a byte that holds qubits is the fault
+`qubit_memory_access`; a call whose argument depends on a qubit is applied, so its writes are undone; a store of
+a value that depends on a qubit makes the bytes it writes hold qubits. A change that is invisible in native C can
+change what these rules give: reading a byte before the test that guards it, removing a qubit-dependent
+argument so that a call is no longer applied, merging an ordinary store with a qubit-dependent one so that the
+bytes hold qubits on both paths. Each was a wrong result of the front before the instructions were classified.
+
+**Classification** (`Classify.h`), on the program as clang hands it over, after SROA (which turns only local
+variables whose address never escapes into values, and moves, merges and removes no other access). Six classes:
+a read of memory that may hold qubits; a store of an ordinary value into such memory; a store whose value or
+address depends on a qubit, or that runs under a conditional jump that depends on one; a call (a call through a
+pointer included) with an argument that depends on a qubit; a memory intrinsic on such memory or depending on a
+qubit; an atomic update or exchange on such memory or depending on a qubit. "Depends on a qubit" is decided by
+the text: a value depends on a qubit at a place if, on some path to that place, it was computed from a qubit
+(the maintainer's decision of 2026-11-19). So in `if (n) g = q; else g = 2;` only the first store makes `g` hold
+qubits, while `x = n ? q : 2; g = x;` stores a value that depends on a qubit on both paths. A qubit variable is
+known at a load exactly when the front's later analysis would find it known (one ordinary value, stored whole or
+measured, or the fresh 0, reaches the load on every path); a variable whose address goes anywhere but loads,
+stores and markers is never known here. A memcpy, memmove or memset of 1, 2, 4 or 8 bytes is first rewritten into
+an integer load and store, as LLVM's InstCombine rewrites it in the optimiser; sealed as a call it would reach the
+front unrewritten, be expanded into a guarded loop, and change where the front places the exchanges of memory written
+under a qubit. The analysis runs before inlining, so it follows markers applied
+through a helper's parameter. Where it is coarser than the later analysis it classifies more, which costs only
+optimisation: the front decides again, after the passes, how each instruction is translated. It is not meant to be
+finer; one way it can be is known and listed in "Not yet". An `invoke` or `callbr` with an argument that depends
+on a qubit, and an intrinsic or `va_arg` that may touch memory that may hold qubits, can be neither classified
+nor left to the optimiser, and are refused by name.
+
+**Sealing** (`Passes.h`). Every run of an LLVM pass that can move, merge, copy or remove instructions goes
+through one module: the optimiser (O2 without the vectorisers), the Scalarizer with InstCombine, and the
+simplifier runs on predicated copies, on regions applied whole and on the scratch functions of proofs. For the
+run each classified instruction becomes a call of a declaration of its own, without a body and with one
+attribute, `noduplicate`. A pass must assume such a call reads and writes any memory and may not return, so it
+keeps the call where it is, in order with every other access to memory and under its conditions; it cannot
+merge two of them (they call different functions), and it may not copy one (without the attribute, LLVM's loop
+rotation copied a store that depends on a qubit into the block before a loop, measured on a generated program). After the run each call is the instruction it stood for again, with its type,
+alignment, volatility, ordering, attributes and metadata, and the front checks that each one is there exactly
+once: an instruction a pass removed or copied is refused by name. This relies on one property of LLVM's passes
+(a call of an unknown function stays as it is), not on a list of their steps. A test fails when any front
+source other than `Passes.cpp` names LLVM's pass machinery (`front/tests/tests/sealed_operations.rs`). Passes
+that only infer attributes, or delete what nothing refers to, see the real instructions, because sealed the
+attributes they infer would be too weak; the front infers them again after the optimiser. A classified vector
+load or store is split into one access per element before the Scalarizer runs, as the Scalarizer would split
+it, each part with the class of the whole, since sealed the Scalarizer cannot split it.
+
+**What the optimiser no longer sees.** It keeps the sealed instructions as they are, and it cannot see through a
+sealed applied call into its callee or inline it. Because the sealed calls are `noduplicate`, it also does not
+inline a function that contains one into more than one caller (the inlined copies would duplicate the call),
+nor unroll or rotate a loop that contains one. Measured on SQLite stage 4: the results are unchanged and the
+applied steps grow by 0.03 %. Some shapes the front handled only after the optimiser had merged two stores are
+now refused by name: an ordinary overwrite of held bytes under a qubit-dependent condition, which the optimiser
+used to fold with the store before it into one store of a chosen value (`docs/RECORDS.md`).
+
+The meaning is promised for C compiled with the project's flags (`front/test.sh`). IR that an optimiser changed
+before it reached the front (clang `-O2`) is translated as it is handed over, and the language's rules apply to
+that IR (the maintainer's decision of 2026-11-19); tests that depend on this section run in the project's modes
+only.
 
 ## Code under a qubit
 
@@ -1992,6 +2058,19 @@ bytes, never written, may still hold qubits at a return (the fallback oracle's `
 `front/tests/tests/memory_held.rs`, `a_held_range_wider_than_every_write_is_refused`). Route: prove which bytes a
 write at a position that is not constant covers for some configuration whatever the ordinary values, and hold only
 those.
+
+Refused by name or not yet excluded around the classification of "What LLVM's passes may not change":
+
+- **A choice at a function's first block.** Code that joins a value depending on a qubit where the choice starts in
+  the function's entry block (`if (n) r = f(q); else r = f(2);` at the top of a function) is refused by name:
+  outlining cannot start a region at the entry block. Before the calls were classified, the optimiser merged
+  them into one applied call and the device returned a wrong result. Route: split the entry block so that the
+  region starts after it.
+- **A known value the optimiser copies.** The classification calls a qubit variable known where one ordinary value
+  reaches its load on every path. A pass that copies the store of that value into two paths makes the front's
+  later analysis meet two values and call the variable unknown, so a load the classification left to the
+  optimiser is later found to depend on a qubit. No program is known to do this. Route: let the later analysis
+  meet two known values in a phi at the join, as the optimiser's copies are.
 
 | Refused inside emitted `apply` | Construction needed |
 |---|---|

@@ -10,6 +10,7 @@
 //!
 //! When any switch is set, the campaign runs only the selected families.
 //! Use the same switches to replay an index.
+//! Families whose defect the front handles also run a few cases in every front test run.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -381,7 +382,16 @@ fn measure_objects(body: &mut String, objects: &[(String, u32)]) -> (u64, Vec<Fi
 // The original fixed prefix, then one case from each loop overwrite recipe.
 #[test]
 fn short_randomized_differential() {
-    campaign("qubit-differential-short", SEED, Some(SHORT_CASES), None, None);
+    campaign("qubit-differential-short", SEED, Some(SHORT_CASES), None, None, Vec::new());
+}
+
+// A few cases of each recipe, in each of its modes, of the families on by default (semantic_cases.rs).
+const FAMILY_CASES_PER_RECIPE: usize = 4;
+#[test]
+fn default_families_agree_with_native() {
+    let recipes = semantic_cases::default_recipes();
+    let cases = FAMILY_CASES_PER_RECIPE * recipes.len();
+    campaign("qubit-differential-families", SEED, Some(cases), None, None, recipes);
 }
 
 // Build the front with front/test.sh, then run:
@@ -396,12 +406,18 @@ fn long_randomized_differential() {
         value.strip_prefix("0x").map_or_else(|| value.parse(), |hex| u64::from_str_radix(hex, 16)).expect("seed")
     });
     let replay = std::env::var("BENNETT_RANDOM_INDEX").ok().map(|value| value.parse().expect("case index"));
-    campaign("qubit-differential-long", seed, limit, Some(LONG_TIME), replay);
+    campaign("qubit-differential-long", seed, limit, Some(LONG_TIME), replay, semantic_cases::enabled_recipes());
 }
 
-fn campaign(name: &str, seed: u64, limit: Option<usize>, time: Option<Duration>, replay: Option<usize>) {
+fn campaign(
+    name: &str,
+    seed: u64,
+    limit: Option<usize>,
+    time: Option<Duration>,
+    replay: Option<usize>,
+    recipes: Vec<(fn(&mut ChaCha8Rng) -> Case, usize)>,
+) {
     let limit = if replay.is_some() { Some(1) } else { limit };
-    let recipes = if time.is_some() { semantic_cases::enabled_recipes() } else { Vec::new() };
     let mut original = ChaCha8Rng::seed_from_u64(seed);
     let mut extra = ChaCha8Rng::seed_from_u64(seed ^ EXTRA_SEED_MASK);
     let mut state = ChaCha8Rng::seed_from_u64(seed ^ STATE_SEED_MASK);
@@ -420,7 +436,9 @@ fn campaign(name: &str, seed: u64, limit: Option<usize>, time: Option<Duration>,
             (generate(&mut original), mode)
         };
         if replay.is_some_and(|selected| index < selected)
-            || (time.is_none() && (generator::SHORT_PREFIX..generator::LOOP_START).contains(&index))
+            || (time.is_none()
+                && recipes.is_empty()
+                && (generator::SHORT_PREFIX..generator::LOOP_START).contains(&index))
         {
             continue;
         }
@@ -595,13 +613,61 @@ fn check_witness(name: &str, qubits: u32, body: &str, refusal: Option<&str>) {
 
 // A program the front must refuse with `reason` in all three modes.
 fn check_refused(name: &str, body: &str, reason: &str) {
+    check_refused_with(name, body, [reason; 3]);
+}
+
+// `reasons` in the order of MODES.
+fn check_refused_with(name: &str, body: &str, reasons: [&str; 3]) {
     let source = write_c(name, &format!("{PRELUDE}{body}{DRIVER}"));
-    for (mode, cflags, flags) in MODES {
+    for ((mode, cflags, flags), reason) in MODES.into_iter().zip(reasons) {
         match lower_text(&source, &format!("{name}-{mode}"), cflags, flags) {
             Ok(_) => panic!("{name}-{mode}: lowered, expected the refusal {reason:?}"),
             Err(error) => assert!(error.contains(reason), "{name}-{mode}: {error}"),
         }
     }
+}
+
+// Generated case 20 of seed 0x87196caa251d0f43 under --taint-all: once the reads of cell2 stay where C has them
+// (docs/DESIGN.md, "What LLVM's passes may not change"), a value the applied computation takes is the constant 0,
+// and the front wrote it as an argument of `apply` without its type, which the reader rejects.
+#[test]
+fn a_constant_argument_of_apply_has_its_type() {
+    check_target(
+        "constant-apply-argument",
+        &Case::values(
+            r#"
+static uint32_t cell0[2] = {3670060788ULL, 11};
+    uint8_t cell1 = 62ULL;
+packet entry(unsigned prep, unsigned n, unsigned column) {
+    uint32_t cell2 = 4151740680ULL;
+    unsigned char q = PREPARE(prep);
+    HBIT(q, 0);
+    HBIT(q, 1);
+    HBIT(q, 2);
+    cell2 = 17ULL * q + 3;
+    if ((q & 6U) != 0) {
+        cell2 += 2502563473062545806ULL + 3ULL * q;
+    }
+    if ((q & 5U) != 0) {
+        cell2 = 17534473925080966101ULL;
+        cell1 += 12047374459930827575ULL + 3ULL * q;
+        cell0[0] = 10380616365596990752ULL + 3ULL * q;
+    }
+    packet key = bennett_measure(&q);
+    packet v0 = bennett_measure_bytes(&cell0[0], 4);
+    packet v1 = bennett_measure_bytes(&cell1, 1);
+    packet v2 = bennett_measure_bytes(&cell2, 4);
+    return key | (v0 << 8) | (v1 << 40) | (v2 << 48);
+}
+"#
+            .to_owned(),
+            3,
+            1,
+            1,
+            false,
+        ),
+        None,
+    );
 }
 
 #[test]
@@ -796,10 +862,14 @@ packet entry(unsigned prep, unsigned n, unsigned column) {
 }
 
 // The nearest shape that must stay refused: the region reads a in a helper it calls, which is applied where
-// the value is stored, after the exchange has changed a's bytes.
+// the value is stored, after the exchange has changed a's bytes. With the project's flags the call of the helper
+// is an applied call the optimiser does not inline (docs/DESIGN.md, "What LLVM's passes may not change"), refused
+// as a call that may read the held byte; after clang -O2 the helper arrives inlined and its load is refused.
 #[test]
 fn merged_held_store_read_by_a_helper_after_the_exchange_is_refused() {
-    check_refused(
+    const CALL: &str = "a call that may read or write memory of @a while 1 byte at @a+0 hold qubits";
+    const LOAD: &str = "reads memory that may change before its result is used";
+    check_refused_with(
         "merged-held-store-helper-read",
         r#"
 uint8_t a = 43, b = 9;
@@ -816,7 +886,7 @@ packet entry(unsigned prep, unsigned n, unsigned column) {
     return key | (first << 8) | (second << 16);
 }
 "#,
-        "reads memory that may change before its result is used",
+        [CALL, LOAD, CALL],
     );
 }
 

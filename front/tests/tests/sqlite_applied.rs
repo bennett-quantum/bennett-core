@@ -3,8 +3,8 @@
 //! (`experiments/sqlite-on-device/applied.c`). Each of the SQL oracle's eight queries, for each of the eight
 //! row values, is compared with the native driver's result, and the classical memory, the database
 //! included, is the same before and after each `apply`.
-use bennett_exec::Options;
-use bennett_front_tests::{options, out_dir, registers, root, state_around_first_apply};
+use bennett_exec::{Executor, Options};
+use bennett_front_tests::{front, options, out_dir, registers, root, state_around_first_apply};
 use num_complex::Complex64;
 use std::collections::BTreeMap;
 use std::process::Command;
@@ -82,7 +82,7 @@ fn sqlite_queries_under_apply_from_c_match_native_for_each_row() {
     checked(Command::new("llvm-link-18").arg(build.join("link/linked.bc")).arg(&applied).arg("-o").arg(&linked));
     let program = build.join("applied.bn");
     let front = checked(
-        Command::new(workspace.join("target/front/bennett-front"))
+        Command::new(front())
             .arg(&linked)
             .arg("-o")
             .arg(&program)
@@ -109,6 +109,14 @@ fn sqlite_queries_under_apply_from_c_match_native_for_each_row() {
             assert_eq!((config[result], config[fault]), (want, 0), "{name}, row {}", config[row]);
             assert!((amplitude - weight).norm() < 1e-12, "{name}, row {}: {amplitude}", config[row]);
         }
+        let function = module.function_named(&entry).expect("entry");
+        let mut whole = Executor::new(&module, function, &[], options).expect("executor");
+        let outcome = whole.run();
+        let stats = whole.stats();
+        println!(
+            "steps {name}: control {} applied {} (summed over configurations), outcome {outcome:?}",
+            stats.steps, stats.region_steps
+        );
         println!("{name}: 8 rows equal to native, memory unchanged ({:.1} s)", running.elapsed().as_secs_f64());
     }
     println!("total {:.1} s", start.elapsed().as_secs_f64());

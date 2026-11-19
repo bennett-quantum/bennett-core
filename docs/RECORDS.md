@@ -6,6 +6,48 @@ A record says what was run when it was run; read the commit it names before rely
 
 # Part one: measurement and testing records
 
+## Classified instructions sealed for LLVM's passes (2026-11-19)
+`docs/DESIGN.md`, "What LLVM's passes may not change". Measured on the commit that introduced it, on top of
+`83dea21`, against the front of `83dea21` (its front sources are those of `814b6bf`). Inputs `prep n column` of
+`entry`, flags of the project (`-O0 -Xclang -disable-O0-optnone`).
+
+| Program | Native C | Before | After |
+|---|---|---|---|
+| a held read under `q &&` before a gate loop | 65,536 | `qubit_memory_access` | 65,536 |
+| a held read whose result controls a gate loop | 65,536 | `qubit_memory_access` | 65,536 |
+| a held read after a gate loop under the same qubit | 65,536 | `qubit_memory_access` | 65,536 |
+| a held read guarding one gate | 65,536 | `qubit_memory_access` | 65,536 |
+| `if (n) return n * held[0]` with `held[0]` holding qubits, `n = 0` | 1 | `qubit_memory_access` | 1 |
+| two applied calls, one argument dropped by the optimiser | 19 | 3 | 19 |
+| `f(q)` or `f(2)` chosen by an ordinary condition at the function's entry | 115 | 3 | refused by name |
+| a held read under `q &&` that also prepares a gate loop's control | 65,536 | `qubit_memory_access` | refused by name (gate loop) |
+| a qubit-dependent store and a store of 2 chosen by an ordinary condition | 2 | `qubit_memory_access` | `qubit_memory_access` (exchange placement) |
+
+Tests: `front/tests/tests/sealed_operations.rs`, the un-ignored `both_qubit_dependent_calls_undo_their_writes`,
+`removed_argument_keeps_the_call_applied` and `qubit_guard_short_circuits_the_global_load`. Over the whole front
+suite no sealed instruction was removed or copied (the front would have refused it by name). Without
+`noduplicate` on the sealed declarations, loop rotation copied a store that depends on a qubit in one generated
+program (seed `0x87196caa251d0f43`, case 194, `--taint-all`).
+
+**SQLite stage 4** (`sqlite_applied.rs`, which prints these counts): 8 queries on 8 rows equal native, memory
+unchanged, before and after. Control steps per query 989,201 before, 989,010 after. Applied steps, summed over
+configurations, before and after: arith 41,735 and 41,711; like_name 49,937 and 49,977; like_note 71,759 and
+71,919; scan 111,085, int_eq 38,009, text_order 43,213, two_where 43,308, range_agg 116,112 unchanged; in all
+515,158 and 515,334 (+176, +0.03 %).
+
+**Randomised differential**, 400 cases per seed (`BENNETT_RANDOM_CASES=400`, `long_randomized_differential`),
+accepted and declined, no failure in any run:
+
+| Seed | Before | After |
+|---|---|---|
+| `0x87196caa251d0f43` | 383 / 17 | 380 / 20 |
+| `0x0b7e11a5d1ff0007` | 382 / 18 | 384 / 16 |
+
+The first seed's three new refusals (cases 84, 260 and 398) are "an update of qubit variable holding ... which
+neither XORs into it nor becomes straight-line code": a store into held bytes followed by an overwrite under a
+qubit-dependent condition, which the optimiser merged into one store before and keeps as two now. The second
+seed's two programs refused before with that message are accepted now and agree with native C.
+
 ## Code under a qubit: merged stores and updates in loops (2026-11-18)
 **A store merged at a join (step 1).** Witness `merged_held_store_can_use_the_value_before_the_exchange`
 (`front/tests/tests/qubit_differential.rs`), refused on the code before this step in all three modes, seen.

@@ -23,7 +23,7 @@
 #include "Evaluations.h"
 #include "HeldBytes.h"
 #include "Markers.h"
-#include "Normalise.h"
+#include "Passes.h"
 #include "RegionResults.h"
 #include "Taint.h"
 
@@ -1064,7 +1064,7 @@ std::string ControlWriter::slice(const Slice &slice, const Value *root, const St
     std::string name = writer.fresh(value->hasName() ? value->getName().str() : "value");
     writer.bind(value, name);
     params += (params.empty() ? "" : ", ") + intType(widthOf(value->getType(), value)) + " " + name;
-    args += (args.empty() ? "" : ", ") + operand(value);
+    args += (args.empty() ? "" : ", ") + typed(value); // an argument of `apply` that is a constant has its type
   }
   for (auto [load, value] : slice.computed) {
     writer.alias(load, value);
