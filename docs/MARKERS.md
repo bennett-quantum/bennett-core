@@ -109,8 +109,9 @@ A loop with gates under such a condition runs as written, its number of passes a
 The control program runs all `n` passes whatever `q` holds (it cannot see `q`), so the loop's ordinary code
 must not be able to fault or write anything: reads of memory, divisions by a divisor that may be 0, stores and
 calls in it are refused by name, and a loop that never ends once entered does not end on the device even
-where `q` is 0 (the front warns where LLVM finds no count of passes). An ordinary `if` written around the loop
-skips it on the device too (`docs/DESIGN.md`, "Code under a qubit", gate loops).
+where `q` is 0 (the front warns where LLVM finds no count of passes). An ordinary `if` written outside the
+qubit's condition skips the loop on the device too; one written inside it (`if (q) if (n) loop`) may be folded
+into the condition by the optimiser and then does not (`docs/DESIGN.md`, "Code under a qubit", gate loops).
 
 ## Measurement
 

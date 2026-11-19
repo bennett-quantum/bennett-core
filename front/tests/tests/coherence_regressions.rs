@@ -314,7 +314,7 @@ fn counted_gate_loop(test: &str) -> String {
     gate_loop("", "unsigned i = 0; i < n; ++i", test)
 }
 
-const UNCOUNTED: &str = "LLVM's loop analysis finds no number of passes for this loop with gates";
+const UNCOUNTED: &str = "LLVM's loop analysis finds no number of passes for this loop";
 
 fn lowering_diagnostics(program: &Program<'_>) -> Vec<String> {
     let source = program.source();
@@ -388,6 +388,35 @@ fn disabled_gate_loop_divides_by_a_proved_divisor() {
         let body = gate_loop("unsigned d = column + (prep != 1);", "unsigned i = 0; i < n; ++i", &test);
         Program { name, declarations: "", body: &body, qubits: 1 }.agrees(n, &[0, 257], &readout(&[0, 8]), 0);
     }
+    // A divisor whose range excludes 0 (1 to 256), and one an ordinary test outside the qubit's condition guards.
+    let counted = "unsigned i = 0; i < 3 + column; ++i";
+    let test = "((i + 17u) / d) & 1";
+    let ranged = gate_loop("", counted, test).replace("if (q) {", "unsigned d = (n & 255u) + 1u;\n    if (q) {");
+    Program { name: "gate-divide-ranged", declarations: "", body: &ranged, qubits: 1 }.agrees(
+        2,
+        &[0, 257],
+        &readout(&[0, 8]),
+        0,
+    );
+    let guarded = gate_loop("", counted, test).replace("if (q) {", "unsigned d = n;\n    if (n) if (q) {");
+    Program { name: "gate-divide-guarded", declarations: "", body: &guarded, qubits: 1 }.agrees(
+        3,
+        &[0, 257],
+        &readout(&[0, 8]),
+        0,
+    );
+}
+
+#[test]
+fn disabled_gate_loop_never_divides_after_a_test_on_another_path() {
+    // Odd passes test the divisor, even passes divide by it: the test is not on the path to the division.
+    let body = gate_loop("", "unsigned i = 0; i < n; ++i", "(i & 1) ? d != 0 : ((i + 17u) / d) & 1")
+        .replace("if (q) {", "unsigned d = column + (prep != 1);\n    if (q) {");
+    Program { name: "gate-divide-wrong-edge", declarations: "", body: &body, qubits: 1 }.refused(
+        1,
+        &[0, 257],
+        &unasked("`udiv` whose divisor is not proved nonzero"),
+    );
 }
 
 #[test]
@@ -432,12 +461,37 @@ fn gate_loops_with_large_ordinary_counts_are_issued_in_full() {
         }
     }
     let body = counted_gate_loop("1").replace("if (q) {", "if (q == n) {");
-    Program { name: "gate-count-equal", declarations: "", body: &body, qubits: 1 }.agrees(
-        1,
-        &[0, 257],
-        &readout(&[0, 8]),
-        0,
+    let program = Program { name: "gate-count-equal", declarations: "", body: &body, qubits: 1 };
+    program.agrees(1, &[0, 257], &readout(&[0, 8]), 0);
+    for diagnostics in lowering_diagnostics(&program) {
+        assert!(!diagnostics.contains(UNCOUNTED), "gate-count-equal: {diagnostics}");
+    }
+}
+
+#[test]
+fn an_uncounted_loop_nested_in_a_counted_gate_loop_is_warned_about() {
+    let body = gate_loop(
+        "",
+        "unsigned i = 0; i < 2 + column; ++i",
+        "1) {\n            #pragma clang loop unroll(disable)\n            for (unsigned j = 0; j != 1; j += n) XBIT(y, 0);\n        } if (0",
     );
+    let program = Program { name: "gate-count-nested", declarations: "", body: &body, qubits: 1 };
+    program.agrees(1, &[0, 1], &readout(&[0, 8]), 0);
+    for diagnostics in lowering_diagnostics(&program) {
+        assert!(diagnostics.contains(UNCOUNTED), "gate-count-nested: {diagnostics}");
+    }
+}
+
+#[test]
+fn an_ordinary_guard_inside_the_qubit_condition_may_be_folded_and_the_warning_remains() {
+    // LLVM folds `if (n)` into the condition `q & n` around it; the control program then runs the loop also for
+    // n = 0, where it never ends (not run here), and the warning is what the programmer gets.
+    let body = gate_loop("", "unsigned j = 0; j != 1; j += n", "1").replace("if (q) {", "if (q & n) if (n) {");
+    let program = Program { name: "gate-count-folded-guard", declarations: "", body: &body, qubits: 1 };
+    program.agrees(1, &[0, 257], &readout(&[0, 8]), 0);
+    for diagnostics in lowering_diagnostics(&program) {
+        assert!(diagnostics.contains(UNCOUNTED), "gate-count-folded-guard: {diagnostics}");
+    }
 }
 
 #[test]

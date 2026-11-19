@@ -1031,12 +1031,14 @@ inputs on which C does not run it. It is accepted only from an allow-list (`Unas
 checked where the device runs it, for every input that reaches it there, using only the tests the device
 makes there:
 
-- it cannot fault there: integer arithmetic other than division, comparisons, choices, casts and address
-  arithmetic, which never fault on the device (a shift by too much gives 0, signed overflow wraps); a division
-  or remainder whose divisor is a nonzero constant, has a constant bit set, or is tested nonzero by a
-  conditional jump of the loop itself on every path to it;
+- it cannot fault there: integer arithmetic other than division, comparisons, choices, casts, address
+  arithmetic and funnel shifts, which never fault on the device (a shift by too much gives 0, signed overflow
+  wraps); a division or remainder whose divisor's range, computed with the device's wrapping arithmetic from
+  constants, excludes 0 (`(n & 255) + 1`), or which a conditional jump of the control program tests nonzero on
+  every path to the division (in the loop, or an ordinary test outside the qubit-dependent condition); a test
+  inside the code under the qubit proves nothing, since that code becomes applied code;
 - it changes nothing later code can see: no store and no call, except the marker that numbers a bit, the
-  bijections the front keeps as intrinsics until after outlining (byte swap, rotations) and intrinsics that do
+  funnel shifts and byte swaps the front keeps as intrinsics until after outlining, and intrinsics that do
   nothing on the device.
 
 Everything else is refused by name ("in a loop with gates under the control of a value that depends on a qubit,
@@ -1051,11 +1053,14 @@ Nothing is proved about the number of passes (the maintainer's decision of 2026-
 full whatever the qubits hold: where the logic guarantees that the condition is 0 and the count is huge, the
 device runs every pass, its gates acting on nothing, which a larger step limit cures; a loop that never ends once
 entered (an ordinary stride that never meets its bound, a subtraction by an ordinary zero) does not end on the
-device for any input, also where C skips it. Where LLVM's loop analysis (ScalarEvolution) finds no count, the
-front warns that the loop's gates are issued whatever the qubits hold and that the loop must end for every
-ordinary input; the warning also appears for loops that do end but whose count the analysis cannot find, and it
-is silent for a counted loop of `2^64` passes. An ordinary test written in C around the loop (`if (d != 0)`)
-is the loop's guard and skips it on the device too.
+device for any input, also where C skips it. Where LLVM's loop analysis (ScalarEvolution) finds no count for
+the loop or for a loop nested in it, the front warns at that loop that the gates are issued whatever the qubits
+hold and that the loop must end for every ordinary input; the warning also appears for loops that do end but
+whose count the analysis cannot find, and it is silent for a counted loop of `2^64` passes. An ordinary test
+the control program makes before the loop skips it on the device too: one written outside the qubit-dependent
+condition (`if (d != 0) if (q) loop`), or one the front keeps as the loop's guard. A test written inside the
+condition may be removed by the optimiser where the condition implies it (`if (q & n) if (n) loop`: LLVM drops
+`if (n)`, and for `n = 0` the device runs the loop), and then the warning is the only protection.
 
 Refused by name, each with its route:
 
@@ -1083,11 +1088,14 @@ nested gate loops give the state computed by hand for every pair of trip counts 
 count included, and a gate at pass 199 of 200 under a budget of 16 steps gives it too, in all three modes.
 `front/tests/tests/coherence_regressions.rs`: a read of memory that holds qubits, a division and a remainder by
 a divisor that is zero only where C skips the loop (in the loop, and computed before it), and a call in the
-loop are refused by name in all three modes, where the front used to fault on the inputs C skips; divisions by a
-constant and by a divisor the loop tests give native C's values; loops whose counts are huge where C skips them
-(a 64-bit counter run from 2 to 3 where C starts it at 0, a widened 32-bit bound, a count read from a local
-before the qubit is prepared, a count compared with the qubit) give native C's values without the warning; a
-loop whose stride is an ordinary input gives native C's values for stride 1 and the warning.
+loop, and a division whose divisor is tested on another path, are refused by name in all three modes, where the
+front used to fault on the inputs C skips; divisions by a constant, by a divisor the loop tests, by a divisor of
+range 1 to 256 and by one an ordinary test outside the condition guards give native C's values; the loop shapes
+whose counts can be huge where C skips them (a 64-bit counter started at 2 where C would start it at 0 and run to
+the bound, a widened 32-bit bound, a count read from a local before the qubit is prepared, a count compared with
+the qubit), run at counts of 1 to 3, give native C's values without the warning; a loop whose stride is an
+ordinary input, alone, nested in a counted loop, and inside `if (q & n) if (n)`, gives native C's values for
+stride 1 and the warning.
 
 ## Overwrites that keep the old value
 

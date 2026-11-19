@@ -91,6 +91,7 @@ private:
   };
   std::vector<GateLoop> gateLoops;
   std::map<const Instruction *, size_t> loopOf; // a gate of a GateLoop: its index
+  std::vector<Instruction *> unasked;           // what moveLoop makes the control program run for every input
 
   // Orders the blocks and operations; refuses an operation on a cycle.
   void order();
@@ -236,8 +237,6 @@ size_t Predicator::gateLoop(Instruction *op) {
         if (cast<CallBase>(inst).getOperandBundle(controlBundle)) {
           fail("internal: a controlled gate in a loop under a qubit-dependent condition");
         }
-      } else {
-        requireRunsUnasked(inst, loop, analysis.dominators); // the control program runs it for every input
       }
       for (const User *user : inst.users()) {
         if (!loop->contains(cast<Instruction>(user))) {
@@ -253,7 +252,7 @@ size_t Predicator::gateLoop(Instruction *op) {
                "one place",
                op);
   }
-  warnUncountedGateLoop(*loop, *op);
+  warnUncountedGateLoop(*loop);
   gateLoops.push_back(GateLoop{loop, {}});
   return gateLoops.size() - 1;
 }
@@ -616,9 +615,8 @@ Value *Predicator::recomputed(Value *value, IRBuilder<> &b, ValueToValueMapTy &m
                "under that control before the loop (not built yet)",
                at);
   }
-  // Computed again before the loop, for every input: also where C does not compute it.
-  requireRunsUnasked(*inst, nullptr, analysis.dominators);
   Instruction *copy = inst->clone();
+  unasked.push_back(copy); // computed again before the loop, for every input: also where C does not compute it
   for (Use &use : copy->operands()) {
     use.set(recomputed(use.get(), b, map, at));
   }
@@ -793,6 +791,7 @@ void Predicator::moveLoop(GateLoop &gates, IRBuilder<> &b) {
 
   // The loop, cloned between `pre` and `cont`, entered where its ordinary guard holds; what it uses from the
   // region is recomputed in `pre` (ordinary values: the region writes no memory).
+  unasked.clear();
   ValueToValueMapTy map;
   for (BasicBlock *block : loop->blocks()) {
     for (Instruction &inst : *block) {
@@ -829,6 +828,22 @@ void Predicator::moveLoop(GateLoop &gates, IRBuilder<> &b) {
     for (unsigned i = 0; i < phi.getNumIncomingValues(); ++i) {
       if (!cloned.count(phi.getIncomingBlock(i))) {
         phi.setIncomingBlock(i, pre);
+      }
+    }
+  }
+  // The control program runs the copies and the loop for every input that reaches them, also where C does not:
+  // each must be allowed to run unasked where it now is, proved with the tests the control program makes on the
+  // way there (not those of the region, which becomes applied code).
+  {
+    DominatorTree dominators(fn);
+    for (BasicBlock *clone : clones) {
+      for (Instruction &inst : *clone) {
+        unasked.push_back(&inst);
+      }
+    }
+    for (Instruction *inst : unasked) {
+      if (!isGateCall(inst)) {
+        requireRunsUnasked(*inst, dominators, inRegion);
       }
     }
   }
