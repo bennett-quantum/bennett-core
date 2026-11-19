@@ -1433,3 +1433,45 @@ fn a_replay_across_a_stack_reservation_is_refused() {
     }
     .refused(1, &[0, 1 << 8], "not handled yet: a call to @f computed by one applied function at two places");
 }
+
+#[test]
+fn a_replay_of_an_ordinary_call_moved_by_taint_all_across_a_stack_reservation_is_refused() {
+    // Under --taint-all the ordinary call is moved into the applied functions, and the replay across the
+    // variable-length array is refused as for any evaluation; in the other modes the call stays in the control
+    // program, its value is passed in, and the program gives C's values.
+    let program = Program {
+        name: "repeated-ordinary-across-reservation",
+        declarations: "__attribute__((noinline)) static uint32_t pure(uint32_t a) { return a * 3u + 1u; }",
+        body: "    volatile uint64_t x = pure(n + 5u) + q;\n    volatile unsigned side = 0;\n    if (n) { volatile char buffer[n + 1]; buffer[0] = 1; side = buffer[0]; }\n    x = side - 1;\n    return READ(x) | ((packet)READ(q) << 8);",
+        qubits: 1,
+    };
+    let source = program.source();
+    let (_, clang, flags) = MODES[2];
+    let refusal = lower_text_with_diagnostics(&source, "repeated-ordinary-across-reservation-taint", clang, flags)
+        .expect_err("refused under --taint-all");
+    assert!(refusal.contains("computed by one applied function at two places"), "{refusal}");
+    let native = program.native_table(&source, 1);
+    assert_eq!(native, [0, 1 << 8]);
+    for (mode, clang, flags) in &MODES[..2] {
+        let name = format!("repeated-ordinary-across-reservation-{mode}");
+        let (text, _) = lower_text_with_diagnostics(&source, &name, clang, flags).expect("lowers");
+        let module = bennett_ir::load(&text).expect("valid device program");
+        for (input, &wanted) in native.iter().enumerate() {
+            let (found, stats) = run_with_stats(&module, "entry", &[input as u64 + 1, 1, 0], 0);
+            assert_eq!((found, stats.nonzero_releases), (Outcome::Returned(Some(wanted)), 0), "{name} q={input}");
+        }
+    }
+}
+
+#[test]
+fn a_known_start_and_the_clearing_computation_are_one_function() {
+    // `x ^= f(q)` into an x the front knows to be 0 is written `v ^ 0` in the computing slice and `v` in the
+    // clearing one; written as one text, they are one function, so the return address is the same in both.
+    Program {
+        name: "return-address-known-start",
+        declarations: RETADDR_HELPER,
+        body: &RETADDR_USE.replace("QUALIFIER uint64_t x = f(q);", "volatile uint64_t x = 0;\n    x ^= f(q);"),
+        qubits: 1,
+    }
+    .agrees(0, &[256, 257], &return_address_readout(), 0);
+}

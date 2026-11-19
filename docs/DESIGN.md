@@ -1404,8 +1404,10 @@ under `apply` they run on the private copy and are undone with it.
   the call in the same function reads, directly or through a function it calls directly (`Applied.h`). Writes
   through other pointers (into the heap, say) and reads through indirect calls are not followed.
   Extend the warning beyond direct callees when a program needs it.
-- **`--taint-all`** does not move an ordinary call with ordinary arguments into an `apply`: there its writes
-  must survive, so only calls of functions that read memory at most are treated as computable coherently.
+- **`--taint-all`** does not move an ordinary call with ordinary arguments that may write memory into an
+  `apply`: there its writes must survive. A call of a function that reads memory at most is treated as
+  computable coherently and is moved into the applied functions that use its value (an evaluation, counted as
+  one in "Evaluations the front repeats or moves").
   Such a call does not count as one of "two calls that depend on a qubit", and in the applied function it
   runs before anything that depends on a qubit, so it reads memory as it is at its own site, never what an
   applied call in the same computation wrote on the private copy.
@@ -1430,7 +1432,8 @@ the same fault, whatever the function looks at. So (`front/src/Evaluations.h`):
   around it (the address of a local, `__builtin_return_address`, `__builtin_frame_address`), and copies in
   generated functions of different shape run under different frames.
 - **One evaluation, one generated function.** The front names every evaluation of a function with quantum
-  operations before it outlines anything, and every copy it makes keeps the name. A generated function whose
+  operations before it outlines anything, and every copy it makes keeps the name (a copy of code under a qubit
+  for each of its results included). A generated function whose
   text equals one written before is that function, so computing a value into a register and clearing it again by
   the same computation is one generated function applied twice. Not yet: an evaluation whose value C consumes in
   two ways (one call whose value C stores twice, or stores and uses again after the code under a qubit) is still
@@ -1439,7 +1442,7 @@ the same fault, whatever the function looks at. So (`front/src/Evaluations.h`):
   Route: compute it once into a register of its own, which every consumer reads and the same `apply` clears.
 - **The same stack pointer.** Where one generated function with an evaluation is applied at two places, no
   reservation or release of the control function's own stack may lie between them (a variable-length array, a
-  `stackrestore`); refused by name otherwise.
+  `stackrestore`); refused by name otherwise, in every mode (an ordinary call `--taint-all` moves in counts).
 - **Frames that C does not have.** Code in a generated function runs under a frame the C program lacks. Nothing
   applied may reach, through its calls, `__builtin_return_address(N)` with `N >= 1` (a call through a pointer
   may reach every function whose address is taken): an ancestor's return address would be the generated
