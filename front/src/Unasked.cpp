@@ -52,8 +52,12 @@ bool harmlessIntrinsic(const IntrinsicInst &intrinsic) {
   }
 }
 
-// The values `value` may take, computed with the device's arithmetic (which wraps; LLVM's poison flags are not
-// used) from constants; anything else may be any value.
+// The values `value` may take on the device, from constants; anything else may be any value. An allow-list of
+// operations whose ConstantRange transfer function covers the device's own definition (crates/exec, `binary` and
+// `cast`): addition, subtraction and multiplication wrap, bitwise operations are exact, a truncation keeps the low
+// bits, extensions extend. LLVM's poison flags are not used. LLVM leaves a shift by the width or more out of a
+// shift's range (it is poison), while the device gives 0, so a shift gives a range only where its amount's range
+// is below the width.
 ConstantRange rangeOf(const Value *value, unsigned depth) {
   unsigned width = value->getType()->getIntegerBitWidth();
   if (const auto *constant = dyn_cast<ConstantInt>(value)) {
@@ -63,31 +67,43 @@ ConstantRange rangeOf(const Value *value, unsigned depth) {
   if (!inst || depth == 0) {
     return ConstantRange::getFull(width);
   }
-  if (const auto *binary = dyn_cast<BinaryOperator>(inst)) {
-    switch (binary->getOpcode()) {
-    case Instruction::Add:
-    case Instruction::Sub:
-    case Instruction::Mul:
-    case Instruction::And:
-    case Instruction::Or:
-    case Instruction::Xor:
-    case Instruction::Shl:
-    case Instruction::LShr:
-    case Instruction::AShr:
-      return rangeOf(binary->getOperand(0), depth - 1)
-          .binaryOp(binary->getOpcode(), rangeOf(binary->getOperand(1), depth - 1));
-    default:
-      return ConstantRange::getFull(width);
+  auto operand = [&](unsigned i) { return rangeOf(inst->getOperand(i), depth - 1); };
+  switch (inst->getOpcode()) {
+  case Instruction::Add:
+    return operand(0).add(operand(1));
+  case Instruction::Sub:
+    return operand(0).sub(operand(1));
+  case Instruction::Mul:
+    return operand(0).multiply(operand(1));
+  case Instruction::And:
+    return operand(0).binaryAnd(operand(1));
+  case Instruction::Or:
+    return operand(0).binaryOr(operand(1));
+  case Instruction::Xor:
+    return operand(0).binaryXor(operand(1));
+  case Instruction::Shl:
+  case Instruction::LShr:
+  case Instruction::AShr: {
+    ConstantRange amount = operand(1);
+    if (!amount.getUnsignedMax().ult(width)) {
+      return ConstantRange::getFull(width); // the device gives 0 for a shift by the width or more
     }
+    ConstantRange shifted = operand(0);
+    return inst->getOpcode() == Instruction::Shl    ? shifted.shl(amount)
+           : inst->getOpcode() == Instruction::LShr ? shifted.lshr(amount)
+                                                     : shifted.ashr(amount);
   }
-  if (const auto *cast = dyn_cast<CastInst>(inst);
-      cast && (isa<ZExtInst>(cast) || isa<SExtInst>(cast) || isa<TruncInst>(cast))) {
-    return rangeOf(cast->getOperand(0), depth - 1).castOp(cast->getOpcode(), width);
+  case Instruction::ZExt:
+    return operand(0).zeroExtend(width);
+  case Instruction::SExt:
+    return operand(0).signExtend(width);
+  case Instruction::Trunc:
+    return operand(0).truncate(width);
+  case Instruction::Select:
+    return operand(1).unionWith(operand(2));
+  default:
+    return ConstantRange::getFull(width);
   }
-  if (const auto *select = dyn_cast<SelectInst>(inst)) {
-    return rangeOf(select->getTrueValue(), depth - 1).unionWith(rangeOf(select->getFalseValue(), depth - 1));
-  }
-  return ConstantRange::getFull(width);
 }
 
 // Whether `condition`, where it holds (`onTrue`) or fails, implies `value != 0`: it is `value != 0` (or

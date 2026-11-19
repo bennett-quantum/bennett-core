@@ -1034,7 +1034,8 @@ makes there:
 - it cannot fault there: integer arithmetic other than division, comparisons, choices, casts, address
   arithmetic and funnel shifts, which never fault on the device (a shift by too much gives 0, signed overflow
   wraps); a division or remainder whose divisor's range, computed with the device's wrapping arithmetic from
-  constants, excludes 0 (`(n & 255) + 1`), or which a conditional jump of the control program tests nonzero on
+  constants, excludes 0 (`(n & 255) + 1`; a shift counts only where its amount is below the width, since the
+  device gives 0 beyond, so `-3 >> n` proves nothing), or which a conditional jump of the control program tests nonzero on
   every path to the division (in the loop, or an ordinary test outside the qubit-dependent condition); a test
   inside the code under the qubit proves nothing, since that code becomes applied code;
 - it changes nothing later code can see: no store and no call, except the marker that numbers a bit, the
@@ -1060,7 +1061,9 @@ whose count the analysis cannot find, and it is silent for a counted loop of `2^
 the control program makes before the loop skips it on the device too: one written outside the qubit-dependent
 condition (`if (d != 0) if (q) loop`), or one the front keeps as the loop's guard. A test written inside the
 condition may be removed by the optimiser where the condition implies it (`if (q & n) if (n) loop`: LLVM drops
-`if (n)`, and for `n = 0` the device runs the loop), and then the warning is the only protection.
+`if (n)`, and for `n = 0` the device runs the loop). The loop then runs its full count on the device for that
+input, `2^32` passes for `do { ... } while (++j != n)` at `n = 0`; the warning appears only where no count is
+found, so a counted loop after a folded guard runs silently.
 
 Refused by name, each with its route:
 
@@ -1089,7 +1092,8 @@ count included, and a gate at pass 199 of 200 under a budget of 16 steps gives i
 `front/tests/tests/coherence_regressions.rs`: a read of memory that holds qubits, a division and a remainder by
 a divisor that is zero only where C skips the loop (in the loop, and computed before it), and a call in the
 loop, and a division whose divisor is tested on another path, are refused by name in all three modes, where the
-front used to fault on the inputs C skips; divisions by a constant, by a divisor the loop tests, by a divisor of
+front used to fault on the inputs C skips (also a division by `-3 >> n`, and one after a test of the divisor
+whose two edges rejoin before the division); divisions by a constant, by a divisor the loop tests, by a divisor of
 range 1 to 256 and by one an ordinary test outside the condition guards give native C's values; the loop shapes
 whose counts can be huge where C skips them (a 64-bit counter started at 2 where C would start it at 0 and run to
 the bound, a widened 32-bit bound, a count read from a local before the qubit is prepared, a count compared with

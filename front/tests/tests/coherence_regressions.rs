@@ -408,6 +408,43 @@ fn disabled_gate_loop_divides_by_a_proved_divisor() {
 }
 
 #[test]
+fn disabled_gate_loop_never_divides_by_a_shift_the_device_may_make_zero() {
+    // LLVM's range of `-3 >> n` is -3 to -1 (a shift by 32 or more is poison to LLVM); the device gives 0 there.
+    let body = gate_loop("int d = -3 >> n;", "unsigned i = 0; i < 3 + column; ++i", "(((int)i + 17) / d) & 1");
+    Program { name: "gate-divide-shifted", declarations: "", body: &body, qubits: 1 }.refused(
+        0,
+        &[0, 257],
+        &unasked("`sdiv` whose divisor is not proved nonzero"),
+    );
+}
+
+#[test]
+fn disabled_gate_loop_never_divides_after_a_test_whose_paths_rejoin() {
+    // Both edges of the divisor's test reach the division's own test: the test does not guard the division.
+    let body = r#"
+    uint8_t y = 0;
+    ZBIT(q, 1);
+    if (q) {
+        unsigned d = column + (prep != 1);
+        #pragma clang loop unroll(disable)
+        for (unsigned i = 0; i < n; ++i) {
+            if (d) XBIT(y, 1);
+            if ((i ^ prep) & 1) {
+                if (((i + 17u) / d) & 1) XBIT(y, 0);
+            }
+        }
+    }
+    packet key = READ(q);
+    return key | ((packet)READ(y) << 8);
+"#;
+    Program { name: "gate-divide-rejoined", declarations: "", body, qubits: 1 }.refused(
+        1,
+        &[0, 513],
+        &unasked("`udiv` whose divisor is not proved nonzero"),
+    );
+}
+
+#[test]
 fn disabled_gate_loop_never_divides_after_a_test_on_another_path() {
     // Odd passes test the divisor, even passes divide by it: the test is not on the path to the division.
     let body = gate_loop("", "unsigned i = 0; i < n; ++i", "(i & 1) ? d != 0 : ((i + 17u) / d) & 1")
