@@ -4,7 +4,7 @@
 #include "Diagnostic.h"
 #include "FpClass.h"
 #include "Markers.h"
-#include "Normalise.h"
+#include "Passes.h"
 
 #include <llvm/ADT/StringSet.h>
 #include <llvm/Analysis/TargetLibraryInfo.h>

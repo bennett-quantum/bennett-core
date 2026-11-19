@@ -1,21 +1,13 @@
-// Normalisation before analysis: LLVM's own O2 pipeline, then the intrinsics the device program has no
-// instruction for are rewritten into ordinary instructions with LLVM's own utilities where they exist.
+// Normalisation before analysis: the intrinsics the device program has no instruction for are rewritten into
+// ordinary instructions with LLVM's own utilities where they exist. LLVM's own pipelines are in Passes.h.
 #pragma once
-
-#include <llvm/IR/PassManager.h>
 
 namespace llvm {
 class Function;
 class Module;
-class PassBuilder;
 } // namespace llvm
 
 namespace bennett {
-
-// Runs the O2 pipeline without the vectorisers (the device program has no vector values). Functions that
-// came from `clang -O0` lose `optnone` and the `noinline` that comes with it first: the front end, not the
-// user's flags, fixes the pipeline.
-void optimise(llvm::Module &module, llvm::PassBuilder &builder, llvm::ModuleAnalysisManager &analyses);
 
 // Gives every `byval` parameter its private copy explicitly: the callee copies the pointee into an alloca
 // of its own on entry and uses that, and the attribute is dropped from the function and its call sites.
@@ -46,14 +38,8 @@ void lowerIntrinsics(llvm::Module &module, bool keepBijections = false);
 
 // Vector values (GCC's vector extensions, or what the optimiser made of an array) become their elements,
 // with LLVM's Scalarizer, loads, stores and variable element indices included; InstCombine then folds
-// what is left of the vectors. Vectors that cross a call or a return stay, for the emitter to refuse.
+// what is left of the vectors (Passes.h, sealed; classified vector accesses are split first, Classify.h).
+// Vectors that cross a call or a return stay, for the emitter to refuse.
 void scalarise(llvm::Module &module);
-
-// Runs InstCombine and EarlyCSE on one function: LLVM's simplifier, used to prove small identities.
-void simplify(llvm::Function &function);
-
-// Runs LLVM's scalar simplifiers on one function, including its CFG: SCCP, InstCombine, SimplifyCFG,
-// EarlyCSE and aggressive dead-code elimination, to a fixed point of the pipeline's own choosing.
-void simplifyDeep(llvm::Function &function);
 
 } // namespace bennett

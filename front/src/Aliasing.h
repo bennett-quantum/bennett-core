@@ -40,11 +40,17 @@ public:
   // own local variables reaches none.
   bool reachesOutsideFrames(const llvm::Function &function, const llvm::CallBase &call) const;
 
+  // A set of objects, for a caller that collects the objects several pointers may point into (Classify.h).
+  using Objects = std::set<const llvm::Value *>;
+  // Adds to `into` the objects `pointer` may point into.
+  void addObjectsOf(const llvm::Value *pointer, Objects &into) const;
+  // Whether memory reached through `pointer` (in `function`) may share bytes with one of `objects`.
+  bool mayReach(const llvm::Function &function, const llvm::Value *pointer, const Objects &objects) const;
+
 private:
   // What an object set may hold besides named objects (globals and local variables).
   static const llvm::Value *const escaped; // memory whose address escapes
   static const llvm::Value *const anything;
-  using Objects = std::set<const llvm::Value *>;
 
   std::map<const llvm::Argument *, Objects> arguments;
   std::map<const llvm::Function *, Objects> touched; // what each defined function may access

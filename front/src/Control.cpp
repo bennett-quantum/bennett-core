@@ -22,7 +22,7 @@
 #include "Emit.h"
 #include "HeldBytes.h"
 #include "Markers.h"
-#include "Normalise.h"
+#include "Passes.h"
 #include "RegionResults.h"
 #include "Taint.h"
 
@@ -1049,7 +1049,7 @@ std::string ControlWriter::slice(const Slice &slice, const Value *root, const St
     std::string name = writer.fresh(value->hasName() ? value->getName().str() : "value");
     writer.bind(value, name);
     params += (params.empty() ? "" : ", ") + intType(widthOf(value->getType(), value)) + " " + name;
-    args += (args.empty() ? "" : ", ") + operand(value);
+    args += (args.empty() ? "" : ", ") + typed(value); // an argument of `apply` that is a constant has its type
   }
   for (auto [load, value] : slice.computed) {
     writer.alias(load, value);
@@ -1059,7 +1059,7 @@ std::string ControlWriter::slice(const Slice &slice, const Value *root, const St
     unsigned width = widthOf(load->getType(), load);
     writer.bind(load, name);
     params += (params.empty() ? "" : ", ") + intType(width) + " " + name;
-    args += (args.empty() ? "" : ", ") + converted(value, width, false);
+    args += (args.empty() ? "" : ", ") + converted(value, width, true);
   }
   std::map<const Storage *, std::string> qubits;
   for (const Storage *storage : slice.quantum) {

@@ -1,6 +1,8 @@
 #include "Normalise.h"
 
+#include "Classify.h"
 #include "Diagnostic.h"
+#include "Passes.h"
 
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/Analysis/TargetTransformInfo.h>
@@ -12,12 +14,6 @@
 #include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/ValueHandle.h>
-#include <llvm/Analysis/AliasAnalysis.h>
-#include <llvm/Passes/PassBuilder.h>
-#include <llvm/Transforms/InstCombine/InstCombine.h>
-#include <llvm/Transforms/Scalar/DCE.h>
-#include <llvm/Transforms/Scalar/EarlyCSE.h>
-#include <llvm/Transforms/Scalar/Scalarizer.h>
 #include <llvm/Transforms/Utils/Local.h>
 #include <llvm/Transforms/Utils/LowerMemIntrinsics.h>
 
@@ -31,17 +27,6 @@
 using namespace llvm;
 
 namespace bennett {
-
-void optimise(Module &module, PassBuilder &builder, ModuleAnalysisManager &analyses) {
-  for (Function &function : module) {
-    if (function.hasFnAttribute(Attribute::OptimizeNone)) {
-      function.removeFnAttr(Attribute::OptimizeNone);
-      function.removeFnAttr(Attribute::NoInline);
-    }
-  }
-  ModulePassManager passes = builder.buildPerModuleDefaultPipeline(OptimizationLevel::O2);
-  passes.run(module, analyses);
-}
 
 namespace {
 
@@ -95,77 +80,18 @@ void bitcastsThroughMemory(Module &module) {
 } // namespace
 
 void scalarise(Module &module) {
-  LoopAnalysisManager loops;
-  FunctionAnalysisManager functions;
-  CGSCCAnalysisManager sccs;
-  ModuleAnalysisManager modules;
-  PassBuilder builder;
-  functions.registerPass([&] { return builder.buildDefaultAAPipeline(); });
-  builder.registerModuleAnalyses(modules);
-  builder.registerCGSCCAnalyses(sccs);
-  builder.registerFunctionAnalyses(functions);
-  builder.registerLoopAnalyses(loops);
-  builder.crossRegisterProxies(loops, functions, sccs, modules);
-  ScalarizerPassOptions options;
-  options.ScalarizeLoadStore = true;
-  options.ScalarizeVariableInsertExtract = true;
-  FunctionPassManager passes;
-  passes.addPass(ScalarizerPass(options));
-  passes.addPass(InstCombinePass());
-  passes.addPass(DCEPass());
-  ModulePassManager modulePasses;
-  modulePasses.addPass(createModuleToFunctionPassAdaptor(std::move(passes)));
+  splitClassifiedVectors(module);
   // Splitting a bitcast between vectors of different element counts makes bitcasts between smaller
   // vectors and integers: go round while the vectors get fewer.
   for (size_t before = vectorValues(module); before > 0;) {
     bitcastsThroughMemory(module);
-    modulePasses.run(module, modules);
-    modules.clear();
+    scalariseSealed(module);
     size_t after = vectorValues(module);
     if (after >= before) {
       break;
     }
     before = after;
   }
-}
-
-void simplify(Function &function) {
-  LoopAnalysisManager loops;
-  FunctionAnalysisManager functions;
-  CGSCCAnalysisManager sccs;
-  ModuleAnalysisManager modules;
-  PassBuilder builder;
-  functions.registerPass([&] { return builder.buildDefaultAAPipeline(); });
-  builder.registerModuleAnalyses(modules);
-  builder.registerCGSCCAnalyses(sccs);
-  builder.registerFunctionAnalyses(functions);
-  builder.registerLoopAnalyses(loops);
-  builder.crossRegisterProxies(loops, functions, sccs, modules);
-  FunctionPassManager passes;
-  passes.addPass(InstCombinePass());
-  passes.addPass(EarlyCSEPass());
-  passes.addPass(InstCombinePass());
-  passes.run(function, functions);
-}
-
-void simplifyDeep(Function &function) {
-  LoopAnalysisManager loops;
-  FunctionAnalysisManager functions;
-  CGSCCAnalysisManager sccs;
-  ModuleAnalysisManager modules;
-  PassBuilder builder;
-  functions.registerPass([&] { return builder.buildDefaultAAPipeline(); });
-  builder.registerModuleAnalyses(modules);
-  builder.registerCGSCCAnalyses(sccs);
-  builder.registerFunctionAnalyses(functions);
-  builder.registerLoopAnalyses(loops);
-  builder.crossRegisterProxies(loops, functions, sccs, modules);
-  FunctionPassManager passes;
-  if (Error error = builder.parsePassPipeline(
-          passes, "sccp,instcombine,simplifycfg,early-cse,instcombine,simplifycfg,adce,instcombine,simplifycfg")) {
-    fail("internal: " + toString(std::move(error)));
-  }
-  passes.run(function, functions);
 }
 
 namespace {

@@ -39,6 +39,8 @@ add_executable(bennett-front
   src/FpClass.cpp
   src/Complex.cpp
   src/Jumps.cpp
+  src/Passes.cpp
+  src/Classify.cpp
 )
 target_include_directories(bennett-front SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_compile_definitions(bennett-front PRIVATE ${LLVM_DEFINITIONS})

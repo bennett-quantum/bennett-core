@@ -4,6 +4,7 @@
 //                 [--float-runtime file.bc] [--complex-runtime file.bc]
 
 #include "Abi.h"
+#include "Classify.h"
 #include "Complex.h"
 #include "Diagnostic.h"
 #include "Emit.h"
@@ -11,15 +12,14 @@
 #include "Markers.h"
 #include "Normalise.h"
 #include "Outline.h"
+#include "Passes.h"
 #include "SoftFloat.h"
 #include "Startup.h"
 
-#include <llvm/Analysis/AliasAnalysis.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/IRReader/IRReader.h>
-#include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/CrashRecoveryContext.h>
 #include <llvm/Support/ErrorHandling.h>
@@ -67,33 +67,6 @@ std::string besideFront(const char *argv0, const char *name) {
   sys::path::remove_filename(path);
   sys::path::append(path, name);
   return std::string(path);
-}
-
-// Runs the module pipeline `pipeline` with fresh analyses.
-void runPipeline(Module &module, const std::string &pipeline, bool optimise) {
-  LoopAnalysisManager loops;
-  FunctionAnalysisManager functions;
-  CGSCCAnalysisManager sccs;
-  ModuleAnalysisManager modules;
-  PipelineTuningOptions tuning;
-  tuning.LoopVectorization = false; // the device program has no vector values
-  tuning.SLPVectorization = false;
-  PassBuilder builder(nullptr, tuning);
-  functions.registerPass([&] { return builder.buildDefaultAAPipeline(); });
-  builder.registerModuleAnalyses(modules);
-  builder.registerCGSCCAnalyses(sccs);
-  builder.registerFunctionAnalyses(functions);
-  builder.registerLoopAnalyses(loops);
-  builder.crossRegisterProxies(loops, functions, sccs, modules);
-  if (optimise) {
-    bennett::optimise(module, builder, modules);
-    return;
-  }
-  ModulePassManager passes;
-  if (Error error = builder.parsePassPipeline(passes, pipeline)) {
-    bennett::fail(toString(std::move(error)));
-  }
-  passes.run(module, modules);
 }
 
 void verify(const Module &module, const char *stage) {
@@ -184,22 +157,19 @@ int main(int argc, char **argv) {
   verify(*module, "after rewriting floating-point values as integers");
   bennett::checkNoFloatingPoint(*module, "after rewriting floating-point values as integers");
   bennett::lowerParameterAttributes(*module);
-  // LLVM's optimiser has bugs of its own. A crash inside it is reported by name; no device program is written.
-  CrashRecoveryContext::Enable();
-  CrashRecoveryContext recovery;
-  if (!recovery.RunSafely([&] { runPipeline(*module, "", true); })) {
-    bennett::fail("LLVM's optimiser crashed on this module (a bug in LLVM); no device program was written");
-  }
-  CrashRecoveryContext::Disable();
+  // The instructions the language's own rules depend on are decided before the optimiser and sealed for it
+  // (Classify.h, Passes.h).
+  bennett::promoteLocals(*module);
+  bennett::classify(*module, taintAll);
+  verify(*module, "after classifying");
+  bennett::optimiseSealed(*module);
+  verify(*module, "after the optimiser");
   bennett::checkNoFloatingPoint(*module, "after the optimiser");
-  // The optimiser deletes the runtime's exception flags, which nothing reads, after it has inferred that
-  // the runtime writes them: the memory effects are inferred again, or no runtime call could run
-  // coherently. Then runtime calls on constants are evaluated (a rotation's angle must be a constant).
-  if (softFloat) {
-    runPipeline(*module, "cgscc(function-attrs)", false);
-    if (bennett::foldConstantCalls(*module)) {
-      runPipeline(*module, "globaldce,cgscc(function-attrs)", false);
-    }
+  // The optimiser deletes the runtime's exception flags, which nothing reads, after it has inferred that the
+  // runtime writes them; the attributes inferred after it (Passes.h) no longer say so, or no runtime call could
+  // run coherently. Then runtime calls on constants are evaluated (a rotation's angle must be a constant).
+  if (softFloat && bennett::foldConstantCalls(*module)) {
+    bennett::removeDeadGlobals(*module);
   }
   bennett::finishStartup(*module, entryName);
   verify(*module, "after deciding constructor/destructor startup");
@@ -223,7 +193,7 @@ int main(int argc, char **argv) {
   }
   bennett::lowerIntrinsics(*module);
   // Memory effects of the outlined functions, which decide what may run coherently.
-  runPipeline(*module, "cgscc(function-attrs)", false);
+  bennett::inferAttributes(*module);
   verify(*module, "after outlining");
 
   if (!emitLLVM.empty()) {

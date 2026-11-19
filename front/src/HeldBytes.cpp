@@ -1,5 +1,7 @@
 #include "HeldBytes.h"
 
+#include "Classify.h"
+
 #include "Aliasing.h"
 #include "Diagnostic.h"
 #include "Markers.h"
@@ -487,6 +489,7 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
               redirected = at.CreateGEP(at.getInt8Ty(), shadow, distance);
             }
             inst.setOperand(isa<LoadInst>(inst) ? 0 : 1, redirected);
+            declassify(inst); // an access of the shadow, a qubit variable, from now on
           }
           break;
         }

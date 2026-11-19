@@ -29,7 +29,7 @@ using namespace llvm;
 
 namespace bennett {
 
-std::set<const Function *> controlFunctions(const Module &module) {
+std::set<const Function *> controlFunctions(const Module &module, bool refuseAddressTaken) {
   std::set<const Function *> control;
   bool changed = true;
   while (changed) {
@@ -49,6 +49,9 @@ std::set<const Function *> controlFunctions(const Module &module) {
     }
   }
   for (const Function *function : control) {
+    if (!refuseAddressTaken) {
+      break;
+    }
     for (const User *user : function->users()) {
       const auto *call = dyn_cast<CallBase>(user);
       if (!call || call->getCalledOperand() != function) {
