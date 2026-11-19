@@ -29,7 +29,7 @@ use bennett_ir::{BlockId, Fault, Type, Width};
 
 use self::bits::{Bit, Circuit, ONE, Word, constant};
 use self::calls::Program;
-use self::memory::Memory;
+use self::memory::{DISPATCH_REQUIRED, Memory};
 use self::symbolic::{Point, Status, Step};
 
 pub use bennett_exec::{ApplyError, ApplyInput, ApplyMemory, Argument};
@@ -238,9 +238,6 @@ fn compile_with_analysis_limit(
                         Status::Running(next)
                     }
                     Step::CheckedWrite(next, dst, word, failed, fault) => {
-                        if program.has_memory() {
-                            return Err(program.deferred_memory(point, "conditional fault"));
-                        }
                         // The attempt has been emitted. Only successful inputs
                         // move to the next instruction and spend one step.
                         slots[dst.index()] = word;
@@ -259,9 +256,6 @@ fn compile_with_analysis_limit(
                         continue;
                     }
                     Step::Switch(..) => {
-                        if program.has_memory() {
-                            return Err(program.deferred_memory(point, "switch"));
-                        }
                         let remaining = input.budget - spent;
                         let (copies, ticks) =
                             machine::run(&mut circuit, &program, &mut slots, (point, ONE), remaining)?;
@@ -272,15 +266,14 @@ fn compile_with_analysis_limit(
                         );
                     }
                     Step::Branch(..) => {
-                        if program.has_memory() {
-                            return Err(program.deferred_memory(point, "br"));
-                        }
                         let remaining = input.budget - spent;
                         let reason = match mode {
                             ApplyMode::Automatic => {
                                 // Preserve the cheaper fixed-charge schedule for covered copied loops.
                                 let has_calls = program.has_calls();
-                                let mut saved = if has_calls { saved::Loop::prove(&program, point) } else { None };
+                                let can_save = !program.has_memory();
+                                let mut saved =
+                                    if has_calls && can_save { saved::Loop::prove(&program, point) } else { None };
                                 let reason = if saved.is_some() {
                                     "one proved loop with fixed continuation and exit charges"
                                 } else if has_calls && point.copy == 0 {
@@ -289,8 +282,7 @@ fn compile_with_analysis_limit(
                                     "copied calls use the shared step machine"
                                 } else {
                                     let checkpoint = circuit.checkpoint();
-                                    let refusal = match controls::run(&mut circuit, &program, &slots, point, remaining)
-                                    {
+                                    let reason = match controls::run(&mut circuit, &program, &slots, point, remaining) {
                                         Ok((copies, proved_passes)) => {
                                             break (
                                                 copies,
@@ -298,14 +290,21 @@ fn compile_with_analysis_limit(
                                                 "qubit-dependent choices use controls within the shared budget",
                                             );
                                         }
-                                        Err(controls::Failure::Control(refusal)) => refusal,
+                                        Err(controls::Failure::Control(refusal)) => {
+                                            if can_save && refusal == controls::Refusal::UnprovedLoop {
+                                                saved = saved::Loop::prove(&program, point);
+                                            }
+                                            refusal.reason()
+                                        }
+                                        // Recheck the access against the exact shared clock.
+                                        Err(controls::Failure::Lowering(ApplyError::Unsupported {
+                                            route: DISPATCH_REQUIRED,
+                                            ..
+                                        })) => DISPATCH_REQUIRED,
                                         Err(controls::Failure::Lowering(error)) => return Err(error),
                                     };
                                     circuit.rewind(checkpoint);
-                                    if refusal == controls::Refusal::UnprovedLoop {
-                                        saved = saved::Loop::prove(&program, point);
-                                    }
-                                    refusal.reason()
+                                    reason
                                 };
                                 if let Some(plan) = saved {
                                     let bounds = reach::analyze(&program, &input, slots.len(), analysis_limit)

@@ -6,7 +6,9 @@ use std::fmt;
 use bennett_exec::ApplyMemory;
 use bennett_ir::{Fault, Width};
 
-use super::bits::{Bit, Circuit, ONE, Word, ZERO, definite};
+use super::bits::{Bit, Circuit, Word, ZERO, definite};
+
+pub(super) const DISPATCH_REQUIRED: &str = "private memory in the step machine";
 
 /// Additional circuit resources used by the private byte map.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -88,10 +90,8 @@ impl<'a> Memory<'a> {
             let version = std::array::from_fn(|_| match value.next().unwrap_or(ZERO) {
                 bit @ Bit::Constant(_) => bit,
                 bit @ Bit::Wire(..) => {
-                    let wire = circuit.fresh();
-                    circuit.xor_into(wire, bit, ONE);
                     self.counts.retained_scratch_qubits += 1;
-                    Bit::Wire(wire, false)
+                    circuit.retain_copy(bit)
                 }
             });
             if let Some(previous) = self.bytes.insert(address + offset as u64, version) {

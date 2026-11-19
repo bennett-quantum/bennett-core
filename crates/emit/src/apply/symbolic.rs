@@ -216,9 +216,9 @@ impl<'a> Frame<'a> {
                 Inst::FuncAddr { dst, func } => (*dst, constant(u128::from(func.address()), u64::BITS as usize)),
                 Inst::Call { .. } => return Err(self.error(point, "call", "a planned call copy")),
                 Inst::CallIndirect { .. } => return Err(self.error(point, "call_indirect", "a planned call copy")),
-                Inst::Load { .. }
-                | Inst::Store { .. }
-                | Inst::Alloca { .. }
+                Inst::Load { .. } => return Err(self.error(point, "load", super::memory::DISPATCH_REQUIRED)),
+                Inst::Store { .. } => return Err(self.error(point, "store", super::memory::DISPATCH_REQUIRED)),
+                Inst::Alloca { .. }
                 | Inst::StackSave { .. }
                 | Inst::StackRestore { .. }
                 | Inst::Setjmp { .. }

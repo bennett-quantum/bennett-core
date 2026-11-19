@@ -1,6 +1,8 @@
 //! Private memory across both emitted control paths.
 
-use bennett_emit::{ApplyInput, ApplyMemory, ApplyMode, Argument, Construction, MemoryCounts, compile_apply_with};
+use bennett_emit::{
+    ApplyInput, ApplyMemory, ApplyMode, Argument, CompiledApply, Construction, MemoryCounts, compile_apply_with,
+};
 use bennett_exec::{Executor, Options, Outcome, RunError};
 use bennett_ir::{Fault, ValidModule, load};
 use rand::{Rng, SeedableRng};
@@ -98,6 +100,193 @@ fn bounds(budget: u64, at: u64, result: Result<u64, Fault>) -> (u64, u64) {
     match result {
         Ok(output) => (output, 0),
         Err(fault) => (0, fault.code()),
+    }
+}
+
+fn isolated(body: &str) -> CompiledApply {
+    let module = module(body, "");
+    let held = Default::default();
+    let compiled = compile_apply_with(
+        ApplyInput {
+            module: &module,
+            callee: module.function_named("f").expect("f"),
+            args: &[Argument::Register(0..3)],
+            out: 3..11,
+            fault: 11..16,
+            budget: 8,
+            entry_fault: None,
+            stack_available: MEMORY as u64,
+            memory: Some(ApplyMemory::new(&[0; MEMORY], &held)),
+            scratch_start: 16,
+        },
+        ApplyMode::Automatic,
+    )
+    .expect("isolated memory example emits");
+    println!("isolated @f: {}", compiled.memory);
+    compiled
+}
+
+#[test]
+fn definite_stores_have_no_physical_cost() {
+    for store in [
+        "store i8 255, 8",
+        "%bit = trunc i3 %x to i1\n    %amount = zext i1 %bit to i8\n    %zero = shl i8 0, %amount\n    store i8 %zero, 8",
+    ] {
+        let compiled = isolated(&format!("func @f(i3 %x) -> i8 {{\nentry:\n    {store}\n    ret 0\n}}"));
+        let (gates, layout) = gates(&compiled, WIDTH, 13);
+        assert_eq!((layout.scratch, gates.len()), (0, 0), "{store}");
+        assert_eq!(compiled.memory, MemoryCounts::default(), "{store}");
+    }
+}
+
+#[test]
+fn version_copies_preserve_equality_and_disjoint_versions_count_toward_the_peak() {
+    let compiled = isolated(
+        r#"
+func @f(i3 %x) -> i8 {
+entry:
+    %bit = trunc i3 %x to i1
+    store i1 %bit, 8
+    %copy = load i1 8
+    store i1 %copy, 9
+    %again = load i1 9
+    %zero = xor i1 %again, %bit
+    store i1 %zero, 10
+    ret 0
+}
+"#,
+    );
+    let (gates, layout) = gates(&compiled, WIDTH, 13);
+    assert_eq!((layout.scratch, gates.len()), (2, 4));
+    assert_eq!(compiled.memory, MemoryCounts { retained_scratch_qubits: 2, gates: 4, peak_nonconstant_bits: 2 });
+    bits::exhaustive(&gates, layout, |_| 0).expect("preserved data and clear scratch");
+}
+
+#[test]
+fn a_computed_zero_is_a_definite_address() {
+    let module = module(
+        r#"
+func @f(i3 %x) -> i8 {
+entry:
+    %bit = trunc i3 %x to i1
+    %amount = zext i1 %bit to i64
+    %zero = shl i64 0, %amount
+    %r = load i8 %zero
+    ret %r
+}
+"#,
+        "    store i8 5, 0",
+    );
+    for budget in 3..=6 {
+        let (_, counts, values) = compare(&module, "computed address", budget, ApplyMode::Automatic);
+        assert_eq!(values, vec![bounds(budget, 5, Ok(5)); 8]);
+        assert_eq!(counts, MemoryCounts::default());
+    }
+}
+
+#[test]
+fn memory_free_paths_after_a_load_compile_in_both_modes() {
+    let module = module(
+        r#"
+func @f(i3 %x) -> i8 {
+entry:
+    %value = load i8 8
+    %odd = trunc i3 %x to i1
+    br %odd, yes, no
+yes:
+    ret %value
+no:
+    ret 0
+cold:
+    store i8 42, 8
+    ret 42
+}
+"#,
+        "    store i8 7, 8",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=5 {
+            let (_, counts, values) = compare(&module, "load before a choice", budget, mode);
+            assert_eq!(counts, MemoryCounts::default());
+            assert_eq!(values, (0..8).map(|x| bounds(budget, 4, Ok((x & 1) * 7))).collect::<Vec<_>>());
+        }
+    }
+}
+
+#[test]
+fn a_conditional_fault_can_follow_the_last_load() {
+    let module = module(
+        r#"
+func @f(i3 %x) -> i8 {
+entry:
+    %n = load i8 8
+    %odd = trunc i3 %x to i1
+    %d = zext i1 %odd to i8
+    %q = udiv i8 %n, %d
+    ret %q
+}
+"#,
+        "    store i8 7, 8",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 3..=6 {
+            let (_, counts, values) = compare(&module, "load before division", budget, mode);
+            assert_eq!(counts, MemoryCounts::default());
+            assert_eq!(
+                values,
+                (0..8)
+                    .map(|x| {
+                        if x & 1 == 0 { bounds(budget, 4, Err(Fault::DivideByZero)) } else { bounds(budget, 5, Ok(7)) }
+                    })
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+#[test]
+fn a_branch_can_exhaust_its_budget_before_a_guarded_store() {
+    let module = module(
+        r#"
+func @f(i3 %x) -> i8 {
+entry:
+    %odd = trunc i3 %x to i1
+    br %odd, yes, no
+yes:
+    store i8 9, 8
+    ret 3
+no:
+    ret 0
+}
+"#,
+        "",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        let (_, counts, values) = compare(&module, "before the guarded store", 2, mode);
+        assert_eq!(counts, MemoryCounts::default());
+        assert_eq!(values, vec![(0, Fault::Budget.code()); 8]);
+    }
+}
+
+#[test]
+fn a_store_keeps_qubit_dependent_bits_above_the_first_byte() {
+    let module = module(
+        r#"
+func @f(i3 %x) -> i8 {
+entry:
+    %wide = zext i3 %x to i16
+    %high = shl i16 %wide, 8
+    store i16 %high, 8
+    %value = load i8 9
+    ret %value
+}
+"#,
+        "",
+    );
+    for budget in [5, 4, 6] {
+        let (_, counts, values) = compare(&module, "high byte", budget, ApplyMode::Automatic);
+        assert_eq!(values, (0..8).map(|x| bounds(budget, 5, Ok(x))).collect::<Vec<_>>());
+        assert_eq!(counts, MemoryCounts { retained_scratch_qubits: 3, gates: 6, peak_nonconstant_bits: 3 });
     }
 }
 
@@ -209,7 +398,9 @@ fn seeded_private_memory_programs_agree_on_complex_amplitudes() {
 func @f(i3 %x) -> i8 {{
 entry:
     %expanded = zext i3 %x to i16
-    %value = xor i16 %expanded, {literal}
+    %high = shl i16 %expanded, 8
+    %both = or i16 %expanded, %high
+    %value = xor i16 %both, {literal}
     call @write(%value)
     br {choice}, overwrite, read
 overwrite:
