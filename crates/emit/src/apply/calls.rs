@@ -178,8 +178,23 @@ impl<'a> Program<'a> {
     }
 
     pub(super) fn block(&self, point: Point) -> &'a Block {
+        self.function(point).block(point.block)
+    }
+
+    pub(super) fn function(&self, point: Point) -> &'a Function {
         let frame = &self.copies[point.copy].frame;
-        frame.module.function(frame.callee).block(point.block)
+        frame.module.function(frame.callee)
+    }
+
+    pub(super) fn direct_child(&self, point: Point) -> Option<Point> {
+        if !matches!(self.block(point).insts.get(point.index), Some(Inst::Call { .. })) {
+            return None;
+        }
+        let Site::Call(index, _) = self.copies[point.copy].sites.get(&(point.block, point.index))? else {
+            return None;
+        };
+        self.copies[*index].available_stack?;
+        Some(Point { copy: *index, ..Point::entry(BlockId(0)) })
     }
 
     pub(super) fn resume(&self, point: Point) -> Option<Point> {

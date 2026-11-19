@@ -9,6 +9,8 @@ mod flow;
 #[cfg(test)]
 mod gadget_tests;
 mod machine;
+mod modular;
+mod modular_loop;
 mod products;
 mod ranges;
 mod reach;
@@ -38,6 +40,11 @@ pub enum Construction {
         /// Number of emitted body passes for loops with program-proved counts.
         proved_passes: usize,
     },
+    /// A proved residue update reuses the same word for each pass.
+    ModularInPlace {
+        /// Passes permitted by the width of the exponent.
+        passes: usize,
+    },
     /// A qubit-dependent jump required instruction dispatch.
     StepMachine {
         /// Ticks after the definite prefix, including the first qubit-dependent jump.
@@ -55,6 +62,9 @@ impl fmt::Display for Construction {
         match self {
             Self::Definite => f.write_str("definite control"),
             Self::Controlled { proved_passes } => write!(f, "control gates ({proved_passes} proved loop passes)"),
+            Self::ModularInPlace { passes } => {
+                write!(f, "in-place modular multiplication ({passes} proved loop passes)")
+            }
             Self::StepMachine { ticks } => write!(f, "step machine ({ticks} ticks)"),
             Self::SavedDecisions { decisions } => write!(f, "saved decisions ({decisions} decisions)"),
         }
@@ -64,7 +74,7 @@ impl fmt::Display for Construction {
 /// Which constructions the compiler may consider.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ApplyMode {
-    /// Try control gates and saved decisions before using the step machine.
+    /// Try in-place updates, control gates and saved decisions before using the step machine.
     #[default]
     Automatic,
     /// Use the step machine at the first qubit-dependent jump, even for a proved loop.
@@ -142,7 +152,7 @@ impl Copies {
     }
 }
 
-/// Follow definite control, then try control gates and saved decisions before instruction dispatch.
+/// Try proved in-place updates and structured control before instruction dispatch.
 pub fn compile_apply(input: ApplyInput<'_>) -> Result<CompiledApply, ApplyError> {
     compile_apply_with(input, ApplyMode::Automatic)
 }
@@ -159,6 +169,23 @@ fn compile_with_analysis_limit(
 ) -> Result<CompiledApply, ApplyError> {
     check_interface(&input)?;
     let (program, mut slots) = Program::check(&input)?;
+    if mode == ApplyMode::Automatic
+        && input.args.iter().any(|arg| matches!(arg, Argument::Register(_)))
+        && let Some(plan) = modular_loop::Plan::prove(&input, &program, &slots)
+    {
+        let mut circuit = Circuit::new(input.scratch_start);
+        let residue = plan.emit(&mut circuit);
+        let forward = circuit.forward_len();
+        circuit.copy(input.out.clone(), &residue, ONE);
+        if let Ok(block) = circuit.finish(forward, &input.module.function(input.callee).name) {
+            return Ok(CompiledApply {
+                block,
+                definite_steps: plan.definite_steps,
+                construction: Construction::ModularInPlace { passes: plan.passes() },
+                reason: "a proved modular residue update with a whole-function budget",
+            });
+        }
+    }
     let mut circuit = Circuit::new(input.scratch_start);
     let mut status = match input.entry_fault {
         Some(fault) => Status::Faulted(fault),

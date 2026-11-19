@@ -77,8 +77,9 @@ fn compile_oracle(module: &ValidModule, callee: FuncId) -> CompiledApply {
 
 fn require_oracle(input: ApplyInput<'_>) -> Result<CompiledApply, bennett_emit::ApplyError> {
     let compiled = compile_apply(input)?;
-    assert!(
-        !matches!(compiled.construction, Construction::StepMachine { .. }),
+    assert_eq!(
+        compiled.construction,
+        Construction::ModularInPlace { passes: EXPONENT_BITS as usize },
         "{}: {}",
         compiled.construction,
         compiled.reason
@@ -262,6 +263,7 @@ fn c_shor_period_distribution_and_counts() {
         let baseline_counts = count::isolated(&hand_built);
         let (amplitude_error, distribution_error, [emitted_peak, hand_peak]) =
             check_period_harness(module, callee, &exact_probabilities(&residues, modulus), [&emitted, &hand_built]);
+        assert!(emitted_peak <= 2 * hand_peak, "N={modulus}: harness peak {emitted_peak} vs {hand_peak}");
         println!(
             "N={modulus}, base={base}, {EXPONENT_BITS} exponent bits, {}\nemitted {generated_counts:?}\nhand {baseline_counts:?}\nharness peaks: emitted {emitted_peak}, hand {hand_peak}\namplitude error {amplitude_error:e}, distribution error {distribution_error:e}",
             oracle.construction

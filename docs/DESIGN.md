@@ -355,7 +355,8 @@ operations and the limits on calls. A jump reads all incoming values before assi
 parameters. Entry stack overflow takes precedence over the budget test. Every successful instruction
 or terminator costs one step.
 
-In automatic mode, a qubit-dependent conditional jump can use **control gates**. A **guard** is a bit
+Automatic mode first tries the in-place residue update described below. In the general
+construction a qubit-dependent conditional jump can use **control gates**. A **guard** is a bit
 that is one exactly on the definite argument assignments that take a route. The compiler combines
 the incoming guard with the condition or its complement to form the two new guards. Each controls
 the gates for its route, and the route's slot values are meaningful only where its guard is one.
@@ -606,11 +607,42 @@ amplitudes with direct evaluation at budgets 6, 7 and 8. The bit-level runner ch
 all operand pairs at widths 2, 3, 4, 6 and 8, and 128 sampled pairs and five corner pairs at
 width 64. It checks unchanged inputs, XOR into the two destinations, and zero scratch.
 
+**In-place modular multiplication.** The compiler can reuse a residue word in a
+single shift loop. It recognises an unsigned product followed by a remainder,
+including a direct helper that returns that pair of operations. The loop carries
+the remainder back as its next residue. A conditional update can use the low
+exponent bit and pass the old residue through the other route. The exponent shifts
+right by one each pass, and the base is squared and reduced by the same modulus.
+The test can sit before the body or at its end.
+
+The proof checks the data flow before allocating the residue. The product has one
+use. The old residue can feed the update, pass through the skipped route or leave
+the loop before another update. The initial residue must be a known value below the
+known modulus, which fits in 64 bits. The remainder preserves that bound. The
+compiler checks the widths of the products,
+squarings and output conversions. Each multiplier must have a computed and
+verified modular inverse. An upper bound on the full route length, including
+calls, returns, branches and exits, must fit the applied function's single budget.
+The shift gives the pass count independently of that budget. Any failed proof
+leaves the existing compilation and fault behaviour in use.
+
+For an `n`-bit residue the gates accumulate the modular product in an `n + 1`-bit
+temporary word by adding one constant per set residue bit under the update control.
+Each modular addition subtracts the
+modulus, restores it when the subtraction is negative, and clears that decision.
+A controlled exchange puts the new value in the residue. Subtracting the product
+of the new residue and the inverse multiplier clears the old value from the
+temporary word. The controls leave the residue unchanged on an unused update.
+The temporary and adder work qubits return to zero on each pass. At the end the
+oracle XORs the residue into the target and reverses the computation to release
+its work qubits.
+
+Run `cargo test -p bennett-emit modular` for the gadget and the proof and fallback checks.
+
 **Period finding from C.** The C square-and-multiply function receives the whole
-eight-bit exponent register in one `apply` with `B = 96`. The exponent test and the
-optional multiply use control gates through the copied call. The compiler emits
-seven proved passes after the first pass through the loop body. The test rejects
-instruction dispatch for this exponentiation. It checks the amplitudes immediately
+eight-bit exponent register in one `apply` with `B = 96`. The compiler schedules
+eight controlled passes using the same residue word through the copied call.
+The test requires this in-place construction and checks the amplitudes immediately
 after the oracle against direct evaluation, then runs Fourier gates in device IR
 before the measurement written in C. The exponent probabilities agree with the exact
 Fourier sum to within `5.6e-16` for 15 and `2.5e-16` for 21.
@@ -632,17 +664,17 @@ live across the exponentiation.
 
 | Modulus and base | Oracle construction | Toffolis | Isolated peak qubits | Scratch | Harness peak qubits | Oracle depth |
 |---|---|---:|---:|---:|---:|---:|
-| 15, base 7 | C, control gates | 3,228 | 533 | 512 | 543 | 3,186 |
+| 15, base 7 | C, in-place updates | 1,552 | 37 | 16 | 47 | 3,695 |
 | 15, base 7 | Hand-built, controlled modular multiplications | 1,552 | 37 | 16 | 47 | 4,015 |
-| 21, base 2 | C, control gates | 18,999 | 753 | 732 | 763 | 16,405 |
+| 21, base 2 | C, in-place updates | 9,240 | 40 | 19 | 50 | 22,459 |
 | 21, base 2 | Hand-built, controlled modular multiplications | 9,240 | 40 | 19 | 50 | 24,059 |
 
-Both C oracles exceed the factor-of-two Toffoli target, using 2.08 and 2.06 times
-the hand-built counts. The emitter lowers products and remainders separately and
-controls the arithmetic and merges. The hand-built circuit uses modular additions
-of constants to multiply in place. Both also exceed the peak-qubit target. The
-compiler keeps intermediate words and guards until the final reversal. The hand-built
-circuit reuses its temporary words after every modular multiplication.
+Both C oracles match the hand-built Toffoli counts and full harness peaks. Before
+the in-place update, the C oracles used 3,228 and 18,999 Toffolis and peaked at
+543 and 763 qubits in the harness. They retained intermediate products, remainders
+and guards across passes. The in-place construction reuses the residue and the
+accumulator and adder work qubits. The benchmark enforces the factor-of-two limit
+on the full harness peak.
 
 Run `front/test.sh --test emitted_shor c_shor_period_distribution_and_counts -- --exact --nocapture`
 to repeat the comparisons and counts.

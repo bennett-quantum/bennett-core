@@ -7,6 +7,9 @@ use super::{
     Outcome, RunError, bits, compile_apply, compile_apply_with, gates, load,
 };
 
+#[path = "modular_loop.rs"]
+mod modular_loop;
+
 const ORDINARY_LOOP: &str = r#"
 memory 1024
 func @f(i3 %x, i3 %passes) -> i8 {
