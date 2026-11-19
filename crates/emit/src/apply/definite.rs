@@ -6,7 +6,7 @@ use bennett_exec::Wire;
 use bennett_ir::{BinOp, BlockId, Inst, Operand, Slot, Terminator, Width};
 
 use super::bits::{Bit, Circuit, Word, ZERO, constant, definite};
-use super::symbolic::{Frame, switch_target, visit_possible_targets};
+use super::symbolic::{Frame, switch_target};
 use super::{arithmetic, division, ranges};
 
 fn fold_inst(
@@ -67,15 +67,6 @@ fn fold_inst(
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Scope {
-    Reachable,
-    // Each validation scope starts from all blocks and differs in which edges it follows.
-    LiteralEdges,
-    AllEdges,
-    ComputedEdges,
-}
-
 #[derive(Default)]
 pub(super) struct Constants {
     slots: Vec<Option<Word>>,
@@ -101,7 +92,7 @@ impl Constants {
         self.reachable.get(block.index()).copied().unwrap_or(false)
     }
 
-    pub(super) fn analyze(frame: &Frame<'_>, inputs: impl Iterator<Item = Option<Word>>, scope: Scope) -> Self {
+    pub(super) fn analyze(frame: &Frame<'_>, inputs: impl Iterator<Item = Option<Word>>) -> Self {
         let function = frame.module.function(frame.callee);
         if !function.blocks.iter().any(|block| {
             matches!(&block.term, Terminator::Switch { value: Operand::Slot(_), .. })
@@ -156,8 +147,7 @@ impl Constants {
         let unknown_word = |slot| (0..frame.slot_width(slot)).map(|index| unknown_bit(slot, index)).collect();
         // Entry reachability grows with the value facts. For example, a loop can
         // first deliver a constant condition and later make both outcomes possible.
-        let every_block = scope != Scope::Reachable;
-        let mut reachable = vec![every_block; function.blocks.len()];
+        let mut reachable = vec![false; function.blocks.len()];
         reachable[0] = true;
         loop {
             let mut changed = false;
@@ -189,11 +179,7 @@ impl Constants {
                         }
                     }
                 };
-                if scope == Scope::AllEdges {
-                    block.term.visit_targets(transfer);
-                } else if scope == Scope::LiteralEdges {
-                    visit_possible_targets(&block.term, transfer);
-                } else if let Terminator::Branch { cond, if_true, if_false } = &block.term {
+                if let Terminator::Branch { cond, if_true, if_false } = &block.term {
                     if let Some(word) = read(&local, cond) {
                         match word[0] {
                             Bit::Constant(choice) => transfer(if choice { if_true } else { if_false }),
@@ -226,17 +212,6 @@ impl Constants {
                     }
                     changed |= old.as_ref() != Some(&word);
                     *old = Some(word);
-                }
-            }
-            if !changed && every_block {
-                // A cold cycle may have no entry value to start propagation. Give
-                // its remaining slots unknown values, then propagate those inputs
-                // before accepting any proof from this pass.
-                for (index, word) in slots.iter_mut().enumerate() {
-                    if word.is_none() {
-                        *word = Some(unknown_word(Slot(index as u32)));
-                        changed = true;
-                    }
                 }
             }
             if !changed {

@@ -6,8 +6,8 @@ use bennett_ir::{
 
 use super::ApplyError;
 use super::arithmetic;
-use super::bits::{Bit, Circuit, Word, ZERO, constant};
-use super::definite::{Constants, Scope};
+use super::bits::{Bit, Circuit, Word, ZERO, constant, definite};
+use super::definite::Constants;
 use super::division;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -37,6 +37,7 @@ pub(super) enum Step<'a> {
     Write(Point, Slot, Word),
     Jump(&'a Target),
     Branch(Bit, &'a Target, &'a Target),
+    Switch(Word, &'a [SwitchCase], &'a Target),
     Return(Word),
     Transfer(Point, Vec<(Slot, Word)>),
     CheckedWrite(Point, Slot, Word, Bit, Fault),
@@ -104,52 +105,12 @@ impl<'a> Frame<'a> {
     pub(super) fn check(
         module: &'a ValidModule,
         callee: FuncId,
-        input: impl Iterator<Item = Option<Word>> + Clone,
+        input: impl Iterator<Item = Option<Word>>,
     ) -> Result<Self, ApplyError> {
         let mut frame = Self { module, callee, constants: Constants::default() };
         frame.check_instructions()?;
-        frame.constants = Constants::analyze(&frame, input.clone(), Scope::Reachable);
-        if frame.check_operands(&[]).is_ok() {
-            return Ok(frame);
-        }
-
-        // These proofs stay local to validation. Emission reads the entry proof
-        // stored in the frame.
-        let literal_edges = Constants::analyze(&frame, input.clone(), Scope::LiteralEdges);
-        if frame.check_operands(&[&literal_edges]).is_ok() {
-            return Ok(frame);
-        }
-        // Even an untaken edge can supply operands needed to validate its target.
-        let all_edges = Constants::analyze(&frame, input.clone(), Scope::AllEdges);
-        if frame.check_operands(&[&literal_edges, &all_edges]).is_ok() {
-            return Ok(frame);
-        }
-        // A computed condition can select one of two conflicting incoming values.
-        let computed_edges = Constants::analyze(&frame, input, Scope::ComputedEdges);
-        frame.check_operands(&[&literal_edges, &all_edges, &computed_edges])?;
+        frame.constants = Constants::analyze(&frame, input);
         Ok(frame)
-    }
-
-    fn check_operands(&self, fallbacks: &[&Constants]) -> Result<(), ApplyError> {
-        for (block, body) in self.module.function(self.callee).blocks.iter().enumerate() {
-            let block = BlockId(block as u32);
-            let constant_value = |operand| {
-                self.constants.get(operand).or_else(|| {
-                    if self.constants.reaches(block) {
-                        None
-                    } else {
-                        fallbacks.iter().find_map(|proof| proof.get(operand))
-                    }
-                })
-            };
-            if let Terminator::Switch { value, .. } = &body.term
-                && constant_value(value).is_none()
-            {
-                let point = Point { block, index: body.insts.len(), copy: 0 };
-                return Err(self.error(point, "switch", "multiway dispatch in the step machine"));
-            }
-        }
-        Ok(())
     }
 
     fn check_instructions(&self) -> Result<(), ApplyError> {
@@ -287,8 +248,14 @@ impl<'a> Frame<'a> {
                 }
             }
             Terminator::Switch { value, cases, default, .. } => {
-                let value = self.constants.get(value).expect("checked the switch selector before lowering");
-                Step::Jump(switch_target(value, cases, default))
+                let selector = read(value);
+                if let Some(value) = self.constants.get(value).or_else(|| definite(&selector)) {
+                    Step::Jump(switch_target(value, cases, default))
+                } else if cases.is_empty() {
+                    Step::Jump(default)
+                } else {
+                    Step::Switch(selector, cases, default)
+                }
             }
             Terminator::Return(Some(value)) => Step::Return(read(value)),
             Terminator::Return(None) | Terminator::Exit(_) | Terminator::Longjmp { .. } | Terminator::Fault(_) => {

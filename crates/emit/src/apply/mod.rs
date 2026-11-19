@@ -241,6 +241,16 @@ fn compile_with_analysis_limit(
                         status = Status::Faulted(fault);
                         continue;
                     }
+                    Step::Switch(..) => {
+                        let remaining = input.budget - spent;
+                        let (copies, ticks) =
+                            machine::run(&mut circuit, &program, &mut slots, (point, ONE), remaining)?;
+                        break (
+                            copies,
+                            Construction::StepMachine { ticks },
+                            controls::Refusal::MultiwayDispatch.reason(),
+                        );
+                    }
                     Step::Branch(..) => {
                         let remaining = input.budget - spent;
                         let reason = match mode {

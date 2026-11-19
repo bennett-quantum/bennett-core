@@ -383,28 +383,12 @@ done(i8 %out):
 "#;
 
 #[test]
-fn switches_require_a_proved_definite_selector() {
+fn proved_definite_switches_use_the_selected_target() {
     for (selector, value) in [(2, 3), (3, 5)] {
         let module = control_example(DEFINITE_SWITCH, 1, &format!(", i8 {selector}"));
         for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
             compare_controls(&module, 3, mode, |bit| (if bit == 0 { 7 } else { value }, 0));
         }
-    }
-    let dynamic = DEFINITE_SWITCH.replace("switch i8 %ordinary, 2", "switch i1 %bit, 1");
-    let module = load(&dynamic).expect("valid qubit switch");
-    let args = [Argument::Register(0..1), Argument::Value(2)];
-    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
-        let error = compile_apply_with(apply_input(&module, &args, 1, 0), mode).expect_err("qubit switch");
-        assert_eq!(
-            error,
-            ApplyError::Unsupported {
-                callee: module.function_named("f").expect("f"),
-                block: BlockId(1),
-                index: 0,
-                operation: "switch",
-                route: "multiway dispatch in the step machine",
-            }
-        );
     }
 }
 

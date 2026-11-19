@@ -2,9 +2,10 @@
 
 use std::collections::{BTreeMap, btree_map::Entry};
 
-use bennett_ir::{Fault, Slot, Target};
+use bennett_ir::{Fault, Predicate, Slot, Target};
 
-use super::bits::{Bit, Circuit, Word, ZERO};
+use super::arithmetic;
+use super::bits::{Bit, Circuit, Word, ZERO, constant};
 use super::calls::Program;
 use super::symbolic::{Point, Step};
 use super::{ApplyError, Copies};
@@ -43,6 +44,18 @@ pub(super) fn run(
                     let take_no = circuit.and(enabled, condition.not());
                     jump(circuit, program, slots, &mut next, &mut writes, (point, yes), take_yes);
                     jump(circuit, program, slots, &mut next, &mut writes, (point, no), take_no);
+                }
+                Step::Switch(selector, cases, default) => {
+                    let mut unmatched = enabled;
+                    for case in cases {
+                        let pattern = constant(case.value, selector.len());
+                        let equal = arithmetic::compare(circuit, Predicate::Eq, &selector, &pattern);
+                        let take = circuit.and(enabled, equal);
+                        // Case values are distinct, so removing a matching dispatch is an XOR.
+                        unmatched = circuit.xor(unmatched, take);
+                        jump(circuit, program, slots, &mut next, &mut writes, (point, &case.target), take);
+                    }
+                    jump(circuit, program, slots, &mut next, &mut writes, (point, default), unmatched);
                 }
                 Step::Return(word) => copies.returned.push((enabled, word)),
                 Step::CheckedWrite(successor, dst, word, failed, fault) => {
