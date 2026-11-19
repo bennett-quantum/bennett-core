@@ -6,7 +6,7 @@ use bennett_ir::{
 
 use super::ApplyError;
 use super::arithmetic;
-use super::bits::{Bit, Circuit, Word, ZERO, constant, definite};
+use super::bits::{Bit, Circuit, Word, ZERO, constant};
 use super::definite::Constants;
 use super::division;
 use super::switches::Edges;
@@ -48,7 +48,7 @@ pub(super) enum Step<'a> {
 pub(super) struct Frame<'a> {
     pub(super) module: &'a ValidModule,
     pub(super) callee: FuncId,
-    constants: Constants,
+    constants: Constants<'a>,
 }
 
 impl<'a> Frame<'a> {
@@ -248,23 +248,16 @@ impl<'a> Frame<'a> {
                     bit @ Bit::Wire(..) => Step::Branch(bit, if_true, if_false),
                 }
             }
-            Terminator::Switch { value, cases, default, .. } => {
+            Terminator::Switch { value, .. } => {
                 let selector = read(value);
-                if let Some(value) = self.constants.get(value).or_else(|| definite(&selector)) {
-                    Step::Jump(switch_target(value, cases, default))
+                let mut edges = self.constants.switch_edges(point.block).clone();
+                edges.retain_possible(&selector);
+                if let ([], Some(default)) = (edges.cases.as_slice(), edges.default) {
+                    Step::Jump(default)
+                } else if let ([case], None) = (edges.cases.as_slice(), edges.default) {
+                    Step::Jump(&case.target)
                 } else {
-                    let mut edges = Edges::new(cases, default);
-                    if let Some(proved) = self.constants.word(value) {
-                        edges.retain_possible(&proved);
-                    }
-                    edges.retain_possible(&selector);
-                    if let ([], Some(default)) = (edges.cases.as_slice(), edges.default) {
-                        Step::Jump(default)
-                    } else if let ([case], None) = (edges.cases.as_slice(), edges.default) {
-                        Step::Jump(&case.target)
-                    } else {
-                        Step::Switch(selector, edges)
-                    }
+                    Step::Switch(selector, edges)
                 }
             }
             Terminator::Return(Some(value)) => Step::Return(read(value)),
@@ -275,7 +268,7 @@ impl<'a> Frame<'a> {
     }
 }
 
-pub(super) fn switch_target<'a>(value: u128, cases: &'a [SwitchCase], default: &'a Target) -> &'a Target {
+fn switch_target<'a>(value: u128, cases: &'a [SwitchCase], default: &'a Target) -> &'a Target {
     cases.iter().find(|case| case.value == value).map_or(default, |case| &case.target)
 }
 

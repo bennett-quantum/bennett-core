@@ -7,7 +7,7 @@ use bennett_ir::{BinOp, BlockId, Inst, Operand, Slot, Terminator, Width};
 
 use super::bits::{Bit, Circuit, Word, ZERO, constant, definite};
 use super::switches::Edges;
-use super::symbolic::{Frame, switch_target};
+use super::symbolic::Frame;
 use super::{arithmetic, division, ranges};
 
 fn fold_inst(
@@ -69,12 +69,13 @@ fn fold_inst(
 }
 
 #[derive(Default)]
-pub(super) struct Constants {
+pub(super) struct Constants<'a> {
     slots: Vec<Option<Word>>,
     reachable: Vec<bool>,
+    switches: Vec<Edges<'a>>,
 }
 
-impl Constants {
+impl<'a> Constants<'a> {
     pub(super) fn get(&self, operand: &Operand) -> Option<u128> {
         match operand {
             Operand::Const(value) => Some(value.value()),
@@ -93,10 +94,14 @@ impl Constants {
         self.reachable.get(block.index()).copied().unwrap_or(false)
     }
 
-    pub(super) fn analyze(frame: &Frame<'_>, inputs: impl Iterator<Item = Option<Word>>) -> Self {
+    pub(super) fn switch_edges(&self, block: BlockId) -> &Edges<'a> {
+        &self.switches[block.index()]
+    }
+
+    pub(super) fn analyze(frame: &Frame<'a>, inputs: impl Iterator<Item = Option<Word>>) -> Self {
         let function = frame.module.function(frame.callee);
         if !function.blocks.iter().any(|block| {
-            matches!(&block.term, Terminator::Switch { value: Operand::Slot(_), .. })
+            matches!(&block.term, Terminator::Switch { .. })
                 || block.insts.iter().any(|inst| {
                     matches!(
                         inst,
@@ -149,6 +154,7 @@ impl Constants {
         // Entry reachability grows with the value facts. For example, a loop can
         // first deliver a constant condition and later make both outcomes possible.
         let mut reachable = vec![false; function.blocks.len()];
+        let mut switches = vec![Edges::default(); function.blocks.len()];
         reachable[0] = true;
         loop {
             let mut changed = false;
@@ -192,18 +198,17 @@ impl Constants {
                     }
                 } else if let Terminator::Switch { value, cases, default, .. } = &block.term {
                     if let Some(word) = read(&local, value) {
-                        if let Some(value) = definite(&word) {
-                            transfer(switch_target(value, cases, default));
-                        } else {
-                            let mut edges = Edges::new(cases, default);
-                            edges.retain_possible(&word);
-                            for case in edges.cases {
-                                transfer(&case.target);
-                            }
-                            if let Some(default) = edges.default {
-                                transfer(default);
-                            }
+                        let mut edges = Edges::new(cases, default);
+                        edges.retain_possible(&word);
+                        for case in &edges.cases {
+                            transfer(&case.target);
                         }
+                        if let Some(default) = edges.default {
+                            transfer(default);
+                        }
+                        // Save the same edges for emission before the slot join
+                        // forgets identities of locally computed selector bits.
+                        switches[index] = edges;
                     }
                 } else {
                     block.term.visit_targets(transfer);
@@ -223,7 +228,7 @@ impl Constants {
                 }
             }
             if !changed {
-                return Self { slots, reachable };
+                return Self { slots, reachable, switches };
             }
         }
     }

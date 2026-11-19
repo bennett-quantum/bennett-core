@@ -6,6 +6,7 @@ use bennett_ir::{SwitchCase, Target};
 
 use super::bits::Bit;
 
+#[derive(Clone, Default)]
 pub(super) struct Edges<'a> {
     pub(super) cases: Vec<&'a SwitchCase>,
     pub(super) default: Option<&'a Target>,
