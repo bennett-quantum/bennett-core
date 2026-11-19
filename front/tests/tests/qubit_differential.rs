@@ -36,6 +36,7 @@ mod state;
 use state::{Check, Field, Preparation};
 
 const SEED: u64 = 0x8719_6caa_251d_0f43;
+const CALLER_FRAMES: &str = "an applied call that may reach `__builtin_return_address` above level 0";
 const SHORT_CASES: usize = generator::SHORT_CASES;
 const EXTRA_SEED_MASK: u64 = 0xe911_2825_44ba_3983;
 const STATE_SEED_MASK: u64 = 0xdba2_4ce8_b7e9_8163;
@@ -285,6 +286,11 @@ fn try_case(case: &Case, name: &str, mode: usize, results: &mut Results) -> Resu
             *results.declined.entry(reason.to_owned()).or_default() += 1;
             if reason.starts_with("not handled yet: an update of qubit variable ") && reason.contains(LOOP_UPDATE) {
                 results.loop_declined += 1;
+            }
+            // An applied call that may read a caller's return address (docs/DESIGN.md, "Evaluations the front
+            // repeats or moves"): counted as declined.
+            if reason.contains(CALLER_FRAMES) {
+                return Ok(());
             }
             if matches!(case.expectation, Expectation::ConditionalWrite)
                 && !reason.contains("a call to @write_cell, which may write memory,")

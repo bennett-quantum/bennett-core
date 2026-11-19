@@ -1020,8 +1020,8 @@ register `x`, XORing into two variables of values the front does not know and co
 with native C for all eight values of `x` at O0, O2 and with `--taint-all`, every other register back at 0; so
 do the parity of `x` accumulated into a `_Bool` and an overwrite in a loop of a variable of known value. The
 control program has no loop left, and one pair of `apply`s into one register carries all three results (the
-counter's stores are among those LLVM moves out of the loops). The smallest budget for all values is 151 steps;
-at 150 the longest runs fault, the others do not. Results of 64 + 32 + 16 + 8 bits from one loop take one
+counter's stores are among those LLVM moves out of the loops). The smallest budget for all values is 150 steps;
+at 149 the longest runs fault, the others do not. Results of 64 + 32 + 16 + 8 bits from one loop take one
 applied function, one `apply` into the 64-bit variable and one pair for the other three, and agree with a hand
 computation for every value of a three-qubit register in all three modes.
 Exchanged variables (`front/tests/tests/qubit_differential.rs`, `loop_overwrite_*`): a loop whose trip count
@@ -1342,8 +1342,10 @@ under `apply` they run on the private copy and are undone with it.
   rest (`front/tests/tests/applied_calls.rs`).
 - **Where the value is computed.** The front applies the computation of a value where the value is stored
   into a qubit variable or controls a gate, not where the call is. So the memory the call reads must be the
-  same there (`ControlAnalysis::memoryUnchangedBetween`; refused by name otherwise), and a value used several
-  times is computed again for each use, each time from the same memory, so each time with the same result.
+  same there (`ControlAnalysis::memoryUnchangedBetween`; refused by name otherwise). A value used several
+  times is computed again for each use, which gives one value for arithmetic and reads of unchanged memory; for
+  a call whose value depends on the frames it does not, a known defect ("Evaluations the front repeats or moves",
+  below).
   The applied function's remaining loads and its callees' accesses are both checked. Loads moved before
   the region are passed in by value ("Conditional jumps, joins and loops" above).
   The memory a call reads is what it, and the functions it calls, may reach outside their own frames
@@ -1382,6 +1384,47 @@ The acceptance target of the rule is SQLite (`experiments/sqlite-on-device`, sta
 database up with ordinary code and then apply one query whose key depends on a three-qubit register; each of
 eight queries gives the native result on each of the eight rows, and memory is unchanged across each `apply`
 (`front/tests/tests/sqlite_applied.rs`, ignored by default since it needs the SQLite sources).
+
+## Evaluations the front repeats or moves
+
+The front applies a computation where its value is consumed, not where C computes it: once per consumer, and
+once more where a register is cleared by computing its value again. Each such `apply` runs a function the front
+generates, which makes the calls the C code made. A run of an applied function is fixed by the function, its
+arguments, its budget, the frames below it with their positions, the stack pointer, and the bytes of memory it
+reads and whether they hold qubits (`docs/APPLY-STEP.md`). Two runs equal in all of these give the same result or
+the same fault, whatever the function looks at. So (`front/src/Evaluations.h`):
+
+- **Copies.** Arithmetic and reads of memory unchanged between the places (checked as in "Applied calls") may be
+  computed by as many generated functions as there are consumers. Anything else is one *evaluation*: a call, a
+  reservation or release of stack, a saved stack pointer, a return address. Its value may depend on the frames
+  around it (the address of a local, `__builtin_return_address`, `__builtin_frame_address`), and copies in
+  generated functions of different shape run under different frames.
+- **One evaluation, one generated function.** The front names every evaluation of a function with quantum
+  operations before it outlines anything, and every copy it makes keeps the name. A generated function whose
+  text equals one written before is that function, so computing a value into a register and clearing it again by
+  the same computation is one generated function applied twice. Not yet: an evaluation whose value C consumes in
+  two ways (one call whose value C stores twice, or stores and uses again after the code under a qubit) is still
+  computed by one generated function per consumer, and a value that depends on the frames (a frame address, a
+  byte of a pointer to a local) can differ between the copies: a known wrong result with ignored witnesses.
+  Route: compute it once into a register of its own, which every consumer reads and the same `apply` clears.
+- **The same stack pointer.** Where one generated function with an evaluation is applied at two places, no
+  reservation or release of the control function's own stack may lie between them (a variable-length array, a
+  `stackrestore`); refused by name otherwise.
+- **Frames that C does not have.** Code in a generated function runs under a frame the C program lacks. Nothing
+  applied may reach, through its calls, `__builtin_return_address(N)` with `N >= 1` (a call through a pointer
+  may reach every function whose address is taken): an ancestor's return address would be the generated
+  frame's. Refused by name, also where the read stays below the generated frame (route: count call depth, or let
+  generated frames not count, a change to the device program). A return address or saved stack pointer of the C
+  function is not moved into code applied under a qubit (refused by name; route: compute it before and pass it
+  in). Label addresses need nothing: computed goto is lowered before outlining to block numbers that are
+  constants of the module, which moved code sees unchanged.
+
+Acceptance (`front/tests/tests/coherence_regressions.rs`): a full return address computed into a word and cleared
+by computing it again gives 0 in the word; a replay across a variable-length array and a helper comparing its
+caller's return address one level up are refused by name in all three modes (each gave a wrong value before);
+arithmetic with two consumers is copied and gives C's values with the preparation's amplitudes. A call feeding
+two stores, and a frame address or a byte of a pointer to a local feeding two words, are ignored witnesses of the
+defect above.
 
 ## Non-local jumps (`setjmp`, `longjmp`)
 
@@ -1487,7 +1530,9 @@ one instruction that reads the frames:
   `apply` and a higher level reads the frames below. Those are the same for every argument value; the applied
   function's own frames may differ between argument values, and each run reads its own. A function the front
   outlines (`main.apply`) is a frame the native program does not have, so the address of a call made from it
-  is not the native one; it stays opaque, so nothing C defines depends on it.
+  is not the native one; it stays opaque, so nothing C defines depends on it, as long as one evaluation is one
+  generated function and nothing applied reads a return address above level 0 (both refused by name otherwise,
+  "Evaluations the front repeats or moves").
 - **The journal-content observer** (`crates/exec/src/measure.rs`) does not credit a `retaddr` result as
   recomputable from live state, which keeps its counts an upper bound.
 
