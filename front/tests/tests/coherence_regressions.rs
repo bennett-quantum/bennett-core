@@ -1089,3 +1089,31 @@ fn a_predicated_update_reads_the_shadow_it_writes_back() {
         [2 | 1 << 64, 1 | 1 << 64],
     );
 }
+
+#[test]
+fn an_ordinary_copy_before_the_write_on_its_path_is_refused() {
+    // Every path writes `g` (the later `g = r + 2`), so the exchange stands above `if (n)`; for n = 0 the copy into
+    // `dest` runs before that write and would read the shadow where C reads the ordinary 13.
+    refused_for_ordinary_inputs(
+        "conditional-byte-copy-before-write",
+        r#"
+uint8_t held = 13;
+uint8_t dest = 3;
+
+__attribute__((noinline)) void work(unsigned n) {
+    uint8_t q = 0;
+    XBIT(q, 0);
+    if (n) { if (q) held = q + 3; }
+    XBIT(q, 0);
+    if (!n) dest = held;
+    uint8_t r = 0;
+    XBIT(r, 0);
+    held = r + 2;
+    XBIT(r, 0);
+}
+"#,
+        "    work(n);\n    return dest;",
+        [13, 3],
+        "after their exchange and before the write that makes them hold qubits on this path",
+    );
+}

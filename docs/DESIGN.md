@@ -1241,7 +1241,12 @@ exchange (no earlier call or exchange may leave them holding qubits, `keepOrdina
 skips the write the shadow holds the old value and the measurement gives it. Everything else is refused by
 name: an ordinary access in between (it would read or write the shadow where C touches ordinary memory, and a
 copy would make other bytes hold qubits), a return at which the bytes may still hold qubits, bytes not shown to
-be ordinary before the exchange (route for all: one exchange on each path that writes, not built).
+be ordinary before the exchange (route for all: one exchange on each path that writes, not built). Where the
+check holds, an ordinary read between the exchange and the first store on each path that makes all the bytes
+hold qubits (`if (!n) dest = g;` before a later `g = r + 2`) is refused by name, since it would see the shadow
+where C sees memory; reads the allow-list above names are not, and an ordinary store there only sets the shadow,
+which the later write or the end of the span settles. A jump on a value chosen by qubits alone one of whose arms
+writes the bytes writes them on that ordinary path, as the text reads.
 
 Which pointers may reach the bytes (`front/src/Aliasing.h`). What a pointer argument may point to is the union
 of what the calls of its function in the module pass; a function the host may call (external linkage), or one
@@ -1303,7 +1308,7 @@ in a loop over an ordinary count, in a loop every pass of which may skip it, and
 a skipped write of another, are refused by name where the bytes leave the function holding qubits; measured
 before the return they give C's values, but are refused where an earlier call left the bytes holding qubits or
 an ordinary copy reads them in between; a later store on every path lets the exchange cross the condition (C's
-values, the old value kept with the warning).
+values, the old value kept with the warning), and an ordinary copy before that later store is refused by name.
 `front/tests/tests/held_regions_independent.rs`: two held objects of unequal width (exact amplitudes), a second
 region over held objects, gate barriers before an overwrite, pointer pairs and call chains, seeded short loops
 against native C, a straight store before a region writing the same byte (C's value), a callee measuring a

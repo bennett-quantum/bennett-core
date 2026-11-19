@@ -363,6 +363,9 @@ bool Holder::qubitWrite(const StoreInst &store, const std::set<const BasicBlock 
 void Holder::span(Value *object, const Range &hull, Instruction *start, const std::set<const BasicBlock *> &region,
                   bool owned, const std::vector<Instruction *> &writes) {
   bool everyPath = true; // decided where the start ends up, before the accesses are redirected
+  // Where every path writes the bytes: what runs after the exchange and before the first store that makes all
+  // of them hold qubits, on some path (an ordinary access there would see the shadow where C sees memory).
+  std::set<const Instruction *> beforeWrite;
   LLVMContext &context = fn.getContext();
   Type *word = IntegerType::get(context, unsigned(8 * (hull.end - hull.begin)));
   IRBuilder<> top(&*fn.getEntryBlock().getFirstInsertionPt());
@@ -660,13 +663,22 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
           if (!apply || state.kind == State::Before) {
             break;
           }
-          if (!everyPath && !owned && state.kind == State::Live && !region.count(inst.getParent()) &&
+          // Allowed while the shadow holds the bytes on a path on which C has not written them (yet): code under
+          // a qubit, stores that make them hold qubits, and reads that only feed such a store back into them.
+          // Where every path writes them, an ordinary store before that write only sets the shadow, which the write
+          // or the end of the span settles; a read there would see the shadow where C sees memory.
+          if (!owned && state.kind == State::Live &&
+              (!everyPath || (beforeWrite.count(&inst) && isa<LoadInst>(inst))) &&
+              !region.count(inst.getParent()) &&
               !(isa<StoreInst>(inst) && qubitWrite(cast<StoreInst>(inst), region, writes)) &&
               !(isa<LoadInst>(inst) && feedsOnlyQubitStoresHere(cast<LoadInst>(&inst)))) {
-            notHandled("an access of " + describe(object, hull) + ", whose exchange runs also on ordinary paths on "
-                           "which C does not write them, before they are measured: it would read or write their "
-                           "shadow where C touches ordinary memory (route: one exchange on each path that writes, "
-                           "not built)",
+            notHandled("an access of " + describe(object, hull) +
+                           (everyPath ? std::string(" after their exchange and before the write that makes them hold "
+                                                    "qubits on this path")
+                                      : std::string(", whose exchange runs also on ordinary paths on which C does "
+                                                    "not write them, before they are measured")) +
+                           ": it would read or write their shadow where C touches ordinary memory (route: one "
+                           "exchange on each path that writes, at the write, not built)",
                        &inst);
           }
           if (state.kind == State::Done) {
@@ -734,6 +746,78 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
       // follow it before the return (the walk refuses the rest), and its read of their old value must be of
       // ordinary bytes there.
       everyPath = owned || writesEveryByte(*borrow, object, hull, region, writes);
+      if (everyPath && !owned) {
+        auto writesAll = [&](Instruction &inst) {
+          auto *store = dyn_cast<StoreInst>(&inst);
+          if (!store || objectOf(store->getPointerOperand()) != object || !qubitWrite(*store, region, writes)) {
+            return false;
+          }
+          bool exact = false;
+          std::optional<Range> range = rangeOf(
+              store->getPointerOperand(), layout.getTypeStoreSize(store->getValueOperand()->getType()).getFixedValue(),
+              object, exact);
+          return exact && range && range->begin <= hull.begin && hull.end <= range->end;
+        };
+        std::set<const BasicBlock *> visited;
+        std::vector<BasicBlock *> work;
+        bool stopped = false;
+        for (Instruction *inst = borrow->getNextNode(); inst && !stopped; inst = inst->getNextNode()) {
+          stopped = writesAll(*inst);
+          if (!stopped) {
+            beforeWrite.insert(inst);
+          }
+        }
+        // A jump on a value chosen by qubits alone, one of whose arms writes the bytes before the arms meet again,
+        // writes them on this ordinary path as the text reads: the search goes on from where the arms meet.
+        PostDominatorTree after(fn);
+        auto armsWrite = [&](BasicBlock &fork, BasicBlock *&meet) {
+          const auto *jump = dyn_cast<BranchInst>(fork.getTerminator());
+          DomTreeNode *node = after.getNode(&fork);
+          if (!jump || !jump->isConditional() || !chosenByQubits(jump->getCondition(), analysis) || !node ||
+              !node->getIDom() || !node->getIDom()->getBlock()) {
+            return false;
+          }
+          meet = node->getIDom()->getBlock();
+          std::set<const BasicBlock *> seen{meet};
+          std::vector<BasicBlock *> arms(succ_begin(&fork), succ_end(&fork));
+          while (!arms.empty()) {
+            BasicBlock *arm = arms.back();
+            arms.pop_back();
+            if (!seen.insert(arm).second) {
+              continue;
+            }
+            if (any_of(*arm, [&](Instruction &inst) { return writesAll(inst); })) {
+              return true;
+            }
+            arms.insert(arms.end(), succ_begin(arm), succ_end(arm));
+          }
+          return false;
+        };
+        if (BasicBlock *meet = nullptr; !stopped && !armsWrite(*borrow->getParent(), meet)) {
+          work.assign(succ_begin(borrow->getParent()), succ_end(borrow->getParent()));
+        }
+        while (!work.empty()) {
+          BasicBlock *block = work.back();
+          work.pop_back();
+          if (!visited.insert(block).second) {
+            continue;
+          }
+          bool written = false;
+          for (Instruction &inst : *block) {
+            if ((written = writesAll(inst))) {
+              break;
+            }
+            beforeWrite.insert(&inst);
+          }
+          BasicBlock *meet = nullptr;
+          if (!written && armsWrite(*block, meet)) {
+            continue; // written where the arms meet: nothing after counts
+          }
+          if (!written) {
+            work.insert(work.end(), succ_begin(block), succ_end(block));
+          }
+        }
+      }
       if (!everyPath) {
         std::vector<LoadInst *> opening{cast<LoadInst>(old)};
         keepOrdinaryLoads(opening, *cast<LoadInst>(old), controlFunctions(*fn.getParent()));
