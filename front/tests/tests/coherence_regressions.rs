@@ -2,9 +2,9 @@
 
 use std::process::Command;
 
-use bennett_exec::Outcome;
+use bennett_exec::{Executor, Outcome};
 use bennett_front_tests::{
-    CLANG_FLAGS, CLANG_O2_FLAGS, lower_text_with_diagnostics, native_build, run_with_stats, write_c,
+    CLANG_FLAGS, CLANG_O2_FLAGS, entry, lower_text_with_diagnostics, native_build, options, run_with_stats, write_c,
 };
 
 #[path = "qubit_differential/state.rs"]
@@ -1115,5 +1115,70 @@ __attribute__((noinline)) void work(unsigned n) {
         "    work(n);\n    return dest;",
         [13, 3],
         "after their exchange and before the write that makes them hold qubits on this path",
+    );
+}
+
+/// The step limit of the folded-guard witnesses: the loops C runs take a few dozen steps; the device's loop
+/// that C skips never ends, or runs 2^32 passes, and exceeds it.
+const FOLDED_GUARD_STEPS: u64 = 3000;
+
+fn ends_like_native_within_a_few_steps(program: &Program<'_>, n: u64) {
+    let source = program.source();
+    let native = program.native_table(&source, n);
+    let mut failures = Vec::new();
+    for (mode, clang, flags) in MODES {
+        let name = format!("{}-{mode}", program.name);
+        let (text, _) = lower_text_with_diagnostics(&source, &name, clang, flags).expect("lowers");
+        let module = bennett_ir::load(&text).expect("valid device program");
+        for (input, &wanted) in native.iter().enumerate() {
+            let mut limited = options(0);
+            limited.budget = Some(FOLDED_GUARD_STEPS);
+            let mut executor =
+                Executor::new(&module, entry(&module, "entry"), &[input as u64 + 1, n, 0], limited).expect("starts");
+            let found = executor.run();
+            println!("{name} q={input} n={n}: native={wanted:#x}, device={found:?}");
+            if found != Outcome::Returned(Some(wanted)) {
+                failures.push(format!("{name} q={input} n={n}: native={wanted:#x}, device={found:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+const FOLDED_GUARD: &str = r#"
+    uint8_t y = 0;
+    ZBIT(q, 1);
+    if (q & n) {
+        if (n) {
+            LOOP
+        }
+    }
+    packet key = READ(q);
+    return key | ((packet)READ(y) << 8);
+"#;
+
+#[test]
+#[ignore = "defect: LLVM folds the ordinary guard `if (n)` into the qubit condition `q & n`; the control program then enters the loop for n = 0, where it never ends (the warning is the only protection until ordinary guards under a qubit are protected)"]
+fn a_folded_guard_keeps_an_endless_loop_from_running() {
+    let body = FOLDED_GUARD.replace(
+        "LOOP",
+        "#pragma clang loop unroll(disable)\n            for (unsigned j = 0; j != 1; j += n) XBIT(y, 0);",
+    );
+    ends_like_native_within_a_few_steps(
+        &Program { name: "folded-guard-endless", declarations: "", body: &body, qubits: 1 },
+        0,
+    );
+}
+
+#[test]
+#[ignore = "defect: LLVM folds the ordinary guard `if (n)` into the qubit condition `q & n`; the control program then runs the counted loop's 2^32 passes for n = 0, and no warning is given since the loop has a count"]
+fn a_folded_guard_keeps_a_counted_loop_from_running() {
+    let body = FOLDED_GUARD.replace(
+        "LOOP",
+        "unsigned j = 0;\n            #pragma clang loop unroll(disable)\n            do { XBIT(y, 0); } while (++j != n);",
+    );
+    ends_like_native_within_a_few_steps(
+        &Program { name: "folded-guard-counted", declarations: "", body: &body, qubits: 1 },
+        0,
     );
 }

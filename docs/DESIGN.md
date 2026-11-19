@@ -1096,7 +1096,9 @@ condition (`if (d != 0) if (q) loop`), or one the front keeps as the loop's guar
 condition may be removed by the optimiser where the condition implies it (`if (q & n) if (n) loop`: LLVM drops
 `if (n)`, and for `n = 0` the device runs the loop). The loop then runs its full count on the device for that
 input, `2^32` passes for `do { ... } while (++j != n)` at `n = 0`; the warning appears only where no count is
-found, so a counted loop after a folded guard runs silently.
+found, so a counted loop after a folded guard runs silently. Both are ignored witnesses in
+`front/tests/tests/coherence_regressions.rs` (`a_folded_guard_keeps_*`) until ordinary guards under a qubit are
+protected.
 
 Refused by name, each with its route:
 
