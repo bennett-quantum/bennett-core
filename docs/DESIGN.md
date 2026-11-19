@@ -206,7 +206,7 @@ and sample larger registers with a fixed seed.
 `bennett run --device qasm --qasm-output FILE` streams the quantum commands of one execution to a
 temporary file beside the requested path. The final comment gives the return and its scalar value
 when present, or the fault or stop reason, along with the run status assigned to that controller
-outcome. Terminal reporting occurs after publication and can independently affect the process exit
+outcome. The terminal run summary follows publication and can independently affect the process exit
 status. The exporter publishes the completed trace without replacing an existing file. A rejected
 start or a trace write error leaves the requested path untouched. The trace has the usual permissions
 for a new file in its directory, including the process umask on Unix.

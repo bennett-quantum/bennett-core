@@ -1294,3 +1294,86 @@ __attribute__((noinline)) unsigned second(void) {
         [3, 3],
     );
 }
+
+#[test]
+#[ignore = "a write through a restrict parameter leaves the caller's byte unclassified and permits a guarded read to fault on the path that skips it"]
+fn a_write_through_restrict_preserves_a_later_read_guard() {
+    compare_ordinary_inputs(
+        "guarded-read-after-restrict-store",
+        r#"
+uint8_t cell[2] = {0, 1};
+
+__attribute__((noinline)) void write_bit(uint8_t *restrict dst) {
+    uint8_t bit = 0;
+    XBIT(bit, 0);
+    dst[0] = bit;
+    XBIT(bit, 0);
+}
+
+__attribute__((noinline)) unsigned read_if_nonzero(unsigned count) {
+    if (count) return count * cell[0];
+    return 0;
+}
+"#,
+        r#"
+    if (n) write_bit(cell);
+    unsigned value = read_if_nonzero(1 - n);
+    if (n) return value + READ_BYTES(cell[0], 1);
+    return value;
+"#,
+        [0, 1],
+    );
+}
+
+#[test]
+#[ignore = "memcpy from a qubit variable leaves the destination unclassified and permits a guarded read to fault on the path that skips it"]
+fn copying_from_a_qubit_variable_preserves_a_later_read_guard() {
+    compare_ordinary_inputs(
+        "guarded-read-after-qubit-copy",
+        r#"
+uint8_t cell[2] = {0, 1};
+
+__attribute__((noinline)) void copy_bit(void) {
+    uint8_t bit = 0;
+    XBIT(bit, 0);
+    __builtin_memcpy(cell, &bit, 1);
+    XBIT(bit, 0);
+}
+
+__attribute__((noinline)) unsigned read_if_nonzero(unsigned count) {
+    if (count) return count * cell[0];
+    return 0;
+}
+"#,
+        r#"
+    if (n) copy_bit();
+    unsigned value = read_if_nonzero(1 - n);
+    if (n) return value + READ_BYTES(cell[0], 1);
+    return value;
+"#,
+        [0, 1],
+    );
+}
+
+#[test]
+#[ignore = "one call feeding two consumers is evaluated in a separate generated function for each, giving different return addresses"]
+fn one_call_feeding_two_consumers_gives_one_value() {
+    compare_ordinary_inputs(
+        "call-feeding-two-stores",
+        RETADDR_HELPER,
+        r#"
+    uint8_t q = 0, marker = 0;
+    if (n) XBIT(q, 0);
+    volatile uint64_t first = 0, second = 0;
+    if (q) {
+        uintptr_t address = f(q);
+        first = address;
+        ZBIT(marker, 0);
+        second = address;
+    }
+    uint64_t a = READ(first), b = READ(second);
+    return a ^ b;
+"#,
+        [0, 0],
+    );
+}
