@@ -4,7 +4,7 @@ use std::process::Command;
 
 use bennett_exec::Outcome;
 use bennett_front_tests::{
-    CLANG_FLAGS, CLANG_O2_FLAGS, lower_text_with_diagnostics, native_build, run_with_stats, write_c,
+    CLANG_FLAGS, CLANG_O2_FLAGS, lower, lower_text_with_diagnostics, native_build, run_with_stats, write_c,
 };
 
 #[path = "qubit_differential/state.rs"]
@@ -454,4 +454,146 @@ fn overwriting_a_return_address_after_a_gate_traces_it() {
         qubits: 1,
     }
     .agrees(0, &[0, 1], &check, 64);
+}
+
+fn compare_ordinary_inputs(name: &str, declarations: &str, body: &str, expected: [u128; 2]) {
+    let source = write_c(
+        name,
+        &format!(
+            "{PRELUDE}{declarations}\npacket entry(unsigned prep, unsigned n, unsigned column) {{\n{body}\n}}\n{DRIVER}"
+        ),
+    );
+    let executable = native_build(&source, name, &["-DNATIVE"]);
+    let native = [0, 1].map(|n| {
+        let output = Command::new(&executable).args(["0", &n.to_string()]).output().expect("run native C");
+        assert!(output.status.success(), "{name} n={n}: {output:?}");
+        let stdout = std::str::from_utf8(&output.stdout).expect("native stdout");
+        u128::from_str_radix(stdout.trim(), 16).expect("native packet")
+    });
+    assert_eq!(native, expected, "{name}");
+
+    let mut failures = Vec::new();
+    for (mode, clang, flags) in MODES {
+        let name = format!("{name}-{mode}");
+        let module = lower(&source, &name, clang, flags);
+        for (n, wanted) in [0, 1].into_iter().zip(native) {
+            let (found, _) = run_with_stats(&module, "entry", &[0, n, 0], 0);
+            let comparison = format!("{name} n={n}: native={wanted}, device={found:?}");
+            println!("{comparison}");
+            if found != Outcome::Returned(Some(wanted)) {
+                failures.push(comparison);
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+#[ignore = "dropping a qubit argument lets one of two applied calls leave its write behind"]
+fn both_qubit_dependent_calls_undo_their_writes() {
+    compare_ordinary_inputs(
+        "two-call-writes",
+        r#"
+unsigned input_seen, successor_seen;
+
+__attribute__((noinline)) static unsigned record_input(unsigned x) {
+    input_seen = 1;
+    return x;
+}
+
+__attribute__((noinline)) unsigned record_successor(unsigned x) {
+    successor_seen = 1;
+    return x + 1;
+}
+"#,
+        r#"
+    uint8_t q = 0, y = 0;
+    XBIT(q, 0);
+    ZBIT(y, 0);
+    y ^= record_input(q);
+    y ^= record_successor(q);
+    unsigned value = READ(y);
+    return value + 16u * (n && input_seen == successor_seen);
+"#,
+        [3, 19],
+    );
+}
+
+#[test]
+#[ignore = "merging ordinary and qubit-dependent calls undoes the ordinary call's write"]
+fn an_ordinary_call_selected_by_a_condition_keeps_its_write() {
+    compare_ordinary_inputs(
+        "conditional-call-write",
+        r#"
+unsigned recorded;
+
+__attribute__((noinline)) unsigned record_call(unsigned x) {
+    recorded = 7;
+    return x + 1;
+}
+"#,
+        r#"
+    uint8_t q = 0, y = 0;
+    XBIT(q, 0);
+    ZBIT(y, 0);
+    unsigned result;
+    if (n) result = record_call(q);
+    else result = record_call(2);
+    y ^= result;
+    XBIT(q, 0);
+    unsigned value = READ(y);
+    if (n) return value;
+    return value + 16u * recorded;
+"#,
+        [115, 2],
+    );
+}
+
+const READ_STORED_BYTE: &str = r#"
+    store_byte(n);
+#ifndef NATIVE
+    if (n) return bennett_measure_bytes((const void *)&held, sizeof held);
+#endif
+    return held;
+"#;
+
+#[test]
+#[ignore = "merging ordinary and qubit-dependent stores makes both paths leave qubits in the byte"]
+fn a_constant_store_selected_by_a_condition_keeps_the_byte_ordinary() {
+    compare_ordinary_inputs(
+        "conditional-byte-value",
+        r#"
+volatile uint8_t held;
+
+__attribute__((noinline)) void store_byte(unsigned n) {
+    uint8_t q = 0;
+    XBIT(q, 0);
+    if (n) held = q;
+    else held = 2;
+    XBIT(q, 0);
+}
+"#,
+        READ_STORED_BYTE,
+        [2, 1],
+    );
+}
+
+#[test]
+#[ignore = "exchanging the byte before the store condition leaves it holding qubits on the skipped path"]
+fn skipping_a_qubit_dependent_store_keeps_the_byte_ordinary() {
+    compare_ordinary_inputs(
+        "conditional-byte-store",
+        r#"
+volatile uint8_t held;
+
+__attribute__((noinline)) void store_byte(unsigned n) {
+    uint8_t q = 0;
+    XBIT(q, 0);
+    if (n) held = q + 1;
+    XBIT(q, 0);
+}
+"#,
+        READ_STORED_BYTE,
+        [0, 2],
+    );
 }
