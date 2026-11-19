@@ -157,12 +157,15 @@ mod tests {
 
     #[test]
     fn remainder_at_the_dividend_bound_only_clears_equality() {
-        let mut circuit = Circuit::new(4);
         let input = (0..4).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
-        let result = reduce(&mut circuit, &input, &constant(15, 4));
-        let block = circuit.finish(0, "remainder at bound").expect("valid wires");
-        for value in 0..16 {
-            check(&block, &result, &[(4, value)], value % 15, 7);
+        // A smaller modulus needs reduction even when the words are unequal.
+        for (modulus, toffolis) in [(15, 7), (11, 6 * 4 * 4)] {
+            let mut circuit = Circuit::new(4);
+            let result = reduce(&mut circuit, &input, &constant(modulus, 4));
+            let block = circuit.finish(0, "remainder at or below bound").expect("valid wires");
+            for value in 0..16 {
+                check(&block, &result, &[(4, value)], value % modulus, toffolis);
+            }
         }
     }
 }

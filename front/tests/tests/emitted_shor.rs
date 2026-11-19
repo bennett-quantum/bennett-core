@@ -5,11 +5,13 @@ mod baseline;
 #[allow(dead_code)] // The shared runner also provides sampling and destination exhaustion.
 #[path = "../../../crates/emit/tests/support/bits.rs"]
 mod bits;
+#[path = "shor_support/count.rs"]
+mod count;
 
 use std::f64::consts::TAU;
 
-use bennett_emit::{ApplyInput, Argument, CompiledApply, Construction, CountingDevice, Counts, compile_apply};
-use bennett_exec::{BlockOp, Device, Executor, GateBlock};
+use bennett_emit::{ApplyInput, Argument, CompiledApply, Construction, compile_apply};
+use bennett_exec::{BlockOp, Executor, GateBlock};
 use bennett_front_tests::{CLANG_FLAGS, STACK_BYTES, c_dir, entry, lower_text_with_budget};
 use bennett_ir::{
     Fault, FixedGate, FuncId, Gate, Inst, MeasureSource, Operand, Qubit, Rotation, Slot, Type, ValidModule, load,
@@ -88,7 +90,8 @@ fn require_oracle(input: ApplyInput<'_>) -> Result<CompiledApply, bennett_emit::
 fn c_powmod_emits_without_instruction_dispatch() {
     for (modulus, base) in CASES {
         let (module, callee) = front_powmod(modulus, base, "powmod_control");
-        compile_oracle(&module, callee);
+        let oracle = compile_oracle(&module, callee);
+        check_oracle(&oracle.block, &modular_powers(base, modulus));
     }
 }
 
@@ -116,6 +119,18 @@ fn fourier(exponent: Slot) -> Vec<Inst> {
     gates
 }
 
+fn modular_powers(base: u64, modulus: u64) -> Vec<u64> {
+    // Compute successive residues independently of the C square-and-multiply loop.
+    let mut next = 1;
+    (0..SAMPLES)
+        .map(|_| {
+            let residue = next;
+            next = (next * base) % modulus;
+            residue
+        })
+        .collect()
+}
+
 fn exact_probabilities(residues: &[u64], modulus: u64) -> Vec<f64> {
     // Orthogonal residue values contribute incoherently to the exponent's
     // marginal. Add Fourier amplitudes only for equal residues.
@@ -131,7 +146,12 @@ fn exact_probabilities(residues: &[u64], modulus: u64) -> Vec<f64> {
         .collect()
 }
 
-fn check_distribution(module: ValidModule, callee: FuncId, exact: &[f64]) -> (f64, f64) {
+fn check_period_harness(
+    module: ValidModule,
+    callee: FuncId,
+    exact: &[f64],
+    oracles: [&GateBlock; 2],
+) -> (f64, f64, [usize; 2]) {
     let main = entry(&module, "entry");
     let mut module = module.into_module();
     let instructions = &mut module.functions[main.index()].blocks[0].insts;
@@ -201,17 +221,11 @@ fn check_distribution(module: ValidModule, callee: FuncId, exact: &[f64]) -> (f6
     let measured_value = measured.quantum.amplitudes[0].0[exponent_column];
     assert!(measured.quantum.amplitudes.iter().all(|(values, _)| values[exponent_column] == measured_value));
     assert!(exact[usize::from((measured_value as u8).reverse_bits())] > TOLERANCE);
-    (amplitude_error, error)
+    let harness_peaks = oracles.map(|oracle| count::harness_peak(&module, main, callee, oracle));
+    (amplitude_error, error, harness_peaks)
 }
 
-fn oracle_counts(block: &GateBlock) -> Counts {
-    let mut count = CountingDevice::default();
-    count.allocate(0..INTERFACE).expect("common interface");
-    count.call(block).expect("count the native gates");
-    count.counts()
-}
-
-fn check_baseline(block: &GateBlock, residues: &[u64]) {
+fn check_oracle(block: &GateBlock, residues: &[u64]) {
     let [BlockOp::Allocate(scratch), gates @ .., BlockOp::ReleaseZero(released)] = block.ops() else {
         panic!("expected one scratch lifetime");
     };
@@ -231,7 +245,7 @@ fn check_baseline(block: &GateBlock, residues: &[u64]) {
     };
     let states = (0..SAMPLES as u128).flat_map(|x| [(x, 0), (x, 0x15a5)]);
     bits::check_states(&gates, layout, states, |x| u128::from(residues[x as usize]))
-        .expect("hand circuit preserves the input and clears scratch");
+        .unwrap_or_else(|error| panic!("{}: {error}", block.name()));
 }
 
 #[test]
@@ -239,22 +253,17 @@ fn c_shor_period_distribution_and_counts() {
     for (modulus, base) in CASES {
         let (module, callee) = front_powmod(modulus, base, "shor_period");
         let oracle = compile_oracle(&module, callee);
-        let generated_counts = oracle_counts(&oracle.block);
-        let hand_built = baseline::powmod(base, modulus);
-        let mut next = 1;
-        let residues = (0..SAMPLES)
-            .map(|_| {
-                let residue = next;
-                next = (next * base) % modulus;
-                residue
-            })
-            .collect::<Vec<_>>();
-        check_baseline(&hand_built, &residues);
-        let baseline_counts = oracle_counts(&hand_built);
-        let (amplitude_error, distribution_error) =
-            check_distribution(module, callee, &exact_probabilities(&residues, modulus));
+        let residues = modular_powers(base, modulus);
+        check_oracle(&oracle.block, &residues);
+        let emitted = count::cancel_adjacent_toffolis(&oracle.block);
+        let hand_built = count::cancel_adjacent_toffolis(&baseline::powmod(base, modulus));
+        check_oracle(&hand_built, &residues);
+        let generated_counts = count::isolated(&emitted);
+        let baseline_counts = count::isolated(&hand_built);
+        let (amplitude_error, distribution_error, [emitted_peak, hand_peak]) =
+            check_period_harness(module, callee, &exact_probabilities(&residues, modulus), [&emitted, &hand_built]);
         println!(
-            "N={modulus}, base={base}, {EXPONENT_BITS} exponent bits, {}\nemitted {generated_counts:?}\nhand {baseline_counts:?}\namplitude error {amplitude_error:e}, distribution error {distribution_error:e}",
+            "N={modulus}, base={base}, {EXPONENT_BITS} exponent bits, {}\nemitted {generated_counts:?}\nhand {baseline_counts:?}\nharness peaks: emitted {emitted_peak}, hand {hand_peak}\namplitude error {amplitude_error:e}, distribution error {distribution_error:e}",
             oracle.construction
         );
     }

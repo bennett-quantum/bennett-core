@@ -616,31 +616,33 @@ before the measurement written in C. The exponent probabilities agree with the e
 Fourier sum to within `5.6e-16` for 15 and `2.5e-16` for 21.
 
 The hand-built oracle uses ripple-carry modular additions of constants to multiply
-in place under each exponent bit. The inverse multiplier clears the multiplication's
-temporary word. The oracle copies its residue by XOR and reverses the computation.
-The bit-level test checks every exponent with both zero and patterned destinations
-and checks that the scratch clears.
+in place under each exponent bit. The adder omits the unused top carry. The inverse
+multiplier clears the multiplication's temporary word. The oracle copies its residue
+by XOR and reverses the computation. The bit-level test checks both circuits on all
+256 exponents with zero and patterned destinations. It checks the preserved exponent,
+the XOR of the expected residue, the fault bits, and the cleared scratch.
 
-Both circuits below count the exponentiation only, with the same eight exponent,
-eight output and five fault qubits. The peak includes all 21 such qubits, including
-the output's high zero bits. Scratch is the peak beyond those registers. The gate
-set counts a Toffoli as one native gate.
+Gate counts and depth cover the exponentiation. Both gate lists use the same
+cancellation of adjacent identical Toffolis and count a Toffoli as one native gate.
+The isolated peak includes eight exponent, eight output and five fault qubits,
+including the output's high zero bits. Scratch is the peak beyond those 21 qubits.
+The harness peak is measured by running each oracle inside the same C harness with
+the Fourier gates. It includes two further five-qubit fault registers that remain
+live across the exponentiation.
 
-| Modulus and base | Oracle construction | Toffolis | Peak qubits | Scratch | Depth |
-|---|---|---:|---:|---:|---:|
-| 15, base 7 | C, control gates | 3,228 | 533 | 512 | 3,186 |
-| 15, base 7 | Hand-built, controlled modular multiplications | 1,872 | 37 | 16 | 4,335 |
-| 21, base 2 | C, control gates | 18,999 | 753 | 732 | 16,405 |
-| 21, base 2 | Hand-built, controlled modular multiplications | 10,840 | 40 | 19 | 25,659 |
+| Modulus and base | Oracle construction | Toffolis | Isolated peak qubits | Scratch | Harness peak qubits | Oracle depth |
+|---|---|---:|---:|---:|---:|---:|
+| 15, base 7 | C, control gates | 3,228 | 533 | 512 | 543 | 3,186 |
+| 15, base 7 | Hand-built, controlled modular multiplications | 1,552 | 37 | 16 | 47 | 4,015 |
+| 21, base 2 | C, control gates | 18,999 | 753 | 732 | 763 | 16,405 |
+| 21, base 2 | Hand-built, controlled modular multiplications | 9,240 | 40 | 19 | 50 | 24,059 |
 
-The C oracles use 1.72 and 1.75 times the hand-built Toffoli counts, and 14.41 and
-18.83 times the peak qubits. Both meet the factor-of-two gate target. Both exceed the
-qubit target because the compiler keeps intermediate products, remainder results,
-guarded merges and decisions until the final reversal. The hand-built circuit reuses
-its temporary words after every modular multiplication. Counts from the earlier
-four- and six-exponent-bit comparisons differ because those comparisons included the
-Fourier transform and used gate counts with arbitrary controls or with Toffolis
-decomposed into elementary gates.
+Both C oracles exceed the factor-of-two Toffoli target, using 2.08 and 2.06 times
+the hand-built counts. The emitter lowers products and remainders separately and
+controls the arithmetic and merges. The hand-built circuit uses modular additions
+of constants to multiply in place. Both also exceed the peak-qubit target. The
+compiler keeps intermediate words and guards until the final reversal. The hand-built
+circuit reuses its temporary words after every modular multiplication.
 
 Run `front/test.sh --test emitted_shor c_shor_period_distribution_and_counts -- --exact --nocapture`
 to repeat the comparisons and counts.

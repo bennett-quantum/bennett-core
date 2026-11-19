@@ -31,15 +31,21 @@ impl ModularAdder {
     fn add(&self, gates: &mut Vec<GateOp>) {
         let lines = self.addend.iter().copied().zip(self.sum.iter().copied()).enumerate();
         let carry_into = |bit| if bit == 0 { self.carry } else { self.addend[bit - 1] };
+        let needs_carry_out = |bit| bit + 1 < self.sum.len();
         for (bit, (a, sum)) in lines.clone() {
             let carry = carry_into(bit);
             flip(gates, sum, &[a]);
             flip(gates, carry, &[a]);
-            flip(gates, a, &[carry, sum]);
+            // The most significant bit has no carry-out in this word.
+            if needs_carry_out(bit) {
+                flip(gates, a, &[carry, sum]);
+            }
         }
         for (bit, (a, sum)) in lines.rev() {
             let carry = carry_into(bit);
-            flip(gates, a, &[carry, sum]);
+            if needs_carry_out(bit) {
+                flip(gates, a, &[carry, sum]);
+            }
             flip(gates, carry, &[a]);
             flip(gates, sum, &[carry]);
         }
