@@ -268,6 +268,19 @@ mod tests {
     }
 
     #[test]
+    fn unsigned_quotient_counts_unequal_significant_widths() {
+        let (p, m) = (3, 5);
+        let dividend = (0..p as u64).map(|wire| Bit::Wire(wire, false)).chain([ZERO; 2]).collect::<Word>();
+        let divisor = (p as u64..(p + m) as u64).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
+        let mut circuit = Circuit::new((p + m) as u64);
+        let result = calculate(&mut circuit, BinOp::Udiv, &dividend, &divisor);
+        let block = circuit.finish(0, "unequal-width quotient").expect("valid gadget wires");
+        let toffolis = 6 * p * m - 2 * m;
+        check(&block, &result, &[(p, 7), (m, 3)], 2, toffolis);
+        check(&block, &result, &[(p, 7), (m, 31)], 0, toffolis);
+    }
+
+    #[test]
     fn fixed_quotients_preserve_rewiring_and_wrapping() {
         for (width, distance) in [(8, 3), (128, 65)] {
             let dividend = (0..width as u64).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
