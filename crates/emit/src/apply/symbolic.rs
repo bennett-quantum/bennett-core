@@ -218,9 +218,9 @@ impl<'a> Frame<'a> {
                 Inst::Call { .. } => return Err(self.error(point, "call", "a planned call copy")),
                 Inst::CallIndirect { .. } => return Err(self.error(point, "call_indirect", "a planned call copy")),
                 Inst::Effect { .. } => return Ok(Step::Fault(Fault::EffectInRegion)),
-                Inst::Load { .. }
-                | Inst::Store { .. }
-                | Inst::Alloca { .. }
+                Inst::Load { .. } => return Err(self.error(point, "load", super::memory::DISPATCH_REQUIRED)),
+                Inst::Store { .. } => return Err(self.error(point, "store", super::memory::DISPATCH_REQUIRED)),
+                Inst::Alloca { .. }
                 | Inst::StackSave { .. }
                 | Inst::StackRestore { .. }
                 | Inst::Setjmp { .. }

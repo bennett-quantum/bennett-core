@@ -159,7 +159,9 @@ fn compare_controls(
     let mut emitted = Executor::new(module, entry, &[budget], options).expect("gate simulation");
     let mut selected = None;
     let mut compiler = |input: ApplyInput<'_>| {
+        let function = &input.module.function(input.callee).name;
         let compiled = compile_apply_with(input, mode)?;
+        println!("@{function}, B={budget}, {mode:?}: {}", compiled.memory);
         assert!(selected.replace((compiled.construction, compiled.reason)).is_none());
         Ok(compiled.block)
     };
@@ -200,10 +202,10 @@ fn qubit_choice_in_an_ordinary_loop_uses_control_gates() {
 
 #[test]
 fn stores_under_and_after_a_qubit_choice_are_refused_before_apply_gates() {
-    for (line, choice, operation) in [
-        ("yes:", "br %bit, yes, no", "br"),
-        ("latch(i8 %value):", "br %bit, yes, no", "br"),
-        ("yes:", "switch i1 %bit, 1: yes, default: no", "switch"),
+    for (line, choice, store_block) in [
+        ("yes:", "br %bit, yes, no", 3),
+        ("latch(i8 %value):", "br %bit, yes, no", 5),
+        ("yes:", "switch i1 %bit, 1: yes, default: no", 3),
     ] {
         let source =
             ORDINARY_LOOP.replace(line, &format!("{line}\n    store i8 9, 8")).replace("br %bit, yes, no", choice);
@@ -225,10 +227,12 @@ fn stores_under_and_after_a_qubit_choice_are_refused_before_apply_gates() {
             assert!(matches!(
                 run.outcome,
                 Outcome::Stopped(RunError::Apply(ApplyError::Unsupported {
-                    operation: actual,
+                    block: bennett_ir::BlockId(actual),
+                    index: 0,
+                    operation: "store",
                     route: "private memory in the step machine",
                     ..
-                })) if actual == operation
+                })) if actual == store_block
             ));
             let counts = device.counts();
             assert_eq!((counts.one_qubit, counts.two_qubit, counts.toffoli), (6, 1, 0));

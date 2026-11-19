@@ -182,10 +182,6 @@ impl<'a> Program<'a> {
         self.has_memory
     }
 
-    pub(super) fn deferred_memory(&self, point: Point, operation: &'static str) -> ApplyError {
-        self.copies[point.copy].frame.error(point, operation, "private memory in the step machine")
-    }
-
     pub(super) fn frames(&self) -> impl Iterator<Item = &Frame<'a>> {
         self.copies.iter().map(|copy| &copy.frame)
     }

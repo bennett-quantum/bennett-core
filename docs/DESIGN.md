@@ -461,13 +461,17 @@ bytes and the caller's values for the rest. Stores zero the unused high bits in 
 Each store puts its nonconstant bits in fresh scratch qubits, so a value already loaded stays
 available after an overwrite. Definite stored values need no gates or qubits. Nothing writes
 to the caller's memory. All versions remain available until the end of the whole applied call,
-when the inverse clears them. Calls and memory instructions use the same step budget.
+when the inverse clears them. The compiler keeps the equality between a retained bit and its
+source, including complements. Computed bits proved constant remain constants when a gadget
+clears its temporary work. Calls and memory instructions use the same step budget.
 
 For each call the compiler reports the retained version qubits, the memory gates including the
 inverse, and the peak number of bits in current byte versions represented by qubits. Copying a
 stored nonconstant bit takes one CNOT in each direction, with two additional X gates in each
-direction if the source is complemented. A qubit-dependent choice in a program with memory
-accesses needs memory in the step machine and is currently refused before emitting the apply.
+direction if the source is complemented. A later qubit-dependent choice can use the ordinary
+control constructions. If control lowering encounters an access, the step machine checks it
+against the remaining whole-function budget. An attempted load or store there is refused at
+its own program point before emitting the apply.
 
 **Copied calls.** Each sequence of call sites has its own copy of the callee's slots and
 program points. Before building gates, the compiler counts one unit for each slot, instruction
@@ -2207,7 +2211,7 @@ Refused by name or not yet excluded around the classification of "What LLVM's pa
 | Reachable recursive calls or adding a call copy that raises the total above 16,384 slots and program points | Shared call frames and return positions |
 | Reachable `call_indirect` without one proved constant address | Prove the target across visits or dispatch among supported addresses |
 | Calls with register signatures, `retaddr` | Register-valued call frames and code addresses |
-| Qubit-dependent control in a call with `load` or `store` | Private memory in the step machine |
+| `load` or `store` attempted after control becomes qubit-dependent | Private memory in the step machine |
 | `load` or `store` without a proved definite address | Address selection over possible bytes |
 | `alloca`, `stacksave`, `stackrestore` | Private stack state |
 | `setjmp`, `longjmp` | Private memory and non-local control transfer |
