@@ -13,7 +13,7 @@ one applied function.
 |---|---|---|
 | `ir` | the device program: one data structure, one reader/writer, one validator | step 2 |
 | `exec` | the classical controller and sparse simulator: forward, reverse (undo journal), applied functions by evaluation or emitted gates, qubits in memory | step 2 |
-| `emit` | controlled gate lowering, circuit counts, and compilation of applied integer functions | M3 |
+| `emit` | controlled gate lowering, circuit counts, and compilation of applied integer functions | M5 |
 | `cli` | `bennett run`, `bennett check` | step 2 |
 | `front` | `bennett-front` (C++, LLVM 18): bitcode with marker calls to `ir` text; taint, outlining, lowering | step 3 |
 | `opt` | optimiser and cost model | not started |

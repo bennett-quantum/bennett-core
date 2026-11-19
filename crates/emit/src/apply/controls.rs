@@ -27,6 +27,7 @@ pub(super) enum Refusal {
     IncompatibleJoins,
     RepeatedContinuation,
     UnequalCharges,
+    MultiwayDispatch,
 }
 
 impl Refusal {
@@ -35,6 +36,7 @@ impl Refusal {
             Self::UnprovedLoop => "qubit-dependent loop without a program-proved pass count",
             Self::IncompatibleJoins => "qubit-dependent routes do not share a supported continuation",
             Self::RepeatedContinuation => "conditional routes would emit shared code more than once",
+            Self::MultiwayDispatch => "qubit-dependent switch uses multiway dispatch",
             Self::UnequalCharges => "unequal route lengths can exhaust the budget after a join",
         }
     }
@@ -171,6 +173,7 @@ impl Controls<'_, '_> {
                     route.slots[dst.index()] = word;
                     route.point = next;
                 }
+                Step::Switch(..) => return Err(Failure::Control(Refusal::MultiwayDispatch)),
                 Step::Branch(condition, yes, no) => {
                     let choice = (point.copy, point.block);
                     if !self.choices.insert(choice) {

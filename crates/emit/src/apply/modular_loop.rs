@@ -237,7 +237,7 @@ fn straight(program: &Program<'_>, slots: &mut [Word], mut point: Point, prefix:
                 next
             }
             Step::Return(word) => return Some((End::Return(word), steps)),
-            Step::Branch(..) | Step::CheckedWrite(..) | Step::Fault(_) => return None,
+            Step::Branch(..) | Step::Switch(..) | Step::CheckedWrite(..) | Step::Fault(_) => return None,
         };
     }
     None

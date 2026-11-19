@@ -1,9 +1,6 @@
 //! Constant-operand proofs and their interaction with untaken control-flow edges.
 
-use super::{
-    ApplyError, ApplyMode, Argument, Executor, Options, Outcome, apply_input, compare_controls, compile_apply_with,
-    control_example,
-};
+use super::{ApplyMode, Executor, Options, Outcome, compare_controls, control_example};
 
 #[test]
 fn previously_supported_product() {
@@ -89,7 +86,6 @@ otherwise:
 
 #[test]
 fn mixed_operand_proofs() {
-    let mut incorrectly_accepted = Vec::new();
     for (operation, instruction) in [
         ("shl", "%result = shl i3 1, %k\n    %out = zext i3 %result to i8\n    ret %out"),
         ("mul", "%result = mul i3 %input, %k\n    %out = zext i3 %result to i8\n    ret %out"),
@@ -116,15 +112,11 @@ join(i3 %k):
         );
         let module = control_example(&source, 3, "");
         let entry = module.function_named("main").expect("main function");
-        let args = [Argument::Register(0..3)];
         for budget in (0..=12).chain([u64::MAX]) {
             let options = Options { machine_meaning: true, ..Options::default() };
             let mut direct = Executor::new(&module, entry, &[budget], options).expect("direct simulation");
             assert_eq!(direct.run(), Outcome::Returned(None));
-            let state = direct.snapshot();
-            assert_eq!(state.quantum.amplitudes.len(), 8);
-            for (basis, _) in state.quantum.amplitudes {
-                let x = basis[0];
+            let expected = |x: u64| {
                 let odd = x & 1;
                 let k = (2 * x * odd) & 7;
                 let (steps, result) = match operation {
@@ -133,29 +125,20 @@ join(i3 %k):
                     "switch" => (5 + 2 * odd, if k == 0 { 3 } else { 7 }),
                     _ => unreachable!("test only generates shifts, multiplies and switches"),
                 };
-                let (out, fault) = if budget < steps { (0, 1) } else { (result, 0) };
-                assert_eq!(basis, [x, odd, 4 ^ out, 16 ^ fault], "{operation}, B={budget}");
+                if budget < steps { (0, 1) } else { (result, 0) }
+            };
+            let state = direct.snapshot();
+            assert_eq!(state.quantum.amplitudes.len(), 8);
+            for (basis, _) in state.quantum.amplitudes {
+                let x = basis[0];
+                let (out, fault) = expected(x);
+                assert_eq!(basis, [x, x & 1, 4 ^ out, 16 ^ fault], "{operation}, B={budget}");
             }
-
             for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
-                if operation != "switch" {
-                    compare_controls(&module, budget, mode, |x| {
-                        let odd = x & 1;
-                        let k = (2 * x * odd) & 7;
-                        let result = if operation == "mul" { (x * k) & 7 } else { (1 << k) & 7 };
-                        if budget < 6 + 2 * odd { (0, 1) } else { (result, 0) }
-                    });
-                    continue;
-                }
-                match compile_apply_with(apply_input(&module, &args, 3, budget), mode) {
-                    Ok(circuit) => incorrectly_accepted.push((operation, budget, mode, circuit.construction)),
-                    Err(ApplyError::Unsupported { operation: actual, .. }) => assert_eq!(actual, operation),
-                    Err(error) => panic!("{operation}, B={budget}, {mode:?}: {error}"),
-                }
+                compare_controls(&module, budget, mode, expected);
             }
         }
     }
-    assert!(incorrectly_accepted.is_empty(), "accepted unproved operands: {incorrectly_accepted:?}");
 }
 
 #[test]

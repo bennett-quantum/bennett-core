@@ -253,7 +253,12 @@ impl<'a> Program<'a> {
             Step::CheckedWrite(next, dst, word, enabled, fault) => {
                 Step::CheckedWrite(next, copy.slot(dst), word, enabled, fault)
             }
-            Step::Jump(_) | Step::Branch(..) | Step::Return(_) | Step::Transfer(..) | Step::Fault(_) => step,
+            Step::Jump(_)
+            | Step::Branch(..)
+            | Step::Switch(..)
+            | Step::Return(_)
+            | Step::Transfer(..)
+            | Step::Fault(_) => step,
         })
     }
 

@@ -348,7 +348,7 @@ new bits by reversible gates into scratch qubits.
 
 The emitter's full instruction subset is `add`, `sub`, `mul`, `and`, `or`, `xor`,
 `udiv`, `sdiv`, `urem`, `srem`, `shl`, `lshr`, `ashr`, `icmp`, `select`, `zext`, `sext`, `trunc`,
-`faddr`, unconditional and conditional `br`, `switch` with a proved constant selector, `ret`,
+`faddr`, unconditional and conditional `br`, `switch`, `ret`,
 and direct `call` and `call_indirect` as described under "Copied calls" below. Calls take integer
 parameters and may return an integer or no value. The [refusal table](#not-yet) gives the excluded
 operations and the limits on calls. A jump reads all incoming values before assigning block
@@ -476,8 +476,15 @@ install the new slot values and dispatch bits. Incoming edges to a point are mut
 per assignment, so XOR joins their dispatch bits. A returned or faulted assignment stops
 dispatching. At the budget boundary each still-running assignment gets the code `budget`.
 
+A definite `switch` follows its selected target. A qubit-held selector uses the step
+machine. Each case compares the full selector with its case value and combines the match
+with the dispatch bit at that point. Case values are distinct, so XORing the matched
+dispatch bits out of the incoming dispatch bit gives the default guard. Each target reads
+its arguments from the same pre-tick frame, including when several cases share a target.
+The whole switch costs one step.
+
 Dispatch uses the steps left after the definite prefix, with the first qubit-dependent jump
-itself counting as the first tick when it triggers dispatch. All loops share that budget.
+or switch counting as the first tick when it triggers dispatch. All loops share that budget.
 Nesting adds possible points to a tick. When no possible point remains, dispatch stops early.
 
 When control gates encounter a loop without a proved pass count, the compiler can try
@@ -607,6 +614,11 @@ at distance `d` uses `2w − d` Toffolis. An arithmetic right stage uses `2(w �
 If `t` is the number of trailing zero bits of `w`, the range comparison uses `w − t − 1`
 Toffolis, and clearing an out-of-range result uses `w`. The gadget doubles the sum of
 these costs to clear its work wires after copying the result.
+
+A switch at the start of dispatch with `k` explicit cases and a selector made of `w`
+distinct variable bits uses `k(w − 1)` Toffolis for the case matches. The default guard
+uses XOR gates. With separate targets that return constants, the complete circuit
+uses `2k(w − 1)` Toffolis, including reversal.
 
 The C Grover test uses the ordinary predicate that sums the decimal digits of an 8-bit
 input and checks for 12. At `B = 40` and two Grover iterations, the emitted gates and direct
@@ -1929,7 +1941,6 @@ those.
 
 | Refused inside emitted `apply` | Construction needed |
 |---|---|
-| `switch` without a proved constant selector | Multiway dispatch in the step machine |
 | Reachable recursive calls or adding a call copy that raises the total above 16,384 slots and program points | Shared call frames and return positions |
 | Reachable `call_indirect` without one proved constant address | Prove the target across visits or dispatch among supported addresses |
 | Calls with register signatures, `retaddr` | Register-valued call frames and code addresses |

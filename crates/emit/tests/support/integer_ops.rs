@@ -209,3 +209,127 @@ entry:
         .unwrap_or_else(|error| panic!("{operation} i128: {error}"));
     }
 }
+
+#[test]
+fn switch_cases_share_the_budget_and_transfer_pre_tick_arguments() {
+    let module = load(
+        r#"
+memory 1024
+func @f(i3 %n, i2 %x, i2 %y) -> i2 {
+entry:
+    %test = trunc i2 %x to i1
+    br %test, loop(%n, %x, %y), done(%x)
+loop(i3 %left, i2 %a, i2 %b):
+    switch i3 %left, 0: done(%a), 1: done(%b), 2: next(%a, %b), default: next(%b, %a)
+next(i2 %first, i2 %second):
+    %count = sub i3 %left, 1
+    %adjusted = add i2 %first, 1
+    br loop(%count, %second, %adjusted)
+done(i2 %result):
+    ret %result
+}
+"#,
+    )
+    .expect("valid switch loop");
+    let args = [Argument::Register(0..3), Argument::Register(3..5), Argument::Register(5..7)];
+    for budget in 0..=29 {
+        let input = ApplyInput {
+            module: &module,
+            callee: module.function_named("f").expect("callee"),
+            args: &args,
+            out: 7..9,
+            fault: 9..14,
+            budget,
+            entry_fault: None,
+            stack_available: 0,
+            scratch_start: 14,
+        };
+        for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+            let compiled = compile_apply_with(input.clone(), mode).expect("emit the switch loop");
+            let (gates, layout) = gates(&compiled, 7, 7);
+            let cases = (0..128).flat_map(|x| [(x, 0), (x, 0x55)]);
+            bits::check_states(&gates, layout, cases, |x| {
+                executor_result(&input, 2, &[(x & 7) as u64, (x >> 3 & 3) as u64, (x >> 5) as u64])
+            })
+            .unwrap_or_else(|error| panic!("{mode:?}, B={budget}: {error}"));
+        }
+    }
+}
+
+#[test]
+fn switch_compares_high_bits_and_uses_default_when_no_case_matches() {
+    let module = load(r#"
+memory 1024
+func @f(i3 %x) -> i2 {
+entry:
+    %sx = sext i3 %x to i128
+    switch i128 %sx, 1: done(i2 1), 5: done(i2 2), 340282366920938463463374607431768211453: done(i2 3), default: done(i2 0)
+done(i2 %result):
+    ret %result
+}
+"#).expect("valid wide switch");
+    let args = [Argument::Register(0..3)];
+    for budget in 0..=4 {
+        let input = ApplyInput {
+            module: &module,
+            callee: module.function_named("f").expect("callee"),
+            args: &args,
+            out: 3..5,
+            fault: 5..10,
+            budget,
+            entry_fault: None,
+            stack_available: 0,
+            scratch_start: 10,
+        };
+        let compiled = compile_apply_with(input.clone(), ApplyMode::Automatic).expect("emit the wide switch");
+        let (gates, layout) = gates(&compiled, 3, 7);
+        bits::check_states(&gates, layout, (0..8).map(|x| (x, 0x55)), |x| executor_result(&input, 2, &[x as u64]))
+            .expect("wide equality, default, XOR destinations and zero scratch");
+    }
+}
+
+#[test]
+fn switch_counts_one_equality_chain_per_case() {
+    let cases = 3;
+    for width in [2, 3, 8] {
+        let module = load(&format!(
+            r#"
+memory 1024
+func @f(i{width} %x) -> i2 {{
+entry:
+    switch i{width} %x, 0: a, 1: b, 2: c, default: other
+a:
+    ret 1
+b:
+    ret 2
+c:
+    ret 3
+other:
+    ret 0
+}}
+"#
+        ))
+        .expect("valid switch");
+        let x = width as u64;
+        let args = [Argument::Register(0..x)];
+        let input = ApplyInput {
+            module: &module,
+            callee: module.function_named("f").expect("callee"),
+            args: &args,
+            out: x..x + 2,
+            fault: x + 2..x + 7,
+            budget: 2,
+            entry_fault: None,
+            stack_available: 0,
+            scratch_start: x + 7,
+        };
+        let compiled = compile_apply_with(input.clone(), ApplyMode::Automatic).expect("emit switch");
+        assert_eq!(compiled.construction, bennett_emit::Construction::StepMachine { ticks: 2 });
+        let (gates, layout) = gates(&compiled, width, 7);
+        assert_eq!(gates.iter().filter(|gate| gate.controls.len() == 2).count(), 2 * cases * (width - 1));
+        bits::check_states(&gates, layout, (0..1 << width).map(|x| (x, 0x55)), |x| {
+            executor_result(&input, 2, &[x as u64])
+        })
+        .expect("result, XOR destinations and zero scratch");
+    }
+}
