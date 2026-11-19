@@ -1069,12 +1069,22 @@ std::string ControlWriter::slice(const Slice &slice, const Value *root, const St
   for (auto [load, value] : slice.computed) {
     writer.alias(load, value);
   }
+  // A known value that is a constant is written in place (as the control program's own aliases do), so equal
+  // computations have equal text whether a load was known here or elsewhere.
+  std::set<const Value *> knownZero;
   for (auto [load, value] : slice.known) {
+    if (const auto *constant = dyn_cast<ConstantInt>(value); constant && value->getType() == load->getType()) {
+      writer.alias(load, constant);
+      if (constant->isZero()) {
+        knownZero.insert(load);
+      }
+      continue;
+    }
     std::string name = writer.fresh("known");
     unsigned width = widthOf(load->getType(), load);
     writer.bind(load, name);
     params += (params.empty() ? "" : ", ") + intType(width) + " " + name;
-    args += (args.empty() ? "" : ", ") + converted(value, width, false);
+    args += (args.empty() ? "" : ", ") + converted(value, width, true);
   }
   std::map<const Storage *, std::string> qubits;
   for (const Storage *storage : slice.quantum) {
@@ -1116,7 +1126,8 @@ std::string ControlWriter::slice(const Slice &slice, const Value *root, const St
       continue;
     }
     for (unsigned side : {0u, 1u}) {
-      if (isZero(resolve(binary->getOperand(side)))) {
+      const Value *operand = binary->getOperand(side);
+      if (isZero(resolve(operand)) || knownZero.count(resolve(operand))) {
         writer.alias(inst, binary->getOperand(1 - side));
         break;
       }
@@ -1128,7 +1139,7 @@ std::string ControlWriter::slice(const Slice &slice, const Value *root, const St
   if (widthOf(root->getType(), root) != bits) {
     fail("internal: a stored value of the wrong width");
   }
-  writer.line("ret " + writer.operand(root));
+  writer.line("ret " + writer.typed(root));
   std::string text = "(" + params + ") -> " + intType(bits) + " {\nentry:\n" + writer.out + "}\n";
   std::set<const MDNode *> evaluations = sliceEvaluations(slice);
   std::string name = module.addFunction(fn.getName().str() + ".apply", text);
@@ -1139,7 +1150,8 @@ std::string ControlWriter::slice(const Slice &slice, const Value *root, const St
 std::set<const MDNode *> ControlWriter::sliceEvaluations(const Slice &slice) {
   std::set<const MDNode *> evaluations;
   for (const Instruction *inst : slice.body) {
-    if (const MDNode *evaluation = evaluationOf(*inst); evaluation && analysis.tainted(inst)) {
+    // Every evaluation the body copies, an ordinary call `--taint-all` moves in included.
+    if (const MDNode *evaluation = evaluationOf(*inst)) {
       evaluations.insert(evaluation);
       evaluationSite.emplace(evaluation, inst);
     }

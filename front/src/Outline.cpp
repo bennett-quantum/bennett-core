@@ -1,6 +1,7 @@
 #include "Outline.h"
 
 #include "Diagnostic.h"
+#include "Evaluations.h"
 #include "HeldBytes.h"
 #include "InPlace.h"
 #include "Markers.h"
@@ -116,6 +117,12 @@ Function *outputVariant(Function &region, unsigned inputs, const SetVector<Value
     auto *cell = new AllocaInst(outputs[j]->getType(), module.getDataLayout().getAllocaAddrSpace(), "output", entry);
     cells.push_back(cell);
     map[region.getArg(inputs + j)] = cell;
+  }
+  // A copy of an evaluation keeps its name (Evaluations.h): its distinct metadata node maps to itself.
+  for (Instruction &inst : instructions(region)) {
+    if (const MDNode *evaluation = evaluationOf(inst)) {
+      map.MD()[evaluation].reset(const_cast<MDNode *>(evaluation));
+    }
   }
   SmallVector<ReturnInst *, 4> returns;
   CloneFunctionInto(variant, &region, map, CloneFunctionChangeType::GlobalChanges, returns);
