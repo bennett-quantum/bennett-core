@@ -987,8 +987,8 @@ share bytes with what a qubit store, a qubit-dependent memory intrinsic or atomi
 a marker acts on; a `restrict` parameter counts as what its calls pass, since bytes written through it hold qubits
 after the call too. A memory intrinsic that copies from such memory or from a qubit variable makes its destination
 memory that may hold qubits. A memcpy, memmove or memset of 1, 2, 4 or 8 bytes is first rewritten, as LLVM's
-InstCombine rewrites it in the optimiser, into an integer load and store (a store of the repeated byte), which the
-classes cover; sealed as a call it would reach the front unrewritten, be expanded into a guarded loop, and change
+InstCombine rewrites the copies in the optimiser, into an integer load and store (for memset a store of the
+repeated byte, also when the byte is computed at run time, which InstCombine leaves alone), which the classes cover; sealed as a call it would reach the front unrewritten, be expanded into a guarded loop, and change
 where the front places the exchanges of memory written under a qubit. A copy out of a qubit variable of any length
 up to its 8 bytes is rewritten the same way (sealed as a call it would keep the variable's address in ordinary
 code, which the front refuses). A qubit variable whose address
@@ -2124,6 +2124,11 @@ Refused by name or not yet excluded around the classification of "What LLVM's pa
   both arms that stores the same ordinary value, into a local or a global (the optimiser merges the two calls).
   Route: keep every store into memory SROA promotes (copies and stores through pointers included) and every call
   under a qubit-dependent condition, by its condition, until the classification has seen the join.
+- **A program function named like one of the front's own.** The front finds its exchange (`bennett.exchange`) and
+  its record of a qubit variable's value (`bennett.holds.<n>`) by name, so a program function given such a name by
+  an `asm` label is taken for the front's own: the front crashes or drops the call (the same on the front before the
+  classification; ignored witnesses in `front/tests/tests/sealed_operations.rs`). Route: remember the declarations
+  the front creates, as it remembers its keeping calls.
 - **A known value the optimiser copies.** The classification calls a qubit variable known where one ordinary value
   reaches its load on every path. A pass that copies the store of that value into two paths makes the front's
   later analysis meet two values and call the variable unknown, so a load the classification left to the

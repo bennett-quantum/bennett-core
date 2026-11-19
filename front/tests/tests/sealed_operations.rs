@@ -1024,3 +1024,49 @@ unsigned entry(unsigned prep, unsigned n, unsigned column) {
         &[(1, 1)],
     );
 }
+
+// Program functions named like the front's own exchange and value record (docs/DESIGN.md, "Not yet"); the front
+// before the classification does the same.
+#[test]
+#[ignore = "a program function named bennett.exchange is taken for the front's exchange: the front crashes"]
+fn a_program_function_named_like_the_exchange_stays_the_programs() {
+    agrees(
+        "named-like-exchange",
+        r#"
+unsigned hits;
+__attribute__((noinline)) static void myexch(void *a, void *b, long c) __asm__("bennett.exchange");
+__attribute__((noinline)) static void myexch(void *a, void *b, long c) { hits += 3; (void)a; (void)b; (void)c; }
+static uint8_t dst[4];
+unsigned long long entry(unsigned prep,unsigned n,unsigned column){
+    uint8_t q=0; XBIT(q,0);
+    dst[0] = (uint8_t)n;
+    myexch(dst, dst, 0);
+    unsigned r = READ_BYTES(q,1);
+    return (dst[0] + hits*16u) * 256u + r;
+}
+"#,
+        &[(1, 1)],
+    );
+}
+
+#[test]
+#[ignore = "a program function named bennett.holds.32 is taken for the front's record and its call dropped (513 for 2305)"]
+fn a_program_function_named_like_the_value_record_stays_the_programs() {
+    agrees(
+        "named-like-holds",
+        r#"
+unsigned hits;
+__attribute__((noinline)) static void myholds(void *p, unsigned v) __asm__("bennett.holds.32");
+__attribute__((noinline)) static void myholds(void *p, unsigned v) { hits += v; (void)p; }
+unsigned long long entry(unsigned prep,unsigned n,unsigned column){
+    uint8_t q=0; XBIT(q,0);
+    q = (uint8_t)(n & 1u);
+    unsigned loc = n + 1;
+    myholds(&loc, 7);
+    unsigned r = READ_BYTES(q,1);
+    return (hits + loc) * 256u + r;
+}
+"#,
+        &[(1, 1)],
+    );
+}

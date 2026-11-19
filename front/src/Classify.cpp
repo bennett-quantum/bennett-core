@@ -620,10 +620,11 @@ void Classifier::refuseUnclassified() {
   }
 }
 
-// A memory intrinsic of a constant, small length becomes an integer load and store, as LLVM's InstCombine rewrites it
-// in the optimiser (memcpy and memmove of 1, 2, 4 or 8 bytes become a load and a store, memset a store of the byte
-// repeated); sealed as a call (HeldMemory), the intrinsic would reach the front unrewritten and be expanded into a
-// loop, which ordinary conditions guard. A copy out of a qubit variable of any length up to its 8 bytes is
+// A memory intrinsic of a constant, small length becomes an integer load and store: memcpy and memmove of 1, 2, 4 or
+// 8 bytes a load and a store, as LLVM's InstCombine rewrites them in the optimiser, and memset of those lengths a
+// store of the byte repeated (InstCombine rewrites only a constant byte; a byte computed at run time is repeated by
+// multiplying it by 0x01..01, which gives the same bytes). Sealed as a call (HeldMemory), the intrinsic would reach
+// the front unrewritten and be expanded into a loop, which ordinary conditions guard. A copy out of a qubit variable of any length up to its 8 bytes is
 // rewritten too: sealed as a call it would keep the variable's address in ordinary code, which the front refuses.
 // The loads and stores are then classified like any other.
 void Classifier::rewriteSmallMemoryIntrinsics() {

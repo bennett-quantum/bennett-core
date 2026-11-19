@@ -24,8 +24,9 @@
 // qubit store, a held-memory call or an atomic update that depends on a qubit writes, or with a global variable a
 // marker acts on. A `restrict` parameter counts as what its calls pass (what is written through it outlives the
 // call). A memory intrinsic that copies from such memory or from a qubit variable makes its destination such memory;
-// a copy of a constant number of bytes out of a qubit variable is rewritten into a read of it and a store, as
-// LLVM's InstCombine would rewrite it. A qubit variable whose address leaves what the front follows counts as such
+// a memory intrinsic of 1, 2, 4 or 8 bytes, and a copy of up to 8 bytes out of a qubit variable, are rewritten into
+// an integer load and store, as LLVM's InstCombine rewrites the copies. A qubit variable whose address leaves what
+// the front follows counts as such
 // memory for reads and copies through pointers the front cannot follow; a local variable or a global of local
 // linkage whose address never escapes is reached only through pointers based on it (Aliasing.h, mayReach).
 //
