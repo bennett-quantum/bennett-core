@@ -349,7 +349,8 @@ new bits by reversible gates into scratch qubits.
 The emitter's full instruction subset is `add`, `sub`, `mul`, `and`, `or`, `xor`,
 `udiv`, `sdiv`, `urem`, `srem`, `shl`, `lshr`, `ashr`, `icmp`, `select`, `zext`, `sext`, `trunc`,
 `faddr`, unconditional and conditional `br`, `switch`, `ret`,
-and direct `call` and `call_indirect` as described under "Copied calls" below. Calls take integer
+and direct `call` and `call_indirect` as described under "Copied calls" below. With definite
+control, the emitter supports `load` and `store` at definite addresses. Calls take integer
 parameters and may return an integer or no value. The emitter also supports `fault`, `effect`
 and `exit` inside an applied function. The [refusal table](#not-yet) gives the excluded
 operations and the limits on calls. A jump reads all incoming values before assigning block
@@ -443,12 +444,30 @@ with divisor zero.
 
 A separate zero test makes each reached division or remainder fault with
 `divide_by_zero` for exactly those inputs. A failed input writes only the fault code and
-stops before any later instruction. A successful attempt costs one step. If the zero test depends on qubits in the
-definite prefix, the emitter records the fault under the zero-test guard and starts the step
-machine at the next point for the successful inputs, with one step spent.
+stops before any later instruction. A successful attempt costs one step. In a function without
+private memory, a qubit-dependent zero test in the definite prefix records the fault under the
+zero-test guard and starts the step machine at the next point for the successful inputs, with one
+step spent.
 On a controlled route it records the fault under the route guard AND the zero test, then
 continues on that route with its guard narrowed to the successful inputs. In the step machine
 itself only the successful inputs receive a successor and the result write.
+
+**Private byte versions under definite control.** The emitter borrows the caller's ordinary
+bytes and held-byte addresses when it compiles an applied call. A sparse map holds the current
+private value of each written byte, shared across copied calls. A load or store checks the full
+span for bounds before checking whether any byte holds qubits. Access to a held byte faults
+even if its qubits hold zero. Little-endian loads use the current private values for written
+bytes and the caller's values for the rest. Stores zero the unused high bits in a partial byte.
+Each store puts its nonconstant bits in fresh scratch qubits, so a value already loaded stays
+available after an overwrite. Definite stored values need no gates or qubits. Nothing writes
+to the caller's memory. All versions remain available until the end of the whole applied call,
+when the inverse clears them. Calls and memory instructions use the same step budget.
+
+For each call the compiler reports the retained version qubits, the memory gates including the
+inverse, and the peak number of bits in current byte versions represented by qubits. Copying a
+stored nonconstant bit takes one CNOT in each direction, with two additional X gates in each
+direction if the source is complemented. A qubit-dependent choice in a program with memory
+accesses needs memory in the step machine and is currently refused before emitting the apply.
 
 **Copied calls.** Each sequence of call sites has its own copy of the callee's slots and
 program points. Before building gates, the compiler counts one unit for each slot, instruction
@@ -2188,8 +2207,9 @@ Refused by name or not yet excluded around the classification of "What LLVM's pa
 | Reachable recursive calls or adding a call copy that raises the total above 16,384 slots and program points | Shared call frames and return positions |
 | Reachable `call_indirect` without one proved constant address | Prove the target across visits or dispatch among supported addresses |
 | Calls with register signatures, `retaddr` | Register-valued call frames and code addresses |
-| `store` | Memory in the step machine |
-| `load`, `alloca`, `stacksave`, `stackrestore` | Private memory and stack state |
+| Qubit-dependent control in a call with `load` or `store` | Private memory in the step machine |
+| `load` or `store` without a proved definite address | Address selection over possible bytes |
+| `alloca`, `stacksave`, `stackrestore` | Private stack state |
 | `setjmp`, `longjmp` | Private memory and non-local control transfer |
 
 ## Open questions

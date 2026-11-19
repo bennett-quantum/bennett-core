@@ -285,9 +285,7 @@ impl<'m> Executor<'m> {
 
     /// The memory range a `width` access at `address` touches.
     pub(crate) fn memory_range(&self, address: u64, width: Width) -> Result<std::ops::Range<usize>, Fault> {
-        let end = address.checked_add(width.bytes()).filter(|&end| end <= self.memory.len() as u64);
-        let end = end.ok_or(Fault::OutOfBounds)?;
-        Ok(address as usize..end as usize)
+        crate::memory::range(self.memory.len(), address, width)
     }
 
     /// The bytes at `range`, little-endian, unmasked.

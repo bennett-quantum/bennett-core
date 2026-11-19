@@ -10,6 +10,7 @@ mod flow;
 #[cfg(test)]
 mod gadget_tests;
 mod machine;
+mod memory;
 mod modular;
 mod modular_loop;
 mod products;
@@ -28,9 +29,11 @@ use bennett_ir::{BlockId, Fault, Type, Width};
 
 use self::bits::{Bit, Circuit, ONE, Word, constant};
 use self::calls::Program;
+use self::memory::Memory;
 use self::symbolic::{Point, Status, Step};
 
-pub use bennett_exec::{ApplyError, ApplyInput, Argument};
+pub use bennett_exec::{ApplyError, ApplyInput, ApplyMemory, Argument};
+pub use memory::MemoryCounts;
 
 /// The control construction selected for one applied function.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,6 +97,8 @@ pub struct CompiledApply {
     pub construction: Construction,
     /// Why the compiler selected this construction.
     pub reason: &'static str,
+    /// Costs of the private memory versions in this call.
+    pub memory: MemoryCounts,
 }
 
 impl CompiledApply {
@@ -172,6 +177,7 @@ fn compile_with_analysis_limit(
     check_interface(&input)?;
     let (program, mut slots) = Program::check(&input)?;
     if mode == ApplyMode::Automatic
+        && !program.has_memory()
         && input.args.iter().any(|arg| matches!(arg, Argument::Register(_)))
         && let Some(plan) = modular_loop::Plan::prove(&input, &program, &slots)
     {
@@ -185,10 +191,12 @@ fn compile_with_analysis_limit(
                 definite_steps: plan.definite_steps,
                 construction: Construction::ModularInPlace { passes: plan.passes() },
                 reason: "a proved modular residue update with a whole-function budget",
+                memory: MemoryCounts::default(),
             });
         }
     }
     let mut circuit = Circuit::new(input.scratch_start);
+    let mut memory = Memory::new(input.memory);
     let mut status = match input.entry_fault {
         Some(fault) => Status::Faulted(fault),
         None => Status::Running(Point::entry(BlockId(0))),
@@ -212,7 +220,12 @@ fn compile_with_analysis_limit(
             }
             Status::Running(_) if spent == input.budget => status = Status::Faulted(Fault::Budget),
             Status::Running(point) => {
-                status = match program.step(&mut circuit, &slots, point)? {
+                let step = if program.has_memory() {
+                    program.step_with_memory(&mut circuit, &slots, point, &mut memory)?
+                } else {
+                    program.step(&mut circuit, &slots, point)?
+                };
+                status = match step {
                     Step::Write(next, dst, word) => {
                         slots[dst.index()] = word;
                         Status::Running(next)
@@ -225,6 +238,9 @@ fn compile_with_analysis_limit(
                         Status::Running(next)
                     }
                     Step::CheckedWrite(next, dst, word, failed, fault) => {
+                        if program.has_memory() {
+                            return Err(program.deferred_memory(point, "conditional fault"));
+                        }
                         // The attempt has been emitted. Only successful inputs
                         // move to the next instruction and spend one step.
                         slots[dst.index()] = word;
@@ -243,6 +259,9 @@ fn compile_with_analysis_limit(
                         continue;
                     }
                     Step::Switch(..) => {
+                        if program.has_memory() {
+                            return Err(program.deferred_memory(point, "switch"));
+                        }
                         let remaining = input.budget - spent;
                         let (copies, ticks) =
                             machine::run(&mut circuit, &program, &mut slots, (point, ONE), remaining)?;
@@ -253,6 +272,9 @@ fn compile_with_analysis_limit(
                         );
                     }
                     Step::Branch(..) => {
+                        if program.has_memory() {
+                            return Err(program.deferred_memory(point, "br"));
+                        }
                         let remaining = input.budget - spent;
                         let reason = match mode {
                             ApplyMode::Automatic => {
@@ -318,5 +340,6 @@ fn compile_with_analysis_limit(
         definite_steps: spent,
         construction,
         reason,
+        memory: memory.counts(),
     })
 }

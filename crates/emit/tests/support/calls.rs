@@ -353,12 +353,6 @@ fn call_refusals_precede_every_gate_of_the_apply() {
             "a proved definite function address",
         ),
         (
-            "%r = call @leaf()",
-            "func @leaf() -> i8 {\nentry:\n    store i8 7, 0\n    ret 7\n}",
-            "store",
-            "memory in the step machine",
-        ),
-        (
             "call @level0()\n    %r = add i8 1, 2",
             &tree,
             "call",

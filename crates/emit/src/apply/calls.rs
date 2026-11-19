@@ -7,6 +7,7 @@ use bennett_exec::frame_bytes;
 use bennett_ir::{Block, BlockId, Fault, FuncId, Function, Inst, Operand, Slot, Target, Terminator, Type};
 
 use super::bits::{Bit, Circuit, Word, constant};
+use super::memory::{AccessError, Memory};
 use super::symbolic::{Frame, Point, Step, before_instruction_fault};
 use super::{ApplyError, ApplyInput, Argument};
 
@@ -30,6 +31,7 @@ enum Site<'a> {
 pub(super) struct Program<'a> {
     copies: Vec<Copy<'a>>,
     work: usize,
+    has_memory: bool,
 }
 
 impl<'a> Program<'a> {
@@ -47,12 +49,18 @@ impl<'a> Program<'a> {
                 sites: BTreeMap::new(),
             }],
             work: work(source),
+            has_memory: false,
         };
 
         let mut index = 0;
         while index < program.copies.len() {
             let func = program.copies[index].frame.callee;
             let source = input.module.function(func);
+            program.has_memory |= source
+                .blocks
+                .iter()
+                .flat_map(|block| &block.insts)
+                .any(|inst| matches!(inst, Inst::Load { .. } | Inst::Store { .. }));
             for (block, body) in source.blocks.iter().enumerate() {
                 let block = BlockId(block as u32);
                 if !program.copies[index].frame.reaches(block) {
@@ -170,6 +178,14 @@ impl<'a> Program<'a> {
         !self.copies[0].sites.is_empty()
     }
 
+    pub(super) fn has_memory(&self) -> bool {
+        self.has_memory
+    }
+
+    pub(super) fn deferred_memory(&self, point: Point, operation: &'static str) -> ApplyError {
+        self.copies[point.copy].frame.error(point, operation, "private memory in the step machine")
+    }
+
     pub(super) fn frames(&self) -> impl Iterator<Item = &Frame<'a>> {
         self.copies.iter().map(|copy| &copy.frame)
     }
@@ -208,6 +224,35 @@ impl<'a> Program<'a> {
 
     pub(super) fn step(&self, circuit: &mut Circuit, slots: &[Word], point: Point) -> Result<Step<'a>, ApplyError> {
         self.step_narrow(circuit, slots, point, &[])
+    }
+
+    pub(super) fn step_with_memory(
+        &self,
+        circuit: &mut Circuit,
+        slots: &[Word],
+        point: Point,
+        memory: &mut Memory<'_>,
+    ) -> Result<Step<'a>, ApplyError> {
+        let read = |operand| self.read(slots, point, operand);
+        let next = point.next();
+        let (operation, result) = match self.block(point).insts.get(point.index) {
+            Some(Inst::Load { width, dst, address }) => (
+                "load",
+                memory.load(&read(address), *width).map(|word| Step::Write(next, self.slot(point, *dst), word)),
+            ),
+            Some(Inst::Store { width, value, address }) => (
+                "store",
+                memory.store(circuit, &read(address), *width, &read(value)).map(|()| Step::Transfer(next, Vec::new())),
+            ),
+            Some(_) | None => return self.step(circuit, slots, point),
+        };
+        let unsupported = |route| self.copies[point.copy].frame.error(point, operation, route);
+        match result {
+            Ok(step) => Ok(step),
+            Err(AccessError::Fault(fault)) => Ok(Step::Fault(fault)),
+            Err(AccessError::MissingMemory) => Err(unsupported("the caller's memory")),
+            Err(AccessError::Address) => Err(unsupported("a proved definite memory address")),
+        }
     }
 
     pub(super) fn step_narrow(

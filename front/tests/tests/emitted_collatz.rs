@@ -54,6 +54,7 @@ fn check_budget(module: &ValidModule, callee: FuncId, budget: u64) -> CompiledAp
         budget,
         entry_fault: None,
         stack_available: STACK_BYTES,
+        memory: None,
         scratch_start: INTERFACE,
     })
     .expect("emit Collatz");

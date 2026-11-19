@@ -2,6 +2,14 @@
 
 use std::ops::Range;
 
+use bennett_ir::{Fault, Width};
+
+pub(crate) fn range(len: usize, address: u64, width: Width) -> Result<Range<usize>, Fault> {
+    let end = address.checked_add(width.bytes()).filter(|&end| end <= len as u64);
+    let end = end.ok_or(Fault::OutOfBounds)?;
+    Ok(address as usize..end as usize)
+}
+
 /// The machine's memory.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Memory {
@@ -17,6 +25,10 @@ impl Memory {
     /// The size in bytes.
     pub(crate) fn len(&self) -> usize {
         self.bytes.len()
+    }
+
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.bytes
     }
 
     /// The bytes at `range`, which must be in bounds, into `out` (as long as the range).

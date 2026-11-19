@@ -8,13 +8,15 @@ mod controlled_apply;
 mod instruction_faults;
 #[path = "support/integer_ops.rs"]
 mod integer_ops;
+#[path = "support/memory.rs"]
+mod memory;
 
 use bennett_emit::{
     ApplyError, ApplyInput, ApplyMode, Argument, CompiledApply, Construction, CountingDevice, compile_apply,
     compile_apply_with,
 };
 use bennett_exec::{BlockOp, Device, Executor, GateBlock, GateOp, Options, Outcome, RunError};
-use bennett_ir::{BlockId, Fault, FixedGate, Gate, load};
+use bennett_ir::{Fault, FixedGate, Gate, load};
 use bits::Layout;
 
 fn gates(compiled: &CompiledApply, x: usize, y: usize) -> (Vec<bennett_exec::GateOp>, Layout) {
@@ -72,6 +74,7 @@ entry:
         budget: 12,
         entry_fault: None,
         stack_available: 0,
+        memory: None,
         scratch_start: 15,
     };
     let compiled = compile_apply(input).expect("arithmetic on qubit words");
@@ -113,6 +116,7 @@ done:
         budget: 0,
         entry_fault: None,
         stack_available: 0,
+        memory: None,
         scratch_start: 9,
     };
     for (budget, steps, result) in [(0, 0, 16), (5, 5, 16), (6, 6, 9), (7, 6, 9)] {
@@ -153,6 +157,7 @@ entry:
         budget: 8,
         entry_fault: None,
         stack_available: 0,
+        memory: None,
         scratch_start: 197,
     })
     .expect("wide arithmetic");
@@ -202,6 +207,7 @@ done(i1 %result):
                 budget,
                 entry_fault: None,
                 stack_available: 0,
+                memory: None,
                 scratch_start: 10,
             },
             ApplyMode::StepMachine,
@@ -273,6 +279,7 @@ join(i3 %a, i3 %b):
         budget: 10,
         entry_fault: None,
         stack_available: 0,
+        memory: None,
         scratch_start: 15,
     };
     for (mode, construction) in [
@@ -348,6 +355,7 @@ fn compile_collatz(module: &bennett_ir::ValidModule, width: u64, budget: u64, mo
             budget,
             entry_fault: None,
             stack_available: 0,
+            memory: None,
             scratch_start: width + 13,
         },
         mode,
@@ -579,6 +587,7 @@ done(i3 %result):
             budget,
             entry_fault: None,
             stack_available: 0,
+            memory: None,
             scratch_start: 11,
         })
         .expect("the shift and factor are definite");
@@ -692,6 +701,7 @@ entry:
         budget: 2,
         entry_fault: None,
         stack_available: 0,
+        memory: None,
         scratch_start: u64::MAX - 1,
     };
     let compiled = compile_apply(input.clone()).expect("last addressable scratch wire");
@@ -738,6 +748,7 @@ fn register_expressions_can_fold_to_constant_shift_amounts_and_factors() {
                         budget,
                         entry_fault: None,
                         stack_available: 0,
+                        memory: None,
                         scratch_start: 13,
                     },
                     mode,
@@ -785,6 +796,7 @@ shift(i4 %amount):
                         budget,
                         entry_fault: None,
                         stack_available: 0,
+                        memory: None,
                         scratch_start: 9,
                     },
                     mode,

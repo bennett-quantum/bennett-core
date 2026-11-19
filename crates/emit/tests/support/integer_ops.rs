@@ -34,6 +34,7 @@ fn binary_sweep(operation: &str, width: usize) {
             budget,
             entry_fault: None,
             stack_available: 0,
+            memory: None,
             scratch_start: fault + 5,
         };
         for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
@@ -67,6 +68,7 @@ fn or_preserves_complemented_operands() {
                 budget,
                 entry_fault: None,
                 stack_available: 0,
+                memory: None,
                 scratch_start: 8,
             };
             let compiled = compile_apply_with(input.clone(), ApplyMode::Automatic).expect("emit OR");
@@ -110,6 +112,7 @@ done(i3 %result):
             budget,
             entry_fault: None,
             stack_available: 0,
+            memory: None,
             scratch_start: 14,
         };
         let compiled = compile_apply_with(input.clone(), ApplyMode::Automatic).expect("emit the countdown");
@@ -167,6 +170,7 @@ entry:
                 budget,
                 entry_fault: None,
                 stack_available: 0,
+                memory: None,
                 scratch_start: 20,
             };
             let compiled = compile_apply_with(input.clone(), ApplyMode::Automatic).expect("emit the wide shift");
@@ -210,6 +214,7 @@ entry:
         budget: 2,
         entry_fault: None,
         stack_available: 0,
+        memory: None,
         scratch_start: 29,
     };
     let compiled = compile_apply_with(input, ApplyMode::Automatic).expect("emit quotient");
@@ -251,6 +256,7 @@ done(i4 %result):
                 budget,
                 entry_fault: None,
                 stack_available: 0,
+                memory: None,
                 scratch_start: 16,
             };
             for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
@@ -301,6 +307,7 @@ entry:
             budget: 14,
             entry_fault: None,
             stack_available: 0,
+            memory: None,
             scratch_start: 17,
         };
         let compiled = compile_apply_with(input.clone(), ApplyMode::Automatic).expect("emit wide division");
@@ -341,6 +348,7 @@ entry:
             budget: 7,
             entry_fault: None,
             stack_available: 0,
+            memory: None,
             scratch_start: 74,
         };
         let compiled = compile_apply_with(input.clone(), ApplyMode::Automatic).expect("emit wide signed remainder");
@@ -383,6 +391,7 @@ done(i2 %result):
             budget,
             entry_fault: None,
             stack_available: 0,
+            memory: None,
             scratch_start: 14,
         };
         for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
@@ -420,6 +429,7 @@ done(i2 %result):
             budget,
             entry_fault: None,
             stack_available: 0,
+            memory: None,
             scratch_start: 10,
         };
         let compiled = compile_apply_with(input.clone(), ApplyMode::Automatic).expect("emit the wide switch");
@@ -458,6 +468,7 @@ done(i2 %result):
                 budget,
                 entry_fault: None,
                 stack_available: 0,
+                memory: None,
                 scratch_start: 8,
             };
             for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
@@ -503,6 +514,7 @@ done(i8 %result):
                 budget,
                 entry_fault: None,
                 stack_available: 0,
+                memory: None,
                 scratch_start: 17,
             };
             for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
@@ -544,6 +556,7 @@ spin(i2 %value):
         budget: 2,
         entry_fault: None,
         stack_available: 0,
+        memory: None,
         scratch_start: 9,
     };
     for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
@@ -597,6 +610,7 @@ fn computed_switch_does_not_dispatch_unplanned_calls() {
                 budget,
                 entry_fault: None,
                 stack_available: 512,
+                memory: None,
                 scratch_start: 12,
             };
             for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
@@ -624,6 +638,7 @@ fn computed_switch_does_not_dispatch_an_impossible_loop() {
         budget: 5,
         entry_fault: None,
         stack_available: 0,
+        memory: None,
         scratch_start: 12,
     };
     for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
@@ -675,6 +690,7 @@ entry:
             budget,
             entry_fault: None,
             stack_available: 512,
+            memory: None,
             scratch_start: 10,
         };
         for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
@@ -717,6 +733,7 @@ other:
             budget: 2,
             entry_fault: None,
             stack_available: 0,
+            memory: None,
             scratch_start: x + 7,
         };
         let compiled = compile_apply_with(input.clone(), ApplyMode::Automatic).expect("emit switch");

@@ -3,8 +3,8 @@
 use std::fmt::Write;
 
 use super::{
-    ApplyError, ApplyInput, ApplyMode, Argument, BlockId, Construction, CountingDevice, Device, Executor, Options,
-    Outcome, RunError, bits, compile_apply, compile_apply_with, gates, load,
+    ApplyError, ApplyInput, ApplyMode, Argument, Construction, CountingDevice, Device, Executor, Options, Outcome,
+    RunError, bits, compile_apply, compile_apply_with, gates, load,
 };
 
 #[path = "modular_loop.rs"]
@@ -118,6 +118,7 @@ fn apply_input<'a>(
         budget,
         entry_fault: None,
         stack_available: 0,
+        memory: None,
         scratch_start: width + 13,
     }
 }
@@ -198,39 +199,41 @@ fn qubit_choice_in_an_ordinary_loop_uses_control_gates() {
 }
 
 #[test]
-fn stores_under_and_after_a_qubit_choice_need_memory_in_the_step_machine() {
-    for (line, position) in [("yes:", BlockId(3)), ("latch(i8 %value):", BlockId(5))] {
-        let source = ORDINARY_LOOP.replace(line, &format!("{line}\n    store i8 9, 8"));
+fn stores_under_and_after_a_qubit_choice_are_refused_before_apply_gates() {
+    for (line, choice, operation) in [
+        ("yes:", "br %bit, yes, no", "br"),
+        ("latch(i8 %value):", "br %bit, yes, no", "br"),
+        ("yes:", "switch i1 %bit, 1: yes, default: no", "switch"),
+    ] {
+        let source =
+            ORDINARY_LOOP.replace(line, &format!("{line}\n    store i8 9, 8")).replace("br %bit, yes, no", choice);
         let module = control_example(&source, 3, ", i3 3");
-        let args = [Argument::Register(0..3), Argument::Value(3)];
         for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
-            for budget in [0, ORDINARY_LOOP_STEPS + 1] {
-                let error = compile_apply_with(apply_input(&module, &args, 3, budget), mode)
-                    .expect_err("a store needs private memory");
-                assert_eq!(
-                    error,
-                    ApplyError::Unsupported {
-                        callee: module.function_named("f").expect("f"),
-                        block: position,
-                        index: 0,
-                        operation: "store",
-                        route: "memory in the step machine",
-                    },
-                );
-                assert!(error.to_string().ends_with("needs memory in the step machine"));
-
-                let mut device = CountingDevice::default();
-                let mut compiler = |input: ApplyInput<'_>| Ok(compile_apply_with(input, mode)?.block);
-                let entry = module.function_named("main").expect("main function");
-                let run = Executor::run_on_with_apply(&module, entry, &[budget], None, &mut device, &mut compiler)
-                    .expect("run to the compiler refusal");
-                assert_eq!(run.outcome, Outcome::Stopped(RunError::Apply(error)));
-                let counts = device.counts();
-                // The caller prepared its registers, and the refused apply contributed no commands.
-                assert_eq!((counts.one_qubit, counts.two_qubit, counts.toffoli), (6, 1, 0));
-                assert_eq!(counts.peak_qubits, 17);
-                assert_eq!(counts.zero_released_qubits, 0);
-            }
+            compare_controls(&module, 0, mode, |_| (0, 1));
+            let mut device = CountingDevice::default();
+            let mut compiler = |input: ApplyInput<'_>| Ok(compile_apply_with(input, mode)?.block);
+            let entry = module.function_named("main").expect("main function");
+            let run = Executor::run_on_with_apply(
+                &module,
+                entry,
+                &[ORDINARY_LOOP_STEPS + 4],
+                None,
+                &mut device,
+                &mut compiler,
+            )
+            .expect("run to the compiler refusal");
+            assert!(matches!(
+                run.outcome,
+                Outcome::Stopped(RunError::Apply(ApplyError::Unsupported {
+                    operation: actual,
+                    route: "private memory in the step machine",
+                    ..
+                })) if actual == operation
+            ));
+            let counts = device.counts();
+            assert_eq!((counts.one_qubit, counts.two_qubit, counts.toffoli), (6, 1, 0));
+            assert_eq!(counts.peak_qubits, 17);
+            assert_eq!(counts.zero_released_qubits, 0);
         }
     }
 }
