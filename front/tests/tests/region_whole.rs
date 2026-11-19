@@ -172,7 +172,7 @@ unsigned long long wide_entry(void) {
 
 /// The smallest budget with which no value of x faults in @nested_entry, measured by bisection
 /// (`SMALLEST_BUDGET=search front/test.sh --test region_whole one_budget -- --nocapture`).
-const SMALLEST_BUDGET: u64 = 151;
+const SMALLEST_BUDGET: u64 = 150;
 
 /// How many values of x fault in the first `apply` that faults in @nested_entry with `budget`.
 fn faulting(budget: u64) -> usize {

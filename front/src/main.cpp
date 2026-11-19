@@ -7,6 +7,7 @@
 #include "Complex.h"
 #include "Diagnostic.h"
 #include "Emit.h"
+#include "Evaluations.h"
 #include "Jumps.h"
 #include "Markers.h"
 #include "Normalise.h"
@@ -218,6 +219,7 @@ int main(int argc, char **argv) {
       controlled.push_back(&function);
     }
   }
+  bennett::markEvaluations(*module, control);
   for (Function *function : controlled) {
     bennett::outlineRegions(*function, taintAll, control);
   }

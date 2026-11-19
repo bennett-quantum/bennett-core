@@ -575,7 +575,6 @@ __attribute__((noinline)) void fill(void) {
 }
 
 #[test]
-#[ignore = "moving the helper into an applied function changes its caller's return address"]
 fn moved_helper_observes_the_original_callers_return_address() {
     Program {
         name: "return-address-ancestor",
@@ -593,7 +592,11 @@ __attribute__((noinline)) uint8_t check_caller(uint8_t q) {
 "#,
         qubits: 1,
     }
-    .agrees(0, &[5, 6 | (1 << 8)], &readout(&[0, 8]), 0);
+    .refused(
+        0,
+        &[5, 6 | (1 << 8)],
+        "not handled yet: an applied call that may reach `__builtin_return_address` above level 0",
+    );
 }
 
 const RETADDR_HELPER: &str = r#"
@@ -630,7 +633,6 @@ fn replay_of_a_nonzero_return_address_test_clears_the_predicate() {
 }
 
 #[test]
-#[ignore = "replaying the full return address at a second call site leaves a nonzero word"]
 fn replay_of_a_full_return_address_clears_the_word() {
     Program {
         name: "return-address-word",
@@ -1376,4 +1378,58 @@ fn one_call_feeding_two_consumers_gives_one_value() {
 "#,
         [0, 0],
     );
+}
+
+const RETURN_ADDRESS_HELPER: &str = r#"
+__attribute__((noinline)) uintptr_t f(uint8_t q) {
+    return q ? (uintptr_t)__builtin_return_address(0) : 0;
+}
+"#;
+
+#[test]
+#[ignore = "defect: one call whose value has two consumers is computed by one generated function per consumer, whose frames differ, so a frame address, a byte of a pointer to a local or a return address differs between the copies (route: one register for the value, read by every consumer and cleared by the same apply)"]
+fn one_call_feeding_two_consumers_gives_one_value_in_each_shape() {
+    for (name, declarations, body) in [
+        (
+            "repeated-two-stores",
+            RETURN_ADDRESS_HELPER,
+            "    volatile uint64_t x = 0, y = 0;\n    uint8_t z = 0;\n    if (q) { uintptr_t t = f(q); x = t; ZBIT(z, 0); y = t; }\n    uint64_t a = READ(x), b = READ(y);\n    return a ^ b;",
+        ),
+        (
+            "repeated-frame-address",
+            "__attribute__((noinline)) uintptr_t f(uint8_t q) { return q ? (uintptr_t)__builtin_frame_address(0) : 0; }",
+            "    uintptr_t t = f(q);\n    volatile uint64_t x = t, y = t + n;\n    uint64_t a = READ(x), b = READ(y);\n    return (a + n) ^ b;",
+        ),
+        (
+            "repeated-pointer-byte",
+            "__attribute__((noinline)) static unsigned part(const void *p, unsigned i) { return ((const unsigned char *)p)[i]; }\n__attribute__((noinline)) uintptr_t f(uint8_t q) { int local; void *p = &local; return q ? part(&p, q - 1) : 0; }",
+            "    uintptr_t t = f(q);\n    volatile uint64_t x = t, y = t + n;\n    uint64_t a = READ(x), b = READ(y);\n    return (a + n) ^ b;",
+        ),
+    ] {
+        ends_like_native_within_a_few_steps(&Program { name, declarations, body, qubits: 1 }, 1);
+    }
+}
+
+#[test]
+fn arithmetic_with_two_consumers_is_still_copied() {
+    Program {
+        name: "repeated-arithmetic",
+        declarations: "",
+        body: "    volatile uint32_t x = 0, y = 0;\n    uint8_t z = 0;\n    if (q) { uint32_t t = q * 17u + 3u; x = t; ZBIT(z, 0); y = t * n + column; }\n    packet a = READ(x), b = READ(y);\n    return a | (b << 32) | ((packet)READ(q) << 64);",
+        qubits: 1,
+    }
+    .agrees(1, &[0, 20 | (20 << 32) | (1 << 64)], &readout(&[0, 32, 64]), 0);
+}
+
+#[test]
+fn a_replay_across_a_stack_reservation_is_refused() {
+    // The value is computed into x, a variable-length array is reserved, and the overwrite clears x by computing
+    // the value again: the second run would start from another stack pointer.
+    Program {
+        name: "repeated-across-reservation",
+        declarations: RETURN_ADDRESS_HELPER,
+        body: "    volatile uint64_t x = f(q);\n    volatile char buffer[n + 1];\n    buffer[0] = 1;\n    x = buffer[0] - 1;\n    return READ(x) | ((packet)READ(q) << 8);",
+        qubits: 1,
+    }
+    .refused(1, &[0, 1 << 8], "not handled yet: a call to @f computed by one applied function at two places");
 }

@@ -20,6 +20,7 @@
 #include "Applied.h"
 #include "Diagnostic.h"
 #include "Emit.h"
+#include "Evaluations.h"
 #include "HeldBytes.h"
 #include "Markers.h"
 #include "Normalise.h"
@@ -177,6 +178,18 @@ private:
   bool sharesMemory(const CallBase &call) const {
     return !call.getCalledFunction()->doesNotAccessMemory() && module.aliasing().reachesOutsideFrames(fn, call);
   }
+
+  // Evaluations (Evaluations.h): those each generated function computes, where each function is applied, and an
+  // instruction of each, for messages.
+  std::map<std::string, std::set<const MDNode *>> evaluated;
+  std::map<std::string, std::vector<const Instruction *>> appliedAt;
+  std::map<const MDNode *, const Instruction *> evaluationSite;
+  // The evaluations of a slice's body, refusing by name a frame observation that moving them would change.
+  std::set<const MDNode *> sliceEvaluations(const Slice &slice);
+  // Refuses by name a generated function with evaluations applied at two places across a reservation or release
+  // of the stack.
+  void requireSameStackForReplays() const;
+  void requireSameStack(const std::vector<const Instruction *> &sites, const MDNode &evaluation) const;
 };
 
 // Stand-ins for the lines that allocate and release the entry fault registers.
@@ -221,6 +234,7 @@ std::string ControlWriter::write() {
     }
   }
   std::string text = function();
+  requireSameStackForReplays();
   std::string allocate, release;
   for (const std::string &faultRegister : faultRegisters) {
     allocate += "    " + faultRegister + " = qalloc " + std::to_string(faultCodeBits) + "\n";
@@ -235,6 +249,7 @@ void ControlWriter::prologue() { out += allocatePlaceholder; }
 
 void ControlWriter::apply(const std::string &callee, const std::string &args, const std::string &target,
                           const Instruction &at) {
+  appliedAt[callee].push_back(&at);
   std::string faultRegister = fresh(target.substr(1) + ".fault");
   bool once = !cyclic.count(at.getParent());
   if (once) {
@@ -1091,6 +1106,22 @@ std::string ControlWriter::slice(const Slice &slice, const Value *root, const St
     }
     writer.line(writer.slot(load) + " = trunc " + intType(bits) + " " + value + " to " + intType(width));
   }
+  // `v ^ 0`, `v | 0` and `v + 0` are `v`: the start of a register the front knows to be 0 (a load aliased to that
+  // constant) leaves them in the C function. Written as `v`, the computation that sets a register and the one
+  // that clears it again are the same text, so the same generated function (Evaluations.h).
+  for (const Instruction *inst : slice.body) {
+    const auto *binary = dyn_cast<BinaryOperator>(inst);
+    if (!binary || (binary->getOpcode() != Instruction::Xor && binary->getOpcode() != Instruction::Or &&
+                    binary->getOpcode() != Instruction::Add)) {
+      continue;
+    }
+    for (unsigned side : {0u, 1u}) {
+      if (isZero(resolve(binary->getOperand(side)))) {
+        writer.alias(inst, binary->getOperand(1 - side));
+        break;
+      }
+    }
+  }
   for (const Instruction *inst : slice.body) {
     writer.instruction(*inst);
   }
@@ -1099,7 +1130,102 @@ std::string ControlWriter::slice(const Slice &slice, const Value *root, const St
   }
   writer.line("ret " + writer.operand(root));
   std::string text = "(" + params + ") -> " + intType(bits) + " {\nentry:\n" + writer.out + "}\n";
-  return module.addFunction(fn.getName().str() + ".apply", text);
+  std::set<const MDNode *> evaluations = sliceEvaluations(slice);
+  std::string name = module.addFunction(fn.getName().str() + ".apply", text);
+  evaluated[name].insert(evaluations.begin(), evaluations.end());
+  return name;
+}
+
+std::set<const MDNode *> ControlWriter::sliceEvaluations(const Slice &slice) {
+  std::set<const MDNode *> evaluations;
+  for (const Instruction *inst : slice.body) {
+    if (const MDNode *evaluation = evaluationOf(*inst); evaluation && analysis.tainted(inst)) {
+      evaluations.insert(evaluation);
+      evaluationSite.emplace(evaluation, inst);
+    }
+    const auto *call = dyn_cast<CallBase>(inst);
+    if (!call) {
+      continue;
+    }
+    if (module.evaluations().readsCallerFrames(*call)) {
+      notHandled("an applied call that may reach `__builtin_return_address` above level 0: it would run under a "
+                 "frame the C program does not have, and an ancestor's return address would be that frame's "
+                 "(route: count call depth, or let generated frames not count, a change to the device program)",
+                 inst);
+    }
+    const Function *callee = call->getCalledFunction();
+    if (!callee || callee->isDeclaration()) {
+      continue;
+    }
+    for (const MDNode *evaluation : module.evaluations().inside(callee)) {
+      if (readsPosition(evaluation)) {
+        notHandled(describeEvaluation(evaluation) +
+                       " of the function under the control of a value that depends on a qubit: in the applied "
+                       "function it would be that function's own (route: compute it before that code and pass it "
+                       "in, not built)",
+                   inst);
+      }
+      evaluations.insert(evaluation);
+      evaluationSite.emplace(evaluation, inst);
+    }
+  }
+  return evaluations;
+}
+
+void ControlWriter::requireSameStackForReplays() const {
+  for (const auto &[name, evaluations] : evaluated) {
+    auto sites = appliedAt.find(name);
+    if (!evaluations.empty() && sites != appliedAt.end() && sites->second.size() > 1) {
+      requireSameStack(sites->second, **evaluations.begin());
+    }
+  }
+}
+
+// Whether `to` can run after `from` on a path that does not return to `from` first.
+bool reachesBefore(const Instruction &from, const Instruction &to) {
+  if (from.getParent() == to.getParent() && from.comesBefore(&to)) {
+    return true;
+  }
+  std::set<const BasicBlock *> seen;
+  std::vector<const BasicBlock *> work(succ_begin(from.getParent()), succ_end(from.getParent()));
+  while (!work.empty()) {
+    const BasicBlock *block = work.back();
+    work.pop_back();
+    if (!seen.insert(block).second) {
+      continue;
+    }
+    if (block == to.getParent() && (block != from.getParent() || to.comesBefore(&from))) {
+      return true;
+    }
+    if (block != from.getParent()) {
+      work.insert(work.end(), succ_begin(block), succ_end(block));
+    }
+  }
+  return false;
+}
+
+void ControlWriter::requireSameStack(const std::vector<const Instruction *> &sites,
+                                     const MDNode &evaluation) const {
+  for (const Instruction &inst : instructions(fn)) {
+    const auto *local = dyn_cast<AllocaInst>(&inst);
+    const auto *intrinsic = dyn_cast<IntrinsicInst>(&inst);
+    bool moves = (local && !analysis.basedOn(local) && !local->getMetadata(qubitMetadata)) ||
+                 (intrinsic && intrinsic->getIntrinsicID() == Intrinsic::stackrestore);
+    if (!moves) {
+      continue;
+    }
+    for (const Instruction *first : sites) {
+      for (const Instruction *second : sites) {
+        if (first != second && reachesBefore(*first, inst) && reachesBefore(inst, *second)) {
+          notHandled(describeEvaluation(&evaluation) +
+                         " computed by one applied function at two places with a reservation or release of the "
+                         "stack between them: the second run would start from another stack pointer (route: "
+                         "compute it once into a register of its own, not built)",
+                     &inst);
+        }
+      }
+    }
+  }
 }
 
 // A gate, controlled by the condition in the call's bundle if it has one. A condition that is a conjunction

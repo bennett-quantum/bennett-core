@@ -4,6 +4,7 @@
 
 #include "Aliasing.h"
 #include "Applied.h"
+#include "Evaluations.h"
 
 #include <cstdint>
 #include <map>
@@ -66,7 +67,8 @@ public:
   // The integer an LLVM constant denotes: integers, null, addresses of globals and functions, and constant
   // expressions over them. Undefined values denote 0.
   std::optional<uint64_t> constantValue(const llvm::Constant *constant) const;
-  // Adds a generated function; `body` is its text after the name. Returns "@name".
+  // Adds a generated function; `body` is its text after the name. Returns "@name". A body equal to one added
+  // before gives that function: one computation in C is one generated function however often it is applied.
   std::string addFunction(const std::string &hint, const std::string &body);
   // `@bennett.copy.iN`: returns its argument, for XORing an ordinary value into a register with `apply`.
   std::string copyFunction(unsigned bits);
@@ -75,6 +77,8 @@ public:
   const AppliedCalls &appliedCalls();
   // Which memory the module's pointers and calls may reach (Aliasing.h); computed on first use.
   const Aliasing &aliasing();
+  // The evaluations in the module's functions (Evaluations.h); computed on first use.
+  Evaluations &evaluations();
 
 private:
   llvm::Module &module;
@@ -85,6 +89,8 @@ private:
   std::map<unsigned, std::string> copies;
   std::unique_ptr<AppliedCalls> applied;
   std::unique_ptr<Aliasing> reach;
+  std::unique_ptr<Evaluations> repeated;
+  std::map<std::string, std::string> bodies; // a generated function's text after its name: its name
   std::vector<std::string> generated;
   Namer functionNames;
   uint64_t staticEnd = 0;

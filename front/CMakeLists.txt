@@ -29,6 +29,7 @@ add_executable(bennett-front
   src/Applied.cpp
   src/Predicate.cpp
   src/Unasked.cpp
+  src/Evaluations.cpp
   src/RegionResults.cpp
   src/HeldBytes.cpp
   src/Aliasing.cpp

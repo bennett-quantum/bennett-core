@@ -180,6 +180,13 @@ const AppliedCalls &ModuleWriter::appliedCalls() {
   return *applied;
 }
 
+Evaluations &ModuleWriter::evaluations() {
+  if (!repeated) {
+    repeated = std::make_unique<Evaluations>(module);
+  }
+  return *repeated;
+}
+
 const Aliasing &ModuleWriter::aliasing() {
   if (!reach) {
     reach = std::make_unique<Aliasing>(module);
@@ -486,8 +493,12 @@ std::string ModuleWriter::dataSegments() const {
 }
 
 std::string ModuleWriter::addFunction(const std::string &hint, const std::string &body) {
+  if (auto found = bodies.find(body); found != bodies.end()) {
+    return found->second;
+  }
   std::string name = "@" + functionNames.fresh(hint);
   generated.push_back("func " + name + body);
+  bodies[body] = name;
   return name;
 }
 
