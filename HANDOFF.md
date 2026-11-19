@@ -47,6 +47,10 @@ The front accepts these programs. Ignored failing witnesses are in `front/tests/
   `__builtin_return_address(1)`. The helper returns 6 in native C and 5 on the device in `o0`, `o2` and `--taint-all`.
 - Preparing the control of a moved gate loop can read a byte holding qubits before the loop on a path where C skips
   the read. Native C returns 65,536 and the device faults with `qubit_memory_access`.
+- Dropping a qubit-dependent argument makes one of two calls ordinary, so only its global write survives. Native C returns 19 and the device returns 3.
+- Merging calls selected by an ordinary condition turns the constant-argument call into an applied call and undoes its write. Native C returns 115 and the device returns 3.
+- Merging a store of 2 with a qubit-dependent store makes the byte hold qubits on both paths. Native C returns 2 and the device faults with `qubit_memory_access`.
+- Moving a qubit-dependent store's exchange before its ordinary condition leaves the byte holding qubits when the store is skipped. Native C returns 0 and the device faults with `qubit_memory_access`.
 
 Refuse by name any transformation whose safety cannot be proved. The two fixes on `wip/sol62-shapes` tried deny-lists
 and then allow-lists. They remain unlanded after three independent review rounds still found wrong results. Start the
@@ -58,7 +62,7 @@ refuse to relocate a helper that observes a return or stack address of itself or
 Run each in the foreground, from the repository root (`CARGO_BUILD_JOBS=3` on the shared laptop):
 
 - `cargo test` passed 408 tests with 0 failures and 5 ignored. The ignored tests name their reasons, including heavy reference runs, generated runs and defect witnesses. The suite takes about 10 s after building and needs no LLVM.
-- `front/test.sh` passed 356 tests with 0 failures and 27 ignored. The ignored tests name their reasons, including the fallback oracle's waiting test, the SQLite acceptance, North Star ladder runs, musl-linked checks that need `rt/musl/build.py` first, heavy runs and defect witnesses. The script requires LLVM 18, clang 18 and CMake. It also compiles the C++ header and classifies the 88 LLVM attribute kinds.
+- `front/test.sh` passed 356 tests with 0 failures and 31 ignored. The ignored tests name their reasons, including the fallback oracle's waiting test, the SQLite acceptance, North Star ladder runs, musl-linked checks that need `rt/musl/build.py` first, heavy runs and defect witnesses. The script requires LLVM 18, clang 18 and CMake. It also compiles the C++ header and classifies the 88 LLVM attribute kinds.
 - `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check`: both clean on 2026-11-18 (`scripts/check.sh`: tree guards 3,642 files, 0 problems).
 - `scripts/check.sh` runs all four plus the tree guards (`docs/CHECKS.md`).
 - Randomised differential run, 15 minutes, ignored by default: `BENNETT_RANDOM_SEED=0x87196caa251d0f43 cargo test -p bennett-front-tests --test qubit_differential long_randomized_differential -- --ignored --exact --nocapture`.
