@@ -3,6 +3,7 @@
 #include "Aliasing.h"
 #include "Diagnostic.h"
 #include "Markers.h"
+#include "Outline.h"
 #include "Taint.h"
 
 #include <llvm/ADT/SmallPtrSet.h>
@@ -122,59 +123,6 @@ bool chosenByQubits(const Value *condition, const ControlAnalysis &analysis) {
   return true;
 }
 
-// Whether code under a qubit (`region`, entered from `start`'s block) runs one of `writes` on every ordinary
-// path through it: whatever the ordinary values, some configuration of the qubits writes. The bytes these writes
-// may write hold qubits from before the code on, so where this fails the exchange there runs also on ordinary
-// paths on which C writes nothing (docs/DESIGN.md, "Memory written under a qubit"). A block is *sure* when,
-// whatever the ordinary values, some configuration of the qubits reaches a write from it before the code ends:
-// it writes, or it jumps unconditionally or on an ordinary value to sure blocks only, or on a value chosen by
-// qubits alone to at least one sure block. Leaving the code is not sure. A jump back to the head of a loop counts
-// as sure for an ordinary choice (staying in the loop forever never reaches code that could read the bytes; it
-// leaves by an edge that is checked) and not for a choice by qubits. Each condition chosen by qubits is taken as
-// free, as the text reads: `if (q) if (!q) g = q;` counts as a write.
-bool writesOnEveryOrdinaryPath(const std::vector<Instruction *> &writes, const Instruction &start,
-                                const std::set<const BasicBlock *> &region, const ControlAnalysis &analysis) {
-  SmallVector<std::pair<const BasicBlock *, const BasicBlock *>, 8> backList;
-  FindFunctionBackedges(*start.getFunction(), backList);
-  std::set<std::pair<const BasicBlock *, const BasicBlock *>> back(backList.begin(), backList.end());
-  std::set<const BasicBlock *> sure;
-  for (const Instruction *write : writes) {
-    sure.insert(write->getParent());
-  }
-  for (bool changed = true; changed;) {
-    changed = false;
-    for (const BasicBlock *block : region) {
-      if (sure.count(block)) {
-        continue;
-      }
-      const Instruction *term = block->getTerminator();
-      const auto *branch = dyn_cast<BranchInst>(term);
-      const auto *choice = dyn_cast<SwitchInst>(term);
-      if (!branch && !choice) {
-        continue;
-      }
-      const Value *condition = branch && branch->isConditional() ? branch->getCondition()
-                               : choice                          ? choice->getCondition()
-                                                                 : nullptr;
-      bool chosen = condition && chosenByQubits(condition, analysis);
-      bool any = false;
-      bool all = true;
-      for (const BasicBlock *succ : successors(block)) {
-        bool good = region.count(succ) && sure.count(succ);
-        bool again = back.count({block, succ}) != 0;
-        any |= good && !again;
-        all &= good || again;
-      }
-      if (chosen ? any : all) {
-        sure.insert(block);
-        changed = true;
-      }
-    }
-  }
-  const BasicBlock *entry = start.getParent()->getSingleSuccessor();
-  return entry && region.count(entry) && sure.count(entry);
-}
-
 class Holder {
 public:
   Holder(Function &function, ControlAnalysis &analysis)
@@ -202,10 +150,18 @@ private:
   std::optional<Range> rangeOf(Value *pointer, uint64_t size, Value *object, bool &exact);
   // `owned`: a local of the function, whose stack bytes never hold qubits: the shadow takes the old value by
   // XOR, holds the local's bytes to the end, and is exchanged into them only where they are measured.
-  // `everyPath`: the writes run on every ordinary path from `start` (writesOnEveryOrdinaryPath); otherwise the
-  // span is refused where the bytes may still hold qubits when the function returns.
+  // `writes`: the stores of values that depend on a qubit into `object` that made the front hold it.
   void span(Value *object, const Range &hull, Instruction *start, const std::set<const BasicBlock *> &region,
-            bool owned, bool everyPath);
+            bool owned, const std::vector<Instruction *> &writes);
+  // Whether, from `from` on, every ordinary path writes each byte of `hull` in `object` with a store whose value,
+  // or whether it runs, depends on a qubit (below).
+  bool writesEveryByte(const Instruction &from, Value *object, const Range &hull,
+                       const std::set<const BasicBlock *> &region, const std::vector<Instruction *> &writes);
+  // Whether `store` writes a value that depends on a qubit, or runs only where a qubit says: in `region`, among
+  // `writes`, or in a block that depends directly on a conditional jump on a value that depends on a qubit (the
+  // block post-dominates one successor of the jump and not the jump's own block). An under-approximation.
+  bool qubitWrite(const StoreInst &store, const std::set<const BasicBlock *> &region,
+                  const std::vector<Instruction *> &writes);
   Function *exchange();
 };
 
@@ -307,12 +263,106 @@ void Holder::hold(const std::vector<Instruction *> &writes, Instruction *start,
         own.push_back(write);
       }
     }
-    span(object, hull, start, region, owned, region.empty() || writesOnEveryOrdinaryPath(own, *start, region, analysis));
+    span(object, hull, start, region, owned, own);
   }
 }
 
+// The exchange that starts a span runs only where it must: on every ordinary path from it, each byte it takes is
+// written by a store that makes it hold qubits (the language's rule; docs/DESIGN.md, "Memory written under a
+// qubit"). This is decided per byte and as an allow-list. A block is *sure* for a byte when, whatever the ordinary
+// values, some configuration of the qubits writes the byte from it before the function returns: it contains such a
+// store of exactly that byte (a constant position covering it), or it jumps unconditionally or on an ordinary
+// value only to sure blocks, or on a value chosen by qubits alone (each such condition read as free, as the text
+// reads) to at least one. Nothing is credited to a jump back into a loop: a pass that skips the store proves
+// nothing about the next. A return is not sure.
+bool Holder::writesEveryByte(const Instruction &from, Value *object, const Range &hull,
+                             const std::set<const BasicBlock *> &region, const std::vector<Instruction *> &writes) {
+  auto writesByte = [&](const Instruction &inst, uint64_t byte) {
+    auto *store = dyn_cast<StoreInst>(const_cast<Instruction *>(&inst));
+    if (!store || objectOf(store->getPointerOperand()) != object) {
+      return false;
+    }
+    bool byQubit = qubitWrite(*store, region, writes);
+    bool exact = false;
+    std::optional<Range> range = rangeOf(store->getPointerOperand(),
+                                         layout.getTypeStoreSize(store->getValueOperand()->getType()).getFixedValue(),
+                                         object, exact);
+    return byQubit && exact && range && range->begin <= byte && byte < range->end;
+  };
+  for (uint64_t byte = hull.begin; byte < hull.end; ++byte) {
+    std::set<const BasicBlock *> sure;
+    for (const BasicBlock &block : fn) {
+      if (any_of(block, [&](const Instruction &inst) { return writesByte(inst, byte); })) {
+        sure.insert(&block);
+      }
+    }
+    auto follows = [&](const BasicBlock &block) {
+      const Instruction *term = block.getTerminator();
+      const auto *branch = dyn_cast<BranchInst>(term);
+      const auto *choice = dyn_cast<SwitchInst>(term);
+      if (!branch && !choice) {
+        return false; // a return, or a trap
+      }
+      const Value *condition = branch && branch->isConditional() ? branch->getCondition()
+                               : choice                          ? choice->getCondition()
+                                                                 : nullptr;
+      bool chosen = condition && chosenByQubits(condition, analysis);
+      bool any = false;
+      bool all = true;
+      for (const BasicBlock *succ : successors(&block)) {
+        any |= sure.count(succ) != 0;
+        all &= sure.count(succ) != 0;
+      }
+      return chosen ? any : all;
+    };
+    for (bool changed = true; changed;) {
+      changed = false;
+      for (const BasicBlock &block : fn) {
+        if (!sure.count(&block) && follows(block)) {
+          sure.insert(&block);
+          changed = true;
+        }
+      }
+    }
+    bool after = false;
+    bool written = false;
+    for (const Instruction &inst : *from.getParent()) {
+      written |= after && writesByte(inst, byte);
+      after |= &inst == &from;
+    }
+    if (!written && !follows(*from.getParent())) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool Holder::qubitWrite(const StoreInst &store, const std::set<const BasicBlock *> &region,
+                        const std::vector<Instruction *> &writes) {
+  if (analysis.tainted(store.getValueOperand()) || region.count(store.getParent()) ||
+      std::find(writes.begin(), writes.end(), &store) != writes.end()) {
+    return true;
+  }
+  PostDominatorTree after(fn);
+  const BasicBlock *block = store.getParent();
+  for (const BasicBlock &jumpBlock : fn) {
+    const auto *jump = dyn_cast<BranchInst>(jumpBlock.getTerminator());
+    if (!jump || !jump->isConditional() || !analysis.tainted(jump->getCondition()) ||
+        after.properlyDominates(block, &jumpBlock)) {
+      continue;
+    }
+    for (const BasicBlock *succ : successors(&jumpBlock)) {
+      if (after.dominates(block, succ)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 void Holder::span(Value *object, const Range &hull, Instruction *start, const std::set<const BasicBlock *> &region,
-                  bool owned, bool everyPath) {
+                  bool owned, const std::vector<Instruction *> &writes) {
+  bool everyPath = true; // decided where the start ends up, before the accesses are redirected
   LLVMContext &context = fn.getContext();
   Type *word = IntegerType::get(context, unsigned(8 * (hull.end - hull.begin)));
   IRBuilder<> top(&*fn.getEntryBlock().getFirstInsertionPt());
@@ -472,6 +522,37 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
                &inst);
   };
 
+  // Whether everything `load` computes ends in stores of values that depend on a qubit into these same bytes:
+  // the old value of an update the front predicated (`x = reached ? v : x`). On a path on which C does not write
+  // the bytes the shadow holds their old value, and the store puts it back.
+  auto feedsOnlyQubitStoresHere = [&](LoadInst *load) {
+    std::set<const Value *> seen;
+    std::vector<const Value *> work{load};
+    while (!work.empty()) {
+      const Value *value = work.back();
+      work.pop_back();
+      if (!seen.insert(value).second) {
+        continue;
+      }
+      for (const User *user : value->users()) {
+        if (const auto *store = dyn_cast<StoreInst>(user)) {
+          if (store->getValueOperand() != value || !analysis.tainted(value) ||
+              objectOf(const_cast<Value *>(store->getPointerOperand())) != object) {
+            return false;
+          }
+          continue;
+        }
+        const auto *inst = dyn_cast<Instruction>(user);
+        if (!inst || inst->mayHaveSideEffects() || isa<PHINode>(inst) || inst->isTerminator() ||
+            isa<CallBase>(inst) || isa<LoadInst>(inst)) {
+          return false;
+        }
+        work.push_back(inst);
+      }
+    }
+    return true;
+  };
+
   // Whether nothing from the start of `from` on touches the bytes but a measurement of them or a return.
   auto quietFrom = [&](BasicBlock &from) {
     std::set<const BasicBlock *> seen{&from};
@@ -537,10 +618,10 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
           // function holding qubits: the caller may read them ordinarily, where C reads the old value.
           if (apply && !owned && !everyPath && state.holdsQubits()) {
             notHandled("memory written under a qubit (" + describe(object, hull) +
-                           ") whose exchange runs also on ordinary paths on which C writes nothing there (an ordinary "
-                           "condition skips the write after the exchange), and which may still hold qubits when the "
-                           "function returns, where the caller can read them (measure them before returning; route: "
-                           "one exchange on each path that writes, not built)",
+                           ") whose exchange runs also on ordinary paths on which C does not write them (an ordinary "
+                           "condition skips a write of some of the bytes after the exchange), and which may still hold "
+                           "qubits when the function returns, where the caller can read them (route: one exchange on "
+                           "each path that writes, not built)",
                        &inst);
           }
           if (state.kind == State::Live && apply && !owned) {
@@ -578,6 +659,15 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
         case Role::Access:
           if (!apply || state.kind == State::Before) {
             break;
+          }
+          if (!everyPath && !owned && state.kind == State::Live && !region.count(inst.getParent()) &&
+              !(isa<StoreInst>(inst) && qubitWrite(cast<StoreInst>(inst), region, writes)) &&
+              !(isa<LoadInst>(inst) && feedsOnlyQubitStoresHere(cast<LoadInst>(&inst)))) {
+            notHandled("an access of " + describe(object, hull) + ", whose exchange runs also on ordinary paths on "
+                           "which C does not write them, before they are measured: it would read or write their "
+                           "shadow where C touches ordinary memory (route: one exchange on each path that writes, "
+                           "not built)",
+                       &inst);
           }
           if (state.kind == State::Done) {
             if (!touched || (bytesOf(*touched) & state.held) != 0) {
@@ -640,6 +730,21 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
       }
     }
     if (!conflict) {
+      // Where the exchange runs on a path on which C does not write the bytes, only a measurement of them may
+      // follow it before the return (the walk refuses the rest), and its read of their old value must be of
+      // ordinary bytes there.
+      everyPath = owned || writesEveryByte(*borrow, object, hull, region, writes);
+      if (!everyPath) {
+        std::vector<LoadInst *> opening{cast<LoadInst>(old)};
+        keepOrdinaryLoads(opening, *cast<LoadInst>(old), controlFunctions(*fn.getParent()));
+        if (opening.empty()) {
+          notHandled("memory written under a qubit (" + describe(object, hull) +
+                         ") whose exchange runs also on ordinary paths on which C does not write them, where the "
+                         "front cannot show the bytes are ordinary before it (an earlier call or exchange may leave "
+                         "them holding qubits; route: one exchange on each path that writes, not built)",
+                     borrow);
+        }
+      }
       for (BasicBlock *block : blocks) {
         if (entry.count(block)) {
           walk(*block, entry[block], true);
@@ -690,7 +795,10 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
     for (auto &[to, preds] : exits) {
       BasicBlock *after = SplitBlockPredecessors(to, preds, ".held.end", &dominators, &loops);
       if (!after) {
-        fail("cannot make a block after code under a qubit to end a span of held bytes");
+        notHandled("memory written under a qubit (" + describe(object, hull) +
+                       ") held by code under a qubit whose exits LLVM cannot gather into a block of their own, to "
+                       "end the span there (route: one exchange on each path that writes, not built)",
+                   to->getFirstNonPHI());
       }
       IRBuilder<> end(after->getTerminator());
       edgeEnds.insert(end.CreateCall(exchange(), {shadow, addressAt(end), end.getInt64(0)}));
@@ -715,11 +823,8 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
                  conflict);
     }
     Instruction *before = node->getIDom()->getBlock()->getTerminator();
-    // Above an ordinary condition that skips the write (the span's original start does not post-dominate the new
-    // place) the exchange runs also where C writes nothing: the bytes are then refused at a return that may see
-    // them hold qubits. Inside the function every access while the shadow holds them reads the shadow, which
-    // holds their old value there.
-    everyPath = everyPath && PostDominatorTree(fn).dominates(start->getParent(), before->getParent());
+    // Above an ordinary condition that skips the write the exchange runs also where C writes nothing; where the
+    // start ends up is checked once the paths agree (writesEveryByte).
     for (Instruction *inst : starting) {
       inst->moveBefore(before);
     }

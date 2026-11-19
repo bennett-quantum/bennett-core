@@ -58,7 +58,7 @@ fn unused_atomic_and_volatile_effect_variants_do_not_disappear() {
         // function returns, which is refused first (docs/DESIGN.md, "Memory written under a qubit"). The others
         // refuse the effect itself.
         let expected = if instruction == "cmpxchg" {
-            String::from("whose exchange runs also on ordinary paths on which C writes nothing there")
+            String::from("whose exchange runs also on ordinary paths on which C does not write them")
         } else {
             format!("an effect on memory (the instruction `{instruction}`) that depends on a qubit")
         };

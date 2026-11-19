@@ -470,7 +470,7 @@ fn straight_store_before_a_region_with_three_objects() {
             "straight-in-loop",
             "#pragma clang loop unroll(disable)\n    for (unsigned i = 0; i < n; ++i) { a = 3 + 2 * q + i; }\n    if (q & 2) { b = 9; a = 257; c[1] = 1ULL << 55; }",
             false,
-            Some("that another write under a qubit holds again"),
+            Some("whose exchange runs also on ordinary paths on which C does not write them, before they are measured"),
         ),
     ] {
         let function = if wrapped { "work" } else { "entry" };

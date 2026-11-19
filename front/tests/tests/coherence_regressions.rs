@@ -4,7 +4,7 @@ use std::process::Command;
 
 use bennett_exec::Outcome;
 use bennett_front_tests::{
-    CLANG_FLAGS, CLANG_O2_FLAGS, lower, lower_text_with_diagnostics, native_build, run_with_stats, write_c,
+    CLANG_FLAGS, CLANG_O2_FLAGS, lower_text_with_diagnostics, native_build, run_with_stats, write_c,
 };
 
 #[path = "qubit_differential/state.rs"]
@@ -662,6 +662,12 @@ fn overwriting_a_return_address_after_a_gate_traces_it() {
 }
 
 fn compare_ordinary_inputs(name: &str, declarations: &str, body: &str, expected: [u128; 2]) {
+    compare_ordinary_inputs_keeping(name, declarations, body, expected, false);
+}
+
+// With `keeps`, an overwrite whose old value cannot be cleared releases it, at most one register per run, and the
+// front warns that it keeps the old value; otherwise every released register is 0.
+fn compare_ordinary_inputs_keeping(name: &str, declarations: &str, body: &str, expected: [u128; 2], keeps: bool) {
     let source = write_c(
         name,
         &format!(
@@ -680,12 +686,18 @@ fn compare_ordinary_inputs(name: &str, declarations: &str, body: &str, expected:
     let mut failures = Vec::new();
     for (mode, clang, flags) in MODES {
         let name = format!("{name}-{mode}");
-        let module = lower(&source, &name, clang, flags);
+        let (text, diagnostics) = lower_text_with_diagnostics(&source, &name, clang, flags).expect("lowers");
+        let module = bennett_ir::load(&text).expect("valid device program");
+        if keeps && !diagnostics.contains("keeps the old value") {
+            failures.push(format!("{name}: missing retention warning: {diagnostics}"));
+        }
         for (n, wanted) in [0, 1].into_iter().zip(native) {
-            let (found, _) = run_with_stats(&module, "entry", &[0, n, 0], 0);
-            let comparison = format!("{name} n={n}: native={wanted}, device={found:?}");
+            let (found, stats) = run_with_stats(&module, "entry", &[0, n, 0], 0);
+            let comparison =
+                format!("{name} n={n}: native={wanted}, device={found:?}, nonzero releases={}", stats.nonzero_releases);
             println!("{comparison}");
-            if found != Outcome::Returned(Some(wanted)) {
+            let releases = if keeps { stats.nonzero_releases > 1 } else { stats.nonzero_releases != 0 };
+            if found != Outcome::Returned(Some(wanted)) || releases {
                 failures.push(comparison);
             }
         }
@@ -825,7 +837,7 @@ fn refused_for_ordinary_inputs(name: &str, declarations: &str, body: &str, expec
     }
 }
 
-const SKIPPED_EXCHANGE: &str = "whose exchange runs also on ordinary paths on which C writes nothing there";
+const SKIPPED_EXCHANGE: &str = "whose exchange runs also on ordinary paths on which C does not write them";
 
 #[test]
 fn an_ordinary_condition_inside_code_under_a_qubit_keeps_a_returned_byte_ordinary() {
@@ -896,7 +908,7 @@ __attribute__((noinline)) unsigned store_and_measure(unsigned n) {
 fn a_write_after_a_skipped_store_keeps_one_span_from_the_first() {
     // The bytes are written on every path after the join, so the exchange moves above the ordinary condition
     // and every access in between reads the shadow; they are measured before the return.
-    compare_ordinary_inputs(
+    compare_ordinary_inputs_keeping(
         "conditional-byte-rewritten",
         r#"
 volatile uint8_t held;
@@ -912,5 +924,168 @@ __attribute__((noinline)) unsigned store_twice(unsigned n) {
 "#,
         "    unsigned v = store_twice(n);\n    return v + 16u * held;",
         [34, 34],
+        true,
+    );
+}
+
+#[test]
+fn a_write_of_another_byte_does_not_authorise_the_exchange_of_a_skipped_one() {
+    refused_for_ordinary_inputs(
+        "conditional-byte-hull",
+        r#"
+uint8_t a[3] = {9, 10, 11};
+
+__attribute__((noinline)) void work(unsigned n) {
+    uint8_t q = 0;
+    XBIT(q, 0);
+    if (q) { a[0] = q + 4; if (n) a[1] = q + 6; }
+    XBIT(q, 0);
+}
+"#,
+        "    work(n);\n    return n ? READ_BYTES(a[1], 1) : a[1];",
+        [10, 7],
+        SKIPPED_EXCHANGE,
+    );
+}
+
+#[test]
+fn a_skipped_write_measured_before_returning_needs_ordinary_bytes_before_the_exchange() {
+    // For n = 0 an earlier call left the byte holding qubits: the exchange's read of the old value would fault.
+    refused_for_ordinary_inputs(
+        "conditional-byte-preheld",
+        r#"
+uint8_t held = 13;
+
+__attribute__((noinline)) void seed(void) {
+    uint8_t q = 0;
+    XBIT(q, 0);
+    held = q + 6;
+    XBIT(q, 0);
+}
+
+__attribute__((noinline)) unsigned work(unsigned n) {
+    uint8_t q = 0;
+    XBIT(q, 0);
+    if (q) { if (n) held = q + 4; }
+    XBIT(q, 0);
+    return READ_BYTES(held, 1);
+}
+"#,
+        "    if (!n) seed();\n    return work(n);",
+        [7, 5],
+        "where the front cannot show the bytes are ordinary before it",
+    );
+}
+
+#[test]
+fn a_skipped_write_measured_before_returning_refuses_an_ordinary_copy_in_between() {
+    // For n = 0 the copy reads the byte ordinarily in C; on the device it would read the shadow.
+    refused_for_ordinary_inputs(
+        "conditional-byte-copy",
+        r#"
+uint8_t held = 13;
+uint8_t copy = 3;
+
+__attribute__((noinline)) void work(unsigned n) {
+    uint8_t q = 0;
+    XBIT(q, 0);
+    if (q) { if (n) held = q + 3; }
+    XBIT(q, 0);
+    if (!n) copy = held;
+    (void)READ_BYTES(held, 1);
+}
+"#,
+        "    work(n);\n    return copy;",
+        [13, 3],
+        "before they are measured: it would read or write their shadow",
+    );
+}
+
+#[test]
+fn a_loop_whose_every_pass_may_skip_the_store_does_not_write_the_byte() {
+    refused_for_ordinary_inputs(
+        "conditional-byte-back-edge",
+        r#"
+uint8_t held = 13;
+
+__attribute__((noinline)) void work(unsigned n) {
+    uint8_t q = 4;
+    XBIT(q, 0);
+    unsigned k = q;
+    while (k) {
+        if (n == k) held = q + k;
+        k >>= 1;
+        if (k & 2) continue;
+        if (n == k + 5) break;
+    }
+    XBIT(q, 0);
+}
+"#,
+        "    work(n);\n    return n ? READ_BYTES(held, 1) : held;",
+        [13, 6],
+        SKIPPED_EXCHANGE,
+    );
+}
+
+#[test]
+fn a_later_store_on_every_path_lets_the_exchange_cross_the_condition() {
+    // The exchange moves above `if (n)`, and every path from there writes the byte with `q + 2`.
+    compare_ordinary_inputs_keeping(
+        "conditional-byte-mandatory",
+        r#"
+volatile uint8_t held = 13;
+
+__attribute__((noinline)) void work(unsigned n) {
+    uint8_t q = 0;
+    XBIT(q, 0);
+    if (n) held = q;
+    held = q + 2;
+    XBIT(q, 0);
+}
+"#,
+        "    work(n);\n    return READ_BYTES(held, 1);",
+        [3, 3],
+        true,
+    );
+}
+
+#[test]
+fn a_qubit_dependent_compare_exchange_is_refused_as_an_effect() {
+    refused_for_ordinary_inputs(
+        "compare-exchange-effect",
+        "int cells[2];",
+        r#"
+    _Bool q = 0;
+    XBIT(q, 0);
+    int expected = 0;
+    (void)__atomic_compare_exchange_n(&cells[q], &expected, 7, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    return READ(q);
+"#,
+        [1, 1],
+        "an effect on memory (the instruction `cmpxchg`) that depends on a qubit",
+    );
+}
+
+#[test]
+fn a_predicated_update_reads_the_shadow_it_writes_back() {
+    // The first code under the qubit writes after a loop over an ordinary count, which the proof credits nothing;
+    // the second becomes `cell = q ? cell : 9`, whose read of the old value only feeds that store back. The
+    // bytes are measured before the return.
+    compare_ordinary_inputs(
+        "conditional-byte-predicated",
+        "uint64_t cell = 5;",
+        r#"
+    uint8_t q = 0;
+    XBIT(q, 0);
+    if (q) {
+        #pragma clang loop unroll(disable)
+        for (unsigned j = 0; j < n; ++j) cell ^= j + q;
+        cell -= 3;
+    }
+    if (!q) cell = 9;
+    packet value = READ_BYTES(cell, 8);
+    return value | ((packet)READ(q) << 64);
+"#,
+        [2 | 1 << 64, 1 | 1 << 64],
     );
 }

@@ -498,6 +498,7 @@ mod waiting_for_fallback {
         acceptance_case("store");
     }
     #[test]
+    #[ignore = "waiting: LLVM bounds the copy at 6 bytes, two of which no configuration writes; they would leave the function holding qubits (docs/DESIGN.md, Memory written under a qubit)"]
     fn memcpy() {
         acceptance_case("memcpy");
     }

@@ -165,7 +165,7 @@ fn columns(module: &ValidModule, state: &Snapshot) -> [usize; 3] {
 /// first measurement is native C's; and the front warns that the bytes hold qubits.
 #[test]
 fn the_fallback_memory_fixtures_give_native_results_and_weights() {
-    for name in ["store", "memset", "nested", "memcpy", "loop"] {
+    for name in ["store", "memset", "nested", "loop"] {
         let native = Native::compile(name, "-O0");
         let source = c_dir().join(format!("fallback_oracle/{name}.c"));
         for (mode, clang, flags) in MODES {
@@ -387,7 +387,7 @@ fn a_second_shadow_an_escaped_restrict_copy_and_a_measuring_callee_are_refused()
         (
             "held-second-shadow",
             "unsigned long long entry(unsigned c) {\n    _Bool q = 0, r = 0; bennett_h(&q); bennett_h(&r);\n    if (c & 1) g[0] = q + 1;\n    if (r) g[0] = 7;\n    return bennett_measure_bytes(g, 1) | bennett_measure(&q) << 8 | bennett_measure(&r) << 9;\n}",
-            "that another write under a qubit holds again",
+            "whose exchange runs also on ordinary paths on which C does not write them, before they are measured",
         ),
         (
             "held-restrict-copy",
@@ -427,5 +427,23 @@ fn callees_measuring_other_or_measured_bytes_still_run() {
             .map(|q| 6 | (if q == 1 { 5 } else { 1 }) << 8 | (if q == 1 { 5 } else { 1 }) << 16 | q << 24)
             .collect();
         assert_eq!(seen, expected, "{mode}");
+    }
+}
+
+/// `memcpy` of 2 or 4 bytes under a qubit: LLVM bounds the copy at 6 bytes, so the exchange takes two bytes that no
+/// configuration writes, and they would leave the function holding qubits where C leaves them ordinary. Refused by
+/// name until the front proves which bytes a write at a position that is not constant covers.
+#[test]
+fn a_held_range_wider_than_every_write_is_refused() {
+    let source = c_dir().join("fallback_oracle/memcpy.c");
+    for (mode, clang, flags) in MODES {
+        let clang: Vec<&str> = clang.iter().copied().chain(["-DMEASURED_CELLS"]).collect();
+        let include = format!("-I{}", root().join("front/include").display());
+        let clang: Vec<&str> = clang.iter().copied().chain([include.as_str()]).collect();
+        let error = lower_text(&source, &format!("held-memcpy-refused-{mode}"), &clang, flags).expect_err(mode);
+        assert!(
+            error.contains("whose exchange runs also on ordinary paths on which C does not write them"),
+            "{mode}: {error}"
+        );
     }
 }
