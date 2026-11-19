@@ -748,7 +748,9 @@ identified by slot and bit index. The analysis starts at the entry and follows t
 edge when a conditional jump or switch folds to a constant. For a qubit-held condition it
 follows both edges. For a qubit-held switch selector it follows the cases and default its
 bit facts permit. It waits for operands whose facts are pending. Reachability can grow as
-more facts arrive.
+more facts arrive, including on later loop visits. The analysis keeps the edges used by
+call planning at each switch after the facts settle. Dispatch starts with those edges and
+can narrow them further using the current selector bits.
 Refusals for given arguments apply at every budget, including zero.
 
 The controller resolves the targets and arguments first, keeping dangling and aliased

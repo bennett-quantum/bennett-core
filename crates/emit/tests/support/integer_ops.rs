@@ -558,6 +558,132 @@ spin(i2 %value):
     }
 }
 
+fn computed_switch(labels: &str, cold: &str) -> bennett_ir::ValidModule {
+    load(&format!(
+        r#"
+memory 1024
+func @f(i1 %left, i1 %right, i1 %enter) -> i4 {{
+entry:
+    br %enter, choose, done(i4 6)
+choose:
+    %bit = xor i1 %left, %right
+    %selector = sext i1 %bit to i2
+    switch i2 %selector, {labels}
+cold:
+    {cold}
+done(i4 %value):
+    ret %value
+}}
+func @leaf() -> i4 {{
+entry:
+    ret 9
+}}
+"#
+    ))
+    .expect("valid guarded switch")
+}
+
+#[test]
+fn computed_switch_does_not_dispatch_unplanned_calls() {
+    for labels in ["0: done(i4 7), 3: done(i4 8), default: cold", "1: cold, 3: done(i4 8), default: done(i4 7)"] {
+        let module = computed_switch(labels, "%result = call @leaf()\n    ret %result");
+        for budget in 0..=7 {
+            let input = ApplyInput {
+                module: &module,
+                callee: module.function_named("f").expect("callee"),
+                args: &[Argument::Register(0..1), Argument::Register(1..2), Argument::Register(2..3)],
+                out: 3..7,
+                fault: 7..12,
+                budget,
+                entry_fault: None,
+                stack_available: 512,
+                scratch_start: 12,
+            };
+            for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+                let compiled = compile_apply_with(input.clone(), mode).expect("skip the unplanned call");
+                super::check(&compiled, 3, 9, |x| {
+                    executor_result(&input, 4, &[(x & 1) as u64, (x >> 1 & 1) as u64, (x >> 2) as u64])
+                });
+            }
+        }
+    }
+}
+
+#[test]
+fn computed_switch_does_not_dispatch_an_impossible_loop() {
+    let module = computed_switch(
+        "0: done(i4 7), 3: done(i4 8), default: cold",
+        "br spin(i2 0)\nspin(i2 %n):\n    %next = add i2 %n, %selector\n    br spin(%next)",
+    );
+    let input = ApplyInput {
+        module: &module,
+        callee: module.function_named("f").expect("callee"),
+        args: &[Argument::Register(0..1), Argument::Register(1..2), Argument::Register(2..3)],
+        out: 3..7,
+        fault: 7..12,
+        budget: 5,
+        entry_fault: None,
+        stack_available: 0,
+        scratch_start: 12,
+    };
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        let reference = compile_apply_with(input.clone(), mode).expect("emit at the last return budget");
+        for budget in [5, 10, 100] {
+            let input = ApplyInput { budget, ..input.clone() };
+            let compiled = compile_apply_with(input.clone(), mode).expect("emit without scheduling the loop");
+            assert_eq!(compiled.construction, Construction::StepMachine { ticks: 5 });
+            assert_eq!(compiled.block.ops(), reference.block.ops());
+            super::check(&compiled, 3, 9, |x| {
+                executor_result(&input, 4, &[(x & 1) as u64, (x >> 1 & 1) as u64, (x >> 2) as u64])
+            });
+        }
+    }
+}
+
+#[test]
+fn switch_planning_includes_a_case_that_becomes_possible_on_a_back_edge() {
+    let module = load(
+        r#"
+memory 1024
+func @f(i1 %repeat) -> i4 {
+entry:
+    br visit(i1 0)
+visit(i1 %selector):
+    switch i1 %selector, 0: choose, 1: invoke, default: done
+choose:
+    br %repeat, visit(i1 1), done
+invoke:
+    %result = call @leaf()
+    ret %result
+done:
+    ret 6
+}
+func @leaf() -> i4 {
+entry:
+    ret 9
+}
+"#,
+    )
+    .expect("valid switch that reaches a new case on a later visit");
+    for budget in 0..=8 {
+        let input = ApplyInput {
+            module: &module,
+            callee: module.function_named("f").expect("callee"),
+            args: &[Argument::Register(0..1)],
+            out: 1..5,
+            fault: 5..10,
+            budget,
+            entry_fault: None,
+            stack_available: 512,
+            scratch_start: 10,
+        };
+        for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+            let compiled = compile_apply_with(input.clone(), mode).expect("emit the reached call");
+            super::check(&compiled, 1, 9, |x| executor_result(&input, 4, &[x as u64]));
+        }
+    }
+}
+
 #[test]
 fn switch_counts_one_equality_chain_per_case() {
     let cases = 3;
