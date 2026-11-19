@@ -4,7 +4,7 @@ use bennett_ir::{BinOp, CastOp, Predicate};
 
 use super::bits::{Bit, Circuit, ONE, Word, ZERO, definite};
 use super::ranges::{product_bits, unsigned_max};
-use super::{products, shifts};
+use super::{division, products, shifts};
 
 pub(super) fn binary(circuit: &mut Circuit, op: BinOp, left: &[Bit], right: &[Bit]) -> Option<Word> {
     Some(match op {
@@ -28,8 +28,8 @@ pub(super) fn binary(circuit: &mut Circuit, op: BinOp, left: &[Bit], right: &[Bi
 
 // The operand proof needs constant folding, without emitting a general product.
 pub(super) fn fold_binary(circuit: &mut Circuit, op: BinOp, left: &[Bit], right: &[Bit]) -> Option<Word> {
-    if op == BinOp::Urem {
-        return definite(left)?.checked_rem(definite(right)?).map(|value| super::bits::constant(value, left.len()));
+    if matches!(op, BinOp::Udiv | BinOp::Sdiv | BinOp::Urem | BinOp::Srem) {
+        return division::fold(op, left, right);
     }
     if matches!(op, BinOp::Shl | BinOp::Lshr | BinOp::Ashr) && definite(right).is_none() {
         return None;

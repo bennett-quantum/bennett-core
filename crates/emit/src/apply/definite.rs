@@ -7,7 +7,7 @@ use bennett_ir::{BinOp, BlockId, Inst, Operand, Slot, Terminator, Width};
 
 use super::bits::{Bit, Circuit, Word, ZERO, constant, definite};
 use super::symbolic::{Frame, switch_target, visit_possible_targets};
-use super::{arithmetic, ranges, remainders};
+use super::{arithmetic, division, ranges};
 
 fn fold_inst(
     inst: &Inst,
@@ -28,7 +28,7 @@ fn fold_inst(
                         ranges::product_bits(ranges::unsigned_max(&left), ranges::unsigned_max(&right), word.len());
                     word[width..].fill(ZERO);
                 } else if *op == BinOp::Urem && definite(&right) != Some(0) {
-                    let width = remainders::result_bits(&left, &right);
+                    let width = division::result_bits(&left, &right);
                     word[width..].fill(ZERO);
                 }
                 word
@@ -112,7 +112,11 @@ impl Constants {
                             | Inst::Call { .. }
                             | Inst::CallIndirect { .. }
                             | Inst::Binary { op: BinOp::Mul, lhs: Operand::Slot(_), rhs: Operand::Slot(_), .. }
-                            | Inst::Binary { op: BinOp::Urem, rhs: Operand::Slot(_), .. }
+                            | Inst::Binary {
+                                op: BinOp::Udiv | BinOp::Sdiv | BinOp::Urem | BinOp::Srem,
+                                rhs: Operand::Slot(_),
+                                ..
+                            }
                     )
                 })
         }) {

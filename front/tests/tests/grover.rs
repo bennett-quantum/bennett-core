@@ -183,3 +183,44 @@ fn gate_name(gate: &bennett_ir::Gate) -> &'static str {
         bennett_ir::Gate::Rotate(axis, _) => axis.mnemonic(),
     }
 }
+
+#[test]
+fn emitted_grover_matches_direct_evaluation_for_the_digit_sum_predicate() {
+    use bennett_emit::{ApplyInput, compile_apply};
+    use bennett_front_tests::lower_text_with_budget;
+
+    let source = c_dir().join("grover.c");
+    let text = lower_text_with_budget(&source, "grover.emitted", CLANG_FLAGS, &[], 40).expect("lower Grover");
+    let module = bennett_ir::load(&text).expect("valid device program");
+    let search = entry(&module, "search_digit_sum_12");
+    let args = [2];
+    let mut direct = Executor::new(&module, search, &args, options(0)).expect("direct Grover");
+    let mut emitted = Executor::new(&module, search, &args, options(0)).expect("emitted Grover");
+    let mut applications = 0;
+    let mut compile = |input: ApplyInput<'_>| {
+        applications += 1;
+        Ok(compile_apply(input)?.block)
+    };
+    loop {
+        let before = direct.snapshot();
+        let frame = before.classical.frames.last().expect("active frame");
+        let next = module.function(frame.func).block(frame.block).insts.get(frame.inst);
+        if matches!(next, Some(Inst::Measure { .. })) {
+            assert!(before.quantum.distance(&emitted.snapshot().quantum).expect("same live registers") <= TOLERANCE);
+        }
+        let expected = direct.step();
+        assert_eq!(emitted.step_emitted(&mut compile), expected);
+        if matches!(next, Some(Inst::Apply { .. })) {
+            let expected = direct.snapshot();
+            let actual = emitted.snapshot();
+            assert_eq!(expected.classical, actual.classical);
+            assert!(expected.quantum.distance(&actual.quantum).expect("same live registers") <= TOLERANCE);
+        }
+        if let Some(outcome) = expected {
+            assert!(matches!(outcome, Outcome::Returned(Some(_))), "{outcome:?}");
+            break;
+        }
+    }
+    assert!(applications > 0);
+    assert_eq!(emitted.stats().nonzero_release_weight, 0.0);
+}

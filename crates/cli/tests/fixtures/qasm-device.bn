@@ -63,10 +63,9 @@ entry:
     ret 7
 }
 
-func @divide(i2 %x) -> i2 {
+func @unsupported_fault(i2 %x) -> i2 {
 entry:
-    %quotient = udiv i2 %x, 2
-    ret %quotient
+    fault unreachable
 }
 
 func @stopped() {
@@ -75,6 +74,6 @@ entry:
     h %x[0]
     %result = qalloc 2
     %fault = qalloc 5
-    apply @divide(%x) -> %result, %fault budget 2
+    apply @unsupported_fault(%x) -> %result, %fault budget 2
     ret
 }

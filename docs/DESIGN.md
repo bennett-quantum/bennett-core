@@ -346,8 +346,8 @@ condition to select a jump even if other assignments have a different value in t
 The compiler represents each bit as a constant, a qubit's value or its complement. It computes
 new bits by reversible gates into scratch qubits.
 
-The emitter's full instruction subset is `add`, `sub`, `mul`, `and`, `or`, `xor`, `urem`, shifts
-(`shl`, `lshr`, `ashr`), `icmp`, `select`, `zext`, `sext`, `trunc`,
+The emitter's full instruction subset is `add`, `sub`, `mul`, `and`, `or`, `xor`,
+`udiv`, `sdiv`, `urem`, `srem`, `shl`, `lshr`, `ashr`, `icmp`, `select`, `zext`, `sext`, `trunc`,
 `faddr`, unconditional and conditional `br`, `switch` with a proved constant selector, `ret`,
 and direct `call` and `call_indirect` as described under "Copied calls" below. Calls take integer
 parameters and may return an integer or no value. The [refusal table](#not-yet) gives the excluded
@@ -416,20 +416,28 @@ right shifts fill with the sign bit. A comparison using all amount bits clears t
 when the amount is at least the word's width, including for arithmetic right shift.
 A proved constant amount is wired directly, with no shift gates.
 
-**Unsigned remainder.** Read the dividend from high bit to low bit. Each new bit
+**Division and remainder.** Read the dividend from high bit to low bit. Each new bit
 doubles the current remainder and adds the bit. A trial subtraction, with one extra
 high bit, selects the difference when the candidate is at least the divisor. The
 previous remainder is below a nonzero divisor, so one subtraction suffices for the new
-remainder to stay below it. A known modulus makes
+remainder to stay below it. Each decision to subtract also gives one quotient bit, from
+most significant to least significant. A quotient needs just the comparison on its last
+trial because no later trial reads the residue. For signed operations, the circuit first
+forms the unsigned magnitudes using conditional two's complement negation. It negates
+the quotient if the signs differ, or negates the remainder if the dividend was negative.
+The result uses the declared width, so the signed minimum divided by minus one wraps
+back to the signed minimum.
+
+For unsigned remainder, a known modulus makes
 bits above its maximum residue definite zero. A power-of-two modulus takes only the
 low bits. When the dividend's upper bound equals a known modulus, the comparison
 with that value selects zero on equality and leaves the other values unchanged.
 The general gadget copies its result and reverses the work, including on inputs
 with divisor zero.
 
-A separate zero test makes a reached `urem` fault with `divide_by_zero` for exactly
-those inputs. A failed input writes only the fault code and stops before any later
-instruction. A successful attempt costs one step. If the zero test depends on qubits in the
+A separate zero test makes each reached division or remainder fault with
+`divide_by_zero` for exactly those inputs. A failed input writes only the fault code and
+stops before any later instruction. A successful attempt costs one step. If the zero test depends on qubits in the
 definite prefix, the emitter records the fault under the zero-test guard and starts the step
 machine at the next point for the successful inputs, with one step spent.
 On a controlled route it records the fault under the route guard AND the zero test, then
@@ -580,7 +588,10 @@ of two words with distinct variable bits, `P` counts bit pairs in the retained c
 `F` counts full adders that produce a carry and `H` counts half adders that produce a
 carry. The product uses `2(P + 2F + H)` Toffolis, or `6w² − 6w` for two words of width
 `w ≥ 2` with a double-width result. The general remainder uses `6pm` for a dividend
-with `p` possible significant bits and a divisor with `m`. The zero test for a divisor
+with `p` possible significant bits and a divisor with `m`. A general unsigned quotient
+uses `6pm − 2m` Toffolis. For independent `w`-bit signed operands, both trial widths
+are `w`. The two input negations and one result negation add a total of
+`6 max(2w − 3, 0)` Toffolis, including local reversal. The zero test for a divisor
 of `m` distinct variable bits uses `2(m − 1)` for `m ≥ 1`. A known nonzero modulus
 needs no zero-test gates, and a power-of-two modulus needs no reduction gates.
 
@@ -596,6 +607,12 @@ at distance `d` uses `2w − d` Toffolis. An arithmetic right stage uses `2(w �
 If `t` is the number of trailing zero bits of `w`, the range comparison uses `w − t − 1`
 Toffolis, and clearing an out-of-range result uses `w`. The gadget doubles the sum of
 these costs to clear its work wires after copying the result.
+
+The C Grover test uses the ordinary predicate that sums the decimal digits of an 8-bit
+input and checks for 12. At `B = 40` and two Grover iterations, the emitted gates and direct
+evaluation give the same amplitudes after each `apply` and before measurement. They also
+give the same measured result with the same seed. Each emitted circuit releases its
+scratch in zero.
 
 The complete `mulmod` applies a double-width product followed by remainder with
 modulus `2^w − 3` held in an ordinary value. Both modes emit the same gate list at
@@ -1912,7 +1929,6 @@ those.
 
 | Refused inside emitted `apply` | Construction needed |
 |---|---|
-| `udiv`, `sdiv`, `srem` | Remaining integer gates, including conditional arithmetic faults |
 | `switch` without a proved constant selector | Multiway dispatch in the step machine |
 | Reachable recursive calls or adding a call copy that raises the total above 16,384 slots and program points | Shared call frames and return positions |
 | Reachable `call_indirect` without one proved constant address | Prove the target across visits or dispatch among supported addresses |

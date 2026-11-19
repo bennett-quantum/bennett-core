@@ -5,6 +5,7 @@ mod bits;
 mod calls;
 mod controls;
 mod definite;
+mod division;
 mod flow;
 #[cfg(test)]
 mod gadget_tests;
@@ -14,7 +15,6 @@ mod modular_loop;
 mod products;
 mod ranges;
 mod reach;
-mod remainders;
 mod saved;
 mod shifts;
 mod symbolic;
@@ -234,7 +234,7 @@ fn compile_with_analysis_limit(
                         break (
                             copies,
                             Construction::StepMachine { ticks: ticks + 1 },
-                            "qubit-dependent remainder fault",
+                            "qubit-dependent division or remainder fault",
                         );
                     }
                     Step::Fault(fault) => {

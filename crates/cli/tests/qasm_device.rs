@@ -265,7 +265,10 @@ fn a_controller_stop_is_published_with_its_reason_and_exit_status() {
     let text = trace.read();
     assert_eq!(recount(&text), [1, 0, 0]);
     let end = text.lines().last().expect("stop footer");
-    assert!(end.starts_with("// stopped") && end.contains("udiv") && end.ends_with("(run status 2)"), "{end}");
+    assert!(
+        end.starts_with("// stopped") && end.contains("cannot emit fault") && end.ends_with("(run status 2)"),
+        "{end}"
+    );
 }
 
 #[cfg(target_os = "linux")]

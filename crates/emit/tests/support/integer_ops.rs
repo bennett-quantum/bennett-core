@@ -108,3 +108,104 @@ entry:
         }
     }
 }
+
+#[test]
+fn division_and_remainder_match_the_executor_at_each_budget() {
+    for operation in ["udiv", "sdiv", "urem", "srem"] {
+        for width in 1..=4 {
+            binary_sweep(operation, width);
+        }
+    }
+}
+
+#[test]
+fn division_faults_only_on_routes_that_attempt_it() {
+    for operation in ["udiv", "sdiv", "urem", "srem"] {
+        let module = load(&format!(
+            r#"
+memory 1024
+func @f(i4 %x, i3 %d) -> i4 {{
+entry:
+    %take = trunc i4 %x to i1
+    br %take, attempt, done(%x)
+attempt:
+    %divisor = sext i3 %d to i4
+    %answer = {operation} i4 %x, %divisor
+    br done(%answer)
+done(i4 %result):
+    ret %result
+}}
+"#
+        ))
+        .expect("valid conditional arithmetic");
+        let args = [Argument::Register(0..4), Argument::Register(4..7)];
+        for budget in 0..=7 {
+            let input = ApplyInput {
+                module: &module,
+                callee: module.function_named("f").expect("callee"),
+                args: &args,
+                out: 7..11,
+                fault: 11..16,
+                budget,
+                entry_fault: None,
+                stack_available: 0,
+                scratch_start: 16,
+            };
+            for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+                let compiled = compile_apply_with(input.clone(), mode).expect("emit conditional division");
+                let (gates, layout) = gates(&compiled, 7, 9);
+                bits::check_states(&gates, layout, (0..128).map(|x| (x, 0x1a5)), |x| {
+                    executor_result(&input, 4, &[(x & 15) as u64, (x >> 4) as u64])
+                })
+                .unwrap_or_else(|error| panic!("{operation}, {mode:?}, B={budget}: {error}"));
+            }
+        }
+    }
+}
+
+#[test]
+fn division_checks_the_full_width_and_wraps_signed_overflow() {
+    for operation in ["udiv", "sdiv", "urem", "srem"] {
+        let module = load(&format!(
+            r#"
+memory 1024
+func @f(i2 %x, i2 %y) -> i8 {{
+entry:
+    %word = zext i2 %x to i128
+    %dividend = shl i128 %word, 126
+    %neg = sext i2 %y to i128
+    %small = trunc i2 %y to i1
+    %signed = zext i1 %small to i128
+    %high = shl i128 %signed, 120
+    %select = icmp eq i2 %y, 1
+    %divisor = select i128 %select, %high, %neg
+    %result = {operation} i128 %dividend, %divisor
+    %upper = lshr i128 %result, 120
+    %top = trunc i128 %upper to i8
+    %bottom = trunc i128 %result to i8
+    %answer = xor i8 %top, %bottom
+    ret %answer
+}}
+"#
+        ))
+        .expect("valid wide arithmetic");
+        let args = [Argument::Register(0..2), Argument::Register(2..4)];
+        let input = ApplyInput {
+            module: &module,
+            callee: module.function_named("f").expect("callee"),
+            args: &args,
+            out: 4..12,
+            fault: 12..17,
+            budget: 14,
+            entry_fault: None,
+            stack_available: 0,
+            scratch_start: 17,
+        };
+        let compiled = compile_apply_with(input.clone(), ApplyMode::Automatic).expect("emit wide division");
+        let (gates, layout) = gates(&compiled, 4, 13);
+        bits::check_states(&gates, layout, (0..16).map(|x| (x, 0x12a5)), |x| {
+            executor_result(&input, 8, &[(x & 3) as u64, (x >> 2) as u64])
+        })
+        .unwrap_or_else(|error| panic!("{operation} i128: {error}"));
+    }
+}
