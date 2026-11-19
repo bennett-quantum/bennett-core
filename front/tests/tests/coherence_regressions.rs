@@ -1497,3 +1497,97 @@ fn a_known_start_and_the_clearing_computation_are_one_function() {
     }
     .agrees(0, &[256, 257], &return_address_readout(), 0);
 }
+
+const CALLER_LOCAL_HELPERS: &str = r#"
+static volatile unsigned increment = 2;
+
+__attribute__((noinline)) static uint8_t read_local(uint8_t bit, volatile unsigned *local) {
+    return bit + *local;
+}
+
+__attribute__((noinline)) static void replace_local(volatile unsigned *local) {
+    *local = 7;
+}
+"#;
+
+#[test]
+#[ignore = "a delayed applied call reads a live caller's local after an intervening write"]
+fn a_call_reads_its_callers_local_before_a_later_write() {
+    let declarations = format!(
+        r#"{CALLER_LOCAL_HELPERS}
+__attribute__((noinline)) static unsigned inner(unsigned input, volatile unsigned *local) {{
+    volatile uint8_t q = 0, first = 0, second = 0;
+    if (input) XBIT(q, 0);
+    uint8_t saved = read_local(q, local);
+    replace_local(local);
+    uint8_t value = saved + increment;
+    first = value;
+    second = value + 1;
+    unsigned a = READ(first), b = READ(second), bit = READ(q);
+    return a + 256 * b + 65536 * bit;
+}}
+"#
+    );
+    compare_ordinary_inputs_in(
+        "caller-local-delayed-read",
+        &declarations,
+        "    volatile unsigned local = 3;\n    return inner(n, &local);",
+        [1541, 67334],
+        false,
+        &MODES[..1],
+    );
+}
+
+#[test]
+#[ignore = "a second application of the same generated function rereads a changed caller's local"]
+fn two_consumers_keep_the_value_read_before_a_caller_local_changes() {
+    let declarations = format!(
+        r#"{CALLER_LOCAL_HELPERS}
+__attribute__((noinline)) static unsigned inner(unsigned input, volatile unsigned *local) {{
+    volatile uint8_t q = 0, first = 0, second = 0;
+    if (input) XBIT(q, 0);
+    uint8_t saved = read_local(q, local);
+    first = saved;
+    replace_local(local);
+    second = saved;
+    unsigned a = READ(first), b = READ(second), bit = READ(q);
+    return a + 256 * b + 65536 * bit;
+}}
+"#
+    );
+    compare_ordinary_inputs_in(
+        "caller-local-repeated-read",
+        &declarations,
+        "    volatile unsigned local = 3;\n    return inner(n, &local);",
+        [771, 66564],
+        false,
+        &MODES[..1],
+    );
+}
+
+#[test]
+#[ignore = "under --taint-all a known nonzero XOR start puts the computing and clearing calls in different generated functions"]
+fn a_known_nonzero_xor_start_clears_a_frame_dependent_value() {
+    let program = Program {
+        name: "return-address-nonzero-xor-start",
+        declarations: RETADDR_HELPER,
+        body: r#"
+    volatile uint64_t x = 7;
+    x ^= f(q);
+    x = 0;
+    packet value = READ(x);
+    return value | ((packet)READ(q) << 8);
+"#,
+        qubits: 1,
+    };
+    let source = program.source();
+    let native = program.native_table(&source, 1);
+    assert_eq!(native, [0, 256]);
+    let (_, clang, flags) = MODES[2];
+    let (text, _) = lower_text_with_diagnostics(&source, program.name, clang, flags).expect("lowers under --taint-all");
+    let module = bennett_ir::load(&text).expect("valid device program");
+    for (input, wanted) in native.into_iter().enumerate() {
+        let (found, stats) = run_with_stats(&module, "entry", &[input as u64 + 1, 1, 0], 0);
+        assert_eq!((found, stats.nonzero_releases), (Outcome::Returned(Some(wanted)), 0), "q={input}");
+    }
+}
