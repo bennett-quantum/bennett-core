@@ -433,13 +433,13 @@ from contributing again. A still-running input with no remaining affordable retu
 exhaust the budget, because the skipped instructions cannot fault. Compilation reports the
 construction and its reason.
 
-For saved decisions with at most eight distinct argument qubits, the compiler can trace the
-supported instructions on all definite arguments under the whole function's budget. This gives
+For saved decisions, the compiler can enumerate all definite values of at most eight distinct
+argument qubits and trace the instructions under the whole function's budget. This gives
 an upper bound on the unsigned value written to each result slot. For low-bit arithmetic and
 selections the compiler omits gates for bits proved zero, while keeping the declared word width
 for later instructions. When every input stops, the schedule ends at the last reached return or
-fault attempt. The analysis has a work limit. If it reaches that limit, the compiler uses the
-original widths and the full remaining budget.
+fault attempt. The analysis has a work limit. Above eight argument qubits, or if the trace would
+exceed that limit, the compiler uses the original widths and the full remaining budget.
 
 A pass count proved from the program may be used at any nesting depth. For example, a
 logical right shift of a `w`-bit loop variable by one on each pass makes it zero after at most
@@ -475,7 +475,8 @@ the wrapper and helper.
 
 Run `front/test.sh --test emitted_collatz c_collatz_budget_sweep_and_counts -- --ignored --exact --nocapture`
 to check the C row and compare the gates with the executor on all 256 inputs at 250 distinct
-budgets, including immediately before, at, and after every return cutoff.
+budgets, including immediately before, at, and after every return cutoff. A budget one full pass
+beyond the last return produces the same gate list.
 
 The next counts use the same convention and include the argument, eight result and five fault
 qubits in the peak. The ordinary loop adds the three-bit input on odd inputs and subtracts it

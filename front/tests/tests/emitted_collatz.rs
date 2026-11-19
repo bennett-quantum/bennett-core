@@ -16,6 +16,7 @@ const INPUTS: u64 = 1 << INPUT_BITS;
 const TARGET_BITS: usize = 8 + Fault::CODE_WIDTH.bits() as usize;
 const INTERFACE: u64 = (INPUT_BITS + TARGET_BITS) as u64;
 const REFERENCE_BUDGET: u64 = 2_000; // More than the longest run on an unsigned byte.
+const PASS_STEPS: u64 = 9; // One complete front-produced Collatz update and back edge.
 
 fn front_collatz(name: &str) -> (ValidModule, FuncId) {
     let module = lower(&c_dir().join("collatz_emitted.c"), name, CLANG_FLAGS, &[]);
@@ -36,7 +37,7 @@ fn reference(module: &ValidModule, callee: FuncId, x: u64, budget: u64) -> (u64,
     let options = Options { budget: Some(budget), ..Options::default() };
     let mut run = Executor::new(module, callee, &[x], options).expect("start the applied function on definite input");
     let output = match run.run() {
-        Outcome::Returned(Some(value)) => u128::from(value),
+        Outcome::Returned(Some(value)) => value,
         Outcome::Faulted(Fault::Budget) => u128::from(Fault::Budget.code()) << 8,
         outcome => panic!("unexpected Collatz outcome for x={x}, B={budget}: {outcome:?}"),
     };
@@ -96,13 +97,19 @@ fn c_collatz_budget_sweep_and_counts() {
     let budgets =
         returns.iter().flat_map(|&(steps, _)| [steps - 1, steps, steps + 1]).chain([0]).collect::<BTreeSet<_>>();
     println!("{} budgets, {INPUTS} inputs, two destination words per input", budgets.len());
-    for budget in budgets {
-        let compiled = check_budget(&module, callee, budget);
-        if budget == longest {
-            let mut counter = CountingDevice::default();
-            counter.allocate(0..INTERFACE).expect("interface");
-            compiled.send(&mut counter).expect("native gates");
-            println!("B={budget}, {}: {:?}", compiled.construction, counter.counts());
-        }
+    let compiled = check_budget(&module, callee, longest);
+    let mut counter = CountingDevice::default();
+    counter.allocate(0..INTERFACE).expect("interface");
+    compiled.send(&mut counter).expect("native gates");
+    let counts = counter.counts();
+    println!("B={longest}, {}: {counts:?}", compiled.construction);
+    assert_eq!(
+        [counts.one_qubit, counts.two_qubit, counts.toffoli, counts.peak_qubits as u128, counts.depth],
+        [14_152, 36_875, 20_252, 15_327, 7_001]
+    );
+    let ample = check_budget(&module, callee, longest + PASS_STEPS);
+    assert!(compiled.block.ops() == ample.block.ops(), "the schedule grew after the last possible return");
+    for budget in budgets.into_iter().filter(|&budget| budget != longest) {
+        check_budget(&module, callee, budget);
     }
 }

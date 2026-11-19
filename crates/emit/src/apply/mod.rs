@@ -149,6 +149,14 @@ pub fn compile_apply(input: ApplyInput<'_>) -> Result<CompiledApply, ApplyError>
 
 /// Compile an applied function with the requested choice of control constructions.
 pub fn compile_apply_with(input: ApplyInput<'_>, mode: ApplyMode) -> Result<CompiledApply, ApplyError> {
+    compile_with_analysis_limit(input, mode, reach::MAX_ATTEMPTS)
+}
+
+fn compile_with_analysis_limit(
+    input: ApplyInput<'_>,
+    mode: ApplyMode,
+    analysis_limit: usize,
+) -> Result<CompiledApply, ApplyError> {
     check_interface(&input)?;
     let (program, mut slots) = Program::check(&input)?;
     let frame = program.root();
@@ -231,7 +239,8 @@ pub fn compile_apply_with(input: ApplyInput<'_>, mode: ApplyMode) -> Result<Comp
                                 if refusal.is_none_or(|refusal| refusal == controls::Refusal::UnprovedLoop)
                                     && let Some(plan) = saved::Loop::prove(&program, point)
                                 {
-                                    let bounds = reach::analyze(&program, &input, slots.len()).unwrap_or_default();
+                                    let bounds = reach::analyze(&program, &input, slots.len(), analysis_limit)
+                                        .unwrap_or_default();
                                     let remaining = bounds.last_attempt.map_or(remaining, |last| last - spent);
                                     let (copies, decisions) =
                                         plan.run(&mut circuit, &program, &mut slots, remaining, &bounds.widths)?;
