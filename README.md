@@ -23,16 +23,22 @@ one applied function.
 cargo test                                   # Rust + guard witnesses, in seconds; Python 3, no LLVM
 cargo run -p bennett -- run examples/thesis.bn
 cargo run -p bennett -- run examples/calls.bn --device count
+cargo run -p bennett -- run examples/grover.bn --device qasm --qasm-output grover.qasm
 front/test.sh                                # builds bennett-front, runs its tests (LLVM 18, clang 18, CMake)
 ```
 
 Counting compiles supported applied integer functions into gates. It can use control gates for
 qubit-dependent choices and loops with program-proved pass counts. Run the same circuits on the
-simulator with `bennett run --apply-circuit auto program.bn`. Both devices accept
+simulator with `bennett run --apply-circuit auto program.bn`. The simulator, counter and OpenQASM device accept
 `--apply-circuit step-machine` to select general instruction dispatch when control depends on qubits.
 The simulator defaults to direct evaluation. Either `--machine-meaning` or `--allow-region-faults`
 lets a run continue after an `apply` faults for some argument values, with the fault code in its register.
 The emitted subset and refusal routes are in [DESIGN.md](docs/DESIGN.md#apply).
+
+Use `--device qasm --qasm-output FILE` to write one run's quantum commands to a new OpenQASM 3 file.
+Measurements use the same synthetic bits as `--device count` with the same `--seed`. Each measurement
+statement carries its outcome in a comment. The file contains only the quantum commands reached with
+those outcomes and omits the ordinary code between them. See [the OpenQASM device](docs/DESIGN.md#openqasm-output).
 
 A C program goes in through `clang` and `bennett-front` (the markers are in `docs/MARKERS.md`):
 

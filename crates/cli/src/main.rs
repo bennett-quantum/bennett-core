@@ -1,5 +1,6 @@
 //! `bennett`: run and check device programs.
 
+mod qasm;
 mod run;
 
 use std::fs;
@@ -40,7 +41,10 @@ struct RunArgs {
     /// The quantum device.
     #[arg(long, value_enum, default_value_t = DeviceKind::Simulator)]
     device: DeviceKind,
-    /// Compile applied functions to gates. Counting defaults to auto and the simulator defaults to evaluation.
+    /// The new OpenQASM 3 file to write with --device qasm.
+    #[arg(long, value_name = "FILE")]
+    qasm_output: Option<PathBuf>,
+    /// Compile applied functions to gates. Count and QASM default to auto, and the simulator defaults to evaluation.
     #[arg(long, value_enum)]
     apply_circuit: Option<ApplyCircuit>,
     /// The function to run.
@@ -67,7 +71,7 @@ struct RunArgs {
     /// same as --allow-region-faults.
     #[arg(long)]
     machine_meaning: bool,
-    /// The seed for simulator sampling or synthetic counting-device measurements.
+    /// The seed for simulator sampling or synthetic count and QASM measurements.
     #[arg(long, value_name = "N", default_value_t = 0)]
     seed: u64,
     /// Run forward, then backward, and report whether the state returned to the entry state.
@@ -82,6 +86,7 @@ struct RunArgs {
 enum DeviceKind {
     Simulator,
     Count,
+    Qasm,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -104,7 +109,13 @@ enum CliError {
     #[error("argument {index} ({value}) does not fit in {ty}")]
     ArgumentRange { index: usize, value: i128, ty: bennett_ir::Type },
     #[error("--reverse requires the simulator")]
-    CountReverse,
+    DeviceReverse,
+    #[error("--device qasm requires --qasm-output FILE")]
+    QasmOutputRequired,
+    #[error("--qasm-output requires --device qasm")]
+    QasmDeviceRequired,
+    #[error("cannot write OpenQASM output {}: {source}", path.display())]
+    QasmIo { path: PathBuf, source: std::io::Error },
     #[error("{0}")]
     Start(#[from] StartError),
 }

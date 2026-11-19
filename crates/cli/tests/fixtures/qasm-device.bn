@@ -1,0 +1,42 @@
+memory 128
+
+func @rotations() {
+entry:
+    %q = qalloc 3
+    x %q[0]
+    s %q[1]
+    sdg %q[1]
+    t %q[1]
+    tdg %q[1]
+    rx(-0.12345678901234568) %q[2] ctrl %q[1], %q[0]
+    ry(5e-324) %q[0]
+    rz(1.7976931348623157e308) %q[1] ctrl %q[0]
+    rz(-0.0) %q[2]
+    ret
+}
+
+func @both(i1 %a, i1 %b) -> i1 {
+entry:
+    %answer = and i1 %a, %b
+    ret %answer
+}
+
+func @applied(i1 %right) {
+entry:
+    %a = qalloc 1
+    %b = qalloc 1
+    %out = qalloc 1
+    %fault = qalloc 5
+    x %a
+    %set = icmp eq i1 %right, 1
+    br %set, set, apply
+set:
+    x %b
+    br apply
+apply:
+    x %out
+    x %fault[2]
+    apply @both(%a, %b) -> %out, %fault budget 2
+    apply @both(%a, %b) -> %out, %fault budget 0
+    ret
+}

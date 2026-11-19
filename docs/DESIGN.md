@@ -201,6 +201,35 @@ definite inputs at a time. It checks that a circuit preserves its input register
 reference result into the output register, and clears scratch. The checks exhaust small registers
 and sample larger registers with a fixed seed.
 
+#### OpenQASM output
+
+`bennett run --device qasm --qasm-output FILE` streams the quantum commands of one execution to a
+new OpenQASM 3.0 file. If the controller faults or stops, the file records the commands reached up to
+that point. As with the counter, `apply` is compiled to gates. Both devices decompose gates beyond
+the native controls described above, so their one-qubit, two-qubit and Toffoli gate totals agree.
+The file expands gate blocks at each call. Gates use `stdgates.inc` with `ctrl @` for each control,
+in control-then-target order.
+The rotation literals round-trip to the exact finite `f64` angles used by the run.
+
+Each device allocation declares a fresh qubit array and resets it to zero, including allocations of
+scratch. OpenQASM declarations leave the initial state undefined. The reset implements the allocation
+and contributes no gates. [OpenQASM qubit declarations](https://openqasm.com/versions/3.0/language/types.html#qubits)
+
+A `qfree` drops a register by partial trace. The file marks its qubits with a `discard` comment and
+leaves them declared and idle. Ignoring those qubits gives the state of the remaining qubits after the
+partial trace. The file marks scratch returned in zero with a `release_zero` comment. Declared qubits
+accumulate over the run, so their total can exceed the counter's peak live qubits.
+
+Each qubit measurement is a `measure` statement annotated with the bit the controller received.
+The writer uses the counter's synthetic measurement stream (`--seed`, default 0). The file follows
+the ordinary control decisions taken for those bits and omits the ordinary control program. Running
+the file may produce different measurement outcomes while still issuing the recorded sequence of gates.
+
+The CLI test independently recounts gate statements and compares them with `--device count`. The
+syntax test invokes the reference parser when available to `python3` on `PATH` and reports a skip
+otherwise. Install `openqasm3[parser]==1.0.1` in a virtual environment and put its `bin` directory
+on `PATH` to run the parser check. [Python OpenQASM reference parser](https://pypi.org/project/openqasm3/1.0.1/)
+
 ### `apply`
 
 `apply @f(args) -> out, fault budget B`. Each argument is an ordinary value or a register read as an integer;
@@ -560,7 +589,7 @@ amplitudes with direct evaluation at budgets 6, 7 and 8. The bit-level runner ch
 all operand pairs at widths 2, 3, 4, 6 and 8, and 128 sampled pairs and five corner pairs at
 width 64. It checks unchanged inputs, XOR into the two destinations, and zero scratch.
 
-`bennett run --device count` uses the compiler for each `apply` it reaches. Pass
+The counting and OpenQASM devices use the compiler for each `apply` they reach. Pass
 `--apply-circuit auto` to run the same gates on the simulator, or `--apply-circuit step-machine`
 to select instruction dispatch whenever control depends on qubits. These modes implement the
 machine's fault semantics, writing fault codes into the program's register. The reference

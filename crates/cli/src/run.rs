@@ -1,5 +1,8 @@
 //! `bennett run`: execute, optionally reverse, and report.
 
+use std::fs::File;
+use std::io::{BufWriter, Write};
+use std::path::Path;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
@@ -9,22 +12,26 @@ use bennett_exec::{
 };
 use bennett_ir::{Const, FuncId, Type, ValidModule};
 
+use crate::qasm::QasmDevice;
 use crate::{ApplyCircuit, CliError, DeviceKind, RunArgs};
 
 pub(crate) fn run(args: &RunArgs) -> Result<ExitCode, CliError> {
     let module = crate::load(&args.file)?;
     let entry = module.function_named(&args.entry).ok_or_else(|| CliError::NoEntry(args.entry.clone()))?;
     let values = entry_arguments(&module, entry, &args.args)?;
-    match args.device {
-        DeviceKind::Simulator => run_simulator(&module, entry, &values, args),
-        DeviceKind::Count => run_count(&module, entry, &values, args),
+    if args.reverse && !matches!(args.device, DeviceKind::Simulator) {
+        return Err(CliError::DeviceReverse);
+    }
+    match (args.device, args.qasm_output.as_deref()) {
+        (DeviceKind::Simulator, None) => run_simulator(&module, entry, &values, args),
+        (DeviceKind::Count, None) => run_count(&module, entry, &values, args),
+        (DeviceKind::Qasm, Some(path)) => run_qasm(&module, entry, &values, args, path),
+        (DeviceKind::Qasm, None) => Err(CliError::QasmOutputRequired),
+        (DeviceKind::Simulator | DeviceKind::Count, Some(_)) => Err(CliError::QasmDeviceRequired),
     }
 }
 
 fn run_count(module: &ValidModule, entry: FuncId, values: &[u64], args: &RunArgs) -> Result<ExitCode, CliError> {
-    if args.reverse {
-        return Err(CliError::CountReverse);
-    }
     let mut device = LowerControls::new(CountingDevice::new(seeded_bits(args.seed)));
     let mut compiler = gate_compiler(args.apply_circuit.unwrap_or(ApplyCircuit::Auto));
     let run = Executor::run_on_with_apply(module, entry, values, args.budget, &mut device, &mut compiler)?;
@@ -39,6 +46,32 @@ fn run_count(module: &ValidModule, entry: FuncId, values: &[u64], args: &RunArgs
     println!("Toffoli gates: {}", counts.toffoli);
     println!("peak qubits: {}", counts.peak_qubits);
     println!("depth: {}", counts.depth);
+    Ok(exit_status(run.outcome))
+}
+
+fn run_qasm(
+    module: &ValidModule,
+    entry: FuncId,
+    values: &[u64],
+    args: &RunArgs,
+    path: &Path,
+) -> Result<ExitCode, CliError> {
+    let io_error = |source| CliError::QasmIo { path: path.to_owned(), source };
+    let mut output = BufWriter::new(File::create_new(path).map_err(io_error)?);
+    let run = {
+        let writer = QasmDevice::new(&mut output, args.seed, seeded_bits(args.seed)).map_err(io_error)?;
+        let mut device = LowerControls::new(writer);
+        let mut compiler = gate_compiler(args.apply_circuit.unwrap_or(ApplyCircuit::Auto));
+        let run = Executor::run_on_with_apply(module, entry, values, args.budget, &mut device, &mut compiler);
+        if let Some(source) = device.inner().take_write_error() {
+            return Err(io_error(source));
+        }
+        run?
+    };
+    output.flush().map_err(io_error)?;
+    report_result(module, entry, run.outcome, 0.0);
+    report_io(&run.tape, run.steps);
+    println!("measurement source: synthetic bits (seed {})", args.seed);
     Ok(exit_status(run.outcome))
 }
 
