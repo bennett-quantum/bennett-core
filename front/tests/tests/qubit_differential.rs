@@ -627,6 +627,102 @@ fn check_refused_with(name: &str, body: &str, reasons: [&str; 3]) {
     }
 }
 
+// Generated cases 84 (o0), 260 and 398 (--taint-all) of seed 0x87196caa251d0f43: a store of a value that depends on a
+// qubit, then an overwrite of the same bytes under a qubit-dependent condition. LLVM's optimiser used to merge the two
+// into one store of a chosen value, which the front lowered; both stores are classified now and stay two, and the
+// front refuses the update by name (a debt with its route in docs/DESIGN.md, "Not yet").
+fn refused_in_mode(name: &str, body: &str, mode: usize, reason: &str) {
+    let source = write_c(name, &format!("{PRELUDE}{body}{DRIVER}"));
+    let (mode, cflags, flags) = MODES[mode];
+    match lower_text(&source, &format!("{name}-{mode}"), cflags, flags) {
+        Ok(_) => panic!("{name}-{mode}: lowered, expected the refusal {reason:?}"),
+        Err(error) => assert!(error.contains(reason), "{name}-{mode}: {error}"),
+    }
+}
+
+const UPDATE_UNDER_A_QUBIT: &str = "under the control of a value that depends on a qubit, which neither XORs into it nor \
+                                    becomes straight-line code";
+
+#[test]
+fn an_overwrite_under_a_qubit_after_a_qubit_store_is_refused_by_name() {
+    for (name, mode, held, body) in [
+        (
+            "overwrite-after-store-84",
+            0,
+            "an update of qubit variable holding the 8 bytes at @cell1+0",
+            r#"
+static uint8_t cell0[2] = {11, 146ULL};
+static uint64_t cell1[2] = {2017224290796646667ULL, 11};
+packet entry(unsigned prep, unsigned n, unsigned column) {
+    unsigned char q = PREPARE(prep);
+    HBIT(q, 0);
+    HBIT(q, 1);
+    cell1[0] = 17ULL * q + 3;
+    if ((q & 1U) == 0) {
+        cell0[1] = 7994603488504215311ULL + 3ULL * q;
+    }
+    if ((q & 1U) != 0) {
+        cell1[0] = 6079927154727593259ULL + 3ULL * q;
+    }
+    packet key = bennett_measure(&q);
+    packet v0 = bennett_measure_bytes(&cell0[1], 1);
+    packet v1 = bennett_measure_bytes(&cell1[0], 8);
+    return key | (v0 << 8) | (v1 << 16);
+}
+"#,
+        ),
+        (
+            "overwrite-after-store-260",
+            2,
+            "an update of qubit variable holding the 4 bytes at @cell0+0",
+            r#"
+static uint32_t cell0[2] = {2236307360ULL, 11};
+packet entry(unsigned prep, unsigned n, unsigned column) {
+    unsigned char q = PREPARE(prep);
+    HBIT(q, 0);
+    HBIT(q, 1);
+    cell0[0] = 17ULL * q + 3;
+    if ((q & 1U) == 0) {
+        cell0[0] -= 16360959345015322276ULL;
+    }
+    if ((q & 1U) != 0) {
+        cell0[0] = 1041296964840124927ULL + 3ULL * q;
+    }
+    packet key = bennett_measure(&q);
+    packet v0 = bennett_measure_bytes(&cell0[0], 4);
+    return key | (v0 << 8);
+}
+"#,
+        ),
+        (
+            "overwrite-after-store-398",
+            2,
+            "an update of qubit variable holding the 1 byte at %cell0+0",
+            r#"
+packet entry(unsigned prep, unsigned n, unsigned column) {
+    uint8_t cell0 = 245ULL;
+    unsigned char q = PREPARE(prep);
+    HBIT(q, 0);
+    HBIT(q, 1);
+    HBIT(q, 2);
+    cell0 = 17ULL * q + 3;
+    if ((q & 5U) == 0) {
+        cell0 -= 8105689122554339160ULL;
+    }
+    if ((q & 5U) != 0) {
+        cell0 += 3073144835884885980ULL + 3ULL * q;
+    }
+    packet key = bennett_measure(&q);
+    packet v0 = bennett_measure_bytes(&cell0, 1);
+    return key | (v0 << 8);
+}
+"#,
+        ),
+    ] {
+        refused_in_mode(name, body, mode, &format!("{held} {UPDATE_UNDER_A_QUBIT}"));
+    }
+}
+
 // Generated case 20 of seed 0x87196caa251d0f43 under --taint-all: once the reads of cell2 stay where C has them
 // (docs/DESIGN.md, "What LLVM's passes may not change"), a value the applied computation takes is the constant 0,
 // and the front wrote it as an argument of `apply` without its type, which the reader rejects.
