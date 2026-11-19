@@ -784,7 +784,6 @@ __attribute__((noinline)) void store_byte(unsigned n) {
 }
 
 #[test]
-#[ignore = "exchanging the byte before the store condition leaves it holding qubits on the skipped path"]
 fn skipping_a_qubit_dependent_store_keeps_the_byte_ordinary() {
     compare_ordinary_inputs(
         "conditional-byte-store",
@@ -800,5 +799,118 @@ __attribute__((noinline)) void store_byte(unsigned n) {
 "#,
         READ_STORED_BYTE,
         [0, 2],
+    );
+}
+
+fn refused_for_ordinary_inputs(name: &str, declarations: &str, body: &str, expected: [u128; 2], reason: &str) {
+    let source = write_c(
+        name,
+        &format!(
+            "{PRELUDE}{declarations}\npacket entry(unsigned prep, unsigned n, unsigned column) {{\n{body}\n}}\n{DRIVER}"
+        ),
+    );
+    let executable = native_build(&source, name, &["-DNATIVE"]);
+    let native = [0, 1].map(|n| {
+        let output = Command::new(&executable).args(["0", &n.to_string()]).output().expect("run native C");
+        assert!(output.status.success(), "{name} n={n}: {output:?}");
+        let stdout = std::str::from_utf8(&output.stdout).expect("native stdout");
+        u128::from_str_radix(stdout.trim(), 16).expect("native packet")
+    });
+    assert_eq!(native, expected, "{name}");
+    for (mode, clang, flags) in MODES {
+        let name = format!("{name}-{mode}");
+        let refusal = lower_text_with_diagnostics(&source, &name, clang, flags).expect_err("named refusal");
+        println!("{name}: {refusal}");
+        assert!(refusal.starts_with("not handled yet: ") && refusal.contains(reason), "{name}: {refusal}");
+    }
+}
+
+const SKIPPED_EXCHANGE: &str = "whose exchange runs also on ordinary paths on which C writes nothing there";
+
+#[test]
+fn an_ordinary_condition_inside_code_under_a_qubit_keeps_a_returned_byte_ordinary() {
+    // LLVM merges `q` and `n` into one condition; for n = 0 nothing is written, whatever q holds.
+    refused_for_ordinary_inputs(
+        "conditional-byte-under-qubit",
+        r#"
+uint8_t held;
+
+__attribute__((noinline)) void store_byte(unsigned n) {
+    uint8_t q = 0;
+    XBIT(q, 0);
+    if (q) { if (n) held = q + 4; }
+    XBIT(q, 0);
+}
+"#,
+        READ_STORED_BYTE,
+        [0, 5],
+        SKIPPED_EXCHANGE,
+    );
+}
+
+#[test]
+fn a_store_under_an_ordinary_condition_in_a_loop_keeps_a_returned_byte_ordinary() {
+    // The exchange would leave the loop for the block before it, above the loop's ordinary guard.
+    refused_for_ordinary_inputs(
+        "conditional-byte-in-loop",
+        r#"
+volatile uint8_t held;
+
+__attribute__((noinline)) void store_byte(unsigned n) {
+    uint8_t q = 0;
+    XBIT(q, 0);
+    #pragma clang loop unroll(disable)
+    for (unsigned i = 0; i < n; ++i)
+        if (i == 0) held = q + 1;
+    XBIT(q, 0);
+}
+"#,
+        READ_STORED_BYTE,
+        [0, 2],
+        SKIPPED_EXCHANGE,
+    );
+}
+
+#[test]
+fn a_skipped_write_measured_before_returning_gives_the_native_byte() {
+    // The exchange runs for n = 0 too, but the shadow holds the old byte there and is measured before the return.
+    compare_ordinary_inputs(
+        "conditional-byte-measured",
+        r#"
+uint8_t held;
+
+__attribute__((noinline)) unsigned store_and_measure(unsigned n) {
+    uint8_t q = 0;
+    XBIT(q, 0);
+    if (q) { if (n) held = q + 4; }
+    XBIT(q, 0);
+    return READ_BYTES(held, 1);
+}
+"#,
+        "    unsigned v = store_and_measure(n);\n    return v + 16u * held;",
+        [0, 85],
+    );
+}
+
+#[test]
+fn a_write_after_a_skipped_store_keeps_one_span_from_the_first() {
+    // The bytes are written on every path after the join, so the exchange moves above the ordinary condition
+    // and every access in between reads the shadow; they are measured before the return.
+    compare_ordinary_inputs(
+        "conditional-byte-rewritten",
+        r#"
+volatile uint8_t held;
+
+__attribute__((noinline)) unsigned store_twice(unsigned n) {
+    uint8_t q = 0;
+    XBIT(q, 0);
+    if (n) held = q;
+    held = q + 1;
+    XBIT(q, 0);
+    return READ_BYTES(held, 1);
+}
+"#,
+        "    unsigned v = store_twice(n);\n    return v + 16u * held;",
+        [34, 34],
     );
 }

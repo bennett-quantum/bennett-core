@@ -8,7 +8,9 @@
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Analysis/AssumptionCache.h>
+#include <llvm/Analysis/CFG.h>
 #include <llvm/Analysis/LoopInfo.h>
+#include <llvm/Analysis/PostDominators.h>
 #include <llvm/Analysis/ScalarEvolution.h>
 #include <llvm/Analysis/TargetLibraryInfo.h>
 #include <llvm/Analysis/ValueTracking.h>
@@ -91,6 +93,88 @@ Value *pointerOf(Instruction &inst) {
   return nullptr;
 }
 
+// Whether a branch on `condition` may take either edge for every ordinary input: it depends on a qubit and on
+// nothing ordinary, so no ordinary value can rule an edge out. A condition with an ordinary operand (`n && q`,
+// which LLVM makes of `if (q) if (n)`, or `q + n > 3`) may take one edge only for some ordinary inputs.
+bool chosenByQubits(const Value *condition, const ControlAnalysis &analysis) {
+  std::set<const Value *> seen;
+  std::vector<const Value *> work{condition};
+  while (!work.empty()) {
+    const Value *value = work.back();
+    work.pop_back();
+    if (isa<Constant>(value) || !seen.insert(value).second) {
+      continue;
+    }
+    if (!analysis.tainted(value)) {
+      return false;
+    }
+    if (analysis.isQuantumLoad(value)) {
+      continue;
+    }
+    const auto *inst = dyn_cast<Instruction>(value);
+    if (!inst || inst->mayReadOrWriteMemory()) {
+      return false;
+    }
+    for (const Use &operand : inst->operands()) {
+      work.push_back(operand.get());
+    }
+  }
+  return true;
+}
+
+// Whether code under a qubit (`region`, entered from `start`'s block) runs one of `writes` on every ordinary
+// path through it: whatever the ordinary values, some configuration of the qubits writes. The bytes these writes
+// may write hold qubits from before the code on, so where this fails the exchange there runs also on ordinary
+// paths on which C writes nothing (docs/DESIGN.md, "Memory written under a qubit"). A block is *sure* when,
+// whatever the ordinary values, some configuration of the qubits reaches a write from it before the code ends:
+// it writes, or it jumps unconditionally or on an ordinary value to sure blocks only, or on a value chosen by
+// qubits alone to at least one sure block. Leaving the code is not sure. A jump back to the head of a loop counts
+// as sure for an ordinary choice (staying in the loop forever never reaches code that could read the bytes; it
+// leaves by an edge that is checked) and not for a choice by qubits. Each condition chosen by qubits is taken as
+// free, as the text reads: `if (q) if (!q) g = q;` counts as a write.
+bool writesOnEveryOrdinaryPath(const std::vector<Instruction *> &writes, const Instruction &start,
+                                const std::set<const BasicBlock *> &region, const ControlAnalysis &analysis) {
+  SmallVector<std::pair<const BasicBlock *, const BasicBlock *>, 8> backList;
+  FindFunctionBackedges(*start.getFunction(), backList);
+  std::set<std::pair<const BasicBlock *, const BasicBlock *>> back(backList.begin(), backList.end());
+  std::set<const BasicBlock *> sure;
+  for (const Instruction *write : writes) {
+    sure.insert(write->getParent());
+  }
+  for (bool changed = true; changed;) {
+    changed = false;
+    for (const BasicBlock *block : region) {
+      if (sure.count(block)) {
+        continue;
+      }
+      const Instruction *term = block->getTerminator();
+      const auto *branch = dyn_cast<BranchInst>(term);
+      const auto *choice = dyn_cast<SwitchInst>(term);
+      if (!branch && !choice) {
+        continue;
+      }
+      const Value *condition = branch && branch->isConditional() ? branch->getCondition()
+                               : choice                          ? choice->getCondition()
+                                                                 : nullptr;
+      bool chosen = condition && chosenByQubits(condition, analysis);
+      bool any = false;
+      bool all = true;
+      for (const BasicBlock *succ : successors(block)) {
+        bool good = region.count(succ) && sure.count(succ);
+        bool again = back.count({block, succ}) != 0;
+        any |= good && !again;
+        all &= good || again;
+      }
+      if (chosen ? any : all) {
+        sure.insert(block);
+        changed = true;
+      }
+    }
+  }
+  const BasicBlock *entry = start.getParent()->getSingleSuccessor();
+  return entry && region.count(entry) && sure.count(entry);
+}
+
 class Holder {
 public:
   Holder(Function &function, ControlAnalysis &analysis)
@@ -118,8 +202,10 @@ private:
   std::optional<Range> rangeOf(Value *pointer, uint64_t size, Value *object, bool &exact);
   // `owned`: a local of the function, whose stack bytes never hold qubits: the shadow takes the old value by
   // XOR, holds the local's bytes to the end, and is exchanged into them only where they are measured.
+  // `everyPath`: the writes run on every ordinary path from `start` (writesOnEveryOrdinaryPath); otherwise the
+  // span is refused where the bytes may still hold qubits when the function returns.
   void span(Value *object, const Range &hull, Instruction *start, const std::set<const BasicBlock *> &region,
-            bool owned);
+            bool owned, bool everyPath);
   Function *exchange();
 };
 
@@ -215,12 +301,18 @@ void Holder::hold(const std::vector<Instruction *> &writes, Instruction *start,
                          "until bennett_measure_bytes measures them; ordinary code that reads them before then "
                          "faults (qubit_memory_access)"),
             first);
-    span(object, hull, start, region, owned);
+    std::vector<Instruction *> own;
+    for (Instruction *write : writes) {
+      if (objectOf(cast<StoreInst>(write)->getPointerOperand()) == object) {
+        own.push_back(write);
+      }
+    }
+    span(object, hull, start, region, owned, region.empty() || writesOnEveryOrdinaryPath(own, *start, region, analysis));
   }
 }
 
 void Holder::span(Value *object, const Range &hull, Instruction *start, const std::set<const BasicBlock *> &region,
-                  bool owned) {
+                  bool owned, bool everyPath) {
   LLVMContext &context = fn.getContext();
   Type *word = IntegerType::get(context, unsigned(8 * (hull.end - hull.begin)));
   IRBuilder<> top(&*fn.getEntryBlock().getFirstInsertionPt());
@@ -380,6 +472,29 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
                &inst);
   };
 
+  // Whether nothing from the start of `from` on touches the bytes but a measurement of them or a return.
+  auto quietFrom = [&](BasicBlock &from) {
+    std::set<const BasicBlock *> seen{&from};
+    std::vector<BasicBlock *> work{&from};
+    while (!work.empty()) {
+      BasicBlock *block = work.back();
+      work.pop_back();
+      for (Instruction &inst : *block) {
+        std::optional<Range> touched;
+        Role kind = role(inst, touched);
+        if (kind != Role::Other && kind != Role::End && kind != Role::Return && kind != Role::EdgeEnd) {
+          return false;
+        }
+      }
+      for (BasicBlock *succ : successors(block)) {
+        if (seen.insert(succ).second) {
+          work.push_back(succ);
+        }
+      }
+    }
+    return true;
+  };
+
   // The state of the bytes at each block's entry. A conflict (the span would start twice, or an access sees a
   // state that differs from path to path) is settled by an exchange on each edge that leaves the shadow holding
   // the bytes where it joins paths on which the span has ended, or else moves the start up the dominator tree.
@@ -418,6 +533,16 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
           state = State{State::Done, all};
           break;
         case Role::Return:
+          // Where the exchange may have run on a path on which C writes nothing, the bytes must not leave the
+          // function holding qubits: the caller may read them ordinarily, where C reads the old value.
+          if (apply && !owned && !everyPath && state.holdsQubits()) {
+            notHandled("memory written under a qubit (" + describe(object, hull) +
+                           ") whose exchange runs also on ordinary paths on which C writes nothing there (an ordinary "
+                           "condition skips the write after the exchange), and which may still hold qubits when the "
+                           "function returns, where the caller can read them (measure them before returning; route: "
+                           "one exchange on each path that writes, not built)",
+                       &inst);
+          }
           if (state.kind == State::Live && apply && !owned) {
             IRBuilder<> end(&inst);
             end.CreateCall(exchange(), {shadow, addressAt(end), end.getInt64(0)});
@@ -522,9 +647,11 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
       }
       return;
     }
-    // Paths on which the shadow still holds the bytes, joining paths on which the span has ended, outside code
-    // applied whole: the span ends on those edges too (the exchange, as before a return).
+    // Paths on which the shadow still holds the bytes, joining paths on which the span has ended or never started,
+    // outside code applied whole: the span ends on those edges too (the exchange, as before a return). Edges that
+    // leave code applied whole end it in a block of their own after that code.
     std::vector<std::pair<BasicBlock *, BasicBlock *>> edges;
+    std::vector<std::pair<BasicBlock *, SmallVector<BasicBlock *, 4>>> exits;
     for (BasicBlock *block : blocks) {
       if (owned || region.count(block) || !entry.count(block) || entry[block].kind != State::Mixed) {
         continue;
@@ -532,22 +659,44 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
       bool live = false;
       bool done = false;
       bool other = false;
+      SmallVector<BasicBlock *, 4> fromRegion;
       for (BasicBlock *pred : predecessors(block)) {
         auto found = exitState.find(pred);
         if (found == exitState.end()) {
           continue;
         }
-        live |= found->second.kind == State::Live;
-        done |= found->second.kind == State::Done;
-        other |= (found->second.kind != State::Live && found->second.kind != State::Done) || region.count(pred);
+        // A path on which the span never started (Before) gives no bytes of its own, as one on which it ended,
+        // when nothing after the join touches the bytes again but a measurement (else the start moves up, below).
+        bool ended = found->second.kind == State::Done || (found->second.kind == State::Before && quietFrom(*block));
+        bool held = found->second.kind == State::Live;
+        live |= held;
+        done |= ended;
+        other |= (!held && !ended) || (region.count(pred) && !held);
+        if (held && region.count(pred) && !is_contained(fromRegion, pred)) {
+          fromRegion.push_back(pred);
+        }
       }
       if (live && done && !other) {
+        if (!fromRegion.empty()) {
+          exits.push_back({block, fromRegion});
+        }
         for (BasicBlock *pred : predecessors(block)) {
-          if (exitState.count(pred) && exitState[pred].kind == State::Live) {
+          if (exitState.count(pred) && exitState[pred].kind == State::Live && !region.count(pred)) {
             edges.push_back({pred, block});
           }
         }
       }
+    }
+    for (auto &[to, preds] : exits) {
+      BasicBlock *after = SplitBlockPredecessors(to, preds, ".held.end", &dominators, &loops);
+      if (!after) {
+        fail("cannot make a block after code under a qubit to end a span of held bytes");
+      }
+      IRBuilder<> end(after->getTerminator());
+      edgeEnds.insert(end.CreateCall(exchange(), {shadow, addressAt(end), end.getInt64(0)}));
+    }
+    if (!exits.empty()) {
+      continue;
     }
     if (!edges.empty()) {
       for (auto [from, to] : edges) {
@@ -566,6 +715,11 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
                  conflict);
     }
     Instruction *before = node->getIDom()->getBlock()->getTerminator();
+    // Above an ordinary condition that skips the write (the span's original start does not post-dominate the new
+    // place) the exchange runs also where C writes nothing: the bytes are then refused at a return that may see
+    // them hold qubits. Inside the function every access while the shadow holds them reads the shadow, which
+    // holds their old value there.
+    everyPath = everyPath && PostDominatorTree(fn).dominates(start->getParent(), before->getParent());
     for (Instruction *inst : starting) {
       inst->moveBefore(before);
     }

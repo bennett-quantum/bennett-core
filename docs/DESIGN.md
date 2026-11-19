@@ -1215,10 +1215,25 @@ bytes is then an access to the same shadow, and the last write is the one the by
 programmer's measurement, `docs/MARKERS.md`): there the bytes get their value, and the bytes measured are
 ordinary memory again, holding the result ("Qubits in memory"); the others keep holding qubits, so ordinary
 code may then touch the measured bytes and not the others. Where a path on which the shadow still holds the
-bytes joins, outside code under a qubit, a path on which the span has ended (a measurement on one path, a
-return after the join), the span also ends on the edges from the first: the same exchange, on those edges.
+bytes joins a path on which the span has ended (a measurement on one path, a return after the join) or never
+started (an ordinary condition skipped the write, and nothing after the join touches the bytes but a
+measurement), the span also ends on the edges from the first: the same exchange, on those edges, or in a block
+of its own after code under a qubit when the edges leave that code.
 Any other disagreement between paths moves the start earlier, to a block that dominates, until every access
 to the bytes sees one state on every path.
+
+The exchange that starts a span must run only on ordinary paths on which a write of a value that depends on a
+qubit into those bytes runs: on another path the language says the bytes stay ordinary. Two placements break
+this. Code under a qubit is applied whole, so its exchange is before it, and an ordinary condition inside it
+can skip every write (`if (q) { if (n) g = q; }`, which LLVM makes one condition `n && q`, or a loop over an
+ordinary count that may be 0); the front decides whether, whatever the ordinary values, some configuration of
+the qubits reaches a write, reading each condition that depends on qubits alone as free, as the text reads.
+And moving the start earlier may take it above an ordinary condition that skips the write (the original start
+no longer post-dominates it). Inside the function this is harmless: while the shadow holds the bytes every
+access reads the shadow, which holds their old value on such a path, and a measurement gives it. What is
+refused by name is a return at which the bytes may still hold qubits after such a placement, since the
+caller may read them ordinarily where C reads the old value (route: one exchange on each path that writes,
+not built; the program can measure the bytes before returning).
 
 Which pointers may reach the bytes (`front/src/Aliasing.h`). What a pointer argument may point to is the union
 of what the calls of its function in the module pass; a function the host may call (external linkage), or one
@@ -1243,7 +1258,8 @@ time, not built), a second shadow of the same bytes while the first holds them (
 that depends on a qubit that does not run before the code under a qubit on every path, or that is in a loop;
 route: one shadow from the earliest write, not built), a callee that measures them (route: measure them in the
 caller first; for the front, ending the span before a call whose only access to them is that measurement, not
-built), an access that touches them only in part, a
+built), a return at which they may still hold qubits after an exchange that ran also where C writes nothing
+(above), an access that touches them only in part, a
 position that is not constant outside code applied whole, more than 8 bytes of one object (planned
 with wider registers), an object the
 front cannot name, and a store into memory in code that also has gates (each listed in `HANDOFF.md`, "What is refused"). The
@@ -1270,6 +1286,10 @@ measurements, a span ended by a measurement on one path and a return on another,
 by computing the old value again (exact amplitudes, nothing kept) and the one that cannot, a region writing
 two objects (every bit of each change), pointers that may share bytes (refused by name; merged, distinct and
 `restrict` accepted with C's values), and a callee reading the global variable (refused by name).
+`front/tests/tests/coherence_regressions.rs`: a store under an ordinary condition, read ordinarily by the caller on
+the path that skips it, gives C's 0 (it faulted before); the same store under a qubit and an ordinary condition,
+and in a loop over an ordinary count, are refused by name where the bytes leave the function holding qubits;
+measured before the return they give C's values.
 `front/tests/tests/held_regions_independent.rs`: two held objects of unequal width (exact amplitudes), a second
 region over held objects, gate barriers before an overwrite, pointer pairs and call chains, seeded short loops
 against native C, a straight store before a region writing the same byte (C's value), a callee measuring a
