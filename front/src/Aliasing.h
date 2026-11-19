@@ -42,9 +42,11 @@ public:
 
   // A set of objects, for a caller that collects the objects several pointers may point into (Classify.h).
   using Objects = std::set<const llvm::Value *>;
-  // Adds to `into` the objects `pointer` may point into.
+  // Adds to `into` the objects `pointer` may point into. A `restrict` argument stands for what its calls pass, not
+  // for an object of its own: what is written through it outlives the call.
   void addObjectsOf(const llvm::Value *pointer, Objects &into) const;
-  // Whether memory reached through `pointer` (in `function`) may share bytes with one of `objects`.
+  // Whether memory reached through `pointer` (in `function`) may share bytes with one of `objects`, a `restrict`
+  // argument standing for what its calls pass.
   bool mayReach(const llvm::Function &function, const llvm::Value *pointer, const Objects &objects) const;
 
 private:
@@ -58,6 +60,8 @@ private:
 
   // The objects `pointer` may point into, its function's arguments resolved by what they may point to.
   Objects objectsOf(const llvm::Value *pointer) const;
+  // `objects` with each `restrict` argument replaced by what its calls pass (anything when not known).
+  Objects withoutRestrict(Objects objects) const;
   Objects touchedBy(const llvm::CallBase &call) const;
   bool escapes(const llvm::Value *object) const;
   bool meet(const llvm::Function &function, const Objects &a, const Objects &b) const;

@@ -269,13 +269,38 @@ bool Aliasing::meet(const Function &function, const Objects &a, const Objects &b
   return false;
 }
 
+Aliasing::Objects Aliasing::withoutRestrict(Objects objects) const {
+  std::set<const Argument *> replaced;
+  for (bool changed = true; changed;) {
+    changed = false;
+    for (const Value *object : Objects(objects)) {
+      const auto *argument = dyn_cast<Argument>(object);
+      if (!argument || !isRestrict(*argument)) {
+        continue;
+      }
+      objects.erase(object);
+      changed = true;
+      if (!replaced.insert(argument).second) {
+        continue;
+      }
+      auto found = arguments.find(argument);
+      if (found == arguments.end()) {
+        objects.insert(anything);
+      } else {
+        objects.insert(found->second.begin(), found->second.end());
+      }
+    }
+  }
+  return objects;
+}
+
 void Aliasing::addObjectsOf(const Value *pointer, Objects &into) const {
-  Objects objects = objectsOf(pointer);
+  Objects objects = withoutRestrict(objectsOf(pointer));
   into.insert(objects.begin(), objects.end());
 }
 
 bool Aliasing::mayReach(const Function &function, const Value *pointer, const Objects &objects) const {
-  return !objects.empty() && meet(function, objectsOf(pointer), objects);
+  return !objects.empty() && meet(function, withoutRestrict(objectsOf(pointer)), objects);
 }
 
 bool Aliasing::mayShare(const Function &function, const Value *a, const Value *b) const {

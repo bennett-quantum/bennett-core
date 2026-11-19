@@ -294,8 +294,17 @@ void Seal::open(const char *run) {
   }
   sealed.clear();
   if (!kept.empty()) {
-    SmallPtrSet<Constant *, 8> remove(kept.begin(), kept.end());
-    removeFromUsedLists(module, [&](Constant *value) { return remove.count(value) != 0; });
+    // Only the entries this seal added to llvm.compiler.used go; llvm.used and the other entries stay as they were.
+    SmallPtrSet<GlobalValue *, 8> remove(kept.begin(), kept.end());
+    SmallVector<GlobalValue *, 8> rest;
+    // The list may be gone: LLVM's GlobalOpt drops an entry of it that llvm.used also holds.
+    if (GlobalVariable *list = collectUsedGlobalVariables(module, rest, /*CompilerUsed=*/true)) {
+      erase_if(rest, [&](GlobalValue *value) { return remove.count(value) != 0; });
+      list->eraseFromParent();
+      if (!rest.empty()) {
+        appendToCompilerUsed(module, rest);
+      }
+    }
     kept.clear();
   }
 }

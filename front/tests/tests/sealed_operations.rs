@@ -1,9 +1,11 @@
 //! Instructions the language's rules depend on are classified before LLVM's optimiser and sealed for every pass
 //! that could move, merge, copy or remove them (`front/src/Classify.h`, `front/src/Passes.h`).
 
+use std::path::Path;
+
 use bennett_exec::Outcome;
 use bennett_front_tests::{
-    CLANG_FLAGS, lower, lower_text_with_diagnostics, native_build, root, run_with_stats, write_c,
+    CLANG_FLAGS, front, lower, lower_text_with_diagnostics, native_build, out_dir, root, run_with_stats, write_c,
 };
 
 /// LLVM's pass machinery and its simplifier utilities, by name. A front source other than `Passes.cpp` that
@@ -53,21 +55,52 @@ fn the_scan_finds_a_simplifier_run() {
     assert!(simplifier_names("  simplifyDeep(*copy); // through Passes.h\n").is_empty());
 }
 
-#[test]
-fn only_the_passes_module_runs_llvm_passes() {
-    let sources = root().join("front/src");
+/// Every file under `dir`, recursively, that names a simplifier, except the files `allowed` (by file name).
+fn simplifier_offenders(dir: &Path, allowed: &[&str]) -> Vec<String> {
     let mut offenders = Vec::new();
-    for entry in std::fs::read_dir(&sources).expect("front/src") {
-        let path = entry.expect("source entry").path();
-        let name = path.file_name().and_then(|name| name.to_str()).expect("file name").to_string();
-        if !(name.ends_with(".cpp") || name.ends_with(".h") || name.ends_with(".def")) || name == "Passes.cpp" {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path).expect("read source");
-        for identifier in simplifier_names(&text) {
-            offenders.push(format!("{name}: {identifier}"));
+    let mut work = vec![dir.to_path_buf()];
+    while let Some(next) = work.pop() {
+        for entry in std::fs::read_dir(&next).unwrap_or_else(|e| panic!("{next:?}: {e}")) {
+            let path = entry.expect("directory entry").path();
+            if path.is_dir() {
+                work.push(path);
+                continue;
+            }
+            let name = path.file_name().and_then(|name| name.to_str()).expect("file name").to_string();
+            if allowed.contains(&name.as_str()) {
+                continue;
+            }
+            let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
+            for identifier in simplifier_names(&String::from_utf8_lossy(&bytes)) {
+                offenders.push(format!("{}: {identifier}", path.display()));
+            }
         }
     }
+    offenders
+}
+
+/// The files that may name LLVM's pass machinery: the one module that seals the classified instructions.
+const PASS_MODULE: &[&str] = &["Passes.cpp"];
+
+#[test]
+fn the_scan_reads_every_file_whatever_its_extension() {
+    let dir = out_dir().join("simplifier-scan-witness");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("detail")).expect("witness directory");
+    std::fs::write(dir.join("Passes.cpp"), "ModulePassManager passes;\n").expect("allowed file");
+    std::fs::write(dir.join("detail/Cleanup.hpp"), "  ModulePassManager passes;\n").expect("header");
+    std::fs::write(dir.join("Normalise.inc"), "  passes.addPass(NoOpModulePass());\n").expect("include");
+    let mut found = simplifier_offenders(&dir, PASS_MODULE);
+    found.sort();
+    assert_eq!(found.len(), 3, "{found:?}");
+    assert!(found.iter().any(|line| line.contains("Cleanup.hpp: ModulePassManager")), "{found:?}");
+    assert!(found.iter().any(|line| line.contains("Normalise.inc: NoOpModulePass")), "{found:?}");
+}
+
+#[test]
+fn only_the_passes_module_runs_llvm_passes() {
+    let mut offenders = simplifier_offenders(&root().join("front/src"), PASS_MODULE);
+    offenders.extend(simplifier_offenders(&root().join("front/include"), &[]));
     assert!(offenders.is_empty(), "run LLVM passes through front/src/Passes.h:\n{}", offenders.join("\n"));
 }
 
@@ -324,4 +357,261 @@ unsigned entry(unsigned prep, unsigned n, unsigned column) {{
         ),
         "the LLVM instruction `atomicrmw`",
     );
+}
+
+/// The two writing helpers of `a_call_with_an_argument_that_depends_on_a_qubit_stays_applied`, with the first
+/// argument `q & 0u`. It depends on a qubit by the text, so the call is applied; the optimiser folds the argument
+/// to 0. Translated as an ordinary call, `first`'s write survived (native 18, device 2): the class decides, and
+/// translating it as applied is not built.
+#[test]
+fn an_applied_call_whose_argument_the_optimiser_folds_is_refused_by_name() {
+    refused(
+        "applied-call-folded-argument",
+        r#"
+unsigned a, b;
+__attribute__((noinline)) static unsigned first(unsigned x) { a = 1; return x; }
+__attribute__((noinline)) unsigned second(unsigned x) { b = 1; return x + 1; }
+unsigned entry(unsigned prep, unsigned n, unsigned column) {
+    uint8_t q = 0, y = 0;
+    XBIT(q, 0);
+    y ^= first(q & 0u);
+    y ^= second(q);
+    return READ_BYTES(y, 1) + (a == b) * 16u;
+}
+"#,
+        "a call with an argument that depends on a qubit before LLVM's optimiser, whose arguments are ordinary after it",
+    );
+}
+
+/// A variadic argument that depends on a qubit: the front passes it in a caller-owned area, after which the call
+/// carried only an ordinary address and was not applied, and the callee's write survived (native 16, device 0).
+#[test]
+fn a_variadic_argument_that_depends_on_a_qubit_is_refused_by_name() {
+    refused(
+        "applied-call-variadic-argument",
+        r#"
+unsigned a, b;
+__attribute__((noinline)) static unsigned first(unsigned x, ...) { a = 1; return x; }
+__attribute__((noinline)) unsigned second(unsigned x) { b = 1; return x + 1; }
+unsigned entry(unsigned prep, unsigned n, unsigned column) {
+    uint8_t q = 0, y = 0;
+    XBIT(q, 0);
+    y ^= first(2, q);
+    y ^= second(q);
+    return READ_BYTES(y, 1) + (a == b) * 16u;
+}
+"#,
+        "a call with a variadic argument, which the front passes in memory, that depends on a qubit",
+    );
+}
+
+/// A structure passed by value whose field depends on a qubit: the call passes the address of a copy.
+#[test]
+fn a_structure_passed_by_value_that_depends_on_a_qubit_is_refused_by_name() {
+    refused(
+        "applied-call-by-value",
+        r#"
+struct pair { unsigned long long x, y, z; };
+unsigned a;
+__attribute__((noinline)) static unsigned first(struct pair p) { a = 1; return (unsigned)(p.x + p.z); }
+unsigned entry(unsigned prep, unsigned n, unsigned column) {
+    uint8_t q = 0, y = 0;
+    XBIT(q, 0);
+    struct pair p = {q, 2, 3};
+    y ^= first(p);
+    return READ_BYTES(y, 1) + 16u * a;
+}
+"#,
+        "a call with an argument passed by value, which is a copy in memory, that depends on a qubit",
+    );
+}
+
+/// `fill` writes a qubit's value through a `restrict` parameter into `held[0]`: the bytes hold qubits after the
+/// call, whatever `restrict` says about the call itself. The guarded read in `masked` must stay guarded.
+#[test]
+fn a_write_through_a_restrict_parameter_keeps_later_guarded_reads_guarded() {
+    agrees(
+        "restrict-fill-guarded-product",
+        r#"
+uint8_t held[2] = {0, 1};
+__attribute__((noinline)) void fill(uint8_t *restrict dest) {
+    uint8_t r = 0;
+    XBIT(r, 0);
+    dest[0] = r;
+    XBIT(r, 0);
+}
+__attribute__((noinline)) unsigned masked(unsigned n) { if (n) return n * held[0]; return 0; }
+unsigned entry(unsigned prep, unsigned n, unsigned column) {
+    fill(held);
+    unsigned v = masked(n - 1);
+    return v + READ_BYTES(held[0], 1);
+}
+"#,
+        &[(1, 1)],
+    );
+}
+
+/// The bytes of a qubit variable copied into `held[0]` by memcpy or memmove: they hold qubits after the copy, so
+/// a guarded read of them must stay guarded.
+fn copied_qubit(name: &str, copy: &str, body: &str, inputs: &[(u64, u64)]) {
+    agrees(
+        name,
+        &format!(
+            "
+uint8_t held[2] = {{0, 1}};
+__attribute__((noinline)) void fill(void) {{
+    uint8_t r = 0;
+    XBIT(r, 0);
+    {copy}(&held[0], &r, 1);
+    XBIT(r, 0);
+}}
+{body}
+"
+        ),
+        inputs,
+    );
+}
+
+const COPIED_PRODUCT: &str = r#"
+__attribute__((noinline)) unsigned masked(unsigned n) { if (n) return n * held[0]; return 0; }
+unsigned entry(unsigned prep, unsigned n, unsigned column) {
+    fill();
+    unsigned v = masked(n - 1);
+    return v + READ_BYTES(held[0], 1);
+}
+"#;
+
+const COPIED_GUARD: &str = r#"
+unsigned long long entry(unsigned prep, unsigned n, unsigned column) {
+    uint8_t q = 0, z = 0;
+    if (prep == 2) XBIT(q, 0); else if (prep == 0) HBIT(q, 0);
+    ZBIT(q, 1);
+    if (prep == 1) fill();
+    ZBIT(q, 1);
+    if (q && held[0]) XBIT(z, 0);
+    return (READ(q) | ((unsigned long long)READ(z) << 32)) | ((unsigned long long)READ_BYTES(held[0], 1) << 16);
+}
+"#;
+
+#[test]
+fn bytes_copied_from_a_qubit_variable_keep_a_guarded_product_guarded() {
+    copied_qubit("memcpy-qubit-product", "__builtin_memcpy", COPIED_PRODUCT, &[(1, 1)]);
+    copied_qubit("memmove-qubit-product", "__builtin_memmove", COPIED_PRODUCT, &[(1, 1)]);
+}
+
+#[test]
+fn bytes_copied_from_a_qubit_variable_keep_a_qubit_guard_guarded() {
+    copied_qubit("memcpy-qubit-guard", "__builtin_memcpy", COPIED_GUARD, &[(1, 1), (2, 1), (3, 1)]);
+    copied_qubit("memmove-qubit-guard", "__builtin_memmove", COPIED_GUARD, &[(1, 1), (2, 1), (3, 1)]);
+}
+
+/// The device result of `entry()` in the LLVM IR `text`, translated as handed over (`clang -O0` keeps it).
+fn run_ir(name: &str, text: &str) -> Outcome {
+    let path = out_dir().join(format!("{name}.ll"));
+    std::fs::write(&path, text).expect("write IR");
+    let module = lower(&path, name, CLANG_FLAGS, &[]);
+    run_with_stats(&module, "entry", &[], 0).0
+}
+
+/// A vector of two 24-bit elements takes six bytes in memory: element 1 starts at byte 3 (an i24 alone takes 4).
+/// `fill`, never called, makes `@buf` memory that may hold qubits, so the vector access is classified and split.
+const VECTOR24: &str = r#"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-linux-gnu"
+@buf = global [8 x i8] c"\01\02\03\04\05\06\07\08", align 16
+declare void @bennett_x(ptr)
+define void @fill() {
+  %q = alloca i8
+  store i8 0, ptr %q
+  call void @bennett_x(ptr %q)
+  %x = load i8, ptr %q
+  store i8 %x, ptr @buf
+  ret void
+}
+"#;
+
+#[test]
+fn a_split_vector_read_finds_each_element_at_its_packed_offset() {
+    let text = format!(
+        "{VECTOR24}
+define i32 @entry() {{
+  %v = load <2 x i24>, ptr @buf, align 1
+  %e = extractelement <2 x i24> %v, i32 1
+  %r = zext i24 %e to i32
+  ret i32 %r
+}}
+"
+    );
+    assert_eq!(run_ir("vector24-read", &text), Outcome::Returned(Some(0x06_05_04)));
+}
+
+#[test]
+fn a_split_vector_write_puts_each_element_at_its_packed_offset() {
+    let text = format!(
+        "{VECTOR24}
+define i32 @entry() {{
+  store <2 x i24> <i24 657164, i24 855567>, ptr @buf, align 1
+  %p = getelementptr inbounds i8, ptr @buf, i64 3
+  %e = load i24, ptr %p, align 1
+  %r = zext i24 %e to i32
+  ret i32 %r
+}}
+"
+    );
+    assert_eq!(run_ir("vector24-write", &text), Outcome::Returned(Some(855_567)));
+}
+
+/// The lines of LLVM text `text` that define the module's lists of globals kept from deletion.
+fn used_lists(text: &str) -> Vec<String> {
+    text.lines()
+        .filter(|line| line.starts_with("@llvm.used") || line.starts_with("@llvm.compiler.used"))
+        .map(String::from)
+        .collect()
+}
+
+/// A function the module keeps in `llvm.used` only, called applied: sealing the call adds the function to
+/// `llvm.compiler.used` for the run and must take away only that entry, leaving `llvm.used` as it was.
+#[test]
+fn sealing_an_applied_call_leaves_the_used_list_as_it_was() {
+    let source = write_c(
+        "used-applied-callee",
+        &format!(
+            "{PRELUDE}
+__attribute__((used, noinline)) static unsigned twice(unsigned x) {{ return 2 * x; }}
+unsigned entry(unsigned prep, unsigned n, unsigned column) {{
+    uint8_t q = 0, y = 0;
+    XBIT(q, 0);
+    y ^= twice(q);
+    return READ_BYTES(y, 1);
+}}
+"
+        ),
+    );
+    // clang puts a `used` function into llvm.compiler.used; the same module with llvm.used instead.
+    let include = format!("-I{}", root().join("front/include").display());
+    let text = std::process::Command::new(bennett_front_tests::clang())
+        .args(CLANG_FLAGS)
+        .arg(&include)
+        .args(["-emit-llvm", "-S", "-o", "-"])
+        .arg(&source)
+        .output()
+        .expect("clang");
+    assert!(text.status.success(), "{}", String::from_utf8_lossy(&text.stderr));
+    let text = String::from_utf8_lossy(&text.stdout).replace("@llvm.compiler.used", "@llvm.used");
+    assert_eq!(used_lists(&text), ["@llvm.used = appending global [1 x ptr] [ptr @twice], section \"llvm.metadata\""]);
+    let input = out_dir().join("used-applied-callee.ll");
+    std::fs::write(&input, &text).expect("write IR");
+    let emitted = out_dir().join("used-applied-callee.emitted.ll");
+    let status = std::process::Command::new(front())
+        .arg(&input)
+        .arg("-o")
+        .arg(out_dir().join("used-applied-callee.bn"))
+        .arg("--stack-bytes=65536")
+        .arg("--region-budget=100000")
+        .arg("--emit-llvm")
+        .arg(&emitted)
+        .status()
+        .expect("run the front");
+    assert!(status.success());
+    assert_eq!(used_lists(&std::fs::read_to_string(&emitted).expect("emitted LLVM")), used_lists(&text));
 }

@@ -22,7 +22,10 @@
 //
 // Memory "may hold qubits" when the front's alias analysis (Aliasing.h) says it may share bytes with an object a
 // qubit store, a held-memory call or an atomic update that depends on a qubit writes, or with a global variable a
-// marker acts on.
+// marker acts on. A `restrict` parameter counts as what its calls pass (what is written through it outlives the
+// call). A memory intrinsic that copies from such memory or from a qubit variable makes its destination such memory;
+// a copy of a constant number of bytes out of a qubit variable is rewritten into a read of it and a store, as
+// LLVM's InstCombine would rewrite it.
 //
 // "Depends on a qubit" is decided by the text of the program: a value depends on a qubit at a place if, on some
 // path to that place, it was computed from a qubit. The sources are: a load of a qubit variable that is not
@@ -48,12 +51,14 @@
 //
 // What can be neither classified nor left to the optimiser is refused by name: an `invoke` or `callbr` with an
 // argument that depends on a qubit, an intrinsic other than the three memory intrinsics, and a `va_arg`, that
-// may touch memory that may hold qubits.
+// may touch memory that may hold qubits; and a qubit-dependent argument the calling-convention lowering would
+// move into memory or drop (refuseQubitArgumentsLoweredAway).
 #pragma once
 
 #include <optional>
 
 namespace llvm {
+class CallBase;
 class Instruction;
 class Module;
 } // namespace llvm
@@ -74,6 +79,20 @@ const char *classDescription(OperationClass kind);
 // Removes the class: the front has turned the access into an access of a qubit variable (HeldBytes.h), which its
 // own analyses govern from then on.
 void declassify(llvm::Instruction &inst);
+
+// An applied call stays applied after the optimiser, whatever its arguments look like then (the optimiser may
+// fold `f(q & 0u)` to `f(0)`). The front calls this where it is about to translate `call` as an ordinary call,
+// with `dependsNow` its own later finding about the arguments: a call classified as applied that the front finds
+// ordinary now is refused by name, never translated as ordinary. Nothing is reclassified by looking at the
+// arguments.
+void requireAppliedCallKept(const llvm::CallBase &call, bool dependsNow);
+
+// Before the front lowers the calling convention (Abi.h, the `byval` copies of Normalise.h), refuses by name a call
+// that passes an argument that depends on a qubit in a way that lowering would turn into memory or drop: a variadic
+// argument, an argument passed by value, a vector or aggregate argument, an argument of a call through another
+// prototype. After that lowering the call would carry only an ordinary address, so it would not be classified as
+// applied. Decided as the classification decides, on a copy of the module after SROA.
+void refuseQubitArgumentsLoweredAway(const llvm::Module &module, bool taintAll);
 
 // Classifies every instruction of `module` (after SROA, before the optimiser) as above.
 void classify(llvm::Module &module, bool taintAll);
