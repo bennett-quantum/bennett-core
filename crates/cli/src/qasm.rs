@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 use std::ops::Range;
 
-use bennett_exec::{Device, GateOp, RunError, Wire};
+use bennett_exec::{Device, GateOp, Outcome, RunError, Wire};
 use bennett_ir::Gate;
 
 #[derive(Clone, Copy)]
@@ -26,6 +26,8 @@ impl<W: Write, I> QasmDevice<W, I> {
     pub(crate) fn new(mut output: W, seed: u64, bits: I) -> io::Result<Self> {
         writeln!(output, "OPENQASM 3.0;\ninclude \"stdgates.inc\";")?;
         writeln!(output, "// Bennett run with synthetic measurement outcomes (seed {seed}).")?;
+        writeln!(output, "// An annotated outcome can have probability zero.")?;
+        writeln!(output, "// A release_zero request assumes a replay with the recorded outcomes.")?;
         Ok(Self { output, write_error: Cell::new(None), bits, wires: HashMap::new(), next_register: 0 })
     }
 
@@ -104,7 +106,16 @@ impl<W: Write, I: Iterator<Item = bool>> Device for QasmDevice<W, I> {
     }
 
     fn release_zero(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
-        self.release(wires, "release_zero", "")
+        self.release(wires, "release_zero requested for", "")
+    }
+}
+
+pub(crate) fn write_run_end(output: &mut impl Write, outcome: Outcome, status: u8) -> io::Result<()> {
+    match outcome {
+        Outcome::Returned(Some(value)) => writeln!(output, "// returned {value} (exit code {status})"),
+        Outcome::Returned(None) => writeln!(output, "// returned (exit code {status})"),
+        Outcome::Faulted(fault) => writeln!(output, "// fault {fault} (code {}, exit code {status})", fault.code()),
+        Outcome::Stopped(error) => writeln!(output, "// stopped {error} (exit code {status})"),
     }
 }
 

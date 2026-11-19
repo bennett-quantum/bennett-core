@@ -40,3 +40,41 @@ apply:
     apply @both(%a, %b) -> %out, %fault budget 0
     ret
 }
+
+func @measure_zero_byte() -> i8 {
+entry:
+    z [16]
+    %byte = measure i8 [16]
+    ret %byte
+}
+
+func @short() -> i8 {
+entry:
+    %q = qalloc 1
+    h %q
+    ret 7
+}
+
+func @long() -> i8 {
+entry:
+    %q = qalloc 1
+    h %q
+    x %q
+    ret 7
+}
+
+func @divide(i2 %x) -> i2 {
+entry:
+    %quotient = udiv i2 %x, 2
+    ret %quotient
+}
+
+func @stopped() {
+entry:
+    %x = qalloc 2
+    h %x[0]
+    %result = qalloc 2
+    %fault = qalloc 5
+    apply @divide(%x) -> %result, %fault budget 2
+    ret
+}

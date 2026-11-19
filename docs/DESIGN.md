@@ -204,8 +204,12 @@ and sample larger registers with a fixed seed.
 #### OpenQASM output
 
 `bennett run --device qasm --qasm-output FILE` streams the quantum commands of one execution to a
-new OpenQASM 3.0 file. If the controller faults or stops, the file records the commands reached up to
-that point. As with the counter, `apply` is compiled to gates. Both devices decompose gates beyond
+temporary file beside the requested path. The final comment gives the return and its scalar value
+when present, or the fault or stop reason, along with the command's exit code. The exporter publishes
+the completed trace at the requested path without replacing an existing file. A rejected start or an
+output error leaves the requested path untouched.
+
+As with the counter, `apply` is compiled to gates. Both devices decompose gates beyond
 the native controls described above, so their one-qubit, two-qubit and Toffoli gate totals agree.
 The file expands gate blocks at each call. Gates use `stdgates.inc` with `ctrl @` for each control,
 in control-then-target order.
@@ -217,16 +221,17 @@ and contributes no gates. [OpenQASM qubit declarations](https://openqasm.com/ver
 
 A `qfree` drops a register by partial trace. The file marks its qubits with a `discard` comment and
 leaves them declared and idle. Ignoring those qubits gives the state of the remaining qubits after the
-partial trace. The file marks scratch returned in zero with a `release_zero` comment. Declared qubits
-accumulate over the run, so their total can exceed the counter's peak live qubits.
+partial trace. The file marks the controller's requests to release wires in zero with `release_zero`
+comments. Declared qubits accumulate over the run, so their total can exceed the counter's peak live qubits.
 
 Each qubit measurement is a `measure` statement annotated with the bit the controller received.
-The writer uses the counter's synthetic measurement stream (`--seed`, default 0). The file follows
-the ordinary control decisions taken for those bits and omits the ordinary control program. Running
-the file may produce different measurement outcomes while still issuing the recorded sequence of gates.
+The writer uses the counter's synthetic measurement stream (`--seed`, default 0). An annotated outcome
+can have probability zero. The file follows the ordinary control decisions taken for those bits and
+omits the ordinary control program. A `release_zero` request assumes a replay with the recorded outcomes.
+Running the file may produce different measurements while still issuing the recorded sequence of gates.
 
 The CLI test independently recounts gate statements and compares them with `--device count`. The
-syntax test invokes the reference parser when available to `python3` on `PATH` and reports a skip
+syntax test invokes version 1.0.1 of the reference parser when available to `python3` on `PATH` and reports a skip
 otherwise. Install `openqasm3[parser]==1.0.1` in a virtual environment and put its `bin` directory
 on `PATH` to run the parser check. [Python OpenQASM reference parser](https://pypi.org/project/openqasm3/1.0.1/)
 

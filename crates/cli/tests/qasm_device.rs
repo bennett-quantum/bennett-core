@@ -7,6 +7,8 @@ use std::process::{Command, Output};
 
 const COUNTS: &str = "../crates/cli/tests/fixtures/count-device.bn";
 const FIXTURE: &str = "../crates/cli/tests/fixtures/qasm-device.bn";
+const BIN: &str = env!("CARGO_BIN_EXE_bennett");
+const EXAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
 const CIRCUITS: &[(&str, &[&str])] = &[
     ("grover", &["grover.bn", "--entry", "searched", "--arg", "2"]),
     ("applied", &[FIXTURE, "--entry", "applied", "--arg", "1"]),
@@ -39,8 +41,8 @@ impl Drop for Trace {
 }
 
 fn run(device: &str, args: &[&str], path: Option<&Path>) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_bennett"));
-    command.current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples")).args(["run", "--device", device]);
+    let mut command = Command::new(BIN);
+    command.current_dir(EXAMPLES).args(["run", "--device", device]);
     if let Some(path) = path {
         command.arg("--qasm-output").arg(path);
     }
@@ -116,12 +118,18 @@ fn reference_parser_accepts_the_circuits() {
         })
         .collect();
     let python = r#"
+from importlib.metadata import PackageNotFoundError, version
 from importlib.util import find_spec
 from pathlib import Path
 import sys
 
-if not all(find_spec(name) for name in ('openqasm3', 'antlr4')):
-    print('skipped OpenQASM syntax check: install openqasm3[parser]==1.0.1', file=sys.stderr)
+try:
+    installed = version('openqasm3')
+except PackageNotFoundError:
+    installed = None
+
+if installed != '1.0.1' or find_spec('antlr4') is None:
+    print('Skipped OpenQASM syntax check. Install openqasm3[parser]==1.0.1.', file=sys.stderr)
     sys.exit(0)
 
 from openqasm3.parser import parse
@@ -161,23 +169,23 @@ fn the_applied_circuit_preserves_inputs_and_xors_both_destinations() {
 }
 
 #[test]
-fn all_rotation_angles_round_trip_to_the_same_bits() {
+fn rotations_preserve_angle_bits_and_control_then_target_order() {
     let trace = Trace::new("angles");
     trace.export(&[FIXTURE, "--entry", "rotations"]);
     let text = trace.read();
     let angles: Vec<_> = gates(&text)
         .filter_map(|(name, operands)| {
             let (axis, angle) = name.strip_suffix(')')?.split_once('(')?;
-            Some((axis, angle.parse::<f64>().expect("read the angle").to_bits(), operands.len()))
+            Some((axis, angle.parse::<f64>().expect("read the angle").to_bits(), operands))
         })
         .collect();
     assert_eq!(
         angles,
         [
-            ("rx", (-0.12345678901234568_f64).to_bits(), 2),
-            ("ry", 1, 1),
-            ("rz", f64::MAX.to_bits(), 2),
-            ("rz", (-0.0_f64).to_bits(), 1),
+            ("rx", (-0.12345678901234568_f64).to_bits(), vec!["q1[0]", "q0[2]"]),
+            ("ry", 1, vec!["q0[0]"]),
+            ("rz", f64::MAX.to_bits(), vec!["q0[0]", "q0[1]"]),
+            ("rz", (-0.0_f64).to_bits(), vec!["q0[2]"]),
         ]
     );
 }
@@ -193,7 +201,8 @@ fn measurements_write_the_outcomes_where_the_controller_received_them() {
         assert!(report.contains(&format!("result: {first}\n")), "{report}");
         assert_eq!(commands[1], format!("measure q0[0]; // outcome {first}"));
         assert_eq!(commands[2], format!("measure q0[0]; // outcome {second}"));
-        assert_eq!(commands[3..], vec!["x q0[0];"; if first == "1" { 10 } else { 0 }]);
+        assert_eq!(commands.last(), Some(&format!("// returned {first} (exit code 0)").as_str()));
+        assert_eq!(commands[3..commands.len() - 1], vec!["x q0[0];"; if first == "1" { 10 } else { 0 }]);
         assert_eq!(recount(&text), counted(&args));
     }
 }
@@ -206,17 +215,104 @@ fn discarding_a_register_leaves_it_idle_and_later_allocation_starts_fresh() {
     let commands: Vec<_> = text.lines().skip_while(|line| *line != "qubit[1] q0;").collect();
     assert_eq!(
         commands,
-        ["qubit[1] q0;", "reset q0;", "x q0[0];", "// discard q0[0] (partial trace)", "qubit[1] q1;", "reset q1;"]
+        [
+            "qubit[1] q0;",
+            "reset q0;",
+            "x q0[0];",
+            "// discard q0[0] (partial trace)",
+            "qubit[1] q1;",
+            "reset q1;",
+            "// returned (exit code 0)",
+        ]
     );
 }
 
 #[test]
 fn a_program_fault_preserves_the_commands_reached_and_the_exit_status() {
-    let trace = Trace::new("budget");
-    let output = run("qasm", &[COUNTS, "--budget", "2"], Some(&trace.0));
+    let short = Trace::new("return");
+    short.export(&[FIXTURE, "--entry", "short"]);
+    let fault = Trace::new("budget");
+    let output = run("qasm", &[FIXTURE, "--entry", "long", "--budget", "2"], Some(&fault.0));
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stdout).contains("fault: budget (code 1)\nsteps: 2\n"));
-    assert_eq!(recount(&trace.read()), [1, 0, 0]);
+    let short = short.read();
+    let fault = fault.read();
+    let (short_commands, short_end) = short.trim_end().rsplit_once('\n').expect("return trace with footer");
+    let (fault_commands, fault_end) = fault.trim_end().rsplit_once('\n').expect("fault trace with footer");
+    assert!(short_commands.ends_with("h q0[0];"));
+    assert_eq!(short_commands, fault_commands);
+    assert_eq!(short_end, "// returned 7 (exit code 0)");
+    assert_eq!(fault_end, "// fault budget (code 1, exit code 1)");
+}
+
+#[test]
+fn a_controller_stop_is_published_with_its_reason_and_exit_status() {
+    let trace = Trace::new("stopped");
+    let output = run("qasm", &[FIXTURE, "--entry", "stopped"], Some(&trace.0));
+    assert_eq!(output.status.code(), Some(2));
+    let text = trace.read();
+    assert_eq!(recount(&text), [1, 0, 0]);
+    let end = text.lines().last().expect("stop footer");
+    assert!(end.starts_with("// stopped") && end.contains("udiv") && end.ends_with("(exit code 2)"), "{end}");
+}
+
+#[test]
+fn a_rejected_entry_does_not_publish_a_trace() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("trace directory");
+    let path = dir.path().join("output.qasm");
+    let output = run("qasm", &["grover.bn", "--entry", "diffuse", "--arg", "0"], Some(&path));
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("is a register"), "{output:?}");
+    assert_eq!(dir.path().read_dir().expect("read trace directory").count(), 0);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_file_size_limit_does_not_publish_a_partial_trace() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("trace directory");
+    let path = dir.path().join("output.qasm");
+    let cases: [(&str, &[&str]); 2] =
+        [("0", &[FIXTURE, "--entry", "short"]), ("1", &["grover.bn", "--entry", "searched", "--arg", "2"])];
+    for (limit, args) in cases {
+        // Ignore SIGXFSZ so the kernel reports EFBIG to the writer instead of terminating the process.
+        let output = Command::new("sh")
+            .current_dir(EXAMPLES)
+            .args(["-c", "ulimit -f \"$1\" && shift && trap '' XFSZ && exec \"$@\"", "sh", limit, BIN])
+            .args(["run", "--device", "qasm", "--qasm-output"])
+            .arg(&path)
+            .args(args)
+            .output()
+            .expect("run bennett with a file size limit");
+        assert_eq!(output.status.code(), Some(2));
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            diagnostic.contains("cannot write OpenQASM output") && diagnostic.contains("File too large"),
+            "{diagnostic}"
+        );
+        assert_eq!(dir.path().read_dir().expect("read trace directory").count(), 0, "limit {limit}");
+    }
+}
+
+#[test]
+fn a_zero_byte_can_have_impossible_synthetic_outcomes() {
+    let args = [FIXTURE, "--entry", "measure_zero_byte", "--seed", "1"];
+    assert!(report(run("simulator", &args, None)).starts_with("result: 0\n"));
+    let trace = Trace::new("zero-byte");
+    assert!(trace.export(&args).starts_with("result: 37\n"));
+    let text = trace.read();
+    assert!(text.contains("synthetic measurement outcomes (seed 1)"));
+    assert!(text.contains("An annotated outcome can have probability zero."));
+    assert!(text.contains("A release_zero request assumes a replay with the recorded outcomes."));
+    let measured: String =
+        text.lines().filter_map(|line| line.split_once("; // outcome ").map(|(_, bit)| bit)).collect();
+    assert_eq!(measured, "10100100");
+    // Z leaves the initial zero byte unchanged. A physical measurement reads zero, so the three X gates
+    // from the synthetic outcomes would leave the byte at 37 when the controller asks to release it in zero.
+    assert_eq!(
+        gates(&text).collect::<Vec<_>>(),
+        [("z", vec!["q0[0]"]), ("x", vec!["q0[0]"]), ("x", vec!["q0[2]"]), ("x", vec!["q0[5]"])]
+    );
+    assert!(text.lines().any(|line| line.starts_with("// release_zero requested for q0[0]")));
 }
 
 #[test]

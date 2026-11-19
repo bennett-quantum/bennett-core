@@ -10,6 +10,7 @@ bennett-ir.workspace = true
 bennett-exec.workspace = true
 bennett-emit.workspace = true
 clap.workspace = true
+tempfile = "3.27"
 thiserror.workspace = true
 
 [lints]
