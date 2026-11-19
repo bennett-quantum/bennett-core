@@ -436,7 +436,8 @@ void annotateRanges(Function &function, ControlAnalysis &analysis) {
 
 } // namespace
 
-void outlineRegions(Function &function, bool taintAll, const std::set<const Function *> &control) {
+void outlineRegions(Function &function, bool taintAll, const std::set<const Function *> &control,
+                    std::optional<Aliasing> &aliasing) {
   {
     // Lifetime markers on qubit variables mean nothing (a qubit variable lives as long as its function)
     // and would make outlined regions take their addresses.
@@ -449,6 +450,7 @@ void outlineRegions(Function &function, bool taintAll, const std::set<const Func
       }
     }
   }
+  registerSharedEvaluations(function, taintAll, aliasing);
   for (;;) {
     removeTrivialPhis(function);
     ControlAnalysis analysis(function, taintAll);

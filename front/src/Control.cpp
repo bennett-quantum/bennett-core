@@ -183,13 +183,30 @@ private:
   // Evaluations (Evaluations.h): those each generated function computes, where each function is applied, and an
   // instruction of each, for messages.
   std::map<std::string, std::set<const MDNode *>> evaluated;
+  // Those of them that depend on a qubit (an ordinary call `--taint-all` copies into a slice runs as ordinary code
+  // too, and is not a value with several consumers).
+  std::set<const MDNode *> qubitEvaluations;
   std::map<std::string, std::vector<const Instruction *>> appliedAt;
   std::map<const MDNode *, const Instruction *> evaluationSite;
+  // Why an evaluation with several consumers has no register of its own (Evaluations.h), where it was recorded.
+  std::map<const MDNode *, std::string> withoutRegister;
+  // Those that have one.
+  std::set<const MDNode *> registered;
+  void noteEvaluation(const MDNode *evaluation, const Instruction &inst) {
+    evaluationSite.emplace(evaluation, &inst);
+    if (inst.getMetadata(sharedCallMetadata)) {
+      registered.insert(evaluation);
+    }
+    if (const MDNode *why = inst.getMetadata(sharedRefusedMetadata)) {
+      withoutRegister.emplace(evaluation, cast<MDString>(why->getOperand(0))->getString().str());
+    }
+  }
   // The evaluations of a slice's body, refusing by name a frame observation that moving them would change.
   std::set<const MDNode *> sliceEvaluations(const Slice &slice);
-  // Refuses by name a generated function with evaluations applied at two places across a reservation or release
-  // of the stack.
-  void requireSameStackForReplays() const;
+  // Refuses by name an evaluation computed by more than one generated function or also by ordinary code, and a
+  // generated function with evaluations applied at two places across a reservation or release of the stack.
+  std::set<const MDNode *> ordinaryEvaluations;
+  void requireSingleEvaluations() const;
   void requireSameStack(const std::vector<const Instruction *> &sites, const MDNode &evaluation) const;
 };
 
@@ -235,7 +252,7 @@ std::string ControlWriter::write() {
     }
   }
   std::string text = function();
-  requireSameStackForReplays();
+  requireSingleEvaluations();
   std::string allocate, release;
   for (const std::string &faultRegister : faultRegisters) {
     allocate += "    " + faultRegister + " = qalloc " + std::to_string(faultCodeBits) + "\n";
@@ -268,6 +285,10 @@ void ControlWriter::apply(const std::string &callee, const std::string &args, co
 void ControlWriter::instruction(const Instruction &inst) {
   if (isHolds(&inst)) {
     return; // a record for the analysis (Taint.h)
+  }
+  if (const MDNode *evaluation = evaluationOf(inst); evaluation && !analysis.tainted(&inst)) {
+    ordinaryEvaluations.insert(evaluation);
+    noteEvaluation(evaluation, inst);
   }
   if (isExchange(&inst)) {
     exchange(cast<CallBase>(inst));
@@ -531,6 +552,13 @@ void ControlWriter::store(const StoreInst &store) {
     }
   }
   if (!known) {
+    if (target.alloca->getMetadata(sharedMetadata)) {
+      // The front placed this clearing where computing the value again gives the value held (Evaluations.h);
+      // keeping the old value instead would release a register that is not 0.
+      notHandled("clearing the register of a value with several consumers, whose value cannot be computed again "
+                 "here from what it read (route: a place to clear it that the allow-list in Evaluations.h accepts)",
+                 &store);
+    }
     retainedOverwrite(target, value, store);
     return;
   }
@@ -865,6 +893,11 @@ Slice ControlWriter::collect(const Value *root, const Instruction &sink, bool kn
       if (knownLoads) {
         std::optional<Access> source = analysis.access(load->getPointerOperand());
         Fact fact = source && source->offset == 0 ? analysis.before(load, source->storage) : Fact{};
+        // A register for a value with several consumers is read, never computed again (Evaluations.h).
+        if (source && source->storage->alloca->getMetadata(sharedMetadata) &&
+            analysis.unchangedBetween(load, &sink, source->storage)) {
+          fact = Fact{};
+        }
         if (fact.kind == Fact::Computed && widthOf(load->getType(), load) == source->storage->bits &&
             recomputable(fact.value, *source->storage, sink)) {
           slice.computed.push_back({load, fact.value});
@@ -1163,8 +1196,11 @@ std::set<const MDNode *> ControlWriter::sliceEvaluations(const Slice &slice) {
   for (const Instruction *inst : slice.body) {
     // Every evaluation the body copies, an ordinary call `--taint-all` moves in included.
     if (const MDNode *evaluation = evaluationOf(*inst)) {
+      if (analysis.tainted(inst)) {
+        qubitEvaluations.insert(evaluation);
+      }
       evaluations.insert(evaluation);
-      evaluationSite.emplace(evaluation, inst);
+      noteEvaluation(evaluation, *inst);
     }
     const auto *call = dyn_cast<CallBase>(inst);
     if (!call) {
@@ -1189,13 +1225,45 @@ std::set<const MDNode *> ControlWriter::sliceEvaluations(const Slice &slice) {
                    inst);
       }
       evaluations.insert(evaluation);
-      evaluationSite.emplace(evaluation, inst);
+      qubitEvaluations.insert(evaluation);
+      noteEvaluation(evaluation, *inst);
     }
   }
   return evaluations;
 }
 
-void ControlWriter::requireSameStackForReplays() const {
+void ControlWriter::requireSingleEvaluations() const {
+  std::map<const MDNode *, std::set<std::string>> computers;
+  for (const auto &[name, evaluations] : evaluated) {
+    for (const MDNode *evaluation : evaluations) {
+      if (qubitEvaluations.count(evaluation)) {
+        computers[evaluation].insert(name);
+      }
+    }
+  }
+  for (auto &[evaluation, names] : computers) {
+    bool ordinary = ordinaryEvaluations.count(evaluation) != 0;
+    if (names.size() + (ordinary ? 1 : 0) > 1) {
+      auto why = withoutRegister.find(evaluation);
+      notHandled(describeEvaluation(evaluation) + " whose value is consumed in " +
+                     std::to_string(names.size() + (ordinary ? 1 : 0)) + " places, each computing it again " +
+                     (ordinary ? "(one of them ordinary code)" : "in a function of its own") +
+                     ": the copies run in different frames and may give different values; " +
+                     (why != withoutRegister.end()
+                          ? "the register of its own that the front gives such a value is cleared by computing the "
+                            "value again after its consumers, and here " +
+                                why->second
+                      : registered.count(evaluation)
+                          ? "the register of its own that the front gave it is cleared before a measurement or a "
+                            "change of what it reads, and a later use (the overwrite of a variable that held a value "
+                            "computed from it) computes it again after that (route: keep what it reads until that "
+                            "use, not built)"
+                          : "the front gives such a value a register of its own only where the control program "
+                            "computes it, outside code under a qubit, and when it is at most 64 bits wide (route: "
+                            "the register inside predicated code, and wider registers, not built)"),
+                 evaluationSite.at(evaluation));
+    }
+  }
   for (const auto &[name, evaluations] : evaluated) {
     auto sites = appliedAt.find(name);
     if (!evaluations.empty() && sites != appliedAt.end() && sites->second.size() > 1) {
@@ -1243,7 +1311,7 @@ void ControlWriter::requireSameStack(const std::vector<const Instruction *> &sit
           notHandled(describeEvaluation(&evaluation) +
                          " computed by one applied function at two places with a reservation or release of the "
                          "stack between them: the second run would start from another stack pointer (route: "
-                         "compute it once into a register of its own, not built)",
+                         "clear the register earlier, before the reservation or release, or keep the stack pointer; not built)",
                      &inst);
         }
       }

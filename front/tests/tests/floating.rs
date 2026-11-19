@@ -185,9 +185,8 @@ fn doubles_compute_under_quantum_control() {
     }
 }
 
-/// long double under quantum control (`float_long_double_controlled.c`): a computation on long doubles
-/// applied coherently to a superposition and a gate controlled by a comparison of long doubles, against
-/// the values the native build computes.
+/// long double under quantum control (`float_long_double_controlled.c`): a long double feeding two stores,
+/// refused by name until a register can be wider than 64 qubits; the native values are still computed.
 #[test]
 fn long_doubles_compute_under_quantum_control() {
     let source = c_dir().join("float_long_double_controlled.c");
@@ -212,8 +211,12 @@ fn long_doubles_compute_under_quantum_control() {
         (CLANG_FLAGS, &["--taint-all"][..], ".taint-all"),
     ] {
         let context = format!("{flags:?} {front:?}");
-        let module = lower(&source, &format!("float_long_double_controlled{suffix}"), flags, front);
-        assert_branches(&module, &context, "ratio", &[], &expected);
+        // y, an 80-bit long double, feeds two stores (its low and high words): one value with two consumers,
+        // wider than one register of 64 qubits, so refused by name (docs/DESIGN.md, "Evaluations the front repeats
+        // or moves"). The native values stay checked, for when registers are wider.
+        let refusal = lower_text(&source, &format!("float_long_double_controlled{suffix}"), flags, front)
+            .expect_err("the shared long double is refused");
+        assert!(refusal.contains("places, each computing it again"), "{context}: {refusal}");
     }
 }
 

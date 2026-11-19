@@ -1160,8 +1160,9 @@ fn ends_like_native_within_a_few_steps(program: &Program<'_>, n: u64) {
             let mut executor =
                 Executor::new(&module, entry(&module, "entry"), &[input as u64 + 1, n, 0], limited).expect("starts");
             let found = executor.run();
-            println!("{name} q={input} n={n}: native={wanted:#x}, device={found:?}");
-            if found != Outcome::Returned(Some(wanted)) {
+            let released = executor.stats().nonzero_releases;
+            println!("{name} q={input} n={n}: native={wanted:#x}, device={found:?}, nonzero releases={released}");
+            if found != Outcome::Returned(Some(wanted)) || released != 0 {
                 failures.push(format!("{name} q={input} n={n}: native={wanted:#x}, device={found:?}"));
             }
         }
@@ -1409,28 +1410,41 @@ __attribute__((noinline)) uintptr_t f(uint8_t q) {
 "#;
 
 #[test]
-#[ignore = "defect: one call whose value has two consumers is computed by one generated function per consumer, whose frames differ, so a frame address, a byte of a pointer to a local or a return address differs between the copies (route: one register for the value, read by every consumer and cleared by the same apply)"]
-fn one_call_feeding_two_consumers_gives_one_value_in_each_shape() {
-    for (name, declarations, body) in [
+fn a_frame_dependent_value_with_two_consumers_is_computed_once_into_a_register() {
+    // The value is stored once into a register where C computes it; both words read the register, and the same
+    // applied function clears it after them.
+    for (name, declarations) in [
         (
-            "repeated-two-stores",
-            RETURN_ADDRESS_HELPER,
-            "    volatile uint64_t x = 0, y = 0;\n    uint8_t z = 0;\n    if (q) { uintptr_t t = f(q); x = t; ZBIT(z, 0); y = t; }\n    uint64_t a = READ(x), b = READ(y);\n    return a ^ b;",
-        ),
-        (
-            "repeated-frame-address",
+            "register-frame-address",
             "__attribute__((noinline)) uintptr_t f(uint8_t q) { return q ? (uintptr_t)__builtin_frame_address(0) : 0; }",
-            "    uintptr_t t = f(q);\n    volatile uint64_t x = t, y = t + n;\n    uint64_t a = READ(x), b = READ(y);\n    return (a + n) ^ b;",
         ),
         (
-            "repeated-pointer-byte",
+            "register-pointer-byte",
             "__attribute__((noinline)) static unsigned part(const void *p, unsigned i) { return ((const unsigned char *)p)[i]; }\n__attribute__((noinline)) uintptr_t f(uint8_t q) { int local; void *p = &local; return q ? part(&p, q - 1) : 0; }",
-            "    uintptr_t t = f(q);\n    volatile uint64_t x = t, y = t + n;\n    uint64_t a = READ(x), b = READ(y);\n    return (a + n) ^ b;",
         ),
+        ("register-return-address", RETURN_ADDRESS_HELPER),
     ] {
+        let body = "    uintptr_t t = f(q);\n    volatile uint64_t x = t, y = t + n;\n    uint64_t a = READ(x), b = READ(y);\n    packet key = READ(q);\n    return (key << 64) | ((a + n) ^ b);";
         ends_like_native_within_a_few_steps(&Program { name, declarations, body, qubits: 1 }, 1);
     }
 }
+
+#[test]
+fn a_call_with_two_consumers_under_a_qubit_with_gates_is_refused() {
+    // Predication copies the code under the qubit for each operation; the register is not built there. The
+    // check that the simplifier keeps classified instructions refuses this shape first, as without the register.
+    Program {
+        name: "repeated-two-stores",
+        declarations: RETURN_ADDRESS_HELPER,
+        body: "    volatile uint64_t x = 0, y = 0;\n    uint8_t z = 0;\n    if (q) { uintptr_t t = f(q); x = t; ZBIT(z, 0); y = t; }\n    uint64_t a = READ(x), b = READ(y);\n    return a ^ b;",
+        qubits: 1,
+    }
+    .refused(1, &[0, 0], SEALED);
+}
+
+/// The refusal of the check that the simplifier keeps classified instructions (DESIGN, "Classification"), which comes before the register's for code under a qubit.
+const SEALED: &str =
+    "not handled yet: LLVM's simplifier removed an instruction whose class the front decided before it";
 
 #[test]
 fn arithmetic_with_two_consumers_is_still_copied() {
@@ -1497,3 +1511,267 @@ fn a_known_start_and_the_clearing_computation_are_one_function() {
     }
     .agrees(0, &[256, 257], &return_address_readout(), 0);
 }
+
+// The register for a value with several consumers is cleared by computing the value again; only at a place where
+// that gives the value it holds (front/src/Evaluations.h). Each of these released a register that was not 0, or
+// gave another value, when the place was found by a scan from the last consumer.
+const SHARED_HELPERS: &str = r#"
+static volatile unsigned message = 3;
+__attribute__((noinline)) static uint8_t f(uint8_t a) { return a * 3 + 1; }
+__attribute__((noinline)) static uint8_t g(uint8_t a) { return a * 5 + message; }
+__attribute__((noinline)) static void update(unsigned n) { message = n; }
+"#;
+const SHARED_READOUT: &str = "    return READ(x) | (READ(y) << 8) | ((packet)READ(q) << 16);";
+
+fn shared_body(body: &str) -> String {
+    format!("    volatile uint8_t x = 0, y = 0;\n{body}\n{SHARED_READOUT}")
+}
+
+fn shared<'a>(name: &'a str, body: &'a str) -> Program<'a> {
+    Program { name, declarations: SHARED_HELPERS, body, qubits: 1 }
+}
+
+#[test]
+fn a_register_is_cleared_before_a_call_that_writes_memory_the_value_reads() {
+    // g reads `message`, which update() writes: computing g(q) again after the call would give another value.
+    shared("shared-before-call", &shared_body("    uint8_t t = g(q);\n    x = t;\n    y = t + 1;\n    update(n);"))
+        .agrees(7, &[0x403, 0x1_0908], &readout(&[0, 8, 16]), 0);
+}
+
+#[test]
+fn a_register_is_cleared_before_a_conditional_gate_on_what_the_value_reads() {
+    // The gate on q is on a path between the consumers and the join after it, run or not.
+    let body = shared_body(
+        "    uint8_t t = f(q);\n    x = t;\n    y = t + 1;\n    x = 0;\n    y = 0;\n    if (n) XBIT(q, 0);",
+    );
+    let program = shared("shared-before-conditional-gate", &body);
+    program.agrees(0, &[0, 0x1_0000], &readout(&[0, 8, 16]), 0);
+    program.agrees(1, &[0x1_0000, 0], &readout(&[0, 8, 16]), 0);
+}
+
+#[test]
+fn a_register_filled_under_an_ordinary_condition_is_cleared_on_the_paths_that_filled_it() {
+    // The join after `if (n)` is also reached without computing t: the register is cleared on the edges from the
+    // paths that computed it.
+    shared(
+        "shared-under-ordinary-condition",
+        &shared_body("    if (n) {\n        uint8_t t = f(q);\n        x = t;\n        if (t & 4) XBIT(y, 0);\n    }"),
+    )
+    .agrees(1, &[0x1, 0x1_0104], &readout(&[0, 8, 16]), 0);
+    shared(
+        "shared-under-ordinary-condition-split",
+        &shared_body("    if (n) {\n        uint8_t t = f(q);\n        if (n & 1) x = t; else y = t + 1;\n    }"),
+    )
+    .agrees(1, &[0x1, 0x1_0004], &readout(&[0, 8, 16]), 0);
+    shared(
+        "shared-under-ordinary-condition-goto",
+        &shared_body("    if (n) {\n        uint8_t t = f(q);\n        x = t;\n        if (n & 2) goto done;\n        y = t + 1;\n    }\ndone:"),
+    )
+    .agrees(1, &[0x201, 0x1_0504], &readout(&[0, 8, 16]), 0);
+}
+
+#[test]
+fn a_gate_between_two_consumers_on_what_the_value_reads_is_refused() {
+    // y = t + 1 needs t after q changed: no register can be cleared by computing t again, and the second
+    // consumer's computation reads q after the gate.
+    shared(
+        "shared-gate-between-consumers",
+        &shared_body("    uint8_t t = f(q);\n    x = t;\n    XBIT(q, 0);\n    y = t + 1;"),
+    )
+    .refused(
+        0,
+        &[0x1_0201, 0x504],
+        "not handled yet: the value of qubit variable 'q' read here is used after the variable changed",
+    );
+}
+
+#[test]
+fn a_measurement_before_every_consumer_is_done_is_refused() {
+    // On the path through the early return the measurements come before the place after the consumers.
+    shared(
+        "shared-measured-before-done",
+        &shared_body("    if (n) {\n        uint8_t t = f(q);\n        x = t;\n        if (n & 2) { y = t + 1; return READ(x) + READ(y) + READ(q); }\n    }"),
+    )
+    .refused(
+        2,
+        &[0x3, 0xa],
+        "not handled yet: a call to @f whose value is consumed in 2 places, each computing it again in a function of its own: the copies run in different frames and may give different values; the register of its own that the front gives such a value is cleared by computing the value again after its consumers, and here a measurement, across which the front does not clear such a register yet, comes between",
+    );
+}
+
+#[test]
+fn shapes_main_accepts_that_the_register_refuses_are_refused_by_name() {
+    // Main computes the value once per consumer; this front gives it a register or refuses by name (DESIGN,
+    // "A register for a value with several consumers", with the routes). The two shapes under a qubit are refused
+    // first by that check, as on the front without the register.
+    let register = "not handled yet: a call to @f whose value is consumed in 2 places";
+    for (name, body, native, reason) in [
+        (
+            "shared-under-qubit-with-gate",
+            "    uint8_t z = 0;\n    if (q) {\n        uint8_t t = f(q);\n        x = t;\n        ZBIT(z, 0);\n        y = t;\n    }",
+            [0, 0x1_0404],
+            SEALED,
+        ),
+        (
+            "shared-under-qubit-two-conditions",
+            "    if (q) {\n        uint8_t t = f(q);\n        if (t & 4) XBIT(x, 0);\n        if (t & 4) XBIT(y, 0);\n    }",
+            [0, 0x1_0101],
+            SEALED,
+        ),
+        (
+            "shared-overwritten-after-measurement",
+            "    uint8_t t = f(q);\n    x = t;\n    y = t + 1;\n    (void)READ(x);\n    y = 0;",
+            [0x1, 0x1_0004],
+            register,
+        ),
+        (
+            "shared-measured-own-store-between",
+            "    uint8_t t = f(q);\n    x = t;\n    unsigned z = READ(x);\n    y = t + 1 + 0 * z;",
+            [0x201, 0x1_0504],
+            register,
+        ),
+    ] {
+        let body = shared_body(body);
+        shared(name, &body).refused(0, &native, reason);
+    }
+}
+
+// Whole programs `unsigned entry(unsigned k)`: k = 0 or 1 sets the qubit; device and native C agree and every
+// register is released at 0, in all three modes.
+fn whole_program_like_native(name: &str, text: &str, native: [u128; 2]) {
+    let source = write_c(name, text);
+    let executable = native_build(&source, name, &["-DNATIVE"]);
+    for (k, &wanted) in native.iter().enumerate() {
+        let output = Command::new(&executable).arg(k.to_string()).output().expect("run native C");
+        assert_eq!(std::str::from_utf8(&output.stdout).expect("native stdout").trim(), wanted.to_string(), "{name}");
+    }
+    let mut failures = Vec::new();
+    for (mode, clang, flags) in MODES {
+        let name = format!("{name}-{mode}");
+        let (text, _) = lower_text_with_diagnostics(&source, &name, clang, flags).expect("lowers");
+        let module = bennett_ir::load(&text).expect("valid device program");
+        for (k, &wanted) in native.iter().enumerate() {
+            let (found, stats) = run_with_stats(&module, "entry", &[k as u64], 0);
+            println!("{name} k={k}: {found:?}, nonzero releases={}", stats.nonzero_releases);
+            if found != Outcome::Returned(Some(wanted)) || stats.nonzero_releases != 0 {
+                failures.push(format!("{name} k={k}: native={wanted}, device={found:?}, releases={stats:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn a_callee_writing_a_live_callers_local_comes_after_the_register_is_cleared() {
+    // put() writes the caller's `cell`, which get() reads through the pointer: a local of a live caller is memory
+    // the call may read, not private to it.
+    whole_program_like_native("shared-ancestor-local", ANCESTOR_LOCAL, [1027, 66820]);
+}
+
+#[test]
+fn a_register_is_cleared_before_a_loop_rather_than_in_it() {
+    // A place inside the loop runs once per pass but the value is computed once: the clear goes before the loop.
+    whole_program_like_native("shared-before-loop-gate", LOOP_AFTER_CONSUMERS, [66049, 1284]);
+    whole_program_like_native("shared-before-loop-call", LOOP_WRITE_AFTER_CONSUMERS, [1027, 66820]);
+}
+
+const ANCESTOR_LOCAL: &str = r#"
+#include <stdint.h>
+#ifdef NATIVE
+#include <stdio.h>
+#include <stdlib.h>
+#define X(q) ((q) ^= 1)
+#define READ(q) (q)
+#else
+#include "bennett.h"
+#define X(q) bennett_x(bennett_bit((void *)&(q),0))
+#define READ(q) bennett_measure((const void *)&(q))
+#endif
+#define NOINLINE __attribute__((noinline))
+static NOINLINE uint8_t get(uint8_t q, volatile unsigned *p) { return q + *p; }
+static NOINLINE void put(volatile unsigned *p) { *p = 7; }
+static NOINLINE unsigned inner(unsigned k, volatile unsigned *p) {
+    volatile uint8_t q = 0;
+    if (k) X(q);
+    volatile uint8_t x = 0, y = 0;
+    uint8_t t = get(q,p);
+    x = t;
+    y = t + 1;
+    put(p);
+    unsigned a = READ(x);
+    unsigned b = READ(y);
+    unsigned key = READ(q);
+    return a + (b << 8) + (key << 16);
+}
+unsigned entry(unsigned k) {
+    volatile unsigned cell = 3;
+    return inner(k,&cell);
+}
+#ifdef NATIVE
+int main(int argc, char **argv) { printf("%u\n",entry(atoi(argv[1]))); return 0; }
+#endif
+"#;
+
+const LOOP_AFTER_CONSUMERS: &str = r#"
+#include <stdint.h>
+#ifdef NATIVE
+#include <stdio.h>
+#include <stdlib.h>
+#define X(q) ((q) ^= 1)
+#define READ(q) (q)
+#else
+#include "bennett.h"
+#define X(q) bennett_x(bennett_bit((void *)&(q),0))
+#define READ(q) bennett_measure((const void *)&(q))
+#endif
+#define NOINLINE __attribute__((noinline))
+
+static volatile unsigned gcell=3, count, held;
+static NOINLINE uint8_t f(uint8_t q) {return q*3+1;}
+static NOINLINE uint8_t g(uint8_t q) {return q+gcell;}
+static NOINLINE void put(unsigned k) {gcell=k+7;}
+static NOINLINE int next(void) {return ++count < 3;}
+unsigned entry(unsigned k) {
+ volatile uint8_t q=0,z=0;
+ volatile uint8_t x=0,y=0;
+ if (k & 1) X(q);
+uint8_t t=f(q); x=t; y=t+1; do {X(q);} while(next());
+ unsigned a=READ(x), b=READ(y), c=READ(q), d=READ(z);
+ return a+(b<<8)+(c<<16)+(d<<24);
+}
+#ifdef NATIVE
+int main(int argc,char **argv){printf("%u\n",entry(atoi(argv[1])));}
+#endif
+"#;
+
+const LOOP_WRITE_AFTER_CONSUMERS: &str = r#"
+#include <stdint.h>
+#ifdef NATIVE
+#include <stdio.h>
+#include <stdlib.h>
+#define X(q) ((q) ^= 1)
+#define READ(q) (q)
+#else
+#include "bennett.h"
+#define X(q) bennett_x(bennett_bit((void *)&(q),0))
+#define READ(q) bennett_measure((const void *)&(q))
+#endif
+#define NOINLINE __attribute__((noinline))
+
+static volatile unsigned gcell=3, count, held;
+static NOINLINE uint8_t f(uint8_t q) {return q*3+1;}
+static NOINLINE uint8_t g(uint8_t q) {return q+gcell;}
+static NOINLINE void put(unsigned k) {gcell=k+7;}
+static NOINLINE int next(void) {return ++count < 3;}
+unsigned entry(unsigned k) {
+ volatile uint8_t q=0,z=0;
+ volatile uint8_t x=0,y=0;
+ if (k & 1) X(q);
+uint8_t t=g(q); x=t; y=t+1; do {put(k);} while(next());
+ unsigned a=READ(x), b=READ(y), c=READ(q), d=READ(z);
+ return a+(b<<8)+(c<<16)+(d<<24);
+}
+#ifdef NATIVE
+int main(int argc,char **argv){printf("%u\n",entry(atoi(argv[1])));}
+#endif
+"#;

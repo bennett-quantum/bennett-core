@@ -5,6 +5,9 @@
 // output: a cost, never a correctness question).
 #pragma once
 
+#include "Aliasing.h"
+
+#include <optional>
 #include <set>
 
 namespace llvm {
@@ -19,6 +22,8 @@ namespace bennett {
 std::set<const llvm::Function *> controlFunctions(const llvm::Module &module, bool refuseAddressTaken = true);
 
 // Outlines every region of `function` that branches or merges on a value that depends on a qubit.
-void outlineRegions(llvm::Function &function, bool taintAll, const std::set<const llvm::Function *> &control);
+// `aliasing` is the module's (Aliasing.h), built when first needed and kept for the next function.
+void outlineRegions(llvm::Function &function, bool taintAll, const std::set<const llvm::Function *> &control,
+                    std::optional<Aliasing> &aliasing);
 
 } // namespace bennett

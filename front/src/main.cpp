@@ -190,8 +190,10 @@ int main(int argc, char **argv) {
     }
   }
   bennett::markEvaluations(*module, control);
+  // Built once, at the first value with several consumers (it reads the whole module).
+  std::optional<bennett::Aliasing> aliasing;
   for (Function *function : controlled) {
-    bennett::outlineRegions(*function, taintAll, control);
+    bennett::outlineRegions(*function, taintAll, control, aliasing);
   }
   bennett::lowerIntrinsics(*module);
   // Memory effects of the outlined functions, which decide what may run coherently.

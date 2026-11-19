@@ -1488,9 +1488,9 @@ under `apply` they run on the private copy and are undone with it.
 - **Where the value is computed.** The front applies the computation of a value where the value is stored
   into a qubit variable or controls a gate, not where the call is. So the memory the call reads must be the
   same there (`ControlAnalysis::memoryUnchangedBetween`; refused by name otherwise). A value used several
-  times is computed again for each use, which gives one value for arithmetic and reads of unchanged memory; for
-  a call whose value depends on the frames it does not, a known defect ("Evaluations the front repeats or moves",
-  below).
+  times is computed again for each use where that is arithmetic and reads of unchanged memory; a call's value
+  with several consumers gets a register of its own, or is refused by name ("Evaluations the front repeats or
+  moves", below).
   The applied function's remaining loads and its callees' accesses are both checked. Loads moved before
   the region are passed in by value ("Conditional jumps, joins and loops" above).
   The memory a call reads is what it, and the functions it calls, may reach outside their own frames
@@ -1550,11 +1550,46 @@ the same fault, whatever the function looks at. So (`front/src/Evaluations.h`):
   operations before it outlines anything, and every copy it makes keeps the name (a copy of code under a qubit
   for each of its results included). A generated function whose
   text equals one written before is that function, so computing a value into a register and clearing it again by
-  the same computation is one generated function applied twice. Not yet: an evaluation whose value C consumes in
-  two ways (one call whose value C stores twice, or stores and uses again after the code under a qubit) is still
-  computed by one generated function per consumer, and a value that depends on the frames (a frame address, a
-  byte of a pointer to a local) can differ between the copies: a known wrong result with ignored witnesses.
-  Route: compute it once into a register of its own, which every consumer reads and the same `apply` clears.
+  the same computation is one generated function applied twice.
+- **A register for a value with several consumers.** Where a call's value that depends on a qubit reaches two or
+  more consumers (stores, jumps, returns) through arithmetic and calls that return values, or one store whose
+  bytes a later store may overwrite (clearing the old value there would compute it again), the value where those
+  uses part (the call, or the last value all of them go through; the call's own value for the one store) is
+  stored once into a fresh qubit variable where C computes it. Every consumer, and every later computation of a
+  value derived from it while the variable still holds it, reads the variable. The variable is set to 0 by computing the value again with the same
+  generated function (an overwrite whose old value can be computed again, "From C to a device program"), so the
+  place where that happens must pass an allow-list:
+  - every path to the place computed the value since the place last ran, and every path from the computation
+    reaches the place before it returns or computes the value again; no consumer runs after the place;
+  - no instruction on a path from the computation to the place changes what the value reads: no store, gate or
+    exchange on a qubit variable it reads, no measurement (of what it reads or not: the front does not clear a
+    register across one yet), and, when a call or load in the computation may read memory, no write to memory (a store outside the qubit variables, a call that may write, an exchange).
+
+  The front takes the latest such place, from the place after the last consumer on along blocks every path takes,
+  stopping at the first instruction that changes what the value reads. A place at the start of a block that paths
+  without the computation also reach (the join after an ordinary `if`) is on the edges from the paths that computed
+  it, in a block of its own. Where no place passes, the value gets no register and the front refuses by name a value
+  computed by two generated functions, with the reason (route: keep what the value reads until the register is
+  cleared, or clear it on each path). A later use that computes the value again after the register is cleared (the
+  overwrite of a variable that held a value computed from it, after a measurement) is refused in the same way. An
+  overwrite of the register whose old value cannot be computed again is refused by name, never kept (a register
+  released that is not 0).
+  The front does this where the control program computes the value. Refused by name where it cannot: a value
+  computed inside code under a qubit with gates (predication copies that code for each operation), a value wider
+  than one register of 64 qubits (an 80-bit `long double`; an aggregate LLVM split into fields). Routes: the
+  register inside predicated code; registers wider than 64 qubits. A value that is not an integer (a `double` the
+  consumers convert) gets no register: its consumers compute it again, which is accepted where their computations
+  are one generated function and refused by name otherwise.
+  Programs the front before this register accepted and that are now refused by name (each a refusal test in
+  `coherence_regressions.rs`, "shapes_main_accepts..."): a call with a measurement between its consumers, or before
+  a later overwrite that computes its value again (route: clear the register across a measurement of what it does
+  not read). A call with two consumers inside code under a qubit with a gate between them, or with two
+  qubit-conditioned gates as consumers, gets no register (route: the register inside predicated code); the check
+  that LLVM's simplifier keeps classified instructions ("Classification" above) refuses those shapes first, with or
+  without the register. A call in the computation may read memory when it reaches memory outside the frames of
+  the functions it calls (`Aliasing::reachesOutsideFrames`) or takes a pointer
+  argument (which may point into a local of a live caller). A place inside a loop that the value is computed
+  before runs once per pass and is not taken; the place before the loop is.
 - **The same stack pointer.** Where one generated function with an evaluation is applied at two places, no
   reservation or release of the control function's own stack may lie between them (a variable-length array, a
   `stackrestore`); refused by name otherwise, in every mode (an ordinary call `--taint-all` moves in counts).
@@ -1568,11 +1603,21 @@ the same fault, whatever the function looks at. So (`front/src/Evaluations.h`):
   constants of the module, which moved code sees unchanged.
 
 Acceptance (`front/tests/tests/coherence_regressions.rs`): a full return address computed into a word and cleared
-by computing it again gives 0 in the word; a replay across a variable-length array and a helper comparing its
-caller's return address one level up are refused by name in all three modes (each gave a wrong value before);
-arithmetic with two consumers is copied and gives C's values with the preparation's amplitudes. A call feeding
-two stores, and a frame address or a byte of a pointer to a local feeding two words, are ignored witnesses of the
-defect above.
+by computing it again gives 0 in the word; a frame address, a byte of a pointer to a local and a return address
+feeding two words give C's values with every register released at 0 (each gave a wrong value before); a replay
+across a variable-length array, a helper comparing its caller's return address one level up and a call feeding
+two stores under a qubit with gates are refused by name in all three modes; arithmetic with two consumers is
+copied and gives C's values with the preparation's amplitudes. A conversion LLVM shares between a store and a
+gate's condition (`float_controlled.c`, `ratio`) and an aggregate result whose fields go to two variables
+(`abi_independent.rs`) give native C's values through the register; the 80-bit `long double` of
+`float_long_double_controlled.c`, and the aggregates of two shapes that clang `-O2` splits, are refused by name.
+The place where the register is cleared: a call that writes memory the value's computation reads, and a gate on
+its input under an ordinary condition after the consumers, come after it, and a value computed under an ordinary
+`if` (one consumer and a qubit-conditioned gate, two consumers on two paths, a `goto` past one consumer) is cleared
+on the paths that computed it, each with C's values, the preparation's amplitudes and every register released at
+0 in all three modes (each released a register that was not 0 before); so do a helper writing a live caller's local
+that the value reads through a pointer, and a loop after the consumers (the register is cleared before it); a
+measurement before every consumer is done, and a gate on the input between two consumers, are refused by name.
 
 ## Non-local jumps (`setjmp`, `longjmp`)
 
@@ -2158,6 +2203,17 @@ Refused by name or not yet excluded around the classification of "What LLVM's pa
   later analysis meet two values and call the variable unknown, so a load the classification left to the
   optimiser is later found to depend on a qubit. No program is known to do this. Route: let the later analysis
   meet two known values in a phi at the join, as the optimiser's copies are.
+
+A value with several consumers that gets no register of its own ("Evaluations the front repeats or moves") is
+refused by name where its consumers would compute it in different generated functions. Programs the front accepted
+before that register and that are refused now, each a refusal test in `front/tests/tests/coherence_regressions.rs`
+(`shapes_main_accepts_that_the_register_refuses_are_refused_by_name`): a call with a measurement between its
+consumers, or before a later overwrite that computes its value again (`downstream`), route: clear the register
+across a measurement of what it does not read. A call with two consumers inside code under a qubit with a gate
+between them (`predgate`), or with two qubit-conditioned gates as consumers (`predtoggle`), gets no register (route:
+the register inside predicated code); the classification check refuses those shapes first, with or without it. By
+width: the 80-bit `long double` of `float_long_double_controlled.c` (`ratio`) and the 96- and 120-bit aggregates of
+two `abi_independent.rs` shapes at `-O2`, route: registers wider than 64 qubits.
 
 | Refused inside emitted `apply` | Construction needed |
 |---|---|

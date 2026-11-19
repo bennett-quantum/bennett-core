@@ -37,6 +37,7 @@ mod state;
 use state::{Check, Field, Preparation};
 
 const SEED: u64 = 0x8719_6caa_251d_0f43;
+const REPEATED_EVALUATION: &str = "places, each computing it again";
 const CALLER_FRAMES: &str = "an applied call that may reach `__builtin_return_address` above level 0";
 const PLACEMENT_SKIP: &str = "from whose exchange some ordinary path does not write every byte";
 const PLACEMENT_MOVE: &str = "whose exchange would have to move earlier than the store that needs it";
@@ -290,9 +291,10 @@ fn try_case(case: &Case, name: &str, mode: usize, results: &mut Results) -> Resu
             if reason.starts_with("not handled yet: an update of qubit variable ") && reason.contains(LOOP_UPDATE) {
                 results.loop_declined += 1;
             }
-            // An applied call that may read a caller's return address (docs/DESIGN.md, "Evaluations the front
+            // One evaluation computed by several generated functions where the front has no register for it yet,
+            // or an applied call that may read a caller's return address (docs/DESIGN.md, "Evaluations the front
             // repeats or moves"): counted as declined.
-            if reason.contains(CALLER_FRAMES) {
+            if reason.contains(REPEATED_EVALUATION) || reason.contains(CALLER_FRAMES) {
                 return Ok(());
             }
             // The placement of the exchange denies by default (docs/DESIGN.md, "Memory written under a qubit"):
