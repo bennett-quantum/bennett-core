@@ -11,6 +11,7 @@ pub(super) fn binary(circuit: &mut Circuit, op: BinOp, left: &[Bit], right: &[Bi
         BinOp::Add => add(circuit, left, right.iter().copied(), ZERO),
         BinOp::Sub => add(circuit, left, right.iter().map(|bit| bit.not()), ONE),
         BinOp::And => left.iter().zip(right).map(|(&a, &b)| circuit.and(a, b)).collect(),
+        BinOp::Or => left.iter().zip(right).map(|(&a, &b)| circuit.and(a.not(), b.not()).not()).collect(),
         BinOp::Xor => left.iter().zip(right).map(|(&a, &b)| circuit.xor(a, b)).collect(),
         BinOp::Mul => {
             let (word, factor) = match (definite(left), definite(right)) {
@@ -21,7 +22,7 @@ pub(super) fn binary(circuit: &mut Circuit, op: BinOp, left: &[Bit], right: &[Bi
             multiply(circuit, word, factor)
         }
         BinOp::Shl | BinOp::Lshr | BinOp::Ashr => shift(op, left, definite(right)?),
-        BinOp::Udiv | BinOp::Sdiv | BinOp::Urem | BinOp::Srem | BinOp::Or => return None,
+        BinOp::Udiv | BinOp::Sdiv | BinOp::Urem | BinOp::Srem => return None,
     })
 }
 
@@ -116,6 +117,19 @@ pub(super) fn cast(op: CastOp, mut value: Word, width: usize) -> Word {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn or_uses_one_toffoli_per_distinct_bit_pair() {
+        use crate::apply::gadget_tests::check;
+
+        for width in [1, 4, 8, 64, 128] {
+            let input = |start| (start..start + width as u64).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
+            let mut circuit = Circuit::new(2 * width as u64);
+            let result = binary(&mut circuit, BinOp::Or, &input(0), &input(width as u64)).expect("or");
+            let block = circuit.finish(0, "or").expect("valid gadget wires");
+            check(&block, &result, &[(width, 1), (width, 1 << (width - 1))], 1 | 1 << (width - 1), width);
+        }
+    }
 
     #[test]
     fn fixed_products_keep_proved_high_bits_zero() {

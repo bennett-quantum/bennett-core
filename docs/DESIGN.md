@@ -346,7 +346,7 @@ condition to select a jump even if other assignments have a different value in t
 The compiler represents each bit as a constant, a qubit's value or its complement. It computes
 new bits by reversible gates into scratch qubits.
 
-The emitter's full instruction subset is `add`, `sub`, `mul`, `and`, `xor`, `urem`, shifts
+The emitter's full instruction subset is `add`, `sub`, `mul`, `and`, `or`, `xor`, `urem`, shifts
 (`shl`, `lshr`, `ashr`) by a proved constant amount, `icmp`, `select`, `zext`, `sext`, `trunc`,
 `faddr`, unconditional and conditional `br`, `switch` with a proved constant selector, `ret`,
 and direct `call` and `call_indirect` as described under "Copied calls" below. Calls take integer
@@ -471,7 +471,7 @@ When control gates encounter a loop without a proved pass count, the compiler ca
 The first qubit-dependent jump may be the loop test or a choice between entering the loop and
 returning early. At the loop test, one route goes back to the test and the other returns from the
 applied function. Both routes are straight sequences of integer operations, unconditional jumps,
-and returns from already-entered copied calls. The integer operations are `add`, `sub`, `and`, `xor`,
+and returns from already-entered copied calls. The integer operations are `add`, `sub`, `and`, `or`, `xor`,
 `icmp`, `select`, `zext`, `sext`, `trunc`, `mul` with a literal operand, and shifts by a literal
 amount. The proof counts the steps on each route, including conditional and unconditional jumps
 and each return. At each test, a return is considered only
@@ -568,7 +568,9 @@ The literal-switch loop test selects the default edge back to an unchanged word.
 Nonzero inputs exhaust the budget in both modes because that edge never shifts the word.
 
 **Arithmetic counts.** The table counts native Toffolis for each gadget, including
-the reversal that clears its own work wires after copying the result. For a product
+the reversal that clears its own work wires after copying the result. An `or`
+of two words with distinct variable bits uses one Toffoli per bit pair by
+complementing the inputs and result of an AND. For a product
 of two words with distinct variable bits, `P` counts bit pairs in the retained columns,
 `F` counts full adders that produce a carry and `H` counts half adders that produce a
 carry. The product uses `2(P + 2F + H)` Toffolis, or `6w² − 6w` for two words of width
@@ -1899,7 +1901,7 @@ those.
 
 | Refused inside emitted `apply` | Construction needed |
 |---|---|
-| `or`, `udiv`, `sdiv`, `srem` | Remaining integer gates, including conditional arithmetic faults |
+| `udiv`, `sdiv`, `srem` | Remaining integer gates, including conditional arithmetic faults |
 | `shl`, `lshr`, `ashr` without a proved constant shift amount | Shifts controlled by the amount register |
 | `switch` without a proved constant selector | Multiway dispatch in the step machine |
 | Reachable recursive calls or adding a call copy that raises the total above 16,384 slots and program points | Shared call frames and return positions |

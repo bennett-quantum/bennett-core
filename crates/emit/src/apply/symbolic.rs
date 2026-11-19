@@ -225,7 +225,7 @@ impl<'a> Frame<'a> {
                     }
                     let declared = left.len();
                     // Low bits of these operations never depend on higher input bits.
-                    if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::And | BinOp::Xor) {
+                    if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::And | BinOp::Or | BinOp::Xor) {
                         let width = result_width(*dst, declared);
                         left.truncate(width);
                         right.truncate(width);
@@ -320,6 +320,7 @@ fn unsupported(inst: &Inst) -> Option<(&'static str, &'static str)> {
             | BinOp::Sub
             | BinOp::Mul
             | BinOp::And
+            | BinOp::Or
             | BinOp::Xor
             | BinOp::Shl
             | BinOp::Lshr
@@ -327,7 +328,6 @@ fn unsupported(inst: &Inst) -> Option<(&'static str, &'static str)> {
             | BinOp::Urem => {
                 return None;
             }
-            BinOp::Or => (op.mnemonic(), "remaining integer operations"),
             BinOp::Udiv | BinOp::Sdiv | BinOp::Srem => (op.mnemonic(), "division and remainder with faults"),
         },
         Inst::Compare { .. } | Inst::Select { .. } | Inst::Cast { .. } => return None,

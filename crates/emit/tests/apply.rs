@@ -4,6 +4,8 @@
 mod bits;
 #[path = "support/controlled_apply.rs"]
 mod controlled_apply;
+#[path = "support/integer_ops.rs"]
+mod integer_ops;
 
 use bennett_emit::{
     ApplyError, ApplyInput, ApplyMode, Argument, CompiledApply, Construction, CountingDevice, compile_apply,
