@@ -23,6 +23,7 @@ const FAMILIES: &[Family] = &[
         modes: PROJECT_MODES,
     },
     Family { switch: "BENNETT_RANDOM_MIXED_STORES", recipes: &[merged_stores, skipped_store], modes: PROJECT_MODES },
+    Family { switch: "BENNETT_RANDOM_GUARDED_LOADS", recipes: &[mixed_guard_load], modes: PROJECT_MODES },
 ];
 
 pub(super) fn enabled_recipes() -> Vec<(Generate, usize)> {
@@ -159,4 +160,41 @@ fn constant_store_keeps_the_global_ordinary() {
 #[ignore = "the exchange makes a global hold qubits on a path that skips its qubit-dependent store"]
 fn skipped_store_keeps_the_global_ordinary() {
     agrees("skipped-store", mixed_store(11, 0, None), PROJECT_MODES, &[vec![0xb00], vec![0x100]]);
+}
+
+fn guarded_load(ordinary: u8, stored: u8, negated: bool) -> Case {
+    let (predicate, initial) = if negated { ("!q || !cell", 1) } else { ("q && cell", 0) };
+    let body = format!(
+        r#"
+uint8_t cell = {ordinary}U;
+
+__attribute__((noinline)) void fill(void) {{
+    uint8_t value = 0;
+    XBIT(value, 0);
+    cell = {stored}U ^ value;
+    XBIT(value, 0);
+}}
+
+packet entry(unsigned prep, unsigned n, unsigned column) {{
+    uint8_t q = 0, target = {initial};
+    if (!column) fill();
+    if (column) XBIT(q, 0);
+    ZBIT(q, 1);
+    if ({predicate}) XBIT(target, 0);
+    packet result = bennett_measure(&target);
+    return (result << 8) | ((packet)bennett_measure_bytes(&cell, 1) << 16);
+}}
+"#,
+    );
+    Case::values(body, 0, 0, 2, false)
+}
+
+fn mixed_guard_load(random: &mut ChaCha8Rng) -> Case {
+    guarded_load(random.random_range(1..=255), random.random(), random.random_bool(0.5))
+}
+
+#[test]
+#[ignore = "the lowered qubit condition reads a qubit-held global that C skips by short-circuiting"]
+fn qubit_guard_short_circuits_the_global_load() {
+    agrees("guarded-load", guarded_load(1, 0, false), PROJECT_MODES, &[vec![0x10000], vec![0x10100]]);
 }
