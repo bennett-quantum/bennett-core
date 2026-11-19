@@ -11,10 +11,9 @@
 //   Its result may depend on the frames around it (the address of a local, `__builtin_return_address`). One
 //   evaluation computed again to clear its register is one generated function (equal text, equal function),
 //   applied with the same arguments from the same running call of the control function, with no reservation or
-//   release of its stack between the applications (refused by name otherwise). An evaluation the C code consumes
-//   in two ways (two stores, a store and an ordinary use after the code under a qubit) is still computed by one
-//   generated function per consumer: a known defect, whose route is a register of its own for the value, which
-//   every consumer reads and the same `apply` clears.
+//   release of its stack between the applications. An evaluation whose value has several consumers gets a register
+//   of its own (registerSharedEvaluations); where it cannot, computing it in two generated functions, or in one and
+//   in ordinary code, is refused by name.
 // - Code in a generated function sits under a frame the C program does not have. A return address or saved
 //   stack pointer of the C function is never moved into one (code under a qubit containing one is refused), and
 //   nothing applied may reach, through its calls, a read of a return address above level 0 (an ancestor's
@@ -39,6 +38,19 @@ class Module;
 } // namespace llvm
 
 namespace bennett {
+
+// One register for an evaluation with several consumers (design note 5.2). For each call in `function` whose
+// value depends on a qubit and reaches two or more consumers (stores, jumps, calls, returns) through arithmetic,
+// the value where those uses part (the call itself or the last arithmetic all of them go through) is stored once
+// into a fresh qubit variable where C computes it, every consumer reads the variable, and the variable is set to 0
+// where all consumers are done: the front then computes the value into the register once, and clears it by the same
+// computation (Control.cpp, an overwrite that computes the old value again). Values wider than 64 bits, and those
+// without a point after all consumers that only the value's own block reaches, are left as they are.
+void registerSharedEvaluations(llvm::Function &function, bool taintAll);
+
+// The metadata that marks such a register: a computation that reads it reads it, and never computes its value
+// again (that would be a second evaluation).
+inline constexpr const char *sharedMetadata = "bennett.shared.register";
 
 // Names each evaluation in the functions `control`.
 void markEvaluations(llvm::Module &module, const std::set<const llvm::Function *> &control);

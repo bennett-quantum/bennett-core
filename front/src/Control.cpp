@@ -182,13 +182,17 @@ private:
   // Evaluations (Evaluations.h): those each generated function computes, where each function is applied, and an
   // instruction of each, for messages.
   std::map<std::string, std::set<const MDNode *>> evaluated;
+  // Those of them that depend on a qubit (an ordinary call `--taint-all` copies into a slice runs as ordinary code
+  // too, and is not a value with several consumers).
+  std::set<const MDNode *> qubitEvaluations;
   std::map<std::string, std::vector<const Instruction *>> appliedAt;
   std::map<const MDNode *, const Instruction *> evaluationSite;
   // The evaluations of a slice's body, refusing by name a frame observation that moving them would change.
   std::set<const MDNode *> sliceEvaluations(const Slice &slice);
-  // Refuses by name a generated function with evaluations applied at two places across a reservation or release
-  // of the stack.
-  void requireSameStackForReplays() const;
+  // Refuses by name an evaluation computed by more than one generated function or also by ordinary code, and a
+  // generated function with evaluations applied at two places across a reservation or release of the stack.
+  std::set<const MDNode *> ordinaryEvaluations;
+  void requireSingleEvaluations() const;
   void requireSameStack(const std::vector<const Instruction *> &sites, const MDNode &evaluation) const;
 };
 
@@ -234,7 +238,7 @@ std::string ControlWriter::write() {
     }
   }
   std::string text = function();
-  requireSameStackForReplays();
+  requireSingleEvaluations();
   std::string allocate, release;
   for (const std::string &faultRegister : faultRegisters) {
     allocate += "    " + faultRegister + " = qalloc " + std::to_string(faultCodeBits) + "\n";
@@ -267,6 +271,10 @@ void ControlWriter::apply(const std::string &callee, const std::string &args, co
 void ControlWriter::instruction(const Instruction &inst) {
   if (isHolds(&inst)) {
     return; // a record for the analysis (Taint.h)
+  }
+  if (const MDNode *evaluation = evaluationOf(inst); evaluation && !analysis.tainted(&inst)) {
+    ordinaryEvaluations.insert(evaluation);
+    evaluationSite.emplace(evaluation, &inst);
   }
   if (isExchange(&inst)) {
     exchange(cast<CallBase>(inst));
@@ -854,6 +862,11 @@ Slice ControlWriter::collect(const Value *root, const Instruction &sink, bool kn
       if (knownLoads) {
         std::optional<Access> source = analysis.access(load->getPointerOperand());
         Fact fact = source && source->offset == 0 ? analysis.before(load, source->storage) : Fact{};
+        // A register for a value with several consumers is read, never computed again (Evaluations.h).
+        if (source && source->storage->alloca->getMetadata(sharedMetadata) &&
+            analysis.unchangedBetween(load, &sink, source->storage)) {
+          fact = Fact{};
+        }
         if (fact.kind == Fact::Computed && widthOf(load->getType(), load) == source->storage->bits &&
             recomputable(fact.value, *source->storage, sink)) {
           slice.computed.push_back({load, fact.value});
@@ -1152,6 +1165,9 @@ std::set<const MDNode *> ControlWriter::sliceEvaluations(const Slice &slice) {
   for (const Instruction *inst : slice.body) {
     // Every evaluation the body copies, an ordinary call `--taint-all` moves in included.
     if (const MDNode *evaluation = evaluationOf(*inst)) {
+      if (analysis.tainted(inst)) {
+        qubitEvaluations.insert(evaluation);
+      }
       evaluations.insert(evaluation);
       evaluationSite.emplace(evaluation, inst);
     }
@@ -1178,13 +1194,35 @@ std::set<const MDNode *> ControlWriter::sliceEvaluations(const Slice &slice) {
                    inst);
       }
       evaluations.insert(evaluation);
+      qubitEvaluations.insert(evaluation);
       evaluationSite.emplace(evaluation, inst);
     }
   }
   return evaluations;
 }
 
-void ControlWriter::requireSameStackForReplays() const {
+void ControlWriter::requireSingleEvaluations() const {
+  std::map<const MDNode *, std::set<std::string>> computers;
+  for (const auto &[name, evaluations] : evaluated) {
+    for (const MDNode *evaluation : evaluations) {
+      if (qubitEvaluations.count(evaluation)) {
+        computers[evaluation].insert(name);
+      }
+    }
+  }
+  for (auto &[evaluation, names] : computers) {
+    bool ordinary = ordinaryEvaluations.count(evaluation) != 0;
+    if (names.size() + (ordinary ? 1 : 0) > 1) {
+      notHandled(describeEvaluation(evaluation) + " whose value is consumed in " +
+                     std::to_string(names.size() + (ordinary ? 1 : 0)) + " places, each computing it again " +
+                     (ordinary ? "(one of them ordinary code)" : "in a function of its own") +
+                     ": the copies run in different frames and may give different values; the front gives such a "
+                     "value a register of its own only where the control program computes it, outside code under "
+                     "a qubit, and when it is at most 64 bits wide (route: the register inside predicated code, "
+                     "and wider registers, not built)",
+                 evaluationSite.at(evaluation));
+    }
+  }
   for (const auto &[name, evaluations] : evaluated) {
     auto sites = appliedAt.find(name);
     if (!evaluations.empty() && sites != appliedAt.end() && sites->second.size() > 1) {

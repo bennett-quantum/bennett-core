@@ -1138,8 +1138,9 @@ fn ends_like_native_within_a_few_steps(program: &Program<'_>, n: u64) {
             let mut executor =
                 Executor::new(&module, entry(&module, "entry"), &[input as u64 + 1, n, 0], limited).expect("starts");
             let found = executor.run();
-            println!("{name} q={input} n={n}: native={wanted:#x}, device={found:?}");
-            if found != Outcome::Returned(Some(wanted)) {
+            let released = executor.stats().nonzero_releases;
+            println!("{name} q={input} n={n}: native={wanted:#x}, device={found:?}, nonzero releases={released}");
+            if found != Outcome::Returned(Some(wanted)) || released != 0 {
                 failures.push(format!("{name} q={input} n={n}: native={wanted:#x}, device={found:?}"));
             }
         }
@@ -1304,27 +1305,35 @@ __attribute__((noinline)) uintptr_t f(uint8_t q) {
 "#;
 
 #[test]
-#[ignore = "defect: one call whose value has two consumers is computed by one generated function per consumer, whose frames differ, so a frame address, a byte of a pointer to a local or a return address differs between the copies (route: one register for the value, read by every consumer and cleared by the same apply)"]
-fn one_call_feeding_two_consumers_gives_one_value() {
-    for (name, declarations, body) in [
+fn a_frame_dependent_value_with_two_consumers_is_computed_once_into_a_register() {
+    // The value is stored once into a register where C computes it; both words read the register, and the same
+    // applied function clears it after them.
+    for (name, declarations) in [
         (
-            "repeated-two-stores",
-            RETURN_ADDRESS_HELPER,
-            "    volatile uint64_t x = 0, y = 0;\n    uint8_t z = 0;\n    if (q) { uintptr_t t = f(q); x = t; ZBIT(z, 0); y = t; }\n    uint64_t a = READ(x), b = READ(y);\n    return a ^ b;",
-        ),
-        (
-            "repeated-frame-address",
+            "register-frame-address",
             "__attribute__((noinline)) uintptr_t f(uint8_t q) { return q ? (uintptr_t)__builtin_frame_address(0) : 0; }",
-            "    uintptr_t t = f(q);\n    volatile uint64_t x = t, y = t + n;\n    uint64_t a = READ(x), b = READ(y);\n    return (a + n) ^ b;",
         ),
         (
-            "repeated-pointer-byte",
+            "register-pointer-byte",
             "__attribute__((noinline)) static unsigned part(const void *p, unsigned i) { return ((const unsigned char *)p)[i]; }\n__attribute__((noinline)) uintptr_t f(uint8_t q) { int local; void *p = &local; return q ? part(&p, q - 1) : 0; }",
-            "    uintptr_t t = f(q);\n    volatile uint64_t x = t, y = t + n;\n    uint64_t a = READ(x), b = READ(y);\n    return (a + n) ^ b;",
         ),
+        ("register-return-address", RETURN_ADDRESS_HELPER),
     ] {
+        let body = "    uintptr_t t = f(q);\n    volatile uint64_t x = t, y = t + n;\n    uint64_t a = READ(x), b = READ(y);\n    packet key = READ(q);\n    return (key << 64) | ((a + n) ^ b);";
         ends_like_native_within_a_few_steps(&Program { name, declarations, body, qubits: 1 }, 1);
     }
+}
+
+#[test]
+fn a_call_with_two_consumers_under_a_qubit_with_gates_is_refused() {
+    // Predication copies the code under the qubit for each operation; the register is not built there.
+    Program {
+        name: "repeated-two-stores",
+        declarations: RETURN_ADDRESS_HELPER,
+        body: "    volatile uint64_t x = 0, y = 0;\n    uint8_t z = 0;\n    if (q) { uintptr_t t = f(q); x = t; ZBIT(z, 0); y = t; }\n    uint64_t a = READ(x), b = READ(y);\n    return a ^ b;",
+        qubits: 1,
+    }
+    .refused(1, &[0, 0], "not handled yet: a call to @f whose value is consumed in 2 places");
 }
 
 #[test]

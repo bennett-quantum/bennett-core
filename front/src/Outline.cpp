@@ -446,6 +446,7 @@ void outlineRegions(Function &function, bool taintAll, const std::set<const Func
       }
     }
   }
+  registerSharedEvaluations(function, taintAll);
   for (;;) {
     removeTrivialPhis(function);
     ControlAnalysis analysis(function, taintAll);

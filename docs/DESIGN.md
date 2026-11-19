@@ -1343,9 +1343,9 @@ under `apply` they run on the private copy and are undone with it.
 - **Where the value is computed.** The front applies the computation of a value where the value is stored
   into a qubit variable or controls a gate, not where the call is. So the memory the call reads must be the
   same there (`ControlAnalysis::memoryUnchangedBetween`; refused by name otherwise). A value used several
-  times is computed again for each use, which gives one value for arithmetic and reads of unchanged memory; for
-  a call whose value depends on the frames it does not, a known defect ("Evaluations the front repeats or moves",
-  below).
+  times is computed again for each use where that is arithmetic and reads of unchanged memory; a call's value
+  with several consumers gets a register of its own, or is refused by name ("Evaluations the front repeats or
+  moves", below).
   The applied function's remaining loads and its callees' accesses are both checked. Loads moved before
   the region are passed in by value ("Conditional jumps, joins and loops" above).
   The memory a call reads is what it, and the functions it calls, may reach outside their own frames
@@ -1405,11 +1405,22 @@ the same fault, whatever the function looks at. So (`front/src/Evaluations.h`):
   operations before it outlines anything, and every copy it makes keeps the name (a copy of code under a qubit
   for each of its results included). A generated function whose
   text equals one written before is that function, so computing a value into a register and clearing it again by
-  the same computation is one generated function applied twice. Not yet: an evaluation whose value C consumes in
-  two ways (one call whose value C stores twice, or stores and uses again after the code under a qubit) is still
-  computed by one generated function per consumer, and a value that depends on the frames (a frame address, a
-  byte of a pointer to a local) can differ between the copies: a known wrong result with ignored witnesses.
-  Route: compute it once into a register of its own, which every consumer reads and the same `apply` clears.
+  the same computation is one generated function applied twice.
+- **A register for a value with several consumers.** Where a call's value that depends on a qubit reaches two or
+  more consumers (stores, jumps, returns) through arithmetic and calls that return values, or one store whose
+  bytes a later store may overwrite (clearing the old value there would compute it again), the value where those
+  uses part (the call, or the last value all of them go through; the call's own value for the one store) is
+  stored once into a fresh qubit variable where C computes it. Every consumer, and every later computation of a
+  value derived from it, reads the variable. The variable is set to 0 as late as its value can still be computed
+  again: from the last consumer forward along blocks every path takes, before the first measurement, the first
+  gate or store on a qubit variable the value reads, or a return. The front carries that out by computing the
+  value again with the same generated function (an overwrite whose old value can be computed again, "From C to a
+  device program").
+  The front does this where the control program computes the value. Refused by name where it cannot: a value
+  computed inside code under a qubit with gates (predication copies that code for each operation), a value wider
+  than one register of 64 qubits (an 80-bit `long double`; an aggregate LLVM split into fields), a value without a
+  place after its consumers in its own loop. Routes: the register inside predicated code; registers wider than 64
+  qubits.
 - **The same stack pointer.** Where one generated function with an evaluation is applied at two places, no
   reservation or release of the control function's own stack may lie between them (a variable-length array, a
   `stackrestore`); refused by name otherwise, in every mode (an ordinary call `--taint-all` moves in counts).
@@ -1423,11 +1434,14 @@ the same fault, whatever the function looks at. So (`front/src/Evaluations.h`):
   constants of the module, which moved code sees unchanged.
 
 Acceptance (`front/tests/tests/coherence_regressions.rs`): a full return address computed into a word and cleared
-by computing it again gives 0 in the word; a replay across a variable-length array and a helper comparing its
-caller's return address one level up are refused by name in all three modes (each gave a wrong value before);
-arithmetic with two consumers is copied and gives C's values with the preparation's amplitudes. A call feeding
-two stores, and a frame address or a byte of a pointer to a local feeding two words, are ignored witnesses of the
-defect above.
+by computing it again gives 0 in the word; a frame address, a byte of a pointer to a local and a return address
+feeding two words give C's values with every register released at 0 (each gave a wrong value before); a replay
+across a variable-length array, a helper comparing its caller's return address one level up and a call feeding
+two stores under a qubit with gates are refused by name in all three modes; arithmetic with two consumers is
+copied and gives C's values with the preparation's amplitudes. A conversion LLVM shares between a store and a
+gate's condition (`float_controlled.c`, `ratio`) and an aggregate result whose fields go to two variables
+(`abi_independent.rs`) give native C's values through the register; the 80-bit `long double` of
+`float_long_double_controlled.c`, and the aggregates of two shapes that clang `-O2` splits, are refused by name.
 
 ## Non-local jumps (`setjmp`, `longjmp`)
 

@@ -147,10 +147,15 @@ fn accepted_aggregate_results_preserve_bits_and_phases_under_qubit_control() {
             let text = match lower_text(&source, &tag, &flags, extra) {
                 Ok(text) => text,
                 Err(message) => {
+                    // At O2 clang splits the aggregates of shapes 3 and 4 (wider than 64 bits) into fields before
+                    // the front sees them, so one call's value reaches both consumers through two values: no
+                    // register of its own yet (docs/DESIGN.md, "Evaluations the front repeats or moves").
+                    let wide = matches!(shape, 3 | 4) && suffix == "o2";
                     assert!(
-                        shape >= 6
-                            && suffix == "o2"
-                            && message.contains("a value that depends on a qubit, used by ordinary code"),
+                        (wide && message.contains("places, each computing it again"))
+                            || (shape >= 6
+                                && suffix == "o2"
+                                && message.contains("a value that depends on a qubit, used by ordinary code")),
                         "unexpected refusal {tag}: {message}"
                     );
                     eprintln!("{tag}: named pointer/vector memory-result debt: {message}");
