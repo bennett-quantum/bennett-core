@@ -1,5 +1,6 @@
 //! `bennett run`: execute, optionally reverse, and report.
 
+use std::fs::File;
 use std::io::{self, BufWriter};
 use std::path::Path;
 use std::process::ExitCode;
@@ -10,7 +11,6 @@ use bennett_exec::{
     ApplyCompiler, ApplyError, ApplyInput, Executor, Options, Outcome, ReverseError, RunError, Snapshot, Stats,
 };
 use bennett_ir::{Const, FuncId, Type, ValidModule};
-use tempfile::NamedTempFile;
 
 use crate::qasm::{QasmDevice, write_run_end};
 use crate::{ApplyCircuit, CliError, DeviceKind, RunArgs};
@@ -46,7 +46,7 @@ fn run_count(module: &ValidModule, entry: FuncId, values: &[u64], args: &RunArgs
     println!("Toffoli gates: {}", counts.toffoli);
     println!("peak qubits: {}", counts.peak_qubits);
     println!("depth: {}", counts.depth);
-    Ok(ExitCode::from(exit_status(run.outcome)))
+    Ok(ExitCode::from(outcome_status(run.outcome)))
 }
 
 fn run_qasm(
@@ -64,7 +64,8 @@ fn run_qasm(
         Err(error) => return Err(io_error(error)),
     }
     let directory = path.parent().unwrap_or_else(|| Path::new("."));
-    let staged = NamedTempFile::new_in(directory).map_err(io_error)?;
+    // Use regular file creation so the staged file has the intended permissions when published.
+    let staged = tempfile::Builder::new().make_in(directory, |path| File::create_new(path)).map_err(io_error)?;
     let mut output = BufWriter::new(staged);
     let run = {
         let writer = QasmDevice::new(&mut output, args.seed, seeded_bits(args.seed)).map_err(io_error)?;
@@ -76,7 +77,7 @@ fn run_qasm(
         }
         run?
     };
-    let status = exit_status(run.outcome);
+    let status = outcome_status(run.outcome);
     write_run_end(&mut output, run.outcome, status).map_err(io_error)?;
     let staged = output.into_inner().map_err(|error| io_error(error.into_error()))?;
     staged.persist_noclobber(path).map_err(|error| io_error(error.error))?;
@@ -126,10 +127,10 @@ fn run_simulator(module: &ValidModule, entry: FuncId, values: &[u64], args: &Run
     if args.stats {
         report_stats(&stats, forward, reverse.flatten());
     }
-    Ok(ExitCode::from(exit_status(outcome)))
+    Ok(ExitCode::from(outcome_status(outcome)))
 }
 
-fn exit_status(outcome: Outcome) -> u8 {
+fn outcome_status(outcome: Outcome) -> u8 {
     match outcome {
         Outcome::Returned(_) => 0,
         Outcome::Faulted(_) | Outcome::Stopped(RunError::RegionFault { .. }) => 1,

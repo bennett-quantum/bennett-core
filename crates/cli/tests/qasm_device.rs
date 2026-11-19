@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -41,12 +42,17 @@ impl Drop for Trace {
 }
 
 fn run(device: &str, args: &[&str], path: Option<&Path>) -> Output {
+    run_command(device, args, path).output().expect("run bennett")
+}
+
+fn run_command(device: &str, args: &[&str], path: Option<&Path>) -> Command {
     let mut command = Command::new(BIN);
     command.current_dir(EXAMPLES).args(["run", "--device", device]);
     if let Some(path) = path {
         command.arg("--qasm-output").arg(path);
     }
-    command.args(args).output().expect("run bennett")
+    command.args(args);
+    command
 }
 
 fn report(output: Output) -> String {
@@ -137,12 +143,18 @@ from openqasm3.parser import parse
 for filename in sys.argv[1:]:
     parse(Path(filename).read_text(encoding='utf-8'))
 "#;
-    let status = Command::new("python3")
-        .args(["-c", python])
-        .args(traces.iter().map(|trace| &trace.0))
-        .status()
-        .expect("run the Python OpenQASM syntax check");
-    assert!(status.success(), "OpenQASM parser exited with {status}");
+    let status = Command::new("python3").args(["-c", python]).args(traces.iter().map(|trace| &trace.0)).status();
+    match status {
+        Ok(status) => assert!(status.success(), "OpenQASM parser exited with {status}"),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            writeln!(
+                io::stderr().lock(),
+                "Skipped OpenQASM syntax check. Install Python 3 on PATH and openqasm3[parser]==1.0.1."
+            )
+            .expect("report missing python3");
+        }
+        Err(error) => panic!("run the Python OpenQASM syntax check: {error}"),
+    }
 }
 
 #[test]
@@ -201,7 +213,7 @@ fn measurements_write_the_outcomes_where_the_controller_received_them() {
         assert!(report.contains(&format!("result: {first}\n")), "{report}");
         assert_eq!(commands[1], format!("measure q0[0]; // outcome {first}"));
         assert_eq!(commands[2], format!("measure q0[0]; // outcome {second}"));
-        assert_eq!(commands.last(), Some(&format!("// returned {first} (exit code 0)").as_str()));
+        assert_eq!(commands.last(), Some(&format!("// returned {first} (run status 0)").as_str()));
         assert_eq!(commands[3..commands.len() - 1], vec!["x q0[0];"; if first == "1" { 10 } else { 0 }]);
         assert_eq!(recount(&text), counted(&args));
     }
@@ -222,7 +234,7 @@ fn discarding_a_register_leaves_it_idle_and_later_allocation_starts_fresh() {
             "// discard q0[0] (partial trace)",
             "qubit[1] q1;",
             "reset q1;",
-            "// returned (exit code 0)",
+            "// returned (run status 0)",
         ]
     );
 }
@@ -241,8 +253,8 @@ fn a_program_fault_preserves_the_commands_reached_and_the_exit_status() {
     let (fault_commands, fault_end) = fault.trim_end().rsplit_once('\n').expect("fault trace with footer");
     assert!(short_commands.ends_with("h q0[0];"));
     assert_eq!(short_commands, fault_commands);
-    assert_eq!(short_end, "// returned 7 (exit code 0)");
-    assert_eq!(fault_end, "// fault budget (code 1, exit code 1)");
+    assert_eq!(short_end, "// returned 7 (run status 0)");
+    assert_eq!(fault_end, "// fault budget (code 1, run status 1)");
 }
 
 #[test]
@@ -253,7 +265,53 @@ fn a_controller_stop_is_published_with_its_reason_and_exit_status() {
     let text = trace.read();
     assert_eq!(recount(&text), [1, 0, 0]);
     let end = text.lines().last().expect("stop footer");
-    assert!(end.starts_with("// stopped") && end.contains("udiv") && end.ends_with("(exit code 2)"), "{end}");
+    assert!(end.starts_with("// stopped") && end.contains("udiv") && end.ends_with("(run status 2)"), "{end}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_reporting_error_leaves_the_controller_outcome_in_the_trace() {
+    use std::process::Stdio;
+
+    let full = fs::OpenOptions::new().write(true).open("/dev/full").expect("open /dev/full");
+    let (reader, writer) = std::io::pipe().expect("create pipe");
+    drop(reader);
+    for (case, sink) in [("full", Stdio::from(full)), ("closed-pipe", Stdio::from(writer))] {
+        let trace = Trace::new(case);
+        let output = run_command("qasm", &[FIXTURE, "--entry", "short"], Some(&trace.0))
+            .stdout(sink)
+            .output()
+            .expect("run with an unwritable stdout");
+        assert!(!output.status.success(), "{case}: {output:?}");
+        let text = trace.read();
+        assert_eq!(recount(&text), [1, 0, 0], "{case}");
+        assert_eq!(text.lines().last(), Some("// returned 7 (run status 0)"), "{case}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn published_traces_have_the_mode_of_a_new_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("trace directory");
+    for mask in ["022", "002", "077"] {
+        let direct = dir.path().join(format!("direct-{mask}"));
+        let trace = dir.path().join(format!("trace-{mask}.qasm"));
+        let output = Command::new("sh")
+            .current_dir(EXAMPLES)
+            .args(["-c", "umask \"$1\" && : > \"$2\" && shift 2 && exec \"$@\"", "sh", mask])
+            .arg(&direct)
+            .arg(BIN)
+            .args(["run", "--device", "qasm", "--qasm-output"])
+            .arg(&trace)
+            .args([FIXTURE, "--entry", "short"])
+            .output()
+            .expect("run bennett under the test umask");
+        report(output);
+        let mode = |path| fs::metadata(path).expect("output metadata").permissions().mode() & 0o777;
+        assert_eq!(mode(&trace), mode(&direct), "umask {mask}");
+    }
 }
 
 #[test]

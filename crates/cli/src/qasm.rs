@@ -110,12 +110,14 @@ impl<W: Write, I: Iterator<Item = bool>> Device for QasmDevice<W, I> {
     }
 }
 
-pub(crate) fn write_run_end(output: &mut impl Write, outcome: Outcome, status: u8) -> io::Result<()> {
+pub(crate) fn write_run_end(output: &mut impl Write, outcome: Outcome, run_status: u8) -> io::Result<()> {
     match outcome {
-        Outcome::Returned(Some(value)) => writeln!(output, "// returned {value} (exit code {status})"),
-        Outcome::Returned(None) => writeln!(output, "// returned (exit code {status})"),
-        Outcome::Faulted(fault) => writeln!(output, "// fault {fault} (code {}, exit code {status})", fault.code()),
-        Outcome::Stopped(error) => writeln!(output, "// stopped {error} (exit code {status})"),
+        Outcome::Returned(Some(value)) => writeln!(output, "// returned {value} (run status {run_status})"),
+        Outcome::Returned(None) => writeln!(output, "// returned (run status {run_status})"),
+        Outcome::Faulted(fault) => {
+            writeln!(output, "// fault {fault} (code {}, run status {run_status})", fault.code())
+        }
+        Outcome::Stopped(error) => writeln!(output, "// stopped {error} (run status {run_status})"),
     }
 }
 

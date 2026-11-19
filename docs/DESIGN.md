@@ -205,9 +205,11 @@ and sample larger registers with a fixed seed.
 
 `bennett run --device qasm --qasm-output FILE` streams the quantum commands of one execution to a
 temporary file beside the requested path. The final comment gives the return and its scalar value
-when present, or the fault or stop reason, along with the command's exit code. The exporter publishes
-the completed trace at the requested path without replacing an existing file. A rejected start or an
-output error leaves the requested path untouched.
+when present, or the fault or stop reason, along with the run status assigned to that controller
+outcome. Terminal reporting occurs after publication and can independently affect the process exit
+status. The exporter publishes the completed trace without replacing an existing file. A rejected
+start or a trace write error leaves the requested path untouched. The trace has the usual permissions
+for a new file in its directory, including the process umask on Unix.
 
 As with the counter, `apply` is compiled to gates. Both devices decompose gates beyond
 the native controls described above, so their one-qubit, two-qubit and Toffoli gate totals agree.
@@ -231,9 +233,10 @@ omits the ordinary control program. A `release_zero` request assumes a replay wi
 Running the file may produce different measurements while still issuing the recorded sequence of gates.
 
 The CLI test independently recounts gate statements and compares them with `--device count`. The
-syntax test invokes version 1.0.1 of the reference parser when available to `python3` on `PATH` and reports a skip
-otherwise. Install `openqasm3[parser]==1.0.1` in a virtual environment and put its `bin` directory
-on `PATH` to run the parser check. [Python OpenQASM reference parser](https://pypi.org/project/openqasm3/1.0.1/)
+syntax test uses `python3` on `PATH` and version 1.0.1 of the reference parser. It reports a skip if
+the interpreter, pinned parser or parser runtime is unavailable. Install `openqasm3[parser]==1.0.1`
+in a virtual environment and put its `bin` directory on `PATH` to run the parser check.
+[Python OpenQASM reference parser](https://pypi.org/project/openqasm3/1.0.1/)
 
 ### `apply`
 
