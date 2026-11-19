@@ -1,5 +1,7 @@
 #include "Emit.h"
 
+#include "Classify.h"
+
 #include "Diagnostic.h"
 #include "Jumps.h"
 #include "Markers.h"
@@ -515,6 +517,7 @@ std::string ModuleWriter::write() {
   for (const std::string &text : generated) {
     functions += "\n" + text;
   }
+  refuseAppliedCallsRunOrdinarily(module, control, ordinaryCalls);
   std::string header = "; Written by bennett-front.\n";
   header += "memory " + std::to_string(staticEnd + options.stackBytes) + "\n";
   return header + dataSegments() + functions;

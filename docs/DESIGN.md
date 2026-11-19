@@ -907,7 +907,15 @@ a marker acts on; a `restrict` parameter counts as what its calls pass, since by
 after the call too. A memory intrinsic that copies from such memory or from a qubit variable makes its destination
 memory that may hold qubits; a copy of a constant number of bytes out of a qubit variable is first rewritten, as
 LLVM's InstCombine would, into a read of the variable and a store of the value, which the classes cover (sealed as a
-call it would keep the variable's address in ordinary code, which the front refuses). The analysis runs before inlining, so it follows markers applied
+call it would keep the variable's address in ordinary code, which the front refuses). A qubit variable whose address
+leaves what the front follows (returned by a helper, stored, passed to a call that may keep it) is treated like memory
+that may hold qubits: a read or a copy through a pointer the front cannot bound away from it depends on a qubit. A
+local variable, or a global of local linkage, whose address never escapes is reached only through pointers based
+on it, never through one the front cannot follow (an exported function's pointer parameter, say). SROA, which runs
+first, folds a join of equal values (`if (q) t = n; else t = n;` passes `n` itself on), although by the text `t`
+depends on a qubit after the choice; so each integer stored into a local variable first goes through a call of
+its own that returns it, the join stays a phi the classification sees, and the calls are removed after it
+(pointers are not wrapped: the analysis follows them through SROA's own rewriting). The analysis runs before inlining, so it follows markers applied
 through a helper's parameter. Where it is coarser than the later analysis it classifies more, which costs only
 optimisation: the front decides again, after the passes, how each instruction is translated. It is not meant to be
 finer; one way it can be is known and listed in "Not yet". An `invoke` or `callbr` with an argument that depends
@@ -924,7 +932,8 @@ merge two of them (they call different functions), and it may not copy one (with
 rotation copied a store that depends on a qubit into the block before a loop, measured on a generated program;
 the attribute was decided on 2026-11-19, with its cost below). After the run each call is the instruction it stood for again, with its type,
 alignment, volatility, ordering, attributes and metadata, and the front checks that each one is there exactly
-once: an instruction a pass removed or copied is refused by name. This relies on one property of LLVM's passes
+once: an instruction a pass removed or copied is refused by name (a pass may delete a declaration once nothing calls
+it; the front holds each declaration by a handle that a deletion clears, so the refusal does not depend on it). This relies on one property of LLVM's passes
 (a call of an unknown function stays as it is), not on a list of their steps. A test fails when any file
 under `front/src` or `front/include` other than `Passes.cpp`, whatever its extension, names LLVM's pass machinery
 (`front/tests/tests/sealed_operations.rs`). Passes
@@ -939,7 +948,11 @@ and `llvm.used` is not touched.
 **The class decides the translation.** After the passes, the front translates a classified instruction by its
 class, never by what its operands look like then: the optimiser may fold `f(q & 0u)` to `f(0)`, and `f` must
 still be applied. Translating such a call as applied when its arguments have become ordinary is not built, so
-where the front would translate a call classified as applied as an ordinary call it refuses it by name. Likewise the front's own lowering of the calling convention, which runs before the
+where the front would translate a call classified as applied as an ordinary call it refuses it by name: in the
+control program, and in every function that may run as ordinary code (one the host may call, one whose address is
+taken, one the control program calls as ordinary code, and whatever those call). A call in a function that only
+ever runs under an `apply` (an outlined region, the callee of an applied call) runs applied and is left alone.
+Likewise the front's own lowering of the calling convention, which runs before the
 classification, must not hide a dependence: a variadic argument goes into an area in memory, a structure passed
 by value is a copy in memory, a vector argument is copied to memory, and a call through another prototype may
 lose an argument, after which the call would carry only an ordinary address. A call that passes an argument
@@ -1922,6 +1935,10 @@ Refused by name or not yet excluded around the classification of "What LLVM's pa
   400 generated programs of seed `0x87196caa251d0f43` (`front/tests/tests/qubit_differential.rs`,
   `an_overwrite_under_a_qubit_after_a_qubit_store_is_refused_by_name`). Route: the front itself joins the store
   and the later overwrite into one store of a chosen value; both are classified stores, so no class changes.
+- **A join of equal pointers under a qubit.** `if (q) p = &a; else p = &a;` makes `p` depend on a qubit by the
+  text, but SROA folds the join before the classification (only integers stored into local variables are kept
+  through it), so what is read through `p` is classified by what `p` points to. Route: keep pointer joins as the
+  integer ones are, once the analysis can follow an address through the call that keeps it.
 - **A known value the optimiser copies.** The classification calls a qubit variable known where one ordinary value
   reaches its load on every path. A pass that copies the store of that value into two paths makes the front's
   later analysis meet two values and call the variable unknown, so a load the classification left to the

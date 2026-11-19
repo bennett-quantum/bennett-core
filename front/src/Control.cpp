@@ -313,6 +313,9 @@ void ControlWriter::instruction(const Instruction &inst) {
     requireAppliedCallKept(*call, std::any_of(call->arg_begin(), call->arg_end(), [&](const Use &arg) {
                              return analysis.tainted(arg.get());
                            }));
+    if (!markerCall(call) && !isa<IntrinsicInst>(call)) {
+      module.noteOrdinaryCall(*call);
+    }
   }
   classicalUse(inst);
   BodyWriter::instruction(inst);

@@ -75,6 +75,8 @@ public:
   const AppliedCalls &appliedCalls();
   // Which memory the module's pointers and calls may reach (Aliasing.h); computed on first use.
   const Aliasing &aliasing();
+  // Records a call the control program makes as ordinary code (for refuseAppliedCallsRunOrdinarily, Classify.h).
+  void noteOrdinaryCall(const llvm::CallBase &call) { ordinaryCalls.push_back(&call); }
 
 private:
   llvm::Module &module;
@@ -86,6 +88,7 @@ private:
   std::unique_ptr<AppliedCalls> applied;
   std::unique_ptr<Aliasing> reach;
   std::vector<std::string> generated;
+  std::vector<const llvm::CallBase *> ordinaryCalls;
   Namer functionNames;
   uint64_t staticEnd = 0;
   size_t definedCount = 0;
