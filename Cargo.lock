@@ -112,6 +112,7 @@ dependencies = [
 name = "bennett-front-tests"
 version = "0.1.0"
 dependencies = [
+ "bennett-emit",
  "bennett-exec",
  "bennett-ir",
  "nalgebra",

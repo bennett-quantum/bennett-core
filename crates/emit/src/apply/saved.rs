@@ -1,152 +1,213 @@
-//! Prove one loop with fixed continuation and exit charges, then save its decisions.
+//! Prove a single fixed-charge loop, possibly preceded by an early exit.
 
 use std::collections::BTreeSet;
 
-use bennett_ir::{BinOp, BlockId, Fault, Inst, Operand, Target, Terminator};
+use bennett_ir::{BinOp, Fault, Inst, Operand, Target, Terminator};
 
-use super::bits::{Circuit, ONE, Word, ZERO};
-use super::symbolic::{Frame, Point, Step};
+use super::bits::{Bit, Circuit, ONE, Word, ZERO};
+use super::calls::Program;
+use super::symbolic::{Point, Step};
 use super::{ApplyError, Copies};
-
-enum End {
-    Header,
-    Return,
-}
 
 struct Path<'a> {
     start: &'a Target,
     charge: u64,
-    end: End,
+    // The next conditional jump, or None for an applied return.
+    next_test: Option<Point>,
 }
 
-pub(super) struct Loop<'a> {
-    header: Point,
+struct Test<'a> {
+    point: Point,
     cond: &'a Operand,
     exit_when_true: bool,
     continuing: Path<'a>,
     exiting: Path<'a>,
 }
 
+pub(super) struct Loop<'a> {
+    entry: Option<Test<'a>>,
+    body: Test<'a>,
+}
+
 impl<'a> Loop<'a> {
-    pub(super) fn prove(frame: &Frame<'a>, header: Point) -> Option<Self> {
-        let function = frame.module.function(frame.callee);
-        let block = function.block(header.block);
-        let Terminator::Branch { cond, if_true, if_false } = &block.term else {
-            return None;
-        };
-        // The definite prefix reaches this test. With only this conditional in the function,
-        // the prefix cannot reach another cycle and still reach the test.
-        if function.blocks.iter().filter(|block| matches!(block.term, Terminator::Branch { .. })).count() != 1 {
-            return None;
+    pub(super) fn prove(program: &Program<'a>, start: Point) -> Option<Self> {
+        let entry = Test::prove(program, start)?;
+        let next = entry.continuing.next_test?;
+        if next == start {
+            return Some(Self { entry: None, body: entry });
         }
-        if !block.insts.iter().all(total) {
-            return None;
-        }
-        let yes = Path::prove(frame, header, if_true)?;
-        let no = Path::prove(frame, header, if_false)?;
-        let (exit_when_true, continuing, exiting) = match (&yes.end, &no.end) {
-            (End::Return, End::Header) => (true, no, yes),
-            (End::Header, End::Return) => (false, yes, no),
-            (End::Header, End::Header) | (End::Return, End::Return) => return None,
-        };
-        Some(Self { header, cond, exit_when_true, continuing, exiting })
+        // Both exits go straight to the applied return. The entry test
+        // cannot be revisited by this loop or by a caller continuation.
+        let body = Test::prove(program, next)?;
+        (body.continuing.next_test == Some(next)).then_some(Self { entry: Some(entry), body })
     }
 
     pub(super) fn run(
         &self,
         circuit: &mut Circuit,
-        frame: &Frame<'a>,
+        program: &Program<'a>,
         slots: &mut [Word],
         mut remaining: u64,
+        widths: &[Option<usize>],
     ) -> Result<(Copies, u64), ApplyError> {
         let mut active = ONE;
         let mut copies = Copies::default();
         let mut decisions = 0;
-        // The first return must use one of these fixed-cost exit paths. If none fits for
-        // an active input, its suffix is total and the first fault is the budget boundary.
-        while remaining >= self.exiting.charge && active != ZERO {
-            let condition = Frame::read(slots, self.cond)[0];
-            let exit = if self.exit_when_true { condition } else { condition.not() };
-            let returning = circuit.and(active, exit);
-            if returning != ZERO {
-                let mut exit_slots = slots.to_vec();
-                let result =
-                    self.follow(circuit, frame, &mut exit_slots, &self.exiting)?.expect("the proved exit path returns");
-                copies.returned.push((returning, result));
+
+        if let Some(entry) = &self.entry {
+            let exit = entry.exit(program, slots);
+            if remaining >= entry.exiting.charge {
+                entry.record(circuit, program, slots, exit, widths, &mut copies)?;
+            } else {
+                copies.faulted.push((exit, Fault::Budget));
             }
+            active = exit.not();
+            let Some(after_entry) = remaining.checked_sub(entry.continuing.charge) else {
+                copies.faulted.push((active, Fault::Budget));
+                return Ok((copies, decisions));
+            };
+            if after_entry < self.body.exiting.charge || active == ZERO {
+                copies.faulted.push((active, Fault::Budget));
+                return Ok((copies, decisions));
+            }
+            entry.continuing.follow(circuit, program, slots, entry.point, widths)?;
+            remaining = after_entry;
+        }
+
+        // If no more returns fit, the remaining instructions are total and
+        // active inputs can only exhaust the budget.
+        while remaining >= self.body.exiting.charge && active != ZERO {
+            let exit = self.body.exit(program, slots);
+            let returning = circuit.and(active, exit);
+            self.body.record(circuit, program, slots, returning, widths, &mut copies)?;
             active = circuit.and(active, exit.not());
             decisions += 1;
-            let Some(after_continue) = remaining.checked_sub(self.continuing.charge) else {
+            let Some(after_continue) = remaining.checked_sub(self.body.continuing.charge) else {
                 break;
             };
-            if after_continue < self.exiting.charge || active == ZERO {
+            if after_continue < self.body.exiting.charge || active == ZERO {
                 break;
             }
-            // This total computation can run on every definite value. The saved decision
-            // ensures that returned inputs cannot contribute to a later result or fault.
-            self.follow(circuit, frame, slots, &self.continuing)?;
+            // Unselected inputs can run this total computation speculatively.
+            // Only enabled inputs can contribute to a return or fault.
+            self.body.continuing.follow(circuit, program, slots, self.body.point, widths)?;
             remaining = after_continue;
         }
         copies.faulted.push((active, Fault::Budget));
         Ok((copies, decisions))
     }
+}
 
-    fn follow(
+impl<'a> Test<'a> {
+    fn prove(program: &Program<'a>, point: Point) -> Option<Self> {
+        let block = program.block(point);
+        let Terminator::Branch { cond, if_true, if_false } = &block.term else {
+            return None;
+        };
+        if point.index != block.insts.len() {
+            return None;
+        }
+        let yes = Path::prove(program, point, if_true)?;
+        let no = Path::prove(program, point, if_false)?;
+        let (exit_when_true, continuing, exiting) = match (yes.next_test, no.next_test) {
+            (None, Some(_)) => (true, no, yes),
+            (Some(_), None) => (false, yes, no),
+            (Some(_), Some(_)) | (None, None) => return None,
+        };
+        Some(Self { point, cond, exit_when_true, continuing, exiting })
+    }
+
+    fn exit(&self, program: &Program<'a>, slots: &[Word]) -> Bit {
+        let condition = program.read(slots, self.point, self.cond)[0];
+        if self.exit_when_true { condition } else { condition.not() }
+    }
+
+    fn record(
         &self,
         circuit: &mut Circuit,
-        frame: &Frame<'a>,
-        slots: &mut [Word],
-        path: &Path<'a>,
-    ) -> Result<Option<Word>, ApplyError> {
-        let mut point = frame.jump(slots, path.start);
-        while point != self.header {
-            point = match frame.step(circuit, slots, point)? {
-                Step::Write(next, dst, word) => {
-                    slots[dst.index()] = word;
-                    next
-                }
-                Step::Jump(target) => frame.jump(slots, target),
-                Step::Return(word) => return Ok(Some(word)),
-                Step::Branch(..) | Step::Transfer(..) | Step::Fault(_) | Step::CheckedWrite(..) => {
-                    unreachable!("proved a straight path")
-                }
-            };
+        program: &Program<'a>,
+        slots: &[Word],
+        returning: Bit,
+        widths: &[Option<usize>],
+        copies: &mut Copies,
+    ) -> Result<(), ApplyError> {
+        if returning != ZERO {
+            let word = self
+                .exiting
+                .follow(circuit, program, &mut slots.to_vec(), self.point, widths)?
+                .expect("proved an exit to the applied return");
+            copies.returned.push((returning, word));
         }
-        Ok(None)
+        Ok(())
     }
 }
 
 impl<'a> Path<'a> {
-    fn prove(frame: &Frame<'a>, header: Point, start: &'a Target) -> Option<Self> {
-        let function = frame.module.function(frame.callee);
-        let mut charge = 1u64; // the decision at the header
-        let mut seen = BTreeSet::<BlockId>::new();
-        let mut block = start.block;
-        let end = loop {
-            if block == header.block {
-                charge = charge.checked_add(header.index as u64)?;
-                break End::Header;
-            }
-            if !seen.insert(block) {
+    fn prove(program: &Program<'a>, test: Point, start: &'a Target) -> Option<Self> {
+        let mut charge = 1; // the conditional jump
+        let mut seen = BTreeSet::new();
+        let mut point = Point { block: start.block, index: 0, ..test };
+        let next_test = loop {
+            if !seen.insert(point) {
                 return None;
             }
-            let body = function.block(block);
-            if !body.insts.iter().all(total) {
-                return None;
+            let block = program.block(point);
+            if let Some(inst) = block.insts.get(point.index) {
+                if !total(inst) {
+                    return None;
+                }
+                charge += 1;
+                point = point.next();
+                continue;
             }
-            charge = charge.checked_add(body.insts.len() as u64 + 1)?;
-            block = match &body.term {
-                Terminator::Jump(target) => target.block,
-                Terminator::Return(Some(_)) => break End::Return,
-                Terminator::Branch { .. }
-                | Terminator::Switch { .. }
-                | Terminator::Return(None)
-                | Terminator::Exit(_)
-                | Terminator::Longjmp { .. }
-                | Terminator::Fault(_) => return None,
-            };
+            match &block.term {
+                Terminator::Branch { .. } => break Some(point),
+                Terminator::Jump(target) => point = Point { block: target.block, index: 0, ..point },
+                Terminator::Return(_) => {
+                    let Some(resume) = program.resume(point) else {
+                        charge += 1;
+                        break None;
+                    };
+                    point = resume;
+                }
+                Terminator::Switch { .. } | Terminator::Exit(_) | Terminator::Longjmp { .. } | Terminator::Fault(_) => {
+                    return None;
+                }
+            }
+            charge += 1;
         };
-        Some(Self { start, charge, end })
+        Some(Self { start, charge, next_test })
+    }
+
+    fn follow(
+        &self,
+        circuit: &mut Circuit,
+        program: &Program<'a>,
+        slots: &mut [Word],
+        test: Point,
+        widths: &[Option<usize>],
+    ) -> Result<Option<Word>, ApplyError> {
+        let mut point = program.jump(slots, test, self.start);
+        while Some(point) != self.next_test {
+            point = match program.step_narrow(circuit, slots, point, widths)? {
+                Step::Write(next, dst, word) => {
+                    slots[dst.index()] = word;
+                    next
+                }
+                Step::Jump(target) => program.jump(slots, point, target),
+                Step::Transfer(next, writes) => {
+                    for (slot, word) in writes {
+                        slots[slot.index()] = word;
+                    }
+                    next
+                }
+                Step::Return(word) => return Ok(Some(word)),
+                Step::Branch(..) | Step::Fault(_) | Step::CheckedWrite(..) => {
+                    unreachable!("proved a total straight path")
+                }
+            };
+        }
+        Ok(None)
     }
 }
 

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 
 use bennett_exec::frame_bytes;
-use bennett_ir::{BlockId, Fault, FuncId, Function, Inst, Operand, Slot, Target, Terminator, Type};
+use bennett_ir::{Block, BlockId, Fault, FuncId, Function, Inst, Operand, Slot, Target, Terminator, Type};
 
 use super::bits::{Bit, Circuit, Word, constant};
 use super::symbolic::{Frame, Point, Step};
@@ -35,18 +35,7 @@ pub(super) struct Program<'a> {
 impl<'a> Program<'a> {
     pub(super) fn check(input: &ApplyInput<'a>) -> Result<(Self, Vec<Word>), ApplyError> {
         let source = input.module.function(input.callee);
-        let args = source
-            .params
-            .iter()
-            .zip(input.args)
-            .map(|(param, arg)| match arg {
-                Argument::Value(value) => {
-                    let Type::Int(width) = param.ty else { unreachable!("checked the argument type") };
-                    constant(*value, width.bits() as usize)
-                }
-                Argument::Register(wires) => wires.clone().map(|wire| Bit::Wire(wire, false)).collect(),
-            })
-            .collect::<Vec<_>>();
+        let args = arguments(input);
         let root = Frame::check(input.module, input.callee, args.iter().cloned().map(Some))?;
         let mut slots = root.initial(args);
         let mut program = Self {
@@ -180,7 +169,30 @@ impl<'a> Program<'a> {
         !self.copies[0].sites.is_empty()
     }
 
+    pub(super) fn block(&self, point: Point) -> &'a Block {
+        let frame = &self.copies[point.copy].frame;
+        frame.module.function(frame.callee).block(point.block)
+    }
+
+    pub(super) fn resume(&self, point: Point) -> Option<Point> {
+        self.copies[point.copy].caller.map(|(resume, _)| resume)
+    }
+
+    pub(super) fn read(&self, slots: &[Word], point: Point, operand: &Operand) -> Word {
+        Frame::read(&slots[self.copies[point.copy].slots.clone()], operand)
+    }
+
     pub(super) fn step(&self, circuit: &mut Circuit, slots: &[Word], point: Point) -> Result<Step<'a>, ApplyError> {
+        self.step_narrow(circuit, slots, point, &[])
+    }
+
+    pub(super) fn step_narrow(
+        &self,
+        circuit: &mut Circuit,
+        slots: &[Word],
+        point: Point,
+        widths: &[Option<usize>],
+    ) -> Result<Step<'a>, ApplyError> {
         let copy = &self.copies[point.copy];
         let local = &slots[copy.slots.clone()];
         if let Some(site) = copy.sites.get(&(point.block, point.index)) {
@@ -201,7 +213,7 @@ impl<'a> Program<'a> {
             return Ok(Step::Transfer(Point { copy: *index, ..Point::entry(BlockId(0)) }, writes));
         }
 
-        let block = copy.frame.module.function(copy.frame.callee).block(point.block);
+        let block = self.block(point);
         if point.index == block.insts.len()
             && let Terminator::Return(value) = &block.term
             && let Some((resume, dst)) = copy.caller
@@ -211,7 +223,8 @@ impl<'a> Program<'a> {
             return Ok(Step::Transfer(resume, writes));
         }
 
-        let step = copy.frame.step(circuit, local, point)?;
+        let widths = if widths.is_empty() { widths } else { &widths[copy.slots.clone()] };
+        let step = copy.frame.step_narrow(circuit, local, point, widths)?;
         Ok(match step {
             Step::Write(next, dst, word) => Step::Write(next, copy.slot(dst), word),
             Step::CheckedWrite(next, dst, word, enabled, fault) => {
@@ -236,6 +249,23 @@ impl<'a> Program<'a> {
         }
         Point { copy: point.copy, ..Point::entry(target.block) }
     }
+}
+
+pub(super) fn arguments(input: &ApplyInput<'_>) -> Vec<Word> {
+    input
+        .module
+        .function(input.callee)
+        .params
+        .iter()
+        .zip(input.args)
+        .map(|(param, arg)| match arg {
+            Argument::Value(value) => {
+                let Type::Int(width) = param.ty else { unreachable!("checked the argument type") };
+                constant(*value, width.bits() as usize)
+            }
+            Argument::Register(wires) => wires.clone().map(|wire| Bit::Wire(wire, false)).collect(),
+        })
+        .collect()
 }
 
 impl Copy<'_> {

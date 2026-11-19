@@ -11,6 +11,7 @@ mod gadget_tests;
 mod machine;
 mod products;
 mod ranges;
+mod reach;
 mod remainders;
 mod saved;
 mod symbolic;
@@ -208,32 +209,39 @@ pub fn compile_apply_with(input: ApplyInput<'_>, mode: ApplyMode) -> Result<Comp
                     Step::Branch(..) => {
                         let remaining = input.budget - spent;
                         let reason = match mode {
-                            ApplyMode::Automatic if program.has_calls() => "copied calls use the shared step machine",
                             ApplyMode::Automatic => {
-                                let checkpoint = circuit.checkpoint();
-                                let refusal = match controls::run(&mut circuit, frame, &slots, point, remaining) {
-                                    Ok((copies, proved_passes)) => {
-                                        break (
-                                            copies,
-                                            Construction::Controlled { proved_passes },
-                                            "qubit-dependent choices use controls within the shared budget",
-                                        );
-                                    }
-                                    Err(controls::Failure::Control(refusal)) => refusal,
-                                    Err(controls::Failure::Lowering(error)) => return Err(error),
+                                let refusal = if program.has_calls() {
+                                    None
+                                } else {
+                                    let checkpoint = circuit.checkpoint();
+                                    let refusal = match controls::run(&mut circuit, frame, &slots, point, remaining) {
+                                        Ok((copies, proved_passes)) => {
+                                            break (
+                                                copies,
+                                                Construction::Controlled { proved_passes },
+                                                "qubit-dependent choices use controls within the shared budget",
+                                            );
+                                        }
+                                        Err(controls::Failure::Control(refusal)) => refusal,
+                                        Err(controls::Failure::Lowering(error)) => return Err(error),
+                                    };
+                                    circuit.rewind(checkpoint);
+                                    Some(refusal)
                                 };
-                                circuit.rewind(checkpoint);
-                                if refusal == controls::Refusal::UnprovedLoop
-                                    && let Some(plan) = saved::Loop::prove(frame, point)
+                                if refusal.is_none_or(|refusal| refusal == controls::Refusal::UnprovedLoop)
+                                    && let Some(plan) = saved::Loop::prove(&program, point)
                                 {
-                                    let (copies, decisions) = plan.run(&mut circuit, frame, &mut slots, remaining)?;
+                                    let bounds = reach::analyze(&program, &input, slots.len()).unwrap_or_default();
+                                    let remaining = bounds.last_attempt.map_or(remaining, |last| last - spent);
+                                    let (copies, decisions) =
+                                        plan.run(&mut circuit, &program, &mut slots, remaining, &bounds.widths)?;
                                     break (
                                         copies,
                                         Construction::SavedDecisions { decisions },
                                         "one proved loop with fixed continuation and exit charges",
                                     );
                                 }
-                                refusal.reason()
+                                refusal.map_or("copied calls use the shared step machine", controls::Refusal::reason)
                             }
                             ApplyMode::StepMachine => "step machine requested for a qubit-dependent jump",
                         };

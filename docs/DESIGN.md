@@ -404,8 +404,8 @@ site with one proved definite address uses the same copy construction. Reachable
 recursive calls and indirect sites without one proved address are refused before
 issuing gates. A copied frame keeps the caller's proved literal bits and equalities
 between argument bits across all visits to the call site. A call result is unknown to
-the caller's operand proof. A qubit-dependent continuation in a function with copied
-calls uses the step machine.
+the caller's operand proof. A qubit-dependent continuation with copied calls can use the
+single-loop proof below. Other qubit-dependent continuations with copied calls use the step machine.
 
 The **step machine** carries one **dispatch bit** per possible program point, set for the
 definite assignments whose next instruction or terminator is there. In one **tick** it evaluates
@@ -421,15 +421,25 @@ Nesting adds possible points to a tick. When no possible point remains, dispatch
 
 When control gates encounter a loop without a proved pass count, the compiler can try
 **saved decisions**, bits recording whether each definite input is still running at each loop test.
-The entire function must have exactly one conditional jump, at the test. The test block and both
-routes may contain only `add`, `sub`, `and`, `xor`, `icmp`, `select`, `zext`, `sext`, `trunc`, `mul`
-with a literal operand, and shifts by a literal amount. The routes follow unconditional jumps, one back to the test
-and one to a return with a value. The proof counts both routes, including the test jump,
-the other jumps and the return. At each test, a return is considered only
+The first qubit-dependent jump may be the loop test or a choice between entering the loop and
+returning early. At the loop test, one route goes back to the test and the other returns from the
+applied function. Both routes are straight sequences of integer operations, unconditional jumps,
+and returns from already-entered copied calls. The integer operations are `add`, `sub`, `and`, `xor`,
+`icmp`, `select`, `zext`, `sext`, `trunc`, `mul` with a literal operand, and shifts by a literal
+amount. The proof counts the steps on each route, including conditional and unconditional jumps
+and each return. At each test, a return is considered only
 if its whole exit route fits in the steps left. A saved decision prevents an earlier return
 from contributing again. A still-running input with no remaining affordable return must
 exhaust the budget, because the skipped instructions cannot fault. Compilation reports the
 construction and its reason.
+
+For saved decisions with at most eight distinct argument qubits, the compiler can trace the
+supported instructions on all definite arguments under the whole function's budget. This gives
+an upper bound on the unsigned value written to each result slot. For low-bit arithmetic and
+selections the compiler omits gates for bits proved zero, while keeping the declared word width
+for later instructions. When every input stops, the schedule ends at the last reached return or
+fault attempt. The analysis has a work limit. If it reaches that limit, the compiler uses the
+original widths and the full remaining budget.
 
 A pass count proved from the program may be used at any nesting depth. For example, a
 logical right shift of a `w`-bit loop variable by one on each pass makes it zero after at most
@@ -442,17 +452,30 @@ after `5 + 9k` steps for `k` updates. The maximum trajectory value is 13,120 and
 terminating input takes 127 updates. Zero never returns. The bit-level runner checked all 256
 inputs at 253 distinct budgets, including immediately before, at and after each terminating
 input's return. It checked both zero and patterned destinations, unchanged inputs, and zero
-scratch. At `B = 1,148`, the following counts include the forward gates, the output and fault
-XORs, and all inverse gates. The peak includes the 21 input, output and fault qubits. Depth
-counts layers of gates on disjoint qubits.
+scratch. The hand-written program's rows use `B = 1,148`. Counts include the forward gates, the
+output and fault XORs, and all inverse gates. Peak includes the 21 input, output and fault qubits.
+Depth counts layers of gates on disjoint qubits.
 
 | Construction | One-qubit gates | Two-qubit gates | Toffolis | Peak qubits | Depth |
 |---|---:|---:|---:|---:|---:|
 | Step machine (1,145 ticks after 3 definite steps) | 8,410 | 53,269 | 65,688 | 26,888 | 44,745 |
 | Saved decisions (128 decisions after 3 definite steps) | 7,136 | 28,513 | 19,258 | 14,330 | 3,729 |
+| C Collatz, saved decisions (127 loop decisions at `B = 1,150`) | 14,152 | 36,875 | 20,252 | 15,327 | 7,001 |
 
 Run `cargo test -p bennett-emit --test apply collatz_eight_bit_budget_sweep_and_counts -- --ignored --exact --nocapture`
 to repeat the sweep and counts.
+
+The C Collatz program uses an ordinary `unsigned` trajectory and returns zero for inputs
+zero and one. The front emits a call to a helper that tests the initial value before its first
+pass. Including the call and both returns, it takes five steps for inputs zero and one and
+`7 + 9k` steps for `k` updates. The loop-carried value still fits in 14 bits. The front computes
+the tripled value plus one before selecting the odd or even result, so that intermediate
+needs at most 16 bits. The emitted circuit uses saved decisions and keeps one budget across
+the wrapper and helper.
+
+Run `front/test.sh --test emitted_collatz c_collatz_budget_sweep_and_counts -- --ignored --exact --nocapture`
+to check the C row and compare the gates with the executor on all 256 inputs at 250 distinct
+budgets, including immediately before, at, and after every return cutoff.
 
 The next counts use the same convention and include the argument, eight result and five fault
 qubits in the peak. The ordinary loop adds the three-bit input on odd inputs and subtracts it

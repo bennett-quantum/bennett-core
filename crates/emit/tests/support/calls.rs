@@ -8,6 +8,44 @@ use super::{
 };
 
 #[test]
+fn saved_loop_after_a_copied_call_and_early_exit_shares_one_budget() {
+    let module = control_example(
+        r#"
+memory 1024
+func @f(i3 %x) -> i8 {
+entry:
+    %r = call @count(%x)
+    %result = add i8 %r, 4
+    ret %result
+}
+func @count(i3 %x) -> i8 {
+entry:
+    %large = icmp ugt i3 %x, 1
+    br %large, loop(%x, i8 0), finish(i8 0)
+loop(i3 %remaining, i8 %n):
+    %next = sub i3 %remaining, 1
+    %inc = add i8 %n, 1
+    %more = icmp ugt i3 %next, 1
+    br %more, loop(%next, %inc), finish(%inc)
+finish(i8 %out):
+    ret %out
+}
+"#,
+        3,
+        "",
+    );
+    for budget in 0..=31 {
+        let (construction, _) = compare_controls(&module, budget, ApplyMode::Automatic, |x| {
+            let passes = x.saturating_sub(1);
+            if budget < 6 + 4 * passes { (0, 1) } else { (4 + passes, 0) }
+        });
+        if budget >= 3 {
+            assert!(matches!(construction, Construction::SavedDecisions { .. }), "{construction}, B={budget}");
+        }
+    }
+}
+
+#[test]
 fn copied_arguments_keep_proved_high_bits() {
     let module = control_example(
         r#"

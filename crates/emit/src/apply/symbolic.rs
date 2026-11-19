@@ -181,8 +181,19 @@ impl<'a> Frame<'a> {
     }
 
     pub(super) fn step(&self, circuit: &mut Circuit, slots: &[Word], point: Point) -> Result<Step<'a>, ApplyError> {
+        self.step_narrow(circuit, slots, point, &[])
+    }
+
+    pub(super) fn step_narrow(
+        &self,
+        circuit: &mut Circuit,
+        slots: &[Word],
+        point: Point,
+        widths: &[Option<usize>],
+    ) -> Result<Step<'a>, ApplyError> {
         let block = self.module.function(self.callee).block(point.block);
         let read = |operand| Self::read(slots, operand);
+        let result_width = |dst: Slot, declared| widths.get(dst.index()).copied().flatten().unwrap_or(declared);
         if let Some(inst) = block.insts.get(point.index) {
             let (dst, result) = match inst {
                 Inst::Binary { op: BinOp::Urem, dst, lhs, rhs, .. } => {
@@ -216,8 +227,16 @@ impl<'a> Frame<'a> {
                             left = constant(value, left.len());
                         }
                     }
-                    let result =
+                    let declared = left.len();
+                    // Low bits of these operations never depend on higher input bits.
+                    if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::And | BinOp::Xor) {
+                        let width = result_width(*dst, declared);
+                        left.truncate(width);
+                        right.truncate(width);
+                    }
+                    let mut result =
                         arithmetic::binary(circuit, *op, &left, &right).expect("checked operands before lowering");
+                    result.resize(declared, ZERO);
                     (*dst, result)
                 }
                 Inst::Compare { pred, dst, lhs, rhs, .. } => {
@@ -225,14 +244,16 @@ impl<'a> Frame<'a> {
                 }
                 Inst::Select { dst, cond, if_true, if_false, .. } => {
                     let condition = read(cond)[0];
-                    (
-                        *dst,
-                        read(if_true)
-                            .into_iter()
-                            .zip(read(if_false))
-                            .map(|(a, b)| circuit.select(condition, a, b))
-                            .collect(),
-                    )
+                    let left = read(if_true);
+                    let declared = left.len();
+                    let mut result: Word = left
+                        .into_iter()
+                        .zip(read(if_false))
+                        .take(result_width(*dst, declared))
+                        .map(|(a, b)| circuit.select(condition, a, b))
+                        .collect();
+                    result.resize(declared, ZERO);
+                    (*dst, result)
                 }
                 Inst::Cast { op, dst, value, to, .. } => (*dst, arithmetic::cast(*op, read(value), to.bits() as usize)),
                 Inst::FuncAddr { dst, func } => (*dst, constant(u128::from(func.address()), u64::BITS as usize)),
