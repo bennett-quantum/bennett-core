@@ -32,13 +32,17 @@ impl<'a> Flow<'a> {
         }
         let joins = simple_fast(Reversed(&graph), exit);
         let doms = simple_fast(&graph, nodes[0]);
-        let loops = function
+        let mut flow = Self { graph, joins, loops: Vec::new(), exit };
+        flow.loops = function
             .blocks
             .iter()
             .enumerate()
-            .map(|(index, _)| ShiftLoop::prove(function, &doms, BlockId(index as u32)))
+            .map(|(index, _)| {
+                let block = BlockId(index as u32);
+                ShiftLoop::prove(function, &doms, block).or_else(|| ShiftLoop::prove_latch(function, &flow, block))
+            })
             .collect();
-        Self { graph, joins, loops, exit }
+        flow
     }
 
     // The nearest common continuation of routes to a return. A route that cannot
@@ -114,7 +118,7 @@ impl<'a> Flow<'a> {
 #[derive(Clone, Copy)]
 pub(super) struct ShiftLoop<'a> {
     pub(super) width: usize,
-    pub(super) tested: Slot,
+    pub(super) zero_on_exit: Slot,
     pub(super) condition: &'a Operand,
     pub(super) continue_when_true: bool,
     pub(super) continuing: &'a Target,
@@ -176,7 +180,51 @@ impl<'a> ShiftLoop<'a> {
 
         found_back_edge.then_some(Self {
             width: width.bits() as usize,
-            tested: block.params[parameter].slot,
+            zero_on_exit: block.params[parameter].slot,
+            condition,
+            continue_when_true,
+            continuing,
+            exiting,
+        })
+    }
+
+    fn prove_latch(function: &'a Function, flow: &Flow<'_>, latch: BlockId) -> Option<Self> {
+        let block = function.block(latch);
+        let Terminator::Branch { cond: condition @ Operand::Slot(cond), if_true, if_false } = &block.term else {
+            return None;
+        };
+        // A rotated loop tests the old word at the end of its body. Testing
+        // old < 2 or old > 1 is equivalent to testing (old >> 1) against zero.
+        let (continue_when_true, width, word) = block.insts.iter().find_map(|inst| {
+            let Inst::Compare { pred, dst, width, lhs, rhs: Operand::Const(limit) } = inst else { return None };
+            if dst != cond {
+                return None;
+            }
+            let continue_when_true = *pred == Predicate::Ugt && limit.value() == 1;
+            let continue_when_false = *pred == Predicate::Ult && limit.value() == 2;
+            (continue_when_true || continue_when_false).then_some((continue_when_true, *width, lhs))
+        })?;
+        let (continuing, exiting) = if continue_when_true { (if_true, if_false) } else { (if_false, if_true) };
+        if continuing.block == exiting.block || exiting.block == latch {
+            return None;
+        }
+        let header = function.block(continuing.block);
+        let parameter = header.params.iter().position(|param| Operand::Slot(param.slot) == *word)?;
+        let Operand::Slot(shifted) = continuing.args[parameter] else { return None };
+        if !block.insts.iter().any(|inst| {
+            matches!(
+                inst,
+                Inst::Binary { op: BinOp::Lshr, dst, lhs, rhs: Operand::Const(amount), .. }
+                    if *dst == shifted && lhs == word && amount.value() == 1
+            )
+        }) || flow.can_revisit(continuing.block, |block| block == latch)
+        {
+            // The body cannot replace the header parameter along another back edge.
+            return None;
+        }
+        Some(Self {
+            width: width.bits() as usize,
+            zero_on_exit: shifted,
             condition,
             continue_when_true,
             continuing,

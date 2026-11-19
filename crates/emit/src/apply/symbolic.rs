@@ -180,11 +180,7 @@ impl<'a> Frame<'a> {
         Ok(())
     }
 
-    pub(super) fn step(&self, circuit: &mut Circuit, slots: &[Word], point: Point) -> Result<Step<'a>, ApplyError> {
-        self.step_narrow(circuit, slots, point, &[])
-    }
-
-    pub(super) fn step_narrow(
+    pub(super) fn step(
         &self,
         circuit: &mut Circuit,
         slots: &[Word],
@@ -300,13 +296,6 @@ impl<'a> Frame<'a> {
                 unreachable!("checked the terminators before lowering")
             }
         })
-    }
-
-    pub(super) fn jump(&self, slots: &mut [Word], target: &Target) -> Point {
-        for (dst, value) in self.incoming(slots, target) {
-            slots[dst.index()] = value;
-        }
-        Point::entry(target.block)
     }
 }
 

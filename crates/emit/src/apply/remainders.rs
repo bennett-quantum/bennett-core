@@ -1,5 +1,8 @@
 //! Restoring unsigned remainder, one trial subtraction per dividend bit.
 
+use bennett_ir::Predicate;
+
+use super::arithmetic;
 use super::bits::{Bit, Circuit, ONE, Word, ZERO, constant, definite};
 use super::ranges::{bits, unsigned_max};
 
@@ -32,7 +35,8 @@ pub(super) fn result_bits(dividend: &[Bit], divisor: &[Bit]) -> usize {
 }
 
 pub(super) fn reduce(circuit: &mut Circuit, dividend: &[Bit], divisor: &[Bit]) -> Word {
-    if let (Some(left), Some(right)) = (definite(dividend), definite(divisor))
+    let modulus = definite(divisor);
+    if let (Some(left), Some(right)) = (definite(dividend), modulus)
         && let Some(value) = left.checked_rem(right)
     {
         return constant(value, dividend.len());
@@ -43,8 +47,13 @@ pub(super) fn reduce(circuit: &mut Circuit, dividend: &[Bit], divisor: &[Bit]) -
     let width = result_bits(dividend, divisor);
     let mut word = if width == 0 {
         Vec::new()
-    } else if definite(divisor).is_some_and(|value| value > maximum || value.is_power_of_two()) {
+    } else if modulus.is_some_and(|value| value > maximum || value.is_power_of_two()) {
         dividend[..width].to_vec()
+    } else if modulus == Some(maximum) {
+        // The only possible nonzero quotient is one, when the two words
+        // are equal. In that case the remainder has every bit clear.
+        let keep = arithmetic::compare(circuit, Predicate::Ne, &dividend[..significant], &divisor[..significant]);
+        dividend[..width].iter().map(|&bit| circuit.and(keep, bit)).collect()
     } else {
         circuit.clean_word(width, |circuit| {
             let denominator = divisor[..divisor_width].iter().map(|&bit| materialize(circuit, bit)).collect::<Word>();
@@ -144,5 +153,16 @@ mod tests {
         assert_eq!(&bounded[4..], &[ZERO; 4]);
         let block = circuit.finish(0, "bounded remainder").expect("valid wires");
         check(&block, &bounded, &[(8, 21)], 10, 6 * 8 * 4);
+    }
+
+    #[test]
+    fn remainder_at_the_dividend_bound_only_clears_equality() {
+        let mut circuit = Circuit::new(4);
+        let input = (0..4).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
+        let result = reduce(&mut circuit, &input, &constant(15, 4));
+        let block = circuit.finish(0, "remainder at bound").expect("valid wires");
+        for value in 0..16 {
+            check(&block, &result, &[(4, value)], value % 15, 7);
+        }
     }
 }

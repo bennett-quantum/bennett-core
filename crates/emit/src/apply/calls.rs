@@ -169,6 +169,14 @@ impl<'a> Program<'a> {
         !self.copies[0].sites.is_empty()
     }
 
+    pub(super) fn frames(&self) -> impl Iterator<Item = &Frame<'a>> {
+        self.copies.iter().map(|copy| &copy.frame)
+    }
+
+    pub(super) fn slot(&self, point: Point, slot: Slot) -> Slot {
+        self.copies[point.copy].slot(slot)
+    }
+
     pub(super) fn block(&self, point: Point) -> &'a Block {
         let frame = &self.copies[point.copy].frame;
         frame.module.function(frame.callee).block(point.block)
@@ -224,7 +232,7 @@ impl<'a> Program<'a> {
         }
 
         let widths = if widths.is_empty() { widths } else { &widths[copy.slots.clone()] };
-        let step = copy.frame.step_narrow(circuit, local, point, widths)?;
+        let step = copy.frame.step(circuit, local, point, widths)?;
         Ok(match step {
             Step::Write(next, dst, word) => Step::Write(next, copy.slot(dst), word),
             Step::CheckedWrite(next, dst, word, enabled, fault) => {

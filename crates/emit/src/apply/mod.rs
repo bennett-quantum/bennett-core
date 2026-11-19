@@ -64,7 +64,7 @@ impl fmt::Display for Construction {
 /// Which constructions the compiler may consider.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ApplyMode {
-    /// Prefer control gates, then saved decisions for one fixed-charge loop.
+    /// Try control gates and saved decisions before using the step machine.
     #[default]
     Automatic,
     /// Use the step machine at the first qubit-dependent jump, even for a proved loop.
@@ -159,7 +159,6 @@ fn compile_with_analysis_limit(
 ) -> Result<CompiledApply, ApplyError> {
     check_interface(&input)?;
     let (program, mut slots) = Program::check(&input)?;
-    let frame = program.root();
     let mut circuit = Circuit::new(input.scratch_start);
     let mut status = match input.entry_fault {
         Some(fault) => Status::Faulted(fault),
@@ -218,11 +217,19 @@ fn compile_with_analysis_limit(
                         let remaining = input.budget - spent;
                         let reason = match mode {
                             ApplyMode::Automatic => {
-                                let refusal = if program.has_calls() {
-                                    None
+                                // Preserve the cheaper fixed-charge schedule for covered copied loops.
+                                let has_calls = program.has_calls();
+                                let mut saved = if has_calls { saved::Loop::prove(&program, point) } else { None };
+                                let reason = if saved.is_some() {
+                                    "one proved loop with fixed continuation and exit charges"
+                                } else if has_calls && point.copy == 0 {
+                                    // Keep the established construction when the first dynamic
+                                    // choice is in the applied entry.
+                                    "copied calls use the shared step machine"
                                 } else {
                                     let checkpoint = circuit.checkpoint();
-                                    let refusal = match controls::run(&mut circuit, frame, &slots, point, remaining) {
+                                    let refusal = match controls::run(&mut circuit, &program, &slots, point, remaining)
+                                    {
                                         Ok((copies, proved_passes)) => {
                                             break (
                                                 copies,
@@ -234,11 +241,12 @@ fn compile_with_analysis_limit(
                                         Err(controls::Failure::Lowering(error)) => return Err(error),
                                     };
                                     circuit.rewind(checkpoint);
-                                    Some(refusal)
+                                    if refusal == controls::Refusal::UnprovedLoop {
+                                        saved = saved::Loop::prove(&program, point);
+                                    }
+                                    refusal.reason()
                                 };
-                                if refusal.is_none_or(|refusal| refusal == controls::Refusal::UnprovedLoop)
-                                    && let Some(plan) = saved::Loop::prove(&program, point)
-                                {
+                                if let Some(plan) = saved {
                                     let bounds = reach::analyze(&program, &input, slots.len(), analysis_limit)
                                         .unwrap_or_default();
                                     let remaining = bounds.last_attempt.map_or(remaining, |last| last - spent);
@@ -250,7 +258,7 @@ fn compile_with_analysis_limit(
                                         "one proved loop with fixed continuation and exit charges",
                                     );
                                 }
-                                refusal.map_or("copied calls use the shared step machine", controls::Refusal::reason)
+                                reason
                             }
                             ApplyMode::StepMachine => "step machine requested for a qubit-dependent jump",
                         };

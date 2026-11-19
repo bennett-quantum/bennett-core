@@ -382,8 +382,11 @@ A **proved pass count** comes from the program. For a test of whether a block pa
 is zero, the compiler checks that every route from the nonzero outcome back to the test
 passes a logical right shift by one of that pass's parameter. A word of width `w` must
 then be zero after at most `w` passes. Each emitted pass uses one control formed by
-combining the previous pass's running inputs with the new test. On an exit the compiler
-records the tested word as zero before assigning the exit arguments. A later outer pass
+combining the previous pass's running inputs with the new test. The test may also sit at
+the end of a pass, compare the old unsigned word with two and pass its shift by one back
+to the body. The compiler checks that another edge cannot replace the word before the
+body reaches that test again. On an exit the compiler records the proved-zero word before
+assigning the exit arguments. A later outer pass
 that receives this zero skips the drained inner loop's body. Exits are collected at the
 shared continuation, which is subject to the same budget check as any join. Proved
 counts can nest. A loop with a qubit-dependent exit and no such proof uses the step
@@ -412,7 +415,9 @@ high bit, selects the difference when the candidate is at least the divisor. The
 previous remainder is below a nonzero divisor, so one subtraction suffices for the new
 remainder to stay below it. A known modulus makes
 bits above its maximum residue definite zero. A power-of-two modulus takes only the
-low bits. The gadget copies its result and reverses the work, including on inputs
+low bits. When the dividend's upper bound equals a known modulus, the comparison
+with that value selects zero on equality and leaves the other values unchanged.
+The general gadget copies its result and reverses the work, including on inputs
 with divisor zero.
 
 A separate zero test makes a reached `urem` fault with `divide_by_zero` for exactly
@@ -441,8 +446,12 @@ site with one proved definite address uses the same copy construction. Reachable
 recursive calls and indirect sites without one proved address are refused before
 issuing gates. A copied frame keeps the caller's proved literal bits and equalities
 between argument bits across all visits to the call site. A call result is unknown to
-the caller's operand proof. A qubit-dependent continuation with copied calls can use the
-single-loop proof below. Other qubit-dependent continuations with copied calls use the step machine.
+the caller's operand proof. When the first qubit-dependent jump is in a frame entered
+by the definite prefix, the control construction can follow calls and returns under
+the route guard. A return from a copied frame stops at the caller's continuation
+until sibling routes have been lowered. If a copied program first branches on qubits
+in the entry frame, or routes reach incompatible continuations, the emitter can use
+the step machine. A copied fixed-charge loop can use the single-loop proof below.
 
 The **step machine** carries one **dispatch bit** per possible program point, set for the
 definite assignments whose next instruction or terminator is there. In one **tick** it evaluates
@@ -596,6 +605,45 @@ to repeat the measurements. At widths 4, 6 and 8 the simulator compares exact
 amplitudes with direct evaluation at budgets 6, 7 and 8. The bit-level runner checks
 all operand pairs at widths 2, 3, 4, 6 and 8, and 128 sampled pairs and five corner pairs at
 width 64. It checks unchanged inputs, XOR into the two destinations, and zero scratch.
+
+**Period finding from C.** The C square-and-multiply function receives the whole
+eight-bit exponent register in one `apply` with `B = 96`. The exponent test and the
+optional multiply use control gates through the copied call. The compiler emits
+seven proved passes after the first pass through the loop body. The test rejects
+instruction dispatch for this exponentiation. It checks the amplitudes immediately
+after the oracle against direct evaluation, then runs Fourier gates in device IR
+before the measurement written in C. The exponent probabilities agree with the exact
+Fourier sum to within `5.6e-16` for 15 and `2.5e-16` for 21.
+
+The hand-built oracle uses ripple-carry modular additions of constants to multiply
+in place under each exponent bit. The inverse multiplier clears the multiplication's
+temporary word. The oracle copies its residue by XOR and reverses the computation.
+The bit-level test checks every exponent with both zero and patterned destinations
+and checks that the scratch clears.
+
+Both circuits below count the exponentiation only, with the same eight exponent,
+eight output and five fault qubits. The peak includes all 21 such qubits, including
+the output's high zero bits. Scratch is the peak beyond those registers. The gate
+set counts a Toffoli as one native gate.
+
+| Modulus and base | Oracle construction | Toffolis | Peak qubits | Scratch | Depth |
+|---|---|---:|---:|---:|---:|
+| 15, base 7 | C, control gates | 3,228 | 533 | 512 | 3,186 |
+| 15, base 7 | Hand-built, controlled modular multiplications | 1,872 | 37 | 16 | 4,335 |
+| 21, base 2 | C, control gates | 18,999 | 753 | 732 | 16,405 |
+| 21, base 2 | Hand-built, controlled modular multiplications | 10,840 | 40 | 19 | 25,659 |
+
+The C oracles use 1.72 and 1.75 times the hand-built Toffoli counts, and 14.41 and
+18.83 times the peak qubits. Both meet the factor-of-two gate target. Both exceed the
+qubit target because the compiler keeps intermediate products, remainder results,
+guarded merges and decisions until the final reversal. The hand-built circuit reuses
+its temporary words after every modular multiplication. Counts from the earlier
+four- and six-exponent-bit comparisons differ because those comparisons included the
+Fourier transform and used gate counts with arbitrary controls or with Toffolis
+decomposed into elementary gates.
+
+Run `front/test.sh --test emitted_shor c_shor_period_distribution_and_counts -- --exact --nocapture`
+to repeat the comparisons and counts.
 
 The counting and OpenQASM devices use the compiler for each `apply` they reach. Pass
 `--apply-circuit auto` to run the same gates on the simulator, or `--apply-circuit step-machine`

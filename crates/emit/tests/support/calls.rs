@@ -204,7 +204,10 @@ even:
                     },
                 );
             if budget >= 19 {
-                assert!(matches!(construction, Construction::StepMachine { .. }));
+                match mode {
+                    ApplyMode::Automatic => assert_eq!(construction, Construction::Controlled { proved_passes: 0 }),
+                    ApplyMode::StepMachine => assert!(matches!(construction, Construction::StepMachine { .. })),
+                }
             }
         }
     }

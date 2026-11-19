@@ -5,8 +5,9 @@ use std::collections::BTreeSet;
 use bennett_ir::{BlockId, Fault, Target};
 
 use super::bits::{Bit, Circuit, ONE, Word, ZERO};
+use super::calls::Program;
 use super::flow::{Flow, ShiftLoop};
-use super::symbolic::{Frame, Point, Step};
+use super::symbolic::{Point, Step};
 use super::{ApplyError, Copies};
 
 pub(super) enum Failure {
@@ -56,26 +57,26 @@ struct Boundary {
 
 struct Controls<'a, 'b> {
     circuit: &'b mut Circuit,
-    frame: &'b Frame<'a>,
-    flow: Flow<'a>,
+    program: &'b Program<'a>,
+    flows: Vec<Flow<'a>>,
     budget: u64,
     copies: Copies,
     proved_passes: usize,
-    choices: BTreeSet<BlockId>,
+    choices: BTreeSet<(usize, BlockId)>,
     boundaries: Vec<Boundary>,
 }
 
 pub(super) fn run(
     circuit: &mut Circuit,
-    frame: &Frame<'_>,
+    program: &Program<'_>,
     slots: &[Word],
     start: Point,
     remaining: u64,
 ) -> Result<(Copies, usize), Failure> {
     let mut controls = Controls {
         circuit,
-        frame,
-        flow: Flow::analyze(frame),
+        program,
+        flows: program.frames().map(Flow::analyze).collect(),
         budget: remaining,
         copies: Copies::default(),
         proved_passes: 0,
@@ -89,6 +90,16 @@ pub(super) fn run(
 }
 
 impl Controls<'_, '_> {
+    fn can_revisit(&self, point: Point, proved_boundaries_only: bool) -> bool {
+        self.flows[point.copy].can_revisit(point.block, |block| {
+            self.boundaries.iter().any(|stop| {
+                stop.point.copy == point.copy
+                    && stop.point.block == block
+                    && (!proved_boundaries_only || stop.proved_loop)
+            })
+        })
+    }
+
     fn charge(&mut self, route: &mut Route) -> Result<bool, Failure> {
         if route.first == self.budget {
             self.copies.faulted.push((route.enabled, Fault::Budget));
@@ -117,28 +128,35 @@ impl Controls<'_, '_> {
                 // evaluated during lowering. Only a program proof permits a loop
                 // schedule here. In particular, a proved outer loop cannot copy an
                 // inner schedule whose only stopping condition is the budget.
-                if self.flow.can_revisit(route.point.block, |block| {
-                    self.boundaries.iter().any(|stop| stop.proved_loop && stop.point.block == block)
-                }) {
-                    return Err(Failure::Control(Refusal::UnprovedLoop));
+                let mut frame = Some(route.point);
+                while let Some(point) = frame {
+                    if self.can_revisit(point, true) {
+                        return Err(Failure::Control(Refusal::UnprovedLoop));
+                    }
+                    frame = self.program.resume(point);
                 }
                 return Ok(None);
             }
-            if !self.flow.can_return(route.point.block) {
+            if !self.flows[route.point.copy].can_return(route.point.block) {
                 return Err(Failure::Control(Refusal::UnprovedLoop));
             }
             let point = route.point;
-            match self.circuit.under(route.enabled, |circuit| self.frame.step(circuit, &route.slots, point))? {
+            match self.circuit.under(route.enabled, |circuit| self.program.step(circuit, &route.slots, point))? {
                 Step::Write(next, dst, word) => {
                     route.slots[dst.index()] = word;
                     route.point = next;
                 }
-                Step::Jump(target) => route.point = self.frame.jump(&mut route.slots, target),
+                Step::Jump(target) => route.point = self.program.jump(&mut route.slots, point, target),
                 Step::Return(word) => {
                     self.copies.returned.push((route.enabled, word));
                     return Ok(None);
                 }
-                Step::Transfer(..) => unreachable!("calls use the step machine"),
+                Step::Transfer(next, writes) => {
+                    for (slot, word) in writes {
+                        route.slots[slot.index()] = word;
+                    }
+                    route.point = next;
+                }
                 Step::Fault(fault) => {
                     self.copies.faulted.push((route.enabled, fault));
                     return Ok(None);
@@ -154,15 +172,16 @@ impl Controls<'_, '_> {
                     route.point = next;
                 }
                 Step::Branch(condition, yes, no) => {
-                    if !self.choices.insert(point.block) {
+                    let choice = (point.copy, point.block);
+                    if !self.choices.insert(choice) {
                         return Err(Failure::Control(Refusal::UnprovedLoop));
                     }
-                    let next = if let Some(plan) = self.flow.shift_loop(point.block) {
+                    let next = if let Some(plan) = self.flows[point.copy].shift_loop(point.block) {
                         self.repeat(route, condition, plan)?
                     } else {
                         self.choose(route, condition, yes, no)?
                     };
-                    self.choices.remove(&point.block);
+                    self.choices.remove(&choice);
                     let Some(next) = next else { return Ok(None) };
                     route = next;
                 }
@@ -171,19 +190,32 @@ impl Controls<'_, '_> {
     }
 
     fn choose(&mut self, route: Route, condition: Bit, yes: &Target, no: &Target) -> Result<Option<Route>, Failure> {
-        let route_block = route.point.block;
-        let join = self.flow.join(route_block);
+        let point = route.point;
+        let flow = &self.flows[point.copy];
+        let join = flow.join(point.block).map(|join| Point { copy: point.copy, ..join });
         let yes_mask = self.circuit.and(route.enabled, condition);
         let no_mask = self.circuit.and(route.enabled, condition.not());
         let parent_mask = route.enabled;
-        self.boundaries.extend(join.map(|point| Boundary { point, proved_loop: false }));
-        if self.flow.can_revisit(route_block, |block| self.boundaries.iter().any(|stop| stop.point.block == block)) {
+        let outer_boundaries = self.boundaries.len();
+        // Returning from a copy is also a boundary. A route that leaves the
+        // callee must not lower the caller's continuation before its sibling.
+        self.boundaries.extend(
+            [join, self.program.resume(point)]
+                .into_iter()
+                .flatten()
+                .map(|point| Boundary { point, proved_loop: false }),
+        );
+        if self.can_revisit(point, false) {
             return Err(Failure::Control(Refusal::UnprovedLoop));
         }
         if yes_mask != ZERO
             && no_mask != ZERO
-            && self.flow.shares_code(yes.block, no.block, |block| {
-                self.boundaries.iter().filter(|stop| stop.point.block == block).map(|stop| stop.point.index).min()
+            && flow.shares_code(yes.block, no.block, |block| {
+                self.boundaries
+                    .iter()
+                    .filter(|stop| stop.point.copy == point.copy && stop.point.block == block)
+                    .map(|stop| stop.point.index)
+                    .min()
             })
         {
             return Err(Failure::Control(Refusal::RepeatedContinuation));
@@ -192,7 +224,7 @@ impl Controls<'_, '_> {
         let no = self.transfer(route, no, no_mask);
         let yes = self.follow(yes)?;
         let no = self.follow(no)?;
-        self.boundaries.truncate(self.boundaries.len() - usize::from(join.is_some()));
+        self.boundaries.truncate(outer_boundaries);
         let same_mask = yes.as_ref().is_some_and(|yes| yes.enabled == yes_mask)
             && no.as_ref().is_some_and(|no| no.enabled == no_mask);
         self.merge(yes, no, same_mask.then_some(parent_mask))
@@ -200,7 +232,7 @@ impl Controls<'_, '_> {
 
     fn repeat(&mut self, mut route: Route, mut condition: Bit, plan: ShiftLoop<'_>) -> Result<Option<Route>, Failure> {
         let test = route.point;
-        let exit_point = Point::entry(plan.exiting.block);
+        let exit_point = Point { copy: test.copy, ..Point::entry(plan.exiting.block) };
         let mut exits = None;
         for pass in 0..=plan.width {
             let continuation = if pass == plan.width {
@@ -216,7 +248,8 @@ impl Controls<'_, '_> {
                 let mut exiting = route.clone();
                 // Every enabled exit saw zero. Carry that fact through the
                 // transfer, including when the tested word is an exit argument.
-                exiting.slots[plan.tested.index()].fill(ZERO);
+                let zeroed = self.program.slot(test, plan.zero_on_exit);
+                exiting.slots[zeroed.index()].fill(ZERO);
                 let exit = self.transfer(exiting, plan.exiting, exit_mask);
                 exits = self.merge(exits, Some(exit), None)?;
             }
@@ -227,9 +260,11 @@ impl Controls<'_, '_> {
             let enabled = route.enabled;
             route = self.transfer(route, plan.continuing, enabled);
             self.proved_passes += 1;
+            let outer_boundaries = self.boundaries.len();
             self.boundaries.extend([test, exit_point].map(|point| Boundary { point, proved_loop: true }));
+            self.boundaries.extend(self.program.resume(test).map(|point| Boundary { point, proved_loop: false }));
             let next = self.follow(route)?;
-            self.boundaries.truncate(self.boundaries.len() - 2);
+            self.boundaries.truncate(outer_boundaries);
             let Some(next) = next else { break };
             route = next;
             if route.point != test {
@@ -238,13 +273,13 @@ impl Controls<'_, '_> {
             if !self.charge(&mut route)? {
                 break;
             }
-            condition = Frame::read(&route.slots, plan.condition)[0];
+            condition = self.program.read(&route.slots, route.point, plan.condition)[0];
         }
         Ok(exits)
     }
 
     fn transfer(&self, mut route: Route, target: &Target, enabled: Bit) -> Route {
-        route.point = self.frame.jump(&mut route.slots, target);
+        route.point = self.program.jump(&mut route.slots, route.point, target);
         route.enabled = enabled;
         route
     }
