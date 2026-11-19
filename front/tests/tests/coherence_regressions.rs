@@ -1182,3 +1182,115 @@ fn a_folded_guard_keeps_a_counted_loop_from_running() {
         0,
     );
 }
+
+// Wrong results `main` has too, which the placement of the exchange does not fix yet (each needs the exchange to
+// stand where the write is on every path, or the bytes to be shown ordinary before it).
+
+#[test]
+#[ignore = "defect: an ordinary copy from a stack local reads the local's shadow before any write on that path (the local is held from before `if (n)`), so the copy holds qubits and the caller's ordinary read faults"]
+fn an_ordinary_copy_of_an_unwritten_local_stays_ordinary() {
+    compare_ordinary_inputs(
+        "held-local-copy",
+        r#"
+uint8_t dest = 3;
+__attribute__((noinline)) void init(uint8_t *p, unsigned n) { *p = n + 13; }
+__attribute__((noinline)) unsigned work(unsigned n) {
+    uint8_t a;
+    init(&a, n);
+    uint8_t q = 0;
+    XBIT(q, 0);
+    if (n) { if (q) a = q + 3; }
+    XBIT(q, 0);
+    if (!n) dest = a;
+    (void)READ_BYTES(a, 1);
+    return 0;
+}
+"#,
+        "    work(n);\n    return dest;",
+        [13, 3],
+    );
+}
+
+#[test]
+#[ignore = "defect: a write under a qubit behind an ordinary condition counts as writing the bytes on every ordinary path, so an ordinary copy after the arms meet reads the shadow where C reads memory"]
+fn a_write_behind_an_ordinary_condition_in_a_qubit_arm_does_not_hide_a_later_copy() {
+    compare_ordinary_inputs_keeping(
+        "held-arm-side",
+        r#"
+uint8_t held = 13, dest = 3, side = 0;
+__attribute__((noinline)) unsigned work(unsigned n) {
+    uint8_t q = 0;
+    XBIT(q, 0);
+    if (q) { side = q; if (n) held = q + 3; }
+    XBIT(q, 0);
+    if (!n) dest = held;
+    uint8_t r = 0;
+    XBIT(r, 0);
+    held = r + 2;
+    XBIT(r, 0);
+    return 0;
+}
+"#,
+        "    work(n);\n    return dest;",
+        [13, 3],
+        true,
+    );
+}
+
+#[test]
+#[ignore = "defect: a write after a measurement counts for the span before it, whose exchange then reads, ordinarily, bytes an earlier call left holding qubits"]
+fn a_write_after_a_measurement_does_not_place_the_earlier_exchange() {
+    compare_ordinary_inputs(
+        "held-write-after-measurement",
+        r#"
+uint8_t held = 13;
+__attribute__((noinline)) void seed(void) {
+    uint8_t s = 0;
+    XBIT(s, 0);
+    held = s + 6;
+    XBIT(s, 0);
+}
+__attribute__((noinline)) unsigned work(unsigned n) {
+    unsigned v = 0;
+    uint8_t q = 0;
+    XBIT(q, 0);
+    if (n) { if (q) held = q + 3; }
+    XBIT(q, 0);
+    v = READ_BYTES(held, 1);
+    uint8_t r = 0;
+    XBIT(r, 0);
+    held = r + 2;
+    XBIT(r, 0);
+    return v;
+}
+"#,
+        "    if (!n) seed();\n    return work(n);",
+        [7, 4],
+    );
+}
+
+#[test]
+#[ignore = "defect: the exchange that opens a span reads the bytes' old value ordinarily, which faults where an earlier call left them holding qubits, although every path overwrites them"]
+fn a_store_into_bytes_an_earlier_call_left_holding_qubits_does_not_fault() {
+    compare_ordinary_inputs(
+        "held-mandatory-preheld",
+        r#"
+uint8_t held = 0;
+__attribute__((noinline)) void first(void) {
+    uint8_t q = 0;
+    XBIT(q, 0);
+    held = q + 6;
+    XBIT(q, 0);
+}
+__attribute__((noinline)) unsigned second(void) {
+    uint8_t r = 0;
+    XBIT(r, 0);
+    held = r + 2;
+    XBIT(r, 0);
+    return READ_BYTES(held, 1);
+}
+"#,
+        "    first();\n    return second();",
+        [3, 3],
+    );
+}

@@ -1890,6 +1890,13 @@ The optimiser, lowering the full device language to gates, certificates, target 
 format, and recomputation shared between conditions (each predicated operation computes and clears
 its own).
 
+Memory written under a qubit at a position that is not constant: the front holds the bytes LLVM's bound allows,
+which can be wider than any write (`memcpy` of 2 or 4 bytes is bounded at 6), and refuses by name where such
+bytes, never written, may still hold qubits at a return (the fallback oracle's `memcpy` fixture,
+`front/tests/tests/memory_held.rs`, `a_held_range_wider_than_every_write_is_refused`). Route: prove which bytes a
+write at a position that is not constant covers for some configuration whatever the ordinary values, and hold only
+those.
+
 | Refused inside emitted `apply` | Construction needed |
 |---|---|
 | `or`, `udiv`, `sdiv`, `srem` | Remaining integer gates, including conditional arithmetic faults |
