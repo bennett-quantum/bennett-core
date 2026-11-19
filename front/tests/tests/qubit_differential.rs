@@ -1,4 +1,8 @@
 //! Compare short C programs with native execution and check the simulated state before readout.
+//!
+//! Set `BENNETT_RANDOM_WRITING_CALLS` to include calls with qubit-dependent arguments
+//! that write a global in the ignored long campaign. When any family switch is set,
+//! that campaign runs only the selected families. Use the same switches to replay an index.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -17,6 +21,8 @@ use rand_chacha::ChaCha8Rng;
 mod generator;
 #[path = "qubit_differential/held_pass.rs"]
 mod held_pass;
+#[path = "qubit_differential/semantic_cases.rs"]
+mod semantic_cases;
 #[path = "qubit_differential/state.rs"]
 mod state;
 
@@ -365,6 +371,7 @@ fn long_randomized_differential() {
 
 fn campaign(name: &str, seed: u64, limit: Option<usize>, time: Option<Duration>, replay: Option<usize>) {
     let limit = if replay.is_some() { Some(1) } else { limit };
+    let recipes = if time.is_some() { semantic_cases::enabled_recipes() } else { Vec::new() };
     let mut original = ChaCha8Rng::seed_from_u64(seed);
     let mut extra = ChaCha8Rng::seed_from_u64(seed ^ EXTRA_SEED_MASK);
     let mut state = ChaCha8Rng::seed_from_u64(seed ^ STATE_SEED_MASK);
@@ -376,13 +383,17 @@ fn campaign(name: &str, seed: u64, limit: Option<usize>, time: Option<Duration>,
         if limit.is_some_and(|limit| results.generated >= limit) || time.is_some_and(|time| start.elapsed() >= time) {
             break;
         }
-        let case = generator::generate(index, &mut original, &mut extra, &mut state, &mut loops);
+        let (case, mode) = if recipes.is_empty() {
+            (generator::generate(index, &mut original, &mut extra, &mut state, &mut loops), index % MODES.len())
+        } else {
+            let (generate, mode) = recipes[index % recipes.len()];
+            (generate(&mut original), mode)
+        };
         if replay.is_some_and(|selected| index < selected)
             || (time.is_none() && (generator::SHORT_PREFIX..generator::LOOP_START).contains(&index))
         {
             continue;
         }
-        let mode = index % MODES.len();
         results.generated += 1;
         let case_name = format!("{name}-{index}");
         if let Err(error) = try_case(&case, &case_name, mode, &mut results) {
