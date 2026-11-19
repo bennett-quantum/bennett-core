@@ -581,11 +581,18 @@ join(i8 %amount):
     }
 
     let source = source("%choose = trunc i8 %input to i1\n    br %choose, live, cold");
-    let module = load(&source).expect("valid function with two reachable predecessors");
-    let args = [Argument::Register(0..8)];
-    for budget in [0, 5] {
-        let error = compile_apply(apply_input(&module, &args, 8, budget)).expect_err("live amounts disagree");
-        assert!(matches!(error, ApplyError::Unsupported { operation: "shl", .. }));
+    let module = control_example(&source, 8, "");
+    for budget in [0, 4, 5] {
+        for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+            compare_controls(
+                &module,
+                budget,
+                mode,
+                |x| {
+                    if budget < 5 { (0, 1) } else { (x << (2 - (x & 1)) & 255, 0) }
+                },
+            );
+        }
     }
 }
 

@@ -214,9 +214,10 @@ impl<'a> Path<'a> {
 fn total(inst: &Inst) -> bool {
     match inst {
         Inst::Binary { op, lhs, rhs, .. } => match op {
-            BinOp::Add | BinOp::Sub | BinOp::And | BinOp::Or | BinOp::Xor => true,
+            BinOp::Add | BinOp::Sub | BinOp::And | BinOp::Or | BinOp::Xor | BinOp::Shl | BinOp::Lshr | BinOp::Ashr => {
+                true
+            }
             BinOp::Mul => matches!(lhs, Operand::Const(_)) || matches!(rhs, Operand::Const(_)),
-            BinOp::Shl | BinOp::Lshr | BinOp::Ashr => matches!(rhs, Operand::Const(_)),
             BinOp::Udiv | BinOp::Sdiv | BinOp::Urem | BinOp::Srem => false,
         },
         Inst::Compare { .. } | Inst::Select { .. } | Inst::Cast { .. } => true,

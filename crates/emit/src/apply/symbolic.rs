@@ -7,7 +7,7 @@ use bennett_ir::{
 use super::ApplyError;
 use super::arithmetic;
 use super::bits::{Bit, Circuit, Word, ZERO, constant};
-use super::definite::{Constants, Scope, requirement};
+use super::definite::{Constants, Scope};
 use super::remainders;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -142,13 +142,6 @@ impl<'a> Frame<'a> {
                     }
                 })
             };
-            for (index, inst) in body.insts.iter().enumerate() {
-                let Some((op, route)) = requirement(inst) else { continue };
-                let Inst::Binary { rhs, .. } = inst else { unreachable!("the requirement is for a binary operation") };
-                if constant_value(rhs).is_none() {
-                    return Err(self.error(Point { block, index, copy: 0 }, op.mnemonic(), route));
-                }
-            }
             if let Terminator::Switch { value, .. } = &body.term
                 && constant_value(value).is_none()
             {
@@ -211,7 +204,7 @@ impl<'a> Frame<'a> {
                 Inst::Binary { op, dst, lhs, rhs, .. } => {
                     let mut left = read(lhs);
                     let mut right = read(rhs);
-                    if requirement(inst).is_some() || *op == BinOp::Mul {
+                    if matches!(op, BinOp::Mul | BinOp::Shl | BinOp::Lshr | BinOp::Ashr) {
                         // A slot can contain other values when this point is inactive.
                         // Use the proven value for each input that executes the instruction.
                         if let Some(value) = self.constants.get(rhs) {

@@ -347,7 +347,7 @@ The compiler represents each bit as a constant, a qubit's value or its complemen
 new bits by reversible gates into scratch qubits.
 
 The emitter's full instruction subset is `add`, `sub`, `mul`, `and`, `or`, `xor`, `urem`, shifts
-(`shl`, `lshr`, `ashr`) by a proved constant amount, `icmp`, `select`, `zext`, `sext`, `trunc`,
+(`shl`, `lshr`, `ashr`), `icmp`, `select`, `zext`, `sext`, `trunc`,
 `faddr`, unconditional and conditional `br`, `switch` with a proved constant selector, `ret`,
 and direct `call` and `call_indirect` as described under "Copied calls" below. Calls take integer
 parameters and may return an integer or no value. The [refusal table](#not-yet) gives the excluded
@@ -409,6 +409,12 @@ Only the declared low bits matter. The gadget reserves its result, computes the
 product, copies it to the result and reverses the computation. Its work wires return
 to zero and can be reused by the next gadget. The full `apply` also reverses this gadget
 when clearing the result.
+
+**Variable shifts.** For each power of two `d` below the word width, the amount's
+corresponding bit chooses between shifting by `d` and leaving the word alone. Arithmetic
+right shifts fill with the sign bit. A comparison using all amount bits clears the result
+when the amount is at least the word's width, including for arithmetic right shift.
+A proved constant amount is wired directly, with no shift gates.
 
 **Unsigned remainder.** Read the dividend from high bit to low bit. Each new bit
 doubles the current remainder and adds the bit. A trial subtraction, with one extra
@@ -472,9 +478,8 @@ The first qubit-dependent jump may be the loop test or a choice between entering
 returning early. At the loop test, one route goes back to the test and the other returns from the
 applied function. Both routes are straight sequences of integer operations, unconditional jumps,
 and returns from already-entered copied calls. The integer operations are `add`, `sub`, `and`, `or`, `xor`,
-`icmp`, `select`, `zext`, `sext`, `trunc`, `mul` with a literal operand, and shifts by a literal
-amount. The proof counts the steps on each route, including conditional and unconditional jumps
-and each return. At each test, a return is considered only
+`icmp`, `select`, `zext`, `sext`, `trunc`, `mul` with a literal operand, and shifts. The proof counts the steps on each route,
+including conditional and unconditional jumps and each return. At each test, a return is considered only
 if its whole exit route fits in the steps left. A saved decision prevents an earlier return
 from contributing again. A still-running input with no remaining affordable return must
 exhaust the budget, because the skipped instructions cannot fault. Compilation reports the
@@ -585,6 +590,12 @@ needs no zero-test gates, and a power-of-two modulus needs no reduction gates.
 | 6 | 180 | 432 | 10 |
 | 8 | 336 | 768 | 14 |
 | 64 | 24,192 | 49,152 | 126 |
+
+For a variable shift of an independent `w`-bit word by a `w`-bit amount, a logical stage
+at distance `d` uses `2w − d` Toffolis. An arithmetic right stage uses `2(w − 1)`.
+If `t` is the number of trailing zero bits of `w`, the range comparison uses `w − t − 1`
+Toffolis, and clearing an out-of-range result uses `w`. The gadget doubles the sum of
+these costs to clear its work wires after copying the result.
 
 The complete `mulmod` applies a double-width product followed by remainder with
 modulus `2^w − 3` held in an ordinary value. Both modes emit the same gate list at
@@ -1902,7 +1913,6 @@ those.
 | Refused inside emitted `apply` | Construction needed |
 |---|---|
 | `udiv`, `sdiv`, `srem` | Remaining integer gates, including conditional arithmetic faults |
-| `shl`, `lshr`, `ashr` without a proved constant shift amount | Shifts controlled by the amount register |
 | `switch` without a proved constant selector | Multiway dispatch in the step machine |
 | Reachable recursive calls or adding a call copy that raises the total above 16,384 slots and program points | Shared call frames and return positions |
 | Reachable `call_indirect` without one proved constant address | Prove the target across visits or dispatch among supported addresses |

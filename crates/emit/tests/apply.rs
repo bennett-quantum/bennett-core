@@ -512,51 +512,6 @@ entry:
 "#;
 
 #[test]
-fn qubit_shift_refusals_do_not_depend_on_budget() {
-    for (operation, route) in [
-        ("shl", "a proved constant shift amount"),
-        ("lshr", "a proved constant shift amount"),
-        ("ashr", "a proved constant shift amount"),
-    ] {
-        let source = DEVICE_PROGRAM
-            .replace("func @main()", "func @main(i64 %budget)")
-            .replace("budget 3", "budget %budget")
-            .replace("INSTRUCTION", &format!("%answer = {operation} i4 %sum, %x"));
-        let module = load(&source).expect("valid program");
-        let entry = module.function_named("main").expect("entry");
-        let expected = Outcome::Stopped(RunError::Apply(ApplyError::Unsupported {
-            callee: module.function_named("f").expect("callee"),
-            block: BlockId(0),
-            index: 1,
-            operation,
-            route,
-        }));
-        for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
-            for budget in [0, 1, 2, 3, u64::MAX] {
-                let mut counter = CountingDevice::default();
-                let mut compiler = |input: ApplyInput<'_>| Ok(compile_apply_with(input, mode)?.block);
-                let run = Executor::run_on_with_apply(&module, entry, &[budget], None, &mut counter, &mut compiler)
-                    .expect("device run");
-                assert_eq!(run.outcome, expected, "{operation}, {mode:?}, B={budget}");
-                assert_eq!(run.steps, 3);
-                assert_eq!(counter.counts().peak_qubits, 13);
-                assert_eq!(counter.counts().depth, 0);
-                assert_eq!(counter.counts().zero_released_qubits, 0);
-
-                let mut simulator = Executor::new(&module, entry, &[budget], Options::default()).expect("simulator");
-                for _ in 0..3 {
-                    assert_eq!(simulator.step_emitted(&mut compiler), None);
-                }
-                let mut before = simulator.snapshot();
-                assert_eq!(simulator.step_emitted(&mut compiler), Some(expected));
-                before.classical.outcome = Some(expected);
-                assert_eq!(simulator.snapshot(), before);
-            }
-        }
-    }
-}
-
-#[test]
 fn ordinary_factors_stay_definite_across_conditional_block_transfers() {
     let module = load(
         r#"

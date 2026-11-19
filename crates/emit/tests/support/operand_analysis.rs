@@ -2,7 +2,7 @@
 
 use super::{
     ApplyError, ApplyMode, Argument, Executor, Options, Outcome, apply_input, compare_controls, compile_apply_with,
-    control_example, load,
+    control_example,
 };
 
 #[test]
@@ -138,11 +138,12 @@ join(i3 %k):
             }
 
             for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
-                if operation == "mul" {
+                if operation != "switch" {
                     compare_controls(&module, budget, mode, |x| {
                         let odd = x & 1;
                         let k = (2 * x * odd) & 7;
-                        if budget < 6 + 2 * odd { (0, 1) } else { ((x * k) & 7, 0) }
+                        let result = if operation == "mul" { (x * k) & 7 } else { (1 << k) & 7 };
+                        if budget < 6 + 2 * odd { (0, 1) } else { (result, 0) }
                     });
                     continue;
                 }
@@ -158,8 +159,8 @@ join(i3 %k):
 }
 
 #[test]
-fn a_pending_cold_predecessor_does_not_prove_a_constant() {
-    let module = load(
+fn an_unreachable_shift_with_unknown_amount_does_not_affect_the_result() {
+    let module = control_example(
         r#"
 memory 1024
 func @f(i3 %input) -> i8 {
@@ -175,12 +176,11 @@ done:
     ret 7
 }
 "#,
-    )
-    .expect("valid function with an unreachable cycle");
-    let args = [Argument::Register(0..3)];
+        3,
+        "",
+    );
     for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
-        let error = compile_apply_with(apply_input(&module, &args, 3, 2), mode).expect_err("unproved cold operand");
-        assert!(matches!(error, ApplyError::Unsupported { operation: "shl", .. }));
+        compare_controls(&module, 2, mode, |_| (7, 0));
     }
 }
 

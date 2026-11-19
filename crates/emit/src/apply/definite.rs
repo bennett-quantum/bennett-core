@@ -67,31 +67,6 @@ fn fold_inst(
     }
 }
 
-/// The required constant input for a shift. A literal needs no data-flow proof.
-pub(super) fn requirement(inst: &Inst) -> Option<(BinOp, &'static str)> {
-    let Inst::Binary { op, rhs, .. } = inst else { return None };
-    match op {
-        BinOp::Shl | BinOp::Lshr | BinOp::Ashr if !literal(rhs) => Some((*op, "a proved constant shift amount")),
-        BinOp::Add
-        | BinOp::Sub
-        | BinOp::Mul
-        | BinOp::And
-        | BinOp::Xor
-        | BinOp::Shl
-        | BinOp::Lshr
-        | BinOp::Ashr
-        | BinOp::Udiv
-        | BinOp::Sdiv
-        | BinOp::Urem
-        | BinOp::Srem
-        | BinOp::Or => None,
-    }
-}
-
-fn literal(operand: &Operand) -> bool {
-    matches!(operand, Operand::Const(_))
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Scope {
     Reachable,
@@ -131,14 +106,14 @@ impl Constants {
         if !function.blocks.iter().any(|block| {
             matches!(&block.term, Terminator::Switch { value: Operand::Slot(_), .. })
                 || block.insts.iter().any(|inst| {
-                    requirement(inst).is_some()
-                        || matches!(
-                            inst,
-                            Inst::Call { .. }
-                                | Inst::CallIndirect { .. }
-                                | Inst::Binary { op: BinOp::Mul, lhs: Operand::Slot(_), rhs: Operand::Slot(_), .. }
-                                | Inst::Binary { op: BinOp::Urem, rhs: Operand::Slot(_), .. }
-                        )
+                    matches!(
+                        inst,
+                        Inst::Binary { op: BinOp::Shl | BinOp::Lshr | BinOp::Ashr, rhs: Operand::Slot(_), .. }
+                            | Inst::Call { .. }
+                            | Inst::CallIndirect { .. }
+                            | Inst::Binary { op: BinOp::Mul, lhs: Operand::Slot(_), rhs: Operand::Slot(_), .. }
+                            | Inst::Binary { op: BinOp::Urem, rhs: Operand::Slot(_), .. }
+                    )
                 })
         }) {
             return Self::default();

@@ -54,3 +54,57 @@ fn or_matches_the_executor_at_each_budget() {
         binary_sweep("or", width);
     }
 }
+
+#[test]
+fn variable_shifts_match_the_executor_at_each_budget() {
+    for operation in ["shl", "lshr", "ashr"] {
+        for width in 1..=4 {
+            binary_sweep(operation, width);
+        }
+    }
+}
+
+#[test]
+fn variable_shifts_see_amount_bits_above_sixty_four() {
+    let source = |operation| {
+        format!(
+            r#"
+memory 1024
+func @f(i3 %x, i3 %distance, i1 %high) -> i8 {{
+entry:
+    %word = sext i3 %x to i128
+    %low = zext i3 %distance to i128
+    %flag = zext i1 %high to i128
+    %far = shl i128 %flag, 100
+    %amount = or i128 %low, %far
+    %shifted = {operation} i128 %word, %amount
+    %answer = trunc i128 %shifted to i8
+    ret %answer
+}}
+"#
+        )
+    };
+    for operation in ["shl", "lshr", "ashr"] {
+        let module = load(&source(operation)).expect("valid wide shift");
+        let args = [Argument::Register(0..3), Argument::Register(3..6), Argument::Register(6..7)];
+        for budget in 5..=9 {
+            let input = ApplyInput {
+                module: &module,
+                callee: module.function_named("f").expect("callee"),
+                args: &args,
+                out: 7..15,
+                fault: 15..20,
+                budget,
+                entry_fault: None,
+                stack_available: 0,
+                scratch_start: 20,
+            };
+            let compiled = compile_apply_with(input.clone(), ApplyMode::Automatic).expect("emit the wide shift");
+            let (gates, layout) = gates(&compiled, 7, 13);
+            bits::check_states(&gates, layout, (0..128).map(|x| (x, 0x12a5)), |x| {
+                executor_result(&input, 8, &[(x & 7) as u64, (x >> 3 & 7) as u64, (x >> 6) as u64])
+            })
+            .expect("wide shift, XOR destinations and zero scratch");
+        }
+    }
+}

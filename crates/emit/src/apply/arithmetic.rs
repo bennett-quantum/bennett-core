@@ -3,8 +3,8 @@
 use bennett_ir::{BinOp, CastOp, Predicate};
 
 use super::bits::{Bit, Circuit, ONE, Word, ZERO, definite};
-use super::products;
 use super::ranges::{product_bits, unsigned_max};
+use super::{products, shifts};
 
 pub(super) fn binary(circuit: &mut Circuit, op: BinOp, left: &[Bit], right: &[Bit]) -> Option<Word> {
     Some(match op {
@@ -21,7 +21,7 @@ pub(super) fn binary(circuit: &mut Circuit, op: BinOp, left: &[Bit], right: &[Bi
             };
             multiply(circuit, word, factor)
         }
-        BinOp::Shl | BinOp::Lshr | BinOp::Ashr => shift(op, left, definite(right)?),
+        BinOp::Shl | BinOp::Lshr | BinOp::Ashr => shifts::shift(circuit, op, left, right),
         BinOp::Udiv | BinOp::Sdiv | BinOp::Urem | BinOp::Srem => return None,
     })
 }
@@ -30,6 +30,9 @@ pub(super) fn binary(circuit: &mut Circuit, op: BinOp, left: &[Bit], right: &[Bi
 pub(super) fn fold_binary(circuit: &mut Circuit, op: BinOp, left: &[Bit], right: &[Bit]) -> Option<Word> {
     if op == BinOp::Urem {
         return definite(left)?.checked_rem(definite(right)?).map(|value| super::bits::constant(value, left.len()));
+    }
+    if matches!(op, BinOp::Shl | BinOp::Lshr | BinOp::Ashr) && definite(right).is_none() {
+        return None;
     }
     if op == BinOp::Mul && definite(left).is_none() && definite(right).is_none() {
         return None;
@@ -58,29 +61,12 @@ fn multiply(circuit: &mut Circuit, word: &[Bit], mut factor: u128) -> Word {
     let width = product_bits(unsigned_max(word), factor, word.len());
     let mut product = vec![ZERO; width];
     while factor != 0 {
-        let shifted = shift(BinOp::Shl, &word[..width], u128::from(factor.trailing_zeros()));
+        let shifted = shifts::fixed(BinOp::Shl, &word[..width], u128::from(factor.trailing_zeros()));
         product = add(circuit, &product, shifted.into_iter(), ZERO);
         factor &= factor - 1;
     }
     product.resize(word.len(), ZERO);
     product
-}
-
-fn shift(op: BinOp, word: &[Bit], amount: u128) -> Word {
-    let width = word.len();
-    if amount >= width as u128 {
-        return vec![ZERO; width];
-    }
-    let amount = amount as usize;
-    let mut shifted = word.to_vec();
-    if op == BinOp::Shl {
-        shifted.copy_within(..width - amount, amount);
-        shifted[..amount].fill(ZERO);
-    } else {
-        shifted.copy_within(amount.., 0);
-        shifted[width - amount..].fill(if op == BinOp::Ashr { word[width - 1] } else { ZERO });
-    }
-    shifted
 }
 
 pub(super) fn compare(circuit: &mut Circuit, pred: Predicate, lhs: &[Bit], rhs: &[Bit]) -> Bit {
