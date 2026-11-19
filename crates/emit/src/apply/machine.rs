@@ -45,17 +45,21 @@ pub(super) fn run(
                     jump(circuit, program, slots, &mut next, &mut writes, (point, yes), take_yes);
                     jump(circuit, program, slots, &mut next, &mut writes, (point, no), take_no);
                 }
-                Step::Switch(selector, cases, default) => {
+                Step::Switch(selector, edges) => {
                     let mut unmatched = enabled;
-                    for case in cases {
+                    for case in edges.cases {
                         let pattern = constant(case.value, selector.len());
                         let equal = arithmetic::compare(circuit, Predicate::Eq, &selector, &pattern);
                         let take = circuit.and(enabled, equal);
-                        // Case values are distinct, so removing a matching dispatch is an XOR.
-                        unmatched = circuit.xor(unmatched, take);
+                        if edges.default.is_some() {
+                            // Case values are distinct, so removing a matching dispatch is an XOR.
+                            unmatched = circuit.xor(unmatched, take);
+                        }
                         jump(circuit, program, slots, &mut next, &mut writes, (point, &case.target), take);
                     }
-                    jump(circuit, program, slots, &mut next, &mut writes, (point, default), unmatched);
+                    if let Some(default) = edges.default {
+                        jump(circuit, program, slots, &mut next, &mut writes, (point, default), unmatched);
+                    }
                 }
                 Step::Return(word) => copies.returned.push((enabled, word)),
                 Step::CheckedWrite(successor, dst, word, failed, fault) => {

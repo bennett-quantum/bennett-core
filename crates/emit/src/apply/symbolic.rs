@@ -9,6 +9,7 @@ use super::arithmetic;
 use super::bits::{Bit, Circuit, Word, ZERO, constant, definite};
 use super::definite::Constants;
 use super::division;
+use super::switches::Edges;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct Point {
@@ -37,7 +38,7 @@ pub(super) enum Step<'a> {
     Write(Point, Slot, Word),
     Jump(&'a Target),
     Branch(Bit, &'a Target, &'a Target),
-    Switch(Word, &'a [SwitchCase], &'a Target),
+    Switch(Word, Edges<'a>),
     Return(Word),
     Transfer(Point, Vec<(Slot, Word)>),
     CheckedWrite(Point, Slot, Word, Bit, Fault),
@@ -251,10 +252,19 @@ impl<'a> Frame<'a> {
                 let selector = read(value);
                 if let Some(value) = self.constants.get(value).or_else(|| definite(&selector)) {
                     Step::Jump(switch_target(value, cases, default))
-                } else if cases.is_empty() {
-                    Step::Jump(default)
                 } else {
-                    Step::Switch(selector, cases, default)
+                    let mut edges = Edges::new(cases, default);
+                    if let Some(proved) = self.constants.word(value) {
+                        edges.retain_possible(&proved);
+                    }
+                    edges.retain_possible(&selector);
+                    if let ([], Some(default)) = (edges.cases.as_slice(), edges.default) {
+                        Step::Jump(default)
+                    } else if let ([case], None) = (edges.cases.as_slice(), edges.default) {
+                        Step::Jump(&case.target)
+                    } else {
+                        Step::Switch(selector, edges)
+                    }
                 }
             }
             Terminator::Return(Some(value)) => Step::Return(read(value)),

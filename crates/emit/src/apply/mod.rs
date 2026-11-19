@@ -17,6 +17,7 @@ mod ranges;
 mod reach;
 mod saved;
 mod shifts;
+mod switches;
 mod symbolic;
 
 use std::fmt;
