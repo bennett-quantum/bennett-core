@@ -5,6 +5,8 @@
 //! - `BENNETT_RANDOM_WRITING_CALLS` for calls with qubit-dependent arguments that write a global.
 //! - `BENNETT_RANDOM_MIXED_STORES` for global stores chosen by an ordinary condition.
 //! - `BENNETT_RANDOM_GUARDED_LOADS` for short-circuited tests of globals that may hold qubits.
+//! - `BENNETT_RANDOM_GUARDED_GATE_LOOPS` for gate loops under a qubit-dependent condition whose ordinary code
+//!   divides or reads memory: refused by name, or accepted for divisors proved nonzero.
 //!
 //! When any switch is set, the campaign runs only the selected families.
 //! Use the same switches to replay an index.
@@ -91,13 +93,20 @@ struct Case {
 }
 
 enum Expectation {
-    Values { clean: bool },
+    Values {
+        clean: bool,
+    },
     Clean,
     AppliedWrite(&'static str),
     ConditionalWrite,
     Retained(u32),
     LoopClean,
-    LoopRetained { object: &'static str, bits: u32 },
+    LoopRetained {
+        object: &'static str,
+        bits: u32,
+    },
+    /// The front must refuse the program with a reason containing every part.
+    Refused(&'static [&'static str]),
 }
 
 impl Expectation {
@@ -136,7 +145,9 @@ impl Expectation {
                 &format!("warning: the overwrite of qubit variable '{object}'{LOOP_UPDATE}"),
                 &format!("keeps the old value in {bits} qubits each time it runs"),
             ],
-            Self::Values { .. } | Self::Clean | Self::ConditionalWrite | Self::LoopClean => return Ok(()),
+            Self::Values { .. } | Self::Clean | Self::ConditionalWrite | Self::LoopClean | Self::Refused(_) => {
+                return Ok(());
+            }
         };
         if !diagnostics.lines().any(|line| expected.iter().all(|part| line.contains(part))) {
             return Err(format!("missing warning containing {expected:?}: {diagnostics:?}"));
@@ -280,6 +291,11 @@ fn try_case(case: &Case, name: &str, mode: usize, results: &mut Results) -> Resu
             {
                 return Err(format!("expected the refusal of a conditional writing call: {reason}"));
             }
+            if let Expectation::Refused(parts) = case.expectation
+                && !parts.iter().all(|part| reason.contains(part))
+            {
+                return Err(format!("expected a refusal naming {parts:?}: {reason}"));
+            }
             if matches!(
                 case.expectation,
                 Expectation::Clean | Expectation::AppliedWrite(_) | Expectation::Retained(_) | Expectation::LoopClean
@@ -301,6 +317,9 @@ fn try_case(case: &Case, name: &str, mode: usize, results: &mut Results) -> Resu
     compare(case, &module, &table, &mut results.compared)?;
     if matches!(case.expectation, Expectation::ConditionalWrite) {
         return Err("accepted a call that may write memory under a qubit-dependent condition".to_owned());
+    }
+    if let Expectation::Refused(parts) = case.expectation {
+        return Err(format!("accepted a program the front must refuse naming {parts:?}"));
     }
     case.expectation.check_diagnostics(&diagnostics)?;
     let retained_bits = case.expectation.retained_bits();
