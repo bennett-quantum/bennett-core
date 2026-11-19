@@ -253,9 +253,16 @@ impl Plan {
             return None;
         };
         let entry_block = program.block(entry);
-        let Terminator::Branch { cond, if_true, if_false } = &entry_block.term else { return None };
+        let Terminator::Branch { cond: cond @ Operand::Slot(entry_condition), if_true, if_false } = &entry_block.term
+        else {
+            return None;
+        };
         let (tested, true_if_zero) = zero_test(&entry_block.insts[entry.index], cond)?;
         let (empty, begin) = if true_if_zero { (if_true, if_false) } else { (if_false, if_true) };
+        let entry_condition = program.slot(entry, *entry_condition).index();
+        // The prefix stops before the comparison. On the continuing edge
+        // it has the opposite value from the zero-exponent edge.
+        slots[entry_condition] = vec![Bit::Constant(!true_if_zero)];
         let head = at_block(entry, begin.block);
         let body = program.block(head);
         let update = Update::recognize(program, head)?;
@@ -272,22 +279,23 @@ impl Plan {
         if amount.value() != 1 {
             return None;
         }
-        let (carried, back, exit, square_insts, pretested) =
-            if let Terminator::Branch { cond, if_true, if_false } = &latch.term {
+        let (carried, back, exit, exit_condition, square_insts, pretested) =
+            if let Terminator::Branch { cond: cond @ Operand::Slot(condition), if_true, if_false } = &latch.term {
                 let (compare, square_insts) = after_shift.split_last()?;
                 let end_on_true = latch_test(compare, cond, *old_exp, *shifted)?;
                 let (exit, back) = if end_on_true { (if_true, if_false) } else { (if_false, if_true) };
                 if back.block != head.block {
                     return None;
                 }
-                (body, back, exit, square_insts, false)
+                let exit_condition = (program.slot(latch_point, *condition).index(), end_on_true);
+                (body, back, exit, exit_condition, square_insts, false)
             } else if let Terminator::Jump(back) = &latch.term
                 && back.block == entry.block
                 && entry.index == 0
                 && begin.args.is_empty()
                 && tested == *old_exp
             {
-                (entry_block, back, empty, after_shift, true)
+                (entry_block, back, empty, (entry_condition, true_if_zero), after_shift, true)
             } else {
                 return None;
             };
@@ -363,6 +371,7 @@ impl Plan {
         // the direct transfers. Check the two complete returns, including
         // any conversion in the wrapper, with distinct probe bits.
         let mut empty_slots = slots.clone();
+        empty_slots[entry_condition] = vec![Bit::Constant(true_if_zero)];
         let empty_point = program.jump(&mut empty_slots, entry, empty);
         let (End::Return(zero_result), empty_steps) = straight(program, &mut empty_slots, empty_point, false)? else {
             return None;
@@ -377,6 +386,8 @@ impl Plan {
         joined_word.resize(slots[joined].len(), ZERO);
         slots[joined] = joined_word;
         let exit_from = if pretested { program.jump(&mut slots, latch_point, back) } else { latch_point };
+        let (condition, value) = exit_condition;
+        slots[condition] = vec![Bit::Constant(value)];
         let exit_point = program.jump(&mut slots, exit_from, exit);
         let (End::Return(result), exit_steps) = straight(program, &mut slots, exit_point, false)? else {
             return None;

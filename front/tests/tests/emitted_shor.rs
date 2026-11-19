@@ -261,6 +261,12 @@ fn c_shor_period_distribution_and_counts() {
         check_oracle(&hand_built, &residues);
         let generated_counts = count::isolated(&emitted);
         let baseline_counts = count::isolated(&hand_built);
+        assert!(
+            generated_counts.toffoli <= 2 * baseline_counts.toffoli,
+            "N={modulus}: Toffolis {} vs {}",
+            generated_counts.toffoli,
+            baseline_counts.toffoli
+        );
         let (amplitude_error, distribution_error, [emitted_peak, hand_peak]) =
             check_period_harness(module, callee, &exact_probabilities(&residues, modulus), [&emitted, &hand_built]);
         assert!(emitted_peak <= 2 * hand_peak, "N={modulus}: harness peak {emitted_peak} vs {hand_peak}");

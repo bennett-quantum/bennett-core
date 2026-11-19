@@ -50,6 +50,11 @@ fn reference(mut x: u64, mut residue: u8, mut base: u8, modulus: u8, update: Upd
     u64::from(residue)
 }
 
+fn return_steps(x: u64, fixed_steps: u64, pass_steps: u64, update_steps: u64) -> u64 {
+    let passes = u64::from(u64::BITS - x.leading_zeros());
+    fixed_steps + pass_steps * passes + update_steps * u64::from(x.count_ones())
+}
+
 fn through_helper() -> String {
     const HELPER: &str = r#"
 func @multiply(i8 %a, i8 %b, i8 %modulus) -> i8 {
@@ -78,12 +83,11 @@ fn direct_and_helper_updates_use_one_budget_at_all_return_boundaries() {
     // The two helper sites add a call and a return to each product.
     for (source, pass_steps, update_steps) in [(SOURCE, 7, 3), (helper.as_str(), 9, 5)] {
         let module = control_example(source, 3, "");
-        let returns = |x: u64| 3 + pass_steps * u64::from(x.ilog2() + 1) + update_steps * u64::from(x.count_ones());
+        let returns = |x| return_steps(x, 3, pass_steps, update_steps);
         let longest = returns(7);
         for budget in 0..=longest + 1 {
             let expected = |x| {
-                let steps = if x == 0 { 3 } else { returns(x) };
-                if budget < steps { (0, Fault::Budget.code()) } else { (reference(x, 1, 7, 15, Update::Odd), 0) }
+                if budget < returns(x) { (0, Fault::Budget.code()) } else { (reference(x, 1, 7, 15, Update::Odd), 0) }
             };
             let (construction, _) = compare_controls(&module, budget, ApplyMode::Automatic, expected);
             if budget >= longest {
@@ -94,6 +98,35 @@ fn direct_and_helper_updates_use_one_budget_at_all_return_boundaries() {
             if budget == longest {
                 let (forced, _) = compare_controls(&module, budget, ApplyMode::StepMachine, expected);
                 assert!(matches!(forced, Construction::StepMachine { .. }));
+            }
+        }
+    }
+}
+
+#[test]
+fn zero_exponent_exit_can_read_the_entry_comparison() {
+    let longest = return_steps(7, 3, 7, 3);
+    for seed in [0, 1] {
+        let source = SOURCE.replace("finish(i8 1), head(i8 1,", &format!("zero_result, head(i8 {seed},")).replace(
+            "\nfinish(i8 %residue):",
+            "\nzero_result:\n    %predicate = zext i1 %empty to i8\n    ret %predicate\nfinish(i8 %residue):",
+        );
+        let module = control_example(&source, 3, "");
+        for budget in 0..=longest + 1 {
+            let expected = |x| {
+                let steps = if x == 0 { 4 } else { return_steps(x, 3, 7, 3) };
+                if budget < steps {
+                    (0, Fault::Budget.code())
+                } else if x == 0 {
+                    (1, 0)
+                } else {
+                    (reference(x, seed, 7, 15, Update::Odd), 0)
+                }
+            };
+            let (construction, _) = compare_controls(&module, budget, ApplyMode::Automatic, expected);
+            assert_eq!(matches!(construction, Construction::ModularInPlace { .. }), seed == 1 && budget >= longest);
+            if budget == longest {
+                compare_controls(&module, budget, ApplyMode::StepMachine, expected);
             }
         }
     }
@@ -161,10 +194,23 @@ fn header_test_and_constant_argument_keep_the_same_residue_update() {
             "    br head(%current, %factor, %next)",
         );
     let module = control_example(&source, 3, ", i8 15");
-    const WHOLE_BUDGET: u64 = 37; // Entry jump, initial test, three eleven-step passes, and return.
-    let (construction, _) =
-        compare_controls(&module, WHOLE_BUDGET, ApplyMode::Automatic, |x| (reference(x, 1, 7, 15, Update::Odd), 0));
-    assert_eq!(construction, Construction::ModularInPlace { passes: 3 });
+    // Entry jump, initial test and return cost four steps. Each pass
+    // includes the next header test, with three extra steps on an update.
+    let longest = return_steps(7, 4, 8, 3);
+    for budget in 0..=longest + 1 {
+        let (construction, _) = compare_controls(&module, budget, ApplyMode::Automatic, |x| {
+            if budget < return_steps(x, 4, 8, 3) {
+                (0, Fault::Budget.code())
+            } else {
+                (reference(x, 1, 7, 15, Update::Odd), 0)
+            }
+        });
+        if budget >= longest {
+            assert_eq!(construction, Construction::ModularInPlace { passes: 3 });
+        } else {
+            assert!(!matches!(construction, Construction::ModularInPlace { .. }));
+        }
+    }
 }
 
 #[test]

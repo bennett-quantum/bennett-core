@@ -619,9 +619,10 @@ The proof checks the data flow before allocating the residue. The product has on
 use. The old residue can feed the update, pass through the skipped route or leave
 the loop before another update. The initial residue must be a known value below the
 known modulus, which fits in 64 bits. The remainder preserves that bound. The
-compiler checks the widths of the products,
-squarings and output conversions. Each multiplier must have a computed and
-verified modular inverse. An upper bound on the full route length, including
+compiler checks the widths of the products, squarings and output conversions.
+When checking a route, the compiler records the comparison value for that edge
+before it transfers any block arguments. Each multiplier must have a computed
+and verified modular inverse. An upper bound on the full route length, including
 calls, returns, branches and exits, must fit the applied function's single budget.
 The shift gives the pass count independently of that budget. Any failed proof
 leaves the existing compilation and fault behaviour in use.
@@ -674,7 +675,7 @@ the in-place update, the C oracles used 3,228 and 18,999 Toffolis and peaked at
 543 and 763 qubits in the harness. They retained intermediate products, remainders
 and guards across passes. The in-place construction reuses the residue and the
 accumulator and adder work qubits. The benchmark enforces the factor-of-two limit
-on the full harness peak.
+on both the Toffoli count and the full harness peak.
 
 Run `front/test.sh --test emitted_shor c_shor_period_distribution_and_counts -- --exact --nocapture`
 to repeat the comparisons and counts.
