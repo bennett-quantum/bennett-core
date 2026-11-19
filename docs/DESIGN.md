@@ -1025,6 +1025,38 @@ loop's own guard into the branch on the qubit, and put code of its own between t
 hoisted into a block before the outer loop). The loop also runs for the configurations whose path would not
 reach it, as ordinary code that writes no memory, its gates acting on none of them. For each definite value of
 what the condition reads the result is the product of the gates the C applies there.
+
+The loop's ordinary code, and what the front computes again before it, therefore runs *unasked*: for definite
+inputs on which C does not run it. It is accepted only from an allow-list (`Unasked.h`), each instruction
+checked where the device runs it, for every input that reaches it there, using only the tests the device
+makes there:
+
+- it cannot fault there: integer arithmetic other than division, comparisons, choices, casts and address
+  arithmetic, which never fault on the device (a shift by too much gives 0, signed overflow wraps); a division
+  or remainder whose divisor is a nonzero constant, has a constant bit set, or is tested nonzero by a
+  conditional jump of the loop itself on every path to it;
+- it changes nothing later code can see: no store and no call, except the marker that numbers a bit, the
+  bijections the front keeps as intrinsics until after outlining (byte swap, rotations) and intrinsics that do
+  nothing on the device.
+
+Everything else is refused by name ("in a loop with gates under the control of a value that depends on a qubit,
+whose ordinary code the control program runs for every input, ..."): a read of memory (it can be out of bounds,
+or read a byte that holds qubits, where C reads nothing), a division by a divisor not proved nonzero (also one
+computed before the loop under the condition, as `m = n / d` for `for (i < m)`), a reservation of stack, a
+trap, a store, a call. Routes, not built: for what can fault, write the fault code under the control of the
+loop's condition qubit; for what the loop needs from a call or memory, compute it under its condition in one
+applied function before the loop (the table of control bits below).
+
+Nothing is proved about the number of passes (the maintainer's decision of 2026-11-19). The loop is issued in
+full whatever the qubits hold: where the logic guarantees that the condition is 0 and the count is huge, the
+device runs every pass, its gates acting on nothing, which a larger step limit cures; a loop that never ends once
+entered (an ordinary stride that never meets its bound, a subtraction by an ordinary zero) does not end on the
+device for any input, also where C skips it. Where LLVM's loop analysis (ScalarEvolution) finds no count, the
+front warns that the loop's gates are issued whatever the qubits hold and that the loop must end for every
+ordinary input; the warning also appears for loops that do end but whose count the analysis cannot find, and it
+is silent for a counted loop of `2^64` passes. An ordinary test written in C around the loop (`if (d != 0)`)
+is the loop's guard and skips it on the device too.
+
 Refused by name, each with its route:
 
 - a loop whose number of passes depends on a qubit: a circuit is a definite list of gates, so the number of
@@ -1049,6 +1081,13 @@ computed condition with two gate sites, one on odd passes only, give the state c
 2, 3, 6 at O0, O2 and with `--taint-all`, every other register 0; the loop has one controlled gate line. Two
 nested gate loops give the state computed by hand for every pair of trip counts 0 to 2, a zero outer or inner
 count included, and a gate at pass 199 of 200 under a budget of 16 steps gives it too, in all three modes.
+`front/tests/tests/coherence_regressions.rs`: a read of memory that holds qubits, a division and a remainder by
+a divisor that is zero only where C skips the loop (in the loop, and computed before it), and a call in the
+loop are refused by name in all three modes, where the front used to fault on the inputs C skips; divisions by a
+constant and by a divisor the loop tests give native C's values; loops whose counts are huge where C skips them
+(a 64-bit counter run from 2 to 3 where C starts it at 0, a widened 32-bit bound, a count read from a local
+before the qubit is prepared, a count compared with the qubit) give native C's values without the warning; a
+loop whose stride is an ordinary input gives native C's values for stride 1 and the warning.
 
 ## Overwrites that keep the old value
 

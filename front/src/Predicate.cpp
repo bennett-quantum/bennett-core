@@ -4,6 +4,7 @@
 #include "Markers.h"
 #include "Normalise.h"
 #include "Taint.h"
+#include "Unasked.h"
 
 #include <llvm/ADT/PostOrderIterator.h>
 #include <llvm/ADT/SetVector.h>
@@ -231,8 +232,12 @@ size_t Predicator::gateLoop(Instruction *op) {
                        "(not built yet)",
                    &inst);
       }
-      if (isGateCall(&inst) && cast<CallBase>(inst).getOperandBundle(controlBundle)) {
-        fail("internal: a controlled gate in a loop under a qubit-dependent condition");
+      if (isGateCall(&inst)) {
+        if (cast<CallBase>(inst).getOperandBundle(controlBundle)) {
+          fail("internal: a controlled gate in a loop under a qubit-dependent condition");
+        }
+      } else {
+        requireRunsUnasked(inst, loop, analysis.dominators); // the control program runs it for every input
       }
       for (const User *user : inst.users()) {
         if (!loop->contains(cast<Instruction>(user))) {
@@ -248,6 +253,7 @@ size_t Predicator::gateLoop(Instruction *op) {
                "one place",
                op);
   }
+  warnUncountedGateLoop(*loop, *op);
   gateLoops.push_back(GateLoop{loop, {}});
   return gateLoops.size() - 1;
 }
@@ -605,11 +611,13 @@ Value *Predicator::recomputed(Value *value, IRBuilder<> &b, ValueToValueMapTy &m
   if (Value *done = map.lookup(inst)) {
     return done;
   }
-  if (analysis.tainted(inst) || isa<PHINode>(inst) || inst->mayReadOrWriteMemory() || inst->isTerminator()) {
+  if (analysis.tainted(inst) || isa<PHINode>(inst) || inst->isTerminator()) {
     notHandled("a loop with gates under the control of a value that depends on a qubit, using a value computed "
                "under that control before the loop (not built yet)",
                at);
   }
+  // Computed again before the loop, for every input: also where C does not compute it.
+  requireRunsUnasked(*inst, nullptr, analysis.dominators);
   Instruction *copy = inst->clone();
   for (Use &use : copy->operands()) {
     use.set(recomputed(use.get(), b, map, at));

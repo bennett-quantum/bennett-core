@@ -284,8 +284,50 @@ fn gate_loop_with_a_held_load_in_the_same_function_is_refused() {
     );
 }
 
+// The ordinary code of a gate loop under a qubit-dependent condition runs in the control program for every
+// input, also where C skips the loop. What it may contain is an allow-list (front/src/Unasked.h).
+const UNASKED: &str = "not handled yet: in a loop with gates under the control of a value that depends on a qubit, whose ordinary code the control program runs for every input, also where C does not enter the loop: ";
+
+fn unasked(what: &str) -> String {
+    format!("{UNASKED}{what}")
+}
+
+// `PREFIX` runs under the qubit-dependent condition before the loop; `TEST` decides each pass's gate.
+const GATE_LOOP: &str = r#"
+    uint8_t y = 0;
+    ZBIT(q, 1);
+    if (q) {
+        PREFIX
+        #pragma clang loop unroll(disable)
+        for (COUNTER)
+            if (TEST) XBIT(y, 0);
+    }
+    packet key = READ(q);
+    return key | ((packet)READ(y) << 8);
+"#;
+
+fn gate_loop(prefix: &str, counter: &str, test: &str) -> String {
+    GATE_LOOP.replace("PREFIX", prefix).replace("COUNTER", counter).replace("TEST", test)
+}
+
+fn counted_gate_loop(test: &str) -> String {
+    gate_loop("", "unsigned i = 0; i < n; ++i", test)
+}
+
+const UNCOUNTED: &str = "LLVM's loop analysis finds no number of passes for this loop with gates";
+
+fn lowering_diagnostics(program: &Program<'_>) -> Vec<String> {
+    let source = program.source();
+    MODES
+        .iter()
+        .map(|(mode, clang, flags)| {
+            let name = format!("{}-{mode}-diagnostics", program.name);
+            lower_text_with_diagnostics(&source, &name, clang, flags).expect("lowers").1
+        })
+        .collect()
+}
+
 #[test]
-#[ignore = "the moved loop loads a qubit-held byte even with its gate disabled"]
 fn disabled_gate_loop_never_loads_a_held_byte() {
     Program {
         name: "gate-load-callee",
@@ -313,33 +355,105 @@ __attribute__((noinline)) void fill(void) {
 "#,
         qubits: 1,
     }
-    .agrees(1, &[65536, 65793], &readout(&[0, 8, 16]), 0);
+    .refused(1, &[65536, 65793], &unasked("a read of memory, which can fault there"));
 }
 
 #[test]
-#[ignore = "the moved loop divides by zero even with its gate disabled"]
 fn disabled_gate_loop_never_divides_by_zero() {
-    Program {
-        name: "gate-divide",
-        declarations: "",
-        body: r#"
-    uint8_t y = 0;
-    ZBIT(q, 1);
-    if (q) {
-        #pragma clang loop unroll(disable)
-        for (unsigned i = 0; i < n; ++i)
-            if (((i + 1u) / (column + (prep != 1))) & 1) XBIT(y, 0);
+    let divisor = "(column + (prep != 1))";
+    for (name, body, native, opcode) in [
+        ("gate-divide", counted_gate_loop(&format!("((i + 1u) / {divisor}) & 1")), [0, 257], "udiv"),
+        ("gate-remainder", counted_gate_loop(&format!("(i + 17u) % {divisor}")), [0, 1], "urem"),
+        (
+            "gate-divide-before-loop",
+            gate_loop(&format!("unsigned m = n / {divisor};"), "unsigned i = 0; i < m; ++i", "1"),
+            [0, 257],
+            "udiv",
+        ),
+    ] {
+        Program { name, declarations: "", body: &body, qubits: 1 }.refused(
+            1,
+            &native,
+            &unasked(&format!("`{opcode}` whose divisor is not proved nonzero")),
+        );
     }
-    packet key = READ(q);
-    return key | ((packet)READ(y) << 8);
-"#,
+}
+
+#[test]
+fn disabled_gate_loop_divides_by_a_proved_divisor() {
+    for (name, test, n) in [
+        ("gate-divide-constant", String::from("((i + 1u) / 3u) & 1"), 3),
+        ("gate-divide-tested", String::from("d && ((i + 1u) / d) & 1"), 1),
+    ] {
+        let body = gate_loop("unsigned d = column + (prep != 1);", "unsigned i = 0; i < n; ++i", &test);
+        Program { name, declarations: "", body: &body, qubits: 1 }.agrees(n, &[0, 257], &readout(&[0, 8]), 0);
+    }
+}
+
+#[test]
+fn disabled_gate_loop_never_calls() {
+    let body = counted_gate_loop("pick(i, column + (prep != 1)) & 1");
+    Program {
+        name: "gate-call",
+        declarations: "__attribute__((noinline)) unsigned pick(unsigned i, unsigned d) { return (i + 1u) / d; }",
+        body: &body,
         qubits: 1,
     }
-    .agrees(1, &[0, 257], &readout(&[0, 8]), 0);
+    .refused(1, &[0, 257], &unasked("a call to @pick"));
 }
 
 #[test]
-#[ignore = "preparing the moved loop's control reads a qubit-held byte on a skipped path"]
+fn disabled_gate_loop_never_traps() {
+    let body = counted_gate_loop("i > 1000 ? (__builtin_trap(), 0) : 1");
+    // The trap leaves the code under the qubit without rejoining, which is refused before the loop is looked at.
+    Program { name: "gate-trap", declarations: "", body: &body, qubits: 1 }.refused(
+        1,
+        &[0, 257],
+        "not handled yet: a branch on a value that depends on a qubit, whose arms do not rejoin",
+    );
+}
+
+#[test]
+fn gate_loops_with_large_ordinary_counts_are_issued_in_full() {
+    // Each count is ordinary; where C skips the loop the device still runs its passes, gates disabled.
+    for (name, prefix, counter, n) in [
+        ("gate-count-wraps", "", "uint64_t i = (prep == 1 ? 2 : 0); i != n; ++i", 3),
+        ("gate-count-wide", "", "uint64_t i = 0; i < n; ++i", 1),
+        ("gate-count-prior-local", "", "unsigned i = 0; i < local; ++i", 1),
+    ] {
+        let mut body = gate_loop(prefix, counter, "1");
+        if name == "gate-count-prior-local" {
+            body = format!("    volatile unsigned b = n; unsigned local = b;\n{body}");
+        }
+        let program = Program { name, declarations: "", body: &body, qubits: 1 };
+        program.agrees(n, &[0, 257], &readout(&[0, 8]), 0);
+        for diagnostics in lowering_diagnostics(&program) {
+            assert!(!diagnostics.contains(UNCOUNTED), "{name}: {diagnostics}");
+        }
+    }
+    let body = counted_gate_loop("1").replace("if (q) {", "if (q == n) {");
+    Program { name: "gate-count-equal", declarations: "", body: &body, qubits: 1 }.agrees(
+        1,
+        &[0, 257],
+        &readout(&[0, 8]),
+        0,
+    );
+}
+
+#[test]
+fn a_gate_loop_without_a_found_count_is_issued_with_a_warning() {
+    // With a stride of 2 the loop never ends once entered, so the device does not end where C skips it.
+    let body = gate_loop("", "unsigned i = 0; i != 1; i += n", "1");
+    let program = Program { name: "gate-count-unknown", declarations: "", body: &body, qubits: 1 };
+    program.agrees(1, &[0, 257], &readout(&[0, 8]), 0);
+    for diagnostics in lowering_diagnostics(&program) {
+        assert!(diagnostics.contains(UNCOUNTED), "{diagnostics}");
+        assert!(diagnostics.contains("it must end for every ordinary input"), "{diagnostics}");
+    }
+}
+
+#[test]
+#[ignore = "LLVM's optimiser reads the held byte before the qubit test that guards it, with or without a loop; needs the front to classify accesses before optimising"]
 fn disabled_gate_loop_never_reads_a_held_byte_to_prepare_control() {
     Program {
         name: "gate-control-load",

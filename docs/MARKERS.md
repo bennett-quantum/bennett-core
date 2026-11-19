@@ -106,6 +106,11 @@ the gates only: `bennett_h(bennett_bit(&x, 3))`. A loop over the bits works when
 
 A loop with gates under such a condition runs as written, its number of passes an ordinary value:
 `if (q) for (i = 0; i < n; i++) bennett_x(&y);` flips `y` n times where `q` is 1, one controlled X per pass.
+The control program runs all `n` passes whatever `q` holds (it cannot see `q`), so the loop's ordinary code
+must not be able to fault or write anything: reads of memory, divisions by a divisor that may be 0, stores and
+calls in it are refused by name, and a loop that never ends once entered does not end on the device even
+where `q` is 0 (the front warns where LLVM finds no count of passes). An ordinary `if` written around the loop
+skips it on the device too (`docs/DESIGN.md`, "Code under a qubit", gate loops).
 
 ## Measurement
 
