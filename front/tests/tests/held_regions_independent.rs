@@ -123,7 +123,7 @@ fn density(
 }
 
 #[test]
-fn unequal_width_held_objects_match_native_and_the_exchange_reference() {
+fn unequal_width_held_objects_with_unwritten_bytes_are_refused() {
     let name = "held-regions-wide";
     let source = fixture(
         name,
@@ -150,65 +150,12 @@ uint64_t entry(unsigned prep, unsigned which) {
 }
 "#,
     );
-    let native = native_build(&source, name, &["-DNATIVE"]);
-    let table = [0, 1, 2, 3].map(|input| [0, 1].map(|which| native_value(&native, input, which)));
-    let reference = reference_copy();
-    let expected_words = [64, 32].map(|width| {
-        let column = usize::from(width == 32);
-        let old = table[0][column];
-        let input: StoreVector = PHASE.iter().enumerate().map(|(q, &amp)| ([q as u64, old, 0, 0], amp)).collect();
-        let copy = apply_to_spare(&reference, "copy", 1, input, |basis| [table[basis[0] as usize][column]]);
-        let clean = clear_known(exchange(copy, width), old);
-        assert!(clean.keys().all(|basis| basis[2..] == [0, 0]));
-        clean
-    });
-    let expected: BTreeMap<_, _> = expected_words[0]
-        .iter()
-        .zip(&expected_words[1])
-        .map(|((&[q, wide, ..], &phase), (&[other_q, bytes, ..], &other_phase))| {
-            assert_eq!((q, phase), (other_q, other_phase));
-            ((q, wide, bytes), Complex64::new(phase.re as f64, phase.im as f64) / 2.0)
-        })
-        .collect();
-
+    // Bytes 1 and 2 of `bytes` are never written, so not every byte the exchange takes is written on every path:
+    // refused by name (main gives native C's values because they are measured before the return; route: hold only
+    // the bytes some store writes, docs/DESIGN.md, "Not yet").
     for (mode, cflags, flags) in MODES {
-        let text = lower_text(&source, &format!("{name}-{mode}"), cflags, flags).expect("lowers");
-        let module = bennett_ir::load(&text).expect("valid program");
-        let measure_count = module
-            .functions
-            .iter()
-            .flat_map(|f| &f.blocks)
-            .flat_map(|b| &b.insts)
-            .filter(|inst| matches!(inst, Inst::Measure { .. }))
-            .count();
-        assert_eq!(measure_count, 2, "{mode}: only the explicit measurements");
-        for (input, expected) in table.iter().enumerate() {
-            for (column, &word) in expected.iter().enumerate() {
-                assert_eq!(
-                    measured(&module, input as u64, column as u64),
-                    Outcome::Returned(Some(word.into())),
-                    "{mode}, input {input}, column {column}"
-                );
-            }
-        }
-        let state = state_before_first_measurement(&module, "entry", &[4, 0]);
-        let q = register_column(&module, &state, "q");
-        let wide = global_address(&text, "wide");
-        // The first marker has ended wide's span. The second object is still in its shadow.
-        let bytes = register_column(&module, &state, "bytes.held");
-        let mut observed = BTreeMap::new();
-        for (basis, amp) in &state.quantum.amplitudes {
-            let key = (basis[q], held_word(&state, basis, wide, 8), basis[bytes]);
-            assert!(observed.insert(key, *amp).is_none(), "{mode}: extra register distinguishes {key:?}");
-            let kept_columns = state.quantum.cells.iter().map(|(_, column)| *column);
-            assert!(
-                basis.iter().enumerate().all(|(i, &value)| {
-                    i == q || i == bytes || value == 0 || kept_columns.clone().any(|column| i == column)
-                }),
-                "{mode}: nonzero spare"
-            );
-        }
-        check_complex(&observed, &expected, mode);
+        let error = lower_text(&source, &format!("{name}-{mode}"), cflags, flags).expect_err(mode);
+        assert!(error.contains("from whose exchange some ordinary path does not write every byte"), "{mode}: {error}");
     }
 }
 
@@ -545,7 +492,7 @@ uint64_t entry(unsigned unused, unsigned also_unused) { return writer(&a); }
 }
 
 #[test]
-fn seeded_short_loops_match_native_for_every_definite_input() {
+fn seeded_short_loops_match_native_or_are_refused_by_name() {
     use rand::{Rng, SeedableRng};
     use rand_chacha::ChaCha8Rng;
     use std::fmt::Write as _;
@@ -554,6 +501,7 @@ fn seeded_short_loops_match_native_for_every_definite_input() {
     const SAMPLES: usize = 9;
     println!("seed={SEED:#018x}, samples={SAMPLES}, definite inputs=8");
     let mut random = ChaCha8Rng::seed_from_u64(SEED);
+    let mut refused = 0;
     for sample in 0..SAMPLES {
         let objects = 1 + sample % 3;
         let mut declarations = String::new();
@@ -597,7 +545,18 @@ uint64_t entry(unsigned prep, unsigned unused) {{
         let native = native_build(&source, &name, &["-DNATIVE"]);
         let table: Vec<_> = (0..8).map(|input| native_value(&native, input, 0)).collect();
         for (mode, cflags, flags) in MODES {
-            let module = lower(&source, &format!("{name}-{mode}"), cflags, flags);
+            // The stores follow a loop inside the code under `q & 4`; the placement of the exchange credits no
+            // write to the loop's back edge, so it refuses where it cannot show a write of every byte on every
+            // path (route: docs/DESIGN.md, "Not yet"). Every program it accepts gives C's values.
+            let text = match lower_text(&source, &format!("{name}-{mode}"), cflags, flags) {
+                Ok(text) => text,
+                Err(error) if error.contains("from whose exchange some ordinary path does not write every byte") => {
+                    refused += 1;
+                    continue;
+                }
+                Err(error) => panic!("{name} {mode}: {error}"),
+            };
+            let module = bennett_ir::load(&text).expect("valid program");
             for (input, expected) in table.iter().copied().enumerate() {
                 assert_eq!(
                     measured(&module, input as u64, 0),
@@ -607,6 +566,7 @@ uint64_t entry(unsigned prep, unsigned unused) {{
             }
         }
     }
+    println!("refused by the placement of the exchange: {refused} of {} lowerings", SAMPLES * MODES.len());
 }
 
 #[test]

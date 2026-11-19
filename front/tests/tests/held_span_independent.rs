@@ -130,7 +130,7 @@ fn global_and_pointer_memops_reach_the_caller_with_native_bytes_and_exact_phases
 }
 
 #[test]
-fn a_whole_marker_allows_ordinary_access_and_a_new_span() {
+fn a_span_threaded_through_an_ordinary_condition_is_refused() {
     let source = write_c(
         "held-span-reborrow",
         r#"#include "bennett.h"
@@ -147,12 +147,16 @@ unsigned entry(unsigned bit) {
 }
 "#,
     );
+    // LLVM threads `if (bit)` into `if (q)`: on the path with bit = 0 the store is skipped, and the exchange would
+    // have to move above `if (bit)` for the paths to agree (main gives C's values: route: a store of every byte on
+    // every path after the condition, or a measurement before the return, each with its proof; docs/DESIGN.md,
+    // "Not yet").
     for (mode, clang_flags, flags) in MODES {
-        let module = lower(&source, &format!("held-span-reborrow-{mode}"), clang_flags, flags);
-        assert_eq!(measurement_count(&module), 2);
-        assert_eq!(run(&module, "entry", &[0], 0), Outcome::Returned(Some(0x03_0a_0a)), "{mode}");
-        let (outcome, _) = run_with_stats(&module, "entry", &[1], 0);
-        assert_eq!(outcome, Outcome::Returned(Some(0x06_0f_0f)), "{mode}");
+        let error = lower_text(&source, &format!("held-span-reborrow-{mode}"), clang_flags, flags).expect_err(mode);
+        assert!(
+            error.contains("whose exchange would have to move earlier than the store that needs it"),
+            "{mode}: {error}"
+        );
     }
 }
 

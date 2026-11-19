@@ -856,7 +856,8 @@ fn refused_for_ordinary_inputs(name: &str, declarations: &str, body: &str, expec
     }
 }
 
-const SKIPPED_EXCHANGE: &str = "whose exchange runs also on ordinary paths on which C does not write them";
+const SKIPPED_EXCHANGE: &str = "from whose exchange some ordinary path does not write every byte";
+const MOVED_EXCHANGE: &str = "whose exchange would have to move earlier than the store that needs it";
 
 #[test]
 fn an_ordinary_condition_inside_code_under_a_qubit_keeps_a_returned_byte_ordinary() {
@@ -898,14 +899,16 @@ __attribute__((noinline)) void store_byte(unsigned n) {
 "#,
         READ_STORED_BYTE,
         [0, 2],
-        SKIPPED_EXCHANGE,
+        MOVED_EXCHANGE,
     );
 }
 
 #[test]
-fn a_skipped_write_measured_before_returning_gives_the_native_byte() {
-    // The exchange runs for n = 0 too, but the shadow holds the old byte there and is measured before the return.
-    compare_ordinary_inputs(
+fn a_skipped_write_measured_before_returning_is_refused() {
+    // C gives 0 and 85, and main's front too, only because the byte is measured before the return: for n = 0 no
+    // path writes it after the exchange (route: a measurement of the bytes before the return with nothing in
+    // between, with its proof, not built; docs/DESIGN.md, "Not yet").
+    refused_for_ordinary_inputs(
         "conditional-byte-measured",
         r#"
 uint8_t held;
@@ -920,14 +923,14 @@ __attribute__((noinline)) unsigned store_and_measure(unsigned n) {
 "#,
         "    unsigned v = store_and_measure(n);\n    return v + 16u * held;",
         [0, 85],
+        SKIPPED_EXCHANGE,
     );
 }
 
 #[test]
-fn a_write_after_a_skipped_store_keeps_one_span_from_the_first() {
-    // The bytes are written on every path after the join, so the exchange moves above the ordinary condition
-    // and every access in between reads the shadow; they are measured before the return.
-    compare_ordinary_inputs_keeping(
+fn a_write_after_a_skipped_store_does_not_move_the_exchange() {
+    // C gives 34 for both n, and main's front too; the exchange would have to move above `if (n)` (route as above).
+    refused_for_ordinary_inputs(
         "conditional-byte-rewritten",
         r#"
 volatile uint8_t held;
@@ -943,7 +946,7 @@ __attribute__((noinline)) unsigned store_twice(unsigned n) {
 "#,
         "    unsigned v = store_twice(n);\n    return v + 16u * held;",
         [34, 34],
-        true,
+        MOVED_EXCHANGE,
     );
 }
 
@@ -992,7 +995,7 @@ __attribute__((noinline)) unsigned work(unsigned n) {
 "#,
         "    if (!n) seed();\n    return work(n);",
         [7, 5],
-        "where the front cannot show the bytes are ordinary before it",
+        SKIPPED_EXCHANGE,
     );
 }
 
@@ -1016,7 +1019,7 @@ __attribute__((noinline)) void work(unsigned n) {
 "#,
         "    work(n);\n    return copy;",
         [13, 3],
-        "before they are measured: it would read or write their shadow",
+        SKIPPED_EXCHANGE,
     );
 }
 
@@ -1047,9 +1050,11 @@ __attribute__((noinline)) void work(unsigned n) {
 }
 
 #[test]
-fn a_later_store_on_every_path_lets_the_exchange_cross_the_condition() {
-    // The exchange moves above `if (n)`, and every path from there writes the byte with `q + 2`.
-    compare_ordinary_inputs_keeping(
+fn a_later_store_on_every_path_does_not_move_the_exchange_above_the_condition() {
+    // C gives 3 for both n, and main's front too: every path writes the byte with `q + 2` after `if (n)`. The
+    // exchange would have to move above `if (n)`; placement denies that by default (route: a store of every byte on
+    // every path after the condition, with its proof, not built; docs/DESIGN.md, "Not yet").
+    refused_for_ordinary_inputs(
         "conditional-byte-mandatory",
         r#"
 volatile uint8_t held = 13;
@@ -1064,7 +1069,7 @@ __attribute__((noinline)) void work(unsigned n) {
 "#,
         "    work(n);\n    return READ_BYTES(held, 1);",
         [3, 3],
-        true,
+        MOVED_EXCHANGE,
     );
 }
 

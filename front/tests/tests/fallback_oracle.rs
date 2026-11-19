@@ -480,6 +480,18 @@ fn fallback_inventory_checks_every_accepted_program_and_names_each_refusal() {
     assert!(missing_warnings.is_empty(), "missing documented history/coherence warnings: {missing_warnings:?}");
 }
 
+/// A fixture placement refuses by name (docs/DESIGN.md, "Not yet"): `reason` must be in the refusal in every mode.
+fn refused_case(name: &str, reason: &str) {
+    for &(mode, flags, extra) in MODES {
+        match lower(name, &format!("refused.{mode}"), flags, extra, &[]) {
+            Ok(_) => panic!("{name}/{mode}: accepted, expected the refusal"),
+            Err(refusal) => assert!(refusal.contains(reason), "{name}/{mode}: {refusal}"),
+        }
+    }
+}
+
+const UNPROVED_WRITES: &str = "from whose exchange some ordinary path does not write every byte";
+
 fn acceptance_case(name: &str) {
     let coherent = CASES.iter().any(|&(case, coherent)| case == name && coherent);
     for &(mode, flags, extra) in MODES {
@@ -532,9 +544,12 @@ mod waiting_for_fallback {
     fn coherent_nested() {
         acceptance_case("coherent_nested");
     }
+    /// The variable-trip loop writes at positions that are not constant, which the placement of the exchange (which
+    /// denies by default) does not credit as writing each byte: refused by name until that is proved (route: shape 1
+    /// of the placement, docs/DESIGN.md, "Not yet").
     #[test]
     fn variable_trip_loop() {
-        acceptance_case("loop");
+        super::refused_case("loop", super::UNPROVED_WRITES);
     }
 }
 

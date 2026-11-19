@@ -1370,34 +1370,32 @@ bytes joins a path on which the span has ended (a measurement on one path, a ret
 started (an ordinary condition skipped the write, and nothing after the join touches the bytes but a
 measurement), the span also ends on the edges from the first: the same exchange, on those edges, or in a block
 of its own after code under a qubit when the edges leave that code.
-Any other disagreement between paths moves the start earlier, to a block that dominates, until every access
-to the bytes sees one state on every path.
+Any other disagreement between paths is refused by name (below): the start is never moved.
 
 The exchange that starts a span must run only on ordinary paths on which a write of a value that depends on a
-qubit into those bytes runs: on another path the language says the bytes stay ordinary. Two placements can
-break this: code under a qubit is applied whole, so its exchange is before it, and an ordinary condition inside
-it can skip a write (`if (q) { if (n) g = q; }`, which LLVM makes one condition `n && q`, or a loop over an
-ordinary count that may be 0); and moving the start earlier may take it above an ordinary condition that skips
-the write. So where the start ends up the front checks, byte by byte and as an allow-list, that every ordinary
-path from it writes each byte it takes: a block is *sure* for a byte when, whatever the ordinary values, some
-configuration of the qubits writes that byte from it before the function returns, by a store of exactly that
-byte (a constant position covering it) whose value, or whether it runs, depends on a qubit; or when it jumps
-unconditionally or on an ordinary value only to sure blocks, or on a value chosen by qubits alone (read as free,
-as the text reads) to at least one. A jump back into a loop is credited nothing, and a write of another byte of
-the object proves nothing about this one (a store counts when its value depends on a qubit, or when its block
-depends directly on a jump on such a value). Where the check fails the span is accepted only if, after the
-exchange, nothing but code under a qubit, such stores, reads whose value goes only into such a store back into
-the same bytes (the old value of an update LLVM made `x = q ? v : x`) and measurements of the bytes touches them, the bytes are measured before every return, and the front can show they are ordinary before the
-exchange (no earlier call or exchange may leave them holding qubits, `keepOrdinaryLoads`); then on a path that
-skips the write the shadow holds the old value and the measurement gives it. Everything else is refused by
-name: an ordinary access in between (it would read or write the shadow where C touches ordinary memory, and a
-copy would make other bytes hold qubits), a return at which the bytes may still hold qubits, bytes not shown to
-be ordinary before the exchange (route for all: one exchange on each path that writes, not built). Where the
-check holds, an ordinary read between the exchange and the first store on each path that makes all the bytes
-hold qubits (`if (!n) dest = g;` before a later `g = r + 2`) is refused by name, since it would see the shadow
-where C sees memory; reads the allow-list above names are not, and an ordinary store there only sets the shadow,
-which the later write or the end of the span settles. A jump on a value chosen by qubits alone one of whose arms
-writes the bytes writes them on that ordinary path, as the text reads.
+qubit into those bytes runs: on another path the language says the bytes stay ordinary. The placement of the
+exchange denies by default:
+
+1. The exchange stands at the store that needs it, or before the code under a qubit that contains it, and is
+   never moved earlier. Where paths with different states of the bytes meet and ending the span on the joining
+   edges does not settle them, the program is refused by name ("whose exchange would have to move earlier than
+   the store that needs it").
+2. Every ordinary path from the exchange writes every byte it takes. A block is *sure* for a byte when, whatever
+   the ordinary values, some configuration of the qubits writes that byte from it before the function returns,
+   by a store of exactly that byte (a constant position covering it) whose value, or whether it runs, depends on
+   a qubit (its block depends directly on a jump on such a value); or when it jumps unconditionally or on an
+   ordinary value only to sure blocks, or on a value chosen by qubits alone (read as free, as the text reads) to
+   at least one. A jump back into a loop is credited nothing, and a write of another byte proves nothing about
+   this one. A span from which some path does not write every byte is refused by name ("from whose exchange
+   some ordinary path does not write every byte"): an ordinary condition inside code under a qubit
+   (`if (q) { if (n) g = q; }`, which LLVM makes one condition `n && q`), a loop over an ordinary count before
+   the write, a store at a position that is not constant, a byte of the object no store writes.
+
+Between the exchange and the first store on each path that makes all the bytes hold qubits, an ordinary read of
+them is refused by name (it would see the shadow where C sees memory); code under a qubit, a read whose value
+goes only into a qubit-dependent store back into the same bytes (the old value of an update LLVM made
+`x = q ? v : x`), and an ordinary store (it only sets the shadow, which the write settles) are not. Shapes that
+are right but refused by these rules are listed with their routes in "Not yet".
 
 Which pointers may reach the bytes (`front/src/Aliasing.h`). What a pointer argument may point to is the union
 of what the calls of its function in the module pass; a function the host may call (external linkage), or one
@@ -1438,8 +1436,8 @@ constant covers, and hold only those). If an applied function faults for
 some argument values, interference between those values and the rest can be lost when the fault register is
 released.
 
-Acceptance (`front/tests/tests/memory_held.rs`): the fallback oracle's `store`, `memset`, `nested` and `loop`
-fixtures (its `memcpy` fixture is refused by name, as above), with the cells measured by `bennett_measure_bytes`, give native C's q, r, y and whole
+Acceptance (`front/tests/tests/memory_held.rs`): the fallback oracle's `store`, `memset` and `nested` fixtures
+(its `loop` and `memcpy` fixtures are refused by name, "Not yet"), with the cells measured by `bennett_measure_bytes`, give native C's q, r, y and whole
 twelve-byte image (guard bytes included, bytes that still hold qubits read from their registers) for every
 definite input, with no register released that is not 0, and native C's exact weights of every result for
 the oracle's ten preparations, at O0, O2 and with `--taint-all`; a store under a qubit followed by its inverse
@@ -1455,14 +1453,12 @@ two objects (every bit of each change), pointers that may share bytes (refused b
 `restrict` accepted with C's values), and a callee reading the global variable (refused by name).
 `front/tests/tests/coherence_regressions.rs`: a store under an ordinary condition, read ordinarily by the caller on
 the path that skips it, gives C's 0 (it faulted before); the same store under a qubit and an ordinary condition,
-in a loop over an ordinary count, in a loop every pass of which may skip it, and a write of one array byte beside
-a skipped write of another, are refused by name where the bytes leave the function holding qubits; measured
-before the return they give C's values, but are refused where an earlier call left the bytes holding qubits or
-an ordinary copy reads them in between; a later store on every path lets the exchange cross the condition (C's
-values, the old value kept with the warning), and an ordinary copy before that later store is refused by name.
-`front/tests/tests/held_regions_independent.rs`: two held objects of unequal width (exact amplitudes), a second
-region over held objects, gate barriers before an overwrite, pointer pairs and call chains, seeded short loops
-against native C, a straight store before a region writing the same byte (C's value), a callee measuring a
+in a loop over an ordinary count, in a loop every pass of which may skip it, a write of one array byte beside a
+skipped write of another, the same measured before the return, a later store on every path after the
+condition, and an ordinary copy before that later store are refused by name.
+`front/tests/tests/held_regions_independent.rs`: two held objects of unequal width with bytes no store writes
+(refused by name), a second region over held objects, gate barriers before an overwrite, pointer pairs and call
+chains, seeded short loops against native C (or refused by name), a straight store before a region writing the same byte (C's value), a callee measuring a
 held global and a callee reading a saved copy of a `restrict` argument (both refused by name).
 
 ## Applied calls
@@ -2087,12 +2083,40 @@ The optimiser, lowering the full device language to gates, certificates, target 
 format, and recomputation shared between conditions (each predicated operation computes and clears
 its own).
 
-Memory written under a qubit at a position that is not constant: the front holds the bytes LLVM's bound allows,
-which can be wider than any write (`memcpy` of 2 or 4 bytes is bounded at 6), and refuses by name where such
-bytes, never written, may still hold qubits at a return (the fallback oracle's `memcpy` fixture,
-`front/tests/tests/memory_held.rs`, `a_held_range_wider_than_every_write_is_refused`). Route: prove which bytes a
-write at a position that is not constant covers for some configuration whatever the ordinary values, and hold only
-those.
+Placement of the exchange for memory written under a qubit, which denies by default ("Memory written under a
+qubit"). Shapes that give C's values on the front before it and are refused by name now, each with its route (a
+list entry with its own proof, in this order):
+
+- Writes at a position that is not constant: the front holds the bytes LLVM's bound allows, which can be wider
+  than any write (`memcpy` of 2 or 4 bytes is bounded at 6), and credits no such write as writing a byte. The
+  fallback oracle's variable-trip `loop` and `memcpy` fixtures (`memory_held.rs`,
+  `fixtures_writing_at_positions_that_are_not_constant_are_refused`, `a_held_range_wider_than_every_write_is_refused`;
+  `fallback_oracle.rs`, `waiting_for_fallback`), objects with bytes no store writes
+  (`held_regions_independent.rs`, `unequal_width_held_objects_with_unwritten_bytes_are_refused`), and loops before
+  the write (`seeded_short_loops_match_native_or_are_refused_by_name`; `qubit_differential.rs`,
+  `later_region_overwrites_an_exchanged_value_is_refused`). Route: prove which bytes such writes cover for some
+  configuration whatever the ordinary values (and credit a loop that every ordinary input leaves), and hold only
+  those.
+- No opening read where every byte is overwritten before any use of its old value, and a proof of ordinary bytes
+  that knows pointer arguments and spans ended by a full measurement: the bytes a span starts on are assumed
+  ordinary (`coherence_regressions.rs`, `a_store_into_bytes_an_earlier_call_left_holding_qubits_does_not_fault`,
+  ignored).
+- A store of every byte on every path after an ordinary condition: the exchange would have to move above it
+  (`coherence_regressions.rs`, `a_later_store_on_every_path_does_not_move_the_exchange_above_the_condition`,
+  `a_write_after_a_skipped_store_does_not_move_the_exchange`; `held_span_independent.rs`,
+  `a_span_threaded_through_an_ordinary_condition_is_refused`). Route: move the exchange only above a condition
+  after which every path writes every byte, with nothing reading them in between.
+- A measurement of the bytes before the return with nothing in between, where some path skips the write
+  (`coherence_regressions.rs`, `a_skipped_write_measured_before_returning_is_refused`). Route: accept the span when
+  every return is preceded by a full measurement, nothing else touches the bytes, and they are shown ordinary
+  before the exchange.
+- A write under a condition the front computes in outlined code under a qubit: a condition counts as chosen by
+  qubits alone only when it is computed from qubit values by instructions, so a condition that a region function
+  returns is ordinary to the placement and the path on which it fails skips the write (`qubit_differential.rs`,
+  `a_constant_argument_of_apply_is_refused_under_an_outlined_condition`, at O0 and under `--taint-all`). Route:
+  prove that the region function's result depends on its qubit arguments alone, a proof that must see through
+  what the function computes (an expression of its arguments that is always 0 is not chosen by them), not only
+  which memory it reads.
 
 Refused by name or not yet excluded around the classification of "What LLVM's passes may not change":
 

@@ -364,7 +364,7 @@ bool Holder::qubitWrite(const StoreInst &store, const std::set<const BasicBlock 
 
 void Holder::span(Value *object, const Range &hull, Instruction *start, const std::set<const BasicBlock *> &region,
                   bool owned, const std::vector<Instruction *> &writes) {
-  bool everyPath = true; // decided where the start ends up, before the accesses are redirected
+  bool everyPath = true; // decided once the paths agree, before the accesses are redirected
   // Where every path writes the bytes: what runs after the exchange and before the first store that makes all
   // of them hold qubits, on some path (an ordinary access there would see the shadow where C sees memory).
   std::set<const Instruction *> beforeWrite;
@@ -619,16 +619,6 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
           state = State{State::Done, all};
           break;
         case Role::Return:
-          // Where the exchange may have run on a path on which C writes nothing, the bytes must not leave the
-          // function holding qubits: the caller may read them ordinarily, where C reads the old value.
-          if (apply && !owned && !everyPath && state.holdsQubits()) {
-            notHandled("memory written under a qubit (" + describe(object, hull) +
-                           ") whose exchange runs also on ordinary paths on which C does not write them (an ordinary "
-                           "condition skips a write of some of the bytes after the exchange), and which may still hold "
-                           "qubits when the function returns, where the caller can read them (route: one exchange on "
-                           "each path that writes, not built)",
-                       &inst);
-          }
           if (state.kind == State::Live && apply && !owned) {
             IRBuilder<> end(&inst);
             end.CreateCall(exchange(), {shadow, addressAt(end), end.getInt64(0)});
@@ -665,22 +655,16 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
           if (!apply || state.kind == State::Before) {
             break;
           }
-          // Allowed while the shadow holds the bytes on a path on which C has not written them (yet): code under
-          // a qubit, stores that make them hold qubits, and reads that only feed such a store back into them.
-          // Where every path writes them, an ordinary store before that write only sets the shadow, which the write
-          // or the end of the span settles; a read there would see the shadow where C sees memory.
-          if (!owned && state.kind == State::Live &&
-              (!everyPath || (beforeWrite.count(&inst) && isa<LoadInst>(inst))) &&
-              !region.count(inst.getParent()) &&
-              !(isa<StoreInst>(inst) && qubitWrite(cast<StoreInst>(inst), region, writes)) &&
-              !(isa<LoadInst>(inst) && feedsOnlyQubitStoresHere(cast<LoadInst>(&inst)))) {
+          // Every path from the exchange writes the bytes (rule 2, below); an ordinary store before that write only
+          // sets the shadow, which the write settles, while an ordinary read there would see the shadow where C sees
+          // memory. Allowed: code under a qubit, stores that make the bytes hold qubits, and reads that only feed
+          // such a store back into them.
+          if (!owned && state.kind == State::Live && beforeWrite.count(&inst) && isa<LoadInst>(inst) &&
+              !region.count(inst.getParent()) && !feedsOnlyQubitStoresHere(cast<LoadInst>(&inst))) {
             notHandled("an access of " + describe(object, hull) +
-                           (everyPath ? std::string(" after their exchange and before the write that makes them hold "
-                                                    "qubits on this path")
-                                      : std::string(", whose exchange runs also on ordinary paths on which C does "
-                                                    "not write them, before they are measured")) +
-                           ": it would read or write their shadow where C touches ordinary memory (route: one "
-                           "exchange on each path that writes, at the write, not built)",
+                           " after their exchange and before the write that makes them hold qubits on this path: it "
+                           "would read their shadow where C reads ordinary memory (route: start the exchange at the "
+                           "write, not built)",
                        &inst);
           }
           if (state.kind == State::Done) {
@@ -745,10 +729,18 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
       }
     }
     if (!conflict) {
-      // Where the exchange runs on a path on which C does not write the bytes, only a measurement of them may
-      // follow it before the return (the walk refuses the rest), and its read of their old value must be of
-      // ordinary bytes there.
+      // Rule 2 of the placement, which denies by default: every ordinary path from the exchange writes every byte
+      // it takes; a span from which some path does not is refused by name.
       everyPath = owned || writesEveryByte(*borrow, object, hull, region, writes);
+      if (!everyPath) {
+        notHandled("memory written under a qubit (" + describe(object, hull) +
+                       ") from whose exchange some ordinary path does not write every byte (an ordinary condition, "
+                       "a loop over an ordinary count or a position that is not constant may skip a byte; route: "
+                       "writes at a position that is not constant proved to cover each byte, or a measurement of "
+                       "the bytes before the return with nothing in between, not built; docs/DESIGN.md, \"Not "
+                       "yet\")",
+                   borrow);
+      }
       if (everyPath && !owned) {
         auto writesAll = [&](Instruction &inst) {
           auto *store = dyn_cast<StoreInst>(&inst);
@@ -819,17 +811,6 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
           if (!written) {
             work.insert(work.end(), succ_begin(block), succ_end(block));
           }
-        }
-      }
-      if (!everyPath) {
-        std::vector<LoadInst *> opening{cast<LoadInst>(old)};
-        keepOrdinaryLoads(opening, *cast<LoadInst>(old), controlFunctions(*fn.getParent()));
-        if (opening.empty()) {
-          notHandled("memory written under a qubit (" + describe(object, hull) +
-                         ") whose exchange runs also on ordinary paths on which C does not write them, where the "
-                         "front cannot show the bytes are ordinary before it (an earlier call or exchange may leave "
-                         "them holding qubits; route: one exchange on each path that writes, not built)",
-                     borrow);
         }
       }
       for (BasicBlock *block : blocks) {
@@ -909,12 +890,13 @@ void Holder::span(Value *object, const Range &hull, Instruction *start, const st
                      "paths and not on others, or read where it may or may not hold qubits)",
                  conflict);
     }
-    Instruction *before = node->getIDom()->getBlock()->getTerminator();
-    // Above an ordinary condition that skips the write the exchange runs also where C writes nothing; where the
-    // start ends up is checked once the paths agree (writesEveryByte).
-    for (Instruction *inst : starting) {
-      inst->moveBefore(before);
-    }
+    // Rule 1 of the placement, which denies by default: the exchange stands at the store that needs it (or before
+    // the code under a qubit that contains it) and is never moved earlier.
+    notHandled("memory written under a qubit (" + describe(object, hull) + ") whose exchange would have to move "
+                   "earlier than the store that needs it for the paths to agree where they meet (route: a store of "
+                   "every byte on every path after the condition, or a measurement of the bytes before the return, "
+                   "each with its proof, not built; docs/DESIGN.md, \"Not yet\")",
+               conflict);
   }
 }
 

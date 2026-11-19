@@ -38,6 +38,8 @@ use state::{Check, Field, Preparation};
 
 const SEED: u64 = 0x8719_6caa_251d_0f43;
 const CALLER_FRAMES: &str = "an applied call that may reach `__builtin_return_address` above level 0";
+const PLACEMENT_SKIP: &str = "from whose exchange some ordinary path does not write every byte";
+const PLACEMENT_MOVE: &str = "whose exchange would have to move earlier than the store that needs it";
 const SHORT_CASES: usize = generator::SHORT_CASES;
 const EXTRA_SEED_MASK: u64 = 0xe911_2825_44ba_3983;
 const STATE_SEED_MASK: u64 = 0xdba2_4ce8_b7e9_8163;
@@ -293,6 +295,12 @@ fn try_case(case: &Case, name: &str, mode: usize, results: &mut Results) -> Resu
             if reason.contains(CALLER_FRAMES) {
                 return Ok(());
             }
+            // The placement of the exchange denies by default (docs/DESIGN.md, "Memory written under a qubit"):
+            // counted as declined, and named so that a reviewer can sample them.
+            if reason.contains(PLACEMENT_SKIP) || reason.contains(PLACEMENT_MOVE) {
+                println!("placement decline: {name}");
+                return Ok(());
+            }
             if matches!(case.expectation, Expectation::ConditionalWrite)
                 && !reason.contains("a call to @write_cell, which may write memory,")
             {
@@ -494,7 +502,7 @@ fn straight_store_before_a_region_with_three_objects() {
             "straight-in-loop",
             "#pragma clang loop unroll(disable)\n    for (unsigned i = 0; i < n; ++i) { a = 3 + 2 * q + i; }\n    if (q & 2) { b = 9; a = 257; c[1] = 1ULL << 55; }",
             false,
-            Some("whose exchange runs also on ordinary paths on which C does not write them, before they are measured"),
+            Some("whose exchange would have to move earlier than the store that needs it"),
         ),
     ] {
         let function = if wrapped { "work" } else { "entry" };
@@ -725,13 +733,16 @@ packet entry(unsigned prep, unsigned n, unsigned column) {
 
 // Generated case 20 of seed 0x87196caa251d0f43 under --taint-all: once the reads of cell2 stay where C has them
 // (docs/DESIGN.md, "What LLVM's passes may not change"), a value the applied computation takes is the constant 0,
-// and the front wrote it as an argument of `apply` without its type, which the reader rejects.
+// and the front wrote it as an argument of `apply` without its type, which the reader rejects. Since the exchange of
+// held bytes stands at the store that needs it, the program is refused by name at O0 and under --taint-all: the
+// store to cell1 sits under a condition the front computes in outlined code under a qubit, which it does not show to
+// be chosen by qubits alone, so an ordinary path may skip the byte (route: a proof that a region function's result
+// depends on the qubits alone, docs/DESIGN.md, "Not yet"). At O2 it is accepted and gives native C's results. Main
+// gives native C's results in every mode.
 #[test]
-fn a_constant_argument_of_apply_has_its_type() {
-    check_target(
-        "constant-apply-argument",
-        &Case::values(
-            r#"
+fn a_constant_argument_of_apply_is_refused_under_an_outlined_condition() {
+    let case = Case::values(
+        r#"
 static uint32_t cell0[2] = {3670060788ULL, 11};
     uint8_t cell1 = 62ULL;
 packet entry(unsigned prep, unsigned n, unsigned column) {
@@ -756,14 +767,30 @@ packet entry(unsigned prep, unsigned n, unsigned column) {
     return key | (v0 << 8) | (v1 << 40) | (v2 << 48);
 }
 "#
-            .to_owned(),
-            3,
-            1,
-            1,
-            false,
-        ),
-        None,
+        .to_owned(),
+        3,
+        1,
+        1,
+        false,
     );
+    let source = write_c("constant-apply-argument", &case.source());
+    let native = native_build(&source, "constant-apply-argument", &["-DNATIVE"]);
+    let table = case.native_table(&native);
+    let mut refused = Vec::new();
+    for (mode, cflags, flags) in MODES {
+        let name = format!("constant-apply-argument-{mode}");
+        match lower_text(&source, &name, cflags, flags) {
+            Ok(text) => {
+                let module = bennett_ir::load(&text).expect("valid program");
+                compare(&case, &module, &table, &mut 0).unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+            Err(error) => {
+                assert!(error.contains(PLACEMENT_SKIP), "{name}: {error}");
+                refused.push(mode);
+            }
+        }
+    }
+    assert_eq!(refused, ["o0", "taint"]);
 }
 
 #[test]
@@ -1215,7 +1242,9 @@ fn loop_overwrite_keeps_one_old_value_and_clears_the_other() {
 // the value to the second region, which overwrites cell0: clearing the value it held computes the old value
 // again too. Clean: nothing kept.
 #[test]
-fn later_region_overwrites_an_exchanged_value() {
+// The loop of three passes in the first code under the qubit gets no credit for its back edge, so the write of
+// cell1[1] is not shown on every path: refused by name (route: docs/DESIGN.md, "Not yet").
+fn later_region_overwrites_an_exchanged_value_is_refused() {
     check_witness(
         "overwrite-after-exchange",
         2,
@@ -1242,6 +1271,6 @@ packet entry(unsigned prep, unsigned n, unsigned column) {
     return key | (v0 << 8) | (v1 << 40);
 }
 "#,
-        None,
+        Some("from whose exchange some ordinary path does not write every byte"),
     );
 }
