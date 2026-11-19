@@ -921,7 +921,8 @@ run each classified instruction becomes a call of a declaration of its own, with
 attribute, `noduplicate`. A pass must assume such a call reads and writes any memory and may not return, so it
 keeps the call where it is, in order with every other access to memory and under its conditions; it cannot
 merge two of them (they call different functions), and it may not copy one (without the attribute, LLVM's loop
-rotation copied a store that depends on a qubit into the block before a loop, measured on a generated program). After the run each call is the instruction it stood for again, with its type,
+rotation copied a store that depends on a qubit into the block before a loop, measured on a generated program;
+the attribute was decided on 2026-11-19, with its cost below). After the run each call is the instruction it stood for again, with its type,
 alignment, volatility, ordering, attributes and metadata, and the front checks that each one is there exactly
 once: an instruction a pass removed or copied is refused by name. This relies on one property of LLVM's passes
 (a call of an unknown function stays as it is), not on a list of their steps. A test fails when any file
@@ -1907,13 +1908,20 @@ Refused by name or not yet excluded around the classification of "What LLVM's pa
   outlining cannot start a region at the entry block. Before the calls were classified, the optimiser merged
   them into one applied call and the device returned a wrong result. Route: split the entry block so that the
   region starts after it.
-- **A qubit store whose value the optimiser folds.** `g = q & 0u` stores a value that depends on a qubit by the
-  text, so `g` holds qubits after it and an ordinary read of `g` is the fault `qubit_memory_access`. The optimiser
-  folds the value to 0 and the front translates an ordinary store, so the device reads 0 where the language
-  faults. Refusing a classified store that the front now finds ordinary is not done: the classification does not
-  see that a measurement makes bytes ordinary again, and such a refusal declined accepted programs (a store after
-  `bennett_measure_bytes`). Route: let the classification follow measurements of held bytes, then translate such
-  a store by its class.
+- **A store classified before the optimiser that the front later finds ordinary is translated as ordinary.**
+  `g = q & 0u` stores a value that depends on a qubit by the text, so `g` holds qubits after it and an ordinary
+  read of `g` is the fault `qubit_memory_access`. The optimiser folds the value to 0 and the front translates an
+  ordinary store, so the device reads 0 where the language faults. Refusing such a store is not done: the
+  classification does not see that a measurement makes bytes ordinary again, and the refusal declined accepted
+  programs (a store after `bennett_measure_bytes`). Route: the classification stops at a measurement (bytes
+  measured are ordinary from there on); then such a store is translated by its class.
+- **An overwrite under a qubit after a qubit store.** A store of a value that depends on a qubit, then an overwrite
+  of the same bytes under a qubit-dependent condition, is refused by name ("an update of qubit variable holding
+  ... which neither XORs into it nor becomes straight-line code"). The optimiser used to merge the two into one
+  store of a chosen value, which the front lowered; both stores are classified now and stay two. Measured: 3 of
+  400 generated programs of seed `0x87196caa251d0f43` (`front/tests/tests/qubit_differential.rs`,
+  `an_overwrite_under_a_qubit_after_a_qubit_store_is_refused_by_name`). Route: the front itself joins the store
+  and the later overwrite into one store of a chosen value; both are classified stores, so no class changes.
 - **A known value the optimiser copies.** The classification calls a qubit variable known where one ordinary value
   reaches its load on every path. A pass that copies the store of that value into two paths makes the front's
   later analysis meet two values and call the variable unknown, so a load the classification left to the

@@ -27,7 +27,8 @@ Tests: `front/tests/tests/sealed_operations.rs`, the un-ignored `both_qubit_depe
 `removed_argument_keeps_the_call_applied` and `qubit_guard_short_circuits_the_global_load`. Over the whole front
 suite no sealed instruction was removed or copied (the front would have refused it by name). Without
 `noduplicate` on the sealed declarations, loop rotation copied a store that depends on a qubit in one generated
-program (seed `0x87196caa251d0f43`, case 194, `--taint-all`).
+program (seed `0x87196caa251d0f43`, case 194, `--taint-all`); the attribute was decided on 2026-11-19 (it also
+keeps a function with a sealed call from being inlined into several callers).
 
 **SQLite stage 4** (`sqlite_applied.rs`, which prints these counts): 8 queries on 8 rows equal native, memory
 unchanged, before and after. Control steps per query 989,201 before, 989,010 after. Applied steps, summed over
