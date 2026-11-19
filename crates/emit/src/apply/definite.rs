@@ -6,6 +6,7 @@ use bennett_exec::Wire;
 use bennett_ir::{BinOp, BlockId, Inst, Operand, Slot, Terminator, Width};
 
 use super::bits::{Bit, Circuit, Word, ZERO, constant, definite};
+use super::switches::Edges;
 use super::symbolic::{Frame, switch_target};
 use super::{arithmetic, division, ranges};
 
@@ -194,7 +195,14 @@ impl Constants {
                         if let Some(value) = definite(&word) {
                             transfer(switch_target(value, cases, default));
                         } else {
-                            block.term.visit_targets(transfer);
+                            let mut edges = Edges::new(cases, default);
+                            edges.retain_possible(&word);
+                            for case in edges.cases {
+                                transfer(&case.target);
+                            }
+                            if let Some(default) = edges.default {
+                                transfer(default);
+                            }
                         }
                     }
                 } else {

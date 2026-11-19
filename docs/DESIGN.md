@@ -476,12 +476,16 @@ install the new slot values and dispatch bits. Incoming edges to a point are mut
 per assignment, so XOR joins their dispatch bits. A returned or faulted assignment stops
 dispatching. At the budget boundary each still-running assignment gets the code `budget`.
 
-A definite `switch` follows its selected target. A qubit-held selector uses the step
-machine. Each case compares the full selector with its case value and combines the match
-with the dispatch bit at that point. Case values are distinct, so XORing the matched
-dispatch bits out of the incoming dispatch bit gives the default guard. Each target reads
-its arguments from the same pre-tick frame, including when several cases share a target.
-The whole switch costs one step.
+A `switch` with one possible edge follows that edge directly. The call planner and
+dispatcher skip case values that disagree with known selector bits or with bits that
+share a qubit. If the compatible cases cover every assignment to the selector's
+distinct qubits, they also skip the default. A switch with multiple possible edges uses
+the step machine. Each remaining case compares the full selector with its case value
+and combines the match with the dispatch bit at that point. Case values are distinct,
+so XORing the matched dispatch bits out of the incoming dispatch bit gives the guard
+for a default that remains possible. Each target reads its arguments from the same
+pre-tick frame, including when several cases share a target. The whole switch costs
+one step.
 
 Dispatch uses the steps left after the definite prefix, with the first qubit-dependent jump
 or switch counting as the first tick when it triggers dispatch. All loops share that budget.
@@ -596,7 +600,9 @@ of two words with distinct variable bits, `P` counts bit pairs in the retained c
 carry. The product uses `2(P + 2F + H)` Toffolis, or `6w² − 6w` for two words of width
 `w ≥ 2` with a double-width result. The general remainder uses `6pm` for a dividend
 with `p` possible significant bits and a divisor with `m`. A general unsigned quotient
-uses `6pm − 2m` Toffolis. For independent `w`-bit signed operands, both trial widths
+uses `6pm − 2m` Toffolis. An eight-bit unsigned quotient at `B = 2` including its zero
+test, output and fault XORs, and full reversal uses 2,331 two-qubit gates and 772 Toffolis
+and peaks at 520 qubits. For independent `w`-bit signed operands, both trial widths
 are `w`. The two input negations and one result negation add a total of
 `6 max(2w − 3, 0)` Toffolis, including local reversal. The zero test for a divisor
 of `m` distinct variable bits uses `2(m − 1)` for `m ≥ 1`. A known nonzero modulus
@@ -729,23 +735,21 @@ machine's fault semantics, writing fault codes into the program's register. The 
 simulator run is `bennett run --machine-meaning` with its default direct evaluation.
 
 Before consulting the budget, the emitter checks every instruction and terminator in every
-planned function copy, including those in bypassed blocks. Shift amounts and switch selectors
-must fold to constants. In each operand analysis, a function copy has one global word of
-facts per slot, shared across blocks and visits. Within a block, an operand can use the word
-just computed there. An absent word means its facts are pending. The first word supplies the
-initial facts. When words meet, matching constants and matching argument bits survive. Conflicts
-and other computed qubit bits become unknown bits identified by slot and bit index.
+planned function copy, including those in bypassed blocks. It plans indirect calls only in
+reachable blocks and requires a single proved function address at each such site. A proved shift
+amount uses fixed wiring and a proved switch selector follows one target. A qubit-held amount
+uses the shift circuit. A switch with several possible edges uses step machine dispatch.
 
-The main analysis starts at the entry and follows the selected edge when a conditional jump
-or switch folds to a constant, every possible edge when it is unknown, and waits when its
-operand is pending. Reachability can grow as more facts arrive. Validation can use three fallback
-passes for a missing constant only in a block the main analysis could not reach. Each starts with
-all blocks. The first follows just the selected edge for literal choices and all edges otherwise.
-The second follows all edges. The third follows the chosen edge for computed constants as in the
-main analysis. Each pass propagates unknown bits for any still-pending words
-before its proofs are accepted. Validation tries these proofs in order, keeping the earlier
-ones available. Emission uses the entry analysis alone. Refusals for given arguments apply
-at every budget, including zero.
+Each function copy has one word of facts per slot, shared across blocks and visits. Within
+a block, an operand can use the word just computed there. An absent word means its facts
+are pending. The first word supplies the initial facts. When words meet, matching constants
+and matching argument bits survive. Conflicts and other computed qubit bits become unknown bits
+identified by slot and bit index. The analysis starts at the entry and follows the selected
+edge when a conditional jump or switch folds to a constant. For a qubit-held condition it
+follows both edges. For a qubit-held switch selector it follows the cases and default its
+bit facts permit. It waits for operands whose facts are pending. Reachability can grow as
+more facts arrive.
+Refusals for given arguments apply at every budget, including zero.
 
 The controller resolves the targets and arguments first, keeping dangling and aliased
 handles as enclosing faults. It checks entry frame space, then builds and validates the

@@ -163,7 +163,8 @@ fn restore(circuit: &mut Circuit, dividend: &[Bit], divisor: &[Bit], quotient: b
     let mut residue = vec![zero; divisor.len()];
     let mut result = vec![ZERO; dividend.len()];
     for (index, &bit) in dividend.iter().enumerate().rev() {
-        let (candidate, difference, fits) = trial(circuit, &residue, bit, &denominator);
+        let need_difference = !quotient || index != 0;
+        let (candidate, difference, fits) = trial(circuit, &residue, bit, &denominator, need_difference);
         if quotient {
             result[index] = fits;
             if index == 0 {
@@ -183,22 +184,26 @@ fn restore(circuit: &mut Circuit, dividend: &[Bit], divisor: &[Bit], quotient: b
     if quotient { result } else { residue }
 }
 
-fn trial(circuit: &mut Circuit, residue: &[Bit], bit: Bit, divisor: &[Bit]) -> (Word, Word, Bit) {
+fn trial(
+    circuit: &mut Circuit,
+    residue: &[Bit],
+    bit: Bit,
+    divisor: &[Bit],
+    need_difference: bool,
+) -> (Word, Word, Bit) {
     let (&top, lower) = residue.split_last().expect("nonempty divisor");
     let candidate = std::iter::once(materialize(circuit, bit)).chain(lower.iter().copied()).collect::<Word>();
     let mut borrow = ZERO;
-    let difference = candidate
-        .iter()
-        .zip(divisor)
-        .map(|(&a, &b)| {
-            let different = circuit.xor(a, b);
-            let digit = circuit.xor(different, borrow);
-            let generated = circuit.and(a.not(), b);
-            let propagated = circuit.and(different.not(), borrow);
-            borrow = circuit.xor(generated, propagated);
-            digit
-        })
-        .collect::<Word>();
+    let mut difference = Vec::new();
+    for (&a, &b) in candidate.iter().zip(divisor) {
+        let different = circuit.xor(a, b);
+        if need_difference {
+            difference.push(circuit.xor(different, borrow));
+        }
+        let generated = circuit.and(a.not(), b);
+        let propagated = circuit.and(different.not(), borrow);
+        borrow = circuit.xor(generated, propagated);
+    }
 
     // The doubled residue has one extra high bit. Subtract if that bit is set
     // or if the remaining bits subtracted without a borrow.
@@ -264,12 +269,17 @@ mod tests {
 
     #[test]
     fn fixed_quotients_preserve_rewiring_and_wrapping() {
-        let dividend = (0..8).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
-        let mut circuit = Circuit::new(8);
-        let result = calculate(&mut circuit, BinOp::Udiv, &dividend, &constant(8, 8));
-        assert_eq!(&result[..5], &dividend[3..]);
-        assert_eq!(&result[5..], &[ZERO; 3]);
-        assert_eq!(circuit.forward_len(), 0);
+        for (width, distance) in [(8, 3), (128, 65)] {
+            let dividend = (0..width as u64).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
+            let mut circuit = Circuit::new(width as u64);
+            let divisor = 1u128 << distance;
+            let result = calculate(&mut circuit, BinOp::Udiv, &dividend, &constant(divisor, width));
+            assert_eq!(&result[..width - distance], &dividend[distance..]);
+            assert!(result[width - distance..].iter().all(|bit| *bit == ZERO));
+            assert_eq!(circuit.forward_len(), 0);
+            let block = circuit.finish(0, "fixed quotient").expect("valid gadget wires");
+            check(&block, &result, &[(width, divisor)], 1, 0);
+        }
 
         for width in [1, 4, 64, 128] {
             let min = 1u128 << (width - 1);

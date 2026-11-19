@@ -512,6 +512,42 @@ entry:
 "#;
 
 #[test]
+fn devices_accept_computed_variable_shifts_through_the_maximum_budget() {
+    let preparation = "    h %arg[0]\n    h %arg[1]\n    h %arg[2]\n    h %arg[3]\n";
+    for operation in ["shl", "lshr", "ashr"] {
+        let source = DEVICE_PROGRAM
+            .replace("func @main()", "func @main(i64 %budget)")
+            .replace("    apply @f", &format!("{preparation}    apply @f"))
+            .replace("budget 3", "budget %budget")
+            .replace("INSTRUCTION", &format!("%answer = {operation} i4 %sum, %x"));
+        let module = load(&source).expect("valid shift program");
+        let entry = module.function_named("main").expect("entry");
+        for budget in [0, 1, 2, 3, 4, u64::MAX] {
+            for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+                let mut compiler = |input: ApplyInput<'_>| Ok(compile_apply_with(input, mode)?.block);
+                let mut counter = CountingDevice::default();
+                let run = Executor::run_on_with_apply(&module, entry, &[budget], None, &mut counter, &mut compiler)
+                    .expect("count shift program");
+                let detail = (operation, budget, mode);
+                assert_eq!(run.outcome, Outcome::Returned(None), "{detail:?}");
+                let counts = counter.counts();
+                assert_eq!(counts.zero_released_qubits, counts.peak_qubits as u128 - 13, "{detail:?}");
+
+                let options = Options { machine_meaning: true, ..Options::default() };
+                let mut direct = Executor::new(&module, entry, &[budget], options).expect("direct executor");
+                let mut emitted = Executor::new(&module, entry, &[budget], options).expect("gate simulator");
+                assert_eq!(direct.run(), Outcome::Returned(None), "{detail:?}");
+                assert_eq!(emitted.run_emitted(&mut compiler), Outcome::Returned(None), "{detail:?}");
+                let actual = emitted.snapshot();
+                let expected = direct.snapshot();
+                assert_eq!(actual.classical, expected.classical, "{detail:?}");
+                assert_eq!(actual.quantum, expected.quantum, "{detail:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn ordinary_factors_stay_definite_across_conditional_block_transfers() {
     let module = load(
         r#"

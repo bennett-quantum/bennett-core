@@ -168,6 +168,67 @@ done:
 }
 
 #[test]
+fn an_indirect_target_must_stay_definite_across_loop_visits() {
+    use bennett_emit::{ApplyError, ApplyInput, Argument, compile_apply_with};
+    use bennett_ir::load;
+
+    let module = load(
+        r#"
+memory 1024
+func @f(i1 %change) -> i8 {
+entry:
+    %first = faddr @first
+    %second = faddr @second
+    br visit(%first, i1 0)
+island(i64 %pending):
+    br %change, island(%pending), visit(%pending, i1 1)
+visit(i64 %address, i1 %ready):
+    br %ready, invoke, later
+invoke:
+    %answer = call_indirect fn() -> i8 %address()
+    ret %answer
+later:
+    %next = select i64 %change, %second, %first
+    br visit(%next, i1 1)
+}
+func @first() -> i8 {
+entry:
+    ret 7
+}
+func @second() -> i8 {
+entry:
+    ret 9
+}
+"#,
+    )
+    .expect("valid loop with a late call target and an unreachable cycle");
+    let callee = module.function_named("f").expect("callee");
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in [0, 10] {
+            let input = ApplyInput {
+                module: &module,
+                callee,
+                args: &[Argument::Register(0..1)],
+                out: 1..9,
+                fault: 9..14,
+                budget,
+                entry_fault: None,
+                stack_available: 512,
+                scratch_start: 14,
+            };
+            let error = compile_apply_with(input.clone(), mode).expect_err("the live back edge changes the address");
+            assert!(matches!(
+                error,
+                ApplyError::Unsupported { operation: "call_indirect", route: "a proved definite function address", .. }
+            ));
+            let fixed = ApplyInput { args: &[Argument::Value(0)], ..input };
+            let compiled = compile_apply_with(fixed, mode).expect("the unreachable cycle cannot change the address");
+            super::super::check(&compiled, 1, 13, |_| if budget == 0 { 1 << 8 } else { 7 });
+        }
+    }
+}
+
+#[test]
 fn dead_selected() {
     for jump in [
         "br 1, join(i8 1), join(i8 2)",

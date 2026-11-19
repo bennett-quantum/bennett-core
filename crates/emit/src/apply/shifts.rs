@@ -52,7 +52,7 @@ mod tests {
 
     #[test]
     fn shift_counts_and_clears_its_work_wires() {
-        for width in [1usize, 2, 3, 4, 8, 65, 128] {
+        for width in [1usize, 2, 3, 4, 8, 64, 65, 128] {
             for op in [BinOp::Shl, BinOp::Lshr, BinOp::Ashr] {
                 let input = |start| (start..start + width as u64).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
                 let mut circuit = Circuit::new(2 * width as u64);
@@ -66,6 +66,37 @@ mod tests {
                 let high = 1 << (width - 1);
                 check(&block, &result, &[(width, high), (width, 0)], high, toffolis);
                 check(&block, &result, &[(width, high), (width, width as u128)], 0, toffolis);
+                let mask = u128::MAX >> (128 - width);
+                let word = high | 1;
+                let distances = (0..width.next_power_of_two().ilog2())
+                    .map(|bit| 1usize << bit)
+                    .chain([width - 1, width + 1])
+                    .filter(|&distance| distance as u128 <= mask);
+                for distance in distances {
+                    let expected = if distance >= width {
+                        0
+                    } else {
+                        match op {
+                            BinOp::Shl => (word << distance) & mask,
+                            BinOp::Lshr => word >> distance,
+                            BinOp::Ashr => {
+                                let pad = 128 - width;
+                                ((((word << pad) as i128) >> (pad + distance)) as u128) & mask
+                            }
+                            BinOp::Add
+                            | BinOp::Sub
+                            | BinOp::Mul
+                            | BinOp::Udiv
+                            | BinOp::Sdiv
+                            | BinOp::Urem
+                            | BinOp::Srem
+                            | BinOp::And
+                            | BinOp::Or
+                            | BinOp::Xor => unreachable!("the test uses shifts"),
+                        }
+                    };
+                    check(&block, &result, &[(width, word), (width, distance as u128)], expected, toffolis);
+                }
             }
         }
     }
