@@ -1,7 +1,9 @@
 //! Compare short C programs with native execution and check the simulated state before readout.
 //!
 //! Set `BENNETT_RANDOM_WRITING_CALLS` to include calls with qubit-dependent arguments
-//! that write a global in the ignored long campaign. When any family switch is set,
+//! that write a global in the ignored long campaign.
+//! Set `BENNETT_RANDOM_MIXED_STORES` for global stores chosen by an ordinary condition.
+//! When any family switch is set,
 //! that campaign runs only the selected families. Use the same switches to replay an index.
 
 use std::collections::BTreeMap;

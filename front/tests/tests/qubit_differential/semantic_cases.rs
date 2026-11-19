@@ -16,11 +16,14 @@ struct Family {
 // These recipes check semantics that depend on what clang hands to the front.
 // Clang -O2 can change the relevant calls and stores before the front sees them.
 const PROJECT_MODES: &[usize] = &[0, 2];
-const FAMILIES: &[Family] = &[Family {
-    switch: "BENNETT_RANDOM_WRITING_CALLS",
-    recipes: &[removed_call_argument, merged_writing_calls],
-    modes: PROJECT_MODES,
-}];
+const FAMILIES: &[Family] = &[
+    Family {
+        switch: "BENNETT_RANDOM_WRITING_CALLS",
+        recipes: &[removed_call_argument, merged_writing_calls],
+        modes: PROJECT_MODES,
+    },
+    Family { switch: "BENNETT_RANDOM_MIXED_STORES", recipes: &[merged_stores, skipped_store], modes: PROJECT_MODES },
+];
 
 pub(super) fn enabled_recipes() -> Vec<(Generate, usize)> {
     FAMILIES
@@ -112,4 +115,48 @@ fn ordinary_call_keeps_its_write_beside_an_applied_call() {
         PROJECT_MODES,
         &[vec![0x70300, 0x70301], vec![0x30100, 0x30201]],
     );
+}
+
+fn mixed_store(initial: u8, offset: u8, ordinary: Option<u8>) -> Case {
+    let otherwise = ordinary.map_or_else(String::new, |value| format!(" else cell = {value}U;"));
+    let body = format!(
+        r#"
+volatile uint8_t cell = {initial}U;
+
+__attribute__((noinline)) void choose_store(unsigned flag) {{
+    uint8_t value = 0;
+    XBIT(value, 0);
+    if (flag) cell = {offset}U + value;{otherwise}
+    XBIT(value, 0);
+}}
+
+packet entry(unsigned prep, unsigned n, unsigned column) {{
+    choose_store(column);
+    if (column) return (packet)bennett_measure_bytes((const void *)&cell, 1) << 8;
+    return (packet)cell << 8;
+}}
+"#,
+    );
+    Case::values(body, 0, 0, 2, false)
+}
+
+fn merged_stores(random: &mut ChaCha8Rng) -> Case {
+    let initial = random.random::<u8>();
+    mixed_store(initial, random.random_range(0..=254), Some(initial ^ random.random_range(1..=255)))
+}
+
+fn skipped_store(random: &mut ChaCha8Rng) -> Case {
+    mixed_store(random.random(), random.random_range(0..=254), None)
+}
+
+#[test]
+#[ignore = "merging a qubit-dependent store and a constant store makes the constant path hold qubits"]
+fn constant_store_keeps_the_global_ordinary() {
+    agrees("merged-stores", mixed_store(11, 0, Some(2)), PROJECT_MODES, &[vec![0x200], vec![0x100]]);
+}
+
+#[test]
+#[ignore = "the exchange makes a global hold qubits on a path that skips its qubit-dependent store"]
+fn skipped_store_keeps_the_global_ordinary() {
+    agrees("skipped-store", mixed_store(11, 0, None), PROJECT_MODES, &[vec![0xb00], vec![0x100]]);
 }
