@@ -312,6 +312,11 @@ void Seal::open(const char *run) {
         appendToCompilerUsed(module, rest);
       }
     }
+    // The erased list's initializer stays behind as a constant that refers to the callees, which LLVM would read
+    // as their address being taken.
+    for (GlobalValue *value : kept) {
+      value->removeDeadConstantUsers();
+    }
     kept.clear();
   }
 }

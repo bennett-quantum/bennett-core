@@ -45,11 +45,13 @@ void setClass(Instruction &inst, OperationClass kind) {
 // declaration that returns its argument (`bennett.keep.<n>`, no memory, no other effect); the values joined are
 // then distinct and the join stays a phi, which the classification sees. The calls are removed after it.
 // Pointers are not wrapped: the analysis follows a pointer to its object through a store and a load SROA removes.
+// The declarations are the ones keepStoredValues creates, remembered as such: a program may name a function of
+// its own `bennett.keep.<n>` (an `asm` label), which is never one of them.
 constexpr const char *keeperPrefix = "bennett.keep.";
+using Keepers = std::set<const Function *>;
 
-bool isKeeper(const CallBase &call) {
-  const Function *callee = call.getCalledFunction();
-  return callee && callee->getName().starts_with(keeperPrefix);
+bool isKeeper(const CallBase &call, const Keepers &keepers) {
+  return keepers.count(call.getCalledFunction()) != 0;
 }
 
 // Whether `alloca` is a qubit variable a marker names directly (SROA never promotes it: its address goes to the
@@ -73,7 +75,7 @@ bool namedByMarker(const AllocaInst &alloca) {
   return false;
 }
 
-void keepStoredValues(Module &module) {
+Keepers keepStoredValues(Module &module) {
   std::map<Type *, Function *> keepers;
   std::map<const AllocaInst *, bool> named;
   for (Function &function : module) {
@@ -102,16 +104,16 @@ void keepStoredValues(Module &module) {
       store->setOperand(0, CallInst::Create(keeper, {store->getValueOperand()}, "", store));
     }
   }
+  Keepers created;
+  for (const auto &[type, keeper] : keepers) {
+    created.insert(keeper);
+  }
+  return created;
 }
 
-void releaseStoredValues(Module &module) {
-  std::vector<Function *> keepers;
-  for (Function &function : module) {
-    if (function.getName().starts_with(keeperPrefix)) {
-      keepers.push_back(&function);
-    }
-  }
-  for (Function *keeper : keepers) {
+void releaseStoredValues(const Keepers &keepers) {
+  for (const Function *constKeeper : keepers) {
+    auto *keeper = const_cast<Function *>(constKeeper);
     for (User *user : make_early_inc_range(keeper->users())) {
       auto *call = cast<CallInst>(user);
       call->replaceAllUsesWith(call->getArgOperand(0));
@@ -153,7 +155,8 @@ bool sameFacts(const std::vector<Fact> &a, const std::vector<Fact> &b) {
 
 class Classifier {
 public:
-  Classifier(Module &module, bool taintAll) : module(module), taintAll(taintAll), aliasing(module) {}
+  Classifier(Module &module, bool taintAll, Keepers keepers)
+      : module(module), taintAll(taintAll), keepers(std::move(keepers)), aliasing(module) {}
 
   // Runs the analysis to its fixed point.
   void run();
@@ -167,6 +170,7 @@ public:
 private:
   Module &module;
   bool taintAll;
+  Keepers keepers; // the calls that keep stored values for SROA (keepStoredValues): transparent
   Aliasing aliasing;
   std::set<const Function *> control;           // functions with gates (Outline.h)
   std::set<const Value *> qubitObjects;         // qubit variables, and pointer parameters markers act through
@@ -510,7 +514,7 @@ bool Classifier::step() {
           changed |= taint(&inst);
         }
       } else if (auto *call = dyn_cast<CallBase>(&inst)) {
-        if (isKeeper(*call)) {
+        if (isKeeper(*call, keepers)) {
           if (anyArgumentTainted(*call)) {
             changed |= taint(call); // the stored value itself (keepStoredValues)
           }
@@ -681,7 +685,7 @@ void Classifier::refuseArgumentsLoweredAway() {
   for (Function &function : module) {
     for (Instruction &inst : instructions(function)) {
       auto *call = dyn_cast<CallBase>(&inst);
-      if (!call || markerCall(call) || call->isInlineAsm() || isa<IntrinsicInst>(call) || isKeeper(*call)) {
+      if (!call || markerCall(call) || call->isInlineAsm() || isa<IntrinsicInst>(call) || isKeeper(*call, keepers)) {
         continue;
       }
       const Function *callee = call->getCalledFunction();
@@ -822,23 +826,23 @@ void requireAppliedCallKept(const CallBase &call, bool dependsNow) {
 void refuseQubitArgumentsLoweredAway(const Module &module, bool taintAll) {
   // On a copy after SROA, as the classification sees the program; the module itself is lowered unchanged.
   std::unique_ptr<Module> copy = CloneModule(module);
-  keepStoredValues(*copy);
+  Keepers keepers = keepStoredValues(*copy);
   promoteLocals(*copy);
-  Classifier classifier(*copy, taintAll);
+  Classifier classifier(*copy, taintAll, keepers);
   classifier.run();
   classifier.refuseArgumentsLoweredAway();
 }
 
 void classify(Module &module, bool taintAll) {
-  keepStoredValues(module);
+  Keepers keepers = keepStoredValues(module);
   promoteLocals(module);
-  Classifier classifier(module, taintAll);
+  Classifier classifier(module, taintAll, keepers);
   classifier.run();
   classifier.refuseUnclassified();
   for (auto &[inst, kind] : classifier.classes) {
     setClass(*inst, kind);
   }
-  releaseStoredValues(module);
+  releaseStoredValues(keepers);
 }
 
 void splitClassifiedVectors(Module &module) {

@@ -821,3 +821,206 @@ unsigned entry(unsigned prep, unsigned n, unsigned column) {
         );
     }
 }
+
+// Shapes of a qubit-dependent choice between equal values that the keeping of stored integers through SROA does not
+// reach (docs/DESIGN.md, "Not yet"); `main` gives the same wrong results. Each is a witness, ignored until built.
+
+#[test]
+#[ignore = "a whole-structure copy in both arms is no integer store, so SROA folds the join before the classification (native 16, device 0)"]
+fn a_qubit_choice_between_equal_structure_copies_keeps_the_call_applied() {
+    agrees(
+        "r11-aggassign",
+        r#"
+unsigned a,b;
+__attribute__((noinline)) static unsigned first(unsigned x){a=1;return x;}
+__attribute__((noinline)) unsigned second(unsigned x){b=1;return x+1;}
+unsigned long long entry(unsigned prep,unsigned n,unsigned column){
+    uint8_t q=0,y=0; XBIT(q,0); ZBIT(y,0);
+    struct S { unsigned x; unsigned z; } t; struct S s; s.x=n; s.z=1;
+    if(q) t=s; else t=s;
+    y ^= first(t.x + t.z);
+    y ^= second(q);
+    return (a == b) * 16u + READ(y);
+}
+"#,
+        &[(1, 1)],
+    );
+}
+
+#[test]
+#[ignore = "a join of equal pointers is folded before the classification (native 18, device 2)"]
+fn a_qubit_choice_between_equal_pointers_keeps_a_read_through_them_dependent() {
+    agrees(
+        "r11-ptrload",
+        r#"
+unsigned a,b;
+__attribute__((noinline)) static unsigned first(unsigned x){a=1;return x;}
+__attribute__((noinline)) unsigned second(unsigned x){b=1;return x+1;}
+unsigned long long entry(unsigned prep,unsigned n,unsigned column){
+    uint8_t q=0,y=0; XBIT(q,0); ZBIT(y,0);
+    uint8_t cell=5; uint8_t *p;
+    if(q) p=&cell; else p=&cell;
+    y ^= first((*p) & 0u);
+    y ^= second(q);
+    return (a == b) * 16u + READ(y);
+}
+"#,
+        &[(1, 1)],
+    );
+}
+
+#[test]
+#[ignore = "a join of equal pointers is folded before the classification (native 19, device 3)"]
+fn a_qubit_choice_between_equal_pointers_keeps_their_comparison_dependent() {
+    agrees(
+        "r11-ptreq",
+        r#"
+unsigned a,b;
+__attribute__((noinline)) static unsigned first(unsigned x){a=1;return x;}
+__attribute__((noinline)) unsigned second(unsigned x){b=1;return x+1;}
+unsigned long long entry(unsigned prep,unsigned n,unsigned column){
+    uint8_t q=0,y=0; XBIT(q,0); ZBIT(y,0);
+    uint8_t heldb=0; uint8_t *p;
+    if(q) p=&heldb; else p=&heldb;
+    y ^= first(p == &heldb);
+    y ^= second(q);
+    return (a == b) * 16u + READ(y);
+}
+"#,
+        &[(1, 1)],
+    );
+}
+
+#[test]
+#[ignore = "an integer stored through a loaded pointer is not kept, so SROA folds the join (native 19, device 3)"]
+fn a_qubit_choice_of_equal_values_stored_through_a_pointer_keeps_the_call_applied() {
+    agrees(
+        "r11-throughptr",
+        r#"
+unsigned a,b;
+__attribute__((noinline)) static unsigned first(unsigned x){a=1;return x;}
+__attribute__((noinline)) unsigned second(unsigned x){b=1;return x+1;}
+unsigned long long entry(unsigned prep,unsigned n,unsigned column){
+    uint8_t q=0,y=0; XBIT(q,0); ZBIT(y,0);
+    unsigned t; unsigned *p=&t;
+    if(q) *p=n; else *p=n;
+    y ^= first(t);
+    y ^= second(q);
+    return (a == b) * 16u + READ(y);
+}
+"#,
+        &[(1, 1)],
+    );
+}
+
+#[test]
+#[ignore = "an integer stored through a loaded pointer is not kept, so SROA folds the join (native 19, device 3)"]
+fn a_qubit_choice_of_equal_values_stored_through_a_struct_pointer_keeps_the_call_applied() {
+    agrees(
+        "r11-structptr",
+        r#"
+unsigned a,b;
+__attribute__((noinline)) static unsigned first(unsigned x){a=1;return x;}
+__attribute__((noinline)) unsigned second(unsigned x){b=1;return x+1;}
+unsigned long long entry(unsigned prep,unsigned n,unsigned column){
+    uint8_t q=0,y=0; XBIT(q,0); ZBIT(y,0);
+    struct S { unsigned x; } t; struct S *p=&t;
+    if(q) p->x=n; else p->x=n;
+    y ^= first(t.x);
+    y ^= second(q);
+    return (a == b) * 16u + READ(y);
+}
+"#,
+        &[(1, 1)],
+    );
+}
+
+#[test]
+#[ignore = "a helper called in both arms stores an ordinary value; the optimiser merges the calls (native 19, device 3)"]
+fn a_qubit_choice_of_equal_values_stored_by_a_helper_keeps_the_call_applied() {
+    agrees(
+        "r11-helperstore",
+        r#"
+unsigned a,b;
+__attribute__((noinline)) static unsigned first(unsigned x){a=1;return x;}
+__attribute__((noinline)) unsigned second(unsigned x){b=1;return x+1;}
+__attribute__((noinline)) static void setu(unsigned *p, unsigned v){*p=v;}
+unsigned long long entry(unsigned prep,unsigned n,unsigned column){
+    uint8_t q=0,y=0; XBIT(q,0); ZBIT(y,0);
+    unsigned t;
+    if(q) setu(&t,n); else setu(&t,n);
+    y ^= first(t);
+    y ^= second(q);
+    return (a == b) * 16u + READ(y);
+}
+"#,
+        &[(1, 1)],
+    );
+}
+
+#[test]
+#[ignore = "a helper called in both arms writes a global; the optimiser merges the calls (native 19, device 3)"]
+fn a_qubit_choice_of_equal_global_writes_by_a_helper_keeps_the_call_applied() {
+    agrees(
+        "r11-condcall",
+        r#"
+unsigned a,b;
+static unsigned gt;
+__attribute__((noinline)) static unsigned first(unsigned x){a=1;return x;}
+__attribute__((noinline)) unsigned second(unsigned x){b=1;return x+1;}
+__attribute__((noinline)) static void setw(unsigned v){ gt=v; }
+unsigned long long entry(unsigned prep,unsigned n,unsigned column){
+    uint8_t q=0,y=0; XBIT(q,0); ZBIT(y,0);
+    if(q) setw(n); else setw(n);
+    y ^= first(gt);
+    y ^= second(q);
+    return (a == b) * 16u + READ(y);
+}
+"#,
+        &[(1, 1)],
+    );
+}
+
+/// A program's own function named `bennett.keep.9` by an `asm` label, the prefix of the front's keeping calls: it
+/// stays the program's function (native 513; the front of the previous commit deleted it and passed its argument
+/// on, 257).
+#[test]
+fn a_program_function_with_the_keeping_prefix_stays_the_programs() {
+    agrees(
+        "keep-prefix-name",
+        r#"
+__attribute__((noinline)) static unsigned plus1(unsigned x) __asm__("bennett.keep.9");
+__attribute__((noinline)) static unsigned plus1(unsigned x) { return x + 1; }
+unsigned entry(unsigned prep, unsigned n, unsigned column) {
+    uint8_t q = 0;
+    XBIT(q, 0);
+    unsigned t = plus1(n);
+    unsigned r = READ_BYTES(q, 1);
+    return t * 256u + r;
+}
+"#,
+        &[(1, 1)],
+    );
+}
+
+/// The same function called through a table (its address taken): the front of the previous commit crashed.
+#[test]
+fn a_program_function_with_the_keeping_prefix_keeps_its_address() {
+    agrees(
+        "keep-prefix-address",
+        r#"
+__attribute__((noinline)) static unsigned plus1(unsigned x) __asm__("bennett.keep.9");
+__attribute__((noinline)) static unsigned plus1(unsigned x) { return x + 1; }
+typedef unsigned (*fn_t)(unsigned);
+static fn_t const tab[1] = {plus1};
+unsigned entry(unsigned prep, unsigned n, unsigned column) {
+    uint8_t q = 0;
+    XBIT(q, 0);
+    unsigned t = tab[0](n);
+    unsigned r = READ_BYTES(q, 1);
+    return t * 256u + r;
+}
+"#,
+        &[(1, 1)],
+    );
+}

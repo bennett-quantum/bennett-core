@@ -2115,10 +2115,15 @@ Refused by name or not yet excluded around the classification of "What LLVM's pa
   400 generated programs of seed `0x87196caa251d0f43` (`front/tests/tests/qubit_differential.rs`,
   `an_overwrite_under_a_qubit_after_a_qubit_store_is_refused_by_name`). Route: the front itself joins the store
   and the later overwrite into one store of a chosen value; both are classified stores, so no class changes.
-- **A join of equal pointers under a qubit.** `if (q) p = &a; else p = &a;` makes `p` depend on a qubit by the
-  text, but SROA folds the join before the classification (only integers stored into local variables are kept
-  through it), so what is read through `p` is classified by what `p` points to. Route: keep pointer joins as the
-  integer ones are, once the analysis can follow an address through the call that keeps it.
+- **Joins of equal values that the keeping through SROA does not reach.** Only an integer stored directly into a
+  local variable is kept through SROA, so these qubit-dependent choices between equal values are still folded
+  before the classification, and a call after them runs as an ordinary call where by the text it is applied (the
+  same wrong results as before the classification; ignored witnesses in `front/tests/tests/sealed_operations.rs`):
+  a whole-structure copy in both arms; a choice between equal pointers (`if (q) p = &a; else p = &a;`, read or
+  compared after it); an integer stored through a pointer variable or a structure pointer; a helper called in
+  both arms that stores the same ordinary value, into a local or a global (the optimiser merges the two calls).
+  Route: keep every store into memory SROA promotes (copies and stores through pointers included) and every call
+  under a qubit-dependent condition, by its condition, until the classification has seen the join.
 - **A known value the optimiser copies.** The classification calls a qubit variable known where one ordinary value
   reaches its load on every path. A pass that copies the store of that value into two paths makes the front's
   later analysis meet two values and call the variable unknown, so a load the classification left to the
