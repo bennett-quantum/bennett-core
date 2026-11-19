@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::ops::Range;
 
-use bennett_ir::{BlockId, Fault, FixedGate, FuncId, Gate, ValidModule};
+use bennett_ir::{BlockId, Fault, FixedGate, FuncId, Gate, ValidModule, Width};
 
 use crate::device::{BlockOp, Device, GateBlock, Wire};
 use crate::executor::RunError;
@@ -17,6 +17,36 @@ pub enum Argument {
     Value(u128),
     /// The wires holding the argument bits, least significant first.
     Register(Range<Wire>),
+}
+
+/// Borrowed ordinary memory at the call boundary. Holding a byte in qubits is
+/// an access fault regardless of the byte's value.
+#[derive(Clone, Copy)]
+pub struct ApplyMemory<'a> {
+    bytes: &'a [u8],
+    held: &'a BTreeMap<u64, usize>,
+}
+
+impl<'a> ApplyMemory<'a> {
+    /// The ordinary bytes and held byte addresses at the call boundary.
+    pub fn new(bytes: &'a [u8], held: &'a BTreeMap<u64, usize>) -> Self {
+        Self { bytes, held }
+    }
+
+    /// Check bounds before checking occupancy and return the entry bytes.
+    pub fn read(self, address: u64, width: Width) -> Result<&'a [u8], Fault> {
+        let range = crate::memory::range(self.bytes.len(), address, width)?;
+        if self.held.range(address..range.end as u64).next().is_some() {
+            return Err(Fault::QubitMemoryAccess);
+        }
+        Ok(&self.bytes[range])
+    }
+}
+
+impl fmt::Debug for ApplyMemory<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ApplyMemory").field("bytes", &self.bytes.len()).field("held_bytes", &self.held.len()).finish()
+    }
 }
 
 /// The resolved inputs and destinations of one applied function.
@@ -38,6 +68,8 @@ pub struct ApplyInput<'a> {
     pub entry_fault: Option<Fault>,
     /// Stack bytes available below the applied entry frame, if it fit.
     pub stack_available: u64,
+    /// The caller's memory at the call boundary, needed by loads and stores.
+    pub memory: Option<ApplyMemory<'a>>,
     /// First free wire above all wires live on the device.
     pub scratch_start: Wire,
 }

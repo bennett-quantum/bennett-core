@@ -214,6 +214,7 @@ entry:
                 budget,
                 entry_fault: None,
                 stack_available: 512,
+                memory: None,
                 scratch_start: 14,
             };
             let error = compile_apply_with(input.clone(), mode).expect_err("the live back edge changes the address");

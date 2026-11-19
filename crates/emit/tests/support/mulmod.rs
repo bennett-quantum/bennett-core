@@ -112,6 +112,7 @@ fn mulmod_permutation_and_count_from_two_to_sixty_four_bits() {
             budget: COMPLETE,
             entry_fault: None,
             stack_available: 0,
+            memory: None,
             scratch_start: 3 * w + 5,
         };
         let auto = compile_apply_with(input.clone(), ApplyMode::Automatic).expect("automatic mulmod");

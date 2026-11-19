@@ -50,10 +50,9 @@ fn fold_inst(
             ),
         },
         Inst::FuncAddr { func, .. } => Some(constant(u128::from(func.address()), u64::BITS as usize)),
-        Inst::Call { .. } | Inst::CallIndirect { .. } => Some(unknown()),
-        Inst::Load { .. }
-        | Inst::Store { .. }
-        | Inst::Alloca { .. }
+        Inst::Call { .. } | Inst::CallIndirect { .. } | Inst::Load { .. } => Some(unknown()),
+        Inst::Store { .. } => None,
+        Inst::Alloca { .. }
         | Inst::StackSave { .. }
         | Inst::StackRestore { .. }
         | Inst::Setjmp { .. }

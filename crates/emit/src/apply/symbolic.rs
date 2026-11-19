@@ -285,8 +285,7 @@ pub(super) fn visit_possible_targets<'a>(term: &'a Terminator, mut visit: impl F
 fn unsupported(inst: &Inst) -> Option<(&'static str, &'static str)> {
     Some(match inst {
         Inst::Binary { .. } | Inst::Compare { .. } | Inst::Select { .. } | Inst::Cast { .. } => return None,
-        Inst::Load { .. } => ("load", "applied memory"),
-        Inst::Store { .. } => ("store", "memory in the step machine"),
+        Inst::Load { .. } | Inst::Store { .. } => return None,
         Inst::Alloca { .. } => ("alloca", "applied stack operations"),
         Inst::StackSave { .. } => ("stacksave", "applied stack operations"),
         Inst::StackRestore { .. } => ("stackrestore", "applied stack operations"),

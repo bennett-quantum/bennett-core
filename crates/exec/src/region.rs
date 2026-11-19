@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use bennett_ir::{Fault, FuncId, Operand, Slot, Type};
 
-use crate::apply_device::{AppliedCircuit, ApplyInput, Argument};
+use crate::apply_device::{AppliedCircuit, ApplyInput, ApplyMemory, Argument};
 use crate::device_io::{DeviceContext, wire, wires};
 use crate::executor::{Executor, Halt, Outcome, RunError};
 use crate::journal::Journal;
@@ -128,6 +128,7 @@ impl<'m> Executor<'m> {
             budget: self.read_word(budget),
             entry_fault: entry.err(),
             stack_available: entry.map_or(0, |sp| sp - self.stack_floor),
+            memory: Some(ApplyMemory::new(self.memory.bytes(), self.quantum.cells())),
             scratch_start: wire(self.quantum.registers().len(), 0),
         };
         let compiler = context.compiler.as_deref_mut().expect("gate compiler selected");

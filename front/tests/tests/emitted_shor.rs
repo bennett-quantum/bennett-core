@@ -70,6 +70,7 @@ fn compile_oracle(module: &ValidModule, callee: FuncId) -> CompiledApply {
         budget: BUDGET,
         entry_fault: None,
         stack_available: STACK_BYTES,
+        memory: None,
         scratch_start: INTERFACE,
     })
     .expect("compile the modular exponentiation")

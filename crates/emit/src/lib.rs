@@ -7,7 +7,8 @@ mod lower;
 mod schedule;
 
 pub use apply::{
-    ApplyError, ApplyInput, ApplyMode, Argument, CompiledApply, Construction, compile_apply, compile_apply_with,
+    ApplyError, ApplyInput, ApplyMemory, ApplyMode, Argument, CompiledApply, Construction, MemoryCounts, compile_apply,
+    compile_apply_with,
 };
 pub use count::{CountingDevice, Counts, seeded_bits};
 pub use lower::LowerControls;

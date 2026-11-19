@@ -96,6 +96,7 @@ fn gate_compiler(choice: ApplyCircuit) -> impl ApplyCompiler {
         let function = &input.module.function(input.callee).name;
         let compiled = compile_apply_with(input, mode)?;
         println!("apply @{function} uses {} ({})", compiled.construction, compiled.reason);
+        println!("apply @{function} memory: {}", compiled.memory);
         Ok(compiled.block)
     }
 }
