@@ -240,9 +240,16 @@ bool Aliasing::escapes(const Value *object) const {
   return leaves;
 }
 
-bool Aliasing::meet(const Function &function, const Objects &a, const Objects &b) const {
+bool Aliasing::meet(const Function &function, const Objects &a, const Objects &b, bool traced) const {
   // An object from `named` may share bytes with an element of `other` that is one of the sentinels.
   auto reaches = [&](const Value *sentinel, const Value *object) {
+    // Traced: every pointer into a local variable or a global of local linkage is based on the object (the front
+    // follows it to the object) unless its address escapes, so a pointer the front does not follow reaches it only
+    // then, from any function.
+    const auto *global = dyn_cast<GlobalVariable>(object);
+    if (traced && (isa<AllocaInst>(object) || (global && global->hasLocalLinkage()))) {
+      return escapes(object);
+    }
     if (const auto *argument = dyn_cast<Argument>(object); argument && isRestrict(*argument)) {
       // Only a pointer based on it may reach its bytes: one the front follows, or a copy of it that escaped.
       return escapes(object);
@@ -300,7 +307,7 @@ void Aliasing::addObjectsOf(const Value *pointer, Objects &into) const {
 }
 
 bool Aliasing::mayReach(const Function &function, const Value *pointer, const Objects &objects) const {
-  return !objects.empty() && meet(function, withoutRestrict(objectsOf(pointer)), objects);
+  return !objects.empty() && meet(function, withoutRestrict(objectsOf(pointer)), objects, /*traced=*/true);
 }
 
 bool Aliasing::mayShare(const Function &function, const Value *a, const Value *b) const {

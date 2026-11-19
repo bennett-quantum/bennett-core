@@ -8,6 +8,7 @@
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/ValueHandle.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/CrashRecoveryContext.h>
 #include <llvm/Transforms/InstCombine/InstCombine.h>
@@ -92,8 +93,9 @@ public:
 
 private:
   Module &module;
-  // Each declaration and the instruction its one call stands for, in the order they were sealed.
-  std::vector<std::pair<Function *, Original>> sealed;
+  // Each declaration and the instruction its one call stands for, in the order they were sealed. The handle
+  // becomes null when a pass deletes the declaration (as it may once nothing calls it).
+  std::vector<std::pair<WeakVH, Original>> sealed;
   std::vector<GlobalValue *> kept;       // callees kept in llvm.compiler.used while their calls are sealed
 
   void seal(Instruction &inst);
@@ -271,9 +273,14 @@ Instruction *Seal::restore(CallInst &call, const Original &original) {
 }
 
 void Seal::open(const char *run) {
-  for (auto &[declaration, original] : sealed) {
+  for (auto &[handle, original] : sealed) {
+    auto *declaration = cast_or_null<Function>(static_cast<Value *>(handle));
+    std::vector<User *> users;
+    if (declaration) {
+      users.assign(declaration->user_begin(), declaration->user_end());
+    }
     std::vector<CallInst *> calls;
-    for (User *user : declaration->users()) {
+    for (User *user : users) {
       auto *call = dyn_cast<CallInst>(user);
       if (!call || call->getCalledOperand() != declaration) {
         fail(std::string("internal: ") + run + " used a sealed instruction other than by calling it, at " +
@@ -290,7 +297,7 @@ void Seal::open(const char *run) {
     }
     restore(*calls.front(), original);
     calls.front()->eraseFromParent();
-    declaration->eraseFromParent();
+    declaration->eraseFromParent(); // it has its one call, so no pass deleted it
   }
   sealed.clear();
   if (!kept.empty()) {

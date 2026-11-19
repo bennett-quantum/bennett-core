@@ -161,7 +161,6 @@ int main(int argc, char **argv) {
   bennett::lowerParameterAttributes(*module);
   // The instructions the language's own rules depend on are decided before the optimiser and sealed for it
   // (Classify.h, Passes.h).
-  bennett::promoteLocals(*module);
   bennett::classify(*module, taintAll);
   verify(*module, "after classifying");
   bennett::optimiseSealed(*module);

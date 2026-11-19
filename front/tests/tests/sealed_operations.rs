@@ -615,3 +615,209 @@ unsigned entry(unsigned prep, unsigned n, unsigned column) {{
     assert!(status.success());
     assert_eq!(used_lists(&std::fs::read_to_string(&emitted).expect("emitted LLVM")), used_lists(&text));
 }
+
+/// The two writing helpers, `first` and `second`, of the applied-call tests, and a helper that returns its
+/// argument: a qubit variable's address that comes back from a call is no longer one the front follows.
+const TWO_WRITERS: &str = r#"
+unsigned a, b;
+__attribute__((noinline)) static unsigned first(unsigned x, ...) { a = 1; return x; }
+__attribute__((noinline)) unsigned second(unsigned x) { b = 1; return x + 1; }
+__attribute__((noinline)) static uint8_t *id(uint8_t *p) { return p; }
+"#;
+
+#[test]
+fn a_qubit_read_through_a_returned_address_is_a_variadic_argument_refused_by_name() {
+    refused(
+        "returned-address-variadic",
+        &format!(
+            "{TWO_WRITERS}
+unsigned entry(unsigned prep, unsigned n, unsigned column) {{
+    uint8_t q = 0, y = 0;
+    XBIT(q, 0);
+    y ^= first(2, *id(&q));
+    y ^= second(q);
+    return READ_BYTES(y, 1) + (a == b) * 16u;
+}}
+"
+        ),
+        "a call with a variadic argument, which the front passes in memory, that depends on a qubit",
+    );
+}
+
+/// `held[0] = *id(&r)` stores the value of qubit variable `r` read through an address the front cannot follow:
+/// the byte holds qubits after it, and the guarded read in `masked` stays guarded (native 1; fault 17 before).
+#[test]
+fn a_store_of_a_qubit_read_through_a_returned_address_keeps_a_guarded_read_guarded() {
+    agrees(
+        "returned-address-store",
+        r#"
+__attribute__((noinline)) static uint8_t *id(uint8_t *p) { return p; }
+uint8_t held[2] = {0, 1};
+__attribute__((noinline)) void fill(void) {
+    uint8_t r = 0;
+    XBIT(r, 0);
+    uint8_t *src = id(&r);
+    held[0] = *src;
+    XBIT(r, 0);
+}
+__attribute__((noinline)) unsigned masked(unsigned n) { if (n) return n * held[0]; return 0; }
+unsigned entry(unsigned prep, unsigned n, unsigned column) {
+    fill();
+    unsigned v = masked(n - 1);
+    return v + READ_BYTES(held[0], 1);
+}
+"#,
+        &[(1, 1)],
+    );
+}
+
+/// memcpy of one byte out of a qubit variable through a returned address: rewritten into a load and a store, as
+/// InstCombine would rewrite it, both classified; the guarded read stays guarded (native 1; it faulted before).
+#[test]
+fn a_copy_out_of_a_qubit_variable_through_a_returned_address_keeps_a_guarded_read_guarded() {
+    agrees(
+        "returned-address-copy",
+        r#"
+__attribute__((noinline)) static uint8_t *id(uint8_t *p) { return p; }
+uint8_t held[2] = {0, 1};
+__attribute__((noinline)) void fill(void) {
+    uint8_t r = 0;
+    XBIT(r, 0);
+    __builtin_memcpy(&held[0], id(&r), 1);
+    XBIT(r, 0);
+}
+__attribute__((noinline)) unsigned masked(unsigned n) { if (n) return n * held[0]; return 0; }
+unsigned entry(unsigned prep, unsigned n, unsigned column) {
+    fill();
+    unsigned v = masked(n - 1);
+    return v + READ_BYTES(held[0], 1);
+}
+"#,
+        &[(1, 1)],
+    );
+}
+
+/// `relay(&q)` returns `first(*p & 0u)`: the call in the helper is applied by its class (native 18; 2 before, an
+/// ordinary call). The helper reads the qubit variable through its parameter, which the front refuses by name.
+#[test]
+fn an_applied_call_in_a_helper_given_a_qubit_variable_is_refused_by_name() {
+    refused(
+        "relay-folded-argument",
+        r#"
+unsigned a, b;
+__attribute__((noinline)) static unsigned first(unsigned x) { a = 1; return x; }
+__attribute__((noinline)) unsigned second(unsigned x) { b = 1; return x + 1; }
+__attribute__((noinline)) static unsigned relay(uint8_t *p) { return first(*p & 0u); }
+unsigned entry(unsigned prep, unsigned n, unsigned column) {
+    uint8_t q = 0, y = 0;
+    XBIT(q, 0);
+    y ^= relay(&q);
+    y ^= second(q);
+    return READ_BYTES(y, 1) + (a == b) * 16u;
+}
+"#,
+        "qubit variable 'q' is passed to a function",
+    );
+}
+
+/// A helper the control program calls as ordinary code, holding a call classified as applied: `held[0]` may hold
+/// qubits (`fill`), so the argument read from it depends on a qubit by the classification, which does not follow
+/// the measurement before the call (a debt, docs/DESIGN.md "Not yet"); the optimiser folds the argument to 0, and
+/// the helper runs as ordinary code. Refused by name, never emitted as an ordinary call.
+#[test]
+fn an_applied_call_in_a_helper_run_as_ordinary_code_is_refused_by_name() {
+    refused(
+        "ordinary-helper-applied-call",
+        &format!(
+            "{FILL}
+unsigned a;
+__attribute__((noinline)) static unsigned first(unsigned x) {{ a = 1; return x; }}
+__attribute__((noinline)) static unsigned relay(void) {{ return first(held[0] & 0u); }}
+unsigned entry(unsigned prep, unsigned n, unsigned column) {{
+    fill();
+    unsigned measured = READ_BYTES(held[0], 1);
+    unsigned r = relay();
+    return measured + 2u * r + 16u * a;
+}}
+"
+        ),
+        "which runs as ordinary code",
+    );
+}
+
+/// `if (q) t = n; else t = n;` then `first(t)`: by the text `t` depends on a qubit after the choice, so the call is
+/// applied (native 19). SROA, before the classification, folded the join to `n` and the call was ordinary (3);
+/// the join is kept for the classification now, and the optimiser's fold is refused by name.
+#[test]
+fn a_join_of_equal_values_under_a_qubit_keeps_the_call_applied_or_refused() {
+    refused(
+        "join-of-equal-values",
+        r#"
+unsigned a, b;
+__attribute__((noinline)) static unsigned first(unsigned x) { a = 1; return x; }
+__attribute__((noinline)) unsigned second(unsigned x) { b = 1; return x + 1; }
+unsigned entry(unsigned prep, unsigned n, unsigned column) {
+    uint8_t q = 0, y = 0;
+    XBIT(q, 0);
+    unsigned t;
+    if (q) t = n; else t = n;
+    y ^= first(t);
+    y ^= second(q);
+    return READ_BYTES(y, 1) + (a == b) * 16u;
+}
+"#,
+        "a call with an argument that depends on a qubit before LLVM's optimiser, whose arguments are ordinary after it",
+    );
+}
+
+/// A private global whose address never escapes is not reached by the pointer parameter of an exported writer
+/// that is never called: the variadic argument read from it is ordinary (native 5; refused before).
+#[test]
+fn a_private_global_whose_address_stays_in_the_module_is_not_reached_by_an_unknown_pointer() {
+    agrees(
+        "private-global-variadic",
+        r#"
+static unsigned ordinary;
+unsigned char held[1];
+__attribute__((noinline)) void fill(unsigned char *restrict dst) {
+    unsigned char r = 0;
+    XBIT(r, 0);
+    *dst = r;
+    XBIT(r, 0);
+}
+__attribute__((noinline)) static unsigned first(unsigned x, ...) { return x + 2; }
+unsigned entry(unsigned prep, unsigned n, unsigned column) {
+    ordinary = n;
+    return first(3, ordinary);
+}
+"#,
+        &[(1, 1)],
+    );
+}
+
+/// A call classified as applied in code the optimiser proves dead (`n == 3 && n == 5`): the optimiser removes the
+/// call and then the declaration that stood for it. The front refuses the removed instruction by name, every time;
+/// it read the deleted declaration before (a crash in most runs), so the program is lowered several times.
+#[test]
+fn a_sealed_call_the_optimiser_removes_is_refused_by_name_every_time() {
+    let program = r#"
+unsigned a, b;
+__attribute__((noinline)) static unsigned first(unsigned x) { a = 1; return x; }
+__attribute__((noinline)) unsigned second(unsigned x) { b = 1; return x + 1; }
+unsigned entry(unsigned prep, unsigned n, unsigned column) {
+    uint8_t q = 0, y = 0;
+    XBIT(q, 0);
+    if (n == 3 && n == 5) y ^= first(q);
+    y ^= second(q);
+    return READ_BYTES(y, 1) + (a == b) * 16u;
+}
+"#;
+    const RUNS: usize = 8;
+    for _ in 0..RUNS {
+        refused(
+            "removed-sealed-call",
+            program,
+            "LLVM's optimiser removed an instruction whose class the front decided",
+        );
+    }
+}

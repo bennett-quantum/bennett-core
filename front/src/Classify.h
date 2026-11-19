@@ -25,7 +25,9 @@
 // marker acts on. A `restrict` parameter counts as what its calls pass (what is written through it outlives the
 // call). A memory intrinsic that copies from such memory or from a qubit variable makes its destination such memory;
 // a copy of a constant number of bytes out of a qubit variable is rewritten into a read of it and a store, as
-// LLVM's InstCombine would rewrite it.
+// LLVM's InstCombine would rewrite it. A qubit variable whose address leaves what the front follows counts as such
+// memory for reads and copies through pointers the front cannot follow; a local variable or a global of local
+// linkage whose address never escapes is reached only through pointers based on it (Aliasing.h, mayReach).
 //
 // "Depends on a qubit" is decided by the text of the program: a value depends on a qubit at a place if, on some
 // path to that place, it was computed from a qubit. The sources are: a load of a qubit variable that is not
@@ -56,9 +58,12 @@
 #pragma once
 
 #include <optional>
+#include <set>
+#include <vector>
 
 namespace llvm {
 class CallBase;
+class Function;
 class Instruction;
 class Module;
 } // namespace llvm
@@ -87,6 +92,14 @@ void declassify(llvm::Instruction &inst);
 // arguments.
 void requireAppliedCallKept(const llvm::CallBase &call, bool dependsNow);
 
+// The same for the functions the front writes as ordinary code: a call classified as applied in a function that may
+// run as ordinary code is refused by name. Such a function is one the host may call (not of local linkage), one whose
+// address is taken, one the control program calls as ordinary code (`ordinaryCalls`, gathered while it is written),
+// and any function they call. A call in a function that only ever runs applied (an outlined region, the callee of
+// an applied call) runs under that `apply` and is left alone.
+void refuseAppliedCallsRunOrdinarily(const llvm::Module &module, const std::set<const llvm::Function *> &control,
+                                     const std::vector<const llvm::CallBase *> &ordinaryCalls);
+
 // Before the front lowers the calling convention (Abi.h, the `byval` copies of Normalise.h), refuses by name a call
 // that passes an argument that depends on a qubit in a way that lowering would turn into memory or drop: a variadic
 // argument, an argument passed by value, a vector or aggregate argument, an argument of a call through another
@@ -94,7 +107,8 @@ void requireAppliedCallKept(const llvm::CallBase &call, bool dependsNow);
 // applied. Decided as the classification decides, on a copy of the module after SROA.
 void refuseQubitArgumentsLoweredAway(const llvm::Module &module, bool taintAll);
 
-// Classifies every instruction of `module` (after SROA, before the optimiser) as above.
+// Runs SROA (Passes.h) and classifies every instruction of `module` as above, before the optimiser. A join of equal
+// values that SROA would fold is kept for the classification (Classify.cpp, keepStoredValues).
 void classify(llvm::Module &module, bool taintAll);
 
 // Splits each classified load and store of a vector of whole-byte elements into one access per element, each with

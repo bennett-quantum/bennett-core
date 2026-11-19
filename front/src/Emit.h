@@ -79,6 +79,8 @@ public:
   const Aliasing &aliasing();
   // The evaluations in the module's functions (Evaluations.h); computed on first use.
   Evaluations &evaluations();
+  // Records a call the control program makes as ordinary code (for refuseAppliedCallsRunOrdinarily, Classify.h).
+  void noteOrdinaryCall(const llvm::CallBase &call) { ordinaryCalls.push_back(&call); }
 
 private:
   llvm::Module &module;
@@ -92,6 +94,7 @@ private:
   std::unique_ptr<Evaluations> repeated;
   std::map<std::string, std::string> bodies; // a generated function's text after its name: its name
   std::vector<std::string> generated;
+  std::vector<const llvm::CallBase *> ordinaryCalls;
   Namer functionNames;
   uint64_t staticEnd = 0;
   size_t definedCount = 0;

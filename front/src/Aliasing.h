@@ -46,7 +46,8 @@ public:
   // for an object of its own: what is written through it outlives the call.
   void addObjectsOf(const llvm::Value *pointer, Objects &into) const;
   // Whether memory reached through `pointer` (in `function`) may share bytes with one of `objects`, a `restrict`
-  // argument standing for what its calls pass.
+  // argument standing for what its calls pass. A local variable, or a global of local linkage, whose address does
+  // not escape is reached only through pointers based on it.
   bool mayReach(const llvm::Function &function, const llvm::Value *pointer, const Objects &objects) const;
 
 private:
@@ -64,7 +65,9 @@ private:
   Objects withoutRestrict(Objects objects) const;
   Objects touchedBy(const llvm::CallBase &call) const;
   bool escapes(const llvm::Value *object) const;
-  bool meet(const llvm::Function &function, const Objects &a, const Objects &b) const;
+  // Whether an object of `a` may share bytes with one of `b`, from `function`. With `traced`, a local variable or a
+  // global of local linkage is reached by a pointer the front does not follow only when its address escapes.
+  bool meet(const llvm::Function &function, const Objects &a, const Objects &b, bool traced = false) const;
 };
 
 // Where every call of `function` in the module passes the same pointer for two of its pointer arguments, and

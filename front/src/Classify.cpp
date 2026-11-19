@@ -39,6 +39,88 @@ void setClass(Instruction &inst, OperationClass kind) {
   inst.setMetadata(classMetadata, MDNode::get(context, {MDString::get(context, className(kind))}));
 }
 
+// SROA turns a local variable into values and folds a join of equal values: after `if (q) t = n; else t = n;` it
+// passes `n` itself on, and the choice, which depends on a qubit, is gone (by the text, `t` depends on a qubit
+// after it). So before SROA each integer stored into a local variable goes through a call of its own of a
+// declaration that returns its argument (`bennett.keep.<n>`, no memory, no other effect); the values joined are
+// then distinct and the join stays a phi, which the classification sees. The calls are removed after it.
+// Pointers are not wrapped: the analysis follows a pointer to its object through a store and a load SROA removes.
+constexpr const char *keeperPrefix = "bennett.keep.";
+
+bool isKeeper(const CallBase &call) {
+  const Function *callee = call.getCalledFunction();
+  return callee && callee->getName().starts_with(keeperPrefix);
+}
+
+// Whether `alloca` is a qubit variable a marker names directly (SROA never promotes it: its address goes to the
+// marker); its stores are left as they are, so the known-value analysis sees the stored values themselves.
+bool namedByMarker(const AllocaInst &alloca) {
+  if (alloca.getMetadata(qubitMetadata)) {
+    return true;
+  }
+  std::vector<const Value *> work{&alloca};
+  while (!work.empty()) {
+    const Value *pointer = work.back();
+    work.pop_back();
+    for (const User *user : pointer->users()) {
+      if (isa<GetElementPtrInst>(user)) {
+        work.push_back(user);
+      } else if (markerCall(user)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+void keepStoredValues(Module &module) {
+  std::map<Type *, Function *> keepers;
+  std::map<const AllocaInst *, bool> named;
+  for (Function &function : module) {
+    for (Instruction &inst : instructions(function)) {
+      auto *store = dyn_cast<StoreInst>(&inst);
+      Type *type = store ? store->getValueOperand()->getType() : nullptr;
+      const auto *local = store ? dyn_cast<AllocaInst>(getUnderlyingObject(store->getPointerOperand())) : nullptr;
+      if (!local || !type->isIntOrIntVectorTy()) {
+        continue;
+      }
+      auto [cached, fresh] = named.try_emplace(local, false);
+      if (fresh) {
+        cached->second = namedByMarker(*local);
+      }
+      if (cached->second) {
+        continue;
+      }
+      Function *&keeper = keepers[type];
+      if (!keeper) {
+        keeper = Function::Create(FunctionType::get(type, {type}, false), GlobalValue::ExternalLinkage,
+                                  keeperPrefix + std::to_string(keepers.size()), module);
+        keeper->setDoesNotAccessMemory();
+        keeper->setDoesNotThrow();
+        keeper->setWillReturn();
+      }
+      store->setOperand(0, CallInst::Create(keeper, {store->getValueOperand()}, "", store));
+    }
+  }
+}
+
+void releaseStoredValues(Module &module) {
+  std::vector<Function *> keepers;
+  for (Function &function : module) {
+    if (function.getName().starts_with(keeperPrefix)) {
+      keepers.push_back(&function);
+    }
+  }
+  for (Function *keeper : keepers) {
+    for (User *user : make_early_inc_range(keeper->users())) {
+      auto *call = cast<CallInst>(user);
+      call->replaceAllUsesWith(call->getArgOperand(0));
+      call->eraseFromParent();
+    }
+    keeper->eraseFromParent();
+  }
+}
+
 // What is known about a qubit variable at a point, as the front's later analysis (Taint.h) decides it: the
 // fresh 0, one ordinary value stored whole, or a measurement; anything else is Quantum.
 struct Fact {
@@ -92,6 +174,7 @@ private:
   std::set<const LoadInst *> knownLoads;        // loads of a tracked variable while it is known
   std::set<const Value *> tainted;
   Aliasing::Objects held;                       // objects that may hold qubits
+  Aliasing::Objects qubitVariables;             // the qubit variables (allocas among qubitObjects)
   std::set<const Function *> returnsTainted;
   std::map<const Function *, std::unique_ptr<PostDominatorTree>> postDominators;
   std::set<const BasicBlock *> underQubit;      // blocks a conditional jump that depends on a qubit decides
@@ -121,9 +204,19 @@ private:
   bool reachesHeld(const Function &function, const Value *pointer) const {
     return aliasing.mayReach(function, pointer, held);
   }
+  // Whether `pointer` may reach bytes whose value depends on a qubit: memory that may hold qubits, or a qubit
+  // variable (whose address may have been returned, stored or passed on, so that the front cannot follow it).
+  bool reachesQubitBytes(const Function &function, const Value *pointer) const {
+    return reachesHeld(function, pointer) || aliasing.mayReach(function, pointer, qubitVariables);
+  }
   bool anyPointerReachesHeld(const CallBase &call) const {
     return any_of(call.args(), [&](const Use &arg) {
       return arg->getType()->isPointerTy() && reachesHeld(*call.getFunction(), arg.get());
+    });
+  }
+  bool anyPointerReachesQubitBytes(const CallBase &call) const {
+    return any_of(call.args(), [&](const Use &arg) {
+      return arg->getType()->isPointerTy() && reachesQubitBytes(*call.getFunction(), arg.get());
     });
   }
   bool taint(const Value *value) { return !value->getType()->isVoidTy() && tainted.insert(value).second; }
@@ -387,7 +480,7 @@ bool Classifier::step() {
             continue;
           }
         }
-        if (reachesHeld(function, pointer)) {
+        if (reachesQubitBytes(function, pointer)) {
           changed |= classify(inst, OperationClass::Read);
           changed |= taint(load);
         }
@@ -417,6 +510,12 @@ bool Classifier::step() {
           changed |= taint(&inst);
         }
       } else if (auto *call = dyn_cast<CallBase>(&inst)) {
+        if (isKeeper(*call)) {
+          if (anyArgumentTainted(*call)) {
+            changed |= taint(call); // the stored value itself (keepStoredValues)
+          }
+          continue;
+        }
         if (markerCall(call)) {
           continue; // a measurement's result is ordinary; the qubit a gate names is no value
         }
@@ -431,13 +530,14 @@ bool Classifier::step() {
           // Its destination holds qubits when what it writes depends on one, or is copied from bytes that may: memory
           // that may hold qubits, or a qubit variable.
           const auto *transfer = dyn_cast<MemTransferInst>(call);
-          bool qubitBytes = transfer && isQubitPointer(transfer->getRawSource());
+          bool qubitBytes = transfer && (isQubitPointer(transfer->getRawSource()) ||
+                                         reachesQubitBytes(function, transfer->getRawSource()));
           if (depends || under || qubitBytes || anyPointerReachesHeld(*call)) {
             changed |= hold(call->getArgOperand(0));
             changed |= classify(inst, OperationClass::HeldMemory);
           }
         } else if (callee && callee->isIntrinsic()) {
-          if (depends || anyPointerReachesHeld(*call)) {
+          if (depends || anyPointerReachesQubitBytes(*call)) {
             changed |= taint(call);
           }
         } else if (depends && control.count(callee)) {
@@ -454,7 +554,7 @@ bool Classifier::step() {
           changed |= classify(inst, OperationClass::AppliedCall);
           changed |= taint(call);
         } else if ((callee && returnsTainted.count(callee)) || (!callee && indirectTainted) ||
-                   anyPointerReachesHeld(*call)) {
+                   anyPointerReachesQubitBytes(*call)) {
           changed |= taint(call);
         }
       } else if (auto *ret = dyn_cast<ReturnInst>(&inst)) {
@@ -563,6 +663,11 @@ void Classifier::rewriteSmallMemoryIntrinsics() {
 void Classifier::run() {
   control = controlFunctions(module, /*refuseAddressTaken=*/false); // the optimiser may still remove the address
   findQubitObjects();
+  for (const Value *object : qubitObjects) {
+    if (isa<AllocaInst>(object)) {
+      qubitVariables.insert(object);
+    }
+  }
   rewriteSmallMemoryIntrinsics();
   findTracked();
   computeKnownLoads();
@@ -576,7 +681,7 @@ void Classifier::refuseArgumentsLoweredAway() {
   for (Function &function : module) {
     for (Instruction &inst : instructions(function)) {
       auto *call = dyn_cast<CallBase>(&inst);
-      if (!call || markerCall(call) || call->isInlineAsm() || isa<IntrinsicInst>(call)) {
+      if (!call || markerCall(call) || call->isInlineAsm() || isa<IntrinsicInst>(call) || isKeeper(*call)) {
         continue;
       }
       const Function *callee = call->getCalledFunction();
@@ -657,6 +762,54 @@ std::optional<OperationClass> classOf(const Instruction &inst) {
 
 void declassify(Instruction &inst) { inst.setMetadata(classMetadata, nullptr); }
 
+void refuseAppliedCallsRunOrdinarily(const Module &module, const std::set<const Function *> &control,
+                                     const std::vector<const CallBase *> &ordinaryCalls) {
+  std::set<const Function *> ordinary;
+  std::vector<const Function *> work;
+  auto add = [&](const Function *function) {
+    if (function && !function->isDeclaration() && !control.count(function) && ordinary.insert(function).second) {
+      work.push_back(function);
+    }
+  };
+  auto addAddressTaken = [&] {
+    for (const Function &function : module) {
+      if (function.hasAddressTaken()) {
+        add(&function);
+      }
+    }
+  };
+  // What the host may call, what may be called through a pointer, and what the control program calls as ordinary
+  // code; then everything those call.
+  for (const Function &function : module) {
+    if (!function.hasLocalLinkage()) {
+      add(&function);
+    }
+  }
+  addAddressTaken();
+  for (const CallBase *call : ordinaryCalls) {
+    add(call->getCalledFunction());
+  }
+  while (!work.empty()) {
+    const Function *function = work.back();
+    work.pop_back();
+    for (const Instruction &inst : instructions(*function)) {
+      if (const auto *call = dyn_cast<CallBase>(&inst)) {
+        add(call->getCalledFunction());
+      }
+    }
+  }
+  for (const Function *function : ordinary) {
+    for (const Instruction &inst : instructions(*function)) {
+      if (classOf(inst) == OperationClass::AppliedCall) {
+        notHandled(std::string(classDescription(OperationClass::AppliedCall)) +
+                       " in @" + function->getName().str() +
+                       ", which runs as ordinary code (not built: apply the call where it stands in ordinary code)",
+                   &inst);
+      }
+    }
+  }
+}
+
 void requireAppliedCallKept(const CallBase &call, bool dependsNow) {
   if (!dependsNow && classOf(call) == OperationClass::AppliedCall) {
     notHandled(std::string(classDescription(OperationClass::AppliedCall)) +
@@ -669,6 +822,7 @@ void requireAppliedCallKept(const CallBase &call, bool dependsNow) {
 void refuseQubitArgumentsLoweredAway(const Module &module, bool taintAll) {
   // On a copy after SROA, as the classification sees the program; the module itself is lowered unchanged.
   std::unique_ptr<Module> copy = CloneModule(module);
+  keepStoredValues(*copy);
   promoteLocals(*copy);
   Classifier classifier(*copy, taintAll);
   classifier.run();
@@ -676,12 +830,15 @@ void refuseQubitArgumentsLoweredAway(const Module &module, bool taintAll) {
 }
 
 void classify(Module &module, bool taintAll) {
+  keepStoredValues(module);
+  promoteLocals(module);
   Classifier classifier(module, taintAll);
   classifier.run();
   classifier.refuseUnclassified();
   for (auto &[inst, kind] : classifier.classes) {
     setClass(*inst, kind);
   }
+  releaseStoredValues(module);
 }
 
 void splitClassifiedVectors(Module &module) {
