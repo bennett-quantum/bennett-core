@@ -548,7 +548,7 @@ fn a_gate_loop_without_a_found_count_is_issued_with_a_warning() {
 }
 
 #[test]
-#[ignore = "refused by name: the gate loop's control is computed under its condition before the loop"]
+#[ignore = "refused by name: preparing the gate loop's control reads memory, which the control program would run unasked"]
 fn disabled_gate_loop_never_reads_a_held_byte_to_prepare_control() {
     Program {
         name: "gate-control-load",

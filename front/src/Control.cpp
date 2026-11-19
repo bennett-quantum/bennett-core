@@ -18,6 +18,7 @@
 // diagnostics.
 
 #include "Applied.h"
+#include "Classify.h"
 #include "Diagnostic.h"
 #include "Emit.h"
 #include "HeldBytes.h"
@@ -305,6 +306,13 @@ void ControlWriter::instruction(const Instruction &inst) {
       std::any_of(call->arg_begin(), call->arg_end(), [&](const Use &arg) { return analysis.tainted(arg.get()); }) &&
       std::none_of(call->arg_begin(), call->arg_end(), [](const Use &arg) { return arg->getType()->isPointerTy(); })) {
     requireUsedResult(*call);
+  }
+  // Translated as an ordinary call from here on: a call classified before the optimiser as applied must not be
+  // (Classify.h).
+  if (const auto *call = dyn_cast<CallBase>(&inst)) {
+    requireAppliedCallKept(*call, std::any_of(call->arg_begin(), call->arg_end(), [&](const Use &arg) {
+                             return analysis.tainted(arg.get());
+                           }));
   }
   classicalUse(inst);
   BodyWriter::instruction(inst);

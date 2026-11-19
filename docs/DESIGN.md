@@ -901,7 +901,13 @@ the text: a value depends on a qubit at a place if, on some path to that place, 
 qubits, while `x = n ? q : 2; g = x;` stores a value that depends on a qubit on both paths. A qubit variable is
 known at a load exactly when the front's later analysis would find it known (one ordinary value, stored whole or
 measured, or the fresh 0, reaches the load on every path); a variable whose address goes anywhere but loads,
-stores and markers is never known here. The analysis runs before inlining, so it follows markers applied
+stores and markers is never known here. Memory "may hold qubits" when the front's alias analysis says it may
+share bytes with what a qubit store, a qubit-dependent memory intrinsic or atomic update writes, or with a global
+a marker acts on; a `restrict` parameter counts as what its calls pass, since bytes written through it hold qubits
+after the call too. A memory intrinsic that copies from such memory or from a qubit variable makes its destination
+memory that may hold qubits; a copy of a constant number of bytes out of a qubit variable is first rewritten, as
+LLVM's InstCombine would, into a read of the variable and a store of the value, which the classes cover (sealed as a
+call it would keep the variable's address in ordinary code, which the front refuses). The analysis runs before inlining, so it follows markers applied
 through a helper's parameter. Where it is coarser than the later analysis it classifies more, which costs only
 optimisation: the front decides again, after the passes, how each instruction is translated. It is not meant to be
 finer; one way it can be is known and listed in "Not yet". An `invoke` or `callbr` with an argument that depends
@@ -918,12 +924,27 @@ merge two of them (they call different functions), and it may not copy one (with
 rotation copied a store that depends on a qubit into the block before a loop, measured on a generated program). After the run each call is the instruction it stood for again, with its type,
 alignment, volatility, ordering, attributes and metadata, and the front checks that each one is there exactly
 once: an instruction a pass removed or copied is refused by name. This relies on one property of LLVM's passes
-(a call of an unknown function stays as it is), not on a list of their steps. A test fails when any front
-source other than `Passes.cpp` names LLVM's pass machinery (`front/tests/tests/sealed_operations.rs`). Passes
+(a call of an unknown function stays as it is), not on a list of their steps. A test fails when any file
+under `front/src` or `front/include` other than `Passes.cpp`, whatever its extension, names LLVM's pass machinery
+(`front/tests/tests/sealed_operations.rs`). Passes
 that only infer attributes, or delete what nothing refers to, see the real instructions, because sealed the
 attributes they infer would be too weak; the front infers them again after the optimiser. A classified vector
-load or store is split into one access per element before the Scalarizer runs, as the Scalarizer would split
-it, each part with the class of the whole, since sealed the Scalarizer cannot split it.
+load or store is split into one access per element before the Scalarizer runs, each at the element's packed offset
+in memory (the elements of a vector lie side by side at their store size: an `i24` lane takes 3 bytes there, 4
+alone), each part with the class of the whole, since sealed the Scalarizer cannot split it. A sealed call's callee
+is kept in `llvm.compiler.used` for the run when it is not there already; that entry alone is taken away again,
+and `llvm.used` is not touched.
+
+**The class decides the translation.** After the passes, the front translates a classified instruction by its
+class, never by what its operands look like then: the optimiser may fold `f(q & 0u)` to `f(0)`, and `f` must
+still be applied. Translating such a call as applied when its arguments have become ordinary is not built, so
+where the front would translate a call classified as applied as an ordinary call it refuses it by name. Likewise the front's own lowering of the calling convention, which runs before the
+classification, must not hide a dependence: a variadic argument goes into an area in memory, a structure passed
+by value is a copy in memory, a vector argument is copied to memory, and a call through another prototype may
+lose an argument, after which the call would carry only an ordinary address. A call that passes an argument
+that depends on a qubit in one of these ways is refused by name, decided as the classification decides, on a
+copy of the program before that lowering. Route: carry the argument's dependence through the lowering to the
+call.
 
 **What the optimiser no longer sees.** It keeps the sealed instructions as they are, and it cannot see through a
 sealed applied call into its callee or inline it. Because the sealed calls are `noduplicate`, it also does not
@@ -1886,6 +1907,13 @@ Refused by name or not yet excluded around the classification of "What LLVM's pa
   outlining cannot start a region at the entry block. Before the calls were classified, the optimiser merged
   them into one applied call and the device returned a wrong result. Route: split the entry block so that the
   region starts after it.
+- **A qubit store whose value the optimiser folds.** `g = q & 0u` stores a value that depends on a qubit by the
+  text, so `g` holds qubits after it and an ordinary read of `g` is the fault `qubit_memory_access`. The optimiser
+  folds the value to 0 and the front translates an ordinary store, so the device reads 0 where the language
+  faults. Refusing a classified store that the front now finds ordinary is not done: the classification does not
+  see that a measurement makes bytes ordinary again, and such a refusal declined accepted programs (a store after
+  `bennett_measure_bytes`). Route: let the classification follow measurements of held bytes, then translate such
+  a store by its class.
 - **A known value the optimiser copies.** The classification calls a qubit variable known where one ordinary value
   reaches its load on every path. A pass that copies the store of that value into two paths makes the front's
   later analysis meet two values and call the variable unknown, so a load the classification left to the

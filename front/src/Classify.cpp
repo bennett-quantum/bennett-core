@@ -4,6 +4,7 @@
 #include "Diagnostic.h"
 #include "Markers.h"
 #include "Outline.h"
+#include "Passes.h"
 #include "Taint.h"
 
 #include <llvm/ADT/PostOrderIterator.h>
@@ -15,6 +16,7 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Module.h>
+#include <llvm/Transforms/Utils/Cloning.h>
 
 #include <map>
 #include <memory>
@@ -71,7 +73,13 @@ class Classifier {
 public:
   Classifier(Module &module, bool taintAll) : module(module), taintAll(taintAll), aliasing(module) {}
 
+  // Runs the analysis to its fixed point.
   void run();
+  // Refuses by name what the classes cannot cover (after run).
+  void refuseUnclassified();
+  // Refuses by name a call whose argument depends on a qubit and that the front's calling-convention lowering
+  // (Abi.h, Normalise.h) would pass in memory or drop (after run, on the module before that lowering).
+  void refuseArgumentsLoweredAway();
   std::map<Instruction *, OperationClass> classes;
 
 private:
@@ -92,17 +100,23 @@ private:
 
   void findQubitObjects();
   void findTracked();
+  void rewriteCopiesOfQubits();
   bool computeKnownLoads();
   void knownLoadsOf(Function &function, const std::vector<const AllocaInst *> &variables);
   bool step();
   bool markRegion(Instruction &jump);
-  void refuseUnclassified();
 
   // The qubit variable or pointer parameter `pointer` points into, if any (several: the first found).
   bool isQubitPointer(const Value *pointer) const {
     SmallVector<const Value *, 4> bases;
     getUnderlyingObjects(pointer, bases, nullptr, 0);
     return any_of(bases, [&](const Value *base) { return qubitObjects.count(base) != 0; });
+  }
+  // Whether every object `pointer` may point into is a qubit variable (a parameter may also be passed memory).
+  bool onlyQubitVariables(const Value *pointer) const {
+    SmallVector<const Value *, 4> bases;
+    getUnderlyingObjects(pointer, bases, nullptr, 0);
+    return all_of(bases, [&](const Value *base) { return isa<AllocaInst>(base) && qubitObjects.count(base); });
   }
   bool reachesHeld(const Function &function, const Value *pointer) const {
     return aliasing.mayReach(function, pointer, held);
@@ -133,8 +147,9 @@ private:
   }
 };
 
-// Qubit variables (allocas a marker acts on, and the front's own, tagged), and pointer parameters of helpers that
-// pass them on to a marker, through any number of calls. A global variable a marker acts on may hold qubits; so
+// Qubit variables (allocas a marker acts on, and the front's own, tagged), pointer parameters of helpers that
+// pass them on to a marker, through any number of calls, and pointer parameters some call passes a qubit
+// variable's address. A global variable a marker acts on may hold qubits; so
 // may whatever a pointer the front cannot follow points to.
 void Classifier::findQubitObjects() {
   auto collect = [&](const Value *pointer) {
@@ -176,8 +191,14 @@ void Classifier::findQubitObjects() {
           continue;
         }
         for (Argument &param : callee->args()) {
-          if (qubitObjects.count(&param) && param.getArgNo() < call->arg_size()) {
+          if (param.getArgNo() >= call->arg_size()) {
+            continue;
+          }
+          if (qubitObjects.count(&param)) {
             changed |= collect(call->getArgOperand(param.getArgNo()));
+          } else if (isQubitPointer(call->getArgOperand(param.getArgNo()))) {
+            // A qubit variable's address handed to a helper: what the helper reads through it is a qubit's value.
+            changed |= qubitObjects.insert(&param).second;
           }
         }
       }
@@ -362,7 +383,9 @@ bool Classifier::step() {
           if (!knownLoads.count(load)) {
             changed |= taint(load);
           }
-          continue;
+          if (onlyQubitVariables(pointer)) {
+            continue;
+          }
         }
         if (reachesHeld(function, pointer)) {
           changed |= classify(inst, OperationClass::Read);
@@ -373,7 +396,7 @@ bool Classifier::step() {
         }
       } else if (auto *store = dyn_cast<StoreInst>(&inst)) {
         const Value *pointer = store->getPointerOperand();
-        if (isQubitPointer(pointer)) {
+        if (onlyQubitVariables(pointer)) {
           continue; // a qubit variable: the front's own analyses decide, and the known values above follow it
         }
         if (isTainted(store->getValueOperand()) || isTainted(pointer) || under) {
@@ -405,8 +428,11 @@ bool Classifier::step() {
             changed |= taint(call);
           }
         } else if (isa<MemIntrinsic>(call)) {
-          // Its destination holds qubits when what it writes depends on one, or is copied from bytes that may.
-          if (depends || under || anyPointerReachesHeld(*call)) {
+          // Its destination holds qubits when what it writes depends on one, or is copied from bytes that may: memory
+          // that may hold qubits, or a qubit variable.
+          const auto *transfer = dyn_cast<MemTransferInst>(call);
+          bool qubitBytes = transfer && isQubitPointer(transfer->getRawSource());
+          if (depends || under || qubitBytes || anyPointerReachesHeld(*call)) {
             changed |= hold(call->getArgOperand(0));
             changed |= classify(inst, OperationClass::HeldMemory);
           }
@@ -490,16 +516,74 @@ void Classifier::refuseUnclassified() {
   }
 }
 
+// A copy of a constant number of bytes out of a qubit variable (memcpy or memmove, at most the variable's 8 bytes)
+// becomes a load of an integer of that size and a store of it, as LLVM's InstCombine would rewrite it: a read of the
+// qubit variable and a store that depends on a qubit, which the classes and the front's translation cover. Sealed as
+// a call, the copy would keep the variable's address in ordinary code, which the front refuses.
+void Classifier::rewriteCopiesOfQubits() {
+  std::vector<MemTransferInst *> copies;
+  for (Function &function : module) {
+    for (Instruction &inst : instructions(function)) {
+      auto *copy = dyn_cast<MemTransferInst>(&inst);
+      auto *length = copy ? dyn_cast<ConstantInt>(copy->getLength()) : nullptr;
+      if (copy && length && !copy->isVolatile() && length->getZExtValue() > 0 &&
+          length->getZExtValue() <= sizeof(uint64_t) && onlyQubitVariables(copy->getRawSource())) {
+        copies.push_back(copy);
+      }
+    }
+  }
+  for (MemTransferInst *copy : copies) {
+    IRBuilder<> b(copy);
+    Type *type = b.getIntNTy(unsigned(cast<ConstantInt>(copy->getLength())->getZExtValue() * 8));
+    LoadInst *load = b.CreateAlignedLoad(type, copy->getRawSource(), copy->getSourceAlign().valueOrOne());
+    StoreInst *store = b.CreateAlignedStore(load, copy->getRawDest(), copy->getDestAlign().valueOrOne());
+    load->setDebugLoc(copy->getDebugLoc());
+    store->setDebugLoc(copy->getDebugLoc());
+    copy->eraseFromParent();
+  }
+}
+
 void Classifier::run() {
   control = controlFunctions(module, /*refuseAddressTaken=*/false); // the optimiser may still remove the address
   findQubitObjects();
+  rewriteCopiesOfQubits();
   findTracked();
   computeKnownLoads();
   for (bool changed = true; changed;) {
     changed = step();
     changed = computeKnownLoads() || changed;
   }
-  refuseUnclassified();
+}
+
+void Classifier::refuseArgumentsLoweredAway() {
+  for (Function &function : module) {
+    for (Instruction &inst : instructions(function)) {
+      auto *call = dyn_cast<CallBase>(&inst);
+      if (!call || markerCall(call) || call->isInlineAsm() || isa<IntrinsicInst>(call)) {
+        continue;
+      }
+      const Function *callee = call->getCalledFunction();
+      FunctionType *type = call->getFunctionType();
+      for (unsigned i = 0; i < call->arg_size(); ++i) {
+        const Value *arg = call->getArgOperand(i);
+        const char *how = nullptr;
+        if (i >= type->getNumParams() && isTainted(arg)) {
+          how = "a variadic argument, which the front passes in memory";
+        } else if (call->isByValArgument(i) && reachesHeld(function, arg)) {
+          how = "an argument passed by value, which is a copy in memory";
+        } else if ((arg->getType()->isVectorTy() || arg->getType()->isAggregateType()) && isTainted(arg)) {
+          how = "a vector or aggregate argument, which the front passes in memory";
+        } else if (callee && callee->getFunctionType() != type && isTainted(arg)) {
+          how = "an argument of a call through another prototype, which the front may drop";
+        }
+        if (how) {
+          notHandled(std::string("a call with ") + how + ", that depends on a qubit (not built: keep the argument's "
+                                                          "dependence through the lowering and apply the call)",
+                     &inst);
+        }
+      }
+    }
+  }
 }
 
 } // namespace
@@ -556,9 +640,28 @@ std::optional<OperationClass> classOf(const Instruction &inst) {
 
 void declassify(Instruction &inst) { inst.setMetadata(classMetadata, nullptr); }
 
+void requireAppliedCallKept(const CallBase &call, bool dependsNow) {
+  if (!dependsNow && classOf(call) == OperationClass::AppliedCall) {
+    notHandled(std::string(classDescription(OperationClass::AppliedCall)) +
+                   " before LLVM's optimiser, whose arguments are ordinary after it (not built: apply it by its "
+                   "class, not as an ordinary call)",
+               &call);
+  }
+}
+
+void refuseQubitArgumentsLoweredAway(const Module &module, bool taintAll) {
+  // On a copy after SROA, as the classification sees the program; the module itself is lowered unchanged.
+  std::unique_ptr<Module> copy = CloneModule(module);
+  promoteLocals(*copy);
+  Classifier classifier(*copy, taintAll);
+  classifier.run();
+  classifier.refuseArgumentsLoweredAway();
+}
+
 void classify(Module &module, bool taintAll) {
   Classifier classifier(module, taintAll);
   classifier.run();
+  classifier.refuseUnclassified();
   for (auto &[inst, kind] : classifier.classes) {
     setClass(*inst, kind);
   }
@@ -592,7 +695,9 @@ void splitClassifiedVectors(Module &module) {
     uint64_t size = layout.getTypeStoreSize(element).getFixedValue();
     Value *whole = PoisonValue::get(vector);
     for (unsigned i = 0; i < vector->getNumElements(); ++i) {
-      Value *address = b.CreateConstInBoundsGEP1_64(element, pointer, i);
+      // A vector's elements lie side by side in memory at their store size, which may be less than their
+      // allocation size (an i24 takes 3 bytes in a vector, 4 alone).
+      Value *address = b.CreateConstInBoundsGEP1_64(b.getInt8Ty(), pointer, i * size);
       Align at = commonAlignment(align, i * size);
       Instruction *part;
       if (isa<LoadInst>(inst)) {
