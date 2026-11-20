@@ -191,8 +191,10 @@ fn known_old_byte_clears_by_x_gates() {
     compare_known_old_byte(512);
 }
 
+// With 128 bytes, `@main`'s four slots leave the stack pointer at 96 and `@g`'s four slots would take
+// it to 64, below the floor of 65 (data ends after byte 64): the entry reservation faults
+// `stack_overflow` before any budget test, for every argument value.
 #[test]
-#[ignore = "the reference does not model available stack space at applied-call entry"]
 fn byte_swap_with_insufficient_space_for_the_applied_frame() {
     compare_known_old_byte(128);
 }
@@ -229,6 +231,10 @@ entry:
     // in preparation leave its value unchanged.
     let mut check = Comparison::prepared(&module, 10, input.clone(), 2.0, [0, 3, 1, 2]);
     check.apply("g", |&[a, x, ..]| [a, x]);
+    if memory_bytes < 64 + 1 + 8 * (4 + 4) {
+        assert_eq!(check.exact, image(&input, |[a, x, ..]| [a, x, 0, Fault::StackOverflow.code()]));
+        return;
+    }
     check.exchange(8);
     check.clear_known(165);
     assert_eq!(check.exact, image(&input, |[a, ..]| [a, 165 + a, 0, 0]));

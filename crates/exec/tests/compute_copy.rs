@@ -113,6 +113,127 @@ entry:
 }
 "#;
 
+// Amounts 0, 5, 10 and 15 from a register: the two at least the width give zero, `ashr` included.
+const SHIFTS: &str = r#"
+func @f(i2 %x) -> i8 {
+entry:
+    %a = zext i2 %x to i8
+    %s = mul i8 %a, 5
+    %l = shl i8 3, %s
+    %r = lshr i8 200, %s
+    %n = ashr i8 -128, %s
+    %t = xor i8 %l, %r
+    %u = add i8 %t, %n
+    ret %u
+}
+"#;
+
+// Divisors 0, 1, -2 and -1: truncation toward zero, remainders with the dividend's sign, the minimum
+// divided by minus one wrapping, unsigned remainder of the same bits, and the zero divisor's fault.
+const SIGNED_DIVISION: &str = r#"
+func @f(i2 %x) -> i8 {
+entry:
+    %d = sext i2 %x to i8
+    %q = sdiv i8 -7, %d
+    %r = srem i8 -7, %d
+    %m = srem i8 7, %d
+    %u = urem i8 250, %d
+    %w = sdiv i8 -128, %d
+    %z = srem i8 -128, %d
+    %r3 = mul i8 %r, 3
+    %m5 = mul i8 %m, 5
+    %u7 = mul i8 %u, 7
+    %w11 = mul i8 %w, 11
+    %z13 = mul i8 %z, 13
+    %s1 = add i8 %q, %r3
+    %s2 = add i8 %s1, %m5
+    %s3 = add i8 %s2, %u7
+    %s4 = add i8 %s3, %w11
+    %s5 = add i8 %s4, %z13
+    ret %s5
+}
+"#;
+
+// `or` with shared bits (13 = 0b1101), signed and unsigned order on the same bits, `select` and a
+// widened comparison result.
+const OR_AND_ORDER: &str = r#"
+func @f(i2 %x) -> i8 {
+entry:
+    %a = zext i2 %x to i8
+    %b = or i8 %a, 13
+    %s = sext i2 %x to i8
+    %c = icmp slt i8 %s, 1
+    %d = icmp ugt i8 %s, 1
+    %e = select i8 %c, %b, 100
+    %k = zext i1 %d to i8
+    %g = shl i8 %k, 7
+    %h = or i8 %e, %g
+    ret %h
+}
+"#;
+
+// A case with no arguments, two cases sharing a target with different arguments, and the default.
+const SWITCH: &str = r#"
+func @f(i2 %x) -> i8 {
+entry:
+    %a = zext i2 %x to i8
+    switch i2 %x, 0: zero, 2: two(i8 20, %a), 3: two(i8 30, i8 1), default: other(%a)
+zero:
+    br other(i8 9)
+two(i8 %p, i8 %q):
+    %s = add i8 %p, %q
+    ret %s
+other(i8 %v):
+    %w = mul i8 %v, 7
+    ret %w
+}
+"#;
+
+// Frames: `@f` 9 slots, `@h` 3, `@g` and `@k` 2, eight bytes each. With 146 bytes of memory the
+// caller's four slots leave the stack pointer at 114, `@f` takes it to 42, `@h` to 18 and `@g` to 2,
+// exactly the floor (data ends at 2), which fits. Input 0 calls `@h` twice in turn, so the second call
+// fits only if the first return restored the pointer. Input 1 calls `@g` through its address, input 2
+// through `@f`'s address, which has another signature (`bad_indirect`), and input 3 goes one frame
+// deeper through `@k`, where `@g` no longer fits (`stack_overflow`).
+const FRAMES: &str = r#"
+func @g(i8 %a) -> i8 {
+entry:
+    %b = mul i8 %a, 3
+    ret %b
+}
+func @h(i8 %a) -> i8 {
+entry:
+    %b = call @g(%a)
+    %c = add i8 %b, 1
+    ret %c
+}
+func @k(i8 %a) -> i8 {
+entry:
+    %b = call @h(%a)
+    ret %b
+}
+func @f(i2 %x) -> i8 {
+entry:
+    %a = zext i2 %x to i8
+    switch i2 %x, 0: twice, 1: good, 2: bad, default: deep
+twice:
+    %r1 = call @h(%a)
+    %r2 = call @h(%r1)
+    ret %r2
+good:
+    %p = faddr @g
+    %r3 = call_indirect fn(i8) -> i8 %p(%a)
+    ret %r3
+bad:
+    %q = faddr @f
+    %r4 = call_indirect fn(i8) -> i8 %q(%a)
+    ret %r4
+deep:
+    %r5 = call @k(%a)
+    ret %r5
+}
+"#;
+
 fn conditional_fault(instruction: &str) -> String {
     format!(
         "func @f(i2 %x) -> i8 {{
@@ -129,9 +250,9 @@ ok:
     )
 }
 
-fn program(functions: &str) -> String {
+fn program(functions: &str, memory: u64) -> String {
     format!(
-        "memory 512
+        "memory {memory}
 data 0 = i8 9, i8 7
 {functions}
 func @main(i64 %budget) {{
@@ -207,8 +328,12 @@ fn assert_amplitudes(exact: &Vector<Basis>, actual: &QuantumSnapshot) {
 // Returns the un-XORed outcome of each definite argument value, checked against analytic values
 // by each test. All 64 argument/target/fault configurations carry nonzero complex amplitudes.
 fn compare(functions: &str, budget: usize) -> [(u64, u64); 4] {
-    let module = load(&program(functions));
-    let reference = Reference::new(&module, "f");
+    compare_in(functions, 512, budget)
+}
+
+fn compare_in(functions: &str, memory: u64, budget: usize) -> [(u64, u64); 4] {
+    let module = load(&program(functions, memory));
+    let reference = Reference::new(&module, "f", "main");
     let apply = |vector| {
         reference.apply(
             vector,
@@ -267,6 +392,9 @@ fn compare(functions: &str, budget: usize) -> [(u64, u64); 4] {
         outcomes,
         "per-input results agree even if a target is invariant under an XOR"
     );
+    for (x, &outcome) in outcomes.iter().enumerate() {
+        assert_eq!(reference.finish(&[x as u64], budget).output, outcome, "the reference's own run of input {x}");
+    }
     let expected = permute(before, |b| {
         let (result, fault) = outcomes[b.argument as usize];
         b.out ^= result;
@@ -341,10 +469,51 @@ fn one_budget_for_the_whole_function_including_calls_and_nested_loops() {
 }
 
 #[test]
+fn shift_amounts_from_a_register_at_and_beyond_the_width() {
+    assert_eq!(compare(SHIFTS, 8), [(75, 0), (98, 0), (0, 0), (0, 0)]);
+}
+
+#[test]
+fn signed_quotients_and_remainders_and_the_zero_divisor() {
+    let outcomes = [(0, Fault::DivideByZero.code()), (121, 0), (155, 0), (93, 0)];
+    assert_eq!(compare(SIGNED_DIVISION, 20), outcomes);
+}
+
+#[test]
+fn or_and_signed_and_unsigned_order() {
+    assert_eq!(compare(OR_AND_ORDER, 10), [(13, 0), (100, 0), (143, 0), (143, 0)]);
+}
+
+#[test]
+fn switch_cases_sharing_a_target_and_the_default() {
+    assert_eq!(compare(SWITCH, 5), [(63, 0), (7, 0), (22, 0), (31, 0)]);
+}
+
+#[test]
+fn frames_reserved_restored_and_overflowing_at_the_floor() {
+    let outcomes = [(4, 0), (3, 0), (0, Fault::BadIndirect.code()), (0, Fault::StackOverflow.code())];
+    assert_eq!(compare_in(FRAMES, 146, 16), outcomes);
+    // One byte less and input 0's `@g` no longer fits either.
+    assert_eq!(compare_in(FRAMES, 145, 16)[0], (0, Fault::StackOverflow.code()));
+}
+
+#[test]
+fn one_budget_across_the_new_families() {
+    for functions in [SHIFTS, SIGNED_DIVISION, OR_AND_ORDER, SWITCH] {
+        for budget in 0..=20 {
+            compare(functions, budget);
+        }
+    }
+    for budget in 0..=16 {
+        compare_in(FRAMES, 146, budget);
+    }
+}
+
+#[test]
 fn completed_ticks_invert_nonblank_records_and_invalid_encodings() {
-    let module = load(&program(ARITHMETIC));
-    let reference = Reference::new(&module, "f");
-    let words = reference.initial_machine().len();
+    let module = load(&program(ARITHMETIC, 512));
+    let reference = Reference::new(&module, "f", "main");
+    let words = reference.initial_machine(8).len();
     for pattern in [0, 1, 0x123456789abcdef0, u64::MAX] {
         let machine = vec![pattern; words];
         let record: Vec<_> = (0..machine.len()).map(|i| pattern.wrapping_add(i as u64)).collect();

@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use bennett_ir::Module;
 use num_complex::Complex;
 
-use super::{Reference, Vector, permute};
+use super::{Reference, Vector, entry_stack_pointer, permute};
 
 // Each basis configuration lists the argument, target, spare and fault registers.
 pub type Registers = [u64; 4];
@@ -20,7 +20,13 @@ pub fn apply_to_spare<const N: usize>(
     state: StoreVector,
     arguments: impl Fn(&Registers) -> [u64; N],
 ) -> StoreVector {
-    Reference::new(module, function)
+    // `@main` executes the `apply`, entered at the top of memory. A module of only the applied function
+    // (a reference module) runs it with all of memory above it.
+    let stack = match module.function_named("main") {
+        Some(_) => entry_stack_pointer(module, "main"),
+        None => module.memory_size,
+    };
+    Reference::at(module, function, stack)
         .apply(state, budget, arguments, |[_, _, spare, fault], (value, code)| {
             *spare ^= value;
             *fault ^= code;

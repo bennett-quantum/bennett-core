@@ -2002,17 +2002,34 @@ negotiation. The exact syntax is whatever the single reader in `ir` accepts; `ex
 
 The independent test helper `crates/exec/tests/compute_copy_reference/` executes the reversible construction
 for small applied functions. Its state vector includes argument and target registers, a fixed machine encoding
-(value slots, call frames, program counter, step count and byte memory), and one full snapshot register per
-scheduled step. Each step XORs its ordinary update into its record and swaps the machine and record registers;
-the inverse swaps first and XORs the same update. After exactly `B` steps, including idle steps after a return
-or fault, it XORs the result or fault code into the targets and runs all inverse steps. Every machine and
-record bit must return exactly. This helper has its own interpreter for the small ordinary instruction subset
-used by its tests; it shares the public IR reader, not executor stepping code, and is not a circuit compiler.
+(value slots, call frames with their entry stack pointers, the stack pointer, program counter, step count and
+byte memory), and one full snapshot register per scheduled step. The number of frames is fixed before the
+`apply` starts: one more than the longest call chain, or than `B` when a function can reach itself. Each step
+XORs its ordinary update into its record and swaps the machine and record registers; the inverse swaps first
+and XORs the same update. After exactly `B` steps, including idle steps after a return or fault, it XORs the
+result or fault code into the targets and runs all inverse steps. Every machine and record bit must return
+exactly. Its ordinary update is a second reading of the [step specification](APPLY-STEP.md) and the stack rule
+of `docs/SYNTAX.md` ("Memory"), written without the executor's code: integer operations at widths up to 64
+bits (quotients and remainders with `divide_by_zero`, shifts by register amounts), comparisons, `select`, casts,
+`faddr`, loads and stores, jumps, `switch`, direct and indirect calls with frames reserved below the stack
+pointer (`stack_overflow` at entry or at a call, `bad_indirect`), returns, explicit faults, `effect`, `exit`
+and quantum instructions. Stack instructions, non-local jumps and `retaddr` are not yet in it. It shares the
+public IR reader, not executor stepping code, and is not a circuit compiler.
+
 Exact complex integer amplitudes with a common denominator of 8 check all 64 prepared configurations of the
 argument, result and fault registers, including relative phases and superposed targets. They are compared with
-the executor within `1e-14` per real or imaginary component. Cases cover arithmetic, private memory, calls,
-input-dependent loops and two nested loops, division and bounds faults, `effect`/`exit`, and a single budget
-exhausted only for some argument values. This is finite test evidence, not a proof for all device programs.
+the executor within `1e-14` per real or imaginary component. Hand-written cases, each with its results worked
+by hand, cover arithmetic, private memory, calls, input-dependent loops and two nested loops, division and
+bounds faults, `effect`/`exit`, a single budget exhausted only for some argument values, shift amounts at and
+beyond the width, signed quotients and remainders, `or` and signed order, `switch`, and frames that fit exactly
+at the floor, overflow one call deeper and are released by each return.
+`crates/exec/tests/compute_copy_generated.rs` generates seeded applied functions of two 3-bit arguments over
+these families, with helpers called directly and through addresses and memory sized so that frames overflow at
+entry or at a call. For each of the 64 argument values the reference's own run gives the step at which it
+finishes; the executor is compared at budget zero, one step before, at and after each finish, and at a bound
+beyond them, and the whole construction is compared on all inputs and on a superposition with phases. The test
+also requires that the seeds reach a return and each fault the families can give. A longer sweep is ignored by
+default. This is finite test evidence, not a proof for all device programs.
 
 The same helper checks stores by exchange on explicit amplitudes. It runs the applied function into the spare
 register, exchanges it with the target by three controlled X gates per bit, and clears the spare by X gates
