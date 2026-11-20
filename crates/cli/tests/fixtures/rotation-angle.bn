@@ -1,0 +1,23 @@
+; Rotations by an angle computed at run time (crates/cli/tests/rotation_angle.rs): `%a` is the angle's
+; binary64 bits, given with `--arg`; `@doubled` computes twice that angle from it by exponent arithmetic.
+memory 64
+
+func @main(i64 %a) {
+entry:
+    %q = qalloc 2
+    h %q
+    rz(%a) %q[1] ctrl %q
+    ry(%a) %q
+    qfree %q
+    ret
+}
+
+; Adds 1 to the exponent field: twice the angle for a normal binary64.
+func @doubled(i64 %a) {
+entry:
+    %b = add i64 %a, 0x10000000000000
+    %q = qalloc 1
+    rx(%b) %q
+    qfree %q
+    ret
+}

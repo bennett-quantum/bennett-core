@@ -53,6 +53,14 @@ impl<'s> Parser<'s> {
         }
         if let Some(axis) = Rotation::from_mnemonic(mnemonic) {
             line.no_result(axis.mnemonic())?;
+            // `(%name)`: an angle computed at run time; `(NUMBER)`: a literal.
+            if let Some(Token::Local(_)) = self.cursor.peek_nth(1) {
+                self.cursor.expect(Token::LParen, "`(` and an angle")?;
+                let angle = self.slot_use(scope, "an angle")?;
+                self.cursor.expect(Token::RParen, "`)`")?;
+                let (target, controls) = self.places(scope)?;
+                return Ok(Statement::Inst(Inst::RotateBy { axis, angle, target, controls }));
+            }
             let angle = self.angle()?;
             return self.gate(scope, Gate::Rotate(axis, angle)).map(Statement::Inst);
         }
@@ -214,14 +222,7 @@ impl<'s> Parser<'s> {
     /// `GATE target [ctrl qubit, ...]`, after the mnemonic and any angle. A gate whose qubits are all in
     /// registers is `Gate`; one with a qubit in memory is `GateAt`.
     fn gate(&mut self, scope: &mut Scope<'s>, gate: Gate) -> Result<Inst, Failure> {
-        let target = self.place(scope)?;
-        let mut controls = Vec::new();
-        if self.cursor.eat(Token::Word("ctrl")) {
-            controls.push(self.place(scope)?);
-            while self.cursor.eat(Token::Comma) {
-                controls.push(self.place(scope)?);
-            }
-        }
+        let (target, controls) = self.places(scope)?;
         let register = |place: &Place| match place {
             Place::Register(qubit) => Some(*qubit),
             Place::Memory { .. } => None,
@@ -230,6 +231,19 @@ impl<'s> Parser<'s> {
             (Some(target), Some(controls)) => Ok(Inst::Gate { gate, target, controls }),
             _ => Ok(Inst::GateAt { gate, target, controls }),
         }
+    }
+
+    /// `target [ctrl qubit, ...]`: a gate's target and controls.
+    fn places(&mut self, scope: &mut Scope<'s>) -> Result<(Place, Vec<Place>), Failure> {
+        let target = self.place(scope)?;
+        let mut controls = Vec::new();
+        if self.cursor.eat(Token::Word("ctrl")) {
+            controls.push(self.place(scope)?);
+            while self.cursor.eat(Token::Comma) {
+                controls.push(self.place(scope)?);
+            }
+        }
+        Ok((target, controls))
     }
 
     /// A qubit in a register (`%register[BIT]`) or in memory: `[ADDRESS:BIT]`, the address an `i64`

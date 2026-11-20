@@ -21,6 +21,7 @@ const CODES: &[(&str, u64)] = &[
     ("exit_type_mismatch", 14),
     ("bad_longjmp", 16),
     ("qubit_memory_access", 17),
+    ("bad_angle", 18),
     ("out_of_memory", 19),
 ];
 
@@ -55,13 +56,13 @@ fn every_fault_xors_into_dirty_fault_registers() {
             }
         }
     }
-    assert_eq!(cases, 4 * 16 * 32, "four widths, sixteen codes, 32 dirty values");
+    assert_eq!(cases, 4 * 17 * 32, "four widths, seventeen codes, 32 dirty values");
 }
 
 #[test]
 fn fault_register_admission_covers_the_entire_register_width_domain() {
-    // SYNTAX's apply form says "5 qubits or more", including 64, rather than exactly five.
-    for width in 1..=64 {
+    // SYNTAX's apply form says "5 qubits or more", including 64 and wider registers, rather than exactly five.
+    for width in (1..=66).chain([128, 129, 1000]) {
         let text = format!(
             "memory 256\nfunc @fail() -> i1 {{\nentry:\n fault bad_longjmp\n}}\n\
              func @main() {{\nentry:\n %o = qalloc 1\n %f = qalloc {width}\n\

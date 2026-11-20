@@ -149,13 +149,21 @@ impl<'m> Executor<'m> {
     /// Undoes the `GateAt` or `GateAtPromoted` record on top of the journal: the inverse gate, then the
     /// promotions undone, the latest first.
     pub(crate) fn undo_gate_at(&mut self, promoting: bool) {
-        let Inst::GateAt { gate, target, controls } = self.retreat() else { unreachable!("a GateAt record") };
+        let inst = self.retreat();
+        let (gate, target, controls) = if let Inst::RotateBy { axis, angle, target, controls } = inst {
+            // The angle's slot holds the value it held when the gate ran: every later step is undone.
+            (self.rotation(*axis, *angle).expect("an angle that ran is finite"), target, controls)
+        } else if let Inst::GateAt { gate, target, controls } = inst {
+            (*gate, target, controls)
+        } else {
+            unreachable!("a GateAt or RotateBy record")
+        };
         let places = std::iter::once(target).chain(controls);
         let resolved: Vec<Resolved> =
             places.map(|place| self.resolve_place(place).expect("a gate that ran resolves again")).collect();
         let qubits: Vec<Wire> = resolved.iter().map(|&place| self.resolve_wire(place)).collect();
         // Undoing returns to a state the run held, so the configuration limit is not applied.
-        self.device_gate(gates::inverse(*gate), qubits[0], &qubits[1..], &mut DeviceContext::default())
+        self.device_gate(gates::inverse(gate), qubits[0], &qubits[1..], &mut DeviceContext::default())
             .expect("no limit");
         if !promoting {
             return;

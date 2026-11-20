@@ -66,6 +66,7 @@ fn fold_inst(
         | Inst::Qfree { .. }
         | Inst::Gate { .. }
         | Inst::GateAt { .. }
+        | Inst::RotateBy { .. }
         | Inst::Measure { .. }
         | Inst::Apply { .. } => unreachable!("checked the supported instructions"),
     }

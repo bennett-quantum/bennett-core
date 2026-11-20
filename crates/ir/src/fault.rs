@@ -64,6 +64,9 @@ faults! {
     /// written over it, a `longjmp` record read from it), whatever the qubits' values; inside an applied
     /// function too. Gates and measurements name such bytes; ordinary code does not.
     QubitMemoryAccess = 17 "qubit_memory_access",
+    /// A rotation whose angle operand, read as the bits of an IEEE 754 binary64, is not finite (an
+    /// infinity or a NaN): angles are finite `f64` values (`docs/DESIGN.md`, "The model").
+    BadAngle = 18 "bad_angle",
     /// The device's heap is exhausted: the C runtime's arena cannot hold a growth of the break or a fresh
     /// anonymous mapping. An allocation function never returns null for it; a request the C library rejects by
     /// arithmetic alone, before asking for memory (`malloc(SIZE_MAX)`, an overflowing `calloc` product), still
