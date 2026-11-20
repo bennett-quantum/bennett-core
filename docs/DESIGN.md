@@ -381,9 +381,9 @@ The emitter's full instruction subset is `add`, `sub`, `mul`, `and`, `or`, `xor`
 `udiv`, `sdiv`, `urem`, `srem`, `shl`, `lshr`, `ashr`, `icmp`, `select`, `zext`, `sext`, `trunc`,
 `faddr`, unconditional and conditional `br`, `switch`, `ret`,
 and direct `call` and `call_indirect` as described under "Copied calls" below. The emitter supports
-`load` and `store` at definite addresses, `alloca`, `stacksave`, `stackrestore`, `fault`, `effect`,
-and `exit` inside an applied function. Calls take integer parameters and may return an integer
-or no value. The [refusal table](#not-yet) gives the excluded
+`load` and `store` at proved definite addresses, including addresses proved definite under a
+dispatch guard. It also supports `alloca`, `stacksave`, `stackrestore`, `fault`, `effect` and `exit`
+inside an applied function. The [refusal table](#not-yet) gives the excluded
 operations and the limits on calls. A jump reads all incoming values before assigning block
 parameters. Entry stack overflow takes precedence over the budget test. Every successful instruction
 or terminator costs one step. A reached `fault` writes its named code, `effect` gives
@@ -531,7 +531,10 @@ and terminator in the entry and each copy, including those in bypassed blocks. T
 can run repeatedly using its copy. A successful call charges one step, reserves eight bytes per
 slot below the caller, zeros the new frame and assigns the
 arguments. A return charges one step, writes the result to the caller and continues
-after that site. Both operations use the same budget as the applied entry.
+after that site. A copied call may take or return a register, represented in its frame by
+a 64-bit handle. The applied entry itself takes and returns integers. A reached
+instruction that allocates a register or operates on its qubits gives `quantum_in_region`.
+Calls and returns use the same budget as the applied entry.
 An invalid definite address or signature gives `bad_indirect` before checking space
 for a callee. A failed frame reservation gives `stack_overflow`. The budget is checked
 before either instruction, and the entry frame check still comes before the first
@@ -2264,7 +2267,7 @@ Refused by name or not yet excluded around the classification of "What LLVM's pa
 |---|---|
 | Reachable recursive calls or adding a call copy that raises the total above 16,384 slots and program points | Shared call frames and return positions |
 | Reachable `call_indirect` without one proved constant address | Prove the target across visits or dispatch among supported addresses |
-| Calls with register signatures, `retaddr` | Register-valued call frames and code addresses |
+| `retaddr` | Code addresses from the copied and suspended frames |
 | `load` or `store` without a proved definite address | Address selection over possible bytes |
 | `setjmp`, `longjmp` | Private memory and non-local control transfer |
 

@@ -250,3 +250,62 @@ done:
         }
     }
 }
+
+#[test]
+fn register_valued_call_signatures_keep_the_first_quantum_fault() {
+    for (calls, fault_attempt) in [
+        ("%handle = call @make()\n    %value = call @consume(%handle)", 4),
+        (
+            "%factory = faddr @make\n    %handle = call_indirect fn() -> q1 %factory()\n    \
+             %consumer = faddr @consume\n    %value = call_indirect fn(q1) -> i2 %consumer(%handle)",
+            5,
+        ),
+    ] {
+        let module = load(&format!(
+            r#"
+memory 512
+func @f(i1 %a, i1 %b) -> i2 {{
+entry:
+    %both = and i1 %a, %b
+    br %both, child, done
+child:
+    {calls}
+    ret %value
+done:
+    ret 1
+}}
+func @make() -> q1 {{
+entry:
+    %handle = qalloc 1
+    ret %handle
+}}
+func @consume(q1 %handle) -> i2 {{
+entry:
+    qfree %handle
+    ret 3
+}}
+{MAIN}
+"#
+        ))
+        .expect("valid device program with register signatures");
+        for budget in 0..=fault_attempt + 1 {
+            for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+                let (counts, _) = compare(&module, mode, budget, |a, b| {
+                    if a & b == 1 {
+                        let fault = if budget >= fault_attempt { Fault::QuantumInRegion } else { Fault::Budget };
+                        (0, fault.code())
+                    } else if budget >= 3 {
+                        (1, 0)
+                    } else {
+                        (0, Fault::Budget.code())
+                    }
+                });
+                // Only the predicate and its inverse require Toffolis. Starting
+                // the call frame copies definite zeros and allocates no qubits.
+                let guard = usize::from(budget >= 1);
+                assert_eq!(counts.toffoli, (2 * guard) as u128, "{mode:?}, B={budget}");
+                assert_eq!(counts.peak_qubits, INTERFACE_WIDTH + guard);
+            }
+        }
+    }
+}
