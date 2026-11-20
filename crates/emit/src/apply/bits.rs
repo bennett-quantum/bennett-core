@@ -241,23 +241,42 @@ impl Circuit {
     // Reserve the result before computing, then clear and reuse all later wires.
     pub(super) fn clean_word(&mut self, width: usize, compute: impl FnOnce(&mut Self) -> Word) -> Word {
         let checkpoint = self.checkpoint();
-        let result: Vec<_> = (0..width).map(|_| self.fresh()).collect();
+        // The reservation counts toward the peak only if the result needs wires.
+        self.next = self.next.and_then(|next| next.checked_add(width as Wire));
         let temporary = self.next;
         let control_scratch = self.control_scratch;
         let start = self.forward_len();
         let mut computed = compute(self);
         computed.resize(width, ZERO);
+        // Failed allocations use a placeholder wire. Equality involving it
+        // cannot prove that the speculative computation is safe to erase.
+        if self.peak.is_none() {
+            return computed;
+        }
         if definite(&computed).is_some() {
             self.rewind(checkpoint);
             return computed;
         }
+        let Some((first, temporary)) = checkpoint.next.zip(temporary) else {
+            self.peak = None;
+            return computed;
+        };
+        self.peak = self.peak.map(|peak| peak.max(temporary));
         let end = self.forward_len();
-        let result = result
-            .into_iter()
+        let mut copies = Vec::new();
+        let result = (first..temporary)
             .zip(computed)
             .map(|(wire, value)| match value {
                 Bit::Constant(_) => value,
                 Bit::Wire(..) => {
+                    // Only an unconditional copy of a source that predates
+                    // this computation survives its local reversal.
+                    if self.enabled == ONE
+                        && let source @ Bit::Wire(source_wire, _) = self.copy_source(value)
+                        && source_wire < first
+                    {
+                        copies.push((wire, source));
+                    }
                     self.xor_into(wire, value, ONE);
                     Bit::Wire(wire, false)
                 }
@@ -266,8 +285,10 @@ impl Circuit {
         for index in (start..end).rev() {
             self.gates.push(self.gates[index].clone());
         }
-        self.next = temporary;
+        self.next = Some(temporary);
         self.control_scratch = control_scratch;
+        self.retained_copies.truncate(checkpoint.retained_copies);
+        self.retained_copies.extend(copies);
         result
     }
 

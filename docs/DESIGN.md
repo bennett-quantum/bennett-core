@@ -462,8 +462,10 @@ Each store puts its nonconstant bits in fresh scratch qubits, so a value already
 available after an overwrite. Definite stored values need no gates or qubits. Nothing writes
 to the caller's memory. All versions remain available until the end of the whole applied call,
 when the inverse clears them. The compiler keeps the equality between a retained bit and its
-source, including complements. Computed bits proved constant remain constants when a gadget
-clears its temporary work. Calls and memory instructions use the same step budget.
+source, including complements. Arithmetic gadgets preserve constant results and the equality of
+an unconditional result copy with a source that survives local reversal. A failed work-wire
+allocation prevents folding the affected gadget and fails circuit construction before emission.
+Calls and memory instructions use the same step budget.
 
 For each call the compiler reports the retained version qubits, the memory gates including the
 inverse, and the peak number of bits in current byte versions represented by qubits. Copying a

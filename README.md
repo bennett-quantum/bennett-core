@@ -28,7 +28,8 @@ front/test.sh                                # builds bennett-front, runs its te
 ```
 
 Counting compiles supported applied integer functions into gates. It can use control gates for
-qubit-dependent choices and loops with program-proved pass counts. Run the same circuits on the
+qubit-dependent choices and loops with program-proved pass counts. While control is definite,
+loads and stores at definite addresses use a private byte map. Run the same circuits on the
 simulator with `bennett run --apply-circuit auto program.bn`. The simulator, counter and OpenQASM device accept
 `--apply-circuit step-machine` to select general instruction dispatch when control depends on qubits.
 The simulator defaults to direct evaluation. Either `--machine-meaning` or `--allow-region-faults`

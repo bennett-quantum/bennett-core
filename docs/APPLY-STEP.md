@@ -23,9 +23,10 @@ address of static data, or zero. [executor.rs: new] [module.rs: static_end]
 Each definite run starts with the caller's frames, stack pointer, stack floor and byte memory. Its writes
 are private to that run. The addresses of bytes holding qubits stay fixed because quantum instructions fault
 before acting. Ordinary loads and stores at those bytes also fault. The direct simulator uses the caller's
-storage and undoes the changes in reverse order after each run. The gate emitter receives no run-time memory
-image or map of qubit addresses. For the stack checks it receives the entry fault, if any, and the number of
-bytes available below the entry frame if it fits. [region.rs: evaluate, apply_gates] [backward.rs: unwind]
+storage and undoes the changes in reverse order after each run. The gate emitter borrows the caller's
+byte image and map of held-byte addresses while it builds the circuit. For the stack checks it receives
+the entry fault, if any, and the number of bytes available below the entry frame if it fits.
+[region.rs: evaluate, apply_gates] [backward.rs: unwind]
 [forward.rs: execute_inst, store] [cells.rs: check_no_cells] [apply_device.rs: ApplyInput]
 
 Count one slot per named result and per function or block parameter, including unused ones. Integer slots hold

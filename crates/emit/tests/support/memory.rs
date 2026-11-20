@@ -1,7 +1,8 @@
 //! Private memory across both emitted control paths.
 
 use bennett_emit::{
-    ApplyInput, ApplyMemory, ApplyMode, Argument, CompiledApply, Construction, MemoryCounts, compile_apply_with,
+    ApplyError, ApplyInput, ApplyMemory, ApplyMode, Argument, CompiledApply, Construction, MemoryCounts,
+    compile_apply_with,
 };
 use bennett_exec::{Executor, Options, Outcome, RunError};
 use bennett_ir::{Fault, ValidModule, load};
@@ -181,6 +182,91 @@ entry:
         let (_, counts, values) = compare(&module, "computed address", budget, ApplyMode::Automatic);
         assert_eq!(values, vec![bounds(budget, 5, Ok(5)); 8]);
         assert_eq!(counts, MemoryCounts::default());
+    }
+}
+
+#[test]
+fn exhausted_scratch_cannot_prove_a_constant_product() {
+    let module = module(
+        r#"
+func @f(i3 %x) -> i8 {
+entry:
+    %low = trunc i3 %x to i2
+    %complement = xor i2 %low, 3
+    %product = mul i2 %low, %complement
+    store i2 %product, 8
+    %result = load i8 8
+    ret %result
+}
+"#,
+        "",
+    );
+    let held = Default::default();
+    let input = ApplyInput {
+        module: &module,
+        callee: module.function_named("f").expect("f"),
+        args: &[Argument::Register(0..3)],
+        out: 3..11,
+        fault: 11..16,
+        budget: 0,
+        entry_fault: None,
+        stack_available: MEMORY as u64,
+        memory: Some(ApplyMemory::new(&[0; MEMORY], &held)),
+        scratch_start: 16,
+    };
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=7 {
+            let (_, _, values) = compare(&module, "product of complements", budget, mode);
+            for scratch_start in [u64::MAX, u64::MAX - 1, u64::MAX - 2] {
+                let limited = compile_apply_with(ApplyInput { budget, scratch_start, ..input.clone() }, mode);
+                if budget < 3 {
+                    let compiled = limited.expect("budget expires before the product");
+                    println!("limited scratch, B={budget}, {mode:?}, @f: {}", compiled.memory);
+                    assert_eq!(compiled.memory, MemoryCounts::default());
+                } else {
+                    assert_eq!(limited.expect_err("product needs scratch"), ApplyError::WireSpace);
+                }
+            }
+            let compiled = compile_apply_with(ApplyInput { budget, ..input.clone() }, mode).expect("room for product");
+            println!("definite inputs, B={budget}, {mode:?}, @f: {}", compiled.memory);
+            let (gates, layout) = gates(&compiled, WIDTH, 13);
+            bits::exhaustive(&gates, layout, |x| {
+                let (result, fault) = values[x as usize];
+                u128::from(result | fault << 8)
+            })
+            .expect("executor outcomes with preserved inputs and zero scratch");
+        }
+    }
+}
+
+#[test]
+fn arithmetic_copy_equality_proves_a_definite_store_and_load_address() {
+    const PREFIX: &str = r#"
+func @f(i3 %x) -> i8 {
+entry:
+    %bit = trunc i3 %x to i1
+    %square = mul i1 %bit, %bit
+    %zero = xor i1 %square, %bit
+"#;
+    let without = isolated(&format!("{PREFIX}    ret 0\n}}"));
+    let with = isolated(&format!("{PREFIX}    store i1 %zero, 8\n    ret 0\n}}"));
+    let (base_gates, base_layout) = gates(&without, WIDTH, 13);
+    let (store_gates, store_layout) = gates(&with, WIDTH, 13);
+    assert_eq!((store_layout.scratch, store_gates.len()), (base_layout.scratch, base_gates.len()));
+    assert_eq!(with.memory, MemoryCounts::default());
+
+    let module = module(
+        &format!(
+            "{PREFIX}    store i1 %zero, 8\n    %saved = load i1 8\n    %addr = zext i1 %saved to i64\n    %r = load i8 %addr\n    ret %r\n}}"
+        ),
+        "    store i8 5, 0\n    store i8 9, 1\n    store i8 1, 8",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=9 {
+            let (_, counts, values) = compare(&module, "square, store and address", budget, mode);
+            assert_eq!(counts, MemoryCounts::default());
+            assert_eq!(values, vec![bounds(budget, 8, Ok(5)); 8]);
+        }
     }
 }
 
