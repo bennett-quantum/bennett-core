@@ -2,6 +2,30 @@
 
 Updated on 2026-11-19 after `d001914`. Earlier measurements and decisions are in `docs/RECORDS.md`.
 
+## STOP: no more patches to code under a qubit (2026-11-20)
+
+**The maintainer has stopped all work on the front end's handling of code under a qubit.** That is everything the
+front decides by asking whether a value, a store or a statement *depends on a qubit*: conditions and loops on a qubit
+in the control program, stores of qubit-dependent values into ordinary memory with the exchange the front adds,
+expressions the front packages into functions it generates, and the classification of calls as applied.
+
+Do not start, continue or land: the guards step (1c), placement P2 and P3, the fixes on `wip/opus-register`, any
+further rule, allow-list entry or refusal in that part of `front/src`, or any fix for an entry under "Known wrong
+results" below. Those entries stay as they are, with their ignored witnesses.
+
+Why: every step of 2026-11-18 and 2026-11-19 on this ground repaired the cases a review had found and the next review
+found new ones. Refusals of generated programs rose from about 4% to about 11%, and thirteen known wrong results
+remain. Ordering patch after patch there was a poor decision by the advisor; it should have been stopped at the
+second round and taken as evidence about the design. The cause is not a list of missing cases. Whether a value depends
+on a qubit is undecidable when taken by value, and when taken by the program text it is not something a C compiler
+preserves: a compiler keeps what a program computes, not how it was written. A front end that rests on that question
+has to defend it against every optimiser pass, one patch at a time.
+
+What happens instead: a design that never asks the question is being written and reviewed before any code changes.
+Until the maintainer decides on it, work continues only on what the question does not touch: the device program and
+the executor, the gate emitter for applied functions, the OpenQASM output, the C library and floating point, and
+ordinary C against native. "Next steps" below is written for that.
+
 ## State
 
 The restart of Bennett in one workspace, grown from the thesis program outward: rotate a bit, let ordinary code depend on it,
@@ -165,13 +189,19 @@ The proof must establish what the callee computes. Functions marked `memory(none
 
 ## Next steps
 
-1. Preserve ordinary guards under a qubit-dependent condition (step 1c).
-2. Placement P2 and P3. Clear scratch registers before release except for reported retention and fault registers. Report language faults on paths that consume the faulting value, as in D3.
-3. Fix the several-consumer register findings, then support values wider than 64 qubits.
-4. Fix both applied-memory findings, then support addresses held in qubits (declare the region and exchange the addressed element).
-5. Cover the remaining arithmetic families.
+Read "STOP" at the top first. Nothing in this list touches code under a qubit.
 
-Grow the independent `apply` reference in `crates/exec/tests/compute_copy_reference/` as coverage grows. The next independent testing pass starts at the first commit in "Which commits no independent check has covered".
+1. Memory in an applied function, in the gate emitter: fix the two findings on `wip/sol62-shor`, then stack operations
+   and stores under a qubit-dependent choice inside the applied function, then addresses held in qubits (declare the
+   region and exchange the addressed element).
+2. Cover the remaining arithmetic families in the gate emitter.
+3. Device language: registers wider than 64 qubits; an ordinary run-time value as a rotation angle.
+4. Grow the independent `apply` reference in `crates/exec/tests/compute_copy_reference/` as coverage grows; record
+   measurement outcomes from the run's own simulation in the OpenQASM output.
+5. The runtime and floating-point debts below.
+
+Not to be started: the former steps on ordinary guards (1c), placement P2 and P3, and the several-consumer register.
+The next independent testing pass starts at the first commit in "Which commits no independent check has covered".
 
 ## What is refused, and what removes it
 
