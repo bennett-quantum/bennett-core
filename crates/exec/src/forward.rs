@@ -74,13 +74,9 @@ impl<'m> Executor<'m> {
             Inst::Qfree { register } => {
                 let id = self.quantum.resolve(self.handle(*register))?;
                 let Type::Qreg(qubits) = self.slot_type(*register) else { unreachable!("validated register") };
-                let chunks = self.quantum.chunks(id).to_vec();
                 self.discard_register(id, qubits, context)?;
-                // The simulator's journal takes back kept columns or recreates zero columns; a register of
-                // more than 64 qubits keeps the ids of its chunks, since a freed head forgets them.
-                for chunk in chunks {
-                    self.record_word(chunk as u128);
-                }
+                // The simulator's journal takes back kept columns or recreates zero columns: a register's
+                // columns are consecutive from its head, so its handle and width name them.
                 self.record(if self.quantum.just_left_over(id) { Undo::Leftover } else { Undo::Qfree });
                 self.advance();
             }

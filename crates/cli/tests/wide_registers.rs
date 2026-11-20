@@ -19,7 +19,8 @@ fn bennett(args: &[&str]) -> String {
 
 /// `@wide`: qubit 999 ends as 1 - qubit 0, so the copy of the top 100 qubits measures 2^99 or 0 (the
 /// three-control gate never fires: qubit 998 is 0). `@applied`: x + 1 with x = 2^64 - 1, read and
-/// written across columns, whether `apply` is evaluated or compiled to gates and run.
+/// written across columns, whether `apply` is evaluated or compiled to gates and run; and `@top_bit`, the
+/// identity on a register holding only bit 127.
 #[test]
 fn the_simulator_runs_wide_registers_evaluated_and_compiled() {
     let wide = bennett(&[FIXTURE, "--entry", "wide"]);
@@ -27,6 +28,9 @@ fn the_simulator_runs_wide_registers_evaluated_and_compiled() {
     for circuit in [&[][..], &["--apply-circuit", "step-machine"][..]] {
         let applied = bennett(&[&[FIXTURE, "--entry", "applied"][..], circuit].concat());
         assert!(applied.contains("result: 18446744073709551616\n"), "{applied}");
+        // The result's top bit, which only a 128-qubit output register holds.
+        let top = bennett(&[&[FIXTURE, "--entry", "top_bit"][..], circuit].concat());
+        assert!(top.contains(&format!("result: {}", 1u128 << 127)), "{top}");
     }
 }
 

@@ -149,15 +149,19 @@ be among an `apply`'s arguments, nor be one register. A call can return a handle
 selected entry ends the run successfully with no scalar host result. The CLI reports its declared width.
 
 A register has from 1 to 2^32 - 1 qubits, as wide as a program needs: the simulator stores one wider than
-64 qubits in several columns, and its limits there are the host's memory, as for `memory N`. Two forms read
-a whole register as an integer, so there its width is at most 128, the widest integer:
+64 qubits in several columns, and a register the host's memory cannot hold stops the run with the
+simulator's `QubitStorage`, not a fault of the program; a run on an external device stores none. Two forms
+read a whole register as an integer, so there its width is at most 128, the widest integer:
 
 - `%d = measure %r` gives an `iN` of the register's width. A wider register is the validator's
   `MeasureTooWide`. To measure some of its qubits, copy at most 128 of them into a fresh register with
   controlled X gates (`x %c[i] ctrl %r[j]`), measure that (the same as measuring those qubits), undo the
   copy and `qfree` the copy.
 - An `apply` argument register has the width of its `iN` parameter and `out` the width of the result, so a
-  wider one is `RegionOperandTooWide`, with the same copy as the way round. The `fault` register has at
+  wider one is `RegionOperandTooWide`. For an argument, copy the qubits into a fresh register as above,
+  apply to it, undo the copy and `qfree` it. For the output, exchange the qubits with a fresh register (a
+  swap: three controlled X per qubit), apply into it, exchange them back and `qfree` it, which is zero
+  again: `apply` XORs into the qubits themselves, which a copy would not. The `fault` register has at
   least 5 qubits and may be of any width: the code goes into its low 5 bits.
 
 Handles of any width pass through calls, block parameters and `ret` as before. To apply a function to

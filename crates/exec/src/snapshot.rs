@@ -38,8 +38,13 @@ pub struct ClassicalSnapshot {
 /// The register table and every nonzero amplitude.
 #[derive(Clone, Debug, PartialEq)]
 pub struct QuantumSnapshot {
-    /// The state of each register id.
+    /// The state of each register id: of each column, for a register stored in several.
     pub registers: Vec<RegisterState>,
+    /// Each register stored in more than one column (more than 64 qubits): its head, the id its handle
+    /// names, and its number of columns, the consecutive ids from the head (`docs/DESIGN.md`, "Running a
+    /// program"). Without it, two states whose columns hold the same words but form different registers
+    /// would compare equal.
+    pub spans: Vec<(usize, usize)>,
     /// Each basis configuration (one value per register id in use) with its amplitude, in order.
     pub amplitudes: Vec<(Vec<u64>, Complex64)>,
     /// The memory bytes that hold qubits, in address order, each with the register id holding its value
@@ -51,6 +56,7 @@ impl QuantumSnapshot {
     pub(crate) fn of(state: &QuantumState) -> Self {
         QuantumSnapshot {
             registers: state.registers().to_vec(),
+            spans: state.spans().iter().map(|(&head, &count)| (head, count)).collect(),
             amplitudes: state.amplitudes().iter().map(|(config, amplitude)| (config.to_vec(), *amplitude)).collect(),
             cells: state.cells().iter().map(|(&address, &column)| (address, column)).collect(),
         }
@@ -63,9 +69,9 @@ impl QuantumSnapshot {
     }
 
     /// The largest difference between corresponding amplitudes, or `None` if the register tables (cells
-    /// included) differ.
+    /// and the columns of each register included) differ.
     pub fn distance(&self, other: &QuantumSnapshot) -> Option<f64> {
-        if self.registers != other.registers || self.cells != other.cells {
+        if self.registers != other.registers || self.spans != other.spans || self.cells != other.cells {
             return None;
         }
         let configs = self.amplitudes.iter().chain(&other.amplitudes).map(|(config, _)| config);
@@ -81,6 +87,7 @@ mod tests {
     fn snapshot(amplitudes: &[(u64, Complex64)]) -> QuantumSnapshot {
         QuantumSnapshot {
             registers: vec![RegisterState { generation: 1, width: Width::new(2) }],
+            spans: Vec::new(),
             amplitudes: amplitudes.iter().map(|&(config, amplitude)| (vec![config], amplitude)).collect(),
             cells: Vec::new(),
         }
