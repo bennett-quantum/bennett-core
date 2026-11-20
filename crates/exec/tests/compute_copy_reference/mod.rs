@@ -377,12 +377,41 @@ impl<'m> Reference<'m> {
             | Inst::GateAt { .. }
             | Inst::Measure { .. }
             | Inst::Apply { .. } => stop(&mut n, Fault::QuantumInRegion),
-            // Stack, non-local jump and return-address instructions are not yet in this reference.
-            Inst::Alloca { .. }
-            | Inst::StackSave { .. }
-            | Inst::StackRestore { .. }
-            | Inst::Setjmp { .. }
-            | Inst::ReturnAddress { .. } => return None,
+            // APPLY-STEP, "Stack". None of the three changes bytes.
+            Inst::Alloca { dst, size } => {
+                // "`alloca` subtracts the size and rounds down to a multiple of eight. It faults
+                // `stack_overflow` on underflow or below the floor." The text does not say whether the
+                // floor is compared before or after rounding; the pointer that would be set is the
+                // rounded one, so this reference compares that.
+                let pointer = c[STACK].checked_sub(read(size)).map(|p| p & !(SLOT_BYTES - 1));
+                match pointer.filter(|&p| p >= self.module.static_end()) {
+                    Some(pointer) => {
+                        n[STACK] = pointer;
+                        n[slots + dst.index()] = pointer;
+                        advance(&mut n);
+                    }
+                    None => stop(&mut n, Fault::StackOverflow),
+                }
+            }
+            Inst::StackSave { dst } => {
+                n[slots + dst.index()] = c[STACK];
+                advance(&mut n);
+            }
+            Inst::StackRestore { pointer } => {
+                // "any operand between the current pointer and the entry pointer minus slot bytes,
+                // inclusive, or faults `bad_stack_restore`. An unsaved or unaligned pointer in range works."
+                let pointer = read(pointer);
+                let reserved = SLOT_BYTES * function.slot_count() as u64;
+                let top = c[frame + ENTRY_STACK].checked_sub(reserved)?;
+                if (c[STACK]..=top).contains(&pointer) {
+                    n[STACK] = pointer;
+                    advance(&mut n);
+                } else {
+                    stop(&mut n, Fault::BadStackRestore);
+                }
+            }
+            // Non-local jump and return-address instructions are not yet in this reference.
+            Inst::Setjmp { .. } | Inst::ReturnAddress { .. } => return None,
         }
         Some(n)
     }

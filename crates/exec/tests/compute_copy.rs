@@ -234,6 +234,60 @@ deep:
 }
 "#;
 
+// 21 slots: with 256 bytes the caller leaves the stack pointer at 224 and `@f` at 56, the floor 2.
+// Sizes 0, 21, 42 and 63 round down to reservations of 0, 24 and 48 bytes, and 63 is more than 56
+// (`stack_overflow`). The restore goes back to the saved pointer (input 0), to an unsaved, unaligned
+// pointer three bytes below it, still in range (input 1), or eight bytes above the top of the frame's
+// allocations (`bad_stack_restore`, input 2). The result is the reserved bytes plus four times the
+// distance below the saved pointer after the restore plus the byte stored in the reservation.
+const STACK: &str = r#"
+func @f(i2 %x) -> i8 {
+entry:
+    %a = zext i2 %x to i64
+    %n = mul i64 %a, 21
+    %s = stacksave
+    %p = alloca %n
+    %q = stacksave
+    store i8 9, %p
+    %v = load i8 %p
+    %d = sub i64 %s, %q
+    %one = icmp eq i2 %x, 1
+    %two = icmp eq i2 %x, 2
+    %low = sub i64 %s, 3
+    %high = add i64 %s, 8
+    %t1 = select i64 %one, %low, %s
+    %t = select i64 %two, %high, %t1
+    stackrestore %t
+    %u = stacksave
+    %e = sub i64 %s, %u
+    %e4 = mul i64 %e, 4
+    %w = zext i8 %v to i64
+    %r1 = add i64 %d, %e4
+    %r2 = add i64 %r1, %w
+    %r = trunc i64 %r2 to i8
+    ret %r
+}
+"#;
+
+// 10 slots: with 168 bytes `@f` starts its reservations at 56, the floor 2. Sizes 40 and 48 give 16 and
+// 8. Size 49 gives 7, rounded down to 0, below the floor. Size 54 gives 2, the floor itself, before
+// rounding and 0 after: the floor is compared with the rounded pointer, the one that would be set.
+const ALLOCA_ROUNDING: &str = r#"
+func @f(i2 %x) -> i8 {
+entry:
+    %a = zext i2 %x to i64
+    %b = mul i64 %a, 8
+    %n1 = add i64 %b, 40
+    %two = icmp eq i2 %x, 2
+    %three = icmp eq i2 %x, 3
+    %n2 = select i64 %two, 49, %n1
+    %n = select i64 %three, 54, %n2
+    %p = alloca %n
+    %r = trunc i64 %p to i8
+    ret %r
+}
+"#;
+
 fn conditional_fault(instruction: &str) -> String {
     format!(
         "func @f(i2 %x) -> i8 {{
@@ -495,6 +549,20 @@ fn frames_reserved_restored_and_overflowing_at_the_floor() {
     assert_eq!(compare_in(FRAMES, 146, 16), outcomes);
     // One byte less and input 0's `@g` no longer fits either.
     assert_eq!(compare_in(FRAMES, 145, 16)[0], (0, Fault::StackOverflow.code()));
+}
+
+#[test]
+fn stack_reservations_restores_and_their_faults() {
+    let outcomes = [(9, 0), (45, 0), (0, Fault::BadStackRestore.code()), (0, Fault::StackOverflow.code())];
+    assert_eq!(compare_in(STACK, 256, 30), outcomes);
+    let outcomes = [(16, 0), (8, 0), (0, Fault::StackOverflow.code()), (0, Fault::StackOverflow.code())];
+    assert_eq!(compare_in(ALLOCA_ROUNDING, 168, 12), outcomes);
+    for budget in 0..=24 {
+        compare_in(STACK, 256, budget);
+    }
+    for budget in 0..=10 {
+        compare_in(ALLOCA_ROUNDING, 168, budget);
+    }
 }
 
 #[test]
