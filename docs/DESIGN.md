@@ -234,8 +234,13 @@ Each qubit measurement is a `measure` statement annotated with the bit the contr
 The writer forwards every command, after the lowering, to a `SimulatedDevice` and takes the outcomes
 from it (`--seed`, default 0), sampling a register's qubits jointly as the simulator does, so each
 annotated outcome has nonzero probability and the run's result is the simulator's for the same seed.
-A `release_zero` request the simulated state does not satisfy stops the run. The counter keeps its
-synthetic bits, so where control depends on a measurement its counts can describe another execution.
+A `release_zero` request the simulated state does not satisfy stops the run. The simulation holds at
+most `--max-configurations` basis configurations, by default 2^20; a run whose state needs more is
+refused by name with no trace published, and the message names `--qasm-outcomes synthetic`. With that
+option the writer takes the counter's seeded synthetic bits instead and simulates nothing; an annotated
+outcome can then have probability zero. The file's header comment says which kind of outcomes it carries.
+The counter keeps its synthetic bits, so where control depends on a measurement its counts can describe
+another execution.
 The file follows the ordinary control decisions taken for the recorded outcomes and omits the ordinary
 control program. A `release_zero` request assumes a replay with the recorded outcomes. Running the
 file may produce different measurements while still issuing the recorded sequence of gates. The writer

@@ -8,12 +8,18 @@ use std::time::{Duration, Instant};
 
 use bennett_emit::{ApplyMode, CountingDevice, LowerControls, compile_apply_with, seeded_bits};
 use bennett_exec::{
-    ApplyCompiler, ApplyError, ApplyInput, Executor, Options, Outcome, ReverseError, RunError, Snapshot, Stats,
+    ApplyCompiler, ApplyError, ApplyInput, Executor, Options, Outcome, ReverseError, RunError, SimulatedDevice,
+    Snapshot, Stats,
 };
 use bennett_ir::{Const, FuncId, Type, ValidModule};
 
-use crate::qasm::{QasmDevice, write_run_end};
-use crate::{ApplyCircuit, CliError, DeviceKind, RunArgs};
+use crate::qasm::{Outcomes, QasmDevice, write_run_end};
+use crate::{ApplyCircuit, CliError, DeviceKind, QasmOutcomes, RunArgs};
+
+/// The most basis configurations the simulation behind `--device qasm` holds unless `--max-configurations`
+/// says otherwise: 2^20, tens of megabytes of amplitudes. A circuit beyond it is refused by name, naming
+/// `--qasm-outcomes synthetic`.
+const QASM_SIMULATION_CONFIGURATIONS: usize = 1 << 20;
 
 pub(crate) fn run(args: &RunArgs) -> Result<ExitCode, CliError> {
     let module = crate::load(&args.file)?;
@@ -21,6 +27,9 @@ pub(crate) fn run(args: &RunArgs) -> Result<ExitCode, CliError> {
     let values = entry_arguments(&module, entry, &args.args)?;
     if args.reverse && !matches!(args.device, DeviceKind::Simulator) {
         return Err(CliError::DeviceReverse);
+    }
+    if args.qasm_outcomes.is_some() && !matches!(args.device, DeviceKind::Qasm) {
+        return Err(CliError::QasmOutcomesDevice);
     }
     match (args.device, args.qasm_output.as_deref()) {
         (DeviceKind::Simulator, None) => run_simulator(&module, entry, &values, args),
@@ -75,7 +84,14 @@ fn run_qasm(
     // The compiler's report of each `apply` is printed only once the trace is published.
     let mut diagnostics = Vec::new();
     let run = {
-        let writer = QasmDevice::new(&mut output, args.seed).map_err(io_error)?;
+        let outcomes = match args.qasm_outcomes.unwrap_or(QasmOutcomes::Simulated) {
+            QasmOutcomes::Simulated => Outcomes::Simulated(Box::new(SimulatedDevice::new(
+                args.seed,
+                Some(args.max_configurations.unwrap_or(QASM_SIMULATION_CONFIGURATIONS)),
+            ))),
+            QasmOutcomes::Synthetic => Outcomes::Synthetic(Box::new(seeded_bits(args.seed))),
+        };
+        let writer = QasmDevice::new(&mut output, args.seed, outcomes).map_err(io_error)?;
         let mut device = LowerControls::new(writer);
         let mut compiler = gate_compiler(args.apply_circuit.unwrap_or(ApplyCircuit::Auto), &mut diagnostics);
         let run = Executor::run_on_with_apply(module, entry, values, args.budget, &mut device, &mut compiler);
@@ -84,6 +100,10 @@ fn run_qasm(
         }
         run?
     };
+    // Only the simulation stops at the configuration limit: refuse rather than publish a partial trace.
+    if let Outcome::Stopped(RunError::ConfigurationLimit { limit }) = run.outcome {
+        return Err(CliError::QasmSimulationLimit { limit });
+    }
     let status = outcome_status(run.outcome);
     write_run_end(&mut output, run.outcome, status).map_err(io_error)?;
     let staged = output.into_inner().map_err(|error| io_error(error.into_error()))?;
@@ -91,7 +111,10 @@ fn run_qasm(
     print_diagnostics(&diagnostics);
     report_result(module, entry, run.outcome, 0.0);
     report_io(&run.tape, run.steps);
-    println!("measurement source: simulation (seed {})", args.seed);
+    match args.qasm_outcomes.unwrap_or(QasmOutcomes::Simulated) {
+        QasmOutcomes::Simulated => println!("measurement source: simulation (seed {})", args.seed),
+        QasmOutcomes::Synthetic => println!("measurement source: synthetic bits (seed {})", args.seed),
+    }
     Ok(ExitCode::from(status))
 }
 

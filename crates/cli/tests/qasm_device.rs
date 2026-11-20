@@ -252,6 +252,59 @@ fn measured_outcomes_follow_the_simulated_state() {
     assert_eq!(seen, [true, true], "the seeds reach both outcomes");
 }
 
+fn outcomes(text: &str) -> String {
+    text.lines().filter_map(|line| line.split_once("; // outcome ").map(|(_, bit)| bit)).collect()
+}
+
+// By default the file says its outcomes come from the run's simulation; with --qasm-outcomes synthetic it
+// says they are synthetic, and they are the counter's bits for the same seed, so a Bell pair's two outcomes
+// differ under some seed.
+#[test]
+fn the_file_names_where_its_outcomes_come_from() {
+    let simulated = Trace::new("source-simulated");
+    simulated.export(&[FIXTURE, "--entry", "bell", "--seed", "3"]);
+    let text = simulated.read();
+    assert!(text.contains("// Bennett run; measurement outcomes sampled from the run's own simulation (seed 3)."));
+    assert!(!text.contains("synthetic"), "{text}");
+    let mut differed = false;
+    for seed in 0..16 {
+        let seed = seed.to_string();
+        let args = [FIXTURE, "--entry", "bell", "--seed", &seed];
+        let trace = Trace::new(&format!("source-synthetic-{seed}"));
+        let exported = trace.export(&[&args[..], &["--qasm-outcomes", "synthetic"]].concat());
+        assert!(exported.contains(&format!("measurement source: synthetic bits (seed {seed})\n")), "{exported}");
+        let text = trace.read();
+        assert!(text.contains(&format!(
+            "// Bennett run; synthetic measurement outcomes (seed {seed}), not from a simulation."
+        )));
+        assert!(text.contains("// An annotated outcome can have probability zero."));
+        let counted = report(run("count", &args, None));
+        let bits = counted.lines().find_map(|line| line.strip_prefix("measurement outcomes: ")).expect("counted bits");
+        assert_eq!(outcomes(&text), bits, "seed {seed}");
+        differed |= bits.as_bytes()[0] != bits.as_bytes()[1];
+    }
+    assert!(differed, "synthetic bits ignore the state");
+}
+
+// A simulation beyond --max-configurations (one configuration here; the Bell pair needs two) is refused by
+// name, naming --qasm-outcomes synthetic, and publishes nothing; with that option the same run is written.
+#[test]
+fn a_state_the_simulation_cannot_hold_is_refused_naming_the_option() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("trace directory");
+    let path = dir.path().join("output.qasm");
+    let args = [FIXTURE, "--entry", "bell", "--max-configurations", "1"];
+    let output = run("qasm", &args, Some(&path));
+    assert_eq!(output.status.code(), Some(2));
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert!(diagnostic.contains("more than 1 basis configurations"), "{diagnostic}");
+    assert!(diagnostic.contains("--qasm-outcomes synthetic"), "{diagnostic}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(dir.path().read_dir().expect("read trace directory").count(), 0);
+    let written = report(run("qasm", &[&args[..], &["--qasm-outcomes", "synthetic"]].concat(), Some(&path)));
+    assert!(written.contains("measurement source: synthetic bits (seed 0)"), "{written}");
+    assert!(path.exists());
+}
+
 /// One qubit's state under the one-qubit gates of `stdgates.inc`, worked here from their definitions.
 fn one_qubit_gate(name: &str, [a, b]: [(f64, f64); 2]) -> [(f64, f64); 2] {
     let r = std::f64::consts::FRAC_1_SQRT_2;
@@ -500,6 +553,9 @@ fn qasm_requires_a_new_output_file_and_disallows_reverse() {
         assert!(String::from_utf8_lossy(&output.stderr).contains(diagnostic), "{output:?}");
         assert!(!trace.0.exists());
     }
+    let output = run("count", &[COUNTS, "--qasm-outcomes", "synthetic"], None);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--qasm-outcomes requires --device qasm"), "{output:?}");
     fs::write(&trace.0, "existing output").expect("create an existing output file");
     let output = run("qasm", &[COUNTS], Some(&trace.0));
     assert_eq!(output.status.code(), Some(2));

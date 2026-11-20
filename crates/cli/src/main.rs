@@ -44,6 +44,10 @@ struct RunArgs {
     /// The new OpenQASM 3 file to write with --device qasm.
     #[arg(long, value_name = "FILE")]
     qasm_output: Option<PathBuf>,
+    /// Where --device qasm takes measurement outcomes: the run's own simulation (the default), or synthetic
+    /// bits for a circuit whose state the simulation cannot hold.
+    #[arg(long, value_enum)]
+    qasm_outcomes: Option<QasmOutcomes>,
     /// Compile applied functions to gates. Count and QASM default to auto, and the simulator defaults to evaluation.
     #[arg(long, value_enum)]
     apply_circuit: Option<ApplyCircuit>,
@@ -57,7 +61,7 @@ struct RunArgs {
     #[arg(long, value_name = "N")]
     budget: Option<u64>,
     /// The most basis configurations the quantum state may hold; a gate beyond it stops the run. A limit of
-    /// the simulator, not a fault of the program.
+    /// the simulator, not a fault of the program. It also bounds the simulation behind --device qasm.
     #[arg(long, value_name = "N")]
     max_configurations: Option<usize>,
     /// Let an `apply` fault for some values of its arguments and the run go on, for programs that inspect
@@ -89,6 +93,14 @@ enum DeviceKind {
     Qasm,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum QasmOutcomes {
+    /// Sample each outcome from the run's own simulation.
+    Simulated,
+    /// Take seeded synthetic bits, as --device count does; an outcome can have probability zero.
+    Synthetic,
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 enum ApplyCircuit {
     Auto,
@@ -114,6 +126,14 @@ enum CliError {
     QasmOutputRequired,
     #[error("--qasm-output requires --device qasm")]
     QasmDeviceRequired,
+    #[error("--qasm-outcomes requires --device qasm")]
+    QasmOutcomesDevice,
+    #[error(
+        "the simulation that gives the OpenQASM measurement outcomes would hold more than {limit} basis \
+         configurations; no trace written. Rerun with --qasm-outcomes synthetic for synthetic outcomes, or \
+         raise --max-configurations"
+    )]
+    QasmSimulationLimit { limit: usize },
     #[error("cannot write OpenQASM output {}: {source}", path.display())]
     QasmIo { path: PathBuf, source: std::io::Error },
     #[error("{0}")]
