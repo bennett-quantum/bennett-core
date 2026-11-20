@@ -176,8 +176,11 @@ impl<'a> ShiftLoop<'a> {
                     return None;
                 }
                 found_back_edge = true;
-            } else if target.block != exiting.block && seen.insert(target.block) {
-                visit_possible_targets(&function.block(target.block).term, |edge| edges.push((target.block, edge)));
+            } else if target.block != exiting.block
+                && seen.insert(target.block)
+                && let (_, Some(term)) = before_instruction_fault(function.block(target.block))
+            {
+                visit_possible_targets(term, |edge| edges.push((target.block, edge)));
             }
         }
 

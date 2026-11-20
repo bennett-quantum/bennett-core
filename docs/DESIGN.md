@@ -384,8 +384,9 @@ before compilation continues.
 
 A **proved pass count** comes from the program. For a test of whether a block parameter
 is zero, the compiler checks that every route from the nonzero outcome back to the test
-passes a logical right shift by one of that pass's parameter. A word of width `w` must
-then be zero after at most `w` passes. Each emitted pass uses one control formed by
+passes a logical right shift by one of that pass's parameter. The proof stops each route
+at an unconditional instruction fault. A word of width `w` must then be zero after at most
+`w` passes. Each emitted pass uses one control formed by
 combining the previous pass's running inputs with the new test. The test may also sit at
 the end of a pass, compare the old unsigned word with two and pass its shift by one back
 to the body. The compiler checks that another edge cannot replace the word before the
