@@ -36,8 +36,8 @@ const CONSTRUCTED: usize = 48;
 
 /// Explicit faults: codes no generated instruction gives otherwise, then two that others also give.
 const FAULTS: [&str; 6] =
-    ["unreachable", "bad_stack_restore", "qubit_alias", "exit_type_mismatch", "out_of_bounds", "budget"];
-const EXPLICIT: [Fault; 4] = [Fault::Unreachable, Fault::BadStackRestore, Fault::QubitAlias, Fault::ExitTypeMismatch];
+    ["unreachable", "dangling_register", "qubit_alias", "exit_type_mismatch", "out_of_bounds", "budget"];
+const EXPLICIT: [Fault; 4] = [Fault::Unreachable, Fault::DanglingRegister, Fault::QubitAlias, Fault::ExitTypeMismatch];
 /// Every operation once, then the signed, division and shift operations again: their sign, rounding
 /// and wide-amount cases are the ones a run reaches least often.
 const BINARY: [&str; 20] = [
@@ -120,7 +120,7 @@ impl Generator {
     /// One straight-line item, defining at most a few names; the last becomes available.
     fn item(&mut self, f: &mut Function, values: &mut Vec<String>, calls_below: usize, applied: bool) {
         let d = f.name("v");
-        match self.rng.random_range(0..14) {
+        match self.rng.random_range(0..16) {
             0..=3 => {
                 let (op, a, b) = (self.pick(&BINARY), self.operand(values), self.operand(values));
                 f.line(&format!("%{d} = {op} i8 {a}, {b}"));
@@ -203,6 +203,41 @@ impl Generator {
                 let at = self.rng.random_range(0..16);
                 f.line(&format!("call @v({})", typed(&a)));
                 f.line(&format!("%{d} = load i8 {at}"));
+            }
+            14 | 15 => {
+                // A reservation of up to 63 bytes (rounded down to eight), a byte stored in it and read
+                // back, then sometimes a restore: to the saved pointer, a few bytes below it, or eight
+                // above it, which is in range only if the frame reserved more before the save.
+                let (save, size, at, low, back) = (f.name("p"), f.name("p"), f.name("p"), f.name("p"), f.name("p"));
+                let (v, n) = (self.value(values), self.value(values));
+                f.line(&format!("%{save} = stacksave"));
+                let masked = f.name("p");
+                f.line(&format!("%{masked} = and i8 {n}, 63"));
+                f.line(&format!("%{size} = zext i8 %{masked} to i64"));
+                f.line(&format!("%{at} = alloca %{size}"));
+                f.line(&format!("store i8 {v}, %{at}"));
+                let byte = f.name("l");
+                f.line(&format!("%{byte} = load i8 %{at}"));
+                let target = match self.rng.random_range(0..4) {
+                    0 => None,
+                    1 => Some(save.clone()),
+                    2 => {
+                        f.line(&format!("%{low} = sub i64 %{save}, {}", self.rng.random_range(1..9)));
+                        Some(low)
+                    }
+                    _ => {
+                        f.line(&format!("%{low} = add i64 %{save}, 8"));
+                        Some(low)
+                    }
+                };
+                if let Some(target) = target {
+                    f.line(&format!("stackrestore %{target}"));
+                }
+                f.line(&format!("%{back} = stacksave"));
+                let (distance, narrow) = (f.name("p"), f.name("l"));
+                f.line(&format!("%{distance} = sub i64 %{save}, %{back}"));
+                f.line(&format!("%{narrow} = trunc i64 %{distance} to i8"));
+                f.line(&format!("%{d} = xor i8 %{narrow}, %{byte}"));
             }
             _ => {
                 let (a, b) = (self.operand(values), self.operand(values));
@@ -592,6 +627,7 @@ fn generated_functions_agree_with_the_executor_around_every_finish() {
         Fault::StackOverflow.code(),
         Fault::EffectInRegion.code(),
         Fault::ExitInRegion.code(),
+        Fault::BadStackRestore.code(),
     ] {
         assert!(tally.outcomes.get(&fault).is_some_and(|&n| n > 0), "no finished run ends with code {fault}");
     }

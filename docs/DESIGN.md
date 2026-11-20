@@ -2089,8 +2089,9 @@ exactly. Its ordinary update is a second reading of the [step specification](APP
 of `docs/SYNTAX.md` ("Memory"), written without the executor's code: integer operations at widths up to 64
 bits (quotients and remainders with `divide_by_zero`, shifts by register amounts), comparisons, `select`, casts,
 `faddr`, loads and stores, jumps, `switch`, direct and indirect calls with frames reserved below the stack
-pointer (`stack_overflow` at entry or at a call, `bad_indirect`), returns, explicit faults, `effect`, `exit`
-and quantum instructions. Stack instructions, non-local jumps and `retaddr` are not yet in it. It shares the
+pointer (`stack_overflow` at entry or at a call, `bad_indirect`), returns, `alloca` (the floor compared with
+the rounded pointer), `stacksave`, `stackrestore` (`bad_stack_restore`), explicit faults, `effect`, `exit`
+and quantum instructions. Non-local jumps and `retaddr` are not yet in it. It shares the
 public IR reader, not executor stepping code, and is not a circuit compiler.
 
 Exact complex integer amplitudes with a common denominator of 8 check all 64 prepared configurations of the
@@ -2098,11 +2099,12 @@ argument, result and fault registers, including relative phases and superposed t
 the executor within `1e-14` per real or imaginary component. Hand-written cases, each with its results worked
 by hand, cover arithmetic, private memory, calls, input-dependent loops and two nested loops, division and
 bounds faults, `effect`/`exit`, a single budget exhausted only for some argument values, shift amounts at and
-beyond the width, signed quotients and remainders, `or` and signed order, `switch`, and frames that fit exactly
-at the floor, overflow one call deeper and are released by each return.
+beyond the width, signed quotients and remainders, `or` and signed order, `switch`, frames that fit exactly
+at the floor, overflow one call deeper and are released by each return, and stack reservations rounded
+down, overflowing below the floor and restored to saved, unsaved and out-of-range pointers.
 `crates/exec/tests/compute_copy_generated.rs` generates seeded applied functions of two 3-bit arguments over
-these families, with helpers called directly and through addresses and memory sized so that frames overflow at
-entry or at a call. For each of the 64 argument values the reference's own run gives the step at which it
+these families, with helpers called directly and through addresses, stack reservations with stores and
+restores, and memory sized so that frames overflow at entry or at a call. For each of the 64 argument values the reference's own run gives the step at which it
 finishes; the executor is compared at budget zero, one step before, at and after each finish, and at a bound
 beyond them, and the whole construction is compared on all inputs and on a superposition with phases. The test
 also requires that the seeds reach a return and each fault the families can give. A longer sweep is ignored by
