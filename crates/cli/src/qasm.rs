@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 use std::ops::Range;
 
-use bennett_exec::{Device, GateOp, Outcome, RunError, Wire};
-use bennett_ir::Gate;
+use bennett_exec::{Device, GateOp, Outcome, RunError, SimulatedDevice, Wire};
+use bennett_ir::{FixedGate, Gate, Rotation};
 
 #[derive(Clone, Copy)]
 struct Qubit {
@@ -14,21 +14,23 @@ struct Qubit {
     index: u64,
 }
 
-pub(crate) struct QasmDevice<W, I> {
+/// Writes each command after the run's own simulation has carried it out, and annotates each measurement
+/// with the outcome the simulation sampled.
+pub(crate) struct QasmDevice<W> {
     output: W,
     write_error: Cell<Option<io::Error>>,
-    bits: I,
+    simulation: SimulatedDevice,
     wires: HashMap<Wire, Qubit>,
     next_register: u64,
 }
 
-impl<W: Write, I> QasmDevice<W, I> {
-    pub(crate) fn new(mut output: W, seed: u64, bits: I) -> io::Result<Self> {
+impl<W: Write> QasmDevice<W> {
+    pub(crate) fn new(mut output: W, seed: u64) -> io::Result<Self> {
         writeln!(output, "OPENQASM 3.0;\ninclude \"stdgates.inc\";")?;
-        writeln!(output, "// Bennett run with synthetic measurement outcomes (seed {seed}).")?;
-        writeln!(output, "// An annotated outcome can have probability zero.")?;
+        writeln!(output, "// Bennett run; measurement outcomes sampled from the run's own simulation (seed {seed}).")?;
         writeln!(output, "// A release_zero request assumes a replay with the recorded outcomes.")?;
-        Ok(Self { output, write_error: Cell::new(None), bits, wires: HashMap::new(), next_register: 0 })
+        let simulation = SimulatedDevice::new(seed, None);
+        Ok(Self { output, write_error: Cell::new(None), simulation, wires: HashMap::new(), next_register: 0 })
     }
 
     // The device interface returns a static diagnostic. Keep the I/O cause for the CLI.
@@ -59,11 +61,12 @@ impl<W: Write, I> QasmDevice<W, I> {
     }
 }
 
-impl<W: Write, I: Iterator<Item = bool>> Device for QasmDevice<W, I> {
+impl<W: Write> Device for QasmDevice<W> {
     fn allocate(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
         if wires.is_empty() {
             return Ok(());
         }
+        self.simulation.allocate(wires.clone())?;
         let register = self.next_register;
         let next = register.checked_add(1).ok_or(RunError::Device("OpenQASM register numbers exhausted"))?;
         let first = wires.start;
@@ -77,14 +80,15 @@ impl<W: Write, I: Iterator<Item = bool>> Device for QasmDevice<W, I> {
     }
 
     fn gate(&mut self, gate: GateOp<&[Wire]>) -> Result<(), RunError> {
+        self.simulation.gate(gate)?;
         self.command(|output, live| {
             for _ in gate.controls {
                 write!(output, "ctrl @ ")?;
             }
             match gate.kind {
-                Gate::Fixed(kind) => write!(output, "{} ", kind.mnemonic())?,
+                Gate::Fixed(kind) => write!(output, "{} ", fixed_name(kind))?,
                 // Debug formatting round-trips the finite binary64 angle, including signed zero.
-                Gate::Rotate(axis, angle) => write!(output, "{}({angle:?}) ", axis.mnemonic())?,
+                Gate::Rotate(axis, angle) => write!(output, "{}({angle:?}) ", rotation_name(axis))?,
             }
             write_operands(output, live, gate.controls.iter().copied().chain(std::iter::once(gate.target)))?;
             writeln!(output, ";")
@@ -92,21 +96,63 @@ impl<W: Write, I: Iterator<Item = bool>> Device for QasmDevice<W, I> {
     }
 
     fn measure(&mut self, wire: Wire) -> Result<bool, RunError> {
-        let bit = self.bits.next().ok_or(RunError::Device("measurement source exhausted"))?;
-        self.command(|output, live| {
-            write!(output, "measure ")?;
-            write_operands(output, live, [wire])?;
-            writeln!(output, "; // outcome {}", u8::from(bit))
-        })?;
+        let bit = self.simulation.measure(wire)?;
+        self.write_measurement(wire, bit)?;
         Ok(bit)
     }
 
+    /// One joint sample of all the ranges, as the simulator takes it, written one qubit at a time.
+    fn measure_many(&mut self, ranges: &[Range<Wire>]) -> Result<Vec<u64>, RunError> {
+        let words = self.simulation.measure_many(ranges)?;
+        for (range, word) in ranges.iter().zip(&words) {
+            for (bit, wire) in range.clone().enumerate() {
+                self.write_measurement(wire, (word >> bit) & 1 == 1)?;
+            }
+        }
+        Ok(words)
+    }
+
     fn discard(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
+        self.simulation.discard(wires.clone())?;
         self.release(wires, "discard", " (partial trace)")
     }
 
     fn release_zero(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
+        self.simulation.release_zero(wires.clone())?;
         self.release(wires, "release_zero requested for", "")
+    }
+}
+
+impl<W: Write> QasmDevice<W> {
+    fn write_measurement(&mut self, wire: Wire, bit: bool) -> Result<(), RunError> {
+        self.command(|output, live| {
+            write!(output, "measure ")?;
+            write_operands(output, live, [wire])?;
+            writeln!(output, "; // outcome {}", u8::from(bit))
+        })
+    }
+}
+
+/// The gate's name in OpenQASM's `stdgates.inc`, spelled out here rather than taken from the device
+/// language's own mnemonics, which name the same gates for another reader.
+fn fixed_name(gate: FixedGate) -> &'static str {
+    match gate {
+        FixedGate::X => "x",
+        FixedGate::H => "h",
+        FixedGate::Z => "z",
+        FixedGate::S => "s",
+        FixedGate::Sdg => "sdg",
+        FixedGate::T => "t",
+        FixedGate::Tdg => "tdg",
+    }
+}
+
+/// The rotation's name in `stdgates.inc`.
+fn rotation_name(axis: Rotation) -> &'static str {
+    match axis {
+        Rotation::Rx => "rx",
+        Rotation::Ry => "ry",
+        Rotation::Rz => "rz",
     }
 }
 

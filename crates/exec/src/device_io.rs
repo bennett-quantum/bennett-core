@@ -31,12 +31,12 @@ pub(crate) struct DeviceContext<'a> {
 }
 
 /// Adapts the sparse simulator's register columns to device commands.
-struct Simulator<'a> {
-    state: &'a mut QuantumState,
-    rng: &'a mut ChaCha8Rng,
-    limit: Option<usize>,
+pub(crate) struct Simulator<'a> {
+    pub(crate) state: &'a mut QuantumState,
+    pub(crate) rng: &'a mut ChaCha8Rng,
+    pub(crate) limit: Option<usize>,
     /// The controller reserves a column for a language register before issuing its allocation.
-    reserved_column: Option<usize>,
+    pub(crate) reserved_column: Option<usize>,
 }
 
 /// A masked fragment of one output word in the joint measurement key.

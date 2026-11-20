@@ -71,7 +71,7 @@ struct RunArgs {
     /// same as --allow-region-faults.
     #[arg(long)]
     machine_meaning: bool,
-    /// The seed for simulator sampling or synthetic count and QASM measurements.
+    /// The seed for simulator and QASM measurement sampling, or for synthetic count measurements.
     #[arg(long, value_name = "N", default_value_t = 0)]
     seed: u64,
     /// Run forward, then backward, and report whether the state returned to the entry state.

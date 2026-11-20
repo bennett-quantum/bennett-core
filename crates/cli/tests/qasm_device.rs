@@ -202,21 +202,106 @@ fn rotations_preserve_angle_bits_and_control_then_target_order() {
     );
 }
 
+// A second measurement of the same qubit repeats the first outcome, whichever it was.
 #[test]
 fn measurements_write_the_outcomes_where_the_controller_received_them() {
-    for (seed, first, second) in [("1", "1", "0"), ("42", "0", "1")] {
-        let args = [COUNTS, "--entry", "adaptive", "--seed", seed];
+    let mut seen = [false; 2];
+    for seed in 0..8 {
+        let seed = seed.to_string();
+        let args = [COUNTS, "--entry", "adaptive", "--seed", &seed];
         let trace = Trace::new(&format!("adaptive-{seed}"));
         let report = trace.export(&args);
         let text = trace.read();
         let commands: Vec<_> = text.lines().skip_while(|line| *line != "h q0[0];").collect();
+        let first = commands[1].strip_prefix("measure q0[0]; // outcome ").expect("first measurement");
         assert!(report.contains(&format!("result: {first}\n")), "{report}");
-        assert_eq!(commands[1], format!("measure q0[0]; // outcome {first}"));
-        assert_eq!(commands[2], format!("measure q0[0]; // outcome {second}"));
+        assert_eq!(commands[2], format!("measure q0[0]; // outcome {first}"), "seed {seed}");
         assert_eq!(commands.last(), Some(&format!("// returned {first} (run status 0)").as_str()));
-        assert_eq!(commands[3..commands.len() - 1], vec!["x q0[0];"; if first == "1" { 10 } else { 0 }]);
-        assert_eq!(recount(&text), counted(&args));
+        let flips = if first == "1" { 10 } else { 0 };
+        assert_eq!(commands[3..commands.len() - 1], vec!["x q0[0];"; flips]);
+        // The counter takes synthetic bits, so its counts describe another execution of this program.
+        assert_eq!(recount(&text), [1 + flips, 0, 0]);
+        seen[usize::from(first == "1")] = true;
     }
+    assert_eq!(seen, [true, true], "the seeds reach both outcomes");
+}
+
+// The outcomes come from the run's own simulation: both halves of a Bell pair agree under every seed,
+// both values occur, and the result is the one the simulator device reports for the same seed.
+#[test]
+fn measured_outcomes_follow_the_simulated_state() {
+    let mut seen = [false; 2];
+    for seed in 0..16 {
+        let seed = seed.to_string();
+        let args = [FIXTURE, "--entry", "bell", "--seed", &seed];
+        let trace = Trace::new(&format!("bell-{seed}"));
+        let exported = trace.export(&args);
+        let outcomes: Vec<_> = trace
+            .read()
+            .lines()
+            .filter_map(|line| line.split_once("; // outcome ").map(|(_, bit)| bit.to_owned()))
+            .collect();
+        assert_eq!(outcomes.len(), 2);
+        assert_eq!(outcomes[0], outcomes[1], "seed {seed}: a Bell pair's outcomes agree");
+        let value = if outcomes[0] == "1" { 3 } else { 0 };
+        assert!(exported.starts_with(&format!("result: {value}")), "{exported}");
+        let simulated = report(run("simulator", &args, None));
+        assert!(simulated.starts_with(&format!("result: {value}")), "seed {seed}: {simulated}");
+        seen[usize::from(value == 3)] = true;
+    }
+    assert_eq!(seen, [true, true], "the seeds reach both outcomes");
+}
+
+/// One qubit's state under the one-qubit gates of `stdgates.inc`, worked here from their definitions.
+fn one_qubit_gate(name: &str, [a, b]: [(f64, f64); 2]) -> [(f64, f64); 2] {
+    let r = std::f64::consts::FRAC_1_SQRT_2;
+    let times = |(x, y): (f64, f64), (c, d): (f64, f64)| (x * c - y * d, x * d + y * c);
+    match name {
+        "h" => [((a.0 + b.0) * r, (a.1 + b.1) * r), ((a.0 - b.0) * r, (a.1 - b.1) * r)],
+        "x" => [b, a],
+        "z" => [a, (-b.0, -b.1)],
+        "s" => [a, times(b, (0.0, 1.0))],
+        "sdg" => [a, times(b, (0.0, -1.0))],
+        "t" => [a, times(b, (r, r))],
+        "tdg" => [a, times(b, (r, -r))],
+        other => panic!("not a one-qubit gate of this check: {other}"),
+    }
+}
+
+// `h t t sdg h` is the identity and so is `h tdg tdg s h`; with T and T-dagger exchanged in the file,
+// each would be `h z h`, a NOT. Reading the file's own gates, each recorded outcome must have
+// probability one.
+#[test]
+fn t_and_t_dagger_are_written_as_themselves() {
+    let trace = Trace::new("phases");
+    assert!(trace.export(&[FIXTURE, "--entry", "phases"]).starts_with("result: 0\n"));
+    let mut qubits = HashMap::new();
+    let mut measured = 0;
+    for line in trace.read().lines() {
+        let (code, comment) = line.split_once("//").map_or((line, ""), |(code, comment)| (code.trim(), comment.trim()));
+        let Some(statement) = code.strip_suffix(';') else { continue };
+        let Some((name, operand)) = statement.split_once(' ') else { continue };
+        match name {
+            "OPENQASM" | "include" | "reset" => {}
+            declaration if declaration.starts_with("qubit[") => {}
+            "measure" => {
+                let [zero, one]: [(f64, f64); 2] = qubits[operand];
+                let outcome = comment.strip_prefix("outcome ").expect("an annotated outcome");
+                let amplitude = if outcome == "1" { one } else { zero };
+                let probability = amplitude.0 * amplitude.0 + amplitude.1 * amplitude.1;
+                assert!((probability - 1.0).abs() < 1e-12, "{operand} outcome {outcome}: probability {probability}");
+                measured += 1;
+            }
+            gate => {
+                let state = qubits.entry(operand.to_owned()).or_insert([(1.0, 0.0), (0.0, 0.0)]);
+                *state = one_qubit_gate(gate, *state);
+            }
+        }
+    }
+    assert_eq!(measured, 2);
+    let text = trace.read();
+    assert_eq!(gates(&text).filter(|(name, _)| *name == "t").count(), 2);
+    assert_eq!(gates(&text).filter(|(name, _)| *name == "tdg").count(), 2);
 }
 
 #[test]
@@ -354,25 +439,47 @@ fn a_file_size_limit_does_not_publish_a_partial_trace() {
     }
 }
 
+// Z leaves the initial zero byte unchanged, so every simulated outcome is zero, the controller adds no X
+// gates, and its request to release the byte in zero holds in the simulated state.
+// The report of each compiled `apply` follows publication: a trace that is never published (here a file
+// size limit of zero makes the final write fail) leaves no report of an `apply` it compiled.
+#[cfg(target_os = "linux")]
 #[test]
-fn a_zero_byte_can_have_impossible_synthetic_outcomes() {
+fn the_apply_report_follows_publication() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("trace directory");
+    let path = dir.path().join("output.qasm");
+    let args = [FIXTURE, "--entry", "applied", "--arg", "1"];
+    let published = report(run("qasm", &args, Some(&path)));
+    assert!(published.contains("apply @both uses "), "{published}");
+    fs::remove_file(&path).expect("remove the published trace");
+    let output = Command::new("sh")
+        .current_dir(EXAMPLES)
+        .args(["-c", "ulimit -f 0 && trap '' XFSZ && exec \"$@\"", "sh", BIN])
+        .args(["run", "--device", "qasm", "--qasm-output"])
+        .arg(&path)
+        .args(args)
+        .output()
+        .expect("run bennett with a file size limit");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("File too large"), "{output:?}");
+    assert_eq!(dir.path().read_dir().expect("read trace directory").count(), 0);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("apply @"), "{stdout}");
+}
+
+#[test]
+fn a_zero_byte_measures_zero_and_is_released_in_zero() {
     let args = [FIXTURE, "--entry", "measure_zero_byte", "--seed", "1"];
     assert!(report(run("simulator", &args, None)).starts_with("result: 0\n"));
     let trace = Trace::new("zero-byte");
-    assert!(trace.export(&args).starts_with("result: 37\n"));
+    assert!(trace.export(&args).starts_with("result: 0\n"));
     let text = trace.read();
-    assert!(text.contains("synthetic measurement outcomes (seed 1)"));
-    assert!(text.contains("An annotated outcome can have probability zero."));
+    assert!(text.contains("measurement outcomes sampled from the run's own simulation (seed 1)"));
     assert!(text.contains("A release_zero request assumes a replay with the recorded outcomes."));
     let measured: String =
         text.lines().filter_map(|line| line.split_once("; // outcome ").map(|(_, bit)| bit)).collect();
-    assert_eq!(measured, "10100100");
-    // Z leaves the initial zero byte unchanged. A physical measurement reads zero, so the three X gates
-    // from the synthetic outcomes would leave the byte at 37 when the controller asks to release it in zero.
-    assert_eq!(
-        gates(&text).collect::<Vec<_>>(),
-        [("z", vec!["q0[0]"]), ("x", vec!["q0[0]"]), ("x", vec!["q0[2]"]), ("x", vec!["q0[5]"])]
-    );
+    assert_eq!(measured, "00000000");
+    assert_eq!(gates(&text).collect::<Vec<_>>(), [("z", vec!["q0[0]"])]);
     assert!(text.lines().any(|line| line.starts_with("// release_zero requested for q0[0]")));
 }
 

@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::ops::Range;
 
-use bennett_exec::{Device, Executor, GateOp, Outcome, RunError, StartError, Wire};
+use bennett_exec::{Device, Executor, GateOp, Options, Outcome, RunError, SimulatedDevice, StartError, Wire};
 use bennett_ir::{Fault, FixedGate, Gate};
 
 #[derive(Debug, PartialEq)]
@@ -178,4 +178,42 @@ fn the_default_device_commands_expand_a_named_block() {
     for commands in device.commands[1..].chunks_exact(one_call.len()) {
         assert_eq!(commands, one_call);
     }
+}
+
+// The simulator behind the device interface samples a run's measurements as the simulator's own run does
+// with the same seed: a three-qubit GHZ state measured as a register reads 0 or 7, never a mixed value,
+// both values occur over the seeds, and each seed gives the simulator's own result. A qubit left in one
+// is not released in zero.
+#[test]
+fn the_simulated_device_samples_like_the_simulator() {
+    let module = bennett_ir::load(
+        "memory 64
+        func @main() -> i3 {
+        entry:
+            %q = qalloc 3
+            h %q[0]
+            x %q[1] ctrl %q[0]
+            x %q[2] ctrl %q[1]
+            %m = measure %q
+            ret %m
+        }",
+    )
+    .expect("valid module");
+    let main = module.function_named("main").expect("main");
+    let mut seen = [false; 2];
+    for seed in 0..16 {
+        let mut device = SimulatedDevice::new(seed, None);
+        let run = Executor::run_on(&module, main, &[], None, &mut device).expect("start");
+        let own = Executor::new(&module, main, &[], Options { seed, ..Options::default() }).expect("start").run();
+        assert_eq!(run.outcome, own, "seed {seed}");
+        let Outcome::Returned(Some(value)) = run.outcome else { panic!("{:?}", run.outcome) };
+        assert!(value == 0 || value == 7, "seed {seed}: {value}");
+        seen[usize::from(value == 7)] = true;
+        assert_eq!(device.snapshot().amplitudes.len(), 1, "the measurement keeps one configuration");
+    }
+    assert_eq!(seen, [true, true]);
+    let mut device = SimulatedDevice::new(0, None);
+    device.allocate(0..1).expect("allocate");
+    device.gate(GateOp { kind: Gate::Fixed(FixedGate::X), target: 0, controls: &[] }).expect("set the wire");
+    assert_eq!(device.release_zero(0..1), Err(RunError::Device("release_zero requires zero wires")));
 }
