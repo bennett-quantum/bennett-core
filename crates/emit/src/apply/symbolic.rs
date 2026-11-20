@@ -243,6 +243,7 @@ impl<'a> Frame<'a> {
                 | Inst::Qfree { .. }
                 | Inst::Gate { .. }
                 | Inst::GateAt { .. }
+                | Inst::RotateBy { .. }
                 | Inst::Measure { .. }
                 | Inst::Apply { .. } => return Ok(Step::Fault(Fault::QuantumInRegion)),
             };
@@ -294,6 +295,7 @@ pub(super) fn before_instruction_fault(block: &Block) -> (&[Inst], Option<&Termi
                 | Inst::Qfree { .. }
                 | Inst::Gate { .. }
                 | Inst::GateAt { .. }
+                | Inst::RotateBy { .. }
                 | Inst::Measure { .. }
                 | Inst::Apply { .. }
         )
@@ -331,6 +333,7 @@ fn unsupported(inst: &Inst) -> Option<(&'static str, &'static str)> {
         | Inst::Qfree { .. }
         | Inst::Gate { .. }
         | Inst::GateAt { .. }
+        | Inst::RotateBy { .. }
         | Inst::Measure { .. }
         | Inst::Apply { .. } => return None,
     })

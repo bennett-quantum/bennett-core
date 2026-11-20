@@ -1,6 +1,8 @@
 //! The device program: modules, functions, blocks and instructions.
 
-use crate::{BinOp, BlockId, CastOp, Const, Fault, FuncId, Gate, Operand, Predicate, Qubits, Slot, Type, Width};
+use crate::{
+    BinOp, BlockId, CastOp, Const, Fault, FuncId, Gate, Operand, Predicate, Qubits, Rotation, Slot, Type, Width,
+};
 
 /// A device program: functions, an initial memory image and a memory size.
 ///
@@ -428,6 +430,19 @@ pub enum Inst {
         /// The control qubits.
         controls: Vec<Place>,
     },
+    /// `rx(%angle) target [ctrl controls]` (or `ry`, `rz`): a rotation by an angle computed at run time,
+    /// the `i64` in `angle` read as the bits of an IEEE 754 binary64; an angle that is not finite is the
+    /// fault `bad_angle`. Its qubits are in registers or in memory, as `GateAt`'s.
+    RotateBy {
+        /// The axis.
+        axis: Rotation,
+        /// The `i64` slot holding the angle's binary64 bits, in radians.
+        angle: Slot,
+        /// The qubit acted on.
+        target: Place,
+        /// The control qubits.
+        controls: Vec<Place>,
+    },
     /// `dst = measure register` or `dst = measure iN [address]`: samples the qubits' value and collapses
     /// the state.
     Measure {
@@ -490,6 +505,7 @@ impl Inst {
             | Inst::Qfree { .. }
             | Inst::Gate { .. }
             | Inst::GateAt { .. }
+            | Inst::RotateBy { .. }
             | Inst::Apply { .. } => None,
         }
     }
@@ -534,6 +550,15 @@ impl Inst {
             Inst::Gate { target, controls, .. } => {
                 operand(&Operand::Slot(target.register));
                 controls.iter().for_each(|c| operand(&Operand::Slot(c.register)));
+            }
+            Inst::RotateBy { angle, target, controls, .. } => {
+                operand(&Operand::Slot(*angle));
+                for place in std::iter::once(target).chain(controls) {
+                    match place {
+                        Place::Register(qubit) => operand(&Operand::Slot(qubit.register)),
+                        Place::Memory { address, .. } => operand(address),
+                    }
+                }
             }
             Inst::GateAt { target, controls, .. } => {
                 for place in std::iter::once(target).chain(controls) {

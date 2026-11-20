@@ -69,9 +69,10 @@ first `N` steps, for any `N`, are equivalent to a finite quantum circuit whose m
 end.
 Part 3 is not covered by that equivalence; why a device can carry it out is argued separately ("`apply`").
 
-Rotations accept any angle. Today angles are written as finite `f64` literals (`docs/SYNTAX.md`).
-The device language and C markers will also accept an ordinary value computed by the control program,
-as needed for the one-control-qubit Shor program. A device with a finite gate set approximates rotations.
+Rotations accept any angle: a finite `f64` literal, or an ordinary value computed by the control program, an
+`i64` read as the bits of a binary64 when the gate runs (`docs/SYNTAX.md`), as the one-control-qubit Shor
+program needs; an angle that is not finite is the fault `bad_angle`. The C markers do not take a computed
+angle yet (the front is stopped). A device with a finite gate set approximates rotations.
 
 ## The device program (`ir`)
 
@@ -97,7 +98,8 @@ A module is a list of functions, an initial memory image and a memory size.
 - **Every operation is total.** A shift by at least the width gives 0. Division by zero, an out-of-bounds access, a
   bad indirect target, `unreachable` and an exhausted budget are *named faults*: part of the result, never a crash.
 - **Quantum instructions**, issued by ordinary code: `qalloc w`, `qfree`, single-qubit gates
-  (`x h z s sdg t tdg rx ry rz`) with an optional list of control qubits, each qubit in a register or at a
+  (`x h z s sdg t tdg rx ry rz`, a rotation's angle a literal or an `i64` computed at run time,
+  `Inst::RotateBy`) with an optional list of control qubits, each qubit in a register or at a
   bit of memory ("Qubits in memory", below), `measure` of a register or of bits at an address, and `apply`
   (below).
 
@@ -126,7 +128,8 @@ straightforward expansion into ordinary code; none reads or acts on a qubit:
   run like its memory size.
 - **Reverse.** In the simulator’s reversible mode each step appends to an undo journal exactly what it overwrites: the old value
   of a slot, the old bytes of a store, the predecessor of a control transfer, the stack pointer. Reversal pops
-  the journal. The journal is a few machine words per step and never holds a copy of the whole state. Console
+  the journal. A rotation by a computed angle is undone by the rotation by its negation, the angle read
+  again from its slot, which holds the same value once every later step is undone. The journal is a few machine words per step and never holds a copy of the whole state. Console
   output goes to a tape and is unwound with it. Gates are undone by their inverses and an `apply` by applying
   it again; reversal past a measurement is refused with a named error.
 - **Why reverse exists.** Keeping what each step overwrites makes a run on definite values reversible step by
@@ -237,7 +240,8 @@ the native controls described above, so their one-qubit, two-qubit and Toffoli g
 for the same measurement outcomes.
 The file expands gate blocks at each call. Gates use `stdgates.inc` with `ctrl @` for each control,
 in control-then-target order.
-The rotation literals round-trip to the exact finite `f64` angles used by the run.
+The rotation angles round-trip to the exact finite `f64` angles used by the run: a literal, or for a
+rotation by a computed angle the value that run computed (the file records the run, not the program).
 
 Each device allocation declares a fresh qubit array and resets it to zero, including allocations of
 scratch. OpenQASM declarations leave the initial state undefined. The reset implements the allocation
@@ -1849,8 +1853,9 @@ The front writes `retaddr N` for every `llvm.returnaddress(N)` in the default ad
   frames in place for reversal. C's `_Noreturn void __bennett_exit(int)` lowers to it; like
   `void __bennett_effect(char)`, it is an ordinary device call, not a quantum marker.
 - Fault codes fit in 5 bits (`Fault::CODE_WIDTH`, widened from 4 on 2026-11-16, the maintainer's decision); a
-  fault register is at least that wide, so every fault register of a program is a `q5` or wider. Fifteen of
-  the 31 nonzero codes are used, the last `qubit_memory_access` (17); 11 was `dirty_free` and 15
+  fault register is at least that wide, so every fault register of a program is a `q5` or wider. Sixteen of
+  the 31 nonzero codes are used, the last `bad_angle` (18, a rotation whose computed angle is not finite);
+  11 was `dirty_free` and 15
   `bad_rewind`, both removed on 2026-11-17. Those codes stay unused and the remaining codes keep their
   numbers because programs may have measured the old codes.
 - `qfree` is the partial trace and never faults ("Releasing a register", below).
