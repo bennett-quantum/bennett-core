@@ -515,6 +515,10 @@ qubit-dependent amount, and `(x*x) XOR x` on one bit. For `srem i2 %x, 1` it pro
 bits on qubits. Storing that remainder adds two retained qubits and four gates. The arithmetic
 address proof alone refuses the remainder as an address. Guarded replay can recognise its value
 where the address proof can replay all inputs. The remainder has value zero for every input.
+Writing one or zero to initially zero byte 8 with two disjoint guarded stores retains one qubit
+and uses two CNOTs, causing `WireSpace` with no spare wire, and the existing conditional
+selection could fold writes to bytes touched only by fixed-address stores before publishing
+each final byte once.
 
 **Varying addresses.** A `data` segment declares a region for varying-address accesses.
 For small argument interfaces, the emitter replays every assignment allowed by the dispatch guard.

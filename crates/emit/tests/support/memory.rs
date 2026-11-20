@@ -956,6 +956,34 @@ done:
 }
 
 #[test]
+fn every_load_candidate_touching_the_same_held_byte_faults() {
+    let module = module(
+        r#"
+data 32 = i64 0
+func @f(i3 %x) -> i8 {
+entry:
+    %low = trunc i3 %x to i2
+    %offset = zext i2 %low to i64
+    %p = or i64 %offset, 32
+    %word = load i16 %p
+    %r = trunc i16 %word to i8
+    ret %r
+}
+"#,
+        "    x [33:0]\n    x [33:0]",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=7 {
+            let (_, _, values) = compare(&module, "overlapping held-byte candidates", budget, mode);
+            let expected = (0..8).map(|x| {
+                if x & 3 < 2 { bounds(budget, 4, Err(Fault::QubitMemoryAccess)) } else { bounds(budget, 6, Ok(0)) }
+            });
+            assert_eq!(values, expected.collect::<Vec<_>>());
+        }
+    }
+}
+
+#[test]
 fn no_configuration_runs_a_store_after_a_faulting_lookup() {
     let module = module(
         r#"
