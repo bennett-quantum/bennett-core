@@ -531,25 +531,22 @@ impl QuantumState {
 
     /// Samples, jointly, the bits `mask` of each column `column` in `picks` and collapses the state onto the
     /// values found, one per pick: one draw, the values in the order of the picks compared as a sequence (for
-    /// one whole column, the order of its values, as `measure` always had). Other bits keep their
-    /// superposition.
+    /// one whole column, the order of its values, as `measure` always had), selected by `pick`. Other bits
+    /// keep their superposition.
     pub(crate) fn measure_bits(&mut self, picks: &[(usize, u64)], rng: &mut impl Rng) -> Vec<u64> {
         let key = |config: &[u64]| -> Vec<u64> { picks.iter().map(|&(column, mask)| config[column] & mask).collect() };
         let mut probabilities = BTreeMap::<Vec<u64>, f64>::new();
         for (config, amplitude) in &self.amplitudes {
             *probabilities.entry(key(config)).or_default() += amplitude.norm_sqr();
         }
-        let total: f64 = probabilities.values().sum();
-        let mut threshold = rng.random::<f64>() * total;
-        let mut outcome = probabilities.last_key_value().map_or((vec![0; picks.len()], 1.0), |(v, &p)| (v.clone(), p));
-        for (value, &probability) in &probabilities {
-            if threshold < probability {
-                outcome = (value.clone(), probability);
-                break;
-            }
-            threshold -= probability;
-        }
-        let (value, probability) = outcome;
+        let weights: Vec<f64> = probabilities.values().copied().collect();
+        // The total is the last running sum, computed as `pick` computes the others.
+        let total = weights.iter().fold(0.0, |sum, weight| sum + weight);
+        let draw = rng.random::<f64>() * total;
+        let (value, probability) = match pick(&weights, draw).and_then(|index| probabilities.into_iter().nth(index)) {
+            Some(outcome) => outcome,
+            None => (vec![0; picks.len()], 1.0),
+        };
         let scale = probability.sqrt().recip();
         self.amplitudes.retain(|config, _| key(config) == value);
         self.amplitudes.values_mut().for_each(|amplitude| *amplitude *= scale);
@@ -597,6 +594,30 @@ impl QuantumState {
     pub(crate) fn peak_configurations(&self) -> usize {
         self.peak_configurations
     }
+}
+
+/// The outcome a draw selects. The outcomes, in order, own the consecutive half-open intervals
+/// `[before, after)` between the running sums of their weights, computed in floating point: outcome `i` is
+/// selected when the draw is not below the sum before it and strictly below the sum after it. An outcome
+/// whose weight is below the rounding unit of the running sum has an empty interval (`after == before`) and
+/// is never selected. If rounding puts the draw at or above the last running sum, the last outcome whose
+/// interval is not empty is selected. `None` only if no interval is non-empty (no outcome of positive
+/// weight).
+fn pick(weights: &[f64], draw: f64) -> Option<usize> {
+    let mut before = 0.0;
+    let mut last = None;
+    for (index, &weight) in weights.iter().enumerate() {
+        let after = before + weight;
+        if after > before {
+            // No earlier non-empty interval took the draw, so it is not below `before`.
+            if draw < after {
+                return Some(index);
+            }
+            last = Some(index);
+        }
+        before = after;
+    }
+    last
 }
 
 /// Whether the simulator may hold `more` qubits besides `live`: its qubit counts in `Stats` are `u32`, and
