@@ -673,6 +673,42 @@ entry:
 }
 
 #[test]
+fn a_callee_cannot_restore_one_byte_above_its_own_ceiling() {
+    let module = module(
+        r#"
+func @f(i3 %x) -> i8 {
+entry:
+    %odd = trunc i3 %x to i1
+    br %odd, enter, done
+enter:
+    %r = call @child()
+    ret %r
+done:
+    ret 3
+}
+func @child() -> i8 {
+entry:
+    %top = stacksave
+    %above = add i64 %top, 1
+    stackrestore %above
+    ret 19
+}
+"#,
+        "",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=9 {
+            let (_, counts, values) = compare(&module, "callee restore ceiling", budget, mode);
+            assert_eq!(counts, MemoryCounts::default());
+            let expected = (0..8).map(|x| {
+                if x & 1 == 0 { bounds(budget, 3, Ok(3)) } else { bounds(budget, 6, Err(Fault::BadStackRestore)) }
+            });
+            assert_eq!(values, expected.collect::<Vec<_>>());
+        }
+    }
+}
+
+#[test]
 fn stack_faults_freeze_at_the_failing_attempt() {
     let cases = [
         ("%small = alloca %size\n    %r = call @child()\n    ret %r", 3, Fault::StackOverflow),
