@@ -115,6 +115,21 @@ fn every_named_fault_and_region_stop_matches_the_executor() {
 }
 
 #[test]
+fn quantum_instructions_inside_apply_give_quantum_in_region() {
+    for stop in [
+        // An addressed instruction must fault before checking the address or touching any byte.
+        "x [0xffffffffffffffff]\n    fault unreachable",
+        "%m = measure i8 [0xffffffffffffffff]\n    fault unreachable",
+        // A valid applied function can name register handles only after a producer.
+        // These operations appear in the copy, and the first allocation faults before them.
+        "%q = qalloc 1\n    x %q\n    %m = measure %q\n    qfree %q\n    fault unreachable",
+        "%q = qalloc 2\n    %error = qalloc 5\n    apply @f(%a, %b) -> %q, %error budget 7\n    fault unreachable",
+    ] {
+        compare_guarded_stop(stop, Fault::QuantumInRegion);
+    }
+}
+
+#[test]
 fn a_region_stop_cannot_replace_an_earlier_fault_or_plan_a_dead_call() {
     let module = load(&format!(
         r#"

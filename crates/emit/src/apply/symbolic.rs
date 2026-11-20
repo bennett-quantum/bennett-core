@@ -1,7 +1,7 @@
 //! The state of an applied frame and the transition for one instruction.
 
 use bennett_ir::{
-    BinOp, Block, BlockId, Fault, FuncId, Gate, Inst, Operand, Slot, SwitchCase, Target, Terminator, Type, ValidModule,
+    BinOp, Block, BlockId, Fault, FuncId, Inst, Operand, Slot, SwitchCase, Target, Terminator, Type, ValidModule,
 };
 
 use super::ApplyError;
@@ -224,15 +224,15 @@ impl<'a> Frame<'a> {
                 | Inst::StackSave { .. }
                 | Inst::StackRestore { .. }
                 | Inst::Setjmp { .. }
-                | Inst::ReturnAddress { .. }
-                | Inst::Qalloc { .. }
+                | Inst::ReturnAddress { .. } => {
+                    unreachable!("checked instructions before lowering")
+                }
+                Inst::Qalloc { .. }
                 | Inst::Qfree { .. }
                 | Inst::Gate { .. }
                 | Inst::GateAt { .. }
                 | Inst::Measure { .. }
-                | Inst::Apply { .. } => {
-                    unreachable!("checked instructions before lowering")
-                }
+                | Inst::Apply { .. } => return Ok(Step::Fault(Fault::QuantumInRegion)),
             };
             return Ok(Step::Write(point.next(), dst, result));
         }
@@ -274,7 +274,19 @@ impl<'a> Frame<'a> {
 // Call planning and constant analysis stop before the first unconditional
 // instruction fault. The preflight check still validates the entire copy.
 pub(super) fn before_instruction_fault(block: &Block) -> (&[Inst], Option<&Terminator>) {
-    match block.insts.iter().position(|inst| matches!(inst, Inst::Effect { .. })) {
+    let fault = block.insts.iter().position(|inst| {
+        matches!(
+            inst,
+            Inst::Effect { .. }
+                | Inst::Qalloc { .. }
+                | Inst::Qfree { .. }
+                | Inst::Gate { .. }
+                | Inst::GateAt { .. }
+                | Inst::Measure { .. }
+                | Inst::Apply { .. }
+        )
+    });
+    match fault {
         Some(index) => (&block.insts[..index], None),
         None => (&block.insts, Some(&block.term)),
     }
@@ -305,17 +317,12 @@ fn unsupported(inst: &Inst) -> Option<(&'static str, &'static str)> {
         Inst::Setjmp { .. } => ("setjmp", "non-local control and memory"),
         Inst::ReturnAddress { .. } => ("retaddr", "applied call frames"),
         Inst::Call { .. } | Inst::CallIndirect { .. } | Inst::FuncAddr { .. } => return None,
-        Inst::Effect { .. } => return None,
-        Inst::Qalloc { .. } => ("qalloc", "explicit instruction faults"),
-        Inst::Qfree { .. } => ("qfree", "explicit instruction faults"),
-        Inst::Gate { gate, .. } | Inst::GateAt { gate, .. } => {
-            let operation = match gate {
-                Gate::Fixed(gate) => gate.mnemonic(),
-                Gate::Rotate(axis, _) => axis.mnemonic(),
-            };
-            (operation, "explicit instruction faults")
-        }
-        Inst::Measure { .. } => ("measure", "explicit instruction faults"),
-        Inst::Apply { .. } => ("apply", "explicit instruction faults"),
+        Inst::Effect { .. }
+        | Inst::Qalloc { .. }
+        | Inst::Qfree { .. }
+        | Inst::Gate { .. }
+        | Inst::GateAt { .. }
+        | Inst::Measure { .. }
+        | Inst::Apply { .. } => return None,
     })
 }

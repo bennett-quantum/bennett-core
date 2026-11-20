@@ -355,8 +355,10 @@ and `exit` inside an applied function. The [refusal table](#not-yet) gives the e
 operations and the limits on calls. A jump reads all incoming values before assigning block
 parameters. Entry stack overflow takes precedence over the budget test. Every successful instruction
 or terminator costs one step. A reached `fault` writes its named code, `effect` gives
-`effect_in_region` and `exit` gives `exit_in_region`. These attempts end the run for their enabled
-inputs before any side effect, with the same budget check as other instructions.
+`effect_in_region` and `exit` gives `exit_in_region`. A reached quantum instruction, including a
+nested `apply`, gives `quantum_in_region` before checking the register or address it names.
+These attempts end the run for their enabled inputs before any side effect, with the same
+budget check as other instructions.
 
 Automatic mode first tries the in-place residue update described below. In the general
 construction a qubit-dependent conditional jump can use **control gates**. A **guard** is a bit
@@ -2189,7 +2191,6 @@ Refused by name or not yet excluded around the classification of "What LLVM's pa
 | `store` | Memory in the step machine |
 | `load`, `alloca`, `stacksave`, `stackrestore` | Private memory and stack state |
 | `setjmp`, `longjmp` | Private memory and non-local control transfer |
-| `qalloc`, `qfree`, gates (on registers or memory), `measure`, nested `apply` | Emit `quantum_in_region` on reaching the instruction |
 
 ## Open questions
 
