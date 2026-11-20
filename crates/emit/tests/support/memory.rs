@@ -29,6 +29,11 @@ entry:
 "#;
 
 fn module(body: &str, setup: &str) -> ValidModule {
+    module_with_width(body, setup, WIDTH)
+}
+
+fn module_with_width(body: &str, setup: &str, width: usize) -> ValidModule {
+    let hadamards = (0..width).map(|bit| format!("    h %arg[{bit}]")).collect::<Vec<_>>().join("\n");
     load(&format!(
         r#"
 memory {MEMORY}
@@ -36,10 +41,8 @@ memory {MEMORY}
 func @main(i64 %budget) {{
 entry:
 {setup}
-    %arg = qalloc {WIDTH}
-    h %arg[0]
-    h %arg[1]
-    h %arg[2]
+    %arg = qalloc {width}
+{hadamards}
     %witness = qalloc 1
     x %witness ctrl %arg[0]
     s %witness
@@ -267,6 +270,32 @@ entry:
             assert_eq!(counts, MemoryCounts::default());
             assert_eq!(values, vec![bounds(budget, 8, Ok(5)); 8]);
         }
+    }
+}
+
+#[test]
+fn an_arithmetic_copy_does_not_keep_equality_to_reused_scratch() {
+    let module = module_with_width(
+        r#"
+func @f(i2 %x) -> i8 {
+entry:
+    %a = trunc i2 %x to i1
+    %hi = lshr i2 %x, 1
+    %b = trunc i2 %hi to i1
+    %product = mul i1 %a, %b
+    %sum = xor i1 %a, %b
+    %either = xor i1 %product, %sum
+    %result = zext i1 %either to i8
+    ret %result
+}
+"#,
+        "",
+        2,
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        let (_, counts, values) = compare(&module, "arithmetic scratch reuse", 8, mode);
+        assert_eq!(counts, MemoryCounts::default());
+        assert_eq!(values, [(0, 0), (1, 0), (1, 0), (1, 0)]);
     }
 }
 

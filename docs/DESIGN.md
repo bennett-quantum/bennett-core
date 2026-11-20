@@ -459,8 +459,10 @@ span for bounds before checking whether any byte holds qubits. Access to a held 
 even if its qubits hold zero. Little-endian loads use the current private values for written
 bytes and the caller's values for the rest. Stores zero the unused high bits in a partial byte.
 Each store puts its nonconstant bits in fresh scratch qubits, so a value already loaded stays
-available after an overwrite. Definite stored values need no gates or qubits. Nothing writes
-to the caller's memory. All versions remain available until the end of the whole applied call,
+available after an overwrite. Under definite control, storing a value the emitter's constant
+analysis proves definite needs no gates or qubits. Values outside that proof use gates to
+preserve the correct bits. Nothing writes to the caller's memory. All versions remain available
+until the end of the whole applied call,
 when the inverse clears them. The compiler keeps the equality between a retained bit and its
 source, including complements. Arithmetic gadgets preserve constant results and the equality of
 an unconditional result copy with a source that survives local reversal. A failed work-wire
@@ -474,6 +476,12 @@ direction if the source is complemented. A later qubit-dependent choice can use 
 control constructions. If control lowering encounters an access, the step machine checks it
 against the remaining whole-function budget. An attempted load or store there is refused at
 its own program point before emitting the apply.
+
+**Cost of missing constant proofs.** The emitter proves a literal zero, a zero shifted by a
+qubit-dependent amount, and `(x*x) XOR x` on one bit. For `srem i2 %x, 1` it produces two
+bits on qubits. Storing that remainder adds two retained qubits and four gates. Using the
+remainder as an address is refused by the definite-address check. The remainder still has
+value zero for every input.
 
 **Copied calls.** Each sequence of call sites has its own copy of the callee's slots and
 program points. Before building gates, the compiler counts one unit for each slot, instruction
