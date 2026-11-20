@@ -23,7 +23,8 @@ pub(super) fn run(
     remaining: u64,
 ) -> Result<(Copies, u64), ApplyError> {
     let mut copies = Copies::default();
-    let mut dispatch = Dispatch::from([start]);
+    let mut dispatch = Dispatch::new();
+    activate(circuit, &mut dispatch, start.0, start.1);
     let mut ticks = 0;
     for _ in 0..remaining {
         if dispatch.is_empty() {
@@ -64,10 +65,11 @@ pub(super) fn run(
                     }
                 }
                 Step::Return(word) => copies.returned.push((enabled, word)),
-                Step::CheckedTransfer(successor, incoming, failed, fault) => {
-                    let faulted = circuit.and(enabled, failed);
-                    let succeeded = circuit.and(enabled, failed.not());
-                    copies.faulted.push((faulted, fault));
+                Step::CheckedTransfer(successor, incoming, succeeded, faults) => {
+                    copies
+                        .faulted
+                        .extend(faults.into_iter().map(|(failed, fault)| (circuit.and(enabled, failed), fault)));
+                    let succeeded = circuit.and(enabled, succeeded);
                     for (dst, word) in incoming {
                         writes.entry(dst).or_default().push((succeeded, word));
                     }

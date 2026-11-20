@@ -499,7 +499,7 @@ an unconditional result copy with a source that survives local reversal. A faile
 allocation prevents folding the affected gadget and fails circuit construction before emission.
 Calls and memory instructions use the same step budget.
 
-For each call the compiler reports the retained version qubits, the memory gates including the
+For each call the compiler reports the retained memory scratch qubits, the memory gates including the
 inverse, and the peak number of bits in current byte versions represented by qubits. Copying a
 stored nonconstant bit takes one CNOT in each direction, with two additional X gates in each
 direction if the source is complemented. A later qubit-dependent choice can use the ordinary
@@ -515,6 +515,25 @@ qubit-dependent amount, and `(x*x) XOR x` on one bit. For `srem i2 %x, 1` it pro
 bits on qubits. Storing that remainder adds two retained qubits and four gates. The arithmetic
 address proof alone refuses the remainder as an address. Guarded replay can recognise its value
 where the address proof can replay all inputs. The remainder has value zero for every input.
+
+**Varying addresses.** A `data` segment declares a region for varying-address accesses.
+For small argument interfaces, the emitter replays every assignment allowed by the dispatch guard.
+The fallback interval from known address bits covers every configuration.
+Each non-faulting candidate span must fit entirely in a declared segment. An unproved bound
+is refused at the attempted instruction. The executor's bounds
+and held-byte checks still determine faults, in that order.
+
+The equality to a candidate address selects the bytes for that candidate. A load copies selected
+bits from the pre-tick map into a fresh word, leaving equal constant bits as literals. A store
+queues each candidate under its address equality and dispatch guard. Several candidate spans
+can cover the same byte. The tick combines their writes into one new version, keeping the old
+value for inputs that did not write. The controls are disjoint because a definite input executes
+one instruction per tick and has one address. Every version stays available through the inverse.
+
+The report includes the number of varying load and store dispatches, the sum of in-bounds
+candidate span sizes, and the Toffolis and retained scratch from address selection. The latter
+include fault conditions, controlled copies and the cost of combining writes at a byte touched
+by a varying store. The gate counts include the inverse.
 
 **Private stack state.** Each copied frame has a stack pointer and a ceiling at the address just
 below its slots. A call with a dynamic stack reserves its slots below the current caller pointer.
@@ -2268,7 +2287,7 @@ Refused by name or not yet excluded around the classification of "What LLVM's pa
 | Reachable recursive calls or adding a call copy that raises the total above 16,384 slots and program points | Shared call frames and return positions |
 | Reachable `call_indirect` without one proved constant address | Prove the target across visits or dispatch among supported addresses |
 | `retaddr` | Pass the suspended callers' return sites in one field of the apply input and derive the applied function's return sites from its copied calls |
-| `load` or `store` without a proved definite address | Address selection over possible bytes |
+| Varying-address `load` or `store` without a proved bound within a declared memory region | Prove the range or declare its full span |
 | `setjmp`, `longjmp` | Private memory and non-local control transfer |
 
 ## Open questions

@@ -13,7 +13,7 @@ one applied function.
 |---|---|---|
 | `ir` | the device program: one data structure, one reader/writer, one validator | step 2 |
 | `exec` | the classical controller and sparse simulator: forward, reverse (undo journal), applied functions by evaluation or emitted gates, qubits in memory | step 2 |
-| `emit` | controlled gate lowering, circuit counts, and compilation of applied integer functions | M6 |
+| `emit` | controlled gate lowering, circuit counts, and compilation of applied integer functions | M7 |
 | `cli` | `bennett run`, `bennett check` | step 2 |
 | `front` | `bennett-front` (C++, LLVM 18): bitcode with marker calls to `ir` text; taint, outlining, lowering | step 3 |
 | `opt` | optimiser and cost model | not started |
@@ -29,7 +29,8 @@ front/test.sh                                # builds bennett-front, runs its te
 
 Counting compiles supported applied integer functions into gates. It can use control gates for
 qubit-dependent choices and loops with program-proved pass counts. Loads and stores at
-definite addresses use a private byte map. Memory and stack operations under qubit-dependent
+definite addresses use a private byte map. Varying addresses use the same map for accesses
+proved to fit in declared data regions. Memory and stack operations under qubit-dependent
 control use the shared step machine. Run the same circuits on the
 simulator with `bennett run --apply-circuit auto program.bn`. The simulator, counter and OpenQASM device accept
 `--apply-circuit step-machine` to select general instruction dispatch when control depends on qubits.

@@ -162,7 +162,10 @@ entry:
     );
     let (gates, layout) = gates(&compiled, WIDTH, 13);
     assert_eq!((layout.scratch, gates.len()), (2, 4));
-    assert_eq!(compiled.memory, MemoryCounts { retained_scratch_qubits: 2, gates: 4, peak_nonconstant_bits: 2 });
+    assert_eq!(
+        compiled.memory,
+        MemoryCounts { retained_scratch_qubits: 2, gates: 4, peak_nonconstant_bits: 2, ..MemoryCounts::default() }
+    );
     bits::exhaustive(&gates, layout, |_| 0).expect("preserved data and clear scratch");
 }
 
@@ -401,7 +404,10 @@ entry:
     for budget in [5, 4, 6] {
         let (_, counts, values) = compare(&module, "high byte", budget, ApplyMode::Automatic);
         assert_eq!(values, (0..8).map(|x| bounds(budget, 5, Ok(x))).collect::<Vec<_>>());
-        assert_eq!(counts, MemoryCounts { retained_scratch_qubits: 3, gates: 6, peak_nonconstant_bits: 3 });
+        assert_eq!(
+            counts,
+            MemoryCounts { retained_scratch_qubits: 3, gates: 6, peak_nonconstant_bits: 3, ..MemoryCounts::default() }
+        );
     }
 }
 
@@ -434,6 +440,7 @@ fn stores_retain_loaded_versions_and_definite_stores_emit_nothing() {
             retained_scratch_qubits: 3 * stores,
             gates: 6 * stores,
             peak_nonconstant_bits: if stores == 0 { 0 } else { 3 },
+            ..MemoryCounts::default()
         };
         assert_eq!(stats, counts);
 
@@ -492,7 +499,7 @@ entry:
         executor.run_emitted(&mut compile),
         Outcome::Stopped(RunError::Apply(bennett_exec::ApplyError::Unsupported {
             operation: "load",
-            route: "a proved definite memory address",
+            route: "a proved address bound within a declared memory region",
             ..
         }))
     ));
@@ -580,7 +587,12 @@ join:
             let expected_counts = if budget < 4 {
                 MemoryCounts::default()
             } else {
-                MemoryCounts { retained_scratch_qubits: 2, gates: 8, peak_nonconstant_bits: 7 }
+                MemoryCounts {
+                    retained_scratch_qubits: 2,
+                    gates: 8,
+                    peak_nonconstant_bits: 7,
+                    ..MemoryCounts::default()
+                }
             };
             assert_eq!(counts, expected_counts);
         }
@@ -863,6 +875,441 @@ read:
                 assert_eq!(counts, MemoryCounts::default());
                 assert_eq!(values, [bounds(budget, 3, Ok(5)); 2]);
             }
+        }
+    }
+}
+
+#[test]
+fn declared_lookup_reads_caller_and_private_definite_bytes() {
+    let module = module(
+        r#"
+data 32 = i64 578437695752307201
+func @f(i3 %x) -> i8 {
+entry:
+    %offset = zext i3 %x to i64
+    %addr = or i64 %offset, 32
+    store i8 91, 34
+    %value = load i8 %addr
+    ret %value
+}
+"#,
+        "    store i8 46, 35",
+    );
+    let table = [1, 2, 91, 46, 5, 6, 7, 8];
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=6 {
+            let (_, counts, values) = compare(&module, "declared lookup", budget, mode);
+            assert_eq!(values, table.map(|value| bounds(budget, 5, Ok(value))));
+            assert_eq!(counts.peak_nonconstant_bits, 0);
+            if budget < 4 {
+                assert_eq!(counts, MemoryCounts::default());
+            } else {
+                assert_eq!((counts.varying_loads, counts.varying_stores, counts.candidate_bytes), (1, 0, 8));
+                assert_eq!(counts.address_scratch_qubits, counts.retained_scratch_qubits);
+                assert!(counts.gates > 0 && counts.address_toffolis > 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn varying_load_preserves_fault_order_and_the_successful_guard() {
+    let module = module(
+        r#"
+data 16 = i32 12584
+func @f(i3 %x) -> i8 {
+entry:
+    %skip = icmp eq i3 %x, 7
+    br %skip, done, choose
+choose:
+    %odd = trunc i3 %x to i1
+    %outside = icmp uge i3 %x, 4
+    %low = select i64 %odd, 18, 16
+    %high = select i64 %odd, 18446744073709551615, 1023
+    %addr = select i64 %outside, %high, %low
+    %word = load i16 %addr
+    %value = trunc i16 %word to i8
+    store i8 9, 32
+    ret %value
+done:
+    ret 55
+}
+"#,
+        "    store i16 4660, 16\n    x [18:0]\n    x [18:0]\n    x [1023:0]\n    x [1023:0]",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=12 {
+            let (_, _, values) = compare(&module, "varying load faults", budget, mode);
+            let expected = [
+                bounds(budget, 11, Ok(52)),
+                bounds(budget, 8, Err(Fault::QubitMemoryAccess)),
+                bounds(budget, 11, Ok(52)),
+                bounds(budget, 8, Err(Fault::QubitMemoryAccess)),
+                bounds(budget, 8, Err(Fault::OutOfBounds)),
+                bounds(budget, 8, Err(Fault::OutOfBounds)),
+                bounds(budget, 8, Err(Fault::OutOfBounds)),
+                bounds(budget, 3, Ok(55)),
+            ];
+            assert_eq!(values, expected);
+        }
+    }
+}
+
+#[test]
+fn no_configuration_runs_a_store_after_a_faulting_lookup() {
+    let module = module(
+        r#"
+data 16 = i16 0
+func @f(i3 %x) -> i8 {
+entry:
+    %odd = trunc i3 %x to i1
+    %p = select i64 %odd, 1023, 16
+    %word = load i16 %p
+    %q = zext i3 %x to i64
+    store i16 %word, %q
+    ret 5
+}
+"#,
+        "    x [16:0]\n    x [16:0]\n    x [1023:0]\n    x [1023:0]",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=7 {
+            let (_, _, values) = compare(&module, "lookup faults on every input", budget, mode);
+            assert_eq!(
+                values,
+                (0..8)
+                    .map(|x| bounds(
+                        budget,
+                        3,
+                        Err(if x & 1 == 1 { Fault::OutOfBounds } else { Fault::QubitMemoryAccess })
+                    ))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+#[test]
+fn known_address_bits_bound_a_lookup_with_a_wider_argument() {
+    let module = load(
+        r#"
+memory 1024
+data 32 = i64 578437695752307201
+func @f(i9 %x) -> i8 {
+entry:
+    %i = trunc i9 %x to i3
+    %o = zext i3 %i to i64
+    %p = or i64 %o, 32
+    %r = load i8 %p
+    ret %r
+}
+"#,
+    )
+    .expect("wider table module");
+    let held = Default::default();
+    let mut image = [0u8; MEMORY];
+    image[32..40].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=6 {
+            let compiled = compile_apply_with(
+                ApplyInput {
+                    module: &module,
+                    callee: module.function_named("f").expect("f"),
+                    args: &[Argument::Register(0..9)],
+                    out: 9..17,
+                    fault: 17..22,
+                    budget,
+                    entry_fault: None,
+                    stack_available: 900,
+                    memory: Some(ApplyMemory::new(&image, &held)),
+                    scratch_start: 22,
+                },
+                mode,
+            )
+            .expect("lookup using known address bits");
+            println!("wider table, B={budget}, {mode:?}, @f: {}", compiled.memory);
+            let (gates, layout) = gates(&compiled, 9, 13);
+            let states = (0..(1 << layout.x)).flat_map(|x| [0, 0x1004].map(|y| (x, y)));
+            bits::check_states(&gates, layout, states, |x| {
+                let (value, fault) = bounds(budget, 5, Ok((x & 7) as u64 + 1));
+                u128::from(value | fault << 8)
+            })
+            .expect("all nine-bit input values");
+        }
+    }
+}
+
+#[test]
+fn seeded_declared_lookups_match_the_executor() {
+    let mut rng = ChaCha8Rng::seed_from_u64(0x1d29_4c1d_3816_83e0);
+    for case in 0..120 {
+        let table = rng.random::<u64>();
+        let overwrite = rng.random::<u8>();
+        let index = rng.random_range(0..8);
+        let budget = rng.random_range(3..=6);
+        let mode = [ApplyMode::Automatic, ApplyMode::StepMachine][case % 2];
+        let module = module(
+            &format!(
+                r#"
+data 32 = i64 {table}
+func @f(i3 %x) -> i8 {{
+entry:
+    %i = zext i3 %x to i64
+    %p = or i64 %i, 32
+    %value = load i8 %p
+    ret %value
+}}
+"#
+            ),
+            &format!("    store i8 {overwrite}, {}", 32 + index),
+        );
+        compare(&module, &format!("seeded table {case}"), budget, mode);
+    }
+}
+
+#[test]
+fn a_varying_load_checks_the_full_span_against_its_declaration() {
+    let module = module(
+        r#"
+data 32 = i16 513
+func @f(i3 %x) -> i8 {
+entry:
+    %low = trunc i3 %x to i1
+    %i = zext i1 %low to i64
+    %p = or i64 %i, 32
+    %word = load i16 %p
+    %r = trunc i16 %word to i8
+    ret %r
+}
+"#,
+        "",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        compare(&module, "before an undeclared span", 3, mode);
+        let entry = module.function_named("main").expect("main");
+        let mut executor = Executor::new(&module, entry, &[4], Options::default()).expect("executor");
+        let mut compiler = |input: ApplyInput<'_>| Ok(compile_apply_with(input, mode)?.block);
+        assert!(matches!(
+            executor.run_emitted(&mut compiler),
+            Outcome::Stopped(RunError::Apply(ApplyError::Unsupported {
+                operation: "load",
+                route: "a proved address bound within a declared memory region",
+                ..
+            }))
+        ));
+    }
+}
+
+#[test]
+fn a_uniform_lookup_needs_no_memory_qubits_or_gates() {
+    let module = module(
+        r#"
+data 32 = i64 0
+func @f(i3 %x) -> i8 {
+entry:
+    %offset = zext i3 %x to i64
+    %address = or i64 %offset, 32
+    %value = load i8 %address
+    ret %value
+}
+"#,
+        "",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 2..=5 {
+            let (_, counts, values) = compare(&module, "uniform declared lookup", budget, mode);
+            let expected = if budget < 3 {
+                MemoryCounts::default()
+            } else {
+                MemoryCounts { varying_loads: 1, candidate_bytes: 8, ..MemoryCounts::default() }
+            };
+            assert_eq!(counts, expected);
+            assert_eq!(values, vec![bounds(budget, 4, Ok(0)); 8]);
+        }
+    }
+}
+
+#[test]
+fn overlapping_unaligned_store_candidates_commit_one_version_per_byte() {
+    let module = module(
+        r#"
+data 32 = i32 0
+func @f(i3 %x) -> i8 {
+entry:
+    %index = trunc i3 %x to i1
+    %offset = zext i1 %index to i64
+    %p = or i64 %offset, 32
+    %shift = lshr i3 %x, 1
+    %data = zext i3 %shift to i16
+    %complement = xor i16 %data, 3
+    %high = shl i16 %complement, 8
+    %v = or i16 %data, %high
+    store i16 %v, %p
+    %r = load i16 %p
+    %low = trunc i16 %r to i8
+    %upper = lshr i16 %r, 8
+    %hi = trunc i16 %upper to i8
+    %shifted = shl i8 %hi, 2
+    %result = or i8 %low, %shifted
+    ret %result
+}
+"#,
+        "",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=17 {
+            let (_, counts, values) = compare(&module, "overlapping unaligned candidates", budget, mode);
+            let expected = (0..8).map(|x| {
+                let low = x >> 1;
+                bounds(budget, 16, Ok(low | (low ^ 3) << 2))
+            });
+            assert_eq!(values, expected.collect::<Vec<_>>());
+            if budget == 9 {
+                // There are two varying bits in each of three bytes. The middle byte
+                // uses both address guards and has only two retained storage wires.
+                assert_eq!(counts.retained_scratch_qubits, 6);
+                assert_eq!(counts.address_scratch_qubits, 6);
+                assert_eq!(counts.peak_nonconstant_bits, 6);
+                assert_eq!(counts.address_toffolis, 16);
+                assert_eq!((counts.varying_loads, counts.varying_stores, counts.candidate_bytes), (0, 1, 4));
+            }
+            if budget >= 10 {
+                assert_eq!((counts.varying_loads, counts.varying_stores, counts.candidate_bytes), (1, 1, 8));
+                assert_eq!(counts.peak_nonconstant_bits, 6);
+            }
+        }
+    }
+}
+
+#[test]
+fn dynamic_stores_fault_before_updating_any_byte() {
+    let module = module(
+        r#"
+data 16 = i32 0
+func @f(i3 %x) -> i8 {
+entry:
+    %odd = trunc i3 %x to i1
+    %outside = icmp uge i3 %x, 4
+    %low = select i64 %odd, 18, 16
+    %high = select i64 %odd, 18446744073709551615, 1023
+    %addr = select i64 %outside, %high, %low
+    store i16 441, %addr
+    %r = load i8 16
+    ret %r
+}
+"#,
+        "    x [18:0]\n    x [18:0]\n    x [1023:0]\n    x [1023:0]",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=9 {
+            let (_, counts, values) = compare(&module, "varying store faults", budget, mode);
+            let expected = (0..8).map(|x| match x {
+                0 | 2 => bounds(budget, 8, Ok(185)),
+                1 | 3 => bounds(budget, 6, Err(Fault::QubitMemoryAccess)),
+                _ => bounds(budget, 6, Err(Fault::OutOfBounds)),
+            });
+            assert_eq!(values, expected.collect::<Vec<_>>());
+            if budget >= 6 {
+                assert_eq!((counts.varying_loads, counts.varying_stores, counts.candidate_bytes), (0, 1, 4));
+            }
+        }
+    }
+}
+
+#[test]
+fn seeded_overlapping_stores_and_varying_loads_match_the_executor() {
+    let mut rng = ChaCha8Rng::seed_from_u64(0xc9a6_d718_05bb_882f);
+    for case in 0..100 {
+        let table = rng.random::<u64>();
+        let mask = rng.random::<u16>();
+        let budget = rng.random_range(3..=10);
+        let address_delta = rng.random_range(0..8);
+        let mode = [ApplyMode::Automatic, ApplyMode::StepMachine][case % 2];
+        let module = module(
+            &format!(
+                r#"
+data 32 = i64 {table}, i8 0
+func @f(i3 %x) -> i8 {{
+entry:
+    %i = zext i3 %x to i64
+    %p = or i64 %i, 32
+    %input = zext i3 %x to i16
+    %v = xor i16 %input, {mask}
+    store i16 %v, %p
+    %q = xor i64 %p, {address_delta}
+    %r = load i16 %q
+    %result = trunc i16 %r to i8
+    ret %result
+}}
+"#
+            ),
+            "",
+        );
+        compare(&module, &format!("seeded varying writes {case}"), budget, mode);
+    }
+}
+
+#[test]
+fn address_selection_respects_the_instruction_dispatch_guard() {
+    let module = module(
+        r#"
+data 32 = i32 21828
+func @f(i3 %x) -> i8 {
+entry:
+    %write = trunc i3 %x to i1
+    %shift = lshr i3 %x, 1
+    %bit = trunc i3 %shift to i1
+    %offset = zext i1 %bit to i64
+    %p = or i64 %offset, 32
+    br %write, put, read
+put:
+    store i16 258, %p
+    %new = load i8 33
+    ret %new
+read:
+    %old = load i8 33
+    ret %old
+}
+"#,
+        "",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=10 {
+            let (_, counts, values) = compare(&module, "guarded address selection", budget, mode);
+            let expected = (0..8)
+                .map(|x| if x & 1 == 0 { bounds(budget, 8, Ok(85)) } else { bounds(budget, 9, Ok(1 + (x >> 1 & 1))) });
+            assert_eq!(values, expected.collect::<Vec<_>>());
+            if budget >= 7 {
+                assert_eq!((counts.varying_stores, counts.candidate_bytes), (1, 4));
+            }
+        }
+    }
+}
+
+#[test]
+fn a_complemented_dispatch_guard_proves_the_only_address_zero() {
+    let module = module_with_width(
+        r#"
+data 0 = i8 42
+func @f(i1 %x) -> i8 {
+entry:
+    %p = zext i1 %x to i64
+    br %x, done, read
+read:
+    %v = load i8 %p
+    ret %v
+done:
+    ret 7
+}
+"#,
+        "",
+        1,
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=5 {
+            let (_, counts, values) = compare(&module, "guard proves address zero", budget, mode);
+            assert_eq!(values, [bounds(budget, 4, Ok(42)), bounds(budget, 3, Ok(7))]);
+            assert_eq!(counts, MemoryCounts::default());
         }
     }
 }

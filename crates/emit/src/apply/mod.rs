@@ -235,7 +235,7 @@ fn compile_with_analysis_limit(
                         }
                         Status::Running(next)
                     }
-                    Step::CheckedTransfer(next, writes, failed, fault) => {
+                    Step::CheckedTransfer(next, writes, succeeded, faults) => {
                         // The attempt has been emitted. Only successful inputs
                         // move to the next instruction and spend one step.
                         for (slot, word) in writes {
@@ -247,10 +247,10 @@ fn compile_with_analysis_limit(
                             &program,
                             &mut slots,
                             &mut memory,
-                            (next, failed.not()),
+                            (next, succeeded),
                             remaining,
                         )?;
-                        copies.faulted.push((failed, fault));
+                        copies.faulted.extend(faults);
                         break (
                             copies,
                             Construction::StepMachine { ticks: ticks + 1 },

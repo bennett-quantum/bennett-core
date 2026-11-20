@@ -259,15 +259,24 @@ impl<'a> Program<'a> {
         let (operation, result) = match self.block(point).insts.get(point.index) {
             Some(Inst::Load { width, dst, address }) => (
                 "load",
-                memory
-                    .load(circuit, &read(address), guard, *width)
-                    .map(|word| Step::Write(next, self.slot(point, *dst), word)),
+                memory.load(circuit, &read(address), guard, *width).map(|access| {
+                    let dst = self.slot(point, *dst);
+                    if access.faults.is_empty() {
+                        Step::Write(next, dst, access.value)
+                    } else {
+                        Step::CheckedTransfer(next, vec![(dst, access.value)], access.succeeded, access.faults)
+                    }
+                }),
             ),
             Some(Inst::Store { width, value, address }) => (
                 "store",
-                memory
-                    .store(circuit, &read(address), guard, *width, read(value))
-                    .map(|()| Step::Transfer(next, Vec::new())),
+                memory.store(circuit, &read(address), guard, *width, read(value)).map(|access| {
+                    if access.faults.is_empty() {
+                        Step::Transfer(next, Vec::new())
+                    } else {
+                        Step::CheckedTransfer(next, Vec::new(), access.succeeded, access.faults)
+                    }
+                }),
             ),
             Some(Inst::Alloca { size, dst }) => {
                 let stack = copy.stack.expect("planned stack slots");
@@ -289,7 +298,7 @@ impl<'a> Program<'a> {
             Err(AccessError::Inactive) => Ok(Step::Inactive),
             Err(AccessError::Fault(fault)) => Ok(Step::Fault(fault)),
             Err(AccessError::MissingMemory) => Err(unsupported("the caller's memory")),
-            Err(AccessError::Address) => Err(unsupported("a proved definite memory address")),
+            Err(AccessError::Address) => Err(unsupported("a proved address bound within a declared memory region")),
         }
     }
 
@@ -348,11 +357,11 @@ impl<'a> Program<'a> {
         let step = copy.frame.step(circuit, local, point, widths)?;
         Ok(match step {
             Step::Write(next, dst, word) => Step::Write(next, copy.slot(dst), word),
-            Step::CheckedTransfer(next, writes, failed, fault) => Step::CheckedTransfer(
+            Step::CheckedTransfer(next, writes, succeeded, faults) => Step::CheckedTransfer(
                 next,
                 writes.into_iter().map(|(slot, word)| (copy.slot(slot), word)).collect(),
-                failed,
-                fault,
+                succeeded,
+                faults,
             ),
             Step::Jump(_)
             | Step::Branch(..)

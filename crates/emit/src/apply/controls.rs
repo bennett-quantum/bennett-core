@@ -163,10 +163,11 @@ impl Controls<'_, '_> {
                     self.copies.faulted.push((route.enabled, fault));
                     return Ok(None);
                 }
-                Step::CheckedTransfer(next, writes, failed, fault) => {
-                    let faulted = self.circuit.and(route.enabled, failed);
-                    self.copies.faulted.push((faulted, fault));
-                    route.enabled = self.circuit.and(route.enabled, failed.not());
+                Step::CheckedTransfer(next, writes, succeeded, faults) => {
+                    self.copies.faulted.extend(
+                        faults.into_iter().map(|(failed, fault)| (self.circuit.and(route.enabled, failed), fault)),
+                    );
+                    route.enabled = self.circuit.and(route.enabled, succeeded);
                     if route.enabled == ZERO {
                         return Ok(None);
                     }

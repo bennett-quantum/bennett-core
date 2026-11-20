@@ -232,7 +232,7 @@ fn varying_stores_under_and_after_a_qubit_choice_are_refused_before_apply_gates(
                     block: bennett_ir::BlockId(actual),
                     index: 0,
                     operation: "store",
-                    route: "a proved definite memory address",
+                    route: "a proved address bound within a declared memory region",
                     ..
                 })) if actual == store_block
             ));

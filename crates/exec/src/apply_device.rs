@@ -33,6 +33,11 @@ impl<'a> ApplyMemory<'a> {
         Self { bytes, held }
     }
 
+    /// Size of the borrowed byte image.
+    pub fn byte_len(self) -> u64 {
+        self.bytes.len() as u64
+    }
+
     /// Check bounds before checking occupancy and return the entry bytes.
     pub fn read(self, address: u64, width: Width) -> Result<&'a [u8], Fault> {
         let range = crate::memory::range(self.bytes.len(), address, width)?;

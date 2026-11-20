@@ -41,7 +41,7 @@ pub(super) enum Step<'a> {
     Switch(Word, Edges<'a>),
     Return(Word),
     Transfer(Point, Vec<(Slot, Word)>),
-    CheckedTransfer(Point, Vec<(Slot, Word)>, Bit, Fault),
+    CheckedTransfer(Point, Vec<(Slot, Word)>, Bit, Vec<(Bit, Fault)>),
     Inactive,
     Fault(Fault),
 }
@@ -51,7 +51,7 @@ impl<'a> Step<'a> {
         match failed {
             ZERO => Self::Transfer(next, writes),
             super::bits::ONE => Self::Fault(fault),
-            Bit::Wire(..) => Self::CheckedTransfer(next, writes, failed, fault),
+            Bit::Wire(..) => Self::CheckedTransfer(next, writes, failed.not(), vec![(failed, fault)]),
         }
     }
 }
