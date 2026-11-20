@@ -231,3 +231,18 @@ fn a_partial_release_leaves_the_other_wire_unchanged() {
     assert_eq!(device.measure_many(std::slice::from_ref(&(1..2))), Ok(vec![1]));
     assert_eq!(device.measure(1), Ok(true));
 }
+
+// The gate lowering takes scratch wires from just below 2^64 (`crates/emit/src/lower.rs`), and the OpenQASM
+// writer forwards them to its simulation: wires there are allocated, checked and released like any other.
+#[test]
+fn wires_just_below_the_top_of_the_wire_space_are_ordinary() {
+    let mut device = SimulatedDevice::new(0, None);
+    let top = Wire::MAX - 3..Wire::MAX;
+    device.allocate(top.clone()).expect("allocate the top wires");
+    assert_eq!(device.allocate(Wire::MAX - 1..Wire::MAX), Err(RunError::Device("wire is already allocated")));
+    device.gate(GateOp { kind: Gate::Fixed(FixedGate::X), target: Wire::MAX - 1, controls: &[] }).expect("set one");
+    assert_eq!(device.measure_many(std::slice::from_ref(&top)), Ok(vec![0b100]));
+    device.gate(GateOp { kind: Gate::Fixed(FixedGate::X), target: Wire::MAX - 1, controls: &[] }).expect("clear it");
+    device.release_zero(top.clone()).expect("the top wires are zero");
+    device.allocate(top).expect("released wires can be allocated again");
+}

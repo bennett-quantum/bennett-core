@@ -138,9 +138,16 @@ straightforward expansion into ordinary code; none reads or acts on a qubit:
 - **The simulator’s quantum state** stores basis configurations with nonzero amplitudes, using `f64`
   for each amplitude's real and imaginary parts. A stored configuration is a list of integers.
   A **column** is one position in that list holding up to 64 bits of a register. A register of more
-  than 64 qubits takes several columns: its **head**, the column its handle names, holding qubits 0 to
-  63, and one **chunk** column for each further 64 (`quantum.rs`, `reserve_register`); `apply` reads and
-  XORs a register of up to 128 qubits across its two columns. Columns for discarded
+  than 64 qubits takes consecutive columns, 64 qubits each, from its **head**, the column its handle
+  names: the first run of free columns long enough (`quantum.rs`, `reserve_register`). Snapshots list
+  each such register's head and number of columns, so two states whose columns hold the same words but
+  form different registers do not compare equal. `apply` reads and XORs a register of up to 128 qubits
+  across its two columns. The simulator's bookkeeping grows with columns, not qubits, and every part of
+  it that grows with a register is allocated fallibly: a register the host cannot hold stops the run
+  (`RunError::QubitStorage`). A run on an external device stores no columns: the device receives each
+  register as one range of wires. The simulator holds at most 2^32 - 1 qubits at once, what the counts
+  in `Stats` hold; an allocation or an applied circuit's scratch beyond that stops the run
+  (`RunError::QubitCount`), though each register may have up to 2^32 - 1 qubits. Columns for discarded
   qubits can remain alongside live columns. Tracing them out of the purification gives the live state.
 - **The simulator’s `measure`** samples with a seeded generator and keeps only the configurations that agree with the outcome,
   rescaled. It names a register, or `N` bits at an address (`measure iN [ADDR]`, "Qubits in memory").
@@ -1944,8 +1951,8 @@ How the simulator stores the result (`crates/exec/src/quantum.rs`) is its own af
 - If the register is zero in every stored configuration, its column is removed.
 - Otherwise the column is kept, unnamed (its generation moves on, so no handle names it) and never reused.
 - A register of several columns is kept or removed whole: if any of its columns is not zero, all are kept
-  and all its qubits count as kept. `qfree` journals the ids of its chunk columns, which a removed head
-  forgets, so that undoing it brings back the same columns.
+  and all its qubits count as kept. Its columns are consecutive from its head, so undoing `qfree` brings
+  back the same columns from the handle and the width alone.
   The stored state is then a **purification** of the state after the partial trace (a larger state whose
   partial trace over the kept columns is that state): what any later step of the program, a measurement
   included, can find out is the same either way.
@@ -1975,6 +1982,8 @@ every quantum step faults `quantum_in_region` before any stop could arise, so no
 |---|---|---|
 | Amplitudes of magnitude at most `f64::EPSILON` are dropped after a gate (one unit of rounding, what cancellation leaves) | `quantum.rs`, `NEGLIGIBLE_AMPLITUDE` | A dropped configuration is never an outcome, and no instruction reads amplitudes. Each dropped amplitude is at most `f64::EPSILON` (weight about 5e-32), but the simulator does not sum what it drops: over many configurations and gates the losses add up with the other `f64` rounding, unbounded by that figure. The state is approximate in `f64` throughout (the tests compare amplitudes and weights with hand-worked values to tolerances from 1e-9 to 1e-20, most at 1e-12): evidence, not proof |
 | The limit on stored basis configurations | `Options::max_configurations`, `RunError::ConfigurationLimit` | A stop: the run ends with no result, the state as before the gate |
+| At most 2^32 - 1 qubits held at once, what the counts in `Stats` hold | `RunError::QubitCount` | A stop before the allocation or the applied circuit, the state as before the step; a device is not limited so |
+| The host's memory for stored qubits | `RunError::QubitStorage` | A stop: an allocation (or the record of a release) the host cannot hold ends the run with no result, the state as before the step; on another host or a device the same program runs on |
 | The stop at an `apply` faulting for some values of its arguments (strict mode, below) | `RunError::RegionFault`, `region.rs` | A stop. With `allow_region_faults` the fault code is the program's, in its fault register: that is the meaning, not a report |
 | Amplitudes, the register table and cells in snapshots, and the distance `bennett run --reverse` prints | `snapshot.rs`, `crates/cli/src/run.rs` | Data for tests and reports; no device observation, read by no instruction |
 | The report of nonzero releases (count, weight, qubits kept) and the other counts of `Stats` | `executor.rs`, "Releasing a register" above | Read by tests and printed by `bennett run`, never by an instruction |

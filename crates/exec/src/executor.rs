@@ -65,6 +65,24 @@ pub enum RunError {
     /// Gate compilation refused an applied function.
     #[error(transparent)]
     Apply(#[from] ApplyError),
+    /// The host could not give the simulator memory to store qubits: a register being allocated, or the
+    /// record of the qubits a release keeps. The state is as it was before the step. A limit of the host,
+    /// not part of the program's meaning; a run on an external device names registers without storing them.
+    #[error("the simulator cannot store {qubits} more qubits in the memory of this host")]
+    QubitStorage {
+        /// The qubits that could not be stored.
+        qubits: u64,
+    },
+    /// An allocation, or an applied circuit's scratch, would raise the qubits the simulator holds at once
+    /// above 2^32 - 1, what its counts in [`Stats`] hold. Each register may have up to 2^32 - 1 qubits; a
+    /// run on an external device is not limited so. The state is as it was before the step.
+    #[error("the simulator would hold {live} + {more} qubits at once; it counts at most 4294967295")]
+    QubitCount {
+        /// The qubits held before the step.
+        live: u64,
+        /// The qubits the step adds.
+        more: u64,
+    },
     /// A gate would raise the number of basis configurations above the run's limit.
     #[error("a gate would raise the number of basis configurations above the limit of {limit}")]
     ConfigurationLimit {
@@ -184,7 +202,8 @@ pub struct Stats {
     /// Memory bytes that hold qubits now (`docs/DESIGN.md`, "Qubits in memory"). Each is an 8-qubit
     /// register, counted in `live_qubits` too.
     pub memory_qubit_bytes: usize,
-    /// Qubits allocated now, those left over included.
+    /// Qubits allocated now, those left over included. The simulator keeps the total within a `u32`
+    /// ([`RunError::QubitCount`]).
     pub live_qubits: u32,
     /// Qubits left over now: the columns the simulator keeps for registers released by `qfree` while not
     /// zero (`docs/DESIGN.md`, "Releasing a register"). A report of the simulator.
@@ -502,11 +521,11 @@ impl<'m> Executor<'m> {
             region_fault_max_weight: self.region_fault_max_weight,
             journal_bytes: self.journal.as_ref().map(Journal::bytes),
             memory_qubit_bytes: self.quantum.cells().len(),
-            live_qubits: self.quantum.live_qubits(),
-            leftover_qubits: self.quantum.leftover_qubits(),
+            live_qubits: counted(self.quantum.live_qubits()),
+            leftover_qubits: counted(self.quantum.leftover_qubits()),
             nonzero_releases: self.quantum.nonzero_releases,
             nonzero_release_weight: self.quantum.nonzero_release_weight,
-            peak_live_qubits: self.quantum.peak_qubits(),
+            peak_live_qubits: counted(self.quantum.peak_qubits()),
             configurations: self.quantum.configurations(),
             peak_configurations: self.quantum.peak_configurations(),
         }
@@ -568,6 +587,11 @@ impl<'m> Executor<'m> {
             journal.push_word(word);
         }
     }
+}
+
+/// A qubit total of the simulator as `Stats` reports it: `QubitCount` keeps every total within a `u32`.
+fn counted(qubits: u64) -> u32 {
+    u32::try_from(qubits).expect("the simulator admits at most u32::MAX qubits at once")
 }
 
 fn check_arguments(entry: &Function, args: &[u64]) -> Result<(), StartError> {
