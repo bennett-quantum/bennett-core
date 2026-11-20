@@ -232,12 +232,21 @@ comments. Declared qubits accumulate over the run, so their total can exceed the
 
 Each qubit measurement is a `measure` statement annotated with the bit the controller received.
 The writer forwards every command, after the lowering, to a `SimulatedDevice` and takes the outcomes
-from it (`--seed`, default 0), sampling a register's qubits jointly with one draw, as the simulator does,
-so each annotated outcome has nonzero probability. The draws are the simulator's for the same seed, so the
-outcomes and the result are those of `--device simulator --machine-meaning`, unless rounding in the
-amplitudes moves a draw across the boundary between two outcomes. Without `--machine-meaning` the
-simulator stops at an `apply` that faults for some argument value (a region fault, a diagnostic only a
-simulator can make); a device, the OpenQASM writer included, writes the fault code and goes on.
+from it (`--seed`, default 0), sampling a register's qubits jointly with one draw, as the simulator does.
+Each annotated outcome has nonzero probability in the simulated state, up to the simulator's floating-point
+rounding: when a draw and the weight of an outcome round to the same number, the sampler can take the next
+outcome even if its weight is only rounding error (ignored witness
+`a_draw_on_a_rounded_boundary_selects_only_possible_outcomes` in `crates/cli/tests/qasm_device.rs`).
+
+Like the counter, the writer compiles every `apply` to gates, as the simulator's gate mode
+(`--apply-circuit auto`) does, and takes the same draws for the same seed. So the OpenQASM run has the
+outcomes, result and stop of `--device simulator --apply-circuit auto` with that seed, unless rounding in the
+amplitudes moves a draw across the boundary between two outcomes. An `apply` the gate compiler refuses stops
+both with status 2, and the trace is published with the stop. The simulator's default direct evaluation runs
+such an `apply`. It also stops, with a region fault (status 1, a diagnostic only a simulator can make), at an
+`apply` that faults for some argument value, unless `--machine-meaning` or `--allow-region-faults` is
+given; the gate mode and the devices write the fault code and go on. `examples/fault.bn` with `--arg 5`
+returns 261 in the OpenQASM run, in the gate mode and under either option, and stops in the default.
 A `release_zero` request the simulated state does not satisfy stops the run. The simulation holds at
 most `--max-configurations` basis configurations, by default 2^20 (the state before any gate holds one);
 a run whose state needs more is refused by name with no trace published, and the message names

@@ -319,10 +319,10 @@ fn a_state_the_simulation_cannot_hold_is_refused_naming_the_option() {
     assert!(path.exists());
 }
 
-// A device runs an applied function under the machine's meaning: a fault for an argument value is a code
-// in the fault register, and the run goes on. The default simulator instead stops at such an `apply` (a
-// region fault, a diagnostic only a simulator can make), so the OpenQASM run agrees with the simulator
-// under --machine-meaning. `fault.bn` with 5 runs out of the applied function's budget.
+// A device writes an applied function's fault code into the fault register and goes on, as the simulator's
+// gate mode does and its direct evaluation does under --machine-meaning or --allow-region-faults. The
+// default direct evaluation stops at such an `apply` (a region fault, a simulator's diagnostic). `fault.bn`
+// with 5 runs out of the applied function's budget.
 #[test]
 fn an_applied_fault_is_written_as_under_the_machine_meaning() {
     let args = ["fault.bn", "--arg", "5", "--seed", "0"];
@@ -331,9 +331,31 @@ fn an_applied_fault_is_written_as_under_the_machine_meaning() {
     assert!(exported.contains("result: 261\n"), "{exported}");
     let meaning = report(run("simulator", &[&args[..], &["--machine-meaning"]].concat(), None));
     assert!(meaning.starts_with("result: 261\n"), "{meaning}");
+    let allowed = report(run("simulator", &[&args[..], &["--allow-region-faults"]].concat(), None));
+    assert!(allowed.starts_with("result: 261\n"), "{allowed}");
+    let gates = report(run("simulator", &[&args[..], &["--apply-circuit", "auto"]].concat(), None));
+    assert!(gates.contains("result: 261\n"), "{gates}");
     let strict = run("simulator", &args, None);
     assert_eq!(strict.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&strict.stdout).starts_with("region fault: apply @triangle faulted (budget)"));
+}
+
+// An `apply` the gate compiler refuses (here `retaddr`) stops the OpenQASM run and the simulator's gate
+// mode alike with status 2; the trace is published with the stop. Direct evaluation runs it.
+#[test]
+fn a_refused_apply_stops_as_in_the_simulators_gate_mode() {
+    let args = [FIXTURE, "--entry", "refused", "--seed", "0"];
+    let trace = Trace::new("refused");
+    let output = run("qasm", &args, Some(&trace.0));
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let stop = "cannot emit retaddr";
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with(&format!("stopped: {stop} in @returns_to")));
+    let last = trace.read().lines().last().expect("a footer").to_owned();
+    assert!(last.starts_with(&format!("// stopped {stop}")) && last.ends_with("(run status 2)"), "{last}");
+    let gates = run("simulator", &[&args[..], &["--apply-circuit", "auto"]].concat(), None);
+    assert_eq!(gates.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&gates.stdout).starts_with(&format!("stopped: {stop} in @returns_to")));
+    assert!(report(run("simulator", &args, None)).starts_with("result: 1\n"));
 }
 
 // The initial state already holds one basis configuration, so a limit of zero is refused before any
@@ -353,26 +375,44 @@ fn a_limit_below_the_initial_state_is_refused() {
     assert!(path.exists());
 }
 
-// The counter and the simulator print the report of an `apply` when they compile it, before the run
-// ends: this program applies once and then never ends, and the report must still arrive.
+/// The address space, in KiB, given to a child that must abort while compiling its second `apply`: room for
+/// the program and its first, small circuit, none for a step-machine circuit of 10^12 ticks.
+const CHILD_ADDRESS_SPACE_KIB: u64 = 32 * 1024;
+
+// The counter and the simulator print the report of an `apply` when they compile it. After one small
+// `apply`, this program applies a loop through the step machine with a budget of 10^12 steps, whose circuit
+// does not fit in the address space the child is given: the child aborts while compiling it, so a report
+// kept until the run ends would never be printed. Reading ends with the child.
+#[cfg(target_os = "linux")]
 #[test]
 fn count_and_simulator_report_an_apply_while_the_run_goes_on() {
-    for device in [&["--device", "count"][..], &["--device", "simulator", "--apply-circuit", "auto"][..]] {
-        let mut child = Command::new(BIN)
+    for device in ["count", "simulator"] {
+        let output = Command::new("sh")
             .current_dir(EXAMPLES)
-            .arg("run")
-            .args(device)
-            .args([FIXTURE, "--entry", "apply_then_spin"])
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .expect("run bennett");
-        let stdout = child.stdout.take().expect("piped output");
-        let mut first = String::new();
-        io::BufRead::read_line(&mut io::BufReader::new(stdout), &mut first).expect("read the report");
-        child.kill().expect("stop the endless run");
-        child.wait().expect("reap the run");
-        assert!(first.starts_with("apply @identity uses "), "{device:?}: {first}");
+            .args(["-c", "ulimit -v \"$1\" && shift && exec \"$@\"", "sh", &CHILD_ADDRESS_SPACE_KIB.to_string(), BIN])
+            .args(["run", "--device", device, "--apply-circuit", "step-machine"])
+            .args([FIXTURE, "--entry", "apply_then_outgrow"])
+            .output()
+            .expect("run bennett with a bounded address space");
+        assert!(!output.status.success(), "{device}: {output:?}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("memory allocation"), "{device}: {output:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.starts_with("apply @identity uses "), "{device}: {stdout}");
+        assert!(!stdout.contains("apply @count_up"), "{device}: {stdout}");
     }
+}
+
+// A rotation by 1.75, 19.1875 and -20.9375 radians leaves q[0] at zero, so the register reads 0 or 2. At
+// seed 0 the draw and the weight of outcome 0 round to the same number and the sampler takes the next
+// outcome, 1, whose weight is rounding error of about 5e-32.
+#[test]
+#[ignore = "the simulator's sampler selects an outcome of weight about 5e-32 when a draw and the weight of \
+            the outcome before it round to the same number (crates/exec/src/quantum.rs, measure_bits)"]
+fn a_draw_on_a_rounded_boundary_selects_only_possible_outcomes() {
+    let trace = Trace::new("boundary");
+    let exported = trace.export(&[FIXTURE, "--entry", "boundary", "--seed", "0"]);
+    let result = exported.lines().next().expect("a result line");
+    assert!(result == "result: 0" || result.starts_with("result: 2 "), "{exported}");
 }
 
 /// One qubit's state under the one-qubit gates of `stdgates.inc`, worked here from their definitions.
