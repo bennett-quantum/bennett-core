@@ -51,7 +51,7 @@ impl<'m> Executor<'m> {
         match resolved {
             Resolved::Register(qubit) => qubit,
             Resolved::Memory { byte, bit } => {
-                wire(self.quantum.cell(byte).expect("a gate's memory byte is a cell"), bit)
+                wire(self.quantum.cell(byte).expect("a gate's memory byte is a cell"), u32::from(bit))
             }
         }
     }
@@ -61,7 +61,7 @@ impl<'m> Executor<'m> {
     fn promote(&mut self, address: u64, context: &mut DeviceContext<'_>) -> Result<u8, RunError> {
         let mut old = [0];
         self.memory.read_into(address as usize..address as usize + 1, &mut old);
-        let handle = self.allocate_register(Width::BYTE, context)?;
+        let handle = self.allocate_register(Width::BYTE.into(), context)?;
         let column = self.quantum.resolve(handle).expect("a fresh register is live");
         self.xor_register(column, u64::from(old[0]), context)?;
         self.memory.write(address as usize, &[0]);

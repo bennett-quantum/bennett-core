@@ -176,13 +176,13 @@ pub enum Problem {
     #[error("qubit {bit} is outside a register of {bits} qubits")]
     QubitOutOfRange {
         /// The index.
-        bit: u8,
+        bit: u32,
         /// The register width.
         bits: u32,
     },
     /// The same qubit twice in one gate.
     #[error("`%{0}[{1}]` appears twice in one gate")]
-    RepeatedQubit(String, u8),
+    RepeatedQubit(String, u32),
     /// A non-finite rotation angle.
     #[error("the rotation angle is not finite")]
     AngleNotFinite,
@@ -199,9 +199,20 @@ pub enum Problem {
     /// A switch case outside the switch's width, or repeated.
     #[error("case {0} is repeated or does not fit the switch's width")]
     BadCase(u128),
-    /// A register of more qubits than a basis configuration holds.
-    #[error("a register of {0} qubits; at most 64")]
-    RegisterTooWide(u32),
+    /// `measure` of a whole register wider than an integer: copy at most 128 of its qubits into a fresh
+    /// register with controlled X and measure that (`docs/DESIGN.md`, "The device program").
+    #[error(
+        "`measure` of a whole register of {0} qubits gives an integer of at most 128 bits; copy at most 128 of \
+         its qubits into a fresh register with controlled X and measure that"
+    )]
+    MeasureTooWide(u32),
+    /// An `apply` argument or output register wider than an integer: copy at most 128 of its qubits into a
+    /// fresh register with controlled X and apply to that.
+    #[error(
+        "`%{0}`, a register of {1} qubits, cannot be an `apply` argument or output: an applied function's \
+         parameters and result are integers of at most 128 bits"
+    )]
+    RegionOperandTooWide(String, u32),
     /// An `apply` callee that does not return an integer.
     #[error("a coherent region must return an integer")]
     RegionResult,

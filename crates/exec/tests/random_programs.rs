@@ -284,7 +284,7 @@ impl<'r> FunctionGen<'r> {
                 let width = Width::new(self.rng.random_range(1..=3)).expect("small width");
                 let dst = self.new_slot();
                 self.registers.push((dst, width));
-                insts.push(Inst::Qalloc { dst, width });
+                insts.push(Inst::Qalloc { dst, width: width.into() });
             }
             2 => {
                 let index = self.rng.random_range(0..self.registers.len());
@@ -300,7 +300,7 @@ impl<'r> FunctionGen<'r> {
         let mut qubits: Vec<Qubit> = self
             .registers
             .iter()
-            .flat_map(|&(register, width)| (0..width.bits() as u8).map(move |bit| Qubit { register, bit }))
+            .flat_map(|&(register, width)| (0..width.bits()).map(move |bit| Qubit { register, bit }))
             .collect();
         if qubits.is_empty() {
             return;
@@ -320,9 +320,9 @@ impl<'r> FunctionGen<'r> {
     /// take `i32`) and an integer otherwise.
     fn apply(&mut self, insts: &mut Vec<Inst>) {
         let out = self.new_slot();
-        insts.push(Inst::Qalloc { dst: out, width: VALUE });
+        insts.push(Inst::Qalloc { dst: out, width: VALUE.into() });
         let fault = self.new_slot();
-        insts.push(Inst::Qalloc { dst: fault, width: Fault::CODE_WIDTH });
+        insts.push(Inst::Qalloc { dst: fault, width: Fault::CODE_WIDTH.into() });
         let input = self.registers.iter().find(|(_, width)| *width == VALUE).map(|(slot, _)| Operand::Slot(*slot));
         let first = input.unwrap_or_else(|| self.operand(VALUE));
         let args = vec![first, self.operand(VALUE)];

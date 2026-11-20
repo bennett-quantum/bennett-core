@@ -40,7 +40,12 @@ impl SimulatedDevice {
     }
 
     fn simulator(&mut self) -> Simulator<'_> {
-        Simulator { state: &mut self.state, rng: &mut self.rng, limit: self.limit, reserved_column: None }
+        Simulator {
+            state: &mut self.state,
+            rng: &mut self.rng,
+            limit: self.limit,
+            reserved_columns: Default::default(),
+        }
     }
 }
 

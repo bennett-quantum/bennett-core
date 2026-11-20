@@ -1,8 +1,8 @@
 //! Semantic boundaries exercised by the IR mutation pass.
 
 use bennett_ir::{
-    BlockId, Const, DataItem, FuncId, Gate, Inst, Module, Operand, Param, Problem, ReadErrorKind, Signature, Slot,
-    Terminator, Type, Width, load, read, validate, write,
+    BlockId, Const, DataItem, FuncId, Gate, Inst, Module, Operand, Param, Problem, Qubits, ReadErrorKind, Signature,
+    Slot, Terminator, Type, Width, load, read, validate, write,
 };
 
 fn parsed(text: &str) -> Module {
@@ -52,8 +52,10 @@ fn direct_modules_check_definitions_and_register_widths() {
     });
     assert!(rejected(repeated).contains(&Problem::Redefined("x".into())));
     let mut wide = base.clone();
-    wide.functions[0].params[0].ty = Type::Qreg(Width::new(65).expect("integer width"));
-    assert!(rejected(wide).contains(&Problem::RegisterTooWide(65)));
+    wide.functions[0].params[0].ty = Type::Qreg(Qubits::new(65).expect("a register width"));
+    wide.functions[0].result = None;
+    wide.functions[0].blocks[0].term = Terminator::Return(None);
+    assert!(validate(wide).is_ok(), "a register may be wider than 64 qubits");
     let mut duplicate = base;
     duplicate.functions.push(duplicate.functions[0].clone());
     assert!(rejected(duplicate).contains(&Problem::DuplicateFunction));
@@ -95,7 +97,7 @@ fn function_addresses_and_signatures_check_every_component() {
     }
     assert_eq!(module.function_at(1), Some(FuncId(0)));
     assert_eq!(module.function_at(2), Some(FuncId(1)));
-    let params = vec![Type::Int(Width::BYTE), Type::Qreg(Width::new(2).expect("width"))];
+    let params = vec![Type::Int(Width::BYTE), Type::Qreg(Qubits::new(2).expect("width"))];
     let result = Some(Type::Int(Width::new(16).expect("width")));
     let function = module.function(FuncId(0));
     assert!(function.has_signature(&Signature { params: params.clone(), result }));

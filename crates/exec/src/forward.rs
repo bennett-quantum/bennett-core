@@ -7,7 +7,7 @@ use bennett_ir::{
 };
 
 use crate::device::Wire;
-use crate::device_io::{DeviceContext, wire, wires};
+use crate::device_io::{DeviceContext, wire, wires, word_ranges};
 use crate::executor::{Executor, Frame, Halt, Outcome, SLOT_BYTES};
 use crate::journal::Undo;
 
@@ -73,9 +73,14 @@ impl<'m> Executor<'m> {
             }
             Inst::Qfree { register } => {
                 let id = self.quantum.resolve(self.handle(*register))?;
-                let Type::Qreg(width) = self.slot_type(*register) else { unreachable!("validated register") };
-                self.discard_register(id, width, context)?;
-                // The simulator's journal takes back a kept column or recreates a zero column.
+                let Type::Qreg(qubits) = self.slot_type(*register) else { unreachable!("validated register") };
+                let chunks = self.quantum.chunks(id).to_vec();
+                self.discard_register(id, qubits, context)?;
+                // The simulator's journal takes back kept columns or recreates zero columns; a register of
+                // more than 64 qubits keeps the ids of its chunks, since a freed head forgets them.
+                for chunk in chunks {
+                    self.record_word(chunk as u128);
+                }
                 self.record(if self.quantum.just_left_over(id) { Undo::Leftover } else { Undo::Qfree });
                 self.advance();
             }
@@ -96,10 +101,11 @@ impl<'m> Executor<'m> {
             }
             Inst::Measure { dst, source: MeasureSource::Register(register) } => {
                 let id = self.quantum.resolve(self.handle(*register))?;
-                let Type::Qreg(width) = self.slot_type(*register) else { unreachable!("validated register") };
-                let range = wires(id, width.bits());
-                let value = self.device_measure(std::slice::from_ref(&range), context)?[0];
-                self.write_slot(*dst, u128::from(value));
+                let Type::Qreg(qubits) = self.slot_type(*register) else { unreachable!("validated register") };
+                // The validator allows at most 128 qubits: one or two words, sampled in one draw.
+                let words = self.device_measure(&word_ranges(id, qubits), context)?;
+                let value = words.iter().rev().fold(0, |value, &word| value << u64::BITS | u128::from(word));
+                self.write_slot(*dst, value);
                 self.record(Undo::Measure);
                 self.advance();
             }
