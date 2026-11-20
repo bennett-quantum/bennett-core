@@ -201,14 +201,16 @@ fn qubit_choice_in_an_ordinary_loop_uses_control_gates() {
 }
 
 #[test]
-fn stores_under_and_after_a_qubit_choice_are_refused_before_apply_gates() {
+fn varying_stores_under_and_after_a_qubit_choice_are_refused_before_apply_gates() {
     for (line, choice, store_block) in [
         ("yes:", "br %bit, yes, no", 3),
         ("latch(i8 %value):", "br %bit, yes, no", 5),
         ("yes:", "switch i1 %bit, 1: yes, default: no", 3),
     ] {
-        let source =
-            ORDINARY_LOOP.replace(line, &format!("{line}\n    store i8 9, 8")).replace("br %bit, yes, no", choice);
+        let source = ORDINARY_LOOP
+            .replace("entry:", "entry:\n    %p = zext i3 %x to i64")
+            .replace(line, &format!("{line}\n    store i8 9, %p"))
+            .replace("br %bit, yes, no", choice);
         let module = control_example(&source, 3, ", i3 3");
         for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
             compare_controls(&module, 0, mode, |_| (0, 1));
@@ -230,7 +232,7 @@ fn stores_under_and_after_a_qubit_choice_are_refused_before_apply_gates() {
                     block: bennett_ir::BlockId(actual),
                     index: 0,
                     operation: "store",
-                    route: "private memory in the step machine",
+                    route: "a proved definite memory address",
                     ..
                 })) if actual == store_block
             ));

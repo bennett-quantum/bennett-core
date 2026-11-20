@@ -7,6 +7,7 @@ use bennett_ir::{Fault, Predicate, Slot, Target};
 use super::arithmetic;
 use super::bits::{Bit, Circuit, Word, ZERO, constant};
 use super::calls::Program;
+use super::memory::Memory;
 use super::symbolic::{Point, Step};
 use super::{ApplyError, Copies};
 
@@ -17,6 +18,7 @@ pub(super) fn run(
     circuit: &mut Circuit,
     program: &Program<'_>,
     slots: &mut [Word],
+    memory: &mut Memory<'_>,
     start: (Point, Bit),
     remaining: u64,
 ) -> Result<(Copies, u64), ApplyError> {
@@ -31,7 +33,7 @@ pub(super) fn run(
         let mut next = Dispatch::new();
         let mut writes = Writes::new();
         for (point, enabled) in dispatch {
-            match program.step(circuit, slots, point)? {
+            match program.step_in(circuit, slots, point, memory, enabled)? {
                 Step::Write(successor, dst, word) => {
                     writes.entry(dst).or_default().push((enabled, word));
                     activate(circuit, &mut next, successor, enabled);
@@ -62,13 +64,16 @@ pub(super) fn run(
                     }
                 }
                 Step::Return(word) => copies.returned.push((enabled, word)),
-                Step::CheckedWrite(successor, dst, word, failed, fault) => {
+                Step::CheckedTransfer(successor, incoming, failed, fault) => {
                     let faulted = circuit.and(enabled, failed);
                     let succeeded = circuit.and(enabled, failed.not());
                     copies.faulted.push((faulted, fault));
-                    writes.entry(dst).or_default().push((succeeded, word));
+                    for (dst, word) in incoming {
+                        writes.entry(dst).or_default().push((succeeded, word));
+                    }
                     activate(circuit, &mut next, successor, succeeded);
                 }
+                Step::Inactive => {}
                 Step::Fault(fault) => copies.faulted.push((enabled, fault)),
                 Step::Transfer(successor, incoming) => {
                     for (dst, word) in incoming {
@@ -89,6 +94,7 @@ pub(super) fn run(
                 }
             }
         }
+        memory.commit(circuit);
         dispatch = next;
         ticks += 1;
     }

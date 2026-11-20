@@ -34,6 +34,7 @@ pub use apply_device::{ApplyCompiler, ApplyError, ApplyInput, ApplyMemory, Argum
 
 pub use device::{BlockOp, Device, GateBlock, GateBlockKey, GateOp, Wire};
 pub use executor::{DeviceRun, Executor, Frame, Options, Outcome, ReverseError, RunError, StartError, Stats};
+pub use forward::STACK_ALIGNMENT;
 pub use journal::Undo;
 pub use measure::{
     Alignment, ApplyClassification, ApplyJournal, BranchJournal, CallPathStep, ChainRecovery, ClassifiedPosition,

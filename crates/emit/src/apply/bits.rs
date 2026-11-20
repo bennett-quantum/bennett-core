@@ -292,6 +292,14 @@ impl Circuit {
         result
     }
 
+    pub(super) fn scratch_end(&self) -> Option<Wire> {
+        self.next
+    }
+
+    pub(super) fn forward_gates(&self) -> &[GateOp] {
+        &self.gates
+    }
+
     pub(super) fn forward_len(&self) -> usize {
         self.gates.len()
     }

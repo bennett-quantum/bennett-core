@@ -11,8 +11,8 @@ use crate::device_io::{DeviceContext, wire, wires};
 use crate::executor::{Executor, Frame, Halt, Outcome, SLOT_BYTES};
 use crate::journal::Undo;
 
-/// `alloca` results are aligned to this many bytes, the size of the widest value.
-const STACK_ALIGN: u64 = 8;
+/// Required address alignment in bytes for `alloca`.
+pub const STACK_ALIGNMENT: u64 = 8;
 
 impl<'m> Executor<'m> {
     /// Executes the instruction or terminator at the top frame's position.
@@ -356,7 +356,7 @@ impl<'m> Executor<'m> {
     }
 
     fn alloca(&mut self, dst: Slot, size: u64) -> Result<(), Fault> {
-        let lowered = self.stack_pointer.checked_sub(size).map(|sp| sp & !(STACK_ALIGN - 1));
+        let lowered = self.stack_pointer.checked_sub(size).map(|sp| sp & !(STACK_ALIGNMENT - 1));
         let new_sp = lowered.filter(|&sp| sp >= self.stack_floor).ok_or(Fault::StackOverflow)?;
         let old_sp = std::mem::replace(&mut self.stack_pointer, new_sp);
         self.write_slot(dst, u128::from(new_sp));

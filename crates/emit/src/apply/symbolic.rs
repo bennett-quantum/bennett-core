@@ -41,8 +41,19 @@ pub(super) enum Step<'a> {
     Switch(Word, Edges<'a>),
     Return(Word),
     Transfer(Point, Vec<(Slot, Word)>),
-    CheckedWrite(Point, Slot, Word, Bit, Fault),
+    CheckedTransfer(Point, Vec<(Slot, Word)>, Bit, Fault),
+    Inactive,
     Fault(Fault),
+}
+
+impl<'a> Step<'a> {
+    pub(super) fn checked(next: Point, writes: Vec<(Slot, Word)>, failed: Bit, fault: Fault) -> Self {
+        match failed {
+            ZERO => Self::Transfer(next, writes),
+            super::bits::ONE => Self::Fault(fault),
+            Bit::Wire(..) => Self::CheckedTransfer(next, writes, failed, fault),
+        }
+    }
 }
 
 pub(super) struct Frame<'a> {
@@ -166,7 +177,7 @@ impl<'a> Frame<'a> {
                     }
                     let result = division::calculate(circuit, *op, &dividend, &divisor);
                     if zero != ZERO {
-                        return Ok(Step::CheckedWrite(point.next(), *dst, result, zero, Fault::DivideByZero));
+                        return Ok(Step::checked(point.next(), vec![(*dst, result)], zero, Fault::DivideByZero));
                     }
                     (*dst, result)
                 }
@@ -220,11 +231,12 @@ impl<'a> Frame<'a> {
                 Inst::Effect { .. } => return Ok(Step::Fault(Fault::EffectInRegion)),
                 Inst::Load { .. } => return Err(self.error(point, "load", super::memory::DISPATCH_REQUIRED)),
                 Inst::Store { .. } => return Err(self.error(point, "store", super::memory::DISPATCH_REQUIRED)),
-                Inst::Alloca { .. }
-                | Inst::StackSave { .. }
-                | Inst::StackRestore { .. }
-                | Inst::Setjmp { .. }
-                | Inst::ReturnAddress { .. } => {
+                Inst::Alloca { .. } => return Err(self.error(point, "alloca", super::memory::DISPATCH_REQUIRED)),
+                Inst::StackSave { .. } => return Err(self.error(point, "stacksave", super::memory::DISPATCH_REQUIRED)),
+                Inst::StackRestore { .. } => {
+                    return Err(self.error(point, "stackrestore", super::memory::DISPATCH_REQUIRED));
+                }
+                Inst::Setjmp { .. } | Inst::ReturnAddress { .. } => {
                     unreachable!("checked instructions before lowering")
                 }
                 Inst::Qalloc { .. }
@@ -310,9 +322,7 @@ fn unsupported(inst: &Inst) -> Option<(&'static str, &'static str)> {
     Some(match inst {
         Inst::Binary { .. } | Inst::Compare { .. } | Inst::Select { .. } | Inst::Cast { .. } => return None,
         Inst::Load { .. } | Inst::Store { .. } => return None,
-        Inst::Alloca { .. } => ("alloca", "applied stack operations"),
-        Inst::StackSave { .. } => ("stacksave", "applied stack operations"),
-        Inst::StackRestore { .. } => ("stackrestore", "applied stack operations"),
+        Inst::Alloca { .. } | Inst::StackSave { .. } | Inst::StackRestore { .. } => return None,
         Inst::Setjmp { .. } => ("setjmp", "non-local control and memory"),
         Inst::ReturnAddress { .. } => ("retaddr", "applied call frames"),
         Inst::Call { .. } | Inst::CallIndirect { .. } | Inst::FuncAddr { .. } => return None,

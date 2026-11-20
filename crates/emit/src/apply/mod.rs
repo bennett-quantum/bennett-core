@@ -18,6 +18,7 @@ mod ranges;
 mod reach;
 mod saved;
 mod shifts;
+mod stack;
 mod switches;
 mod symbolic;
 
@@ -196,7 +197,7 @@ fn compile_with_analysis_limit(
         }
     }
     let mut circuit = Circuit::new(input.scratch_start);
-    let mut memory = Memory::new(input.memory);
+    let mut memory = Memory::new(&input);
     let mut status = match input.entry_fault {
         Some(fault) => Status::Faulted(fault),
         None => Status::Running(Point::entry(BlockId(0))),
@@ -220,11 +221,8 @@ fn compile_with_analysis_limit(
             }
             Status::Running(_) if spent == input.budget => status = Status::Faulted(Fault::Budget),
             Status::Running(point) => {
-                let step = if program.has_memory() {
-                    program.step_with_memory(&mut circuit, &slots, point, &mut memory)?
-                } else {
-                    program.step(&mut circuit, &slots, point)?
-                };
+                let step = program.step_in(&mut circuit, &slots, point, &mut memory, ONE)?;
+                memory.commit(&mut circuit);
                 status = match step {
                     Step::Write(next, dst, word) => {
                         slots[dst.index()] = word;
@@ -237,18 +235,26 @@ fn compile_with_analysis_limit(
                         }
                         Status::Running(next)
                     }
-                    Step::CheckedWrite(next, dst, word, failed, fault) => {
+                    Step::CheckedTransfer(next, writes, failed, fault) => {
                         // The attempt has been emitted. Only successful inputs
                         // move to the next instruction and spend one step.
-                        slots[dst.index()] = word;
+                        for (slot, word) in writes {
+                            slots[slot.index()] = word;
+                        }
                         let remaining = input.budget - spent - 1;
-                        let (mut copies, ticks) =
-                            machine::run(&mut circuit, &program, &mut slots, (next, failed.not()), remaining)?;
+                        let (mut copies, ticks) = machine::run(
+                            &mut circuit,
+                            &program,
+                            &mut slots,
+                            &mut memory,
+                            (next, failed.not()),
+                            remaining,
+                        )?;
                         copies.faulted.push((failed, fault));
                         break (
                             copies,
                             Construction::StepMachine { ticks: ticks + 1 },
-                            "qubit-dependent division or remainder fault",
+                            "qubit-dependent instruction fault",
                         );
                     }
                     Step::Fault(fault) => {
@@ -258,7 +264,7 @@ fn compile_with_analysis_limit(
                     Step::Switch(..) => {
                         let remaining = input.budget - spent;
                         let (copies, ticks) =
-                            machine::run(&mut circuit, &program, &mut slots, (point, ONE), remaining)?;
+                            machine::run(&mut circuit, &program, &mut slots, &mut memory, (point, ONE), remaining)?;
                         break (
                             copies,
                             Construction::StepMachine { ticks },
@@ -323,10 +329,11 @@ fn compile_with_analysis_limit(
                             ApplyMode::StepMachine => "step machine requested for a qubit-dependent jump",
                         };
                         let (copies, ticks) =
-                            machine::run(&mut circuit, &program, &mut slots, (point, ONE), remaining)?;
+                            machine::run(&mut circuit, &program, &mut slots, &mut memory, (point, ONE), remaining)?;
                         break (copies, Construction::StepMachine { ticks }, reason);
                     }
                     Step::Return(word) => Status::Returned(word),
+                    Step::Inactive => unreachable!("the definite prefix is active"),
                 };
                 spent += 1;
             }

@@ -505,8 +505,9 @@ fn seeded_private_memory_programs_agree_on_complex_amplitudes() {
         let a = rng.random_range(32..36);
         let b = rng.random_range(32..36);
         let literal = rng.random::<u16>();
-        let overwrite = rng.random::<bool>();
-        let budget = rng.random_range(0..=18);
+        let choice = ["0", "1", "%odd"][case % 3];
+        let mode = [ApplyMode::Automatic, ApplyMode::StepMachine][case % 2];
+        let budget = rng.random_range(0..=19);
         let module = module(
             &format!(
                 r#"
@@ -517,6 +518,7 @@ entry:
     %both = or i16 %expanded, %high
     %value = xor i16 %both, {literal}
     call @write(%value)
+    %odd = trunc i3 %x to i1
     br {choice}, overwrite, read
 overwrite:
     %narrow = trunc i16 %value to i9
@@ -536,10 +538,295 @@ entry:
     ret
 }}
 "#,
-                choice = u8::from(overwrite)
             ),
             "    store i32 306247156, 32",
         );
-        compare(&module, &format!("seeded case {case}"), budget, ApplyMode::Automatic);
+        compare(&module, &format!("seeded case {case}"), budget, mode);
+    }
+}
+
+#[test]
+fn guarded_stores_and_loads_share_only_their_own_updates() {
+    let module = module(
+        r#"
+func @f(i3 %x) -> i8 {
+entry:
+    %odd = trunc i3 %x to i1
+    br %odd, write, read
+write:
+    %v = zext i3 %x to i9
+    store i9 %v, 8
+    br join
+read:
+    %old = load i16 8
+    %low = trunc i16 %old to i8
+    ret %low
+join:
+    %after = load i8 8
+    ret %after
+}
+"#,
+        "    store i16 4660, 8",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=8 {
+            let (_, counts, values) = compare(&module, "guarded overlapping access", budget, mode);
+            assert_eq!(
+                values,
+                (0..8)
+                    .map(|x| if x & 1 == 0 { bounds(budget, 5, Ok(52)) } else { bounds(budget, 7, Ok(x)) })
+                    .collect::<Vec<_>>()
+            );
+            let expected_counts = if budget < 4 {
+                MemoryCounts::default()
+            } else {
+                MemoryCounts { retained_scratch_qubits: 2, gates: 8, peak_nonconstant_bits: 7 }
+            };
+            assert_eq!(counts, expected_counts);
+        }
+    }
+}
+
+#[test]
+fn guarded_memory_faults_precede_later_operations() {
+    let module = module(
+        r#"
+func @f(i3 %x) -> i8 {
+entry:
+    switch i3 %x, 0: held, 1: bounds, default: done
+held:
+    store i16 1, 8
+    ret 1
+bounds:
+    %v = load i16 1023
+    ret 1
+done:
+    ret 2
+}
+"#,
+        "    x [9:0]\n    x [9:0]\n    x [1023:0]\n    x [1023:0]",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=4 {
+            let (_, counts, values) = compare(&module, "guarded first fault", budget, mode);
+            assert_eq!(counts, MemoryCounts::default());
+            assert_eq!(values[0], bounds(budget, 2, Err(Fault::QubitMemoryAccess)));
+            assert_eq!(values[1], bounds(budget, 2, Err(Fault::OutOfBounds)));
+            assert_eq!(values[2..], [bounds(budget, 2, Ok(2)); 6]);
+        }
+    }
+}
+
+#[test]
+fn copied_stack_frames_restore_their_own_pointers_and_keep_bytes() {
+    let module = module(
+        r#"
+func @f(i3 %x) -> i8 {
+entry:
+    %before = stacksave
+    %odd = trunc i3 %x to i1
+    br %odd, write, done
+write:
+    %p = alloca 3
+    %v = zext i3 %x to i8
+    store i8 %v, %p
+    %from_child = call @child(%p)
+    %after = stacksave
+    %same = icmp eq i64 %after, %p
+    stackrestore %before
+    %restored = stacksave
+    %again = icmp eq i64 %restored, %before
+    %ok = and i1 %same, %again
+    %v2 = load i8 %p
+    %r = xor i8 %from_child, %v2
+    %answer = select i8 %ok, %r, 255
+    ret %answer
+done:
+    ret 17
+}
+func @child(i64 %parent) -> i8 {
+entry:
+    %own = stacksave
+    %p = alloca 17
+    %delta = sub i64 %own, %p
+    %value = trunc i64 %delta to i8
+    %old = load i8 %parent
+    %v = add i8 %value, %old
+    %unaligned = sub i64 %own, 1
+    stackrestore %unaligned
+    ret %v
+}
+"#,
+        "",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=27 {
+            let (_, _, values) = compare(&module, "copied stack frames", budget, mode);
+            assert_eq!(
+                values,
+                (0..8)
+                    .map(|x| if x & 1 == 0 { bounds(budget, 4, Ok(17)) } else { bounds(budget, 26, Ok((x + 24) ^ x)) })
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+#[test]
+fn stack_faults_freeze_at_the_failing_attempt() {
+    let cases = [
+        ("%small = alloca %size\n    %r = call @child()\n    ret %r", 3, Fault::StackOverflow),
+        (
+            "%small = alloca %size\n    %above = add i64 %top, %size\n    stackrestore %above\n    ret 7",
+            4,
+            Fault::BadStackRestore,
+        ),
+        (
+            "%small = alloca %size\n    %below = sub i64 %small, 1\n    stackrestore %below\n    ret 7",
+            4,
+            Fault::BadStackRestore,
+        ),
+        ("%small = alloca %huge\n    ret 7", 2, Fault::StackOverflow),
+    ];
+    for (body, fault_at, code) in cases {
+        let module = module(
+            &format!(
+                r#"
+func @f(i3 %x) -> i8 {{
+entry:
+    %top = stacksave
+    %odd = trunc i3 %x to i1
+    br %odd, try, done
+try:
+    %size = select i64 %odd, 912, 0
+    %huge = select i64 %odd, 18446744073709551615, 0
+    {body}
+done:
+    ret 4
+}}
+func @child() -> i8 {{
+entry:
+    %one = stacksave
+    %two = stacksave
+    %three = stacksave
+    %four = stacksave
+    %five = stacksave
+    %six = stacksave
+    %seven = stacksave
+    %eight = stacksave
+    ret 7
+}}
+"#
+            ),
+            "",
+        );
+        for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+            for budget in 0..=10 {
+                let (_, counts, values) = compare(&module, "stack first fault", budget, mode);
+                assert_eq!(counts, MemoryCounts::default());
+                assert_eq!(
+                    values,
+                    (0..8)
+                        .map(|x| if x & 1 == 0 {
+                            bounds(budget, 4, Ok(4))
+                        } else {
+                            bounds(budget, 4 + fault_at, Err(code))
+                        })
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn nested_memory_loops_spend_one_shared_budget() {
+    let module = module(
+        r#"
+func @f(i3 %x) -> i8 {
+entry:
+    %limit = trunc i3 %x to i2
+    br outer(%limit)
+outer(i2 %left):
+    %done = icmp eq i2 %left, 0
+    br %done, finish, inner(%left)
+inner(i2 %in):
+    %old = load i8 8
+    %new = add i8 %old, 1
+    store i8 %new, 8
+    %next = sub i2 %in, 1
+    %again = icmp ne i2 %next, 0
+    br %again, inner(%next), leave
+leave:
+    %remaining = sub i2 %left, 1
+    br outer(%remaining)
+finish:
+    %r = load i8 8
+    ret %r
+}
+"#,
+        "    store i8 5, 8",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=55 {
+            let (_, _, values) = compare(&module, "nested guarded stores", budget, mode);
+            let expected = (0..8).map(|x| {
+                let n = x & 3;
+                let stores = n * (n + 1) / 2;
+                bounds(budget, 6 + 4 * n + 6 * stores, Ok(5 + stores))
+            });
+            assert_eq!(values, expected.collect::<Vec<_>>());
+        }
+    }
+}
+
+#[test]
+fn stack_allocation_checks_the_floor_after_alignment() {
+    let module = module(
+        r#"
+data 956 = i8 0
+func @f(i3 %x) -> i8 {
+entry:
+    %p = alloca 9
+    %q = stacksave
+    ret 5
+}
+"#,
+        "",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=4 {
+            let (_, counts, values) = compare(&module, "stack alignment at the floor", budget, mode);
+            assert_eq!(counts, MemoryCounts::default());
+            assert_eq!(values, vec![bounds(budget, 1, Err(Fault::StackOverflow)); 8]);
+        }
+    }
+}
+
+#[test]
+fn conditional_and_switch_destinations_can_share_the_same_load() {
+    for instruction in ["br %x, read, read", "switch i1 %x, 0: read, default: read"] {
+        let module = module_with_width(
+            &format!(
+                r#"
+func @f(i1 %x) -> i8 {{
+entry:
+    {instruction}
+read:
+    %v = load i8 0
+    ret %v
+}}
+"#
+            ),
+            "    store i8 5, 0",
+            1,
+        );
+        for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+            for budget in 0..=4 {
+                let (_, counts, values) = compare(&module, instruction, budget, mode);
+                assert_eq!(counts, MemoryCounts::default());
+                assert_eq!(values, [bounds(budget, 3, Ok(5)); 2]);
+            }
+        }
     }
 }

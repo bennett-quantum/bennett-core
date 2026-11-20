@@ -202,7 +202,7 @@ impl<'a> Path<'a> {
                     next
                 }
                 Step::Return(word) => return Ok(Some(word)),
-                Step::Branch(..) | Step::Switch(..) | Step::Fault(_) | Step::CheckedWrite(..) => {
+                Step::Branch(..) | Step::Switch(..) | Step::Fault(_) | Step::CheckedTransfer(..) | Step::Inactive => {
                     unreachable!("proved a total straight path")
                 }
             };

@@ -8,6 +8,7 @@ use bennett_ir::{Block, BlockId, Fault, FuncId, Function, Inst, Operand, Slot, T
 
 use super::bits::{Bit, Circuit, Word, constant};
 use super::memory::{AccessError, Memory};
+use super::stack::{self, StackSlots};
 use super::symbolic::{Frame, Point, Step, before_instruction_fault};
 use super::{ApplyError, ApplyInput, Argument};
 
@@ -19,6 +20,7 @@ struct Copy<'a> {
     frame: Frame<'a>,
     slots: Range<usize>,
     available_stack: Option<u64>,
+    stack: Option<StackSlots>,
     caller: Option<(Point, Option<Slot>)>,
     sites: BTreeMap<(BlockId, usize), Site<'a>>,
 }
@@ -32,6 +34,7 @@ pub(super) struct Program<'a> {
     copies: Vec<Copy<'a>>,
     work: usize,
     has_memory: bool,
+    stack_floor: u64,
 }
 
 impl<'a> Program<'a> {
@@ -45,13 +48,16 @@ impl<'a> Program<'a> {
                 frame: root,
                 slots: 0..slots.len(),
                 available_stack: input.entry_fault.is_none().then_some(input.stack_available),
+                stack: None,
                 caller: None,
                 sites: BTreeMap::new(),
             }],
             work: work(source),
             has_memory: false,
+            stack_floor: input.module.static_end(),
         };
 
+        let mut has_stack = false;
         let mut index = 0;
         while index < program.copies.len() {
             let func = program.copies[index].frame.callee;
@@ -61,6 +67,10 @@ impl<'a> Program<'a> {
                 .iter()
                 .flat_map(|block| &block.insts)
                 .any(|inst| matches!(inst, Inst::Load { .. } | Inst::Store { .. }));
+            has_stack |=
+                source.blocks.iter().flat_map(|block| &block.insts).any(|inst| {
+                    matches!(inst, Inst::Alloca { .. } | Inst::StackSave { .. } | Inst::StackRestore { .. })
+                });
             for (block, body) in source.blocks.iter().enumerate() {
                 let block = BlockId(block as u32);
                 if !program.copies[index].frame.reaches(block) {
@@ -123,6 +133,17 @@ impl<'a> Program<'a> {
             }
             index += 1;
         }
+        if has_stack {
+            program.has_memory = true;
+            let entry = if input.entry_fault.is_some() {
+                0
+            } else {
+                program.stack_floor.checked_add(input.stack_available).ok_or(ApplyError::Interface)?
+            };
+            for (index, copy) in program.copies.iter_mut().enumerate() {
+                copy.stack = Some(StackSlots::append(&mut slots, if index == 0 { entry } else { 0 }));
+            }
+        }
         Ok((program, slots))
     }
 
@@ -166,7 +187,14 @@ impl<'a> Program<'a> {
         let start = slots.len();
         slots.extend(frame.initial([]));
         let index = self.copies.len();
-        self.copies.push(Copy { frame, slots: start..slots.len(), available_stack, caller, sites: BTreeMap::new() });
+        self.copies.push(Copy {
+            frame,
+            slots: start..slots.len(),
+            available_stack,
+            stack: None,
+            caller,
+            sites: BTreeMap::new(),
+        });
         Ok(index)
     }
 
@@ -222,29 +250,48 @@ impl<'a> Program<'a> {
         self.step_narrow(circuit, slots, point, &[])
     }
 
-    pub(super) fn step_with_memory(
+    pub(super) fn step_in(
         &self,
         circuit: &mut Circuit,
         slots: &[Word],
         point: Point,
         memory: &mut Memory<'_>,
+        guard: Bit,
     ) -> Result<Step<'a>, ApplyError> {
         let read = |operand| self.read(slots, point, operand);
         let next = point.next();
+        let copy = &self.copies[point.copy];
         let (operation, result) = match self.block(point).insts.get(point.index) {
             Some(Inst::Load { width, dst, address }) => (
                 "load",
-                memory.load(&read(address), *width).map(|word| Step::Write(next, self.slot(point, *dst), word)),
+                memory
+                    .load(circuit, &read(address), guard, *width)
+                    .map(|word| Step::Write(next, self.slot(point, *dst), word)),
             ),
             Some(Inst::Store { width, value, address }) => (
                 "store",
-                memory.store(circuit, &read(address), *width, &read(value)).map(|()| Step::Transfer(next, Vec::new())),
+                memory
+                    .store(circuit, &read(address), guard, *width, read(value))
+                    .map(|()| Step::Transfer(next, Vec::new())),
             ),
+            Some(Inst::Alloca { size, dst }) => {
+                let stack = copy.stack.expect("planned stack slots");
+                return Ok(stack.allocate(circuit, slots, next, copy.slot(*dst), &read(size), self.stack_floor));
+            }
+            Some(Inst::StackSave { dst }) => {
+                let stack = copy.stack.expect("planned stack slots");
+                return Ok(Step::Write(next, copy.slot(*dst), slots[stack.current.index()].clone()));
+            }
+            Some(Inst::StackRestore { pointer }) => {
+                let stack = copy.stack.expect("planned stack slots");
+                return Ok(stack.restore(circuit, slots, next, read(pointer)));
+            }
             Some(_) | None => return self.step(circuit, slots, point),
         };
         let unsupported = |route| self.copies[point.copy].frame.error(point, operation, route);
         match result {
             Ok(step) => Ok(step),
+            Err(AccessError::Inactive) => Ok(Step::Inactive),
             Err(AccessError::Fault(fault)) => Ok(Step::Fault(fault)),
             Err(AccessError::MissingMemory) => Err(unsupported("the caller's memory")),
             Err(AccessError::Address) => Err(unsupported("a proved definite memory address")),
@@ -268,14 +315,28 @@ impl<'a> Program<'a> {
             if child.available_stack.is_none() {
                 return Ok(Step::Fault(Fault::StackOverflow));
             }
-            let writes = child
+            let mut writes: Vec<_> = child
                 .frame
                 .initial(args.iter().map(|arg| Frame::read(local, arg)))
                 .into_iter()
                 .enumerate()
                 .map(|(index, word)| (child.slot(Slot(index as u32)), word))
                 .collect();
-            return Ok(Step::Transfer(Point { copy: *index, ..Point::entry(BlockId(0)) }, writes));
+            let next = Point { copy: *index, ..Point::entry(BlockId(0)) };
+            if let (Some(parent_stack), Some(child_stack)) = (copy.stack, child.stack) {
+                let size = frame_bytes(child.slots.len()).expect("checked frame size");
+                let (top, failed) = stack::reserve(
+                    circuit,
+                    &slots[parent_stack.current.index()],
+                    &stack::word(size),
+                    self.stack_floor,
+                    false,
+                );
+                writes.push((child_stack.current, top.clone()));
+                writes.push((child_stack.top, top));
+                return Ok(Step::checked(next, writes, failed, Fault::StackOverflow));
+            }
+            return Ok(Step::Transfer(next, writes));
         }
 
         let block = self.block(point);
@@ -292,15 +353,19 @@ impl<'a> Program<'a> {
         let step = copy.frame.step(circuit, local, point, widths)?;
         Ok(match step {
             Step::Write(next, dst, word) => Step::Write(next, copy.slot(dst), word),
-            Step::CheckedWrite(next, dst, word, enabled, fault) => {
-                Step::CheckedWrite(next, copy.slot(dst), word, enabled, fault)
-            }
+            Step::CheckedTransfer(next, writes, failed, fault) => Step::CheckedTransfer(
+                next,
+                writes.into_iter().map(|(slot, word)| (copy.slot(slot), word)).collect(),
+                failed,
+                fault,
+            ),
             Step::Jump(_)
             | Step::Branch(..)
             | Step::Switch(..)
             | Step::Return(_)
             | Step::Transfer(..)
-            | Step::Fault(_) => step,
+            | Step::Fault(_)
+            | Step::Inactive => step,
         })
     }
 

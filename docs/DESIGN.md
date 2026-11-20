@@ -349,10 +349,10 @@ new bits by reversible gates into scratch qubits.
 The emitter's full instruction subset is `add`, `sub`, `mul`, `and`, `or`, `xor`,
 `udiv`, `sdiv`, `urem`, `srem`, `shl`, `lshr`, `ashr`, `icmp`, `select`, `zext`, `sext`, `trunc`,
 `faddr`, unconditional and conditional `br`, `switch`, `ret`,
-and direct `call` and `call_indirect` as described under "Copied calls" below. With definite
-control, the emitter supports `load` and `store` at definite addresses. Calls take integer
-parameters and may return an integer or no value. The emitter also supports `fault`, `effect`
-and `exit` inside an applied function. The [refusal table](#not-yet) gives the excluded
+and direct `call` and `call_indirect` as described under "Copied calls" below. The emitter supports
+`load` and `store` at definite addresses, `alloca`, `stacksave`, `stackrestore`, `fault`, `effect`,
+and `exit` inside an applied function. Calls take integer parameters and may return an integer
+or no value. The [refusal table](#not-yet) gives the excluded
 operations and the limits on calls. A jump reads all incoming values before assigning block
 parameters. Entry stack overflow takes precedence over the budget test. Every successful instruction
 or terminator costs one step. A reached `fault` writes its named code, `effect` gives
@@ -444,25 +444,24 @@ with divisor zero.
 
 A separate zero test makes each reached division or remainder fault with
 `divide_by_zero` for exactly those inputs. A failed input writes only the fault code and
-stops before any later instruction. A successful attempt costs one step. In a function without
-private memory, a qubit-dependent zero test in the definite prefix records the fault under the
-zero-test guard and starts the step machine at the next point for the successful inputs, with one
-step spent.
+stops before any later instruction. A successful attempt costs one step. A qubit-dependent zero
+test in the definite prefix records the fault under the zero-test guard and starts the step machine
+at the next point for the successful inputs, with one step spent.
 On a controlled route it records the fault under the route guard AND the zero test, then
 continues on that route with its guard narrowed to the successful inputs. In the step machine
 itself only the successful inputs receive a successor and the result write.
 
-**Private byte versions under definite control.** The emitter borrows the caller's ordinary
+**Private byte versions.** The emitter borrows the caller's ordinary
 bytes and held-byte addresses when it compiles an applied call. A sparse map holds the current
 private value of each written byte, shared across copied calls. A load or store checks the full
 span for bounds before checking whether any byte holds qubits. Access to a held byte faults
 even if its qubits hold zero. Little-endian loads use the current private values for written
 bytes and the caller's values for the rest. Stores zero the unused high bits in a partial byte.
-Each store puts its nonconstant bits in fresh scratch qubits, so a value already loaded stays
-available after an overwrite. Under definite control, storing a value the emitter's constant
-analysis proves definite needs no gates or qubits. Values outside that proof use gates to
-preserve the correct bits. Nothing writes to the caller's memory. All versions remain available
-until the end of the whole applied call,
+Under definite control a store copies its nonconstant bits into fresh scratch qubits, so a value
+already loaded stays available after an overwrite. Under definite control, storing a value the
+emitter's constant analysis proves definite needs no gates or qubits. Values outside that proof
+use gates to preserve the correct bits. Nothing writes to the caller's memory. All versions remain
+available until the end of the whole applied call,
 when the inverse clears them. The compiler keeps the equality between a retained bit and its
 source, including complements. Arithmetic gadgets preserve constant results and the equality of
 an unconditional result copy with a source that survives local reversal. A failed work-wire
@@ -473,15 +472,27 @@ For each call the compiler reports the retained version qubits, the memory gates
 inverse, and the peak number of bits in current byte versions represented by qubits. Copying a
 stored nonconstant bit takes one CNOT in each direction, with two additional X gates in each
 direction if the source is complemented. A later qubit-dependent choice can use the ordinary
-control constructions. If control lowering encounters an access, the step machine checks it
-against the remaining whole-function budget. An attempted load or store there is refused at
-its own program point before emitting the apply.
+control construction until it needs a memory or stack operation. The step machine performs the
+accesses within the remaining whole-function budget. Loads and stores check the pre-tick map.
+Each successful store selects its bytes under its dispatch guard after all accesses in that tick
+have read. The guards are disjoint, so each input sees just its own store. Earlier versions are
+available to reverse the call. The compiler can prove an address definite on its dispatch guard
+by replaying forward gates over at most eight distinct argument qubits and at most $2^{20}$ gates.
 
 **Cost of missing constant proofs.** The emitter proves a literal zero, a zero shifted by a
 qubit-dependent amount, and `(x*x) XOR x` on one bit. For `srem i2 %x, 1` it produces two
-bits on qubits. Storing that remainder adds two retained qubits and four gates. Using the
-remainder as an address is refused by the definite-address check. The remainder still has
-value zero for every input.
+bits on qubits. Storing that remainder adds two retained qubits and four gates. The arithmetic
+address proof alone refuses the remainder as an address. Guarded replay can recognise its value
+where the address proof can replay all inputs. The remainder has value zero for every input.
+
+**Private stack state.** Each copied frame has a stack pointer and a ceiling at the address just
+below its slots. A call with a dynamic stack reserves its slots below the current caller pointer.
+The caller keeps its own pointer while the callee runs. A return resumes the caller with that
+pointer and shared private bytes. `alloca` subtracts the size and rounds down to an eight-byte
+boundary. Underflow or crossing the floor gives `stack_overflow`. `stacksave` reads the pointer.
+`stackrestore` accepts any address from the current pointer through the ceiling, inclusive, and
+otherwise gives `bad_stack_restore`. A failed instruction keeps its first fault and does not write
+a successor. These stack operations use the same tick as the rest of the applied function.
 
 **Copied calls.** Each sequence of call sites has its own copy of the callee's slots and
 program points. Before building gates, the compiler counts one unit for each slot, instruction
@@ -2221,9 +2232,7 @@ Refused by name or not yet excluded around the classification of "What LLVM's pa
 | Reachable recursive calls or adding a call copy that raises the total above 16,384 slots and program points | Shared call frames and return positions |
 | Reachable `call_indirect` without one proved constant address | Prove the target across visits or dispatch among supported addresses |
 | Calls with register signatures, `retaddr` | Register-valued call frames and code addresses |
-| `load` or `store` attempted after control becomes qubit-dependent | Private memory in the step machine |
 | `load` or `store` without a proved definite address | Address selection over possible bytes |
-| `alloca`, `stacksave`, `stackrestore` | Private stack state |
 | `setjmp`, `longjmp` | Private memory and non-local control transfer |
 
 ## Open questions
