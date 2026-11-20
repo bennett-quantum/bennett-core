@@ -403,11 +403,9 @@ fn count_and_simulator_report_an_apply_while_the_run_goes_on() {
 }
 
 // A rotation by 1.75, 19.1875 and -20.9375 radians leaves q[0] at zero, so the register reads 0 or 2. At
-// seed 0 the draw and the weight of outcome 0 round to the same number and the sampler takes the next
-// outcome, 1, whose weight is rounding error of about 5e-32.
+// seed 0 the draw equals the weight of outcome 0, and outcome 1, whose weight is rounding error of about
+// 5e-32, has an empty interval: the sampler must not take it.
 #[test]
-#[ignore = "the simulator's sampler selects an outcome of weight about 5e-32 when a draw and the weight of \
-            the outcome before it round to the same number (crates/exec/src/quantum.rs, measure_bits)"]
 fn a_draw_on_a_rounded_boundary_selects_only_possible_outcomes() {
     let trace = Trace::new("boundary");
     let exported = trace.export(&[FIXTURE, "--entry", "boundary", "--seed", "0"]);

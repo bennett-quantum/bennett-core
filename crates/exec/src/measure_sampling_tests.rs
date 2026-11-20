@@ -8,7 +8,7 @@ use bennett_ir::Width;
 use num_complex::Complex64;
 use rand::{Rng, RngCore};
 
-use super::{Config, QuantumState};
+use super::{Config, QuantumState, pick};
 
 /// A generator that always gives the same 64 bits.
 struct Constant(u64);
@@ -54,4 +54,76 @@ fn a_draw_on_the_boundary_between_two_outcomes_belongs_to_the_second() {
     // The draw one step below the boundary is the first outcome's.
     let (mut state, column) = two_equal_outcomes();
     assert_eq!(state.measure_bits(&[(column, 1)], &mut Constant(half - (1 << 11))), vec![0]);
+}
+
+/// A weight below half the rounding unit of one half: added to one half it leaves the running sum unchanged.
+const BELOW_ROUNDING: f64 = 1.0 / (1u64 << 60) as f64;
+
+#[test]
+fn an_outcome_whose_interval_is_empty_is_never_picked() {
+    let weights = [0.5, BELOW_ROUNDING, 0.5];
+    assert_eq!(0.5 + BELOW_ROUNDING, 0.5, "the middle interval is empty");
+    let largest = Constant(u64::MAX).random::<f64>();
+    assert_eq!(largest, 1.0 - f64::EPSILON / 2.0, "the largest draw the generator gives");
+    for (draw, expected) in [(0.0, 0), (0.5 - f64::EPSILON / 4.0, 0), (0.5, 2), (largest, 2), (1.0, 2), (2.0, 2)] {
+        assert_eq!(pick(&weights, draw), Some(expected), "draw {draw:e}");
+    }
+    // A draw at or past the last running sum takes the last outcome whose interval is not empty, not the last.
+    let empty_last = [0.5, 0.5, BELOW_ROUNDING];
+    assert_eq!(pick(&empty_last, 1.0), Some(1));
+    assert_eq!(pick(&empty_last, 0.5), Some(1));
+    assert_eq!(pick(&[], 0.0), None);
+}
+
+/// The same weights in a state: no draw the generator can give near the empty interval, nor the largest or
+/// the smallest, measures the outcome of weight below the rounding unit.
+#[test]
+fn measurement_never_returns_an_outcome_with_an_empty_interval() {
+    let state = || {
+        let mut state = QuantumState::default();
+        let handle = state.allocate(Width::new(2).expect("a width"));
+        let column = state.resolve(handle).expect("live");
+        let configs = [(0u64, 0.5), (1, BELOW_ROUNDING), (2, 0.5)].map(|(value, weight): (u64, f64)| {
+            let mut config = vec![0u64; column + 1];
+            config[column] = value;
+            (Config::from(config), Complex64::new(weight.sqrt(), 0.0))
+        });
+        state.replace_amplitudes(BTreeMap::from(configs));
+        (state, column)
+    };
+    // The generator's draw is the top 53 bits of its word: one step of a draw is 2^11 of the word.
+    let step = 1u64 << 11;
+    let near_half = (0..=2048u64).flat_map(|k| [(1u64 << 63) + k * step, (1u64 << 63) - k * step]);
+    for word in near_half.chain([0, u64::MAX]) {
+        let (mut state, column) = state();
+        let outcome = state.measure_bits(&[(column, 3)], &mut Constant(word));
+        assert_ne!(outcome, vec![1], "word {word:#x}");
+    }
+}
+
+/// The witness: three rotations about one axis that return qubit 0 to a state of exact probability zero for
+/// outcome 1 leave a computed weight of about 5.5e-32 there. At seed 0 the draw equals outcome 0's weight
+/// exactly, which made the earlier rule return 1.
+#[test]
+fn rotations_that_cancel_do_not_measure_their_rounding_residue() {
+    let module = bennett_ir::load(
+        "memory 256
+func @main() -> i2 {
+entry:
+    %q = qalloc 2
+    ry(1.75) %q[0]
+    ry(19.1875) %q[0]
+    ry(-20.9375) %q[0]
+    ry(1.139387646145412) %q[1]
+    %m = measure %q
+    ret %m
+}",
+    )
+    .expect("valid");
+    let entry = module.function_named("main").expect("entry");
+    for seed in 0..64 {
+        let options = crate::Options { seed, ..crate::Options::default() };
+        let outcome = crate::Executor::new(&module, entry, &[], options).expect("starts").run();
+        assert!(matches!(outcome, crate::Outcome::Returned(Some(0 | 2))), "seed {seed}: {outcome:?}");
+    }
 }
