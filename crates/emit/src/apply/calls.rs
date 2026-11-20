@@ -172,11 +172,6 @@ impl<'a> Program<'a> {
             return Err(error("a smaller copy expansion (limit: 16384 slots and program points)"));
         }
 
-        if function.params.iter().any(|param| matches!(param.ty, Type::Qreg(_)))
-            || matches!(function.result, Some(Type::Qreg(_)))
-        {
-            return Err(error("integer call signatures"));
-        }
         // These facts hold across every visit in the caller copy. The frame
         // remaps their wire identities together, preserving shared input bits.
         let proofs = args.iter().map(|arg| parent.frame.known_bits(arg));
