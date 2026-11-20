@@ -341,3 +341,32 @@ fn a_register_the_host_cannot_hold_stops_the_simulator_by_name() {
         assert_eq!(executor.stats().live_qubits, 0);
     });
 }
+
+/// A gate on two ordinary memory bytes needs 16 fresh qubits; with 2^32 - 9 held, only 8 fit under the
+/// simulator's count. The stop must come before either byte becomes qubits: no byte held, the same count,
+/// the same step. Reaching the count takes 2^26 columns (about 2.5 GB and a few seconds), so the test is
+/// run on request.
+#[test]
+#[ignore = "allocates about 2.5 GB to hold 2^32 - 9 qubits; run with --include-ignored"]
+fn a_memory_gate_stopped_by_the_qubit_count_leaves_no_byte_held() {
+    let module = common::load(
+        "memory 128
+func @main() {
+entry:
+    %q = qalloc 4294967287
+    x [16:0] ctrl [17:0]
+    ret
+}",
+    );
+    let mut executor = common::executor(&module, "main", &[], bennett_exec::Options { reversible: true, ..bounded() });
+    assert_eq!(executor.step(), None);
+    let before = executor.stats();
+    let stop = bennett_exec::RunError::QubitCount { live: u64::from(u32::MAX) - 8, more: 16 };
+    assert_eq!(executor.step(), Some(Outcome::Stopped(stop)));
+    let after = executor.stats();
+    assert_eq!(
+        (after.live_qubits, after.memory_qubit_bytes, after.steps),
+        (before.live_qubits, before.memory_qubit_bytes, before.steps)
+    );
+    assert_eq!(after.memory_qubit_bytes, 0);
+}

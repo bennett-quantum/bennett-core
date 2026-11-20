@@ -94,12 +94,33 @@ impl<'m> Executor<'m> {
         if resolved.iter().enumerate().any(|(k, place)| resolved[..k].contains(place)) {
             return Err(Fault::QubitAlias.into());
         }
-        let mut promoted: Vec<(u64, u8)> = Vec::new();
+        // The bytes to promote, distinct, in the order the gate names them. The simulator admits their
+        // qubits all at once, and a promotion that fails takes back those before it: a stop leaves the
+        // state as it was.
+        let mut fresh: Vec<u64> = Vec::new();
         for place in &resolved {
             if let Resolved::Memory { byte, .. } = *place
                 && self.quantum.cell(byte).is_none()
+                && !fresh.contains(&byte)
             {
-                promoted.push((byte, self.promote(byte, context)?));
+                fresh.push(byte);
+            }
+        }
+        if context.external.is_none() {
+            self.quantum.admit(fresh.len() as u64 * u64::from(Width::BYTE.bits()))?;
+        }
+        let mut promoted: Vec<(u64, u8)> = Vec::new();
+        for byte in fresh {
+            match self.promote(byte, context) {
+                Ok(old) => promoted.push((byte, old)),
+                Err(error) => {
+                    if context.external.is_none() {
+                        for &(byte, old) in promoted.iter().rev() {
+                            self.unpromote(byte, old);
+                        }
+                    }
+                    return Err(error.into());
+                }
             }
         }
         let target = self.resolve_wire(resolved[0]);
