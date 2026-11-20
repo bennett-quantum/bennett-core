@@ -58,6 +58,46 @@ fn forward_then_reverse_restores_the_entry_state() {
     }
 }
 
+/// Each computed rotation here is the first gate on its memory byte, so it turns an ordinary byte (zero or
+/// not) into qubits, under a control in superposition: undoing it must apply the inverse rotation and then
+/// give the byte back. Each step is undone one at a time and compared with the state before it ran.
+#[test]
+fn undoing_a_rotation_that_turns_a_byte_into_qubits_restores_each_earlier_state() {
+    let module = common::load(
+        "memory 64
+data 9 = i8 5, i8 0x80
+func @main(i64 %a) {
+entry:
+    %q = qalloc 1
+    h %q
+    ry(%a) [8:1] ctrl %q
+    rx(%a) [9:2]
+    rz(%a) [10:7] ctrl %q
+    ry(%a) [8:1]
+    ret
+}",
+    );
+    for angle in ANGLES {
+        let mut executor =
+            executor(&module, "main", &[angle.to_bits()], bennett_exec::Options { reversible: true, ..bounded() });
+        let mut before = vec![executor.snapshot()];
+        while executor.step().is_none() {
+            before.push(executor.snapshot());
+        }
+        assert_eq!(executor.outcome(), Some(Outcome::Returned(None)), "{angle}");
+        assert_eq!(executor.snapshot().quantum.cells.len(), 3, "{angle}: three bytes hold qubits");
+        // The last step, `ret`, is the first undone: back to the state it started from.
+        while let Some(expected) = before.pop() {
+            assert!(executor.step_back().expect("reversible"), "{angle}");
+            common::assert_same_state(
+                &executor.snapshot(),
+                &expected,
+                &format!("{angle}: undo to step {}", before.len()),
+            );
+        }
+    }
+}
+
 /// Infinities and NaNs (quiet, signalling, with a payload, negative) fault `bad_angle` with the state as it
 /// was before the rotation; zero of either sign, the smallest subnormal and the largest finite angle run.
 #[test]
