@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use bennett_ir::{Fault, FuncId, Operand, Slot, Type};
+use bennett_ir::{Fault, FuncId, Operand, Qubits, Slot, Type};
 
 use crate::apply_device::{AppliedCircuit, ApplyInput, ApplyMemory, Argument};
 use crate::device_io::{DeviceContext, wire, wires};
@@ -32,10 +32,25 @@ pub struct RegionCost {
 /// Where an argument's value comes from on each configuration.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Input {
-    /// A register, read as an integer: a column of the configuration.
-    Register(usize),
+    /// A register of at most 128 qubits, read as an integer: its head column and its width.
+    Register(usize, Qubits),
     /// A classical value, the same on every configuration.
     Value(u128),
+}
+
+/// An `apply` target register: its head column and its width.
+type Target = (usize, Qubits);
+
+/// The value of the register stored in `columns` (least significant first) in `config`.
+fn register_value(config: &[u64], columns: &[usize]) -> u128 {
+    columns.iter().rev().fold(0, |value, &column| value << u64::BITS | u128::from(config[column]))
+}
+
+/// XORs `value` into the register stored in `columns` (least significant first) in `config`.
+fn xor_into(config: &mut [u64], columns: &[usize], value: u128) {
+    for (k, &column) in columns.iter().enumerate() {
+        config[column] ^= (value >> (k as u32 * u64::BITS)) as u64;
+    }
 }
 
 impl<'m> Executor<'m> {
@@ -55,6 +70,15 @@ impl<'m> Executor<'m> {
     ) -> Result<(), Halt> {
         let (out, fault, inputs) = self.region_operands(args, out, fault)?;
         let budget = self.read_word(budget);
+        // A register of more than 64 qubits (at most 128 here) is two columns.
+        let input_columns: Vec<Vec<usize>> = inputs
+            .iter()
+            .map(|input| match *input {
+                Input::Register(column, _) => self.quantum.columns_of(column),
+                Input::Value(_) => Vec::new(),
+            })
+            .collect();
+        let out_columns = self.quantum.columns_of(out.0);
         let mut values = Vec::with_capacity(inputs.len());
         // This evaluation is the simulator's implementation of apply. It requires amplitudes.
         let original = self.quantum.take_amplitudes();
@@ -62,8 +86,8 @@ impl<'m> Executor<'m> {
         let mut outcomes = Vec::with_capacity(original.len());
         for config in original.keys() {
             values.clear();
-            values.extend(inputs.iter().map(|input| match *input {
-                Input::Register(column) => u128::from(config[column]),
+            values.extend(inputs.iter().zip(&input_columns).map(|(input, columns)| match *input {
+                Input::Register(..) => register_value(config, columns),
                 Input::Value(value) => value,
             }));
             outcomes.push(self.evaluate(callee, &values, budget));
@@ -83,9 +107,12 @@ impl<'m> Executor<'m> {
         let mut permuted = BTreeMap::new();
         for ((mut config, amplitude), outcome) in original.into_iter().zip(outcomes) {
             match outcome {
-                // The validator made the result as wide as the register, at most 64 bits.
-                Outcome::Returned(result) => config[out] ^= result.expect("a region callee returns an integer") as u64,
-                Outcome::Faulted(code) => config[fault] ^= code.code(),
+                // The validator made the result as wide as the register, at most 128 bits.
+                Outcome::Returned(result) => {
+                    xor_into(&mut config, &out_columns, result.expect("a region callee returns an integer"));
+                }
+                // The code goes into the low 5 bits of the fault register, in its head column.
+                Outcome::Faulted(code) => config[fault.0] ^= code.code(),
                 // The simulator's stops concern gates and `apply`, which fault `quantum_in_region` in a region
                 // first: a stop of the simulator never becomes a fault code the program could read.
                 Outcome::Stopped(_) => unreachable!("a region reaches no gate or apply, so no stop of the simulator"),
@@ -107,15 +134,12 @@ impl<'m> Executor<'m> {
         context: &mut DeviceContext<'_>,
     ) -> Result<(), Halt> {
         let (out, fault, inputs) = self.region_operands(args, out, fault)?;
-        let range = |column: usize| {
-            let register = &self.quantum.registers()[column];
-            wires(column, register.width.expect("resolved register is live").bits())
-        };
+        let range = |(column, qubits): Target| wires(column, qubits.count());
         let args = inputs
             .into_iter()
             .map(|input| match input {
                 Input::Value(value) => Argument::Value(value),
-                Input::Register(column) => Argument::Register(range(column)),
+                Input::Register(column, qubits) => Argument::Register(range((column, qubits))),
             })
             .collect::<Vec<_>>();
         let entry = self.frame_fits(callee);
@@ -136,20 +160,24 @@ impl<'m> Executor<'m> {
         let circuit = AppliedCircuit::check(&input, &block)?;
         if let Some(device) = context.external.as_deref_mut() {
             AppliedCircuit::send(&block, device)?;
-        } else if let Some(weight) = circuit.simulate(&mut self.quantum, fault)? {
+        } else if let Some(weight) = circuit.simulate(&mut self.quantum, fault.0)? {
             self.record_region_fault_weight(weight);
         }
         Ok(())
     }
 
-    /// The columns of `out` and `fault` and where each argument comes from; `qubit_alias` if a target is
-    /// an argument or both are one register.
-    fn region_operands(&self, args: &[Operand], out: Slot, fault: Slot) -> Result<(usize, usize, Vec<Input>), Halt> {
-        let out = self.quantum.resolve(self.handle(out))?;
-        let fault = self.quantum.resolve(self.handle(fault))?;
+    /// The head columns and widths of `out` and `fault` and where each argument comes from; `qubit_alias` if
+    /// a target is an argument or both are one register.
+    fn region_operands(&self, args: &[Operand], out: Slot, fault: Slot) -> Result<(Target, Target, Vec<Input>), Halt> {
+        let register = |slot: Slot| -> Result<Target, Fault> {
+            let Type::Qreg(qubits) = self.slot_type(slot) else { unreachable!("validated register") };
+            Ok((self.quantum.resolve(self.handle(slot))?, qubits))
+        };
+        let (out, fault) = (register(out)?, register(fault)?);
         let inputs = args.iter().map(|arg| self.input(arg)).collect::<Result<Vec<_>, _>>()?;
-        let targets = [Input::Register(out), Input::Register(fault)];
-        if out == fault || inputs.iter().any(|input| targets.contains(input)) {
+        let is_target =
+            |input: &Input| matches!(*input, Input::Register(column, _) if column == out.0 || column == fault.0);
+        if out.0 == fault.0 || inputs.iter().any(is_target) {
             return Err(Fault::QubitAlias.into());
         }
         Ok((out, fault, inputs))
@@ -157,10 +185,11 @@ impl<'m> Executor<'m> {
 
     fn input(&self, arg: &Operand) -> Result<Input, Fault> {
         match arg {
-            Operand::Slot(slot) if matches!(self.slot_type(*slot), Type::Qreg(_)) => {
-                Ok(Input::Register(self.quantum.resolve(self.handle(*slot))?))
-            }
-            Operand::Slot(_) | Operand::Const(_) => Ok(Input::Value(self.read(arg))),
+            Operand::Slot(slot) => match self.slot_type(*slot) {
+                Type::Qreg(qubits) => Ok(Input::Register(self.quantum.resolve(self.handle(*slot))?, qubits)),
+                Type::Int(_) => Ok(Input::Value(self.read(arg))),
+            },
+            Operand::Const(_) => Ok(Input::Value(self.read(arg))),
         }
     }
 

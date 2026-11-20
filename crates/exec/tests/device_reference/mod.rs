@@ -208,7 +208,7 @@ impl<'m> Device<'m> {
     }
 
     fn qubit(&self, qubit: Qubit) -> Result<(usize, u8), Fault> {
-        Ok((self.register(qubit.register)?, qubit.bit))
+        Ok((self.register(qubit.register)?, u8::try_from(qubit.bit).expect("a qubit of this reference's registers")))
     }
 
     fn execute(&mut self, inst: &Inst, observed: Option<u64>) -> Result<Event, Fault> {
@@ -280,6 +280,7 @@ impl<'m> Device<'m> {
                 return Err(Fault::QuantumInRegion);
             }
             Inst::Qalloc { width, dst } => {
+                let width = width.as_width().expect("a register of this reference's widths");
                 let id = self.quantum.allocate(width);
                 event = Event::Allocated { id, dst, width };
                 Some(id)

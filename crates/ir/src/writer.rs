@@ -121,7 +121,7 @@ impl Writer<'_> {
             }
             Inst::FuncAddr { func, .. } => write!(self.out, "faddr @{}", self.module.function(*func).name),
             Inst::Effect { byte } => write!(self.out, "effect {}", op(byte)),
-            Inst::Qalloc { width, .. } => write!(self.out, "qalloc {}", width.bits()),
+            Inst::Qalloc { width, .. } => write!(self.out, "qalloc {}", width.count()),
             Inst::Qfree { register } => write!(self.out, "qfree {}", name(register)),
             Inst::Gate { gate, target, controls } => {
                 let controls: Vec<Place> = controls.iter().map(|&qubit| Place::Register(qubit)).collect();

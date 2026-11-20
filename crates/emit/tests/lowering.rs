@@ -110,7 +110,7 @@ fn simulate_original(width: u64, gates: &[GateOp]) -> QuantumSnapshot {
     // Build the reference instructions directly, independent of the writer's names and mnemonic formatting.
     let text = format!("memory 8\nfunc @main() {{\nentry:\n%input = qalloc {width}\nret\n}}");
     let mut module = bennett_ir::read(&text).expect("valid reference allocation");
-    let qubit = |wire| Qubit { register: Slot(0), bit: wire as u8 };
+    let qubit = |wire| Qubit { register: Slot(0), bit: wire as u32 };
     module.functions[0].blocks[0].insts.extend(gates.iter().map(|op| Inst::Gate {
         gate: op.kind,
         target: qubit(op.target),

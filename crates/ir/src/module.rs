@@ -1,6 +1,6 @@
 //! The device program: modules, functions, blocks and instructions.
 
-use crate::{BinOp, BlockId, CastOp, Const, Fault, FuncId, Gate, Operand, Predicate, Slot, Type, Width};
+use crate::{BinOp, BlockId, CastOp, Const, Fault, FuncId, Gate, Operand, Predicate, Qubits, Slot, Type, Width};
 
 /// A device program: functions, an initial memory image and a memory size.
 ///
@@ -213,7 +213,7 @@ pub struct Qubit {
     /// The slot holding the register handle.
     pub register: Slot,
     /// The qubit's index in the register, from 0 (least significant).
-    pub bit: u8,
+    pub bit: u32,
 }
 
 /// Where a qubit of a gate lives: in a register, or at a bit of memory (`docs/DESIGN.md`, "Qubits in
@@ -402,7 +402,7 @@ pub enum Inst {
         /// The register handle.
         dst: Slot,
         /// The number of qubits.
-        width: Width,
+        width: Qubits,
     },
     /// `qfree register`: releases a register that is zero in every basis configuration.
     Qfree {

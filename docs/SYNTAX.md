@@ -12,11 +12,11 @@ function   := "func" @name "(" [param {"," param}] ")" ["->" type] "{" block {bl
 param      := type %name
 block      := label ":" {statement} terminator           ; a line ending in ":" is a label
 label      := name ["(" param {"," param} ")"]           ; block parameters replace phi nodes
-type       := iN | qN                                    ; iN: N from 1 to 128; qN: a register handle, N from 1 to 64
+type       := iN | qN                                    ; iN: N from 1 to 128; qN: a register handle, N from 1 to 2^32 - 1
 
 operand    := %name | INT          ; an INT takes its type from the instruction
 typed      := %name | iN INT       ; in argument lists, a constant names its type
-qubit      := %name ["[" INT "]"]  ; bare %q means %q[0]
+qubit      := %name ["[" INT "]"]  ; bare %q means %q[0]; the index is below the register's width
             | "[" operand [":" INT] "]"        ; a bit of memory: bit INT of the integer at the i64 address
 
 statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv urem srem and or xor shl lshr ashr
@@ -34,11 +34,11 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | %d = retaddr N                             ; i64 code address the frame N levels down returns to
             | %d = faddr @f
             | effect operand                             ; one i8 to the console
-            | %d = qalloc N
+            | %d = qalloc N                              ; N from 1 to 2^32 - 1
             | qfree %r                                   ; the partial trace: %r dropped unexamined
             | GATE qubit [ctrl qubit {, qubit}]          ; x h z s sdg t tdg
             | (rx | ry | rz)(ANGLE) qubit [ctrl ...]     ; radians, any finite angle
-            | %d = measure %r                            ; every qubit of the register
+            | %d = measure %r                            ; every qubit of the register: an iN, N at most 128
             | %d = measure iN "[" operand "]"            ; N bits from bit 0 of the integer at the i64 address
             | apply @f(typed, ...) -> %out, %fault budget operand  ; %fault: a register of 5 qubits or more
                                                                    ; meaning: docs/DESIGN.md, "apply"
@@ -148,7 +148,19 @@ mismatch. Only `apply` reads its argument registers, for each definite value of 
 be among an `apply`'s arguments, nor be one register. A call can return a handle to its caller. Returning a register from the
 selected entry ends the run successfully with no scalar host result. The CLI reports its declared width.
 
-Registers are currently limited to 64 qubits. Wider registers are planned. To apply a function to
+A register has from 1 to 2^32 - 1 qubits, as wide as a program needs: the simulator stores one wider than
+64 qubits in several columns, and its limits there are the host's memory, as for `memory N`. Two forms read
+a whole register as an integer, so there its width is at most 128, the widest integer:
+
+- `%d = measure %r` gives an `iN` of the register's width. A wider register is the validator's
+  `MeasureTooWide`. To measure some of its qubits, copy at most 128 of them into a fresh register with
+  controlled X gates (`x %c[i] ctrl %r[j]`), measure that (the same as measuring those qubits), undo the
+  copy and `qfree` the copy.
+- An `apply` argument register has the width of its `iN` parameter and `out` the width of the result, so a
+  wider one is `RegionOperandTooWide`, with the same copy as the way round. The `fault` register has at
+  least 5 qubits and may be of any width: the code goes into its low 5 bits.
+
+Handles of any width pass through calls, block parameters and `ret` as before. To apply a function to
 bits held at a memory address today, copy the bits into a register with controlled X gates, use
 `apply`, then undo the copy. An argument form for bits at an address will expand into those steps
 once C functions can take qubits through pointers.
