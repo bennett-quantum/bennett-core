@@ -38,6 +38,7 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | qfree %r                                   ; the partial trace: %r dropped unexamined
             | GATE qubit [ctrl qubit {, qubit}]          ; x h z s sdg t tdg
             | (rx | ry | rz)(ANGLE) qubit [ctrl ...]     ; radians, any finite angle
+            | (rx | ry | rz)(%a) qubit [ctrl ...]        ; the angle computed at run time: an i64, binary64 bits
             | %d = measure %r                            ; every qubit of the register: an iN, N at most 128
             | %d = measure iN "[" operand "]"            ; N bits from bit 0 of the integer at the i64 address
             | apply @f(typed, ...) -> %out, %fault budget operand  ; %fault: a register of 5 qubits or more
@@ -52,8 +53,12 @@ terminator := br label[(typed, ...)]
 ```
 
 Integers are decimal or `0x` hex and may be negative (two's complement at the type's width). An `ANGLE` is
-currently a decimal literal that must be finite as an `f64`. A literal that overflows (`1e999`) is a read
-error. A planned form will also accept an ordinary angle computed at run time. Strings
+a decimal literal that must be finite as an `f64`. A literal that overflows (`1e999`) is a read
+error. In the other form the angle is the value of an `i64` slot, `%a`, read when the gate runs as the bits
+of an IEEE 754 binary64 (as C's `double` is held in memory): an angle computed by the program. The validator
+requires an `i64`; an angle that is not finite (an infinity or a NaN) is the fault `bad_angle` (18) when the
+gate runs, before anything changes. Only a name is accepted there: `rz(1)` is the literal 1.0. The writer
+prints each form as it was read, so `read(write(m)) == m`. Strings
 accept `\n \t \r \0 \\ \" \xHH`. Names may be used before they are defined.
 
 ## Memory

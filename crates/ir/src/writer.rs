@@ -128,6 +128,10 @@ impl Writer<'_> {
                 self.gate(f, *gate, Place::Register(*target), &controls)
             }
             Inst::GateAt { gate, target, controls } => self.gate(f, *gate, *target, controls),
+            Inst::RotateBy { axis, angle, target, controls } => {
+                write!(self.out, "{}({})", axis.mnemonic(), name(angle))?;
+                self.places(f, *target, controls)
+            }
             Inst::Measure { source: MeasureSource::Register(register), .. } => {
                 write!(self.out, "measure {}", name(register))
             }
@@ -147,6 +151,11 @@ impl Writer<'_> {
             Gate::Fixed(fixed) => self.out.push_str(fixed.mnemonic()),
             Gate::Rotate(axis, angle) => write!(self.out, "{}({angle:?})", axis.mnemonic())?,
         }
+        self.places(f, target, controls)
+    }
+
+    /// ` target [ctrl control, ...]` after a gate's mnemonic and angle.
+    fn places(&mut self, f: &Function, target: Place, controls: &[Place]) -> fmt::Result {
         write!(self.out, " {}", QubitText(f, target))?;
         for (i, control) in controls.iter().enumerate() {
             let separator = if i == 0 { " ctrl " } else { ", " };

@@ -125,6 +125,7 @@ impl<'a> Program<'a> {
                         | Inst::Qfree { .. }
                         | Inst::Gate { .. }
                         | Inst::GateAt { .. }
+                        | Inst::RotateBy { .. }
                         | Inst::Measure { .. }
                         | Inst::Apply { .. } => continue,
                     };

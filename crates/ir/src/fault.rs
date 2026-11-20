@@ -64,6 +64,9 @@ faults! {
     /// written over it, a `longjmp` record read from it), whatever the qubits' values; inside an applied
     /// function too. Gates and measurements name such bytes; ordinary code does not.
     QubitMemoryAccess = 17 "qubit_memory_access",
+    /// A rotation whose angle operand, read as the bits of an IEEE 754 binary64, is not finite (an
+    /// infinity or a NaN): angles are finite `f64` values (`docs/DESIGN.md`, "The model").
+    BadAngle = 18 "bad_angle",
 }
 
 impl Fault {
