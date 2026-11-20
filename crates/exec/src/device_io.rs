@@ -44,9 +44,9 @@ struct Simulator<'a> {
     state: &'a mut QuantumState,
     rng: &'a mut ChaCha8Rng,
     limit: Option<usize>,
-    /// The controller reserves the columns of a language register before issuing its allocation; they
-    /// take its wires 64 at a time, least significant first.
-    reserved_columns: std::collections::VecDeque<usize>,
+    /// The controller reserves the columns of a language register before issuing its allocation: its
+    /// head, followed by the rest of its consecutive columns, which take its wires 64 at a time.
+    reserved: Option<usize>,
 }
 
 /// A masked fragment of one output word in the joint measurement key.
@@ -63,12 +63,7 @@ impl Simulator<'_> {
     }
 
     fn masks(&self, wires: Range<Wire>) -> Result<BTreeMap<usize, u64>, RunError> {
-        let mut masks = BTreeMap::new();
-        for wire in wires {
-            let qubit = self.qubit(wire)?;
-            *masks.entry(qubit.column).or_default() |= 1u64 << qubit.bit;
-        }
-        Ok(masks)
+        self.state.device_wires.masks(wires).ok_or(RunError::Device("wire is not allocated"))
     }
 
     fn measurement_parts(&self, ranges: &[Range<Wire>]) -> Result<Vec<MeasurementPart>, RunError> {
@@ -97,22 +92,26 @@ impl Simulator<'_> {
 
 impl Device for Simulator<'_> {
     fn allocate(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
-        if wires.clone().any(|wire| self.state.device_wires.qubit(wire).is_some()) {
+        if self.state.device_wires.any_bound(wires.clone()) {
             return Err(RunError::Device("wire is already allocated"));
         }
+        if let Some(column) = self.reserved.take() {
+            // The reservation grew the configurations for a register of several columns; one column is
+            // grown here, as for scratch.
+            self.state.ensure_column(column);
+            let qubits = wires.end - wires.start;
+            return self.state.device_wires.bind(column, wires).map_err(|_| RunError::QubitStorage { qubits });
+        }
+        self.state.admit(wires.end - wires.start)?;
         let mut start = wires.start;
         while start < wires.end {
             let end = wires.end.min(start.saturating_add(64));
-            let column = match self.reserved_columns.pop_front() {
-                Some(column) => column,
-                None => {
-                    let width = Width::new((end - start) as u32).expect("width of a storage column");
-                    let handle = self.state.reserve(width);
-                    self.state.resolve(handle).expect("reserved column")
-                }
-            };
+            let width = Width::new((end - start) as u32).expect("width of a storage column");
+            let handle = self.state.reserve(width);
+            let column = self.state.resolve(handle).expect("reserved column");
             self.state.ensure_column(column);
-            self.state.device_wires.bind(column, start..end);
+            let qubits = end - start;
+            self.state.device_wires.bind(column, start..end).map_err(|_| RunError::QubitStorage { qubits })?;
             start = end;
         }
         Ok(())
@@ -130,8 +129,7 @@ impl Device for Simulator<'_> {
     }
 
     fn discard(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
-        self.state.discard(self.masks(wires)?);
-        Ok(())
+        self.state.discard(self.masks(wires)?)
     }
 
     fn release_zero(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
@@ -163,17 +161,14 @@ impl Executor<'_> {
     fn with_device<T>(
         &mut self,
         context: &mut DeviceContext<'_>,
-        reserved_columns: Vec<usize>,
+        reserved: Option<usize>,
         command: impl FnOnce(&mut dyn Device) -> Result<T, RunError>,
     ) -> Result<T, RunError> {
         match context.external.as_deref_mut() {
             Some(device) => command(device),
-            None => command(&mut Simulator {
-                state: &mut self.quantum,
-                rng: &mut self.rng,
-                limit: context.limit,
-                reserved_columns: reserved_columns.into(),
-            }),
+            None => {
+                command(&mut Simulator { state: &mut self.quantum, rng: &mut self.rng, limit: context.limit, reserved })
+            }
         }
     }
 
@@ -182,10 +177,15 @@ impl Executor<'_> {
         qubits: Qubits,
         context: &mut DeviceContext<'_>,
     ) -> Result<u64, RunError> {
-        let handle = self.quantum.reserve_register(qubits);
+        let handle = self.quantum.reserve_register(qubits)?;
         let column = self.quantum.resolve(handle).expect("fresh register");
-        let columns = self.quantum.columns_of(column);
-        self.with_device(context, columns, |device| device.allocate(wires(column, qubits.count())))?;
+        let allocated =
+            self.with_device(context, Some(column), |device| device.allocate(wires(column, qubits.count())));
+        if let Err(error) = allocated {
+            // Nothing was allocated: the reservation goes, and the handle with it.
+            self.quantum.unallocate(handle);
+            return Err(error);
+        }
         Ok(handle)
     }
 
@@ -196,7 +196,7 @@ impl Executor<'_> {
         controls: &[Wire],
         context: &mut DeviceContext<'_>,
     ) -> Result<(), RunError> {
-        self.with_device(context, Vec::new(), |device| device.gate(GateOp { kind, target, controls }))
+        self.with_device(context, None, |device| device.gate(GateOp { kind, target, controls }))
     }
 
     pub(crate) fn device_measure(
@@ -204,7 +204,7 @@ impl Executor<'_> {
         ranges: &[Range<Wire>],
         context: &mut DeviceContext<'_>,
     ) -> Result<Vec<u64>, RunError> {
-        self.with_device(context, Vec::new(), |device| device.measure_many(ranges))
+        self.with_device(context, None, |device| device.measure_many(ranges))
     }
 
     pub(crate) fn discard_register(
@@ -231,9 +231,9 @@ impl Executor<'_> {
         context: &mut DeviceContext<'_>,
         command: impl FnOnce(&mut dyn Device) -> Result<(), RunError>,
     ) -> Result<(), RunError> {
-        self.with_device(context, Vec::new(), command)?;
+        self.with_device(context, None, command)?;
         if context.external.is_some() {
-            for column in self.quantum.columns_of(column).into_iter().rev() {
+            for column in self.quantum.columns_of(column).rev() {
                 self.quantum.retire(column);
             }
         }
@@ -270,7 +270,7 @@ mod tests {
     fn batches_measure_within_at_and_across_storage_boundaries() {
         let mut state = QuantumState::default();
         let mut rng = ChaCha8Rng::seed_from_u64(0);
-        let mut sim = Simulator { state: &mut state, rng: &mut rng, limit: None, reserved_columns: Default::default() };
+        let mut sim = Simulator { state: &mut state, rng: &mut rng, limit: None, reserved: None };
         sim.allocate(0..64).expect("first column");
         sim.allocate(64..66).expect("second column");
         for target in [2, 63, 64] {
@@ -285,7 +285,7 @@ mod tests {
     fn subcolumn_release_preserves_a_live_neighbour() {
         let mut state = QuantumState::default();
         let mut rng = ChaCha8Rng::seed_from_u64(0);
-        let mut sim = Simulator { state: &mut state, rng: &mut rng, limit: None, reserved_columns: Default::default() };
+        let mut sim = Simulator { state: &mut state, rng: &mut rng, limit: None, reserved: None };
         sim.allocate(0..3).expect("shared column");
         sim.gate(GateOp { kind: Gate::Fixed(FixedGate::X), target: 0, controls: &[] }).expect("set neighbour");
         sim.release_zero(1..2).expect("only the zero wire is released");
@@ -299,7 +299,7 @@ mod tests {
     fn crossing_release_and_reallocation_leave_both_neighbours_live() {
         let mut state = QuantumState::default();
         let mut rng = ChaCha8Rng::seed_from_u64(0);
-        let mut sim = Simulator { state: &mut state, rng: &mut rng, limit: None, reserved_columns: Default::default() };
+        let mut sim = Simulator { state: &mut state, rng: &mut rng, limit: None, reserved: None };
         sim.allocate(0..66).expect("two storage columns");
         let x = Gate::Fixed(FixedGate::X);
         for target in [62, 65] {
@@ -318,7 +318,7 @@ mod tests {
 
         let mut state = QuantumState::default();
         let mut rng = ChaCha8Rng::seed_from_u64(0);
-        let mut sim = Simulator { state: &mut state, rng: &mut rng, limit: None, reserved_columns: Default::default() };
+        let mut sim = Simulator { state: &mut state, rng: &mut rng, limit: None, reserved: None };
         sim.allocate(0..2).expect("same storage column");
         sim.gate(GateOp { kind: Gate::Fixed(FixedGate::H), target: 0, controls: &[] }).expect("superposition");
         let x = Gate::Fixed(FixedGate::X);
@@ -346,8 +346,7 @@ mod tests {
         for entangled in [false, true] {
             let mut state = QuantumState::default();
             let mut rng = ChaCha8Rng::seed_from_u64(0);
-            let mut sim =
-                Simulator { state: &mut state, rng: &mut rng, limit: None, reserved_columns: Default::default() };
+            let mut sim = Simulator { state: &mut state, rng: &mut rng, limit: None, reserved: None };
             sim.allocate(0..65).expect("two storage columns");
             let x = Gate::Fixed(FixedGate::X);
             if entangled {
@@ -370,7 +369,7 @@ mod tests {
     fn a_whole_64_bit_register_uses_one_word_per_measurement_key() {
         let mut state = QuantumState::default();
         let mut rng = ChaCha8Rng::seed_from_u64(0);
-        let mut sim = Simulator { state: &mut state, rng: &mut rng, limit: None, reserved_columns: Default::default() };
+        let mut sim = Simulator { state: &mut state, rng: &mut rng, limit: None, reserved: None };
         sim.allocate(0..64).expect("one full register");
         let range = 0..64;
         let parts = sim.measurement_parts(std::slice::from_ref(&range)).expect("valid measure");

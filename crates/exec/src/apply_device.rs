@@ -207,6 +207,7 @@ impl AppliedCircuit {
 
     /// Returns the total input weight whose fault code was XORed into the destination.
     pub(crate) fn simulate(&self, state: &mut QuantumState, fault: usize) -> Result<Option<f64>, RunError> {
+        state.admit(self.scratch as u64)?;
         let bindings = self
             .interface
             .iter()

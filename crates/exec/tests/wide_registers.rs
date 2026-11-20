@@ -200,3 +200,144 @@ entry:
         assert_eq!(assert_reverses(&unmeasured, "main", &[], bounded()), Outcome::Returned(None), "q{width}");
     }
 }
+
+/// Two states whose columns hold the same words, with the same register table, but in which the columns
+/// form different registers: `%big` takes columns 0 and 1 in one and 1 and 2 in the other, and the set
+/// qubit is its qubit 64 in one and its qubit 0 in the other. Measuring `%big` tells them apart, so the
+/// snapshots must too.
+#[test]
+fn snapshots_tell_apart_registers_whose_columns_hold_the_same_words() {
+    let state = |text: &str| {
+        let module = common::load(text);
+        let mut executor = common::executor(&module, "main", &[], bounded());
+        for _ in 0..3 {
+            executor.step();
+        }
+        let snapshot = executor.snapshot().quantum;
+        (snapshot, executor.run())
+    };
+    let (first, first_measured) = state(
+        "memory 64
+func @main() -> i128 {
+entry:
+    %big = qalloc 128
+    %small = qalloc 64
+    x %big[64]
+    %m = measure %big
+    ret %m
+}",
+    );
+    let (second, second_measured) = state(
+        "memory 64
+func @main() -> i128 {
+entry:
+    %small = qalloc 64
+    %big = qalloc 128
+    x %big
+    %m = measure %big
+    ret %m
+}",
+    );
+    assert_eq!((first_measured, second_measured), (Outcome::Returned(Some(1 << 64)), Outcome::Returned(Some(1))));
+    assert_eq!((&first.registers, &first.amplitudes), (&second.registers, &second.amplitudes));
+    assert_eq!((first.spans.as_slice(), second.spans.as_slice()), ([(0, 2)].as_slice(), [(1, 2)].as_slice()));
+    assert_eq!(first.distance(&second), None);
+}
+
+/// The address-space limit for the runs below, in bytes (192 MiB): the test binary and the controller's
+/// bookkeeping fit; the simulator's table for a register of 2^32 - 1 qubits (2^26 columns of 8 bytes)
+/// does not.
+const ADDRESS_SPACE: &str = "201326592";
+
+/// Runs `test` in a child process of this binary under the address-space limit, when `prlimit` is present;
+/// otherwise in this process if `in_process` (a run that needs no more than the limit), else not at all.
+fn under_address_limit(test: &str, in_process: bool, body: fn()) {
+    if std::env::var_os("BENNETT_UNDER_LIMIT").is_some() {
+        return body();
+    }
+    let exe = std::env::current_exe().expect("the test binary");
+    let child = std::process::Command::new("prlimit")
+        .args([format!("--as={ADDRESS_SPACE}"), "--core=0".into(), "--".into()])
+        .arg(exe)
+        .args(["--exact", test, "--test-threads", "1"])
+        .env("BENNETT_UNDER_LIMIT", "1")
+        .output();
+    match child {
+        Ok(output) => assert!(
+            output.status.success(),
+            "{test} under {ADDRESS_SPACE} bytes: {:?}\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout)
+        ),
+        Err(_) if in_process => body(),
+        Err(_) => {}
+    }
+}
+
+/// A device that records the wire ranges it allocates and the gates it receives.
+#[derive(Default)]
+struct RangeDevice {
+    allocated: Vec<std::ops::Range<bennett_exec::Wire>>,
+    targets: Vec<bennett_exec::Wire>,
+}
+
+impl bennett_exec::Device for RangeDevice {
+    fn allocate(&mut self, wires: std::ops::Range<bennett_exec::Wire>) -> Result<(), bennett_exec::RunError> {
+        self.allocated.push(wires);
+        Ok(())
+    }
+    fn gate(&mut self, gate: bennett_exec::GateOp<&[bennett_exec::Wire]>) -> Result<(), bennett_exec::RunError> {
+        self.targets.push(gate.target);
+        Ok(())
+    }
+    fn measure(&mut self, _: bennett_exec::Wire) -> Result<bool, bennett_exec::RunError> {
+        Ok(false)
+    }
+    fn discard(&mut self, _: std::ops::Range<bennett_exec::Wire>) -> Result<(), bennett_exec::RunError> {
+        Ok(())
+    }
+    fn release_zero(&mut self, _: std::ops::Range<bennett_exec::Wire>) -> Result<(), bennett_exec::RunError> {
+        Ok(())
+    }
+}
+
+const WIDEST: &str = "memory 64
+func @main() {
+entry:
+    %q = qalloc 4294967295
+    x %q[4294967294]
+    qfree %q
+    ret
+}";
+
+/// A register of the greatest width reaches an external device as one range of wires, with its top qubit
+/// addressed, within the address-space limit: the controller stores no columns for a device.
+#[test]
+fn the_widest_register_reaches_an_external_device_as_one_range() {
+    under_address_limit("the_widest_register_reaches_an_external_device_as_one_range", true, || {
+        let module = common::load(WIDEST);
+        let mut device = RangeDevice::default();
+        let entry = module.function_named("main").expect("entry");
+        let run = bennett_exec::Executor::run_on(&module, entry, &[], None, &mut device).expect("started");
+        assert_eq!(run.outcome, Outcome::Returned(None));
+        assert_eq!(device.allocated, vec![std::ops::Range { start: 0, end: u64::from(u32::MAX) }]);
+        assert_eq!(device.targets, [u64::from(u32::MAX) - 1]);
+    });
+}
+
+/// The simulator cannot hold that register within the limit: the run stops with the simulator's
+/// `QubitStorage`, naming the width, with the state as before the allocation, instead of aborting.
+#[test]
+fn a_register_the_host_cannot_hold_stops_the_simulator_by_name() {
+    under_address_limit("a_register_the_host_cannot_hold_stops_the_simulator_by_name", false, || {
+        let module = common::load(WIDEST);
+        let mut executor = common::executor(&module, "main", &[], bounded());
+        let before = executor.snapshot();
+        let stop = bennett_exec::RunError::QubitStorage { qubits: u64::from(u32::MAX) };
+        assert_eq!(executor.run(), Outcome::Stopped(stop));
+        let after = executor.snapshot();
+        assert_eq!(after.quantum, before.quantum, "the allocation left nothing behind");
+        assert_eq!(after.classical.frames, before.classical.frames, "still at the allocation");
+        assert_eq!(executor.stats().live_qubits, 0);
+    });
+}
