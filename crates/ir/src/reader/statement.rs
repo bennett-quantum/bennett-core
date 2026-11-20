@@ -5,7 +5,7 @@ use super::lexer::Token;
 use super::{Parser, Scope};
 use crate::{
     BinOp, BlockId, CastOp, Fault, FixedGate, FuncId, Gate, Inst, MeasureSource, Operand, Place, Predicate, Qubit,
-    Rotation, Signature, Slot, SwitchCase, Target, Terminator, Type, Width,
+    Qubits, Rotation, Signature, Slot, SwitchCase, Target, Terminator, Type, Width,
 };
 
 /// The mnemonics that end a block.
@@ -366,10 +366,11 @@ impl<'s> Parser<'s> {
         Ok(Qubit { register, bit })
     }
 
-    fn register_width(&mut self) -> Result<Width, Failure> {
+    /// `N` of `qalloc N`: from 1 to [`Qubits::MAX`].
+    fn register_width(&mut self) -> Result<Qubits, Failure> {
         let (text, offset) = self.cursor.number("a number of qubits")?;
-        let bits = text.parse().ok().filter(|&bits| bits <= Width::MAX_QUBITS).and_then(Width::new);
-        bits.ok_or_else(|| Failure { offset, kind: ReadErrorKind::BadNumber(text.to_owned()) })
+        let qubits = text.parse().ok().and_then(Qubits::new);
+        qubits.ok_or_else(|| Failure { offset, kind: ReadErrorKind::BadNumber(text.to_owned()) })
     }
 
     fn slot_use(&mut self, scope: &mut Scope<'s>, expected: &'static str) -> Result<Slot, Failure> {

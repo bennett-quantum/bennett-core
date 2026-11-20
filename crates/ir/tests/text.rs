@@ -58,7 +58,8 @@ fn malformed_statements_are_named() {
     assert!(matches!(read_error(&body("%x = frob i8 1, 2")).2, ReadErrorKind::UnknownInstruction(_)));
     assert!(matches!(read_error(&body("%x = add i8 300, 1")).2, ReadErrorKind::OutOfRange { .. }));
     assert!(matches!(read_error(&body("%x = add i129 1, 1")).2, ReadErrorKind::BadType(_)));
-    assert!(matches!(read_error(&body("%x = qalloc 65")).2, ReadErrorKind::BadNumber(_)));
+    assert!(matches!(read_error(&body("%x = qalloc 0")).2, ReadErrorKind::BadNumber(_)));
+    assert!(matches!(read_error(&body("%x = qalloc 4294967296")).2, ReadErrorKind::BadNumber(_)));
     assert!(matches!(read_error(&body("add i8 1, 1")).2, ReadErrorKind::ResultRequired("add")));
     assert!(matches!(read_error(&body("%x = store i8 1, 0")).2, ReadErrorKind::ResultNotAllowed("store")));
     assert!(matches!(read_error(&body("%x = add i8 1, 1 1")).2, ReadErrorKind::Unexpected { .. }));

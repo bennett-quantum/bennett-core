@@ -86,7 +86,9 @@ fn observation_module(module: &ValidModule, reuse_measured_byte: bool) -> Result
             if let Inst::Measure { dst, source } = inst {
                 let width = match source {
                     MeasureSource::Register(slot) => match module.slot_type(entry, slot) {
-                        Type::Qreg(width) => width,
+                        Type::Qreg(qubits) => {
+                            qubits.as_width().ok_or_else(|| format!("measurement of {} qubits", qubits.count()))?
+                        }
                         ty => return Err(format!("measurement source has type {ty:?}")),
                     },
                     MeasureSource::Memory { width, .. } => width,
@@ -96,13 +98,13 @@ fn observation_module(module: &ValidModule, reuse_measured_byte: bool) -> Result
                 let slot = Slot(function.slot_names.len() as u32);
                 function.slot_names.push(format!("test.observed.{}", widths.len()));
                 widths.push(width);
-                allocations.push(Inst::Qalloc { dst: slot, width });
+                allocations.push(Inst::Qalloc { dst: slot, width: width.into() });
                 for bit in 0..width.bits() as u8 {
                     let original = match source {
-                        MeasureSource::Register(register) => Place::Register(Qubit { register, bit }),
+                        MeasureSource::Register(register) => Place::Register(Qubit { register, bit: bit.into() }),
                         MeasureSource::Memory { address, .. } => Place::Memory { address, bit },
                     };
-                    let observed = Place::Register(Qubit { register: slot, bit });
+                    let observed = Place::Register(Qubit { register: slot, bit: bit.into() });
                     insts.extend([cnot(observed, original), cnot(original, observed), cnot(observed, original)]);
                 }
                 if demote_byte {

@@ -21,7 +21,7 @@ pub use module::{
 };
 pub use ops::{BinOp, CastOp, FixedGate, Gate, Predicate, Rotation};
 pub use reader::{NameKind, ReadError, ReadErrorKind, read};
-pub use types::{BlockId, Const, FuncId, Operand, Slot, Type, Width};
+pub use types::{BlockId, Const, FuncId, Operand, Qubits, Slot, Type, Width};
 pub use validate::{Expected, Location, Problem, ValidModule, ValidationError, ValidationErrors, validate};
 pub use writer::write;
 

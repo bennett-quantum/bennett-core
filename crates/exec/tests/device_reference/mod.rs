@@ -218,7 +218,8 @@ impl<'m> Device<'m> {
     }
 
     fn qubit(&self, qubit: Qubit) -> Result<(usize, u8), Fault> {
-        Ok((self.register(qubit.register)?, qubit.bit))
+        // The reference holds each register in one 64-bit word.
+        Ok((self.register(qubit.register)?, u8::try_from(qubit.bit).expect("a qubit of a register of at most 64")))
     }
 
     fn measure(&mut self, observed: Option<u128>, read: impl Fn(&Basis) -> u128) -> (u128, Event) {
@@ -301,6 +302,7 @@ impl<'m> Device<'m> {
                 return Err(Fault::QuantumInRegion);
             }
             Inst::Qalloc { width, dst } => {
+                let width = Width::new(width.count()).expect("the reference holds registers of at most 64 qubits");
                 let id = self.quantum.allocate(width);
                 event = Event::Allocated { id, dst, width };
                 Some(u128::from(id))

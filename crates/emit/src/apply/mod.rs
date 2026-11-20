@@ -121,10 +121,12 @@ fn check_interface(input: &ApplyInput<'_>) -> Result<(), ApplyError> {
     let Some(Type::Int(result)) = function.result else { return Err(ApplyError::Interface) };
     let length = |range: &Range<Wire>| range.end.saturating_sub(range.start);
     let disjoint = |a: &Range<Wire>, b: &Range<Wire>| a.end <= b.start || b.end <= a.start;
-    let max_qubits = u64::from(Width::MAX_QUBITS);
+    // Arguments and the result are integers, so their registers have at most 128 qubits; the fault
+    // register has at least 5 and may be wider than any integer.
+    let max_qubits = u64::from(Width::MAX_BITS);
     if length(&input.out) != u64::from(result.bits())
         || length(&input.out) > max_qubits
-        || !(u64::from(Fault::CODE_WIDTH.bits())..=max_qubits).contains(&length(&input.fault))
+        || length(&input.fault) < u64::from(Fault::CODE_WIDTH.bits())
         || !disjoint(&input.out, &input.fault)
         || input.out.end.max(input.fault.end) > input.scratch_start
         || input.args.len() != function.params.len()

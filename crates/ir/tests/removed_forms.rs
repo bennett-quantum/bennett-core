@@ -39,7 +39,7 @@ fn direct_and_indirect_ordinary_calls_cannot_consume_a_qubit_register() {
                 == Problem::TypeMismatch {
                     operand: "`%q`".into(),
                     expected: Expected::Type(Type::Int(Width::BIT)),
-                    found: Type::Qreg(Width::BIT),
+                    found: Type::Qreg(Width::BIT.into()),
                 }),
             "{call}: {errors}"
         );
