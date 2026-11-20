@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-/// The bit width of an integer value (1 to 128 bits) or of a quantum register (1 to 64 qubits).
+/// The bit width of an integer value: 1 to 128 bits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Width(pub(crate) u8);
 
@@ -18,8 +18,6 @@ impl Width {
 
     /// The widest integer.
     pub const MAX_BITS: u32 = 128;
-    /// The most qubits in one register: a register's value in a basis configuration is a `u64`.
-    pub const MAX_QUBITS: u32 = 64;
 
     /// The width of `bits` bits, or `None` outside 1 to 128.
     pub const fn new(bits: u32) -> Option<Width> {
@@ -42,20 +40,54 @@ impl Width {
     }
 }
 
+/// The number of qubits in a quantum register: 1 to [`Qubits::MAX`]. A register may be wider than any
+/// integer; only the instructions that read a register as an integer (`measure` of the whole register and
+/// the operands of `apply`) need its width to be at most [`Width::MAX_BITS`] (`docs/DESIGN.md`, "The device
+/// program").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Qubits(pub(crate) u32);
+
+impl Qubits {
+    /// The most qubits in one register: a qubit's index in its register is a `u32`.
+    pub const MAX: u32 = u32::MAX;
+
+    /// A register of `qubits` qubits, or `None` for 0.
+    pub const fn new(qubits: u32) -> Option<Qubits> {
+        if qubits >= 1 { Some(Qubits(qubits)) } else { None }
+    }
+
+    /// The number of qubits.
+    pub const fn count(self) -> u32 {
+        self.0
+    }
+
+    /// The integer width of the same number of bits, if there is one (at most 128).
+    pub const fn as_width(self) -> Option<Width> {
+        Width::new(self.0)
+    }
+}
+
+impl From<Width> for Qubits {
+    /// A register as wide as an integer of `width`.
+    fn from(width: Width) -> Qubits {
+        Qubits(width.bits())
+    }
+}
+
 /// What a value is: an integer, or a handle naming a quantum register.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
     /// An integer of the given width. Pointers are `i64` addresses.
     Int(Width),
     /// A handle to a quantum register of the given number of qubits.
-    Qreg(Width),
+    Qreg(Qubits),
 }
 
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Type::Int(width) => write!(f, "i{}", width.bits()),
-            Type::Qreg(width) => write!(f, "q{}", width.bits()),
+            Type::Qreg(qubits) => write!(f, "q{}", qubits.count()),
         }
     }
 }

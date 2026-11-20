@@ -1,6 +1,6 @@
 //! Decoding of type words, numbers and string literals.
 
-use crate::{Type, Width};
+use crate::{Qubits, Type, Width};
 
 /// The type a word such as `i32` or `q4` names.
 pub(super) fn parse_type(word: &str) -> Option<Type> {
@@ -8,10 +8,10 @@ pub(super) fn parse_type(word: &str) -> Option<Type> {
     if !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    let width = Width::new(digits.parse().ok()?)?;
+    let count: u32 = digits.parse().ok()?;
     match kind {
-        "i" => Some(Type::Int(width)),
-        "q" if width.bits() <= Width::MAX_QUBITS => Some(Type::Qreg(width)),
+        "i" => Width::new(count).map(Type::Int),
+        "q" => Qubits::new(count).map(Type::Qreg),
         _ => None,
     }
 }
@@ -68,11 +68,14 @@ mod tests {
     #[test]
     fn type_words() {
         assert_eq!(parse_type("i32"), Width::new(32).map(Type::Int));
-        assert_eq!(parse_type("q1"), Some(Type::Qreg(Width::BIT)));
+        assert_eq!(parse_type("q1"), Qubits::new(1).map(Type::Qreg));
         assert_eq!(parse_type("i0"), None);
         assert_eq!(parse_type("i128"), Width::new(128).map(Type::Int));
         assert_eq!(parse_type("i129"), None);
-        assert_eq!(parse_type("q65"), None);
+        assert_eq!(parse_type("q65"), Qubits::new(65).map(Type::Qreg));
+        assert_eq!(parse_type("q4294967295"), Qubits::new(u32::MAX).map(Type::Qreg));
+        assert_eq!(parse_type("q4294967296"), None);
+        assert_eq!(parse_type("q0"), None);
         assert_eq!(parse_type("i+8"), None);
         assert_eq!(parse_type("x8"), None);
         assert_eq!(parse_type("i"), None);

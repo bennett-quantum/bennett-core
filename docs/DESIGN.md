@@ -78,8 +78,12 @@ as needed for the one-control-qubit Shor program. A device with a finite gate se
 A module is a list of functions, an initial memory image and a memory size.
 
 - **Values** are integers of any width from 1 to 128 bits. A pointer is an integer address into one flat byte memory.
-  A quantum register currently holds at most 64 qubits. Wider registers and objects with more than
-  8 bytes holding qubits are planned before running Shor above 64 bits.
+  A quantum register holds from 1 to 2^32 - 1 qubits (`crates/ir/src/types.rs`, `Qubits`); a qubit's
+  index in it is a `u32`. Only the forms that read a whole register as an integer limit its width to the
+  widest integer, 128: `measure` of the register (else `MeasureTooWide`) and the arguments and output of
+  `apply` (else `RegionOperandTooWide`); a wider register is read in parts by copying them into narrower
+  registers with controlled X (`docs/SYNTAX.md`, "Registers are not integers"). Objects with more than 8
+  bytes holding qubits are not built: they are code under a qubit (HANDOFF, "STOP").
   There are no floating-point values: floating point arrives as library code.
 - **Functions** have typed parameters and at most one result. Bodies are basic blocks in SSA form with block
   parameters. Every name is resolved to a dense index when the module is loaded; nothing is looked up by name at
@@ -133,10 +137,17 @@ straightforward expansion into ordinary code; none reads or acts on a qubit:
   rounding in the amplitudes, since gates are undone by their inverses in floating point.
 - **The simulator’s quantum state** stores basis configurations with nonzero amplitudes, using `f64`
   for each amplitude's real and imaginary parts. A stored configuration is a list of integers.
-  A **column** is one position in that list holding the bits of a register. Columns for discarded
+  A **column** is one position in that list holding up to 64 bits of a register. A register of more
+  than 64 qubits takes several columns: its **head**, the column its handle names, holding qubits 0 to
+  63, and one **chunk** column for each further 64 (`quantum.rs`, `reserve_register`); `apply` reads and
+  XORs a register of up to 128 qubits across its two columns. Columns for discarded
   qubits can remain alongside live columns. Tracing them out of the purification gives the live state.
 - **The simulator’s `measure`** samples with a seeded generator and keeps only the configurations that agree with the outcome,
   rescaled. It names a register, or `N` bits at an address (`measure iN [ADDR]`, "Qubits in memory").
+  A register of 65 to 128 qubits is sent to the device as two ranges of wires, measured in one draw.
+- **Wires.** The controller names qubit `i` of the register whose head is column `c` by the wire
+  `c * 2^32 + i`, so each register has a range of wires as long as the widest register; a device sees a
+  register's allocation as one range of wires, whatever its width.
 
 ### What a device carries out
 
@@ -1117,13 +1128,14 @@ value the front can compute again from the registers the code read while they ar
 `apply` into the variable: a later overwrite of it clears the old value by computing it again and keeps
 nothing (the front records the value for its analysis, `bennett.holds` in `Taint.h`, which emits no code).
 
-A register currently holds at most 64 qubits. When the results take more bits, they are packed into words of at most 64
+When the results take more than 64 bits, the front packs them into words of at most 64
 bits, each a register of its own, and the one applied function takes the word's number as an ordinary argument
 and returns that word: every word is computed and the one asked for chosen at the end, so each run takes the
 same steps whichever word it returns. Each word is then one `apply` into its variable (a word of one variable)
 or a pair around a fresh register as above, with the same arguments and the same `B`: two runs of the whole
-code for each register. There is never a second copy of the code. The plan is to add wider registers
-and held objects before Shor above 64 bits.
+code for each register. There is never a second copy of the code. Registers may now be wider than 64
+qubits ("The device program"); the front still packs by 64 bits, and held objects of more than 8 bytes are
+not built.
 
 What LLVM moves out of the code is still the code's. When it promotes a variable that a loop of the code
 writes to a register (scalar promotion), the stores in the loop become one store after it, in the block where
@@ -1847,6 +1859,9 @@ How the simulator stores the result (`crates/exec/src/quantum.rs`) is its own af
 
 - If the register is zero in every stored configuration, its column is removed.
 - Otherwise the column is kept, unnamed (its generation moves on, so no handle names it) and never reused.
+- A register of several columns is kept or removed whole: if any of its columns is not zero, all are kept
+  and all its qubits count as kept. `qfree` journals the ids of its chunk columns, which a removed head
+  forgets, so that undoing it brings back the same columns.
   The stored state is then a **purification** of the state after the partial trace (a larger state whose
   partial trace over the kept columns is that state): what any later step of the program, a measurement
   included, can find out is the same either way.

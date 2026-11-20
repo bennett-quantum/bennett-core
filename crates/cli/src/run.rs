@@ -160,7 +160,7 @@ fn entry_arguments(module: &ValidModule, entry: FuncId, literals: &[i128]) -> Re
 fn report_result(module: &ValidModule, entry: FuncId, outcome: Outcome, region_fault_weight: f64) {
     match outcome {
         Outcome::Returned(None) => match module.function(entry).result {
-            Some(Type::Qreg(width)) => println!("result: register (q{})", width.bits()),
+            Some(Type::Qreg(qubits)) => println!("result: register (q{})", qubits.count()),
             Some(Type::Int(_)) | None => println!("result: none"),
         },
         Outcome::Returned(Some(value)) => match module.function(entry).result {

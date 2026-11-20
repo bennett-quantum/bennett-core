@@ -66,9 +66,9 @@ impl Dense {
         handle
     }
 
-    pub fn gate(&mut self, matrix: Matrix2<C>, target: (usize, u8), controls: &[(usize, u8)]) {
-        let target = 1 << (self.offset(target.0) + u32::from(target.1));
-        let controls: usize = controls.iter().map(|&(r, bit)| 1 << (self.offset(r) + u32::from(bit))).sum();
+    pub fn gate(&mut self, matrix: Matrix2<C>, target: (usize, u32), controls: &[(usize, u32)]) {
+        let target = 1 << (self.offset(target.0) + target.1);
+        let controls: usize = controls.iter().map(|&(r, bit)| 1 << (self.offset(r) + bit)).sum();
         // Tensor contraction of the 2x2 matrix with each target-bit slice of the dense vector.
         for low in 0..self.state.len() {
             if low & target == 0 && low & controls == controls {
@@ -287,7 +287,7 @@ impl<'a> Oracle<'a> {
                     {
                         return Err(End::Fault(Fault::QuantumInRegion));
                     }
-                    Inst::Qalloc { width, .. } => Some(Value::Reg(self.dense.allocate(width.bits()))),
+                    Inst::Qalloc { width, .. } => Some(Value::Reg(self.dense.allocate(width.count()))),
                     Inst::Qfree { register } => {
                         let r = slots[register.index()].reg();
                         assert!(

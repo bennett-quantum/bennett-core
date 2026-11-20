@@ -29,9 +29,9 @@ bytes available below the entry frame if it fits. [region.rs: evaluate, apply_ga
 [forward.rs: execute_inst, store] [cells.rs: check_no_cells] [apply_device.rs: ApplyInput]
 
 Count one slot per named result and per function or block parameter, including unused ones. Integer slots hold
-1 to 128 bits. Register slots hold 64-bit handles to 1 to 64 qubits, so an applied result can be at most 64 bits
-while its intermediates may be wider. [reader/mod.rs: function, params, label] [reader/statement.rs: statement]
-[module.rs: slot_count] [types.rs: Width::new, MAX_QUBITS] [executor.rs: handle] [validate/function.rs: apply]
+1 to 128 bits. Register slots hold 64-bit handles to 1 to 2^32 - 1 qubits; an applied result's register has the width of the
+result, at most 128 bits. [reader/mod.rs: function, params, label] [reader/statement.rs: statement]
+[module.rs: slot_count] [types.rs: Width::new, Qubits] [executor.rs: handle] [validate/function.rs: apply]
 
 Read the ordinary operand `B` and start with zero steps. Reserve eight bytes per slot, regardless of width,
 so a zero-slot frame reserves zero bytes. Checked multiplication overflow, subtraction underflow or going below

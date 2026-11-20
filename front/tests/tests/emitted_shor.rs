@@ -100,7 +100,7 @@ fn c_powmod_emits_without_instruction_dispatch() {
 fn fourier(exponent: Slot) -> Vec<Inst> {
     let qubit = |bit| Qubit { register: exponent, bit };
     let mut gates = Vec::new();
-    for target in (0..EXPONENT_BITS as u8).rev() {
+    for target in (0..EXPONENT_BITS as u32).rev() {
         gates.push(Inst::Gate { gate: Gate::Fixed(FixedGate::H), target: qubit(target), controls: Vec::new() });
         for control in (0..target).rev() {
             let angle = TAU / f64::from(1u32 << (target - control + 1));

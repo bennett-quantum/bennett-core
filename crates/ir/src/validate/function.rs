@@ -5,8 +5,8 @@ use petgraph::graph::{DiGraph, NodeIndex};
 
 use super::error::{Expected, Location, Problem, ValidationError};
 use crate::{
-    CastOp, Fault, Function, Gate, Inst, MEMORY_QUBIT_BITS, MeasureSource, Module, Operand, Place, Slot, Terminator,
-    Type, Width,
+    CastOp, Fault, Function, Gate, Inst, MEMORY_QUBIT_BITS, MeasureSource, Module, Operand, Place, Qubits, Slot,
+    Terminator, Type, Width,
 };
 
 /// Checks `function`, appending what is wrong to `errors`, and returns the type of every slot. The types
@@ -135,8 +135,8 @@ impl<'a> Checker<'a> {
             }
         }
         for (dst, register) in measured {
-            if let Some(Type::Qreg(width)) = self.types[register.index()] {
-                self.types[dst.index()] = Some(Type::Int(width));
+            if let Some(Type::Qreg(qubits)) = self.types[register.index()] {
+                self.types[dst.index()] = qubits.as_width().map(Type::Int);
             }
         }
     }
@@ -146,11 +146,6 @@ impl<'a> Checker<'a> {
             let name = self.slot_name(slot);
             self.error(site, Problem::Redefined(name));
             return;
-        }
-        if let Some(Type::Qreg(width)) = ty
-            && width.bits() > Width::MAX_QUBITS
-        {
-            self.error(site, Problem::RegisterTooWide(width.bits()));
         }
         self.defs[slot.index()] = Some(def);
         self.types[slot.index()] = ty;
@@ -260,8 +255,15 @@ impl<'a> Checker<'a> {
                 self.arguments(site, args, signature.params.iter().copied());
             }
             Inst::Effect { byte } => self.expect(site, *byte, Type::Int(Width::BYTE)),
-            Inst::Qfree { register } | Inst::Measure { source: MeasureSource::Register(register), .. } => {
+            Inst::Qfree { register } => {
                 self.register_width(site, *register);
+            }
+            Inst::Measure { source: MeasureSource::Register(register), .. } => {
+                if let Some(qubits) = self.register_width(site, *register)
+                    && qubits.as_width().is_none()
+                {
+                    self.error(site, Problem::MeasureTooWide(qubits.count()));
+                }
             }
             Inst::Measure { source: MeasureSource::Memory { address, .. }, .. } => {
                 self.expect(site, *address, Type::Int(Width::WORD));
@@ -298,10 +300,10 @@ impl<'a> Checker<'a> {
         for (k, place) in places.iter().enumerate() {
             match *place {
                 Place::Register(qubit) => {
-                    if let Some(width) = self.register_width(site, qubit.register)
-                        && u32::from(qubit.bit) >= width.bits()
+                    if let Some(qubits) = self.register_width(site, qubit.register)
+                        && qubit.bit >= qubits.count()
                     {
-                        self.error(site, Problem::QubitOutOfRange { bit: qubit.bit, bits: width.bits() });
+                        self.error(site, Problem::QubitOutOfRange { bit: qubit.bit, bits: qubits.count() });
                     }
                     if places[..k].contains(place) {
                         let name = self.slot_name(qubit.register);
@@ -340,18 +342,26 @@ impl<'a> Checker<'a> {
             Some(params) => {
                 for (arg, width) in args.iter().zip(params) {
                     match self.type_of(*arg) {
-                        Some(Type::Int(w) | Type::Qreg(w)) if w == width => {}
+                        Some(Type::Int(w)) if w == width => {}
+                        Some(Type::Qreg(qubits)) if qubits == Qubits::from(width) => {}
+                        Some(Type::Qreg(qubits)) if qubits.as_width().is_none() => {
+                            self.operand_too_wide(site, *arg, qubits);
+                        }
                         Some(found) => self.mismatch(site, *arg, Expected::IntOrRegister(width.bits()), found),
                         None => {}
                     }
                 }
             }
         }
-        if let Some(width) = result {
-            self.expect(site, Operand::Slot(out), Type::Qreg(width));
+        match (result, self.types[out.index()]) {
+            (_, Some(Type::Qreg(qubits))) if qubits.as_width().is_none() => {
+                self.operand_too_wide(site, Operand::Slot(out), qubits);
+            }
+            (Some(width), _) => self.expect(site, Operand::Slot(out), Type::Qreg(Qubits::from(width))),
+            (None, _) => {}
         }
         match self.types[fault.index()] {
-            Some(Type::Qreg(width)) if width >= Fault::CODE_WIDTH => {}
+            Some(Type::Qreg(qubits)) if qubits >= Qubits::from(Fault::CODE_WIDTH) => {}
             Some(found) => {
                 let expected = Expected::RegisterOfAtLeast(Fault::CODE_WIDTH.bits());
                 self.mismatch(site, Operand::Slot(fault), expected, found);
@@ -426,8 +436,17 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Reports a register wider than any integer used as an `apply` argument or output.
+    fn operand_too_wide(&mut self, site: Site, operand: Operand, qubits: Qubits) {
+        let name = match operand {
+            Operand::Slot(slot) => self.slot_name(slot),
+            Operand::Const(value) => value.value().to_string(),
+        };
+        self.error(site, Problem::RegionOperandTooWide(name, qubits.count()));
+    }
+
     /// The width of the register in `slot`, reporting the slot if it is not a register.
-    fn register_width(&mut self, site: Site, slot: Slot) -> Option<Width> {
+    fn register_width(&mut self, site: Site, slot: Slot) -> Option<Qubits> {
         match self.types[slot.index()]? {
             Type::Qreg(width) => Some(width),
             found @ Type::Int(_) => {

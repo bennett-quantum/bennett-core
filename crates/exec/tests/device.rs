@@ -86,19 +86,21 @@ fn register_and_memory_commands_observe_measurement_and_release() {
     assert!(device.bits.is_empty());
 
     let x = |target, controls| Command::Gate(GateOp { kind: Gate::Fixed(FixedGate::X), target, controls });
+    // Each register id names its own range of 2^32 wires; the cell is register 1.
+    let cell = 1 << 32;
     let mut expected = vec![
         Command::Allocate(0..1),
         x(0, vec![]),
-        Command::Allocate(64..72),
-        x(64, vec![]),
-        x(66, vec![]),
-        x(65, vec![0]),
+        Command::Allocate(cell..cell + 8),
+        x(cell, vec![]),
+        x(cell + 2, vec![]),
+        x(cell + 1, vec![0]),
     ];
-    expected.extend((64..66).chain(64..72).map(Command::Measure));
+    expected.extend((cell..cell + 2).chain(cell..cell + 8).map(Command::Measure));
     expected.extend([
-        x(65, vec![]),
-        x(71, vec![]),
-        Command::ReleaseZero(64..72),
+        x(cell + 1, vec![]),
+        x(cell + 7, vec![]),
+        Command::ReleaseZero(cell..cell + 8),
         Command::Measure(0),
         Command::Discard(0..1),
     ]);
