@@ -236,6 +236,7 @@ fn total(inst: &Inst) -> bool {
         | Inst::Qfree { .. }
         | Inst::Gate { .. }
         | Inst::GateAt { .. }
+        | Inst::RotateBy { .. }
         | Inst::Measure { .. }
         | Inst::Apply { .. } => false,
     }

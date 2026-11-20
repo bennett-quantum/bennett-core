@@ -294,6 +294,7 @@ fn renumber_functions(module: &mut Module, order: &[u32]) {
             | Inst::Qfree { .. }
             | Inst::Gate { .. }
             | Inst::GateAt { .. }
+            | Inst::RotateBy { .. }
             | Inst::Measure { .. } => {}
         }
     }

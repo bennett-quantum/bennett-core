@@ -2,8 +2,8 @@
 //! state and journals exactly what it overwrote.
 
 use bennett_ir::{
-    BlockId, ENTRY_RETURN_ADDRESS, Fault, FuncId, Gate, Inst, JUMP_RECORD_BYTES, MeasureSource, Operand, Qubit, Slot,
-    Target, Terminator, Type, Width,
+    BlockId, ENTRY_RETURN_ADDRESS, Fault, FuncId, Gate, Inst, JUMP_RECORD_BYTES, MeasureSource, Operand, Qubit,
+    Rotation, Slot, Target, Terminator, Type, Width,
 };
 
 use crate::device::Wire;
@@ -87,6 +87,10 @@ impl<'m> Executor<'m> {
             }
             Inst::GateAt { gate, target, controls } => {
                 self.gate_at(*gate, target, controls, context)?;
+            }
+            Inst::RotateBy { axis, angle, target, controls } => {
+                let gate = self.rotation(*axis, *angle)?;
+                self.gate_at(gate, target, controls, context)?;
             }
             Inst::Measure { dst, source: MeasureSource::Memory { width, address } } => {
                 let range = self.memory_range(self.read_word(address), *width)?;
@@ -483,6 +487,13 @@ impl<'m> Executor<'m> {
             return Err(Fault::QubitAlias.into());
         }
         Ok(self.device_gate(gate, target, &controls, context)?)
+    }
+
+    /// The rotation about `axis` by the angle in `angle`: its `i64` read as the bits of an IEEE 754 binary64.
+    /// An angle that is not finite (an infinity or a NaN) is the fault `bad_angle`, before anything changes.
+    pub(crate) fn rotation(&self, axis: Rotation, angle: Slot) -> Result<Gate, Fault> {
+        let radians = f64::from_bits(self.read(&Operand::Slot(angle)) as u64);
+        if radians.is_finite() { Ok(Gate::Rotate(axis, radians)) } else { Err(Fault::BadAngle) }
     }
 
     fn qubit(&self, qubit: &Qubit) -> Result<Wire, Fault> {

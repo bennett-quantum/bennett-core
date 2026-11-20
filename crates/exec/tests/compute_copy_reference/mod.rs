@@ -375,6 +375,7 @@ impl<'m> Reference<'m> {
             | Inst::Qfree { .. }
             | Inst::Gate { .. }
             | Inst::GateAt { .. }
+            | Inst::RotateBy { .. }
             | Inst::Measure { .. }
             | Inst::Apply { .. } => stop(&mut n, Fault::QuantumInRegion),
             // Stack, non-local jump and return-address instructions are not yet in this reference.

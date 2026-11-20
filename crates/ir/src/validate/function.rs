@@ -174,6 +174,7 @@ impl<'a> Checker<'a> {
             | Inst::Qfree { .. }
             | Inst::Gate { .. }
             | Inst::GateAt { .. }
+            | Inst::RotateBy { .. }
             | Inst::Apply { .. } => None,
         }
     }
@@ -279,6 +280,12 @@ impl<'a> Checker<'a> {
                     self.error(site, Problem::GateAtWithoutMemory);
                 }
                 self.gate(site, *gate, &places);
+            }
+            Inst::RotateBy { axis, angle, target, controls } => {
+                self.expect(site, Operand::Slot(*angle), Type::Int(Width::WORD));
+                let places: Vec<Place> = std::iter::once(target).chain(controls).copied().collect();
+                // The angle is checked when the gate runs; zero stands for it here.
+                self.gate(site, Gate::Rotate(*axis, 0.0), &places);
             }
             Inst::Apply { callee, args, out, fault, budget } => {
                 self.apply(site, *callee, args, *out, *fault);

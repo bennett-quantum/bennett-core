@@ -300,6 +300,7 @@ pub fn registers(module: &ValidModule, name: &str) -> Vec<String> {
             | Inst::Qfree { .. }
             | Inst::Gate { .. }
             | Inst::GateAt { .. }
+            | Inst::RotateBy { .. }
             | Inst::Measure { .. }
             | Inst::Apply { .. } => None,
         })

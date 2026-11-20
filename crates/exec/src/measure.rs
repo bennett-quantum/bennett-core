@@ -1148,6 +1148,7 @@ impl Executor<'_> {
                                 | Inst::Qfree { .. }
                                 | Inst::Gate { .. }
                                 | Inst::GateAt { .. }
+                                | Inst::RotateBy { .. }
                                 | Inst::Measure { .. }
                                 | Inst::Apply { .. } => None,
                             }
@@ -1294,6 +1295,7 @@ impl Executor<'_> {
                 | Inst::Qfree { .. }
                 | Inst::Gate { .. }
                 | Inst::GateAt { .. }
+                | Inst::RotateBy { .. }
                 | Inst::Measure { .. }
                 | Inst::Apply { .. } => return None,
             }),
@@ -1362,6 +1364,7 @@ impl Executor<'_> {
                 | Inst::Qfree { .. }
                 | Inst::Gate { .. }
                 | Inst::GateAt { .. }
+                | Inst::RotateBy { .. }
                 | Inst::Measure { .. }
                 | Inst::Apply { .. } => None,
             },
