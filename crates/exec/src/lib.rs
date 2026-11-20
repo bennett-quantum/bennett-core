@@ -27,6 +27,7 @@ mod quantum;
 #[cfg(test)]
 mod recompute_independent_tests;
 mod region;
+mod simulated_device;
 mod snapshot;
 mod wire_storage;
 
@@ -44,4 +45,5 @@ pub use measure::{
 };
 pub use quantum::RegisterState;
 pub use region::RegionCost;
+pub use simulated_device::SimulatedDevice;
 pub use snapshot::{ClassicalSnapshot, QuantumSnapshot, Snapshot};

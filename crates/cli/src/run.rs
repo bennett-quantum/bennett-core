@@ -33,8 +33,13 @@ pub(crate) fn run(args: &RunArgs) -> Result<ExitCode, CliError> {
 
 fn run_count(module: &ValidModule, entry: FuncId, values: &[u64], args: &RunArgs) -> Result<ExitCode, CliError> {
     let mut device = LowerControls::new(CountingDevice::new(seeded_bits(args.seed)));
-    let mut compiler = gate_compiler(args.apply_circuit.unwrap_or(ApplyCircuit::Auto));
-    let run = Executor::run_on_with_apply(module, entry, values, args.budget, &mut device, &mut compiler)?;
+    let mut diagnostics = Vec::new();
+    let run = {
+        let mut compiler = gate_compiler(args.apply_circuit.unwrap_or(ApplyCircuit::Auto), &mut diagnostics);
+        Executor::run_on_with_apply(module, entry, values, args.budget, &mut device, &mut compiler)
+    };
+    print_diagnostics(&diagnostics);
+    let run = run?;
     report_result(module, entry, run.outcome, 0.0);
     report_io(&run.tape, run.steps);
     let counts = device.inner().counts();
@@ -67,10 +72,12 @@ fn run_qasm(
     // Use regular file creation so the staged file has the intended permissions when published.
     let staged = tempfile::Builder::new().make_in(directory, |path| File::create_new(path)).map_err(io_error)?;
     let mut output = BufWriter::new(staged);
+    // The compiler's report of each `apply` is printed only once the trace is published.
+    let mut diagnostics = Vec::new();
     let run = {
-        let writer = QasmDevice::new(&mut output, args.seed, seeded_bits(args.seed)).map_err(io_error)?;
+        let writer = QasmDevice::new(&mut output, args.seed).map_err(io_error)?;
         let mut device = LowerControls::new(writer);
-        let mut compiler = gate_compiler(args.apply_circuit.unwrap_or(ApplyCircuit::Auto));
+        let mut compiler = gate_compiler(args.apply_circuit.unwrap_or(ApplyCircuit::Auto), &mut diagnostics);
         let run = Executor::run_on_with_apply(module, entry, values, args.budget, &mut device, &mut compiler);
         if let Some(source) = device.inner().take_write_error() {
             return Err(io_error(source));
@@ -81,13 +88,15 @@ fn run_qasm(
     write_run_end(&mut output, run.outcome, status).map_err(io_error)?;
     let staged = output.into_inner().map_err(|error| io_error(error.into_error()))?;
     staged.persist_noclobber(path).map_err(|error| io_error(error.error))?;
+    print_diagnostics(&diagnostics);
     report_result(module, entry, run.outcome, 0.0);
     report_io(&run.tape, run.steps);
-    println!("measurement source: synthetic bits (seed {})", args.seed);
+    println!("measurement source: simulation (seed {})", args.seed);
     Ok(ExitCode::from(status))
 }
 
-fn gate_compiler(choice: ApplyCircuit) -> impl ApplyCompiler {
+/// The gate compiler, adding a line to `diagnostics` for each `apply` it compiles; the caller prints them.
+fn gate_compiler(choice: ApplyCircuit, diagnostics: &mut Vec<String>) -> impl ApplyCompiler + '_ {
     let mode = match choice {
         ApplyCircuit::Auto => ApplyMode::Automatic,
         ApplyCircuit::StepMachine => ApplyMode::StepMachine,
@@ -95,9 +104,15 @@ fn gate_compiler(choice: ApplyCircuit) -> impl ApplyCompiler {
     move |input: ApplyInput<'_>| {
         let function = &input.module.function(input.callee).name;
         let compiled = compile_apply_with(input, mode)?;
-        println!("apply @{function} uses {} ({})", compiled.construction, compiled.reason);
-        println!("apply @{function} memory: {}", compiled.memory);
+        diagnostics.push(format!("apply @{function} uses {} ({})", compiled.construction, compiled.reason));
+        diagnostics.push(format!("apply @{function} memory: {}", compiled.memory));
         Ok(compiled.block)
+    }
+}
+
+fn print_diagnostics(diagnostics: &[String]) {
+    for line in diagnostics {
+        println!("{line}");
     }
 }
 
@@ -114,10 +129,12 @@ fn run_simulator(module: &ValidModule, entry: FuncId, values: &[u64], args: &Run
     let entry_state = executor.snapshot();
 
     let started = Instant::now();
+    let mut diagnostics = Vec::new();
     let outcome = match args.apply_circuit {
-        Some(choice) => executor.run_emitted(&mut gate_compiler(choice)),
+        Some(choice) => executor.run_emitted(&mut gate_compiler(choice, &mut diagnostics)),
         None => executor.run(),
     };
+    print_diagnostics(&diagnostics);
     let forward = Timed { steps: executor.stats().steps, time: started.elapsed() };
     let stats = executor.stats();
     report_result(module, entry, outcome, stats.region_fault_max_weight);

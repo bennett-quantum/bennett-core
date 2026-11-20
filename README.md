@@ -39,9 +39,9 @@ The emitted subset and refusal routes are in [DESIGN.md](docs/DESIGN.md#apply).
 
 Use `--device qasm --qasm-output FILE` to write one run's quantum commands to a new OpenQASM 3 file.
 The file appears after the trace has been written in full, including a final comment with the run's outcome.
-Measurements use the same synthetic bits as `--device count` with the same `--seed`. An annotated outcome
-can have probability zero. A `release_zero` comment records the controller's request and assumes a replay
-with those outcomes. The file records the quantum commands reached and omits the ordinary code between them.
+Measurement outcomes come from the run's own simulation with `--seed`, as `--device simulator` samples
+them; `--device count` instead takes synthetic bits. A `release_zero` comment records the controller's
+request and assumes a replay with those outcomes. The file records the quantum commands reached and omits the ordinary code between them.
 See [the OpenQASM device](docs/DESIGN.md#openqasm-output).
 
 A C program goes in through `clang` and `bennett-front` (the markers are in `docs/MARKERS.md`):

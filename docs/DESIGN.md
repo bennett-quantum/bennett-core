@@ -151,7 +151,9 @@ stay live in their original column. A device can measure the individual qubits i
 
 `Executor::run_on` runs the controller on a supplied device for modules without `apply`.
 `Executor::run_on_with_apply` takes a gate compiler and invokes it when the controller reaches an
-`apply`. The simulator provides reversal, snapshots, configuration limits and release diagnostics.
+`apply`. `SimulatedDevice` is the sparse simulator behind the same device interface, sampling
+measurements with a seeded generator as the simulator's own run does; a device that only records
+commands forwards them to it and takes each measurement outcome from it. The simulator provides reversal, snapshots, configuration limits and release diagnostics.
 Its default mode evaluates applied functions directly. Its gate mode runs the emitted X, CNOT and
 Toffoli gates on batches of definite configurations, carrying each complex amplitude unchanged.
 It verifies that scratch qubits (temporary circuit storage) are zero before installing the resulting state.
@@ -206,13 +208,15 @@ and sample larger registers with a fixed seed.
 `bennett run --device qasm --qasm-output FILE` streams the quantum commands of one execution to a
 temporary file beside the requested path. The final comment gives the return and its scalar value
 when present, or the fault or stop reason, along with the run status assigned to that controller
-outcome. The terminal run summary follows publication and can independently affect the process exit
-status. The exporter publishes the completed trace without replacing an existing file. A rejected
+outcome. The terminal run summary, including the gate compiler's report of each `apply`, follows
+publication and can independently affect the process exit status; a trace that is not published
+leaves no such report. The exporter publishes the completed trace without replacing an existing file. A rejected
 start or a trace write error leaves the requested path untouched. The trace has the usual permissions
 for a new file in its directory, including the process umask on Unix.
 
 As with the counter, `apply` is compiled to gates. Both devices decompose gates beyond
-the native controls described above, so their one-qubit, two-qubit and Toffoli gate totals agree.
+the native controls described above, so their one-qubit, two-qubit and Toffoli gate totals agree
+for the same measurement outcomes.
 The file expands gate blocks at each call. Gates use `stdgates.inc` with `ctrl @` for each control,
 in control-then-target order.
 The rotation literals round-trip to the exact finite `f64` angles used by the run.
@@ -227,12 +231,20 @@ partial trace. The file marks the controller's requests to release wires in zero
 comments. Declared qubits accumulate over the run, so their total can exceed the counter's peak live qubits.
 
 Each qubit measurement is a `measure` statement annotated with the bit the controller received.
-The writer uses the counter's synthetic measurement stream (`--seed`, default 0). An annotated outcome
-can have probability zero. The file follows the ordinary control decisions taken for those bits and
-omits the ordinary control program. A `release_zero` request assumes a replay with the recorded outcomes.
-Running the file may produce different measurements while still issuing the recorded sequence of gates.
+The writer forwards every command, after the lowering, to a `SimulatedDevice` and takes the outcomes
+from it (`--seed`, default 0), sampling a register's qubits jointly as the simulator does, so each
+annotated outcome has nonzero probability and the run's result is the simulator's for the same seed.
+A `release_zero` request the simulated state does not satisfy stops the run. The counter keeps its
+synthetic bits, so where control depends on a measurement its counts can describe another execution.
+The file follows the ordinary control decisions taken for the recorded outcomes and omits the ordinary
+control program. A `release_zero` request assumes a replay with the recorded outcomes. Running the
+file may produce different measurements while still issuing the recorded sequence of gates. The writer
+spells each gate with its name in `stdgates.inc` from its own table.
 
-The CLI test independently recounts gate statements and compares them with `--device count`. The
+The CLI test independently recounts gate statements and compares them with `--device count`.
+It also reads back the one-qubit gates of a file around T and T-dagger and requires each recorded
+outcome to have probability one there, which an exchange of the two names fails, and requires both
+measurements of a Bell pair to agree under every seed it tries. The
 syntax test uses `python3` on `PATH` and version 1.0.1 of the reference parser. It reports a skip if
 the interpreter, pinned parser or parser runtime is unavailable. Install `openqasm3[parser]==1.0.1`
 in a virtual environment and put its `bin` directory on `PATH` to run the parser check.
