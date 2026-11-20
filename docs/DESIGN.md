@@ -154,6 +154,12 @@ straightforward expansion into ordinary code; none reads or acts on a qubit:
   qubits can remain alongside live columns. Tracing them out of the purification gives the live state.
 - **The simulator’s `measure`** samples with a seeded generator and keeps only the configurations that agree with the outcome,
   rescaled. It names a register, or `N` bits at an address (`measure iN [ADDR]`, "Qubits in memory").
+  The outcomes, in order, own the half-open intervals between the running sums of their weights, and the
+  draw, in `[0, total)`, selects the one whose interval holds it (`quantum.rs`, `pick`). The simulator
+  computes amplitudes in floating point, so an outcome of exact probability zero can still carry a
+  computed weight; it can be returned only if that weight exceeds the rounding unit of the running total,
+  and then with about that probability (an outcome whose weight does not change the running sum has an
+  empty interval and is never returned).
   A register of 65 to 128 qubits is sent to the device as two ranges of wires, measured in one draw.
 - **Wires.** The controller names qubit `i` of the register whose head is column `c` by the wire
   `c * 2^32 + i`, so each register has a range of wires as long as the widest register; a device sees a
