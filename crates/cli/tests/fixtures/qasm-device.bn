@@ -126,13 +126,54 @@ entry:
     ret %a
 }
 
-func @apply_then_spin() {
+func @count_up(i8 %x) -> i8 {
+entry:
+    br loop(%x)
+loop(i8 %v):
+    %done = icmp eq i8 %v, 0
+    %next = add i8 %v, 1
+    br %done, exit, loop(%next)
+exit:
+    ret %v
+}
+
+func @apply_then_outgrow() {
 entry:
     %a = qalloc 1
     %o = qalloc 1
     %e = qalloc 5
     apply @identity(%a) -> %o, %e budget 1
-    br spin
-spin:
-    br spin
+    %x = qalloc 8
+    h %x[0]
+    %r = qalloc 8
+    %f = qalloc 5
+    apply @count_up(%x) -> %r, %f budget 1000000000000
+    ret
+}
+
+func @returns_to(i1 %x) -> i1 {
+entry:
+    %r = retaddr 0
+    %b = trunc i64 %r to i1
+    ret %b
+}
+
+func @refused() -> i1 {
+entry:
+    %q = qalloc 1
+    %f = qalloc 5
+    apply @returns_to(i1 0) -> %q, %f budget 3
+    %v = measure %q
+    ret %v
+}
+
+func @boundary() -> i2 {
+entry:
+    %q = qalloc 2
+    ry(1.75) %q[0]
+    ry(19.1875) %q[0]
+    ry(-20.9375) %q[0]
+    ry(1.139387646145412) %q[1]
+    %m = measure %q
+    ret %m
 }
