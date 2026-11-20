@@ -209,11 +209,23 @@ fn the_simulated_device_samples_like_the_simulator() {
         let Outcome::Returned(Some(value)) = run.outcome else { panic!("{:?}", run.outcome) };
         assert!(value == 0 || value == 7, "seed {seed}: {value}");
         seen[usize::from(value == 7)] = true;
-        assert_eq!(device.snapshot().amplitudes.len(), 1, "the measurement keeps one configuration");
+        assert_eq!(device.configurations(), 1, "the measurement keeps one configuration");
     }
     assert_eq!(seen, [true, true]);
     let mut device = SimulatedDevice::new(0, None);
     device.allocate(0..1).expect("allocate");
     device.gate(GateOp { kind: Gate::Fixed(FixedGate::X), target: 0, controls: &[] }).expect("set the wire");
     assert_eq!(device.release_zero(0..1), Err(RunError::Device("release_zero requires zero wires")));
+}
+
+// Releasing one wire of two leaves the other where it was: wire 1, set to one, still measures one.
+#[test]
+fn a_partial_release_leaves_the_other_wire_unchanged() {
+    let mut device = SimulatedDevice::new(0, None);
+    device.allocate(0..2).expect("allocate");
+    device.gate(GateOp { kind: Gate::Fixed(FixedGate::X), target: 1, controls: &[] }).expect("set wire 1");
+    device.release_zero(0..1).expect("wire 0 is zero");
+    assert_eq!(device.configurations(), 1);
+    assert_eq!(device.measure_many(std::slice::from_ref(&(1..2))), Ok(vec![1]));
+    assert_eq!(device.measure(1), Ok(true));
 }

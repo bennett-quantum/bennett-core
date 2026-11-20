@@ -14,7 +14,6 @@ use crate::device::{Device, GateOp, Wire};
 use crate::device_io::Simulator;
 use crate::executor::RunError;
 use crate::quantum::QuantumState;
-use crate::snapshot::QuantumSnapshot;
 
 /// The executor's sparse state-vector simulator behind the [`Device`] interface: wires are bound to storage
 /// columns as they are allocated, gates act on the amplitudes, and measurements sample the state with a
@@ -33,9 +32,11 @@ impl SimulatedDevice {
         Self { state: QuantumState::default(), rng: ChaCha8Rng::seed_from_u64(seed), limit }
     }
 
-    /// The simulated state, for a report or a test harness.
-    pub fn snapshot(&self) -> QuantumSnapshot {
-        QuantumSnapshot::of(&self.state)
+    /// The number of basis configurations with nonzero amplitude: one before any gate. The device offers no
+    /// snapshot of registers: it has none, only wires, and a release of some wires of a storage column
+    /// leaves the others at their bit positions, which a register snapshot would read as another value.
+    pub fn configurations(&self) -> usize {
+        self.state.configurations()
     }
 
     fn simulator(&mut self) -> Simulator<'_> {
