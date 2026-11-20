@@ -130,6 +130,11 @@ fn quantum_instructions_inside_apply_give_quantum_in_region() {
 }
 
 #[test]
+fn a_faulting_memory_gate_stops_call_planning() {
+    compare_guarded_stop("h [16]\n    %dead = call @f(%a, %b)\n    ret %dead", Fault::QuantumInRegion);
+}
+
+#[test]
 fn a_region_stop_cannot_replace_an_earlier_fault_or_plan_a_dead_call() {
     let module = load(&format!(
         r#"
