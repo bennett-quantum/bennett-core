@@ -298,3 +298,20 @@ entry:
     %m = measure %o
     ret %m
 }
+
+func @id(i128 %x) -> i128 {
+entry:
+    ret %x
+}
+
+; `apply` of the identity to a 128-qubit register holding only bit 127: the result's top bit.
+func @top_bit() -> i128 {
+entry:
+    %x = qalloc 128
+    %o = qalloc 128
+    %f = qalloc 5
+    x %x[127]
+    apply @id(%x) -> %o, %f budget 4
+    %m = measure %o
+    ret %m
+}

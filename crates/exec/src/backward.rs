@@ -1,7 +1,7 @@
 //! Undoing one journaled step. Each undo reads back what the forward step destroyed; everything else it
 //! needs is still in the state, because every later step has already been undone.
 
-use bennett_ir::{BlockId, FuncId, Inst, Qubits, Slot, Type};
+use bennett_ir::{BlockId, FuncId, Inst, Slot, Type};
 
 use crate::device_io::DeviceContext;
 use crate::executor::{Executor, Frame};
@@ -44,14 +44,10 @@ impl<'m> Executor<'m> {
             Undo::Qfree => {
                 let Inst::Qfree { register } = self.retreat() else { unreachable!("a qfree record") };
                 let Type::Qreg(qubits) = self.slot_type(*register) else { unreachable!("a register slot") };
-                let chunks = self.pop_chunks(qubits);
-                self.quantum.revive(self.handle(*register), qubits, chunks);
+                self.quantum.revive(self.handle(*register), qubits);
             }
             Undo::Leftover => {
                 let Inst::Qfree { register } = self.retreat() else { unreachable!("a qfree record") };
-                let Type::Qreg(qubits) = self.slot_type(*register) else { unreachable!("a register slot") };
-                // A register left over keeps its chunks; the journalled ids are the same.
-                self.pop_chunks(qubits);
                 self.quantum.take_back(self.handle(*register));
             }
             Undo::Apply => {
@@ -176,14 +172,6 @@ impl<'m> Executor<'m> {
         let inst = &self.function(frame.func).block(frame.block).insts[frame.inst];
         let dst: Slot = inst.result().expect("the instruction defines a result");
         self.slots[frame.base + dst.index()] = self.pop_word();
-    }
-
-    /// The chunk ids a `qfree` of a register of `qubits` qubits journalled, least significant first.
-    fn pop_chunks(&mut self, qubits: Qubits) -> Vec<usize> {
-        let count = crate::quantum::column_widths(qubits).count() - 1;
-        let mut chunks: Vec<usize> = (0..count).map(|_| self.pop_word() as usize).collect();
-        chunks.reverse();
-        chunks
     }
 
     fn pop_word(&mut self) -> u128 {

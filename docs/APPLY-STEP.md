@@ -111,7 +111,7 @@ Codes 11, 15 and 18 are unused. [fault.rs: faults, Fault::code]
 ## Finish
 
 Save the outcome and undo the private run. XOR flips target bits whose source bits are one. A return XORs its
-low 64 bits into `out` alone, without another width mask. A fault XORs its code into `fault` alone. A run still
+result, of the width of `out` (at most 128 bits), into `out` alone, without another width mask. A fault XORs its code into `fault` alone. A run still
 running at the boundary first faults `budget`. Other registers and each amplitude (the complex coefficient
 of a definite register assignment) are preserved. A completed `apply` costs the enclosing run one step.
 [region.rs: apply, evaluate, restore] [backward.rs: unwind] [forward.rs: execute_inst] [executor.rs: step]

@@ -74,11 +74,11 @@ impl<'m> Executor<'m> {
         let input_columns: Vec<Vec<usize>> = inputs
             .iter()
             .map(|input| match *input {
-                Input::Register(column, _) => self.quantum.columns_of(column),
+                Input::Register(column, _) => self.quantum.columns_of(column).collect(),
                 Input::Value(_) => Vec::new(),
             })
             .collect();
-        let out_columns = self.quantum.columns_of(out.0);
+        let out_columns: Vec<usize> = self.quantum.columns_of(out.0).collect();
         let mut values = Vec::with_capacity(inputs.len());
         // This evaluation is the simulator's implementation of apply. It requires amplitudes.
         let original = self.quantum.take_amplitudes();
