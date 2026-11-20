@@ -309,3 +309,45 @@ entry:
         }
     }
 }
+
+#[test]
+fn register_returning_calls_keep_integer_arguments() {
+    for (calls, divide_at) in
+        [("call @make(%a)", 2), ("%factory = faddr @make\n    call_indirect fn(i1) -> q1 %factory(%a)", 3)]
+    {
+        let module = load(&format!(
+            r#"
+memory 512
+func @f(i1 %a, i1 %b) -> i2 {{
+entry:
+    {calls}
+    ret 1
+}}
+func @make(i1 %divisor) -> q1 {{
+entry:
+    %check = udiv i1 1, %divisor
+    %handle = qalloc 1
+    ret %handle
+}}
+{MAIN}
+"#
+        ))
+        .expect("valid register-returning call with an integer argument");
+        for budget in 0..=divide_at + 2 {
+            for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+                compare(&module, mode, budget, |a, _| {
+                    let fault = if budget < divide_at {
+                        Fault::Budget
+                    } else if a == 0 {
+                        Fault::DivideByZero
+                    } else if budget == divide_at {
+                        Fault::Budget
+                    } else {
+                        Fault::QuantumInRegion
+                    };
+                    (0, fault.code())
+                });
+            }
+        }
+    }
+}

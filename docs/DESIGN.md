@@ -2267,7 +2267,7 @@ Refused by name or not yet excluded around the classification of "What LLVM's pa
 |---|---|
 | Reachable recursive calls or adding a call copy that raises the total above 16,384 slots and program points | Shared call frames and return positions |
 | Reachable `call_indirect` without one proved constant address | Prove the target across visits or dispatch among supported addresses |
-| `retaddr` | Code addresses from the copied and suspended frames |
+| `retaddr` | Pass the suspended callers' return sites in one field of the apply input and derive the applied function's return sites from its copied calls |
 | `load` or `store` without a proved definite address | Address selection over possible bytes |
 | `setjmp`, `longjmp` | Private memory and non-local control transfer |
 
