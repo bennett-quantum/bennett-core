@@ -4,6 +4,8 @@
 mod bits;
 #[path = "support/controlled_apply.rs"]
 mod controlled_apply;
+#[path = "support/instruction_faults.rs"]
+mod instruction_faults;
 #[path = "support/integer_ops.rs"]
 mod integer_ops;
 

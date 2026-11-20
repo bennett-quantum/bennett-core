@@ -139,7 +139,7 @@ impl Controls<'_, '_> {
                 }
                 return Ok(None);
             }
-            if !self.flows[route.point.copy].can_return(route.point.block) {
+            if !self.flows[route.point.copy].can_finish(route.point.block) {
                 return Err(Failure::Control(Refusal::UnprovedLoop));
             }
             let point = route.point;

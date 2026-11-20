@@ -1,7 +1,7 @@
 //! The state of an applied frame and the transition for one instruction.
 
 use bennett_ir::{
-    BinOp, BlockId, Fault, FuncId, Gate, Inst, Operand, Slot, SwitchCase, Target, Terminator, Type, ValidModule,
+    BinOp, Block, BlockId, Fault, FuncId, Gate, Inst, Operand, Slot, SwitchCase, Target, Terminator, Type, ValidModule,
 };
 
 use super::ApplyError;
@@ -123,12 +123,13 @@ impl<'a> Frame<'a> {
                 }
             }
             let (operation, route) = match &block.term {
-                Terminator::Jump(_) | Terminator::Branch { .. } | Terminator::Switch { .. } | Terminator::Return(_) => {
-                    continue;
-                }
-                Terminator::Exit(_) => ("exit", "explicit instruction faults"),
+                Terminator::Jump(_)
+                | Terminator::Branch { .. }
+                | Terminator::Switch { .. }
+                | Terminator::Return(_)
+                | Terminator::Exit(_)
+                | Terminator::Fault(_) => continue,
                 Terminator::Longjmp { .. } => ("longjmp", "non-local control and memory"),
-                Terminator::Fault(_) => ("fault", "explicit instruction faults"),
             };
             return Err(self.error(Point { block: block_id, index: block.insts.len(), copy: 0 }, operation, route));
         }
@@ -216,6 +217,7 @@ impl<'a> Frame<'a> {
                 Inst::FuncAddr { dst, func } => (*dst, constant(u128::from(func.address()), u64::BITS as usize)),
                 Inst::Call { .. } => return Err(self.error(point, "call", "a planned call copy")),
                 Inst::CallIndirect { .. } => return Err(self.error(point, "call_indirect", "a planned call copy")),
+                Inst::Effect { .. } => return Ok(Step::Fault(Fault::EffectInRegion)),
                 Inst::Load { .. }
                 | Inst::Store { .. }
                 | Inst::Alloca { .. }
@@ -223,7 +225,6 @@ impl<'a> Frame<'a> {
                 | Inst::StackRestore { .. }
                 | Inst::Setjmp { .. }
                 | Inst::ReturnAddress { .. }
-                | Inst::Effect { .. }
                 | Inst::Qalloc { .. }
                 | Inst::Qfree { .. }
                 | Inst::Gate { .. }
@@ -261,10 +262,21 @@ impl<'a> Frame<'a> {
                 }
             }
             Terminator::Return(Some(value)) => Step::Return(read(value)),
-            Terminator::Return(None) | Terminator::Exit(_) | Terminator::Longjmp { .. } | Terminator::Fault(_) => {
+            Terminator::Exit(_) => Step::Fault(Fault::ExitInRegion),
+            Terminator::Fault(code) => Step::Fault(*code),
+            Terminator::Return(None) | Terminator::Longjmp { .. } => {
                 unreachable!("checked the terminators before lowering")
             }
         })
+    }
+}
+
+// Call planning and constant analysis stop before the first unconditional
+// instruction fault. The preflight check still validates the entire copy.
+pub(super) fn before_instruction_fault(block: &Block) -> (&[Inst], Option<&Terminator>) {
+    match block.insts.iter().position(|inst| matches!(inst, Inst::Effect { .. })) {
+        Some(index) => (&block.insts[..index], None),
+        None => (&block.insts, Some(&block.term)),
     }
 }
 
@@ -293,7 +305,7 @@ fn unsupported(inst: &Inst) -> Option<(&'static str, &'static str)> {
         Inst::Setjmp { .. } => ("setjmp", "non-local control and memory"),
         Inst::ReturnAddress { .. } => ("retaddr", "applied call frames"),
         Inst::Call { .. } | Inst::CallIndirect { .. } | Inst::FuncAddr { .. } => return None,
-        Inst::Effect { .. } => ("effect", "explicit instruction faults"),
+        Inst::Effect { .. } => return None,
         Inst::Qalloc { .. } => ("qalloc", "explicit instruction faults"),
         Inst::Qfree { .. } => ("qfree", "explicit instruction faults"),
         Inst::Gate { gate, .. } | Inst::GateAt { gate, .. } => {

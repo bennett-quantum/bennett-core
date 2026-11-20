@@ -7,7 +7,7 @@ use bennett_ir::{BinOp, BlockId, Inst, Operand, Slot, Terminator, Width};
 
 use super::bits::{Bit, Circuit, Word, ZERO, constant, definite};
 use super::switches::Edges;
-use super::symbolic::Frame;
+use super::symbolic::{Frame, before_instruction_fault};
 use super::{arithmetic, division, ranges};
 
 fn fold_inst(
@@ -168,7 +168,8 @@ impl<'a> Constants<'a> {
                     Operand::Const(value) => Some(constant(value.value(), value.width().bits() as usize)),
                     Operand::Slot(slot) => local.get(slot).or(slots[slot.index()].as_ref()).cloned(),
                 };
-                for inst in &block.insts {
+                let (instructions, term) = before_instruction_fault(block);
+                for inst in instructions {
                     let Some(result) = inst.result() else { continue };
                     if let Some(word) = fold_inst(inst, |op| read(&local, op), &mut circuit, || unknown_word(result)) {
                         local.insert(result, word);
@@ -186,7 +187,7 @@ impl<'a> Constants<'a> {
                         }
                     }
                 };
-                if let Terminator::Branch { cond, if_true, if_false } = &block.term {
+                if let Some(Terminator::Branch { cond, if_true, if_false }) = term {
                     if let Some(word) = read(&local, cond) {
                         match word[0] {
                             Bit::Constant(choice) => transfer(if choice { if_true } else { if_false }),
@@ -196,7 +197,7 @@ impl<'a> Constants<'a> {
                             }
                         }
                     }
-                } else if let Terminator::Switch { value, cases, default, .. } = &block.term {
+                } else if let Some(Terminator::Switch { value, cases, default, .. }) = term {
                     if let Some(word) = read(&local, value) {
                         let mut edges = Edges::new(cases, default);
                         edges.retain_possible(&word);
@@ -210,8 +211,8 @@ impl<'a> Constants<'a> {
                         // forgets identities of locally computed selector bits.
                         switches[index] = edges;
                     }
-                } else {
-                    block.term.visit_targets(transfer);
+                } else if let Some(term) = term {
+                    term.visit_targets(transfer);
                 }
                 for (slot, mut word) in local.into_iter().chain(incoming) {
                     let old = &mut slots[slot.index()];

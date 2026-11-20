@@ -63,9 +63,10 @@ entry:
     ret 7
 }
 
-func @unsupported_fault(i2 %x) -> i2 {
+func @unsupported_jump(i2 %x) -> i2 {
 entry:
-    fault unreachable
+    %saved = setjmp 0
+    ret %x
 }
 
 func @stopped() {
@@ -74,6 +75,6 @@ entry:
     h %x[0]
     %result = qalloc 2
     %fault = qalloc 5
-    apply @unsupported_fault(%x) -> %result, %fault budget 2
+    apply @unsupported_jump(%x) -> %result, %fault budget 2
     ret
 }

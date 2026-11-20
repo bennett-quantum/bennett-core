@@ -7,7 +7,7 @@ use bennett_exec::frame_bytes;
 use bennett_ir::{Block, BlockId, Fault, FuncId, Function, Inst, Operand, Slot, Target, Terminator, Type};
 
 use super::bits::{Bit, Circuit, Word, constant};
-use super::symbolic::{Frame, Point, Step};
+use super::symbolic::{Frame, Point, Step, before_instruction_fault};
 use super::{ApplyError, ApplyInput, Argument};
 
 // Count a unit for each copied slot and each instruction or terminator, including
@@ -58,7 +58,8 @@ impl<'a> Program<'a> {
                 if !program.copies[index].frame.reaches(block) {
                     continue;
                 }
-                for (inst, instruction) in body.insts.iter().enumerate() {
+                let (instructions, _) = before_instruction_fault(body);
+                for (inst, instruction) in instructions.iter().enumerate() {
                     let point = Point { copy: index, block, index: inst };
                     let site = match instruction {
                         Inst::Call { callee, args, dst } => {

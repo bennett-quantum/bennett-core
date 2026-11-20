@@ -350,10 +350,13 @@ The emitter's full instruction subset is `add`, `sub`, `mul`, `and`, `or`, `xor`
 `udiv`, `sdiv`, `urem`, `srem`, `shl`, `lshr`, `ashr`, `icmp`, `select`, `zext`, `sext`, `trunc`,
 `faddr`, unconditional and conditional `br`, `switch`, `ret`,
 and direct `call` and `call_indirect` as described under "Copied calls" below. Calls take integer
-parameters and may return an integer or no value. The [refusal table](#not-yet) gives the excluded
+parameters and may return an integer or no value. The emitter also supports `fault`, `effect`
+and `exit` inside an applied function. The [refusal table](#not-yet) gives the excluded
 operations and the limits on calls. A jump reads all incoming values before assigning block
 parameters. Entry stack overflow takes precedence over the budget test. Every successful instruction
-or terminator costs one step.
+or terminator costs one step. A reached `fault` writes its named code, `effect` gives
+`effect_in_region` and `exit` gives `exit_in_region`. These attempts end the run for their enabled
+inputs before any side effect, with the same budget check as other instructions.
 
 Automatic mode first tries the in-place residue update described below. In the general
 construction a qubit-dependent conditional jump can use **control gates**. A **guard** is a bit
@@ -362,9 +365,9 @@ the incoming guard with the condition or its complement to form the two new guar
 the gates for its route, and the route's slot values are meaningful only where its guard is one.
 If the routes rejoin, the compiler selects each assignment's slots from the enabled route and emits
 the continuation once. Its analysis looks for the nearest common continuation of the routes to a
-return, using only the selected target of each literal conditional or switch. If both routes could
-emit shared code before reaching a common stop, the compiler uses the step machine, which represents
-each assignment's current point with qubits. This covers short-circuit tests whose early returns bypass
+return or explicit stop, using only the selected target of each literal conditional or switch. If both
+routes could emit shared code before reaching a common stop, the compiler uses the step machine, which
+represents each assignment's current point with qubits. This covers short-circuit tests whose early returns bypass
 the shared code. A loop whose test stays definite can use control gates for a choice in its body.
 
 The compiler accumulates guarded returns and faults from different routes or steps. For each
@@ -736,7 +739,8 @@ simulator run is `bennett run --machine-meaning` with its default direct evaluat
 
 Before consulting the budget, the emitter checks every instruction and terminator in every
 planned function copy, including those in bypassed blocks. It plans indirect calls only in
-reachable blocks and requires a single proved function address at each such site. A proved shift
+reachable blocks and requires a single proved function address at each such site. Call planning
+ends a path at the first unconditional instruction fault. A proved shift
 amount uses fixed wiring and a proved switch selector follows one target. A qubit-held amount
 uses the shift circuit. A switch with several possible edges uses step machine dispatch.
 
@@ -2167,7 +2171,6 @@ Refused by name or not yet excluded around the classification of "What LLVM's pa
 | `store` | Memory in the step machine |
 | `load`, `alloca`, `stacksave`, `stackrestore` | Private memory and stack state |
 | `setjmp`, `longjmp` | Private memory and non-local control transfer |
-| `fault`, `effect`, `exit` | Emit the named first fault on reaching the instruction |
 | `qalloc`, `qfree`, gates (on registers or memory), `measure`, nested `apply` | Emit `quantum_in_region` on reaching the instruction |
 
 ## Open questions

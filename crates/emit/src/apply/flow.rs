@@ -7,7 +7,7 @@ use petgraph::algo::dominators::{Dominators, simple_fast};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::Reversed;
 
-use super::symbolic::{Frame, Point, visit_possible_targets};
+use super::symbolic::{Frame, Point, before_instruction_fault, visit_possible_targets};
 
 pub(super) struct Flow<'a> {
     graph: DiGraph<(), ()>,
@@ -23,11 +23,14 @@ impl<'a> Flow<'a> {
         let nodes: Vec<_> = function.blocks.iter().map(|_| graph.add_node(())).collect();
         let exit = graph.add_node(());
         for (index, block) in function.blocks.iter().enumerate() {
-            visit_possible_targets(&block.term, |target| {
-                graph.add_edge(nodes[index], nodes[target.block.index()], ());
-            });
-            if matches!(block.term, Terminator::Return(_)) {
-                graph.add_edge(nodes[index], exit, ());
+            let (_, term) = before_instruction_fault(block);
+            match term {
+                None | Some(Terminator::Return(_) | Terminator::Exit(_) | Terminator::Fault(_)) => {
+                    graph.add_edge(nodes[index], exit, ());
+                }
+                Some(term) => visit_possible_targets(term, |target| {
+                    graph.add_edge(nodes[index], nodes[target.block.index()], ());
+                }),
             }
         }
         let joins = simple_fast(Reversed(&graph), exit);
@@ -45,14 +48,14 @@ impl<'a> Flow<'a> {
         flow
     }
 
-    // The nearest common continuation of routes to a return. A route that cannot
-    // reach it will instead return, exhaust the budget, or make the construction decline.
+    // The nearest common continuation of routes to a stop. A route that bypasses
+    // it can return, fault, exhaust the budget, or make the construction decline.
     pub(super) fn join(&self, block: BlockId) -> Option<Point> {
         let node = self.joins.immediate_dominator(NodeIndex::new(block.index()))?;
         (node != self.exit).then(|| Point::entry(BlockId(node.index() as u32)))
     }
 
-    pub(super) fn can_return(&self, block: BlockId) -> bool {
+    pub(super) fn can_finish(&self, block: BlockId) -> bool {
         self.joins.immediate_dominator(NodeIndex::new(block.index())).is_some()
     }
 
