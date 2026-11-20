@@ -210,7 +210,7 @@ temporary file beside the requested path. The final comment gives the return and
 when present, or the fault or stop reason, along with the run status assigned to that controller
 outcome. The terminal run summary, including the gate compiler's report of each `apply`, follows
 publication and can independently affect the process exit status; a trace that is not published
-leaves no such report. The exporter publishes the completed trace without replacing an existing file. A rejected
+leaves no such report. The counter and the simulator print each report as they compile the `apply`. The exporter publishes the completed trace without replacing an existing file. A rejected
 start or a trace write error leaves the requested path untouched. The trace has the usual permissions
 for a new file in its directory, including the process umask on Unix.
 
@@ -232,11 +232,16 @@ comments. Declared qubits accumulate over the run, so their total can exceed the
 
 Each qubit measurement is a `measure` statement annotated with the bit the controller received.
 The writer forwards every command, after the lowering, to a `SimulatedDevice` and takes the outcomes
-from it (`--seed`, default 0), sampling a register's qubits jointly as the simulator does, so each
-annotated outcome has nonzero probability and the run's result is the simulator's for the same seed.
+from it (`--seed`, default 0), sampling a register's qubits jointly with one draw, as the simulator does,
+so each annotated outcome has nonzero probability. The draws are the simulator's for the same seed, so the
+outcomes and the result are those of `--device simulator --machine-meaning`, unless rounding in the
+amplitudes moves a draw across the boundary between two outcomes. Without `--machine-meaning` the
+simulator stops at an `apply` that faults for some argument value (a region fault, a diagnostic only a
+simulator can make); a device, the OpenQASM writer included, writes the fault code and goes on.
 A `release_zero` request the simulated state does not satisfy stops the run. The simulation holds at
-most `--max-configurations` basis configurations, by default 2^20; a run whose state needs more is
-refused by name with no trace published, and the message names `--qasm-outcomes synthetic`. With that
+most `--max-configurations` basis configurations, by default 2^20 (the state before any gate holds one);
+a run whose state needs more is refused by name with no trace published, and the message names
+`--qasm-outcomes synthetic`. With that
 option the writer takes the counter's seeded synthetic bits instead and simulates nothing; an annotated
 outcome can then have probability zero. The file's header comment says which kind of outcomes it carries.
 The counter keeps its synthetic bits, so where control depends on a measurement its counts can describe

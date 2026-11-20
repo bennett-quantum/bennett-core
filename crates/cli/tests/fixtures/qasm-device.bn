@@ -104,3 +104,35 @@ entry:
     %m = measure %q
     ret %m
 }
+
+func @two_coins() -> i2 {
+entry:
+    %q = qalloc 2
+    h %q[0]
+    h %q[1]
+    %m = measure %q
+    ret %m
+}
+
+func @measure_fresh() -> i1 {
+entry:
+    %q = qalloc 1
+    %m = measure %q
+    ret %m
+}
+
+func @identity(i1 %a) -> i1 {
+entry:
+    ret %a
+}
+
+func @apply_then_spin() {
+entry:
+    %a = qalloc 1
+    %o = qalloc 1
+    %e = qalloc 5
+    apply @identity(%a) -> %o, %e budget 1
+    br spin
+spin:
+    br spin
+}

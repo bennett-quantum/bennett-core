@@ -42,13 +42,8 @@ pub(crate) fn run(args: &RunArgs) -> Result<ExitCode, CliError> {
 
 fn run_count(module: &ValidModule, entry: FuncId, values: &[u64], args: &RunArgs) -> Result<ExitCode, CliError> {
     let mut device = LowerControls::new(CountingDevice::new(seeded_bits(args.seed)));
-    let mut diagnostics = Vec::new();
-    let run = {
-        let mut compiler = gate_compiler(args.apply_circuit.unwrap_or(ApplyCircuit::Auto), &mut diagnostics);
-        Executor::run_on_with_apply(module, entry, values, args.budget, &mut device, &mut compiler)
-    };
-    print_diagnostics(&diagnostics);
-    let run = run?;
+    let mut compiler = gate_compiler(args.apply_circuit.unwrap_or(ApplyCircuit::Auto), print_report);
+    let run = Executor::run_on_with_apply(module, entry, values, args.budget, &mut device, &mut compiler)?;
     report_result(module, entry, run.outcome, 0.0);
     report_io(&run.tape, run.steps);
     let counts = device.inner().counts();
@@ -77,6 +72,18 @@ fn run_qasm(
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(io_error(error)),
     }
+    let outcomes = match args.qasm_outcomes.unwrap_or(QasmOutcomes::Simulated) {
+        QasmOutcomes::Simulated => {
+            let limit = args.max_configurations.unwrap_or(QASM_SIMULATION_CONFIGURATIONS);
+            let simulation = SimulatedDevice::new(args.seed, Some(limit));
+            // A gate is checked against the limit as it acts; the initial state, before any, is checked here.
+            if simulation.configurations() > limit {
+                return Err(CliError::QasmSimulationLimit { limit });
+            }
+            Outcomes::Simulated(Box::new(simulation))
+        }
+        QasmOutcomes::Synthetic => Outcomes::Synthetic(Box::new(seeded_bits(args.seed))),
+    };
     let directory = path.parent().unwrap_or_else(|| Path::new("."));
     // Use regular file creation so the staged file has the intended permissions when published.
     let staged = tempfile::Builder::new().make_in(directory, |path| File::create_new(path)).map_err(io_error)?;
@@ -84,16 +91,10 @@ fn run_qasm(
     // The compiler's report of each `apply` is printed only once the trace is published.
     let mut diagnostics = Vec::new();
     let run = {
-        let outcomes = match args.qasm_outcomes.unwrap_or(QasmOutcomes::Simulated) {
-            QasmOutcomes::Simulated => Outcomes::Simulated(Box::new(SimulatedDevice::new(
-                args.seed,
-                Some(args.max_configurations.unwrap_or(QASM_SIMULATION_CONFIGURATIONS)),
-            ))),
-            QasmOutcomes::Synthetic => Outcomes::Synthetic(Box::new(seeded_bits(args.seed))),
-        };
         let writer = QasmDevice::new(&mut output, args.seed, outcomes).map_err(io_error)?;
         let mut device = LowerControls::new(writer);
-        let mut compiler = gate_compiler(args.apply_circuit.unwrap_or(ApplyCircuit::Auto), &mut diagnostics);
+        let mut compiler =
+            gate_compiler(args.apply_circuit.unwrap_or(ApplyCircuit::Auto), |line| diagnostics.push(line));
         let run = Executor::run_on_with_apply(module, entry, values, args.budget, &mut device, &mut compiler);
         if let Some(source) = device.inner().take_write_error() {
             return Err(io_error(source));
@@ -108,7 +109,7 @@ fn run_qasm(
     write_run_end(&mut output, run.outcome, status).map_err(io_error)?;
     let staged = output.into_inner().map_err(|error| io_error(error.into_error()))?;
     staged.persist_noclobber(path).map_err(|error| io_error(error.error))?;
-    print_diagnostics(&diagnostics);
+    diagnostics.into_iter().for_each(print_report);
     report_result(module, entry, run.outcome, 0.0);
     report_io(&run.tape, run.steps);
     match args.qasm_outcomes.unwrap_or(QasmOutcomes::Simulated) {
@@ -118,8 +119,8 @@ fn run_qasm(
     Ok(ExitCode::from(status))
 }
 
-/// The gate compiler, adding a line to `diagnostics` for each `apply` it compiles; the caller prints them.
-fn gate_compiler(choice: ApplyCircuit, diagnostics: &mut Vec<String>) -> impl ApplyCompiler + '_ {
+/// The gate compiler, giving `report` one line for each `apply` it compiles, as it compiles it.
+fn gate_compiler(choice: ApplyCircuit, mut report: impl FnMut(String)) -> impl ApplyCompiler {
     let mode = match choice {
         ApplyCircuit::Auto => ApplyMode::Automatic,
         ApplyCircuit::StepMachine => ApplyMode::StepMachine,
@@ -127,16 +128,14 @@ fn gate_compiler(choice: ApplyCircuit, diagnostics: &mut Vec<String>) -> impl Ap
     move |input: ApplyInput<'_>| {
         let function = &input.module.function(input.callee).name;
         let compiled = compile_apply_with(input, mode)?;
-        diagnostics.push(format!("apply @{function} uses {} ({})", compiled.construction, compiled.reason));
-        diagnostics.push(format!("apply @{function} memory: {}", compiled.memory));
+        report(format!("apply @{function} uses {} ({})", compiled.construction, compiled.reason));
+        report(format!("apply @{function} memory: {}", compiled.memory));
         Ok(compiled.block)
     }
 }
 
-fn print_diagnostics(diagnostics: &[String]) {
-    for line in diagnostics {
-        println!("{line}");
-    }
+fn print_report(line: String) {
+    println!("{line}");
 }
 
 fn run_simulator(module: &ValidModule, entry: FuncId, values: &[u64], args: &RunArgs) -> Result<ExitCode, CliError> {
@@ -152,12 +151,10 @@ fn run_simulator(module: &ValidModule, entry: FuncId, values: &[u64], args: &Run
     let entry_state = executor.snapshot();
 
     let started = Instant::now();
-    let mut diagnostics = Vec::new();
     let outcome = match args.apply_circuit {
-        Some(choice) => executor.run_emitted(&mut gate_compiler(choice, &mut diagnostics)),
+        Some(choice) => executor.run_emitted(&mut gate_compiler(choice, print_report)),
         None => executor.run(),
     };
-    print_diagnostics(&diagnostics);
     let forward = Timed { steps: executor.stats().steps, time: started.elapsed() };
     let stats = executor.stats();
     report_result(module, entry, outcome, stats.region_fault_max_weight);

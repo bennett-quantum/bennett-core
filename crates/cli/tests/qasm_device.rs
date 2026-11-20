@@ -227,9 +227,23 @@ fn measurements_write_the_outcomes_where_the_controller_received_them() {
 }
 
 // The outcomes come from the run's own simulation: both halves of a Bell pair agree under every seed,
-// both values occur, and the result is the one the simulator device reports for the same seed.
+// both values occur, and the result is the one the simulator device reports for the same seed. Two
+// independent coins are sampled jointly, as the simulator samples a register: one draw for both, so
+// each seed gives the simulator's value (a draw per qubit would give another value under some seed).
 #[test]
 fn measured_outcomes_follow_the_simulated_state() {
+    let mut values = std::collections::BTreeSet::new();
+    for seed in 0..16 {
+        let seed = seed.to_string();
+        let args = [FIXTURE, "--entry", "two_coins", "--seed", &seed];
+        let trace = Trace::new(&format!("coins-{seed}"));
+        let exported = trace.export(&args);
+        let simulated = report(run("simulator", &args, None));
+        let value = simulated.lines().next().expect("a result line");
+        assert!(exported.starts_with(&format!("{value}\n")), "seed {seed}: {exported} against {simulated}");
+        values.insert(value.to_owned());
+    }
+    assert_eq!(values.len(), 4, "the seeds reach every value: {values:?}");
     let mut seen = [false; 2];
     for seed in 0..16 {
         let seed = seed.to_string();
@@ -303,6 +317,62 @@ fn a_state_the_simulation_cannot_hold_is_refused_naming_the_option() {
     let written = report(run("qasm", &[&args[..], &["--qasm-outcomes", "synthetic"]].concat(), Some(&path)));
     assert!(written.contains("measurement source: synthetic bits (seed 0)"), "{written}");
     assert!(path.exists());
+}
+
+// A device runs an applied function under the machine's meaning: a fault for an argument value is a code
+// in the fault register, and the run goes on. The default simulator instead stops at such an `apply` (a
+// region fault, a diagnostic only a simulator can make), so the OpenQASM run agrees with the simulator
+// under --machine-meaning. `fault.bn` with 5 runs out of the applied function's budget.
+#[test]
+fn an_applied_fault_is_written_as_under_the_machine_meaning() {
+    let args = ["fault.bn", "--arg", "5", "--seed", "0"];
+    let trace = Trace::new("applied-fault");
+    let exported = trace.export(&args);
+    assert!(exported.contains("result: 261\n"), "{exported}");
+    let meaning = report(run("simulator", &[&args[..], &["--machine-meaning"]].concat(), None));
+    assert!(meaning.starts_with("result: 261\n"), "{meaning}");
+    let strict = run("simulator", &args, None);
+    assert_eq!(strict.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&strict.stdout).starts_with("region fault: apply @triangle faulted (budget)"));
+}
+
+// The initial state already holds one basis configuration, so a limit of zero is refused before any
+// gate, naming --qasm-outcomes synthetic, with nothing published.
+#[test]
+fn a_limit_below_the_initial_state_is_refused() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("trace directory");
+    let path = dir.path().join("output.qasm");
+    let args = [FIXTURE, "--entry", "measure_fresh", "--max-configurations", "0"];
+    let output = run("qasm", &args, Some(&path));
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert!(diagnostic.contains("more than 0 basis configurations"), "{diagnostic}");
+    assert!(diagnostic.contains("--qasm-outcomes synthetic"), "{diagnostic}");
+    assert_eq!(dir.path().read_dir().expect("read trace directory").count(), 0);
+    report(run("qasm", &[FIXTURE, "--entry", "measure_fresh", "--max-configurations", "1"], Some(&path)));
+    assert!(path.exists());
+}
+
+// The counter and the simulator print the report of an `apply` when they compile it, before the run
+// ends: this program applies once and then never ends, and the report must still arrive.
+#[test]
+fn count_and_simulator_report_an_apply_while_the_run_goes_on() {
+    for device in [&["--device", "count"][..], &["--device", "simulator", "--apply-circuit", "auto"][..]] {
+        let mut child = Command::new(BIN)
+            .current_dir(EXAMPLES)
+            .arg("run")
+            .args(device)
+            .args([FIXTURE, "--entry", "apply_then_spin"])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("run bennett");
+        let stdout = child.stdout.take().expect("piped output");
+        let mut first = String::new();
+        io::BufRead::read_line(&mut io::BufReader::new(stdout), &mut first).expect("read the report");
+        child.kill().expect("stop the endless run");
+        child.wait().expect("reap the run");
+        assert!(first.starts_with("apply @identity uses "), "{device:?}: {first}");
+    }
 }
 
 /// One qubit's state under the one-qubit gates of `stdgates.inc`, worked here from their definitions.
