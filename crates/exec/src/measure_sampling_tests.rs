@@ -75,6 +75,20 @@ fn an_outcome_whose_interval_is_empty_is_never_picked() {
     assert_eq!(pick(&[], 0.0), None);
 }
 
+/// A weight below the rounding unit of the running sum can still change it: `0.5 + 3 * 2^-55` rounds up to
+/// the next binary64 after one half, so the middle interval is `[0.5, 0.5 + 2^-53)`, not empty, and the draw
+/// 0.5 is in it. A rule that skipped weights below some cutoff (such as `f64::EPSILON / 2`, the unit at one
+/// half) would select the last outcome.
+#[test]
+fn a_small_weight_that_changes_the_running_sum_has_its_interval() {
+    let small = 3.0 / (1u64 << 55) as f64;
+    let weights = [0.5, small, 0.5 - f64::EPSILON / 2.0];
+    assert!(0.5 + small > 0.5, "the middle interval is not empty");
+    assert!(small < f64::EPSILON / 2.0, "below the rounding unit at one half");
+    assert_eq!(pick(&weights, 0.5), Some(1));
+    assert_eq!(pick(&weights, 0.5 + f64::EPSILON / 2.0), Some(2));
+}
+
 /// The same weights in a state: no draw the generator can give near the empty interval, nor the largest or
 /// the smallest, measures the outcome of weight below the rounding unit.
 #[test]
@@ -126,4 +140,28 @@ entry:
         let outcome = crate::Executor::new(&module, entry, &[], options).expect("starts").run();
         assert!(matches!(outcome, crate::Outcome::Returned(Some(0 | 2))), "seed {seed}: {outcome:?}");
     }
+}
+
+/// Two rotations about Y leave four outcomes, the smallest of weight above 0.12. At seed 0 the draw,
+/// 0.7090754154265617, is the running sum after outcome 1 as the half-open intervals round it, so the
+/// interval rule selects outcome 2. The earlier rule, subtracting weights from the draw, rounded differently
+/// and returned 1: the change of rule changes seeded outcomes at a rounded boundary between two outcomes that
+/// both have substantial weight, not only at an empty interval.
+#[test]
+fn a_draw_on_a_rounded_boundary_between_likely_outcomes_selects_the_later() {
+    let module = bennett_ir::load(
+        "memory 256
+func @main() -> i2 {
+entry:
+    %q = qalloc 2
+    ry(1.7421875) %q[0]
+    ry(1.1393876461454118) %q[1]
+    %m = measure %q
+    ret %m
+}",
+    )
+    .expect("valid");
+    let entry = module.function_named("main").expect("entry");
+    let outcome = crate::Executor::new(&module, entry, &[], crate::Options::default()).expect("starts").run();
+    assert_eq!(outcome, crate::Outcome::Returned(Some(2)));
 }
