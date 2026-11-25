@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 
 HERE = Path(__file__).resolve().parent
@@ -17,7 +18,9 @@ def run(args, **kwargs):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__, usage="%(prog)s [options] source -o OUTPUT [-- ARGUMENT ...]",
+        epilog="run input: the strings after the first -- are main's argv[1], argv[2], ...")
     parser.add_argument("source", type=Path)
     parser.add_argument("-o", required=True, type=Path)
     parser.add_argument("--libdir", type=Path, default=ROOT / "target/musl")
@@ -30,12 +33,16 @@ def main():
     parser.add_argument("--clock-start", type=int, default=0, help="run input: initial unsigned nanoseconds")
     parser.add_argument("--entropy-image", type=Path, help="run input: exact entropy bytes (default empty)")
     parser.add_argument("--file-image", type=Path, help="run input: JSON mapping absolute file paths to hex bytes")
-    parser.add_argument("--arg", action="append", default=[], dest="run_args", metavar="STRING",
-                        help="run input: the next argument of main, in order (--arg=-x for one starting with -)")
     parser.add_argument("--argv0", default="prog", metavar="STRING", help="run input: argv[0] (default prog)")
     parser.add_argument("--argument-bytes", type=int, default=4096,
                         help="the size of the arguments' area: their bytes, each with its NUL, must fit")
-    args = parser.parse_args()
+    # Each argument of main is a string of link.py's own command line, so the host limits it as natively.
+    options, run_args = sys.argv[1:], []
+    if "--" in options:
+        split = options.index("--")
+        options, run_args = options[:split], options[split + 1:]
+    args = parser.parse_args(options)
+    args.run_args = run_args
     if not 0 <= args.clock_start < 1 << 64:
         parser.error("--clock-start must fit in an unsigned 64-bit integer")
     lib = args.libdir.resolve()

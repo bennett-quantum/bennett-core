@@ -34,31 +34,35 @@ EXHAUSTED = {
 }
 
 
-# Run arguments (link.py --arg, --argv0): each case runs natively with the same argv (argv[0] included) and an
-# empty environment, and on the device, comparing status and stdout. Arguments are exact bytes.
+# Run arguments (link.py -- ARGUMENT ..., --argv0): each case runs natively with the same argv (argv[0] included) and an
+# empty environment, and on the device, comparing status and stdout. Arguments are exact bytes; link.py options
+# may follow. The longest native argument, 131071 bytes and its NUL (Linux's MAX_ARG_STRLEN), starts with '-'.
+LONGEST = b"-" + b"0" * 131069 + b"7"
 ARGUMENT_CASES = [
     ("args", "no-arguments", b"prog", [], ["-O0"]),
     ("args", "empty", b"prog", [b"", b"", b"x", b""], ["-O0"]),
     ("args", "many", b"prog", [b"%d" % i * (i % 7) for i in range(200)], ["-O0"]),
     ("args", "bytes", b"prog", [b"\xc3\xa9t\xc3\xa9", bytes(range(0x80, 0x100)), b"\x01\x02\x1f\x7f",
-                                b" spaces \"quotes\" \\ ", b"-x", b"--arg", b"="], ["-O0", "-O2"]),
+                                b" spaces \"quotes\" \\ ", b"-x", b"--", b"-o", b"--argv0=x", b"="],
+     ["-O0", "-O2"]),
     ("args", "argv0", b"/usr/local/bin/named", [b"a"], ["-O0"]),
     ("budget", "budget-enough", b"prog", [b"1000"], ["-O0", "-O2"]),
     ("budget", "budget-short", b"prog", [b"10", b"0x1b"], ["-O0"]),
     ("budget", "budget-range", b"prog", [b"18446744073709551616"], ["-O0"]),
     ("budget", "budget-rest", b"prog", [b"12abc"], ["-O0"]),
     ("budget", "budget-missing", b"prog", [], ["-O0"]),
+    ("budget", "budget-longest", b"prog", [LONGEST], ["-O0"], ["--argument-bytes=135168"]),
 ]
 
 
 def argument_cases(args):
-    for source_name, case, argv0, arguments, levels in ARGUMENT_CASES:
+    for source_name, case, argv0, arguments, levels, *options in ARGUMENT_CASES:
         source = HERE / "tests" / f"{source_name}.c"
         for level in levels:
             program = args.out / f"args-{case}{level}.bn"
             command = ["python3", HERE / "link.py", source, "--libdir", args.libdir, "--front", args.front,
-                       f"--clang-flag={level}", "-o", program, b"--argv0=" + argv0,
-                       *(b"--arg=" + argument for argument in arguments)]
+                       f"--clang-flag={level}", "-o", program, b"--argv0=" + argv0, *(options[0] if options else []),
+                       "--", *arguments]
             linked = subprocess.run([a if isinstance(a, bytes) else str(a) for a in command], capture_output=True)
             assert linked.returncode == 0, linked.stderr
             result = run([args.executor, "run", "--entry", "__bennett_entry", "--budget", 1000000000, program])
@@ -83,7 +87,7 @@ def code_lines(path):
 def relink(args, source, level, arguments, name):
     program = args.out / f"relink-{name}{level}.bn"
     linked = run(["python3", HERE / "link.py", source, "--libdir", args.libdir, "--front", args.front,
-                  f"--clang-flag={level}", "-o", program, *(f"--arg={argument}" for argument in arguments)])
+                  f"--clang-flag={level}", "-o", program, "--", *arguments])
     assert linked.returncode == 0, linked.stderr
     return program
 

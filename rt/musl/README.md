@@ -102,12 +102,12 @@ Supply the run's inputs when constructing its image:
 
 ```sh
 python3 rt/musl/link.py program.c -o program.bn --clock-start 1234999999998 \
-  --entropy-image entropy.bin --file-image files.json --arg 100000 --arg=-v --arg ''
+  --entropy-image entropy.bin --file-image files.json -- 100000 -v ''
 bennett run program.bn --entry __bennett_entry --reverse --stats
 ```
 
-Each `--arg` is the next argument of `main`, in order (`--arg=-v` for one that starts with `-`); `--argv0`
-replaces `argv[0]`, `prog` by default. The strings are the host's exact bytes (an empty string, bytes that are
+The strings after the first `--` are the arguments of `main`, in order, from `argv[1]` (one may be `--` or
+look like an option); `--argv0` replaces `argv[0]`, `prog` by default. The strings are the host's exact bytes (an empty string, bytes that are
 not UTF-8), NUL-terminated and contiguous in writable data of the image, and `argv[argc]` is null. `start.h`
 declares the count and the strings' area, which `link.py` defines with the other inputs; `start.c` builds from
 them, on its own frame, the one array of pointers musl's start-up reads: `argv`, its null pointer, the empty
@@ -115,9 +115,10 @@ environment's null pointer and the auxiliary vector, as on a Linux process's ini
 of the stack). Start-up reads nothing but the image. The area's size is a link parameter, `--argument-bytes`
 (4096 by default); the strings with their NULs must fit. Because its size does not depend on the arguments and
 both values are writable, so that no optimiser takes them into code, a relink with other arguments changes the
-image's data only: every function is the same text, and steps measured on one image hold for the other. The
-host's `execve` limits on `link.py`'s own command line (128 KiB per string, about 2 MiB in all) are the native
-run's.
+image's data only: every function is the same text, and steps measured on one image hold for the other. Each
+argument is one string of `link.py`'s command line, so the host's `execve` limit of 128 KiB per string is the
+native run's (`--argv0=S` spends eight bytes of it); the limit on the whole command line (about 2 MiB) also counts
+`link.py`'s options and environment, so the longest accepted list is somewhat shorter than natively.
 
 `files.json` maps canonical absolute paths to hex byte strings, for example
 `{"/fixtures/input":"610062ff63"}`. Parent directories are created automatically. Installation occurs

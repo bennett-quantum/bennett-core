@@ -2166,8 +2166,9 @@ loops, loop updates, applied calls and retained overwrites are tracked in `HANDO
 
 ## Run arguments at the musl boundary
 
-With musl linked, `main` receives the run's arguments as C strings: `rt/musl/link.py --arg S` (repeated, in
-order) gives `argv[1]`, `argv[2]`, ..., and `--argv0 S` replaces `argv[0]` (default `prog`). They are the host's
+With musl linked, `main` receives the run's arguments as C strings: the strings after the first `--` of
+`rt/musl/link.py`'s command line are `argv[1]`, `argv[2]`, ..., and `--argv0 S` replaces `argv[0]` (default
+`prog`). They are the host's
 exact bytes, so an empty string or bytes that are not UTF-8 arrive unchanged; a NUL cannot be one. `argv[argc]` is
 a null pointer and the environment is empty, as before. The count and the strings, NUL-terminated and contiguous,
 are writable data of the run image (`rt/musl/start.h`), the strings in an area whose size is a link parameter
@@ -2179,8 +2180,10 @@ its null pointer, the environment's null pointer and the auxiliary vector, becau
 environment at `argv + argc + 1` and reads the auxiliary words after it; the array takes `8 * (argc + 8)` bytes of
 the stack. The arguments are part of the run input like the clock start and the entropy image: `link.py` writes
 them into the same generated file, start-up reads only that data, and the same image gives the same run.
-`link.py` receives them through the host's `execve`, so the host's limits (128 KiB per string, about 2 MiB in all
-with the default stack limit) bound them as they bound the native run. A program reads, for example, a measured
+`link.py` receives each argument as one string of its own command line, so the host's limit of 128 KiB per string
+bounds it as it bounds the native run (`--argv0=S` spends eight bytes of that on its option name); the host's limit
+on the whole command line (about 2 MiB with the default stack limit) also counts `link.py`'s options and
+environment, so the longest list `link.py` accepts is somewhat shorter than the longest native one. A program reads, for example, a measured
 step budget with `strtoul(argv[1], ...)`. Changing an argument means relinking, as for the other images; passing
 arguments to `bennett run` without relinking needs the separate image loader below.
 
