@@ -80,26 +80,18 @@ def main():
     def cbytes(data):
         return '"' + ''.join(f"\\x{x:02x}" for x in data) + '"'
     # The arguments are the host's exact bytes (os.fsencode undoes Python's decoding of non-UTF-8 bytes),
-    # NUL-terminated and contiguous, as Linux lays them out; the start vector holds argv, its null pointer,
-    # the empty environment and the auxiliary vector in one array (start.h).
+    # NUL-terminated and contiguous, as Linux lays them out; start.c builds argv from them (start.h).
     strings = [os.fsencode(text) for text in [args.argv0, *args.run_args]]
     if any(b"\0" in string for string in strings):
         parser.error("an argument cannot contain a NUL byte")
-    offsets, argument_bytes = [], b""
-    for string in strings:
-        offsets.append(len(argument_bytes))
-        argument_bytes += string + b"\0"
-    vector = [f"{{.pointer = __bennett_argument_bytes + {offset}}}" for offset in offsets]
-    vector += ["{.pointer = 0}", "{.pointer = 0}", "{.value = AT_PAGESZ}", "{.value = 4096}", "{.value = AT_NULL}",
-               "{.value = 0}", "{.value = 0}", "{.value = 0}"]
+    argument_bytes = b"".join(string + b"\0" for string in strings)
     inputs_c = ['#include <stdint.h>', '#include <fcntl.h>', '#include <unistd.h>', '#include <sys/stat.h>',
-                '#include <elf.h>', '#include "start.h"',
+                '#include "start.h"',
                 f'const uint64_t __bennett_clock_start = {args.clock_start}ULL;',
                 f'const uint64_t __bennett_entropy_size = {len(entropy)}ULL;',
                 f'const unsigned char __bennett_entropy_image[] = {cbytes(entropy)};',
-                f'static char __bennett_argument_bytes[{len(argument_bytes)}] = {cbytes(argument_bytes)};',
-                f'const int __bennett_argc = {len(strings)};',
-                'union __bennett_start_word __bennett_start_vector[] = {' + ', '.join(vector) + '};',
+                f'const size_t __bennett_argument_count = {len(strings)};',
+                f'char __bennett_argument_bytes[{len(argument_bytes)}] = {cbytes(argument_bytes)};',
                 'void __bennett_input_files(void) {']
     directories = {"/dev", "/tmp"}
     for path, data in contents:

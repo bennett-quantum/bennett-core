@@ -109,9 +109,10 @@ bennett run program.bn --entry __bennett_entry --reverse --stats
 Each `--arg` is the next argument of `main`, in order (`--arg=-v` for one that starts with `-`); `--argv0`
 replaces `argv[0]`, `prog` by default. The strings are the host's exact bytes (an empty string, bytes that are
 not UTF-8), NUL-terminated and contiguous in writable data of the image, and `argv[argc]` is null. `start.h`
-declares the one array musl's start-up reads: `argv`, its null pointer, the empty environment's null pointer and
-the auxiliary vector, as on a Linux process's initial stack; `link.py` defines it with the other inputs, so
-start-up reads nothing but the image. There is no device limit; the host's `execve` limits on `link.py`'s own
+declares the count and the strings, which `link.py` defines with the other inputs; `start.c` builds from them,
+on its own frame, the one array of pointers musl's start-up reads: `argv`, its null pointer, the empty
+environment's null pointer and the auxiliary vector, as on a Linux process's initial stack. Start-up reads
+nothing but the image. There is no device limit; the host's `execve` limits on `link.py`'s own
 command line (128 KiB per string, about 2 MiB in all) are the native run's.
 
 `files.json` maps canonical absolute paths to hex byte strings, for example

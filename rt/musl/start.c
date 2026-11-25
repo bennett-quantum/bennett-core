@@ -1,5 +1,6 @@
 /* Enter musl's own startup. It initializes TLS, walks constructors, calls main, then calls exit.
- * The arguments, environment and auxiliary vector are the run input's (start.h). */
+ * The arguments are the run input's (start.h); the environment is empty. */
+#include <elf.h>
 #include <stddef.h>
 #include "start.h"
 #ifndef MAIN_ARGS
@@ -29,7 +30,26 @@ _Noreturn void __bennett_exit(int);
 
 int __bennett_entry(void)
 {
-    char **argv = &__bennett_start_vector[0].pointer;
-    int status = __libc_start_main(invoke_main, __bennett_argc, argv, NULL, NULL, NULL);
+    size_t argc = __bennett_argument_count;
+    /* One array of pointers, as on a Linux process's initial stack: argv, its null pointer, the empty
+     * environment's null pointer, then the auxiliary vector. musl finds the environment at argv + argc + 1 and
+     * reads the auxiliary words after the environment's null pointer as size_t, which the x86-64 ABI represents
+     * as it does a pointer. The array lives in this frame, which lasts until exit. */
+    char *vector[argc + 8];
+    char *string = __bennett_argument_bytes;
+    for (size_t i = 0; i < argc; i++) {
+        vector[i] = string;
+        while (*string++)
+            ;
+    }
+    vector[argc] = NULL;
+    vector[argc + 1] = NULL;
+    vector[argc + 2] = (char *)AT_PAGESZ;
+    vector[argc + 3] = (char *)4096;
+    vector[argc + 4] = (char *)AT_NULL;
+    vector[argc + 5] = NULL;
+    vector[argc + 6] = NULL;
+    vector[argc + 7] = NULL;
+    int status = __libc_start_main(invoke_main, (int)argc, vector, NULL, NULL, NULL);
     __bennett_exit(status);
 }
