@@ -153,6 +153,51 @@ void checkPrimitiveFunction(const Function &function, const Primitive &primitive
   }
 }
 
+// A primitive whose address the program takes, other than as the target of a direct call, if any.
+const Function *addressTaken(const Module &module) {
+  for (const Primitive &primitive : primitives) {
+    const Function *function = module.getFunction(primitive.name);
+    if (!function) {
+      continue;
+    }
+    for (const Use &use : function->uses()) {
+      const auto *call = dyn_cast<CallBase>(use.getUser());
+      if (!call || !call->isCallee(&use)) {
+        return function;
+      }
+    }
+  }
+  return nullptr;
+}
+
+// A primitive call is known by its target, and a call through a pointer may reach one wherever the program takes a
+// primitive's address. So, in such a program, no call through a pointer may carry an attribute that lets LLVM
+// remove, merge or move it: no pass may drop or move a primitive call that a pointer reaches.
+void checkIndirectCalls(const Module &module) {
+  const Function *taken = addressTaken(module);
+  if (!taken) {
+    return;
+  }
+  for (const Function &function : module) {
+    for (const BasicBlock &block : function) {
+      for (const Instruction &inst : block) {
+        const auto *call = dyn_cast<CallBase>(&inst);
+        if (!call || call->getCalledFunction() || call->isInlineAsm()) {
+          continue;
+        }
+        if (std::string bad = firstHarmful(call->getAttributes(), call->getFunctionType()->getNumParams(), true);
+            !bad.empty()) {
+          misuse("a call through a pointer carries `" + bad +
+                     "`, one of the attributes that let LLVM remove or move its calls, in a program that takes the "
+                     "address of the primitive @" +
+                     taken->getName().str() + ", which the pointer may name" + route,
+                 call);
+        }
+      }
+    }
+  }
+}
+
 } // namespace
 
 ArrayRef<Primitive> allPrimitives() { return primitives; }
@@ -217,14 +262,19 @@ void checkPrimitives(const Module &module) {
                  " with an assembler label" + route,
              &global);
     }
-    if (isa<GlobalAlias>(global) || isa<GlobalIFunc>(global)) {
+    if (isa<GlobalAlias>(global)) {
       fail("the program defines an alias named after the primitive @" + linker.str() + route);
+    }
+    if (isa<GlobalIFunc>(global)) {
+      fail("the program defines a function chosen by a resolver (an ifunc) named after the primitive @" +
+           linker.str() + route);
     }
     if (isa<GlobalVariable>(global)) {
       misuse("the program has a variable with the linker name of the primitive @" + linker.str() + route, &global);
     }
     checkPrimitiveFunction(cast<Function>(global), *primitive);
   }
+  checkIndirectCalls(module);
   const Function *marker = nullptr;
   const Function *handle = nullptr;
   for (const Function &function : module) {

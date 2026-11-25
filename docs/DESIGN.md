@@ -1031,7 +1031,11 @@ translation path, the front end's own part is built (new files, beside the old l
   no attribute that lets LLVM remove, merge or move a call; every call of it must have that type and no such
   attribute. The attributes allowed are the target and code-generation strings, `nounwind`, `nobuiltin`, and on
   operands `noundef`, `signext`, `zeroext`, and at calls the operand facts `nonnull`, alignment and dereferenceable
-  bytes. A break is refused by name with status 2. A program that refers to a marker and to one of the seven
+  bytes. A symbol of that name that is an alias or an ifunc is refused. A primitive call is known by its target, so
+  where the program takes a primitive's address other than as a direct callee, no call through a pointer may carry
+  such an attribute either (a pass could otherwise drop a call that the pointer makes to the primitive). The check
+  applies to every module, whether or not its units include the handle header: the C library's and the marker
+  programs' too. A break is refused by name with status 2. A program that refers to a marker and to one of the seven
   interface functions is refused by name too. A program that passes and uses the interface is then refused with
   "not handled yet" at its first interface call: the translation into device instructions waits on the device
   forms (`docs/HANDLES.md`, section 14).

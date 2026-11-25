@@ -49,7 +49,10 @@ llvm::FunctionType *primitiveType(const Primitive &primitive, llvm::LLVMContext 
 // function with external linkage, the header's function type, no attribute that lets LLVM remove, merge, move
 // or speculate a call (only the target and code-generation attributes clang 18 puts on the header's
 // declarations, `noreturn` exactly where the header has it), and every call of it has that function type and
-// such attributes. Also refuses a program that uses both the marker interface (docs/MARKERS.md) and one of the
+// such attributes. A symbol that is an alias or an ifunc is refused. Where the program takes a primitive's
+// address other than as a direct callee, a call through a pointer may reach it, so no call through a pointer may
+// carry such an attribute either. The check applies to every module, whether or not its units include the handle
+// header (the C library's and the marker programs' too). Also refuses a program that uses both the marker interface (docs/MARKERS.md) and one of the
 // seven interface functions. Stops at the first violation with "error: ..." and status 2.
 void checkPrimitives(const llvm::Module &module);
 

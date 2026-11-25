@@ -300,3 +300,91 @@ fn a_program_with_markers_and_handles_is_refused() {
         );
     }
 }
+
+/// The four reserved effect primitives and one interface function, each with its LLVM type, the operands of a call
+/// and whether the header declares it `noreturn`.
+const RESERVED: &[(&str, &str, &str, bool)] = &[
+    ("__bennett_effect", "void (i8)", "i8 1", false),
+    ("__bennett_exit", "void (i32)", "i32 1", true),
+    ("__bennett_out_of_memory", "void ()", "", true),
+    ("__bennett_bad_argument", "void ()", "", true),
+    ("bq_free", "void (i64)", "i64 1", false),
+];
+
+/// The shapes in which a program can name a reserved primitive so that LLVM may drop or redirect its call, as
+/// LLVM text that clang can write or a program can hand to the front: attributes on a direct call, an alias or an
+/// ifunc in its place, and attributes on a call through a pointer that may name it.
+fn reserved_shapes(name: &str, ty: &str, args: &str, noreturn: bool) -> Vec<(&'static str, String, String)> {
+    let params = ty.trim_start_matches("void ").trim_matches(|c| c == '(' || c == ')');
+    let declare = format!("declare void @{name}({params}){}\n", if noreturn { " noreturn" } else { "" });
+    let body = format!("define internal void @replacement({params}) {{\n  ret void\n}}\n");
+    let main_direct = format!("define i32 @main() {{\n  call void @{name}({args})\n  ret i32 7\n}}\n");
+    vec![
+        (
+            "call_attributes",
+            format!(
+                "{declare}define i32 @main() {{\n  call void @{name}({args}) nounwind willreturn memory(none)\n  ret i32 7\n}}\n"
+            ),
+            format!("a call of the primitive @{name} carries `"),
+        ),
+        (
+            "alias",
+            format!("@{name} = alias {ty}, ptr @replacement\n{body}{main_direct}"),
+            format!("an alias named after the primitive @{name}"),
+        ),
+        (
+            "ifunc",
+            format!(
+                "@{name} = ifunc {ty}, ptr @resolve\ndefine internal ptr @resolve() {{\n  ret ptr @replacement\n}}\n{body}{main_direct}"
+            ),
+            format!("an ifunc) named after the primitive @{name}"),
+        ),
+        (
+            "indirect",
+            format!(
+                "{declare}@target = internal constant ptr @{name}\ndefine i32 @main() {{\n  %callee = load ptr, ptr @target\n  \
+                 call void %callee({args}) nounwind willreturn memory(none)\n  ret i32 7\n}}\n"
+            ),
+            format!("takes the address of the primitive @{name}"),
+        ),
+    ]
+}
+
+/// Each shape is refused by name, before any code is generated, for every reserved effect primitive and an
+/// interface function, whether or not the program includes the handle header (these modules do not).
+#[test]
+fn a_reserved_primitive_cannot_be_dropped_or_redirected() {
+    for &(name, ty, args, noreturn) in RESERVED {
+        for (shape, text, expected) in reserved_shapes(name, ty, args, noreturn) {
+            let tag = format!("handles_reserved_{name}_{shape}");
+            let path = out_dir().join(format!("{tag}.ll"));
+            std::fs::write(&path, &text).unwrap_or_else(|e| panic!("cannot write {path:?}: {e}"));
+            let result = output(
+                Command::new(front())
+                    .arg(&path)
+                    .arg("-o")
+                    .arg(out_dir().join(format!("{tag}.bn")))
+                    .args(["--region-budget=64", "--stack-bytes=4096"]),
+            );
+            assert_refused(&result, REFUSED, &expected, &format!("{tag}:\n{text}"));
+        }
+    }
+}
+
+/// A call through a pointer with such an attribute is the program's own business where no primitive's address is
+/// taken: the check does not refuse it.
+#[test]
+fn an_indirect_call_without_a_primitive_address_is_not_refused_by_the_check() {
+    let text = "declare void @helper()\n@target = internal constant ptr @helper\ndefine i32 @main() {\n  \
+                %callee = load ptr, ptr @target\n  call void %callee() nounwind willreturn memory(none)\n  ret i32 7\n}\n";
+    let path = out_dir().join("handles_indirect_helper.ll");
+    std::fs::write(&path, text).unwrap_or_else(|e| panic!("cannot write {path:?}: {e}"));
+    let result = output(
+        Command::new(front())
+            .arg(&path)
+            .arg("-o")
+            .arg(out_dir().join("handles_indirect_helper.bn"))
+            .args(["--region-budget=64", "--stack-bytes=4096"]),
+    );
+    assert!(!stderr(&result).contains("takes the address of the primitive"), "{}", stderr(&result));
+}
