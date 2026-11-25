@@ -2170,12 +2170,15 @@ With musl linked, `main` receives the run's arguments as C strings: `rt/musl/lin
 order) gives `argv[1]`, `argv[2]`, ..., and `--argv0 S` replaces `argv[0]` (default `prog`). They are the host's
 exact bytes, so an empty string or bytes that are not UTF-8 arrive unchanged; a NUL cannot be one. `argv[argc]` is
 a null pointer and the environment is empty, as before. The count and the strings, NUL-terminated and contiguous,
-are data of the run image, the strings writable (`rt/musl/start.h`); start-up builds the rest as Linux lays out a new process's
-stack, in one array of pointers on its own frame, which lasts until exit: `argv`, its null pointer, the environment's
-null pointer and the auxiliary vector, because musl's start-up finds the environment at `argv + argc + 1` and reads
-the auxiliary words after it. The arguments are part of
-the run input like the clock start and the entropy image: `link.py` writes them into the same generated file,
-start-up reads only that data, and the same image gives the same run. The device imposes no limit of its own;
+are writable data of the run image (`rt/musl/start.h`), the strings in an area whose size is a link parameter
+(`--argument-bytes`, 4096 bytes by default): the strings with their NULs must fit, and a relink with other arguments
+and the same area changes the image's data only, not one instruction, so step counts measured on one image hold
+for the other. Being writable, neither value can be taken into code by an optimiser. Start-up builds the rest as
+Linux lays out a new process's stack, in one array of pointers on its own frame, which lasts until exit: `argv`,
+its null pointer, the environment's null pointer and the auxiliary vector, because musl's start-up finds the
+environment at `argv + argc + 1` and reads the auxiliary words after it; the array takes `8 * (argc + 8)` bytes of
+the stack. The arguments are part of the run input like the clock start and the entropy image: `link.py` writes
+them into the same generated file, start-up reads only that data, and the same image gives the same run.
 `link.py` receives them through the host's `execve`, so the host's limits (128 KiB per string, about 2 MiB in all
 with the default stack limit) bound them as they bound the native run. A program reads, for example, a measured
 step budget with `strtoul(argv[1], ...)`. Changing an argument means relinking, as for the other images; passing

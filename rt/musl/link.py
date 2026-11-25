@@ -33,6 +33,8 @@ def main():
     parser.add_argument("--arg", action="append", default=[], dest="run_args", metavar="STRING",
                         help="run input: the next argument of main, in order (--arg=-x for one starting with -)")
     parser.add_argument("--argv0", default="prog", metavar="STRING", help="run input: argv[0] (default prog)")
+    parser.add_argument("--argument-bytes", type=int, default=4096,
+                        help="the size of the arguments' area: their bytes, each with its NUL, must fit")
     args = parser.parse_args()
     if not 0 <= args.clock_start < 1 << 64:
         parser.error("--clock-start must fit in an unsigned 64-bit integer")
@@ -85,13 +87,15 @@ def main():
     if any(b"\0" in string for string in strings):
         parser.error("an argument cannot contain a NUL byte")
     argument_bytes = b"".join(string + b"\0" for string in strings)
+    if len(argument_bytes) > args.argument_bytes:
+        parser.error(f"the arguments need {len(argument_bytes)} bytes with their NULs; raise --argument-bytes")
     inputs_c = ['#include <stdint.h>', '#include <fcntl.h>', '#include <unistd.h>', '#include <sys/stat.h>',
                 '#include "start.h"',
                 f'const uint64_t __bennett_clock_start = {args.clock_start}ULL;',
                 f'const uint64_t __bennett_entropy_size = {len(entropy)}ULL;',
                 f'const unsigned char __bennett_entropy_image[] = {cbytes(entropy)};',
-                f'const size_t __bennett_argument_count = {len(strings)};',
-                f'char __bennett_argument_bytes[{len(argument_bytes)}] = {cbytes(argument_bytes)};',
+                f'size_t __bennett_argument_count = {len(strings)};',
+                f'char __bennett_argument_bytes[{args.argument_bytes}] = {cbytes(argument_bytes)};',
                 'void __bennett_input_files(void) {']
     directories = {"/dev", "/tmp"}
     for path, data in contents:

@@ -109,11 +109,15 @@ bennett run program.bn --entry __bennett_entry --reverse --stats
 Each `--arg` is the next argument of `main`, in order (`--arg=-v` for one that starts with `-`); `--argv0`
 replaces `argv[0]`, `prog` by default. The strings are the host's exact bytes (an empty string, bytes that are
 not UTF-8), NUL-terminated and contiguous in writable data of the image, and `argv[argc]` is null. `start.h`
-declares the count and the strings, which `link.py` defines with the other inputs; `start.c` builds from them,
-on its own frame, the one array of pointers musl's start-up reads: `argv`, its null pointer, the empty
-environment's null pointer and the auxiliary vector, as on a Linux process's initial stack. Start-up reads
-nothing but the image. There is no device limit; the host's `execve` limits on `link.py`'s own
-command line (128 KiB per string, about 2 MiB in all) are the native run's.
+declares the count and the strings' area, which `link.py` defines with the other inputs; `start.c` builds from
+them, on its own frame, the one array of pointers musl's start-up reads: `argv`, its null pointer, the empty
+environment's null pointer and the auxiliary vector, as on a Linux process's initial stack (`8 * (argc + 8)` bytes
+of the stack). Start-up reads nothing but the image. The area's size is a link parameter, `--argument-bytes`
+(4096 by default); the strings with their NULs must fit. Because its size does not depend on the arguments and
+both values are writable, so that no optimiser takes them into code, a relink with other arguments changes the
+image's data only: every function is the same text, and steps measured on one image hold for the other. The
+host's `execve` limits on `link.py`'s own command line (128 KiB per string, about 2 MiB in all) are the native
+run's.
 
 `files.json` maps canonical absolute paths to hex byte strings, for example
 `{"/fixtures/input":"610062ff63"}`. Parent directories are created automatically. Installation occurs

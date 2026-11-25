@@ -75,44 +75,41 @@ def argument_cases(args):
             print(f"arguments {case} {level}: passed (status {reference.returncode})", flush=True)
 
 
-def device_functions(path):
-    """The text of each function of a device program, by name."""
-    functions, name = {}, None
-    for line in path.read_text().splitlines(keepends=True):
-        if line.startswith("func @"):
-            name = line[len("func @"):].split("(")[0]
-            functions[name] = line
-        elif name is not None:
-            functions[name] += line
-            if line.startswith("}"):
-                name = None
-    return functions
+def code_lines(path):
+    """The device program's lines other than data items: its memory size and every function's text."""
+    return [line for line in path.read_text().splitlines() if not line.startswith("data ")]
 
 
-def relinked_apply(args):
-    """Two images of one program with different arguments: main sees each, and the applied function (a second
-    entry; quantum operations in main of a musl-linked program are refused today) has the same text and takes
-    the same steps in both. The arguments move later data, so code that names those addresses differs."""
-    source = HERE / "tests/args-apply.c"
+def relink(args, source, level, arguments, name):
+    program = args.out / f"relink-{name}{level}.bn"
+    linked = run(["python3", HERE / "link.py", source, "--libdir", args.libdir, "--front", args.front,
+                  f"--clang-flag={level}", "-o", program, *(f"--arg={argument}" for argument in arguments)])
+    assert linked.returncode == 0, linked.stderr
+    return program
+
+
+def relinked_images(args):
+    """A relink with other arguments, in count and in length, changes the image's data only: every function and
+    the memory size are the same text. main sees each set of arguments; the applied function (a second entry;
+    quantum operations in main of a musl-linked program are refused today) takes the same steps in both."""
     runs = []
-    for budget in ("1000", "77"):
-        program = args.out / f"args-apply-{budget}.bn"
-        linked = run(["python3", HERE / "link.py", source, "--libdir", args.libdir, "--front", args.front,
-                      "-o", program, f"--arg={budget}"])
-        assert linked.returncode == 0, linked.stderr
+    for name, arguments in (("one", ["1000"]), ("three", ["77", "a longer second argument", ""])):
+        program = relink(args, HERE / "tests/args-apply.c", "-O0", arguments, name)
         classical = run([args.executor, "run", "--entry", "__bennett_entry", "--budget", 100000000, program])
-        assert classical.returncode == 0 and f'console: "budget {budget}\\n"' in classical.stdout, classical
+        assert classical.returncode == 0 and f'console: "budget {arguments[0]}\\n"' in classical.stdout, classical
         applied = run([args.executor, "run", "--entry", "applied_entry", "--stats", "--budget", 100000000, program])
         assert applied.returncode == 0 and "region faults: 0 " in applied.stdout, applied
         counts = [line.strip() for line in applied.stdout.splitlines()
                   if line.startswith(("result: ", "steps: ", "  region steps: "))]
         assert len(counts) == 3, applied.stdout
-        runs.append((device_functions(program), counts))
+        runs.append((code_lines(program), counts))
     (first, first_counts), (second, second_counts) = runs
     assert first_counts == second_counts, (first_counts, second_counts)
-    for name in ("applied_entry", "applied_entry.apply", "search"):
-        assert first[name] == second[name], name
-    print(f"arguments relinked apply: passed ({', '.join(first_counts)} in both)", flush=True)
+    assert first == second, next((a, b) for a, b in zip(first, second) if a != b)
+    optimised = [code_lines(relink(args, HERE / "tests/args.c", "-O2", arguments, name))
+                 for name, arguments in (("none", []), ("several", ["x" * 100, "", "y"]))]
+    assert optimised[0] == optimised[1], next((a, b) for a, b in zip(*optimised) if a != b)
+    print(f"arguments relinked: passed (code identical; {', '.join(first_counts)} in both)", flush=True)
 
 
 def main():
@@ -176,7 +173,7 @@ def main():
             assert console == escaped(output), (name, console, output)
         print(f"{name} {level}: passed ({program.stat().st_size} text bytes)", flush=True)
     argument_cases(args)
-    relinked_apply(args)
+    relinked_images(args)
     print(f"library tests: {time.monotonic() - started:.2f}s", flush=True)
 
 
