@@ -888,6 +888,8 @@ surface is `docs/MARKERS.md`. Input LLVM's reader cannot parse, stops on or cras
 verifier rejects, is named "the input is not valid LLVM IR" with status 2, and no device program is written; an empty file is LLVM's empty module and gives
 an empty device program (`front/src/main.cpp`, `readInput`).
 
+The handle interface that replaces the marker surface, built beside it, is designed in `docs/HANDLES.md`.
+
 - **A qubit is a variable, not a value.** A local variable whose address is passed to a marker becomes a quantum
   register as wide as the variable. There is no allocation call.
 - **A store into a qubit variable applies the whole computation of the stored value into it.** `v ^= expr` is an
