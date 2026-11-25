@@ -191,10 +191,12 @@ stdout/status for floating-point printf/strtod/sqrt/sin/pow, for constructors, a
 nested exit, for `malloc`/`realloc`/`calloc`/`free`, for signals raised, blocked, ignored and handled, for
 `abort` after a handler returns, for reads of the empty stdin through `scanf`, `getchar` and `fgets`, and for
 a break that shrinks and grows again, for the default floating-point environment, for run arguments
-(`args.c`: none, empty strings, 200 arguments, bytes that are not ASCII or UTF-8, another `argv[0]`, writes
-into the strings and the array; `budget.c`: a step budget read with `strtoul` and passed on, in range, out of
-range and malformed; each run natively with the same `argv` and an empty environment; `args-apply.c`: two images linked
-with different arguments give the same steps inside an `apply` and the same text for the applied functions), and for complex products,
+(`args.c`: none with the default `argv[0]`, empty strings, 200 arguments, bytes that are not ASCII or UTF-8,
+strings that look like options or are `--`, another `argv[0]`, writes into the strings and the array;
+`budget.c`: a step budget read with `strtoul` and passed on, in range, out of range, malformed, missing, and
+the longest argument Linux passes, 131,071 bytes; each run natively with the same `argv` and an empty
+environment; relinks of `args-apply.c` and `args.c` with arguments of another count and length give the same
+text for every function, and the same steps inside an `apply`; arguments too large for their area are refused), and for complex products,
 quotients and `cexp` (`complex.c`, over libgcc's helpers), and for `setjmp`/`longjmp` across frames, `sigsetjmp` with
 and without the signal mask (musl's `__sigsetjmp_tail`) and jumps out of signal handlers (`setjmp.c`); they check that heap
 exhaustion by `mmap`, `malloc`, `realloc` and the break is the fault `out_of_memory` with the output flushed
@@ -203,8 +205,8 @@ arithmetic rejections stay null against native (`alloc-arithmetic`), and named f
 `tests/regress/` holds the self-checking witnesses of the independent testing pass of this boundary (each
 returns 0 natively and failed or faulted here before its fix). The 35 programs (42 runs with the
 `-O2` ones) took 173 seconds with the debug CLI on the shared machine, after building the library.
-The run-argument cases and the relinked `apply` were measured with the 24 tests before the allocator
-ones: 243 s together on the shared machine (2026-11-25).
+The run-argument cases and the relinks were measured with the 24 tests before the allocator ones and
+before the longest-argument case: 243 s together on the shared machine (2026-11-25).
 The debug CLI now reads their large data strings without overflowing its host stack.
 
 The front writes zero runs of 16 bytes or more as one `zero N` data item, so the 1 MiB arena costs a

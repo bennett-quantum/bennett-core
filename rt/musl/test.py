@@ -39,7 +39,7 @@ EXHAUSTED = {
 # may follow. The longest native argument, 131071 bytes and its NUL (Linux's MAX_ARG_STRLEN), starts with '-'.
 LONGEST = b"-" + b"0" * 131069 + b"7"
 ARGUMENT_CASES = [
-    ("args", "no-arguments", b"prog", [], ["-O0"]),
+    ("args", "no-arguments", None, [], ["-O0"]),  # link.py's default argv[0]
     ("args", "empty", b"prog", [b"", b"", b"x", b""], ["-O0"]),
     ("args", "many", b"prog", [b"%d" % i * (i % 7) for i in range(200)], ["-O0"]),
     ("args", "bytes", b"prog", [b"\xc3\xa9t\xc3\xa9", bytes(range(0x80, 0x100)), b"\x01\x02\x1f\x7f",
@@ -61,16 +61,16 @@ def argument_cases(args):
         for level in levels:
             program = args.out / f"args-{case}{level}.bn"
             command = ["python3", HERE / "link.py", source, "--libdir", args.libdir, "--front", args.front,
-                       f"--clang-flag={level}", "-o", program, b"--argv0=" + argv0, *(options[0] if options else []),
-                       "--", *arguments]
+                       f"--clang-flag={level}", "-o", program, *([b"--argv0=" + argv0] if argv0 else []),
+                       *(options[0] if options else []), "--", *arguments]
             linked = subprocess.run([a if isinstance(a, bytes) else str(a) for a in command], capture_output=True)
             assert linked.returncode == 0, linked.stderr
             result = run([args.executor, "run", "--entry", "__bennett_entry", "--budget", 1000000000, program])
             native = args.out / f"args-{source_name}{level}.native"
             built = run(["clang-18", level, source, "-o", native])
             assert built.returncode == 0, built.stderr
-            reference = subprocess.run([argv0, *arguments], executable=native, env={}, capture_output=True,
-                                       stdin=subprocess.DEVNULL)
+            reference = subprocess.run([argv0 or b"prog", *arguments], executable=native, env={},
+                                       capture_output=True, stdin=subprocess.DEVNULL)
             assert f"result: {reference.returncode}\n" in result.stdout, (case, level, result.stdout, reference)
             assert result.returncode == 0, (case, level, result)
             console = next((line.removeprefix("console: ") for line in result.stdout.splitlines()
@@ -105,7 +105,7 @@ def relinked_images(args):
         assert applied.returncode == 0 and "region faults: 0 " in applied.stdout, applied
         counts = [line.strip() for line in applied.stdout.splitlines()
                   if line.startswith(("result: ", "steps: ", "  region steps: "))]
-        assert len(counts) == 3, applied.stdout
+        assert len(counts) == 3 and int(counts[2].removeprefix("region steps: ")) > 0, applied.stdout
         runs.append((code_lines(program), counts))
     (first, first_counts), (second, second_counts) = runs
     assert first_counts == second_counts, (first_counts, second_counts)
@@ -113,6 +113,10 @@ def relinked_images(args):
     optimised = [code_lines(relink(args, HERE / "tests/args.c", "-O2", arguments, name))
                  for name, arguments in (("none", []), ("several", ["x" * 100, "", "y"]))]
     assert optimised[0] == optimised[1], next((a, b) for a, b in zip(*optimised) if a != b)
+    # Arguments that do not fit the area are refused by name.
+    refused = run(["python3", HERE / "link.py", HERE / "tests/args.c", "--libdir", args.libdir, "--front", args.front,
+                   "--argument-bytes=8", "-o", args.out / "relink-refused.bn", "--", "four"])
+    assert refused.returncode == 2 and "the arguments need 10 bytes" in refused.stderr, refused
     print(f"arguments relinked: passed (code identical; {', '.join(first_counts)} in both)", flush=True)
 
 
