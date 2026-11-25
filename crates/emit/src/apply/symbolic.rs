@@ -9,9 +9,8 @@ use bennett_ir::{
 use super::ApplyError;
 use super::arithmetic;
 use super::bits::{Bit, Circuit, Word, ZERO, constant};
-use super::definite::{CallSite, Constants};
+use super::definite::{CallProofs, CallResult, CallSite, Constants};
 use super::division;
-use super::returns::Returns;
 use super::switches::Edges;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -98,6 +97,10 @@ impl<'a> Frame<'a> {
         }
     }
 
+    pub(super) fn operand(&self, slots: &[Word], operand: &Operand) -> Word {
+        self.constants.project(slots, operand, Self::read(slots, operand))
+    }
+
     pub(super) fn incoming(&self, slots: &[Word], target: &Target) -> Vec<(Slot, Word)> {
         self.module
             .function(self.callee)
@@ -121,27 +124,38 @@ impl<'a> Frame<'a> {
         std::mem::take(&mut self.constants.calls)
     }
 
+    pub(super) fn for_analysis(module: &'a ValidModule, callee: FuncId) -> Self {
+        Self { module, callee, constants: Constants::default() }
+    }
+
     pub(super) fn return_analysis(
         module: &'a ValidModule,
         callee: FuncId,
-        can_return: impl FnMut(FuncId) -> bool,
+        mut can_return: impl FnMut(FuncId) -> bool,
     ) -> Option<Vec<Option<Word>>> {
-        let frame = Self { module, callee, constants: Constants::default() };
+        let frame = Self::for_analysis(module, callee);
         let inputs = module.function(callee).params.iter().map(|_| None);
-        Constants::analyze(&frame, inputs, can_return).into_stopping_proof()
+        Constants::analyze(&frame, inputs, |target, _| {
+            if can_return(target) { CallResult::Returns(Vec::new()) } else { CallResult::Stops }
+        })
+        .into_stopping_proof()
     }
 
     pub(super) fn check(
         module: &'a ValidModule,
         callee: FuncId,
         input: impl Iterator<Item = Option<Word>>,
-        returns: &mut Returns<'a>,
+        proofs: &mut CallProofs<'a>,
     ) -> Result<Self, ApplyError> {
-        let mut frame = Self { module, callee, constants: Constants::default() };
+        let mut frame = Self::for_analysis(module, callee);
         frame.check_instructions()?;
-        let stopping_proof = returns.stopping_proof(callee);
-        frame.constants =
-            Constants::for_emission(&frame, input, |target| returns.can_return(target), stopping_proof.as_deref());
+        let stopping_proof = proofs.returns.stopping_proof(callee);
+        frame.constants = Constants::for_emission(
+            &frame,
+            input,
+            |target, args| proofs.call(module, target, args),
+            stopping_proof.as_deref(),
+        );
         Ok(frame)
     }
 
@@ -186,10 +200,7 @@ impl<'a> Frame<'a> {
                     ..
                 } => {
                     let dividend = read(circuit, lhs);
-                    let mut divisor = read(circuit, rhs);
-                    if let Some(value) = self.constants.get(rhs) {
-                        divisor = constant(value, divisor.len());
-                    }
+                    let divisor = read(circuit, rhs);
                     let zero = division::is_zero(circuit, &divisor);
                     if zero == super::bits::ONE {
                         return Ok(Step::Fault(Fault::DivideByZero));
@@ -203,18 +214,6 @@ impl<'a> Frame<'a> {
                 Inst::Binary { op, dst, lhs, rhs, .. } => {
                     let mut left = read(circuit, lhs);
                     let mut right = read(circuit, rhs);
-                    if matches!(op, BinOp::Mul | BinOp::Shl | BinOp::Lshr | BinOp::Ashr) {
-                        // A slot can contain other values when this point is inactive.
-                        // Use the proven value for each input that executes the instruction.
-                        if let Some(value) = self.constants.get(rhs) {
-                            right = constant(value, right.len());
-                        }
-                        if *op == BinOp::Mul
-                            && let Some(value) = self.constants.get(lhs)
-                        {
-                            left = constant(value, left.len());
-                        }
-                    }
                     let declared = left.len();
                     // Low bits of these operations never depend on higher input bits.
                     if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::And | BinOp::Or | BinOp::Xor) {
@@ -273,17 +272,11 @@ impl<'a> Frame<'a> {
         }
         Ok(match &block.term {
             Terminator::Jump(target) => Step::Jump(target),
-            Terminator::Branch { cond, if_true, if_false } => {
-                // A proved condition holds for every input that reaches this point,
-                // even when an inactive input has a different value in its slot.
-                let condition =
-                    self.constants.get(cond).map_or_else(|| read(circuit, cond)[0], |value| Bit::Constant(value == 1));
-                match condition {
-                    Bit::Constant(true) => Step::Jump(if_true),
-                    Bit::Constant(false) => Step::Jump(if_false),
-                    bit @ Bit::Wire(..) => Step::Branch(bit, if_true, if_false),
-                }
-            }
+            Terminator::Branch { cond, if_true, if_false } => match read(circuit, cond)[0] {
+                Bit::Constant(true) => Step::Jump(if_true),
+                Bit::Constant(false) => Step::Jump(if_false),
+                bit @ Bit::Wire(..) => Step::Branch(bit, if_true, if_false),
+            },
             Terminator::Switch { value, .. } => {
                 let selector = read(circuit, value);
                 let mut edges = self.constants.switch_edges(point.block).clone();

@@ -7,8 +7,8 @@ use bennett_exec::frame_bytes;
 use bennett_ir::{Block, BlockId, Fault, FuncId, Function, Inst, Operand, Slot, Target, Terminator, Type};
 
 use super::bits::{Bit, Circuit, Word, ZERO, constant};
+use super::definite::CallProofs;
 use super::memory::{AccessError, Memory};
-use super::returns::Returns;
 use super::selectors::Selector;
 use super::stack::{self, StackSlots};
 use super::symbolic::{Frame, IndirectCall, Point, Step};
@@ -52,8 +52,8 @@ impl<'a> Program<'a> {
     pub(super) fn check(input: &ApplyInput<'a>) -> Result<(Self, Vec<Word>), ApplyError> {
         let source = input.module.function(input.callee);
         let args = arguments(input);
-        let mut returns = Returns::new(input.module);
-        let root = Frame::check(input.module, input.callee, args.iter().cloned().map(Some), &mut returns)?;
+        let mut proofs = CallProofs::new(input.module, COPY_WORK_LIMIT);
+        let root = Frame::check(input.module, input.callee, args.iter().cloned().map(Some), &mut proofs)?;
         let mut slots = root.initial(args);
         let mut program = Self {
             copies: vec![Copy {
@@ -91,7 +91,7 @@ impl<'a> Program<'a> {
                 let mut targets = Vec::new();
                 for callee in call.candidates {
                     let child =
-                        program.child(&mut returns, point, callee, call.args, (call.dst, operation), &mut slots)?;
+                        program.child(&mut proofs, point, callee, call.args, (call.dst, operation), &mut slots)?;
                     targets.push((callee.address(), child));
                 }
                 let site = match (targets.as_slice(), call.invalid_possible) {
@@ -121,14 +121,14 @@ impl<'a> Program<'a> {
         }
         #[cfg(test)]
         {
-            program.return_analysis_work = returns.work;
+            program.return_analysis_work = proofs.returns.work;
         }
         Ok((program, slots))
     }
 
     fn child(
         &mut self,
-        returns: &mut Returns<'a>,
+        proofs: &mut CallProofs<'a>,
         at: Point,
         callee: FuncId,
         args: &[Operand],
@@ -154,8 +154,8 @@ impl<'a> Program<'a> {
 
         // These facts hold across every visit in the caller copy. The frame
         // remaps their wire identities together, preserving shared input bits.
-        let proofs = args.iter().map(|arg| parent.frame.known_bits(arg));
-        let frame = Frame::check(module, callee, proofs, returns)?;
+        let arguments = args.iter().map(|arg| parent.frame.known_bits(arg));
+        let frame = Frame::check(module, callee, arguments, proofs)?;
         let available_stack =
             parent.available_stack.and_then(|bytes| bytes.checked_sub(frame_bytes(function.slot_count())?));
         let caller = Some((at.next(), dst.map(|slot| parent.slot(slot))));
@@ -237,9 +237,10 @@ impl<'a> Program<'a> {
         memory: &mut Memory<'_>,
         guard: Bit,
     ) -> Result<Step<'a>, ApplyError> {
-        let read = |operand| self.read(slots, point, operand);
         let next = point.next();
         let copy = &self.copies[point.copy];
+        let local = &slots[copy.slots.clone()];
+        let read = |operand| copy.frame.operand(local, operand);
         let (operation, result) = match self.block(point).insts.get(point.index) {
             Some(Inst::Load { width, dst, address }) => (
                 "load",
@@ -306,12 +307,13 @@ impl<'a> Program<'a> {
     ) -> Result<Step<'a>, ApplyError> {
         let copy = &self.copies[point.copy];
         let local = &slots[copy.slots.clone()];
+        let read = |circuit: &Circuit, operand: &Operand| resolve(circuit, copy.frame.operand(local, operand));
         if let Some(site) = copy.sites.get(&(point.block, point.index)) {
             return Ok(match site {
                 Site::Call(index, args) => call_step(self.enter(circuit, slots, point, *index, args)),
                 Site::BadAddress => Step::Fault(Fault::BadIndirect),
                 Site::Indirect { target, args, targets, invalid_possible } => {
-                    let address = Frame::read(local, target);
+                    let address = read(circuit, target);
                     let facts = Selector::new(&address);
                     let targets: Vec<_> =
                         targets.iter().filter(|&&(value, _)| facts.allows(u128::from(value))).copied().collect();
@@ -338,7 +340,6 @@ impl<'a> Program<'a> {
         }
 
         let widths = if widths.is_empty() { widths } else { &widths[copy.slots.clone()] };
-        let read = |circuit: &Circuit, operand: &Operand| resolve(circuit, Frame::read(local, operand));
         let step = copy.frame.step(circuit, read, point, widths)?;
         Ok(match step {
             Step::Write(next, dst, word) => Step::Write(next, copy.slot(dst), word),
@@ -440,7 +441,7 @@ impl Copy<'_> {
     }
 }
 
-fn work(function: &Function) -> usize {
+pub(super) fn work(function: &Function) -> usize {
     function
         .blocks
         .iter()

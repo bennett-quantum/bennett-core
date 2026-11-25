@@ -7,7 +7,7 @@ use bennett_ir::{FixedGate, Gate};
 
 use super::ApplyError;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(super) enum Bit {
     Constant(bool),
     Wire(Wire, bool),

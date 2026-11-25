@@ -583,7 +583,14 @@ constant bits and shared qubit values. It selects candidates while the local ins
 still has those relationships and retains any candidates discovered on later visits. The emitter refuses
 reachable recursion and copy expansions above the limit before issuing gates. A copied frame keeps the
 caller's proved literal bits and equalities between argument bits across all visits to the call site.
-A call result is unknown to the caller's operand proof. When the first qubit-dependent jump is in a frame
+The return analysis uses the argument facts at each copied call. It keeps literals and argument-bit
+identities that agree across the reachable normal returns of the possible targets. It translates those
+identities to the caller's argument bits for operand evaluation. The call executes and charges its
+normal steps, including any fault before a return. The analysis caches
+proofs by function and normalized argument facts. It uses an unknown word for an active recursive query
+or when the additional proof work reaches the copy-work limit.
+
+When the first qubit-dependent jump is in a frame
 entered by the definite prefix, the control construction can follow calls and returns under
 the route guard. A return from a copied frame stops at the caller's continuation
 until sibling routes have been lowered. If a copied program first branches on qubits

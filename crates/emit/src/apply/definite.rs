@@ -11,6 +11,10 @@ use super::switches::Edges;
 use super::symbolic::{Frame, before_instruction_fault};
 use super::{arithmetic, division, ranges};
 
+mod results;
+use results::ReturnWord;
+pub(super) use results::{CallProofs, CallResult};
+
 fn fold_inst(
     inst: &Inst,
     read: impl Fn(&Operand) -> Option<Word>,
@@ -51,9 +55,8 @@ fn fold_inst(
             ),
         },
         Inst::FuncAddr { func, .. } => Some(constant(u128::from(func.address()), u64::BITS as usize)),
-        Inst::Call { .. }
-        | Inst::CallIndirect { .. }
-        | Inst::Load { .. }
+        Inst::Call { .. } | Inst::CallIndirect { .. } => unreachable!("calls use the return proof"),
+        Inst::Load { .. }
         | Inst::Alloca { .. }
         | Inst::StackSave { .. }
         | Inst::Setjmp { .. }
@@ -118,20 +121,121 @@ fn indirect_targets(module: &ValidModule, signature: &Signature, address: &[Bit]
     (candidates, invalid_possible)
 }
 
+fn intersect_return(joined: &mut Option<ReturnWord>, word: ReturnWord) {
+    if let Some(joined) = joined {
+        for (old, bit) in joined.iter_mut().zip(word) {
+            if *old != bit {
+                *old = None;
+            }
+        }
+    } else {
+        *joined = Some(word);
+    }
+}
+
+fn fold_call(
+    slot: Option<Slot>,
+    candidates: &BTreeSet<FuncId>,
+    args: Option<&[Option<Word>]>,
+    mut call_result: impl FnMut(FuncId, Option<&[Option<Word>]>) -> CallResult,
+    unknown_word: impl FnOnce(Slot) -> Word,
+) -> Option<Option<Word>> {
+    let mut returning = false;
+    let mut joined = None;
+    let unknown = slot.map(unknown_word);
+    for &callee in candidates {
+        let CallResult::Returns(mut word) = call_result(callee, args) else {
+            continue;
+        };
+        returning = true;
+        let Some(unknown) = &unknown else { break };
+        word.resize(unknown.len(), None);
+        intersect_return(&mut joined, word);
+    }
+    returning.then(|| {
+        joined.zip(unknown).map(|(proved, unknown)| {
+            proved.into_iter().zip(unknown).map(|(bit, unknown)| bit.unwrap_or(unknown)).collect()
+        })
+    })
+}
+
+// Number the argument identities by their first occurrence. The reverse map
+// translates the callee's argument identities back into the caller's word.
+fn normalize_arguments(
+    frame: &Frame<'_>,
+    inputs: impl Iterator<Item = Option<Word>>,
+) -> (Vec<Word>, Vec<Option<Wire>>) {
+    let mut identities = BTreeMap::new();
+    let mut sources = Vec::new();
+    let words = frame
+        .module
+        .function(frame.callee)
+        .params
+        .iter()
+        .zip(inputs)
+        .map(|(parameter, input)| match input {
+            Some(word) => word
+                .into_iter()
+                .map(|bit| match bit {
+                    Bit::Constant(_) => bit,
+                    Bit::Wire(wire, inverted) => {
+                        let number = *identities.entry(wire).or_insert_with(|| {
+                            let number = sources.len() as Wire;
+                            sources.push(Some(wire));
+                            number
+                        });
+                        Bit::Wire(number, inverted)
+                    }
+                })
+                .collect(),
+            None => (0..frame.slot_width(parameter.slot))
+                .map(|_| {
+                    let number = sources.len() as Wire;
+                    sources.push(None);
+                    Bit::Wire(number, false)
+                })
+                .collect(),
+        })
+        .collect();
+    (words, sources)
+}
+
+#[derive(Clone, Copy)]
+struct ArgumentBit {
+    slot: Slot,
+    index: usize,
+    inverted: bool,
+}
+
 #[derive(Default)]
 pub(super) struct Constants<'a> {
     slots: Vec<Option<Word>>,
+    argument_bits: Vec<ArgumentBit>,
+    returned: Option<ReturnWord>,
     switches: Vec<Edges<'a>>,
     pub(super) calls: Calls<'a>,
     may_return: bool,
 }
 
 impl<'a> Constants<'a> {
-    pub(super) fn get(&self, operand: &Operand) -> Option<u128> {
-        match operand {
-            Operand::Const(value) => Some(value.value()),
-            Operand::Slot(slot) => definite(self.slots.get(slot.index())?.as_ref()?),
+    pub(super) fn project(&self, slots: &[Word], operand: &Operand, mut word: Word) -> Word {
+        let Operand::Slot(slot) = operand else { return word };
+        if let Some(proved) = self.slots.get(slot.index()).and_then(Option::as_ref) {
+            for (bit, fact) in word.iter_mut().zip(proved) {
+                match *fact {
+                    Bit::Constant(_) => *bit = *fact,
+                    Bit::Wire(wire, inverted) => {
+                        // A current frame's immutable argument slots carry
+                        // the physical bits for its abstract identities.
+                        if let Some(source) = self.argument_bits.get(wire as usize) {
+                            let original = slots[source.slot.index()][source.index];
+                            *bit = if inverted ^ source.inverted { original.not() } else { original };
+                        }
+                    }
+                }
+            }
         }
+        word
     }
 
     pub(super) fn word(&self, operand: &Operand) -> Option<Word> {
@@ -148,11 +252,12 @@ impl<'a> Constants<'a> {
     pub(super) fn for_emission(
         frame: &Frame<'a>,
         inputs: impl Iterator<Item = Option<Word>>,
-        can_return: impl FnMut(FuncId) -> bool,
+        call_result: impl FnMut(FuncId, Option<&[Option<Word>]>) -> CallResult,
         stopping_proof: Option<&[Option<Word>]>,
     ) -> Self {
         let function = frame.module.function(frame.callee);
-        if !function.blocks.iter().any(|block| {
+        let (inputs, _) = normalize_arguments(frame, inputs);
+        let needs_analysis = function.blocks.iter().any(|block| {
             matches!(&block.term, Terminator::Switch { .. })
                 || block.insts.iter().any(|inst| {
                     matches!(
@@ -168,12 +273,12 @@ impl<'a> Constants<'a> {
                             }
                     )
                 })
-        }) {
-            // A caller may already have relied on these exact facts to omit
-            // its continuation. Use them even in a frame that needs no local pass.
-            return Self { slots: stopping_proof.unwrap_or_default().to_vec(), ..Self::default() };
-        }
-        let mut plan = Self::analyze(frame, inputs, can_return);
+        });
+        let mut plan = if needs_analysis {
+            Self::solve(frame, &inputs, call_result)
+        } else {
+            Self::with_arguments(frame, &inputs)
+        };
         if let Some(proof) = stopping_proof {
             // Keep the control constants behind the caller's non-return proof
             // alongside any additional facts proved for this copy's arguments.
@@ -201,36 +306,40 @@ impl<'a> Constants<'a> {
     pub(super) fn analyze(
         frame: &Frame<'a>,
         inputs: impl Iterator<Item = Option<Word>>,
-        mut can_return: impl FnMut(FuncId) -> bool,
+        call_result: impl FnMut(FuncId, Option<&[Option<Word>]>) -> CallResult,
     ) -> Self {
+        let (inputs, _) = normalize_arguments(frame, inputs);
+        Self::solve(frame, &inputs, call_result)
+    }
+
+    fn with_arguments(frame: &Frame<'a>, inputs: &[Word]) -> Self {
         let function = frame.module.function(frame.callee);
         let mut slots = vec![None; function.slot_count()];
-        let mut arguments = BTreeMap::new();
-        let mut next_argument_wire = 0;
+        let mut argument_bits = Vec::new();
         for (parameter, input) in function.params.iter().zip(inputs) {
-            let mut fresh = || {
-                let wire = next_argument_wire;
-                next_argument_wire += 1;
-                wire
-            };
-            let word = match input {
-                Some(word) => word
-                    .into_iter()
-                    .map(|bit| match bit {
-                        Bit::Constant(_) => bit,
-                        Bit::Wire(wire, inverted) => {
-                            Bit::Wire(*arguments.entry(wire).or_insert_with(&mut fresh), inverted)
-                        }
-                    })
-                    .collect(),
-                None => (0..frame.slot_width(parameter.slot)).map(|_| Bit::Wire(fresh(), false)).collect(),
-            };
-            slots[parameter.slot.index()] = Some(word);
+            for (index, bit) in input.iter().enumerate() {
+                if let Bit::Wire(wire, inverted) = *bit
+                    && wire as usize == argument_bits.len()
+                {
+                    argument_bits.push(ArgumentBit { slot: parameter.slot, index, inverted });
+                }
+            }
+            slots[parameter.slot.index()] = Some(input.clone());
         }
 
+        Self { slots, argument_bits, ..Self::default() }
+    }
+
+    fn solve(
+        frame: &Frame<'a>,
+        inputs: &[Word],
+        mut call_result: impl FnMut(FuncId, Option<&[Option<Word>]>) -> CallResult,
+    ) -> Self {
+        let function = frame.module.function(frame.callee);
+        let Self { mut slots, argument_bits, .. } = Self::with_arguments(frame, inputs);
         // Immutable argument bits keep their identities. Other unknown bits get distinct
         // slot identities at block boundaries, where different loop visits can meet.
-        let argument_wires = next_argument_wire;
+        let argument_wires = argument_bits.len() as Wire;
         let slot_width = Wire::from(Width::MAX_BITS);
         let scratch = argument_wires + slot_width * slots.len() as Wire;
         let unknown_bit =
@@ -242,6 +351,7 @@ impl<'a> Constants<'a> {
         let mut switches = vec![Edges::default(); function.blocks.len()];
         let mut calls = Calls::new();
         let mut may_return = false;
+        let mut returned = None;
         reachable[0] = true;
         loop {
             let mut changed = false;
@@ -278,10 +388,18 @@ impl<'a> Constants<'a> {
                     };
                     if let Some(call) = call {
                         let site = record_call(&mut calls, (BlockId(index as u32), at), call);
-                        if !site.candidates.iter().copied().any(&mut can_return) {
+                        let args: Option<Vec<_>> =
+                            site.dst.map(|_| site.args.iter().map(|arg| read(&local, arg)).collect());
+                        let Some(word) =
+                            fold_call(site.dst, &site.candidates, args.as_deref(), &mut call_result, unknown_word)
+                        else {
                             term = None;
                             break;
+                        };
+                        if let Some((slot, word)) = site.dst.zip(word) {
+                            local.insert(slot, word);
                         }
+                        continue;
                     }
                     let Some(result) = inst.result() else { continue };
                     if let Some(word) = fold_inst(inst, |op| read(&local, op), &mut circuit, || unknown_word(result)) {
@@ -328,6 +446,16 @@ impl<'a> Constants<'a> {
                     // Non-local control is unsupported by emission. Treat it
                     // conservatively when summarizing potential callees.
                     may_return |= matches!(term, Terminator::Return(_) | Terminator::Longjmp { .. });
+                    if let Terminator::Return(Some(value)) = term
+                        && let Some(word) = read(&local, value)
+                    {
+                        let proof = word.into_iter().map(|bit| match bit {
+                            Bit::Constant(_) => Some(bit),
+                            Bit::Wire(wire, _) if wire < argument_wires => Some(bit),
+                            Bit::Wire(..) => None,
+                        });
+                        intersect_return(&mut returned, proof.collect());
+                    }
                     term.visit_targets(transfer);
                 }
                 for (slot, mut word) in local.into_iter().chain(incoming) {
@@ -345,7 +473,7 @@ impl<'a> Constants<'a> {
                 }
             }
             if !changed {
-                return Self { slots, switches, calls, may_return };
+                return Self { slots, argument_bits, returned, switches, calls, may_return };
             }
         }
     }
