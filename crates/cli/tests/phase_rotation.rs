@@ -26,21 +26,33 @@ fn bits(angle: f64) -> String {
 fn the_counting_device_counts_phase_rotations() {
     let counted = bennett(&["--device", "count", FIXTURE, "--arg", &bits(0.7)]);
     assert!(
-        counted.contains("one-qubit gates: 2\ntwo-qubit gates: 1\nToffoli gates: 0\npeak qubits: 2\n"),
+        counted.contains("one-qubit gates: 4\ntwo-qubit gates: 1\nToffoli gates: 0\npeak qubits: 2\n"),
         "{counted}"
     );
 }
 
+/// The OpenQASM run takes its outcomes from its own simulation of what it writes: the measured control
+/// must read as in the simulator at every seed, 1 always at a half turn.
 #[test]
-fn the_openqasm_file_writes_the_phase_rotation_as_p() {
+fn the_openqasm_file_writes_the_phase_rotation_as_p_and_simulates_it() {
     for angle in [0.7, -1.89, std::f64::consts::PI] {
-        let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("phase-{}-{angle}.qasm", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        let target = path.to_str().expect("a UTF-8 path");
-        bennett(&["--device", "qasm", "--qasm-output", target, FIXTURE, "--arg", &bits(angle)]);
-        let text = std::fs::read_to_string(&path).expect("the OpenQASM file");
-        std::fs::remove_file(&path).expect("remove the OpenQASM file");
-        assert!(text.contains(&format!("\nctrl @ p({angle:?}) q0[0], q0[1];\n")), "{text}");
-        assert!(text.contains("\np(0.25) q0[0];\n"), "{text}");
+        for seed in ["0", "1", "2", "3"] {
+            let path = Path::new(env!("CARGO_TARGET_TMPDIR"))
+                .join(format!("phase-{}-{angle}-{seed}.qasm", std::process::id()));
+            let _ = std::fs::remove_file(&path);
+            let target = path.to_str().expect("a UTF-8 path");
+            let args = [FIXTURE, "--arg", &bits(angle), "--seed", seed];
+            let exported = bennett(&[&["--device", "qasm", "--qasm-output", target][..], &args].concat());
+            let simulated = bennett(&args);
+            let text = std::fs::read_to_string(&path).expect("the OpenQASM file");
+            std::fs::remove_file(&path).expect("remove the OpenQASM file");
+            assert!(text.contains(&format!("\nctrl @ p({angle:?}) q0[0], q0[1];\n")), "{text}");
+            assert!(text.contains("\np(0.25) q0[1];\n"), "{text}");
+            let result = |report: &str| report.lines().next().expect("a result line").to_owned();
+            assert_eq!(result(&exported), result(&simulated), "{angle} seed {seed}");
+            if angle == std::f64::consts::PI {
+                assert!(result(&simulated).starts_with("result: 3 "), "a half turn: {simulated}");
+            }
+        }
     }
 }

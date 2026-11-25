@@ -137,7 +137,8 @@ A gate's qubit is a register qubit, `%q[3]`, or a bit of memory, `[%p:3]`: bit `
 The address is an `i64` value or a constant (`[64:0]`); the bit is a decimal from 0 to 127; `[%p]` is
 bit 0. One gate may mix them: `x [%p:1] ctrl %q[0], [16]`. A gate whose qubits are all in registers is
 `bennett_ir::Inst::Gate`, as before; one with a qubit in memory is `Inst::GateAt`, and the writer prints
-both in the same form, so reading what it wrote gives the same instruction. The validator reports a bit
+both in the same form, so reading what it wrote gives the same instruction. A rotation by a run-time angle,
+`rx|ry|rz|p(%a)`, is `Inst::RotateBy` with register and memory qubits alike. The validator reports a bit
 from 128 (`MemoryBitOutOfRange`), the same address operand and bit twice in one gate
 (`RepeatedMemoryQubit`; the same bit through different operands is the run-time fault `qubit_alias`),
 and an address that is not an `i64`.

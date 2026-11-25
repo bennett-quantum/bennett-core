@@ -1,13 +1,18 @@
 ; The phase rotation through the CLI (crates/cli/tests/phase_rotation.rs): `%a` is the angle's binary64 bits,
-; given with `--arg`; one controlled phase rotation by it, one by a literal.
+; given with `--arg`. The control `%q[0]` in (|0> + |1>)/sqrt 2 and the target `%q[1]` at 1: a controlled
+; phase rotation by `%a` turns the control's 1 by e^{i a}, a literal one on the target adds a global phase,
+; and `h` on the control makes the turn measurable: at a half turn the control always reads 1.
 memory 64
 
-func @main(i64 %a) {
+func @main(i64 %a) -> i2 {
 entry:
     %q = qalloc 2
     h %q
+    x %q[1]
     p(%a) %q[1] ctrl %q
-    p(0.25) %q
+    p(0.25) %q[1]
+    h %q
+    %m = measure %q
     qfree %q
-    ret
+    ret %m
 }
