@@ -250,3 +250,36 @@ fn write_operands(output: &mut impl Write, live: &LiveWires, wires: impl IntoIte
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Releases that split registers and span two of them name exactly the qubits released, by their
+    /// index in their own array.
+    #[test]
+    fn released_runs_are_named_by_their_indices_in_each_array() {
+        let outcomes = Outcomes::Synthetic(Box::new(std::iter::repeat(false)));
+        let mut device = QasmDevice::new(Vec::new(), 0, outcomes).expect("header");
+        device.allocate(10..14).expect("q0: wires 10 to 13");
+        device.allocate(14..17).expect("q1: wires 14 to 16");
+        device.release_zero(10..11).expect("the first qubit of q0");
+        device.discard(12..16).expect("the top two of q0 and the first two of q1");
+        device.discard(11..12).expect("what is left of q0");
+        device.release_zero(16..17).expect("what is left of q1");
+        let text = String::from_utf8(device.output).expect("text");
+        let comments: Vec<&str> = text
+            .lines()
+            .filter(|line| line.starts_with("// discard ") || line.starts_with("// release_zero requested "))
+            .collect();
+        assert_eq!(
+            comments,
+            [
+                "// release_zero requested for q0[0]",
+                "// discard q0[2:3], q1[0:1] (partial trace)",
+                "// discard q0[1] (partial trace)",
+                "// release_zero requested for q1[2]",
+            ]
+        );
+    }
+}

@@ -69,5 +69,5 @@ pub(super) fn harness_peak(module: &ValidModule, main: FuncId, callee: FuncId, o
         .expect("start the full period finding harness");
     assert_eq!(run.outcome, Outcome::Returned(Some(0)), "synthetic measurements returned zero");
     assert_eq!(oracle_calls, 1);
-    counter.counts().peak_qubits
+    usize::try_from(counter.counts().peak_qubits).expect("a peak the host can index")
 }

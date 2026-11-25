@@ -4,7 +4,7 @@
 //! costs host memory for the qubits it uses, not for its width.
 
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::iter::{Repeat, from_fn, repeat};
 use std::ops::Range;
 
@@ -25,8 +25,9 @@ pub struct Counts {
     pub two_qubit: u128,
     /// X gates with two controls.
     pub toffoli: u128,
-    /// The maximum number of simultaneously allocated qubits.
-    pub peak_qubits: usize,
+    /// The maximum number of simultaneously allocated qubits, in 64 bits on every host: a register can
+    /// have 2^32 - 1 qubits, and several can be live.
+    pub peak_qubits: u64,
     /// The largest gate layer, counting dependencies between gates on the same live wire.
     pub depth: u128,
     /// Qubits discarded by partial trace.
@@ -83,7 +84,7 @@ impl LiveWires {
 
     /// How many of `wires` are live.
     fn live_in(&self, wires: &Range<Wire>) -> u64 {
-        self.runs.overlapping(wires.clone()).map(|run| run.end.min(wires.end) - run.start.max(wires.start)).sum()
+        covered(&self.runs, wires)
     }
 
     /// Makes `wires` live at layer 0, as a fresh allocation is.
@@ -115,19 +116,22 @@ impl LiveWires {
     fn layer(&self, wire: Wire) -> u128 {
         self.layers.get(&wire).copied().unwrap_or(0)
     }
-
-    /// The number of live wires, as a peak count.
-    fn peak(&self) -> usize {
-        usize::try_from(self.count).unwrap_or(usize::MAX)
-    }
 }
 
-/// A block's resources and layer dependencies, independent of the live wires around a call.
+/// How many of `wires` lie in `runs`.
+fn covered(runs: &RangeSet<Wire>, wires: &Range<Wire>) -> u64 {
+    runs.overlapping(wires.clone()).map(|run| run.end.min(wires.end) - run.start.max(wires.start)).sum()
+}
+
+/// A block's resources and layer dependencies, independent of the live wires around a call. Its scratch
+/// is kept as runs and a schedule row only for scratch wires a gate uses, so a block that allocates a wide
+/// register costs host memory for the qubits it uses, as a direct allocation does.
 struct BlockSummary {
     schedule: Schedule,
     counts: Counts,
     inputs: HashSet<Wire>,
-    scratch_wires: HashSet<Wire>,
+    /// Every wire the block allocates.
+    scratch_wires: RangeSet<Wire>,
 }
 
 impl BlockSummary {
@@ -135,37 +139,54 @@ impl BlockSummary {
         let mut counts = Counts::default();
         let mut schedule = Schedule::default();
         let mut inputs = HashSet::new();
-        let mut scratch = HashSet::new();
-        let mut scratch_wires = HashSet::new();
+        // The scratch allocated now, how many wires it has, the part no gate has used since its
+        // allocation (its schedule row, at layer 0, is made at its first gate), and the part that has rows.
+        let mut scratch = RangeSet::new();
+        let mut scratch_count = 0u64;
+        let mut fresh = RangeSet::new();
+        let mut scheduled = BTreeSet::new();
+        let mut scratch_wires = RangeSet::new();
         for op in block.ops() {
             match op {
+                BlockOp::Allocate(wires) if wires.is_empty() => {}
                 BlockOp::Allocate(wires) => {
-                    for wire in wires.clone() {
-                        if !scratch.insert(wire) {
-                            return Err(RunError::Device("block allocates a live wire"));
-                        }
-                        scratch_wires.insert(wire);
-                        schedule.allocate(wire);
+                    if scratch.overlaps(wires) {
+                        return Err(RunError::Device("block allocates a live wire"));
                     }
-                    counts.peak_qubits = counts.peak_qubits.max(scratch.len());
+                    scratch.insert(wires.clone());
+                    fresh.insert(wires.clone());
+                    scratch_wires.insert(wires.clone());
+                    scratch_count += wires.end - wires.start;
+                    counts.peak_qubits = counts.peak_qubits.max(scratch_count);
                 }
                 BlockOp::Gate(gate) => {
-                    inputs.extend(
-                        std::iter::once(gate.target)
-                            .chain(gate.controls.iter().copied())
-                            .filter(|wire| !scratch.contains(wire)),
-                    );
+                    for wire in std::iter::once(gate.target).chain(gate.controls.iter().copied()) {
+                        if !scratch.contains(&wire) {
+                            inputs.insert(wire);
+                        } else if fresh.contains(&wire) {
+                            fresh.remove(wire..wire + 1);
+                            scheduled.insert(wire);
+                            schedule.allocate(wire);
+                        }
+                    }
                     counts.gate(gate.borrowed())?;
                     schedule.gate(gate);
                 }
+                BlockOp::ReleaseZero(wires) if wires.is_empty() => {}
                 BlockOp::ReleaseZero(wires) => {
-                    for wire in wires.clone() {
-                        if !scratch.remove(&wire) {
-                            return Err(RunError::Device("block can only release its own scratch"));
-                        }
-                        schedule.release(wire);
-                        counts.zero_released_qubits += 1;
+                    let count = wires.end - wires.start;
+                    if covered(&scratch, wires) != count {
+                        return Err(RunError::Device("block can only release its own scratch"));
                     }
+                    scratch.remove(wires.clone());
+                    fresh.remove(wires.clone());
+                    let released: Vec<Wire> = scheduled.range(wires.clone()).copied().collect();
+                    for wire in released {
+                        scheduled.remove(&wire);
+                        schedule.release(wire);
+                    }
+                    scratch_count -= count;
+                    counts.zero_released_qubits += u128::from(count);
                 }
             }
         }
@@ -176,14 +197,15 @@ impl BlockSummary {
     }
 
     fn repeat(&self, times: u64, live: &mut LiveWires, counts: &mut Counts) -> Result<(), RunError> {
-        if self.scratch_wires.iter().any(|&wire| live.contains(wire)) {
+        if self.scratch_wires.iter().any(|run| live.runs.overlaps(run)) {
             return Err(RunError::Device("block allocates a live wire"));
         }
         if !self.inputs.iter().all(|&wire| live.contains(wire)) {
             return Err(RunError::Device("block uses an unallocated wire"));
         }
         let mut per_call = self.counts;
-        per_call.peak_qubits += live.peak();
+        per_call.peak_qubits =
+            per_call.peak_qubits.checked_add(live.count).ok_or(RunError::Device("device count overflow"))?;
         let mut total = *counts;
         total.add_block(per_call, times)?;
         self.schedule.apply_repeated(times, &mut live.layers, &mut total.depth)?;
@@ -248,7 +270,7 @@ pub fn seeded_bits(seed: u64) -> impl Iterator<Item = bool> {
 impl<I: Iterator<Item = bool>> Device for CountingDevice<I> {
     fn allocate(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
         self.live.allocate(wires);
-        self.counts.peak_qubits = self.counts.peak_qubits.max(self.live.peak());
+        self.counts.peak_qubits = self.counts.peak_qubits.max(self.live.count);
         Ok(())
     }
 

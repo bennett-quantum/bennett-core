@@ -222,9 +222,11 @@ generator (`--seed`, default 0) and prints the source and the consumed bits in o
 the execution for those bits.
 The library counter also accepts a fixed sequence or a source that always gives zero.
 The counter and the lowering wrapper keep the live wires as runs, one entry per allocation however
-wide, and a layer only for the wires a gate has acted on, so a register of 2^32 - 1 qubits that uses
-three of them is counted in a few megabytes (`crates/cli/tests/wide_registers.rs` runs it under a
-192 MiB address-space limit).
+wide, and a layer only for the wires a gate has acted on; a block's summary keeps its scratch the same
+way. So a register of 2^32 - 1 qubits that uses a few of them is counted in a few megabytes, allocated
+directly or as a block's scratch (`crates/cli/tests/wide_registers.rs` and
+`crates/emit/tests/wide_scratch.rs` run them under a 192 MiB address-space limit). The peak is counted
+in 64 bits on every host.
 
 | Example | One-qubit gates | Two-qubit gates | Toffolis | Peak qubits | Depth |
 |---|---:|---:|---:|---:|---:|
@@ -269,8 +271,9 @@ leaves them declared and idle. Ignoring those qubits gives the state of the rema
 partial trace. The file marks the controller's requests to release wires in zero with `release_zero`
 comments. Both comments name each run of consecutive qubits of an array once: `q0[5]` for one qubit,
 OpenQASM 3's inclusive range `q0[0:999]` for more. With the live wires kept as runs, one entry per
-allocation, a file's size and the writer's memory grow with the qubits a run names, not with the width of
-its registers. Declared qubits accumulate over the run, so their total can exceed the counter's peak live qubits.
+allocation, a file's size and the writer's own memory grow with the qubits a run names, not with the
+width of its registers. With simulated outcomes (the default) the simulation's storage still grows with
+the width: a register the host cannot hold stops the run by name. Synthetic outcomes need no simulation. Declared qubits accumulate over the run, so their total can exceed the counter's peak live qubits.
 
 Each qubit measurement is a `measure` statement annotated with the bit the controller received.
 The writer forwards every command, after the lowering, to a `SimulatedDevice` and takes the outcomes
