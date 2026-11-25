@@ -1,4 +1,4 @@
-/* Exception flags are not readable on the device: testing one is a named fault. */
+/* Exception flags: 0/0 raises invalid, as natively. */
 #include <fenv.h>
 volatile double zero = 0.0;
 int main(void) {

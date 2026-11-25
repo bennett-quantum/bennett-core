@@ -71,7 +71,7 @@ void checkType(const Instruction &inst, const Type *type) {
       type->isFloatTy() && function.getDenormalModeF32Raw().isValid() ? "denormal-fp-math-f32" : "denormal-fp-math";
   notHandled("a floating-point operation on `" + typeName(type) + "` in @" + function.getName().str() +
                  ", which promises the subnormal mode \"" + attribute + "\"=\"" + mode.str() +
-                 "\"; the device computes IEEE subnormals (a floating-point environment is a debt)",
+                 "\"; the device computes IEEE subnormals (flush-to-zero and denormals-are-zero modes are not carried)",
              &inst);
 }
 

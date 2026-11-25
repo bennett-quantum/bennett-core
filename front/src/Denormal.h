@@ -3,7 +3,8 @@
 // zero. So an operation whose result depends on the mode, in a function that promises any mode but IEEE
 // (`preserve-sign`, `positive-zero`, `dynamic`), is refused by name, rather than giving IEEE results where
 // the native program, run in the environment it promises (x86-64 MXCSR DAZ/FTZ), flushes. Route past the
-// refusal: the floating-point environment carried through SoftFloat's state.
+// refusal: flush-to-zero and denormals-are-zero carried in the runtime's state beside the rounding mode
+// (`rt/softfloat/libgcc.c`), compared with native code run under DAZ/FTZ.
 //
 // Measured: `-fdenormal-fp-math=preserve-sign` and `-fdenormal-fp-math-f32=preserve-sign` against native code
 // run with DAZ and FTZ set, at O0 and O2 (`front/tests/tests/attributes_independent.rs`).

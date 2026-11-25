@@ -65,7 +65,7 @@ BENNETT_ATTRIBUTE(SpeculativeLoadHardening, ignored, "LLVM consumes this optimis
 BENNETT_ATTRIBUTE(StackProtect, ignored, "LLVM consumes this optimisation or host-code-generation hint; the device has no corresponding ABI/instrumentation.")
 BENNETT_ATTRIBUTE(StackProtectReq, ignored, "LLVM consumes this optimisation or host-code-generation hint; the device has no corresponding ABI/instrumentation.")
 BENNETT_ATTRIBUTE(StackProtectStrong, ignored, "LLVM consumes this optimisation or host-code-generation hint; the device has no corresponding ABI/instrumentation.")
-BENNETT_ATTRIBUTE(StrictFP, refused, "SoftFloat.cpp refuses constrained floating-point operations; environment support is a debt.")
+BENNETT_ATTRIBUTE(StrictFP, handled, "SoftFloat.cpp lowers constrained floating-point operations over the runtime's rounding mode and flags, then drops the attribute.")
 BENNETT_ATTRIBUTE(SwiftAsync, handled, "Abi.cpp refuses this convention when adapting mismatched prototypes; direct calls use device slots.")
 BENNETT_ATTRIBUTE(SwiftError, refused, "Normalise.cpp refuses this parameter convention by name.")
 BENNETT_ATTRIBUTE(SwiftSelf, handled, "Abi.cpp refuses this convention when adapting mismatched prototypes; direct calls use device slots.")

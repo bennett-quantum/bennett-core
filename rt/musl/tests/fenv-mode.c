@@ -1,4 +1,4 @@
-/* Another rounding mode is not supported: a named fault, never a success that changes nothing. */
+/* Another rounding mode: the division rounds upward, as natively. */
 #include <fenv.h>
 volatile double one = 1.0, three = 3.0;
 int main(void) {

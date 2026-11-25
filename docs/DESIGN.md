@@ -1245,16 +1245,32 @@ and utilities where they exist (`Abi.h`, `Normalise.h`):
   x86-64 back end expands it, mask by mask, so the class of a noncanonical long double is native's:
   `FpClass.h`); `fmuladd` is unfused, as x86-64 without FMA computes it natively; `fma` is fused.
 - **Where C leaves a choice, the native program's** is taken: `fmin`/`fmax` are clang's x86-64 expansion
-  (`isnan(x) ? y : y < x ? y : x`, so of two equal zeros the first), `fminl`/`fmaxl` are glibc's, which the
-  native program calls; an out-of-range conversion to an integer goes through the integer LLVM's x86-64 back
-  end converts to (SSE 32 or 64 bits, x87 16 or 64), so it gives what native code gives.
+  (`isnan(x) ? y : y < x ? y : x`, so of two equal zeros the first), and under `FENV_ACCESS` glibc's, which
+  the native program then calls; `fminl`/`fmaxl` are glibc's, which the native program calls; an out-of-range
+  conversion to an integer goes through the integer LLVM's x86-64 back end converts to (SSE 32 or 64 bits,
+  x87 16 or 64), so it gives what native code gives.
+- **The floating-point environment** is the runtime's state, ordinary memory of the program: one rounding mode
+  and one set of exception flags, which every routine reads and raises as x86's instructions read MXCSR and
+  the x87 control word and set their flags (glibc's `fesetround` sets both units alike, its `fetestexcept`
+  reads both). The C library's `<fenv.h>` (`rt/musl/fenv.c`) reaches it through the runtime's four
+  `__bennett_fe*` functions. A constrained intrinsic (`#pragma STDC FENV_ACCESS ON`, `strictfp`) is lowered as
+  its plain operation, whatever its rounding and exception arguments, since every routine reads the current
+  mode: a static rounding argument is LLVM's promise that the current mode is that one. A signalling comparison
+  (`fcmps`: `<` under `FENV_ACCESS`) also raises invalid for a quiet NaN. `llvm.get.rounding` (`FLT_ROUNDS`) and
+  `llvm.set.rounding` read and set the mode. A plain operation after a change of mode without `FENV_ACCESS`,
+  which C leaves undefined, rounds in the current mode, as the hardware does for every operation the compiler
+  did not fold. Not carried, and a named fault in `fesetenv`: traps (an unmasked exception), x87 precision
+  other than extended, flush-to-zero and denormals-are-zero, different modes for SSE and x87; x87's
+  denormal-operand flag is never set (glibc's `fetestexcept` masks it out). Cost: a program that never names a
+  `<fenv.h>` function does not link it; the front then deletes every write to the flags and LLVM folds the
+  mode to "to nearest", so its routines are those of a fixed environment and write no memory. In a program
+  that reads the flags every routine writes them, so its floating point under a qubit branch or inside
+  `apply` is refused by name as any memory-writing call there is.
 - **The default runtime** is Berkeley SoftFloat 3e with the x86 SSE specialisation (`rt/softfloat`, measured
   in `rt/softfloat/README.md`); `long double` is computed at x87's full 64-bit precision. `--float-runtime`
-  swaps the runtime at link time. Its global state: the rounding mode is never written and folds to
-  round-to-nearest-even; the exception flags are never read (C reads them only through `<fenv.h>`, the C
-  library's), its `softfloat_raiseFlags` does nothing, and the optimiser deletes them, so the routines write
-  no memory and run under qubit control. Runtime calls on constants are evaluated after the optimiser,
-  so a rotation's angle may be a computed constant.
+  swaps the runtime at link time. Its global state is the floating-point environment (above). Runtime calls
+  on constants are evaluated after the optimiser, so a rotation's angle may be a computed constant (in a
+  program that touches the environment, only where the routine does not depend on it).
 - **Complex multiply and divide** (`Complex.h`): clang's calls of `__mulsc3`, `__divsc3`, `__muldc3`,
   `__divdc3`, `__mulxc3`, `__divxc3` go to libgcc's own sources (`rt/libgcc`, GCC 13.3.0 vendored unmodified,
   decided 2026-11-16), which are ordinary C on floating-point values: the helpers a program calls and does not
@@ -1265,12 +1281,12 @@ and utilities where they exist (`Abi.h`, `Normalise.h`):
 - **Refused by name**: `frem` and the C library's functions (`sin`, `pow`, `strtod`, and `sqrt` under the
   default `-fmath-errno`, since errno is the C library's); operations on `__float128` (moving it is fine);
   conversions to and from integers wider than 128 bits; `powi` on `_Float16` and `__bf16` (natively the C
-  library's `powf`); `#pragma STDC FENV_ACCESS`; an operation whose result depends on the subnormal mode
+  library's `powf`); an operation whose result depends on the subnormal mode
   (arithmetic, comparison, conversion from floating point, every intrinsic but `fabs`, `copysign` and
   `is.fpclass`) in a function that promises a mode other than IEEE through `denormal-fp-math` or
   `denormal-fp-math-f32` (`-fdenormal-fp-math=preserve-sign`, `positive-zero`, `dynamic`), since SoftFloat
   keeps subnormals where the promised environment flushes them (`Denormal.h`); moves and those bit operations
-  stay accepted. Route: the floating-point environment through SoftFloat's state.
+  stay accepted. Route: flush-to-zero and denormals-are-zero in the runtime's state beside the rounding mode.
 - **Beyond SoftFloat**: conversions to and from 128-bit integers follow libgcc's routines on x86-64 step for
   step, so out of range they give what the native program gives; `fmal`, which SoftFloat lacks for the
   80-bit format, is written over SoftFloat's primitives and rounded once by its own rounding, and agrees
@@ -2336,7 +2352,8 @@ interface (the libgcc names), swappable at link time, for `float`, `double` and 
 The reason: it covers `float` and the 80-bit format, it is a verified reference, and it needs no hand port. The
 original Bennett.jl's branch-free routines are kept as a later, cheaper alternative for the optimiser, to be
 checked bit for bit against SoftFloat. Mathematics functions (`sin`, `exp`, `pow`, ...) come from the C
-library's own code; `sqrt` and `fma` from SoftFloat.
+library's own code; `sqrt`, `fma` and the other functions IEEE 754 defines exactly (rounding to an integer,
+`lround`, `fmin`, ...) from SoftFloat, also when the program calls the C library's by name (`rt/musl/math.c`).
 
 Non-NaN results agree bit for bit with the native x86-64 build. Two NaN results agree when each
 carries the payload (the extra bits of a NaN) of an operand's NaN, quieted if needed, or of the
@@ -2344,7 +2361,9 @@ default NaN that an invalid operation produces. Their signs may differ. Includin
 accounts for 1,476 of 164,096 `__divdc3` test cases that would otherwise disagree.
 Measured against this machine's SSE
 and x87 (`front/tests/tests/softfloat.rs`): no other difference in any operation or conversion, NaN bits
-included, except for out-of-range conversions, which C leaves undefined. `long double` encodings no arithmetic
+included, except for out-of-range conversions, which C leaves undefined. Under each of the four rounding modes,
+with the exception flags, the same holds (`front/tests/tests/fenv.rs`): out of range a conversion raises
+invalid as natively, and when two or more operands of `fma` are NaNs which comes back stays unspecified. `long double` encodings no arithmetic
 produces (pseudo-denormals, unnormals, pseudo-infinities, pseudo-NaNs, written through memory) are read as x87
 reads every operand: a pseudo-denormal as the denormal of the same value, the others as invalid operands
 giving x87's indefinite (`rt/softfloat/README.md`, "Noncanonical long double operands"). Where the native

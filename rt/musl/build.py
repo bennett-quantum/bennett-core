@@ -16,6 +16,15 @@ def run(args, **kwargs):
     return subprocess.run([str(a) for a in args], check=True, **kwargs)
 
 
+# Members compiled from the device's own source, with extra options, in place of musl's: musl's generic <fenv.h>
+# dummies, and the functions IEEE 754 defines exactly, which the float runtime computes as the native glibc does.
+REPLACED = {Path("src/fenv/fenv.c"): (HERE / "fenv.c", [])}
+for _base in ["sqrt", "fma", "rint", "nearbyint", "lrint", "llrint", "round", "lround", "llround", "floor", "ceil",
+              "trunc", "fmin", "fmax"]:
+    for _name in [_base, _base + "f", _base + "l"]:
+        REPLACED[Path(f"src/math/{_name}.c")] = (HERE / "math.c", ["-fno-math-errno", f"-DM_{_name}"])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("out", nargs="?", type=Path, default=HERE.parents[1] / "target/musl")
@@ -43,7 +52,7 @@ def main():
                       build / "obj/include", SOURCE / "include"]:
         flags += ["-I", str(directory)]
     fingerprint = hashlib.sha256(json.dumps(flags).encode())
-    for path in sorted([*SOURCE.rglob("*"), *(HERE / "overlay").glob("*.h"), Path(__file__)]):
+    for path in sorted([*SOURCE.rglob("*"), *(HERE / "overlay").glob("*.h"), *{source for source, _ in REPLACED.values()}, Path(__file__)]):
         if path.is_file():
             fingerprint.update(str(path.relative_to(HERE)).encode())
             fingerprint.update(path.read_bytes())
@@ -69,8 +78,9 @@ def main():
         if unchanged and target.exists():
             return str(source), "cached"
         with target.with_suffix(".log").open("w") as log:
-            run([clang, *flags, "-O0", "-Xclang", "-disable-O0-optnone", "-gline-tables-only",
-                 "-emit-llvm", "-c", SOURCE / source, "-o", target], stdout=log, stderr=log)
+            own, extra = REPLACED.get(source, (SOURCE / source, []))
+            run([clang, *flags, *extra, "-O0", "-Xclang", "-disable-O0-optnone", "-gline-tables-only",
+                 "-emit-llvm", "-c", own, "-o", target], stdout=log, stderr=log)
         return str(source), "built"
     with ThreadPoolExecutor(options.jobs) as pool:
         results = list(pool.map(compile_one, sources))

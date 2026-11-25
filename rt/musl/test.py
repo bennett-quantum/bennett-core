@@ -155,7 +155,7 @@ def main():
         result = run([args.executor, "run", "--entry", "__bennett_entry", "--budget", 1000000000, *reverse, program])
         if reverse:
             assert "returned to entry: classical state identical" in result.stdout, (name, level, result)
-        if name in ["unimplemented", "stderr", "fenv-mode", "fenv-flags"]:
+        if name in ["unimplemented", "stderr"]:
             assert result.returncode == 1 and "fault: unreachable" in result.stdout, (name, result)
         elif name in EXHAUSTED:
             assert result.returncode == 1 and "fault: out_of_memory (code 19)" in result.stdout, (name, result)

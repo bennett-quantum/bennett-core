@@ -23,8 +23,9 @@
 //    (by default `float-runtime.bc` next to bennett-front: Berkeley SoftFloat 3e, `rt/softfloat`), with
 //    LinkOnlyNeeded. Every definition of the runtime is renamed `bennett.float.<name>` first and is
 //    internal after linking: a program's own function or declaration of the same name is never
-//    redirected to the runtime, and LLVM's optimiser sees the whole runtime, inlines it and folds its
-//    never-written globals (the rounding mode, extF80's rounding precision) to constants.
+//    redirected to the runtime (only the declared `__bennett_fe*` state functions are), and LLVM's
+//    optimiser sees the whole runtime, inlines it and folds its never-written globals (the rounding mode
+//    unless the program sets it, extF80's rounding precision) to constants.
 // 3. floatsToIntegers: every floating-point type in the module, the runtime's included, becomes the
 //    integer of its width (`float` i32, `double` i64, `x86_fp80` i80, ...), which has the same size and
 //    alignment (checked against the data layout, with every struct field's offset, for each type
@@ -34,11 +35,19 @@
 //    places float and double arguments in the vector-register save area and long double ones on the
 //    stack, and lowerValuesInMemory.
 //
+// The floating-point environment is the runtime's state: every routine reads its rounding mode and raises its
+// exception flags, as x86's instructions read MXCSR and the x87 control word and set their flags. A constrained
+// intrinsic (`#pragma STDC FENV_ACCESS ON`) is lowered as its plain operation; llvm.get.rounding and
+// llvm.set.rounding read and set the mode; the C library's <fenv.h> reaches the state through the runtime's
+// `__bennett_fe*` functions, which are linked like its routines. In a program that cannot read the flags every
+// write to them is deleted, and in one that never sets the mode LLVM folds it to "to nearest", so a program
+// that never touches the environment pays nothing for it.
+//
 // Refused by name: `frem` (fmod) and the intrinsics of C library functions (sin, exp, pow, ...), which
 // come with the C library, and `powi` on `half` and `bfloat` (the back end calls powf); operations on
 // `fp128` and `ppc_fp128` values (moving them is fine); conversions between floating point and integers
-// wider than 128 bits; constrained intrinsics; atomic floating-point updates. A program without floating
-// point is unchanged and no runtime is linked.
+// wider than 128 bits; atomic floating-point updates; operations in a function that promises a subnormal mode
+// other than IEEE's (`Denormal.h`). A program without floating point is unchanged and no runtime is linked.
 #pragma once
 
 #include <string>
@@ -59,7 +68,8 @@ void floatsToIntegers(llvm::Module &module);
 // Evaluates each call of a runtime function whose arguments are constants, with LLVM's Evaluator, and
 // simplifies what uses the result: LLVM's optimiser folds such a call only where it inlines the routine,
 // and a rotation's angle must be a constant. A rotation's angle computed by a function of the program
-// that only reads memory is inlined first, up to 8 levels. Returns whether anything changed.
+// that only reads memory is inlined first, up to 8 levels. Nothing is evaluated in a program that sets the
+// rounding mode (the Evaluator would read the mode's initial value). Returns whether anything changed.
 bool foldConstantCalls(llvm::Module &module);
 
 // Stops with an internal error naming it if any floating-point type is left anywhere in the module.

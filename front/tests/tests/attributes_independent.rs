@@ -171,20 +171,12 @@ fn an_f32_preserve_sign_denormal_mode_is_refused_by_name() {
     );
 }
 
+/// `strictfp` functions (`#pragma STDC FENV_ACCESS ON`), whose operations are constrained intrinsics, give the
+/// native results (`front/src/SoftFloat.cpp`, "constrained intrinsic"). Until the environment was carried they
+/// were refused by name.
 #[test]
-fn strict_fp_comparison_is_refused_before_it_can_claim_native_agreement() {
-    let source = c_dir().join("attribute_fp.c");
-    for (flags, suffix) in [(CLANG_FLAGS, "o0"), (CLANG_O2_FLAGS, "o2")] {
-        let level = if suffix == "o0" { "-O0" } else { "-O2" };
-        let exe = native_build_with(&source, &format!("attrs.strict.{suffix}"), &[level, "-DSTRICT", "-DNATIVE"], &[]);
-        let output = Command::new(exe).output().expect("execute strict native witness");
-        assert!(output.status.success());
-        assert_eq!(String::from_utf8(output.stdout).expect("native text").lines().count(), 48);
-        let mut flags = flags.to_vec();
-        flags.push("-DSTRICT");
-        let error = lower_text(&source, &format!("attrs.strict.{suffix}"), &flags, &[]).expect_err("strict FP refusal");
-        assert!(error.contains("constrained floating-point intrinsic"), "{error}");
-    }
+fn strict_fp_preserves_native_results() {
+    compare("attribute_fp", "strict", 6, FP_INPUTS, &["-DSTRICT"], &[]);
 }
 
 #[test]

@@ -22,7 +22,7 @@ operation and of the 32-bit integer conversions.
 | format: operations | mismatches |
 |---|---|
 | f32, f64: add, sub, mul, div, sqrt, neg, fabs, trunc, floor, ceil, round, roundeven, rint, lrint, lround, all 14 fcmp predicates, conversions among f32/f64/f80 and to and from i32/i64/u32/u64 | none, NaN bits included |
-| f32, f64: fma | which NaN, only: for `fma(0, inf, NaN)` x86 returns the NaN operand, SoftFloat the default NaN; of several NaN operands x86's choice depends on the instruction form the compiler picks |
+| f32, f64: fma | which NaN, only: of several NaN operands x86's choice depends on the instruction form the compiler picks. (`fma(0, inf, NaN)`, where x86 returns the NaN operand and SoftFloat the default NaN, has followed x86 since 2026-11-25: `libgcc.c` returns a NaN addend beside factors that are not NaNs) |
 | extF80, canonical encodings: the same operations | none, NaN bits included (SoftFloat follows x87: the larger significand wins) |
 | extF80: pseudo-denormals, unnormals, pseudo-infinities, pseudo-NaNs | SoftFloat's own operations differ (x87 reads or rejects them otherwise); no arithmetic produces them, only `memcpy`. The runtime reads them as x87 does ("Noncanonical long double operands") |
 | out-of-range conversions to integers (undefined in C) | SoftFloat saturates; `libgcc.c` gives what clang's x86-64 code gives instead |
@@ -48,7 +48,7 @@ calls, called directly.
 | `fmal` (SoftFloat has no extF80 fused multiply-add) | the exact 128-bit product of the significands and the addend's aligned in a 256-bit window, the bits shifted out jammed into the lowest one, added or subtracted, normalised, rounded once by `softfloat_roundPackToExtF80`; glibc's special cases (an infinite or NaN operand, a zero factor or addend) computed as glibc computes them, with SoftFloat's extF80 operations, which match x87's | none, NaN bits included, against glibc's `fmal`: the cross product of the directed values (830,584 triples) and 10^8 random triples (`float_runtime_exact 100000000 3 0 fma`, 52 s), steered to cancellation (the addend near or minus the product), subnormal results and overflow |
 | `__extendhfsf2`, `__extendhfxf2`, `__truncsfhf2`, `__truncdfhf2`, `__truncxfhf2` (`_Float16`) | SoftFloat's `f16` conversions, one rounding each | none, NaN bits included: every 16-bit input, every 32-bit `float` input, random `double` and `long double` operands steered to `_Float16`'s and `float`'s subnormal ranges |
 | `__fixhfti`, `__fixunshfti`, `__floattihf`, `__floatuntihf` | as libgcc's soft-fp routines: saturating (an infinity or NaN gives the largest or least integer by its sign; unsigned, a negative value 0); an integer of 2^64 or more is an infinity | none: every 16-bit input |
-| `__truncsfbf2`, `__truncdfbf2`, `__truncxfbf2` (`__bf16`) | from `float` to nearest even on the bits, a NaN quiet with the top of its payload; from `double` and `long double` rounded to `float` to odd (an inexact `float` made odd towards the exact value), then to `__bf16`: one correct rounding, since `float` keeps at least two more bits everywhere | none, NaN bits included: every 32-bit `float` input |
+| `__truncsfbf2`, `__truncdfbf2`, `__truncxfbf2` (`__bf16`) | from `float` the low 16 bits rounded off in the current mode (to nearest even by default), a NaN quiet with the top of its payload; from `double` and `long double` rounded to `float` to odd (an inexact `float` made odd towards the exact value), then to `__bf16`: one correct rounding, since `float` keeps at least two more bits everywhere | none, NaN bits included: every 32-bit `float` input |
 
 The whole set, measured on 2026-11-15 with `float_runtime_exact 10000000 3 1` (7.5 min, 3 threads): directed
 values, 10^7 random operands per operation and every 32-bit input of each conversion from `float`: 0 mismatches
@@ -416,18 +416,69 @@ work is a cost of that chosen ABI. Repacking and less favorable LLVM inlining ar
 not additional accuracy or rounding guarantees. These are classical executed device steps on these
 inputs, not native cycles, gates, or a proof that this cost is necessary.
 
-## Global state
+## Global state: the floating-point environment (2026-11-25)
 
 SoftFloat keeps the rounding mode, the tininess rule, the 80-bit rounding precision and the exception flags in
-globals. The first three are never written; once the runtime is internal to the program LLVM folds their loads
-to the initial values (round to nearest even, tininess after rounding as x86 detects it, 80-bit precision as
-Linux sets x87). The flags are only ever or-ed into: `libgcc.c` supplies a `softfloat_raiseFlags` that does
-nothing, SoftFloat's direct writes to the flags are deleted by the optimiser because nothing reads them, and
-the front re-infers memory effects afterwards. A routine that returns an aggregate (SoftFloat's
-`extFloat80_t`, a 128-bit integer as C returns it on x86-64) returns it as one integer of at most 128 bits,
-as the front does for every aggregate result that fits (`front/src/Abi.h`), not through memory. So no routine
-writes memory, and floating-point code runs in control code, under a qubit branch, and inside a coherent
-region alike (`fmal` and the 128-bit conversions were refused under qubit control at `-O2` while such results
-came back through memory). C can observe the flags and the
-rounding mode only through `<fenv.h>`, which belongs to the C library; `#pragma STDC FENV_ACCESS` (constrained
-intrinsics) is refused by name.
+globals, which are ordinary memory of the program once the front has linked the runtime. The rounding mode and
+the flags are the floating-point environment: every routine rounds in the current mode and raises the flags of
+the IEEE operation, as x86's instructions read MXCSR and the x87 control word and set their flags. There is one
+mode and one set of flags for `float`, `double` and `long double` alike, as the C interface sees x86's two units:
+glibc's `fesetround` sets SSE's mode and x87's together and its `fetestexcept` reads both units' flags. The C
+library's `<fenv.h>` (`rt/musl/fenv.c`) reaches them through four functions of `libgcc.c`,
+`__bennett_fegetround`, `__bennett_fesetround`, `__bennett_fegetexcept` and `__bennett_fesetexcept`, in x86's
+encodings; the front links them like the routines (`front/src/SoftFloat.h`). The tininess rule (after rounding,
+as x86) and the 80-bit precision (x87's on Linux) are never written.
+
+What the routines do beyond SoftFloat's own operations, each found by the comparison below: a conversion to an
+integer raises inexact when it truncates (x86's `cvttsd2si` and `fistp` do) and invalid out of range and for
+a NaN, also on the unsigned 64-bit paths; x87's 16-bit conversion (`fistp` to a word, which LLVM's x86-64 back
+end uses from long double to 16 bits or fewer) is `__bennett_fixxfhi`, giving -2^15 and invalid out of range;
+a quiet comparison (`ucomisd`, `fucomi`: a plain `fcmp`) raises invalid for a signalling NaN, and a signalling
+one (`constrained.fcmps`, C's `<` under `FENV_ACCESS`: `comisd`, `fcomi`) for any NaN, `__bennett_signal*2`
+beside the quiet comparison; `rint` and `nearbyint` round in the current mode, `rint` raising inexact; `fma`
+and `fmaf` return a NaN addend beside factors that are not NaNs, raising invalid only for a signalling one
+(x86's FMA); `fmal`'s exact cancellation is -0 rounding downward; the strict forms of `fmin` and `fmax`
+are glibc's (`__bennett_fmin`, ...), which the native program calls under `FENV_ACCESS`; and the `_Float16`
+and `__bf16` conversions follow libgcc's soft-fp, which the native program calls: the truncations to `__bf16`
+round in the current mode and raise inexact, overflow and underflow (tininess after rounding, as x86), a
+128-bit integer outside 64 bits overflows to `_Float16` as the mode says (it gave infinity in every mode), and
+the conversions of `_Float16` to 128-bit integers raise invalid for an infinity or a NaN, and unsigned, inexact
+in (-1, 0) and invalid from -1 down.
+
+**Cost.** A program that never names a `<fenv.h>` function never links the four functions: nothing writes the
+mode, and LLVM's optimiser folds its loads to "to nearest"; nothing reads the flags, and the front deletes every
+store to them and gives every load the initial value (no routine computes a result from the flags). LLVM's
+optimiser would not delete them itself: it deletes a global or-ed with one constant only, which SoftFloat's own
+writes of the inexact flag were while `softfloat_raiseFlags` did nothing, not one or-ed with several (measured
+on LLVM 18's `opt -O2`). So such a program's routines write no memory and run under a qubit branch and inside
+`apply`, as before. In a program that reads the flags every routine writes memory: its floating point under a
+qubit branch or inside `apply` is refused by name, as any memory-writing call there
+(`front/tests/tests/fenv.rs`). A routine that returns an aggregate (SoftFloat's `extFloat80_t`, a 128-bit
+integer as C returns it on x86-64) returns it as one integer of at most 128 bits, as the front does for every
+aggregate result that fits (`front/src/Abi.h`), not through memory (`fmal` and the 128-bit conversions were
+refused under qubit control at `-O2` while such results came back through memory).
+
+**Against the native program.** `front/tests/c/fenv_ops.c`, under `#pragma STDC FENV_ACCESS ON`, operands
+through volatile memory, every case under each of the four modes, the result's bits and the flags it raised:
+add, sub, mul, div, the six comparisons and the four quiet `<math.h>` comparisons, sqrt, fma (on 13^3 triples),
+conversions among the three formats and to and from 8-, 16-, 32- and 64-bit integers, rint, nearbyint, floor,
+ceil, trunc, round, roundeven, lrint, llrint, lround, llround, fmin, fmax, and musl's `FENV_ACCESS` functions
+called by name (`nearbyint`, `lrint`, `llrintl`, `ilogb`, `fma` and their `f`/`l` forms), `_Float16` and
+`__bf16` conversions, arithmetic and `sqrt`, and conversions to and from 128-bit integers, on 32 to 35 directed
+operands per format (zeros, subnormal edges, 1 and its neighbours, ties, integer boundaries, the largest
+finite, infinities, quiet and signalling NaNs, a pseudo-denormal and an unnormal): 112 groups, about 1.6·10^5
+cases, 5·10^7 device steps. Every case agrees with native code at device `-O0` and `-O2`, with and without
+`-fno-math-errno`; the native program agrees with itself at `-O0` and `-O2`. Seeded random operands (mixed
+generators, 20 operations, 2,000 a mode and group; seed 1 at device `-O0`, seed 7 at `-O2`) agree too. Compared as C defines the
+result: an out-of-range conversion to an integer only by its invalid flag (the value is undefined, and native
+`-O0` and `-O2` give different ones; clang's unsigned 64-bit sequence can also raise inexact beside invalid),
+and an `fma` or a `_Float16` operation with two or more NaN operands only as a NaN (native `-O2` commutes the
+latter). The conversions to `__bf16` are compared outside `FENV_ACCESS`, through a call: under it clang 18
+converts to the `_Float16` encoding instead (`(__bf16)1.0` is `0x3c00`, a native compiler defect), and it
+cannot compile an integer to `__bf16` there, nor `long double` to `__bf16` at all. A mutant runtime that
+ignores the mode in `rint`, one that raises no flags, and one whose signalling comparison raises nothing each
+make the comparison fail (10, 100 and 1 of the 112 groups). `fenv_api.c` checks `<fenv.h>` itself against glibc:
+setting, reading and rejecting modes, raising, testing, clearing, saving and restoring flags, whole environments
+saved, held, set and updated, and `FLT_ROUNDS`. Not carried, and a named fault: an environment set with an
+unmasked exception (a trap), x87 precision other than extended, flush-to-zero or denormals-are-zero, or
+different modes for SSE and x87. x87's denormal-operand flag is never set; glibc's `fetestexcept` masks it out.

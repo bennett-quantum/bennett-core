@@ -260,7 +260,7 @@ public:
           notHandled("a floating-point operation in a constant expression", &inst);
         }
       }
-      if (involvesFloat(inst)) {
+      if (involvesFloat(inst) || roundingMode(inst)) {
         work.push_back(&inst);
       }
     }
@@ -270,6 +270,12 @@ public:
   }
 
 private:
+  static bool roundingMode(const Instruction &inst) {
+    const auto *intrinsic = dyn_cast<IntrinsicInst>(&inst);
+    Intrinsic::ID id = intrinsic ? intrinsic->getIntrinsicID() : Intrinsic::not_intrinsic;
+    return id == Intrinsic::get_rounding || id == Intrinsic::set_rounding;
+  }
+
   static bool involvesFloat(const Instruction &inst) {
     if (hasFloat(inst.getType())) {
       return true;
@@ -490,8 +496,8 @@ private:
   // gives (undefined in C): the conversion to the narrowest signed integer of the machine (SSE has 32
   // and 64 bits, x87 also 16) that holds every value of the result, then truncated; to 32 bits
   // unsigned the routine that truncates the 64-bit conversion, to 64 bits unsigned its own routine.
-  // x87's 16-bit conversion gives its indefinite integer, -2^15, out of range: the 32-bit conversion,
-  // replaced by that when it is not a 16-bit value. Wider than 64 bits (up to 128): the 128-bit routine
+  // x87's 16-bit conversion gives its indefinite integer, -2^15, and invalid out of range: a routine of its own
+  // (`__bennett_fixxfhi`). Wider than 64 bits (up to 128): the 128-bit routine
   // of the same signedness (`__fixdfti`, `__fixunsdfti`), then truncated, as the back end promotes them.
   Value *toInteger(IRBuilder<> &b, Value *x, IntegerType *to, bool isSigned, const Instruction *at) {
     unsigned width = to->getBitWidth();
@@ -504,16 +510,14 @@ private:
       return b.CreateTrunc(joined(b, call(b, name, pair, {x}, at)), to);
     }
     unsigned signedWidth = isSigned ? width : width + 1;
+    if (x->getType()->isX86_FP80Ty() && signedWidth <= 16) {
+      return b.CreateTrunc(call(b, "__bennett_fixxfhi", b.getInt32Ty(), {x}, at), to);
+    }
     bool narrow = signedWidth <= 32 || (!isSigned && width == 32);
     bool unsignedRoutine = !isSigned && (width == 32 || width == 64);
     std::string name =
         std::string("__fix") + (unsignedRoutine ? "uns" : "") + mode(x->getType()) + (narrow ? "si" : "di");
-    Value *result = call(b, name, narrow ? b.getInt32Ty() : b.getInt64Ty(), {x}, at);
-    if (x->getType()->isX86_FP80Ty() && signedWidth <= 16) {
-      Value *fits = b.CreateICmpULT(b.CreateAdd(result, b.getInt32(0x8000)), b.getInt32(0x10000));
-      result = b.CreateSelect(fits, result, b.getInt32(0xFFFF8000));
-    }
-    return b.CreateTrunc(result, to);
+    return b.CreateTrunc(call(b, name, narrow ? b.getInt32Ty() : b.getInt64Ty(), {x}, at), to);
   }
 
   // sitofp, uitofp: extended to 32, 64 or 128 bits, then the routine.
@@ -541,10 +545,11 @@ private:
     IRBuilder<> b(call);
     Intrinsic::ID id = call->getIntrinsicID();
     std::string name = call->getCalledFunction()->getName().str();
-    if (isa<ConstrainedFPIntrinsic>(call)) {
-      notHandled("the constrained floating-point intrinsic @" + name +
-                     " (floating-point state other than the default: `#pragma STDC FENV_ACCESS`)",
-                 call);
+    if (auto *constrained = dyn_cast<ConstrainedFPIntrinsic>(call)) {
+      return lowerConstrained(constrained);
+    }
+    if (id == Intrinsic::get_rounding || id == Intrinsic::set_rounding) {
+      return lowerRoundingMode(call);
     }
     if (libraryIntrinsic(id)) {
       notHandled("the intrinsic @" + name + ", a C library function (it comes with the C library)", call);
@@ -668,6 +673,95 @@ private:
     }
     default:
       notHandled("the floating-point intrinsic @" + name, call);
+    }
+    replace(call, replacement);
+    return replacement;
+  }
+
+  // A constrained intrinsic (`#pragma STDC FENV_ACCESS ON`, `-ffp-model=strict`) is its plain operation, since
+  // every routine reads the current rounding mode and raises the flags of the IEEE operation, as x86's
+  // instructions do, whatever the intrinsic's rounding and exception arguments say. A static rounding argument
+  // (`round.upward`, from `#pragma STDC FENV_ROUND`) is LLVM's promise that the current mode is that one (clang
+  // sets it with llvm.set.rounding), so the current mode gives the same result; `fpexcept.maytrap` and `ignore`
+  // allow what `strict` requires. A signalling comparison (`fcmps`: C's <, <=, >, >= under FENV_ACCESS, x86's
+  // comisd and fcomi) also raises invalid for a quiet NaN, which a quiet one (`fcmp` and the plain `fcmp`:
+  // ucomisd, fucomi) raises only for a signalling NaN. What has no plain lowering (`frem`, `sin`, `pow`, ...)
+  // is refused by name as its plain form is.
+  Value *lowerConstrained(ConstrainedFPIntrinsic *call) {
+    IRBuilder<> b(call);
+    Intrinsic::ID id = call->getIntrinsicID();
+    std::vector<Value *> args;
+    for (Value *arg : call->args()) {
+      if (!isa<MetadataAsValue>(arg)) { // the rounding and exception arguments come last
+        args.push_back(arg);
+      }
+    }
+    auto instruction = [&](unsigned opcode) -> Value * {
+      Instruction *made = args.size() == 2
+                              ? static_cast<Instruction *>(BinaryOperator::Create(
+                                    static_cast<Instruction::BinaryOps>(opcode), args[0], args[1]))
+                              : CastInst::Create(static_cast<Instruction::CastOps>(opcode), args[0], call->getType());
+      return b.Insert(made);
+    };
+    // The native program calls the C library's fmin and fmax for these (LLVM's x86-64 back end has no strict
+    // inline form), which differ from the plain form's inline code in the zero and NaN they choose.
+    if ((id == Intrinsic::experimental_constrained_minnum || id == Intrinsic::experimental_constrained_maxnum) &&
+        (call->getType()->isFloatTy() || call->getType()->isDoubleTy())) {
+      const char *base = id == Intrinsic::experimental_constrained_minnum ? "__bennett_fmin" : "__bennett_fmax";
+      std::string routine = base + libm(call->getType());
+      Value *replacement = this->call(b, routine, call->getType(), args, call);
+      replace(call, replacement);
+      return replacement;
+    }
+    Value *plain = nullptr;
+    switch (id) {
+#define INSTRUCTION(NAME, ARGS, ROUNDING, INTRINSIC)                                                                   \
+  case Intrinsic::INTRINSIC:                                                                                           \
+    plain = instruction(Instruction::NAME);                                                                            \
+    break;
+#define CMP_INSTRUCTION(NAME, ARGS, ROUNDING, INTRINSIC, NODE)                                                         \
+  case Intrinsic::INTRINSIC:                                                                                           \
+    plain = b.CreateFCmp(cast<ConstrainedFPCmpIntrinsic>(call)->getPredicate(), args[0], args[1]);                     \
+    break;
+#define FUNCTION(NAME, ARGS, ROUNDING, INTRINSIC)                                                                      \
+  case Intrinsic::INTRINSIC:                                                                                           \
+    plain = b.CreateIntrinsic(call->getType(), Intrinsic::NAME, args);                                                 \
+    break;
+#include <llvm/IR/ConstrainedOps.def>
+    default:
+      fail("internal: the constrained intrinsic @" + call->getCalledFunction()->getName().str());
+    }
+    if (id == Intrinsic::experimental_constrained_fcmps) {
+      Value *x = args[0], *y = args[1];
+      if (promoted(x->getType())) {
+        x = convert(b, x, b.getFloatTy(), call);
+        y = convert(b, y, b.getFloatTy(), call);
+      } else if (!computable(x->getType())) {
+        refuseType(x->getType(), call);
+      }
+      this->call(b, "__bennett_signal" + mode(x->getType()) + "2", b.getVoidTy(), {x, y}, call);
+    }
+    Value *replacement = lowerMade(plain);
+    replace(call, replacement);
+    return replacement;
+  }
+
+  // llvm.get.rounding (`FLT_ROUNDS`) and llvm.set.rounding (`#pragma STDC FENV_ROUND`) on the runtime's rounding
+  // mode, which `__bennett_fegetround` gives in x87's RC field (to nearest 0, downward 1, upward 2, toward zero 3,
+  // at bit 10). FLT_ROUNDS counts toward zero 0, to nearest 1, upward 2, downward 3: from RC, as LLVM's x86-64
+  // back end computes it, `(0x2d >> 2 * RC) & 3`, and back the inverse table `(0x63 >> 2 * mode) & 3`, the
+  // mode taken modulo 4 (another value is undefined).
+  Value *lowerRoundingMode(IntrinsicInst *call) {
+    IRBuilder<> b(call);
+    Type *word = b.getInt32Ty();
+    Value *replacement = nullptr;
+    if (call->getIntrinsicID() == Intrinsic::get_rounding) {
+      Value *field = b.CreateAnd(b.CreateLShr(this->call(b, "__bennett_fegetround", word, {}, call), 9), 6);
+      replacement = b.CreateAnd(b.CreateLShr(ConstantInt::get(word, 0x2d), field), 3);
+    } else {
+      Value *index = b.CreateShl(b.CreateAnd(call->getArgOperand(0), 3), 1);
+      Value *field = b.CreateAnd(b.CreateLShr(ConstantInt::get(word, 0x63), index), 3);
+      replacement = this->call(b, "__bennett_fesetround", b.getVoidTy(), {b.CreateShl(field, 10)}, call);
     }
     replace(call, replacement);
     return replacement;
@@ -1120,13 +1214,82 @@ AttributeList mappedAttributes(LLVMContext &context, AttributeList attributes, u
   return AttributeList::get(context, attributes.getFnAttrs(), AttributeSet::get(context, result), params);
 }
 
+// The floating-point environment: the runtime's functions through which the C library's <fenv.h> reads and
+// writes the rounding mode and the exception flags, its state (`rt/softfloat/libgcc.c`).
+constexpr const char *stateRoutines[] = {"__bennett_fegetround", "__bennett_fesetround", "__bennett_fegetexcept",
+                                         "__bennett_fesetexcept"};
+
+// Each call of one of the state routines becomes a call of the runtime's. Returns whether there was one.
+bool linkStateRoutines(Module &module, Runtime &runtime) {
+  bool linked = false;
+  for (const char *name : stateRoutines) {
+    Function *declared = module.getFunction(name);
+    if (!declared || !declared->isDeclaration() || declared->use_empty()) {
+      continue;
+    }
+    Function *routine = runtime.routine(name, declared->getFunctionType(), false, declared);
+    declared->replaceAllUsesWith(routine);
+    declared->eraseFromParent();
+    linked = true;
+  }
+  return linked;
+}
+
+// The runtime's exception flags, when the program cannot read them (it has no call of `__bennett_fegetexcept`):
+// then every write to them is dead, and each is deleted, so that no routine writes memory (a routine that writes
+// memory cannot run under a qubit branch or coherently). With no store left, each load gives the initial value.
+// LLVM's optimiser deletes a global that is only or-ed with one constant, as SoftFloat's own writes of the inexact
+// flag are, but not one or-ed with several, as `softfloat_raiseFlags` does (measured). No routine computes a
+// result from the flags (`rt/softfloat/libgcc.c`).
+void removeUnreadFlags(Module &module) {
+  GlobalVariable *flags = module.getGlobalVariable(std::string(runtimePrefix) + "softfloat_exceptionFlags", true);
+  if (!flags || module.getFunction(std::string(runtimePrefix) + "__bennett_fegetexcept") || !flags->hasInitializer()) {
+    return;
+  }
+  for (User *user : make_early_inc_range(flags->users())) {
+    if (auto *store = dyn_cast<StoreInst>(user); store && store->getPointerOperand() == flags) {
+      store->eraseFromParent();
+    } else if (auto *load = dyn_cast<LoadInst>(user); load && load->getType() == flags->getValueType()) {
+      load->replaceAllUsesWith(flags->getInitializer());
+      load->eraseFromParent();
+    } else {
+      fail("internal: an unexpected use of the floating-point runtime's exception flags");
+    }
+  }
+}
+
+// Whether the program reads or sets the rounding mode with llvm.get.rounding or llvm.set.rounding.
+bool usesRoundingMode(const Module &module) {
+  for (const Function &function : module) {
+    Intrinsic::ID id = function.getIntrinsicID();
+    if ((id == Intrinsic::get_rounding || id == Intrinsic::set_rounding) && !function.use_empty()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// With every floating-point operation lowered, `strictfp` constrains nothing; it would only keep LLVM's
+// optimiser from inlining the runtime's routines into the program's strict functions.
+void dropStrictFP(Module &module) {
+  for (Function &function : module) {
+    function.removeFnAttr(Attribute::StrictFP);
+    for (Instruction &inst : instructions(function)) {
+      if (auto *call = dyn_cast<CallBase>(&inst)) {
+        call->removeFnAttr(Attribute::StrictFP);
+      }
+    }
+  }
+}
+
 } // namespace
 
 bool lowerFloatOperations(Module &module, const std::string &runtimePath) {
-  if (!usesFloat(module)) {
+  Runtime runtime(module, runtimePath);
+  bool state = linkStateRoutines(module, runtime);
+  if (!state && !usesFloat(module) && !usesRoundingMode(module)) {
     return false;
   }
-  Runtime runtime(module, runtimePath);
   std::vector<Function *> functions;
   for (Function &function : module) {
     if (!function.isDeclaration()) {
@@ -1138,12 +1301,14 @@ bool lowerFloatOperations(Module &module, const std::string &runtimePath) {
     program.lowerFunction(*function);
   }
   bool linked = runtime.link();
+  removeUnreadFlags(module);
   Lowerer inRuntime(module, nullptr);
   for (Function &function : module) {
     if (!function.isDeclaration() && function.getName().starts_with(runtimePrefix)) {
       inRuntime.lowerFunction(function);
     }
   }
+  dropStrictFP(module);
   return linked;
 }
 
@@ -1263,6 +1428,13 @@ void floatsToIntegers(Module &module) {
 }
 
 bool foldConstantCalls(Module &module) {
+  // LLVM's Evaluator reads a global's initial value: where the program sets the rounding mode (its global was
+  // not made a constant by the optimiser), a routine evaluated so would round to nearest whatever the mode.
+  if (const GlobalVariable *mode =
+          module.getGlobalVariable(std::string(runtimePrefix) + "softfloat_roundingMode", true);
+      mode && !mode->isConstant()) {
+    return false;
+  }
   TargetLibraryInfoImpl libraryInfo{Triple(module.getTargetTriple())};
   TargetLibraryInfo library(libraryInfo);
   bool folded = false;

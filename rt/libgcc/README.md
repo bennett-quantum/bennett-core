@@ -40,8 +40,8 @@ worked by hand (front test `the_nan_payload_rule_allows_exactly_another_nans_pay
 Scratch output goes under `.tmp/libgcc-exact`.
 
 The GCC `cdivchk` programs separately call `ilogb`/`ilogbl`. Those musl routines contain
-`FENV_ACCESS` and currently require the front's constrained-operation fallback. This is
-separate from `__divxc3`, which no longer calls a library function.
+`FENV_ACCESS`; since 2026-11-25 their constrained operations are lowered over the carried
+floating-point environment. This is separate from `__divxc3`, which no longer calls a library function.
 
 To repeat the corpus check, pass the GCC **14.2.0** corpus's
 `gcc/testsuite/gcc.c-torture/execute/ieee` directory (build musl first):
@@ -50,22 +50,16 @@ To repeat the corpus check, pass the GCC **14.2.0** corpus's
 python3 rt/libgcc/exact/corpus.py path/to/execute/ieee
 ```
 
-The runner uses the corpus's `-fno-inline`, checks native `-O0` and `-O2` stdout/status,
-and attempts the normal musl link first. Its separately labelled diagnostic copies musl's
-`ilogb.c`, `ilogbf.c` and `ilogbl.c` into scratch, removing only their `FENV_ACCESS` pragmas;
-it supplies their internal declaration visibility macro but changes no arithmetic. The
-original corpus programs and all six libgcc helpers stay unchanged. This diagnostic tests
-the division algorithms; it does not implement observable exceptions or turn a normal-route
-refusal into a corpus pass. The runner exits **1** if any normal route refuses, even when every diagnostic agrees.
-Scratch sources, native link maps and outputs are retained under
-`.tmp/libgcc-corpus`.
+The runner uses the corpus's `-fno-inline`, checks native `-O0` and `-O2` stdout/status, links each
+program with musl as the corpora do and fails if any is refused or differs. Scratch outputs are retained
+under `.tmp/libgcc-corpus`.
 
 Measured on 2026-11-16 with GCC 14.2.0's three original test files, clang 18.1.3 and
-libgcc 13.3.0: both native levels exit 0 with empty stdout. All three normal device links
-still refuse at musl's constrained operation. With the explicitly diagnostic pragma removal,
-all three return 0 with empty stdout: `cdivchkf` **7,045**, `cdivchkd` **7,262**, `cdivchkld`
-**9,238** steps. The old compiler-rt division failed even this diagnostic; libgcc passes it.
-This removes the helper-accuracy failure, while the ordinary corpus route remains a debt.
+libgcc 13.3.0: both native levels exit 0 with empty stdout. The normal device links refused at musl's
+constrained operation then; a diagnostic copy with the pragmas removed returned 0 (`cdivchkf` 7,045,
+`cdivchkd` 7,262, `cdivchkld` 9,238 steps). The old compiler-rt division failed even that diagnostic;
+libgcc passes it. Measured on 2026-11-25 with the environment carried: the normal routes agree, `cdivchkf`
+**7,029**, `cdivchkd` **7,270**, `cdivchkld` **10,703** steps.
 
 Independent testing found an acceptance gap in the rule: differing signalling output NaNs are
 normalised to quiet NaNs before comparison and accepted. This violates the quiet-output condition
@@ -182,9 +176,9 @@ operand-order comparison, not assumed from the mere presence of NaNs.
 inputs in the default environment. Noncanonical encodings created through raw memory (unnormals,
 pseudo-denormals/infinities/NaNs) are read as x87 reads them since 2026-11-16, by the floating-point
 runtime at every operation's operands (`rt/softfloat/README.md`, "Noncanonical long double operands").
-The remaining limitation belongs to floating-point lowering as a whole: non-default rounding and
-observable flags need the front's environment fallback, real SoftFloat state and constrained-operation
-lowering. That is a debt, not coverage proved by this canonical-input sweep.
+This sweep covers the default environment; the helpers' arithmetic reads the current rounding mode and
+raises flags like every floating-point operation (`rt/softfloat/README.md`, "Global state"), but no sweep of
+the helpers under the other modes has been run.
 
 Measured by the independent testing pass (2026-11-16): 800 tuples per class and helper, one
 noncanonical operand at each position among canonical ones, `-O0` caller, raw bits against the archive.

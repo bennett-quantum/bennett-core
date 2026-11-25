@@ -152,19 +152,39 @@ python3 rt/musl/test-devices.py   # native file/image comparisons, arithmetic cl
 Measured before selecting the flags: the existing front refuses musl's `sin.c` built with
 `-frounding-math` at `llvm.experimental.constrained.fpext.f64.f32`. With `-fno-rounding-math` it passes
 floating-point lowering and waits on the ordinary library dependency `__rem_pio2`. The product build
-therefore uses `-fno-rounding-math`, leaving the front's refusal of constrained operations intact. It uses
-SoftFloat's existing round-to-nearest-even mode; dynamic floating-point environments are not supported.
-This is a build choice within that existing layer, not a new floating-point promise.
+therefore uses `-fno-rounding-math`. This is a build choice for musl's own files: they compute in whatever
+mode is current, as natively, since every floating-point operation reads the floating-point runtime's mode.
 
-`<fenv.h>` is Bennett's (`runtime.c`), not musl's: musl's generic dummy `fenv.c`, built where x86-64 has
-assembly, reported success for `fesetround(FE_UPWARD)` without changing the rounding and never saw a flag,
-while the x86-64 headers name every mode and flag (a measured silent wrong result). The default environment
-is supported: `fegetround` gives `FE_TONEAREST`, `fesetround(FE_TONEAREST)`, `feclearexcept`, `fegetenv`,
-`feholdexcept` and `fesetenv` of the default or a saved environment succeed. Another rounding mode, raising
-or testing a flag, and setting another environment trap as `unreachable`. Twelve musl math files use
-`#pragma STDC FENV_ACCESS ON` (`ilogb`, `ilogbf`, `ilogbl`, `fma`, `fmaf`, `fmal`, `lrint`, `lrintl`,
-`llrintl`, `nearbyint`, `nearbyintf`, `nearbyintl`); the front refuses their constrained operations by name. Neither of the probe's
-integer-only printf/scanf patches is applied: every upstream file, including floating-point stdio, is intact.
+`<fenv.h>` is Bennett's (`fenv.c`), compiled by `build.py` in place of musl's `src/fenv/fenv.c`: musl's generic
+dummies, built where x86-64 has assembly, reported success for `fesetround(FE_UPWARD)` without changing the
+rounding and never saw a flag. The environment is the floating-point runtime's state, one rounding mode and one
+set of exception flags that every operation reads and raises (`rt/softfloat/README.md`, "Global state"); `fenv.c`
+reaches it through the runtime's `__bennett_fe*` functions, and musl's own `fesetround`, `feholdexcept`,
+`feupdateenv`, `fegetexceptflag` and `fesetexceptflag` sit on it. As glibc on x86-64, which the native program
+uses: all four rounding modes; the five standard flags (x87's denormal-operand flag, which musl's `FE_ALL_EXCEPT`
+names, is never set, as glibc's `fetestexcept` masks it out); `fegetenv` stores what `fnstenv` and `stmxcsr` store
+for that state; `fesetenv` takes a saved or the default environment. An environment that asks for what is not
+carried is a named fault (`unreachable`): an unmasked exception (a trap), x87 precision other than extended,
+flush-to-zero or denormals-are-zero, or different modes for SSE and x87. The member is pulled from the archive
+only when a program names one of these functions, so a program that never does keeps floating point that writes
+no memory (`front/tests/tests/fenv.rs`).
+
+The C library's functions whose result IEEE 754 defines exactly, `sqrt`, `fma`, `rint`, `nearbyint`, `lrint`,
+`llrint`, `round`, `lround`, `llround`, `floor`, `ceil`, `trunc`, `fmin`, `fmax` and their `f` and `l` forms,
+are compiled from `math.c` in place of musl's: each is the compiler's builtin under `FENV_ACCESS`, which the
+front lowers to the floating-point runtime's routine. glibc computes these as the IEEE operation (an x86
+instruction, or exact software), and so does the runtime; musl's software gives the same values but raised other
+flags (a spurious inexact from `lround`, `lroundl`, `llroundf` and from exact results of `fmal`, a default NaN
+for `fmaf(0, inf, NaN)`) and passed signalling NaNs through unquieted (`nearbyint`, `fma`), measured by
+`front/tests/c/fenv_ops.c` against glibc; the other functions are replaced with them for the same reason, unmeasured
+one by one against musl's. errno is not set,
+as by musl's. Twelve musl math files use `#pragma STDC FENV_ACCESS ON`; those that remain musl's (`ilogb`,
+`ilogbf`, `ilogbl`) run with their constrained operations lowered and agree with glibc, except that `ilogbl`
+reads a long double encoding no arithmetic produces (an unnormal, a pseudo-denormal) at face value, where
+glibc's x87 code reads it as x87 does. musl's `isless`, `isgreater` and the other quiet comparison macros test
+for a NaN first, so they never raise invalid, also not for a signalling NaN (glibc's are the compiler's builtins,
+`ucomisd`); C's Annex F leaves signalling NaNs undefined. Neither of the probe's integer-only printf/scanf
+patches is applied: every upstream file, including floating-point stdio, is intact.
 
 ## On the corpora
 
@@ -179,7 +199,7 @@ and what removes it:
 | files: `open`, `fopen`, `freopen` previously trapped by name | 6 | carried file model at this boundary; targeted rerun results below |
 | `setjmp`, `_setjmp`, `longjmp`: no definition (musl's are x86-64 assembly, not built) | 2 | removed: the device's own `setjmp` and `longjmp` (`docs/DESIGN.md`, "Non-local jumps"); both agree, run alone |
 | `__mulsc3`, `__divsc3`: no definition | 2 GCC | removed: complex helpers (now libgcc, `rt/libgcc`); both agreed at `b961292` |
-| musl's `ilogb`, `ilogbl` (and ten other math files) under `#pragma STDC FENV_ACCESS ON`: constrained operations refused by the front | 3 `ieee/` (`cdivchkf` was counted at `__divsc3` before the helpers) | lowering constrained operations in the device's fixed environment (to nearest, no readable flags), which `fenv` here already enforces. The six helpers now come from libgcc (`rt/libgcc`), including self-contained `__divxc3`; the corpus programs' own `ilogb`/`ilogbl` calls still need this fallback |
+| musl's `ilogb`, `ilogbl` (and ten other math files) under `#pragma STDC FENV_ACCESS ON`: constrained operations refused by the front | 3 `ieee/` (`cdivchkf` was counted at `__divsc3` before the helpers) | removed (2026-11-25): constrained operations are lowered over the carried floating-point environment; all three agree (`rt/libgcc/exact/corpus.py`) |
 | a program's own `int strlen(char *)` against the library's (c-testsuite `00025`) | 1 | a call through a mismatched prototype, a front refusal |
 | not library calls: `llvm.returnaddress`, inline assembly, an over-aligned variadic argument, an unprototyped call with an extra argument (`bad_indirect`), a run past the step budget (`float` to `i128` was one; it agrees since the 128-bit conversions) | 7 (9 before `llvm.eh.sjlj.longjmp` became the device's `longjmp`) | the front's own debts (`HANDOFF.md`) |
 
@@ -193,7 +213,7 @@ These offline integration tests are separate from `cargo test` and `front/test.s
 stdout/status for floating-point printf/strtod/sqrt/sin/pow, for constructors, atexit, destructors and
 nested exit, for `malloc`/`realloc`/`calloc`/`free`, for signals raised, blocked, ignored and handled, for
 `abort` after a handler returns, for reads of the empty stdin through `scanf`, `getchar` and `fgets`, and for
-a break that shrinks and grows again, for the default floating-point environment, for run arguments
+a break that shrinks and grows again, for the floating-point environment, for run arguments
 (`args.c`: none with the default `argv[0]`, empty strings, 200 arguments, bytes that are not ASCII or UTF-8,
 strings that look like options or are `--`, another `argv[0]`, writes into the strings and the array;
 `budget.c`: a step budget read with `strtoul` and passed on, in range, out of range, malformed, missing, and
@@ -204,7 +224,8 @@ quotients and `cexp` (`complex.c`, over libgcc's helpers), and for `setjmp`/`lon
 and without the signal mask (musl's `__sigsetjmp_tail`) and jumps out of signal handlers (`setjmp.c`); they check that heap
 exhaustion by `mmap`, `malloc`, `realloc` and the break is the fault `out_of_memory` with the output flushed
 before it kept (`arena`, `heap-exhaust`, `realloc-exhaust`, `mmap-exhaust`, `brk-exhaust`), that musl's
-arithmetic rejections stay null against native (`alloc-arithmetic`), and named faults for stderr, an unimplemented syscall, another rounding mode and a flag test.
+arithmetic rejections stay null against native (`alloc-arithmetic`), and named faults for stderr and an
+unimplemented syscall; another rounding mode and a flag test agree with native.
 `tests/regress/` holds the self-checking witnesses of the independent testing pass of this boundary (each
 returns 0 natively and failed or faulted here before its fix). The 35 programs (42 runs with the
 `-O2` ones) took 173 seconds with the debug CLI on the shared machine, after building the library.

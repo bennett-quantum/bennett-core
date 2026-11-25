@@ -296,7 +296,7 @@ fn assert_refused(name: &str, text: &str, clang_flags: &[&str], front_flags: &[&
 /// What has no soft-float routine yet, and the C library's functions, are refused by name.
 #[test]
 fn what_the_runtime_does_not_compute_is_refused_by_name() {
-    let cases: [(&str, &str, &[&str], &str); 8] = [
+    let cases: [(&str, &str, &[&str], &str); 7] = [
         (
             "float_frem",
             "volatile double a = 5.5, b = 2;\nint main(void) { return (int)__builtin_fmod(a, b); }\n",
@@ -333,12 +333,6 @@ fn what_the_runtime_does_not_compute_is_refused_by_name() {
             "volatile __float128 a = 5.5;\nint main(void) { return (int)(a + a); }\n",
             &[],
             "an operation on `fp128` (__float128) values",
-        ),
-        (
-            "float_fenv",
-            "#pragma STDC FENV_ACCESS ON\nvolatile double a = 5, b = 3;\nint main(void) { return (int)(a / b); }\n",
-            &[],
-            "the constrained floating-point intrinsic @llvm.experimental.constrained.fdiv.f64",
         ),
         (
             "float_atomic",
