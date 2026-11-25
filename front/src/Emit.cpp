@@ -680,8 +680,10 @@ void BodyWriter::body(const Function &function) {
         if (const auto *call = dyn_cast<CallBase>(&inst);
             call && call->getCalledFunction() &&
             (call->getCalledFunction()->getName() == "__bennett_exit" ||
+             call->getCalledFunction()->getName() == "__bennett_out_of_memory" ||
              call->getCalledFunction()->getName() == deviceLongjmp)) {
-          break; // `exit` and `longjmp` are device terminators; LLVM follows a noreturn call with unreachable.
+          // `exit`, `fault` and `longjmp` are device terminators; LLVM follows a noreturn call with unreachable.
+          break;
         }
       }
     }
@@ -832,6 +834,10 @@ void BodyWriter::call(const Instruction &inst) {
   }
   if (const auto *callee = call.getCalledFunction(); callee && callee->getName() == "__bennett_exit") {
     line("exit " + typed(call.getArgOperand(0)));
+    return;
+  }
+  if (const auto *callee = call.getCalledFunction(); callee && callee->getName() == "__bennett_out_of_memory") {
+    line("fault out_of_memory"); // the C runtime's heap is exhausted
     return;
   }
   if (const auto *callee = call.getCalledFunction(); callee && callee->getName() == "__bennett_effect") {

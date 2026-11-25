@@ -70,6 +70,22 @@ std::optional<Marker> markerCall(const Value *value) {
 
 void checkMarkers(const Module &module, bool floatsAreBits) {
   for (const Function &function : module) {
+    if (function.getName() == "__bennett_out_of_memory") {
+      // The C runtime's allocator calls it when its arena cannot hold a request: `fault out_of_memory`.
+      FunctionType *type = function.getFunctionType();
+      if (!function.isDeclaration() || !type->getReturnType()->isVoidTy() || type->getNumParams() != 0 ||
+          type->isVarArg() || !function.doesNotReturn()) {
+        misuse("the device function @__bennett_out_of_memory has the wrong signature or is defined; it is "
+               "_Noreturn void __bennett_out_of_memory(void)",
+               &function);
+      }
+      if (function.onlyReadsMemory() || function.willReturn() || function.isSpeculatable()) {
+        misuse("the device function @__bennett_out_of_memory has attributes that let LLVM remove or move its "
+               "calls",
+               &function);
+      }
+      continue;
+    }
     if (function.getName() == "__bennett_effect" || function.getName() == "__bennett_exit") {
       bool exits = function.getName() == "__bennett_exit";
       std::string name = "@" + function.getName().str();
