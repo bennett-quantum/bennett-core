@@ -46,7 +46,7 @@ fn fold_inst(
         Inst::Cast { op, to, value, .. } => Some(arithmetic::cast(*op, read(value)?, to.bits() as usize)),
         Inst::Select { cond, if_true, if_false, .. } => match read(cond)?[0] {
             Bit::Constant(choice) => read(if choice { if_true } else { if_false }),
-            condition @ Bit::Wire(..) => Some(
+            condition @ (Bit::Wire(..) | Bit::Shared { .. }) => Some(
                 read(if_true)?
                     .into_iter()
                     .zip(read(if_false)?)
@@ -181,7 +181,7 @@ fn normalize_arguments(
                 .into_iter()
                 .map(|bit| match bit {
                     Bit::Constant(_) => bit,
-                    Bit::Wire(wire, inverted) => {
+                    Bit::Wire(wire, inverted) | Bit::Shared { wire, inverted, .. } => {
                         let number = *identities.entry(wire).or_insert_with(|| {
                             let number = sources.len() as Wire;
                             sources.push(Some(wire));
@@ -227,7 +227,7 @@ impl<'a> Constants<'a> {
             for (bit, fact) in word.iter_mut().zip(proved) {
                 match *fact {
                     Bit::Constant(_) => *bit = *fact,
-                    Bit::Wire(wire, inverted) => {
+                    Bit::Wire(wire, inverted) | Bit::Shared { wire, inverted, .. } => {
                         // A current frame's immutable argument slots carry
                         // the physical bits for its abstract identities.
                         if let Some(source) = self.argument_bits.get(wire as usize) {
@@ -427,7 +427,7 @@ impl<'a> Constants<'a> {
                     if let Some(word) = read(&local, cond) {
                         match word[0] {
                             Bit::Constant(choice) => transfer(if choice { if_true } else { if_false }),
-                            Bit::Wire(..) => {
+                            Bit::Wire(..) | Bit::Shared { .. } => {
                                 transfer(if_true);
                                 transfer(if_false);
                             }
@@ -456,8 +456,9 @@ impl<'a> Constants<'a> {
                     {
                         let proof = word.into_iter().map(|bit| match bit {
                             Bit::Constant(_) => Some(bit),
-                            Bit::Wire(wire, _) if wire < argument_wires => Some(bit),
-                            Bit::Wire(..) => None,
+                            Bit::Wire(wire, inverted) | Bit::Shared { wire, inverted, .. } => {
+                                (wire < argument_wires).then_some(Bit::Wire(wire, inverted))
+                            }
                         });
                         intersect_return(&mut returned, proof.collect());
                     }
@@ -467,7 +468,7 @@ impl<'a> Constants<'a> {
                     let old = &mut slots[slot.index()];
                     for (index, bit) in word.iter_mut().enumerate() {
                         let unknown = unknown_bit(slot, index);
-                        if matches!(*bit, Bit::Wire(wire, _) if wire >= argument_wires)
+                        if bit.wire().is_some_and(|(wire, _)| wire >= argument_wires)
                             || old.as_ref().is_some_and(|old| old[index] != *bit)
                         {
                             *bit = unknown;

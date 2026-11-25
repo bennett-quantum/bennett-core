@@ -39,7 +39,7 @@ impl Query {
         word.iter()
             .map(|bit| match *bit {
                 Some(bit @ Bit::Constant(_)) => Some(bit),
-                Some(Bit::Wire(wire, inverted)) => {
+                Some(Bit::Wire(wire, inverted) | Bit::Shared { wire, inverted, .. }) => {
                     self.sources[wire as usize].map(|source| Bit::Wire(source, inverted))
                 }
                 None => None,

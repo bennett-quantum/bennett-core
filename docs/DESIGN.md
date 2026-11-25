@@ -502,12 +502,13 @@ private value of each written byte, shared across copied calls. A load or store 
 span for bounds before checking whether any byte holds qubits. Access to a held byte faults
 even if its qubits hold zero. Little-endian loads use the current private values for written
 bytes and the caller's values for the rest. Stores zero the unused high bits in a partial byte.
-An unconditional write to a definite address records its source bits directly in the byte map.
-Constants use literal values. A plain wire remains available through the inverse and can be
-referenced without gates or scratch. A complemented wire is copied into a positive control
-with one X and one CNOT in each direction. Later reads of that version share the positive
-control. An overwrite replaces the map entry, so a value already loaded still refers to its
-original bits. The caller's memory stays intact.
+An unconditional write to a definite address records literal values and shares a
+plain immutable wire without gates or scratch. Each shared bit keeps the identity
+of its byte version for guarded selection. This preserves the same equality of
+versions that separate retained copies would have, so a merge cannot introduce
+negative controls by conflating two copies. An inverted source uses the retained
+copy into a fresh positive wire. An overwrite replaces the map entry, so a value
+already loaded still refers to its original bits. The caller's memory stays intact.
 Arithmetic gadgets preserve constant results and the equality of an unconditional result copy
 with a source that survives local reversal. A failed work-wire allocation prevents folding the
 affected gadget and fails circuit construction before emission.

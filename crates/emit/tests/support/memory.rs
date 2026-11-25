@@ -1596,8 +1596,8 @@ entry:
     );
     let (gates, layout) = gates(&compiled, WIDTH, 13);
     bits::exhaustive(&gates, layout, |x| if x & 1 == 0 { 255 } else { 0 }).expect("complemented output");
-    // One X and one CNOT in each direction, plus eight output CNOTs.
-    assert_eq!(gates.len(), 12);
+    // Two X gates and one CNOT in each direction, plus eight output CNOTs.
+    assert_eq!(gates.len(), 14);
     assert_eq!(layout.scratch, 1);
 }
 
@@ -1639,4 +1639,130 @@ read:
         compare(&module, "address after repeated use of stored complement", 8272, ApplyMode::Automatic);
     let expected = (0..8).map(|x| (if x & 3 == 2 { 255 } else { 0 }, 0)).collect::<Vec<_>>();
     assert_eq!(values, expected);
+}
+
+fn private_polarity_case(invert_store: bool, invert_read: bool, guarded: bool) -> String {
+    let merge = if guarded {
+        r#"
+    br %choose, positive, negative
+positive:
+    store i1 %left, 10
+    br read
+negative:
+    store i1 %right, 10
+    br read
+read:"#
+    } else {
+        "    store i1 %left, 10\n    store i1 %right, 10"
+    };
+    format!(
+        r#"
+func @f(i3 %x) -> i8 {{
+entry:
+    %bit = trunc i3 %x to i1
+    %stored = xor i1 %bit, {store_mask}
+    store i1 %stored, 8
+    %first = load i1 8
+    store i1 %first, 9
+    %second = load i1 9
+    %left = xor i1 %first, {read_mask}
+    %right = xor i1 %second, {read_mask}
+    %shifted = lshr i3 %x, 1
+    %choose = trunc i3 %shifted to i1
+{merge}
+    %value = load i1 10
+    %fanout = sext i1 %value to i8
+    %mask = sext i1 %choose to i8
+    %out = and i8 %fanout, %mask
+    ret %out
+}}
+"#,
+        store_mask = u32::from(invert_store),
+        read_mask = u32::from(invert_read),
+    )
+}
+
+#[test]
+fn private_byte_sharing_keeps_store_and_read_polarities_within_the_copy_cost() {
+    // Measured with each stored bit retained on its own wire.
+    const COPY_COSTS: [(usize, usize); 8] =
+        [(32, 12), (36, 11), (40, 12), (44, 11), (36, 12), (40, 11), (44, 12), (48, 11)];
+    for invert_store in [false, true] {
+        for invert_read in [false, true] {
+            for guarded in [false, true] {
+                let source = private_polarity_case(invert_store, invert_read, guarded);
+                let module = module(&source, "");
+                let held = Default::default();
+                let input = ApplyInput {
+                    module: &module,
+                    callee: module.function_named("f").expect("test entry"),
+                    args: &[Argument::Register(0..3)],
+                    out: 3..11,
+                    fault: 11..16,
+                    budget: 24,
+                    entry_fault: None,
+                    stack_available: MEMORY as u64,
+                    memory: Some(ApplyMemory::new(&[0; MEMORY], &held)),
+                    scratch_start: 16,
+                };
+                for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+                    let compiled = compile_apply_with(input.clone(), mode).expect("compile the polarity matrix");
+                    let (gates, layout) = gates(&compiled, WIDTH, 13);
+                    let expected = |x| {
+                        let set = x & 1 != 0;
+                        if x & 2 != 0 && (set ^ invert_store ^ invert_read) { 255 } else { 0 }
+                    };
+                    bits::check_states(&gates, layout, (0..8).flat_map(|x| [(x, 0), (x, 0x15a5)]), expected)
+                        .expect("preserve inputs and clear the scratch");
+                    let index = 4 * usize::from(invert_store) + 2 * usize::from(invert_read) + usize::from(guarded);
+                    let (copy_gates, copy_scratch) = COPY_COSTS[index];
+                    assert!(
+                        gates.len() <= copy_gates && layout.scratch <= copy_scratch,
+                        "store inverted {invert_store}, read inverted {invert_read}, guarded {guarded}, {mode:?}: {} gates and {} scratch above ({copy_gates}, {copy_scratch})",
+                        gates.len(),
+                        layout.scratch
+                    );
+                    println!(
+                        "POLARITY {invert_store} {invert_read} {guarded} {mode:?}: {} gates, {} scratch",
+                        gates.len(),
+                        layout.scratch
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn merging_inverted_reads_preserves_the_replay_budget_for_a_later_load() {
+    let source = private_polarity_case(true, true, true);
+    let (prefix, _) = source.split_once("    %fanout =").expect("prepared byte and mask");
+    let source = format!(
+        r#"{prefix}
+    %fanout = sext i1 %value to i128
+    %mask = sext i1 %choose to i128
+    br loop(i16 0, i128 0)
+loop(i16 %count, i128 %acc):
+    %selected = and i128 %fanout, %mask
+    %sum = xor i128 %acc, %selected
+    %next = add i16 %count, 1
+    %done = icmp eq i16 %next, 1651
+    br %done, finish, loop(%next, %sum)
+finish:
+    %small = trunc i3 %x to i2
+    %unit = select i2 %bit, 1, -1
+    %offset = srem i2 %small, %unit
+    %address = zext i2 %offset to i64
+    %base = load i8 %address
+    %low = trunc i128 %sum to i8
+    %out = xor i8 %low, %base
+    ret %out
+}}
+"#,
+    );
+    let module = module(&source, "");
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        let (_, _, values) = compare(&module, "load after inverted guarded versions", 8280, mode);
+        assert_eq!(values, (0..8).map(|x| (if x & 3 == 3 { 255 } else { 0 }, 0)).collect::<Vec<_>>());
+    }
 }

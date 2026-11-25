@@ -24,7 +24,9 @@ impl Facts {
     fn known(&self, source: Bit) -> Option<bool> {
         match source {
             Bit::Constant(value) => Some(value),
-            Bit::Wire(wire, inverted) => self.bits.get(&wire).map(|&value| value ^ inverted),
+            Bit::Wire(wire, inverted) | Bit::Shared { wire, inverted, .. } => {
+                self.bits.get(&wire).map(|&value| value ^ inverted)
+            }
         }
     }
 

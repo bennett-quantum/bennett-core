@@ -92,6 +92,7 @@ pub(super) struct Memory<'a> {
     bytes: BTreeMap<u64, Byte>,
     counts: MemoryCounts,
     current_bits: usize,
+    shared_version: u32,
     pending: BTreeMap<u64, ByteWrites>,
     proof: Option<AddressProof>,
 }
@@ -104,6 +105,7 @@ impl<'a> Memory<'a> {
             bytes: BTreeMap::new(),
             counts: MemoryCounts::default(),
             current_bits: 0,
+            shared_version: 0,
             pending: BTreeMap::new(),
             proof: input.memory.and_then(|_| AddressProof::new(input.args)),
         }
@@ -123,6 +125,7 @@ impl<'a> Memory<'a> {
             bytes: self.bytes.clone(),
             counts: MemoryCounts::default(),
             current_bits: self.current_bits,
+            shared_version: self.shared_version,
             pending: BTreeMap::new(),
             proof: None,
         }
@@ -290,7 +293,7 @@ impl<'a> Memory<'a> {
         // Known bits bound all possible addresses, including those on inactive inputs.
         let (fixed, mask) = address.iter().enumerate().fold((0u64, 0u64), |(fixed, mask), (index, bit)| match bit {
             Bit::Constant(value) => (fixed | u64::from(*value) << index, mask | 1 << index),
-            Bit::Wire(..) => (fixed, mask),
+            Bit::Wire(..) | Bit::Shared { .. } => (fixed, mask),
         });
         let maximum = fixed | !mask;
         let upper = maximum.min(last);
@@ -331,12 +334,7 @@ impl<'a> Memory<'a> {
             let scratch = circuit.scratch_end();
             let old = self.byte(address, pending.initial);
             let new = match pending.alternatives.as_slice() {
-                // Every value bit stays available through the inverse. The
-                // new version can point directly to the stored bits.
-                [(ONE, value)] => value.map(|bit| match bit {
-                    Bit::Wire(source, true) => circuit.retain_complement(source),
-                    Bit::Constant(_) | Bit::Wire(_, false) => bit,
-                }),
+                [(ONE, value)] => value.map(|bit| self.store_bit(circuit, bit)),
                 [(guard, value)] => std::array::from_fn(|i| circuit.select(*guard, value[i], old[i])),
                 alternatives => select_byte(circuit, old, alternatives),
             };
@@ -346,6 +344,18 @@ impl<'a> Memory<'a> {
             self.account(circuit, scratch, gates, pending.varying);
         }
         self.counts.peak_nonconstant_bits = self.counts.peak_nonconstant_bits.max(self.current_bits);
+    }
+
+    fn store_bit(&mut self, circuit: &mut Circuit, bit: Bit) -> Bit {
+        match (bit.wire(), self.shared_version.checked_add(1)) {
+            (None, _) => bit,
+            (Some((wire, false)), Some(version)) => {
+                // Keep the identity of the omitted copy for guarded selection.
+                self.shared_version = version;
+                Bit::Shared { wire, version, inverted: false }
+            }
+            (Some(_), _) => circuit.retain_copy(bit),
+        }
     }
 
     fn account(&mut self, circuit: &Circuit, first: Option<Wire>, gates: usize, varying: bool) {
@@ -405,7 +415,7 @@ impl AddressChoices<'_> {
 }
 
 fn symbolic_bits(byte: &Byte) -> usize {
-    byte.iter().filter(|bit| matches!(bit, Bit::Wire(..))).count()
+    byte.iter().filter(|bit| bit.wire().is_some()).count()
 }
 
 // Replay forward gates in parallel over every assignment of a small interface.
@@ -456,7 +466,7 @@ impl AddressProof {
         match bit {
             Bit::Constant(true) => self.domain,
             Bit::Constant(false) => [0; PROOF_WORDS],
-            Bit::Wire(wire, inverted) => {
+            Bit::Wire(wire, inverted) | Bit::Shared { wire, inverted, .. } => {
                 let values = self.wires.get(&wire).copied().unwrap_or_default();
                 std::array::from_fn(|i| values[i] ^ if inverted { self.domain[i] } else { 0 })
             }

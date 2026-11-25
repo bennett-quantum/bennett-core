@@ -61,7 +61,9 @@ impl<'a> Step<'a> {
         match failed {
             ZERO => Self::Transfer(next, writes),
             super::bits::ONE => Self::Fault(fault),
-            Bit::Wire(..) => Self::CheckedTransfer(next, writes, failed.not(), vec![(failed, fault)]),
+            Bit::Wire(..) | Bit::Shared { .. } => {
+                Self::CheckedTransfer(next, writes, failed.not(), vec![(failed, fault)])
+            }
         }
     }
 }
@@ -265,7 +267,7 @@ impl<'a> Frame<'a> {
             Terminator::Branch { cond, if_true, if_false } => match read(circuit, cond)[0] {
                 Bit::Constant(true) => Step::Jump(if_true),
                 Bit::Constant(false) => Step::Jump(if_false),
-                bit @ Bit::Wire(..) => Step::Branch(bit, if_true, if_false),
+                bit @ (Bit::Wire(..) | Bit::Shared { .. }) => Step::Branch(bit, if_true, if_false),
             },
             Terminator::Switch { value, .. } => {
                 let selector = read(circuit, value);

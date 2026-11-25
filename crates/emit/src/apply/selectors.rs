@@ -23,7 +23,7 @@ impl Selector {
                     mask |= 1u128 << index;
                     fixed |= u128::from(value) << index;
                 }
-                Bit::Wire(wire, inverted) => match first_use.entry(wire) {
+                Bit::Wire(wire, inverted) | Bit::Shared { wire, inverted, .. } => match first_use.entry(wire) {
                     Entry::Vacant(entry) => {
                         entry.insert((index, inverted));
                     }

@@ -28,7 +28,7 @@ pub(super) fn analyze(program: &Program<'_>, input: &ApplyInput<'_>, count: usiz
         .iter()
         .flatten()
         .filter_map(|bit| match *bit {
-            Bit::Wire(wire, _) => Some(wire),
+            Bit::Wire(wire, _) | Bit::Shared { wire, .. } => Some(wire),
             Bit::Constant(_) => None,
         })
         .collect::<BTreeSet<_>>();
@@ -45,7 +45,7 @@ pub(super) fn analyze(program: &Program<'_>, input: &ApplyInput<'_>, count: usiz
             word.iter()
                 .map(|bit| match *bit {
                     Bit::Constant(_) => *bit,
-                    Bit::Wire(wire, inverted) => {
+                    Bit::Wire(wire, inverted) | Bit::Shared { wire, inverted, .. } => {
                         let index = wires.binary_search(&wire).expect("input wire");
                         Bit::Constant((assignment & (1 << index) != 0) ^ inverted)
                     }

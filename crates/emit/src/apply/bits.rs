@@ -11,6 +11,8 @@ use super::ApplyError;
 pub(super) enum Bit {
     Constant(bool),
     Wire(Wire, bool),
+    // A separately stored version of an immutable wire.
+    Shared { wire: Wire, version: u32, inverted: bool },
 }
 
 pub(super) const ZERO: Bit = Bit::Constant(false);
@@ -22,6 +24,14 @@ impl Bit {
         match self {
             Self::Constant(value) => Self::Constant(!value),
             Self::Wire(wire, inverted) => Self::Wire(wire, !inverted),
+            Self::Shared { wire, version, inverted } => Self::Shared { wire, version, inverted: !inverted },
+        }
+    }
+
+    pub(super) fn wire(self) -> Option<(Wire, bool)> {
+        match self {
+            Self::Constant(_) => None,
+            Self::Wire(wire, inverted) | Self::Shared { wire, inverted, .. } => Some((wire, inverted)),
         }
     }
 }
@@ -35,7 +45,7 @@ pub(super) fn constant(value: u128, width: usize) -> Word {
 pub(super) fn definite(word: &[Bit]) -> Option<u128> {
     word.iter().enumerate().try_fold(0, |value, (index, bit)| match bit {
         Bit::Constant(set) => Some(value | u128::from(*set) << index),
-        Bit::Wire(..) => None,
+        Bit::Wire(..) | Bit::Shared { .. } => None,
     })
 }
 
@@ -135,7 +145,7 @@ impl Circuit {
             match bit {
                 ZERO => return,
                 ONE => continue,
-                Bit::Wire(wire, inverted) => {
+                Bit::Wire(wire, inverted) | Bit::Shared { wire, inverted, .. } => {
                     if controls.contains(&(wire, !inverted)) {
                         return;
                     }
@@ -193,7 +203,9 @@ impl Circuit {
         match (left, right) {
             (ZERO, bit) | (bit, ZERO) => bit,
             (ONE, bit) | (bit, ONE) => bit.not(),
-            (Bit::Wire(a, neg_a), Bit::Wire(b, neg_b)) => {
+            (left, right) => {
+                let (a, neg_a) = left.wire().expect("symbolic XOR operand");
+                let (b, neg_b) = right.wire().expect("symbolic XOR operand");
                 let (known_left, known_right) = (self.copy_source(left), self.copy_source(right));
                 if known_left == known_right {
                     return ZERO;
@@ -222,8 +234,8 @@ impl Circuit {
             (ONE, bit) => self.and(condition.not(), bit.not()).not(),
             (bit, ZERO) => self.and(condition, bit),
             (bit, ONE) => self.and(condition, bit.not()).not(),
-            (Bit::Wire(..), Bit::Wire(..)) if known_yes == known_no.not() => self.xor(no, condition),
-            (Bit::Wire(..), Bit::Wire(..)) => {
+            _ if known_yes == known_no.not() => self.xor(no, condition),
+            _ => {
                 let wire = self.fresh();
                 self.xor_into(wire, no, ONE);
                 self.xor_into(wire, yes, condition);
@@ -239,25 +251,22 @@ impl Circuit {
         }
     }
 
-    // Materialize an inverted bit once so each read can use a positive control.
-    pub(super) fn retain_complement(&mut self, source: Wire) -> Bit {
+    pub(super) fn retain_copy(&mut self, bit: Bit) -> Bit {
         debug_assert_eq!(self.enabled, ONE);
-        let target = self.fresh();
-        self.xor_into(target, ONE, ONE);
-        self.xor_into(target, Bit::Wire(source, false), ONE);
-        self.retained_copies.push((target, self.copy_source(Bit::Wire(source, true))));
-        Bit::Wire(target, false)
+        let wire = self.fresh();
+        self.xor_into(wire, bit, ONE);
+        self.retained_copies.push((wire, self.copy_source(bit)));
+        Bit::Wire(wire, false)
     }
 
-    // Follow a retained copy back to its immutable source.
+    // Follow a shared or retained copy back to its immutable source.
     pub(super) fn copy_source(&self, bit: Bit) -> Bit {
-        if let Bit::Wire(wire, inverted) = bit
-            && let Ok(index) = self.retained_copies.binary_search_by_key(&wire, |&(copy, _)| copy)
-        {
+        let Some((wire, inverted)) = bit.wire() else { return bit };
+        if let Ok(index) = self.retained_copies.binary_search_by_key(&wire, |&(copy, _)| copy) {
             let source = self.retained_copies[index].1;
             return if inverted { source.not() } else { source };
         }
-        bit
+        Bit::Wire(wire, inverted)
     }
 
     // Reserve the result before computing, then clear and reuse all later wires.
@@ -290,7 +299,7 @@ impl Circuit {
             .zip(computed)
             .map(|(wire, value)| match value {
                 Bit::Constant(_) => value,
-                Bit::Wire(..) => {
+                Bit::Wire(..) | Bit::Shared { .. } => {
                     // Only an unconditional copy of a source that predates
                     // this computation survives its local reversal.
                     if self.enabled == ONE
