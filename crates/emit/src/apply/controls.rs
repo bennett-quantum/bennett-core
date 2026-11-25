@@ -4,11 +4,14 @@ use std::collections::BTreeSet;
 
 use bennett_ir::{BlockId, Fault, Target};
 
-use super::bits::{Bit, Circuit, ONE, Word, ZERO, constant};
+use super::bits::{Bit, Circuit, ONE, Word, ZERO};
 use super::calls::Program;
 use super::flow::{BranchEquality, Flow, ShiftLoop};
 use super::symbolic::{Point, Step};
 use super::{ApplyError, Copies};
+use facts::Facts;
+
+mod facts;
 
 pub(super) enum Failure {
     Control(Refusal),
@@ -49,6 +52,7 @@ struct Route {
     point: Point,
     enabled: Bit,
     slots: Vec<Word>,
+    facts: Facts,
     // Inclusive bounds on steps spent since the definite prefix, for enabled inputs only.
     first: u64,
     last: u64,
@@ -87,7 +91,7 @@ pub(super) fn run(
         choices: BTreeSet::new(),
         boundaries: Vec::new(),
     };
-    let route = Route { point: start, enabled: ONE, slots: slots.to_vec(), first: 0, last: 0 };
+    let route = Route { point: start, enabled: ONE, slots: slots.to_vec(), facts: Facts::default(), first: 0, last: 0 };
     let end = controls.follow(route)?;
     debug_assert!(end.is_none(), "no enclosing continuation");
     Ok((controls.copies, controls.proved_passes))
@@ -145,7 +149,10 @@ impl Controls<'_, '_> {
                 return Err(Failure::Control(Refusal::UnprovedLoop));
             }
             let point = route.point;
-            match self.circuit.under(route.enabled, |circuit| self.program.step(circuit, &route.slots, point))? {
+            let step = self.circuit.under(route.enabled, |circuit| {
+                self.program.step_with(circuit, &route.slots, point, &[], |word| route.facts.resolve_word(word))
+            })?;
+            match step {
                 Step::Write(next, dst, word) => {
                     route.slots[dst.index()] = word;
                     route.point = next;
@@ -232,12 +239,9 @@ impl Controls<'_, '_> {
         }
         let (mut yes_route, mut no_route) = (route.clone(), route);
         if let Some(equality) = BranchEquality::in_block(self.program.block(point)) {
-            // The equality is true for every enabled input on this route.
-            // Record it before reading the jump's arguments.
             let equal_route = if equality.when_true { &mut yes_route } else { &mut no_route };
             let slot = self.program.slot(point, equality.slot);
-            let word = &mut equal_route.slots[slot.index()];
-            *word = constant(equality.value.value(), word.len());
+            equal_route.facts.assume(&equal_route.slots[slot.index()], equality.value.value());
         }
         let yes = self.transfer(yes_route, yes, yes_mask);
         let no = self.transfer(no_route, no, no_mask);
@@ -292,7 +296,8 @@ impl Controls<'_, '_> {
             if !self.charge(&mut route)? {
                 break;
             }
-            condition = self.program.read(&route.slots, route.point, plan.condition)[0];
+            let tested = self.program.read(&route.slots, route.point, plan.condition)[0];
+            condition = route.facts.resolve(tested);
         }
         Ok(exits)
     }
@@ -320,9 +325,10 @@ impl Controls<'_, '_> {
         // need no meaningful value. Keeping common bits also keeps ordinary loop counters definite.
         for (old, update) in left.slots.iter_mut().zip(right.slots) {
             for (old, update) in old.iter_mut().zip(update) {
-                *old = self.circuit.select(right.enabled, update, *old);
+                *old = left.facts.join(*old, &right.facts, update, right.enabled, self.circuit);
             }
         }
+        left.facts.intersect(&right.facts);
         left.enabled = parent.unwrap_or_else(|| self.circuit.xor(left.enabled, right.enabled));
         left.first = left.first.min(right.first);
         left.last = left.last.max(right.last);

@@ -398,12 +398,13 @@ that is one exactly on the definite argument assignments that take a route. The 
 the incoming guard with the condition or its complement to form the two new guards. Each controls
 the gates for its route, and the route's slot values are meaningful only where its guard is one.
 When the conditional tests an integer slot against a literal with `eq` or `ne` in the same block,
-the compiler records that literal in the equal route's slot before reading the jump arguments.
-This proof applies to ordinary conditional jumps as well as to the exits of shift loops that test
-for zero.
-If the routes rejoin, the compiler selects each assignment's slots from the enabled route and emits
-the continuation once. Its analysis looks for the nearest common continuation of the routes to a
-return or explicit stop, using only the selected target of each literal conditional or switch. If both
+the compiler records the tested wires' values for the equal route. Jump arguments keep their
+original bits, including when assigned to new block parameters. Instructions use the recorded
+values on that route. At a join the compiler reuses a bit when it can prove that the bit agrees
+with both incoming values under their respective guards. Otherwise it selects the value of the enabled route.
+Wire facts survive the join when both routes agree on them.
+The compiler emits the continuation once. Its analysis looks for the nearest common continuation of the routes
+to a return or explicit stop, using only the selected target of each literal conditional or switch. If both
 routes could emit shared code before reaching a common stop, the compiler uses the step machine, which
 represents each assignment's current point with qubits. This covers short-circuit tests whose early returns bypass
 the shared code. A loop whose test stays definite can use control gates for a choice in its body.

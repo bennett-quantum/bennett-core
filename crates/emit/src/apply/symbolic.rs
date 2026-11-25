@@ -170,12 +170,11 @@ impl<'a> Frame<'a> {
     pub(super) fn step(
         &self,
         circuit: &mut Circuit,
-        slots: &[Word],
+        read: impl Fn(&Operand) -> Word,
         point: Point,
         widths: &[Option<usize>],
     ) -> Result<Step<'a>, ApplyError> {
         let block = self.module.function(self.callee).block(point.block);
-        let read = |operand| Self::read(slots, operand);
         let result_width = |dst: Slot, declared| widths.get(dst.index()).copied().flatten().unwrap_or(declared);
         if let Some(inst) = block.insts.get(point.index) {
             let (dst, result) = match inst {

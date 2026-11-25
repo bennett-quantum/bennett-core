@@ -187,3 +187,113 @@ join(i2 %result):
         assert_eq!(construction, Construction::Controlled { proved_passes: 0 }, "B={budget}");
     }
 }
+
+#[test]
+fn a_join_preserves_equal_arguments_to_skip_an_unreachable_load() {
+    let module = load(
+        r#"
+memory 131072
+func @f(i16 %x) -> i2 {
+entry:
+    %zero = icmp eq i16 %x, 0
+    br %zero, join(%x, i2 1), join(%x, i2 2)
+join(i16 %k, i2 %tag):
+    %diff = icmp ne i16 %k, %x
+    br %diff, read, done
+read:
+    %addr = zext i16 %k to i64
+    %value = load i2 %addr
+    ret %value
+done:
+    ret %tag
+}
+func @main(i64 %budget) {
+entry:
+    %a = qalloc 16
+    h %a[0]
+    h %a[15]
+    s %a[15]
+    %out = qalloc 2
+    %fault = qalloc 5
+    x %out[1]
+    x %fault[4]
+    apply @f(%a) -> %out, %fault budget %budget
+    ret
+}
+"#,
+    )
+    .expect("valid unreachable load");
+    let (construction, _) = compare(&module, 18, |x| (if x == 0 { 1 } else { 2 }, 0));
+    assert_eq!(construction, Construction::Controlled { proved_passes: 0 });
+}
+
+#[test]
+fn a_join_keeps_a_countdown_unreachable_at_every_budget() {
+    for (condition, targets, equal_arm) in [
+        ("%test = icmp eq i2 %x, 0", "join(%x), join(%x)", ""),
+        ("%flipped = xor i2 %x, 1\n    %test = icmp ne i2 %flipped, 1", "join(%x), join(i2 0)", ""),
+        ("%test = icmp ne i2 %x, 0", "join(%x), equal", "equal:\n    %same = xor i2 %x, 0\n    br join(%same)"),
+    ] {
+        let module = load(&format!(
+            r#"
+memory 4096
+func @f(i2 %x) -> i2 {{
+entry:
+    %other = xor i2 %x, 0
+    {condition}
+    br %test, {targets}
+{equal_arm}
+join(i2 %k):
+    %diff = icmp ne i2 %k, %other
+    br %diff, count(%k), done
+count(i2 %n):
+    %more = icmp ne i2 %n, 0
+    br %more, step, done
+step:
+    %previous = sub i2 %n, 1
+    br count(%previous)
+done:
+    ret %x
+}}
+{MAIN}
+"#
+        ))
+        .expect("valid unreachable countdown");
+        for budget in [18, 64, 256] {
+            let (construction, cost) = compare(&module, budget, |x| (x, 0));
+            println!("{targets}, B={budget}: {construction:?}, {cost:?}");
+            assert_eq!(construction, Construction::Controlled { proved_passes: 0 }, "{targets}, B={budget}");
+            assert_eq!(cost.operations, 14, "{targets}, B={budget}");
+        }
+    }
+}
+
+#[test]
+fn a_reassigned_block_parameter_uses_its_new_value_at_the_join() {
+    let module = load(&format!(
+        r#"
+memory 4096
+func @f(i2 %x) -> i2 {{
+entry:
+    %zero = icmp eq i2 %x, 0
+    br %zero, reset, other
+reset:
+    br local(%x, i1 0)
+local(i2 %word, i1 %reassigned):
+    br %reassigned, leave, advance
+advance:
+    br local(i2 3, i1 1)
+leave:
+    br join(%word)
+other:
+    br join(%x)
+join(i2 %result):
+    ret %result
+}}
+{MAIN}
+"#
+    ))
+    .expect("valid reassignment and join");
+    let (construction, _) = compare(&module, 18, |x| (if x == 0 { 3 } else { x }, 0));
+    assert_eq!(construction, Construction::Controlled { proved_passes: 0 });
+}
