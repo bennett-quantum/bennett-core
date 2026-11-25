@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use bennett_ir::{BinOp, BlockId, Function, Inst, Operand, Predicate, Slot, Target, Terminator};
+use bennett_ir::{BinOp, Block, BlockId, Const, Function, Inst, Operand, Predicate, Slot, Target, Terminator};
 use petgraph::algo::dominators::{Dominators, simple_fast};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::Reversed;
@@ -119,6 +119,33 @@ impl<'a> Flow<'a> {
 }
 
 #[derive(Clone, Copy)]
+pub(super) struct BranchEquality {
+    pub(super) slot: Slot,
+    pub(super) value: Const,
+    pub(super) when_true: bool,
+}
+
+impl BranchEquality {
+    pub(super) fn in_block(block: &Block) -> Option<Self> {
+        let Terminator::Branch { cond: Operand::Slot(cond), .. } = &block.term else { return None };
+        block.insts.iter().find_map(|inst| {
+            let Inst::Compare { pred: pred @ (Predicate::Eq | Predicate::Ne), dst, lhs, rhs, .. } = inst else {
+                return None;
+            };
+            if dst != cond {
+                return None;
+            }
+            let ((Operand::Slot(slot), Operand::Const(value)) | (Operand::Const(value), Operand::Slot(slot))) =
+                (lhs, rhs)
+            else {
+                return None;
+            };
+            Some(Self { slot: *slot, value: *value, when_true: *pred == Predicate::Eq })
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
 pub(super) struct ShiftLoop<'a> {
     pub(super) width: usize,
     pub(super) zero_on_exit: Slot,
@@ -131,22 +158,16 @@ pub(super) struct ShiftLoop<'a> {
 impl<'a> ShiftLoop<'a> {
     fn prove(function: &'a Function, doms: &Dominators<NodeIndex>, header: BlockId) -> Option<Self> {
         let block = function.block(header);
-        let Terminator::Branch { cond: condition @ Operand::Slot(cond), if_true, if_false } = &block.term else {
+        let Terminator::Branch { cond: condition, if_true, if_false } = &block.term else {
             return None;
         };
-        let (continue_when_true, width, word) = block.insts.iter().find_map(|inst| {
-            let Inst::Compare { pred, dst, width, lhs, rhs } = inst else { return None };
-            if dst != cond || !matches!(pred, Predicate::Eq | Predicate::Ne) {
-                return None;
-            }
-            let (word, zero) = if matches!(lhs, Operand::Slot(_)) { (lhs, rhs) } else { (rhs, lhs) };
-            matches!(zero, Operand::Const(value) if value.value() == 0).then_some((
-                *pred == Predicate::Ne,
-                *width,
-                word,
-            ))
-        })?;
-        let parameter = block.params.iter().position(|param| Operand::Slot(param.slot) == *word)?;
+        let BranchEquality { slot, value, when_true } = BranchEquality::in_block(block)?;
+        if value.value() != 0 {
+            return None;
+        }
+        let word = Operand::Slot(slot);
+        let parameter = block.params.iter().position(|param| param.slot == slot)?;
+        let continue_when_true = !when_true;
         let (continuing, exiting) = if continue_when_true { (if_true, if_false) } else { (if_false, if_true) };
         if exiting.block == header || continuing.block == exiting.block {
             return None;
@@ -168,7 +189,7 @@ impl<'a> ShiftLoop<'a> {
                         matches!(
                             inst,
                             Inst::Binary { op: BinOp::Lshr, dst, lhs, rhs: Operand::Const(amount), .. }
-                                if Operand::Slot(*dst) == *shifted && lhs == word && amount.value() == 1
+                                if Operand::Slot(*dst) == *shifted && *lhs == word && amount.value() == 1
                         )
                     })
                 })?;
@@ -185,8 +206,8 @@ impl<'a> ShiftLoop<'a> {
         }
 
         found_back_edge.then_some(Self {
-            width: width.bits() as usize,
-            zero_on_exit: block.params[parameter].slot,
+            width: value.width().bits() as usize,
+            zero_on_exit: slot,
             condition,
             continue_when_true,
             continuing,

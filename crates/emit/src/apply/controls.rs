@@ -4,9 +4,9 @@ use std::collections::BTreeSet;
 
 use bennett_ir::{BlockId, Fault, Target};
 
-use super::bits::{Bit, Circuit, ONE, Word, ZERO};
+use super::bits::{Bit, Circuit, ONE, Word, ZERO, constant};
 use super::calls::Program;
-use super::flow::{Flow, ShiftLoop};
+use super::flow::{BranchEquality, Flow, ShiftLoop};
 use super::symbolic::{Point, Step};
 use super::{ApplyError, Copies};
 
@@ -230,8 +230,17 @@ impl Controls<'_, '_> {
         {
             return Err(Failure::Control(Refusal::RepeatedContinuation));
         }
-        let yes = self.transfer(route.clone(), yes, yes_mask);
-        let no = self.transfer(route, no, no_mask);
+        let (mut yes_route, mut no_route) = (route.clone(), route);
+        if let Some(equality) = BranchEquality::in_block(self.program.block(point)) {
+            // The equality is true for every enabled input on this route.
+            // Record it before reading the jump's arguments.
+            let equal_route = if equality.when_true { &mut yes_route } else { &mut no_route };
+            let slot = self.program.slot(point, equality.slot);
+            let word = &mut equal_route.slots[slot.index()];
+            *word = constant(equality.value.value(), word.len());
+        }
+        let yes = self.transfer(yes_route, yes, yes_mask);
+        let no = self.transfer(no_route, no, no_mask);
         let yes = self.follow(yes)?;
         let no = self.follow(no)?;
         self.boundaries.truncate(outer_boundaries);
