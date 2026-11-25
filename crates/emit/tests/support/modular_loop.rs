@@ -259,3 +259,56 @@ fn unproved_updates_preserve_the_ordinary_result_or_fault() {
     let (construction, _) = compare_controls(&module, 40, ApplyMode::Automatic, |x| (u64::from(x & 1 == 0), 0));
     assert!(!matches!(construction, Construction::ModularInPlace { .. }));
 }
+
+fn private_result(store_at: u64, load_at: u64) -> String {
+    let kernel = SOURCE.replace("@f(i3 %exponent)", "@kernel(i3 %exponent, i1 %unused)");
+    format!(
+        r#"
+{kernel}
+data 48 = i64 @kernel
+func @f(i3 %x) -> i8 {{
+entry:
+    store i3 %x, 16
+    %arg = load i3 16
+    %pointer = load i64 48
+    %result = call_indirect fn(i3, i1) -> i8 %pointer(%arg, i1 0)
+    store i8 %result, {store_at}
+    %out = load i8 {load_at}
+    ret %out
+}}
+"#
+    )
+}
+
+#[test]
+fn modular_private_return_uses_the_wrapper_budget() {
+    let module = control_example(&private_result(24, 24), 3, "");
+    // The wrapper adds four steps before the kernel and three on return.
+    let returns = |x| return_steps(x, 3 + 7, 7, 3);
+    let longest = returns(7);
+    for budget in [longest - 1, longest, longest + 1] {
+        let (construction, _) = compare_controls(&module, budget, ApplyMode::Automatic, |x| {
+            if budget < returns(x) { (0, Fault::Budget.code()) } else { (reference(x, 1, 7, 15, Update::Odd), 0) }
+        });
+        assert_eq!(matches!(construction, Construction::ModularInPlace { passes: 3 }), budget >= longest);
+    }
+}
+
+#[test]
+fn modular_private_return_checks_the_last_byte_and_one_past_it() {
+    for address in [1023, 1024] {
+        let module = control_example(&private_result(address, address), 3, "");
+        let inside = address == 1023;
+        let (construction, _) = compare_controls(&module, 50, ApplyMode::Automatic, |x| {
+            if inside { (reference(x, 1, 7, 15, Update::Odd), 0) } else { (0, Fault::OutOfBounds.code()) }
+        });
+        assert_eq!(matches!(construction, Construction::ModularInPlace { passes: 3 }), inside);
+    }
+}
+
+#[test]
+fn modular_private_return_requires_the_original_result_bits() {
+    let module = control_example(&private_result(24, 25), 3, "");
+    let (construction, _) = compare_controls(&module, 50, ApplyMode::Automatic, |_| (0, 0));
+    assert!(matches!(construction, Construction::StepMachine { .. }));
+}

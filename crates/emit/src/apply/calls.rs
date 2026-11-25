@@ -185,6 +185,10 @@ impl<'a> Program<'a> {
         self.has_memory
     }
 
+    pub(super) fn has_dynamic_stack(&self) -> bool {
+        self.copies[0].stack.is_some()
+    }
+
     pub(super) fn frames(&self) -> impl Iterator<Item = &Frame<'a>> {
         self.copies.iter().map(|copy| &copy.frame)
     }

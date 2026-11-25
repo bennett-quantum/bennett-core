@@ -228,7 +228,7 @@ impl Circuit {
         Bit::Wire(wire, false)
     }
 
-    fn copy_source(&self, bit: Bit) -> Bit {
+    pub(super) fn copy_source(&self, bit: Bit) -> Bit {
         if let Bit::Wire(wire, inverted) = bit
             && let Ok(index) = self.retained_copies.binary_search_by_key(&wire, |&(copy, _)| copy)
         {
@@ -290,6 +290,10 @@ impl Circuit {
         self.retained_copies.truncate(checkpoint.retained_copies);
         self.retained_copies.extend(copies);
         result
+    }
+
+    pub(super) fn fits(&self) -> bool {
+        self.peak.is_some()
     }
 
     pub(super) fn scratch_end(&self) -> Option<Wire> {

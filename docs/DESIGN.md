@@ -799,6 +799,20 @@ calls, returns, branches and exits, must fit the applied function's single budge
 The shift gives the pass count independently of that budget. Any failed proof
 leaves the existing compilation and fault behaviour in use.
 
+The compiler tries the proof before emitting the loop's entry comparison,
+using the slots and private memory from the ordinary definite prefix. A resolved
+indirect call can enter that prefix just like a direct call. The compiler checks
+both exits by replaying their instructions with the initial residue or fresh
+symbolic residue bits. Inside the loop frame it follows only lossless conversions
+and unconditional transfers, since it has replaced the loop's computation.
+After a return to a caller it has the caller's suspended state, including the
+private byte versions, and can follow memory accesses. A successful replay
+must end with the same residue bits in the output. A possible fault, unresolved
+choice or unknown result keeps ordinary emission. The replay charges every step
+against the original budget. It can elide a proved store and load on the way
+out because only the result and fault are visible after the call. Functions
+using dynamic stack operations keep ordinary emission.
+
 For an `n`-bit residue the gates accumulate the modular product in an `n + 1`-bit
 temporary word by adding one constant per set residue bit under the update control.
 Each modular addition subtracts the
@@ -895,8 +909,8 @@ loads of field values reuse the stored bit references, and all image values
 are definite. The stores account for all 16 qubits and 32 CNOTs added to
 identity and all nine qubits and 18 CNOTs added to predicate.
 
-In the Shor fixture a direct call through the adapter also reproduces the
-register counts. A definite indirect call without memory leaves the in-place
+In the baseline Shor fixture a direct call through the adapter also reproduces
+the register counts. A definite indirect call without memory leaves the in-place
 construction and emits 1,306 one-qubit gates, 570 two-qubit gates and 3,228
 Toffolis, with a peak of 533 qubits (543 in the harness) and 5,106 operations.
 The in-place proof follows direct calls and lossless conversions. The
@@ -916,6 +930,20 @@ wrapper's returns and the guarded result stores. The memory counters attribute
 memory. The eight input copies account for eight of those qubits and 16 of
 those gates. The remaining memory cost comes from guarded writes to the
 result, attempted on different return ticks.
+
+After extending the modular proof through the wrapper, the register rows stay
+at the counts above. The private-block measurements in automatic mode are:
+
+| Function | Construction | One-qubit | Two-qubit | Toffolis | Isolated peak | Harness peak | Operations | Inputs agreed |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Identity | Definite | 0 | 40 | 0 | 37 | — | 42 | 256/256 |
+| Predicate | Definite | 20 | 19 | 14 | 37 | — | 55 | 256/256 |
+| Shor 15, base 7 | In-place, eight passes | 962 | 3,252 | 1,552 | 45 | 55 | 5,768 | 256/256 |
+
+Shor's definite indirect call without the block now matches the register form.
+The block retains eight input copies, accounting for all 16 additional CNOTs
+and eight additional qubits. The benchmark checks the Toffoli count and both
+peaks against twice the hand-built circuit's counts.
 
 Run `cargo test -p bennett-emit --test handle_price -- --nocapture` to repeat
 the measurements.

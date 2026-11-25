@@ -179,25 +179,9 @@ fn compile_with_analysis_limit(
 ) -> Result<CompiledApply, ApplyError> {
     check_interface(&input)?;
     let (program, mut slots) = Program::check(&input)?;
-    if mode == ApplyMode::Automatic
-        && !program.has_memory()
-        && input.args.iter().any(|arg| matches!(arg, Argument::Register(_)))
-        && let Some(plan) = modular_loop::Plan::prove(&input, &program, &slots)
-    {
-        let mut circuit = Circuit::new(input.scratch_start);
-        let residue = plan.emit(&mut circuit);
-        let forward = circuit.forward_len();
-        circuit.copy(input.out.clone(), &residue, ONE);
-        if let Ok(block) = circuit.finish(forward, &input.module.function(input.callee).name) {
-            return Ok(CompiledApply {
-                block,
-                definite_steps: plan.definite_steps,
-                construction: Construction::ModularInPlace { passes: plan.passes() },
-                reason: "a proved modular residue update with a whole-function budget",
-                memory: MemoryCounts::default(),
-            });
-        }
-    }
+    let try_modular = mode == ApplyMode::Automatic
+        && !program.has_dynamic_stack()
+        && input.args.iter().any(|arg| matches!(arg, Argument::Register(_)));
     let mut circuit = Circuit::new(input.scratch_start);
     let mut memory = Memory::new(&input);
     let mut status = match input.entry_fault {
@@ -223,6 +207,23 @@ fn compile_with_analysis_limit(
             }
             Status::Running(_) if spent == input.budget => status = Status::Faulted(Fault::Budget),
             Status::Running(point) => {
+                if try_modular
+                    && let Some(scratch) = circuit.scratch_end()
+                    && let Some(plan) =
+                        modular_loop::Plan::prove(&input, &program, &slots, &memory, point, spent, scratch)
+                {
+                    let checkpoint = circuit.checkpoint();
+                    let residue = plan.emit(&mut circuit);
+                    if circuit.fits() {
+                        spent += 1; // The loop's entry comparison has definite control.
+                        break (
+                            Copies { returned: vec![(ONE, residue)], faulted: Vec::new() },
+                            Construction::ModularInPlace { passes: plan.passes() },
+                            "a proved modular residue update with a whole-function budget",
+                        );
+                    }
+                    circuit.rewind(checkpoint);
+                }
                 let step = program.step_in(&mut circuit, &slots, point, &mut memory, ONE)?;
                 memory.commit(&mut circuit);
                 status = match step {

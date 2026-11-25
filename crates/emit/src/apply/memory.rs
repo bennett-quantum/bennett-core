@@ -113,6 +113,21 @@ impl<'a> Memory<'a> {
         self.counts
     }
 
+    // A speculative exit uses arbitrary symbolic residue wires. Address replay
+    // cannot evaluate those wires, so it may only use the symbolic address bounds.
+    pub(super) fn fork_for_exit(&self) -> Self {
+        debug_assert!(self.pending.is_empty());
+        Self {
+            base: self.base,
+            declarations: self.declarations,
+            bytes: self.bytes.clone(),
+            counts: MemoryCounts::default(),
+            current_bits: self.current_bits,
+            pending: BTreeMap::new(),
+            proof: None,
+        }
+    }
+
     fn access(
         &mut self,
         circuit: &Circuit,

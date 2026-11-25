@@ -2,11 +2,13 @@
 
 use std::collections::BTreeSet;
 
+use bennett_exec::Wire;
 use bennett_ir::{BinOp, BlockId, CastOp, Function, Inst, Operand, Predicate, Slot, Target, Terminator, Width};
 
 use super::ApplyInput;
 use super::bits::{Bit, Circuit, ONE, Word, ZERO, constant, definite};
 use super::calls::Program;
+use super::memory::Memory;
 use super::modular::{self, Factor, Multiplier};
 use super::ranges::{bits, unsigned_max};
 use super::symbolic::{Point, Step};
@@ -17,7 +19,6 @@ pub(super) struct Plan {
     exponent: Word,
     factors: Vec<Factor>,
     condition: Condition,
-    pub(super) definite_steps: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -190,41 +191,43 @@ impl<'a> Update<'a> {
     }
 }
 
-enum End {
-    Test(Point),
-    Return(Word),
-}
-
-// Walk the acyclic wrapper code. The prefix can enter direct copies. Each
-// exit must only move or losslessly convert its result on the way out.
-fn straight(program: &Program<'_>, slots: &mut [Word], mut point: Point, prefix: bool) -> Option<(End, u64)> {
+// The loop has not executed on the probe state. In its frame, keep the
+// existing restriction to copies, lossless conversions and unconditional
+// transfers. Suspended callers have their exact pre-loop slots and memory.
+fn replay_exit(
+    program: &Program<'_>,
+    slots: &mut [Word],
+    mut point: Point,
+    loop_copy: usize,
+    memory: &Memory<'_>,
+    scratch: Wire,
+) -> Option<(Word, u64)> {
     let mut seen = BTreeSet::new();
-    let mut circuit = Circuit::new(0);
+    let mut circuit = Circuit::new(scratch);
+    let mut memory = memory.fork_for_exit();
     let mut steps = 0;
     while seen.insert(point) {
-        let block = program.block(point);
-        let inst = block.insts.get(point.index);
-        if prefix
-            && point.index + 1 == block.insts.len()
-            && let (Some(inst), Terminator::Branch { cond, .. }) = (inst, &block.term)
-            && zero_test(inst, cond).is_some()
-        {
-            return Some((End::Test(point), steps));
-        }
-        let allowed = if let Some(inst) = inst {
-            if let Inst::Cast { op: CastOp::Zext | CastOp::Trunc, value, to, .. } = inst {
+        if point.copy == loop_copy {
+            let block = program.block(point);
+            let safe = if let Some(inst) = block.insts.get(point.index) {
+                let Inst::Cast { op: CastOp::Zext | CastOp::Trunc, value, to, .. } = inst else {
+                    return None;
+                };
                 unsigned_max(&program.read(slots, point, value)) <= to.mask()
             } else {
-                prefix && program.direct_child(point).is_some()
+                matches!(block.term, Terminator::Jump(_) | Terminator::Return(_))
+            };
+            if !safe {
+                return None;
             }
-        } else {
-            matches!(block.term, Terminator::Jump(_) | Terminator::Return(_))
-        };
-        if !allowed {
-            return None;
         }
         steps += 1;
-        point = match program.step(&mut circuit, slots, point).ok()? {
+        let step = program.step_in(&mut circuit, slots, point, &mut memory, ONE).ok()?;
+        memory.commit(&mut circuit);
+        if !circuit.fits() {
+            return None;
+        }
+        point = match step {
             Step::Write(next, dst, word) => {
                 slots[dst.index()] = word;
                 next
@@ -236,35 +239,43 @@ fn straight(program: &Program<'_>, slots: &mut [Word], mut point: Point, prefix:
                 }
                 next
             }
-            Step::Return(word) => return Some((End::Return(word), steps)),
+            Step::Return(mut word) => {
+                for bit in &mut word {
+                    *bit = circuit.copy_source(*bit);
+                }
+                return Some((word, steps));
+            }
             Step::Branch(..)
             | Step::Switch(..)
             | Step::Indirect(..)
             | Step::CheckedTransfer(..)
             | Step::Inactive
-            | Step::Fault(_) => {
-                return None;
-            }
+            | Step::Fault(_) => return None,
         };
     }
     None
 }
 
 impl Plan {
-    pub(super) fn prove(input: &ApplyInput<'_>, program: &Program<'_>, slots: &[Word]) -> Option<Self> {
-        if input.entry_fault.is_some() || input.budget == 0 {
+    pub(super) fn prove(
+        input: &ApplyInput<'_>,
+        program: &Program<'_>,
+        slots: &[Word],
+        memory: &Memory<'_>,
+        entry: Point,
+        prefix_steps: u64,
+        scratch: Wire,
+    ) -> Option<Self> {
+        let entry_block = program.block(entry);
+        if entry.index + 1 != entry_block.insts.len() {
             return None;
         }
-        let mut slots = slots.to_vec();
-        let (End::Test(entry), prefix_steps) = straight(program, &mut slots, Point::entry(BlockId(0)), true)? else {
-            return None;
-        };
-        let entry_block = program.block(entry);
         let Terminator::Branch { cond: cond @ Operand::Slot(entry_condition), if_true, if_false } = &entry_block.term
         else {
             return None;
         };
         let (tested, true_if_zero) = zero_test(&entry_block.insts[entry.index], cond)?;
+        let mut slots = slots.to_vec();
         let (empty, begin) = if true_if_zero { (if_true, if_false) } else { (if_false, if_true) };
         let entry_condition = program.slot(entry, *entry_condition).index();
         // The prefix stops before the comparison. On the continuing edge
@@ -379,15 +390,14 @@ impl Plan {
         // any conversion in the wrapper, with distinct probe bits.
         let mut empty_slots = slots.clone();
         empty_slots[entry_condition] = vec![Bit::Constant(true_if_zero)];
+        let probe_end = scratch.checked_add(residue_width as u64)?;
         let empty_point = program.jump(&mut empty_slots, entry, empty);
-        let (End::Return(zero_result), empty_steps) = straight(program, &mut empty_slots, empty_point, false)? else {
-            return None;
-        };
+        let (zero_result, empty_steps) =
+            replay_exit(program, &mut empty_slots, empty_point, entry.copy, memory, probe_end)?;
         if zero_result != constant(initial, output_width) {
             return None;
         }
-        let probe_end = input.scratch_start.checked_add(residue_width as u64)?;
-        let probe = (input.scratch_start..probe_end).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
+        let probe = (scratch..probe_end).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
         let joined = program.slot(latch_point, joined.slot).index();
         let mut joined_word = probe.clone();
         joined_word.resize(slots[joined].len(), ZERO);
@@ -396,9 +406,7 @@ impl Plan {
         let (condition, value) = exit_condition;
         slots[condition] = vec![Bit::Constant(value)];
         let exit_point = program.jump(&mut slots, exit_from, exit);
-        let (End::Return(result), exit_steps) = straight(program, &mut slots, exit_point, false)? else {
-            return None;
-        };
+        let (result, exit_steps) = replay_exit(program, &mut slots, exit_point, entry.copy, memory, probe_end)?;
         let mut expected = probe;
         expected.resize(output_width, ZERO);
         if result != expected {
@@ -408,23 +416,14 @@ impl Plan {
         // Count all calls and branches on the most expensive possible routes
         // with a single whole-function allowance. Additional padded rounds
         // are identities on inputs whose exponent has already shifted to zero.
-        let entry_steps = prefix_steps + 2;
+        let loop_budget = input.budget.checked_sub(prefix_steps)?.checked_sub(2)?;
         // One shift and either a latch test and branch, or a jump back to
         // the header followed by its test and branch.
         let pass_steps = update.steps + square.steps + 3 + u64::from(pretested);
-        if entry_steps + empty_steps > input.budget
-            || entry_steps + pass_steps * exponent_bits.len() as u64 + exit_steps > input.budget
-        {
+        if empty_steps > loop_budget || pass_steps * exponent_bits.len() as u64 + exit_steps > loop_budget {
             return None;
         }
-        Some(Self {
-            initial,
-            modulus: modulus64,
-            exponent: exponent_bits,
-            factors,
-            condition: update.condition,
-            definite_steps: prefix_steps + 1,
-        })
+        Some(Self { initial, modulus: modulus64, exponent: exponent_bits, factors, condition: update.condition })
     }
 
     pub(super) fn passes(&self) -> usize {

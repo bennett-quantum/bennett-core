@@ -260,7 +260,14 @@ fn measure(
             block.name(),
             [BlockOp::Allocate(scratch.clone()), BlockOp::ReleaseZero(released.clone())],
         );
-        count::harness_peak(&module, entry, applied, &lifetime).to_string()
+        let peak = count::harness_peak(&module, entry, applied, &lifetime);
+        if matches!(route, Route::Block) && mode == ApplyMode::Automatic {
+            // Twice the hand-built Shor oracle's Toffoli count and peaks.
+            assert!(native[2] <= 2 * 1_552, "private block Toffolis {}", native[2]);
+            assert!(scratch.end <= 2 * 37, "private block isolated peak {}", scratch.end);
+            assert!(peak <= 2 * 47, "private block harness peak {peak}");
+        }
+        peak.to_string()
     } else {
         "-".to_owned()
     };
