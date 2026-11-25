@@ -1075,6 +1075,11 @@ The front end's own part, for the record (lane of the front end, not a device it
 `bq_rotate` translated to the one device instruction of D6, kind or axis passed as an operand (no switch on the codes
 and no `bad_gate` issued by the front end); the set of apply targets, read from the compiled signatures before
 pointers are lowered to integers, for D11; and the two named stops lowered to `fault NAME`.
+Built so far (`docs/DESIGN.md`, "From C to a device program"): the declaration check on the module and on each unit's parsed form, the latter from
+clang's syntax tree filtered to the names containing `bq_` or `__bennett_`, which carries each declaration's linker
+name as computed at the end of the unit. The named stop `out_of_memory` is lowered by the runtime's work;
+`bad_argument` waits on its code (D15). A program that uses the interface is refused by name, before any device
+instruction is written, until the forms of this section exist.
 
 ## 15. What the runtime must provide
 

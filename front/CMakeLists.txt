@@ -42,6 +42,7 @@ add_executable(bennett-front
   src/Jumps.cpp
   src/Passes.cpp
   src/Classify.cpp
+  src/Primitives.cpp
 )
 target_include_directories(bennett-front SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_compile_definitions(bennett-front PRIVATE ${LLVM_DEFINITIONS})
@@ -51,6 +52,24 @@ if(LLVM_LINK_LLVM_DYLIB)
 else()
   llvm_map_components_to_libnames(llvm_libs core irreader bitreader passes transformsutils analysis codegen)
   target_link_libraries(bennett-front PRIVATE ${llvm_libs})
+endif()
+
+# The declaration rule of the handle interface on one unit's parsed form (docs/HANDLES.md, section 4).
+add_executable(bennett-handles
+  src/HandlesTool.cpp
+  src/Primitives.cpp
+  src/UnitDeclarations.cpp
+  src/Markers.cpp
+  src/Diagnostic.cpp
+)
+target_include_directories(bennett-handles SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+target_compile_definitions(bennett-handles PRIVATE ${LLVM_DEFINITIONS})
+target_compile_options(bennett-handles PRIVATE -Wall -Wextra -fno-rtti -fno-exceptions)
+if(LLVM_LINK_LLVM_DYLIB)
+  target_link_libraries(bennett-handles PRIVATE LLVM)
+else()
+  llvm_map_components_to_libnames(handles_libs core support)
+  target_link_libraries(bennett-handles PRIVATE ${handles_libs})
 endif()
 
 # The default floating-point runtime, `float-runtime.bc` next to bennett-front: Berkeley SoftFloat 3e

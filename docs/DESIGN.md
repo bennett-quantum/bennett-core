@@ -1021,7 +1021,31 @@ surface is `docs/MARKERS.md`. Input LLVM's reader cannot parse, stops on or cras
 verifier rejects, is named "the input is not valid LLVM IR" with status 2, and no device program is written; an empty file is LLVM's empty module and gives
 an empty device program (`front/src/main.cpp`, `readInput`).
 
-The handle interface that replaces the marker surface, built beside it, is designed in `docs/HANDLES.md`.
+The handle interface that replaces the marker surface, built beside it, is designed in `docs/HANDLES.md`. Of its
+translation path, the front end's own part is built (new files, beside the old layer):
+
+- **The declaration rule on the module** (`front/src/Primitives.h`). `bennett-front` checks, before anything else,
+  every symbol whose linker name is one of the eleven primitives (the seven `bq_*` functions and the four reserved
+  effect primitives): it must be a function declaration with
+  external linkage, the header's LLVM type as clang 18 emits it, `noreturn` exactly where the header has it, and
+  no attribute that lets LLVM remove, merge or move a call; every call of it must have that type and no such
+  attribute. The attributes allowed are the target and code-generation strings, `nounwind`, `nobuiltin`, and on
+  operands `noundef`, `signext`, `zeroext`, and at calls the operand facts `nonnull`, alignment and dereferenceable
+  bytes. A break is refused by name with status 2. A program that refers to a marker and to one of the seven
+  interface functions is refused by name too. A program that passes and uses the interface is then refused with
+  "not handled yet" at its first interface call: the translation into device instructions waits on the device
+  forms (`docs/HANDLES.md`, section 14).
+- **The declaration rule on each unit's parsed form** (`front/src/UnitDeclarations.h`, the tool `bennett-handles
+  check-unit`). The driver runs clang 18 on the unit twice with `-fsyntax-only -Xclang -ast-dump=json` and the
+  filters `bq_` and `__bennett_` (2 MB and 0.6 s for the SQLite amalgamation, against 735 MB and 6 s unfiltered)
+  and passes both dumps. The check refuses by name a declaration with linkage of a primitive's identifier other
+  than the header's, a definition or `alias` of one, a declaration of another identifier with a primitive's
+  linker name, a header declaration whose final linker name is not its identifier (`#pragma redefine_extname`,
+  clause 3 of the rule), and a unit in which the header at the given path does not declare every primitive.
+- **Tests** (`front/tests/tests/handles_front.rs`): each refusal from a C program at `-O0` and at `-O2`, and a
+  conforming program that passes both checks. The gate kind and the rotation axis are run-time operands of the
+  device instruction, which makes every check of the call in the interface's order; the front end does not switch
+  on them.
 
 - **A qubit is a variable, not a value.** A local variable whose address is passed to a marker becomes a quantum
   register as wide as the variable. There is no allocation call.
@@ -2447,6 +2471,24 @@ output functions `__bennett_exit` and `__bennett_effect`, for attributes on a ca
 Route: the declaration rule and reserved addresses of the handle path (`docs/HANDLES.md`): each primitive is one
 fixed device function at a reserved address, and a call to that address, direct or through a pointer, is that
 primitive's call.
+
+The handle interface's front end (`docs/HANDLES.md`; the old layer above stays as it is):
+
+- **Every program that uses the handle interface is refused by name** ("not handled yet") after the declaration
+  checks: the translation of each of its calls into one device instruction waits on the device forms D1 to D10 and
+  the codes 20 to 24. `__bennett_bad_argument` is not yet lowered to `fault bad_argument` (code 24 is not in
+  the device language). Route: part two of the path, once the forms land.
+- **A program that uses both interfaces is refused by name.** Cheap to reverse: the check is one test in
+  `checkPrimitives`; the two could be allowed side by side once both paths can run in one program.
+- **A compatible declaration of another identifier with a primitive's linker name is not refused** when the
+  identifier contains neither `bq_` nor `__bennett_` (`void my_free(bq_reg) __asm__("bq_free");`): the filtered
+  dumps do not contain it, and in the module it is the header's declaration. Its calls are the primitive's calls,
+  with the same type and no attribute (the module check refuses either), so the result is the right one; the rule
+  of `docs/HANDLES.md`, section 4, clause 2, refuses it. Route: a scan of every declaration's linker name in the
+  unfiltered dump, streamed, or a clang plugin when the clang development headers are part of the toolchain.
+- **The unit check runs only where the driver runs it.** No driver of the tree compiles a handle program yet (the
+  tests do), and the C library's units declare `__bennett_effect` and `__bennett_exit` themselves, so they would be
+  refused (runtime items R1 and R2 of `docs/HANDLES.md`). Route: the driver of the handle path, after R1 and R2.
 
 | Refused inside emitted `apply` | Construction needed |
 |---|---|
