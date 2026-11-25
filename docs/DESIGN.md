@@ -2164,6 +2164,22 @@ which check phases as well as weights. The recorded test coverage and its limits
 keeps an old value. The warning for use of a tested-only shape and the missing proofs for gate
 loops, loop updates, applied calls and retained overwrites are tracked in `HANDOFF.md`, "Debts".
 
+## Run arguments at the musl boundary
+
+With musl linked, `main` receives the run's arguments as C strings: `rt/musl/link.py --arg S` (repeated, in
+order) gives `argv[1]`, `argv[2]`, ..., and `--argv0 S` replaces `argv[0]` (default `prog`). They are the host's
+exact bytes, so an empty string or bytes that are not UTF-8 arrive unchanged; a NUL cannot be one. `argv[argc]` is
+a null pointer and the environment is empty, as before. The strings and the array are writable data of the run
+image, laid out as Linux lays out a new process's stack: the NUL-terminated strings contiguous, and `argv`, its null
+pointer, the environment's null pointer and the auxiliary vector one array, because musl's start-up finds the
+environment at `argv + argc + 1` and the auxiliary vector after it (`rt/musl/start.h`). The arguments are part of
+the run input like the clock start and the entropy image: `link.py` writes them into the same generated file,
+start-up reads only that data, and the same image gives the same run. The device imposes no limit of its own;
+`link.py` receives them through the host's `execve`, so the host's limits (128 KiB per string, about 2 MiB in all
+with the default stack limit) bound them as they bound the native run. A program reads, for example, a measured
+step budget with `strtoul(argv[1], ...)`. Changing an argument means relinking, as for the other images; passing
+arguments to `bennett run` without relinking needs the separate image loader below.
+
 ## Files, clock and entropy at the musl boundary
 
 `rt/musl/vfs.c`, `devices.c` and `models.c` carry the earlier workspace's ordinary C models

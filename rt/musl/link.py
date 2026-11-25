@@ -30,6 +30,9 @@ def main():
     parser.add_argument("--clock-start", type=int, default=0, help="run input: initial unsigned nanoseconds")
     parser.add_argument("--entropy-image", type=Path, help="run input: exact entropy bytes (default empty)")
     parser.add_argument("--file-image", type=Path, help="run input: JSON mapping absolute file paths to hex bytes")
+    parser.add_argument("--arg", action="append", default=[], dest="run_args", metavar="STRING",
+                        help="run input: the next argument of main, in order (--arg=-x for one starting with -)")
+    parser.add_argument("--argv0", default="prog", metavar="STRING", help="run input: argv[0] (default prog)")
     args = parser.parse_args()
     if not 0 <= args.clock_start < 1 << 64:
         parser.error("--clock-start must fit in an unsigned 64-bit integer")
@@ -76,10 +79,27 @@ def main():
         parser.error("a file-image path cannot be another file's parent directory")
     def cbytes(data):
         return '"' + ''.join(f"\\x{x:02x}" for x in data) + '"'
+    # The arguments are the host's exact bytes (os.fsencode undoes Python's decoding of non-UTF-8 bytes),
+    # NUL-terminated and contiguous, as Linux lays them out; the start vector holds argv, its null pointer,
+    # the empty environment and the auxiliary vector in one array (start.h).
+    strings = [os.fsencode(text) for text in [args.argv0, *args.run_args]]
+    if any(b"\0" in string for string in strings):
+        parser.error("an argument cannot contain a NUL byte")
+    offsets, argument_bytes = [], b""
+    for string in strings:
+        offsets.append(len(argument_bytes))
+        argument_bytes += string + b"\0"
+    vector = [f"{{.pointer = __bennett_argument_bytes + {offset}}}" for offset in offsets]
+    vector += ["{.pointer = 0}", "{.pointer = 0}", "{.value = AT_PAGESZ}", "{.value = 4096}", "{.value = AT_NULL}",
+               "{.value = 0}", "{.value = 0}", "{.value = 0}"]
     inputs_c = ['#include <stdint.h>', '#include <fcntl.h>', '#include <unistd.h>', '#include <sys/stat.h>',
+                '#include <elf.h>', '#include "start.h"',
                 f'const uint64_t __bennett_clock_start = {args.clock_start}ULL;',
                 f'const uint64_t __bennett_entropy_size = {len(entropy)}ULL;',
                 f'const unsigned char __bennett_entropy_image[] = {cbytes(entropy)};',
+                f'static char __bennett_argument_bytes[{len(argument_bytes)}] = {cbytes(argument_bytes)};',
+                f'const int __bennett_argc = {len(strings)};',
+                'union __bennett_start_word __bennett_start_vector[] = {' + ', '.join(vector) + '};',
                 'void __bennett_input_files(void) {']
     directories = {"/dev", "/tmp"}
     for path, data in contents:
@@ -96,7 +116,7 @@ def main():
                ("vfs.c", "vfs.bc", []), ("devices.c", "devices.bc", []), ("models.c", "models.bc", [])]
     for source, output, extra in sources:
         run([clang, *flags, *common, *extra, HERE / source, "-o", scratch / output])
-    run([clang, *flags, *common, scratch / "inputs.c", "-o", scratch / "inputs.bc"])
+    run([clang, *flags, *common, "-I", HERE, scratch / "inputs.c", "-o", scratch / "inputs.bc"])
     inputs = [scratch / output for _, output, _ in sources] + [scratch / "program.bc", scratch / "inputs.bc"]
     roots = []
     for _ in range(16):

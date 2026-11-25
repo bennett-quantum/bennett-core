@@ -34,6 +34,87 @@ EXHAUSTED = {
 }
 
 
+# Run arguments (link.py --arg, --argv0): each case runs natively with the same argv (argv[0] included) and an
+# empty environment, and on the device, comparing status and stdout. Arguments are exact bytes.
+ARGUMENT_CASES = [
+    ("args", "no-arguments", b"prog", [], ["-O0"]),
+    ("args", "empty", b"prog", [b"", b"", b"x", b""], ["-O0"]),
+    ("args", "many", b"prog", [b"%d" % i * (i % 7) for i in range(200)], ["-O0"]),
+    ("args", "bytes", b"prog", [b"\xc3\xa9t\xc3\xa9", bytes(range(0x80, 0x100)), b"\x01\x02\x1f\x7f",
+                                b" spaces \"quotes\" \\ ", b"-x", b"--arg", b"="], ["-O0", "-O2"]),
+    ("args", "argv0", b"/usr/local/bin/named", [b"a"], ["-O0"]),
+    ("budget", "budget-enough", b"prog", [b"1000"], ["-O0", "-O2"]),
+    ("budget", "budget-short", b"prog", [b"10", b"0x1b"], ["-O0"]),
+    ("budget", "budget-range", b"prog", [b"18446744073709551616"], ["-O0"]),
+    ("budget", "budget-rest", b"prog", [b"12abc"], ["-O0"]),
+    ("budget", "budget-missing", b"prog", [], ["-O0"]),
+]
+
+
+def argument_cases(args):
+    for source_name, case, argv0, arguments, levels in ARGUMENT_CASES:
+        source = HERE / "tests" / f"{source_name}.c"
+        for level in levels:
+            program = args.out / f"args-{case}{level}.bn"
+            command = ["python3", HERE / "link.py", source, "--libdir", args.libdir, "--front", args.front,
+                       f"--clang-flag={level}", "-o", program, b"--argv0=" + argv0,
+                       *(b"--arg=" + argument for argument in arguments)]
+            linked = subprocess.run([a if isinstance(a, bytes) else str(a) for a in command], capture_output=True)
+            assert linked.returncode == 0, linked.stderr
+            result = run([args.executor, "run", "--entry", "__bennett_entry", "--budget", 1000000000, program])
+            native = args.out / f"args-{source_name}{level}.native"
+            built = run(["clang-18", level, source, "-o", native])
+            assert built.returncode == 0, built.stderr
+            reference = subprocess.run([argv0, *arguments], executable=native, env={}, capture_output=True,
+                                       stdin=subprocess.DEVNULL)
+            assert f"result: {reference.returncode}\n" in result.stdout, (case, level, result.stdout, reference)
+            assert result.returncode == 0, (case, level, result)
+            console = next((line.removeprefix("console: ") for line in result.stdout.splitlines()
+                            if line.startswith("console: ")), "")
+            assert console == escaped(reference.stdout), (case, level, console, reference.stdout)
+            print(f"arguments {case} {level}: passed (status {reference.returncode})", flush=True)
+
+
+def device_functions(path):
+    """The text of each function of a device program, by name."""
+    functions, name = {}, None
+    for line in path.read_text().splitlines(keepends=True):
+        if line.startswith("func @"):
+            name = line[len("func @"):].split("(")[0]
+            functions[name] = line
+        elif name is not None:
+            functions[name] += line
+            if line.startswith("}"):
+                name = None
+    return functions
+
+
+def relinked_apply(args):
+    """Two images of one program with different arguments: main sees each, and the applied function (a second
+    entry; quantum operations in main of a musl-linked program are refused today) has the same text and takes
+    the same steps in both. The arguments move later data, so code that names those addresses differs."""
+    source = HERE / "tests/args-apply.c"
+    runs = []
+    for budget in ("1000", "77"):
+        program = args.out / f"args-apply-{budget}.bn"
+        linked = run(["python3", HERE / "link.py", source, "--libdir", args.libdir, "--front", args.front,
+                      "-o", program, f"--arg={budget}"])
+        assert linked.returncode == 0, linked.stderr
+        classical = run([args.executor, "run", "--entry", "__bennett_entry", "--budget", 100000000, program])
+        assert classical.returncode == 0 and f'console: "budget {budget}\\n"' in classical.stdout, classical
+        applied = run([args.executor, "run", "--entry", "applied_entry", "--stats", "--budget", 100000000, program])
+        assert applied.returncode == 0 and "region faults: 0 " in applied.stdout, applied
+        counts = [line.strip() for line in applied.stdout.splitlines()
+                  if line.startswith(("result: ", "steps: ", "  region steps: "))]
+        assert len(counts) == 3, applied.stdout
+        runs.append((device_functions(program), counts))
+    (first, first_counts), (second, second_counts) = runs
+    assert first_counts == second_counts, (first_counts, second_counts)
+    for name in ("applied_entry", "applied_entry.apply", "search"):
+        assert first[name] == second[name], name
+    print(f"arguments relinked apply: passed ({', '.join(first_counts)} in both)", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--libdir", type=Path, default=ROOT / "target/musl")
@@ -94,6 +175,8 @@ def main():
                             if line.startswith("console: ")), "")
             assert console == escaped(output), (name, console, output)
         print(f"{name} {level}: passed ({program.stat().st_size} text bytes)", flush=True)
+    argument_cases(args)
+    relinked_apply(args)
     print(f"library tests: {time.monotonic() - started:.2f}s", flush=True)
 
 

@@ -30,8 +30,9 @@ the standard init/fini bounds supplied by the front, and retries library depende
 and `--arena-bytes` select build products and limits. Intermediate files are temporary unless `--keep DIR`
 is supplied. The supplied program needs a defined `int main` with zero to three ordinary C parameters.
 
-`start.c` gives musl's unmodified `__libc_start_main` a correctly typed adapter to `main`, `argc=1`,
-`argv={"prog",0}`, an empty environment and a page-size auxiliary vector. Musl initializes its own thread
+`start.c` gives musl's unmodified `__libc_start_main` a correctly typed adapter to `main`, the run's
+arguments, an empty environment and a page-size auxiliary vector. The arguments are a run input
+(`--arg`, `--argv0`; below), `argc=1` and `argv={"prog",0}` without them. Musl initializes its own thread
 and TLS data, walks the front's constructor arrays, calls main, and runs its own `exit`: atexit handlers,
 destructors and stdio flushing. Bennett supplies only the thread-pointer bridge and system-call boundary;
 there is no probe hash oracle or hand-made exit sequence.
@@ -101,15 +102,23 @@ Supply the run's inputs when constructing its image:
 
 ```sh
 python3 rt/musl/link.py program.c -o program.bn --clock-start 1234999999998 \
-  --entropy-image entropy.bin --file-image files.json
+  --entropy-image entropy.bin --file-image files.json --arg 100000 --arg=-v --arg ''
 bennett run program.bn --entry __bennett_entry --reverse --stats
 ```
+
+Each `--arg` is the next argument of `main`, in order (`--arg=-v` for one that starts with `-`); `--argv0`
+replaces `argv[0]`, `prog` by default. The strings are the host's exact bytes (an empty string, bytes that are
+not UTF-8), NUL-terminated and contiguous in writable data of the image, and `argv[argc]` is null. `start.h`
+declares the one array musl's start-up reads: `argv`, its null pointer, the empty environment's null pointer and
+the auxiliary vector, as on a Linux process's initial stack; `link.py` defines it with the other inputs, so
+start-up reads nothing but the image. There is no device limit; the host's `execve` limits on `link.py`'s own
+command line (128 KiB per string, about 2 MiB in all) are the native run's.
 
 `files.json` maps canonical absolute paths to hex byte strings, for example
 `{"/fixtures/input":"610062ff63"}`. Parent directories are created automatically. Installation occurs
 before the first device syscall, including those called by constructors, and is itself journalled.
-The defaults are no user files, clock start zero and an empty entropy image. These are inputs of
-the run image; to use another image currently relink. Host paths are read only by the image builder.
+The defaults are no user files, clock start zero, an empty entropy image and no arguments. These are
+inputs of the run image; to use another image currently relink. Host paths are read only by the image builder.
 
 A clock read returns the unsigned 64-bit start plus the number of earlier clock reads, in nanoseconds,
 wrapping modulo 2^64. Accepted clock ids share that counter. `clock_gettime`, `gettimeofday` and `time`
@@ -175,7 +184,11 @@ These offline integration tests are separate from `cargo test` and `front/test.s
 stdout/status for floating-point printf/strtod/sqrt/sin/pow, for constructors, atexit, destructors and
 nested exit, for `malloc`/`realloc`/`calloc`/`free`, for signals raised, blocked, ignored and handled, for
 `abort` after a handler returns, for reads of the empty stdin through `scanf`, `getchar` and `fgets`, and for
-a break that shrinks and grows again, for the default floating-point environment, and for complex products,
+a break that shrinks and grows again, for the default floating-point environment, for run arguments
+(`args.c`: none, empty strings, 200 arguments, bytes that are not ASCII or UTF-8, another `argv[0]`, writes
+into the strings and the array; `budget.c`: a step budget read with `strtoul` and passed on, in range, out of
+range and malformed; each run natively with the same `argv` and an empty environment; `args-apply.c`: two images linked
+with different arguments give the same steps inside an `apply` and the same text for the applied functions), and for complex products,
 quotients and `cexp` (`complex.c`, over libgcc's helpers), and for `setjmp`/`longjmp` across frames, `sigsetjmp` with
 and without the signal mask (musl's `__sigsetjmp_tail`) and jumps out of signal handlers (`setjmp.c`); they check that heap
 exhaustion by `mmap`, `malloc`, `realloc` and the break is the fault `out_of_memory` with the output flushed
@@ -184,6 +197,8 @@ arithmetic rejections stay null against native (`alloc-arithmetic`), and named f
 `tests/regress/` holds the self-checking witnesses of the independent testing pass of this boundary (each
 returns 0 natively and failed or faulted here before its fix). The 35 programs (42 runs with the
 `-O2` ones) took 173 seconds with the debug CLI on the shared machine, after building the library.
+The run-argument cases and the relinked `apply` were measured with the 24 tests before the allocator
+ones: 243 s together on the shared machine (2026-11-25).
 The debug CLI now reads their large data strings without overflowing its host stack.
 
 The front writes zero runs of 16 bytes or more as one `zero N` data item, so the 1 MiB arena costs a

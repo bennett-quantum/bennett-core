@@ -1,6 +1,7 @@
-/* Enter musl's own startup. It initializes TLS, walks constructors, calls main, then calls exit. */
-#include <elf.h>
+/* Enter musl's own startup. It initializes TLS, walks constructors, calls main, then calls exit.
+ * The arguments, environment and auxiliary vector are the run input's (start.h). */
 #include <stddef.h>
+#include "start.h"
 #ifndef MAIN_ARGS
 #define MAIN_ARGS 0
 #endif
@@ -25,15 +26,10 @@ static int invoke_main(int argc, char **argv, char **envp)
 }
 int __libc_start_main(int (*)(int, char **, char **), int, char **, void (*)(), void (*)(), void (*)());
 _Noreturn void __bennett_exit(int);
-static char name[] = "prog";
-static struct {
-    char *argv[2];
-    char *envp[1];
-    size_t auxv[6];
-} initial_stack = {{name, NULL}, {NULL}, {AT_PAGESZ, 4096, AT_NULL, 0, 0, 0}};
 
 int __bennett_entry(void)
 {
-    int status = __libc_start_main(invoke_main, 1, initial_stack.argv, NULL, NULL, NULL);
+    char **argv = &__bennett_start_vector[0].pointer;
+    int status = __libc_start_main(invoke_main, __bennett_argc, argv, NULL, NULL, NULL);
     __bennett_exit(status);
 }
