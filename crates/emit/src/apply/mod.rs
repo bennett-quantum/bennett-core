@@ -17,6 +17,7 @@ mod products;
 mod ranges;
 mod reach;
 mod saved;
+mod selectors;
 mod shifts;
 mod stack;
 mod switches;
@@ -51,9 +52,9 @@ pub enum Construction {
         /// Passes permitted by the width of the exponent.
         passes: usize,
     },
-    /// A qubit-dependent jump required instruction dispatch.
+    /// Qubit-dependent control required instruction dispatch.
     StepMachine {
-        /// Ticks after the definite prefix, including the first qubit-dependent jump.
+        /// Ticks after the definite prefix, including the attempt that triggered dispatch.
         ticks: u64,
     },
     /// A proof covered the first outcome of one loop and no instruction dispatch is needed.
@@ -261,15 +262,16 @@ fn compile_with_analysis_limit(
                         status = Status::Faulted(fault);
                         continue;
                     }
-                    Step::Switch(..) => {
+                    Step::Switch(..) | Step::Indirect(..) => {
+                        let refusal = if matches!(step, Step::Switch(..)) {
+                            controls::Refusal::MultiwayDispatch
+                        } else {
+                            controls::Refusal::IndirectDispatch
+                        };
                         let remaining = input.budget - spent;
                         let (copies, ticks) =
                             machine::run(&mut circuit, &program, &mut slots, &mut memory, (point, ONE), remaining)?;
-                        break (
-                            copies,
-                            Construction::StepMachine { ticks },
-                            controls::Refusal::MultiwayDispatch.reason(),
-                        );
+                        break (copies, Construction::StepMachine { ticks }, refusal.reason());
                     }
                     Step::Branch(..) => {
                         let remaining = input.budget - spent;

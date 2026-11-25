@@ -168,8 +168,8 @@ done:
 }
 
 #[test]
-fn an_indirect_target_must_stay_definite_across_loop_visits() {
-    use bennett_emit::{ApplyError, ApplyInput, Argument, compile_apply_with};
+fn indirect_dispatch_plans_targets_discovered_on_later_loop_visits() {
+    use bennett_emit::{ApplyInput, Argument, Construction, compile_apply_with};
     use bennett_ir::load;
 
     let module = load(
@@ -204,7 +204,7 @@ entry:
     .expect("valid loop with a late call target and an unreachable cycle");
     let callee = module.function_named("f").expect("callee");
     for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
-        for budget in [0, 10] {
+        for budget in [0, 7, 8, 9, 10, 11] {
             let input = ApplyInput {
                 module: &module,
                 callee,
@@ -217,14 +217,12 @@ entry:
                 memory: None,
                 scratch_start: 14,
             };
-            let error = compile_apply_with(input.clone(), mode).expect_err("the live back edge changes the address");
-            assert!(matches!(
-                error,
-                ApplyError::Unsupported { operation: "call_indirect", route: "a proved definite function address", .. }
-            ));
+            let compiled = compile_apply_with(input.clone(), mode).expect("plan both addresses");
+            super::super::check(&compiled, 1, 13, |x| if budget < 10 { 1 << 8 } else { 7 + 2 * x });
             let fixed = ApplyInput { args: &[Argument::Value(0)], ..input };
             let compiled = compile_apply_with(fixed, mode).expect("the unreachable cycle cannot change the address");
-            super::super::check(&compiled, 1, 13, |_| if budget == 0 { 1 << 8 } else { 7 });
+            assert_eq!(compiled.construction, Construction::Definite);
+            super::super::check(&compiled, 1, 13, |_| if budget < 10 { 1 << 8 } else { 7 });
         }
     }
 }

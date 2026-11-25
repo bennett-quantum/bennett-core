@@ -28,6 +28,7 @@ pub(super) enum Refusal {
     RepeatedContinuation,
     UnequalCharges,
     MultiwayDispatch,
+    IndirectDispatch,
 }
 
 impl Refusal {
@@ -37,6 +38,7 @@ impl Refusal {
             Self::IncompatibleJoins => "qubit-dependent routes do not share a supported continuation",
             Self::RepeatedContinuation => "conditional routes would emit shared code more than once",
             Self::MultiwayDispatch => "qubit-dependent switch uses multiway dispatch",
+            Self::IndirectDispatch => "qubit-dependent indirect call uses multiway dispatch",
             Self::UnequalCharges => "unequal route lengths can exhaust the budget after a join",
         }
     }
@@ -178,6 +180,7 @@ impl Controls<'_, '_> {
                 }
                 Step::Inactive => unreachable!("this lowering does not access memory"),
                 Step::Switch(..) => return Err(Failure::Control(Refusal::MultiwayDispatch)),
+                Step::Indirect(..) => return Err(Failure::Control(Refusal::IndirectDispatch)),
                 Step::Branch(condition, yes, no) => {
                     let choice = (point.copy, point.block);
                     if !self.choices.insert(choice) {

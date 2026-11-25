@@ -501,6 +501,11 @@ cold:
 done(i8 %result):
     ret %result
 }}
+func @recursive_target() -> i8 {{
+entry:
+    %again = call @recursive_target()
+    ret %again
+}}
 "#
         );
         let module = load(&source).expect("valid switch with an unreachable indirect call");

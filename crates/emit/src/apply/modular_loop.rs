@@ -237,7 +237,12 @@ fn straight(program: &Program<'_>, slots: &mut [Word], mut point: Point, prefix:
                 next
             }
             Step::Return(word) => return Some((End::Return(word), steps)),
-            Step::Branch(..) | Step::Switch(..) | Step::CheckedTransfer(..) | Step::Inactive | Step::Fault(_) => {
+            Step::Branch(..)
+            | Step::Switch(..)
+            | Step::Indirect(..)
+            | Step::CheckedTransfer(..)
+            | Step::Inactive
+            | Step::Fault(_) => {
                 return None;
             }
         };

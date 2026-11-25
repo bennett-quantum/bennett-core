@@ -34,11 +34,19 @@ pub(super) enum Status {
     Faulted(Fault),
 }
 
+pub(super) struct IndirectCall<'a> {
+    pub(super) address: Word,
+    pub(super) args: &'a [Operand],
+    pub(super) targets: Vec<(u64, usize)>,
+    pub(super) invalid_possible: bool,
+}
+
 pub(super) enum Step<'a> {
     Write(Point, Slot, Word),
     Jump(&'a Target),
     Branch(Bit, &'a Target, &'a Target),
     Switch(Word, Edges<'a>),
+    Indirect(IndirectCall<'a>),
     Return(Word),
     Transfer(Point, Vec<(Slot, Word)>),
     CheckedTransfer(Point, Vec<(Slot, Word)>, Bit, Vec<(Bit, Fault)>),

@@ -2,9 +2,11 @@
 
 use std::fmt::Write;
 
+use bennett_ir::Fault;
+
 use super::{
-    ApplyError, ApplyInput, ApplyMode, Construction, CountingDevice, Executor, Options, Outcome, RunError,
-    compare_controls, compile_apply_with, control_example, load,
+    ApplyError, ApplyInput, ApplyMode, Argument, Construction, CountingDevice, Device, Executor, Options, Outcome,
+    RunError, apply_input, compare_controls, compile_apply_with, control_example, load,
 };
 
 #[test]
@@ -82,7 +84,7 @@ entry:
 }
 
 #[test]
-fn bypassed_indirect_calls_need_no_target_proof() {
+fn bypassed_indirect_calls_do_not_copy_recursive_targets() {
     for condition in ["1", "%same"] {
         let source = format!(
             r#"
@@ -104,7 +106,8 @@ done:
 }}
 func @leaf() -> i8 {{
 entry:
-    ret 9
+    %again = call @leaf()
+    ret %again
 }}
 "#
         );
@@ -327,6 +330,287 @@ entry:
 }
 
 #[test]
+fn indirect_dispatch_selects_a_signature_and_checks_only_that_frames_space() {
+    for memory in [64, 72] {
+        let source = format!(
+            r#"
+memory {memory}
+func @wrong_signature() -> i1 {{
+entry:
+    ret 0
+}}
+func @small() -> i8 {{
+entry:
+    ret 9
+}}
+func @large() -> i8 {{
+entry:
+    %value = add i8 3, 4
+    ret %value
+}}
+func @f(i2 %x) -> i8 {{
+entry:
+    %address = zext i2 %x to i64
+    %result = call_indirect fn() -> i8 %address()
+    ret %result
+}}
+"#
+        );
+        let module = control_example(&source, 2, "");
+        // Five controller slots and three applied slots use 64 bytes.
+        // The small target needs zero more bytes and the large one needs eight.
+        for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+            for budget in 0..=6 {
+                compare_controls(&module, budget, mode, |address| match (budget, address) {
+                    (0..=1, _) => (0, 1),
+                    (_, 0..=1) => (0, 4),
+                    (_, 3) if memory == 64 => (0, 6),
+                    (4.., 2) => (9, 0),
+                    (5.., 3) => (7, 0),
+                    _ => (0, 1),
+                });
+            }
+            let compiled = compile_apply_with(apply_input(&module, &[Argument::Register(0..2)], 2, 2), mode)
+                .expect("emit the indirect attempt");
+            assert_eq!(compiled.construction, Construction::StepMachine { ticks: 1 });
+            let mut device = CountingDevice::default();
+            let interface = 2 + 8 + 5;
+            device.allocate(0..interface).expect("allocate interface");
+            compiled.send(&mut device).expect("count the attempt");
+            let counts = device.counts();
+            // Two equality tests of a two-bit word need one Toffoli each.
+            // Their XOR gives the unmatched guard. Uncomputation doubles the Toffolis.
+            let targets = 2;
+            assert_eq!(counts.toffoli, 2 * targets);
+            assert_eq!(counts.peak_qubits, interface as usize + targets as usize + 1);
+        }
+    }
+}
+
+#[test]
+fn indirect_address_aliases_exclude_an_incompatible_recursive_target() {
+    let module = control_example(
+        r#"
+memory 512
+func @first(i8 %arg) -> i8 {
+entry:
+    %answer = add i8 %arg, 1
+    ret %answer
+}
+func @second(i8 %arg) -> i8 {
+entry:
+    %answer = xor i8 %arg, 6
+    ret %answer
+}
+func @never(i8 %arg) -> i8 {
+entry:
+    %answer = call @never(%arg)
+    ret %answer
+}
+func @f(i1 %x) -> i8 {
+entry:
+    %first = faddr @first
+    %second = faddr @second
+    %address = select i64 %x, %first, %second
+    %arg = zext i1 %x to i8
+    %result = call_indirect fn(i8) -> i8 %address(%arg)
+    ret %result
+}
+"#,
+        1,
+        "",
+    );
+    // Addresses 1 and 2 use the same low two bits with opposite polarities.
+    // Address 3 agrees with the constant bits and violates that relation.
+    for budget in 0..=9 {
+        for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+            compare_controls(&module, budget, mode, |x| {
+                if budget < 8 {
+                    (0, 1)
+                } else if x == 0 {
+                    (6, 0)
+                } else {
+                    (2, 0)
+                }
+            });
+        }
+    }
+}
+
+#[test]
+fn an_indirect_site_with_no_compatible_target_faults_at_its_attempt() {
+    let module = control_example(
+        r#"
+memory 512
+func @wrong_signature() -> i1 {
+entry:
+    ret 1
+}
+func @outside_address_range() -> i8 {
+entry:
+    ret 7
+}
+func @f(i1 %x) -> i8 {
+entry:
+    %address = zext i1 %x to i64
+    %result = call_indirect fn() -> i8 %address()
+    ret %result
+}
+"#,
+        1,
+        "",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in [1, 2, 3] {
+            compare_controls(&module, budget, mode, |_| {
+                let fault = if budget < 2 { Fault::Budget } else { Fault::BadIndirect };
+                (0, fault.code())
+            });
+        }
+    }
+}
+
+#[test]
+fn a_guarded_indirect_call_with_one_candidate_shares_the_budget() {
+    let module = control_example(
+        r#"
+memory 512
+func @only_target() -> i8 {
+entry:
+    ret 19
+}
+func @f(i2 %x) -> i8 {
+entry:
+    %odd = trunc i2 %x to i1
+    br %odd, invoke, skip
+invoke:
+    %high = lshr i2 %x, 1
+    %address = zext i2 %high to i64
+    %result = call_indirect fn() -> i8 %address()
+    ret %result
+skip:
+    ret 31
+}
+"#,
+        2,
+        "",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in [2, 3, 4, 5, 6, 7, 8] {
+            compare_controls(&module, budget, mode, |x| match x {
+                0 | 2 if budget >= 3 => (31, 0),
+                1 if budget >= 5 => (0, Fault::BadIndirect.code()),
+                3 if budget >= 7 => (19, 0),
+                _ => (0, Fault::Budget.code()),
+            });
+        }
+    }
+}
+
+#[test]
+fn indirect_targets_respect_the_call_copy_work_limit() {
+    // The caller costs one parameter slot, the call, and the return. Each
+    // candidate costs just its return, so this site can copy 16,381 targets.
+    let mut source = String::from(
+        r#"
+memory 512
+func @f(i64 %address) -> i8 {
+entry:
+    call_indirect fn() %address()
+    ret 7
+}
+"#,
+    );
+    for target in 0..16_381 {
+        writeln!(
+            source,
+            "func @target{target}() {{
+entry:
+    ret
+}}"
+        )
+        .expect("write target");
+    }
+    for exceeds_limit in [false, true] {
+        if exceeds_limit {
+            source.push_str(
+                "func @extra() {
+entry:
+    ret
+}
+",
+            );
+        }
+        let module = load(&source).expect("valid indirect call with many targets");
+        let input = apply_input(&module, &[Argument::Register(0..64)], 64, 0);
+        for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+            let result = compile_apply_with(input.clone(), mode);
+            if exceeds_limit {
+                assert!(
+                    matches!(
+                        result,
+                        Err(ApplyError::Unsupported {
+                            callee,
+                            block: bennett_ir::BlockId(0),
+                            index: 0,
+                            operation: "call_indirect",
+                            route: "a smaller copy expansion (limit: 16384 slots and program points)",
+                        }) if callee == input.callee
+                    ),
+                    "{mode:?}: {result:?}"
+                );
+            } else {
+                assert_eq!(result.expect("copies fit the limit").construction, Construction::Definite);
+            }
+        }
+    }
+}
+
+#[test]
+fn an_indirect_target_reserves_space_below_the_current_stack_pointer() {
+    let module = control_example(
+        r#"
+memory 120
+func @small() -> i8 {
+entry:
+    ret 9
+}
+func @large() -> i8 {
+entry:
+    %value = add i8 3, 4
+    ret %value
+}
+func @f(i2 %x) -> i8 {
+entry:
+    %high = lshr i2 %x, 1
+    %lowered = trunc i2 %high to i1
+    %size = select i64 %lowered, 16, 0
+    %p = alloca %size
+    %low = trunc i2 %x to i1
+    %address = select i64 %low, 2, 1
+    %result = call_indirect fn() -> i8 %address()
+    ret %result
+}
+"#,
+        2,
+        "",
+    );
+    // The controller and applied frame leave 16 bytes. An allocation of
+    // all 16 bytes still allows the zero-slot callee, while the larger
+    // callee needs another eight bytes below the current pointer.
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in [6, 7, 8, 9, 10] {
+            compare_controls(&module, budget, mode, |x| match x {
+                0 | 2 if budget >= 9 => (9, 0),
+                1 if budget >= 10 => (7, 0),
+                3 if budget >= 7 => (0, Fault::StackOverflow.code()),
+                _ => (0, Fault::Budget.code()),
+            });
+        }
+    }
+}
+
+#[test]
 fn call_refusals_precede_every_gate_of_the_apply() {
     let mut tree = String::new();
     let levels = 14;
@@ -350,7 +634,7 @@ fn call_refusals_precede_every_gate_of_the_apply() {
             "%addr = zext i1 %x to i64\n    %r = call_indirect fn(i1) -> i8 %addr(%x)",
             "",
             "call_indirect",
-            "a proved definite function address",
+            "recursive call frames",
         ),
         (
             "call @level0()\n    %r = add i8 1, 2",

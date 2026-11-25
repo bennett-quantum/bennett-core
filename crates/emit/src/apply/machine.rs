@@ -1,4 +1,4 @@
-//! One clock for all instructions after the first qubit-dependent jump.
+//! One clock for instruction dispatch after the definite prefix.
 
 use std::collections::{BTreeMap, btree_map::Entry};
 
@@ -64,24 +64,45 @@ pub(super) fn run(
                         jump(circuit, program, slots, &mut next, &mut writes, (point, default), unmatched);
                     }
                 }
+                Step::Indirect(call) => {
+                    let mut unmatched = enabled;
+                    for (address, index) in call.targets {
+                        let pattern = constant(u128::from(address), call.address.len());
+                        let equal = arithmetic::compare(circuit, Predicate::Eq, &call.address, &pattern);
+                        let take = circuit.and(enabled, equal);
+                        if call.invalid_possible {
+                            unmatched = circuit.xor(unmatched, take);
+                        }
+                        if take == ZERO {
+                            continue;
+                        }
+                        match program.enter(circuit, slots, point, index, call.args) {
+                            Ok(entry) => {
+                                if entry.failed != ZERO {
+                                    copies.faulted.push((circuit.and(take, entry.failed), Fault::StackOverflow));
+                                }
+                                let succeeded = circuit.and(take, entry.failed.not());
+                                transfer(circuit, &mut next, &mut writes, entry.next, entry.writes, succeeded);
+                            }
+                            Err(fault) => copies.faulted.push((take, fault)),
+                        }
+                    }
+                    if call.invalid_possible {
+                        copies.faulted.push((unmatched, Fault::BadIndirect));
+                    }
+                }
                 Step::Return(word) => copies.returned.push((enabled, word)),
                 Step::CheckedTransfer(successor, incoming, succeeded, faults) => {
                     copies
                         .faulted
                         .extend(faults.into_iter().map(|(failed, fault)| (circuit.and(enabled, failed), fault)));
                     let succeeded = circuit.and(enabled, succeeded);
-                    for (dst, word) in incoming {
-                        writes.entry(dst).or_default().push((succeeded, word));
-                    }
-                    activate(circuit, &mut next, successor, succeeded);
+                    transfer(circuit, &mut next, &mut writes, successor, incoming, succeeded);
                 }
                 Step::Inactive => {}
                 Step::Fault(fault) => copies.faulted.push((enabled, fault)),
                 Step::Transfer(successor, incoming) => {
-                    for (dst, word) in incoming {
-                        writes.entry(dst).or_default().push((enabled, word));
-                    }
-                    activate(circuit, &mut next, successor, enabled);
+                    transfer(circuit, &mut next, &mut writes, successor, incoming, enabled);
                 }
             }
         }
@@ -140,4 +161,21 @@ fn jump(
         writes.entry(dst).or_default().push((enabled, value));
     }
     activate(circuit, dispatch, Point { copy: point.copy, ..Point::entry(target.block) }, enabled);
+}
+
+fn transfer(
+    circuit: &mut Circuit,
+    dispatch: &mut Dispatch,
+    writes: &mut Writes,
+    successor: Point,
+    incoming: Vec<(Slot, Word)>,
+    enabled: Bit,
+) {
+    if enabled == ZERO {
+        return;
+    }
+    for (dst, word) in incoming {
+        writes.entry(dst).or_default().push((enabled, word));
+    }
+    activate(circuit, dispatch, successor, enabled);
 }

@@ -77,7 +77,11 @@ pub(super) fn analyze(program: &Program<'_>, input: &ApplyInput<'_>, count: usiz
                     stopped = Some(spent + 1);
                     break;
                 }
-                Step::Branch(..) | Step::Switch(..) | Step::CheckedTransfer(..) | Step::Inactive => return None,
+                Step::Branch(..)
+                | Step::Switch(..)
+                | Step::Indirect(..)
+                | Step::CheckedTransfer(..)
+                | Step::Inactive => return None,
             };
         }
         last_attempt = last_attempt.zip(stopped).map(|(previous, stopped)| previous.max(stopped));

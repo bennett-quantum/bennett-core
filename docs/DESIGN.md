@@ -558,17 +558,17 @@ after that site. A copied call may take or return a register, represented in its
 a 64-bit handle. The applied entry itself takes and returns integers. A reached
 instruction that allocates a register or operates on its qubits gives `quantum_in_region`.
 Calls and returns use the same budget as the applied entry.
-An invalid definite address or signature gives `bad_indirect` before checking space
-for a callee. A failed frame reservation gives `stack_overflow`. The budget is checked
-before either instruction, and the entry frame check still comes before the first
-budget check.
+An address with no target of the required signature gives `bad_indirect` before the callee
+frame check. A failed frame reservation gives `stack_overflow`. The budget is checked before
+the call attempt, and the entry frame check comes before the first budget check.
 
-The planner creates copies only for sites the entry analysis can reach. An indirect
-site with one proved definite address uses the same copy construction. Reachable
-recursive calls and indirect sites without one proved address are refused before
-issuing gates. A copied frame keeps the caller's proved literal bits and equalities
-between argument bits across all visits to the call site. A call result is unknown to
-the caller's operand proof. When the first qubit-dependent jump is in a frame entered
+The planner creates copies only for sites the entry analysis can reach. An indirect site
+with one proved definite address uses the same copy construction. For a qubit-dependent address,
+the planner copies each function whose signature matches and whose address agrees with the proved
+constant bits and shared qubit values. Reachable recursion among those candidates or exceeding
+the copy limit is refused before issuing gates. A copied frame keeps the caller's proved
+literal bits and equalities between argument bits across all visits to the call site. A call
+result is unknown to the caller's operand proof. When the first qubit-dependent jump is in a frame entered
 by the definite prefix, the control construction can follow calls and returns under
 the route guard. A return from a copied frame stops at the caller's continuation
 until sibling routes have been lowered. If a copied program first branches on qubits
@@ -594,8 +594,24 @@ for a default that remains possible. Each target reads its arguments from the sa
 pre-tick frame, including when several cases share a target. The whole switch costs
 one step.
 
-Dispatch uses the steps left after the definite prefix, with the first qubit-dependent jump
-or switch counting as the first tick when it triggers dispatch. All loops share that budget.
+A qubit-dependent `call_indirect` uses the same instruction dispatch. The address is compared with
+each compatible target. A matched input enters that target's copied frame if it fits below the
+current stack pointer, or gives `stack_overflow`. If the possible targets leave any addresses
+unmatched, the compiler XORs the match guards out of the incoming dispatch bit and records
+`bad_indirect` under the leftover guard. With no compatible target, the call faults immediately.
+One compatible target uses a direct transfer when its address is the only possible value.
+Only successful calls advance with the next tick. A two-bit selector with two signature-compatible
+addresses and two unmatched addresses needs two Toffolis to compare the addresses, a third scratch
+bit for their XOR, and two inverse Toffolis to clear the work.
+
+The C function-pointer test dispatches between two predicates on an eight-bit input. The
+front lowers the ordinary C function and a device-program harness applies it with a budget
+of 20. Both modes agree with direct evaluation on all 256 inputs. Each emits 70 one-qubit
+gates, 6 two-qubit gates and 58 Toffolis. Peak use is 47 qubits, including 21 argument, result
+and fault qubits. Run `front/test.sh --test emitted_indirect -- --nocapture` to reproduce the counts.
+
+Dispatch uses the steps left after the definite prefix, with the first qubit-dependent jump,
+switch or call target counting as the first tick when it triggers dispatch. All loops share that budget.
 Nesting adds possible points to a tick. When no possible point remains, dispatch stops early.
 
 When control gates encounter a loop without a proved pass count, the compiler can try
@@ -842,9 +858,9 @@ machine's fault semantics, writing fault codes into the program's register. The 
 simulator run is `bennett run --machine-meaning` with its default direct evaluation.
 
 Before consulting the budget, the emitter checks every instruction and terminator in every
-planned function copy, including those in bypassed blocks. It plans indirect calls only in
-reachable blocks and requires a single proved function address at each such site. Call planning
-ends a path at the first unconditional instruction fault. A proved shift
+planned function copy, including those in bypassed blocks. It plans indirect calls in
+reachable blocks by signature and proved address bits. Within each copy, call planning ends a
+path at the first unconditional instruction fault. A proved shift
 amount uses fixed wiring and a proved switch selector follows one target. A qubit-held amount
 uses the shift circuit. A switch with several possible edges uses step machine dispatch.
 
@@ -2290,8 +2306,7 @@ Refused by name or not yet excluded around the classification of "What LLVM's pa
 
 | Refused inside emitted `apply` | Construction needed |
 |---|---|
-| Reachable recursive calls or adding a call copy that raises the total above 16,384 slots and program points | Shared call frames and return positions |
-| Reachable `call_indirect` without one proved constant address | Prove the target across visits or dispatch among supported addresses |
+| A reachable direct or indirect call candidate that recurses or raises the copy total above 16,384 slots and program points | Shared call frames and return positions |
 | `retaddr` | Pass the suspended callers' return sites in one field of the apply input and derive the applied function's return sites from its copied calls |
 | Varying-address `load` or `store` without a proved bound within a declared memory region | Prove the range or declare its full span |
 | `setjmp`, `longjmp` | Private memory and non-local control transfer |

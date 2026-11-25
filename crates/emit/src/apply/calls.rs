@@ -6,10 +6,11 @@ use std::ops::Range;
 use bennett_exec::frame_bytes;
 use bennett_ir::{Block, BlockId, Fault, FuncId, Function, Inst, Operand, Slot, Target, Terminator, Type};
 
-use super::bits::{Bit, Circuit, Word, constant};
+use super::bits::{Bit, Circuit, Word, ZERO, constant};
 use super::memory::{AccessError, Memory};
+use super::selectors::Selector;
 use super::stack::{self, StackSlots};
-use super::symbolic::{Frame, Point, Step, before_instruction_fault};
+use super::symbolic::{Frame, IndirectCall, Point, Step, before_instruction_fault};
 use super::{ApplyError, ApplyInput, Argument};
 
 // Count a unit for each copied slot and each instruction or terminator, including
@@ -28,6 +29,13 @@ struct Copy<'a> {
 enum Site<'a> {
     Call(usize, &'a [Operand]),
     BadAddress,
+    Indirect { target: &'a Operand, args: &'a [Operand], targets: Vec<(u64, usize)>, invalid_possible: bool },
+}
+
+pub(super) struct CallEntry {
+    pub(super) next: Point,
+    pub(super) writes: Vec<(Slot, Word)>,
+    pub(super) failed: Bit,
 }
 
 pub(super) struct Program<'a> {
@@ -86,26 +94,47 @@ impl<'a> Program<'a> {
                         }
                         Inst::CallIndirect { signature, target, args, dst } => {
                             let frame = &program.copies[index].frame;
-                            let Some(address) = frame.known(target) else {
-                                return Err(frame.error(point, "call_indirect", "a proved definite function address"));
-                            };
-                            let callee = input
-                                .module
-                                .function_at(address as u64)
-                                .filter(|&callee| input.module.function(callee).has_signature(signature));
-                            match callee {
-                                Some(callee) => {
-                                    let child = program.child(
-                                        input,
-                                        point,
-                                        callee,
-                                        args,
-                                        (*dst, "call_indirect"),
-                                        &mut slots,
-                                    )?;
-                                    Site::Call(child, args)
+                            if let Some(address) = frame.known(target) {
+                                let callee = input
+                                    .module
+                                    .function_at(address as u64)
+                                    .filter(|&callee| input.module.function(callee).has_signature(signature));
+                                match callee {
+                                    Some(callee) => {
+                                        let child = program.child(
+                                            input,
+                                            point,
+                                            callee,
+                                            args,
+                                            (*dst, "call_indirect"),
+                                            &mut slots,
+                                        )?;
+                                        Site::Call(child, args)
+                                    }
+                                    None => Site::BadAddress,
                                 }
-                                None => Site::BadAddress,
+                            } else {
+                                let proved = frame.known_bits(target).map(|word| Selector::new(&word));
+                                let mut targets = Vec::new();
+                                for (index, function) in input.module.functions.iter().enumerate() {
+                                    let callee = FuncId(index as u32);
+                                    let address = callee.address();
+                                    if function.has_signature(signature)
+                                        && proved.as_ref().is_none_or(|bits| bits.allows(u128::from(address)))
+                                    {
+                                        let child = program.child(
+                                            input,
+                                            point,
+                                            callee,
+                                            args,
+                                            (*dst, "call_indirect"),
+                                            &mut slots,
+                                        )?;
+                                        targets.push((address, child));
+                                    }
+                                }
+                                let invalid_possible = !proved.is_some_and(|bits| bits.covered_by(targets.len()));
+                                Site::Indirect { target, args, targets, invalid_possible }
                             }
                         }
                         Inst::Binary { .. }
@@ -312,35 +341,24 @@ impl<'a> Program<'a> {
         let copy = &self.copies[point.copy];
         let local = &slots[copy.slots.clone()];
         if let Some(site) = copy.sites.get(&(point.block, point.index)) {
-            let Site::Call(index, args) = site else {
-                return Ok(Step::Fault(Fault::BadIndirect));
-            };
-            let child = &self.copies[*index];
-            if child.available_stack.is_none() {
-                return Ok(Step::Fault(Fault::StackOverflow));
-            }
-            let mut writes: Vec<_> = child
-                .frame
-                .initial(args.iter().map(|arg| Frame::read(local, arg)))
-                .into_iter()
-                .enumerate()
-                .map(|(index, word)| (child.slot(Slot(index as u32)), word))
-                .collect();
-            let next = Point { copy: *index, ..Point::entry(BlockId(0)) };
-            if let (Some(parent_stack), Some(child_stack)) = (copy.stack, child.stack) {
-                let size = frame_bytes(child.slots.len()).expect("checked frame size");
-                let (top, failed) = stack::reserve(
-                    circuit,
-                    &slots[parent_stack.current.index()],
-                    &stack::word(size),
-                    self.stack_floor,
-                    false,
-                );
-                writes.push((child_stack.current, top.clone()));
-                writes.push((child_stack.top, top));
-                return Ok(Step::checked(next, writes, failed, Fault::StackOverflow));
-            }
-            return Ok(Step::Transfer(next, writes));
+            return Ok(match site {
+                Site::Call(index, args) => call_step(self.enter(circuit, slots, point, *index, args)),
+                Site::BadAddress => Step::Fault(Fault::BadIndirect),
+                Site::Indirect { target, args, targets, invalid_possible } => {
+                    let address = Frame::read(local, target);
+                    let facts = Selector::new(&address);
+                    let targets: Vec<_> =
+                        targets.iter().filter(|&&(value, _)| facts.allows(u128::from(value))).copied().collect();
+                    let invalid_possible = *invalid_possible && !facts.covered_by(targets.len());
+                    if targets.is_empty() {
+                        Step::Fault(Fault::BadIndirect)
+                    } else if targets.len() == 1 && !invalid_possible {
+                        call_step(self.enter(circuit, slots, point, targets[0].1, args))
+                    } else {
+                        Step::Indirect(IndirectCall { address, args, targets, invalid_possible })
+                    }
+                }
+            });
         }
 
         let block = self.block(point);
@@ -366,11 +384,49 @@ impl<'a> Program<'a> {
             Step::Jump(_)
             | Step::Branch(..)
             | Step::Switch(..)
+            | Step::Indirect(..)
             | Step::Return(_)
             | Step::Transfer(..)
             | Step::Fault(_)
             | Step::Inactive => step,
         })
+    }
+
+    pub(super) fn enter(
+        &self,
+        circuit: &mut Circuit,
+        slots: &[Word],
+        point: Point,
+        index: usize,
+        args: &[Operand],
+    ) -> Result<CallEntry, Fault> {
+        let child = &self.copies[index];
+        child.available_stack.ok_or(Fault::StackOverflow)?;
+        let parent = &self.copies[point.copy];
+        let local = &slots[parent.slots.clone()];
+        let mut writes: Vec<_> = child
+            .frame
+            .initial(args.iter().map(|arg| Frame::read(local, arg)))
+            .into_iter()
+            .enumerate()
+            .map(|(slot, word)| (child.slot(Slot(slot as u32)), word))
+            .collect();
+        let next = Point { copy: index, ..Point::entry(BlockId(0)) };
+        let mut failed = ZERO;
+        if let (Some(parent_stack), Some(child_stack)) = (parent.stack, child.stack) {
+            let size = frame_bytes(child.slots.len()).expect("checked frame size");
+            let (top, overflow) = stack::reserve(
+                circuit,
+                &slots[parent_stack.current.index()],
+                &stack::word(size),
+                self.stack_floor,
+                false,
+            );
+            writes.push((child_stack.current, top.clone()));
+            writes.push((child_stack.top, top));
+            failed = overflow;
+        }
+        Ok(CallEntry { next, writes, failed })
     }
 
     pub(super) fn incoming(&self, slots: &[Word], point: Point, target: &Target) -> Vec<(Slot, Word)> {
@@ -388,6 +444,10 @@ impl<'a> Program<'a> {
         }
         Point { copy: point.copy, ..Point::entry(target.block) }
     }
+}
+
+fn call_step(entry: Result<CallEntry, Fault>) -> Step<'static> {
+    entry.map_or_else(Step::Fault, |entry| Step::checked(entry.next, entry.writes, entry.failed, Fault::StackOverflow))
 }
 
 pub(super) fn arguments(input: &ApplyInput<'_>) -> Vec<Word> {
