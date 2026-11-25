@@ -146,8 +146,8 @@ void checkPrimitiveFunction(const Function &function, const Primitive &primitive
       misuse("a call of the primitive " + name + " is marked `noreturn`" + route, call);
     }
     if (std::string bad = firstHarmful(call->getAttributes(), expected->getNumParams(), true); !bad.empty()) {
-      misuse("a call of the primitive " + name + " carries `" + bad +
-                 "`, one of the attributes that let LLVM remove or move its calls" + route,
+      misuse("a call of the device function " + name +
+                 " has attributes that let LLVM remove or move its calls (`" + bad + "`)" + route,
              call);
     }
   }
@@ -263,7 +263,7 @@ void checkPrimitives(const Module &module) {
              &global);
     }
     if (isa<GlobalAlias>(global)) {
-      fail("the program defines an alias named after the primitive @" + linker.str() + route);
+      fail("the primitive @" + linker.str() + " is defined by an alias in the program" + route);
     }
     if (isa<GlobalIFunc>(global)) {
       fail("the program defines a function chosen by a resolver (an ifunc) named after the primitive @" +

@@ -167,7 +167,7 @@ const MODULE_CASES: &[(&str, &str, &str)] = &[
         "alias",
         "void x(bq_reg r) { (void)r; }\nvoid bq_free(bq_reg) __attribute__((alias(\"x\")));\n\
          int main(void) { bq_free(bq_alloc(1)); return 0; }",
-        "the program defines an alias named after the primitive @bq_free",
+        "the primitive @bq_free is defined by an alias",
     ),
     (
         "variable",
@@ -325,12 +325,12 @@ fn reserved_shapes(name: &str, ty: &str, args: &str, noreturn: bool) -> Vec<(&'s
             format!(
                 "{declare}define i32 @main() {{\n  call void @{name}({args}) nounwind willreturn memory(none)\n  ret i32 7\n}}\n"
             ),
-            format!("a call of the primitive @{name} carries `"),
+            format!("a call of the device function @{name} has attributes that let LLVM remove or move its calls"),
         ),
         (
             "alias",
             format!("@{name} = alias {ty}, ptr @replacement\n{body}{main_direct}"),
-            format!("an alias named after the primitive @{name}"),
+            format!("the primitive @{name} is defined by an alias"),
         ),
         (
             "ifunc",
