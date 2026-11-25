@@ -109,3 +109,63 @@ finish:
     );
     assert_eq!(proof_work(&source, 300).slot_words, 0);
 }
+
+#[test]
+fn known_high_bit_in_a_wide_modular_loop_leaves_no_comparison_gates() {
+    let compiled = definite_wide_loop();
+    assert_eq!(compiled.definite_steps, 1161);
+    assert_eq!(compiled.block.ops().len(), 3);
+    assert!(matches!(
+        compiled.block.ops(),
+        [bennett_exec::BlockOp::Allocate(empty), bennett_exec::BlockOp::Gate(gate), bennett_exec::BlockOp::ReleaseZero(end)]
+        if empty.is_empty() && empty == end && gate.target == 128 && gate.controls.is_empty()
+    ));
+}
+
+fn definite_wide_loop() -> crate::CompiledApply {
+    let module = load(
+        r#"
+memory 8192
+func @f(i64 %lower, i63 %upper) -> i8 {
+entry:
+    %low = zext i64 %lower to i128
+    %high = zext i63 %upper to i128
+    %offset = shl i128 %high, 64
+    %wide = or i128 %low, %offset
+    %count = or i128 %wide, 170141183460469231731687303715884105728
+    br check(i8 1, i8 2, %count)
+check(i8 %residue, i8 %base, i128 %exponent):
+    %more = icmp ne i128 %exponent, 0
+    br %more, update, exit(%residue)
+update:
+    %product = mul i8 %residue, %base
+    %next = urem i8 %product, 3
+    br latch(%next)
+latch(i8 %joined):
+    %half = lshr i128 %exponent, 1
+    %square = mul i8 %base, %base
+    %factor = urem i8 %square, 3
+    br check(%joined, %factor, %half)
+exit(i8 %answer):
+    ret %answer
+}
+"#,
+    )
+    .expect("wide definite loop");
+    compile_apply_with(
+        ApplyInput {
+            module: &module,
+            callee: module.function_named("f").expect("loop"),
+            args: &[Argument::Register(0..64), Argument::Register(64..127)],
+            out: 127..135,
+            fault: 135..140,
+            budget: 1161,
+            entry_fault: None,
+            stack_available: 4096,
+            memory: None,
+            scratch_start: 140,
+        },
+        ApplyMode::Automatic,
+    )
+    .expect("emit the definite loop")
+}

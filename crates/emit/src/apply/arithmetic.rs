@@ -69,25 +69,48 @@ fn multiply(circuit: &mut Circuit, word: &[Bit], mut factor: u128) -> Word {
     product
 }
 
+fn known_different(circuit: &Circuit, left: Bit, right: Bit) -> bool {
+    circuit.copy_source(left) == circuit.copy_source(right).not()
+}
+
 pub(super) fn compare(circuit: &mut Circuit, pred: Predicate, lhs: &[Bit], rhs: &[Bit]) -> Bit {
-    if matches!(pred, Predicate::Eq | Predicate::Ne) {
+    if matches!(pred, Predicate::Eq | Predicate::Ne)
+        && lhs.iter().zip(rhs).any(|(&left, &right)| known_different(circuit, left, right))
+    {
+        return Bit::Constant(pred == Predicate::Ne);
+    }
+    let checkpoint = circuit.checkpoint();
+    let result = if matches!(pred, Predicate::Eq | Predicate::Ne) {
         let equal = lhs.iter().zip(rhs).fold(ONE, |equal, (&a, &b)| {
             let different = circuit.xor(a, b);
             circuit.and(equal, different.not())
         });
-        return if pred == Predicate::Eq { equal } else { equal.not() };
+        if pred == Predicate::Eq { equal } else { equal.not() }
+    } else {
+        order(circuit, pred, lhs, rhs)
+    };
+    if matches!(result, Bit::Constant(_)) && circuit.fits() {
+        circuit.rewind(checkpoint);
     }
+    result
+}
 
+fn order(circuit: &mut Circuit, pred: Predicate, lhs: &[Bit], rhs: &[Bit]) -> Bit {
     let (mut lhs, mut rhs) = (lhs, rhs);
     if matches!(pred, Predicate::Ugt | Predicate::Ule | Predicate::Sgt | Predicate::Sle) {
         std::mem::swap(&mut lhs, &mut rhs);
     }
     let signed = matches!(pred, Predicate::Slt | Predicate::Sle | Predicate::Sgt | Predicate::Sge);
-    let mut less = ZERO;
-    // A more significant difference decides the comparison. Complementing the sign bits
-    // puts negative numbers before nonnegative numbers in the same unsigned ordering.
-    for (index, (&mut_a, &mut_b)) in lhs.iter().zip(rhs).enumerate() {
-        let (a, b) = if signed && index + 1 == lhs.len() { (mut_a.not(), mut_b.not()) } else { (mut_a, mut_b) };
+    // Complementing the sign bits puts negative numbers before nonnegative numbers.
+    let pairs = lhs
+        .iter()
+        .zip(rhs)
+        .enumerate()
+        .map(|(index, (&a, &b))| if signed && index + 1 == lhs.len() { (a.not(), b.not()) } else { (a, b) });
+    // Any known difference decides the comparison of its bit and all lower bits.
+    let decisive = pairs.clone().enumerate().rfind(|&(_, (a, b))| known_different(circuit, a, b));
+    let (first, mut less) = decisive.map_or((0, ZERO), |(index, (_, b))| (index + 1, b));
+    for (a, b) in pairs.skip(first) {
         let different = circuit.xor(a, b);
         less = circuit.select(different, b, less);
     }
@@ -114,6 +137,26 @@ mod tests {
             let result = binary(&mut circuit, BinOp::Or, &input(0), &input(width as u64)).expect("or");
             let block = circuit.finish(0, "or").expect("valid gadget wires");
             check(&block, &result, &[(width, 1), (width, 1 << (width - 1))], 1 | 1 << (width - 1), width);
+        }
+    }
+
+    #[test]
+    fn proved_comparisons_skip_the_unneeded_low_bits() {
+        let mut left = (0..127).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
+        left.push(ONE);
+        let right = [ZERO; 128];
+        for (predicate, expected) in [
+            (Predicate::Eq, false),
+            (Predicate::Ne, true),
+            (Predicate::Ult, false),
+            (Predicate::Uge, true),
+            (Predicate::Slt, true),
+            (Predicate::Sge, false),
+        ] {
+            let mut circuit = Circuit::new(127);
+            assert_eq!(compare(&mut circuit, predicate, &left, &right), Bit::Constant(expected));
+            assert_eq!(circuit.forward_len(), 0, "{predicate:?}");
+            assert_eq!(circuit.scratch_end(), Some(127));
         }
     }
 

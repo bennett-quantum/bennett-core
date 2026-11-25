@@ -440,6 +440,12 @@ operand bounds, or the declared width if that bound overflows. Bits above the wo
 width are represented as literal zero and allocate no qubits. The operand analysis keeps
 these high zeros for later proofs without generating the product gates.
 
+**Comparisons.** A pair of known unequal bits decides equality immediately. In an
+ordered comparison, a known difference also decides all the lower positions. The
+emitter starts the comparison at that difference and uses only the higher bits
+that can override it. Signed comparisons reverse the ordering at the sign bit.
+A comparison proved constant emits no gates and needs no temporary qubits.
+
 **Products of qubit-held words.** Each bit pair contributes one AND to the column
 of its two indices' sum. A half adder reduces two column bits and a full adder reduces
 three, keeping the sum bit in that column and passing the carry to the next column.
