@@ -240,7 +240,11 @@ entry:
     );
     assert_eq!((first_measured, second_measured), (Outcome::Returned(Some(1 << 64)), Outcome::Returned(Some(1))));
     assert_eq!((&first.registers, &first.amplitudes), (&second.registers, &second.amplitudes));
-    assert_eq!((first.spans.as_slice(), second.spans.as_slice()), ([(0, 2)].as_slice(), [(1, 2)].as_slice()));
+    // The wire table: `%big` from column 0 then `%small` from column 2, against `%small` from column 0 then
+    // `%big` from column 1 (wires `c * 2^32 + i`, bits `64 * c + i`).
+    let column = |c: u64| c << 32;
+    assert_eq!(first.wires, [(0..128, 0), (column(2)..column(2) + 64, 128)]);
+    assert_eq!(second.wires, [(0..64, 0), (column(1)..column(1) + 128, 64)]);
     assert_eq!(first.distance(&second), None);
 }
 

@@ -5,8 +5,10 @@
 //! keeps its column, unnamed and never reused, so the stored state stays the exact purification of the
 //! state after the partial trace (`docs/DESIGN.md`, "Releasing a register"). A register of more than 64
 //! qubits is stored in consecutive columns from its head, whose id its handle names, 64 qubits each; it is
-//! kept or removed whole. The map is ordered, so iteration, and
-//! therefore seeded measurement, is deterministic.
+//! kept or removed whole. Which wire names which bit of which column is the wire table's
+//! (`wire_storage.rs`): allocation and release work on wires, for the controller's registers as for any
+//! client of the device interface. The map is ordered, so iteration, and therefore seeded measurement, is
+//! deterministic.
 
 use std::collections::{BTreeMap, TryReserveError};
 use std::ops::Range;
@@ -16,10 +18,10 @@ use num_complex::Complex64;
 use rand::Rng;
 
 use crate::device::Wire;
-use crate::device_io::{wire, wires};
+use crate::device_io::wires;
 use crate::executor::RunError;
 use crate::gates::Matrix;
-use crate::wire_storage::WireStorage;
+use crate::wire_storage::{WireStorage, column_bit};
 
 /// The values of every register column, one basis state.
 pub(crate) type Config = Box<[u64]>;
@@ -33,6 +35,24 @@ pub(crate) fn column_widths(qubits: Qubits) -> impl Iterator<Item = Width> {
     let count = qubits.count();
     (0..count.div_ceil(COLUMN_QUBITS))
         .map(move |k| Width::new((count - k * COLUMN_QUBITS).min(COLUMN_QUBITS)).expect("1 to 64 qubits"))
+}
+
+/// The columns of the register of `qubits` qubits whose head is `head`: consecutive, 64 qubits each.
+pub(crate) fn register_columns(head: usize, qubits: Qubits) -> Range<usize> {
+    head..head + qubits.count().div_ceil(COLUMN_QUBITS) as usize
+}
+
+/// The bits of `value` that `mask` selects, packed from bit 0 in their order.
+fn gather(value: u64, mask: u64) -> u64 {
+    let mut packed = 0;
+    let mut rest = mask;
+    let mut bit = 0;
+    while rest != 0 {
+        packed |= (value >> rest.trailing_zeros() & 1) << bit;
+        bit += 1;
+        rest &= rest - 1;
+    }
+    packed
 }
 
 /// An amplitude no larger than this is treated as zero and dropped, by the simulator: amplitudes of a
@@ -70,8 +90,10 @@ impl QubitRef {
 
 #[derive(Clone, Debug)]
 pub(crate) struct QuantumState {
+    /// The column table: one entry per column, a register of several columns having one per column.
     registers: Vec<RegisterState>,
     columns: usize,
+    /// Which wire names which bit of which column (`wire_storage.rs`).
     pub(crate) device_wires: WireStorage,
     amplitudes: BTreeMap<Config, Complex64>,
     peak_qubits: u64,
@@ -81,14 +103,20 @@ pub(crate) struct QuantumState {
     /// The memory bytes that hold qubits ("cells", `docs/DESIGN.md`, "Qubits in memory"): byte address to
     /// the column of the 8-qubit register that holds the byte's value. Part of the register table.
     cells: BTreeMap<u64, usize>,
-    /// The ids of registers left over, in the order they were left: released by `qfree` while not zero, so
-    /// their columns are kept, with no live handle (`docs/DESIGN.md`, "Releasing a register").
+    /// The columns left over, in the order they were left: kept by a release that was not zero, with no
+    /// bound wire and no live handle (`docs/DESIGN.md`, "Releasing a register").
     leftovers: Vec<usize>,
-    /// The number of columns of each register of more than 64 qubits, by its head: it occupies the
-    /// consecutive columns `head..head + n`. Kept while the head is live or left over.
-    spans: BTreeMap<usize, usize>,
     /// Whether the state stores columns (the simulator); an external device's run only names registers.
     stores_columns: bool,
+}
+
+/// What a release of wires does with them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Release {
+    /// The partial trace over them (`qfree`, a device's `discard`).
+    Trace,
+    /// Their release in zero, refused unless they are zero in every stored configuration.
+    Zero,
 }
 
 impl Default for QuantumState {
@@ -117,48 +145,29 @@ impl QuantumState {
             nonzero_release_weight: 0.0,
             cells: BTreeMap::new(),
             leftovers: Vec::new(),
-            spans: BTreeMap::new(),
             stores_columns: false,
         }
     }
 
+    /// A register of `width` qubits, allocated and bound as the controller does it.
     #[cfg(test)]
     pub(crate) fn allocate(&mut self, width: Width) -> u64 {
-        let handle = self.reserve(width);
-        self.ensure_column(handle_id(handle));
+        let qubits = Qubits::from(width);
+        let handle = self.reserve_register(qubits).expect("a small register");
+        let head = handle_id(handle);
+        self.bind(head, wires(head, qubits.count()));
         handle
     }
 
-    /// Reserves a register of `qubits` qubits and returns the handle naming its head. The simulator gives a
-    /// register of more than 64 qubits the first run of consecutive free columns long enough, growing the
-    /// table and every configuration fallibly: a register the host cannot hold is `QubitStorage`, with the
-    /// state unchanged. A run on an external device reserves the head alone.
+    /// Reserves a register of `qubits` qubits and returns the handle naming its head. The simulator gives it
+    /// the columns `reserve_columns` finds; a run on an external device reserves the head alone.
     pub(crate) fn reserve_register(&mut self, qubits: Qubits) -> Result<u64, RunError> {
-        let count = qubits.count().div_ceil(COLUMN_QUBITS) as usize;
-        let head_width = Width::new(qubits.count().min(COLUMN_QUBITS)).expect("1 to 64 qubits");
-        if !self.stores_columns {
-            return Ok(self.reserve(head_width));
-        }
-        self.admit(u64::from(qubits.count()))?;
-        if count == 1 {
-            return Ok(self.reserve(head_width));
-        }
-        let unstorable = |_| RunError::QubitStorage { qubits: u64::from(qubits.count()) };
-        let head = self.free_run(count);
-        let end = head + count;
-        if let Some(missing) = end.checked_sub(self.registers.len()).filter(|&missing| missing > 0) {
-            self.registers.try_reserve(missing).map_err(unstorable)?;
-        }
-        self.try_grow_columns(end).map_err(unstorable)?;
-        if end > self.registers.len() {
-            self.registers.resize(end, RegisterState { generation: 0, width: None });
-        }
-        for (register, width) in self.registers[head..end].iter_mut().zip(column_widths(qubits)) {
-            register.generation = register.generation.wrapping_add(1);
-            register.width = Some(width);
-        }
-        self.spans.insert(head, count);
-        self.note_qubit_peak(0);
+        let head = if self.stores_columns {
+            self.admit(u64::from(qubits.count()))?;
+            self.reserve_columns(qubits)?
+        } else {
+            self.reserve_head(Width::new(qubits.count().min(COLUMN_QUBITS)).expect("1 to 64 qubits"))
+        };
         Ok(u64::from(self.registers[head].generation) << 32 | head as u64)
     }
 
@@ -166,6 +175,61 @@ impl QuantumState {
     /// total past what its counts hold.
     pub(crate) fn admit(&self, more: u64) -> Result<(), RunError> {
         admitted(self.live_qubits(), more)
+    }
+
+    /// Reserves the columns for `qubits` qubits, wires allocated together: the first run of consecutive
+    /// free columns long enough, 64 qubits to a column but the last, beyond the table if need be. The table,
+    /// the wire table's masks and every configuration grow fallibly: if the host cannot hold them the result
+    /// is `QubitStorage`, with the state unchanged. Returns the first column.
+    pub(crate) fn reserve_columns(&mut self, qubits: Qubits) -> Result<usize, RunError> {
+        let count = qubits.count().div_ceil(COLUMN_QUBITS) as usize;
+        self.reserve_run(count, column_widths(qubits), u64::from(qubits.count()))
+    }
+
+    /// Reserves `count` consecutive free columns of the given widths, as `reserve_columns`; `qubits` is what
+    /// a refusal names.
+    fn reserve_run(
+        &mut self,
+        count: usize,
+        widths: impl Iterator<Item = Width>,
+        qubits: u64,
+    ) -> Result<usize, RunError> {
+        let unstorable = |_| RunError::QubitStorage { qubits };
+        let head = self.free_run(count);
+        let end = head + count;
+        if let Some(missing) = end.checked_sub(self.registers.len()).filter(|&missing| missing > 0) {
+            self.registers.try_reserve_exact(missing).map_err(unstorable)?;
+        }
+        self.device_wires.grow(end).map_err(unstorable)?;
+        // The last fallible growth, and the only one a snapshot sees.
+        self.try_grow_columns(end).map_err(unstorable)?;
+        if end > self.registers.len() {
+            self.registers.resize(end, RegisterState { generation: 0, width: None });
+        }
+        for (register, width) in self.registers[head..end].iter_mut().zip(widths) {
+            register.generation = register.generation.wrapping_add(1);
+            register.width = Some(width);
+        }
+        Ok(head)
+    }
+
+    /// Reserves a register id for a run on an external device, which stores no columns.
+    fn reserve_head(&mut self, width: Width) -> usize {
+        let id = self.registers.iter().position(|r| r.width.is_none()).unwrap_or(self.registers.len());
+        if id == self.registers.len() {
+            self.registers.push(RegisterState { generation: 0, width: None });
+        }
+        let register = &mut self.registers[id];
+        register.generation = register.generation.wrapping_add(1);
+        register.width = Some(width);
+        id
+    }
+
+    /// Binds `wires` to the columns reserved for them from `head`, from its bit 0, and counts them in the
+    /// peak.
+    pub(crate) fn bind(&mut self, head: usize, wires: Range<Wire>) {
+        self.device_wires.bind(wires, column_bit(head));
+        self.note_qubit_peak(0);
     }
 
     /// The first id of `count` consecutive free ids, those beyond the table included.
@@ -181,155 +245,126 @@ impl QuantumState {
         start
     }
 
-    /// The columns of the register whose head is `id`, least significant first.
-    pub(crate) fn columns_of(&self, id: usize) -> Range<usize> {
-        id..id + self.spans.get(&id).copied().unwrap_or(1)
-    }
-
-    /// Reserves a register of `width` qubits and returns its handle: the generation in the high
-    /// half, the id in the low half.
-    pub(crate) fn reserve(&mut self, width: Width) -> u64 {
-        let id = self.registers.iter().position(|r| r.width.is_none()).unwrap_or(self.registers.len());
-        if id == self.registers.len() {
-            self.registers.push(RegisterState { generation: 0, width: None });
+    /// Releases `wires`, every one of them bound, by the partial trace or in zero (`Release`). A release is
+    /// kept or removed whole. If any of its bits is nonzero in some stored configuration, every one is kept:
+    /// a column all of whose bound bits it names is left over, and the bits it names of any other column
+    /// move to a fresh column, left over. Otherwise its wires are unbound and a column left with no bound
+    /// bit is freed. The simulator reports the probability that any of the bits is nonzero, each
+    /// configuration counted once. Fails with nothing changed if a wire is not bound, if `Zero` finds a
+    /// nonzero bit, or if the host cannot hold the record of what is kept (`QubitStorage`).
+    pub(crate) fn release(&mut self, wires: Range<Wire>, how: Release) -> Result<(), RunError> {
+        let table = &self.device_wires;
+        if !table.covers(wires.clone()) {
+            return Err(RunError::Device("wire is not allocated"));
         }
-        let register = &mut self.registers[id];
-        register.generation = register.generation.wrapping_add(1);
-        register.width = Some(width);
-        let handle = u64::from(register.generation) << 32 | id as u64;
-        self.note_qubit_peak(0);
-        handle
-    }
-
-    pub(crate) fn ensure_column(&mut self, id: usize) {
-        if id >= self.columns {
-            self.set_columns(id + 1);
+        // A column named whole by one piece needs nothing more; the pieces of other columns are gathered.
+        let mut gathered = BTreeMap::<usize, u64>::new();
+        for piece in table.pieces(wires.clone()).filter(|piece| piece.mask() != table.mask(piece.column)) {
+            *gathered.entry(piece.column).or_default() |= piece.mask();
         }
-    }
-
-    /// The simulator reports the probability that any of the selected bits is nonzero.
-    /// Each configuration contributes at most once, even when several columns are dirty. A register of
-    /// several columns is kept or removed whole. Fails, with nothing changed, if the host cannot hold the
-    /// record of the columns kept.
-    pub(crate) fn discard(&mut self, masks: BTreeMap<usize, u64>) -> Result<(), RunError> {
-        if masks.is_empty() {
-            return Ok(());
-        }
-        let mut selected: Vec<_> = masks.into_iter().map(|(column, mask)| (column, mask, false)).collect();
-        let mut any_dirty = false;
+        let parts: Vec<(usize, u64)> = gathered
+            .iter()
+            .map(|(&column, &mask)| (column, mask))
+            .filter(|&(column, mask)| mask != table.mask(column))
+            .collect();
         let mut weight = 0.0;
+        let mut dirty = false;
         for (config, amplitude) in &self.amplitudes {
-            let mut nonzero = false;
-            for (column, mask, dirty) in &mut selected {
-                if config[*column] & *mask != 0 {
-                    *dirty = true;
-                    nonzero = true;
-                }
-            }
-            if nonzero {
-                any_dirty = true;
+            if table.pieces(wires.clone()).any(|piece| config[piece.column] & piece.mask() != 0) {
+                dirty = true;
                 weight += amplitude.norm_sqr();
             }
         }
-        let kept: u64 =
-            selected.iter().filter(|(.., dirty)| *dirty).map(|(_, mask, _)| u64::from(mask.count_ones())).sum();
-        self.leftovers.try_reserve(selected.len()).map_err(|_| RunError::QubitStorage { qubits: kept })?;
-        if any_dirty {
+        if dirty && how == Release::Zero {
+            return Err(RunError::Device("release_zero requires zero wires"));
+        }
+        let mut hidden = None;
+        if dirty {
+            let unstorable = |_| RunError::QubitStorage { qubits: wires.end - wires.start };
+            let whole = table.pieces(wires.clone()).filter(|piece| piece.mask() == table.mask(piece.column)).count();
+            self.leftovers.try_reserve(whole + gathered.len()).map_err(unstorable)?;
+            if !parts.is_empty() {
+                let widths = parts.iter().map(|&(_, mask)| Width::new(mask.count_ones()).expect("named bits"));
+                hidden = Some(self.reserve_run(parts.len(), widths, wires.end - wires.start)?);
+            }
             self.nonzero_releases += 1;
             // Rounding can place the sum marginally above one.
             self.nonzero_release_weight += weight.min(1.0);
         }
-        let groups: Vec<Range<usize>> = self
-            .spans
-            .iter()
-            .filter(|&(head, _)| selected.binary_search_by_key(head, |&(column, ..)| column).is_ok())
-            .map(|(&head, &count)| head..head + count)
-            .collect();
-        let (grouped, single): (Vec<_>, Vec<_>) =
-            selected.into_iter().partition(|(column, ..)| groups.iter().any(|group| group.contains(column)));
-        for (column, mask, dirty) in single {
-            self.release_bits(column, mask, dirty);
-        }
-        for group in groups {
-            if grouped.iter().any(|(column, _, dirty)| *dirty && group.contains(column)) {
-                self.leave_group(group);
-            } else {
-                self.free_group(group);
-            }
-        }
-        Ok(())
-    }
-
-    pub(crate) fn release_zero(&mut self, id: usize, mask: u64) {
-        self.release_bits(id, mask, false);
-    }
-
-    fn release_bits(&mut self, id: usize, mask: u64, dirty: bool) {
-        if mask == self.device_wires.mask(id) {
-            if dirty {
-                self.leave(id);
-            } else {
-                self.free(id);
-            }
-        } else {
-            self.release_part(id, mask, dirty);
-        }
-    }
-
-    /// Unbind just these bits. Preserve a dirty subset in its own unnamed column so the remaining
-    /// live bits keep their values and correlations, and the released wire names can be used again.
-    fn release_part(&mut self, id: usize, mask: u64, keep: bool) {
-        let width = self.registers[id].width.expect("live column").bits();
-        let removed = mask.count_ones();
-        self.registers[id].width = Width::new(width - removed);
-        self.device_wires.unbind(id, mask);
-        if keep {
-            let handle = self.reserve(Width::new(removed).expect("released bits"));
-            let hidden = handle_id(handle);
-            self.ensure_column(hidden);
-            let positions: Vec<_> = (0..64).filter(|bit| mask >> bit & 1 == 1).collect();
+        if let Some(hidden) = hidden {
+            let moves: Vec<(usize, u64, usize)> =
+                parts.iter().zip(hidden..).map(|(&(column, mask), to)| (column, mask, to)).collect();
             self.amplitudes = self
                 .take_amplitudes()
                 .into_iter()
                 .map(|(mut config, amplitude)| {
-                    let old = config[id];
-                    config[hidden] = positions
-                        .iter()
-                        .enumerate()
-                        .fold(0, |value, (bit, &source)| value | ((old >> source & 1) << bit));
-                    config[id] &= !mask;
+                    for &(column, mask, to) in &moves {
+                        config[to] = gather(config[column], mask);
+                        config[column] &= !mask;
+                    }
                     (config, amplitude)
                 })
                 .collect();
-            self.leave(hidden);
+            self.leftovers.extend(hidden..hidden + parts.len());
+            for register in &mut self.registers[hidden..hidden + parts.len()] {
+                register.generation = register.generation.wrapping_add(1);
+            }
         }
+        // The columns named whole are left over or freed; the wire table is read, not changed, meanwhile.
+        let Self { device_wires, registers, leftovers, .. } = self;
+        let complete = |column: usize| gathered.get(&column).is_some_and(|&mask| mask == device_wires.mask(column));
+        let named_whole = device_wires
+            .pieces(wires.clone())
+            .filter(|piece| piece.mask() == device_wires.mask(piece.column))
+            .map(|piece| piece.column)
+            .chain(gathered.keys().copied().filter(|&column| complete(column)));
+        for column in named_whole {
+            if dirty {
+                registers[column].generation = registers[column].generation.wrapping_add(1);
+                leftovers.push(column);
+            } else {
+                registers[column].width = None;
+            }
+        }
+        device_wires.unbind(wires);
+        for &(column, _) in &parts {
+            registers[column].width = Width::new(device_wires.mask(column).count_ones());
+        }
+        if !dirty {
+            self.shrink_columns();
+        }
+        Ok(())
     }
 
-    pub(crate) fn just_left_over(&self, id: usize) -> bool {
-        self.leftovers.last() == Some(&id)
+    /// Whether the register whose head is `id` was just released and kept (its head is a column left over).
+    pub(crate) fn is_left_over(&self, id: usize) -> bool {
+        self.registers[id].width.is_some() && self.device_wires.mask(id) == 0
     }
 
-    /// Undoes `allocate`: the register's columns are dropped and its ids get their previous generation.
-    /// Configurations where the register is not zero are dropped: once every later step is undone they can
-    /// only be rounding residue.
-    pub(crate) fn unallocate(&mut self, handle: u64) {
-        let id = self.resolve(handle).expect("an allocation being undone is live");
-        let group = self.columns_of(id);
-        self.amplitudes.retain(|config, _| config[group.clone()].iter().all(|&word| word == 0));
-        for register in &mut self.registers[group.clone()] {
+    /// Undoes `allocate` of the register of `qubits` qubits with this handle: its columns are dropped and get
+    /// their previous generation. Configurations where the register is not zero are dropped: once every
+    /// later step is undone they can only be rounding residue.
+    pub(crate) fn unallocate(&mut self, handle: u64, qubits: Qubits) {
+        let head = self.resolve(handle).expect("an allocation being undone is live");
+        // A run on an external device reserved the head alone.
+        let columns = if self.stores_columns { register_columns(head, qubits) } else { head..head + 1 };
+        self.amplitudes.retain(|config, _| config[columns.clone()].iter().all(|&word| word == 0));
+        self.device_wires.unbind(wires(head, qubits.count()));
+        for register in &mut self.registers[columns] {
             register.generation = register.generation.wrapping_sub(1);
+            register.width = None;
         }
-        self.free_group(group);
+        self.shrink_columns();
         // Ids that were never allocated before are forgotten again, as `allocate` found them.
         while self.registers.last().is_some_and(|r| r.width.is_none() && r.generation == 0) {
             self.registers.pop();
         }
     }
 
-    /// Undoes `allocate` of the live register in `column`, as `unallocate` does for its handle.
-    pub(crate) fn unallocate_column(&mut self, column: usize) {
+    /// Undoes `allocate` of the live register of `qubits` qubits whose head is `column`.
+    pub(crate) fn unallocate_column(&mut self, column: usize, qubits: Qubits) {
         let handle = u64::from(self.registers[column].generation) << 32 | column as u64;
-        self.unallocate(handle);
+        self.unallocate(handle, qubits);
     }
 
     /// The column of the cell holding the memory byte at `address`, if the byte holds qubits.
@@ -360,77 +395,18 @@ impl QuantumState {
         };
     }
 
-    /// Whether register `id` is zero in every configuration.
-    pub(crate) fn is_zero(&self, id: usize) -> bool {
-        self.amplitudes.keys().all(|config| config[id] == 0)
-    }
-
-    /// Whether the selected bits are zero in every stored configuration.
-    pub(crate) fn mask_is_zero(&self, id: usize, mask: u64) -> bool {
-        self.amplitudes.keys().all(|config| config[id] & mask == 0)
-    }
-
-    /// Frees the register, which is zero in every configuration: its column goes, which is exact.
-    pub(crate) fn free(&mut self, id: usize) {
-        debug_assert!(self.is_zero(id), "only a register zero in every configuration is freed");
-        self.retire(id);
-    }
-
-    /// Frees the consecutive columns `group`, a register of several columns zero in every configuration, at
-    /// once; the table and the configurations shrink once.
-    fn free_group(&mut self, group: Range<usize>) {
-        self.spans.remove(&group.start);
-        for column in group.clone() {
-            self.device_wires.unbind(column, u64::MAX);
-            self.registers[column].width = None;
-        }
-        self.shrink_columns();
-    }
-
-    /// Keeps the register's qubits as left over instead of freeing them: its handle goes stale (the
-    /// generation moves on, so no handle names it), its column and amplitudes stay, and its id is not reused.
-    /// The stored state is then a purification of the state after the partial trace over the register.
-    fn leave(&mut self, id: usize) {
-        self.device_wires.unbind(id, u64::MAX);
-        let register = &mut self.registers[id];
-        register.generation = register.generation.wrapping_add(1);
-        self.leftovers.push(id);
-    }
-
-    /// Leaves every column of `group`, the head last, so that the head is the last register left over.
-    fn leave_group(&mut self, group: Range<usize>) {
-        for column in group.clone().skip(1).chain([group.start]) {
-            self.leave(column);
-        }
-    }
-
-    /// Takes back the column `id` left over, its qubits named again by the wires from `first`.
-    fn reclaim(&mut self, id: usize, first: Wire) {
-        let index = self.leftovers.iter().rposition(|&left| left == id).expect("a register left over is taken back");
-        self.leftovers.remove(index);
-        let register = &mut self.registers[id];
-        register.generation = register.generation.wrapping_sub(1);
-        let count = Wire::from(register.width.expect("kept column").bits());
-        self.device_wires.bind(id, first..first + count).expect("storage the register held");
-    }
-
-    /// Undoes `leave` of a whole register: its handle is live again. A register of several columns was
-    /// the last left over, so its columns are the last entries of the list.
-    pub(crate) fn take_back(&mut self, handle: u64) {
-        let id = handle_id(handle);
-        let group = self.columns_of(id);
-        if group.len() == 1 {
-            return self.reclaim(id, wire(id, 0));
-        }
-        let kept = self.leftovers.len() - group.len();
-        debug_assert!(self.leftovers[kept..].iter().all(|column| group.contains(column)));
+    /// Undoes the release of a register of `qubits` qubits with this handle that kept it: its columns, the
+    /// last ones left over, are live again, bound to its wires.
+    pub(crate) fn take_back(&mut self, handle: u64, qubits: Qubits) {
+        let head = handle_id(handle);
+        let columns = register_columns(head, qubits);
+        let kept = self.leftovers.len() - columns.len();
+        debug_assert!(self.leftovers[kept..].iter().all(|column| columns.contains(column)));
         self.leftovers.truncate(kept);
-        let mut qubits = 0;
-        for register in &mut self.registers[group.clone()] {
+        for register in &mut self.registers[columns] {
             register.generation = register.generation.wrapping_sub(1);
-            qubits += register.width.expect("kept column").bits();
         }
-        self.device_wires.bind(id, wires(id, qubits)).expect("storage the register held");
+        self.device_wires.bind(wires(head, qubits.count()), column_bit(head));
     }
 
     /// The qubits of registers left over.
@@ -438,35 +414,35 @@ impl QuantumState {
         qubit_total(self.leftovers.iter().filter_map(|&id| self.registers[id].width))
     }
 
-    /// Undoes `free` of a whole register of `qubits` qubits: it is live again in the columns it had, zero in
-    /// every configuration, with the same handle.
+    /// Undoes the release of a register of `qubits` qubits with this handle that freed it: it is live again
+    /// in the columns it had, zero in every configuration. Undoing returns to storage the run held, so its
+    /// growth is not checked.
     pub(crate) fn revive(&mut self, handle: u64, qubits: Qubits) {
-        let id = handle_id(handle);
-        let count = qubits.count().div_ceil(COLUMN_QUBITS) as usize;
-        for (register, width) in self.registers[id..id + count].iter_mut().zip(column_widths(qubits)) {
+        let head = handle_id(handle);
+        let columns = register_columns(head, qubits);
+        for (register, width) in self.registers[columns.clone()].iter_mut().zip(column_widths(qubits)) {
             register.width = Some(width);
         }
-        self.device_wires.bind(id, wires(id, qubits.count())).expect("storage the register held");
-        self.ensure_column(id + count - 1);
-        if count > 1 {
-            self.spans.insert(id, count);
+        self.device_wires.grow(columns.end).expect("storage the register held");
+        if columns.end > self.columns {
+            self.set_columns(columns.end);
         }
+        self.device_wires.bind(wires(head, qubits.count()), column_bit(head));
     }
 
-    /// Frees the column `id`; the head of a register of several columns forgets its span.
+    /// Frees the register id `id` of a run on an external device, which stores no columns.
     pub(crate) fn retire(&mut self, id: usize) {
-        self.spans.remove(&id);
-        self.device_wires.unbind(id, u64::MAX);
         self.registers[id].width = None;
         self.shrink_columns();
     }
 
-    /// Drops the columns after the last live one.
+    /// Drops the columns after the last one in use.
     fn shrink_columns(&mut self) {
         let columns = self.registers.iter().rposition(|r| r.width.is_some()).map_or(0, |last| last + 1);
-        if columns != self.columns {
+        if columns < self.columns {
             self.set_columns(columns);
         }
+        self.device_wires.truncate(columns);
     }
 
     /// Resizes every configuration to `columns` columns. Dropped columns are zero, so no two
@@ -595,11 +571,6 @@ impl QuantumState {
         &self.registers
     }
 
-    /// The registers stored in more than one column: head and number of columns, in head order.
-    pub(crate) fn spans(&self) -> &BTreeMap<usize, usize> {
-        &self.spans
-    }
-
     pub(crate) fn amplitudes(&self) -> &BTreeMap<Config, Complex64> {
         &self.amplitudes
     }
@@ -688,12 +659,23 @@ mod tests {
         let mut state = QuantumState::default();
         let byte = Width::BYTE;
         let [a, b, c] = [(); 3].map(|()| handle_id(state.allocate(byte)));
-        state.free(a);
-        state.free(c);
+        for id in [a, c] {
+            state.release(wires(id, 8), Release::Zero).expect("zero");
+        }
         let wide = Qubits::new(129).expect("a width");
         let head = handle_id(state.reserve_register(wide).expect("stored"));
-        assert_eq!((b, head, state.columns_of(head)), (1, 2, 2..5));
-        assert_eq!(handle_id(state.reserve(byte)), 0, "the gap before the wide register");
+        assert_eq!((b, head, register_columns(head, wide)), (1, 2, 2..5));
+        assert_eq!(
+            handle_id(state.reserve_register(byte.into()).expect("stored")),
+            0,
+            "the gap before the wide register"
+        );
         assert_eq!(state.live_qubits(), 8 + 129 + 8);
+    }
+
+    #[test]
+    fn gathering_packs_the_selected_bits() {
+        assert_eq!(gather(0b1010_0110, 0b1110_0100), 0b1011);
+        assert_eq!(gather(u64::MAX, u64::MAX), u64::MAX);
     }
 }

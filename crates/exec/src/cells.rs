@@ -74,7 +74,7 @@ impl<'m> Executor<'m> {
     fn unpromote(&mut self, address: u64, old: u8) {
         let column = self.quantum.cell(address).expect("an un-promoted byte is a cell");
         self.quantum.xor_register(column, u64::from(old));
-        self.quantum.unallocate_column(column);
+        self.quantum.unallocate_column(column, Width::BYTE.into());
         self.quantum.bind_cell(address, None);
         self.memory.write(address as usize, &[old]);
     }

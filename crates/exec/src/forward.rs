@@ -77,7 +77,7 @@ impl<'m> Executor<'m> {
                 self.discard_register(id, qubits, context)?;
                 // The simulator's journal takes back kept columns or recreates zero columns: a register's
                 // columns are consecutive from its head, so its handle and width name them.
-                self.record(if self.quantum.just_left_over(id) { Undo::Leftover } else { Undo::Qfree });
+                self.record(if self.quantum.is_left_over(id) { Undo::Leftover } else { Undo::Qfree });
                 self.advance();
             }
             Inst::Gate { gate, target, controls } => {

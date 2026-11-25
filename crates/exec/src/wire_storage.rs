@@ -1,9 +1,12 @@
-//! Bind device wire identities to bits of the sparse simulator's register columns.
+//! The wire table: which device wire names which bit of the sparse simulator's register columns.
 //!
-//! A binding is a run of consecutive wires stored 64 to a column in consecutive columns, so the bookkeeping
-//! grows with the columns a register uses, not with its qubits, and growing it is fallible: a register the
-//! host cannot hold is a stop of the simulator, not an abort (`docs/DESIGN.md`, "The simulator's own stops
-//! and reports").
+//! A qubit of the simulator is a **storage bit**: bit `b` of column `c` is storage bit `64 * c + b`. The
+//! table is a bijection between the live wires and the bound storage bits (`docs/DESIGN.md`, "Running a
+//! program"), stored as **segments**: wires `w..w + n` are the storage bits `s..s + n`, in order. A segment
+//! is what one allocation bound, less what releases took out of it; so the table grows with allocations,
+//! not with qubits. Beside the segments, each column's mask of bound bits, their image, changed only with
+//! them. Every query works on the segments that overlap the wires it names, split at segment and column
+//! boundaries; an empty range overlaps none.
 
 use std::collections::{BTreeMap, TryReserveError};
 use std::ops::Range;
@@ -11,118 +14,234 @@ use std::ops::Range;
 use crate::device::Wire;
 use crate::quantum::{COLUMN_QUBITS, QubitRef};
 
-/// Wires per column, as a wire count.
+/// Bits per column, as a storage bit count.
 const COLUMN: u64 = COLUMN_QUBITS as u64;
 
-/// Bound wires `start..end` (the map's key and `end`) map wire `w` to column `column + (w - origin) / 64`,
-/// bit `(w - origin) % 64`. A run trimmed by a later binding keeps its origin.
-#[derive(Clone, Copy, Debug)]
-struct Run {
-    origin: Wire,
+/// The storage bit of bit 0 of `column`.
+pub(crate) fn column_bit(column: usize) -> u64 {
+    column as u64 * COLUMN
+}
+
+/// Wires from the key of the map to `end` are the storage bits from `bit` on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Segment {
     end: Wire,
-    column: usize,
+    bit: u64,
+}
+
+/// Consecutive wires that are consecutive bits of one column, from bit `low`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Piece {
+    pub(crate) wires: Range<Wire>,
+    pub(crate) column: usize,
+    pub(crate) low: u8,
+}
+
+impl Piece {
+    /// The piece's bits of its column.
+    pub(crate) fn mask(&self) -> u64 {
+        (u64::MAX >> (COLUMN - (self.wires.end - self.wires.start))) << self.low
+    }
 }
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct WireStorage {
-    /// The runs by their first wire; no two overlap.
-    runs: BTreeMap<Wire, Run>,
-    /// For each column: the wire of its bit 0 and which of its bits are bound (0: none).
-    columns: Vec<(Wire, u64)>,
+    /// By first wire; no two overlap, and none continues another (both its wires and its bits): the form is
+    /// canonical, so two tables are equal exactly when they bind the same wires to the same bits.
+    segments: BTreeMap<Wire, Segment>,
+    /// For each column, its bits bound to a wire.
+    bound: Vec<u64>,
 }
 
 impl WireStorage {
-    /// Binds `wires` to consecutive columns from `column`, 64 to a column, the last holding the rest.
-    pub(crate) fn bind(&mut self, column: usize, wires: Range<Wire>) -> Result<(), TryReserveError> {
-        let columns = usize::try_from((wires.end - wires.start).div_ceil(COLUMN)).unwrap_or(usize::MAX);
-        let last = column.saturating_add(columns);
-        if let Some(missing) = last.checked_sub(self.columns.len()).filter(|&missing| missing > 0) {
-            self.columns.try_reserve(missing)?;
-            self.columns.resize(last, (0, 0));
+    /// Makes room for the masks of `columns` columns, or fails with the table unchanged.
+    pub(crate) fn grow(&mut self, columns: usize) -> Result<(), TryReserveError> {
+        if let Some(missing) = columns.checked_sub(self.bound.len()).filter(|&missing| missing > 0) {
+            self.bound.try_reserve_exact(missing)?;
+            self.bound.resize(columns, 0);
         }
-        self.trim(wires.clone());
-        for (k, entry) in self.columns[column..last].iter_mut().enumerate() {
-            let first = wires.start + k as Wire * COLUMN;
-            let count = (wires.end - first).min(COLUMN);
-            *entry = (first, u64::MAX >> (COLUMN - count));
-        }
-        self.runs.insert(wires.start, Run { origin: wires.start, end: wires.end, column });
         Ok(())
     }
 
-    /// Cuts `wires` out of the runs that overlap them; what remains of each keeps its mapping.
-    fn trim(&mut self, wires: Range<Wire>) {
-        let overlapping: Vec<(Wire, Run)> = self
-            .runs
-            .range(..wires.end)
-            .rev()
-            .take_while(|(_, run)| run.end > wires.start)
-            .map(|(&start, &run)| (start, run))
-            .collect();
-        for (start, run) in overlapping {
-            self.runs.remove(&start);
-            if start < wires.start {
-                self.runs.insert(start, Run { end: wires.start, ..run });
+    /// Binds `wires`, none of them bound, to the storage bits from `bit`, none of them bound, in columns
+    /// the table has room for (`grow`).
+    pub(crate) fn bind(&mut self, wires: Range<Wire>, bit: u64) {
+        if wires.is_empty() {
+            return;
+        }
+        debug_assert!(!self.any_bound(wires.clone()), "binding a bound wire");
+        let mut segment = Segment { end: wires.end, bit };
+        let mut start = wires.start;
+        // Merge with the segment before and the one after where both the wires and the bits continue.
+        if let Some((&before, &previous)) = self.segments.range(..start).next_back()
+            && previous.end == start
+            && previous.bit + (start - before) == bit
+        {
+            self.segments.remove(&before);
+            (start, segment.bit) = (before, previous.bit);
+        }
+        if let Some(&next) = self.segments.get(&wires.end)
+            && next.bit == bit + (wires.end - wires.start)
+        {
+            self.segments.remove(&wires.end);
+            segment.end = next.end;
+        }
+        self.segments.insert(start, segment);
+        for piece in split(wires.start, Segment { end: wires.end, bit }, wires.clone()) {
+            debug_assert_eq!(self.bound[piece.column] & piece.mask(), 0, "binding a bound bit");
+            self.bound[piece.column] |= piece.mask();
+        }
+    }
+
+    /// Unbinds every bound wire of `wires`; what remains of a segment keeps its bits.
+    pub(crate) fn unbind(&mut self, wires: Range<Wire>) {
+        let overlapping: Vec<(Wire, Segment)> = self.overlapping(wires.clone()).collect();
+        for (start, segment) in overlapping {
+            for piece in split(start, segment, wires.clone()) {
+                self.bound[piece.column] &= !piece.mask();
             }
-            if wires.end < run.end {
-                self.runs.insert(wires.end, run);
+            self.segments.remove(&start);
+            if start < wires.start {
+                self.segments.insert(start, Segment { end: wires.start, ..segment });
+            }
+            if wires.end < segment.end {
+                let bit = segment.bit + (wires.end - start);
+                self.segments.insert(wires.end, Segment { bit, ..segment });
             }
         }
+    }
+
+    /// The segments that hold a wire of `wires`, by first wire.
+    fn overlapping(&self, wires: Range<Wire>) -> impl Iterator<Item = (Wire, Segment)> + '_ {
+        let containing = self.segments.range(..=wires.start).next_back();
+        let from = containing.filter(|(_, segment)| segment.end > wires.start).map_or(wires.start, |(&start, _)| start);
+        let to = if wires.is_empty() { from } else { wires.end };
+        self.segments.range(from..to).map(|(&start, &segment)| (start, segment))
+    }
+
+    /// Whether every wire of `wires` is bound.
+    pub(crate) fn covers(&self, wires: Range<Wire>) -> bool {
+        let mut next = wires.start;
+        for (start, segment) in self.overlapping(wires.clone()) {
+            if start > next {
+                return false;
+            }
+            next = segment.end;
+        }
+        next >= wires.end
+    }
+
+    /// The pieces of `wires`, in wire order: of the bound wires only, so a caller checks `covers` first.
+    pub(crate) fn pieces(&self, wires: Range<Wire>) -> impl Iterator<Item = Piece> + '_ {
+        self.overlapping(wires.clone()).flat_map(move |(start, segment)| split(start, segment, wires.clone()))
+    }
+
+    /// Whether any wire of `wires` is bound.
+    pub(crate) fn any_bound(&self, wires: Range<Wire>) -> bool {
+        self.overlapping(wires).next().is_some()
     }
 
     pub(crate) fn qubit(&self, wire: Wire) -> Option<QubitRef> {
-        let (_, run) = self.runs.range(..=wire).next_back()?;
-        if wire >= run.end {
-            return None;
-        }
-        let offset = wire - run.origin;
-        let column = run.column + usize::try_from(offset / COLUMN).ok()?;
-        let bit = (offset % COLUMN) as u8;
-        let &(first, live) = self.columns.get(column)?;
-        (first == wire - Wire::from(bit) && live >> bit & 1 == 1).then_some(QubitRef { column, bit })
-    }
-
-    /// The bits of each column that `wires` name, if every one of them is bound.
-    pub(crate) fn masks(&self, wires: Range<Wire>) -> Option<BTreeMap<usize, u64>> {
-        let mut masks = BTreeMap::new();
-        let mut wire = wires.start;
-        while wire < wires.end {
-            let qubit = self.qubit(wire)?;
-            let count = (COLUMN - u64::from(qubit.bit)).min(wires.end - wire);
-            let mask = (u64::MAX >> (COLUMN - count)) << qubit.bit;
-            if self.mask(qubit.column) & mask != mask {
-                return None;
-            }
-            *masks.entry(qubit.column).or_default() |= mask;
-            wire += count;
-        }
-        Some(masks)
-    }
-
-    /// Whether any of `wires` is bound; the work grows with the columns of the runs that overlap them.
-    pub(crate) fn any_bound(&self, wires: Range<Wire>) -> bool {
-        let overlapping = self.runs.range(..wires.end).rev().take_while(|(_, run)| run.end > wires.start);
-        overlapping.into_iter().any(|(&start, run)| {
-            let (low, high) = (start.max(wires.start), run.end.min(wires.end));
-            let (first, last) = ((low - run.origin) / COLUMN, (high - 1 - run.origin) / COLUMN);
-            (first..=last).any(|k| {
-                let base = run.origin + k * COLUMN;
-                // A run can end at the top of the wire space; no wire is at or past it.
-                let (from, to) = (low.max(base) - base, high.min(base.saturating_add(COLUMN)) - base);
-                let mask = (u64::MAX >> (COLUMN - (to - from))) << from;
-                let column = usize::try_from(k).ok().and_then(|k| self.columns.get(run.column + k));
-                column.is_some_and(|&(first_wire, live)| first_wire == base && live & mask != 0)
-            })
+        let (&start, segment) = self.segments.range(..=wire).next_back()?;
+        (wire < segment.end).then(|| {
+            let bit = segment.bit + (wire - start);
+            QubitRef { column: (bit / COLUMN) as usize, bit: (bit % COLUMN) as u8 }
         })
     }
 
+    /// The bound bits of `column`.
     pub(crate) fn mask(&self, column: usize) -> u64 {
-        self.columns.get(column).map_or(0, |&(_, mask)| mask)
+        self.bound.get(column).copied().unwrap_or(0)
     }
 
-    pub(crate) fn unbind(&mut self, column: usize, mask: u64) {
-        if let Some((_, live)) = self.columns.get_mut(column) {
-            *live &= !mask;
+    /// Every segment: its wires and the storage bit of its first wire, in wire order.
+    pub(crate) fn segments(&self) -> impl Iterator<Item = (Range<Wire>, u64)> + '_ {
+        self.segments.iter().map(|(&start, segment)| (start..segment.end, segment.bit))
+    }
+
+    /// Forgets the masks of columns from `columns` on, which have no bound bit.
+    pub(crate) fn truncate(&mut self, columns: usize) {
+        debug_assert!(self.bound.iter().skip(columns).all(|&mask| mask == 0));
+        self.bound.truncate(columns);
+        // Give back the room of a wide register once it is gone, not on every release.
+        if self.bound.capacity() / 2 > columns {
+            self.bound.shrink_to_fit();
         }
+    }
+}
+
+/// The part of `segment` (from wire `start`) inside `wires`, as pieces in wire order.
+fn split(start: Wire, segment: Segment, wires: Range<Wire>) -> impl Iterator<Item = Piece> {
+    let (from, to) = (start.max(wires.start), segment.end.min(wires.end));
+    let first = segment.bit + (from - start);
+    let mut wire = from;
+    std::iter::from_fn(move || {
+        (wire < to).then(|| {
+            let bit = first + (wire - from);
+            let low = bit % COLUMN;
+            let count = (COLUMN - low).min(to - wire);
+            let piece = Piece { wires: wire..wire + count, column: (bit / COLUMN) as usize, low: low as u8 };
+            wire += count;
+            piece
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn table(columns: usize) -> WireStorage {
+        let mut table = WireStorage::default();
+        table.grow(columns).expect("a few columns");
+        table
+    }
+
+    /// A release across two allocations next to each other names bits of two columns: each piece stays in
+    /// its own allocation.
+    #[test]
+    fn pieces_stop_at_the_end_of_an_allocation() {
+        let mut table = table(2);
+        table.bind(0..2, column_bit(0));
+        table.bind(2..3, column_bit(1));
+        assert!(table.covers(0..3));
+        let pieces: Vec<Piece> = table.pieces(0..3).collect();
+        assert_eq!(pieces, [Piece { wires: 0..2, column: 0, low: 0 }, Piece { wires: 2..3, column: 1, low: 0 }]);
+    }
+
+    /// An empty range inside a segment overlaps nothing.
+    #[test]
+    fn an_empty_range_names_no_wire() {
+        let mut table = table(1);
+        table.bind(0..2, column_bit(0));
+        assert!(!table.any_bound(1..1));
+        assert!(table.covers(1..1));
+        assert_eq!(table.pieces(1..1).count(), 0);
+    }
+
+    /// Unbinding the middle of a segment leaves two that keep their bits; binding it back merges them.
+    #[test]
+    fn unbinding_splits_and_binding_back_merges() {
+        let mut table = table(3);
+        table.bind(10..140, column_bit(0));
+        table.unbind(60..70);
+        assert_eq!(table.qubit(70), Some(QubitRef { column: 0, bit: 60 }));
+        assert_eq!(table.qubit(65), None);
+        assert_eq!(table.mask(0), !(0x3ff << 50));
+        assert!(!table.covers(50..80));
+        table.bind(60..70, 50);
+        assert_eq!(table.segments().collect::<Vec<_>>(), [(10..140, 0)]);
+        assert_eq!(table.mask(2), 0b11);
+    }
+
+    /// Wires up to the top of the numbering are ordinary.
+    #[test]
+    fn the_top_wires_are_ordinary() {
+        let mut table = table(1);
+        table.bind(Wire::MAX - 3..Wire::MAX, column_bit(0));
+        assert!(table.covers(Wire::MAX - 3..Wire::MAX));
+        assert_eq!(table.qubit(Wire::MAX - 1), Some(QubitRef { column: 0, bit: 2 }));
+        table.unbind(Wire::MAX - 1..Wire::MAX);
+        assert_eq!(table.mask(0), 0b11);
     }
 }

@@ -48,7 +48,8 @@ impl<'m> Executor<'m> {
             }
             Undo::Leftover => {
                 let Inst::Qfree { register } = self.retreat() else { unreachable!("a qfree record") };
-                self.quantum.take_back(self.handle(*register));
+                let Type::Qreg(qubits) = self.slot_type(*register) else { unreachable!("a register slot") };
+                self.quantum.take_back(self.handle(*register), qubits);
             }
             Undo::Apply => {
                 let Inst::Apply { callee, args, out, fault, budget } = self.retreat() else {
@@ -90,7 +91,8 @@ impl<'m> Executor<'m> {
         let inst = self.retreat();
         if undo == Undo::Qalloc {
             let dst = inst.result().expect("qalloc defines its handle");
-            self.quantum.unallocate(self.handle(dst));
+            let Type::Qreg(qubits) = self.slot_type(dst) else { unreachable!("a register slot") };
+            self.quantum.unallocate(self.handle(dst), qubits);
         }
         self.restore_result();
     }

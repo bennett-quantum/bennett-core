@@ -14,7 +14,7 @@ use crate::apply_device::{AppliedCircuit, ApplyInput, ApplyMemory, Argument};
 use crate::device_io::{DeviceContext, wire, wires};
 use crate::executor::{Executor, Halt, Outcome, RunError};
 use crate::journal::Journal;
-use crate::quantum::Config;
+use crate::quantum::{Config, register_columns};
 
 /// What computing coherent regions cost the executor, summed over every `apply` executed, forward or
 /// backward. A run is one evaluation of the callee on one basis configuration. A report of the simulator,
@@ -74,11 +74,11 @@ impl<'m> Executor<'m> {
         let input_columns: Vec<Vec<usize>> = inputs
             .iter()
             .map(|input| match *input {
-                Input::Register(column, _) => self.quantum.columns_of(column).collect(),
+                Input::Register(column, qubits) => register_columns(column, qubits).collect(),
                 Input::Value(_) => Vec::new(),
             })
             .collect();
-        let out_columns: Vec<usize> = self.quantum.columns_of(out.0).collect();
+        let out_columns: Vec<usize> = register_columns(out.0, out.1).collect();
         let mut values = Vec::with_capacity(inputs.len());
         // This evaluation is the simulator's implementation of apply. It requires amplitudes.
         let original = self.quantum.take_amplitudes();

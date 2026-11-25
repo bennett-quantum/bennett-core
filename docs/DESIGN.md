@@ -137,14 +137,20 @@ straightforward expansion into ordinary code; none reads or acts on a qubit:
   rounding in the amplitudes, since gates are undone by their inverses in floating point.
 - **The simulator’s quantum state** stores basis configurations with nonzero amplitudes, using `f64`
   for each amplitude's real and imaginary parts. A stored configuration is a list of integers.
-  A **column** is one position in that list holding up to 64 bits of a register. A register of more
-  than 64 qubits takes consecutive columns, 64 qubits each, from its **head**, the column its handle
-  names: the first run of free columns long enough (`quantum.rs`, `reserve_register`). Snapshots list
-  each such register's head and number of columns, so two states whose columns hold the same words but
+  A **column** is one position in that list holding up to 64 bits of a register. Wires allocated
+  together (a register, or one allocation through the device interface) take consecutive columns, 64
+  qubits each but the last, from the first column, the **head** of a register and the column its handle
+  names: the first run of free columns long enough (`quantum.rs`, `reserve_columns`). The **wire table**
+  (`wire_storage.rs`) says which wire names which bit of which column. It is a one-to-one map between
+  the live wires and the bound bits, kept as runs of consecutive wires on consecutive bits, one per
+  allocation less what releases took out, so it grows with allocations, not qubits. Every allocation and
+  release goes through it, the controller's registers and the device interface's wire ranges alike, and
+  a bit of a live column that no wire names is zero in every stored configuration, so a wire allocated
+  again starts at 0. Snapshots list the wire table, so two states whose columns hold the same words but
   form different registers do not compare equal. `apply` reads and XORs a register of up to 128 qubits
-  across its two columns. The simulator's bookkeeping grows with columns, not qubits, and every part of
-  it that grows with a register is allocated fallibly: a register the host cannot hold stops the run
-  (`RunError::QubitStorage`). A run on an external device stores no columns: the device receives each
+  across its two columns. Everything that grows with a register (the column table, the wire table's
+  masks of bound bits, every configuration) is allocated fallibly before anything changes: a register the
+  host cannot hold stops the run (`RunError::QubitStorage`), for one column as for many. A run on an external device stores no columns: the device receives each
   register as one range of wires. The simulator holds at most 2^32 - 1 qubits at once, what the counts
   in `Stats` hold; an allocation or an applied circuit's scratch beyond that stops the run
   (`RunError::QubitCount`), though each register may have up to 2^32 - 1 qubits. Columns for discarded
@@ -163,9 +169,12 @@ gates with their target and controls, measures wires, discards them by partial t
 after clearing them to zero. It keeps track of wire identities, register handles and bytes holding qubits.
 Measurement is the only operation that returns quantum data. The sparse simulator preserves its seeded
 sampling of a whole set of bits in one draw. Each wire names a bit of a simulator column, so a measurement
-or release can span columns or select part of one. If the discarded part of a column is nonzero in any
-stored configuration, the simulator keeps it in an unnamed column. On a partial discard the remaining bits
-stay live in their original column. A device can measure the individual qubits in a set.
+or release can span columns or select part of one, and a release may name wires of several allocations.
+A release is kept or removed whole, as `qfree` is ("Releasing a register"): if any of its bits is nonzero
+in some stored configuration, all are kept, a column it names whole as an unnamed column, the bits it
+names of another column moved to an unnamed column of their own; the remaining bits of a column stay live
+where they are. An empty range is a no-op for every command. A device can measure the individual qubits
+in a set.
 
 `Executor::run_on` runs the controller on a supplied device for modules without `apply`.
 `Executor::run_on_with_apply` takes a gate compiler and invokes it when the controller reaches an
@@ -2118,11 +2127,13 @@ variable whose value it knows.
 
 How the simulator stores the result (`crates/exec/src/quantum.rs`) is its own affair:
 
-- If the register is zero in every stored configuration, its column is removed.
-- Otherwise the column is kept, unnamed (its generation moves on, so no handle names it) and never reused.
-- A register of several columns is kept or removed whole: if any of its columns is not zero, all are kept
-  and all its qubits count as kept. Its columns are consecutive from its head, so undoing `qfree` brings
-  back the same columns from the handle and the width alone.
+- `qfree` releases the register's wires, as a device client releases wires (one path, `quantum.rs`,
+  `release`).
+- If the register is zero in every stored configuration, its columns are removed.
+- Otherwise its columns are kept, unnamed (their generation moves on, so no handle names them) and never
+  reused. A register of several columns is kept or removed whole: if any of its columns is not zero, all
+  are kept and all its qubits count as kept. Its columns are consecutive from its head, so undoing `qfree`
+  brings back the same columns from the handle and the width alone.
   The stored state is then a **purification** of the state after the partial trace (a larger state whose
   partial trace over the kept columns is that state): what any later step of the program, a measurement
   included, can find out is the same either way.
