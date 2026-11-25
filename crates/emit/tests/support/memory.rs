@@ -1766,3 +1766,216 @@ finish:
         assert_eq!(values, (0..8).map(|x| (if x & 3 == 3 { 255 } else { 0 }, 0)).collect::<Vec<_>>());
     }
 }
+
+const GUARDED_PAIR: &str = r#"
+func @f(i3 %x) -> i8 {
+entry:
+    %choose = trunc i3 %x to i1
+    br %choose, yes, no
+yes:
+    store i8 1, 8
+    br read
+no:
+    store i8 0, 8
+    br read
+read:
+    %result = load i8 8
+    ret %result
+}
+"#;
+
+const GUARDED_TRIPLE: &str = r#"
+func @f(i3 %x) -> i8 {
+entry:
+    %choose = trunc i3 %x to i2
+    switch i2 %choose, 0: first, 1: second, default: third
+first:
+    store i8 1, 8
+    br read
+second:
+    store i8 2, 8
+    br read
+third:
+    store i8 3, 8
+    br read
+read:
+    %result = load i8 8
+    ret %result
+}
+"#;
+
+fn price(module: &ValidModule, label: &str, budget: u64, expected: impl Fn(u64) -> u64) {
+    let (_, _, inputs) = compare(module, label, budget, ApplyMode::Automatic);
+    assert_eq!(inputs, (0..8).map(|x| (expected(x), 0)).collect::<Vec<_>>());
+
+    let mut bytes = [0; MEMORY];
+    for data in &module.data {
+        let address = data.address as usize;
+        bytes[address..address + data.len() as usize].copy_from_slice(&data.encode());
+    }
+    let held = Default::default();
+    let compiled = compile_apply_with(
+        ApplyInput {
+            module,
+            callee: module.function_named("f").expect("applied function"),
+            args: &[Argument::Register(0..3)],
+            out: 3..11,
+            fault: 11..16,
+            budget,
+            entry_fault: None,
+            stack_available: MEMORY as u64 - module.static_end(),
+            memory: Some(ApplyMemory::new(&bytes, &held)),
+            scratch_start: 16,
+        },
+        ApplyMode::Automatic,
+    )
+    .expect("emit the same apply in isolation");
+    let (gates, layout) = gates(&compiled, WIDTH, 13);
+    let count = |controls| gates.iter().filter(|gate| gate.controls.len() == controls).count();
+    println!(
+        "| {label} | {} | {} | {} | {} | {} | {} | {} | 8/8 |",
+        compiled.block.ops().len(),
+        count(2),
+        count(1),
+        16 + layout.scratch,
+        compiled.memory.retained_scratch_qubits,
+        compiled.memory.gates,
+        compiled.memory.peak_nonconstant_bits,
+    );
+}
+
+#[test]
+fn private_memory_cost_debts() {
+    let remainder = |body: &str, by: &str| {
+        format!(
+            r#"
+func @f(i3 %x) -> i8 {{
+entry:
+    %n = trunc i3 %x to i2
+    %r = {by}
+{body}
+}}
+"#
+        )
+    };
+    for (label, body, expected) in [
+        ("store", "    store i2 %r, 8\n    %byte = load i8 8\n    ret %byte", 0),
+        ("address", "    %address = zext i2 %r to i64\n    %byte = load i8 %address\n    ret %byte", 41),
+    ] {
+        for (variant, by) in [("srem", "srem i2 %n, 1"), ("literal", "and i2 %n, 0")] {
+            let source = format!("data 0 = i8 41\n{}", remainder(body, by));
+            price(&module(&source, ""), &format!("{label} {variant}"), 5, |_| expected);
+        }
+    }
+    price(&module(GUARDED_PAIR, ""), "two guarded", 6, |x| x & 1);
+    price(&module(GUARDED_TRIPLE, ""), "three guarded", 6, |x| (x & 3).min(2) + 1);
+    let mixed = GUARDED_PAIR.replace("    %choose", "    store i8 7, 8\n    %choose");
+    let mixed = mixed.replace("    store i8 0, 8", "    %skip = add i8 0, 0");
+    price(&module(&mixed, ""), "unguarded then guarded", 7, |x| if x & 1 == 0 { 7 } else { 1 });
+    price(
+        &module(&GUARDED_PAIR.replace("    %result = load i8 8\n    ret %result", "    ret 0"), ""),
+        "two guarded with discarded result",
+        6,
+        |_| 0,
+    );
+}
+
+fn remainder_store(input: &str, op: &str, width: usize, divisor: &str) -> String {
+    let read_bytes = if width == 1 { "    %out = load i8 8" } else { "    %out = load i8 23" };
+    format!(
+        r#"
+func @f(i3 %x) -> i8 {{
+entry:
+{input}
+    %r = {op} i{width} %n, {divisor}
+    store i{width} %r, 8
+{read_bytes}
+    ret %out
+}}
+"#
+    )
+}
+
+#[test]
+fn unit_remainder_stores_are_definite_at_the_integer_width_limits() {
+    for (width, input) in [(1, "    %n = trunc i3 %x to i1"), (128, "    %n = sext i3 %x to i128")] {
+        for (op, divisor) in [("urem", "1"), ("srem", "1"), ("srem", "-1")] {
+            let source = remainder_store(input, op, width, divisor);
+            let compiled = isolated(&source);
+            let (gates, layout) = gates(&compiled, WIDTH, 13);
+            assert!(gates.is_empty(), "{op} i{width} by {divisor}");
+            assert_eq!(layout.scratch, 0);
+            let (_, memory, values) = compare(&module(&source, ""), "unit remainder", 5, ApplyMode::Automatic);
+            assert_eq!(memory, MemoryCounts::default());
+            assert_eq!(values, vec![(0, 0); 8]);
+        }
+    }
+}
+
+#[test]
+fn a_maximum_divisor_still_reduces_an_equal_dividend() {
+    for (op, divisor) in [("urem", u128::MAX), ("srem", i128::MAX as u128), ("srem", 1u128 << 127)] {
+        let source = remainder_store(
+            &format!("    %top = trunc i3 %x to i1\n    %n = select i128 %top, {divisor}, 1"),
+            op,
+            128,
+            &divisor.to_string(),
+        );
+        let (_, _, values) = compare(&module(&source, ""), "maximum divisor", 6, ApplyMode::Automatic);
+        assert_eq!(values, vec![(0, 0); 8]);
+    }
+}
+
+#[test]
+fn signed_remainder_by_a_negative_constant_extends_the_dividend_sign() {
+    let source = remainder_store("    %n = sext i3 %x to i128", "srem", 128, "-3")
+        .replace("    ret %out", "    %low = load i8 8\n    %both = xor i8 %out, %low\n    ret %both");
+    let (_, _, values) = compare(&module(&source, ""), "negative divisor", 7, ApplyMode::Automatic);
+    let expected = (0..8)
+        .map(|x| {
+            let signed = ((x << 5) as i8) >> 5;
+            let remainder = signed % -3;
+            let high_byte = if remainder < 0 { 255 } else { 0 };
+            (u64::from(remainder.cast_unsigned() ^ high_byte), 0)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(values, expected);
+}
+
+#[test]
+fn a_zero_remainder_divisor_faults_at_its_attempt() {
+    for (width, input) in [(1, "    %n = trunc i3 %x to i1"), (128, "    %n = sext i3 %x to i128")] {
+        for op in ["urem", "srem"] {
+            let source = remainder_store(input, op, width, "0");
+            let module = module(&source, "");
+            for (budget, fault) in [(1, Fault::Budget), (2, Fault::DivideByZero), (3, Fault::DivideByZero)] {
+                let (_, memory, values) = compare(&module, "zero divisor", budget, ApplyMode::Automatic);
+                assert_eq!(memory, MemoryCounts::default());
+                assert_eq!(values, vec![(0, fault.code()); 8]);
+            }
+        }
+    }
+}
+
+#[test]
+fn an_address_from_a_unit_remainder_needs_no_assignment_replay() {
+    // Replay supports up to eight argument qubits.
+    let module = module_with_width(
+        r#"
+data 0 = i8 41
+func @f(i9 %x) -> i8 {
+entry:
+    %n = trunc i9 %x to i2
+    %r = srem i2 %n, 1
+    %at = zext i2 %r to i64
+    %out = load i8 %at
+    ret %out
+}
+"#,
+        "",
+        9,
+    );
+    let (_, memory, values) = compare(&module, "constant address without replay", 5, ApplyMode::Automatic);
+    assert_eq!(memory, MemoryCounts::default());
+    assert_eq!(values, vec![(41, 0); 512]);
+}

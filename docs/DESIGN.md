@@ -524,12 +524,15 @@ have read. The guards are disjoint, so each input sees just its own store. Earli
 available to reverse the call. The compiler can prove an address definite on its dispatch guard
 by replaying forward gates over at most eight distinct argument qubits and at most $2^{20}$ gates.
 
-**Cost of missing constant proofs.** The emitter proves a literal zero, a zero shifted by a
-qubit-dependent amount, and `(x*x) XOR x` on one bit. For `srem i2 %x, 1` it produces two
-bits on qubits even though the remainder is zero for every input. An unconditional store
-at a definite address can record those bits without another copy. The arithmetic address proof
-alone refuses the remainder as an address. Guarded replay can recognise its value where the
-address proof can replay all inputs.
+**Cost of missing constant proofs.** The emitter proves a literal zero, a zero shifted
+by a qubit-dependent amount, and `(x*x) XOR x` on one bit. A remainder by a known
+nonzero divisor has magnitude at most the smaller of the dividend's maximum
+magnitude and the divisor magnitude minus one. A zero bound produces literal
+zero before memory lowering. A dividend whose magnitude is always less than the
+divisor supplies its own remainder. Signed results preserve the dividend's sign
+and extend it above the proved result width. Both arithmetic analysis and gate
+emission use the bounds. A zero divisor still faults at the instruction.
+
 Writing one or zero to initially zero byte 8 with two disjoint guarded stores retains one qubit
 and uses two CNOTs, causing `WireSpace` with no spare wire, and the existing conditional
 selection could fold writes to bytes touched only by fixed-address stores before publishing

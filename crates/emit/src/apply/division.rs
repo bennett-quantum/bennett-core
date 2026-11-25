@@ -35,14 +35,93 @@ pub(super) fn result_bits(dividend: &[Bit], divisor: &[Bit]) -> usize {
     bits(unsigned_max(dividend).min(unsigned_max(divisor).saturating_sub(1)))
 }
 
+fn signed_value(value: u128, width: usize) -> i128 {
+    ((value << (128 - width)) as i128) >> (128 - width)
+}
+
+// The most negative input has the sign bit set and every unproved low
+// bit clear. The most positive input has the sign bit clear and every
+// unproved low bit set. Correlations can only tighten these bounds.
+fn maximum_signed_magnitude(word: &[Bit]) -> u128 {
+    let (&sign, low) = word.split_last().expect("integer has a sign bit");
+    let positive = if sign == ONE { 0 } else { unsigned_max(low) };
+    let negative = if sign == ZERO {
+        0
+    } else {
+        let minimum_low =
+            low.iter().enumerate().fold(0, |value, (index, bit)| value | (u128::from(*bit == ONE) << index));
+        (1 << low.len()) - minimum_low
+    };
+    positive.max(negative)
+}
+
+struct RemainderBounds {
+    dividend: u128,
+    modulus: u128,
+    can_be_negative: bool,
+}
+
+impl RemainderBounds {
+    fn constant_divisor(op: BinOp, dividend: &[Bit], divisor: &[Bit]) -> Option<Self> {
+        let value = definite(divisor).filter(|&value| value != 0)?;
+        match op {
+            BinOp::Urem => Some(Self { dividend: unsigned_max(dividend), modulus: value, can_be_negative: false }),
+            BinOp::Srem => Some(Self {
+                dividend: maximum_signed_magnitude(dividend),
+                modulus: signed_value(value, divisor.len()).unsigned_abs(),
+                can_be_negative: dividend.last() != Some(&ZERO),
+            }),
+            BinOp::Udiv
+            | BinOp::Sdiv
+            | BinOp::Add
+            | BinOp::Sub
+            | BinOp::Mul
+            | BinOp::And
+            | BinOp::Or
+            | BinOp::Xor
+            | BinOp::Shl
+            | BinOp::Lshr
+            | BinOp::Ashr => None,
+        }
+    }
+
+    fn maximum(&self) -> u128 {
+        self.dividend.min(self.modulus - 1)
+    }
+
+    fn width(&self) -> usize {
+        let maximum = self.maximum();
+        bits(maximum) + usize::from(maximum != 0 && self.can_be_negative)
+    }
+
+    fn sign_extension(&self, word: &[Bit]) -> Bit {
+        if self.can_be_negative { word.last().copied().unwrap_or(ZERO) } else { ZERO }
+    }
+}
+
+pub(super) fn apply_remainder_facts(op: BinOp, dividend: &[Bit], divisor: &[Bit], result: &mut [Bit]) {
+    if let Some(bounds) = RemainderBounds::constant_divisor(op, dividend, divisor) {
+        let (value, high) = result.split_at_mut(bounds.width());
+        high.fill(bounds.sign_extension(value));
+    } else if op == BinOp::Urem && definite(divisor) != Some(0) {
+        result[result_bits(dividend, divisor)..].fill(ZERO);
+    }
+}
+
 pub(super) fn fold(op: BinOp, dividend: &[Bit], divisor: &[Bit]) -> Option<Word> {
     let width = dividend.len();
-    let left = definite(dividend)?;
-    let right = definite(divisor)?;
-    if right == 0 {
-        return None;
-    }
-    let signed = |value| ((value << (128 - width)) as i128) >> (128 - width);
+    let right = definite(divisor).filter(|&value| value != 0)?;
+    let Some(left) = definite(dividend) else {
+        let bounds = RemainderBounds::constant_divisor(op, dividend, divisor)?;
+        return if bounds.maximum() == 0 {
+            Some(vec![ZERO; width])
+        } else if bounds.dividend < bounds.modulus {
+            Some(dividend.to_vec())
+        } else {
+            None
+        };
+    };
+    let signed = |value| signed_value(value, width);
     let value = match op {
         BinOp::Udiv => left / right,
         BinOp::Urem => left % right,
@@ -68,7 +147,14 @@ pub(super) fn calculate(circuit: &mut Circuit, op: BinOp, dividend: &[Bit], divi
     match op {
         BinOp::Udiv => quotient(circuit, dividend, divisor),
         BinOp::Urem => reduce(circuit, dividend, divisor),
-        BinOp::Sdiv | BinOp::Srem => signed(circuit, dividend, divisor, op == BinOp::Sdiv),
+        BinOp::Sdiv => signed(circuit, dividend, divisor, true),
+        BinOp::Srem => {
+            if let Some(bounds) = RemainderBounds::constant_divisor(op, dividend, divisor) {
+                signed_constant_remainder(circuit, dividend, &bounds)
+            } else {
+                signed(circuit, dividend, divisor, false)
+            }
+        }
         BinOp::Add
         | BinOp::Sub
         | BinOp::Mul
@@ -112,6 +198,23 @@ fn signed(circuit: &mut Circuit, dividend: &[Bit], divisor: &[Bit], quotient: bo
         let sign = if quotient { circuit.xor(dividend_sign, divisor_sign) } else { dividend_sign };
         negate_if(circuit, &magnitude, sign)
     })
+}
+
+fn signed_constant_remainder(circuit: &mut Circuit, dividend: &[Bit], bounds: &RemainderBounds) -> Word {
+    let width = bounds.width();
+    let significant = bits(bounds.dividend);
+    let divisor = constant(bounds.modulus, bits(bounds.modulus));
+    let sign = dividend[dividend.len() - 1];
+    let mut result = circuit.clean_word(width, |circuit| {
+        let magnitude = negate_if(circuit, &dividend[..significant], sign);
+        let mut remainder = restore(circuit, &magnitude, &divisor, false);
+        remainder.truncate(bits(bounds.maximum()));
+        remainder.resize(width, ZERO);
+        negate_if(circuit, &remainder, sign)
+    });
+    let high = bounds.sign_extension(&result);
+    result.resize(dividend.len(), high);
+    result
 }
 
 // In two's complement negation, a bit flips exactly when a lower bit is one.

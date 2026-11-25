@@ -33,9 +33,8 @@ fn fold_inst(
                     let width =
                         ranges::product_bits(ranges::unsigned_max(&left), ranges::unsigned_max(&right), word.len());
                     word[width..].fill(ZERO);
-                } else if *op == BinOp::Urem && definite(&right) != Some(0) {
-                    let width = division::result_bits(&left, &right);
-                    word[width..].fill(ZERO);
+                } else if matches!(op, BinOp::Urem | BinOp::Srem) {
+                    division::apply_remainder_facts(*op, &left, &right, &mut word);
                 }
                 word
             }))
