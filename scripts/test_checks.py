@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Executed defect witnesses for the fast checks and exact-revision push hook."""
 import importlib.util
+import json
+import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -159,6 +162,100 @@ class Checks(unittest.TestCase):
             push.main(self.root, [f'HEAD {tip} refs/heads/main {base}'])
         push.main(self.root, [f'HEAD {tip} refs/heads/wip/checks {base}'])
         self.assertEqual(push.wip_commits(self.root, base, '0' * 40), [])
+
+    def mutation_step(self, file, before, after):
+        self.init_repo()
+        path = self.root / file
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(before)
+        base = self.commit('Add mutation fixture')
+        path.write_text(after)
+        self.commit('Change mutation fixture')
+        return base
+
+    def run_mutation(self, base, *flags, listing='', diagnostic='', status=0, package_dir='.'):
+        # Run the CLI on a real Git diff with a fake Cargo so these tests need no mutation tool or builds.
+        bin_dir = self.root / '.tmp/bin'
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        cargo = bin_dir / 'cargo'
+        metadata = {'workspace_default_members': ['fixture'], 'packages': [
+            {'id': 'fixture', 'name': 'fixture',
+             'manifest_path': str(self.root / package_dir / 'Cargo.toml')}]}
+        cargo.write_text(
+            '#!/usr/bin/env python3\n'
+            'import sys\n'
+            'if sys.argv[1] == "metadata":\n'
+            f'    print({json.dumps(metadata)!r})\n'
+            'elif sys.argv[1] == "mutants" and sys.argv[-2:] == ["--list", "--json"]:\n'
+            f'    sys.stdout.write({listing!r})\n'
+            f'    sys.stderr.write({diagnostic!r})\n'
+            f'    sys.exit({status})\n'
+            'else:\n'
+            '    sys.exit("unexpected cargo invocation: " + repr(sys.argv[1:]))\n')
+        cargo.chmod(0o755)
+        env = os.environ | {'PATH': os.pathsep.join([str(bin_dir), os.environ['PATH']]),
+                            'BENNETT_FRONT': str(self.root / 'missing-front')}
+        return subprocess.run(
+            [sys.executable, str(ROOT / 'scripts/mutate-diff.py'), base, *flags],
+            cwd=self.root, env=env, text=True, capture_output=True)
+
+    def assert_empty_mutation_set(self, result, diagnostic=''):
+        self.assertEqual(result.returncode, 1, result)
+        self.assertEqual(result.stderr, diagnostic +
+                         'no generated Rust mutants in this diff: record explicit seeded edits for unsupported changes\n')
+        self.assertNotIn('changed-line mutants selected', result.stdout)
+
+    def test_mutation_docs_only_rejects_blank_listing(self):
+        base = self.mutation_step('README.md', 'Before\n', 'After\n')
+        diagnostic = ' INFO Diff changes no Rust source files\n'
+        for flags in [('--list',), ()]:
+            with self.subTest(flags=flags):
+                self.assert_empty_mutation_set(
+                    self.run_mutation(base, *flags, diagnostic=diagnostic), diagnostic)
+
+    def test_mutation_rust_comment_only_rejects_empty_array(self):
+        source = 'pub fn increment(x: u32) -> u32 { x + 1 }\n'
+        base = self.mutation_step('src/lib.rs', source, '// Increment an integer.\n' + source)
+        for flags in [('--list',), ()]:
+            with self.subTest(flags=flags):
+                self.assert_empty_mutation_set(self.run_mutation(base, *flags, listing='[]\n'))
+
+    def test_mutation_empty_front_harness_diff_does_not_require_front_build(self):
+        base = self.mutation_step('front/tests/tests/smoke.rs', '#[test]\nfn smoke() {}\n',
+                                  '#[test]\nfn smoke() { assert_eq!(1 + 1, 2); }\n')
+        self.assert_empty_mutation_set(self.run_mutation(base, listing='[]\n', package_dir='front/tests'))
+
+    def test_mutation_lists_candidates_for_changed_rust_code(self):
+        base = self.mutation_step('src/lib.rs', 'pub fn f(x: u32) -> u32 { x + 1 }\n',
+                                  'pub fn f(x: u32) -> u32 { x + 2 }\n')
+        candidate = {'file': 'src/lib.rs', 'replacement': '-'}
+        result = self.run_mutation(base, '--list', listing=json.dumps([candidate]))
+        self.assertEqual(result.returncode, 0, result)
+        self.assertEqual(result.stderr, '')
+        self.assertIn('1 changed-line mutants selected\n', result.stdout)
+        self.assertIn(str(candidate), result.stdout)
+
+    def test_mutation_preserves_tool_failure(self):
+        base = self.mutation_step('src/lib.rs', 'pub fn f() {}\n', 'pub fn g() {}\n')
+        diagnostic = 'Error: failed to parse input diff\n'
+        for flags in [('--list',), ()]:
+            with self.subTest(flags=flags):
+                result = self.run_mutation(base, *flags, status=2, diagnostic=diagnostic)
+                self.assertEqual(result.returncode, 2, result)
+                self.assertIn(diagnostic, result.stderr)
+                self.assertIn('cargo mutants --list --json failed (exit 2)', result.stderr)
+                self.assertNotIn('no generated Rust mutants', result.stderr)
+                self.assertNotIn('Traceback', result.stderr)
+
+    def test_mutation_rejects_invalid_list_output(self):
+        base = self.mutation_step('src/lib.rs', 'pub fn f() {}\n', 'pub fn g() {}\n')
+        for listing, message in [('invalid JSON', 'returned invalid JSON'), ('{}', 'expected a JSON array')]:
+            with self.subTest(listing=listing):
+                result = self.run_mutation(base, '--list', listing=listing)
+                self.assertEqual(result.returncode, 1, result)
+                self.assertIn(message, result.stderr)
+                self.assertNotIn('no generated Rust mutants', result.stderr)
+                self.assertNotIn('Traceback', result.stderr)
 
 
 if __name__ == '__main__':

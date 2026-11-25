@@ -42,13 +42,19 @@ def main():
         command.extend(['--test-package', name])
     print(f'mutation step {base}..{head}; results {output.relative_to(root)}', flush=True)
     env = os.environ | {'TMPDIR': str(output)}
-    front_tests = root / 'front/tests'
-    if any(Path(p['manifest_path']).parent == front_tests for p in selected):
-        front = Path(env.get('BENNETT_FRONT', root / 'target/front/bennett-front')).resolve()
-        if not args.list and not front.is_file():
-            sys.exit('run front/test.sh at this revision before mutating the front harness')
-        env['BENNETT_FRONT'] = str(front)
-    candidates = json.loads(run(*command, '--list', '--json', cwd=root, env=env))
+    preview = subprocess.run([*command, '--list', '--json'], cwd=root, env=env,
+                             stdout=subprocess.PIPE, text=True)
+    if preview.returncode:
+        sys.stderr.write(preview.stdout)
+        print(f'cargo mutants --list --json failed (exit {preview.returncode})', file=sys.stderr)
+        return preview.returncode
+    # cargo-mutants can leave stdout blank when it has no mutants to filter.
+    try:
+        candidates = json.loads(preview.stdout.strip() or '[]')
+    except json.JSONDecodeError as error:
+        sys.exit(f'cargo mutants --list --json returned invalid JSON: {error}')
+    if not isinstance(candidates, list):
+        sys.exit('cargo mutants --list --json expected a JSON array')
     if not candidates:
         sys.exit('no generated Rust mutants in this diff: record explicit seeded edits for unsupported changes')
     print(f'{len(candidates)} changed-line mutants selected', flush=True)
@@ -56,6 +62,12 @@ def main():
         for candidate in candidates:
             print(candidate)
         return 0
+    front_tests = root / 'front/tests'
+    if any(Path(p['manifest_path']).parent == front_tests for p in selected):
+        front = Path(env.get('BENNETT_FRONT', root / 'target/front/bennett-front')).resolve()
+        if not front.is_file():
+            sys.exit('run front/test.sh at this revision before mutating the front harness')
+        env['BENNETT_FRONT'] = str(front)
     code = subprocess.call(command, cwd=root, env=env)
     # A successful empty run is not evidence for changes outside cargo-mutants' Rust scope.
     print('Inspect missed/unviable/timeout outcomes. Non-Rust changes require explicit seeded edits; '
