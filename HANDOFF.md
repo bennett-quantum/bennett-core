@@ -1,19 +1,36 @@
 # HANDOFF
 
-Updated on 2026-11-20 after `7db3a1f`. Earlier measurements and decisions are in `docs/RECORDS.md`.
+Updated on 2026-11-25 with the maintainer's decisions of that day; the code is as it was after `7db3a1f`. Earlier
+measurements and decisions are in `docs/RECORDS.md`.
 
-## STOP: no more patches to code under a qubit (2026-11-20)
+## The front end is being rebuilt on handles (2026-11-25)
 
-**The maintainer has stopped all work on the front end's handling of code under a qubit.** That is everything the
-front decides by asking whether a value, a store or a statement *depends on a qubit*: conditions and loops on a qubit
-in the control program, stores of qubit-dependent values into ordinary memory with the exchange the front adds,
-expressions the front packages into functions it generates, and the classification of calls as applied.
+**The maintainer accepted a new core design for the C front end on 2026-11-25.** Qubits live in the device and C holds
+only *handles* to them. Every quantum operation is a call to an external function: allocate, release (the partial
+trace), measure, gate, rotation, and `apply`, which names a plain C function and the registers it is applied to. The
+front end translates each such call from the call's run-time operands and the device's register table and from
+nothing else. It never asks whether a value, a store or a statement depends on a qubit. The design document
+(`docs/HANDLES.md`) is the first step of the build and does not exist yet.
 
-Do not start, continue or land: the guards step (1c), placement P2 and P3, the fixes on `wip/opus-register`, any
-further rule, allow-list entry or refusal in that part of `front/src`, or any fix for an entry under "Known wrong
-results" below. Those entries stay as they are, with their ignored witnesses.
+**How it is built.** Beside the old layer on `main`, in small landed steps: a new header and a new translation path.
+First the design document and one revision of the header, settled by writing five example programs in it (the thesis
+program, Grover over a C predicate, Shor for 15 and for 21, Grover over SQLite). The first milestone can refute the
+design cheaply: the thesis program, Grover over a C predicate and Shor for 15 run on the device through the new path,
+with equal results at `-O0` and `-O2` and the Toffoli and qubit counts the emitter already reaches. Then Grover over
+SQLite.
 
-Why: every step of 2026-11-18 and 2026-11-19 on this ground repaired the cases a review had found and the next review
+**The old layer is frozen: no more patches to code under a qubit (stopped on 2026-11-20).** The old layer is
+everything the front decides by asking whether a value, a store or a statement *depends on a qubit*: conditions and
+loops on a qubit in the control program, stores of qubit-dependent values into ordinary memory with the exchange the
+front adds, expressions the front packages into functions it generates, and the classification of calls as applied.
+
+Do not start, continue or land: the guards step (1c), placement P2 and P3, the register for a value with several
+consumers, any further rule, allow-list entry or refusal in that part of `front/src`, or any fix for an entry under
+"Known wrong results" below. Those entries stay as they are, with their ignored witnesses. The old layer stays
+untouched beside the new path until the milestone programs and Grover over SQLite pass in the new form. Then it is
+deleted from `main` in one commit, and this file names the last commit that contains it.
+
+Why it was stopped: every step of 2026-11-18 and 2026-11-19 on this ground repaired the cases a review had found and the next review
 found new ones. Refusals of generated programs rose from about 4% to about 11%, and thirteen known wrong results
 remain. Ordering patch after patch there was a poor decision by the advisor; it should have been stopped at the
 second round and taken as evidence about the design. The cause is not a list of missing cases. Whether a value depends
@@ -21,10 +38,9 @@ on a qubit is undecidable when taken by value, and when taken by the program tex
 preserves: a compiler keeps what a program computes, not how it was written. A front end that rests on that question
 has to defend it against every optimiser pass, one patch at a time.
 
-What happens instead: a design that never asks the question is being written and reviewed before any code changes.
-Until the maintainer decides on it, work continues only on what the question does not touch: the device program and
-the executor, the gate emitter for applied functions, the OpenQASM output, the C library and floating point, and
-ordinary C against native. "Next steps" below is written for that.
+The handle design never asks the question. Work outside the front end continues as before: the device program and the
+executor, the gate emitter for applied functions, the OpenQASM output, the C library and floating point, and ordinary
+C against native.
 
 ## State
 
@@ -108,6 +124,34 @@ Run each in the foreground, from the repository root (`CARGO_BUILD_JOBS=3` on th
 ## Decisions in force
 
 The newest decisions appear first.
+
+- **2026-11-25, the core of the C front end.** Qubits are handles, every quantum operation is an external call, and
+  `apply` names a plain C function (the section at the top). `if (q) { ... }` and `y = q + 3` leave the language: the
+  programmer names every point where qubits meet ordinary code. Shorter notation may be added in two ways only: a
+  library in ordinary C that calls the interface, or a form expanded at source level, before any compiler pass, by a
+  rule that looks at that form alone. A store that depends on a qubit still makes the bytes qubits (2026-11-17); it now
+  happens in the private memory of an applied function, not in the control program's memory.
+- **2026-11-25, the old layer.** Frozen now. Deleted from `main` in one commit once the milestone programs and Grover
+  over SQLite pass in the new form. The device forms that served it (bytes holding qubits, gates and measurements at a
+  memory address) stay in the device language.
+- **2026-11-25, the interface before anything depends on it.** One revision of the header first: a query for a
+  register's width, a phase rotation (so that a routine stays right when run under a control), control scopes that
+  combine with the short forms for scalar functions, and a helper for fault registers. A step budget comes from a run
+  that reports the steps used, not from a guessed constant.
+- **2026-11-25, choices the proofs left open.** The private memory of an `apply` is placed before the input is
+  written, at the same address for every input, aligned to 16 bytes. Addresses have one concrete 64-bit layout, and
+  the loader's choices are fixed by the device. The builders of the scalar forms check explicitly that a slice has at
+  most 64 qubits. Every implementation of `apply` returns its scratch qubits to 0. A quantum call inside an applied
+  function has the device language's fault code 8 (one numbering). The control-scope library's failures (a pop
+  without a push, overflow, no storage) are named stops of the run. musl takes its declarations of the output and exit
+  primitives from the header. The claim that no program is refused for how it uses the interface is verified again
+  with linker names in the first step's review.
+- **2026-11-25, emitter choices ratified.** The five provisional choices stand, each widened only when a measured
+  program needs it: the single-loop proof recognises one conditional test with straight continuing and exiting routes;
+  the simulator evaluates applied functions directly by default and uses emitted gates with `--apply-circuit`;
+  constant operands are proved conservatively; copying calls stops at 16,384 slots and program points with a refusal
+  by name; width analysis traces at most eight argument qubits and 2^20 attempts, then falls back to full widths.
+  The two limits are derived from the program's own work count when a measured program reaches them.
 
 - **2026-11-20, sampling.** Each interval includes its lower endpoint and excludes its upper endpoint. Empty intervals are skipped.
 - **2026-11-20, return addresses.** Keep the named `retaddr` refusal in emitted `apply` until it can read both suspended and copied call frames.
@@ -199,10 +243,13 @@ Since `c5bd22a`:
 - The arithmetic job's local stash `2cfafc9` dispatches indirect calls among matching addresses and writes
   `bad_indirect` for other targets. `cargo test` passed 489 tests and `front/test.sh` passed 433. A C example with two
   targets agreed on all 256 inputs with 58 Toffolis and 47 peak qubits. Push and review are pending.
-- `wip/opus-register` (`8f16b77`), the register for a value with several consumers, stopped after three review rounds. It accepts `paired-read`, which main refuses, and returns 2,569 for C's 1,541. It also refuses valid cases with an unrelated write, a loop that skips a consumer, or a saved byte passed to another call.
-- `wip/opus-rule-o` is superseded by the rule O commits on main and retired.
-- `wip/opus-register-draft` is superseded by the later register branch and retired.
-- Never to be landed: `wip/fallback-step3`, `wip/sol-mutants-machine`, `wip/sol-mutants-machine-partial` (they build on the removed `mark`/`rewind` machinery).
+- On 2026-11-25 every other `wip/` branch left the branch list. The 29 whose work is on `main` were deleted. The 20
+  whose work is not on `main` are kept on the remote as `refs/archive/2026-11-25/wip/<name>`
+  (`git fetch origin 'refs/archive/*:refs/archive/*'`). None of them is to be landed:
+  - `opus-register` (`8f16b77`), the register for a value with several consumers, is old-layer work stopped after three review rounds. It accepts `paired-read`, which main refuses, and returns 2,569 for C's 1,541.
+  - `opus-rule-o` and `opus-register-draft` are superseded and retired.
+  - `sol-mutants-machine` and `sol-mutants-machine-partial` build on the removed `mark`/`rewind` machinery.
+  - The rest date from 2026-11-15 to 2026-11-19 and hold one to thirteen commits each that never landed.
 
 ### Notes for the next placement step
 
@@ -211,12 +258,20 @@ The proof must establish what the callee computes. Functions marked `memory(none
 
 ## Next steps
 
-Read "STOP" at the top first. Nothing in this list touches code under a qubit.
+Read the section at the top first. Nothing in this list changes the old layer. The five lines run side by side.
 
-1. Re-check the wide-register fix, land wide registers and the reviewed angles in order, then review and land the sampler fix.
-2. Push and review indirect dispatch from the stash.
-3. Use the recorded baselines to reduce the memory costs in the gate emitter.
-4. Address the runtime and floating-point debts below.
+1. Front end: write `docs/HANDLES.md`, revise the header against the five example programs, then build the new
+   translation path up to the first milestone (the section at the top).
+2. Device: re-check the wide-register fix, land wide registers and the reviewed angles in order, then review and land
+   the sampler fix. Then the device forms the handle interface needs, as `docs/HANDLES.md` lists them (among them:
+   measuring a slice of a register, a phase rotation, the fixed placement of an `apply`'s private memory).
+3. Emitter: push and review indirect dispatch from the stash. Then use the recorded baselines to reduce the memory
+   costs: an `apply` of the handle interface passes its arguments through memory, so those costs decide its price.
+4. Runtime: make heap exhaustion a named fault (the handle design requires it), then the runtime and floating-point
+   debts below.
+5. Testing: independent passes over the commits listed under "Which commits no independent check has covered" that are
+   outside the old layer, and the independent `apply` reference grown towards a second implementation of the device
+   language.
 
 Not to be started: the former steps on ordinary guards (1c), placement P2 and P3, and the several-consumer register.
 The next independent testing pass starts at the first commit in "Which commits no independent check has covered".
@@ -295,22 +350,7 @@ The next independent testing pass starts at the first commit in "Which commits n
 
 ## Questions for the maintainer
 
-- **Single-loop proof.** Taken: recognise one conditional test and straight continuing and
-  exiting routes with provably lowerable integer operations. Recommend broadening the proof
-  to additional total control-flow shapes only when a measured program needs it.
-
-- **Simulator entry point for emitted gates.** Taken: opt in with `--apply-circuit auto`
-  or `--apply-circuit step-machine`. Recommend keeping direct evaluation as the default while its
-  instruction coverage and strict fault diagnostics exceed the gate compiler's.
-
-- **Constant operands in emitted arithmetic.** Taken: fold bits and prove a single value
-  across incoming edges and visits before using a constant shift amount or a fixed-factor multiply. A
-  conditional jump that folds to a constant contributes only its selected edge. Recommend
-  keeping the proof conservative until a program needs more facts about definite control.
-
-- **Copy-expansion limit.** The emitter uses a fixed 16,384 units. Derive the limit from the program's own work count if a measured program hits it.
-
-- **Width-analysis work limits.** The limits are fixed at eight argument qubits and 2^20 attempts. If a measured program reaches them, derive the limits from the trace's work count.
+None open. The maintainer ratified the five provisional emitter choices on 2026-11-25 ("Decisions in force").
 
 ## Which commits no independent check has covered
 
