@@ -297,6 +297,7 @@ pub fn registers(module: &ValidModule, name: &str) -> Vec<String> {
             | Inst::CallIndirect { .. }
             | Inst::FuncAddr { .. }
             | Inst::Effect { .. }
+            | Inst::QallocBy { .. }
             | Inst::Qfree { .. }
             | Inst::Gate { .. }
             | Inst::GateAt { .. }

@@ -16,7 +16,7 @@
 
 use std::ops::Range;
 
-use bennett_ir::{Fault, Gate, Inst, Place, Width};
+use bennett_ir::{Fault, Gate, Inst, Operand, Place, Width};
 
 use crate::device::Wire;
 use crate::device_io::{DeviceContext, wire};
@@ -35,8 +35,9 @@ impl<'m> Executor<'m> {
     /// Resolves a place. A memory place outside memory is `out_of_bounds`.
     fn resolve_place(&self, place: &Place) -> Result<Resolved, Fault> {
         match *place {
-            Place::Register(qubit) => {
-                Ok(Resolved::Register(wire(self.quantum.resolve(self.handle(qubit.register))?, qubit.bit)))
+            Place::Register(qubit) => Ok(Resolved::Register(self.qubit(&qubit)?)),
+            Place::Indexed { register, index } => {
+                Ok(Resolved::Register(self.position(register, self.read_word(&Operand::Slot(index)))?))
             }
             Place::Memory { address, bit } => {
                 let byte = self.read_word(&address).checked_add(u64::from(bit / 8));

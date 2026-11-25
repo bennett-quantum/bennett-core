@@ -45,9 +45,10 @@ faults! {
     EffectInRegion = 7 "effect_in_region",
     /// A quantum instruction was reached inside a coherent region.
     QuantumInRegion = 8 "quantum_in_region",
-    /// A register handle was used after its register was freed.
+    /// A register handle that names no allocated register: its register was freed, or no allocation made
+    /// it (an `i64` handle is the number of the allocation that made it, from 1).
     DanglingRegister = 9 "dangling_register",
-    /// One gate or `apply` names the same qubit or register twice.
+    /// One gate or `apply` names the same qubit or register twice; a gate's target among its controls.
     QubitAlias = 10 "qubit_alias",
     // Code 11 was `dirty_free`, removed on 2026-11-17 when `qfree` became the partial trace; it stays unused.
     /// `stackrestore` to a stack pointer below the current one or above the current frame's allocations.
@@ -72,6 +73,17 @@ faults! {
     /// arithmetic alone, before asking for memory (`malloc(SIZE_MAX)`, an overflowing `calloc` product), still
     /// returns null (`rt/musl/README.md`, "The boundary").
     OutOfMemory = 19 "out_of_memory",
+    /// `qalloc i64` with a width outside 1 to 2^32 - 1, the widths a register may have.
+    BadWidth = 20 "bad_width",
+    /// `qalloc i64` when the run has made 2^64 - 1 allocations, as many as an `i64` handle can number.
+    OutOfHandles = 21 "out_of_handles",
+    /// A qubit position at or past its register's width, given at run time.
+    BadRange = 22 "bad_range",
+    /// A gate or rotation code outside its set; the device's gate kinds are literals, so only a program that
+    /// switches on a code reaches it, through `fault bad_gate`.
+    BadGate = 23 "bad_gate",
+    /// A list read from memory that cannot be read, or an argument of the handle interface that is malformed.
+    BadArgument = 24 "bad_argument",
 }
 
 impl Fault {

@@ -1,12 +1,13 @@
 //! Undoing one journaled step. Each undo reads back what the forward step destroyed; everything else it
 //! needs is still in the state, because every later step has already been undone.
 
-use bennett_ir::{BlockId, FuncId, Inst, Slot, Type};
+use bennett_ir::{BlockId, FuncId, Inst, Qubits, Slot};
 
 use crate::device_io::DeviceContext;
 use crate::executor::{Executor, Frame};
 use crate::forward::unpack_position;
 use crate::gates;
+use crate::handles::Entry;
 use crate::journal::Undo;
 
 impl<'m> Executor<'m> {
@@ -41,15 +42,17 @@ impl<'m> Executor<'m> {
                 self.gate(inverse, target, controls, &mut DeviceContext::default())
                     .expect("a gate that ran forward runs inverted");
             }
-            Undo::Qfree => {
-                let Inst::Qfree { register } = self.retreat() else { unreachable!("a qfree record") };
-                let Type::Qreg(qubits) = self.slot_type(*register) else { unreachable!("a register slot") };
-                self.quantum.revive(self.handle(*register), qubits);
-            }
-            Undo::Leftover => {
-                let Inst::Qfree { register } = self.retreat() else { unreachable!("a qfree record") };
-                let Type::Qreg(qubits) = self.slot_type(*register) else { unreachable!("a register slot") };
-                self.quantum.take_back(self.handle(*register), qubits);
+            Undo::Qfree | Undo::Leftover => {
+                self.retreat();
+                let qubits = Qubits::new(self.pop_word() as u32).expect("a released register's width");
+                let entry = Entry { register: self.pop_word() as u64, qubits };
+                let handle = self.pop_word() as u64;
+                self.handles.restore(handle, entry);
+                if undo == Undo::Qfree {
+                    self.quantum.revive(entry.register, qubits);
+                } else {
+                    self.quantum.take_back(entry.register, qubits);
+                }
             }
             Undo::Apply => {
                 let Inst::Apply { callee, args, out, fault, budget } = self.retreat() else {
@@ -88,11 +91,10 @@ impl<'m> Executor<'m> {
     }
 
     fn undo_definition(&mut self, undo: Undo) {
-        let inst = self.retreat();
+        self.retreat();
         if undo == Undo::Qalloc {
-            let dst = inst.result().expect("qalloc defines its handle");
-            let Type::Qreg(qubits) = self.slot_type(dst) else { unreachable!("a register slot") };
-            self.quantum.unallocate(self.handle(dst), qubits);
+            let entry = self.handles.unallocate();
+            self.quantum.unallocate(entry.register, entry.qubits);
         }
         self.restore_result();
     }

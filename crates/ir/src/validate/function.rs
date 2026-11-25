@@ -165,6 +165,7 @@ impl<'a> Checker<'a> {
                 Some(Type::Int(Width::WORD))
             }
             Inst::Qalloc { width, .. } => Some(Type::Qreg(*width)),
+            Inst::QallocBy { .. } => Some(Type::Int(Width::WORD)),
             Inst::Call { callee, .. } => self.call_result(site, self.module.function(*callee).result),
             Inst::CallIndirect { signature, .. } => self.call_result(site, signature.result),
             Inst::Measure { source: MeasureSource::Register(_), .. }
@@ -257,8 +258,9 @@ impl<'a> Checker<'a> {
             }
             Inst::Effect { byte } => self.expect(site, *byte, Type::Int(Width::BYTE)),
             Inst::Qfree { register } => {
-                self.register_width(site, *register);
+                self.register_or_handle(site, *register);
             }
+            Inst::QallocBy { width, .. } => self.expect(site, *width, Type::Int(Width::WORD)),
             Inst::Measure { source: MeasureSource::Register(register), .. } => {
                 if let Some(qubits) = self.register_width(site, *register)
                     && qubits.as_width().is_none()
@@ -307,7 +309,8 @@ impl<'a> Checker<'a> {
         for (k, place) in places.iter().enumerate() {
             match *place {
                 Place::Register(qubit) => {
-                    if let Some(qubits) = self.register_width(site, qubit.register)
+                    // An `i64` handle's width is known only when the gate runs (`bad_range`).
+                    if let Some(qubits) = self.register_or_handle(site, qubit.register)
                         && qubit.bit >= qubits.count()
                     {
                         self.error(site, Problem::QubitOutOfRange { bit: qubit.bit, bits: qubits.count() });
@@ -325,6 +328,11 @@ impl<'a> Checker<'a> {
                     if places[..k].contains(place) {
                         self.error(site, Problem::RepeatedMemoryQubit(bit));
                     }
+                }
+                // The position is a value: its range and any repetition are checked when the gate runs.
+                Place::Indexed { register, index } => {
+                    self.register_or_handle(site, register);
+                    self.expect(site, Operand::Slot(index), Type::Int(Width::WORD));
                 }
             }
         }
@@ -450,6 +458,19 @@ impl<'a> Checker<'a> {
             Operand::Const(value) => value.value().to_string(),
         };
         self.error(site, Problem::RegionOperandTooWide(name, qubits.count()));
+    }
+
+    /// The width of the register in `slot` if it is a `qN` register; `None` for an `i64` handle, whose width
+    /// the register table gives at run time. Reports any other type.
+    fn register_or_handle(&mut self, site: Site, slot: Slot) -> Option<Qubits> {
+        match self.types[slot.index()]? {
+            Type::Qreg(width) => Some(width),
+            Type::Int(Width::WORD) => None,
+            found @ Type::Int(_) => {
+                self.mismatch(site, Operand::Slot(slot), Expected::RegisterOrHandle, found);
+                None
+            }
+        }
     }
 
     /// The width of the register in `slot`, reporting the slot if it is not a register.

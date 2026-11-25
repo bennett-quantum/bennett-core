@@ -68,6 +68,7 @@ fn fold_inst(
         Inst::Store { .. } | Inst::StackRestore { .. } => None,
         Inst::Effect { .. }
         | Inst::Qalloc { .. }
+        | Inst::QallocBy { .. }
         | Inst::Qfree { .. }
         | Inst::Gate { .. }
         | Inst::GateAt { .. }

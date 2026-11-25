@@ -104,7 +104,15 @@ impl<'s> Parser<'s> {
                 line.no_result("effect")?;
                 Inst::Effect { byte: self.operand(scope, Width::BYTE)? }
             }
-            "qalloc" => Inst::Qalloc { dst: line.result("qalloc")?, width: self.register_width()? },
+            "qalloc" => {
+                let dst = line.result("qalloc")?;
+                // `qalloc i64 WIDTH`: the width computed at run time, the result an `i64` handle.
+                if self.cursor.eat(Token::Word("i64")) {
+                    Inst::QallocBy { dst, width: self.operand(scope, Width::WORD)? }
+                } else {
+                    Inst::Qalloc { dst, width: self.register_width()? }
+                }
+            }
             "qfree" => {
                 line.no_result("qfree")?;
                 Inst::Qfree { register: self.slot_use(scope, "a register")? }
@@ -219,13 +227,13 @@ impl<'s> Parser<'s> {
         Ok(Inst::CallIndirect { signature: Signature { params, result }, target, args, dst })
     }
 
-    /// `GATE target [ctrl qubit, ...]`, after the mnemonic and any angle. A gate whose qubits are all in
-    /// registers is `Gate`; one with a qubit in memory is `GateAt`.
+    /// `GATE target [ctrl qubit, ...]`, after the mnemonic and any angle. A gate whose qubits are all register
+    /// qubits at literal positions is `Gate`; one with a qubit in memory or at a run-time position is `GateAt`.
     fn gate(&mut self, scope: &mut Scope<'s>, gate: Gate) -> Result<Inst, Failure> {
         let (target, controls) = self.places(scope)?;
         let register = |place: &Place| match place {
             Place::Register(qubit) => Some(*qubit),
-            Place::Memory { .. } => None,
+            Place::Memory { .. } | Place::Indexed { .. } => None,
         };
         match (register(&target), controls.iter().map(register).collect::<Option<Vec<Qubit>>>()) {
             (Some(target), Some(controls)) => Ok(Inst::Gate { gate, target, controls }),
@@ -246,10 +254,17 @@ impl<'s> Parser<'s> {
         Ok((target, controls))
     }
 
-    /// A qubit in a register (`%register[BIT]`) or in memory: `[ADDRESS:BIT]`, the address an `i64`
-    /// value or constant; `[ADDRESS]` names bit 0.
+    /// A qubit in a register (`%register[BIT]`, or `%register[%index]` with the position computed at run
+    /// time) or in memory: `[ADDRESS:BIT]`, the address an `i64` value or constant; `[ADDRESS]` names bit 0.
     fn place(&mut self, scope: &mut Scope<'s>) -> Result<Place, Failure> {
         if !self.cursor.eat(Token::LBracket) {
+            if let (Some(Token::LBracket), Some(Token::Local(_))) = (self.cursor.peek_nth(1), self.cursor.peek_nth(2)) {
+                let register = self.slot_use(scope, "a qubit")?;
+                self.cursor.expect(Token::LBracket, "`[`")?;
+                let index = self.slot_use(scope, "a qubit index")?;
+                self.cursor.expect(Token::RBracket, "`]`")?;
+                return Ok(Place::Indexed { register, index });
+            }
             return Ok(Place::Register(self.qubit(scope)?));
         }
         let address = self.operand(scope, Width::WORD)?;

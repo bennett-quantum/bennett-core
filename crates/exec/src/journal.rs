@@ -30,12 +30,13 @@ pub enum Undo {
     Finish,
     /// A gate, undone by its inverse. No words.
     Gate,
-    /// A `qalloc`. Words: the old slot value.
+    /// A `qalloc` or `qalloc i64`. Words: the old slot value.
     Qalloc,
-    /// A `qfree`, undone by reviving the register. No words.
+    /// A `qfree`, undone by reviving the register. Words: the released handle, the simulator's handle of the
+    /// register, then its width.
     Qfree,
     /// A `qfree` of a register that was not zero: the simulator keeps its column (left over, its handle
-    /// stale), undone by taking it back. No words.
+    /// stale), undone by taking it back. Words: as for `Qfree`.
     Leftover,
     /// A measurement: a barrier that reversal refuses to cross. Words: the old slot value.
     Measure,

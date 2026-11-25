@@ -1,6 +1,6 @@
 //! The executor's state, its construction, and the public stepping interface.
 
-use bennett_ir::{BlockId, Fault, FuncId, Function, Module, Operand, Slot, Type, ValidModule};
+use bennett_ir::{BlockId, Fault, FuncId, Function, Module, Operand, Qubits, Slot, Type, ValidModule};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use thiserror::Error;
@@ -8,6 +8,7 @@ use thiserror::Error;
 use crate::apply_device::{ApplyCompiler, ApplyError};
 use crate::device::Device;
 use crate::device_io::DeviceContext;
+use crate::handles::Handles;
 use crate::journal::{Journal, Undo};
 use crate::measure::Collector;
 use crate::memory::Memory;
@@ -264,6 +265,8 @@ pub struct Executor<'m> {
     pub(crate) stack_floor: u64,
     pub(crate) tape: Vec<u8>,
     pub(crate) quantum: QuantumState,
+    /// The handles the run has given and the registers they name.
+    pub(crate) handles: Handles,
     pub(crate) journal: Option<Journal>,
     pub(crate) outcome: Option<Outcome>,
     pub(crate) steps: u64,
@@ -364,6 +367,7 @@ impl<'m> Executor<'m> {
             stack_floor: module.static_end(),
             tape: Vec::new(),
             quantum: if simulate { QuantumState::default() } else { QuantumState::without_simulator() },
+            handles: Handles::default(),
             journal: None,
             outcome: None,
             steps: 0,
@@ -503,6 +507,7 @@ impl<'m> Executor<'m> {
                 tape: self.tape.clone(),
                 outcome: self.outcome,
                 steps: self.steps,
+                handles: self.handles.table(),
             },
             quantum: QuantumSnapshot::of(&self.quantum),
         }
@@ -553,9 +558,25 @@ impl<'m> Executor<'m> {
         self.slots[self.top().base + slot.index()]
     }
 
-    /// A register handle, which a slot of register type holds.
+    /// A register handle, which a slot of register type or an `i64` handle holds.
     pub(crate) fn handle(&self, slot: Slot) -> u64 {
         self.slot(slot) as u64
+    }
+
+    /// The handle, the allocation's number, of the register `slot` names: an `i64` slot holds it, a `qN` slot
+    /// the simulator's handle of the register. `dangling_register` if a `qN` slot's register was released.
+    pub(crate) fn handle_number(&self, slot: Slot) -> Result<u64, Fault> {
+        match self.slot_type(slot) {
+            Type::Qreg(_) => self.handles.number_of(self.handle(slot)),
+            Type::Int(_) => Ok(self.handle(slot)),
+        }
+    }
+
+    /// The register the handle in `slot` names: its head column and its width; `dangling_register` if the
+    /// handle names no allocated register.
+    pub(crate) fn register(&self, slot: Slot) -> Result<(usize, Qubits), Fault> {
+        let entry = self.handles.get(self.handle_number(slot)?)?;
+        Ok((self.quantum.resolve(entry.register).expect("a live handle names a live register"), entry.qubits))
     }
 
     /// The value of an operand of 64 bits or fewer: an address, a size, a budget.

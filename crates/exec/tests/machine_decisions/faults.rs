@@ -23,6 +23,11 @@ const CODES: &[(&str, u64)] = &[
     ("qubit_memory_access", 17),
     ("bad_angle", 18),
     ("out_of_memory", 19),
+    ("bad_width", 20),
+    ("out_of_handles", 21),
+    ("bad_range", 22),
+    ("bad_gate", 23),
+    ("bad_argument", 24),
 ];
 
 #[test]
@@ -56,7 +61,7 @@ fn every_fault_xors_into_dirty_fault_registers() {
             }
         }
     }
-    assert_eq!(cases, 4 * 17 * 32, "four widths, seventeen codes, 32 dirty values");
+    assert_eq!(cases, 4 * 22 * 32, "four widths, 22 codes, 32 dirty values");
 }
 
 #[test]
