@@ -8,6 +8,10 @@ mod generated;
 mod memory;
 #[path = "device_reference/memory_generated.rs"]
 mod memory_generated;
+#[path = "device_reference/nonlocal_generated.rs"]
+mod nonlocal_generated;
+#[path = "device_reference/nonlocal_worked.rs"]
+mod nonlocal_worked;
 #[path = "device_reference/compare.rs"]
 mod observe;
 #[path = "device_reference/wide.rs"]

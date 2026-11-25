@@ -9,12 +9,20 @@ use super::{Device, Event};
 
 impl Device<'_> {
     pub(super) fn memory_range(&self, address: u64, width: Width) -> Result<Range<usize>, Fault> {
-        let end = address.checked_add(width.bytes()).filter(|&end| end <= self.module.memory_size);
+        self.byte_range(address, width.bytes())
+    }
+
+    fn byte_range(&self, address: u64, bytes: u64) -> Result<Range<usize>, Fault> {
+        let end = address.checked_add(bytes).filter(|&end| end <= self.module.memory_size);
         end.map(|end| address as usize..end as usize).ok_or(Fault::OutOfBounds)
     }
 
     pub(super) fn ordinary_range(&self, address: Operand, width: Width) -> Result<Range<usize>, Fault> {
-        let range = self.memory_range(self.read_i64(address), width)?;
+        self.ordinary_bytes(address, width.bytes())
+    }
+
+    pub(super) fn ordinary_bytes(&self, address: Operand, bytes: u64) -> Result<Range<usize>, Fault> {
+        let range = self.byte_range(self.read_i64(address), bytes)?;
         let cells = self.applied.as_ref().map_or(&self.quantum.cells, |context| context.cells);
         if cells.range(range.start as u64..range.end as u64).next().is_some() {
             return Err(Fault::QubitMemoryAccess);

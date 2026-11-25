@@ -5,6 +5,7 @@
 
 mod cells;
 mod integers;
+mod nonlocal;
 mod quantum;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -341,8 +342,9 @@ impl<'m> Device<'m> {
                 None
             }
             Inst::ReturnAddress { level, .. } => Some(u128::from(self.return_address(level))),
-            Inst::Setjmp { .. } => {
-                panic!("instruction outside the outer reference: {inst:?}")
+            Inst::Setjmp { buffer, .. } => {
+                self.save_jump_record(buffer)?;
+                Some(0)
             }
         };
         if let Some(value) = value {
@@ -420,7 +422,7 @@ impl<'m> Device<'m> {
                 self.finish = Some(Finish::Returned(Some(self.read(*operand))));
             }
             Terminator::Fault(fault) => return Err(*fault),
-            Terminator::Longjmp { .. } => panic!("longjmp is outside the outer reference"),
+            Terminator::Longjmp { buffer, value } => self.resume_jump_record(*buffer, *value)?,
         }
         Ok(())
     }

@@ -1,4 +1,4 @@
-//! Observe the executor at the reference's measurement checkpoints and at completion.
+//! Observe the executor around measurements, after non-local jump operations and at completion.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -128,6 +128,7 @@ pub fn run<'m>(module: &'m ValidModule, name: &str, args: &[u64], seed: u64, bud
     let mut counts = Counts { programs: 1, ..Counts::default() };
     let mut registers = RegisterObservations::default();
     let mut measurements = Vec::new();
+    let mut jump_fault = false;
 
     if let Some(finish) = reference.finish {
         assert_eq!(executor.step(), Some(outcome(finish)), "entry fault");
@@ -135,9 +136,10 @@ pub fn run<'m>(module: &'m ValidModule, name: &str, args: &[u64], seed: u64, bud
     while reference.finish.is_none() {
         let measurement = reference.next_measurement();
         if measurement.is_some() {
-            checkpoint(&reference, &executor.snapshot(), &registers, &mut counts);
+            checkpoint(&reference, &executor.snapshot(), &registers, &mut counts, true);
         }
 
+        let jump = reference.next_is_nonlocal_jump();
         let actual_finish = executor.step();
         let observed = measurement.map(|dst| {
             assert_eq!(actual_finish, None, "executor must reach the measurement");
@@ -158,13 +160,19 @@ pub fn run<'m>(module: &'m ValidModule, name: &str, args: &[u64], seed: u64, bud
             Event::Measured { outcome, probabilities } => {
                 counts.measurements += 1;
                 measurements.push((outcome, probabilities));
-                checkpoint(&reference, &executor.snapshot(), &registers, &mut counts);
+                checkpoint(&reference, &executor.snapshot(), &registers, &mut counts, true);
             }
         }
         assert_eq!(actual_finish, reference.finish.map(outcome), "outcome after {} steps", reference.steps);
+        if jump {
+            jump_fault = reference.finish.is_some();
+            if !jump_fault {
+                checkpoint(&reference, &executor.snapshot(), &registers, &mut counts, true);
+            }
+        }
     }
     assert_eq!(executor.outcome(), reference.finish.map(outcome), "completion");
-    checkpoint(&reference, &executor.snapshot(), &registers, &mut counts);
+    checkpoint(&reference, &executor.snapshot(), &registers, &mut counts, jump_fault);
     counts.operations = reference.steps;
     Run { reference, measurements, counts }
 }
@@ -176,13 +184,19 @@ fn outcome(finish: Finish) -> Outcome {
     }
 }
 
-fn checkpoint(reference: &Device<'_>, snapshot: &Snapshot, registers: &RegisterObservations, counts: &mut Counts) {
+fn checkpoint(
+    reference: &Device<'_>,
+    snapshot: &Snapshot,
+    registers: &RegisterObservations,
+    counts: &mut Counts,
+    compare_frames: bool,
+) {
     let actual = &snapshot.classical;
     let step = reference.steps;
     assert_eq!(actual.steps, step, "step count");
     assert_eq!(actual.memory, reference.memory, "memory at step {step}");
     assert_eq!(actual.tape, reference.tape, "tape at step {step}");
-    if reference.finish.is_none() {
+    if compare_frames {
         assert_eq!(actual.stack_pointer, reference.stack, "stack at step {step}");
         assert_eq!(actual.frames.len(), reference.frames.len(), "call depth at step {step}");
         for (actual_frame, frame) in actual.frames.iter().zip(&reference.frames) {
