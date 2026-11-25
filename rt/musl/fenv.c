@@ -13,9 +13,11 @@
  * fetestexcept reads the flags of both, and only the five standard ones (glibc masks x87's denormal-operand
  * flag, `__FE_DENORM`, out, as its FE_ALL_EXCEPT does not have it; musl's FE_ALL_EXCEPT does, so it is masked
  * here too); feraiseexcept raises only those five. Traps (an unmasked exception), x87 precision other than
- * extended, SSE's flush-to-zero and denormals-are-zero modes, and different modes for SSE and x87 are not
- * carried: an environment that asks for one is a named fault (`fesetenv`), never a success that changes
- * nothing. */
+ * extended, SSE's flush-to-zero and denormals-are-zero modes, different modes for SSE and x87, and different
+ * flags in the two halves of a saved environment (x86 keeps a set of flags per unit, the device one set, so it
+ * cannot tell which unit's flag an edit of one half removes) are not carried: an environment that asks for one
+ * is a named fault (`fesetenv`), never a success that changes nothing. So is a reserved MXCSR bit, which
+ * faults natively. */
 #include <fenv.h>
 #include <features.h>
 
@@ -31,10 +33,12 @@ void __bennett_fesetexcept(int);
 #define X87_MASKS 0x3f
 #define X87_EXTENDED 0x300
 #define X87_ROUNDING 0xc00
-/* MXCSR's: the exception masks, the rounding control, flush-to-zero and denormals-are-zero. */
+/* MXCSR's: the exception masks, the rounding control, flush-to-zero and denormals-are-zero; its
+ * other bits are reserved. */
 #define SSE_MASKS 0x1f80
 #define SSE_ROUNDING_SHIFT 3
 #define SSE_FLUSH 0x8040
+#define SSE_DEFINED 0xffff
 
 int feclearexcept(int mask)
 {
@@ -65,17 +69,17 @@ hidden int __fesetround(int mode)
     return 0;
 }
 
-/* What `fnstenv` and `stmxcsr` store on x86-64 for the carried state, with every x87 register empty; the
- * flags are in the x87 status word (where they are natively depends on which unit raised them; fesetenv and
- * fetestexcept read both). */
+/* What `fnstenv` and `stmxcsr` store on x86-64 for the carried state, with every x87 register empty. The
+ * flags are in both halves: natively each half has the flags its unit raised, and fetestexcept reads their
+ * union. */
 int fegetenv(fenv_t *environment)
 {
-    int mode = __bennett_fegetround();
+    int mode = __bennett_fegetround(), flags = __bennett_fegetexcept();
     *environment = (fenv_t){
         .__control_word = 0x37f | mode,
-        .__status_word = __bennett_fegetexcept(),
+        .__status_word = flags,
         .__tags = 0xffff,
-        .__mxcsr = SSE_MASKS | mode << SSE_ROUNDING_SHIFT,
+        .__mxcsr = SSE_MASKS | mode << SSE_ROUNDING_SHIFT | flags,
     };
     return 0;
 }
@@ -91,11 +95,12 @@ int fesetenv(const fenv_t *environment)
     }
     unsigned control = environment->__control_word, mxcsr = environment->__mxcsr;
     int mode = control & X87_ROUNDING;
+    int flags = environment->__status_word & CARRIED;
     if ((control & X87_MASKS) != X87_MASKS || (control & X87_EXTENDED) != X87_EXTENDED ||
-        (mxcsr & SSE_MASKS) != SSE_MASKS || (mxcsr & SSE_FLUSH) ||
-        (int)(mxcsr >> SSE_ROUNDING_SHIFT & X87_ROUNDING) != mode)
-        __builtin_trap(); /* a trap, x87 precision, flush to zero or two rounding modes: not carried */
+        (mxcsr & SSE_MASKS) != SSE_MASKS || (mxcsr & SSE_FLUSH) || (mxcsr & ~SSE_DEFINED) ||
+        (int)(mxcsr >> SSE_ROUNDING_SHIFT & X87_ROUNDING) != mode || (int)(mxcsr & CARRIED) != flags)
+        __builtin_trap(); /* a trap, x87 precision, flush to zero, two modes or two sets of flags: not carried */
     __bennett_fesetround(mode);
-    __bennett_fesetexcept((environment->__status_word | mxcsr) & CARRIED);
+    __bennett_fesetexcept(flags);
     return 0;
 }

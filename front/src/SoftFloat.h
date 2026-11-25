@@ -69,7 +69,8 @@ void floatsToIntegers(llvm::Module &module);
 // simplifies what uses the result: LLVM's optimiser folds such a call only where it inlines the routine,
 // and a rotation's angle must be a constant. A rotation's angle computed by a function of the program
 // that only reads memory is inlined first, up to 8 levels. Nothing is evaluated in a program that sets the
-// rounding mode (the Evaluator would read the mode's initial value). Returns whether anything changed.
+// rounding mode or reads the flags (the Evaluator would read their initial values). Returns whether anything
+// changed.
 bool foldConstantCalls(llvm::Module &module);
 
 // Stops with an internal error naming it if any floating-point type is left anywhere in the module.

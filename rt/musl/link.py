@@ -58,8 +58,8 @@ def main():
     scratch = Path(temporary.name) if temporary else args.keep.resolve()
     scratch.mkdir(parents=True, exist_ok=True)
     common = ["-O0", "-Xclang", "-disable-O0-optnone", "-gline-tables-only", "-emit-llvm", "-c"]
-    run([clang, *common, "-nostdinc", "-isystem", lib / "sysroot/include", "-I", ROOT / "front/include",
-         *args.clang_flag, args.source.resolve(), "-o", scratch / "program.bc"])
+    run([clang, *common, "-nostdinc", "-isystem", HERE / "include", "-isystem", lib / "sysroot/include",
+         "-I", ROOT / "front/include", *args.clang_flag, args.source.resolve(), "-o", scratch / "program.bc"])
     ir = run(["llvm-dis-18", scratch / "program.bc", "-o", "-"], capture_output=True, text=True).stdout
     match = re.search(r"^define\b[^\n]* @main\(([^\n]*)\)", ir, re.M)
     if not match or "..." in match[1]:

@@ -23,6 +23,12 @@ static void show(const char *what, double x) {
   printf("%s %016llx %02x %d %d\n", what, bits.u, fetestexcept(FLAGS), fegetround(), FLT_ROUNDS);
 }
 
+/* A strict function that is not inlined, called twice with the same operands across a change of mode: the
+ * optimiser must not merge the calls (the environment is the runtime's memory, not LLVM's inaccessible one). */
+static __attribute__((noinline)) double add(double x, double y) { return x + y; }
+static double (*volatile add_through)(double, double) = add;
+static volatile long double below_two63 = 0x1.fffffffffffffffep62L;
+
 static void third(const char *what) {
   long double l = onel / threel;
   unsigned char bytes[10];
@@ -92,6 +98,29 @@ int main(void) {
   feupdateenv(&held);
   show("updated", 0);
   third("after update");
+
+  /* Two calls of a strict function across a change of mode, and one through a pointer. */
+  fesetenv(FE_DFL_ENV);
+  fesetround(FE_DOWNWARD);
+  volatile double down = add(one, 0x1p-53);
+  int down_flags = fetestexcept(FLAGS);
+  feclearexcept(FE_ALL_EXCEPT);
+  fesetround(FE_UPWARD);
+  volatile double up = add(one, 0x1p-53);
+  int up_flags = fetestexcept(FLAGS);
+  feclearexcept(FE_ALL_EXCEPT);
+  volatile double through = add_through(one, 0x1p-53);
+  printf("calls %d %x %x %d %x\n", down != up, down_flags, up_flags, up == through, fetestexcept(FLAGS));
+
+  /* lrintl out of range after rounding upward: one conversion, invalid only. */
+  feclearexcept(FE_ALL_EXCEPT);
+  printf("lrintl %ld %x\n", lrintl(below_two63), fetestexcept(FLAGS));
+  fesetround(FE_TONEAREST);
+
+  /* A quiet comparison with a signalling NaN constant still raises invalid. */
+  feclearexcept(FE_ALL_EXCEPT);
+  volatile int constant = __builtin_nans("") == 0.0;
+  printf("constant compare %d %x\n", constant, fetestexcept(FLAGS));
 
   /* Operations whose flags depend on the mode. */
   fesetenv(FE_DFL_ENV);

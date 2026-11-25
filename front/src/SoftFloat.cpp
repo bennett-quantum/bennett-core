@@ -634,29 +634,26 @@ private:
                                {x, call->getArgOperand(1)}, call);
       break;
     case Intrinsic::minimum:
-    case Intrinsic::maximum: {
-      // LangRef: a NaN if either is one; otherwise the lesser (greater), with -0 less than +0. Equal
-      // values differ at most in the sign of a zero, which `or` (`and`) of the bits decides.
-      Value *y = call->getArgOperand(1);
-      bool minimum = id == Intrinsic::minimum;
-      Value *unordered = lowerMade(b.CreateFCmpUNO(x, y));
-      Value *nan = lowerMade(b.CreateFAdd(x, y));
-      Value *before = lowerMade(minimum ? b.CreateFCmpOLT(x, y) : b.CreateFCmpOGT(x, y));
-      Value *equal = lowerMade(b.CreateFCmpOEQ(x, y));
-      Value *zeros = b.CreateBitCast(minimum ? b.CreateOr(bits(b, x), bits(b, y)) : b.CreateAnd(bits(b, x), bits(b, y)),
-                                     type);
-      replacement = b.CreateSelect(unordered, nan, b.CreateSelect(before, x, b.CreateSelect(equal, zeros, y)));
+    case Intrinsic::maximum:
+      // LangRef's: a routine, so that the sum giving a NaN result is computed only when it is the result.
+      replacement = this->call(b, (id == Intrinsic::minimum ? "__bennett_fminimum" : "__bennett_fmaximum") + libm(type),
+                               type, {x, call->getArgOperand(1)}, call);
       break;
-    }
     case Intrinsic::lrint:
     case Intrinsic::llrint:
     case Intrinsic::lround:
     case Intrinsic::llround: {
       // On long double the native program calls glibc's lroundl and llroundl, software that takes the
       // operand's bits at face value (`rt/softfloat/libgcc.c`); a composition would read it as x87 does.
+      // lrint and llrint to 64 bits are one conversion in the current mode, as x86's (cvtsd2si, fistp), so an
+      // out-of-range value raises invalid only.
       bool rounding = id == Intrinsic::lround || id == Intrinsic::llround;
       if (rounding && type->isX86_FP80Ty() && call->getType()->isIntegerTy(64)) {
         replacement = this->call(b, id == Intrinsic::lround ? "lroundl" : "llroundl", call->getType(), {x}, call);
+        break;
+      }
+      if (!rounding && call->getType()->isIntegerTy(64)) {
+        replacement = this->call(b, (id == Intrinsic::lrint ? "lrint" : "llrint") + libm(type), call->getType(), {x}, call);
         break;
       }
       Value *rounded = unary(id == Intrinsic::lrint || id == Intrinsic::llrint ? "rint" : "round");
@@ -690,6 +687,14 @@ private:
   Value *lowerConstrained(ConstrainedFPIntrinsic *call) {
     IRBuilder<> b(call);
     Intrinsic::ID id = call->getIntrinsicID();
+    for (const Type *type : {call->getType(), call->getArgOperand(0)->getType()}) {
+      if (type->getScalarType()->isBFloatTy()) {
+        notHandled("the constrained floating-point intrinsic @" + call->getCalledFunction()->getName().str() +
+                       " on `bfloat` (__bf16): under FENV_ACCESS clang 18's x86-64 back end converts to the _Float16 "
+                       "encoding or cannot compile it, so the native program has no such result to agree with",
+                   call);
+      }
+    }
     std::vector<Value *> args;
     for (Value *arg : call->args()) {
       if (!isa<MetadataAsValue>(arg)) { // the rounding and exception arguments come last
@@ -721,7 +726,7 @@ private:
     break;
 #define CMP_INSTRUCTION(NAME, ARGS, ROUNDING, INTRINSIC, NODE)                                                         \
   case Intrinsic::INTRINSIC:                                                                                           \
-    plain = b.CreateFCmp(cast<ConstrainedFPCmpIntrinsic>(call)->getPredicate(), args[0], args[1]);                     \
+    plain = b.Insert(new FCmpInst(cast<ConstrainedFPCmpIntrinsic>(call)->getPredicate(), args[0], args[1]));          \
     break;
 #define FUNCTION(NAME, ARGS, ROUNDING, INTRINSIC)                                                                      \
   case Intrinsic::INTRINSIC:                                                                                           \
@@ -730,6 +735,12 @@ private:
 #include <llvm/IR/ConstrainedOps.def>
     default:
       fail("internal: the constrained intrinsic @" + call->getCalledFunction()->getName().str());
+    }
+    // A quiet comparison whose predicate needs no call (`false`, `true`) still raises invalid for a signalling NaN.
+    if (auto *compare = dyn_cast<ConstrainedFPCmpIntrinsic>(call);
+        compare && id == Intrinsic::experimental_constrained_fcmp &&
+        (compare->getPredicate() == FCmpInst::FCMP_FALSE || compare->getPredicate() == FCmpInst::FCMP_TRUE)) {
+      lowerMade(b.Insert(new FCmpInst(FCmpInst::FCMP_UNO, args[0], args[1])));
     }
     if (id == Intrinsic::experimental_constrained_fcmps) {
       Value *x = args[0], *y = args[1];
@@ -1269,14 +1280,29 @@ bool usesRoundingMode(const Module &module) {
   return false;
 }
 
+// Memory effects that touch inaccessible memory also touch the runtime's globals. LLVM models the floating-point
+// environment of constrained intrinsics as inaccessible memory, and clang's attributes say so (a strict function
+// that computes is `memory(inaccessiblemem: readwrite)`); once lowered, the environment is ordinary memory, and
+// the old effects would let the optimiser merge two calls across a change of the mode.
+MemoryEffects withEnvironment(MemoryEffects effects) {
+  return effects | MemoryEffects(IRMemLocation::Other, effects.getModRef(IRMemLocation::InaccessibleMem));
+}
+
 // With every floating-point operation lowered, `strictfp` constrains nothing; it would only keep LLVM's
-// optimiser from inlining the runtime's routines into the program's strict functions.
-void dropStrictFP(Module &module) {
+// optimiser from inlining the runtime's routines into the program's strict functions. Memory effects that
+// stood for the environment are widened to its globals (`withEnvironment`).
+void releaseStrictFP(Module &module) {
   for (Function &function : module) {
     function.removeFnAttr(Attribute::StrictFP);
+    if (function.hasFnAttribute(Attribute::Memory)) {
+      function.setMemoryEffects(withEnvironment(function.getMemoryEffects()));
+    }
     for (Instruction &inst : instructions(function)) {
       if (auto *call = dyn_cast<CallBase>(&inst)) {
         call->removeFnAttr(Attribute::StrictFP);
+        if (call->hasFnAttr(Attribute::Memory)) {
+          call->setMemoryEffects(withEnvironment(call->getMemoryEffects()));
+        }
       }
     }
   }
@@ -1308,7 +1334,7 @@ bool lowerFloatOperations(Module &module, const std::string &runtimePath) {
       inRuntime.lowerFunction(function);
     }
   }
-  dropStrictFP(module);
+  releaseStrictFP(module);
   return linked;
 }
 
@@ -1428,12 +1454,14 @@ void floatsToIntegers(Module &module) {
 }
 
 bool foldConstantCalls(Module &module) {
-  // LLVM's Evaluator reads a global's initial value: where the program sets the rounding mode (its global was
-  // not made a constant by the optimiser), a routine evaluated so would round to nearest whatever the mode.
-  if (const GlobalVariable *mode =
-          module.getGlobalVariable(std::string(runtimePrefix) + "softfloat_roundingMode", true);
-      mode && !mode->isConstant()) {
-    return false;
+  // LLVM's Evaluator reads a global's initial value: where the program sets the rounding mode or reads the
+  // flags (their globals were not made constants or deleted by the optimiser), a routine evaluated so would
+  // round to nearest whatever the mode, and a read of the flags would give none.
+  for (const char *state : {"softfloat_roundingMode", "softfloat_exceptionFlags"}) {
+    if (const GlobalVariable *global = module.getGlobalVariable(std::string(runtimePrefix) + state, true);
+        global && !global->isConstant()) {
+      return false;
+    }
   }
   TargetLibraryInfoImpl libraryInfo{Triple(module.getTargetTriple())};
   TargetLibraryInfo library(libraryInfo);

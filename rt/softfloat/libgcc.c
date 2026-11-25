@@ -526,25 +526,27 @@ long double __powixf2(long double x, int m) {
  * 754 defines them; errno is not set (it is the C library's, and these are not its functions). */
 float sqrtf(float a) { return of_f32(f32_sqrt(f32_of(a))); }
 double sqrt(double a) { return of_f64(f64_sqrt(f64_of(a))); }
-/* fmaf and fma: x86's FMA instructions, which glibc's use. A NaN addend beside factors that are not NaNs is the
- * result, quieted, and only a signalling one raises invalid, also when the product is zero times infinity
- * (SoftFloat gives the default NaN and raises invalid there). Otherwise SoftFloat's, NaNs in the order of the
- * operands as x86's. */
+/* fmaf and fma: SoftFloat's, NaNs in the order of the operands as x86's FMA instructions (which glibc's use).
+ * x86 also returns a NaN addend beside a product of zero and infinity, raising invalid only if it is a
+ * signalling NaN; SoftFloat gives the default NaN and raises invalid. The flags follow x86 here: they are put
+ * back as they were and invalid raised for a signalling addend. The value stays SoftFloat's default NaN (which
+ * NaN comes back is not promised, `rt/softfloat/README.md`), so that in a program that does not read the flags
+ * the check is deleted with them and a finite operation costs what SoftFloat's does. */
 float fmaf(float a, float b, float c) {
   float32_t x = f32_of(a), y = f32_of(b), z = f32_of(c);
-  if (nan32(z) && !nan32(x) && !nan32(y)) {
-    if (softfloat_isSigNaNF32UI(z.v)) softfloat_raiseFlags(softfloat_flag_invalid);
-    return of_f32((float32_t){z.v | 0x00400000});
-  }
-  return of_f32(f32_mulAdd(x, y, z));
+  uint_fast8_t before = softfloat_exceptionFlags;
+  float32_t r = f32_mulAdd(x, y, z);
+  if (__builtin_expect(r.v == defaultNaNF32UI, 0) && nan32(z) && !nan32(x) && !nan32(y))
+    softfloat_exceptionFlags = before | (softfloat_isSigNaNF32UI(z.v) ? softfloat_flag_invalid : 0);
+  return of_f32(r);
 }
 double fma(double a, double b, double c) {
   float64_t x = f64_of(a), y = f64_of(b), z = f64_of(c);
-  if (nan64(z) && !nan64(x) && !nan64(y)) {
-    if (softfloat_isSigNaNF64UI(z.v)) softfloat_raiseFlags(softfloat_flag_invalid);
-    return of_f64((float64_t){z.v | UINT64_C(0x0008000000000000)});
-  }
-  return of_f64(f64_mulAdd(x, y, z));
+  uint_fast8_t before = softfloat_exceptionFlags;
+  float64_t r = f64_mulAdd(x, y, z);
+  if (__builtin_expect(r.v == defaultNaNF64UI, 0) && nan64(z) && !nan64(x) && !nan64(y))
+    softfloat_exceptionFlags = before | (softfloat_isSigNaNF64UI(z.v) ? softfloat_flag_invalid : 0);
+  return of_f64(r);
 }
 long double sqrtl(long double a) { return of_x80(extF80_sqrt(x80_of(a))); }
 
@@ -658,6 +660,16 @@ ROUND_SSE(round, softfloat_round_near_maxMag, false)
 ROUND_SSE(roundeven, softfloat_round_near_even, false)
 ROUND(rint, softfloat_roundingMode, true)
 ROUND(nearbyint, softfloat_roundingMode, false)
+
+/* lrint and llrint (`llvm.lrint`, `llvm.llrint` to 64 bits): one conversion in the current mode, as x86's
+ * cvtss2si, cvtsd2si and fistp convert: inexact when the value changes, and out of range or for a NaN invalid
+ * and the indefinite integer -2^63, without inexact. */
+long lrintf(float a) { return f32_to_i64(f32_of(a), softfloat_roundingMode, true); }
+long lrint(double a) { return f64_to_i64(f64_of(a), softfloat_roundingMode, true); }
+long lrintl(long double a) { return extF80_to_i64(x80_of(a), softfloat_roundingMode, true); }
+long long llrintf(float a) { return f32_to_i64(f32_of(a), softfloat_roundingMode, true); }
+long long llrint(double a) { return f64_to_i64(f64_of(a), softfloat_roundingMode, true); }
+long long llrintl(long double a) { return extF80_to_i64(x80_of(a), softfloat_roundingMode, true); }
 
 /* roundevenl. The native program calls glibc's, which is software (sysdeps/ieee754/ldbl-96), not x87's
  * frndint: it rounds the significand as an integer at the bit where the exponent puts the binary point and
@@ -795,6 +807,35 @@ double fmax(double x, double y) {
   float64_t a = f64_of(x), b = f64_of(y);
   return nan64(a) ? y : f64_lt_quiet(a, b) ? y : x;
 }
+
+/* minimum and maximum (`llvm.minimum`, `llvm.maximum`), as LLVM's language reference defines them: a NaN if
+ * either operand is one (their sum, the first NaN quieted, invalid for a signalling one); otherwise the lesser
+ * (greater), -0 less than +0, the equal operands' bits or-ed (and-ed) to choose the zero. Comparisons are quiet,
+ * so ordered operands raise nothing. */
+#define MINIMUM(T, name, s, before, join)                                                                  \
+  T name(T x, T y) {                                                                                       \
+    if (__unord##s##2(x, y)) return __add##s##3(x, y);                                                      \
+    if (before) return x;                                                                                  \
+    return __eq##s##2(x, y) ? y : join(x, y);                                                              \
+  }
+static float or32(float x, float y) { return of_f32((float32_t){f32_of(x).v | f32_of(y).v}); }
+static float and32(float x, float y) { return of_f32((float32_t){f32_of(x).v & f32_of(y).v}); }
+static double or64(double x, double y) { return of_f64((float64_t){f64_of(x).v | f64_of(y).v}); }
+static double and64(double x, double y) { return of_f64((float64_t){f64_of(x).v & f64_of(y).v}); }
+static long double or80(long double x, long double y) {
+  extFloat80_t a = x80_bits(x), b = x80_bits(y);
+  return of_x80((extFloat80_t){.signif = a.signif | b.signif, .signExp = (uint16_t)(a.signExp | b.signExp)});
+}
+static long double and80(long double x, long double y) {
+  extFloat80_t a = x80_bits(x), b = x80_bits(y);
+  return of_x80((extFloat80_t){.signif = a.signif & b.signif, .signExp = (uint16_t)(a.signExp & b.signExp)});
+}
+MINIMUM(float, __bennett_fminimumf, sf, __ltsf2(x, y) < 0, or32)
+MINIMUM(float, __bennett_fmaximumf, sf, __gtsf2(x, y) > 0, and32)
+MINIMUM(double, __bennett_fminimum, df, __ltdf2(x, y) < 0, or64)
+MINIMUM(double, __bennett_fmaximum, df, __gtdf2(x, y) > 0, and64)
+MINIMUM(long double, __bennett_fminimuml, xf, __ltxf2(x, y) < 0, or80)
+MINIMUM(long double, __bennett_fmaximuml, xf, __gtxf2(x, y) > 0, and80)
 
 /* glibc's fmin, fmax, fminf and fmaxf (sysdeps/x86_64/fpu/s_fmin.S and its siblings), which the native program
  * calls for `llvm.experimental.constrained.minnum` and `maxnum` (LLVM's x86-64 back end has no strict inline

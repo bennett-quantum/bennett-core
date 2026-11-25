@@ -1260,8 +1260,12 @@ and utilities where they exist (`Abi.h`, `Normalise.h`):
   `llvm.set.rounding` read and set the mode. A plain operation after a change of mode without `FENV_ACCESS`,
   which C leaves undefined, rounds in the current mode, as the hardware does for every operation the compiler
   did not fold. Not carried, and a named fault in `fesetenv`: traps (an unmasked exception), x87 precision
-  other than extended, flush-to-zero and denormals-are-zero, different modes for SSE and x87; x87's
-  denormal-operand flag is never set (glibc's `fetestexcept` masks it out). Cost: a program that never names a
+  other than extended, flush-to-zero and denormals-are-zero, different modes for SSE and x87, different flags in
+  the two halves of a saved environment; x87's denormal-operand flag is never set (glibc's `fetestexcept` masks
+  it out). A constrained operation on `__bf16` is refused by name: under `FENV_ACCESS` clang 18's x86-64 back end
+  converts to the `_Float16` encoding or cannot compile it, so there is no native result to agree with. Memory
+  effects that clang gave a strict function for the environment (`inaccessiblemem`) are widened to the runtime's
+  globals, so the optimiser does not merge two calls across a change of mode. Cost: a program that never names a
   `<fenv.h>` function does not link it; the front then deletes every write to the flags and LLVM folds the
   mode to "to nearest", so its routines are those of a fixed environment and write no memory. In a program
   that reads the flags every routine writes them, so its floating point under a qubit branch or inside
@@ -1269,8 +1273,8 @@ and utilities where they exist (`Abi.h`, `Normalise.h`):
 - **The default runtime** is Berkeley SoftFloat 3e with the x86 SSE specialisation (`rt/softfloat`, measured
   in `rt/softfloat/README.md`); `long double` is computed at x87's full 64-bit precision. `--float-runtime`
   swaps the runtime at link time. Its global state is the floating-point environment (above). Runtime calls
-  on constants are evaluated after the optimiser, so a rotation's angle may be a computed constant (in a
-  program that touches the environment, only where the routine does not depend on it).
+  on constants are evaluated after the optimiser, so a rotation's angle may be a computed constant; not in a
+  program that sets the mode or reads the flags, since LLVM's Evaluator would read their initial values.
 - **Complex multiply and divide** (`Complex.h`): clang's calls of `__mulsc3`, `__divsc3`, `__muldc3`,
   `__divdc3`, `__mulxc3`, `__divxc3` go to libgcc's own sources (`rt/libgcc`, GCC 13.3.0 vendored unmodified,
   decided 2026-11-16), which are ordinary C on floating-point values: the helpers a program calls and does not

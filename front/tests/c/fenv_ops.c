@@ -138,13 +138,21 @@ static void load(void) {
   } while (0)
 
 /* Which NaN comes back when two or more operands are NaNs is unspecified (x86's choice depends on the
- * instruction form), so then only that the result is a NaN is compared. */
+ * instruction form), and so is it for a NaN addend beside a product of zero and infinity (x86 returns the
+ * addend, the device the default NaN): then only that the result is a NaN, and whether it is quiet, is
+ * compared. */
+#define ZERO_TIMES_INFINITY(x, y)                                                                              \
+  (((x) == 0 && __builtin_isinf(y)) || (__builtin_isinf(x) && (y) == 0))
 #define RECORD_FMA(a, b, x, y, z, value)                                                                       \
   do {                                                                                                         \
     __typeof__(value) result_ = (value);                                                                       \
-    if (__builtin_isnan(result_) && __builtin_isnan(x) + __builtin_isnan(y) + __builtin_isnan(z) >= 2)        \
-      memset(&result_, 0xff, sizeof result_);                                                                  \
-    record(a, b, &result_, sizeof result_ == 16 ? 10 : sizeof result_);                                       \
+    if (__builtin_isnan(result_) && (__builtin_isnan(x) + __builtin_isnan(y) + __builtin_isnan(z) >= 2 ||     \
+                                     (__builtin_isnan(z) && ZERO_TIMES_INFINITY(x, y)))) {                     \
+      unsigned char class_ = __builtin_issignaling(result_) ? 2 : 1;                                           \
+      record(a, b, &class_, 1);                                                                                \
+    } else {                                                                                                   \
+      record(a, b, &result_, sizeof result_ == 16 ? 10 : sizeof result_);                                     \
+    }                                                                                                          \
   } while (0)
 
 /* Each group, over each mode. */
@@ -172,9 +180,9 @@ BINARY(sub_l, vl, -)
 BINARY(mul_l, vl, *)
 BINARY(div_l, vl, /)
 
-/* The comparisons, as one word of bits: signalling <, <=, >, >=, quiet ==, !=, and the quiet comparisons of
- * <math.h> as the compiler's builtins, which glibc's macros are (musl's test for a NaN first, so they never
- * raise invalid, also not for a signalling NaN, whose behaviour C's Annex F leaves undefined). */
+/* The comparisons, as one word of bits: signalling <, <=, >, >=, quiet ==, !=, and the six quiet comparison
+ * macros of <math.h> (on the device musl's header with them as the compiler's builtins, as glibc's are:
+ * rt/musl/include/math.h). */
 #define COMPARE(name, V)                                                                                       \
   static void name(void) {                                                                                     \
     begin(#name);                                                                                              \
@@ -190,8 +198,8 @@ BINARY(div_l, vl, /)
       bits = (V[i] == V[j]) | (V[i] != V[j]) << 1;                                                             \
       RECORD(i, j, bits);                                                                                      \
       start();                                                                                                 \
-      bits = __builtin_isless(V[i], V[j]) | __builtin_isgreaterequal(V[i], V[j]) << 1 |                       \
-             __builtin_islessgreater(V[i], V[j]) << 2 | __builtin_isunordered(V[i], V[j]) << 3;                \
+      bits = isless(V[i], V[j]) | isgreaterequal(V[i], V[j]) << 1 | islessgreater(V[i], V[j]) << 2 |           \
+             isunordered(V[i], V[j]) << 3 | islessequal(V[i], V[j]) << 4 | isgreater(V[i], V[j]) << 5;         \
       RECORD(i, j, bits);                                                                                      \
     }                                                                                                          \
     end();                                                                                                     \

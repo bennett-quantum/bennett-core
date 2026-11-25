@@ -3,7 +3,7 @@
 //! itself, with musl linked on the device (`rt/musl/fenv.c`, the state in `rt/softfloat/libgcc.c`). The C
 //! programs say what they compare (`front/tests/c/fenv_ops.c`, `fenv_api.c`).
 use bennett_exec::{Executor, Options, Outcome};
-use bennett_front_tests::{CLANG_FLAGS, lower_text, native_build_with, out_dir, root, write_c};
+use bennett_front_tests::{CLANG_FLAGS, lower, lower_text, native_build_with, out_dir, root, run, write_c};
 use bennett_ir::Fault;
 use std::path::Path;
 use std::process::Command;
@@ -97,7 +97,8 @@ fn random_operands_round_and_raise_flags_as_native_code() {
 }
 
 /// An environment that asks for what is not carried (a trap, x87 precision other than extended, flush to zero,
-/// two rounding modes) is a named fault, never a success that changes nothing.
+/// two rounding modes, flags in one half only) or sets a reserved bit is a named fault, never a success that
+/// changes nothing.
 #[test]
 fn an_environment_that_is_not_carried_is_a_named_fault() {
     for (name, change) in [
@@ -105,6 +106,10 @@ fn an_environment_that_is_not_carried_is_a_named_fault() {
         ("fenv_precision", "env.__control_word &= ~0x300;"),
         ("fenv_flush", "env.__mxcsr |= 0x8040;"),
         ("fenv_modes", "env.__mxcsr |= FE_UPWARD << 3;"),
+        // A flag in one half only: natively each unit has its own flags, the device one set.
+        ("fenv_halves", "env.__status_word |= FE_INVALID;"),
+        // A reserved MXCSR bit, which faults natively.
+        ("fenv_reserved", "env.__mxcsr |= 1u << 16;"),
     ] {
         let source = write_c(
             name,
@@ -141,4 +146,62 @@ fn reading_the_flags_makes_floating_point_under_a_qubit_branch_a_refusal() {
             .contains("@bennett.float.__muldf3, which may write memory, controlled by a value that depends on a qubit"),
         "{error}"
     );
+}
+
+/// LLVM's minimum and maximum of two largest finite doubles raise nothing: the sum that makes the NaN result is
+/// computed only when it is the result (glibc's fminimum raises nothing there either). The flags are read through
+/// a pointer, as a program may read them.
+#[test]
+fn minimum_and_maximum_of_finite_operands_raise_no_flag() {
+    for (name, intrinsic) in [("fenv_minimum", "minimum"), ("fenv_maximum", "maximum")] {
+        let source = out_dir().join(format!("{name}.ll"));
+        std::fs::write(
+            &source,
+            format!(
+                "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                 target triple = \"x86_64-pc-linux-gnu\"\n@a = global double 0x7FEFFFFFFFFFFFFF\n\
+                 declare i32 @__bennett_fegetexcept()\n@read = global ptr @__bennett_fegetexcept\n\
+                 declare double @llvm.experimental.constrained.{intrinsic}.f64(double, double, metadata)\n\
+                 define i32 @main() strictfp {{\n  %x = load volatile double, ptr @a\n  %y = load volatile double, ptr @a\n  \
+                 %m = call double @llvm.experimental.constrained.{intrinsic}.f64(double %x, double %y, metadata !\"fpexcept.strict\") strictfp\n  \
+                 store volatile double %m, ptr @a\n  %r = load volatile ptr, ptr @read\n  %f = call i32 %r()\n  ret i32 %f\n}}\n"
+            ),
+        )
+        .expect("write the IR");
+        let module = lower(&source, name, &["-O0"], &[]);
+        assert_eq!(run(&module, "main", &[], 0), Outcome::Returned(Some(0)), "{name}");
+    }
+}
+
+/// A constrained operation on `__bf16` is refused by name: under FENV_ACCESS clang 18 converts to the _Float16
+/// encoding (`(__bf16)1.0f` is 0x3c00 natively) or cannot compile it, so there is no native result to agree with.
+#[test]
+fn a_strict_operation_on_bfloat_is_refused_by_name() {
+    let source = write_c(
+        "fenv_bfloat",
+        "#pragma STDC FENV_ACCESS ON\nvolatile float f = 1.0f;\nvolatile __bf16 b;\n\
+         int main(void) {\n  b = (__bf16)f;\n  return 0;\n}\n",
+    );
+    let error = lower_text(&source, "fenv_bfloat", CLANG_FLAGS, &[]).expect_err("refused");
+    assert!(
+        error.contains(
+            "constrained floating-point intrinsic @llvm.experimental.constrained.fptrunc.bf16.f32 on `bfloat`"
+        ),
+        "{error}"
+    );
+}
+
+/// A direct read of the flags after an overflow gives overflow and inexact: the front's evaluation of runtime calls
+/// on constants, a read of the flags among them (it has no operands), is not done where the flags are read, since
+/// LLVM's Evaluator would give their initial value.
+#[test]
+fn a_direct_read_of_the_flags_is_not_evaluated_away() {
+    let source = write_c(
+        "fenv_direct_read",
+        "#pragma STDC FENV_ACCESS ON\nint __bennett_fegetexcept(void);\nvolatile double a = 1.7976931348623157e308;\n\
+         int main(void) {\n  volatile double m = a + a;\n  (void)m;\n  return __bennett_fegetexcept();\n}\n",
+    );
+    let module = lower(&source, "fenv_direct_read", CLANG_FLAGS, &[]);
+    // x86's overflow (8) and inexact (32).
+    assert_eq!(run(&module, "main", &[], 0), Outcome::Returned(Some(40)));
 }

@@ -163,9 +163,12 @@ reaches it through the runtime's `__bennett_fe*` functions, and musl's own `fese
 `feupdateenv`, `fegetexceptflag` and `fesetexceptflag` sit on it. As glibc on x86-64, which the native program
 uses: all four rounding modes; the five standard flags (x87's denormal-operand flag, which musl's `FE_ALL_EXCEPT`
 names, is never set, as glibc's `fetestexcept` masks it out); `fegetenv` stores what `fnstenv` and `stmxcsr` store
-for that state; `fesetenv` takes a saved or the default environment. An environment that asks for what is not
-carried is a named fault (`unreachable`): an unmasked exception (a trap), x87 precision other than extended,
-flush-to-zero or denormals-are-zero, or different modes for SSE and x87. The member is pulled from the archive
+for that state, the flags in both halves (natively each half holds the flags its unit raised); `fesetenv` takes a
+saved or the default environment. An environment that asks for what is not carried is a named fault
+(`unreachable`): an unmasked exception (a trap), x87 precision other than extended, flush-to-zero or
+denormals-are-zero, different modes for SSE and x87, or different flags in the two halves (the device has one set
+of flags, so it cannot tell which unit's flag an edit of one half removes); so is a reserved MXCSR bit, which
+faults natively. The member is pulled from the archive
 only when a program names one of these functions, so a program that never does keeps floating point that writes
 no memory (`front/tests/tests/fenv.rs`).
 
@@ -181,9 +184,10 @@ one by one against musl's. errno is not set,
 as by musl's. Twelve musl math files use `#pragma STDC FENV_ACCESS ON`; those that remain musl's (`ilogb`,
 `ilogbf`, `ilogbl`) run with their constrained operations lowered and agree with glibc, except that `ilogbl`
 reads a long double encoding no arithmetic produces (an unnormal, a pseudo-denormal) at face value, where
-glibc's x87 code reads it as x87 does. musl's `isless`, `isgreater` and the other quiet comparison macros test
-for a NaN first, so they never raise invalid, also not for a signalling NaN (glibc's are the compiler's builtins,
-`ucomisd`); C's Annex F leaves signalling NaNs undefined. Neither of the probe's integer-only printf/scanf
+glibc's x87 code reads it as x87 does. Programs on the device include `include/math.h` before musl's headers
+(`link.py`): musl's `<math.h>` with the six quiet comparison macros (`isless`, `isgreater`, ..., `isunordered`)
+as the compiler's builtins, as glibc's are. musl's test for a NaN first, so they never raised invalid, also not
+for a signalling NaN, where glibc's `ucomisd` does. Neither of the probe's integer-only printf/scanf
 patches is applied: every upstream file, including floating-point stdio, is intact.
 
 ## On the corpora

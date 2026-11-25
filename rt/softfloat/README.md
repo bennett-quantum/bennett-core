@@ -22,7 +22,7 @@ operation and of the 32-bit integer conversions.
 | format: operations | mismatches |
 |---|---|
 | f32, f64: add, sub, mul, div, sqrt, neg, fabs, trunc, floor, ceil, round, roundeven, rint, lrint, lround, all 14 fcmp predicates, conversions among f32/f64/f80 and to and from i32/i64/u32/u64 | none, NaN bits included |
-| f32, f64: fma | which NaN, only: of several NaN operands x86's choice depends on the instruction form the compiler picks. (`fma(0, inf, NaN)`, where x86 returns the NaN operand and SoftFloat the default NaN, has followed x86 since 2026-11-25: `libgcc.c` returns a NaN addend beside factors that are not NaNs) |
+| f32, f64: fma | which NaN, only: for `fma(0, inf, NaN)` x86 returns the NaN operand, SoftFloat the default NaN (the flags follow x86 since 2026-11-25: invalid only for a signalling addend); of several NaN operands x86's choice depends on the instruction form the compiler picks |
 | extF80, canonical encodings: the same operations | none, NaN bits included (SoftFloat follows x87: the larger significand wins) |
 | extF80: pseudo-denormals, unnormals, pseudo-infinities, pseudo-NaNs | SoftFloat's own operations differ (x87 reads or rejects them otherwise); no arithmetic produces them, only `memcpy`. The runtime reads them as x87 does ("Noncanonical long double operands") |
 | out-of-range conversions to integers (undefined in C) | SoftFloat saturates; `libgcc.c` gives what clang's x86-64 code gives instead |
@@ -435,9 +435,13 @@ a NaN, also on the unsigned 64-bit paths; x87's 16-bit conversion (`fistp` to a 
 end uses from long double to 16 bits or fewer) is `__bennett_fixxfhi`, giving -2^15 and invalid out of range;
 a quiet comparison (`ucomisd`, `fucomi`: a plain `fcmp`) raises invalid for a signalling NaN, and a signalling
 one (`constrained.fcmps`, C's `<` under `FENV_ACCESS`: `comisd`, `fcomi`) for any NaN, `__bennett_signal*2`
-beside the quiet comparison; `rint` and `nearbyint` round in the current mode, `rint` raising inexact; `fma`
-and `fmaf` return a NaN addend beside factors that are not NaNs, raising invalid only for a signalling one
-(x86's FMA); `fmal`'s exact cancellation is -0 rounding downward; the strict forms of `fmin` and `fmax`
+beside the quiet comparison, also when an operand is a constant; `rint` and `nearbyint` round in the current
+mode, `rint` raising inexact; `lrint` and `llrint` are one conversion in the current mode (`lrintf`, ... in
+`libgcc.c`: out of range invalid only, as `cvtsd2si` and `fistp`); LLVM's `minimum` and `maximum` are routines
+that add the operands only for a NaN result; `fma`
+and `fmaf` beside a product of zero and infinity and a NaN addend raise invalid only for a signalling addend,
+as x86's FMA (the value stays SoftFloat's default NaN, so that the check is deleted with the flags in a program
+that does not read them: a finite `fma` costs 127 device steps before and after, measured); `fmal`'s exact cancellation is -0 rounding downward; the strict forms of `fmin` and `fmax`
 are glibc's (`__bennett_fmin`, ...), which the native program calls under `FENV_ACCESS`; and the `_Float16`
 and `__bf16` conversions follow libgcc's soft-fp, which the native program calls: the truncations to `__bf16`
 round in the current mode and raise inexact, overflow and underflow (tininess after rounding, as x86), a
@@ -458,6 +462,11 @@ integer as C returns it on x86-64) returns it as one integer of at most 128 bits
 aggregate result that fits (`front/src/Abi.h`), not through memory (`fmal` and the 128-bit conversions were
 refused under qubit control at `-O2` while such results came back through memory).
 
+The front evaluates runtime calls on constants after its optimiser (a rotation's angle must be a constant), with
+LLVM's Evaluator, which reads a global's initial value; it evaluates nothing in a program that sets the mode or
+reads the flags, where a read of the flags (a call with no operands) would otherwise give none
+(`front/tests/tests/fenv.rs`, found in review).
+
 **Against the native program.** `front/tests/c/fenv_ops.c`, under `#pragma STDC FENV_ACCESS ON`, operands
 through volatile memory, every case under each of the four modes, the result's bits and the flags it raised:
 add, sub, mul, div, the six comparisons and the four quiet `<math.h>` comparisons, sqrt, fma (on 13^3 triples),
@@ -472,13 +481,16 @@ cases, 5·10^7 device steps. Every case agrees with native code at device `-O0` 
 generators, 20 operations, 2,000 a mode and group; seed 1 at device `-O0`, seed 7 at `-O2`) agree too. Compared as C defines the
 result: an out-of-range conversion to an integer only by its invalid flag (the value is undefined, and native
 `-O0` and `-O2` give different ones; clang's unsigned 64-bit sequence can also raise inexact beside invalid),
-and an `fma` or a `_Float16` operation with two or more NaN operands only as a NaN (native `-O2` commutes the
-latter). The conversions to `__bf16` are compared outside `FENV_ACCESS`, through a call: under it clang 18
+and an `fma` or a `_Float16` operation with two or more NaN operands, or an `fma` of zero, infinity and a NaN,
+only as a quiet or signalling NaN (native `-O2` commutes the `_Float16` operation). The conversions to `__bf16` are compared outside `FENV_ACCESS`, through a call: under it clang 18
 converts to the `_Float16` encoding instead (`(__bf16)1.0` is `0x3c00`, a native compiler defect), and it
-cannot compile an integer to `__bf16` there, nor `long double` to `__bf16` at all. A mutant runtime that
+cannot compile an integer to `__bf16` or most other `__bf16` operations there, nor `long double` to `__bf16` at
+all. So a constrained operation on `__bf16` is refused by name (`front/tests/tests/fenv.rs`). A mutant runtime that
 ignores the mode in `rint`, one that raises no flags, and one whose signalling comparison raises nothing each
 make the comparison fail (10, 100 and 1 of the 112 groups). `fenv_api.c` checks `<fenv.h>` itself against glibc:
 setting, reading and rejecting modes, raising, testing, clearing, saving and restoring flags, whole environments
 saved, held, set and updated, and `FLT_ROUNDS`. Not carried, and a named fault: an environment set with an
-unmasked exception (a trap), x87 precision other than extended, flush-to-zero or denormals-are-zero, or
-different modes for SSE and x87. x87's denormal-operand flag is never set; glibc's `fetestexcept` masks it out.
+unmasked exception (a trap), x87 precision other than extended, flush-to-zero or denormals-are-zero, different
+modes for SSE and x87, or different flags in its two halves (one set of flags cannot know which unit raised
+which); a reserved MXCSR bit faults too, as natively. The quiet comparison macros of `<math.h>` are compared as
+programs spell them, with musl's header on the device (`rt/musl/README.md`, `include/math.h`). x87's denormal-operand flag is never set; glibc's `fetestexcept` masks it out.
