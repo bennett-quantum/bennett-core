@@ -10,7 +10,8 @@
 //! At every position a program reaches, every assignment of small values to the slots the step reads or
 //! overwrites, and to two memory bytes, is stepped once. Distinct inputs must give distinct outputs
 //! (injective), and stepping back must give the input exactly. The input states are arbitrary, not only
-//! ones a run reaches.
+//! ones a run reaches. A rotation by a computed angle takes angles of both signs, and ones that are not
+//! finite, in place of the integer values its `i64` slot would otherwise take.
 
 use std::collections::HashMap;
 
@@ -23,6 +24,7 @@ const PROGRAM: &str = r#"
 memory 256
 data 16 = i8 3, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 5
 data 32 = i64 @twice
+data 40 = i64 0x3fe6666666666666
 
 func @twice(i2 %x) -> i2 {
 entry:
@@ -59,6 +61,12 @@ entry:
     %q = qalloc 2
     h %q[0]
     x %q[1] ctrl %q[0]
+    %ang = load i64 40
+    %neg = xor i64 %ang, 0x8000000000000000
+    ry(%ang) %q[1] ctrl %q[0]
+    rz(%ang) %q[0]
+    rz(%neg) %q[0]
+    ry(%neg) %q[1] ctrl %q[0]
     x %q[1] ctrl %q[0]
     h %q[0]
     qfree %q
@@ -167,6 +175,11 @@ enum Place {
     Byte(usize),
 }
 
+/// The angles a computed rotation's slot takes: finite ones of both signs and the two kinds that fault
+/// `bad_angle`. The `i64` defaults of `values`, read as binary64, are subnormal: a rotation by them is the
+/// identity to within the comparison's tolerance, so a wrong inverse would not show.
+const ANGLES: [f64; 4] = [0.7, -1.89, f64::INFINITY, f64::NAN];
+
 const BYTES: [usize; 2] = [16, 24];
 const BYTE_VALUES: [u128; 2] = [0, 0x5a];
 
@@ -216,6 +229,10 @@ fn places_of_step(executor: &Executor) -> Vec<(Place, Vec<u128>)> {
     let function = executor.function(frame.func);
     let block = function.block(frame.block);
     let mut slots = Vec::new();
+    let angle = match block.insts.get(frame.inst) {
+        Some(Inst::RotateBy { angle, .. }) => Some(*angle),
+        _ => None,
+    };
     match block.insts.get(frame.inst) {
         Some(inst) => {
             inst.visit_uses(|slot| slots.push((depth, slot)));
@@ -239,7 +256,12 @@ fn places_of_step(executor: &Executor) -> Vec<(Place, Vec<u128>)> {
         .into_iter()
         .map(|(frame, slot)| {
             let func = executor.frames[frame].func;
-            (Place::Slot { frame, slot }, values(executor.module.slot_type(func, slot)))
+            let choices = if frame == depth && Some(slot) == angle {
+                ANGLES.iter().map(|angle| u128::from(angle.to_bits())).collect()
+            } else {
+                values(executor.module.slot_type(func, slot))
+            };
+            (Place::Slot { frame, slot }, choices)
         })
         .filter(|(_, choices)| !choices.is_empty())
         .collect();
@@ -271,16 +293,47 @@ fn next_inst<'m>(executor: &Executor<'m>) -> Option<&'m Inst> {
     executor.function(frame.func).block(frame.block).insts.get(frame.inst)
 }
 
-/// Single steps: injective, and undone exactly, from every assignment at every reached position. Returns
-/// the steps checked and how many of them faulted.
-fn check_single_steps(fixture: &Fixture) -> (usize, usize) {
-    let (mut checked, mut faults) = (0, 0);
+/// What `check_single_steps` covered: single steps undone, faulting steps, and among them the
+/// rotations by a computed angle (`Inst::RotateBy`), split into those undone, those that turned a byte into
+/// qubits, and those that faulted `bad_angle`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Counts {
+    checked: usize,
+    faults: usize,
+    rotations: usize,
+    promoting_rotations: usize,
+    bad_angles: usize,
+}
+
+impl std::ops::Add for Counts {
+    type Output = Counts;
+    fn add(self, other: Counts) -> Counts {
+        Counts {
+            checked: self.checked + other.checked,
+            faults: self.faults + other.faults,
+            rotations: self.rotations + other.rotations,
+            promoting_rotations: self.promoting_rotations + other.promoting_rotations,
+            bad_angles: self.bad_angles + other.bad_angles,
+        }
+    }
+}
+
+/// Single steps: injective, and undone exactly, from every assignment at every reached position.
+fn check_single_steps(fixture: &Fixture) -> Counts {
+    let mut counts = Counts::default();
     for (steps, position) in positions(fixture) {
         let probe = fixture.at(steps);
         if matches!(next_inst(&probe), Some(Inst::Measure { .. })) {
             continue;
         }
         let (places, choices): (Vec<Place>, Vec<Vec<u128>>) = places_of_step(&probe).into_iter().unzip();
+        // For a computed rotation, the index of its angle among the varied places.
+        let angle = match next_inst(&probe) {
+            Some(Inst::RotateBy { angle, .. }) => {
+                places.iter().position(|place| matches!(place, Place::Slot { slot, .. } if slot == angle))
+            }
+            _ => None,
+        };
         let mut outputs = HashMap::new();
         for assignment in assignments(&choices) {
             let mut executor = fixture.at(steps);
@@ -303,8 +356,20 @@ fn check_single_steps(fixture: &Fixture) -> (usize, usize) {
                 let mut unchanged = after;
                 unchanged.outcome = None;
                 assert_eq!(unchanged, before, "{position:?} {assignment:?}: a fault changed the state");
-                faults += 1;
+                counts.faults += 1;
+                // The angle is read before anything else, so an angle that is not finite faults
+                // `bad_angle` whatever the qubits' addresses are.
+                let bad_angle = executor.outcome == Some(Outcome::Faulted(bennett_ir::Fault::BadAngle));
+                if let Some(index) = angle {
+                    let finite = f64::from_bits(assignment[index] as u64).is_finite();
+                    assert_eq!(bad_angle, !finite, "{position:?} {assignment:?}");
+                    counts.bad_angles += usize::from(bad_angle);
+                }
                 continue;
+            }
+            if angle.is_some() {
+                counts.rotations += 1;
+                counts.promoting_rotations += usize::from(after.kinds.last() == Some(&Undo::GateAtPromoted));
             }
             assert_eq!(executor.step_back(), Ok(true), "{position:?} {assignment:?}");
             assert_eq!(key(&executor).kinds, before.kinds);
@@ -314,10 +379,10 @@ fn check_single_steps(fixture: &Fixture) -> (usize, usize) {
             let distance = back.quantum.distance(&at_step.quantum);
             assert!(distance.is_some_and(|d| d <= 1e-12), "{position:?} {assignment:?}: amplitudes {distance:?}");
             assert_eq!(key(&executor).words, before.words, "{position:?} {assignment:?}");
-            checked += 1;
+            counts.checked += 1;
         }
     }
-    (checked, faults)
+    counts
 }
 
 fn fixtures(module: &ValidModule) -> Vec<Fixture<'_>> {
@@ -335,12 +400,10 @@ fn fixtures(module: &ValidModule) -> Vec<Fixture<'_>> {
 #[test]
 fn every_journalled_step_is_a_bijection_on_clean_and_dirty_history() {
     let module = bennett_ir::load(PROGRAM).expect("valid");
-    let (checked, faults) = fixtures(&module)
-        .iter()
-        .map(check_single_steps)
-        .fold((0, 0), |(c, f), (checked, faults)| (c + checked, f + faults));
+    let counts = fixtures(&module).iter().map(check_single_steps).fold(Counts::default(), |a, b| a + b);
     // The counts pin the coverage: a change to the program or the value sets shows here.
-    assert_eq!((checked, faults), (32_328, 2_952), "single steps checked, and faulting ones among them");
+    let expected = Counts { checked: 33_224, faults: 3_208, rotations: 256, promoting_rotations: 0, bad_angles: 256 };
+    assert_eq!(counts, expected, "single steps checked, faulting ones, computed rotations");
 }
 
 #[test]
@@ -387,6 +450,7 @@ const CELLS: &str = r#"
 memory 256
 data 16 = i8 3, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 5
 data 48 = i8 7
+data 56 = i64 0x3fe6666666666666
 
 func @peek(i2 %x) -> i8 {
 entry:
@@ -410,14 +474,19 @@ entry:
     %p = zext i2 %a to i64
     %addr = add i64 %p, 16
     %far = mul i64 %p, 120
+    %near = add i64 %p, 32
+    %ang = load i64 56
+    %neg = xor i64 %ang, 0x8000000000000000
     h [16:1]
     x [%addr:0] ctrl [16:1]
     x [%addr:1] ctrl [16:1]
     x %q[0] ctrl [16:1]
     s [24:3] ctrl %q[0]
     t [%far:2]
+    rx(%ang) [%near:6] ctrl [16:1]
     apply @peek(%b) -> %o, %e budget 20
     apply @peek(%b) -> %o, %e budget 20
+    rx(%neg) [%near:6] ctrl [16:1]
     tdg [%far:2]
     sdg [24:3] ctrl %q[0]
     x %q[0] ctrl [16:1]
@@ -463,8 +532,7 @@ fn cell_fixtures(module: &ValidModule) -> Vec<Fixture<'_>> {
 fn every_step_at_memory_qubits_is_a_bijection_on_clean_and_dirty_history() {
     let module = bennett_ir::load(CELLS).expect("valid");
     let fixtures = cell_fixtures(&module);
-    let (checked, faults) =
-        fixtures.iter().map(check_single_steps).fold((0, 0), |(c, f), (checked, faults)| (c + checked, f + faults));
+    let counts = fixtures.iter().map(check_single_steps).fold(Counts::default(), |a, b| a + b);
     let mut kinds = std::collections::BTreeSet::new();
     let mut outcomes = std::collections::BTreeSet::new();
     for fixture in &fixtures {
@@ -492,6 +560,7 @@ fn every_step_at_memory_qubits_is_a_bijection_on_clean_and_dirty_history() {
         };
         assert_eq!(fixture.at(0).run(), expected, "c = {c}");
     }
-    println!("memory qubits: {checked} single steps ({faults} faulting); outcomes {outcomes:?}");
-    assert_eq!((checked, faults), (4_504, 512), "single steps, faulting ones");
+    println!("memory qubits: {counts:?}; outcomes {outcomes:?}");
+    let expected = Counts { checked: 7_000, faults: 1_312, rotations: 480, promoting_rotations: 160, bad_angles: 640 };
+    assert_eq!(counts, expected, "single steps, faulting ones, computed rotations");
 }
