@@ -1,7 +1,7 @@
 //! A block's depth as a max-plus transformation of the incoming wire layers.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use bennett_exec::{GateOp, RunError, Wire};
 
@@ -80,7 +80,7 @@ impl Schedule {
     pub(crate) fn apply_repeated(
         &self,
         mut times: u64,
-        layers: &mut HashMap<Wire, u128>,
+        layers: &mut BTreeMap<Wire, u128>,
         depth: &mut u128,
     ) -> Result<(), RunError> {
         // Stage just the participating wires so an overflow cannot leave a partial call counted.
@@ -88,7 +88,8 @@ impl Schedule {
             .rows
             .keys()
             .filter_map(|output| match *output {
-                Input::Wire(wire) => Some((wire, layers[&wire])),
+                // A live wire no gate has acted on yet is at layer 0.
+                Input::Wire(wire) => Some((wire, layers.get(&wire).copied().unwrap_or(0))),
                 Input::Depth | Input::Zero => None,
             })
             .collect();

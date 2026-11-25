@@ -11,6 +11,7 @@ bennett-exec.workspace = true
 petgraph.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
+rangemap.workspace = true
 
 [lints]
 workspace = true

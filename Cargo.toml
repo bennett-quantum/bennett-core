@@ -19,6 +19,7 @@ num-complex = "0.4"
 petgraph = { version = "0.8", default-features = false, features = ["std"] }
 rand = { version = "0.9", default-features = false }
 rand_chacha = { version = "0.9", default-features = false }
+rangemap = "1.5"
 thiserror = "2"
 
 [workspace.lints.rust]

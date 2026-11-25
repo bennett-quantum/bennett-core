@@ -5,6 +5,7 @@ use std::ops::Range;
 
 use bennett_exec::{BlockOp, Device, GateBlock, GateBlockKey, GateOp, RunError, Wire};
 use bennett_ir::{FixedGate, Gate};
+use rangemap::RangeSet;
 
 const X: Gate = Gate::Fixed(FixedGate::X);
 
@@ -13,20 +14,35 @@ fn native(gate: GateOp<&[Wire]>) -> bool {
     count <= 1 || (count == 2 && gate.kind == X)
 }
 
-fn scratch_range(live: &BTreeSet<Wire>, count: u64) -> Result<Range<Wire>, RunError> {
-    // Search downwards so the usual low-numbered program wires need no remapping.
+fn scratch_range(live: &RangeSet<Wire>, count: u64) -> Result<Range<Wire>, RunError> {
+    // Search downwards so the usual low-numbered program wires need no remapping. A window that ends above
+    // the start of the highest live run it meets still meets that run, so the next window ends there.
     let mut end = Wire::MAX;
     loop {
         let start = end.checked_sub(count).ok_or(RunError::Device("no unused wire range for scratch"))?;
-        if let Some(&occupied) = live.range(start..end).next_back() {
-            end = occupied;
+        if let Some(occupied) = live.overlapping(start..end).next_back() {
+            end = occupied.start;
         } else {
             return Ok(start..end);
         }
     }
 }
 
-fn lower(gate: GateOp<&[Wire]>, live: &BTreeSet<Wire>, ops: &mut Vec<BlockOp>) -> Result<Range<Wire>, RunError> {
+/// Marks `wires` live; an empty range changes nothing.
+fn insert(live: &mut RangeSet<Wire>, wires: &Range<Wire>) {
+    if !wires.is_empty() {
+        live.insert(wires.clone());
+    }
+}
+
+/// Marks `wires` no longer live; an empty range changes nothing.
+fn remove(live: &mut RangeSet<Wire>, wires: &Range<Wire>) {
+    if !wires.is_empty() {
+        live.remove(wires.clone());
+    }
+}
+
+fn lower(gate: GateOp<&[Wire]>, live: &RangeSet<Wire>, ops: &mut Vec<BlockOp>) -> Result<Range<Wire>, RunError> {
     let scratch = scratch_range(live, (gate.controls.len() - 1) as u64)?;
     let ladder = gate.controls[1..].iter().enumerate().map(|(index, &control)| {
         let target = scratch.start + index as u64;
@@ -48,16 +64,16 @@ enum LoweredBlock {
 }
 
 impl LoweredBlock {
-    fn available<'a>(&'a self, original: &'a GateBlock, live: &BTreeSet<Wire>) -> Option<&'a GateBlock> {
+    fn available<'a>(&'a self, original: &'a GateBlock, live: &RangeSet<Wire>) -> Option<&'a GateBlock> {
         match self {
             Self::Native => Some(original),
             Self::WithScratch { definition, scratch } => {
-                scratch.iter().all(|&(start, end)| live.range(start..end).next().is_none()).then_some(definition)
+                scratch.iter().all(|&(start, end)| live.overlapping(start..end).next().is_none()).then_some(definition)
             }
         }
     }
 
-    fn new(block: &GateBlock, live: &BTreeSet<Wire>) -> Result<Self, RunError> {
+    fn new(block: &GateBlock, live: &RangeSet<Wire>) -> Result<Self, RunError> {
         let needs_lowering = block.ops().iter().any(|op| match op {
             BlockOp::Gate(gate) => !native(gate.borrowed()),
             BlockOp::Allocate(_) | BlockOp::ReleaseZero(_) => false,
@@ -76,13 +92,9 @@ impl LoweredBlock {
                     scratch.insert((wires.start, wires.end));
                     continue;
                 }
-                BlockOp::Allocate(wires) => live.extend(wires.clone()),
+                BlockOp::Allocate(wires) => insert(&mut live, wires),
                 BlockOp::Gate(_) => {}
-                BlockOp::ReleaseZero(wires) => {
-                    for wire in wires.clone() {
-                        live.remove(&wire);
-                    }
-                }
+                BlockOp::ReleaseZero(wires) => remove(&mut live, wires),
             }
             ops.push(op.clone());
         }
@@ -93,20 +105,19 @@ impl LoweredBlock {
 /// Lowers controlled gates using temporary qubits, forwarding other commands to the inner device.
 pub struct LowerControls<D> {
     inner: D,
-    live: BTreeSet<Wire>,
+    /// The allocated wires, as runs: a register costs one entry however many qubits it has.
+    live: RangeSet<Wire>,
     blocks: HashMap<GateBlockKey, LoweredBlock>,
 }
 
 impl<D> LowerControls<D> {
     /// Wrap a device before allocating any wires.
     pub fn new(inner: D) -> Self {
-        Self { inner, live: BTreeSet::new(), blocks: HashMap::new() }
+        Self { inner, live: RangeSet::new(), blocks: HashMap::new() }
     }
 
     fn end_wires(&mut self, wires: Range<Wire>) {
-        for wire in wires {
-            self.live.remove(&wire);
-        }
+        remove(&mut self.live, &wires);
     }
 
     /// Inspect the inner device, for example to read its gate counts.
@@ -118,7 +129,7 @@ impl<D> LowerControls<D> {
 impl<D: Device> Device for LowerControls<D> {
     fn allocate(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
         self.inner.allocate(wires.clone())?;
-        self.live.extend(wires);
+        insert(&mut self.live, &wires);
         Ok(())
     }
 

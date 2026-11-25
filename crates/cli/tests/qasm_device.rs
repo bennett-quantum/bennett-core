@@ -641,7 +641,8 @@ fn a_zero_byte_measures_zero_and_is_released_in_zero() {
         text.lines().filter_map(|line| line.split_once("; // outcome ").map(|(_, bit)| bit)).collect();
     assert_eq!(measured, "00000000");
     assert_eq!(gates(&text).collect::<Vec<_>>(), [("z", vec!["q0[0]"])]);
-    assert!(text.lines().any(|line| line.starts_with("// release_zero requested for q0[0]")));
+    // The byte's eight qubits, named as one run.
+    assert!(text.lines().any(|line| line == "// release_zero requested for q0[0:7]"), "{text}");
 }
 
 #[test]
