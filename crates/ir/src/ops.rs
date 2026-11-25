@@ -116,7 +116,7 @@ mnemonic_enum! {
 }
 
 mnemonic_enum! {
-    /// The axis of a single-qubit rotation `exp(-iθσ/2)`.
+    /// A single-qubit gate by an angle θ: the rotation `exp(-iθσ/2)` about an axis, or the phase rotation.
     Rotation {
         /// Rotation about X.
         Rx = "rx",
@@ -124,6 +124,9 @@ mnemonic_enum! {
         Ry = "ry",
         /// Rotation about Z.
         Rz = "rz",
+        /// Phase rotation `diag(1, e^{iθ})`, OpenQASM 3's `p`: `rz` times the global phase `e^{iθ/2}`, which
+        /// becomes a relative phase under a control.
+        P = "p",
     }
 }
 

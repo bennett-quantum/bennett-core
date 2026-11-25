@@ -16,7 +16,7 @@ fn diagonal(phase: Complex64) -> Matrix {
     [[real(1.0), real(0.0)], [real(0.0), phase]]
 }
 
-/// The matrix of `gate`. Rotations are `exp(-iθσ/2)`.
+/// The matrix of `gate`. Rotations about an axis are `exp(-iθσ/2)`; the phase rotation is `diag(1, e^{iθ})`.
 pub(crate) fn matrix(gate: Gate) -> Matrix {
     let (zero, one, i) = (real(0.0), real(1.0), Complex64::i());
     match gate {
@@ -38,6 +38,7 @@ pub(crate) fn matrix(gate: Gate) -> Matrix {
                 Rotation::Rz => {
                     [[Complex64::from_polar(1.0, -angle / 2.0), zero], [zero, Complex64::from_polar(1.0, angle / 2.0)]]
                 }
+                Rotation::P => diagonal(Complex64::from_polar(1.0, angle)),
             }
         }
     }
@@ -88,10 +89,11 @@ mod tests {
             Rotation::Rx => [[zero, one], [one, zero]],
             Rotation::Ry => [[zero, -i], [i, zero]],
             Rotation::Rz => [[one, zero], [zero, -one]],
+            Rotation::P => unreachable!("the phase rotation is not about an axis"),
         };
         for angle in [0.7, -1.9, 3.0] {
             let (c, s) = ((angle / 2.0_f64).cos(), (angle / 2.0_f64).sin());
-            for &axis in Rotation::ALL {
+            for axis in [Rotation::Rx, Rotation::Ry, Rotation::Rz] {
                 let sigma = pauli(axis);
                 let got = matrix(Gate::Rotate(axis, angle));
                 for r in 0..2 {
@@ -100,6 +102,23 @@ mod tests {
                         let expected = identity * c - i * s * sigma[r][col];
                         assert!((got[r][col] - expected).norm() < 1e-15, "{axis:?}({angle}) [{r}][{col}]: {got:?}");
                     }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_phase_rotation_is_diag_one_and_e_to_the_i_theta_and_rz_times_a_global_phase() {
+        let zero = real(0.0);
+        for angle in [0.7, -1.9, 3.0, std::f64::consts::PI] {
+            let got = matrix(Gate::Rotate(Rotation::P, angle));
+            let expected = [[real(1.0), zero], [zero, Complex64::new(angle.cos(), angle.sin())]];
+            let rz = matrix(Gate::Rotate(Rotation::Rz, angle));
+            let global = Complex64::from_polar(1.0, angle / 2.0);
+            for r in 0..2 {
+                for c in 0..2 {
+                    assert!((got[r][c] - expected[r][c]).norm() < 1e-15, "p({angle}) [{r}][{c}]: {got:?}");
+                    assert!((got[r][c] - global * rz[r][c]).norm() < 1e-15, "p({angle}) against rz [{r}][{c}]");
                 }
             }
         }

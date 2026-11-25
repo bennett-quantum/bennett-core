@@ -31,6 +31,7 @@ pub fn gate_matrix(gate: Gate) -> Matrix2<C> {
                 Rotation::Rx => Matrix2::new(c, -i * s, -i * s, c),
                 Rotation::Ry => Matrix2::new(c, -s, s, c),
                 Rotation::Rz => Matrix2::new(c - i * s, zero, zero, c + i * s),
+                Rotation::P => Matrix2::new(one, zero, zero, C::from_polar(1.0, angle)),
             }
         }
     }

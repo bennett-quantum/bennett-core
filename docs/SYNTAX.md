@@ -37,8 +37,8 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | %d = qalloc N                              ; N from 1 to 2^32 - 1
             | qfree %r                                   ; the partial trace: %r dropped unexamined
             | GATE qubit [ctrl qubit {, qubit}]          ; x h z s sdg t tdg
-            | (rx | ry | rz)(ANGLE) qubit [ctrl ...]     ; radians, any finite angle
-            | (rx | ry | rz)(%a) qubit [ctrl ...]        ; the angle computed at run time: an i64, binary64 bits
+            | (rx | ry | rz | p)(ANGLE) qubit [ctrl ...] ; radians, any finite angle
+            | (rx | ry | rz | p)(%a) qubit [ctrl ...]    ; the angle computed at run time: an i64, binary64 bits
             | %d = measure %r                            ; every qubit of the register: an iN, N at most 128
             | %d = measure iN "[" operand "]"            ; N bits from bit 0 of the integer at the i64 address
             | apply @f(typed, ...) -> %out, %fault budget operand  ; %fault: a register of 5 qubits or more
@@ -51,6 +51,10 @@ terminator := br label[(typed, ...)]
             | longjmp operand, operand                   ; jump record address (i64), i32 value
             | fault NAME                                 ; budget, unreachable, ... (bennett_ir::Fault; 5-bit codes)
 ```
+
+`rx`, `ry` and `rz` are the rotations `exp(-iθσ/2)` about X, Y and Z; `p` is the phase rotation
+`diag(1, e^{iθ})`, applied where every control is 1 (a controlled `p` is a controlled phase, which a
+controlled `rz` is not; `docs/DESIGN.md`, "The model").
 
 Integers are decimal or `0x` hex and may be negative (two's complement at the type's width). An `ANGLE` is
 a decimal literal that must be finite as an `f64`. A literal that overflows (`1e999`) is a read

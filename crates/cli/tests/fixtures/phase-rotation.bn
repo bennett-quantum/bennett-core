@@ -1,0 +1,13 @@
+; The phase rotation through the CLI (crates/cli/tests/phase_rotation.rs): `%a` is the angle's binary64 bits,
+; given with `--arg`; one controlled phase rotation by it, one by a literal.
+memory 64
+
+func @main(i64 %a) {
+entry:
+    %q = qalloc 2
+    h %q
+    p(%a) %q[1] ctrl %q
+    p(0.25) %q
+    qfree %q
+    ret
+}
