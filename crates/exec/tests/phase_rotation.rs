@@ -13,8 +13,9 @@ use bennett_ir::Fault;
 use common::{TOLERANCE, assert_reverses, bounded, executor, run};
 use num_complex::Complex64;
 
-/// Angles of both signs, a half turn, tiny, and larger than 2 pi.
-const ANGLES: [f64; 6] = [0.7, -1.89, PI, 1e-18, 7.5, -PI / 2.0];
+/// Angles of both signs, a half turn, tiny, larger than 2 pi, and far larger, where a reduction of the angle
+/// modulo a rounded 2 pi would give a wrong phase.
+const ANGLES: [f64; 7] = [0.7, -1.89, PI, 1e-18, 7.5, -PI / 2.0, 1e18];
 
 fn close(actual: Complex64, expected: Complex64, context: &str) {
     assert!((actual - expected).norm() <= TOLERANCE, "{context}: {actual} against {expected}");

@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn the_phase_rotation_is_diag_one_and_e_to_the_i_theta_and_rz_times_a_global_phase() {
         let zero = real(0.0);
-        for angle in [0.7, -1.9, 3.0, std::f64::consts::PI] {
+        for angle in [0.7, -1.9, 3.0, std::f64::consts::PI, 1e18] {
             let got = matrix(Gate::Rotate(Rotation::P, angle));
             let expected = [[real(1.0), zero], [zero, Complex64::new(angle.cos(), angle.sin())]];
             let rz = matrix(Gate::Rotate(Rotation::Rz, angle));
