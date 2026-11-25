@@ -84,6 +84,16 @@ void checkMarkers(const Module &module, bool floatsAreBits) {
                "calls",
                &function);
       }
+      // Attributes on one call license removing that call just as the declaration's would.
+      for (const User *user : function.users()) {
+        const auto *call = dyn_cast<CallBase>(user);
+        if (call && call->getCalledOperand() == &function &&
+            (call->onlyReadsMemory() || call->hasFnAttr(Attribute::WillReturn))) {
+          misuse("a call of the device function @__bennett_out_of_memory has attributes that let LLVM remove or "
+                 "move it",
+                 call);
+        }
+      }
       continue;
     }
     if (function.getName() == "__bennett_effect" || function.getName() == "__bennett_exit") {

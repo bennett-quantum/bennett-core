@@ -74,3 +74,25 @@ fn out_of_memory_attributes_cannot_license_removing_the_call() {
     let error = lower_text(&path, "out_of_memory_pure", CLANG_FLAGS, &[]).expect_err("must refuse");
     assert!(error.contains("attributes that let LLVM remove or move its calls"), "{error}");
 }
+
+#[test]
+fn attributes_on_one_call_cannot_license_removing_it() {
+    // The declaration is right; only the call says it reads no memory and returns, which would let LLVM delete
+    // it and leave the `unreachable` after it, a different fault.
+    for (name, attributes) in [("pure", "memory(none)"), ("reads", "memory(read)"), ("returns", "willreturn")] {
+        let tag = format!("out_of_memory_call_{name}");
+        let path = out_dir().join(format!("{tag}.ll"));
+        std::fs::write(
+            &path,
+            format!(
+                "declare void @__bennett_out_of_memory() noreturn\ndefine i32 @main() {{\n call void @__bennett_out_of_memory() nounwind {attributes}\n unreachable\n}}\n"
+            ),
+        )
+        .expect("write IR");
+        let error = lower_text(&path, &tag, CLANG_FLAGS, &[]).expect_err("must refuse");
+        assert!(
+            error.contains("a call of the device function @__bennett_out_of_memory has attributes"),
+            "{tag}: {error}"
+        );
+    }
+}
