@@ -1,18 +1,23 @@
 //! Stream the commands of one device run as OpenQASM 3.
 
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::io::{self, Write};
 use std::ops::Range;
 
 use bennett_exec::{Device, GateOp, Outcome, RunError, SimulatedDevice, Wire};
 use bennett_ir::{FixedGate, Gate, Rotation};
+use rangemap::RangeMap;
 
-#[derive(Clone, Copy)]
-struct Qubit {
-    register: u64,
-    index: u64,
+/// The OpenQASM register that an allocation's wires became, and the allocation's first wire: wire `w`
+/// is qubit `w - first` of `q<register>`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Register {
+    number: u64,
+    first: Wire,
 }
+
+/// The live wires by allocation, as runs: a register costs one entry however many qubits it has.
+type LiveWires = RangeMap<Wire, Register>;
 
 /// Where the writer takes measurement outcomes.
 pub(crate) enum Outcomes {
@@ -28,7 +33,7 @@ pub(crate) struct QasmDevice<W> {
     output: W,
     write_error: Cell<Option<io::Error>>,
     outcomes: Outcomes,
-    wires: HashMap<Wire, Qubit>,
+    wires: LiveWires,
     next_register: u64,
 }
 
@@ -49,7 +54,7 @@ impl<W: Write> QasmDevice<W> {
             }
         }
         writeln!(output, "// A release_zero request assumes a replay with the recorded outcomes.")?;
-        Ok(Self { output, write_error: Cell::new(None), outcomes, wires: HashMap::new(), next_register: 0 })
+        Ok(Self { output, write_error: Cell::new(None), outcomes, wires: LiveWires::new(), next_register: 0 })
     }
 
     /// The simulation, when it carries out the commands.
@@ -65,7 +70,7 @@ impl<W: Write> QasmDevice<W> {
         self.write_error.take()
     }
 
-    fn command(&mut self, emit: impl FnOnce(&mut W, &HashMap<Wire, Qubit>) -> io::Result<()>) -> Result<(), RunError> {
+    fn command(&mut self, emit: impl FnOnce(&mut W, &LiveWires) -> io::Result<()>) -> Result<(), RunError> {
         emit(&mut self.output, &self.wires).map_err(|error| {
             self.write_error.set(Some(error));
             RunError::Device("cannot write OpenQASM output")
@@ -78,12 +83,10 @@ impl<W: Write> QasmDevice<W> {
         }
         self.command(|output, live| {
             write!(output, "// {comment} ")?;
-            write_operands(output, live, wires.clone())?;
+            write_runs(output, live, wires.clone())?;
             writeln!(output, "{suffix}")
         })?;
-        for wire in wires {
-            self.wires.remove(&wire);
-        }
+        self.wires.remove(wires);
         Ok(())
     }
 }
@@ -103,7 +106,7 @@ impl<W: Write> Device for QasmDevice<W> {
         // OpenQASM declarations leave the initial state undefined. Allocation prepares zero.
         self.command(|output, _| writeln!(output, "qubit[{width}] q{register};\nreset q{register};"))?;
         // A device wire may be reused. Each QASM allocation has a fresh identity.
-        self.wires.extend(wires.map(|wire| (wire, Qubit { register, index: wire - first })));
+        self.wires.insert(wires, Register { number: register, first });
         self.next_register = next;
         Ok(())
     }
@@ -218,17 +221,32 @@ pub(crate) fn write_run_end(output: &mut impl Write, outcome: Outcome, run_statu
     }
 }
 
-fn write_operands(
-    output: &mut impl Write,
-    live: &HashMap<Wire, Qubit>,
-    wires: impl IntoIterator<Item = Wire>,
-) -> io::Result<()> {
+/// Writes the live qubits among `wires`, in order, one run of consecutive qubits of a register at a
+/// time: `q0[5]` for one qubit, OpenQASM 3's inclusive range `q0[0:999]` for more, so that the text grows
+/// with the registers named, not with their widths.
+fn write_runs(output: &mut impl Write, live: &LiveWires, wires: Range<Wire>) -> io::Result<()> {
+    for (position, (run, &Register { number, first })) in live.overlapping(wires.clone()).enumerate() {
+        if position > 0 {
+            write!(output, ", ")?;
+        }
+        let low = run.start.max(wires.start) - first;
+        let high = run.end.min(wires.end) - 1 - first;
+        if low == high {
+            write!(output, "q{number}[{low}]")?;
+        } else {
+            write!(output, "q{number}[{low}:{high}]")?;
+        }
+    }
+    Ok(())
+}
+
+fn write_operands(output: &mut impl Write, live: &LiveWires, wires: impl IntoIterator<Item = Wire>) -> io::Result<()> {
     for (position, wire) in wires.into_iter().enumerate() {
         if position > 0 {
             write!(output, ", ")?;
         }
-        let Qubit { register, index } = live[&wire];
-        write!(output, "q{register}[{index}]")?;
+        let Register { number, first } = *live.get(&wire).expect("the device addresses live wires");
+        write!(output, "q{number}[{}]", wire - first)?;
     }
     Ok(())
 }

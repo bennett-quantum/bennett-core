@@ -1,7 +1,10 @@
 //! Count gates and live wires without keeping a quantum state.
+//!
+//! The live wires are kept as runs and a gate layer only for the wires gates have acted on, so a register
+//! costs host memory for the qubits it uses, not for its width.
 
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::iter::{Repeat, from_fn, repeat};
 use std::ops::Range;
 
@@ -9,6 +12,7 @@ use bennett_exec::{BlockOp, Device, GateBlock, GateBlockKey, GateOp, RunError, W
 use bennett_ir::{FixedGate, Gate};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
+use rangemap::RangeSet;
 
 use crate::schedule::Schedule;
 
@@ -59,6 +63,62 @@ impl Counts {
             ..*self
         };
         Ok(())
+    }
+}
+
+/// The allocated wires and the layer of each wire a gate has acted on since its allocation; an
+/// allocated wire without a layer entry is at layer 0.
+#[derive(Default)]
+struct LiveWires {
+    runs: RangeSet<Wire>,
+    /// The number of wires in `runs`.
+    count: u64,
+    layers: BTreeMap<Wire, u128>,
+}
+
+impl LiveWires {
+    fn contains(&self, wire: Wire) -> bool {
+        self.runs.contains(&wire)
+    }
+
+    /// How many of `wires` are live.
+    fn live_in(&self, wires: &Range<Wire>) -> u64 {
+        self.runs.overlapping(wires.clone()).map(|run| run.end.min(wires.end) - run.start.max(wires.start)).sum()
+    }
+
+    /// Makes `wires` live at layer 0, as a fresh allocation is.
+    fn allocate(&mut self, wires: Range<Wire>) {
+        if wires.is_empty() {
+            return;
+        }
+        self.count += (wires.end - wires.start) - self.live_in(&wires);
+        self.runs.insert(wires.clone());
+        self.forget_layers(wires);
+    }
+
+    fn end(&mut self, wires: Range<Wire>) {
+        if wires.is_empty() {
+            return;
+        }
+        self.count -= self.live_in(&wires);
+        self.runs.remove(wires.clone());
+        self.forget_layers(wires);
+    }
+
+    fn forget_layers(&mut self, wires: Range<Wire>) {
+        let touched: Vec<Wire> = self.layers.range(wires).map(|(&wire, _)| wire).collect();
+        for wire in touched {
+            self.layers.remove(&wire);
+        }
+    }
+
+    fn layer(&self, wire: Wire) -> u128 {
+        self.layers.get(&wire).copied().unwrap_or(0)
+    }
+
+    /// The number of live wires, as a peak count.
+    fn peak(&self) -> usize {
+        usize::try_from(self.count).unwrap_or(usize::MAX)
     }
 }
 
@@ -115,18 +175,18 @@ impl BlockSummary {
         Ok(Self { schedule, counts, inputs, scratch_wires })
     }
 
-    fn repeat(&self, times: u64, layers: &mut HashMap<Wire, u128>, counts: &mut Counts) -> Result<(), RunError> {
-        if self.scratch_wires.iter().any(|wire| layers.contains_key(wire)) {
+    fn repeat(&self, times: u64, live: &mut LiveWires, counts: &mut Counts) -> Result<(), RunError> {
+        if self.scratch_wires.iter().any(|&wire| live.contains(wire)) {
             return Err(RunError::Device("block allocates a live wire"));
         }
-        if !self.inputs.iter().all(|wire| layers.contains_key(wire)) {
+        if !self.inputs.iter().all(|&wire| live.contains(wire)) {
             return Err(RunError::Device("block uses an unallocated wire"));
         }
         let mut per_call = self.counts;
-        per_call.peak_qubits += layers.len();
+        per_call.peak_qubits += live.peak();
         let mut total = *counts;
         total.add_block(per_call, times)?;
-        self.schedule.apply_repeated(times, layers, &mut total.depth)?;
+        self.schedule.apply_repeated(times, &mut live.layers, &mut total.depth)?;
         *counts = total;
         Ok(())
     }
@@ -136,7 +196,7 @@ impl BlockSummary {
 pub struct CountingDevice<I = Repeat<bool>> {
     bits: I,
     outcomes: Vec<bool>,
-    layers: HashMap<Wire, u128>,
+    live: LiveWires,
     counts: Counts,
     blocks: HashMap<GateBlockKey, BlockSummary>,
     #[cfg(test)]
@@ -149,7 +209,7 @@ impl<I: Iterator<Item = bool>> CountingDevice<I> {
         Self {
             bits,
             outcomes: Vec::new(),
-            layers: HashMap::new(),
+            live: LiveWires::default(),
             counts: Counts::default(),
             blocks: HashMap::new(),
             #[cfg(test)]
@@ -168,9 +228,7 @@ impl<I: Iterator<Item = bool>> CountingDevice<I> {
     }
 
     fn end_wires(&mut self, wires: Range<Wire>) {
-        for wire in wires {
-            self.layers.remove(&wire);
-        }
+        self.live.end(wires);
     }
 }
 
@@ -189,18 +247,21 @@ pub fn seeded_bits(seed: u64) -> impl Iterator<Item = bool> {
 
 impl<I: Iterator<Item = bool>> Device for CountingDevice<I> {
     fn allocate(&mut self, wires: Range<Wire>) -> Result<(), RunError> {
-        self.layers.extend(wires.map(|wire| (wire, 0)));
-        self.counts.peak_qubits = self.counts.peak_qubits.max(self.layers.len());
+        self.live.allocate(wires);
+        self.counts.peak_qubits = self.counts.peak_qubits.max(self.live.peak());
         Ok(())
     }
 
     fn gate(&mut self, gate: GateOp<&[Wire]>) -> Result<(), RunError> {
         let wires = || std::iter::once(&gate.target).chain(gate.controls);
-        let latest = wires().map(|wire| self.layers[wire]).max().expect("gate has a target");
+        if !wires().all(|&wire| self.live.contains(wire)) {
+            return Err(RunError::Device("gate on an unallocated wire"));
+        }
+        let latest = wires().map(|&wire| self.live.layer(wire)).max().expect("gate has a target");
         let layer = latest.checked_add(1).ok_or(RunError::Device("gate depth overflow"))?;
         self.counts.gate(gate)?;
         for wire in wires() {
-            self.layers.insert(*wire, layer);
+            self.live.layers.insert(*wire, layer);
         }
         self.counts.depth = self.counts.depth.max(layer);
         Ok(())
@@ -249,7 +310,7 @@ impl<I: Iterator<Item = bool>> Device for CountingDevice<I> {
                     entry.insert(summary)
                 }
             };
-            summary.repeat(times, &mut self.layers, &mut self.counts)?;
+            summary.repeat(times, &mut self.live, &mut self.counts)?;
         }
         Ok(())
     }

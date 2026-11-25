@@ -1,0 +1,16 @@
+; A register of the greatest width, 2^32 - 1 qubits, of which the program uses three: its first, middle
+; and top qubits. The three-control gate is lowered with two scratch qubits.
+memory 64
+
+func @main() -> i1 {
+entry:
+    %q = qalloc 4294967295
+    %r = qalloc 1
+    x %q[4294967294]
+    h %q[0]
+    x %q[2147483648] ctrl %q[0]
+    x %r[0] ctrl %q[0], %q[2147483648], %q[4294967294]
+    %m = measure %r
+    qfree %q
+    ret %m
+}
