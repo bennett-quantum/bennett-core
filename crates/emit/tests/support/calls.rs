@@ -382,7 +382,7 @@ entry:
             // Their XOR gives the unmatched guard. Uncomputation doubles the Toffolis.
             let targets = 2;
             assert_eq!(counts.toffoli, 2 * targets);
-            assert_eq!(counts.peak_qubits, interface as usize + targets as usize + 1);
+            assert_eq!(counts.peak_qubits, interface + targets as u64 + 1);
         }
     }
 }

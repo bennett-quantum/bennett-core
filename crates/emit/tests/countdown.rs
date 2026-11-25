@@ -72,7 +72,7 @@ retzero:
 struct Cost {
     operations: usize,
     toffoli: u128,
-    peak_qubits: usize,
+    peak_qubits: u64,
 }
 
 fn compare(module: &ValidModule, budget: u64, expected: impl Fn(u64) -> (u64, u64)) -> (Construction, Cost) {

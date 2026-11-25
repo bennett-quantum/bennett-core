@@ -298,7 +298,7 @@ fn c_shor_period_distribution_and_counts() {
         let scratch = 3 * width as usize + 4;
         assert_eq!((isolated_peak, harness_peak), (21 + scratch, 31 + scratch), "N={modulus}: peak qubit formulas");
         assert_eq!(baseline_counts.toffoli, toffolis, "N={modulus}: hand-built Toffolis");
-        assert_eq!(baseline_counts.peak_qubits, isolated_peak, "N={modulus}: hand-built isolated peak");
+        assert_eq!(baseline_counts.peak_qubits, isolated_peak as u64, "N={modulus}: hand-built isolated peak");
         if modulus == 15 {
             assert_eq!(generated_counts.toffoli, 1_552, "N=15: emitted Toffolis");
         }

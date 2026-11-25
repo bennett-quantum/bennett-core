@@ -70,19 +70,17 @@ const WIDEST: &str = "tests/fixtures/widest-register.bn";
 /// of a register of 2^32 - 1 qubits (the counter and the writer kept one before), above what the run needs.
 const ADDRESS_SPACE: &str = "201326592";
 
-/// Runs `bennett run` under the address-space limit when `prlimit` is present, otherwise without it.
+/// Runs `bennett run` under the address-space limit; fails by name when `prlimit` cannot be started,
+/// rather than running the widest register without the limit.
 fn bennett_limited(args: &[&str]) -> String {
-    let limited = Command::new("prlimit")
+    let output = Command::new("prlimit")
         .args([format!("--as={ADDRESS_SPACE}"), "--core=0".into(), "--".into()])
         .arg(env!("CARGO_BIN_EXE_bennett"))
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .arg("run")
         .args(args)
-        .output();
-    let output = match limited {
-        Ok(output) => output,
-        Err(_) => return bennett(args),
-    };
+        .output()
+        .unwrap_or_else(|error| panic!("the widest-register tests need prlimit (util-linux) for their limit: {error}"));
     assert!(output.status.success(), "{:?}\n{}", output.status, String::from_utf8_lossy(&output.stderr));
     String::from_utf8(output.stdout).expect("a text report")
 }

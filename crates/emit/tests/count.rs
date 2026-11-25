@@ -62,7 +62,7 @@ fn native_toffoli_and_lowered_gates_have_the_expected_costs() {
                     one_qubit: 2 * one,
                     two_qubit: 2 * two,
                     toffoli: 2 * toffoli,
-                    peak_qubits: (n + 1 + scratch) as usize,
+                    peak_qubits: n + 1 + scratch,
                     depth: 2 * (one + two + toffoli),
                     zero_released_qubits: u128::from(scratch) * 2,
                     ..Counts::default()

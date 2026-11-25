@@ -97,7 +97,7 @@ done:
             // A constant result or fault code uses at most singly controlled copies.
             let predicate = usize::from(budget >= 1);
             assert_eq!(counts.toffoli, (2 * predicate) as u128, "{stop}, {mode:?}, B={budget}");
-            assert_eq!(counts.peak_qubits, INTERFACE_WIDTH + predicate);
+            assert_eq!(counts.peak_qubits, (INTERFACE_WIDTH + predicate) as u64);
             if mode == ApplyMode::Automatic && budget >= 3 {
                 assert_eq!(construction, Construction::Controlled { proved_passes: 0 }, "{stop}, B={budget}");
             }
@@ -304,7 +304,7 @@ entry:
                 // the call frame copies definite zeros and allocates no qubits.
                 let guard = usize::from(budget >= 1);
                 assert_eq!(counts.toffoli, (2 * guard) as u128, "{mode:?}, B={budget}");
-                assert_eq!(counts.peak_qubits, INTERFACE_WIDTH + guard);
+                assert_eq!(counts.peak_qubits, (INTERFACE_WIDTH + guard) as u64);
             }
         }
     }
