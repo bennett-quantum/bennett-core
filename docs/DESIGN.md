@@ -69,6 +69,11 @@ first `N` steps, for any `N`, are equivalent to a finite quantum circuit whose m
 end.
 Part 3 is not covered by that equivalence; why a device can carry it out is argued separately ("`apply`").
 
+The gates with an angle θ are the rotations `rx`, `ry`, `rz`, `exp(-iθσ/2)` about the X, Y or Z axis, and the
+phase rotation `p`, `diag(1, e^{iθ})` (OpenQASM 3's `p`). Alone, `p(θ)` is `rz(θ)` times the global phase
+`e^{iθ/2}`, which no measurement sees; under a control that phase is relative, so a controlled `p` is a
+controlled phase and a controlled `rz` is not. A routine written with `p` therefore stays right when it is run
+under a control. Each acts where every control is 1, like every gate.
 Rotations accept any angle: a finite `f64` literal, or an ordinary value computed by the control program, an
 `i64` read as the bits of a binary64 when the gate runs (`docs/SYNTAX.md`), as the one-control-qubit Shor
 program needs; an angle that is not finite is the fault `bad_angle`. The C markers do not take a computed
@@ -98,7 +103,7 @@ A module is a list of functions, an initial memory image and a memory size.
 - **Every operation is total.** A shift by at least the width gives 0. Division by zero, an out-of-bounds access, a
   bad indirect target, `unreachable` and an exhausted budget are *named faults*: part of the result, never a crash.
 - **Quantum instructions**, issued by ordinary code: `qalloc w`, `qfree`, single-qubit gates
-  (`x h z s sdg t tdg rx ry rz`, a rotation's angle a literal or an `i64` computed at run time,
+  (`x h z s sdg t tdg rx ry rz p`, a rotation's angle a literal or an `i64` computed at run time,
   `Inst::RotateBy`) with an optional list of control qubits, each qubit in a register or at a
   bit of memory ("Qubits in memory", below), `measure` of a register or of bits at an address, and `apply`
   (below).
@@ -247,7 +252,7 @@ As with the counter, `apply` is compiled to gates. Both devices decompose gates 
 the native controls described above, so their one-qubit, two-qubit and Toffoli gate totals agree
 for the same measurement outcomes.
 The file expands gate blocks at each call. Gates use `stdgates.inc` with `ctrl @` for each control,
-in control-then-target order.
+in control-then-target order; the phase rotation is its `p`, whose `p(λ)` is `diag(1, e^{iλ})` as the device's.
 The rotation angles round-trip to the exact finite `f64` angles used by the run: a literal, or for a
 rotation by a computed angle the value that run computed (the file records the run, not the program).
 

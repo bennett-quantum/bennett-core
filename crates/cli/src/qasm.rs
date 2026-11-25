@@ -197,12 +197,13 @@ fn fixed_name(gate: FixedGate) -> &'static str {
     }
 }
 
-/// The rotation's name in `stdgates.inc`.
+/// The rotation's name in `stdgates.inc`, whose `p(λ)` is `diag(1, e^{iλ})`, as the device's.
 fn rotation_name(axis: Rotation) -> &'static str {
     match axis {
         Rotation::Rx => "rx",
         Rotation::Ry => "ry",
         Rotation::Rz => "rz",
+        Rotation::P => "p",
     }
 }
 

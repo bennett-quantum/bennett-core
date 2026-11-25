@@ -134,6 +134,7 @@ fn unitary(gate: Gate) -> [[C; 2]; 2] {
                 Rotation::Rx => [[c, -C::I * s], [-C::I * s, c]],
                 Rotation::Ry => [[c, real(-s)], [real(s), c]],
                 Rotation::Rz => [[c - C::I * s, C::ZERO], [C::ZERO, c + C::I * s]],
+                Rotation::P => panic!("the phase rotation is outside this reference"),
             }
         }
     }

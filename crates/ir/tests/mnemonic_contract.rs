@@ -43,7 +43,8 @@ const FIXED: &[(FixedGate, &str)] = &[
     (FixedGate::T, "t"),
     (FixedGate::Tdg, "tdg"),
 ];
-const ROTATIONS: &[(Rotation, &str)] = &[(Rotation::Rx, "rx"), (Rotation::Ry, "ry"), (Rotation::Rz, "rz")];
+const ROTATIONS: &[(Rotation, &str)] =
+    &[(Rotation::Rx, "rx"), (Rotation::Ry, "ry"), (Rotation::Rz, "rz"), (Rotation::P, "p")];
 
 fn constant(bits: u32, value: u128) -> Operand {
     Operand::Const(Const::new(Width::new(bits).expect("width"), value).expect("constant fits"))
