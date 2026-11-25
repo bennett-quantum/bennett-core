@@ -117,3 +117,43 @@ fn an_alias_cannot_define_the_out_of_memory_function() {
         );
     }
 }
+
+#[test]
+#[ignore = "defect: a call through a pointer with willreturn nounwind memory(none) is deleted before the front's \
+            second check (debt in docs/DESIGN.md, \"Not yet\"; removed by the declaration rule and reserved addresses \
+            of docs/HANDLES.md). Run: front/test.sh --test out_of_memory \
+            an_indirect_call_with_attributes_is_refused_or_faults -- --ignored"]
+fn an_indirect_call_with_attributes_is_refused_or_faults() {
+    let path = out_dir().join("out_of_memory_indirect.ll");
+    std::fs::write(
+        &path,
+        "declare void @__bennett_out_of_memory() noreturn\n@target = internal constant ptr @__bennett_out_of_memory\n\
+         define i32 @main() {\n %callee = load ptr, ptr @target\n call void %callee() nounwind willreturn memory(none)\n\
+         ret i32 7\n}\n",
+    )
+    .expect("write IR");
+    // Either a refusal by name or a run that ends with the fault; today the call is deleted and main returns 7.
+    if lower_text(&path, "out_of_memory_indirect", CLANG_FLAGS, &[]).is_ok() {
+        let module = lower(&path, "out_of_memory_indirect", CLANG_FLAGS, &[]);
+        let mut executor = Executor::new(&module, entry(&module, "main"), &[], options(0)).expect("starts");
+        assert_eq!(executor.run(), Outcome::Faulted(Fault::OutOfMemory));
+    }
+}
+
+#[test]
+#[ignore = "defect: an ifunc of the reserved name is refused, but the message calls it an alias or data (debt in \
+            docs/DESIGN.md, \"Not yet\"; removed by the declaration rule of docs/HANDLES.md). Run: front/test.sh \
+            --test out_of_memory an_ifunc_of_the_out_of_memory_name_is_refused_by_kind -- --ignored"]
+fn an_ifunc_of_the_out_of_memory_name_is_refused_by_kind() {
+    let path = out_dir().join("out_of_memory_ifunc.ll");
+    std::fs::write(
+        &path,
+        "@__bennett_out_of_memory = ifunc void (), ptr @resolve\ndefine internal ptr @resolve() {\n ret ptr @f\n}\n\
+         define internal void @f() {\n ret void\n}\ndefine i32 @main() {\n call void @__bennett_out_of_memory()\n\
+         ret i32 7\n}\n",
+    )
+    .expect("write IR");
+    let error = lower_text(&path, "out_of_memory_ifunc", CLANG_FLAGS, &[]).expect_err("must refuse");
+    assert!(error.contains("@__bennett_out_of_memory"), "{error}");
+    assert!(error.contains("ifunc") || error.contains("not a plain declaration"), "{error}");
+}

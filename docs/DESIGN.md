@@ -2438,6 +2438,16 @@ Refused by name or not yet excluded around the classification of "What LLVM's pa
   optimiser is later found to depend on a qubit. No program is known to do this. Route: let the later analysis
   meet two known values in a phi at the join, as the optimiser's copies are.
 
+Not yet excluded at the device's own functions: **a program that itself declares, aliases or takes the address of
+a reserved primitive's name can make the front drop or redirect the call.** A call through a pointer to
+`__bennett_out_of_memory` marked `willreturn nounwind memory(none)` is deleted by the optimiser before the front's
+second check, so the run returns where it should fault; an ifunc of that name is refused, but the message calls it
+an alias or data (ignored witnesses in `front/tests/tests/out_of_memory.rs`). The same holds today for the exit and
+output functions `__bennett_exit` and `__bennett_effect`, for attributes on a call and for an alias as well.
+Route: the declaration rule and reserved addresses of the handle path (`docs/HANDLES.md`): each primitive is one
+fixed device function at a reserved address, and a call to that address, direct or through a pointer, is that
+primitive's call.
+
 | Refused inside emitted `apply` | Construction needed |
 |---|---|
 | A reachable direct or indirect call candidate that recurses or raises the copy total above 16,384 slots and program points | Shared call frames and return positions |
