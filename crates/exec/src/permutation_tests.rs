@@ -65,6 +65,8 @@ entry:
     %neg = xor i64 %ang, 0x8000000000000000
     ry(%ang) %q[1] ctrl %q[0]
     rz(%ang) %q[0]
+    p(%ang) %q[1] ctrl %q[0]
+    p(%neg) %q[1] ctrl %q[0]
     rz(%neg) %q[0]
     ry(%neg) %q[1] ctrl %q[0]
     x %q[1] ctrl %q[0]
@@ -402,7 +404,7 @@ fn every_journalled_step_is_a_bijection_on_clean_and_dirty_history() {
     let module = bennett_ir::load(PROGRAM).expect("valid");
     let counts = fixtures(&module).iter().map(check_single_steps).fold(Counts::default(), |a, b| a + b);
     // The counts pin the coverage: a change to the program or the value sets shows here.
-    let expected = Counts { checked: 33_224, faults: 3_208, rotations: 256, promoting_rotations: 0, bad_angles: 256 };
+    let expected = Counts { checked: 33_352, faults: 3_336, rotations: 384, promoting_rotations: 0, bad_angles: 384 };
     assert_eq!(counts, expected, "single steps checked, faulting ones, computed rotations");
 }
 
