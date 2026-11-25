@@ -333,7 +333,10 @@ impl<'a> Memory<'a> {
             let new = match pending.alternatives.as_slice() {
                 // Every value bit stays available through the inverse. The
                 // new version can point directly to the stored bits.
-                [(ONE, value)] => *value,
+                [(ONE, value)] => value.map(|bit| match bit {
+                    Bit::Wire(source, true) => circuit.retain_complement(source),
+                    Bit::Constant(_) | Bit::Wire(_, false) => bit,
+                }),
                 [(guard, value)] => std::array::from_fn(|i| circuit.select(*guard, value[i], old[i])),
                 alternatives => select_byte(circuit, old, alternatives),
             };

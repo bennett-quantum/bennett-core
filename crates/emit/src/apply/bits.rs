@@ -239,6 +239,16 @@ impl Circuit {
         }
     }
 
+    // Materialize an inverted bit once so each read can use a positive control.
+    pub(super) fn retain_complement(&mut self, source: Wire) -> Bit {
+        debug_assert_eq!(self.enabled, ONE);
+        let target = self.fresh();
+        self.xor_into(target, ONE, ONE);
+        self.xor_into(target, Bit::Wire(source, false), ONE);
+        self.retained_copies.push((target, self.copy_source(Bit::Wire(source, true))));
+        Bit::Wire(target, false)
+    }
+
     // Follow a retained copy back to its immutable source.
     pub(super) fn copy_source(&self, bit: Bit) -> Bit {
         if let Bit::Wire(wire, inverted) = bit

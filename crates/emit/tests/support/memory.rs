@@ -155,15 +155,15 @@ entry:
     store i1 %copy, 9
     %again = load i1 9
     %zero = xor i1 %again, %bit
-    store i1 %zero, 10
-    ret 0
+    %answer = zext i1 %zero to i8
+    ret %answer
 }
 "#,
     );
     let (gates, layout) = gates(&compiled, WIDTH, 13);
+    bits::exhaustive(&gates, layout, |_| 0).expect("preserved data and clear scratch");
     assert_eq!((layout.scratch, gates.len()), (0, 0));
     assert_eq!(compiled.memory, MemoryCounts { peak_nonconstant_bits: 2, ..MemoryCounts::default() });
-    bits::exhaustive(&gates, layout, |_| 0).expect("preserved data and clear scratch");
 }
 
 #[test]
@@ -1577,4 +1577,66 @@ read:
     let expected = (0..8).map(|x| (if x & 1 == 0 { 7 } else { x >> 1 }, 0)).collect::<Vec<_>>();
     assert_eq!(values, expected);
     assert!(counts.retained_scratch_qubits > 0 && counts.gates > 0);
+}
+
+#[test]
+fn stored_complement_is_materialized_once_for_many_consumers() {
+    let compiled = isolated(
+        r#"
+func @f(i3 %x) -> i8 {
+entry:
+    %bit = trunc i3 %x to i1
+    %inverted = xor i1 %bit, 1
+    store i1 %inverted, 24
+    %read = load i1 24
+    %answer = sext i1 %read to i8
+    ret %answer
+}
+"#,
+    );
+    let (gates, layout) = gates(&compiled, WIDTH, 13);
+    bits::exhaustive(&gates, layout, |x| if x & 1 == 0 { 255 } else { 0 }).expect("complemented output");
+    // One X and one CNOT in each direction, plus eight output CNOTs.
+    assert_eq!(gates.len(), 12);
+    assert_eq!(layout.scratch, 1);
+}
+
+#[test]
+fn stored_complement_keeps_the_later_address_provable() {
+    let module = module(
+        r#"
+func @f(i3 %x) -> i8 {
+entry:
+    %low = trunc i3 %x to i1
+    %opposite = xor i1 %low, 1
+    store i1 %opposite, 64
+    %saved = load i1 64
+    %left = sext i1 %saved to i128
+    %shifted = lshr i3 %x, 1
+    %second = trunc i3 %shifted to i1
+    %right = sext i1 %second to i128
+    br accumulate(i16 0, i128 0)
+accumulate(i16 %passed, i128 %total):
+    %intersection = and i128 %left, %right
+    %updated = xor i128 %total, %intersection
+    %advance = add i16 %passed, 1
+    %last = icmp eq i16 %advance, 1651
+    br %last, read, accumulate(%advance, %updated)
+read:
+    %narrow = trunc i3 %x to i2
+    %unit = select i2 %low, 1, -1
+    %offset = srem i2 %narrow, %unit
+    %address = zext i2 %offset to i64
+    %byte = load i8 %address
+    %answer = trunc i128 %updated to i8
+    %result = xor i8 %answer, %byte
+    ret %result
+}
+"#,
+        "",
+    );
+    let (_, _, values) =
+        compare(&module, "address after repeated use of stored complement", 8272, ApplyMode::Automatic);
+    let expected = (0..8).map(|x| (if x & 3 == 2 { 255 } else { 0 }, 0)).collect::<Vec<_>>();
+    assert_eq!(values, expected);
 }

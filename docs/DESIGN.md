@@ -503,9 +503,11 @@ span for bounds before checking whether any byte holds qubits. Access to a held 
 even if its qubits hold zero. Little-endian loads use the current private values for written
 bytes and the caller's values for the rest. Stores zero the unused high bits in a partial byte.
 An unconditional write to a definite address records its source bits directly in the byte map.
-Constants use literal values. Other bits refer to circuit values that remain available through
-the inverse. An overwrite replaces the map entry, so a value already loaded still refers to
-its original bits. The store adds no gates or qubits. The caller's memory stays intact.
+Constants use literal values. A plain wire remains available through the inverse and can be
+referenced without gates or scratch. A complemented wire is copied into a positive control
+with one X and one CNOT in each direction. Later reads of that version share the positive
+control. An overwrite replaces the map entry, so a value already loaded still refers to its
+original bits. The caller's memory stays intact.
 Arithmetic gadgets preserve constant results and the equality of an unconditional result copy
 with a source that survives local reversal. A failed work-wire allocation prevents folding the
 affected gadget and fails circuit construction before emission.
