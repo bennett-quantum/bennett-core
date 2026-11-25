@@ -31,7 +31,7 @@ impl Counts {
 
 pub struct Run<'m> {
     pub reference: Device<'m>,
-    pub measurements: Vec<(u64, BTreeMap<u64, f64>)>,
+    pub measurements: Vec<(u128, BTreeMap<u128, f64>)>,
     pub counts: Counts,
 }
 
@@ -41,24 +41,46 @@ struct Register {
     state: RegisterState,
 }
 
+type RegisterTable = BTreeMap<usize, RegisterState>;
+
 #[derive(Default)]
 struct RegisterObservations {
     allocations: BTreeMap<u64, Register>,
-    last_table: Vec<RegisterState>,
+    last_table: RegisterTable,
+    retired: RegisterTable,
 }
 
 impl RegisterObservations {
-    fn changed(&self, next: &[RegisterState]) -> Vec<usize> {
-        (0..self.last_table.len().max(next.len()))
-            .filter(|&index| self.last_table.get(index) != next.get(index))
+    fn live_table(&self, quantum: &QuantumSnapshot) -> RegisterTable {
+        let cells: BTreeSet<_> = quantum.cells.iter().map(|&(_, column)| column).collect();
+        quantum
+            .registers
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(column, state)| {
+                state.width.is_some() && !cells.contains(column) && self.retired.get(column) != Some(state)
+            })
             .collect()
     }
 
-    fn allocate(&mut self, id: u64, width: Width, handle: u128, table: Vec<RegisterState>) {
+    fn changed(&self, next: &RegisterTable) -> Vec<usize> {
+        self.last_table
+            .keys()
+            .chain(next.keys())
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter(|column| self.last_table.get(column) != next.get(column))
+            .collect()
+    }
+
+    fn allocate(&mut self, id: u64, width: Width, handle: u128, quantum: &QuantumSnapshot) {
+        let table = self.live_table(quantum);
         let changed = self.changed(&table);
         assert_eq!(changed.len(), 1, "qalloc changes a single register column");
         let column = changed[0];
-        let state = table[column];
+        let state = table[&column];
         assert_eq!(state.width, Some(width), "qalloc width");
         assert_ne!(handle, 0, "qalloc produces a handle");
         assert!(
@@ -69,31 +91,38 @@ impl RegisterObservations {
         self.last_table = table;
     }
 
-    fn release(&mut self, id: u64, table: Vec<RegisterState>) {
+    fn release(&mut self, id: u64, quantum: &QuantumSnapshot) {
+        let mut table = self.live_table(quantum);
         let register = &self.allocations[&id];
         assert_eq!(self.changed(&table), [register.column], "qfree changes the released column");
-        assert_ne!(table.get(register.column), Some(&register.state), "qfree retires the handle");
+        assert_ne!(table.get(&register.column), Some(&register.state), "qfree retires the handle");
+        // A released register may still occupy a column in the snapshot's purification.
+        if let Some(state) = table.remove(&register.column) {
+            self.retired.insert(register.column, state);
+        }
         self.last_table = table;
     }
 
     fn live_columns(&self, quantum: &QuantumSnapshot, live: &[(u64, Width)]) -> Vec<usize> {
+        let table = self.live_table(quantum);
         let observed: Vec<_> = self
             .allocations
             .iter()
             .filter_map(|(&id, register)| {
-                let state = quantum.registers.get(register.column)?;
+                let state = table.get(&register.column)?;
                 (state == &register.state).then(|| (id, state.width.expect("live width")))
             })
             .collect();
         assert_eq!(observed, live, "live registers and widths");
-        assert_eq!(self.last_table, quantum.registers, "only allocation and release change register columns");
+        assert_eq!(self.last_table, table, "only qalloc and qfree change live register columns");
         live.iter().map(|(id, _)| self.allocations[id].column).collect()
     }
 }
 
 pub fn run<'m>(module: &'m ValidModule, name: &str, args: &[u64], seed: u64, budget: u64) -> Run<'m> {
     let entry = module.function_named(name).expect("entry function");
-    let mut reference = Device::new(module, entry, args, budget);
+    let reference_args: Vec<_> = args.iter().copied().map(u128::from).collect();
+    let mut reference = Device::new(module, entry, &reference_args, budget);
     let options = Options { seed, budget: Some(budget), allow_region_faults: true, ..Options::default() };
     let mut executor = Executor::new(module, entry, args, options).expect("executor starts");
     let mut counts = Counts { programs: 1, ..Counts::default() };
@@ -114,7 +143,7 @@ pub fn run<'m>(module: &'m ValidModule, name: &str, args: &[u64], seed: u64, bud
             assert_eq!(actual_finish, None, "executor must reach the measurement");
             let snapshot = executor.snapshot();
             let frame = snapshot.classical.frames.last().expect("measurement's frame");
-            snapshot.classical.slots[frame.base + dst.index()].try_into().expect("register outcome fits u64")
+            snapshot.classical.slots[frame.base + dst.index()]
         });
 
         match reference.step(observed) {
@@ -123,9 +152,9 @@ pub fn run<'m>(module: &'m ValidModule, name: &str, args: &[u64], seed: u64, bud
                 let snapshot = executor.snapshot();
                 let frame = snapshot.classical.frames.last().expect("allocator's frame");
                 let handle = snapshot.classical.slots[frame.base + dst.index()];
-                registers.allocate(id, width, handle, snapshot.quantum.registers);
+                registers.allocate(id, width, handle, &snapshot.quantum);
             }
-            Event::Released(id) => registers.release(id, executor.snapshot().quantum.registers),
+            Event::Released(id) => registers.release(id, &executor.snapshot().quantum),
             Event::Measured { outcome, probabilities } => {
                 counts.measurements += 1;
                 measurements.push((outcome, probabilities));
@@ -142,7 +171,7 @@ pub fn run<'m>(module: &'m ValidModule, name: &str, args: &[u64], seed: u64, bud
 
 fn outcome(finish: Finish) -> Outcome {
     match finish {
-        Finish::Returned(value) => Outcome::Returned(value.map(u128::from)),
+        Finish::Returned(value) => Outcome::Returned(value),
         Finish::Faulted(fault) => Outcome::Faulted(fault),
     }
 }
@@ -163,14 +192,30 @@ fn checkpoint(reference: &Device<'_>, snapshot: &Snapshot, registers: &RegisterO
             assert_eq!(actual_frame.entry_stack_pointer, frame.entry_stack, "entry stack at step {step}");
             for (index, &value) in frame.slots.iter().enumerate() {
                 let expected = match reference.slot_type(frame.function, Slot(index as u32)) {
-                    Type::Qreg(_) if value != 0 => registers.allocations[&value].handle,
-                    _ => u128::from(value),
+                    Type::Qreg(_) if value != 0 => {
+                        registers.allocations[&u64::try_from(value).expect("reference handle")].handle
+                    }
+                    _ => value,
                 };
                 assert_eq!(actual.slots[actual_frame.base + index], expected, "slot {index} at step {step}");
             }
         }
     }
-    let columns = registers.live_columns(&snapshot.quantum, &reference.quantum.live);
+    let mut columns = registers.live_columns(&snapshot.quantum, &reference.quantum.live);
+    let actual_cells: BTreeMap<_, _> = snapshot.quantum.cells.iter().copied().collect();
+    assert_eq!(actual_cells.len(), snapshot.quantum.cells.len(), "duplicate cell address at step {step}");
+    assert!(
+        actual_cells.keys().eq(reference.quantum.cells.keys()),
+        "cell addresses at step {step}: actual {actual_cells:?}, expected {:?}",
+        reference.quantum.cells
+    );
+    columns.resize(columns.len() + actual_cells.len(), usize::MAX);
+    for (&address, &column) in &reference.quantum.cells {
+        let actual_column = actual_cells[&address];
+        assert_eq!(snapshot.quantum.registers[actual_column].width, Some(Width::BYTE), "cell width at step {step}");
+        columns[column] = actual_column;
+    }
+    assert_eq!(columns.iter().collect::<BTreeSet<_>>().len(), columns.len(), "distinct live columns at step {step}");
     let actual_density = reduced(&snapshot.quantum, &columns);
     counts.density_entries += assert_density(&actual_density, &reference.quantum.density, &format!("step {step}"));
     counts.states += 1;
@@ -179,7 +224,6 @@ fn checkpoint(reference: &Device<'_>, snapshot: &Snapshot, registers: &RegisterO
 /// The snapshot contains a purification. Cross terms survive only within the same assignment of
 /// discarded qubits. The reference's matrix already has those dimensions traced out.
 fn reduced(quantum: &QuantumSnapshot, keep: &[usize]) -> Density {
-    assert!(quantum.cells.is_empty(), "this language subset has no memory qubits");
     let mut by_environment: BTreeMap<Basis, Vec<(Basis, C)>> = BTreeMap::new();
     for (configuration, amplitude) in &quantum.amplitudes {
         let live = keep.iter().map(|&col| configuration[col]).collect();

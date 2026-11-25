@@ -14,7 +14,7 @@ const DEFAULT_PROGRAMS: u64 = 96;
 const HEAVY_PROGRAMS: u64 = 2048;
 const SEED_START: u64 = 0x2fd6_c8a0_547e_0620;
 
-fn layer(rng: &mut ChaCha8Rng, registers: &[&str]) -> String {
+pub(super) fn layer(rng: &mut ChaCha8Rng, registers: &[&str]) -> String {
     let mut wires = registers.to_vec();
     let mut text = String::new();
     for _ in 0..rng.random_range(3..=7) {
@@ -193,7 +193,7 @@ fn sweep(programs: u64) {
         totals.add(&counts);
     }
     assert_eq!(paths, BTreeSet::from([11, 29]));
-    assert_eq!(flags, BTreeSet::from([0, Fault::Budget.code(), Fault::DivideByZero.code()]));
+    assert_eq!(flags, BTreeSet::from([0, u128::from(Fault::Budget.code()), u128::from(Fault::DivideByZero.code())]));
     assert_eq!(terminations, BTreeSet::from(["return", "exit", "fault", "budget"]));
     assert_eq!(totals.programs as u64, programs);
     assert_eq!(totals.states, 2 * totals.measurements + totals.programs);

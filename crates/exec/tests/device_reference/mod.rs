@@ -3,11 +3,11 @@
 //! Classical control chooses instructions. Quantum instructions update a reduced density matrix
 //! directly. The only inputs from a run under comparison are the outcomes chosen by its measurements.
 
+mod cells;
 mod integers;
 mod quantum;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ops::Range;
 
 use bennett_ir::{
     BlockId, CastOp, DataItem, DataSegment, Fault, FuncId, Inst, MeasureSource, Operand, Qubit, Slot, Target,
@@ -15,7 +15,8 @@ use bennett_ir::{
 };
 
 use crate::compute_copy_reference::Reference as ComputeCopy;
-use integers::{binary, compare, mask, signed};
+use cells::little_endian;
+use integers::{binary, compare, signed};
 use quantum::Quantum;
 
 pub use quantum::{Basis, Density};
@@ -25,7 +26,7 @@ const MIN_MEASUREMENT_PROBABILITY: f64 = 1e-22;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Finish {
-    Returned(Option<u64>),
+    Returned(Option<u128>),
     Faulted(Fault),
 }
 
@@ -33,14 +34,14 @@ pub enum Event {
     Ordinary,
     Allocated { id: u64, dst: Slot, width: Width },
     Released(u64),
-    Measured { outcome: u64, probabilities: BTreeMap<u64, f64> },
+    Measured { outcome: u128, probabilities: BTreeMap<u128, f64> },
 }
 
 pub struct Frame {
     pub function: FuncId,
     pub block: BlockId,
     pub position: usize,
-    pub slots: Vec<u64>,
+    pub slots: Vec<u128>,
     pub entry_stack: u64,
     stack_ceiling: u64,
     destination: Option<Slot>,
@@ -50,7 +51,7 @@ pub struct Device<'m> {
     module: &'m ValidModule,
     entry: FuncId,
     budget: u64,
-    in_apply: bool,
+    region_cells: Option<&'m BTreeMap<u64, usize>>,
     pub frames: Vec<Frame>,
     pub stack: u64,
     pub memory: Vec<u8>,
@@ -61,30 +62,30 @@ pub struct Device<'m> {
 }
 
 impl<'m> Device<'m> {
-    pub fn new(module: &'m ValidModule, entry: FuncId, args: &[u64], budget: u64) -> Self {
+    pub fn new(module: &'m ValidModule, entry: FuncId, args: &[u128], budget: u64) -> Self {
         let mut memory = vec![0; module.memory_size as usize];
         for segment in &module.data {
             let start = segment.address as usize;
             let bytes = segment.encode();
             memory[start..start + bytes.len()].copy_from_slice(&bytes);
         }
-        Self::start(module, entry, args, budget, module.memory_size, memory, false)
+        Self::start(module, entry, args, budget, module.memory_size, memory, None)
     }
 
     fn start(
         module: &'m ValidModule,
         entry: FuncId,
-        args: &[u64],
+        args: &[u128],
         budget: u64,
         stack: u64,
         memory: Vec<u8>,
-        in_apply: bool,
+        region_cells: Option<&'m BTreeMap<u64, usize>>,
     ) -> Self {
         let mut device = Self {
             module,
             entry,
             budget,
-            in_apply,
+            region_cells,
             frames: Vec::new(),
             stack,
             memory,
@@ -113,16 +114,21 @@ impl<'m> Device<'m> {
     }
 
     pub fn next_measurement(&self) -> Option<Slot> {
-        if self.finish.is_some() || self.steps >= self.budget {
+        if self.finish.is_some() || self.steps >= self.budget || self.region_cells.is_some() {
             return None;
         }
         match self.instruction()? {
-            Inst::Measure { source: MeasureSource::Register(reg), dst } => self.register(*reg).ok().map(|_| *dst),
+            Inst::Measure { source, dst } => match *source {
+                MeasureSource::Register(reg) => self.register(reg).ok().map(|_| *dst),
+                MeasureSource::Memory { width, address } => {
+                    self.memory_range(self.read_i64(address), width).ok().map(|_| *dst)
+                }
+            },
             _ => None,
         }
     }
 
-    pub fn step(&mut self, observed: Option<u64>) -> Event {
+    pub fn step(&mut self, observed: Option<u128>) -> Event {
         assert!(self.finish.is_none());
         let result = if self.steps >= self.budget {
             Err(Fault::Budget)
@@ -145,11 +151,15 @@ impl<'m> Device<'m> {
         }
     }
 
-    fn read(&self, operand: Operand) -> u64 {
+    fn read(&self, operand: Operand) -> u128 {
         match operand {
             Operand::Slot(slot) => self.frame().slots[slot.index()],
-            Operand::Const(value) => value.value().try_into().expect("integer through i64"),
+            Operand::Const(value) => value.value(),
         }
+    }
+
+    fn read_i64(&self, operand: Operand) -> u64 {
+        self.read(operand).try_into().expect("i64 operand")
     }
 
     fn operand_type(&self, operand: Operand) -> Type {
@@ -159,7 +169,7 @@ impl<'m> Device<'m> {
         }
     }
 
-    fn put(&mut self, slot: Slot, value: u64) {
+    fn put(&mut self, slot: Slot, value: u128) {
         self.frames.last_mut().expect("running frame").slots[slot.index()] = value;
     }
 
@@ -167,13 +177,13 @@ impl<'m> Device<'m> {
         self.frames.last_mut().expect("running frame").position += 1;
     }
 
-    fn enter(&mut self, function: FuncId, args: &[u64], destination: Option<Slot>) -> Result<(), Fault> {
+    fn enter(&mut self, function: FuncId, args: &[u128], destination: Option<Slot>) -> Result<(), Fault> {
         let callee = self.module.function(function);
         let stack_ceiling = self.lower_stack(callee.slot_count() as u64 * SLOT_BYTES, u64::MAX)?;
         let mut slots = vec![0; callee.slot_count()];
         for (parameter, &argument) in callee.params.iter().zip(args) {
             slots[parameter.slot.index()] = match parameter.ty {
-                Type::Int(width) => argument & mask(width),
+                Type::Int(width) => argument & width.mask(),
                 Type::Qreg(_) => argument,
             };
         }
@@ -198,20 +208,28 @@ impl<'m> Device<'m> {
             .ok_or(Fault::StackOverflow)
     }
 
-    fn memory_range(&self, address: u64, width: Width) -> Result<Range<usize>, Fault> {
-        let end = address.checked_add(width.bytes()).filter(|&end| end <= self.module.memory_size);
-        end.map(|end| address as usize..end as usize).ok_or(Fault::OutOfBounds)
-    }
-
     fn register(&self, slot: Slot) -> Result<usize, Fault> {
-        self.quantum.position(self.read(Operand::Slot(slot))).ok_or(Fault::DanglingRegister)
+        self.quantum.position(self.read_i64(Operand::Slot(slot))).ok_or(Fault::DanglingRegister)
     }
 
     fn qubit(&self, qubit: Qubit) -> Result<(usize, u8), Fault> {
         Ok((self.register(qubit.register)?, qubit.bit))
     }
 
-    fn execute(&mut self, inst: &Inst, observed: Option<u64>) -> Result<Event, Fault> {
+    fn measure(&mut self, observed: Option<u128>, read: impl Fn(&Basis) -> u128) -> (u128, Event) {
+        let outcome = observed.expect("observation for reached measurement");
+        let probabilities = self.quantum.probabilities(&read);
+        let probability = probabilities.get(&outcome).copied().unwrap_or_default();
+        assert!(
+            probability > MIN_MEASUREMENT_PROBABILITY,
+            "measurement at step {} chose {outcome} with probability {probability:.3e}; probabilities: {probabilities:?}",
+            self.steps,
+        );
+        self.quantum.project(|basis| read(basis) == outcome, probability);
+        (outcome, Event::Measured { outcome, probabilities })
+    }
+
+    fn execute(&mut self, inst: &Inst, observed: Option<u128>) -> Result<Event, Fault> {
         let mut event = Event::Ordinary;
         let value = match *inst {
             Inst::Binary { op, width, lhs, rhs, .. } => Some(binary(op, width, self.read(lhs), self.read(rhs))?),
@@ -221,36 +239,34 @@ impl<'m> Device<'m> {
             }
             Inst::Cast { op, from, to, value, .. } => {
                 let value = self.read(value);
-                let extended = if op == CastOp::Sext { signed(value, from) as u64 } else { value };
-                Some(extended & mask(to))
+                let extended = if op == CastOp::Sext { signed(value, from) as u128 } else { value };
+                Some(extended & to.mask())
             }
             Inst::Load { width, address, .. } => {
-                let mut bytes = [0; 8];
-                let data = &self.memory[self.memory_range(self.read(address), width)?];
-                bytes[..data.len()].copy_from_slice(data);
-                Some(u64::from_le_bytes(bytes) & mask(width))
+                let range = self.ordinary_range(address, width)?;
+                Some(little_endian(&self.memory[range]) & width.mask())
             }
             Inst::Store { width, address, value } => {
-                let range = self.memory_range(self.read(address), width)?;
-                let bytes = (self.read(value) & mask(width)).to_le_bytes();
+                let range = self.ordinary_range(address, width)?;
+                let bytes = (self.read(value) & width.mask()).to_le_bytes();
                 let len = range.len();
                 self.memory[range].copy_from_slice(&bytes[..len]);
                 None
             }
             Inst::Alloca { size, .. } => {
-                self.stack = self.lower_stack(self.read(size), !7)?;
-                Some(self.stack)
+                self.stack = self.lower_stack(self.read_i64(size), !7)?;
+                Some(u128::from(self.stack))
             }
-            Inst::StackSave { .. } => Some(self.stack),
+            Inst::StackSave { .. } => Some(u128::from(self.stack)),
             Inst::StackRestore { pointer } => {
-                let restored = self.read(pointer);
+                let restored = self.read_i64(pointer);
                 if !(self.stack..=self.frame().stack_ceiling).contains(&restored) {
                     return Err(Fault::BadStackRestore);
                 }
                 self.stack = restored;
                 None
             }
-            Inst::FuncAddr { func, .. } => Some(func.address()),
+            Inst::FuncAddr { func, .. } => Some(u128::from(func.address())),
             Inst::Call { callee, ref args, dst } => {
                 self.call(callee, args, dst)?;
                 return Ok(event);
@@ -258,13 +274,13 @@ impl<'m> Device<'m> {
             Inst::CallIndirect { ref signature, target, ref args, dst } => {
                 let callee = self
                     .module
-                    .function_at(self.read(target))
+                    .function_at(self.read_i64(target))
                     .filter(|&id| self.module.function(id).has_signature(signature))
                     .ok_or(Fault::BadIndirect)?;
                 self.call(callee, args, dst)?;
                 return Ok(event);
             }
-            Inst::Effect { .. } if self.in_apply => return Err(Fault::EffectInRegion),
+            Inst::Effect { .. } if self.region_cells.is_some() => return Err(Fault::EffectInRegion),
             Inst::Effect { byte } => {
                 self.tape.push(self.read(byte) as u8);
                 None
@@ -275,14 +291,14 @@ impl<'m> Device<'m> {
             | Inst::GateAt { .. }
             | Inst::Measure { .. }
             | Inst::Apply { .. }
-                if self.in_apply =>
+                if self.region_cells.is_some() =>
             {
                 return Err(Fault::QuantumInRegion);
             }
             Inst::Qalloc { width, dst } => {
                 let id = self.quantum.allocate(width);
                 event = Event::Allocated { id, dst, width };
-                Some(id)
+                Some(u128::from(id))
             }
             Inst::Qfree { register } => {
                 let position = self.register(register)?;
@@ -301,29 +317,26 @@ impl<'m> Device<'m> {
                 self.quantum.gate(gate, target, &controls);
                 None
             }
-            Inst::Measure { source: MeasureSource::Register(slot), .. } => {
-                let register = self.register(slot)?;
-                let outcome = observed.expect("observation for reached register measurement");
-                let probabilities = self.quantum.probabilities(register);
-                let probability = probabilities.get(&outcome).copied().unwrap_or_default();
-                assert!(
-                    probability > MIN_MEASUREMENT_PROBABILITY,
-                    "measurement of handle {} at step {} chose {outcome} with probability {probability:.3e}; probabilities: {probabilities:?}",
-                    self.quantum.live[register].0,
-                    self.steps,
-                );
-                self.quantum.project(register, outcome, probability);
-                event = Event::Measured { outcome, probabilities };
+            Inst::GateAt { gate, target, ref controls } => {
+                self.gate_at(gate, target, controls)?;
+                None
+            }
+            Inst::Measure { source, .. } => {
+                let (outcome, measured) = match source {
+                    MeasureSource::Register(slot) => {
+                        let register = self.register(slot)?;
+                        self.measure(observed, |basis| u128::from(basis[register]))
+                    }
+                    MeasureSource::Memory { address, width } => self.measure_memory(address, width, observed)?,
+                };
+                event = measured;
                 Some(outcome)
             }
             Inst::Apply { callee, ref args, out, fault, budget } => {
-                self.apply(callee, args, out, fault, self.read(budget))?;
+                self.apply(callee, args, out, fault, self.read_i64(budget))?;
                 None
             }
-            Inst::GateAt { .. }
-            | Inst::Measure { source: MeasureSource::Memory { .. }, .. }
-            | Inst::Setjmp { .. }
-            | Inst::ReturnAddress { .. } => {
+            Inst::Setjmp { .. } | Inst::ReturnAddress { .. } => {
                 panic!("instruction outside the outer reference: {inst:?}")
             }
         };
@@ -357,7 +370,7 @@ impl<'m> Device<'m> {
                 self.jump(if self.read(*cond) == 1 { if_true } else { if_false });
             }
             Terminator::Switch { value, cases, default, .. } => {
-                let selector = u128::from(self.read(*value));
+                let selector = self.read(*value);
                 let target = cases.iter().find(|case| case.value == selector).map_or(default, |case| &case.target);
                 self.jump(target);
             }
@@ -375,7 +388,7 @@ impl<'m> Device<'m> {
                     self.advance();
                 }
             }
-            Terminator::Exit(_) if self.in_apply => return Err(Fault::ExitInRegion),
+            Terminator::Exit(_) if self.region_cells.is_some() => return Err(Fault::ExitInRegion),
             Terminator::Exit(operand) => {
                 if Some(self.operand_type(*operand)) != self.module.function(self.entry).result {
                     return Err(Fault::ExitTypeMismatch);
@@ -406,17 +419,19 @@ impl<'m> Device<'m> {
             arguments
                 .iter()
                 .map(|arg| match *arg {
-                    Ok(register) => basis[register],
+                    Ok(register) => u128::from(basis[register]),
                     Err(value) => value,
                 })
                 .collect::<Vec<_>>()
         };
 
-        // The compute/copy reference can initialize bytes via data segments. Copy the current
-        // bytes below the existing floor into its module without changing the stack's extent.
-        // For writes above the floor, use the same independent ordinary rules with private memory.
+        // The compute/copy reference initializes ordinary bytes from data segments. Use the
+        // private ordinary step rules when held bytes or writes above the floor must be carried in.
         let floor = self.module.static_end() as usize;
-        let copy_module = self.memory[floor..].iter().all(|&byte| byte == 0).then(|| {
+        let can_copy = self.quantum.cells.is_empty()
+            && self.memory[floor..].iter().all(|&byte| byte == 0)
+            && args.iter().all(|&op| !matches!(self.operand_type(op), Type::Int(width) if width.bits() > 64));
+        let copy_module = can_copy.then(|| {
             let mut module = (**self.module).clone();
             module.data = vec![DataSegment { address: 0, items: vec![DataItem::Bytes(self.memory[..floor].to_vec())] }];
             module
@@ -428,7 +443,11 @@ impl<'m> Device<'m> {
             for basis in [row, col] {
                 let values = input(basis);
                 outputs.entry(values).or_insert_with_key(|args| match &copy {
-                    Some(copy) => copy.finish(args, budget as usize).output,
+                    Some(copy) => {
+                        let words: Vec<_> =
+                            args.iter().map(|&value| value.try_into().expect("compute/copy word")).collect();
+                        copy.finish(&words, budget as usize).output
+                    }
                     None => self.private_run(callee, args, budget),
                 });
             }
@@ -442,11 +461,21 @@ impl<'m> Device<'m> {
         Ok(())
     }
 
-    fn private_run(&self, callee: FuncId, args: &[u64], budget: u64) -> (u64, u64) {
-        let mut private = Self::start(self.module, callee, args, budget, self.stack, self.memory.clone(), true);
+    fn private_run(&self, callee: FuncId, args: &[u128], budget: u64) -> (u64, u64) {
+        let mut private = Device::start(
+            self.module,
+            callee,
+            args,
+            budget,
+            self.stack,
+            self.memory.clone(),
+            Some(&self.quantum.cells),
+        );
         loop {
             match private.finish {
-                Some(Finish::Returned(Some(value))) => return (value, 0),
+                Some(Finish::Returned(Some(value))) => {
+                    return (value.try_into().expect("apply output fits its register"), 0);
+                }
                 Some(Finish::Faulted(fault)) => return (0, fault.code()),
                 Some(Finish::Returned(None)) => panic!("apply requires an integer result"),
                 None => {

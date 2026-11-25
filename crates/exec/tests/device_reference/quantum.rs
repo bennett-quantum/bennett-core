@@ -13,27 +13,45 @@ pub struct Quantum {
     // Handles are monotonic. A register's position in a basis vector can change on release.
     next_handle: u64,
     pub live: Vec<(u64, Width)>,
+    pub cells: BTreeMap<u64, usize>,
     pub density: Density,
 }
 
 impl Quantum {
     pub fn new() -> Self {
-        Self { next_handle: 1, live: Vec::new(), density: BTreeMap::from([((Vec::new(), Vec::new()), C::ONE)]) }
+        Self {
+            next_handle: 1,
+            live: Vec::new(),
+            cells: BTreeMap::new(),
+            density: BTreeMap::from([((Vec::new(), Vec::new()), C::ONE)]),
+        }
     }
 
     pub fn allocate(&mut self, width: Width) -> u64 {
         let handle = self.next_handle;
         self.next_handle += 1;
+        // Register columns precede cells, whose positions are tracked independently of address order.
+        let column = self.live.len();
         self.live.push((handle, width));
-        self.density = std::mem::take(&mut self.density)
-            .into_iter()
-            .map(|((mut row, mut col), value)| {
-                row.push(0);
-                col.push(0);
-                ((row, col), value)
-            })
-            .collect();
+        for position in self.cells.values_mut() {
+            *position += 1;
+        }
+        self.insert_column(column, 0);
         handle
+    }
+
+    pub fn promote(&mut self, address: u64, value: u8) -> usize {
+        let column = self.live.len() + self.cells.len();
+        assert!(self.cells.insert(address, column).is_none());
+        self.insert_column(column, u64::from(value));
+        column
+    }
+
+    fn insert_column(&mut self, column: usize, value: u64) {
+        self.permute(|mut basis| {
+            basis.insert(column, value);
+            basis
+        });
     }
 
     pub fn position(&self, handle: u64) -> Option<usize> {
@@ -42,29 +60,43 @@ impl Quantum {
 
     pub fn release(&mut self, register: usize) {
         self.live.remove(register);
+        self.trace_column(register);
+    }
+
+    pub fn demote(&mut self, address: u64) {
+        let column = self.cells.remove(&address).expect("measured cell");
+        self.trace_column(column);
+    }
+
+    fn trace_column(&mut self, column: usize) {
+        for position in self.cells.values_mut() {
+            if *position > column {
+                *position -= 1;
+            }
+        }
         let mut reduced = Density::new();
         for ((mut row, mut col), value) in std::mem::take(&mut self.density) {
-            if row.remove(register) == col.remove(register) {
+            if row.remove(column) == col.remove(column) {
                 *reduced.entry((row, col)).or_default() += value;
             }
         }
         self.density = reduced;
     }
 
-    pub fn gate(&mut self, gate: Gate, (register, bit): (usize, u8), controls: &[(usize, u8)]) {
+    pub fn gate(&mut self, gate: Gate, (column, bit): (usize, u8), controls: &[(usize, u8)]) {
         let matrix = unitary(gate);
         let image = |basis: Basis| {
             if controls.iter().any(|&(reg, bit)| basis[reg] & (1 << bit) == 0) {
                 return vec![(basis, C::ONE)];
             }
-            let input = ((basis[register] >> bit) & 1) as usize;
+            let input = ((basis[column] >> bit) & 1) as usize;
             matrix
                 .iter()
                 .enumerate()
                 .filter(|(_, row)| row[input] != C::ZERO)
                 .map(|(output, row)| {
                     let mut new = basis.clone();
-                    new[register] ^= ((input ^ output) as u64) << bit;
+                    new[column] ^= ((input ^ output) as u64) << bit;
                     (new, row[input])
                 })
                 .collect()
@@ -83,19 +115,19 @@ impl Quantum {
         self.density = next;
     }
 
-    pub fn probabilities(&self, register: usize) -> BTreeMap<u64, f64> {
+    pub fn probabilities(&self, read: impl Fn(&Basis) -> u128) -> BTreeMap<u128, f64> {
         let mut probabilities = BTreeMap::new();
         for ((row, col), value) in &self.density {
             if row == col {
-                *probabilities.entry(row[register]).or_default() += value.re;
+                *probabilities.entry(read(row)).or_default() += value.re;
             }
         }
         probabilities
     }
 
-    pub fn project(&mut self, register: usize, outcome: u64, probability: f64) {
+    pub fn project(&mut self, matches: impl Fn(&Basis) -> bool, probability: f64) {
         self.density.retain(|(row, col), value| {
-            if row[register] == outcome && col[register] == outcome {
+            if matches(row) && matches(col) {
                 *value /= probability;
                 true
             } else {

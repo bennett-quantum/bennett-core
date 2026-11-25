@@ -6,6 +6,10 @@ mod compute_copy_reference;
 mod device_reference;
 #[path = "device_reference/generated.rs"]
 mod generated;
+#[path = "device_reference/memory.rs"]
+mod memory;
+#[path = "device_reference/memory_generated.rs"]
+mod memory_generated;
 #[path = "device_reference/compare.rs"]
 mod observe;
 
@@ -187,8 +191,8 @@ entry:
             let expected = if bit == 1 { 81 } else { 43 };
             assert_eq!(result.reference.tape, [expected]);
             assert_eq!(result.reference.memory[0], expected);
-            assert_eq!(result.reference.finish, Some(Finish::Returned(Some(u64::from(expected)))));
-            let basis = if mixed == 1 { vec![bit] } else { vec![bit, bit] };
+            assert_eq!(result.reference.finish, Some(Finish::Returned(Some(u128::from(expected)))));
+            let basis = if mixed == 1 { vec![bit as u64] } else { vec![bit as u64; 2] };
             assert_density(&result.reference.quantum.density, &pure(&[(basis, C::ONE)]), "projected pair");
             ones += bit;
         }
@@ -360,7 +364,7 @@ fail:
             let result = run(&program, "main", &[], seed, BUDGET);
             let flag = result.measurements[0].0;
             assert!(flag == 16 || flag == 18);
-            let bit = u64::from(flag == 18);
+            let bit = u128::from(flag == 18);
             assert_eq!(result.measurements[1].0, bit);
             assert_eq!(result.reference.finish, Some(Finish::Returned(Some(flag + bit))));
             assert_eq!(result.reference.memory[addr], 7, "applied store is private");
@@ -478,7 +482,7 @@ entry:
     let result = run(&program, "main", &[], 0, BUDGET);
     let expected_stack = 259 - 14 * 8;
     let local = (expected_stack - 3) & !7;
-    assert_eq!(result.reference.finish, Some(Finish::Returned(Some(expected_stack as u64))));
+    assert_eq!(result.reference.finish, Some(Finish::Returned(Some(expected_stack as u128))));
     assert_eq!(result.reference.tape, [0x57, 0, 128, 253, 48, 3, 8, 20, 42]);
     assert_eq!(&result.reference.memory[local..local + 2], [0x57, 0x13]);
 }
