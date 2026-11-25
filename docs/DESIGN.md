@@ -163,9 +163,11 @@ straightforward expansion into ordinary code; none reads or acts on a qubit:
   The outcomes, in order, own the half-open intervals between the running sums of their weights, and the
   draw, in `[0, total)`, selects the one whose interval holds it (`quantum.rs`, `pick`). The simulator
   computes amplitudes in floating point, so an outcome of exact probability zero can still carry a
-  computed weight; it can be returned only if that weight exceeds the rounding unit of the running total,
-  and then with about that probability (an outcome whose weight does not change the running sum has an
-  empty interval and is never returned).
+  computed weight. An outcome's interval is empty exactly when adding its weight leaves the rounded
+  running sum unchanged; such an outcome is never returned, and any other is returned with the probability
+  of its interval, about its weight. The draw is the generator's uniform value times the total, which is
+  faithful for the weights of a normalised state but not at the smallest scale of binary64 (two weights
+  of the smallest positive value are not drawn equally often); no simulator state has such a total.
   A register of 65 to 128 qubits is sent to the device as two ranges of wires, measured in one draw.
 - **Wires.** The controller names qubit `i` of the register whose head is column `c` by the wire
   `c * 2^32 + i`, so each register has a range of wires as long as the widest register; a device sees a

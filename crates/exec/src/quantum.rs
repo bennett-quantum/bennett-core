@@ -599,8 +599,8 @@ impl QuantumState {
 /// The outcome a draw selects. The outcomes, in order, own the consecutive half-open intervals
 /// `[before, after)` between the running sums of their weights, computed in floating point: outcome `i` is
 /// selected when the draw is not below the sum before it and strictly below the sum after it. An outcome
-/// whose weight is below the rounding unit of the running sum has an empty interval (`after == before`) and
-/// is never selected. If rounding puts the draw at or above the last running sum, the last outcome whose
+/// whose weight, added to the running sum, leaves the rounded sum unchanged has an empty interval
+/// (`after == before`) and is never selected. If rounding puts the draw at or above the last running sum, the last outcome whose
 /// interval is not empty is selected. `None` only if no interval is non-empty (no outcome of positive
 /// weight).
 fn pick(weights: &[f64], draw: f64) -> Option<usize> {
