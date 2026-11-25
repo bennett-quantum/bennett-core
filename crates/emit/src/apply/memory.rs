@@ -331,10 +331,9 @@ impl<'a> Memory<'a> {
             let scratch = circuit.scratch_end();
             let old = self.byte(address, pending.initial);
             let new = match pending.alternatives.as_slice() {
-                [(ONE, value)] => value.map(|bit| match bit {
-                    Bit::Constant(_) => bit,
-                    Bit::Wire(..) => circuit.retain_copy(bit),
-                }),
+                // Every value bit stays available through the inverse. The
+                // new version can point directly to the stored bits.
+                [(ONE, value)] => *value,
                 [(guard, value)] => std::array::from_fn(|i| circuit.select(*guard, value[i], old[i])),
                 alternatives => select_byte(circuit, old, alternatives),
             };

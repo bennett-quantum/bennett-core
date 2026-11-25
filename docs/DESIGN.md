@@ -502,22 +502,19 @@ private value of each written byte, shared across copied calls. A load or store 
 span for bounds before checking whether any byte holds qubits. Access to a held byte faults
 even if its qubits hold zero. Little-endian loads use the current private values for written
 bytes and the caller's values for the rest. Stores zero the unused high bits in a partial byte.
-Under definite control a store copies its nonconstant bits into fresh scratch qubits, so a value
-already loaded stays available after an overwrite. Under definite control, storing a value the
-emitter's constant analysis proves definite needs no gates or qubits. Values outside that proof
-use gates to preserve the correct bits. Nothing writes to the caller's memory. All versions remain
-available until the end of the whole applied call,
-when the inverse clears them. The compiler keeps the equality between a retained bit and its
-source, including complements. Arithmetic gadgets preserve constant results and the equality of
-an unconditional result copy with a source that survives local reversal. A failed work-wire
-allocation prevents folding the affected gadget and fails circuit construction before emission.
+An unconditional write to a definite address records its source bits directly in the byte map.
+Constants use literal values. Other bits refer to circuit values that remain available through
+the inverse. An overwrite replaces the map entry, so a value already loaded still refers to
+its original bits. The store adds no gates or qubits. The caller's memory stays intact.
+Arithmetic gadgets preserve constant results and the equality of an unconditional result copy
+with a source that survives local reversal. A failed work-wire allocation prevents folding the
+affected gadget and fails circuit construction before emission.
 Calls and memory instructions use the same step budget.
 
 For each call the compiler reports the retained memory scratch qubits, the memory gates including the
-inverse, and the peak number of bits in current byte versions represented by qubits. Copying a
-stored nonconstant bit takes one CNOT in each direction, with two additional X gates in each
-direction if the source is complemented. A later qubit-dependent choice can use the ordinary
-control construction until it needs a memory or stack operation. The step machine performs the
+inverse, and the peak number of positions in current byte versions that refer to qubits. Several
+positions can refer to the same qubit. A later qubit-dependent choice can use the ordinary control
+construction until it needs a memory or stack operation. The step machine performs the
 accesses within the remaining whole-function budget. Loads and stores check the pre-tick map.
 Each successful store selects its bytes under its dispatch guard after all accesses in that tick
 have read. The guards are disjoint, so each input sees just its own store. Earlier versions are
@@ -526,9 +523,10 @@ by replaying forward gates over at most eight distinct argument qubits and at mo
 
 **Cost of missing constant proofs.** The emitter proves a literal zero, a zero shifted by a
 qubit-dependent amount, and `(x*x) XOR x` on one bit. For `srem i2 %x, 1` it produces two
-bits on qubits. Storing that remainder adds two retained qubits and four gates. The arithmetic
-address proof alone refuses the remainder as an address. Guarded replay can recognise its value
-where the address proof can replay all inputs. The remainder has value zero for every input.
+bits on qubits even though the remainder is zero for every input. An unconditional store
+at a definite address can record those bits without another copy. The arithmetic address proof
+alone refuses the remainder as an address. Guarded replay can recognise its value where the
+address proof can replay all inputs.
 Writing one or zero to initially zero byte 8 with two disjoint guarded stores retains one qubit
 and uses two CNOTs, causing `WireSpace` with no spare wire, and the existing conditional
 selection could fold writes to bytes touched only by fixed-address stores before publishing
@@ -933,8 +931,8 @@ checks both zero and patterned XOR destinations and zeroed scratch.
 | Shor 15, base 7 | Registers | In-place, eight passes | 962 | 3,236 | 1,552 | 37 | 47 | 5,752 | 256/256 |
 | Shor 15, base 7 | Private block | Step machine, 99 ticks | 98,796 | 186,069 | 86,810 | 7,875 | 7,885 | 371,677 | 256/256 |
 
-The direct-call and definite indirect-call variants reproduce the register
-counts for identity and predicate. The private block stores eight nonconstant
+At baseline, the direct-call and definite indirect-call variants reproduced
+the register counts for identity and predicate. The private block stores eight nonconstant
 input bits and eight identity or one predicate result bits. Each stored bit
 accounts for one retained qubit and two CNOTs including the inverse. Both
 loads of field values reuse the stored bit references, and all image values
@@ -972,10 +970,19 @@ at the counts above. The private-block measurements in automatic mode are:
 | Predicate | Definite | 20 | 19 | 14 | 37 | — | 55 | 256/256 |
 | Shor 15, base 7 | In-place, eight passes | 962 | 3,252 | 1,552 | 45 | 55 | 5,768 | 256/256 |
 
-Shor's definite indirect call without the block now matches the register form.
-The block retains eight input copies, accounting for all 16 additional CNOTs
+At that step, Shor's definite indirect call without the block matched the
+register form. The block retained eight input copies, accounting for all 16 additional CNOTs
 and eight additional qubits. The benchmark checks the Toffoli count and both
 peaks against twice the hand-built circuit's counts.
+
+Sharing source bits for unconditional stores removes the remaining copies.
+The private-block and register forms now have the same counts in automatic mode.
+
+| Function | Construction | One-qubit | Two-qubit | Toffolis | Isolated peak | Harness peak | Operations | Inputs agreed |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Identity | Definite | 0 | 8 | 0 | 21 | — | 10 | 256/256 |
+| Predicate | Definite | 20 | 1 | 14 | 28 | — | 37 | 256/256 |
+| Shor 15, base 7 | In-place, eight passes | 962 | 3,236 | 1,552 | 37 | 47 | 5,752 | 256/256 |
 
 Run `cargo test -p bennett-emit --test handle_price -- --nocapture` to repeat
 the measurements.

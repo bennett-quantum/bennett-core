@@ -239,16 +239,7 @@ impl Circuit {
         }
     }
 
-    /// Copy a bit without losing equality with its source. Both wires must
-    /// keep their values until the enclosing computation is reversed.
-    pub(super) fn retain_copy(&mut self, bit: Bit) -> Bit {
-        debug_assert_eq!(self.enabled, ONE);
-        let wire = self.fresh();
-        self.xor_into(wire, bit, ONE);
-        self.retained_copies.push((wire, self.copy_source(bit)));
-        Bit::Wire(wire, false)
-    }
-
+    // Follow a retained copy back to its immutable source.
     pub(super) fn copy_source(&self, bit: Bit) -> Bit {
         if let Bit::Wire(wire, inverted) = bit
             && let Ok(index) = self.retained_copies.binary_search_by_key(&wire, |&(copy, _)| copy)

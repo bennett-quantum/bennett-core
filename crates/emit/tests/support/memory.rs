@@ -144,7 +144,7 @@ fn definite_stores_have_no_physical_cost() {
 }
 
 #[test]
-fn version_copies_preserve_equality_and_disjoint_versions_count_toward_the_peak() {
+fn shared_source_bits_preserve_equality_and_count_each_live_byte_version() {
     let compiled = isolated(
         r#"
 func @f(i3 %x) -> i8 {
@@ -161,11 +161,8 @@ entry:
 "#,
     );
     let (gates, layout) = gates(&compiled, WIDTH, 13);
-    assert_eq!((layout.scratch, gates.len()), (2, 4));
-    assert_eq!(
-        compiled.memory,
-        MemoryCounts { retained_scratch_qubits: 2, gates: 4, peak_nonconstant_bits: 2, ..MemoryCounts::default() }
-    );
+    assert_eq!((layout.scratch, gates.len()), (0, 0));
+    assert_eq!(compiled.memory, MemoryCounts { peak_nonconstant_bits: 2, ..MemoryCounts::default() });
     bits::exhaustive(&gates, layout, |_| 0).expect("preserved data and clear scratch");
 }
 
@@ -404,10 +401,7 @@ entry:
     for budget in [5, 4, 6] {
         let (_, counts, values) = compare(&module, "high byte", budget, ApplyMode::Automatic);
         assert_eq!(values, (0..8).map(|x| bounds(budget, 5, Ok(x))).collect::<Vec<_>>());
-        assert_eq!(
-            counts,
-            MemoryCounts { retained_scratch_qubits: 3, gates: 6, peak_nonconstant_bits: 3, ..MemoryCounts::default() }
-        );
+        assert_eq!(counts, MemoryCounts { peak_nonconstant_bits: 3, ..MemoryCounts::default() });
     }
 }
 
@@ -435,13 +429,7 @@ fn stores_retain_loaded_versions_and_definite_stores_emit_nothing() {
         let (construction, stats, actual) = compare(&module, "versions", budget, ApplyMode::Automatic);
         assert_eq!(construction, Construction::Definite);
         assert_eq!(actual, (0..8).map(expected).collect::<Vec<_>>());
-        let stores = usize::from(budget >= 2) + usize::from(budget >= 4);
-        let counts = MemoryCounts {
-            retained_scratch_qubits: 3 * stores,
-            gates: 6 * stores,
-            peak_nonconstant_bits: if stores == 0 { 0 } else { 3 },
-            ..MemoryCounts::default()
-        };
+        let counts = MemoryCounts { peak_nonconstant_bits: if budget < 2 { 0 } else { 3 }, ..MemoryCounts::default() };
         assert_eq!(stats, counts);
 
         let compiled = compile_apply_with(ApplyInput { budget, ..input.clone() }, ApplyMode::Automatic).expect("bits");
@@ -1453,9 +1441,10 @@ done:
 #[ignore = "heavy: 2^20 gate replay cutoff"]
 fn address_replay_includes_the_gate_limit_and_stops_above_it() {
     const LIMIT: u64 = 1 << 20;
-    const STORES_PER_PASS: u64 = 16;
-    const PASSES: u64 = LIMIT / (8 * STORES_PER_PASS);
-    let stores = "    store i8 %pad, 64\n".repeat(STORES_PER_PASS as usize);
+    const XORS_PER_PASS: u64 = 64;
+    const PASSES: u64 = LIMIT / (16 * XORS_PER_PASS);
+    const PADDING_END: u64 = 8 + (XORS_PER_PASS + 3) * PASSES;
+    let padding = (0..XORS_PER_PASS).map(|i| format!("    %padding{i} = xor i8 %pad, %rotated\n")).collect::<String>();
     let module = load(&format!(
         r#"
 memory {MEMORY}
@@ -1465,15 +1454,19 @@ entry:
     %active = trunc i8 %pad to i1
     %offset = zext i1 %active to i64
     %p = or i64 %offset, 32
+    %lower = lshr i8 %pad, 1
+    %upper = shl i8 %pad, 7
+    %rotated = or i8 %lower, %upper
+    %other = trunc i8 %rotated to i1
     br emit(i16 0)
 emit(i16 %pass):
-{stores}    %next = add i16 %pass, 1
+{padding}    %next = add i16 %pass, 1
     %finished = icmp eq i16 %next, {PASSES}
     br %finished, tail, emit(%next)
 tail:
     br %extra, one_more, dispatch
 one_more:
-    store i1 %active, 65
+    %extra_gate = and i1 %active, %other
     br dispatch
 dispatch:
     br %active, read, done
@@ -1489,7 +1482,7 @@ done:
     let held = Default::default();
     let mut image = [0; MEMORY];
     image[33] = 42;
-    let compile = |extra| {
+    let compile = |extra, budget| {
         compile_apply_with(
             ApplyInput {
                 module: &module,
@@ -1497,7 +1490,7 @@ done:
                 args: &[Argument::Register(0..8), Argument::Value(extra)],
                 out: 8..16,
                 fault: 16..21,
-                budget: (STORES_PER_PASS + 3) * PASSES + 16,
+                budget,
                 entry_fault: None,
                 stack_available: MEMORY as u64,
                 memory: Some(ApplyMemory::new(&image, &held)),
@@ -1507,11 +1500,16 @@ done:
         )
     };
 
-    // Definite-control stores copy one gate per input bit. The extra store adds one gate.
-    // The known-bit interval includes undeclared byte 32, so only replay can admit the load.
+    // Each XOR uses two CNOTs per bit. The budget fault at the end of the
+    // padding adds its XOR, and the reverse path repeats the padding.
+    let padded = compile(0, PADDING_END).expect("emit the padding at the replay limit");
+    assert_eq!(padded.block.ops().len() as u64, 2 * LIMIT + 2 + u64::from(Fault::Budget.code().count_ones()));
+
+    // The extra AND adds one gate. Only replay can exclude undeclared byte 32.
+    let budget = PADDING_END + 16;
     assert!(
         matches!(
-            compile(1),
+            compile(1, budget),
             Err(ApplyError::Unsupported {
                 operation: "load",
                 route: "a proved address bound within a declared memory region",
@@ -1520,7 +1518,63 @@ done:
         ),
         "address proof must fall back above the gate limit"
     );
-    let at_limit = compile(0).expect("the guard proves address 33 at the gate limit");
-    assert_eq!(at_limit.memory.gates as u64, 2 * LIMIT);
+    let at_limit = compile(0, budget).expect("the guard proves address 33 at the gate limit");
     assert_eq!(at_limit.memory.varying_loads, 0);
+}
+
+#[test]
+fn unconditional_store_aliases_the_widest_valid_span_under_the_budget() {
+    for (address, valid) in [(1008, true), (1009, false)] {
+        let source = format!(
+            r#"
+func @f(i3 %x) -> i8 {{
+entry:
+    %wide = zext i3 %x to i128
+    %high = shl i128 %wide, 120
+    store i128 %high, {address}
+    %result = load i8 1023
+    ret %result
+}}
+"#
+        );
+        let module = module(&source, "");
+        for budget in [2, 3, 4, 5] {
+            let (_, counts, values) = compare(&module, "wide fixed store", budget, ApplyMode::Automatic);
+            let expected = (0..8)
+                .map(|x| if valid { bounds(budget, 5, Ok(x)) } else { bounds(budget, 3, Err(Fault::OutOfBounds)) });
+            assert_eq!(values, expected.collect::<Vec<_>>());
+            assert_eq!((counts.retained_scratch_qubits, counts.gates), (0, 0));
+            assert_eq!(counts.peak_nonconstant_bits, if valid && budget >= 3 { 3 } else { 0 });
+        }
+    }
+}
+
+#[test]
+fn a_guarded_fixed_store_keeps_the_previous_byte_for_other_inputs() {
+    let module = module(
+        r#"
+data 24 = i8 7
+func @f(i3 %x) -> i8 {
+entry:
+    %take = trunc i3 %x to i1
+    %value = lshr i3 %x, 1
+    br %take, write, skip
+write:
+    store i3 %value, 24
+    br read
+skip:
+    %unchanged = add i8 0, 0
+    br read
+read:
+    %result = load i8 24
+    ret %result
+}
+"#,
+        "",
+    );
+    let (construction, counts, values) = compare(&module, "guarded fixed store", 7, ApplyMode::Automatic);
+    assert!(matches!(construction, Construction::StepMachine { .. }));
+    let expected = (0..8).map(|x| (if x & 1 == 0 { 7 } else { x >> 1 }, 0)).collect::<Vec<_>>();
+    assert_eq!(values, expected);
+    assert!(counts.retained_scratch_qubits > 0 && counts.gates > 0);
 }
