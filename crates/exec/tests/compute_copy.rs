@@ -1,4 +1,6 @@
 //! Small, phase-sensitive checks of a literal reversible construction against the executor.
+#[path = "compute_copy/boundaries.rs"]
+mod boundaries;
 mod common;
 mod compute_copy_reference;
 #[path = "compute_copy/swap_in.rs"]
@@ -113,12 +115,12 @@ entry:
 }
 "#;
 
-// Amounts 0, 5, 10 and 15 from a register: the two at least the width give zero, `ashr` included.
+// Amounts 0, 4, 8 and 12 from a register: the two at least the width give zero, `ashr` included.
 const SHIFTS: &str = r#"
 func @f(i2 %x) -> i8 {
 entry:
     %a = zext i2 %x to i8
-    %s = mul i8 %a, 5
+    %s = mul i8 %a, 4
     %l = shl i8 3, %s
     %r = lshr i8 200, %s
     %n = ashr i8 -128, %s
@@ -419,6 +421,9 @@ fn compare_in(functions: &str, memory: u64, budget: usize) -> [(u64, u64); 4] {
     assert_eq!(e.step(), None);
     let applied = e.snapshot();
     assert_amplitudes(&after, &applied.quantum);
+    assert_eq!(applied.classical.steps, prepared.classical.steps + 1, "apply costs one enclosing step");
+    assert_eq!(applied.classical.stack_pointer, prepared.classical.stack_pointer);
+    assert_eq!(applied.classical.slots, prepared.classical.slots);
     assert_eq!(applied.classical.memory, prepared.classical.memory, "private writes do not escape");
     assert_eq!(applied.classical.tape, prepared.classical.tape);
     assert_eq!(e.run(), Outcome::Returned(None));
@@ -440,15 +445,21 @@ fn compare_in(functions: &str, memory: u64, budget: usize) -> [(u64, u64); 4] {
         assert_eq!(state.quantum.amplitudes.len(), 1);
         let config = &state.quantum.amplitudes[0].0;
         *outcome = (config[0], config[1]);
+        let finish = reference.finish(&[x as u64], budget);
+        assert_eq!(finish.output, *outcome, "the reference's own run of input {x}");
+        // The final attempt of a run that faults, unlike a return, costs no step.
+        let successful_steps = match (finish.ticks, finish.output.1) {
+            (None, _) => budget,
+            (Some(ticks), 0) => ticks,
+            (Some(ticks), _) => ticks.saturating_sub(1), // An entry fault took no attempts.
+        };
+        assert_eq!(definite.stats().region_steps, successful_steps as u64, "input {x}, budget {budget}");
     }
     assert_eq!(
         std::array::from_fn(|x| computed[&[x as u64]]),
         outcomes,
         "per-input results agree even if a target is invariant under an XOR"
     );
-    for (x, &outcome) in outcomes.iter().enumerate() {
-        assert_eq!(reference.finish(&[x as u64], budget).output, outcome, "the reference's own run of input {x}");
-    }
     let expected = permute(before, |b| {
         let (result, fault) = outcomes[b.argument as usize];
         b.out ^= result;
@@ -524,7 +535,7 @@ fn one_budget_for_the_whole_function_including_calls_and_nested_loops() {
 
 #[test]
 fn shift_amounts_from_a_register_at_and_beyond_the_width() {
-    assert_eq!(compare(SHIFTS, 8), [(75, 0), (98, 0), (0, 0), (0, 0)]);
+    assert_eq!(compare(SHIFTS, 8), [(75, 0), (52, 0), (0, 0), (0, 0)]);
 }
 
 #[test]

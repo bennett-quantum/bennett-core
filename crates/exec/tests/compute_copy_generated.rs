@@ -10,7 +10,7 @@
 //! on all 64 inputs and on a superposition with phases, and the executor's amplitudes are compared.
 
 mod common;
-#[allow(dead_code, reason = "this binary does not use the store-by-exchange helpers")]
+#[allow(dead_code, reason = "this binary uses static initial memory and no store-by-exchange helpers")]
 mod compute_copy_reference;
 
 use std::collections::{BTreeMap, BTreeSet};

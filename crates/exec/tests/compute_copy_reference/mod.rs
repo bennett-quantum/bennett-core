@@ -70,6 +70,8 @@ pub struct Reference<'m> {
     /// The deepest call chain from the entry, if no function is reachable from itself.
     chain: Option<usize>,
     caller_stack: u64,
+    caller_memory: Option<&'m [u8]>,
+    held_bytes: &'m [u64],
     parameter_slots: Vec<usize>,
 }
 
@@ -102,7 +104,16 @@ impl<'m> Reference<'m> {
         let entry = module.function_named(name).expect("applied function");
         let parameter_slots = module.function(entry).params.iter().map(|param| param.slot.index()).collect();
         let chain = call_chain(module, entry);
-        Self { module, entry, frame_size, chain, caller_stack, parameter_slots }
+        Self { module, entry, frame_size, chain, caller_stack, caller_memory: None, held_bytes: &[], parameter_slots }
+    }
+
+    /// Starts with the fixture's live caller memory. Held addresses are fixed during a private run.
+    pub fn with_memory(mut self, bytes: &'m [u8], held_bytes: &'m [u64]) -> Self {
+        assert_eq!(bytes.len() as u64, self.module.memory_size);
+        assert!(held_bytes.iter().all(|&address| address < self.module.memory_size));
+        self.caller_memory = Some(bytes);
+        self.held_bytes = held_bytes;
+        self
     }
 
     /// The number of frames the encoding holds for a run of at most `budget` steps. Each call costs a
@@ -121,9 +132,15 @@ impl<'m> Reference<'m> {
         let frames = self.frames(budget);
         let memory_start = self.memory_start(frames);
         let mut initial = vec![0; memory_start + self.module.memory_size as usize];
-        for segment in &self.module.data {
-            for (i, byte) in segment.encode().into_iter().enumerate() {
-                initial[memory_start + segment.address as usize + i] = u64::from(byte);
+        if let Some(bytes) = self.caller_memory {
+            for (word, &byte) in initial[memory_start..].iter_mut().zip(bytes) {
+                *word = u64::from(byte);
+            }
+        } else {
+            for segment in &self.module.data {
+                for (i, byte) in segment.encode().into_iter().enumerate() {
+                    initial[memory_start + segment.address as usize + i] = u64::from(byte);
+                }
             }
         }
         initial[HEADER + FUNCTION] = u64::from(self.entry.0);
@@ -335,26 +352,26 @@ impl<'m> Reference<'m> {
             Inst::Load { width, dst, address } => {
                 let m = mask(*width)?;
                 match self.memory_range(read(address), *width) {
-                    Some(range) => {
+                    Ok(range) => {
                         // Little-endian, masked to the width.
                         let value = range.rev().fold(0u64, |v, at| v << 8 | c[memory_start + at] & 0xff);
                         n[slots + dst.index()] = value & m;
                         advance(&mut n);
                     }
-                    None => stop(&mut n, Fault::OutOfBounds),
+                    Err(fault) => stop(&mut n, fault),
                 }
             }
             Inst::Store { width, value, address } => {
                 let value = read(value) & mask(*width)?;
                 match self.memory_range(read(address), *width) {
-                    Some(range) => {
+                    Ok(range) => {
                         // The whole range takes the value's low bytes, least significant first.
                         for (i, at) in range.enumerate() {
                             n[memory_start + at] = value.checked_shr(8 * i as u32).unwrap_or(0) & 0xff;
                         }
                         advance(&mut n);
                     }
-                    None => stop(&mut n, Fault::OutOfBounds),
+                    Err(fault) => stop(&mut n, fault),
                 }
             }
             Inst::Call { callee, args, .. } => self.call(c, &mut n, frame, depth, frames, *callee, args)?,
@@ -416,13 +433,15 @@ impl<'m> Reference<'m> {
         Some(n)
     }
 
-    /// Byte indices of an access of `width` at `address`: the width rounded up to bytes must neither
-    /// overflow the address nor exceed memory, else `out_of_bounds`. A private copy holds no qubits
-    /// here, so the second check of APPLY-STEP, "Memory", never fires in this reference.
-    fn memory_range(&self, address: u64, width: Width) -> Option<std::ops::Range<usize>> {
+    /// APPLY-STEP, "Memory": check the entire byte range for bounds, then for qubit occupancy.
+    fn memory_range(&self, address: u64, width: Width) -> Result<std::ops::Range<usize>, Fault> {
         let bytes = u64::from(width.bits()).div_ceil(8);
-        let end = address.checked_add(bytes).filter(|&end| end <= self.module.memory_size)?;
-        Some(usize::try_from(address).ok()?..usize::try_from(end).ok()?)
+        let end = address.checked_add(bytes).filter(|&end| end <= self.module.memory_size).ok_or(Fault::OutOfBounds)?;
+        let range = address..end;
+        if self.held_bytes.iter().any(|held| range.contains(held)) {
+            return Err(Fault::QubitMemoryAccess);
+        }
+        Ok(address as usize..end as usize)
     }
 
     /// APPLY-STEP, "Calls": read the arguments, reserve the callee's frame below the current stack
