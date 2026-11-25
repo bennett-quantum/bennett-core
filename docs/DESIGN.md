@@ -164,8 +164,10 @@ straightforward expansion into ordinary code; none reads or acts on a qubit:
   draw, in `[0, total)`, selects the one whose interval holds it (`quantum.rs`, `pick`). The simulator
   computes amplitudes in floating point, so an outcome of exact probability zero can still carry a
   computed weight. An outcome's interval is empty exactly when adding its weight leaves the rounded
-  running sum unchanged; such an outcome is never returned, and any other is returned with the probability
-  of its interval, about its weight. The draw is the generator's uniform value times the total, which is
+  running sum unchanged; such an outcome is never returned. Any other is returned with the probability that
+  the draw selects it: the fraction of the generator's values whose draw lies in its interval. That is about
+  its weight, but an interval narrower than the step between consecutive draws can lie between two of them
+  and then is never selected. The draw is the generator's uniform value times the total, which is
   faithful for the weights of a normalised state but not at the smallest scale of binary64 (two weights
   of the smallest positive value are not drawn equally often); no simulator state has such a total.
   A register of 65 to 128 qubits is sent to the device as two ranges of wires, measured in one draw.
@@ -276,9 +278,10 @@ The writer forwards every command, after the lowering, to a `SimulatedDevice` an
 from it (`--seed`, default 0), sampling a register's qubits jointly with one draw, as the simulator does.
 Each annotated outcome has nonzero probability in the simulated state, up to the simulator's floating-point
 rounding: an outcome of exact probability zero is returned only if its computed weight changes the running
-sum of weights (the simulator's `measure`, "Running a program"), so a draw that equals a running sum never takes an
-outcome whose weight is only rounding error (`a_draw_on_a_rounded_boundary_selects_only_possible_outcomes`
-in `crates/cli/tests/qasm_device.rs`).
+sum of weights (the simulator's `measure`, "Running a program"). A draw that equals a running sum takes the
+next outcome whose interval is not empty, so an outcome whose weight leaves the sum unchanged is never taken
+(`a_draw_on_a_rounded_boundary_selects_only_possible_outcomes` in `crates/cli/tests/qasm_device.rs`), but one
+whose weight is entirely rounding error and still advances the sum can be.
 
 Like the counter, the writer compiles every `apply` to gates, as the simulator's gate mode
 (`--apply-circuit auto`) does, and takes the same draws for the same seed. So the OpenQASM run has the
