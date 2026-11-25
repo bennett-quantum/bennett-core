@@ -398,10 +398,13 @@ that is one exactly on the definite argument assignments that take a route. The 
 the incoming guard with the condition or its complement to form the two new guards. Each controls
 the gates for its route, and the route's slot values are meaningful only where its guard is one.
 When the conditional tests an integer slot against a literal with `eq` or `ne` in the same block,
-the compiler records the tested wires' values for the equal route. Jump arguments keep their
-original bits, including when assigned to new block parameters. Instructions use the recorded
-values on that route. At a join the compiler reuses a bit when it can prove that the bit agrees
-with both incoming values under their respective guards. Otherwise it selects the value of the enabled route.
+the compiler records the tested bits' values for the equal route. A retained copy is a wire whose
+value is known to equal its source bit. Facts use the underlying source wire and account for
+polarity when recording or reading a value. Literals already have a definite value. Ordinary
+conditional jumps transfer their original bits, including when they assign block parameters.
+Instructions use the recorded values on their route. At a join the compiler reuses a bit
+if it can prove agreement with both incoming values under their respective guards. Otherwise it
+selects the value of the enabled route.
 Wire facts survive the join when both routes agree on them.
 The compiler emits the continuation once. Its analysis looks for the nearest common continuation of the routes
 to a return or explicit stop, using only the selected target of each literal conditional or switch. If both
@@ -429,8 +432,8 @@ at an unconditional instruction fault. A word of width `w` must then be zero aft
 combining the previous pass's running inputs with the new test. The test may also sit at
 the end of a pass, compare the old unsigned word with two and pass its shift by one back
 to the body. The compiler checks that another edge cannot replace the word before the
-body reaches that test again. On an exit the compiler records the proved-zero word before
-assigning the exit arguments. A later outer pass
+body reaches that test again. On a proved shift-loop exit, the compiler substitutes literal zeros
+for the drained word before assigning the exit arguments. A later outer pass
 that receives this zero skips the drained inner loop's body. Exits are collected at the
 shared continuation, which is subject to the same budget check as any join. Proved
 counts can nest. A loop with a qubit-dependent exit and no such proof uses the step

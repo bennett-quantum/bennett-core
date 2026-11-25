@@ -293,7 +293,7 @@ impl<'a> Program<'a> {
         point: Point,
         widths: &[Option<usize>],
     ) -> Result<Step<'a>, ApplyError> {
-        self.step_with(circuit, slots, point, widths, |word| word)
+        self.step_with(circuit, slots, point, widths, |_, word| word)
     }
 
     pub(super) fn step_with(
@@ -302,7 +302,7 @@ impl<'a> Program<'a> {
         slots: &[Word],
         point: Point,
         widths: &[Option<usize>],
-        resolve: impl Fn(Word) -> Word,
+        resolve: impl Fn(&Circuit, Word) -> Word,
     ) -> Result<Step<'a>, ApplyError> {
         let copy = &self.copies[point.copy];
         let local = &slots[copy.slots.clone()];
@@ -338,7 +338,7 @@ impl<'a> Program<'a> {
         }
 
         let widths = if widths.is_empty() { widths } else { &widths[copy.slots.clone()] };
-        let read = |operand: &Operand| resolve(Frame::read(local, operand));
+        let read = |circuit: &Circuit, operand: &Operand| resolve(circuit, Frame::read(local, operand));
         let step = copy.frame.step(circuit, read, point, widths)?;
         Ok(match step {
             Step::Write(next, dst, word) => Step::Write(next, copy.slot(dst), word),

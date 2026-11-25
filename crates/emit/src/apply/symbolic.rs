@@ -170,7 +170,7 @@ impl<'a> Frame<'a> {
     pub(super) fn step(
         &self,
         circuit: &mut Circuit,
-        read: impl Fn(&Operand) -> Word,
+        read: impl Fn(&Circuit, &Operand) -> Word,
         point: Point,
         widths: &[Option<usize>],
     ) -> Result<Step<'a>, ApplyError> {
@@ -185,8 +185,8 @@ impl<'a> Frame<'a> {
                     rhs,
                     ..
                 } => {
-                    let dividend = read(lhs);
-                    let mut divisor = read(rhs);
+                    let dividend = read(circuit, lhs);
+                    let mut divisor = read(circuit, rhs);
                     if let Some(value) = self.constants.get(rhs) {
                         divisor = constant(value, divisor.len());
                     }
@@ -201,8 +201,8 @@ impl<'a> Frame<'a> {
                     (*dst, result)
                 }
                 Inst::Binary { op, dst, lhs, rhs, .. } => {
-                    let mut left = read(lhs);
-                    let mut right = read(rhs);
+                    let mut left = read(circuit, lhs);
+                    let mut right = read(circuit, rhs);
                     if matches!(op, BinOp::Mul | BinOp::Shl | BinOp::Lshr | BinOp::Ashr) {
                         // A slot can contain other values when this point is inactive.
                         // Use the proven value for each input that executes the instruction.
@@ -228,22 +228,26 @@ impl<'a> Frame<'a> {
                     (*dst, result)
                 }
                 Inst::Compare { pred, dst, lhs, rhs, .. } => {
-                    (*dst, vec![arithmetic::compare(circuit, *pred, &read(lhs), &read(rhs))])
+                    let left = read(circuit, lhs);
+                    let right = read(circuit, rhs);
+                    (*dst, vec![arithmetic::compare(circuit, *pred, &left, &right)])
                 }
                 Inst::Select { dst, cond, if_true, if_false, .. } => {
-                    let condition = read(cond)[0];
-                    let left = read(if_true);
+                    let condition = read(circuit, cond)[0];
+                    let left = read(circuit, if_true);
                     let declared = left.len();
                     let mut result: Word = left
                         .into_iter()
-                        .zip(read(if_false))
+                        .zip(read(circuit, if_false))
                         .take(result_width(*dst, declared))
                         .map(|(a, b)| circuit.select(condition, a, b))
                         .collect();
                     result.resize(declared, ZERO);
                     (*dst, result)
                 }
-                Inst::Cast { op, dst, value, to, .. } => (*dst, arithmetic::cast(*op, read(value), to.bits() as usize)),
+                Inst::Cast { op, dst, value, to, .. } => {
+                    (*dst, arithmetic::cast(*op, read(circuit, value), to.bits() as usize))
+                }
                 Inst::FuncAddr { dst, func } => (*dst, constant(u128::from(func.address()), u64::BITS as usize)),
                 Inst::Call { .. } => return Err(self.error(point, "call", "a planned call copy")),
                 Inst::CallIndirect { .. } => return Err(self.error(point, "call_indirect", "a planned call copy")),
@@ -273,7 +277,7 @@ impl<'a> Frame<'a> {
                 // A proved condition holds for every input that reaches this point,
                 // even when an inactive input has a different value in its slot.
                 let condition =
-                    self.constants.get(cond).map_or_else(|| read(cond)[0], |value| Bit::Constant(value == 1));
+                    self.constants.get(cond).map_or_else(|| read(circuit, cond)[0], |value| Bit::Constant(value == 1));
                 match condition {
                     Bit::Constant(true) => Step::Jump(if_true),
                     Bit::Constant(false) => Step::Jump(if_false),
@@ -281,7 +285,7 @@ impl<'a> Frame<'a> {
                 }
             }
             Terminator::Switch { value, .. } => {
-                let selector = read(value);
+                let selector = read(circuit, value);
                 let mut edges = self.constants.switch_edges(point.block).clone();
                 edges.retain_possible(&selector);
                 if let ([], Some(default)) = (edges.cases.as_slice(), edges.default) {
@@ -292,7 +296,7 @@ impl<'a> Frame<'a> {
                     Step::Switch(selector, edges)
                 }
             }
-            Terminator::Return(Some(value)) => Step::Return(read(value)),
+            Terminator::Return(Some(value)) => Step::Return(read(circuit, value)),
             Terminator::Exit(_) => Step::Fault(Fault::ExitInRegion),
             Terminator::Fault(code) => Step::Fault(*code),
             Terminator::Return(None) | Terminator::Longjmp { .. } => {

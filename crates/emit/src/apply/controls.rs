@@ -150,7 +150,9 @@ impl Controls<'_, '_> {
             }
             let point = route.point;
             let step = self.circuit.under(route.enabled, |circuit| {
-                self.program.step_with(circuit, &route.slots, point, &[], |word| route.facts.resolve_word(word))
+                self.program.step_with(circuit, &route.slots, point, &[], |circuit, word| {
+                    route.facts.resolve_word(circuit, word)
+                })
             })?;
             match step {
                 Step::Write(next, dst, word) => {
@@ -241,7 +243,7 @@ impl Controls<'_, '_> {
         if let Some(equality) = BranchEquality::in_block(self.program.block(point)) {
             let equal_route = if equality.when_true { &mut yes_route } else { &mut no_route };
             let slot = self.program.slot(point, equality.slot);
-            equal_route.facts.assume(&equal_route.slots[slot.index()], equality.value.value());
+            equal_route.facts.assume(self.circuit, &equal_route.slots[slot.index()], equality.value.value());
         }
         let yes = self.transfer(yes_route, yes, yes_mask);
         let no = self.transfer(no_route, no, no_mask);
@@ -297,7 +299,7 @@ impl Controls<'_, '_> {
                 break;
             }
             let tested = self.program.read(&route.slots, route.point, plan.condition)[0];
-            condition = route.facts.resolve(tested);
+            condition = route.facts.resolve(self.circuit, tested);
         }
         Ok(exits)
     }

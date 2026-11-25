@@ -20,6 +20,22 @@ entry:
 }
 "#;
 
+const WIDE_MAIN: &str = r#"
+func @main(i64 %budget) {
+entry:
+    %a = qalloc 16
+    h %a[0]
+    h %a[15]
+    s %a[15]
+    %out = qalloc 2
+    %fault = qalloc 5
+    x %out[1]
+    x %fault[4]
+    apply @f(%a) -> %out, %fault budget %budget
+    ret
+}
+"#;
+
 fn countdown(tail: &str, before_effect: &str) -> ValidModule {
     load(&format!(
         r#"
@@ -190,10 +206,10 @@ join(i2 %result):
 
 #[test]
 fn a_join_preserves_equal_arguments_to_skip_an_unreachable_load() {
-    let module = load(
+    let module = load(&format!(
         r#"
 memory 131072
-func @f(i16 %x) -> i2 {
+func @f(i16 %x) -> i2 {{
 entry:
     %zero = icmp eq i16 %x, 0
     br %zero, join(%x, i2 1), join(%x, i2 2)
@@ -206,22 +222,10 @@ read:
     ret %value
 done:
     ret %tag
-}
-func @main(i64 %budget) {
-entry:
-    %a = qalloc 16
-    h %a[0]
-    h %a[15]
-    s %a[15]
-    %out = qalloc 2
-    %fault = qalloc 5
-    x %out[1]
-    x %fault[4]
-    apply @f(%a) -> %out, %fault budget %budget
-    ret
-}
-"#,
-    )
+}}
+{WIDE_MAIN}
+"#
+    ))
     .expect("valid unreachable load");
     let (construction, _) = compare(&module, 18, |x| (if x == 0 { 1 } else { 2 }, 0));
     assert_eq!(construction, Construction::Controlled { proved_passes: 0 });
@@ -296,4 +300,142 @@ join(i2 %result):
     .expect("valid reassignment and join");
     let (construction, _) = compare(&module, 18, |x| (if x == 0 { 3 } else { x }, 0));
     assert_eq!(construction, Construction::Controlled { proved_passes: 0 });
+}
+
+#[test]
+fn a_retained_copy_keeps_a_guarded_load_unreachable() {
+    let module = load(&format!(
+        r#"
+memory 131072
+func @f(i16 %x) -> i2 {{
+entry:
+    %bit = trunc i16 %x to i1
+    %copy = mul i1 %bit, %bit
+    %zero = icmp eq i16 %x, 0
+    br %zero, equal(%bit), other
+equal(i1 %k):
+    %different = icmp ne i1 %copy, %k
+    br %different, read, done
+read:
+    %addr = zext i16 %x to i64
+    %value = load i2 %addr
+    ret %value
+done:
+    ret 1
+other:
+    ret 2
+}}
+{WIDE_MAIN}
+"#
+    ))
+    .expect("valid load guarded by a retained copy");
+    let (construction, cost) = compare(&module, 18, |x| (if x == 0 { 1 } else { 2 }, 0));
+    assert_eq!(construction, Construction::Controlled { proved_passes: 0 });
+    assert_eq!(cost.operations, 102);
+}
+
+fn retained_copy_countdown(body: &str, counter: &str) -> ValidModule {
+    load(&format!(
+        r#"
+memory 4096
+func @f(i2 %x) -> i2 {{
+entry:
+    %bit = trunc i2 %x to i1
+    %copy = mul i1 %bit, %bit
+    {body}
+    br %different, count({counter}), done
+count(i2 %n):
+    %again = icmp ne i2 %n, 0
+    br %again, step, done
+step:
+    %prev = sub i2 %n, 1
+    br count(%prev)
+done:
+    ret 1
+other:
+    ret 2
+}}
+{MAIN}
+"#
+    ))
+    .expect("valid countdown guarded by retained bits")
+}
+
+#[test]
+fn a_retained_copy_keeps_the_countdown_unreachable() {
+    for (derive, counter) in [("%wide = sext i1 %copy to i2", "%wide"), ("", "%x")] {
+        let module = retained_copy_countdown(
+            &format!(
+                r#"
+    {derive}
+    %zero = icmp eq i2 %x, 0
+    br %zero, equal(%bit), other
+equal(i1 %k):
+    %different = icmp ne i1 %copy, %k
+"#
+            ),
+            counter,
+        );
+        for budget in [18, 64, 256] {
+            let (construction, cost) = compare(&module, budget, |x| (if x == 0 { 1 } else { 2 }, 0));
+            println!("{counter}, B={budget}: {construction:?}, {cost:?}");
+            assert_eq!(construction, Construction::Controlled { proved_passes: 0 }, "{counter}, B={budget}");
+            assert_eq!(cost, Cost { operations: 18, toffoli: 2, peak_qubits: 11 }, "{counter}, B={budget}");
+        }
+    }
+}
+
+#[test]
+fn retained_copy_facts_hold_in_both_directions_and_at_joins() {
+    for (body, results, last_attempt) in [
+        (
+            r#"
+    %second = mul i1 %copy, %copy
+    %flipped = xor i1 %second, 1
+    %zero = icmp eq i2 %x, 0
+    br %zero, equal(%flipped), other
+equal(i1 %k):
+    %different = icmp ne i1 %k, 1
+"#,
+            [1, 2, 2, 2],
+            9,
+        ),
+        (
+            r#"
+    %flipped = xor i1 %copy, 1
+    %odd = icmp ne i1 %flipped, 1
+    br %odd, other, equal(%bit)
+equal(i1 %k):
+    %different = icmp ne i1 %k, 0
+"#,
+            [1, 2, 1, 2],
+            8,
+        ),
+        (
+            r#"
+    %zero = icmp eq i2 %x, 0
+    br %zero, join(%bit), join(%copy)
+join(i1 %k):
+    %different = icmp ne i1 %k, %bit
+"#,
+            [1; 4],
+            7,
+        ),
+        (
+            r#"
+    %zero = icmp eq i2 %x, 0
+    br %zero, join(i1 0), join(%copy)
+join(i1 %k):
+    %different = icmp ne i1 %k, %bit
+"#,
+            [1; 4],
+            7,
+        ),
+    ] {
+        let module = retained_copy_countdown(body, "%x");
+        for budget in [last_attempt, 18] {
+            let (construction, _) = compare(&module, budget, |x| (results[x as usize], 0));
+            assert_eq!(construction, Construction::Controlled { proved_passes: 0 }, "B={budget}{body}");
+        }
+    }
 }
