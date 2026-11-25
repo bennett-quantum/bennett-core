@@ -21,6 +21,7 @@ const CODES: &[(&str, u64)] = &[
     ("exit_type_mismatch", 14),
     ("bad_longjmp", 16),
     ("qubit_memory_access", 17),
+    ("out_of_memory", 19),
 ];
 
 #[test]
@@ -54,7 +55,7 @@ fn every_fault_xors_into_dirty_fault_registers() {
             }
         }
     }
-    assert_eq!(cases, 4 * 15 * 32, "four widths, fifteen codes, 32 dirty values");
+    assert_eq!(cases, 4 * 16 * 32, "four widths, sixteen codes, 32 dirty values");
 }
 
 #[test]

@@ -64,6 +64,11 @@ faults! {
     /// written over it, a `longjmp` record read from it), whatever the qubits' values; inside an applied
     /// function too. Gates and measurements name such bytes; ordinary code does not.
     QubitMemoryAccess = 17 "qubit_memory_access",
+    /// The device's heap is exhausted: the C runtime's arena cannot hold a growth of the break or a fresh
+    /// anonymous mapping. An allocation function never returns null for it; a request the C library rejects by
+    /// arithmetic alone, before asking for memory (`malloc(SIZE_MAX)`, an overflowing `calloc` product), still
+    /// returns null (`rt/musl/README.md`, "The boundary").
+    OutOfMemory = 19 "out_of_memory",
 }
 
 impl Fault {
@@ -116,5 +121,12 @@ mod tests {
         assert_eq!(Fault::BadLongjmp.code(), 16);
         assert_ne!(Fault::BadLongjmp, Fault::BadIndirect);
         assert!(u128::from(Fault::BadLongjmp.code()) > Width(4).mask());
+    }
+
+    /// Heap exhaustion is a fault of its own, never a null result of an allocation function.
+    #[test]
+    fn heap_exhaustion_is_the_fault_out_of_memory_with_code_19() {
+        assert_eq!(Fault::from_name("out_of_memory"), Some(Fault::OutOfMemory));
+        assert_eq!(Fault::OutOfMemory.code(), 19);
     }
 }

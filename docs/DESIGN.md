@@ -1965,9 +1965,9 @@ The front writes `retaddr N` for every `llvm.returnaddress(N)` in the default ad
   frames in place for reversal. C's `_Noreturn void __bennett_exit(int)` lowers to it; like
   `void __bennett_effect(char)`, it is an ordinary device call, not a quantum marker.
 - Fault codes fit in 5 bits (`Fault::CODE_WIDTH`, widened from 4 on 2026-11-16, the maintainer's decision); a
-  fault register is at least that wide, so every fault register of a program is a `q5` or wider. Fifteen of
-  the 31 nonzero codes are used, the last `qubit_memory_access` (17); 11 was `dirty_free` and 15
-  `bad_rewind`, both removed on 2026-11-17. Those codes stay unused and the remaining codes keep their
+  fault register is at least that wide, so every fault register of a program is a `q5` or wider. Sixteen of
+  the 31 nonzero codes are used, the last `out_of_memory` (19, the C runtime's heap exhausted); 18 is
+  unused; 11 was `dirty_free` and 15 `bad_rewind`, both removed on 2026-11-17. Those two stay unused and the remaining codes keep their
   numbers because programs may have measured the old codes.
 - `qfree` is the partial trace and never faults ("Releasing a register", below).
 - `measure` reads a whole register, or the `N` bits from bit 0 of the integer at an address.

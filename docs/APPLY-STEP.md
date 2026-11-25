@@ -95,7 +95,7 @@ jump, call or return. Faults cost zero, so attempt number `B` can return or give
 
 ## Fault codes
 
-Codes 11 and 15 are unused. [fault.rs: faults, Fault::code]
+Codes 11, 15 and 18 are unused. [fault.rs: faults, Fault::code]
 
 | Code | Name | Code | Name |
 | ---: | --- | ---: | --- |
@@ -106,7 +106,7 @@ Codes 11 and 15 are unused. [fault.rs: faults, Fault::code]
 | 5 | `unreachable` | 14 | `exit_type_mismatch` |
 | 6 | `stack_overflow` | 16 | `bad_longjmp` |
 | 7 | `effect_in_region` | 17 | `qubit_memory_access` |
-| 8 | `quantum_in_region` | | |
+| 8 | `quantum_in_region` | 19 | `out_of_memory` |
 
 ## Finish
 
