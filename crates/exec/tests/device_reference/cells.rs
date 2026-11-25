@@ -15,7 +15,7 @@ impl Device<'_> {
 
     pub(super) fn ordinary_range(&self, address: Operand, width: Width) -> Result<Range<usize>, Fault> {
         let range = self.memory_range(self.read_i64(address), width)?;
-        let cells = self.region_cells.unwrap_or(&self.quantum.cells);
+        let cells = self.applied.as_ref().map_or(&self.quantum.cells, |context| context.cells);
         if cells.range(range.start as u64..range.end as u64).next().is_some() {
             return Err(Fault::QubitMemoryAccess);
         }

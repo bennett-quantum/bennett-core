@@ -1,7 +1,5 @@
 //! Compare the documented outer device language with the executor on worked and generated programs.
 
-#[allow(dead_code, reason = "this binary only needs definite apply transitions")]
-mod compute_copy_reference;
 #[path = "device_reference/mod.rs"]
 mod device_reference;
 #[path = "device_reference/generated.rs"]
@@ -12,6 +10,10 @@ mod memory;
 mod memory_generated;
 #[path = "device_reference/compare.rs"]
 mod observe;
+#[path = "device_reference/wide.rs"]
+mod wide;
+#[path = "device_reference/wide_generated.rs"]
+mod wide_generated;
 
 use std::f64::consts::FRAC_1_SQRT_2;
 use std::fmt::Write as _;

@@ -10,11 +10,10 @@ mod quantum;
 use std::collections::{BTreeMap, BTreeSet};
 
 use bennett_ir::{
-    BlockId, CastOp, DataItem, DataSegment, Fault, FuncId, Inst, MeasureSource, Operand, Qubit, Slot, Target,
-    Terminator, Type, ValidModule, Width,
+    BlockId, CastOp, Fault, FuncId, Inst, MeasureSource, Operand, Qubit, Slot, Target, Terminator, Type, ValidModule,
+    Width,
 };
 
-use crate::compute_copy_reference::Reference as ComputeCopy;
 use cells::little_endian;
 use integers::{binary, compare, signed};
 use quantum::Quantum;
@@ -47,11 +46,16 @@ pub struct Frame {
     destination: Option<Slot>,
 }
 
+struct AppliedContext<'a> {
+    callers: &'a [Frame],
+    cells: &'a BTreeMap<u64, usize>,
+}
+
 pub struct Device<'m> {
     module: &'m ValidModule,
     entry: FuncId,
     budget: u64,
-    region_cells: Option<&'m BTreeMap<u64, usize>>,
+    applied: Option<AppliedContext<'m>>,
     pub frames: Vec<Frame>,
     pub stack: u64,
     pub memory: Vec<u8>,
@@ -79,13 +83,13 @@ impl<'m> Device<'m> {
         budget: u64,
         stack: u64,
         memory: Vec<u8>,
-        region_cells: Option<&'m BTreeMap<u64, usize>>,
+        applied: Option<AppliedContext<'m>>,
     ) -> Self {
         let mut device = Self {
             module,
             entry,
             budget,
-            region_cells,
+            applied,
             frames: Vec::new(),
             stack,
             memory,
@@ -114,7 +118,7 @@ impl<'m> Device<'m> {
     }
 
     pub fn next_measurement(&self) -> Option<Slot> {
-        if self.finish.is_some() || self.steps >= self.budget || self.region_cells.is_some() {
+        if self.finish.is_some() || self.steps >= self.budget || self.applied.is_some() {
             return None;
         }
         match self.instruction()? {
@@ -280,7 +284,7 @@ impl<'m> Device<'m> {
                 self.call(callee, args, dst)?;
                 return Ok(event);
             }
-            Inst::Effect { .. } if self.region_cells.is_some() => return Err(Fault::EffectInRegion),
+            Inst::Effect { .. } if self.applied.is_some() => return Err(Fault::EffectInRegion),
             Inst::Effect { byte } => {
                 self.tape.push(self.read(byte) as u8);
                 None
@@ -291,7 +295,7 @@ impl<'m> Device<'m> {
             | Inst::GateAt { .. }
             | Inst::Measure { .. }
             | Inst::Apply { .. }
-                if self.region_cells.is_some() =>
+                if self.applied.is_some() =>
             {
                 return Err(Fault::QuantumInRegion);
             }
@@ -336,7 +340,8 @@ impl<'m> Device<'m> {
                 self.apply(callee, args, out, fault, self.read_i64(budget))?;
                 None
             }
-            Inst::Setjmp { .. } | Inst::ReturnAddress { .. } => {
+            Inst::ReturnAddress { level, .. } => Some(u128::from(self.return_address(level))),
+            Inst::Setjmp { .. } => {
                 panic!("instruction outside the outer reference: {inst:?}")
             }
         };
@@ -345,6 +350,25 @@ impl<'m> Device<'m> {
         }
         self.advance();
         Ok(event)
+    }
+
+    fn return_address(&self, level: u32) -> u64 {
+        let suspended = self.applied.as_ref().map_or(&[][..], |context| context.callers);
+        let mut frames = self.frames.iter().rev().chain(suspended.iter().rev()).skip(level as usize);
+        if frames.next().is_none() {
+            return 0;
+        }
+        let Some(caller) = frames.next() else {
+            return 0xffff_ffff_0000_0000;
+        };
+
+        // Count the terminator of each preceding block as well as its instructions.
+        let preceding: usize = self.module.function(caller.function).blocks[..caller.block.0 as usize]
+            .iter()
+            .map(|block| block.insts.len() + 1)
+            .sum();
+        let after_call = u32::try_from(preceding + caller.position + 1).expect("code position fits 32 bits");
+        ((u64::from(caller.function.0) + 1) << 32) | u64::from(after_call)
     }
 
     fn call(&mut self, callee: FuncId, args: &[Operand], dst: Option<Slot>) -> Result<(), Fault> {
@@ -388,7 +412,7 @@ impl<'m> Device<'m> {
                     self.advance();
                 }
             }
-            Terminator::Exit(_) if self.region_cells.is_some() => return Err(Fault::ExitInRegion),
+            Terminator::Exit(_) if self.applied.is_some() => return Err(Fault::ExitInRegion),
             Terminator::Exit(operand) => {
                 if Some(self.operand_type(*operand)) != self.module.function(self.entry).result {
                     return Err(Fault::ExitTypeMismatch);
@@ -425,31 +449,11 @@ impl<'m> Device<'m> {
                 .collect::<Vec<_>>()
         };
 
-        // The compute/copy reference initializes ordinary bytes from data segments. Use the
-        // private ordinary step rules when held bytes or writes above the floor must be carried in.
-        let floor = self.module.static_end() as usize;
-        let can_copy = self.quantum.cells.is_empty()
-            && self.memory[floor..].iter().all(|&byte| byte == 0)
-            && args.iter().all(|&op| !matches!(self.operand_type(op), Type::Int(width) if width.bits() > 64));
-        let copy_module = can_copy.then(|| {
-            let mut module = (**self.module).clone();
-            module.data = vec![DataSegment { address: 0, items: vec![DataItem::Bytes(self.memory[..floor].to_vec())] }];
-            module
-        });
-        let copy =
-            copy_module.as_ref().map(|module| ComputeCopy::at(module, &module.function(callee).name, self.stack));
+        // Each definite evaluation starts with the same suspended caller frames and private bytes.
         let mut outputs = BTreeMap::new();
         for (row, col) in self.quantum.density.keys() {
             for basis in [row, col] {
-                let values = input(basis);
-                outputs.entry(values).or_insert_with_key(|args| match &copy {
-                    Some(copy) => {
-                        let words: Vec<_> =
-                            args.iter().map(|&value| value.try_into().expect("compute/copy word")).collect();
-                        copy.finish(&words, budget as usize).output
-                    }
-                    None => self.private_run(callee, args, budget),
-                });
+                outputs.entry(input(basis)).or_insert_with_key(|args| self.private_run(callee, args, budget));
             }
         }
         self.quantum.permute(|mut basis| {
@@ -469,7 +473,7 @@ impl<'m> Device<'m> {
             budget,
             self.stack,
             self.memory.clone(),
-            Some(&self.quantum.cells),
+            Some(AppliedContext { callers: &self.frames, cells: &self.quantum.cells }),
         );
         loop {
             match private.finish {

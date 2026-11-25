@@ -3,7 +3,7 @@
 use bennett_ir::{BinOp, Fault, Predicate, Width};
 
 pub fn signed(value: u128, width: Width) -> i128 {
-    let padding = 128 - width.bits();
+    let padding = u128::BITS - width.bits();
     ((value << padding) as i128) >> padding
 }
 
@@ -14,12 +14,14 @@ pub fn binary(op: BinOp, width: Width, a: u128, b: u128) -> Result<u128, Fault> 
         BinOp::Udiv | BinOp::Sdiv | BinOp::Urem | BinOp::Srem if b == 0 => {
             return Err(Fault::DivideByZero);
         }
+        // Compare the full shift amount before applying a host shift.
         BinOp::Shl | BinOp::Lshr | BinOp::Ashr if b >= u128::from(width.bits()) => 0,
         BinOp::Add => a.wrapping_add(b),
         BinOp::Sub => a.wrapping_sub(b),
         BinOp::Mul => a.wrapping_mul(b),
         BinOp::Udiv => a / b,
         BinOp::Urem => a % b,
+        // At 128 bits, MIN / -1 must wrap at the host width before masking.
         BinOp::Sdiv => signed_a().wrapping_div(signed_b()) as u128,
         BinOp::Srem => signed_a().wrapping_rem(signed_b()) as u128,
         BinOp::And => a & b,
