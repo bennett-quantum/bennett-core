@@ -47,8 +47,14 @@ seeking it gives `ESPIPE`.
 
 `exit`/`exit_group` finish through `__bennett_exit`, including from nested calls. The arena defaults to 1 MiB;
 `--arena-bytes` is a link parameter in whole 4096-byte pages. `brk` grows from the bottom and anonymous
-private mappings from the top; without `MAP_FIXED` an address is only a hint. Exhaustion returns `ENOMEM`;
-`mremap` fails with `ENOMEM` (musl's `realloc` then copies). The arena is monotone: `munmap` accepts valid
+private mappings from the top; without `MAP_FIXED` an address is only a hint. **Exhaustion is the named fault
+`out_of_memory`**, never `ENOMEM` or a null result: a growth of the break or a fresh mapping the arena cannot
+hold (one larger than the arena too) calls `__bennett_out_of_memory`, which ends the run with the console as
+written so far (stdio unflushed, as for every fault). Musl's arithmetic rejections before any system call
+(`malloc(SIZE_MAX)`, an overflowing `calloc`, `mmap` of `PTRDIFF_MAX` bytes or more, the public `brk` and
+`sbrk(n != 0)`, which musl never implements) stay null or `ENOMEM`, as natively (`docs/DESIGN.md`, "Files,
+clock and entropy at the musl boundary"). `mremap` fails with `ENOMEM` (musl's `realloc` then copies); a `MAP_FIXED` mapping longer than
+the arena fails with `ENOMEM`. The arena is monotone: `munmap` accepts valid
 ranges but does not reclaim storage; use after release is outside the C allocation lifetime. A `MAP_FIXED`
 anonymous mapping is accepted over arena pages already handed out and gives fresh zero pages there (musl's
 `malloc` maps its guard page this way); elsewhere it traps. Pages the break gives back read as zero when it
@@ -116,8 +122,8 @@ Empty reads consume none. Undo restores both counters, destinations and all file
 Metadata uses root ownership, a model inode/device identity, and zero timestamps. Unsupported
 operations and flags trap by name instead of claiming success. The remaining debts and their routes
 are in `HANDOFF.md`, including locks, links, directory enumeration, per-invocation image loading,
-permissions/metadata, and transactional allocation exhaustion. The existing finite arena bounds the
-filesystem as well as the application heap.
+and permissions/metadata. The existing finite arena bounds the filesystem as well as the application
+heap; a file operation that exhausts it ends the run with `out_of_memory`, so no half-made change is seen.
 
 ```sh
 python3 rt/musl/test-devices.py   # native file/image comparisons, arithmetic clock oracle, tape, reversal
@@ -171,11 +177,13 @@ nested exit, for `malloc`/`realloc`/`calloc`/`free`, for signals raised, blocked
 `abort` after a handler returns, for reads of the empty stdin through `scanf`, `getchar` and `fgets`, and for
 a break that shrinks and grows again, for the default floating-point environment, and for complex products,
 quotients and `cexp` (`complex.c`, over libgcc's helpers), and for `setjmp`/`longjmp` across frames, `sigsetjmp` with
-and without the signal mask (musl's `__sigsetjmp_tail`) and jumps out of signal handlers (`setjmp.c`); they check arena
-exhaustion and named faults for stderr, an unimplemented syscall, another rounding mode and a flag test.
+and without the signal mask (musl's `__sigsetjmp_tail`) and jumps out of signal handlers (`setjmp.c`); they check that heap
+exhaustion by `mmap`, `malloc`, `realloc` and the break is the fault `out_of_memory` with the output flushed
+before it kept (`arena`, `heap-exhaust`, `realloc-exhaust`, `mmap-exhaust`, `brk-exhaust`), that musl's
+arithmetic rejections stay null against native (`alloc-arithmetic`), and named faults for stderr, an unimplemented syscall, another rounding mode and a flag test.
 `tests/regress/` holds the self-checking witnesses of the independent testing pass of this boundary (each
-returns 0 natively and failed or faulted here before its fix). The 24 tests took 13 to 30 seconds with the
-debug CLI after building the library.
+returns 0 natively and failed or faulted here before its fix). The 35 programs (42 runs with the
+`-O2` ones) took 173 seconds with the debug CLI on the shared machine, after building the library.
 The debug CLI now reads their large data strings without overflowing its host stack.
 
 The front writes zero runs of 16 bytes or more as one `zero N` data item, so the 1 MiB arena costs a

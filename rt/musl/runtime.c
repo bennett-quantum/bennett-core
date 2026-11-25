@@ -22,6 +22,8 @@ _Static_assert(BENNETT_ARENA_BYTES >= PAGE && BENNETT_ARENA_BYTES % PAGE == 0,
 
 void __bennett_effect(char);
 _Noreturn void __bennett_exit(int);
+/* Ends the run with the named fault `out_of_memory`: the arena cannot hold a request. */
+_Noreturn void __bennett_out_of_memory(void);
 struct pthread *__bennett_thread_pointer;
 int __set_thread_area(void *pointer)
 {
@@ -42,7 +44,10 @@ static void zero(unsigned char *p, size_t n)
     for (size_t i = 0; i < n; ++i) p[i] = 0;
 }
 
-/* The arena: brk grows from the bottom, anonymous mappings from the top; nothing is reused. */
+/* The arena: brk grows from the bottom, anonymous mappings from the top; nothing is reused. A growth or a
+ * fresh mapping it cannot hold is the fault `out_of_memory`, never an error result, so no allocation
+ * function returns null for exhaustion (musl's own arithmetic rejections, such as `malloc(SIZE_MAX)`, never
+ * reach the system call). */
 static int arena_range(uintptr_t address, size_t length)
 {
     uintptr_t base = (uintptr_t)arena;
@@ -64,30 +69,33 @@ static long map(long address, size_t length, long prot, long flags)
     if (prot & ~(long)(PROT_READ | PROT_WRITE)) __builtin_trap();
     if ((flags & ~(long)MAP_FIXED) != (MAP_PRIVATE | MAP_ANONYMOUS)) __builtin_trap();
     if (!length) return -EINVAL;
-    if (length > BENNETT_ARENA_BYTES) return -ENOMEM;
-    length = page_up(length);
     if (flags & MAP_FIXED) {
         /* A fresh private mapping over part of the arena already in use (musl's heap guard page). */
+        if (length > BENNETT_ARENA_BYTES) return -ENOMEM;
+        length = page_up(length);
         if (address & (PAGE - 1)) return -EINVAL;
         if (!arena_in_use(address, length)) __builtin_trap();
         zero((unsigned char *)address, length);
         return address;
     }
-    /* Without MAP_FIXED the address is only a hint. */
-    if (length > BENNETT_ARENA_BYTES - mmap_used - page_up(brk_used)) return -ENOMEM;
-    mmap_used += length;
+    /* Without MAP_FIXED the address is only a hint. The free pages lie between the break and the lowest
+     * mapping; their size is a whole number of pages, so the rounded length fits whenever the length does. */
+    if (length > BENNETT_ARENA_BYTES - mmap_used - page_up(brk_used)) __bennett_out_of_memory();
+    mmap_used += page_up(length);
     return (long)(arena + BENNETT_ARENA_BYTES - mmap_used);
 }
 
 static long set_break(uintptr_t want)
 {
     uintptr_t base = (uintptr_t)arena;
-    if (want >= base && want - base <= BENNETT_ARENA_BYTES - mmap_used) {
-        size_t old = brk_used;
-        brk_used = want - base;
-        /* Pages given back are fresh zero pages if the break grows over them again. */
-        if (page_up(brk_used) < page_up(old)) zero(arena + page_up(brk_used), page_up(old) - page_up(brk_used));
-    }
+    /* The query brk(0), or an address below the arena: the current break, as Linux answers a failed brk. */
+    if (want < base) return base + brk_used;
+    /* A break the arena cannot hold is always a growth, since the current break fits. */
+    if (want - base > BENNETT_ARENA_BYTES - mmap_used) __bennett_out_of_memory();
+    size_t old = brk_used;
+    brk_used = want - base;
+    /* Pages given back are fresh zero pages if the break grows over them again. */
+    if (page_up(brk_used) < page_up(old)) zero(arena + page_up(brk_used), page_up(old) - page_up(brk_used));
     return base + brk_used;
 }
 

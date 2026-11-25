@@ -18,6 +18,22 @@ def escaped(data):
     return '"' + ''.join(escape.get(b, chr(b) if 32 <= b < 127 else f"\\x{b:02x}") for b in data) + '"' if data else ''
 
 
+# Heap exhaustion ends the run with the fault `out_of_memory`, keeping the lines flushed before it. Natively these
+# programs would succeed (or allocate until the host refuses), so each states its own console: a function of
+# the number k of lines that fit, here checked for every k up to a bound far above the arena's.
+def lines(make):
+    return lambda console: any(console == escaped(b"".join(make(i) for i in range(1, k + 1))) for k in range(1, 200))
+
+
+EXHAUSTED = {
+    "arena": lambda console: console == escaped(b"".join(b"page %d\n" % i for i in range(1, 5))),
+    "heap-exhaust": lines(lambda i: b"%d\n" % i),
+    "realloc-exhaust": lines(lambda i: b"%d\n" % (16 << i)),
+    "mmap-exhaust": lambda console: console == escaped(b"small 1\n"),
+    "brk-exhaust": lambda console: console == escaped(b"grown 1\n"),
+}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--libdir", type=Path, default=ROOT / "target/musl")
@@ -29,7 +45,8 @@ def main():
     started = time.monotonic()
     # tests/regress: witnesses of the independent testing pass, each self-checking (status 0 natively).
     regressions = sorted(f"regress/{path.stem}" for path in (HERE / "tests/regress").glob("*.c"))
-    names = ["library", "exit", "arena", "unimplemented", "stderr", "heap", "signals", "abort", "stdin", "brk",
+    names = ["library", "exit", *EXHAUSTED, "alloc-arithmetic", "unimplemented", "stderr", "heap", "signals",
+             "abort", "stdin", "brk",
              "fenv", "fenv-mode", "fenv-flags", "complex", "setjmp", "setjmp-independent", "setjmp-masks",
              "prototypes", "proto-independent",
              *regressions]
@@ -53,23 +70,25 @@ def main():
             assert "returned to entry: classical state identical" in result.stdout, (name, level, result)
         if name in ["unimplemented", "stderr", "fenv-mode", "fenv-flags"]:
             assert result.returncode == 1 and "fault: unreachable" in result.stdout, (name, result)
+        elif name in EXHAUSTED:
+            assert result.returncode == 1 and "fault: out_of_memory (code 19)" in result.stdout, (name, result)
+            console = next((line.removeprefix("console: ") for line in result.stdout.splitlines()
+                            if line.startswith("console: ")), "")
+            assert EXHAUSTED[name](console), (name, console)
         else:
-            if name == "arena":
-                status, output = 0, b"pages=4 errno=12\n"
-            else:
-                native = args.out / f"{name.replace('/', '-')}.native"
-                built = run(["clang-18", "-O0", source, "-lm", "-o", native])
+            native = args.out / f"{name.replace('/', '-')}.native"
+            built = run(["clang-18", "-O0", source, "-lm", "-o", native])
+            assert built.returncode == 0, built.stderr
+            reference = subprocess.run([native], capture_output=True, stdin=subprocess.DEVNULL)
+            if name == "proto-independent":
+                native_o2 = native.with_suffix(".native-O2")
+                built = run(["clang-18", "-O2", source, "-o", native_o2])
                 assert built.returncode == 0, built.stderr
-                reference = subprocess.run([native], capture_output=True, stdin=subprocess.DEVNULL)
-                if name == "proto-independent":
-                    native_o2 = native.with_suffix(".native-O2")
-                    built = run(["clang-18", "-O2", source, "-o", native_o2])
-                    assert built.returncode == 0, built.stderr
-                    reference_o2 = subprocess.run([native_o2], capture_output=True, stdin=subprocess.DEVNULL)
-                    assert (reference.returncode, reference.stdout) == (reference_o2.returncode, reference_o2.stdout), name
-                # A process killed by a signal has the status a shell reports.
-                status = reference.returncode if reference.returncode >= 0 else 128 - reference.returncode
-                output = reference.stdout
+                reference_o2 = subprocess.run([native_o2], capture_output=True, stdin=subprocess.DEVNULL)
+                assert (reference.returncode, reference.stdout) == (reference_o2.returncode, reference_o2.stdout), name
+            # A process killed by a signal has the status a shell reports.
+            status = reference.returncode if reference.returncode >= 0 else 128 - reference.returncode
+            output = reference.stdout
             assert result.returncode == 0 and f"result: {status}\n" in result.stdout, (name, result)
             console = next((line.removeprefix("console: ") for line in result.stdout.splitlines()
                             if line.startswith("console: ")), "")

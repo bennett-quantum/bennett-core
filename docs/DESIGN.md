@@ -2186,7 +2186,24 @@ fd makes its number reusable. There is no disk backend without a use for one; bl
 links/symlinks, directory enumeration and unmapped system calls remain named faults, with the route
 for each in `HANDOFF.md`, "Debts". Metadata uses a model device/inode identity, root ownership and zero
 timestamps, rather than borrowing host-dependent values. This does not implement all Linux filesystem
-semantics; allocation failure, permissions, metadata and namespace lifetime debts are recorded there.
+semantics; permissions, metadata and namespace lifetime debts are recorded there.
+
+**Heap exhaustion is the fault `out_of_memory` (19), never a null result.** The arena (`--arena-bytes`) holds
+the break, growing up, and anonymous mappings, growing down. A growth of the break or a fresh mapping it
+cannot hold, a request larger than the whole arena included, calls `_Noreturn void
+__bennett_out_of_memory(void)`, which the front lowers to the terminator `fault out_of_memory` (checked like
+`__bennett_exit`: declared, no parameters, `noreturn`, no attribute that lets LLVM remove the call). Every
+allocation of musl and of the file model ends in one of those two, so `malloc`, `calloc`, `realloc`,
+`aligned_alloc`, `strdup`, stdio's buffers and a program's own `mmap` or `brk` never report exhaustion as
+null or `ENOMEM`: a program's check of the result is never reached, so the device's finite arena cannot
+send it down a path the native program does not take, other than ending with a resource fault. Like every
+fault it ends the run at once: the console keeps the bytes written before it; stdio is not flushed and no
+`atexit` handler runs. Requests musl rejects by arithmetic on the arguments alone, before any system call
+(`malloc` of at least `SIZE_MAX/2 - 4096` bytes, an overflowing `calloc` or `reallocarray` product,
+`aligned_alloc` beyond its limits, `mmap` of `PTRDIFF_MAX` bytes or more), stay null with `ENOMEM`, as
+natively: they do not depend on the arena. A request below those limits that no real host could satisfy
+either is the fault, since the device does not know the native host's limit. A failure of the remaining
+heap may also leave partial state behind no longer: nothing runs after the fault.
 
 For the smallest positive subnormal double, musl currently prints `0x1p-1074` with `printf("%a")`.
 glibc prints `0x0.0000000000001p-1022`. Both spellings conform to C. Matching glibc through
