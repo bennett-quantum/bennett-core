@@ -565,11 +565,12 @@ the call attempt, and the entry frame check comes before the first budget check.
 The planner creates copies only for sites the entry analysis can reach. An indirect site
 with one proved definite address uses the same copy construction. For a qubit-dependent address,
 the planner copies each function whose signature matches and whose address agrees with the proved
-constant bits and shared qubit values. Reachable recursion among those candidates or exceeding
-the copy limit is refused before issuing gates. A copied frame keeps the caller's proved
-literal bits and equalities between argument bits across all visits to the call site. A call
-result is unknown to the caller's operand proof. When the first qubit-dependent jump is in a frame entered
-by the definite prefix, the control construction can follow calls and returns under
+constant bits and shared qubit values. It selects candidates while the local instruction analysis
+still has those relationships and retains any candidates discovered on later visits. The emitter refuses
+reachable recursion and copy expansions above the limit before issuing gates. A copied frame keeps the
+caller's proved literal bits and equalities between argument bits across all visits to the call site.
+A call result is unknown to the caller's operand proof. When the first qubit-dependent jump is in a frame
+entered by the definite prefix, the control construction can follow calls and returns under
 the route guard. A return from a copied frame stops at the caller's continuation
 until sibling routes have been lowered. If a copied program first branches on qubits
 in the entry frame, or routes reach incompatible continuations, the emitter can use
@@ -858,10 +859,14 @@ machine's fault semantics, writing fault codes into the program's register. The 
 simulator run is `bennett run --machine-meaning` with its default direct evaluation.
 
 Before consulting the budget, the emitter checks every instruction and terminator in every
-planned function copy, including those in bypassed blocks. It plans indirect calls in
-reachable blocks by signature and proved address bits. Within each copy, call planning ends a
-path at the first unconditional instruction fault. A proved shift
-amount uses fixed wiring and a proved switch selector follows one target. A qubit-held amount
+planned function copy, including those in bypassed blocks. Planning follows each path until an
+unconditional instruction fault or a call with no possible returning target. The emitter summarizes
+possible returns with unconstrained function arguments and propagates newly found returns to callers.
+A call at the stopping point stays in the plan. It can fault there or enter a copied frame that
+will fault or exhaust the budget. In that frame, each attempted instruction uses the same budget as
+the call that entered it. Other live predecessors can still reach a shared continuation.
+
+A proved shift amount uses fixed wiring and a proved switch selector follows one target. A qubit-held amount
 uses the shift circuit. A switch with several possible edges uses step machine dispatch.
 
 Each function copy has one word of facts per slot, shared across blocks and visits. Within
@@ -872,9 +877,9 @@ identified by slot and bit index. The analysis starts at the entry and follows t
 edge when a conditional jump or switch folds to a constant. For a qubit-held condition it
 follows both edges. For a qubit-held switch selector it follows the cases and default its
 bit facts permit. It waits for operands whose facts are pending. Reachability can grow as
-more facts arrive, including on later loop visits. The analysis keeps the edges used by
-call planning at each switch after the facts settle. Dispatch starts with those edges and
-can narrow them further using the current selector bits.
+more facts arrive, including on later loop visits. Dispatch starts with the possible switch edges
+and indirect targets recorded by the analysis. It reads the selector or address for the current
+visit and combines each match with the incoming dispatch bit.
 Refusals for given arguments apply at every budget, including zero.
 
 The controller resolves the targets and arguments first, keeping dangling and aliased

@@ -168,6 +168,72 @@ done:
 }
 
 #[test]
+fn an_indirect_site_dispatches_each_visit_using_its_current_address() {
+    let module = control_example(
+        r#"
+memory 1024
+func @add(i8 %v) -> i8 {
+entry:
+    %z = add i8 %v, 7
+    ret %z
+}
+func @rotate(i8 %v) -> i8 {
+entry:
+    %z = mul i8 %v, 3
+    %r = xor i8 %z, 19
+    ret %r
+}
+func @wrapper(i1 %which, i8 %v) -> i8 {
+entry:
+    %a = select i64 %which, 1, 2
+    %r = call_indirect fn(i8) -> i8 %a(%v)
+    ret %r
+}
+func @wrapper2(i1 %which, i8 %v) -> i8 {
+entry:
+    %a = select i64 %which, 2, 1
+    %r = call_indirect fn(i8) -> i8 %a(%v)
+    %s = add i8 %r, 4
+    ret %s
+}
+func @f(i2 %x) -> i8 {
+entry:
+    %odd = trunc i2 %x to i1
+    %hi = lshr i2 %x, 1
+    %which = trunc i2 %hi to i1
+    br loop(i1 0, i8 2)
+loop(i1 %last, i8 %v):
+    %alt = xor i1 %last, %odd
+    %a = select i64 %alt, 3, 4
+    %r = call_indirect fn(i1, i8) -> i8 %a(%which, %v)
+    br %last, done, loop(i1 1, %r)
+done:
+    ret %r
+}
+"#,
+        2,
+        "",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 20..=26 {
+            compare_controls(&module, budget, mode, |x| {
+                if budget < 25 {
+                    return (0, bennett_ir::Fault::Budget.code());
+                }
+                let call = |first_wrapper: bool, value| {
+                    let high = x & 2 != 0;
+                    let add = first_wrapper == high;
+                    let result = if add { value + 7 } else { (value * 3) ^ 19 };
+                    result + 4 * u64::from(!first_wrapper)
+                };
+                let first = x & 1 != 0;
+                (call(!first, call(first, 2)), 0)
+            });
+        }
+    }
+}
+
+#[test]
 fn indirect_dispatch_plans_targets_discovered_on_later_loop_visits() {
     use bennett_emit::{ApplyInput, Argument, Construction, compile_apply_with};
     use bennett_ir::load;

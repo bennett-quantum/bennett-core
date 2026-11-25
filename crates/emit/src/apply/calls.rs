@@ -8,9 +8,10 @@ use bennett_ir::{Block, BlockId, Fault, FuncId, Function, Inst, Operand, Slot, T
 
 use super::bits::{Bit, Circuit, Word, ZERO, constant};
 use super::memory::{AccessError, Memory};
+use super::returns::Returns;
 use super::selectors::Selector;
 use super::stack::{self, StackSlots};
-use super::symbolic::{Frame, IndirectCall, Point, Step, before_instruction_fault};
+use super::symbolic::{Frame, IndirectCall, Point, Step};
 use super::{ApplyError, ApplyInput, Argument};
 
 // Count a unit for each copied slot and each instruction or terminator, including
@@ -49,7 +50,10 @@ impl<'a> Program<'a> {
     pub(super) fn check(input: &ApplyInput<'a>) -> Result<(Self, Vec<Word>), ApplyError> {
         let source = input.module.function(input.callee);
         let args = arguments(input);
-        let root = Frame::check(input.module, input.callee, args.iter().cloned().map(Some))?;
+        let mut returns = Returns::new(input.module);
+        let root = Frame::check(input.module, input.callee, args.iter().cloned().map(Some), |callee| {
+            returns.can_return(callee)
+        })?;
         let mut slots = root.initial(args);
         let mut program = Self {
             copies: vec![Copy {
@@ -79,86 +83,26 @@ impl<'a> Program<'a> {
                 source.blocks.iter().flat_map(|block| &block.insts).any(|inst| {
                     matches!(inst, Inst::Alloca { .. } | Inst::StackSave { .. } | Inst::StackRestore { .. })
                 });
-            for (block, body) in source.blocks.iter().enumerate() {
-                let block = BlockId(block as u32);
-                if !program.copies[index].frame.reaches(block) {
-                    continue;
+            for ((block, instruction), call) in program.copies[index].frame.take_calls() {
+                let point = Point { copy: index, block, index: instruction };
+                let operation = if call.target.is_some() { "call_indirect" } else { "call" };
+                let mut targets = Vec::new();
+                for callee in call.candidates {
+                    let child =
+                        program.child(&mut returns, point, callee, call.args, (call.dst, operation), &mut slots)?;
+                    targets.push((callee.address(), child));
                 }
-                let (instructions, _) = before_instruction_fault(body);
-                for (inst, instruction) in instructions.iter().enumerate() {
-                    let point = Point { copy: index, block, index: inst };
-                    let site = match instruction {
-                        Inst::Call { callee, args, dst } => {
-                            let child = program.child(input, point, *callee, args, (*dst, "call"), &mut slots)?;
-                            Site::Call(child, args)
-                        }
-                        Inst::CallIndirect { signature, target, args, dst } => {
-                            let frame = &program.copies[index].frame;
-                            if let Some(address) = frame.known(target) {
-                                let callee = input
-                                    .module
-                                    .function_at(address as u64)
-                                    .filter(|&callee| input.module.function(callee).has_signature(signature));
-                                match callee {
-                                    Some(callee) => {
-                                        let child = program.child(
-                                            input,
-                                            point,
-                                            callee,
-                                            args,
-                                            (*dst, "call_indirect"),
-                                            &mut slots,
-                                        )?;
-                                        Site::Call(child, args)
-                                    }
-                                    None => Site::BadAddress,
-                                }
-                            } else {
-                                let proved = frame.known_bits(target).map(|word| Selector::new(&word));
-                                let mut targets = Vec::new();
-                                for (index, function) in input.module.functions.iter().enumerate() {
-                                    let callee = FuncId(index as u32);
-                                    let address = callee.address();
-                                    if function.has_signature(signature)
-                                        && proved.as_ref().is_none_or(|bits| bits.allows(u128::from(address)))
-                                    {
-                                        let child = program.child(
-                                            input,
-                                            point,
-                                            callee,
-                                            args,
-                                            (*dst, "call_indirect"),
-                                            &mut slots,
-                                        )?;
-                                        targets.push((address, child));
-                                    }
-                                }
-                                let invalid_possible = !proved.is_some_and(|bits| bits.covered_by(targets.len()));
-                                Site::Indirect { target, args, targets, invalid_possible }
-                            }
-                        }
-                        Inst::Binary { .. }
-                        | Inst::Compare { .. }
-                        | Inst::Select { .. }
-                        | Inst::Cast { .. }
-                        | Inst::FuncAddr { .. }
-                        | Inst::Load { .. }
-                        | Inst::Store { .. }
-                        | Inst::Alloca { .. }
-                        | Inst::StackSave { .. }
-                        | Inst::StackRestore { .. }
-                        | Inst::ReturnAddress { .. }
-                        | Inst::Setjmp { .. }
-                        | Inst::Effect { .. }
-                        | Inst::Qalloc { .. }
-                        | Inst::Qfree { .. }
-                        | Inst::Gate { .. }
-                        | Inst::GateAt { .. }
-                        | Inst::Measure { .. }
-                        | Inst::Apply { .. } => continue,
-                    };
-                    program.copies[index].sites.insert((point.block, point.index), site);
-                }
+                let site = match (targets.as_slice(), call.invalid_possible) {
+                    ([], _) => Site::BadAddress,
+                    ([(_, child)], false) => Site::Call(*child, call.args),
+                    ([_, _, ..], _) | ([_], true) => Site::Indirect {
+                        target: call.target.expect("an indirect call can have several addresses"),
+                        args: call.args,
+                        targets,
+                        invalid_possible: call.invalid_possible,
+                    },
+                };
+                program.copies[index].sites.insert((block, instruction), site);
             }
             index += 1;
         }
@@ -178,7 +122,7 @@ impl<'a> Program<'a> {
 
     fn child(
         &mut self,
-        input: &ApplyInput<'a>,
+        returns: &mut Returns<'a>,
         at: Point,
         callee: FuncId,
         args: &[Operand],
@@ -186,7 +130,8 @@ impl<'a> Program<'a> {
         slots: &mut Vec<Word>,
     ) -> Result<usize, ApplyError> {
         let parent = &self.copies[at.copy];
-        let function = input.module.function(callee);
+        let module = parent.frame.module;
+        let function = module.function(callee);
         let error = |route| parent.frame.error(at, call, route);
         let mut ancestor = Some(at);
         while let Some(point) = ancestor {
@@ -204,7 +149,7 @@ impl<'a> Program<'a> {
         // These facts hold across every visit in the caller copy. The frame
         // remaps their wire identities together, preserving shared input bits.
         let proofs = args.iter().map(|arg| parent.frame.known_bits(arg));
-        let frame = Frame::check(input.module, callee, proofs)?;
+        let frame = Frame::check(module, callee, proofs, |target| returns.can_return(target))?;
         let available_stack =
             parent.available_stack.and_then(|bytes| bytes.checked_sub(frame_bytes(function.slot_count())?));
         let caller = Some((at.next(), dst.map(|slot| parent.slot(slot))));

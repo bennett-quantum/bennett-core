@@ -16,6 +16,7 @@ mod modular_loop;
 mod products;
 mod ranges;
 mod reach;
+mod returns;
 mod saved;
 mod selectors;
 mod shifts;

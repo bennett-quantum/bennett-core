@@ -1,5 +1,7 @@
 //! The state of an applied frame and the transition for one instruction.
 
+use std::collections::BTreeMap;
+
 use bennett_ir::{
     BinOp, Block, BlockId, Fault, FuncId, Inst, Operand, Slot, SwitchCase, Target, Terminator, Type, ValidModule,
 };
@@ -7,7 +9,7 @@ use bennett_ir::{
 use super::ApplyError;
 use super::arithmetic;
 use super::bits::{Bit, Circuit, Word, ZERO, constant};
-use super::definite::Constants;
+use super::definite::{CallSite, Constants};
 use super::division;
 use super::switches::Edges;
 
@@ -110,26 +112,29 @@ impl<'a> Frame<'a> {
         ApplyError::Unsupported { callee: self.callee, block: point.block, index: point.index, operation, route }
     }
 
-    pub(super) fn known(&self, operand: &Operand) -> Option<u128> {
-        self.constants.get(operand)
-    }
-
     pub(super) fn known_bits(&self, operand: &Operand) -> Option<Word> {
         self.constants.word(operand)
     }
 
-    pub(super) fn reaches(&self, block: BlockId) -> bool {
-        self.constants.reaches(block)
+    pub(super) fn take_calls(&mut self) -> BTreeMap<(BlockId, usize), CallSite<'a>> {
+        std::mem::take(&mut self.constants.calls)
+    }
+
+    pub(super) fn may_return(module: &'a ValidModule, callee: FuncId, can_return: impl FnMut(FuncId) -> bool) -> bool {
+        let frame = Self { module, callee, constants: Constants::default() };
+        let inputs = module.function(callee).params.iter().map(|_| None);
+        Constants::analyze(&frame, inputs, can_return).may_return
     }
 
     pub(super) fn check(
         module: &'a ValidModule,
         callee: FuncId,
         input: impl Iterator<Item = Option<Word>>,
+        can_return: impl FnMut(FuncId) -> bool,
     ) -> Result<Self, ApplyError> {
         let mut frame = Self { module, callee, constants: Constants::default() };
         frame.check_instructions()?;
-        frame.constants = Constants::analyze(&frame, input);
+        frame.constants = Constants::for_emission(&frame, input, can_return);
         Ok(frame)
     }
 

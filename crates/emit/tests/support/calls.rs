@@ -481,11 +481,11 @@ entry:
 }
 func @f(i2 %x) -> i8 {
 entry:
+    %high = lshr i2 %x, 1
+    %address = zext i2 %high to i64
     %odd = trunc i2 %x to i1
     br %odd, invoke, skip
 invoke:
-    %high = lshr i2 %x, 1
-    %address = zext i2 %high to i64
     %result = call_indirect fn() -> i8 %address()
     ret %result
 skip:
@@ -498,9 +498,197 @@ skip:
     for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
         for budget in [2, 3, 4, 5, 6, 7, 8] {
             compare_controls(&module, budget, mode, |x| match x {
-                0 | 2 if budget >= 3 => (31, 0),
+                0 | 2 if budget >= 5 => (31, 0),
                 1 if budget >= 5 => (0, Fault::BadIndirect.code()),
                 3 if budget >= 7 => (19, 0),
+                _ => (0, Fault::Budget.code()),
+            });
+        }
+    }
+}
+
+#[test]
+fn computed_address_aliases_exclude_an_impossible_recursive_target() {
+    let module = control_example(
+        r#"
+memory 512
+func @one() -> i8 {
+entry:
+    ret 7
+}
+func @two() -> i8 {
+entry:
+    ret 9
+}
+func @never() -> i8 {
+entry:
+    %r = call @never()
+    ret %r
+}
+func @f(i2 %x) -> i8 {
+entry:
+    %both = icmp eq i2 %x, 3
+    %address = select i64 %both, 1, 2
+    %result = call_indirect fn() -> i8 %address()
+    ret %result
+}
+"#,
+        2,
+        "",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=6 {
+            compare_controls(&module, budget, mode, |x| {
+                if budget < 5 { (0, Fault::Budget.code()) } else { (if x == 3 { 7 } else { 9 }, 0) }
+            });
+        }
+    }
+}
+
+#[test]
+fn a_call_that_cannot_match_leaves_same_block_and_successor_calls_dead() {
+    for continuation in ["", "br later\nlater:"] {
+        let module = control_example(
+            &format!(
+                r#"
+memory 512
+func @f(i1 %x) -> i8 {{
+entry:
+    %address = zext i1 %x to i64
+    call_indirect fn() %address()
+    {continuation}
+    %result = call @f(%x)
+    ret %result
+}}
+"#
+            ),
+            1,
+            "",
+        );
+        for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+            for budget in 0..=3 {
+                compare_controls(&module, budget, mode, |_| {
+                    (0, if budget < 2 { Fault::Budget } else { Fault::BadIndirect }.code())
+                });
+            }
+        }
+    }
+}
+
+#[test]
+fn a_callee_that_cannot_return_preserves_each_call_step() {
+    for (call, extra, fault_at) in [
+        ("call @make()", "", 2),
+        ("%address = faddr @make\n    call_indirect fn() -> q1 %address()", "", 3),
+        ("call @middle()", "func @middle() {\nentry:\n    call @make()\n    ret\n}", 3),
+    ] {
+        let module = control_example(
+            &format!(
+                r#"
+memory 512
+func @f(i1 %x) -> i8 {{
+entry:
+    {call}
+    call @f(%x)
+    ret 0
+}}
+func @make() -> q1 {{
+entry:
+    %register = qalloc 1
+    ret %register
+}}
+{extra}
+"#
+            ),
+            1,
+            "",
+        );
+        for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+            for budget in 0..=fault_at + 1 {
+                compare_controls(&module, budget, mode, |_| {
+                    (0, if budget < fault_at { Fault::Budget } else { Fault::QuantumInRegion }.code())
+                });
+            }
+        }
+    }
+}
+
+#[test]
+fn a_live_predecessor_keeps_the_continuation_of_a_stopping_call() {
+    let module = control_example(
+        r#"
+memory 512
+func @f(i1 %x) -> i8 {
+entry:
+    br %x, stop, join
+stop:
+    %address = zext i1 %x to i64
+    call_indirect fn() %address()
+    br join
+join:
+    %result = call @relay()
+    ret %result
+}
+func @relay() -> i8 {
+entry:
+    %result = call @leaf()
+    ret %result
+}
+func @leaf() -> i8 {
+entry:
+    ret 29
+}
+"#,
+        1,
+        "",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=7 {
+            compare_controls(&module, budget, mode, |x| match x {
+                0 if budget >= 6 => (29, 0),
+                1 if budget >= 3 => (0, Fault::BadIndirect.code()),
+                _ => (0, Fault::Budget.code()),
+            });
+        }
+    }
+}
+
+#[test]
+fn an_indirect_call_with_a_returning_target_keeps_its_continuation() {
+    let module = control_example(
+        r#"
+memory 512
+func @stop() -> i8 {
+entry:
+    %register = qalloc 1
+    ret 0
+}
+func @relay() -> i8 {
+entry:
+    %result = call @leaf()
+    ret %result
+}
+func @f(i1 %x) -> i8 {
+entry:
+    %address = select i64 %x, 1, 2
+    %first = call_indirect fn() -> i8 %address()
+    %second = call @leaf()
+    %result = add i8 %first, %second
+    ret %result
+}
+func @leaf() -> i8 {
+entry:
+    ret 12
+}
+"#,
+        1,
+        "",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=10 {
+            compare_controls(&module, budget, mode, |x| match x {
+                0 if budget >= 9 => (24, 0),
+                1 if budget >= 3 => (0, Fault::QuantumInRegion.code()),
                 _ => (0, Fault::Budget.code()),
             });
         }

@@ -1,11 +1,12 @@
 //! Prove constants for the operations that need them, independently of the step budget.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bennett_exec::Wire;
-use bennett_ir::{BinOp, BlockId, Inst, Operand, Slot, Terminator, Width};
+use bennett_ir::{BinOp, BlockId, FuncId, Inst, Operand, Signature, Slot, Terminator, ValidModule, Width};
 
 use super::bits::{Bit, Circuit, Word, ZERO, constant, definite};
+use super::selectors::Selector;
 use super::switches::Edges;
 use super::symbolic::{Frame, before_instruction_fault};
 use super::{arithmetic, division, ranges};
@@ -54,11 +55,11 @@ fn fold_inst(
         | Inst::CallIndirect { .. }
         | Inst::Load { .. }
         | Inst::Alloca { .. }
-        | Inst::StackSave { .. } => Some(unknown()),
+        | Inst::StackSave { .. }
+        | Inst::Setjmp { .. }
+        | Inst::ReturnAddress { .. } => Some(unknown()),
         Inst::Store { .. } | Inst::StackRestore { .. } => None,
-        Inst::Setjmp { .. }
-        | Inst::ReturnAddress { .. }
-        | Inst::Effect { .. }
+        Inst::Effect { .. }
         | Inst::Qalloc { .. }
         | Inst::Qfree { .. }
         | Inst::Gate { .. }
@@ -68,11 +69,61 @@ fn fold_inst(
     }
 }
 
+pub(super) struct CallSite<'a> {
+    pub(super) target: Option<&'a Operand>,
+    pub(super) args: &'a [Operand],
+    pub(super) dst: Option<Slot>,
+    pub(super) candidates: BTreeSet<FuncId>,
+    pub(super) invalid_possible: bool,
+}
+
+type Calls<'a> = BTreeMap<(BlockId, usize), CallSite<'a>>;
+
+fn record_call<'a, 'sites>(
+    calls: &'sites mut Calls<'a>,
+    at: (BlockId, usize),
+    call: CallSite<'a>,
+) -> &'sites CallSite<'a> {
+    let site = calls.entry(at).or_insert_with(|| CallSite {
+        target: call.target,
+        args: call.args,
+        dst: call.dst,
+        candidates: BTreeSet::new(),
+        invalid_possible: false,
+    });
+    // Retain the possibilities from earlier visits as input facts change at joins.
+    site.candidates.extend(call.candidates);
+    site.invalid_possible |= call.invalid_possible;
+    site
+}
+
+fn indirect_targets(module: &ValidModule, signature: &Signature, address: &[Bit]) -> (BTreeSet<FuncId>, bool) {
+    if let Some(address) = definite(address) {
+        let callee =
+            module.function_at(address as u64).filter(|&callee| module.function(callee).has_signature(signature));
+        return (callee.into_iter().collect(), callee.is_none());
+    }
+
+    let selector = Selector::new(address);
+    let candidates: BTreeSet<_> = module
+        .functions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, function)| {
+            let callee = FuncId(index as u32);
+            (function.has_signature(signature) && selector.allows(u128::from(callee.address()))).then_some(callee)
+        })
+        .collect();
+    let invalid_possible = !selector.covered_by(candidates.len());
+    (candidates, invalid_possible)
+}
+
 #[derive(Default)]
 pub(super) struct Constants<'a> {
     slots: Vec<Option<Word>>,
-    reachable: Vec<bool>,
     switches: Vec<Edges<'a>>,
+    pub(super) calls: Calls<'a>,
+    pub(super) may_return: bool,
 }
 
 impl<'a> Constants<'a> {
@@ -90,15 +141,15 @@ impl<'a> Constants<'a> {
         }
     }
 
-    pub(super) fn reaches(&self, block: BlockId) -> bool {
-        self.reachable.get(block.index()).copied().unwrap_or(false)
-    }
-
     pub(super) fn switch_edges(&self, block: BlockId) -> &Edges<'a> {
         &self.switches[block.index()]
     }
 
-    pub(super) fn analyze(frame: &Frame<'a>, inputs: impl Iterator<Item = Option<Word>>) -> Self {
+    pub(super) fn for_emission(
+        frame: &Frame<'a>,
+        inputs: impl Iterator<Item = Option<Word>>,
+        can_return: impl FnMut(FuncId) -> bool,
+    ) -> Self {
         let function = frame.module.function(frame.callee);
         if !function.blocks.iter().any(|block| {
             matches!(&block.term, Terminator::Switch { .. })
@@ -119,6 +170,15 @@ impl<'a> Constants<'a> {
         }) {
             return Self::default();
         }
+        Self::analyze(frame, inputs, can_return)
+    }
+
+    pub(super) fn analyze(
+        frame: &Frame<'a>,
+        inputs: impl Iterator<Item = Option<Word>>,
+        mut can_return: impl FnMut(FuncId) -> bool,
+    ) -> Self {
+        let function = frame.module.function(frame.callee);
         let mut slots = vec![None; function.slot_count()];
         let mut arguments = BTreeMap::new();
         let mut next_argument_wire = 0;
@@ -155,6 +215,8 @@ impl<'a> Constants<'a> {
         // first deliver a constant condition and later make both outcomes possible.
         let mut reachable = vec![false; function.blocks.len()];
         let mut switches = vec![Edges::default(); function.blocks.len()];
+        let mut calls = Calls::new();
+        let mut may_return = false;
         reachable[0] = true;
         loop {
             let mut changed = false;
@@ -168,8 +230,34 @@ impl<'a> Constants<'a> {
                     Operand::Const(value) => Some(constant(value.value(), value.width().bits() as usize)),
                     Operand::Slot(slot) => local.get(slot).or(slots[slot.index()].as_ref()).cloned(),
                 };
-                let (instructions, term) = before_instruction_fault(block);
-                for inst in instructions {
+                let (instructions, mut term) = before_instruction_fault(block);
+                for (at, inst) in instructions.iter().enumerate() {
+                    let call = if let Inst::Call { callee, args, dst } = inst {
+                        Some(CallSite {
+                            target: None,
+                            args,
+                            dst: *dst,
+                            candidates: BTreeSet::from([*callee]),
+                            invalid_possible: false,
+                        })
+                    } else if let Inst::CallIndirect { signature, target, args, dst } = inst {
+                        let Some(address) = read(&local, target) else {
+                            // The address can acquire facts from a later predecessor.
+                            term = None;
+                            break;
+                        };
+                        let (candidates, invalid_possible) = indirect_targets(frame.module, signature, &address);
+                        Some(CallSite { target: Some(target), args, dst: *dst, candidates, invalid_possible })
+                    } else {
+                        None
+                    };
+                    if let Some(call) = call {
+                        let site = record_call(&mut calls, (BlockId(index as u32), at), call);
+                        if !site.candidates.iter().copied().any(&mut can_return) {
+                            term = None;
+                            break;
+                        }
+                    }
                     let Some(result) = inst.result() else { continue };
                     if let Some(word) = fold_inst(inst, |op| read(&local, op), &mut circuit, || unknown_word(result)) {
                         local.insert(result, word);
@@ -212,6 +300,9 @@ impl<'a> Constants<'a> {
                         switches[index] = edges;
                     }
                 } else if let Some(term) = term {
+                    // Non-local control is unsupported by emission. Treat it
+                    // conservatively when summarizing potential callees.
+                    may_return |= matches!(term, Terminator::Return(_) | Terminator::Longjmp { .. });
                     term.visit_targets(transfer);
                 }
                 for (slot, mut word) in local.into_iter().chain(incoming) {
@@ -229,7 +320,7 @@ impl<'a> Constants<'a> {
                 }
             }
             if !changed {
-                return Self { slots, reachable, switches };
+                return Self { slots, switches, calls, may_return };
             }
         }
     }
