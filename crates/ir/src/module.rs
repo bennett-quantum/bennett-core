@@ -430,11 +430,11 @@ pub enum Inst {
         /// The control qubits.
         controls: Vec<Place>,
     },
-    /// `rx(%angle) target [ctrl controls]` (or `ry`, `rz`): a rotation by an angle computed at run time,
+    /// `rx(%angle) target [ctrl controls]` (or `ry`, `rz`, `p`): a rotation by an angle computed at run time,
     /// the `i64` in `angle` read as the bits of an IEEE 754 binary64; an angle that is not finite is the
     /// fault `bad_angle`. Its qubits are in registers or in memory, as `GateAt`'s.
     RotateBy {
-        /// The axis.
+        /// The axis, or the phase rotation.
         axis: Rotation,
         /// The `i64` slot holding the angle's binary64 bits, in radians.
         angle: Slot,
