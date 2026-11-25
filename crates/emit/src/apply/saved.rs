@@ -233,6 +233,7 @@ fn total(inst: &Inst) -> bool {
         | Inst::FuncAddr { .. }
         | Inst::Effect { .. }
         | Inst::Qalloc { .. }
+        | Inst::QallocBy { .. }
         | Inst::Qfree { .. }
         | Inst::Gate { .. }
         | Inst::GateAt { .. }

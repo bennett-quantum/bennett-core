@@ -122,6 +122,7 @@ impl Writer<'_> {
             Inst::FuncAddr { func, .. } => write!(self.out, "faddr @{}", self.module.function(*func).name),
             Inst::Effect { byte } => write!(self.out, "effect {}", op(byte)),
             Inst::Qalloc { width, .. } => write!(self.out, "qalloc {}", width.count()),
+            Inst::QallocBy { width, .. } => write!(self.out, "qalloc i64 {}", op(width)),
             Inst::Qfree { register } => write!(self.out, "qfree {}", name(register)),
             Inst::Gate { gate, target, controls } => {
                 let controls: Vec<Place> = controls.iter().map(|&qubit| Place::Register(qubit)).collect();
@@ -271,6 +272,9 @@ impl fmt::Display for QubitText<'_> {
             Place::Memory { address, bit } => {
                 let address = OperandText { function: self.0, operand: address, typed: false };
                 if bit == 0 { write!(f, "[{address}]") } else { write!(f, "[{address}:{bit}]") }
+            }
+            Place::Indexed { register, index } => {
+                write!(f, "{}[{}]", SlotText(self.0, register), SlotText(self.0, index))
             }
         }
     }

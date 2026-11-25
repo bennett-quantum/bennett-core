@@ -212,7 +212,8 @@ pub struct Block {
 /// One qubit of a quantum register.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Qubit {
-    /// The slot holding the register handle.
+    /// The slot holding the register handle: a `qN` register, or an `i64` handle (`docs/SYNTAX.md`,
+    /// "Handles as integers").
     pub register: Slot,
     /// The qubit's index in the register, from 0 (least significant).
     pub bit: u32,
@@ -231,6 +232,15 @@ pub enum Place {
         address: Operand,
         /// The bit, below [`MEMORY_QUBIT_BITS`].
         bit: u8,
+    },
+    /// `register[index]` with the position computed at run time: qubit `index` of the register named by
+    /// `register` (a `qN` register or an `i64` handle); an index at or past the register's width is the
+    /// fault `bad_range`.
+    Indexed {
+        /// The slot holding the register handle.
+        register: Slot,
+        /// The `i64` slot holding the qubit's position.
+        index: Slot,
     },
 }
 
@@ -406,7 +416,17 @@ pub enum Inst {
         /// The number of qubits.
         width: Qubits,
     },
-    /// `qfree register`: releases a register that is zero in every basis configuration.
+    /// `dst = qalloc i64 width`: a fresh register of `width` qubits, all |0⟩, the width given at run time;
+    /// `dst` is its `i64` handle, the number of the allocation. A width outside 1 to 2^32 - 1 is the fault
+    /// `bad_width`; an allocation after 2^64 - 1 of them is `out_of_handles`.
+    QallocBy {
+        /// The `i64` handle.
+        dst: Slot,
+        /// The `i64` number of qubits.
+        width: Operand,
+    },
+    /// `qfree register`: drops the register by partial trace, whatever it holds. The register is a `qN`
+    /// register or an `i64` handle; a handle that names no allocated register is `dangling_register`.
     Qfree {
         /// The register handle.
         register: Slot,
@@ -420,8 +440,9 @@ pub enum Inst {
         /// The control qubits.
         controls: Vec<Qubit>,
     },
-    /// `gate target [ctrl controls]` with at least one qubit in memory: as `Gate`, on qubits that may live
-    /// at memory addresses. A gate whose qubits are all in registers is always written as `Gate`.
+    /// `gate target [ctrl controls]` with at least one qubit in memory or at a position computed at run time
+    /// ([`Place`]): as `Gate`. A gate whose qubits are all register qubits at literal positions is always
+    /// written as `Gate`.
     GateAt {
         /// The gate.
         gate: Gate,
@@ -497,6 +518,7 @@ impl Inst {
             | Inst::Setjmp { dst, .. }
             | Inst::FuncAddr { dst, .. }
             | Inst::Qalloc { dst, .. }
+            | Inst::QallocBy { dst, .. }
             | Inst::Measure { dst, .. } => Some(*dst),
             Inst::Call { dst, .. } | Inst::CallIndirect { dst, .. } => *dst,
             Inst::Store { .. }
@@ -541,7 +563,7 @@ impl Inst {
                 operand(target);
                 args.iter().for_each(operand);
             }
-            Inst::Effect { byte } => operand(byte),
+            Inst::Effect { byte } | Inst::QallocBy { width: byte, .. } => operand(byte),
             Inst::FuncAddr { .. } | Inst::Qalloc { .. } | Inst::StackSave { .. } | Inst::ReturnAddress { .. } => {}
             Inst::Qfree { register } | Inst::Measure { source: MeasureSource::Register(register), .. } => {
                 operand(&Operand::Slot(*register))
@@ -557,6 +579,10 @@ impl Inst {
                     match place {
                         Place::Register(qubit) => operand(&Operand::Slot(qubit.register)),
                         Place::Memory { address, .. } => operand(address),
+                        Place::Indexed { register, index } => {
+                            operand(&Operand::Slot(*register));
+                            operand(&Operand::Slot(*index));
+                        }
                     }
                 }
             }
@@ -565,6 +591,10 @@ impl Inst {
                     match place {
                         Place::Register(qubit) => operand(&Operand::Slot(qubit.register)),
                         Place::Memory { address, .. } => operand(address),
+                        Place::Indexed { register, index } => {
+                            operand(&Operand::Slot(*register));
+                            operand(&Operand::Slot(*index));
+                        }
                     }
                 }
             }

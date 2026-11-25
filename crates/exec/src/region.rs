@@ -169,10 +169,7 @@ impl<'m> Executor<'m> {
     /// The head columns and widths of `out` and `fault` and where each argument comes from; `qubit_alias` if
     /// a target is an argument or both are one register.
     fn region_operands(&self, args: &[Operand], out: Slot, fault: Slot) -> Result<(Target, Target, Vec<Input>), Halt> {
-        let register = |slot: Slot| -> Result<Target, Fault> {
-            let Type::Qreg(qubits) = self.slot_type(slot) else { unreachable!("validated register") };
-            Ok((self.quantum.resolve(self.handle(slot))?, qubits))
-        };
+        let register = |slot: Slot| -> Result<Target, Fault> { self.register(slot) };
         let (out, fault) = (register(out)?, register(fault)?);
         let inputs = args.iter().map(|arg| self.input(arg)).collect::<Result<Vec<_>, _>>()?;
         let is_target =
@@ -186,7 +183,10 @@ impl<'m> Executor<'m> {
     fn input(&self, arg: &Operand) -> Result<Input, Fault> {
         match arg {
             Operand::Slot(slot) => match self.slot_type(*slot) {
-                Type::Qreg(qubits) => Ok(Input::Register(self.quantum.resolve(self.handle(*slot))?, qubits)),
+                Type::Qreg(_) => {
+                    let (column, qubits) = self.register(*slot)?;
+                    Ok(Input::Register(column, qubits))
+                }
                 Type::Int(_) => Ok(Input::Value(self.read(arg))),
             },
             Operand::Const(_) => Ok(Input::Value(self.read(arg))),

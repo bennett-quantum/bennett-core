@@ -33,6 +33,9 @@ pub struct ClassicalSnapshot {
     pub outcome: Option<Outcome>,
     /// The step count.
     pub steps: u64,
+    /// The allocation count, the last handle given, and each live handle with its register's width, in
+    /// handle order (`docs/DESIGN.md`, "Running a program").
+    pub handles: (u64, Vec<(u64, u32)>),
 }
 
 /// The register table and every nonzero amplitude.

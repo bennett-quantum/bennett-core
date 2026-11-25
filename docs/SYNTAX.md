@@ -17,6 +17,8 @@ type       := iN | qN                                    ; iN: N from 1 to 128; 
 operand    := %name | INT          ; an INT takes its type from the instruction
 typed      := %name | iN INT       ; in argument lists, a constant names its type
 qubit      := %name ["[" INT "]"]  ; bare %q means %q[0]; the index is below the register's width
+            | %name "[" %index "]"             ; the position an i64 computed at run time
+                                               ; %name: a qN register or an i64 handle ("Handles as integers")
             | "[" operand [":" INT] "]"        ; a bit of memory: bit INT of the integer at the i64 address
 
 statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv urem srem and or xor shl lshr ashr
@@ -35,6 +37,7 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | %d = faddr @f
             | effect operand                             ; one i8 to the console
             | %d = qalloc N                              ; N from 1 to 2^32 - 1
+            | %d = qalloc i64 operand                    ; the width at run time; %d an i64 handle
             | qfree %r                                   ; the partial trace: %r dropped unexamined
             | GATE qubit [ctrl qubit {, qubit}]          ; x h z s sdg t tdg
             | (rx | ry | rz | p)(ANGLE) qubit [ctrl ...] ; radians, any finite angle
@@ -149,6 +152,27 @@ one faults `qubit_memory_access`, inside an applied function too (`docs/DESIGN.m
 Measuring all eight bits of a byte that holds qubits makes it ordinary memory again. A planned
 instruction will drop the qubits in addressed bytes unexamined by partial trace, as `qfree`
 does for registers.
+
+## Handles as integers
+
+Every successful allocation of a run, `qalloc N` and `qalloc i64` alike, is numbered: the `k`-th, counting
+from 1, has the handle `k`, and no allocation of the run gets that number again, after its `qfree` too; 0 is
+never a handle. `%h = qalloc i64 %w` takes its width at run time and gives the handle as an `i64`. It checks,
+in this order, that `%w` is from 1 to 2^32 - 1 (else the fault `bad_width`, 20) and that the run has made
+fewer than 2^64 - 1 allocations (else `out_of_handles`, 21).
+
+A gate's target or control and `qfree` may name a register by an `i64` value holding its handle:
+`x %h[3] ctrl %q[1], %h[%i]`. A value that names no allocated register (released, never allocated, or 0) is
+the fault `dangling_register` (9). A position may be an `i64` slot, `%r[%i]`, on a `qN` register or an
+`i64` handle. A position at or past the register's width is the fault `bad_range` (22): a run-time position,
+and a literal position on an `i64` handle, whose width the validator cannot see (on a `qN` register the
+validator still reports a literal one, `QubitOutOfRange`). A gate checks its target and then each control in
+order, the handle and then the position, and then that no qubit is named twice (`qubit_alias`, 10, also
+through run-time positions); the first check that fails is the fault, before the gate acts.
+
+`measure` of a whole register, `apply` and calls still take `qN` registers. No instruction turns a `qN`
+register into its integer or an integer into a `qN` register; both name registers by the one numbering, so a
+program that counts its allocations knows the handle of each.
 
 ## Registers are not integers
 

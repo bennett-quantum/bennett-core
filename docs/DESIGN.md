@@ -102,11 +102,16 @@ A module is a list of functions, an initial memory image and a memory size.
   entry-return outcome, even from a nested call); `setjmp` and the terminator `longjmp` (non-local jumps, below).
 - **Every operation is total.** A shift by at least the width gives 0. Division by zero, an out-of-bounds access, a
   bad indirect target, `unreachable` and an exhausted budget are *named faults*: part of the result, never a crash.
-- **Quantum instructions**, issued by ordinary code: `qalloc w`, `qfree`, single-qubit gates
+- **Quantum instructions**, issued by ordinary code: `qalloc w` and `qalloc i64 %w` (the width at run time),
+  `qfree`, single-qubit gates
   (`x h z s sdg t tdg rx ry rz p`, a rotation's angle a literal or an `i64` computed at run time,
   `Inst::RotateBy`) with an optional list of control qubits, each qubit in a register or at a
   bit of memory ("Qubits in memory", below), `measure` of a register or of bits at an address, and `apply`
-  (below).
+  (below). Every allocation has a handle, its number among the run's allocations, from 1, never given again
+  in the run. A register is named by a `qN` value, or by an `i64` value holding its handle wherever a gate, a
+  control or `qfree` names a register, with qubit positions given as literals or as `i64` values (`docs/SYNTAX.md`, "Handles as integers"). Each
+  of these forms means the same as the form with that definite register and position written out; it adds the
+  checks `bad_width`, `dangling_register` and `bad_range`, made from definite values before anything changes.
 
 There is one instruction set for every tier. A tier is a way of running code, not a different language.
 
@@ -131,6 +136,13 @@ straightforward expansion into ordinary code; none reads or acts on a qubit:
 - **Forward.** The executor counts one step per executed instruction and terminator. The program carries no
   metering code. A run may be given a step limit (`Options::budget`, `bennett run --budget`), a parameter of the
   run like its memory size.
+- **Handles.** The executor keeps the allocation count and a table from each live handle to the simulator's
+  register and its width (`crates/exec/src/handles.rs`); snapshots list both. A `qN` slot holds the
+  simulator's own handle of its register, which no instruction reads, and the table maps it back to the
+  allocation's number, so that both forms of `qalloc` are counted alike. `qfree` retires the handle and
+  journals the register and its width, so that undoing it restores the table entry; undoing an allocation
+  takes the count back by one. Memory bytes that hold qubits ("Qubits in memory") are no allocations and take
+  no handle.
 - **Reverse.** In the simulator’s reversible mode each step appends to an undo journal exactly what it overwrites: the old value
   of a slot, the old bytes of a store, the predecessor of a control transfer, the stack pointer. Reversal pops
   the journal. A rotation by a computed angle is undone by the rotation by its negation, the angle read
@@ -1869,9 +1881,11 @@ The front writes `retaddr N` for every `llvm.returnaddress(N)` in the default ad
   frames in place for reversal. C's `_Noreturn void __bennett_exit(int)` lowers to it; like
   `void __bennett_effect(char)`, it is an ordinary device call, not a quantum marker.
 - Fault codes fit in 5 bits (`Fault::CODE_WIDTH`, widened from 4 on 2026-11-16, the maintainer's decision); a
-  fault register is at least that wide, so every fault register of a program is a `q5` or wider. Sixteen of
-  the 31 nonzero codes are used, the last `bad_angle` (18, a rotation whose computed angle is not finite);
-  11 was `dirty_free` and 15
+  fault register is at least that wide, so every fault register of a program is a `q5` or wider. Twenty-one
+  of the 31 nonzero codes are used: 1 to 10, 12 to 14, 16 to 18 (`bad_angle`, a rotation whose computed angle
+  is not finite) and 20 to 24 (`bad_width`, `out_of_handles`, `bad_range`, `bad_gate`, `bad_argument`, the
+  checks of the handle interface; `bad_gate` and `bad_argument` are reached through `fault NAME` until a form
+  checks them); 19 is reserved for `out_of_memory`, the C runtime's allocator stop. 11 was `dirty_free` and 15
   `bad_rewind`, both removed on 2026-11-17. Those codes stay unused and the remaining codes keep their
   numbers because programs may have measured the old codes.
 - `qfree` is the partial trace and never faults ("Releasing a register", below).

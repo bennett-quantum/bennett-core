@@ -122,6 +122,7 @@ impl<'a> Program<'a> {
                         | Inst::Setjmp { .. }
                         | Inst::Effect { .. }
                         | Inst::Qalloc { .. }
+                        | Inst::QallocBy { .. }
                         | Inst::Qfree { .. }
                         | Inst::Gate { .. }
                         | Inst::GateAt { .. }

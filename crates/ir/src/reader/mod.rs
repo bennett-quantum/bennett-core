@@ -291,6 +291,7 @@ fn renumber_functions(module: &mut Module, order: &[u32]) {
             | Inst::CallIndirect { .. }
             | Inst::Effect { .. }
             | Inst::Qalloc { .. }
+            | Inst::QallocBy { .. }
             | Inst::Qfree { .. }
             | Inst::Gate { .. }
             | Inst::GateAt { .. }

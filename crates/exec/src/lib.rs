@@ -18,6 +18,7 @@ mod device_io;
 mod executor;
 mod forward;
 mod gates;
+mod handles;
 mod journal;
 mod measure;
 mod memory;

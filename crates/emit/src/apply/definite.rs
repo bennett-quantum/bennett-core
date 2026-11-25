@@ -60,6 +60,7 @@ fn fold_inst(
         | Inst::ReturnAddress { .. }
         | Inst::Effect { .. }
         | Inst::Qalloc { .. }
+        | Inst::QallocBy { .. }
         | Inst::Qfree { .. }
         | Inst::Gate { .. }
         | Inst::GateAt { .. }

@@ -323,6 +323,7 @@ impl<'m> Device<'m> {
             }
             Inst::GateAt { .. }
             | Inst::RotateBy { .. }
+            | Inst::QallocBy { .. }
             | Inst::Measure { source: MeasureSource::Memory { .. }, .. }
             | Inst::Setjmp { .. }
             | Inst::ReturnAddress { .. } => {

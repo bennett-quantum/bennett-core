@@ -240,6 +240,7 @@ impl<'a> Frame<'a> {
                     unreachable!("checked instructions before lowering")
                 }
                 Inst::Qalloc { .. }
+                | Inst::QallocBy { .. }
                 | Inst::Qfree { .. }
                 | Inst::Gate { .. }
                 | Inst::GateAt { .. }
@@ -292,6 +293,7 @@ pub(super) fn before_instruction_fault(block: &Block) -> (&[Inst], Option<&Termi
             inst,
             Inst::Effect { .. }
                 | Inst::Qalloc { .. }
+                | Inst::QallocBy { .. }
                 | Inst::Qfree { .. }
                 | Inst::Gate { .. }
                 | Inst::GateAt { .. }
@@ -330,6 +332,7 @@ fn unsupported(inst: &Inst) -> Option<(&'static str, &'static str)> {
         Inst::Call { .. } | Inst::CallIndirect { .. } | Inst::FuncAddr { .. } => return None,
         Inst::Effect { .. }
         | Inst::Qalloc { .. }
+        | Inst::QallocBy { .. }
         | Inst::Qfree { .. }
         | Inst::Gate { .. }
         | Inst::GateAt { .. }

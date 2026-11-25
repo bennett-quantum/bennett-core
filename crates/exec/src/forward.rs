@@ -2,13 +2,14 @@
 //! state and journals exactly what it overwrote.
 
 use bennett_ir::{
-    BlockId, ENTRY_RETURN_ADDRESS, Fault, FuncId, Gate, Inst, JUMP_RECORD_BYTES, MeasureSource, Operand, Qubit,
+    BlockId, ENTRY_RETURN_ADDRESS, Fault, FuncId, Gate, Inst, JUMP_RECORD_BYTES, MeasureSource, Operand, Qubit, Qubits,
     Rotation, Slot, Target, Terminator, Type, Width,
 };
 
 use crate::device::Wire;
 use crate::device_io::{DeviceContext, wire, wires, word_ranges};
 use crate::executor::{Executor, Frame, Halt, Outcome, SLOT_BYTES};
+use crate::handles::Entry;
 use crate::journal::Undo;
 
 /// Required address alignment in bytes for `alloca`.
@@ -65,18 +66,21 @@ impl<'m> Executor<'m> {
                 self.advance();
             }
             _ if self.in_region => return Err(Fault::QuantumInRegion.into()),
-            Inst::Qalloc { dst, width } => {
-                let handle = self.allocate_register(*width, context)?;
-                self.write_slot(*dst, u128::from(handle));
-                self.record(Undo::Qalloc);
-                self.advance();
+            Inst::Qalloc { dst, width } => self.qalloc(*dst, *width, false, context)?,
+            Inst::QallocBy { dst, width } => {
+                let width = u32::try_from(self.read_word(width)).ok().and_then(Qubits::new).ok_or(Fault::BadWidth)?;
+                self.qalloc(*dst, width, true, context)?;
             }
             Inst::Qfree { register } => {
-                let id = self.quantum.resolve(self.handle(*register))?;
-                let Type::Qreg(qubits) = self.slot_type(*register) else { unreachable!("validated register") };
+                let handle = self.handle_number(*register)?;
+                let (id, qubits) = self.register(*register)?;
                 self.discard_register(id, qubits, context)?;
+                let entry = self.handles.remove(handle);
                 // The simulator's journal takes back kept columns or recreates zero columns: a register's
                 // columns are consecutive from its head, so its handle and width name them.
+                self.record_word(u128::from(handle));
+                self.record_word(u128::from(entry.register));
+                self.record_word(u128::from(qubits.count()));
                 self.record(if self.quantum.just_left_over(id) { Undo::Leftover } else { Undo::Qfree });
                 self.advance();
             }
@@ -100,8 +104,7 @@ impl<'m> Executor<'m> {
                 self.advance();
             }
             Inst::Measure { dst, source: MeasureSource::Register(register) } => {
-                let id = self.quantum.resolve(self.handle(*register))?;
-                let Type::Qreg(qubits) = self.slot_type(*register) else { unreachable!("validated register") };
+                let (id, qubits) = self.register(*register)?;
                 // The validator allows at most 128 qubits: one or two words, sampled in one draw.
                 let words = self.device_measure(&word_ranges(id, qubits), context)?;
                 let value = words.iter().rev().fold(0, |value, &word| value << u64::BITS | u128::from(word));
@@ -496,8 +499,36 @@ impl<'m> Executor<'m> {
         if radians.is_finite() { Ok(Gate::Rotate(axis, radians)) } else { Err(Fault::BadAngle) }
     }
 
-    fn qubit(&self, qubit: &Qubit) -> Result<Wire, Fault> {
-        Ok(wire(self.quantum.resolve(self.handle(qubit.register))?, qubit.bit))
+    /// The wire of `qubit`: `dangling_register` if its handle names no register, `bad_range` if its position
+    /// is not below the register's width (possible for an `i64` handle, whose width the validator cannot see).
+    pub(crate) fn qubit(&self, qubit: &Qubit) -> Result<Wire, Fault> {
+        self.position(qubit.register, u64::from(qubit.bit))
+    }
+
+    /// The wire of qubit `bit` of the register named in `register`, checked as [`Executor::qubit`] checks.
+    pub(crate) fn position(&self, register: Slot, bit: u64) -> Result<Wire, Fault> {
+        let (id, qubits) = self.register(register)?;
+        let bit = u32::try_from(bit).ok().filter(|&bit| bit < qubits.count()).ok_or(Fault::BadRange)?;
+        Ok(wire(id, bit))
+    }
+
+    /// `qalloc` and `qalloc i64` of `width` qubits: `out_of_handles` after 2^64 - 1 allocations; else the
+    /// register, numbered by the next handle. `dst` gets the handle (`by_value`, `qalloc i64`) or the
+    /// simulator's handle of the register (`qalloc N`, a `qN` slot).
+    fn qalloc(
+        &mut self,
+        dst: Slot,
+        width: Qubits,
+        by_value: bool,
+        context: &mut DeviceContext<'_>,
+    ) -> Result<(), Halt> {
+        self.handles.admit()?;
+        let register = self.allocate_register(width, context)?;
+        let handle = self.handles.insert(Entry { register, qubits: width });
+        self.write_slot(dst, u128::from(if by_value { handle } else { register }));
+        self.record(Undo::Qalloc);
+        self.advance();
+        Ok(())
     }
 }
 

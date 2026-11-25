@@ -74,6 +74,8 @@ pub enum Expected {
     Type(Type),
     /// A register of any width.
     AnyRegister,
+    /// A register of any width, or an `i64` handle.
+    RegisterOrHandle,
     /// A register of at least this many qubits.
     RegisterOfAtLeast(u32),
     /// An integer or a register of this width.
@@ -85,6 +87,7 @@ impl fmt::Display for Expected {
         match self {
             Expected::Type(ty) => write!(f, "{ty}"),
             Expected::AnyRegister => write!(f, "a register"),
+            Expected::RegisterOrHandle => write!(f, "a register or an i64 handle"),
             Expected::RegisterOfAtLeast(bits) => write!(f, "a register of at least {bits} qubits"),
             Expected::IntOrRegister(bits) => write!(f, "i{bits} or q{bits}"),
         }

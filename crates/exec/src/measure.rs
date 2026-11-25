@@ -91,6 +91,9 @@ pub enum WordRole {
     LongjmpControl(usize),
     /// The old value of the `setjmp`'s result slot in a `Longjmp` record.
     LongjmpResult,
+    /// The released handle (0), the simulator's handle of the register (1) or its width (2), in a `Qfree` or
+    /// `Leftover` record: register bookkeeping, never credited to a witness.
+    Released(usize),
 }
 
 /// What live thing holds a value, named in a [`WordWitness::LiveCopy`].
@@ -1052,14 +1055,19 @@ impl Executor<'_> {
                 });
                 words
             }
-            Undo::Effect
-            | Undo::Finish
-            | Undo::Gate
-            | Undo::GateAt
-            | Undo::GateAtPromoted
-            | Undo::Qfree
-            | Undo::Leftover
-            | Undo::Apply => Vec::new(),
+            Undo::Qfree | Undo::Leftover => info
+                .words
+                .iter()
+                .enumerate()
+                .map(|(index, &value)| WordInstance {
+                    role: WordRole::Released(index),
+                    value,
+                    witness: WordWitness::None,
+                    recompute: None,
+                    chain: None,
+                })
+                .collect(),
+            Undo::Effect | Undo::Finish | Undo::Gate | Undo::GateAt | Undo::GateAtPromoted | Undo::Apply => Vec::new(),
         };
         // Check original operand values against live state; captured values alone never suffice.
         let context_live = Arc::new(if collector.keep_raw { live.to_vec() } else { Vec::new() });
@@ -1086,7 +1094,8 @@ impl Executor<'_> {
                 | WordRole::ReturnPacked
                 | WordRole::ReturnStack
                 | WordRole::JumpRecord(_)
-                | WordRole::LongjmpControl(_) => None,
+                | WordRole::LongjmpControl(_)
+                | WordRole::Released(_) => None,
             };
             word.recompute = producer.and_then(|p| self.recompute_witness(p, word.value, live));
             // A cheap copy witness may differ across branches. Keep every instance's post-step
@@ -1145,6 +1154,7 @@ impl Executor<'_> {
                                 | Inst::FuncAddr { .. }
                                 | Inst::Effect { .. }
                                 | Inst::Qalloc { .. }
+                                | Inst::QallocBy { .. }
                                 | Inst::Qfree { .. }
                                 | Inst::Gate { .. }
                                 | Inst::GateAt { .. }
@@ -1292,6 +1302,7 @@ impl Executor<'_> {
                 | Inst::CallIndirect { .. }
                 | Inst::Effect { .. }
                 | Inst::Qalloc { .. }
+                | Inst::QallocBy { .. }
                 | Inst::Qfree { .. }
                 | Inst::Gate { .. }
                 | Inst::GateAt { .. }
@@ -1361,6 +1372,7 @@ impl Executor<'_> {
                 | Inst::CallIndirect { .. }
                 | Inst::Effect { .. }
                 | Inst::Qalloc { .. }
+                | Inst::QallocBy { .. }
                 | Inst::Qfree { .. }
                 | Inst::Gate { .. }
                 | Inst::GateAt { .. }
