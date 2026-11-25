@@ -1,0 +1,71 @@
+; Written by bennett-front.
+memory 65552
+
+func @entry() -> i64 {
+entry:
+    %residue.fault = qalloc 5
+    %residue.fault.1 = qalloc 5
+    %exponent.fault = qalloc 5
+    %exponent = qalloc 8
+    %residue = qalloc 8
+    h %exponent[0]
+    h %exponent[1]
+    h %exponent[2]
+    h %exponent[3]
+    h %exponent[4]
+    h %exponent[5]
+    h %exponent[6]
+    h %exponent[7]
+    apply @entry.apply(%exponent) -> %residue, %residue.fault budget 96
+    %exponent.measured = measure %exponent
+    %call4 = zext i8 %exponent.measured to i64
+    %residue.measured = measure %residue
+    %call5 = zext i8 %residue.measured to i64
+    %shl = shl i64 %call5, 8
+    %or = or i64 %shl, %call4
+    %converted = trunc i64 %call5 to i8
+    apply @bennett.copy.i8(%converted) -> %residue, %residue.fault.1 budget 96
+    qfree %residue
+    %converted.1 = trunc i64 %call4 to i8
+    apply @bennett.copy.i8(%converted.1) -> %exponent, %exponent.fault budget 96
+    qfree %exponent
+    qfree %residue.fault
+    qfree %residue.fault.1
+    qfree %exponent.fault
+    ret %or
+}
+
+func @powmod(i64 %base, i64 %exponent, i64 %modulus) -> i64 {
+entry:
+    %tobool.not7 = icmp eq i64 %exponent, 0
+    br %tobool.not7, for.end(i64 1), for.body(i64 1, %base, %exponent)
+for.body(i64 %result.010, i64 %base.addr.09, i64 %exponent.addr.08):
+    %and = and i64 %exponent.addr.08, 1
+    %tobool1.not = icmp eq i64 %and, 0
+    br %tobool1.not, for.inc(%result.010), if.then
+if.then:
+    %mul = mul i64 %result.010, %base.addr.09
+    %rem = urem i64 %mul, %modulus
+    br for.inc(%rem)
+for.inc(i64 %result.1):
+    %shr = lshr i64 %exponent.addr.08, 1
+    %mul2 = mul i64 %base.addr.09, %base.addr.09
+    %rem3 = urem i64 %mul2, %modulus
+    %tobool.not = icmp ult i64 %exponent.addr.08, 2
+    br %tobool.not, for.end(%result.1), for.body(%result.1, %rem3, %shr)
+for.end(i64 %result.0.lcssa):
+    ret %result.0.lcssa
+}
+
+func @entry.apply(i8 %exponent) -> i8 {
+entry:
+    %conv = zext i8 %exponent to i64
+    %call1 = call @powmod(i64 7, %conv, i64 15)
+    %v = trunc i64 %call1 to i8
+    ret %v
+}
+
+func @bennett.copy.i8(i8 %value) -> i8 {
+entry:
+    ret %value
+}

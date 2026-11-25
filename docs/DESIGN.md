@@ -852,6 +852,74 @@ on both the Toffoli count and the full harness peak.
 Run `front/test.sh --test emitted_shor c_shor_period_distribution_and_counts -- --exact --nocapture`
 to repeat the comparisons and counts.
 
+**Private-block argument passing.** The emitter test compares the register form
+with a scalar wrapper that passes the same eight input and output bits through
+private memory. It uses the front's lowered exponentiation for 15, an eight-bit
+identity and the eight-bit predicate `x == 42`. An image containing the scalar
+function pointer and two zeroed 64-bit members is copied into a block at address
+16. An input byte overwrites the low byte of the second member. The wrapper loads
+the pointer and the full 64-bit argument, calls the function through the pointer,
+and stores the 64-bit result in the third member. The output is its low byte.
+
+The fixture uses a fixed placement outside the live stack and assumes successful
+placement and field checks. The field widths, offsets and directions are fixed
+in the program. Today's register-form `apply` charges six instructions to copy
+the image, one to write the input, one to enter the wrapper and one to load the
+output. The handle device does the setup and extraction outside the budget and
+passes the block address in the entry state. The model also charges a return to
+pass the extracted byte to today's XOR destination. The budget includes the
+wrapper body and the adapter to the same eight-bit function. The exponentiation
+has 96 steps available in each case plus the model's wrapper and adapter charges.
+
+Both circuit lists use the adjacent Toffoli cancellation above. An operation is
+a gate, scratch allocation or scratch release. The isolated interface holds
+21 qubits. The Shor harness peak is counted with the same register allocations
+as the period-finding test. The Fourier gates only use the live exponent
+register. For every row the test compares all 256 inputs with the executor and
+checks both zero and patterned XOR destinations and zeroed scratch.
+
+| Function | Input form | Construction | One-qubit | Two-qubit | Toffolis | Isolated peak | Harness peak | Operations | Inputs agreed |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Identity | Registers | Definite | 0 | 8 | 0 | 21 | — | 10 | 256/256 |
+| Identity | Private block | Definite | 0 | 40 | 0 | 37 | — | 42 | 256/256 |
+| Predicate | Registers | Definite | 20 | 1 | 14 | 28 | — | 37 | 256/256 |
+| Predicate | Private block | Definite | 20 | 19 | 14 | 37 | — | 55 | 256/256 |
+| Shor 15, base 7 | Registers | In-place, eight passes | 962 | 3,236 | 1,552 | 37 | 47 | 5,752 | 256/256 |
+| Shor 15, base 7 | Private block | Step machine, 99 ticks | 98,796 | 186,069 | 86,810 | 7,875 | 7,885 | 371,677 | 256/256 |
+
+The direct-call and definite indirect-call variants reproduce the register
+counts for identity and predicate. The private block stores eight nonconstant
+input bits and eight identity or one predicate result bits. Each stored bit
+accounts for one retained qubit and two CNOTs including the inverse. Both
+loads of field values reuse the stored bit references, and all image values
+are definite. The stores account for all 16 qubits and 32 CNOTs added to
+identity and all nine qubits and 18 CNOTs added to predicate.
+
+In the Shor fixture a direct call through the adapter also reproduces the
+register counts. A definite indirect call without memory leaves the in-place
+construction and emits 1,306 one-qubit gates, 570 two-qubit gates and 3,228
+Toffolis, with a peak of 533 qubits (543 in the harness) and 5,106 operations.
+The in-place proof follows direct calls and lossless conversions. The
+indirect call and its address instruction lie outside that proof. The block
+also stores its result after the input-dependent loop, which requires the
+step machine. To separate dispatch from the wrapper, forcing the register
+form to use the step machine at the same 99 ticks uses 98,796 one-qubit gates,
+183,785 CNOTs and 82,280 Toffolis. It peaks at 6,741 isolated qubits and
+6,751 in the harness, with 364,863 operations. Thus 80,728 of the extra
+85,258 Toffolis already occur in register-only dispatch. At the usual budget
+of 96 the forced register form emits 93 ticks and uses 74,228 Toffolis.
+
+Against the matched dispatch run, the wrapper adds 2,284 CNOTs, 4,530
+Toffolis and 1,134 peak qubits. These counts include dispatch through the
+wrapper's returns and the guarded result stores. The memory counters attribute
+234 retained qubits and 1,360 gates, including the inverse, to fixed-address
+memory. The eight input copies account for eight of those qubits and 16 of
+those gates. The remaining memory cost comes from guarded writes to the
+result, attempted on different return ticks.
+
+Run `cargo test -p bennett-emit --test handle_price -- --nocapture` to repeat
+the measurements.
+
 The counting and OpenQASM devices use the compiler for each `apply` they reach. Pass
 `--apply-circuit auto` to run the same gates on the simulator, or `--apply-circuit step-machine`
 to select instruction dispatch whenever control depends on qubits. These modes implement the
