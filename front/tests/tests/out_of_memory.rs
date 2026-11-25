@@ -96,3 +96,24 @@ fn attributes_on_one_call_cannot_license_removing_it() {
         );
     }
 }
+
+#[test]
+fn an_alias_cannot_define_the_out_of_memory_function() {
+    // An alias gives the program's own function the reserved name outside LLVM's function list; the run would
+    // exit with 7 instead of faulting.
+    let source = write_c(
+        "out_of_memory_alias",
+        "extern _Noreturn void __bennett_exit(int);\n\
+         _Noreturn void replacement(void) { __bennett_exit(7); }\n\
+         _Noreturn void __bennett_out_of_memory(void) __attribute__((alias(\"replacement\")));\n\
+         int main(void) { __bennett_out_of_memory(); }\n",
+    );
+    for (level, flags) in [("O0", CLANG_FLAGS), ("O2", CLANG_O2_FLAGS)] {
+        let tag = format!("out_of_memory_alias_{level}");
+        let error = lower_text(&source, &tag, flags, &[]).expect_err("must refuse");
+        assert!(
+            error.starts_with("error:") && error.contains("@__bennett_out_of_memory is defined by an alias"),
+            "{tag}: {error}"
+        );
+    }
+}

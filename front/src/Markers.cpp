@@ -69,6 +69,13 @@ std::optional<Marker> markerCall(const Value *value) {
 }
 
 void checkMarkers(const Module &module, bool floatsAreBits) {
+  // The name must be a plain declaration: an alias or ifunc of that name would define it outside the function
+  // list checked below, and a call would reach the program's own code instead of the fault.
+  if (const GlobalValue *named = module.getNamedValue("__bennett_out_of_memory"); named && !isa<Function>(named)) {
+    misuse("the device function @__bennett_out_of_memory is defined by an alias or as data; it is only declared, "
+           "_Noreturn void __bennett_out_of_memory(void)",
+           named);
+  }
   for (const Function &function : module) {
     if (function.getName() == "__bennett_out_of_memory") {
       // The C runtime's allocator calls it when its arena cannot hold a request: `fault out_of_memory`.
