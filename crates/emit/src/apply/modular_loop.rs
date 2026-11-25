@@ -19,6 +19,7 @@ pub(super) struct Plan {
     exponent: Word,
     factors: Vec<Factor>,
     condition: Condition,
+    pub(super) definite_steps: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -191,6 +192,69 @@ impl<'a> Update<'a> {
     }
 }
 
+fn clone_slots(slots: &[Word]) -> Vec<Word> {
+    #[cfg(test)]
+    tests::record_slot_words(slots.len());
+    slots.to_vec()
+}
+
+fn next_definite<'a>(
+    program: &Program<'a>,
+    slots: &mut [Word],
+    point: Point,
+    step: Step<'a>,
+) -> Result<Point, Step<'a>> {
+    match step {
+        Step::Write(next, dst, word) => {
+            slots[dst.index()] = word;
+            Ok(next)
+        }
+        Step::Jump(target) => Ok(program.jump(slots, point, target)),
+        Step::Transfer(next, writes) => {
+            for (dst, word) in writes {
+                slots[dst.index()] = word;
+            }
+            Ok(next)
+        }
+        stop @ (Step::Return(_)
+        | Step::Branch(..)
+        | Step::Switch(..)
+        | Step::Indirect(..)
+        | Step::CheckedTransfer(..)
+        | Step::Inactive
+        | Step::Fault(_)) => Err(stop),
+    }
+}
+
+// Replay ordinary emission in the recognised loop as far as its first
+// qubit-dependent choice. A loop that reaches an exit stays in the definite
+// prefix. Both exits leave the loop frame at the named block.
+fn first_choice(
+    program: &Program<'_>,
+    slots: &[Word],
+    mut point: Point,
+    exits: [BlockId; 2],
+    circuit: &mut Circuit,
+    budget: u64,
+) -> Option<u64> {
+    let mut slots = clone_slots(slots);
+    let loop_copy = point.copy;
+    for spent in 0..budget {
+        if point.copy == loop_copy && point.index == 0 && exits.contains(&point.block) {
+            return None;
+        }
+        let step = program.step(circuit, &slots, point).ok()?;
+        if !circuit.fits() {
+            return None;
+        }
+        match next_definite(program, &mut slots, point, step) {
+            Ok(next) => point = next,
+            Err(stop) => return matches!(stop, Step::Branch(..)).then_some(spent),
+        }
+    }
+    None
+}
+
 // The loop has not executed on the probe state. In its frame, keep the
 // existing restriction to copies, lossless conversions and unconditional
 // transfers. Suspended callers have their exact pre-loop slots and memory.
@@ -201,12 +265,13 @@ fn replay_exit(
     loop_copy: usize,
     memory: &Memory<'_>,
     scratch: Wire,
-) -> Option<(Word, u64)> {
+    budget: u64,
+) -> Option<Word> {
     let mut seen = BTreeSet::new();
     let mut circuit = Circuit::new(scratch);
     let mut memory = memory.fork_for_exit();
     let mut steps = 0;
-    while seen.insert(point) {
+    while steps < budget && seen.insert(point) {
         if point.copy == loop_copy {
             let block = program.block(point);
             let safe = if let Some(inst) = block.insts.get(point.index) {
@@ -222,36 +287,27 @@ fn replay_exit(
             }
         }
         steps += 1;
+        #[cfg(test)]
+        let gates = circuit.forward_len();
         let step = program.step_in(&mut circuit, slots, point, &mut memory, ONE).ok()?;
         memory.commit(&mut circuit);
+        #[cfg(test)]
+        tests::record_replay_gates(circuit.forward_len() - gates);
         if !circuit.fits() {
             return None;
         }
-        point = match step {
-            Step::Write(next, dst, word) => {
-                slots[dst.index()] = word;
-                next
+        let stop = match next_definite(program, slots, point, step) {
+            Ok(next) => {
+                point = next;
+                continue;
             }
-            Step::Jump(target) => program.jump(slots, point, target),
-            Step::Transfer(next, writes) => {
-                for (dst, word) in writes {
-                    slots[dst.index()] = word;
-                }
-                next
-            }
-            Step::Return(mut word) => {
-                for bit in &mut word {
-                    *bit = circuit.copy_source(*bit);
-                }
-                return Some((word, steps));
-            }
-            Step::Branch(..)
-            | Step::Switch(..)
-            | Step::Indirect(..)
-            | Step::CheckedTransfer(..)
-            | Step::Inactive
-            | Step::Fault(_) => return None,
+            Err(stop) => stop,
         };
+        let Step::Return(mut word) = stop else { return None };
+        for bit in &mut word {
+            *bit = circuit.copy_source(*bit);
+        }
+        return Some(word);
     }
     None
 }
@@ -264,8 +320,14 @@ impl Plan {
         memory: &Memory<'_>,
         entry: Point,
         prefix_steps: u64,
-        scratch: Wire,
+        circuit: &mut Circuit,
     ) -> Option<Self> {
+        let remaining = input.budget.checked_sub(prefix_steps)?;
+        let loop_budget = remaining.checked_sub(2)?;
+        if loop_budget == 0 {
+            return None;
+        }
+        let scratch = circuit.scratch_end()?;
         let entry_block = program.block(entry);
         if entry.index + 1 != entry_block.insts.len() {
             return None;
@@ -275,12 +337,9 @@ impl Plan {
             return None;
         };
         let (tested, true_if_zero) = zero_test(&entry_block.insts[entry.index], cond)?;
-        let mut slots = slots.to_vec();
+        let entry_slots = slots;
         let (empty, begin) = if true_if_zero { (if_true, if_false) } else { (if_false, if_true) };
         let entry_condition = program.slot(entry, *entry_condition).index();
-        // The prefix stops before the comparison. On the continuing edge
-        // it has the opposite value from the zero-exponent edge.
-        slots[entry_condition] = vec![Bit::Constant(!true_if_zero)];
         let head = at_block(entry, begin.block);
         let body = program.block(head);
         let update = Update::recognize(program, head)?;
@@ -354,6 +413,9 @@ impl Plan {
         if !captured(update.product.modulus) || !captured(square.modulus) {
             return None;
         }
+        // Only candidates with a recognised loop need a copy of the prefix.
+        let mut slots = clone_slots(slots);
+        slots[entry_condition] = vec![Bit::Constant(!true_if_zero)];
         let modulus = definite(&program.read(&slots, entry, &update.product.modulus))?;
         if modulus < 2 || definite(&program.read(&slots, entry, &square.modulus))? != modulus {
             return None;
@@ -378,6 +440,18 @@ impl Plan {
         if definite(&exponent_bits).is_some() {
             return None;
         }
+        // Charge the longest body route before trying either return. The
+        // shift bounds the number of passes independently of the budget.
+        let pass_steps = update.steps + square.steps + 3 + u64::from(pretested);
+        let loop_steps = pass_steps * exponent_bits.len() as u64;
+        let exit_budget = loop_budget.checked_sub(loop_steps)?;
+        if exit_budget == 0 {
+            return None;
+        }
+        let checkpoint = circuit.checkpoint();
+        let choice = first_choice(program, entry_slots, entry, [empty.block, exit.block], circuit, 2 + loop_steps);
+        circuit.rewind(checkpoint);
+        let choice = choice?;
         let mut factors = Vec::new();
         for _ in &exponent_bits {
             update.product.exact_product(modulus - 1, factor)?;
@@ -388,12 +462,12 @@ impl Plan {
         // The only residue reads on the reached routes are the update and
         // the direct transfers. Check the two complete returns, including
         // any conversion in the wrapper, with distinct probe bits.
-        let mut empty_slots = slots.clone();
+        let mut empty_slots = clone_slots(&slots);
         empty_slots[entry_condition] = vec![Bit::Constant(true_if_zero)];
         let probe_end = scratch.checked_add(residue_width as u64)?;
         let empty_point = program.jump(&mut empty_slots, entry, empty);
-        let (zero_result, empty_steps) =
-            replay_exit(program, &mut empty_slots, empty_point, entry.copy, memory, probe_end)?;
+        let zero_result =
+            replay_exit(program, &mut empty_slots, empty_point, entry.copy, memory, probe_end, loop_budget)?;
         if zero_result != constant(initial, output_width) {
             return None;
         }
@@ -406,24 +480,21 @@ impl Plan {
         let (condition, value) = exit_condition;
         slots[condition] = vec![Bit::Constant(value)];
         let exit_point = program.jump(&mut slots, exit_from, exit);
-        let (result, exit_steps) = replay_exit(program, &mut slots, exit_point, entry.copy, memory, probe_end)?;
+        let result = replay_exit(program, &mut slots, exit_point, entry.copy, memory, probe_end, exit_budget)?;
         let mut expected = probe;
         expected.resize(output_width, ZERO);
         if result != expected {
             return None;
         }
 
-        // Count all calls and branches on the most expensive possible routes
-        // with a single whole-function allowance. Additional padded rounds
-        // are identities on inputs whose exponent has already shifted to zero.
-        let loop_budget = input.budget.checked_sub(prefix_steps)?.checked_sub(2)?;
-        // One shift and either a latch test and branch, or a jump back to
-        // the header followed by its test and branch.
-        let pass_steps = update.steps + square.steps + 3 + u64::from(pretested);
-        if empty_steps > loop_budget || pass_steps * exponent_bits.len() as u64 + exit_steps > loop_budget {
-            return None;
-        }
-        Some(Self { initial, modulus: modulus64, exponent: exponent_bits, factors, condition: update.condition })
+        Some(Self {
+            initial,
+            modulus: modulus64,
+            exponent: exponent_bits,
+            factors,
+            condition: update.condition,
+            definite_steps: prefix_steps + choice,
+        })
     }
 
     pub(super) fn passes(&self) -> usize {
@@ -482,3 +553,7 @@ fn latch_test(compare: &Inst, cond: &Operand, old: Operand, shifted: Slot) -> Op
         None
     }
 }
+
+#[cfg(test)]
+#[path = "modular_loop_tests.rs"]
+mod tests;

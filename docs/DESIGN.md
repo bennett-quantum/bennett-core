@@ -801,8 +801,12 @@ leaves the existing compilation and fault behaviour in use.
 
 The compiler tries the proof before emitting the loop's entry comparison,
 using the slots and private memory from the ordinary definite prefix. A resolved
-indirect call can enter that prefix just like a direct call. The compiler checks
-both exits by replaying their instructions with the initial residue or fresh
+indirect call can enter that prefix just like a direct call. It checks the loop
+shape before copying its slots. Ordinary emission in the recognised loop finds
+the first qubit-dependent jump and supplies the definite-step count. Loops
+whose control stays definite keep ordinary emission. The compiler charges the
+entry and the longest loop route before trying either exit. Each exit replay
+stops at its remaining budget. The replays use the initial residue or fresh
 symbolic residue bits. Inside the loop frame it follows only lossless conversions
 and unconditional transfers, since it has replaced the loop's computation.
 After a return to a caller it has the caller's suspended state, including the
@@ -866,18 +870,19 @@ on both the Toffoli count and the full harness peak.
 Run `front/test.sh --test emitted_shor c_shor_period_distribution_and_counts -- --exact --nocapture`
 to repeat the comparisons and counts.
 
-**Private-block argument passing.** The emitter test compares the register form
-with a scalar wrapper that passes the same eight input and output bits through
-private memory. It uses the front's lowered exponentiation for 15, an eight-bit
+**Private-block argument passing.** The emitter test models the scalar form
+in `docs/HANDLES.md`, sections 6 and 8.3. It compares the register form with a
+scalar wrapper that passes the same eight input and output bits through private
+memory. It uses the front's lowered exponentiation for 15, an eight-bit
 identity and the eight-bit predicate `x == 42`. An image containing the scalar
 function pointer and two zeroed 64-bit members is copied into a block at address
 16. An input byte overwrites the low byte of the second member. The wrapper loads
 the pointer and the full 64-bit argument, calls the function through the pointer,
 and stores the 64-bit result in the third member. The output is its low byte.
 
-The fixture uses a fixed placement outside the live stack and assumes successful
-placement and field checks. The field widths, offsets and directions are fixed
-in the program. Today's register-form `apply` charges six instructions to copy
+The fixture assumes successful placement and field checks. The chosen block is
+free and outside the heap and live stack, with the same address for every input
+and budget. The field widths, offsets and directions are fixed in the program. Today's register-form `apply` charges six instructions to copy
 the image, one to write the input, one to enter the wrapper and one to load the
 output. The handle device does the setup and extraction outside the budget and
 passes the block address in the entry state. The model also charges a return to

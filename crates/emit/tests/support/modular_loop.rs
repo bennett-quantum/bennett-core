@@ -308,7 +308,70 @@ fn modular_private_return_checks_the_last_byte_and_one_past_it() {
 
 #[test]
 fn modular_private_return_requires_the_original_result_bits() {
-    let module = control_example(&private_result(24, 25), 3, "");
-    let (construction, _) = compare_controls(&module, 50, ApplyMode::Automatic, |_| (0, 0));
+    let source = private_result(24, 25).replace("store i3 %x, 16", "store i8 1, 25\n    store i3 %x, 16");
+    let module = control_example(&source, 3, "");
+    let (construction, _) = compare_controls(&module, 50, ApplyMode::Automatic, |_| (1, 0));
     assert!(matches!(construction, Construction::StepMachine { .. }));
+}
+
+fn compile_private_loop(module: &bennett_ir::ValidModule, mode: ApplyMode) -> bennett_emit::CompiledApply {
+    use bennett_emit::{ApplyInput, Argument, compile_apply_with};
+    use bennett_exec::ApplyMemory;
+
+    let mut bytes = [0; 1024];
+    for data in &module.data {
+        let address = data.address as usize;
+        bytes[address..address + data.len() as usize].copy_from_slice(&data.encode());
+    }
+    let held = Default::default();
+    compile_apply_with(
+        ApplyInput {
+            module,
+            callee: module.function_named("f").expect("wrapper"),
+            args: &[Argument::Register(0..3)],
+            out: 3..11,
+            fault: 11..16,
+            budget: 50,
+            entry_fault: None,
+            stack_available: 800,
+            memory: Some(ApplyMemory::new(&bytes, &held)),
+            scratch_start: 16,
+        },
+        mode,
+    )
+    .expect("compile wrapped loop")
+}
+
+#[test]
+fn modular_proof_counts_the_definite_first_iteration() {
+    let source = private_result(24, 24).replace("store i3 %x, 16", "%odd = or i3 %x, 1\n    store i3 %odd, 16");
+    let module = control_example(&source, 3, "");
+    let automatic = compile_private_loop(&module, ApplyMode::Automatic);
+    let dispatch = compile_private_loop(&module, ApplyMode::StepMachine);
+    assert_eq!(automatic.construction, Construction::ModularInPlace { passes: 3 });
+    assert_eq!(dispatch.definite_steps, 16);
+    assert_eq!(automatic.definite_steps, dispatch.definite_steps);
+}
+
+#[test]
+fn modular_proof_leaves_a_fixed_trip_count_in_the_definite_prefix() {
+    let source = private_result(24, 24)
+        .replace("    %low = trunc i3 %x to i1\n    br %low, update, latch(%old)\nupdate:\n", "")
+        .replace("store i3 %x, 16", "%full = or i3 %x, 4\n    store i3 %full, 16");
+    let module = control_example(&source, 3, "");
+    let expected = |x| (reference(x | 4, 1, 7, 15, Update::Always), 0);
+    let (construction, _) = compare_controls(&module, 50, ApplyMode::Automatic, expected);
+    assert_eq!(construction, Construction::Definite);
+    let automatic = compile_private_loop(&module, ApplyMode::Automatic);
+    let dispatch = compile_private_loop(&module, ApplyMode::StepMachine);
+    assert_eq!(automatic.block.ops(), dispatch.block.ops());
+    assert!(
+        automatic
+            .block
+            .ops()
+            .iter()
+            .filter(|op| matches!(op, bennett_exec::BlockOp::Gate(gate) if gate.controls.len() == 2))
+            .count()
+            <= 2
+    );
 }

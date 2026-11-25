@@ -208,14 +208,13 @@ fn compile_with_analysis_limit(
             Status::Running(_) if spent == input.budget => status = Status::Faulted(Fault::Budget),
             Status::Running(point) => {
                 if try_modular
-                    && let Some(scratch) = circuit.scratch_end()
                     && let Some(plan) =
-                        modular_loop::Plan::prove(&input, &program, &slots, &memory, point, spent, scratch)
+                        modular_loop::Plan::prove(&input, &program, &slots, &memory, point, spent, &mut circuit)
                 {
                     let checkpoint = circuit.checkpoint();
                     let residue = plan.emit(&mut circuit);
                     if circuit.fits() {
-                        spent += 1; // The loop's entry comparison has definite control.
+                        spent = plan.definite_steps;
                         break (
                             Copies { returned: vec![(ONE, residue)], faulted: Vec::new() },
                             Construction::ModularInPlace { passes: plan.passes() },
