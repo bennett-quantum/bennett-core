@@ -696,6 +696,116 @@ entry:
 }
 
 #[test]
+fn a_guarded_nonreturning_call_uses_the_planners_control_facts() {
+    let module = control_example(
+        r#"
+memory 512
+func @f(i2 %x) -> i8 {
+entry:
+    %high = lshr i2 %x, 1
+    %go = trunc i2 %high to i1
+    br %go, invoke, skip
+invoke:
+    call @stop(%x)
+    %r = call @leaf()
+    ret %r
+skip:
+    ret 17
+}
+func @stop(i2 %x) {
+entry:
+    %low = trunc i2 %x to i1
+    %hi = lshr i2 %x, 1
+    %high = trunc i2 %hi to i1
+    br %low, arm(i1 1), faulted
+arm(i1 %yes):
+    br %high, decide, faulted
+decide:
+    br %yes, faulted, impossible
+faulted:
+    fault unreachable
+impossible:
+    ret
+}
+func @leaf() -> i8 {
+entry:
+    ret 41
+}
+"#,
+        2,
+        "",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in [8, 9, 12, 14] {
+            compare_controls(&module, budget, mode, |x| match x {
+                0 | 1 => (17, 0),
+                2 if budget >= 9 => (0, Fault::Unreachable.code()),
+                3 if budget >= 11 => (0, Fault::Unreachable.code()),
+                _ => (0, Fault::Budget.code()),
+            });
+        }
+    }
+}
+
+#[test]
+fn two_literal_loop_addresses_can_require_an_unreachable_recursive_copy() {
+    let module = control_example(
+        r#"
+memory 512
+func @one() -> i8 {
+entry:
+    ret 7
+}
+func @two() -> i8 {
+entry:
+    ret 9
+}
+func @never() -> i8 {
+entry:
+    %r = call @never()
+    ret %r
+}
+func @f(i1 %x) -> i8 {
+entry:
+    br loop(i64 1, i1 0)
+loop(i64 %address, i1 %last):
+    %r = call_indirect fn() -> i8 %address()
+    br %last, done, loop(i64 2, i1 1)
+done:
+    ret %r
+}
+"#,
+        1,
+        "",
+    );
+    let entry = module.function_named("main").expect("control entry");
+    let options = Options { machine_meaning: true, ..Options::default() };
+    let budget = 8;
+    let mut direct = Executor::new(&module, entry, &[budget], options).expect("direct run");
+    assert_eq!(direct.run(), Outcome::Returned(None));
+    for (basis, _) in direct.snapshot().quantum.amplitudes {
+        assert_eq!(basis, [basis[0], basis[0] & 1, 4 ^ 9, 16]);
+    }
+    let recursive = module.function_named("never").expect("recursive function");
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        let mut emit = Executor::new(&module, entry, &[budget], options).expect("emitted run");
+        let result = emit.run_emitted(&mut |input: ApplyInput<'_>| Ok(compile_apply_with(input, mode)?.block));
+        assert!(
+            matches!(
+                result,
+                Outcome::Stopped(RunError::Apply(ApplyError::Unsupported {
+                    callee,
+                    operation: "call",
+                    route: "recursive call frames",
+                    ..
+                })) if callee == recursive
+            ),
+            "{mode:?}: {result:?}",
+        );
+    }
+}
+
+#[test]
 fn indirect_targets_respect_the_call_copy_work_limit() {
     // The caller costs one parameter slot, the call, and the return. Each
     // candidate costs just its return, so this site can copy 16,381 targets.

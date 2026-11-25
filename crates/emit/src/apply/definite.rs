@@ -123,7 +123,7 @@ pub(super) struct Constants<'a> {
     slots: Vec<Option<Word>>,
     switches: Vec<Edges<'a>>,
     pub(super) calls: Calls<'a>,
-    pub(super) may_return: bool,
+    may_return: bool,
 }
 
 impl<'a> Constants<'a> {
@@ -149,6 +149,7 @@ impl<'a> Constants<'a> {
         frame: &Frame<'a>,
         inputs: impl Iterator<Item = Option<Word>>,
         can_return: impl FnMut(FuncId) -> bool,
+        stopping_proof: Option<&[Option<Word>]>,
     ) -> Self {
         let function = frame.module.function(frame.callee);
         if !function.blocks.iter().any(|block| {
@@ -168,9 +169,33 @@ impl<'a> Constants<'a> {
                     )
                 })
         }) {
-            return Self::default();
+            // A caller may already have relied on these exact facts to omit
+            // its continuation. Use them even in a frame that needs no local pass.
+            return Self { slots: stopping_proof.unwrap_or_default().to_vec(), ..Self::default() };
         }
-        Self::analyze(frame, inputs, can_return)
+        let mut plan = Self::analyze(frame, inputs, can_return);
+        if let Some(proof) = stopping_proof {
+            // Keep the control constants behind the caller's non-return proof
+            // alongside any additional facts proved for this copy's arguments.
+            for (slot, fact) in plan.slots.iter_mut().zip(proof) {
+                if fact.is_some() {
+                    *slot = fact.clone();
+                }
+            }
+        }
+        plan
+    }
+
+    pub(super) fn into_stopping_proof(mut self) -> Option<Vec<Option<Word>>> {
+        if self.may_return {
+            return None;
+        }
+        for slot in &mut self.slots {
+            if slot.as_deref().and_then(definite).is_none() {
+                *slot = None;
+            }
+        }
+        Some(self.slots)
     }
 
     pub(super) fn analyze(

@@ -44,6 +44,8 @@ pub(super) struct Program<'a> {
     work: usize,
     has_memory: bool,
     stack_floor: u64,
+    #[cfg(test)]
+    pub(super) return_analysis_work: usize,
 }
 
 impl<'a> Program<'a> {
@@ -51,9 +53,7 @@ impl<'a> Program<'a> {
         let source = input.module.function(input.callee);
         let args = arguments(input);
         let mut returns = Returns::new(input.module);
-        let root = Frame::check(input.module, input.callee, args.iter().cloned().map(Some), |callee| {
-            returns.can_return(callee)
-        })?;
+        let root = Frame::check(input.module, input.callee, args.iter().cloned().map(Some), &mut returns)?;
         let mut slots = root.initial(args);
         let mut program = Self {
             copies: vec![Copy {
@@ -67,6 +67,8 @@ impl<'a> Program<'a> {
             work: work(source),
             has_memory: false,
             stack_floor: input.module.static_end(),
+            #[cfg(test)]
+            return_analysis_work: 0,
         };
 
         let mut has_stack = false;
@@ -117,6 +119,10 @@ impl<'a> Program<'a> {
                 copy.stack = Some(StackSlots::append(&mut slots, if index == 0 { entry } else { 0 }));
             }
         }
+        #[cfg(test)]
+        {
+            program.return_analysis_work = returns.work;
+        }
         Ok((program, slots))
     }
 
@@ -149,7 +155,7 @@ impl<'a> Program<'a> {
         // These facts hold across every visit in the caller copy. The frame
         // remaps their wire identities together, preserving shared input bits.
         let proofs = args.iter().map(|arg| parent.frame.known_bits(arg));
-        let frame = Frame::check(module, callee, proofs, |target| returns.can_return(target))?;
+        let frame = Frame::check(module, callee, proofs, returns)?;
         let available_stack =
             parent.available_stack.and_then(|bytes| bytes.checked_sub(frame_bytes(function.slot_count())?));
         let caller = Some((at.next(), dst.map(|slot| parent.slot(slot))));

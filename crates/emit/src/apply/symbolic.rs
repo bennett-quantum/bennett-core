@@ -11,6 +11,7 @@ use super::arithmetic;
 use super::bits::{Bit, Circuit, Word, ZERO, constant};
 use super::definite::{CallSite, Constants};
 use super::division;
+use super::returns::Returns;
 use super::switches::Edges;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -120,21 +121,27 @@ impl<'a> Frame<'a> {
         std::mem::take(&mut self.constants.calls)
     }
 
-    pub(super) fn may_return(module: &'a ValidModule, callee: FuncId, can_return: impl FnMut(FuncId) -> bool) -> bool {
+    pub(super) fn return_analysis(
+        module: &'a ValidModule,
+        callee: FuncId,
+        can_return: impl FnMut(FuncId) -> bool,
+    ) -> Option<Vec<Option<Word>>> {
         let frame = Self { module, callee, constants: Constants::default() };
         let inputs = module.function(callee).params.iter().map(|_| None);
-        Constants::analyze(&frame, inputs, can_return).may_return
+        Constants::analyze(&frame, inputs, can_return).into_stopping_proof()
     }
 
     pub(super) fn check(
         module: &'a ValidModule,
         callee: FuncId,
         input: impl Iterator<Item = Option<Word>>,
-        can_return: impl FnMut(FuncId) -> bool,
+        returns: &mut Returns<'a>,
     ) -> Result<Self, ApplyError> {
         let mut frame = Self { module, callee, constants: Constants::default() };
         frame.check_instructions()?;
-        frame.constants = Constants::for_emission(&frame, input, can_return);
+        let stopping_proof = returns.stopping_proof(callee);
+        frame.constants =
+            Constants::for_emission(&frame, input, |target| returns.can_return(target), stopping_proof.as_deref());
         Ok(frame)
     }
 

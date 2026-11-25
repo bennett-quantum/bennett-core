@@ -861,8 +861,10 @@ simulator run is `bennett run --machine-meaning` with its default direct evaluat
 Before consulting the budget, the emitter checks every instruction and terminator in every
 planned function copy, including those in bypassed blocks. Planning follows each path until an
 unconditional instruction fault or a call with no possible returning target. The emitter summarizes
-possible returns with unconstrained function arguments and propagates newly found returns to callers.
-A call at the stopping point stays in the plan. It can fault there or enter a copied frame that
+possible returns with unconstrained function arguments. It schedules direct callees before their
+callers and propagates newly found returns to dependent summaries. A copied frame retains the control
+facts from a summary used to rule out its return, including when the frame would otherwise skip the
+constant analysis. A call at the stopping point stays in the plan. It can fault there or enter a copied frame that
 will fault or exhaust the budget. In that frame, each attempted instruction uses the same budget as
 the call that entered it. Other live predecessors can still reach a shared continuation.
 
@@ -2312,6 +2314,7 @@ Refused by name or not yet excluded around the classification of "What LLVM's pa
 | Refused inside emitted `apply` | Construction needed |
 |---|---|
 | A reachable direct or indirect call candidate that recurses or raises the copy total above 16,384 slots and program points | Shared call frames and return positions |
+| An indirect call whose joined address bits admit an impossible recursive target, for example addresses 1 and 2 held in a loop parameter | Track sets of possible addresses at joins if a measured program needs the precision |
 | `retaddr` | Pass the suspended callers' return sites in one field of the apply input and derive the applied function's return sites from its copied calls |
 | Varying-address `load` or `store` without a proved bound within a declared memory region | Prove the range or declare its full span |
 | `setjmp`, `longjmp` | Private memory and non-local control transfer |
