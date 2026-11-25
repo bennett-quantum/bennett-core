@@ -92,6 +92,27 @@ impl Circuit {
         }
     }
 
+    // The in-place update uses the saved allocator state without copying the
+    // already emitted prefix. Its gates start a separate suffix.
+    pub(super) fn suffix(&self, checkpoint: &Checkpoint) -> Self {
+        Self {
+            start: self.start,
+            next: checkpoint.next,
+            peak: checkpoint.peak,
+            gates: Vec::new(),
+            enabled: self.enabled,
+            control_scratch: checkpoint.control_scratch,
+            retained_copies: self.retained_copies[..checkpoint.retained_copies].to_vec(),
+        }
+    }
+
+    pub(super) fn replace_after(&mut self, checkpoint: Checkpoint, mut suffix: Self) {
+        self.gates.truncate(checkpoint.gates);
+        self.gates.append(&mut suffix.gates);
+        std::mem::swap(&mut self.gates, &mut suffix.gates);
+        *self = suffix;
+    }
+
     pub(super) fn rewind(&mut self, checkpoint: Checkpoint) {
         self.next = checkpoint.next;
         self.peak = checkpoint.peak;
@@ -308,8 +329,27 @@ impl Circuit {
         self.gates.len()
     }
 
-    pub(super) fn finish(mut self, forward_len: usize, name: &str) -> Result<GateBlock, ApplyError> {
-        let scratch = self.start..self.peak.ok_or(ApplyError::WireSpace)?;
+    pub(super) fn fits_at(&self, start: Wire) -> bool {
+        self.peak.is_some_and(|end| start.checked_add(end - self.start).is_some())
+    }
+
+    pub(super) fn finish(self, forward_len: usize, name: &str) -> Result<GateBlock, ApplyError> {
+        self.finish_placed(forward_len, name, std::convert::identity)
+    }
+
+    pub(super) fn finish_placed(
+        mut self,
+        forward_len: usize,
+        name: &str,
+        place: impl Fn(Wire) -> Wire,
+    ) -> Result<GateBlock, ApplyError> {
+        let scratch = place(self.start)..place(self.peak.ok_or(ApplyError::WireSpace)?);
+        for gate in &mut self.gates {
+            gate.target = place(gate.target);
+            for control in &mut gate.controls {
+                *control = place(*control);
+            }
+        }
         self.gates.reserve(forward_len);
         for index in (0..forward_len).rev() {
             self.gates.push(self.gates[index].clone());

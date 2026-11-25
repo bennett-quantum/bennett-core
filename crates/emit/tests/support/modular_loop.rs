@@ -375,3 +375,70 @@ fn modular_proof_leaves_a_fixed_trip_count_in_the_definite_prefix() {
             <= 2
     );
 }
+
+#[test]
+fn modular_proof_places_only_the_chosen_circuit_in_the_caller_range() {
+    use bennett_emit::{ApplyError, ApplyInput, Argument, compile_apply_with};
+    use bennett_exec::BlockOp;
+
+    let source = SOURCE.replace("i3 ", "i12 ").replace("i8 7,", "i8 2,").replace(", 15", ", 3");
+    let module = bennett_ir::load(&source).expect("wide exponent loop");
+    for interface in [0, u64::MAX - 37] {
+        let limit = |room| ApplyInput {
+            module: &module,
+            callee: module.function_named("f").expect("loop"),
+            args: &[],
+            out: interface + 12..interface + 20,
+            fault: interface + 20..interface + 25,
+            budget: 130,
+            entry_fault: None,
+            stack_available: 800,
+            memory: None,
+            scratch_start: u64::MAX - room,
+        };
+        let args = [Argument::Register(interface..interface + 12)];
+        for room in [9, 10, 11] {
+            let input = ApplyInput { args: &args, ..limit(room) };
+            let compiled = compile_apply_with(input, ApplyMode::Automatic);
+            if room == 9 {
+                assert!(matches!(compiled, Err(ApplyError::WireSpace)));
+                continue;
+            }
+            let compiled = compiled.expect("the in-place update fits");
+            assert_eq!(compiled.definite_steps, 1);
+            assert_eq!(compiled.construction, Construction::ModularInPlace { passes: 12 });
+            let [BlockOp::Allocate(scratch), ops @ .., BlockOp::ReleaseZero(released)] = compiled.block.ops() else {
+                panic!("expected one scratch lifetime");
+            };
+            assert_eq!(scratch, released);
+            assert_eq!(scratch.clone(), u64::MAX - room..u64::MAX - room + 10);
+            let compact = |wire| {
+                if scratch.contains(&wire) {
+                    25 + (wire - scratch.start)
+                } else {
+                    assert!((interface..interface + 25).contains(&wire));
+                    wire - interface
+                }
+            };
+            let gates = ops
+                .iter()
+                .map(|op| {
+                    let BlockOp::Gate(gate) = op else { panic!("expected a gate") };
+                    let mut gate = gate.clone();
+                    gate.target = compact(gate.target);
+                    for control in &mut gate.controls {
+                        *control = compact(*control);
+                    }
+                    gate
+                })
+                .collect::<Vec<_>>();
+            crate::bits::check_states(
+                &gates,
+                crate::bits::Layout { x: 12, y: 13, scratch: 10 },
+                (0..4096).flat_map(|x| [(x, 0), (x, 0x11ca)]),
+                |x| 1 + (x & 1),
+            )
+            .expect("preserve the interface and clear scratch");
+        }
+    }
+}

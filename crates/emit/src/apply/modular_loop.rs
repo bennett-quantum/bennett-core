@@ -6,7 +6,7 @@ use bennett_exec::Wire;
 use bennett_ir::{BinOp, BlockId, CastOp, Function, Inst, Operand, Predicate, Slot, Target, Terminator, Width};
 
 use super::ApplyInput;
-use super::bits::{Bit, Circuit, ONE, Word, ZERO, constant, definite};
+use super::bits::{Bit, Checkpoint, Circuit, ONE, Word, ZERO, constant, definite};
 use super::calls::Program;
 use super::memory::Memory;
 use super::modular::{self, Factor, Multiplier};
@@ -19,7 +19,6 @@ pub(super) struct Plan {
     exponent: Word,
     factors: Vec<Factor>,
     condition: Condition,
-    pub(super) definite_steps: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -226,35 +225,6 @@ fn next_definite<'a>(
     }
 }
 
-// Replay ordinary emission in the recognised loop as far as its first
-// qubit-dependent choice. A loop that reaches an exit stays in the definite
-// prefix. Both exits leave the loop frame at the named block.
-fn first_choice(
-    program: &Program<'_>,
-    slots: &[Word],
-    mut point: Point,
-    exits: [BlockId; 2],
-    circuit: &mut Circuit,
-    budget: u64,
-) -> Option<u64> {
-    let mut slots = clone_slots(slots);
-    let loop_copy = point.copy;
-    for spent in 0..budget {
-        if point.copy == loop_copy && point.index == 0 && exits.contains(&point.block) {
-            return None;
-        }
-        let step = program.step(circuit, &slots, point).ok()?;
-        if !circuit.fits() {
-            return None;
-        }
-        match next_definite(program, &mut slots, point, step) {
-            Ok(next) => point = next,
-            Err(stop) => return matches!(stop, Step::Branch(..)).then_some(spent),
-        }
-    }
-    None
-}
-
 // The loop has not executed on the probe state. In its frame, keep the
 // existing restriction to copies, lossless conversions and unconditional
 // transfers. Suspended callers have their exact pre-loop slots and memory.
@@ -312,22 +282,26 @@ fn replay_exit(
     None
 }
 
-impl Plan {
-    pub(super) fn prove(
-        input: &ApplyInput<'_>,
-        program: &Program<'_>,
-        slots: &[Word],
-        memory: &Memory<'_>,
-        entry: Point,
-        prefix_steps: u64,
-        circuit: &mut Circuit,
-    ) -> Option<Self> {
-        let remaining = input.budget.checked_sub(prefix_steps)?;
-        let loop_budget = remaining.checked_sub(2)?;
-        if loop_budget == 0 {
-            return None;
-        }
-        let scratch = circuit.scratch_end()?;
+struct Shape<'a> {
+    entry: Point,
+    tested: Operand,
+    entry_condition: usize,
+    true_if_zero: bool,
+    empty: &'a Target,
+    exit: &'a Target,
+    exit_condition: (usize, bool),
+    latch: Point,
+    back_to_test: Option<&'a Target>,
+    joined: usize,
+    initial: [Operand; 3],
+    update: Product,
+    square: Product,
+    condition: Condition,
+    pass_steps: u64,
+}
+
+impl<'a> Shape<'a> {
+    fn recognize(program: &Program<'a>, entry: Point) -> Option<Self> {
         let entry_block = program.block(entry);
         if entry.index + 1 != entry_block.insts.len() {
             return None;
@@ -337,7 +311,6 @@ impl Plan {
             return None;
         };
         let (tested, true_if_zero) = zero_test(&entry_block.insts[entry.index], cond)?;
-        let entry_slots = slots;
         let (empty, begin) = if true_if_zero { (if_true, if_false) } else { (if_false, if_true) };
         let entry_condition = program.slot(entry, *entry_condition).index();
         let head = at_block(entry, begin.block);
@@ -413,22 +386,85 @@ impl Plan {
         if !captured(update.product.modulus) || !captured(square.modulus) {
             return None;
         }
-        // Only candidates with a recognised loop need a copy of the prefix.
-        let mut slots = clone_slots(slots);
-        slots[entry_condition] = vec![Bit::Constant(!true_if_zero)];
-        let modulus = definite(&program.read(&slots, entry, &update.product.modulus))?;
-        if modulus < 2 || definite(&program.read(&slots, entry, &square.modulus))? != modulus {
+        let initial = [residue, base, exponent]
+            .map(|index| if pretested { Operand::Slot(carried.params[index].slot) } else { begin.args[index] });
+        let pass_steps = update.steps + square.steps + 3 + u64::from(pretested);
+        Some(Self {
+            entry,
+            tested,
+            entry_condition,
+            true_if_zero,
+            empty,
+            exit,
+            exit_condition,
+            latch: latch_point,
+            back_to_test: pretested.then_some(back),
+            joined: program.slot(latch_point, joined.slot).index(),
+            initial,
+            update: update.product,
+            square,
+            condition: update.condition,
+            pass_steps,
+        })
+    }
+}
+
+pub(super) struct Candidate<'a> {
+    shape: Shape<'a>,
+    slots: Vec<Word>,
+    checkpoint: Checkpoint,
+    prefix_steps: u64,
+    scratch: Wire,
+}
+
+impl<'a> Candidate<'a> {
+    pub(super) fn remember(
+        program: &Program<'a>,
+        slots: &[Word],
+        entry: Point,
+        prefix_steps: u64,
+        circuit: &Circuit,
+    ) -> Option<Self> {
+        let shape = Shape::recognize(program, entry)?;
+        Some(Self {
+            shape,
+            slots: clone_slots(slots),
+            checkpoint: circuit.checkpoint(),
+            prefix_steps,
+            scratch: circuit.scratch_end()?,
+        })
+    }
+
+    // A recognized loop can leave only through its two exits. Its direct
+    // product helpers return immediately and never modify the byte map.
+    pub(super) fn exited(&self, next: Point) -> bool {
+        next.copy == self.shape.entry.copy
+            && next.index == 0
+            && [self.shape.empty.block, self.shape.exit.block].contains(&next.block)
+    }
+
+    pub(super) fn prove(
+        self,
+        input: &ApplyInput<'_>,
+        program: &Program<'a>,
+        memory: &Memory<'_>,
+    ) -> Option<(Plan, Checkpoint)> {
+        #[cfg(test)]
+        tests::record_attempt();
+        let Self { shape, mut slots, checkpoint, prefix_steps, scratch } = self;
+        let loop_budget = input.budget.checked_sub(prefix_steps)?.checked_sub(2)?;
+        let entry = shape.entry;
+        slots[shape.entry_condition] = vec![Bit::Constant(!shape.true_if_zero)];
+        let modulus = definite(&program.read(&slots, entry, &shape.update.modulus))?;
+        if modulus < 2 || definite(&program.read(&slots, entry, &shape.square.modulus))? != modulus {
             return None;
         }
         let modulus64 = u64::try_from(modulus).ok()?;
-        let initial_word = |index: usize| {
-            let source = if pretested { Operand::Slot(carried.params[index].slot) } else { begin.args[index] };
-            program.read(&slots, entry, &source)
-        };
-        let initial = definite(&initial_word(residue))?;
-        let mut factor = definite(&initial_word(base))?;
-        let mut exponent_bits = initial_word(exponent);
-        if initial >= modulus || exponent_bits != program.read(&slots, entry, &tested) {
+        let [initial_word, base_word, exponent_word] = shape.initial.map(|source| program.read(&slots, entry, &source));
+        let initial = definite(&initial_word)?;
+        let mut factor = definite(&base_word)?;
+        let mut exponent_bits = exponent_word;
+        if initial >= modulus || exponent_bits != program.read(&slots, entry, &shape.tested) {
             return None;
         }
         let output_width = (input.out.end - input.out.start) as usize;
@@ -442,44 +478,39 @@ impl Plan {
         }
         // Charge the longest body route before trying either return. The
         // shift bounds the number of passes independently of the budget.
-        let pass_steps = update.steps + square.steps + 3 + u64::from(pretested);
-        let loop_steps = pass_steps * exponent_bits.len() as u64;
+        let loop_steps = shape.pass_steps * exponent_bits.len() as u64;
         let exit_budget = loop_budget.checked_sub(loop_steps)?;
         if exit_budget == 0 {
             return None;
         }
-        let checkpoint = circuit.checkpoint();
-        let choice = first_choice(program, entry_slots, entry, [empty.block, exit.block], circuit, 2 + loop_steps);
-        circuit.rewind(checkpoint);
-        let choice = choice?;
         let mut factors = Vec::new();
         for _ in &exponent_bits {
-            update.product.exact_product(modulus - 1, factor)?;
+            shape.update.exact_product(modulus - 1, factor)?;
             factors.push(Factor::prove(factor, modulus64)?);
-            factor = square.exact_product(factor, factor)? % modulus;
+            factor = shape.square.exact_product(factor, factor)? % modulus;
         }
 
         // The only residue reads on the reached routes are the update and
         // the direct transfers. Check the two complete returns, including
         // any conversion in the wrapper, with distinct probe bits.
         let mut empty_slots = clone_slots(&slots);
-        empty_slots[entry_condition] = vec![Bit::Constant(true_if_zero)];
+        empty_slots[shape.entry_condition] = vec![Bit::Constant(shape.true_if_zero)];
         let probe_end = scratch.checked_add(residue_width as u64)?;
-        let empty_point = program.jump(&mut empty_slots, entry, empty);
+        let empty_point = program.jump(&mut empty_slots, entry, shape.empty);
         let zero_result =
             replay_exit(program, &mut empty_slots, empty_point, entry.copy, memory, probe_end, loop_budget)?;
         if zero_result != constant(initial, output_width) {
             return None;
         }
         let probe = (scratch..probe_end).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
-        let joined = program.slot(latch_point, joined.slot).index();
+        let joined = shape.joined;
         let mut joined_word = probe.clone();
         joined_word.resize(slots[joined].len(), ZERO);
         slots[joined] = joined_word;
-        let exit_from = if pretested { program.jump(&mut slots, latch_point, back) } else { latch_point };
-        let (condition, value) = exit_condition;
+        let exit_from = shape.back_to_test.map_or(shape.latch, |back| program.jump(&mut slots, shape.latch, back));
+        let (condition, value) = shape.exit_condition;
         slots[condition] = vec![Bit::Constant(value)];
-        let exit_point = program.jump(&mut slots, exit_from, exit);
+        let exit_point = program.jump(&mut slots, exit_from, shape.exit);
         let result = replay_exit(program, &mut slots, exit_point, entry.copy, memory, probe_end, exit_budget)?;
         let mut expected = probe;
         expected.resize(output_width, ZERO);
@@ -487,16 +518,14 @@ impl Plan {
             return None;
         }
 
-        Some(Self {
-            initial,
-            modulus: modulus64,
-            exponent: exponent_bits,
-            factors,
-            condition: update.condition,
-            definite_steps: prefix_steps + choice,
-        })
+        Some((
+            Plan { initial, modulus: modulus64, exponent: exponent_bits, factors, condition: shape.condition },
+            checkpoint,
+        ))
     }
+}
 
+impl Plan {
     pub(super) fn passes(&self) -> usize {
         self.factors.len()
     }

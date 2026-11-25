@@ -805,12 +805,15 @@ calls, returns, branches and exits, must fit the applied function's single budge
 The shift gives the pass count independently of that budget. Any failed proof
 leaves the existing compilation and fault behaviour in use.
 
-The compiler tries the proof before emitting the loop's entry comparison,
-using the slots and private memory from the ordinary definite prefix. A resolved
-indirect call can enter that prefix just like a direct call. It checks the loop
-shape before copying its slots. Ordinary emission in the recognised loop finds
-the first qubit-dependent jump and supplies the definite-step count. Loops
-whose control stays definite keep ordinary emission. The compiler charges the
+Ordinary emission finds the first qubit-dependent jump and supplies the
+number of successful steps before it. A resolved indirect call can enter the
+definite prefix just like a direct call. The compiler recognises the loop shape
+before saving its entry slots and circuit position. It keeps that entry while
+control stays inside the loop and tries the proof at the first qubit-dependent
+jump. Control that reaches the loop exit with every jump definite keeps ordinary
+emission. Both constructions use temporary wire identities that preserve shared
+argument wires. Only the selected block's scratch range must fit the caller's
+wire placement. The compiler charges the
 entry and the longest loop route before trying either exit. Each exit replay
 stops at its remaining budget. The replays use the initial residue or fresh
 symbolic residue bits. Inside the loop frame it follows only lossless conversions

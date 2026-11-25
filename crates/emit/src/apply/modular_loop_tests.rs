@@ -9,12 +9,18 @@ use crate::{ApplyInput, ApplyMode, Argument, Construction, compile_apply_with};
 
 #[derive(Clone, Copy, Default)]
 struct Work {
+    attempts: usize,
     slot_words: usize,
     replay_gates: usize,
 }
 
 thread_local! {
-    static WORK: Cell<Work> = const { Cell::new(Work { slot_words: 0, replay_gates: 0 }) };
+    static WORK: Cell<Work> = const { Cell::new(Work { attempts: 0, slot_words: 0, replay_gates: 0 }) };
+}
+
+pub(super) fn record_attempt() {
+    let work = WORK.get();
+    WORK.set(Work { attempts: work.attempts + 1, ..work });
 }
 
 pub(super) fn record_slot_words(words: usize) {
@@ -168,4 +174,15 @@ exit(i8 %answer):
         ApplyMode::Automatic,
     )
     .expect("emit the definite loop")
+}
+
+#[test]
+fn modular_proof_records_the_definite_loop_entry_once() {
+    WORK.set(Work::default());
+    let compiled = definite_wide_loop();
+    assert_eq!(compiled.construction, Construction::Definite);
+    let work = WORK.get();
+    assert_eq!(work.slot_words, 18);
+    assert_eq!(work.attempts, 0);
+    assert_eq!(work.replay_gates, 0);
 }

@@ -23,6 +23,7 @@ mod shifts;
 mod stack;
 mod switches;
 mod symbolic;
+mod wires;
 
 use std::fmt;
 use std::ops::Range;
@@ -34,6 +35,7 @@ use self::bits::{Bit, Circuit, ONE, Word, constant};
 use self::calls::Program;
 use self::memory::{DISPATCH_REQUIRED, Memory};
 use self::symbolic::{Point, Status, Step};
+use self::wires::Layout;
 
 pub use bennett_exec::{ApplyError, ApplyInput, ApplyMemory, Argument};
 pub use memory::MemoryCounts;
@@ -178,6 +180,15 @@ fn compile_with_analysis_limit(
     analysis_limit: usize,
 ) -> Result<CompiledApply, ApplyError> {
     check_interface(&input)?;
+    let wires = Layout::new(&input);
+    let args = wires.arguments(input.args);
+    let input = ApplyInput {
+        args: &args,
+        out: wires.local(input.out.clone()),
+        fault: wires.local(input.fault.clone()),
+        scratch_start: wires.scratch_start(),
+        ..input
+    };
     let (program, mut slots) = Program::check(&input)?;
     let try_modular = mode == ApplyMode::Automatic
         && !program.has_dynamic_stack()
@@ -189,6 +200,7 @@ fn compile_with_analysis_limit(
         None => Status::Running(Point::entry(BlockId(0))),
     };
     let mut spent = 0;
+    let mut candidate = None;
     let (copies, construction, reason) = loop {
         match status {
             Status::Returned(word) => {
@@ -207,21 +219,8 @@ fn compile_with_analysis_limit(
             }
             Status::Running(_) if spent == input.budget => status = Status::Faulted(Fault::Budget),
             Status::Running(point) => {
-                if try_modular
-                    && let Some(plan) =
-                        modular_loop::Plan::prove(&input, &program, &slots, &memory, point, spent, &mut circuit)
-                {
-                    let checkpoint = circuit.checkpoint();
-                    let residue = plan.emit(&mut circuit);
-                    if circuit.fits() {
-                        spent = plan.definite_steps;
-                        break (
-                            Copies { returned: vec![(ONE, residue)], faulted: Vec::new() },
-                            Construction::ModularInPlace { passes: plan.passes() },
-                            "a proved modular residue update with a whole-function budget",
-                        );
-                    }
-                    circuit.rewind(checkpoint);
+                if try_modular && candidate.is_none() && input.budget - spent > 2 {
+                    candidate = modular_loop::Candidate::remember(&program, &slots, point, spent, &circuit);
                 }
                 let step = program.step_in(&mut circuit, &slots, point, &mut memory, ONE)?;
                 memory.commit(&mut circuit);
@@ -275,6 +274,20 @@ fn compile_with_analysis_limit(
                         break (copies, Construction::StepMachine { ticks }, refusal.reason());
                     }
                     Step::Branch(..) => {
+                        if let Some(candidate) = candidate.take()
+                            && let Some((plan, checkpoint)) = candidate.prove(&input, &program, &memory)
+                        {
+                            let mut in_place = circuit.suffix(&checkpoint);
+                            let residue = plan.emit(&mut in_place);
+                            if wires.fits(&in_place) {
+                                circuit.replace_after(checkpoint, in_place);
+                                break (
+                                    Copies { returned: vec![(ONE, residue)], faulted: Vec::new() },
+                                    Construction::ModularInPlace { passes: plan.passes() },
+                                    "a proved modular residue update with a whole-function budget",
+                                );
+                            }
+                        }
                         let remaining = input.budget - spent;
                         let reason = match mode {
                             ApplyMode::Automatic => {
@@ -338,6 +351,11 @@ fn compile_with_analysis_limit(
                     Step::Return(word) => Status::Returned(word),
                     Step::Inactive => unreachable!("the definite prefix is active"),
                 };
+                if let Status::Running(next) = status
+                    && candidate.as_ref().is_some_and(|candidate| candidate.exited(next))
+                {
+                    candidate = None;
+                }
                 spent += 1;
             }
         }
@@ -345,7 +363,7 @@ fn compile_with_analysis_limit(
     let forward = circuit.forward_len();
     copies.write(&mut circuit, input.out, input.fault);
     Ok(CompiledApply {
-        block: circuit.finish(forward, &input.module.function(input.callee).name)?,
+        block: wires.finish(circuit, forward, &input.module.function(input.callee).name)?,
         definite_steps: spent,
         construction,
         reason,
