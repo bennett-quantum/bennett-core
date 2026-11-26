@@ -188,6 +188,18 @@ impl<'a> Program<'a> {
         self.copies[0].stack.is_some()
     }
 
+    pub(super) fn stores_have_definite_addresses(&self) -> bool {
+        self.frames().all(|frame| {
+            frame
+                .module
+                .function(frame.callee)
+                .blocks
+                .iter()
+                .flat_map(|block| &block.insts)
+                .all(|inst| if let Inst::Store { address, .. } = inst { frame.is_definite(address) } else { true })
+        })
+    }
+
     pub(super) fn frames(&self) -> impl Iterator<Item = &Frame<'a>> {
         self.copies.iter().map(|copy| &copy.frame)
     }

@@ -220,6 +220,13 @@ pub(super) struct Constants<'a> {
 }
 
 impl<'a> Constants<'a> {
+    pub(super) fn is_definite(&self, operand: &Operand) -> bool {
+        match operand {
+            Operand::Const(_) => true,
+            Operand::Slot(slot) => self.slots.get(slot.index()).and_then(Option::as_deref).and_then(definite).is_some(),
+        }
+    }
+
     pub(super) fn project(&self, slots: &[Word], operand: &Operand, mut word: Word) -> Word {
         let Operand::Slot(slot) = operand else { return word };
         if let Some(proved) = self.slots.get(slot.index()).and_then(Option::as_ref) {

@@ -99,6 +99,10 @@ impl<'a> Frame<'a> {
         }
     }
 
+    pub(super) fn is_definite(&self, operand: &Operand) -> bool {
+        self.constants.is_definite(operand)
+    }
+
     pub(super) fn operand(&self, slots: &[Word], operand: &Operand) -> Word {
         self.constants.project(slots, operand, Self::read(slots, operand))
     }

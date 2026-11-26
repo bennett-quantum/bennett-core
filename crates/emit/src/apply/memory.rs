@@ -89,6 +89,7 @@ struct ByteWrites {
 pub(super) struct Memory<'a> {
     base: Option<ApplyMemory<'a>>,
     declarations: &'a [DataSegment],
+    fixed_stores: bool,
     bytes: BTreeMap<u64, Byte>,
     counts: MemoryCounts,
     current_bits: usize,
@@ -98,10 +99,11 @@ pub(super) struct Memory<'a> {
 }
 
 impl<'a> Memory<'a> {
-    pub(super) fn new(input: &ApplyInput<'a>) -> Self {
+    pub(super) fn new(input: &ApplyInput<'a>, fixed_stores: bool) -> Self {
         Self {
             base: input.memory,
             declarations: &input.module.data,
+            fixed_stores,
             bytes: BTreeMap::new(),
             counts: MemoryCounts::default(),
             current_bits: 0,
@@ -122,6 +124,7 @@ impl<'a> Memory<'a> {
         Self {
             base: self.base,
             declarations: self.declarations,
+            fixed_stores: self.fixed_stores,
             bytes: self.bytes.clone(),
             counts: MemoryCounts::default(),
             current_bits: self.current_bits,
@@ -336,7 +339,17 @@ impl<'a> Memory<'a> {
             let new = match pending.alternatives.as_slice() {
                 [(ONE, value)] => value.map(|bit| self.store_bit(circuit, bit)),
                 [(guard, value)] => std::array::from_fn(|i| circuit.select(*guard, value[i], old[i])),
-                alternatives => select_byte(circuit, old, alternatives),
+                alternatives => {
+                    // A varying store can only reach declared bytes. Keep
+                    // those bytes on the existing selection path if a store
+                    // in any copy has an unproved address.
+                    let fixed_only = !pending.varying && (self.fixed_stores || !self.declared(address, address + 1));
+                    if fixed_only && let Some(folded) = self.fold_literal_writes(circuit, &old, alternatives) {
+                        folded
+                    } else {
+                        select_byte(circuit, old, alternatives)
+                    }
+                }
             };
             self.current_bits -= symbolic_bits(&old);
             self.current_bits += symbolic_bits(&new);
@@ -355,6 +368,52 @@ impl<'a> Memory<'a> {
                 Bit::Shared { wire, version, inverted: false }
             }
             (Some(_), _) => circuit.retain_copy(bit),
+        }
+    }
+
+    // For disjoint write guards, a literal bit changes precisely when one
+    // of the active writes differs from the old bit.
+    fn fold_literal_writes(&mut self, circuit: &mut Circuit, old: &Byte, alternatives: &[(Bit, Byte)]) -> Option<Byte> {
+        let old = definite(old)?;
+        let writes = alternatives
+            .iter()
+            .map(|(guard, byte)| Some((*guard, old ^ definite(byte)?)))
+            .collect::<Option<Vec<_>>>()?;
+        Some(std::array::from_fn(|index| {
+            let mask = 1 << index;
+            let changes = writes.iter().filter_map(|&(guard, delta)| (delta & mask != 0).then_some(guard));
+            self.guard_parity(circuit, old & mask != 0, changes)
+        }))
+    }
+
+    fn guard_parity(&mut self, circuit: &mut Circuit, mut inverted: bool, guards: impl Iterator<Item = Bit>) -> Bit {
+        let mut wires = BTreeSet::new();
+        for guard in guards {
+            match guard {
+                Bit::Constant(value) => inverted ^= value,
+                Bit::Wire(wire, complement) | Bit::Shared { wire, inverted: complement, .. } => {
+                    inverted ^= complement;
+                    if !wires.insert(wire) {
+                        wires.remove(&wire);
+                    }
+                }
+            }
+        }
+        if wires.len() > 1 {
+            let target = circuit.fresh();
+            circuit.xor_into(target, Bit::Constant(inverted), ONE);
+            for source in wires {
+                circuit.xor_into(target, Bit::Wire(source, false), ONE);
+            }
+            Bit::Wire(target, false)
+        } else if let Some(&source) = wires.first() {
+            if inverted {
+                circuit.retain_copy(Bit::Wire(source, true))
+            } else {
+                self.store_bit(circuit, Bit::Wire(source, false))
+            }
+        } else {
+            Bit::Constant(inverted)
         }
     }
 

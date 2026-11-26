@@ -507,8 +507,9 @@ plain immutable wire without gates or scratch. Each shared bit keeps the identit
 of its byte version for guarded selection. This preserves the same equality of
 versions that separate retained copies would have, so a merge cannot introduce
 negative controls by conflating two copies. An inverted source uses the retained
-copy into a fresh positive wire. An overwrite replaces the map entry, so a value
-already loaded still refers to its original bits. The caller's memory stays intact.
+copy into a fresh positive wire. Plain stores use a retained copy once the 32-bit version counter fills.
+An overwrite replaces the map entry, so a value already loaded still refers to
+its original bits. The caller's memory stays intact.
 Arithmetic gadgets preserve constant results and the equality of an unconditional result copy
 with a source that survives local reversal. A failed work-wire allocation prevents folding the
 affected gadget and fails circuit construction before emission.
@@ -520,11 +521,19 @@ positions can refer to the same qubit. A later qubit-dependent choice can use th
 construction until it needs a memory or stack operation. The step machine performs the
 accesses within the remaining whole-function budget. Loads and stores check the pre-tick map.
 Each successful store selects its bytes under its dispatch guard after all accesses in that tick
-have read. The guards are disjoint, so each input sees just its own store. Earlier versions are
-available to reverse the call. The compiler can prove an address definite on its dispatch guard
-by replaying forward gates over at most eight distinct argument qubits and at most $2^{20}$ gates.
+have read. The guards are disjoint, so each input sees just its own store.
 
-**Cost of missing constant proofs.** The emitter proves a literal zero, a zero shifted
+When only fixed-address stores can reach a byte, the emitter can fold simultaneous
+literal writes. For each bit it starts with the old literal value and XORs the guards
+of writes that change that bit. Disjoint guards make this the selected value on each
+input. A single positive guard can be used directly as the byte's new bit, with a
+separate byte-version identity. Symbolic values and declared bytes that an unproved
+store address could reach use ordinary selection.
+
+Earlier versions are available to reverse the call. The compiler can prove an
+address definite on its dispatch guard by replaying forward gates over at most eight distinct argument qubits and at most $2^{20}$ gates.
+
+**Constant values and remainder bounds.** The emitter proves a literal zero, a zero shifted
 by a qubit-dependent amount, and `(x*x) XOR x` on one bit. A remainder by a known
 nonzero divisor has magnitude at most the smaller of the dividend's maximum
 magnitude and the divisor magnitude minus one. A zero bound produces literal
@@ -532,11 +541,6 @@ zero before memory lowering. A dividend whose magnitude is always less than the
 divisor's magnitude supplies its own remainder. A nonzero signed remainder takes
 the dividend's sign. The emitter extends the result above its proved width. Both arithmetic analysis and gate
 emission use the bounds. A zero divisor still faults at the instruction.
-
-Writing one or zero to initially zero byte 8 with two disjoint guarded stores retains one qubit
-and uses two CNOTs, causing `WireSpace` with no spare wire, and the existing conditional
-selection could fold writes to bytes touched only by fixed-address stores before publishing
-each final byte once.
 
 **Varying addresses.** A `data` segment declares a region for varying-address accesses.
 For small argument interfaces, the emitter replays every assignment allowed by the dispatch guard.

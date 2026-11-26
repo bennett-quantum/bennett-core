@@ -2046,3 +2046,73 @@ entry:
         assert_eq!(values, expected);
     }
 }
+
+#[test]
+fn literal_fixed_writes_reuse_the_selecting_bit() {
+    let compiled = isolated(GUARDED_PAIR);
+    let (gates, layout) = gates(&compiled, WIDTH, 13);
+    bits::exhaustive(&gates, layout, |x| x & 1).expect("the selected byte follows the guard");
+    assert_eq!((gates.len(), layout.scratch), (1, 0));
+    assert_eq!((compiled.memory.retained_scratch_qubits, compiled.memory.gates), (0, 0));
+}
+
+#[test]
+fn a_byte_with_a_later_varying_store_keeps_ordinary_selection() {
+    let source = GUARDED_PAIR.replace(
+        "read:\n    %result",
+        r#"read:
+    %next = lshr i3 %x, 1
+    %bit = trunc i3 %next to i1
+    %offset = zext i1 %bit to i64
+    %address = add i64 %offset, 8
+    store i8 7, %address
+    %result"#,
+    );
+    let module = module(&format!("data 8 = i16 0\n{source}"), "");
+    let (_, memory, values) = compare(&module, "before varying store", 4, ApplyMode::Automatic);
+    assert_eq!(values, vec![(0, Fault::Budget.code()); 8]);
+    assert_eq!((memory.retained_scratch_qubits, memory.gates), (1, 2));
+    let (_, memory, values) = compare(&module, "after varying store", 11, ApplyMode::Automatic);
+    let expected = (0..8).map(|x| (if x & 2 == 0 { 7 } else { x & 1 }, 0)).collect::<Vec<_>>();
+    assert_eq!(values, expected);
+    assert_eq!(memory.varying_stores, 1);
+}
+
+fn writes_separated_by_a_load() -> ValidModule {
+    module(
+        &GUARDED_PAIR.replace(
+            "    %result = load i8 8\n    ret %result",
+            r#"    %first = load i8 8
+    br %choose, clear, set
+clear:
+    store i8 0, 8
+    br finish
+set:
+    store i8 1, 8
+    br finish
+finish:
+    %second = load i8 8
+    %saved = shl i8 %first, 1
+    %out = xor i8 %saved, %second
+    ret %out"#,
+        ),
+        "",
+    )
+}
+
+#[test]
+fn an_intervening_load_keeps_its_selected_byte() {
+    let module = writes_separated_by_a_load();
+    let (_, _, values) = compare(&module, "read before the second set of writes", 12, ApplyMode::Automatic);
+    assert_eq!(values, (0..8).map(|x| (1 + (x & 1), 0)).collect::<Vec<_>>());
+}
+
+#[test]
+fn the_clock_can_stop_between_sets_of_fixed_writes() {
+    let module = writes_separated_by_a_load();
+    for budget in [6, 7, 8, 11, 12, 13] {
+        let (_, memory, values) = compare(&module, "budget around second set of writes", budget, ApplyMode::Automatic);
+        assert_eq!(values, (0..8).map(|x| bounds(budget, 12, Ok(1 + (x & 1)))).collect::<Vec<_>>());
+        assert_eq!(memory.retained_scratch_qubits, usize::from(budget >= 7));
+    }
+}

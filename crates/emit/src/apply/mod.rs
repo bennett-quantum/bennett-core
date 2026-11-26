@@ -194,7 +194,8 @@ fn compile_with_analysis_limit(
         && !program.has_dynamic_stack()
         && input.args.iter().any(|arg| matches!(arg, Argument::Register(_)));
     let mut circuit = Circuit::new(input.scratch_start);
-    let mut memory = Memory::new(&input);
+    let fixed_stores = input.module.data.is_empty() || program.stores_have_definite_addresses();
+    let mut memory = Memory::new(&input, fixed_stores);
     let mut status = match input.entry_fault {
         Some(fault) => Status::Faulted(fault),
         None => Status::Running(Point::entry(BlockId(0))),
