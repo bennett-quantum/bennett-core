@@ -149,13 +149,7 @@ impl<'a> Frame<'a> {
     ) -> Result<Self, ApplyError> {
         let mut frame = Self::for_analysis(module, callee);
         frame.check_instructions()?;
-        let stopping_proof = proofs.returns.stopping_proof(callee);
-        frame.constants = Constants::for_emission(
-            &frame,
-            input,
-            |target, args| proofs.call(module, target, args),
-            stopping_proof.as_deref(),
-        );
+        frame.constants = Constants::for_emission(&frame, input, proofs);
         Ok(frame)
     }
 

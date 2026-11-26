@@ -75,6 +75,7 @@ fn fold_inst(
 pub(super) struct CallSite<'a> {
     pub(super) target: Option<&'a Operand>,
     pub(super) args: &'a [Operand],
+    pub(super) argument_facts: Option<Vec<Option<Word>>>,
     pub(super) dst: Option<Slot>,
     pub(super) candidates: BTreeSet<FuncId>,
     pub(super) invalid_possible: bool,
@@ -90,6 +91,7 @@ fn record_call<'a, 'sites>(
     let site = calls.entry(at).or_insert_with(|| CallSite {
         target: call.target,
         args: call.args,
+        argument_facts: None,
         dst: call.dst,
         candidates: BTreeSet::new(),
         invalid_possible: false,
@@ -97,6 +99,7 @@ fn record_call<'a, 'sites>(
     // Retain the possibilities from earlier visits as input facts change at joins.
     site.candidates.extend(call.candidates);
     site.invalid_possible |= call.invalid_possible;
+    site.argument_facts = call.argument_facts;
     site
 }
 
@@ -252,11 +255,11 @@ impl<'a> Constants<'a> {
     pub(super) fn for_emission(
         frame: &Frame<'a>,
         inputs: impl Iterator<Item = Option<Word>>,
-        call_result: impl FnMut(FuncId, Option<&[Option<Word>]>) -> CallResult,
-        stopping_proof: Option<&[Option<Word>]>,
+        proofs: &mut CallProofs<'a>,
     ) -> Self {
         let function = frame.module.function(frame.callee);
         let (inputs, _) = normalize_arguments(frame, inputs);
+        let stopping_proof = proofs.returns.stopping_proof(frame.callee);
         let needs_analysis = function.blocks.iter().any(|block| {
             matches!(&block.term, Terminator::Switch { .. })
                 || block.insts.iter().any(|inst| {
@@ -274,12 +277,14 @@ impl<'a> Constants<'a> {
                     )
                 })
         });
-        let mut plan = if needs_analysis {
-            Self::solve(frame, &inputs, call_result)
+        // Emit a proved stopping copy with the same argument facts that
+        // let its caller omit the continuation.
+        let mut plan = if needs_analysis || proofs.stops_with_arguments(frame.callee, &inputs) {
+            Self::solve(frame, &inputs, |target, args| proofs.call(frame.module, target, args))
         } else {
             Self::with_arguments(frame, &inputs)
         };
-        if let Some(proof) = stopping_proof {
+        if let Some(proof) = stopping_proof.as_deref() {
             // Keep the control constants behind the caller's non-return proof
             // alongside any additional facts proved for this copy's arguments.
             for (slot, fact) in plan.slots.iter_mut().zip(proof) {
@@ -371,6 +376,7 @@ impl<'a> Constants<'a> {
                         Some(CallSite {
                             target: None,
                             args,
+                            argument_facts: None,
                             dst: *dst,
                             candidates: BTreeSet::from([*callee]),
                             invalid_possible: false,
@@ -382,17 +388,27 @@ impl<'a> Constants<'a> {
                             break;
                         };
                         let (candidates, invalid_possible) = indirect_targets(frame.module, signature, &address);
-                        Some(CallSite { target: Some(target), args, dst: *dst, candidates, invalid_possible })
+                        Some(CallSite {
+                            target: Some(target),
+                            args,
+                            argument_facts: None,
+                            dst: *dst,
+                            candidates,
+                            invalid_possible,
+                        })
                     } else {
                         None
                     };
-                    if let Some(call) = call {
+                    if let Some(mut call) = call {
+                        call.argument_facts = call.dst.map(|_| call.args.iter().map(|arg| read(&local, arg)).collect());
                         let site = record_call(&mut calls, (BlockId(index as u32), at), call);
-                        let args: Option<Vec<_>> =
-                            site.dst.map(|_| site.args.iter().map(|arg| read(&local, arg)).collect());
-                        let Some(word) =
-                            fold_call(site.dst, &site.candidates, args.as_deref(), &mut call_result, unknown_word)
-                        else {
+                        let Some(word) = fold_call(
+                            site.dst,
+                            &site.candidates,
+                            site.argument_facts.as_deref(),
+                            &mut call_result,
+                            unknown_word,
+                        ) else {
                             term = None;
                             break;
                         };

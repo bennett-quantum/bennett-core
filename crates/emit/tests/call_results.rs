@@ -50,6 +50,10 @@ struct Cost {
 }
 
 fn compare(module: &ValidModule, budget: u64, expected: impl Fn(u64) -> (u64, u64)) -> Cost {
+    compare_mode(module, budget, ApplyMode::Automatic, expected)
+}
+
+fn compare_mode(module: &ValidModule, budget: u64, mode: ApplyMode, expected: impl Fn(u64) -> (u64, u64)) -> Cost {
     let entry = module.function_named("main").expect("entry");
     let options = Options { machine_meaning: true, ..Options::default() };
     let mut direct = Executor::new(module, entry, &[budget], options).expect("reference");
@@ -61,7 +65,7 @@ fn compare(module: &ValidModule, budget: u64, expected: impl Fn(u64) -> (u64, u6
         device.allocate(argument.clone()).expect("allocate argument");
         device.allocate(input.out.clone()).expect("allocate result");
         device.allocate(input.fault.clone()).expect("allocate fault");
-        let compiled = compile_apply_with(input, ApplyMode::Automatic)?;
+        let compiled = compile_apply_with(input, mode)?;
         compiled.send(&mut device).expect("count circuit");
         let counts = device.counts();
         assert!(
@@ -301,6 +305,7 @@ no:
     );
     let cost = compare(&module, 32, |x| (if x == 0 { 9 } else { 8 >> (x & 1) }, 0));
     println!("multiple return sites: {cost:?}");
+    assert_eq!(cost.operations, 82);
 }
 
 #[test]
@@ -328,6 +333,91 @@ entry:
     );
     let cost = compare(&module, 32, |x| (if x == 0 { 9 } else { 8 >> (x & 1) }, 0));
     println!("multiple indirect targets: {cost:?}");
+    assert_eq!(cost.operations, 80);
+}
+
+#[test]
+fn an_indirect_target_can_stop_for_the_supplied_argument() {
+    let module = module(
+        r#"
+    %odd = trunc i2 %x to i1
+    %a = faddr @seven
+    %b = faddr @maybe
+    %target = select i64 %odd, %a, %b
+    %value = call_indirect fn(i1) -> i8 %target(i1 0)
+    switch i8 %value, 7: yes, default: no
+yes:
+    ret 14
+no:
+    %unreachable = call @cycle()
+    ret %unreachable
+"#,
+        &format!(
+            r#"
+func @seven(i1 %flag) -> i8 {{
+entry:
+    ret 7
+}}
+func @maybe(i1 %flag) -> i8 {{
+entry:
+    br %flag, returns, stopped
+returns:
+    ret 8
+stopped:
+    effect 65
+    ret 9
+}}
+{RECURSIVE}
+"#
+        ),
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in [8, 9, 10, 32] {
+            compare_mode(&module, budget, mode, |x| match (x, budget) {
+                (0, _) => (9, 0),
+                (2, 9..) => (0, Fault::EffectInRegion.code()),
+                (1 | 3, 10..) => (14, 0),
+                (_, _) => (0, Fault::Budget.code()),
+            });
+        }
+    }
+}
+
+#[test]
+fn a_copy_can_stop_using_shared_local_argument_bits() {
+    let module = module(
+        r#"
+    %sum = add i2 %x, 1
+    %alias = or i2 %sum, 0
+    %value = call @stop_if_equal(%sum, %alias)
+    %unreachable = call @cycle()
+    ret %unreachable
+"#,
+        &format!(
+            r#"
+func @stop_if_equal(i2 %a, i2 %b) -> i8 {{
+entry:
+    %equal = icmp eq i2 %a, %b
+    br %equal, stopped, returns
+stopped:
+    effect 65
+    ret 9
+returns:
+    ret 8
+}}
+{RECURSIVE}
+"#
+        ),
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in [7, 8, 9] {
+            compare_mode(&module, budget, mode, |x| match (x, budget) {
+                (0, _) => (9, 0),
+                (_, 8..) => (0, Fault::EffectInRegion.code()),
+                (_, _) => (0, Fault::Budget.code()),
+            });
+        }
+    }
 }
 
 #[test]

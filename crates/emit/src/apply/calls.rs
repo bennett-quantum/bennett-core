@@ -7,7 +7,7 @@ use bennett_exec::frame_bytes;
 use bennett_ir::{Block, BlockId, Fault, FuncId, Function, Inst, Operand, Slot, Target, Terminator, Type};
 
 use super::bits::{Bit, Circuit, Word, ZERO, constant};
-use super::definite::CallProofs;
+use super::definite::{CallProofs, CallSite};
 use super::memory::{AccessError, Memory};
 use super::selectors::Selector;
 use super::stack::{self, StackSlots};
@@ -89,9 +89,8 @@ impl<'a> Program<'a> {
                 let point = Point { copy: index, block, index: instruction };
                 let operation = if call.target.is_some() { "call_indirect" } else { "call" };
                 let mut targets = Vec::new();
-                for callee in call.candidates {
-                    let child =
-                        program.child(&mut proofs, point, callee, call.args, (call.dst, operation), &mut slots)?;
+                for &callee in &call.candidates {
+                    let child = program.child(&mut proofs, point, callee, &call, operation, &mut slots)?;
                     targets.push((callee.address(), child));
                 }
                 let site = match (targets.as_slice(), call.invalid_possible) {
@@ -131,14 +130,14 @@ impl<'a> Program<'a> {
         proofs: &mut CallProofs<'a>,
         at: Point,
         callee: FuncId,
-        args: &[Operand],
-        (dst, call): (Option<Slot>, &'static str),
+        site: &CallSite<'a>,
+        operation: &'static str,
         slots: &mut Vec<Word>,
     ) -> Result<usize, ApplyError> {
         let parent = &self.copies[at.copy];
         let module = parent.frame.module;
         let function = module.function(callee);
-        let error = |route| parent.frame.error(at, call, route);
+        let error = |route| parent.frame.error(at, operation, route);
         let mut ancestor = Some(at);
         while let Some(point) = ancestor {
             let copy = &self.copies[point.copy];
@@ -152,13 +151,16 @@ impl<'a> Program<'a> {
             return Err(error("a smaller copy expansion (limit: 16384 slots and program points)"));
         }
 
-        // These facts hold across every visit in the caller copy. The frame
-        // remaps their wire identities together, preserving shared input bits.
-        let arguments = args.iter().map(|arg| parent.frame.known_bits(arg));
+        // Use the same facts as the caller's return query. They hold across
+        // visits to the site and can include identities local to its block.
+        let arguments = site.args.iter().enumerate().map(|(index, arg)| match &site.argument_facts {
+            Some(facts) => facts[index].clone(),
+            None => parent.frame.known_bits(arg),
+        });
         let frame = Frame::check(module, callee, arguments, proofs)?;
         let available_stack =
             parent.available_stack.and_then(|bytes| bytes.checked_sub(frame_bytes(function.slot_count())?));
-        let caller = Some((at.next(), dst.map(|slot| parent.slot(slot))));
+        let caller = Some((at.next(), site.dst.map(|slot| parent.slot(slot))));
         let start = slots.len();
         slots.extend(frame.initial([]));
         let index = self.copies.len();

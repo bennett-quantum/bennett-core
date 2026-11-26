@@ -63,7 +63,7 @@ impl<'a> CallProofs<'a> {
         Self { returns: Returns::new(module), words: CopyResults::new(work_limit) }
     }
 
-    pub(in crate::apply) fn call(
+    pub(super) fn call(
         &mut self,
         module: &'a ValidModule,
         target: FuncId,
@@ -71,10 +71,15 @@ impl<'a> CallProofs<'a> {
     ) -> CallResult {
         self.words.call(module, &mut self.returns, target, args)
     }
+
+    pub(super) fn stops_with_arguments(&self, callee: FuncId, arguments: &[Word]) -> bool {
+        let context = Context { callee, arguments: arguments.to_vec() };
+        matches!(self.words.complete.get(&context), Some(CallResult::Stops))
+    }
 }
 
 struct CopyResults {
-    complete: HashMap<Context, ReturnWord>,
+    complete: HashMap<Context, CallResult>,
     remaining: usize,
 }
 
@@ -96,11 +101,14 @@ impl CopyResults {
         let Some(args) = args else { return CallResult::Returns(Vec::new()) };
         let query = Query::new(&Frame::for_analysis(module, target), args);
         self.resolve(module, returns, &query.context);
-        CallResult::Returns(self.lookup(&query).unwrap_or_default())
+        self.lookup(&query).unwrap_or_else(|| CallResult::Returns(Vec::new()))
     }
 
-    fn lookup(&self, query: &Query) -> Option<ReturnWord> {
-        self.complete.get(&query.context).map(|word| query.translate(word))
+    fn lookup(&self, query: &Query) -> Option<CallResult> {
+        self.complete.get(&query.context).map(|result| match result {
+            CallResult::Stops => CallResult::Stops,
+            CallResult::Returns(word) => CallResult::Returns(query.translate(word)),
+        })
     }
 
     fn resolve<'a>(&mut self, module: &'a ValidModule, returns: &mut Returns<'a>, root: &Context) {
@@ -136,18 +144,22 @@ impl CopyResults {
                     return CallResult::Returns(Vec::new());
                 };
                 let query = Query::new(&Frame::for_analysis(module, target), args);
-                let word = self.lookup(&query).unwrap_or_else(|| {
+                self.lookup(&query).unwrap_or_else(|| {
                     if requested.insert(query.context.clone()) {
                         dependencies.push(query.context);
                     }
-                    Vec::new()
-                });
-                CallResult::Returns(word)
+                    CallResult::Returns(Vec::new())
+                })
             });
             if dependencies.is_empty() {
                 let task = pending.pop().expect("current query exists");
                 active.remove(&task.context.callee);
-                self.complete.insert(task.context, plan.returned.unwrap_or_default());
+                let result = if plan.may_return {
+                    CallResult::Returns(plan.returned.unwrap_or_default())
+                } else {
+                    CallResult::Stops
+                };
+                self.complete.insert(task.context, result);
             } else {
                 // The provisional pass discovers independent calls together.
                 // Recompute after their results are available so refined
