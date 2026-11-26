@@ -230,20 +230,23 @@ fn a_direct_read_of_the_flags_is_not_evaluated_away() {
     assert_eq!(run(&module, "main", &[], 0), Outcome::Returned(Some(40)));
 }
 
-/// An over-refusal (no wrong result): a non-strict helper on `_Float16` that clang inlines at -O2 into a strict
-/// caller makes the caller hold the value, so the device refuses what native code computes (`3c00 0`).
+/// An over-refusal (no wrong result): a non-strict helper that holds a `_Float16` value, taking and returning only
+/// its bits, is accepted at -O0, but clang inlines it at -O2 into the strict caller, which then holds the value, so
+/// the device refuses what native code computes (`3c00 0`).
 #[test]
 #[ignore = "defect: over-refusal of a non-strict _Float16 helper inlined into a strict function at -O2 (docs/DESIGN.md, floating point)"]
 fn a_non_strict_half_helper_inlined_into_a_strict_caller_is_computed() {
     let source = write_c(
         "fenv_inline_plain",
-        "#include <stdio.h>\n#include <fenv.h>\nstatic inline _Float16 mag(_Float16 h) { return __builtin_fabsf16(h); }\n\
-         #pragma STDC FENV_ACCESS ON\nvolatile unsigned short u = 0xbc00;\nint main(void) {\n  unsigned short n = u;\n  \
-         _Float16 h;\n  __builtin_memcpy(&h, &n, 2);\n  _Float16 r = mag(h);\n  __builtin_memcpy(&n, &r, 2);\n  \
-         printf(\"%04x %x\\n\", n, fetestexcept(FE_INVALID));\n  return 0;\n}\n",
+        "#include <stdio.h>\n#include <fenv.h>\nstatic inline unsigned short mag(unsigned short u) {\n  _Float16 h;\n  \
+         __builtin_memcpy(&h, &u, 2);\n  h = __builtin_fabsf16(h);\n  __builtin_memcpy(&u, &h, 2);\n  return u;\n}\n\
+         #pragma STDC FENV_ACCESS ON\nvolatile unsigned short u = 0xbc00;\nint main(void) {\n  \
+         printf(\"%04x %x\\n\", mag(u), fetestexcept(FE_INVALID));\n  return 0;\n}\n",
     );
     let expected = native(&source, "fenv_inline_plain", &[]);
-    let (outcome, printed) = device(&source, "fenv_inline_plain-O2", &["-O2"]);
-    assert_eq!(outcome, Outcome::Returned(Some(0)));
-    assert_eq!(printed, expected);
+    for level in ["-O0", "-O2"] {
+        let (outcome, printed) = device(&source, &format!("fenv_inline_plain{level}"), &[level]);
+        assert_eq!(outcome, Outcome::Returned(Some(0)), "{level}");
+        assert_eq!(printed, expected, "{level}");
+    }
 }
