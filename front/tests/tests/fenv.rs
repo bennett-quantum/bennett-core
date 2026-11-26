@@ -1,7 +1,9 @@
 //! The floating-point environment against the native program (clang 18 with glibc on x86-64): every operation
 //! under each of the four rounding modes, its result's bits and the exception flags it raised, and `<fenv.h>`
 //! itself, with musl linked on the device (`rt/musl/fenv.c`, the state in `rt/softfloat/libgcc.c`). The C
-//! programs say what they compare (`front/tests/c/fenv_ops.c`, `fenv_api.c`).
+//! programs say what they compare (`front/tests/c/fenv_ops.c`, `fenv_api.c`, `fenv_pows.c`). The rounding modes and
+//! ISO C's five exceptions are the guarantee; x86's denormal-operand flag, compared beside them, is outside it:
+//! best effort, its known gap (glibc's `fmal`) not compared.
 use bennett_exec::{Executor, Options, Outcome};
 use bennett_front_tests::{
     CLANG_FLAGS, CLANG_O2_FLAGS, lower, lower_text, native_build_with, out_dir, root, run, write_c,
@@ -176,18 +178,22 @@ fn minimum_and_maximum_of_finite_operands_raise_no_flag() {
     }
 }
 
-/// Every operation on `_Float16` or `__bf16` in a strict function is refused by name: there clang 18's x86-64
-/// back end gives `_Float16`'s encoding for `(__bf16)1.0f` (0x3c00), cannot compile most `__bf16` operations, and
-/// gives different results at -O0 and -O2 for `_Float16` (`fabs` of a signalling NaN), so no native result is
-/// determined. Conversions, absolute values and classification alike; moving the values is not an operation.
+/// A strict function that holds any value of a 16-bit floating type (`_Float16`, `__bf16`) is refused by name, one
+/// rule drawn by type: there clang 18's x86-64 back end gives `_Float16`'s encoding for `(__bf16)1.0f` (0x3c00),
+/// cannot compile most `__bf16` operations, and gives different results at -O0 and -O2 (`fabs` of a signalling
+/// `_Float16` NaN, the sign of a `__bf16`), so no native result is determined. Operations, conversions,
+/// reinterpretations and moves alike.
 #[test]
-fn an_operation_on_half_or_bfloat_in_a_strict_function_is_refused_by_name() {
+fn a_strict_function_holding_a_half_or_bfloat_value_is_refused_by_name() {
     for (name, declaration, operation) in [
         ("fenv_bfloat_trunc", "volatile float f = 1.0f;\nvolatile __bf16 r;", "r = (__bf16)f;"),
         ("fenv_bfloat_abs", "volatile __bf16 v, r;", "r = __builtin_elementwise_abs(v);"),
         ("fenv_bfloat_class", "volatile __bf16 v;\nvolatile int r;", "r = __builtin_isfpclass(v, 1);"),
         ("fenv_half_abs", "volatile _Float16 v, r;", "r = __builtin_fabsf16(v);"),
         ("fenv_half_add", "volatile _Float16 v, r;", "r = v + v;"),
+        ("fenv_bfloat_sign", "volatile __bf16 v = -1;\nvolatile int r;", "r = !!__builtin_signbit(v);"),
+        ("fenv_half_sign", "volatile _Float16 v = -1;\nvolatile int r;", "r = !!__builtin_signbit(v);"),
+        ("fenv_half_move", "volatile _Float16 v, r;", "r = v;"),
     ] {
         let source = write_c(
             name,
@@ -222,4 +228,22 @@ fn a_direct_read_of_the_flags_is_not_evaluated_away() {
     let module = lower(&source, "fenv_direct_read", CLANG_FLAGS, &[]);
     // x86's overflow (8) and inexact (32).
     assert_eq!(run(&module, "main", &[], 0), Outcome::Returned(Some(40)));
+}
+
+/// An over-refusal (no wrong result): a non-strict helper on `_Float16` that clang inlines at -O2 into a strict
+/// caller makes the caller hold the value, so the device refuses what native code computes (`3c00 0`).
+#[test]
+#[ignore = "defect: over-refusal of a non-strict _Float16 helper inlined into a strict function at -O2 (docs/DESIGN.md, floating point)"]
+fn a_non_strict_half_helper_inlined_into_a_strict_caller_is_computed() {
+    let source = write_c(
+        "fenv_inline_plain",
+        "#include <stdio.h>\n#include <fenv.h>\nstatic inline _Float16 mag(_Float16 h) { return __builtin_fabsf16(h); }\n\
+         #pragma STDC FENV_ACCESS ON\nvolatile unsigned short u = 0xbc00;\nint main(void) {\n  unsigned short n = u;\n  \
+         _Float16 h;\n  __builtin_memcpy(&h, &n, 2);\n  _Float16 r = mag(h);\n  __builtin_memcpy(&n, &r, 2);\n  \
+         printf(\"%04x %x\\n\", n, fetestexcept(FE_INVALID));\n  return 0;\n}\n",
+    );
+    let expected = native(&source, "fenv_inline_plain", &[]);
+    let (outcome, printed) = device(&source, "fenv_inline_plain-O2", &["-O2"]);
+    assert_eq!(outcome, Outcome::Returned(Some(0)));
+    assert_eq!(printed, expected);
 }

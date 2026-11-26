@@ -436,8 +436,14 @@ SSE and overflow, underflow and denormal operand in x87, as libgcc's `__sfp_hand
 (`rt/musl/README.md`). The tininess rule (after rounding, as x86) and the 80-bit precision (x87's on Linux) are
 never written.
 
+**What is guaranteed.** The rounding modes and ISO C's five exceptions (invalid, divide by zero, overflow,
+underflow, inexact) are exact: compared bit for bit with the hardware, per unit. x86's denormal-operand flag is an
+extension outside ISO C's five: it is carried as well as measured and is outside the guarantee; its known gap is
+glibc's software `fmal`, whose intermediate operations raise it in cases the device does not follow, and any
+other a later comparison finds.
+
 What the routines do beyond SoftFloat's own operations, each found by the comparison below: the
-denormal-operand flag, which SoftFloat does not have, is raised for a subnormal operand (x87: also a
+denormal-operand flag (best effort, above), which SoftFloat does not have, is raised for a subnormal operand (x87: also a
 pseudo-denormal) by arithmetic, comparisons, square roots, fused multiply-adds, minima and maxima and the
 conversions between formats, when no operand is a NaN, not by a division by zero or a product of zero and
 infinity, and not by conversions to integers or SSE4.1's `roundsd` (`floor`, `ceil`, ...); glibc's `fmin` and
@@ -484,20 +490,23 @@ LLVM's Evaluator, which reads a global's initial value; it evaluates nothing in 
 reads the flags, where a read of the flags (a call with no operands) would otherwise give none
 (`front/tests/tests/fenv.rs`, found in review).
 
-**`_Float16` and `__bf16` in a strict function** (`#pragma STDC FENV_ACCESS ON`) are refused by name, every
-operation on them (moving them is not one): there clang 18's x86-64 back end gives `_Float16`'s encoding for a
-`__bf16` result (`(__bf16)1.0f` is `0x3c00`), cannot compile most `__bf16` operations, and computes some
-`_Float16` ones differently at `-O0` and `-O2` (`fabs` of a signalling NaN quieted with invalid raised, or its
-bits kept), so no native result is determined. Outside strict functions they are computed as before.
+**`_Float16` and `__bf16` in a strict function** (`#pragma STDC FENV_ACCESS ON`): a strict function that holds any
+value of a 16-bit floating type (an operand, a result, a conversion, a reinterpretation or a move) is refused by
+name, one rule drawn by type: there clang 18's x86-64 back end gives `_Float16`'s encoding for a `__bf16` result
+(`(__bf16)1.0f` is `0x3c00`), cannot compile most `__bf16` operations, and computes some operations differently at
+`-O0` and `-O2` (`fabs` of a signalling `_Float16` NaN quieted with invalid raised, or its bits kept; the sign of
+`(__bf16)-1` 1 or 0), so no native result is determined. Outside strict functions they are computed as before; a
+non-strict helper that clang inlines at `-O2` into a strict caller is refused too, an over-refusal (`docs/DESIGN.md`,
+"Not yet").
 
 **Against the native program.** `front/tests/c/fenv_ops.c`, under `#pragma STDC FENV_ACCESS ON`, operands
 through volatile memory, every case under each of the four modes, the result's bits and both units' six
-status flags as `fegetenv` stores them: add, sub, mul, div, the six comparisons and each of the six quiet
+status flags as `fegetenv` stores them (the five standard ones exact; the denormal-operand flag best effort): add, sub, mul, div, the six comparisons and each of the six quiet
 `<math.h>` comparison macros on its own, sqrt, fma (on 13^3 triples), conversions among the three formats and
 to and from 8-, 16-, 32-, 64- and 128-bit integers, rint, nearbyint, floor, ceil, trunc, round, roundeven,
 lrint, llrint, lround, llround, fmin, fmax, musl's `FENV_ACCESS` functions called by name (`nearbyint`, `lrint`,
 `llrintl`, `ilogb`, `fma` and their `f`/`l` forms), and `_Float16` and `__bf16` conversions, arithmetic and
-`sqrt` (through functions outside `FENV_ACCESS`), on 32 to 35 directed operands per format (zeros, subnormal
+`sqrt` (through functions outside `FENV_ACCESS` that take and return the bits), on 32 to 35 directed operands per format (zeros, subnormal
 edges, 1 and its neighbours, ties, integer boundaries, the largest finite, infinities, quiet and signalling
 NaNs, a pseudo-denormal and an unnormal): 112 groups, about 1.6·10^5 cases, 10^8 device steps. Every case
 agrees with native code at device `-O0` and `-O2`, with and without `-fno-math-errno`; the native program
@@ -515,7 +524,9 @@ with musl's `isless` alone restored, 268 comparison results differ. `fenv_api.c`
 against glibc: setting, reading and rejecting modes, raising, testing, clearing, saving and restoring flags,
 whole environments saved, held, set and updated, `FLT_ROUNDS`, different modes in the two units, each unit's
 flags in its half, a saved half edited and restored, the denormal-operand flag through a saved half, and two
-calls of a strict function across a change of mode (with the memory-effect widening of
+calls of a strict function across a change of mode, `feclearexcept` clearing x87's denormal-operand flag (as
+glibc's always does), and `fenv_pows.c` the integer powers of subnormals in all three formats (with the
+memory-effect widening of
 `front/src/SoftFloat.cpp` disabled, `-O2` merges them and fails it). Not carried, and a named fault in
 `fesetenv`: an unmasked exception (a trap), x87 precision other than extended, flush-to-zero or
 denormals-are-zero, and a reserved MXCSR bit (which faults natively too).

@@ -42,7 +42,8 @@ static void mix(const void *bytes, size_t n) {
   }
 }
 /* One case: `n` result bytes, then the six status flags of each unit raised since the last clear, SSE's (MXCSR)
- * and x87's (the status word), as fegetenv stores them. */
+ * and x87's (the status word), as fegetenv stores them. The five standard flags are the guarantee; the
+ * denormal-operand flag (bit 1) is outside it, compared here as best effort. */
 static int fmal_denormal; /* fmal's denormal-operand flag is not compared (FMA below) */
 static void record(unsigned a, unsigned b, const void *result, size_t n) {
   fenv_t e;
@@ -106,29 +107,40 @@ static const struct x80 f80_bits[] = {
 };
 #define COUNT(a) (sizeof(a) / sizeof(a)[0])
 
-/* _Float16 and __bf16 operations outside FENV_ACCESS, called from the strict code: in a strict function clang 18
- * gives no determined native result for them (the device refuses them there by name). Each is a call of libgcc's
- * soft-fp or of float arithmetic, which read the mode as they run. */
+/* _Float16 and __bf16 operations outside FENV_ACCESS, on and to the values' bits, called from the strict code:
+ * a strict function that holds a 16-bit floating value at all is refused on the device (clang 18 gives no
+ * determined native result there). Each is a call of libgcc's soft-fp or of float arithmetic, which read the
+ * mode as they run. */
 #pragma STDC FENV_ACCESS OFF
-static __attribute__((noinline)) _Float16 h_f(float x) { return (_Float16)x; }
-static __attribute__((noinline)) _Float16 h_d(double x) { return (_Float16)x; }
-static __attribute__((noinline)) _Float16 h_l(long double x) { return (_Float16)x; }
-static __attribute__((noinline)) _Float16 h_sqrt(_Float16 x) { return (_Float16)__builtin_sqrtf(x); }
-static __attribute__((noinline)) __int128 ti_h(_Float16 x) { return (__int128)x; }
-static __attribute__((noinline)) unsigned __int128 uti_h(_Float16 x) { return (unsigned __int128)x; }
-static __attribute__((noinline)) _Float16 h_add(_Float16 x, _Float16 y) { return x + y; }
-static __attribute__((noinline)) _Float16 h_mul(_Float16 x, _Float16 y) { return x * y; }
-static __attribute__((noinline)) _Float16 h_i64(int64_t x) { return (_Float16)x; }
-static __attribute__((noinline)) _Float16 h_ti(__int128 x) { return (_Float16)x; }
-static __attribute__((noinline)) _Float16 h_uti(unsigned __int128 x) { return (_Float16)x; }
+static _Float16 hb(uint16_t u) {
+  _Float16 h;
+  memcpy(&h, &u, 2);
+  return h;
+}
+static uint16_t bh(_Float16 h) {
+  uint16_t u;
+  memcpy(&u, &h, 2);
+  return u;
+}
+static __attribute__((noinline)) uint16_t h_f(float x) { return bh((_Float16)x); }
+static __attribute__((noinline)) uint16_t h_d(double x) { return bh((_Float16)x); }
+static __attribute__((noinline)) uint16_t h_l(long double x) { return bh((_Float16)x); }
+static __attribute__((noinline)) uint16_t h_sqrt(uint16_t x) { return bh((_Float16)__builtin_sqrtf(hb(x))); }
+static __attribute__((noinline)) __int128 ti_h(uint16_t x) { return (__int128)hb(x); }
+static __attribute__((noinline)) unsigned __int128 uti_h(uint16_t x) { return (unsigned __int128)hb(x); }
+static __attribute__((noinline)) uint16_t h_add(uint16_t x, uint16_t y) { return bh(hb(x) + hb(y)); }
+static __attribute__((noinline)) uint16_t h_mul(uint16_t x, uint16_t y) { return bh(hb(x) * hb(y)); }
+static __attribute__((noinline)) uint16_t h_i64(int64_t x) { return bh((_Float16)x); }
+static __attribute__((noinline)) uint16_t h_ti(__int128 x) { return bh((_Float16)x); }
+static __attribute__((noinline)) uint16_t h_uti(unsigned __int128 x) { return bh((_Float16)x); }
 /* 0 if `r` is to be compared bit for bit, else 1 for a quiet NaN, 2 for a signalling one: of two NaN operands
  * which one comes back is unspecified (native -O2 commutes the float operation). */
-static __attribute__((noinline)) unsigned char h_nans(_Float16 r, _Float16 x, _Float16 y) {
-  if (!__builtin_isnan(r) || !__builtin_isnan(x) || !__builtin_isnan(y)) return 0;
-  return __builtin_issignaling(r) ? 2 : 1;
+static __attribute__((noinline)) unsigned char h_nans(uint16_t r, uint16_t x, uint16_t y) {
+  if (!__builtin_isnan(hb(r)) || !__builtin_isnan(hb(x)) || !__builtin_isnan(hb(y))) return 0;
+  return __builtin_issignaling(hb(r)) ? 2 : 1;
 }
 #pragma STDC FENV_ACCESS ON
-static volatile _Float16 vh[COUNT(f32_bits)];
+static volatile uint16_t vh[COUNT(f32_bits)]; /* _Float16 bits */
 static volatile float vf[COUNT(f32_bits)];
 static volatile double vd[COUNT(f64_bits)];
 static volatile long double vl[COUNT(f80_bits)];
@@ -329,8 +341,18 @@ UNARY(to_h_l, vl, h_l(i >= COUNT(vl) - 2 ? 0 : x))
 /* To __bf16 outside FENV_ACCESS: under it clang 18 converts to the _Float16 encoding instead ((__bf16)1.0 is
  * 0x3c00), a native compiler defect. The conversion is a call of libgcc's, which reads the mode as it runs. */
 #pragma STDC FENV_ACCESS OFF
-static __attribute__((noinline)) __bf16 bf16_f(float x) { return (__bf16)x; }
-static __attribute__((noinline)) __bf16 bf16_d(double x) { return (__bf16)x; }
+static __attribute__((noinline)) uint16_t bf16_f(float x) {
+  __bf16 b = (__bf16)x;
+  uint16_t u;
+  memcpy(&u, &b, 2);
+  return u;
+}
+static __attribute__((noinline)) uint16_t bf16_d(double x) {
+  __bf16 b = (__bf16)x;
+  uint16_t u;
+  memcpy(&u, &b, 2);
+  return u;
+}
 #pragma STDC FENV_ACCESS ON
 UNARY(to_bf_f, vf, bf16_f(x))
 UNARY(to_bf_d, vd, bf16_d(x))
@@ -346,9 +368,9 @@ UNARY_INT(to_uti_l, vl, (unsigned __int128)x)
   static void name(void) {                                                                                     \
     begin(#name);                                                                                              \
     MODES for (unsigned i = 0; i < COUNT(vh); ++i) for (unsigned j = 0; j < COUNT(vh); ++j) {                 \
-      _Float16 x = vh[i], y = vh[j];                                                                           \
+      uint16_t x = vh[i], y = vh[j];                                                                           \
       start();                                                                                                 \
-      _Float16 r = f(x, y);                                                                                    \
+      uint16_t r = f(x, y);                                                                                    \
       unsigned char nans = h_nans(r, x, y);                                                                    \
       if (nans)                                                                                                \
         record(i, j, &nans, 1);                                                                                \

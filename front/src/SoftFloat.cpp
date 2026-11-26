@@ -254,6 +254,7 @@ public:
   Lowerer(Module &module, Runtime *runtime, bool units = false) : module(module), runtime(runtime), units(units) {}
 
   void lowerFunction(Function &function) {
+    refuseStrictHalf(function);
     std::vector<Instruction *> work;
     for (Instruction &inst : instructions(function)) {
       for (const Use &operand : inst.operands()) {
@@ -272,6 +273,58 @@ public:
   }
 
 private:
+  // A strict function (`#pragma STDC FENV_ACCESS ON`, `strictfp`) that holds any value of a 16-bit floating type,
+  // _Float16 or __bf16 (a parameter, a result, an operand: an operation, a conversion, a reinterpretation or a
+  // move), is refused by name, one rule drawn by type: there clang 18's x86-64 back end gives _Float16's encoding
+  // for a __bf16 result, cannot compile most __bf16 operations, and computes some operations on both types
+  // differently at -O0 and -O2 (fabs of a signalling _Float16 NaN, the sign of a __bf16), so no native result is
+  // determined.
+  // The 16-bit floating type `type` holds (itself, or an element, field, parameter or result), or null.
+  static const Type *halfIn(const Type *type) {
+    if (promoted(type)) {
+      return type->getScalarType();
+    }
+    std::vector<const Type *> parts;
+    if (const auto *array = dyn_cast<ArrayType>(type)) {
+      parts.push_back(array->getElementType());
+    } else if (const auto *structure = dyn_cast<StructType>(type)) {
+      parts.assign(structure->element_begin(), structure->element_end());
+    } else if (const auto *signature = dyn_cast<FunctionType>(type)) {
+      parts.push_back(signature->getReturnType());
+      parts.insert(parts.end(), signature->param_begin(), signature->param_end());
+    }
+    for (const Type *part : parts) {
+      if (const Type *half = halfIn(part)) {
+        return half;
+      }
+    }
+    return nullptr;
+  }
+
+  static void refuseStrictHalf(const Function &function) {
+    if (!function.hasFnAttribute(Attribute::StrictFP)) {
+      return;
+    }
+    auto check = [&](const Type *type, const Value *at) {
+      if (const Type *half = halfIn(type)) {
+        notHandled("a value of type " + described(half) + " in @" + function.getName().str() +
+                       ", a function with `#pragma STDC FENV_ACCESS ON` (strictfp), where clang 18's x86-64 back "
+                       "end gives no determined native result for the 16-bit floating types",
+                   at);
+      }
+    };
+    check(function.getFunctionType(), &function);
+    for (const Instruction &inst : instructions(function)) {
+      check(inst.getType(), &inst);
+      for (const Use &operand : inst.operands()) {
+        check(operand->getType(), &inst);
+      }
+      if (const auto *call = dyn_cast<CallBase>(&inst)) {
+        check(call->getFunctionType(), &inst);
+      }
+    }
+  }
+
   static bool roundingMode(const Instruction &inst) {
     const auto *intrinsic = dyn_cast<IntrinsicInst>(&inst);
     Intrinsic::ID id = intrinsic ? intrinsic->getIntrinsicID() : Intrinsic::not_intrinsic;
@@ -938,57 +991,9 @@ private:
     return result;
   }
 
-  // An operation on _Float16 or __bf16 in a strict function (`#pragma STDC FENV_ACCESS ON`, `strictfp`) is
-  // refused by name: there clang 18's x86-64 back end gives _Float16's encoding for a __bf16 result, cannot
-  // compile most __bf16 operations, and computes some _Float16 ones differently at -O0 and -O2 (fabs of a
-  // signalling NaN quieted and raising invalid, or its bits kept), so no native result is determined. Moving
-  // such values is not an operation.
-  static void refuseStrictHalf(const Instruction &inst) {
-    const Function &function = *inst.getFunction();
-    if (!function.hasFnAttribute(Attribute::StrictFP)) {
-      return;
-    }
-    switch (inst.getOpcode()) {
-    case Instruction::FNeg:
-    case Instruction::FAdd:
-    case Instruction::FSub:
-    case Instruction::FMul:
-    case Instruction::FDiv:
-    case Instruction::FRem:
-    case Instruction::FCmp:
-    case Instruction::FPExt:
-    case Instruction::FPTrunc:
-    case Instruction::FPToSI:
-    case Instruction::FPToUI:
-    case Instruction::SIToFP:
-    case Instruction::UIToFP:
-      break;
-    case Instruction::Call:
-      if (!isa<IntrinsicInst>(inst) || isa<DbgInfoIntrinsic>(inst)) {
-        return;
-      }
-      break;
-    default:
-      return;
-    }
-    const Type *half = promoted(inst.getType()) ? inst.getType() : nullptr;
-    for (const Use &operand : inst.operands()) {
-      if (!half && promoted(operand->getType())) {
-        half = operand->getType();
-      }
-    }
-    if (half) {
-      notHandled("an operation on " + described(half) + " in @" + function.getName().str() +
-                     ", a function with `#pragma STDC FENV_ACCESS ON` (strictfp), where clang 18's x86-64 back end "
-                     "gives no determined native result for these types",
-                 &inst);
-    }
-  }
-
   // Lowers `inst` and returns what replaces it (itself if nothing does).
   Value *lower(Instruction *inst) {
     checkDenormalMode(*inst);
-    refuseStrictHalf(*inst);
     if (vectorOperation(*inst)) {
       return scalarise(inst);
     }

@@ -1252,7 +1252,10 @@ and utilities where they exist (`Abi.h`, `Normalise.h`):
 - **The floating-point environment** is the runtime's state, ordinary memory of the program, and it is x86's: two
   units, SSE for `float` and `double` and x87 for `long double` (as clang's x86-64 code computes them), each with
   its own rounding mode and six status flags (the five IEEE exceptions and x86's denormal operand), which every
-  routine reads and raises in its unit as x86's instructions do. In a program that links `<fenv.h>` the front
+  routine reads and raises in its unit as x86's instructions do. The guarantee covers the rounding modes and
+  ISO C's five exceptions, exact and compared bit for bit with the hardware; the denormal-operand flag, an x86
+  extension outside ISO C, is carried as well as measured and is outside the guarantee, with its known gaps named
+  (glibc's software `fmal`). In a program that links `<fenv.h>` the front
   calls `__bennett_x87_swap` around each x87-unit routine; libgcc's soft-fp `_Float16`/`__bf16` conversions take
   SSE's mode and split their flags as libgcc raises them. The C library's `<fenv.h>` (`rt/musl/fenv.c`) does what
   glibc's does with the two units, through the runtime's `__bennett_fe*` functions. A constrained intrinsic
@@ -1285,10 +1288,11 @@ and utilities where they exist (`Abi.h`, `Normalise.h`):
 - **Refused by name**: `frem` and the C library's functions (`sin`, `pow`, `strtod`, and `sqrt` under the
   default `-fmath-errno`, since errno is the C library's); operations on `__float128` (moving it is fine);
   conversions to and from integers wider than 128 bits; `powi` on `_Float16` and `__bf16` (natively the C
-  library's `powf`); every operation on `_Float16` or `__bf16` in a strict function (`#pragma STDC FENV_ACCESS
-  ON`), since there clang 18's x86-64 back end itself gives no determined result (the `_Float16` encoding for a
-  `__bf16` result, most `__bf16` operations not compiled, `_Float16` results that differ between `-O0` and
-  `-O2`); an operation whose result depends on the subnormal mode
+  library's `powf`); a strict function (`#pragma STDC FENV_ACCESS ON`) that holds any value of a 16-bit floating
+  type, `_Float16` or `__bf16` (an operand, a result, a conversion, a reinterpretation or a move), one rule
+  drawn by type, since there clang 18's x86-64 back end itself gives no determined result (the `_Float16` encoding
+  for a `__bf16` result, most `__bf16` operations not compiled, results that differ between `-O0` and `-O2`: `fabs`
+  of a signalling `_Float16` NaN, the sign of a `__bf16`); an operation whose result depends on the subnormal mode
   (arithmetic, comparison, conversion from floating point, every intrinsic but `fabs`, `copysign` and
   `is.fpclass`) in a function that promises a mode other than IEEE through `denormal-fp-math` or
   `denormal-fp-math-f32` (`-fdenormal-fp-math=preserve-sign`, `positive-zero`, `dynamic`), since SoftFloat
@@ -2596,6 +2600,13 @@ primitive's call.
 | `retaddr` | Pass the suspended callers' return sites in one field of the apply input and derive the applied function's return sites from its copied calls |
 | Varying-address `load` or `store` without a proved bound within a declared memory region | Prove the range or declare its full span |
 | `setjmp`, `longjmp` | Private memory and non-local control transfer |
+
+
+Floating point: the strict 16-bit refusal is drawn on the function that holds the value after clang's inlining,
+so a non-strict helper on `_Float16` or `__bf16` that clang inlines at `-O2` into a strict caller is refused
+though native code computes it (an over-refusal, no wrong result: `front/tests/tests/fenv.rs`,
+`a_non_strict_half_helper_inlined_into_a_strict_caller_is_computed`, ignored). Route: check each operation in the
+function it was written in, before the front's own inlining, from the debug location or a mark clang leaves.
 
 ## Open questions
 

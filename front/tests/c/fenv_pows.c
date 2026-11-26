@@ -1,6 +1,7 @@
 /* Integer powers (`__builtin_powi`, libgcc's __powisf2, __powidf2, __powixf2) of the smallest subnormal of each
  * format and of other operands, with exponents that do and do not run the multiplications and the division: the
- * result and both units' six status flags, against the native program (`front/tests/tests/fenv.rs`). */
+ * result and both units' six status flags, against the native program (`front/tests/tests/fenv.rs`). The
+ * denormal-operand flag, which this checks most, is outside the guarantee: compared as best effort. */
 #include <fenv.h>
 #include <stdio.h>
 #include <string.h>

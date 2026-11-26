@@ -167,7 +167,8 @@ int main(void) {
   printf("denormal half %x %x\n", split.__status_word & 2, split.__mxcsr & 2);
   fesetenv(FE_DFL_ENV);
 
-  /* feclearexcept clears x87's denormal-operand flag, also when asked to clear nothing; SSE's it leaves. */
+  /* feclearexcept clears x87's denormal-operand flag, also when asked to clear nothing; SSE's it leaves (that flag
+   * is outside the guarantee: best effort). */
   static volatile long double smallest_l = 0x1p-16445L, zero_l = 0.0L;
   static volatile double smallest = 0x1p-1074;
   for (int mask = 0; mask <= FLAGS; mask += FLAGS) {

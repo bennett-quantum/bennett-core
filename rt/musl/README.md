@@ -163,12 +163,14 @@ each with its own rounding mode and six status flags (`rt/softfloat/README.md`, 
 it through the runtime's `__bennett_fe*` functions, and musl's own `fesetround`, `feupdateenv` and
 `fegetexceptflag` sit on it. Each function does what glibc's does on x86-64, which the native program uses:
 `fesetround` sets both modes and `fegetround` reads x87's; `fetestexcept` reads both units' flags together and
-`feclearexcept` clears both; `feraiseexcept` raises invalid and divide by zero in SSE and overflow, underflow and
+`feclearexcept` clears both (x87's denormal-operand flag on every call, as glibc's mask does); `feraiseexcept` raises invalid and divide by zero in SSE and overflow, underflow and
 inexact in x87; `fesetexceptflag` sets and clears SSE's flags and only clears x87's; these take the five standard
 flags (glibc's `FE_ALL_EXCEPT`; musl's also names the denormal-operand flag, which glibc masks out).
 `feholdexcept` saves and clears every flag of both units; `fegetenv` and `fesetenv` carry both halves of
 `fenv_t` as `fnstenv`, `stmxcsr` and glibc's `fesetenv` do, the two modes and the denormal-operand flag
-included. An environment that asks for what is not carried is a named fault (the device's `unreachable`: its
+included. The rounding modes and the five standard flags are exact; the denormal-operand flag is carried as well
+as measured and is outside the guarantee (`rt/softfloat/README.md`, "What is guaranteed"). An environment that
+asks for what is not carried is a named fault (the device's `unreachable`: its
 faults are a fixed table with no room for a reason): an unmasked exception (a trap), x87 precision other than
 extended, or flush-to-zero or denormals-are-zero; so is a reserved MXCSR bit, which faults natively. The members
 are pulled from the archive only when a program names one of these functions, so a program that never does
