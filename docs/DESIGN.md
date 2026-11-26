@@ -827,9 +827,11 @@ definite prefix just like a direct call. The compiler recognises the loop shape
 before saving its entry slots and circuit position. It keeps that entry while
 control stays inside the loop and tries the proof at the first qubit-dependent
 jump. Control that reaches the loop exit with every jump definite keeps ordinary
-emission. Both constructions use temporary wire identities that preserve shared
-argument wires. Only the selected block's scratch range must fit the caller's
-wire placement. The compiler charges the
+emission. Both constructions use temporary wire identities. The compiler merges
+overlapping or adjacent interface ranges and maps each resulting span with one
+offset. Overlapping arguments keep sharing the same wires, and layout storage
+depends on the number of spans. Only the selected block's scratch range must fit
+the caller's wire placement. The compiler charges the
 entry and the longest loop route before trying either exit. Each exit replay
 stops at its remaining budget. The replays use the initial residue or fresh
 symbolic residue bits. Inside the loop frame it follows only lossless conversions
