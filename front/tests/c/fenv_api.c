@@ -167,6 +167,21 @@ int main(void) {
   printf("denormal half %x %x\n", split.__status_word & 2, split.__mxcsr & 2);
   fesetenv(FE_DFL_ENV);
 
+  /* feclearexcept clears x87's denormal-operand flag, also when asked to clear nothing; SSE's it leaves. */
+  static volatile long double smallest_l = 0x1p-16445L, zero_l = 0.0L;
+  static volatile double smallest = 0x1p-1074;
+  for (int mask = 0; mask <= FLAGS; mask += FLAGS) {
+    fesetenv(FE_DFL_ENV);
+    volatile long double sum_l = smallest_l + zero_l;
+    volatile double sum = smallest + zero;
+    (void)sum_l;
+    (void)sum;
+    feclearexcept(mask);
+    fegetenv(&split);
+    printf("cleared %x: halves %x %x\n", mask, split.__status_word & 0x3f, split.__mxcsr & 0x3f);
+  }
+  fesetenv(FE_DFL_ENV);
+
   /* Operations whose flags depend on the mode. */
   fesetenv(FE_DFL_ENV);
   for (int i = 0; i < 4; ++i) {

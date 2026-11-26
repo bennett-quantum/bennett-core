@@ -8,7 +8,8 @@
  * mode and its own six status flags (invalid 1, denormal operand 2, divide by zero 4, overflow 8, underflow 16,
  * inexact 32), reached through the runtime's `__bennett_fe*` functions. Each function does what glibc's does
  * on x86-64, which the native program uses: fesetround sets both units' modes, fegetround reads x87's;
- * fetestexcept reads the union of both units' flags; feclearexcept clears both; feraiseexcept raises invalid
+ * fetestexcept reads the union of both units' flags; feclearexcept clears both (and x87's denormal-operand flag
+ * always); feraiseexcept raises invalid
  * and divide by zero in SSE and overflow, underflow and inexact in x87; fesetexceptflag sets and clears SSE's
  * flags and only clears x87's. These
  * take only the five standard flags (glibc's FE_ALL_EXCEPT; musl's also names the denormal-operand flag, which
@@ -50,11 +51,13 @@ enum { SSE = 0, X87 = 1 };
 #define SSE_DEFINED 0xffff
 
 #ifdef M_fenv
+/* As glibc's: SSE's flags in `mask` are cleared; x87's status word keeps only the standard flags not in `mask`
+ * (glibc ands it with `mask ^ FE_ALL_EXCEPT`), so its denormal-operand flag is cleared on every call. */
 int feclearexcept(int mask)
 {
     mask &= CARRIED;
-    for (int unit = SSE; unit <= X87; ++unit)
-        __bennett_fesetunit(unit, __bennett_fegetunit(unit) & ~mask);
+    __bennett_fesetunit(SSE, __bennett_fegetunit(SSE) & ~mask);
+    __bennett_fesetunit(X87, __bennett_fegetunit(X87) & ~(STATUS & ~(CARRIED & ~mask)));
     return 0;
 }
 
