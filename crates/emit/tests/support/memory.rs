@@ -1067,6 +1067,84 @@ entry:
     }
 }
 
+fn check_wide_lookup(declaration: &str, address: &str, width: usize, expected: [Result<u16, Fault>; 2]) {
+    let module = load(&format!(
+        r#"
+memory {MEMORY}
+{declaration}
+func @f(i9 %x) -> i{width} {{
+entry:
+    %bit = trunc i9 %x to i1
+    %low = zext i1 %bit to i64
+{address}
+    %value = load i{width} %p
+    ret %value
+}}
+"#
+    ))
+    .expect("wide lookup module");
+    let mut image = [0; MEMORY];
+    for segment in &module.data {
+        let address = segment.address as usize;
+        let bytes = segment.encode();
+        image[address..address + bytes.len()].copy_from_slice(&bytes);
+    }
+    let held = Default::default();
+    let fault_start = (9 + width) as u64;
+    let scratch_start = fault_start + u64::from(Fault::CODE_WIDTH.bits());
+    // Compile the access in isolation so data may reach the last byte without reserving a caller frame.
+    let compiled = compile_apply_with(
+        ApplyInput {
+            module: &module,
+            callee: module.function_named("f").expect("f"),
+            args: &[Argument::Register(0..9)],
+            out: 9..fault_start,
+            fault: fault_start..scratch_start,
+            budget: 7,
+            entry_fault: None,
+            stack_available: MEMORY as u64,
+            memory: Some(ApplyMemory::new(&image, &held)),
+            scratch_start,
+        },
+        ApplyMode::StepMachine,
+    )
+    .expect("wide lookup emits a value or an out-of-bounds fault");
+    let (gates, layout) = gates(&compiled, 9, (scratch_start - 9) as usize);
+    let states = (0..512).flat_map(|x| [0, (16 << width) | 4].map(|y| (x, y)));
+    bits::check_states(&gates, layout, states, |x| match expected[(x & 1) as usize] {
+        Ok(value) => u128::from(value),
+        Err(fault) => u128::from(fault.code()) << width,
+    })
+    .expect("exact wide lookup values and faults");
+}
+
+#[test]
+fn wide_lookup_faults_when_all_addresses_are_outside_memory() {
+    check_wide_lookup("", "    %p = or i64 %low, 1024", 8, [Err(Fault::OutOfBounds); 2]);
+}
+
+#[test]
+fn wide_lookup_can_read_the_last_byte_or_fault() {
+    check_wide_lookup(
+        "data 1023 = i8 167",
+        "    %high = shl i64 %low, 10\n    %p = or i64 %high, 1023",
+        8,
+        [Ok(167), Err(Fault::OutOfBounds)],
+    );
+}
+
+#[test]
+fn wide_lookup_reads_two_bytes_at_either_start() {
+    for start in [0, 32] {
+        check_wide_lookup(
+            &format!("data {start} = i8 18, i8 52, i8 86"),
+            &format!("    %p = or i64 %low, {start}"),
+            16,
+            [Ok(0x3412), Ok(0x5634)],
+        );
+    }
+}
+
 #[test]
 fn seeded_declared_lookups_match_the_executor() {
     let mut rng = ChaCha8Rng::seed_from_u64(0x1d29_4c1d_3816_83e0);
@@ -1340,4 +1418,109 @@ done:
             assert_eq!(counts, MemoryCounts::default());
         }
     }
+}
+
+#[test]
+fn a_dispatch_guard_proves_address_thirty_three() {
+    let module = module_with_width(
+        r#"
+data 0 = i8 12, i8 24
+data 33 = i8 42
+func @f(i1 %x) -> i8 {
+entry:
+    %offset = zext i1 %x to i64
+    %p = or i64 %offset, 32
+    br %x, access, done
+access:
+    %v = load i8 %p
+    store i8 42, %p
+    ret %v
+done:
+    ret 7
+}
+"#,
+        "",
+        1,
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        let (_, counts, values) = compare(&module, "guard proves address 33", 6, mode);
+        assert_eq!(values, [(7, 0), (42, 0)]);
+        assert_eq!(counts, MemoryCounts::default());
+    }
+}
+
+#[test]
+#[ignore = "heavy: 2^20 gate replay cutoff"]
+fn address_replay_includes_the_gate_limit_and_stops_above_it() {
+    const LIMIT: u64 = 1 << 20;
+    const STORES_PER_PASS: u64 = 16;
+    const PASSES: u64 = LIMIT / (8 * STORES_PER_PASS);
+    let stores = "    store i8 %pad, 64\n".repeat(STORES_PER_PASS as usize);
+    let module = load(&format!(
+        r#"
+memory {MEMORY}
+data 33 = i8 42
+func @f(i8 %pad, i1 %extra) -> i8 {{
+entry:
+    %active = trunc i8 %pad to i1
+    %offset = zext i1 %active to i64
+    %p = or i64 %offset, 32
+    br emit(i16 0)
+emit(i16 %pass):
+{stores}    %next = add i16 %pass, 1
+    %finished = icmp eq i16 %next, {PASSES}
+    br %finished, tail, emit(%next)
+tail:
+    br %extra, one_more, dispatch
+one_more:
+    store i1 %active, 65
+    br dispatch
+dispatch:
+    br %active, read, done
+read:
+    %v = load i8 %p
+    ret %v
+done:
+    ret 7
+}}
+"#
+    ))
+    .expect("gate replay module");
+    let held = Default::default();
+    let mut image = [0; MEMORY];
+    image[33] = 42;
+    let compile = |extra| {
+        compile_apply_with(
+            ApplyInput {
+                module: &module,
+                callee: module.function_named("f").expect("f"),
+                args: &[Argument::Register(0..8), Argument::Value(extra)],
+                out: 8..16,
+                fault: 16..21,
+                budget: (STORES_PER_PASS + 3) * PASSES + 16,
+                entry_fault: None,
+                stack_available: MEMORY as u64,
+                memory: Some(ApplyMemory::new(&image, &held)),
+                scratch_start: 21,
+            },
+            ApplyMode::StepMachine,
+        )
+    };
+
+    // Definite-control stores copy one gate per input bit. The extra store adds one gate.
+    // The known-bit interval includes undeclared byte 32, so only replay can admit the load.
+    assert!(
+        matches!(
+            compile(1),
+            Err(ApplyError::Unsupported {
+                operation: "load",
+                route: "a proved address bound within a declared memory region",
+                ..
+            })
+        ),
+        "address proof must fall back above the gate limit"
+    );
+    let at_limit = compile(0).expect("the guard proves address 33 at the gate limit");
+    assert_eq!(at_limit.memory.gates as u64, 2 * LIMIT);
+    assert_eq!(at_limit.memory.varying_loads, 0);
 }

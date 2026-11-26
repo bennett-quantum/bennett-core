@@ -218,6 +218,26 @@ fn the_simulated_device_samples_like_the_simulator() {
     assert_eq!(device.release_zero(0..1), Err(RunError::Device("release_zero requires zero wires")));
 }
 
+#[test]
+fn single_wire_measurement_samples_and_collapses() {
+    let mut seen = [false; 2];
+    for seed in 0..16 {
+        let mut device = SimulatedDevice::new(seed, None);
+        device.allocate(0..1).expect("allocate a zero wire");
+        assert_eq!(device.measure(0), Ok(false));
+        device.gate(GateOp { kind: Gate::Fixed(FixedGate::X), target: 0, controls: &[] }).expect("set the wire");
+        assert_eq!(device.measure(0), Ok(true));
+
+        device.gate(GateOp { kind: Gate::Fixed(FixedGate::H), target: 0, controls: &[] }).expect("superpose the wire");
+        assert_eq!(device.configurations(), 2);
+        let measured = device.measure(0).expect("measure the superposed wire");
+        seen[usize::from(measured)] = true;
+        assert_eq!(device.configurations(), 1);
+        assert_eq!(device.measure(0), Ok(measured));
+    }
+    assert_eq!(seen, [true, true]);
+}
+
 // Releasing one wire of two leaves the other where it was: wire 1, set to one, still measures one.
 #[test]
 fn a_partial_release_leaves_the_other_wire_unchanged() {
