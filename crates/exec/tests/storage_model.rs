@@ -6,12 +6,14 @@
 //!   wires and empty ranges, near wire 0 and at the top of the wire numbering. The model is the set of
 //!   live wires, each with its value: only X gates act, so the state is always a basis state, and a wire
 //!   released in zero and allocated again holds 0.
-//! - The controller: `qalloc`, `x` (controlled or not) and `qfree` of whole registers and `x` on memory
-//!   bytes, in a generated program run step by step, stepped back and run forward again. The model is the
-//!   live registers and bytes holding qubits with their values, and the qubits kept by releases that were
-//!   not zero.
+//! - The controller: `qalloc`, `x` (controlled or not) and `qfree` of whole registers and `x` on one memory
+//!   byte or one controlled by another, in a generated program run step by step, stepped back and run
+//!   forward again. The model is the live registers and bytes holding qubits with their values, and the
+//!   qubits kept by releases that were not zero; and, next to a register of about 2^32 qubits, the
+//!   simulator's qubit count: the step that would pass it stops with the model's state unchanged.
 //!
-//! The default run is a few hundred sequences; the ignored test runs many more.
+//! The default run is a few hundred sequences; the ignored tests run many more, and the programs at the
+//! qubit count.
 
 mod common;
 
@@ -290,9 +292,23 @@ struct RegisterModel {
     kept: u32,
 }
 
+/// What the run reports after a step, as the model counts it: qubits held (those kept included), qubits
+/// kept, bytes holding qubits.
+type Counts = (u32, u32, usize);
+
 impl RegisterModel {
-    fn held(&self) -> u32 {
-        self.registers.iter().map(|register| register.width).sum::<u32>() + 8 * self.cells.len() as u32 + self.kept
+    fn held(&self) -> u64 {
+        let registers: u64 = self.registers.iter().map(|register| u64::from(register.width)).sum();
+        registers + 8 * self.cells.len() as u64 + u64::from(self.kept)
+    }
+
+    fn counts(&self) -> Counts {
+        (u32::try_from(self.held()).expect("within the count"), self.kept, self.cells.len())
+    }
+
+    /// The value of a memory byte: its qubits' value if it holds qubits, else the memory's (0).
+    fn byte(&self, address: u64) -> u8 {
+        self.cells.get(&address).copied().unwrap_or(0)
     }
 }
 
@@ -300,8 +316,15 @@ impl RegisterModel {
 const CELLS: Range<u64> = 1000..1006;
 const PROBES: u64 = 2000;
 
-/// A generated program: its text, the qubits held and kept after each step, and memory bytes expected.
-type Program = (String, Vec<(u32, u32)>, Vec<(u64, u8)>);
+/// A generated program: its text, the model's counts after each step, the memory bytes expected at the end,
+/// and the stop the step after the last counted one must make, if the program reaches the simulator's
+/// qubit count.
+struct Program {
+    text: String,
+    counts: Vec<Counts>,
+    expected: Vec<(u64, u8)>,
+    stop: Option<RunError>,
+}
 
 fn pick_width(rng: &mut ChaCha8Rng) -> u32 {
     match rng.random_range(0..16) {
@@ -313,22 +336,40 @@ fn pick_width(rng: &mut ChaCha8Rng) -> u32 {
     }
 }
 
-/// A program of `length` steps of `qalloc`, `x` and `qfree`, then probes that copy chosen bits of every live
-/// register into fresh qubits, measure them and store them at `PROBES` on, and measure every byte holding
-/// qubits in place. Returns the program, the model's qubits held and kept after each step, and the
-/// expected memory bytes.
-fn register_program(seed: u64, length: usize) -> Program {
+/// The most qubits the simulator holds at once (`RunError::QubitCount`).
+const MOST_QUBITS: u64 = u32::MAX as u64;
+
+/// A program of `length` steps of `qalloc`, `x` (on registers, on one memory byte, or on one byte controlled
+/// by another) and `qfree`, then probes that copy chosen bits of every live register into fresh qubits,
+/// measure them and store them at `PROBES` on, and measure every byte holding qubits in place.
+///
+/// With `wide`, the program first allocates a register of that many qubits, which it never touches again,
+/// and its other registers are narrow: the steps after it approach the simulator's qubit count, and the
+/// first step that would pass it (an allocation, or a gate whose memory bytes need more qubits than are
+/// left) is where the program ends, the model expecting the stop with nothing changed.
+fn register_program(seed: u64, length: usize, wide: Option<u32>) -> Program {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let mut model = RegisterModel::default();
     let mut text = String::from("memory 4096\nfunc @main() {\nentry:\n");
     let mut counts = Vec::new();
     let mut slots = 0;
-    for _ in 0..length {
-        let choice = rng.random_range(0..12);
+    if let Some(width) = wide {
+        let _ = writeln!(text, "    %wide = qalloc {width}");
+        model.kept = 0;
+        counts.push((width, 0, 0));
+    }
+    let mut stop = None;
+    while counts.len() < length && stop.is_none() {
+        let held = model.held() + u64::from(wide.unwrap_or(0));
+        let past_count = |more: u64| (held + more > MOST_QUBITS).then_some(RunError::QubitCount { live: held, more });
+        let choice = rng.random_range(0..14);
         if model.registers.is_empty() || choice < 3 || (choice < 5 && model.registers.len() < 3) {
-            let width = pick_width(&mut rng);
+            let width = if wide.is_some() { rng.random_range(1..=6) } else { pick_width(&mut rng) };
             let _ = writeln!(text, "    %r{slots} = qalloc {width}");
-            model.registers.push(Register { slot: slots, width, set: BTreeSet::new() });
+            stop = past_count(u64::from(width));
+            if stop.is_none() {
+                model.registers.push(Register { slot: slots, width, set: BTreeSet::new() });
+            }
             slots += 1;
         } else if choice < 7 {
             let index = rng.random_range(0..model.registers.len());
@@ -337,18 +378,42 @@ fn register_program(seed: u64, length: usize) -> Program {
             if !register.set.is_empty() {
                 model.kept += register.width;
             }
-        } else if choice < 9 {
-            let address = rng.random_range(CELLS);
-            let bit = rng.random_range(0..8u8);
-            let _ = writeln!(text, "    x [{address}:{bit}]");
-            *model.cells.entry(address).or_default() ^= 1 << bit;
+        } else if choice < 11 {
+            // One byte, or one byte controlled by another: every byte the gate names that does not hold
+            // qubits yet is turned into qubits, all of them counted before any is.
+            let target = (rng.random_range(CELLS), rng.random_range(0..8u8));
+            let control = (choice >= 9).then(|| {
+                let address = CELLS.start + (target.0 - CELLS.start + rng.random_range(1..6)) % 6;
+                (address, rng.random_range(0..8u8))
+            });
+            let bytes: BTreeSet<u64> =
+                [Some(target.0), control.map(|(address, _)| address)].into_iter().flatten().collect();
+            let fresh = bytes.iter().filter(|address| !model.cells.contains_key(address)).count() as u64;
+            match control {
+                Some((address, bit)) => {
+                    let _ = writeln!(text, "    x [{}:{}] ctrl [{address}:{bit}]", target.0, target.1);
+                }
+                None => {
+                    let _ = writeln!(text, "    x [{}:{}]", target.0, target.1);
+                }
+            }
+            stop = past_count(8 * fresh);
+            if stop.is_none() {
+                let flips = control.is_none_or(|(address, bit)| model.byte(address) >> bit & 1 == 1);
+                for &address in &bytes {
+                    model.cells.entry(address).or_default();
+                }
+                if flips {
+                    *model.cells.entry(target.0).or_default() ^= 1 << target.1;
+                }
+            }
         } else {
             let target = rng.random_range(0..model.registers.len());
             let bit = rng.random_range(0..model.registers[target].width);
             let control = rng.random_range(0..model.registers.len());
             let control_bit = rng.random_range(0..model.registers[control].width);
             let (slot, control_slot) = (model.registers[target].slot, model.registers[control].slot);
-            if choice == 9 || (target, bit) == (control, control_bit) {
+            if choice == 11 || (target, bit) == (control, control_bit) {
                 let _ = writeln!(text, "    x %r{slot}[{bit}]");
                 flip(&mut model.registers[target].set, bit);
             } else {
@@ -358,35 +423,40 @@ fn register_program(seed: u64, length: usize) -> Program {
                 }
             }
         }
-        counts.push((model.held(), model.kept));
-    }
-    let mut expected = Vec::new();
-    let mut probe = 0;
-    for register in &model.registers {
-        let mut bits: BTreeSet<u32> = [0, 1, 62, 63, 64, 65, register.width.saturating_sub(2), register.width - 1]
-            .into_iter()
-            .filter(|&bit| bit < register.width)
-            .collect();
-        bits.extend(register.set.iter().copied());
-        bits.extend((0..4).map(|_| rng.random_range(0..register.width)));
-        for bit in bits {
-            let address = PROBES + probe;
-            let _ = write!(
-                text,
-                "    %p{probe} = qalloc 1\n    x %p{probe}[0] ctrl %r{}[{bit}]\n    %m{probe} = measure %p{probe}\n    \
-                 %z{probe} = zext i1 %m{probe} to i8\n    store i8 %z{probe}, {address}\n",
-                register.slot
-            );
-            expected.push((address, u8::from(register.set.contains(&bit))));
-            probe += 1;
+        if stop.is_none() {
+            let (held, kept, cells) = model.counts();
+            counts.push((held + wide.unwrap_or(0), kept, cells));
         }
     }
-    for (&address, &value) in &model.cells {
-        let _ = writeln!(text, "    %c{address} = measure i8 [{address}]");
-        expected.push((address, value));
+    let mut expected = Vec::new();
+    if stop.is_none() {
+        let mut probe = 0;
+        for register in &model.registers {
+            let mut bits: BTreeSet<u32> = [0, 1, 62, 63, 64, 65, register.width.saturating_sub(2), register.width - 1]
+                .into_iter()
+                .filter(|&bit| bit < register.width)
+                .collect();
+            bits.extend(register.set.iter().copied());
+            bits.extend((0..4).map(|_| rng.random_range(0..register.width)));
+            for bit in bits {
+                let address = PROBES + probe;
+                let _ = write!(
+                    text,
+                    "    %p{probe} = qalloc 1\n    x %p{probe}[0] ctrl %r{}[{bit}]\n    %m{probe} = measure %p{probe}\n    \
+                     %z{probe} = zext i1 %m{probe} to i8\n    store i8 %z{probe}, {address}\n",
+                    register.slot
+                );
+                expected.push((address, u8::from(register.set.contains(&bit))));
+                probe += 1;
+            }
+        }
+        for (&address, &value) in &model.cells {
+            let _ = writeln!(text, "    %c{address} = measure i8 [{address}]");
+            expected.push((address, value));
+        }
     }
     text.push_str("    ret\n}\n");
-    (text, counts, expected)
+    Program { text, counts, expected, stop }
 }
 
 fn flip(set: &mut BTreeSet<u32>, bit: u32) {
@@ -395,27 +465,37 @@ fn flip(set: &mut BTreeSet<u32>, bit: u32) {
     }
 }
 
-fn check_register_programs(seeds: Range<u64>, length: usize) {
+/// Runs the programs of `seeds` step by step against the model. Without `wide`, it also steps back now
+/// and then, compares the states passed, and runs forward again; with it (whose states are too large to copy
+/// at every step), it checks the counts only, and the stop.
+fn check_register_programs(seeds: Range<u64>, length: usize, wide: Option<u32>) {
     for seed in seeds {
-        let (text, counts, expected) = register_program(seed, length);
+        let Program { text, counts, expected, stop } = register_program(seed, length, wide);
         let module = common::load(&text);
         let options = Options { reversible: true, ..common::bounded() };
         let mut executor = common::executor(&module, "main", &[], options);
         let mut rng = ChaCha8Rng::seed_from_u64(seed ^ 0x5eed);
-        let mut snapshots: Vec<Snapshot> = vec![executor.snapshot()];
         let check = |executor: &bennett_exec::Executor<'_>, step: usize| {
             let stats = executor.stats();
-            let (held, kept) = if step == 0 { (0, 0) } else { counts[step - 1] };
+            let expected = if step == 0 { (0, 0, 0) } else { counts[step - 1] };
             assert_eq!(
-                (stats.live_qubits, stats.leftover_qubits),
-                (held, kept),
+                (stats.live_qubits, stats.leftover_qubits, stats.memory_qubit_bytes),
+                expected,
                 "seed {seed}, after step {step}\n{text}"
             );
+            assert_eq!(stats.steps, step as u64, "seed {seed}\n{text}");
         };
-        while snapshots.len() <= length {
-            assert_eq!(executor.step(), None, "seed {seed}\n{text}");
+        let mut snapshots: Vec<Snapshot> = Vec::new();
+        for step in 1..=counts.len() {
+            if wide.is_none() && snapshots.is_empty() {
+                snapshots.push(executor.snapshot());
+            }
+            assert_eq!(executor.step(), None, "seed {seed}, step {step}\n{text}");
+            check(&executor, step);
+            if wide.is_some() {
+                continue;
+            }
             snapshots.push(executor.snapshot());
-            check(&executor, snapshots.len() - 1);
             // Now and then step back a few steps, compare with the states passed, and run forward again.
             if rng.random_bool(0.2) {
                 let back = rng.random_range(1..snapshots.len());
@@ -435,6 +515,13 @@ fn check_register_programs(seeds: Range<u64>, length: usize) {
                 }
             }
         }
+        if let Some(stop) = stop {
+            // The step past the count stops by name, with the model's state unchanged.
+            let outcome = executor.step();
+            check(&executor, counts.len());
+            assert_eq!(outcome, Some(bennett_exec::Outcome::Stopped(stop)), "seed {seed}\n{text}");
+            continue;
+        }
         assert_eq!(executor.run(), bennett_exec::Outcome::Returned(None), "seed {seed}\n{text}");
         let memory = executor.snapshot().classical.memory;
         for (address, value) in expected {
@@ -445,11 +532,31 @@ fn check_register_programs(seeds: Range<u64>, length: usize) {
 
 #[test]
 fn registers_agree_with_the_model_forward_and_back() {
-    check_register_programs(0..40, 40);
+    check_register_programs(0..40, 40, None);
 }
 
 #[test]
 #[ignore = "a longer run of the same model test; run with --include-ignored"]
 fn registers_agree_with_the_model_forward_and_back_long() {
-    check_register_programs(1000..1400, 80);
+    check_register_programs(1000..1400, 80, None);
+}
+
+/// Programs that reach the simulator's qubit count: a register of 2^32 - 1 - m qubits for m from 0 to
+/// 23, then allocations and gates on memory bytes until one would pass the count. Among them, gates on
+/// two ordinary bytes with room for one only, which must stop before either byte holds qubits.
+#[test]
+#[ignore = "holds a register of about 2^32 qubits (about 2.5 GB, a few seconds per program); run with --include-ignored"]
+fn registers_agree_with_the_model_at_the_qubit_count() {
+    let mut partly_room = 0;
+    for margin in 0..24 {
+        let wide = u32::MAX - margin;
+        check_register_programs(u64::from(margin)..u64::from(margin) + 1, 12, Some(wide));
+        let stop = register_program(u64::from(margin), 12, Some(wide)).stop;
+        if let Some(RunError::QubitCount { live, more: 16 }) = stop
+            && MOST_QUBITS - live >= 8
+        {
+            partly_room += 1;
+        }
+    }
+    assert!(partly_room > 0, "no program reached a two-byte gate with room for one byte");
 }

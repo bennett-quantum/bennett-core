@@ -173,7 +173,9 @@ or release can span columns or select part of one, and a release may name wires 
 A release is kept or removed whole, as `qfree` is ("Releasing a register"): if any of its bits is nonzero
 in some stored configuration, all are kept, a column it names whole as an unnamed column, the bits it
 names of another column moved to an unnamed column of their own; the remaining bits of a column stay live
-where they are. An empty range is a no-op for every command. A device can measure the individual qubits
+where they are. Each such move needs a fresh column, also for a column whose named bits are zero when other
+named bits are not, so a release of part of a column that is not zero can stop with the simulator's
+`QubitStorage` (state unchanged) where the host cannot hold one more column. An empty range is a no-op for every command. A device can measure the individual qubits
 in a set.
 
 `Executor::run_on` runs the controller on a supplied device for modules without `apply`.
