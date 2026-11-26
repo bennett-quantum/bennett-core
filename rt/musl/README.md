@@ -115,7 +115,10 @@ environment's null pointer and the auxiliary vector, as on a Linux process's ini
 of the stack). Start-up reads nothing but the image. The area's size is a link parameter, `--argument-bytes`
 (4096 by default); the strings with their NULs must fit. Because its size does not depend on the arguments and
 both values are writable, so that no optimiser takes them into code, a relink with other arguments changes the
-image's data only: every function is the same text, and steps measured on one image hold for the other. Each
+image's data only: every function is the same text, so an applied function given the same inputs takes the
+same steps in both images. A caller that reads `argc` or `argv` can give it other inputs, and the whole run's
+step count can differ, since start-up reads the strings (an empty `main` takes 2,155 steps with `argv[0]`
+`prog` and 2,165 with `progg`). Each
 argument is one string of `link.py`'s command line, so the host's `execve` limit of 128 KiB per string is the
 native run's (`--argv0=S` spends eight bytes of it); the limit on the whole command line (about 2 MiB) also counts
 `link.py`'s options and environment, so the longest accepted list is somewhat shorter than natively.

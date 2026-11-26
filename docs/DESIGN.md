@@ -2173,8 +2173,9 @@ exact bytes, so an empty string or bytes that are not UTF-8 arrive unchanged; a 
 a null pointer and the environment is empty, as before. The count and the strings, NUL-terminated and contiguous,
 are writable data of the run image (`rt/musl/start.h`), the strings in an area whose size is a link parameter
 (`--argument-bytes`, 4096 bytes by default): the strings with their NULs must fit, and a relink with other arguments
-and the same area changes the image's data only, not one instruction, so step counts measured on one image hold
-for the other. Being writable, neither value can be taken into code by an optimiser. Start-up builds the rest as
+and the same area changes the image's data only, not one instruction, so an applied function given the same
+inputs takes the same steps in both images. A caller that reads `argc` or `argv` can give it other inputs, and the
+whole run's step count can differ, because start-up reads the strings. Being writable, neither value can be taken into code by an optimiser. Start-up builds the rest as
 Linux lays out a new process's stack, in one array of pointers on its own frame, which lasts until exit: `argv`,
 its null pointer, the environment's null pointer and the auxiliary vector, because musl's start-up finds the
 environment at `argv + argc + 1` and reads the auxiliary words after it; the array takes `8 * (argc + 8)` bytes of

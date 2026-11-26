@@ -46,6 +46,7 @@ ARGUMENT_CASES = [
                                 b" spaces \"quotes\" \\ ", b"-x", b"--", b"-o", b"--argv0=x", b"="],
      ["-O0", "-O2"]),
     ("args", "argv0", b"/usr/local/bin/named", [b"a"], ["-O0"]),
+    ("args", "argv0-empty", b"", [b"a"], ["-O0"]),
     ("budget", "budget-enough", b"prog", [b"1000"], ["-O0", "-O2"]),
     ("budget", "budget-short", b"prog", [b"10", b"0x1b"], ["-O0"]),
     ("budget", "budget-range", b"prog", [b"18446744073709551616"], ["-O0"]),
@@ -61,7 +62,7 @@ def argument_cases(args):
         for level in levels:
             program = args.out / f"args-{case}{level}.bn"
             command = ["python3", HERE / "link.py", source, "--libdir", args.libdir, "--front", args.front,
-                       f"--clang-flag={level}", "-o", program, *([b"--argv0=" + argv0] if argv0 else []),
+                       f"--clang-flag={level}", "-o", program, *([] if argv0 is None else [b"--argv0=" + argv0]),
                        *(options[0] if options else []), "--", *arguments]
             linked = subprocess.run([a if isinstance(a, bytes) else str(a) for a in command], capture_output=True)
             assert linked.returncode == 0, linked.stderr
@@ -69,7 +70,7 @@ def argument_cases(args):
             native = args.out / f"args-{source_name}{level}.native"
             built = run(["clang-18", level, source, "-o", native])
             assert built.returncode == 0, built.stderr
-            reference = subprocess.run([argv0 or b"prog", *arguments], executable=native, env={},
+            reference = subprocess.run([b"prog" if argv0 is None else argv0, *arguments], executable=native, env={},
                                        capture_output=True, stdin=subprocess.DEVNULL)
             assert f"result: {reference.returncode}\n" in result.stdout, (case, level, result.stdout, reference)
             assert result.returncode == 0, (case, level, result)
