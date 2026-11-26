@@ -41,23 +41,34 @@ static void mix(const void *bytes, size_t n) {
     hash *= 0x100000001b3u;
   }
 }
-/* One case: `n` result bytes, then the flags raised since the last clear. */
+/* One case: `n` result bytes, then the six status flags of each unit raised since the last clear, SSE's (MXCSR)
+ * and x87's (the status word), as fegetenv stores them. */
+static int fmal_denormal; /* fmal's denormal-operand flag is not compared (FMA below) */
 static void record(unsigned a, unsigned b, const void *result, size_t n) {
-  int f = fetestexcept(FLAGS);
-  unsigned char flags = (unsigned char)f;
+  fenv_t e;
+  fegetenv(&e);
+  unsigned char flags[2] = {(unsigned char)(e.__mxcsr & 0x3f), (unsigned char)(e.__status_word & 0x3f)};
+  if (fmal_denormal) flags[1] &= ~0x02;
   mix(result, n);
-  mix(&flags, 1);
+  mix(flags, 2);
   ++cases;
 #ifdef VERBOSE
   printf("%s m%d %u %u ", group, mode_index, a, b);
   for (size_t i = n; i-- > 0;) printf("%02x", ((const unsigned char *)result)[i]);
-  printf(" %02x\n", flags);
+  printf(" sse %02x x87 %02x\n", flags[0], flags[1]);
 #else
   (void)a;
   (void)b;
 #endif
 }
-static void start(void) { feclearexcept(FE_ALL_EXCEPT); }
+/* Every status flag of both units cleared, the denormal-operand flag too (feclearexcept leaves it). */
+static void start(void) {
+  fenv_t e;
+  fegetenv(&e);
+  e.__status_word &= ~0x3f;
+  e.__mxcsr &= ~0x3fu;
+  fesetenv(&e);
+}
 
 /* Directed operands, as bits. */
 static const uint32_t f32_bits[] = {
@@ -95,6 +106,28 @@ static const struct x80 f80_bits[] = {
 };
 #define COUNT(a) (sizeof(a) / sizeof(a)[0])
 
+/* _Float16 and __bf16 operations outside FENV_ACCESS, called from the strict code: in a strict function clang 18
+ * gives no determined native result for them (the device refuses them there by name). Each is a call of libgcc's
+ * soft-fp or of float arithmetic, which read the mode as they run. */
+#pragma STDC FENV_ACCESS OFF
+static __attribute__((noinline)) _Float16 h_f(float x) { return (_Float16)x; }
+static __attribute__((noinline)) _Float16 h_d(double x) { return (_Float16)x; }
+static __attribute__((noinline)) _Float16 h_l(long double x) { return (_Float16)x; }
+static __attribute__((noinline)) _Float16 h_sqrt(_Float16 x) { return (_Float16)__builtin_sqrtf(x); }
+static __attribute__((noinline)) __int128 ti_h(_Float16 x) { return (__int128)x; }
+static __attribute__((noinline)) unsigned __int128 uti_h(_Float16 x) { return (unsigned __int128)x; }
+static __attribute__((noinline)) _Float16 h_add(_Float16 x, _Float16 y) { return x + y; }
+static __attribute__((noinline)) _Float16 h_mul(_Float16 x, _Float16 y) { return x * y; }
+static __attribute__((noinline)) _Float16 h_i64(int64_t x) { return (_Float16)x; }
+static __attribute__((noinline)) _Float16 h_ti(__int128 x) { return (_Float16)x; }
+static __attribute__((noinline)) _Float16 h_uti(unsigned __int128 x) { return (_Float16)x; }
+/* 0 if `r` is to be compared bit for bit, else 1 for a quiet NaN, 2 for a signalling one: of two NaN operands
+ * which one comes back is unspecified (native -O2 commutes the float operation). */
+static __attribute__((noinline)) unsigned char h_nans(_Float16 r, _Float16 x, _Float16 y) {
+  if (!__builtin_isnan(r) || !__builtin_isnan(x) || !__builtin_isnan(y)) return 0;
+  return __builtin_issignaling(r) ? 2 : 1;
+}
+#pragma STDC FENV_ACCESS ON
 static volatile _Float16 vh[COUNT(f32_bits)];
 static volatile float vf[COUNT(f32_bits)];
 static volatile double vd[COUNT(f64_bits)];
@@ -104,7 +137,7 @@ static void load(void) {
     float x;
     memcpy(&x, &f32_bits[i], 4);
     vf[i] = x;
-    vh[i] = (_Float16)x;
+    vh[i] = h_f(x);
   }
   for (unsigned i = 0; i < COUNT(f64_bits); ++i) {
     double x;
@@ -197,13 +230,22 @@ BINARY(div_l, vl, /)
       start();                                                                                                 \
       bits = (V[i] == V[j]) | (V[i] != V[j]) << 1;                                                             \
       RECORD(i, j, bits);                                                                                      \
-      start();                                                                                                 \
-      bits = isless(V[i], V[j]) | isgreaterequal(V[i], V[j]) << 1 | islessgreater(V[i], V[j]) << 2 |           \
-             isunordered(V[i], V[j]) << 3 | islessequal(V[i], V[j]) << 4 | isgreater(V[i], V[j]) << 5;         \
-      RECORD(i, j, bits);                                                                                      \
+      COMPARE_MACRO(i, j, isless(V[i], V[j]));                                                                 \
+      COMPARE_MACRO(i, j, isgreaterequal(V[i], V[j]));                                                         \
+      COMPARE_MACRO(i, j, islessgreater(V[i], V[j]));                                                          \
+      COMPARE_MACRO(i, j, isunordered(V[i], V[j]));                                                            \
+      COMPARE_MACRO(i, j, islessequal(V[i], V[j]));                                                            \
+      COMPARE_MACRO(i, j, isgreater(V[i], V[j]));                                                              \
     }                                                                                                          \
     end();                                                                                                     \
   }
+/* Each macro on its own, so that one that misses a flag cannot hide behind another that raises it. */
+#define COMPARE_MACRO(i, j, expression)                                                                        \
+  do {                                                                                                         \
+    start();                                                                                                   \
+    int macro_ = (expression);                                                                                 \
+    RECORD(i, j, macro_);                                                                                      \
+  } while (0)
 COMPARE(compare_f, vf)
 COMPARE(compare_d, vd)
 COMPARE(compare_l, vl)
@@ -279,11 +321,11 @@ UNARY_INT(lround_d, vd, lround(x))
 UNARY_INT(lround_l, vl, lroundl(x))
 UNARY_INT(llround_f, vf, llroundf(x))
 
-UNARY(to_h_f, vf, (_Float16)x)
-UNARY(to_h_d, vd, (_Float16)x)
+UNARY(to_h_f, vf, h_f(x))
+UNARY(to_h_d, vd, h_d(x))
 /* Not on the last two long doubles, an unnormal and a pseudo-denormal: libgcc's truncation, which the native
  * program calls, reads them at face value (`rt/softfloat/README.md`, "Noncanonical long double operands"). */
-UNARY(to_h_l, vl, i >= COUNT(vl) - 2 ? (_Float16)0 : (_Float16)x)
+UNARY(to_h_l, vl, h_l(i >= COUNT(vl) - 2 ? 0 : x))
 /* To __bf16 outside FENV_ACCESS: under it clang 18 converts to the _Float16 encoding instead ((__bf16)1.0 is
  * 0x3c00), a native compiler defect. The conversion is a call of libgcc's, which reads the mode as it runs. */
 #pragma STDC FENV_ACCESS OFF
@@ -293,27 +335,30 @@ static __attribute__((noinline)) __bf16 bf16_d(double x) { return (__bf16)x; }
 UNARY(to_bf_f, vf, bf16_f(x))
 UNARY(to_bf_d, vd, bf16_d(x))
 /* Not from long double: clang 18's back end cannot compile that conversion at all. */
-UNARY(sqrt_h, vh, (_Float16)__builtin_sqrtf(x))
-UNARY_INT(to_ti_h, vh, (__int128)x)
-UNARY_INT(to_uti_h, vh, (unsigned __int128)x)
+UNARY(sqrt_h, vh, h_sqrt(x))
+UNARY_INT(to_ti_h, vh, ti_h(x))
+UNARY_INT(to_uti_h, vh, uti_h(x))
 UNARY_INT(to_ti_d, vd, (__int128)x)
 UNARY_INT(to_uti_d, vd, (unsigned __int128)x)
 UNARY_INT(to_ti_l, vl, (__int128)x)
 UNARY_INT(to_uti_l, vl, (unsigned __int128)x)
-/* _Float16 arithmetic: of two NaN operands which one comes back is unspecified (native -O2 commutes the float
- * operation), so then only that the result is a NaN is compared. */
-#define BINARY_HALF(name, op)                                                                                  \
+#define BINARY_HALF(name, f)                                                                                   \
   static void name(void) {                                                                                     \
     begin(#name);                                                                                              \
     MODES for (unsigned i = 0; i < COUNT(vh); ++i) for (unsigned j = 0; j < COUNT(vh); ++j) {                 \
       _Float16 x = vh[i], y = vh[j];                                                                           \
       start();                                                                                                 \
-      RECORD_FMA(i, j, x, y, (_Float16)0, x op y);                                                             \
+      _Float16 r = f(x, y);                                                                                    \
+      unsigned char nans = h_nans(r, x, y);                                                                    \
+      if (nans)                                                                                                \
+        record(i, j, &nans, 1);                                                                                \
+      else                                                                                                     \
+        record(i, j, &r, 2);                                                                                   \
     }                                                                                                          \
     end();                                                                                                     \
   }
-BINARY_HALF(add_h, +)
-BINARY_HALF(mul_h, *)
+BINARY_HALF(add_h, h_add)
+BINARY_HALF(mul_h, h_mul)
 
 /* Integers to floating point. */
 static const int64_t integers[] = {
@@ -339,7 +384,16 @@ FROM(from_u64_d, uint64_t, double)
 FROM(from_i32_d, int32_t, double)
 FROM(from_i64_l, int64_t, long double)
 FROM(from_u64_l, uint64_t, long double)
-FROM(from_i64_h, int64_t, _Float16)
+#define FROM_HALF(name, value, f)                                                                                \
+  static void name(void) {                                                                                     \
+    begin(#name);                                                                                              \
+    MODES for (unsigned i = 0; i < COUNT(integers); ++i) {                                                     \
+      start();                                                                                                 \
+      RECORD(i, 0, f(value));                                                                                  \
+    }                                                                                                          \
+    end();                                                                                                     \
+  }
+FROM_HALF(from_i64_h, (int64_t)vi[i], h_i64)
 /* Not an integer to __bf16: clang 18's x86-64 back end cannot compile it under FENV_ACCESS ("Do not know how
  * to soft promote this operator's result"), so there is no native reference. */
 /* 128-bit integers: the 64-bit ones shifted left by 40 bits (some beyond 2^64, which overflows _Float16). */
@@ -355,10 +409,12 @@ FROM(from_i64_h, int64_t, _Float16)
 FROM_WIDE(from_ti_d, __int128, double)
 FROM_WIDE(from_uti_f, unsigned __int128, float)
 FROM_WIDE(from_ti_l, __int128, long double)
-FROM_WIDE(from_ti_h, __int128, _Float16)
-FROM_WIDE(from_uti_h, unsigned __int128, _Float16)
+FROM_HALF(from_ti_h, (__int128)vi[i] * ((__int128)1 << 40), h_ti)
+FROM_HALF(from_uti_h, (unsigned __int128)vi[i] * ((unsigned __int128)1 << 40), h_uti)
 
-/* Fused multiply-add on every triple of a smaller set (RECORD_FMA above). */
+/* Fused multiply-add on every triple of a smaller set (RECORD_FMA above). glibc's fmal is software whose
+ * intermediate x87 operations raise the denormal-operand flag in ways the device does not follow (a tiny product,
+ * a NaN operand: rt/softfloat/README.md), so for long double that flag alone is not compared. */
 #define FMA(name, V, f)                                                                                        \
   static void name(void) {                                                                                     \
     static const unsigned picks[] = {0, 1, 2, 4, 6, 8, 9, 13, 14, 24, 26, 28, 29};                              \
@@ -366,8 +422,10 @@ FROM_WIDE(from_uti_h, unsigned __int128, _Float16)
     MODES for (unsigned i = 0; i < COUNT(picks); ++i) for (unsigned j = 0; j < COUNT(picks); ++j)              \
         for (unsigned k = 0; k < COUNT(picks); ++k) {                                                          \
       __typeof__(V[0]) x = V[picks[i]], y = V[picks[j]], z = V[picks[k]];                                      \
+      fmal_denormal = sizeof x == 16;                                                                         \
       start();                                                                                                 \
       RECORD_FMA(i * 16 + j, k, x, y, z, f(x, y, z));                                                          \
+      fmal_denormal = 0;                                                                                      \
     }                                                                                                          \
     end();                                                                                                     \
   }
@@ -478,6 +536,12 @@ static long double random_l(void) {
     end();                                                                                                     \
   }
 #define RECORD_FMA3(a, b, value) RECORD_FMA(a, b, x, y, z, value)
+#define RECORD_FMAL3(a, b, value)                                                                              \
+  do {                                                                                                         \
+    fmal_denormal = 1;                                                                                         \
+    RECORD_FMA(a, b, x, y, z, value);                                                                          \
+    fmal_denormal = 0;                                                                                         \
+  } while (0)
 RANDOM_GROUP(random_add_d, double, random_d, 0, RECORD, x + y)
 RANDOM_GROUP(random_sub_d, double, random_d, 0, RECORD, x - y)
 RANDOM_GROUP(random_mul_d, double, random_d, 0, RECORD, x * y)
@@ -492,7 +556,7 @@ RANDOM_GROUP(random_add_l, long double, random_l, 0, RECORD, x + y)
 RANDOM_GROUP(random_mul_l, long double, random_l, 0, RECORD, x * y)
 RANDOM_GROUP(random_div_l, long double, random_l, 0, RECORD, x / y)
 RANDOM_GROUP(random_sqrt_l, long double, random_l, 0, RECORD, sqrtl(x))
-RANDOM_GROUP(random_fma_l, long double, random_l, 0, RECORD_FMA3, fmal(x, y, z))
+RANDOM_GROUP(random_fma_l, long double, random_l, 0, RECORD_FMAL3, fmal(x, y, z))
 RANDOM_GROUP(random_to_f_d, double, random_d, 0, RECORD, (float)x)
 RANDOM_GROUP(random_to_d_l, long double, random_l, 0, RECORD, (double)x)
 RANDOM_GROUP(random_to_i64_d, double, random_d, 0, RECORD_INT, (int64_t)x)

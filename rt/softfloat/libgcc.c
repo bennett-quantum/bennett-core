@@ -29,6 +29,13 @@
 #include "specialize.h" /* the default NaN */
 #include "internals.h" /* SoftFloat's own rounding (softfloat_roundPackTo...) for the routines it has no entry for */
 
+/* x86's denormal-operand flag, which SoftFloat does not have, beside SoftFloat's five in its flags word. */
+enum { softfloat_flag_denormal = 32 };
+
+/* The x87 unit's rounding mode and flags (the SSE unit's are SoftFloat's; see `__bennett_x87_swap`). */
+uint_fast8_t x87_roundingMode = softfloat_round_near_even;
+uint_fast8_t x87_exceptionFlags;
+
 /* What a comparison returns: libgcc's CMPtype, a machine word on x86-64, and compiler-rt's CMP_RESULT. */
 typedef long cmp_t;
 
@@ -113,20 +120,81 @@ static bool nan80(extFloat80_t x) {
   return (x.signExp & 0x7FFF) == 0x7FFF && (x.signif & UINT64_C(0x7FFFFFFFFFFFFFFF)) != 0;
 }
 
+/* x86's denormal-operand flag: SSE and x87 arithmetic, comparisons, square roots, fused multiply-adds, minima and
+ * maxima and the conversions between floating-point formats raise it for a subnormal operand (x87 also for a
+ * pseudo-denormal) when no operand is a NaN, in their own unit; conversions to integers and SSE4.1's roundsd do
+ * not (measured against the native program, `front/tests/c/fenv_ops.c`). */
+static int class32(float a) { /* 1 subnormal, 2 NaN, 0 otherwise */
+  float32_t x = f32_of(a);
+  return nan32(x) ? 2 : !(x.v & 0x7F800000) && (x.v & 0x007FFFFF);
+}
+static int class64(double a) {
+  float64_t x = f64_of(a);
+  return nan64(x) ? 2 : !(x.v & UINT64_C(0x7FF0000000000000)) && (x.v & UINT64_C(0x000FFFFFFFFFFFFF));
+}
+static int class80(long double a) {
+  extFloat80_t x = x80_bits(a);
+  return nan80(x) || unsupported80(x) ? 2 : !(x.signExp & 0x7FFF) && x.signif;
+}
+static int class16(_Float16 a) {
+  uint16_t x;
+  __builtin_memcpy(&x, &a, sizeof x);
+  return (x & 0x7FFF) > 0x7C00 ? 2 : !(x & 0x7C00) && (x & 0x03FF);
+}
+static int class_none(long long a) {
+  (void)a;
+  return 0;
+}
+#define CLASS(a)                                                                                           \
+  _Generic((a), _Float16: class16, float: class32, double: class64, long double: class80, default: class_none)(a)
+static void denormal_of(int classes) {
+  if (classes == 1) softfloat_raiseFlags(softfloat_flag_denormal);
+}
+#define DENORMAL(a) denormal_of(CLASS(a))
+#define DENORMAL2(a, b) denormal_of(CLASS(a) | CLASS(b))
+#define DENORMAL3(a, b, c) denormal_of(CLASS(a) | CLASS(b) | CLASS(c))
+/* Beside a NaN too: glibc's fmin and fmax (and x87's fminl, fmaxl) compare each operand with itself. */
+#define DENORMAL_ANY(a, b) denormal_of(CLASS(a) & 1 || CLASS(b) & 1)
+/* A division by zero raises divide by zero only, and a product of zero and infinity invalid only. */
+static bool zero_or_infinite32(float a, bool infinite) {
+  uint32_t m = f32_of(a).v & 0x7FFFFFFF;
+  return infinite ? m == 0x7F800000 : !m;
+}
+static bool zero_or_infinite64(double a, bool infinite) {
+  uint64_t m = f64_of(a).v & UINT64_C(0x7FFFFFFFFFFFFFFF);
+  return infinite ? m == UINT64_C(0x7FF0000000000000) : !m;
+}
+static bool zero_or_infinite80(long double a, bool infinite) {
+  extFloat80_t x = x80_bits(a);
+  return infinite ? (x.signExp & 0x7FFF) == 0x7FFF && x.signif == UINT64_C(0x8000000000000000)
+                  : !(x.signExp & 0x7FFF) && !x.signif;
+}
+#define ZERO(a) _Generic((a), float: zero_or_infinite32, double: zero_or_infinite64, long double: zero_or_infinite80)(a, false)
+#define INFINITE(a)                                                                                        \
+  _Generic((a), float: zero_or_infinite32, double: zero_or_infinite64, long double: zero_or_infinite80)(a, true)
+#define ZERO_TIMES_INFINITY(a, b) ((ZERO(a) && INFINITE(b)) || (INFINITE(a) && ZERO(b)))
+
 void softfloat_raiseFlags(uint_fast8_t flags) { softfloat_exceptionFlags |= flags; }
 
 /* Arithmetic. */
-float __addsf3(float a, float b) { return of_f32(f32_add(f32_of(a), f32_of(b))); }
-float __subsf3(float a, float b) { return of_f32(f32_sub(f32_of(a), f32_of(b))); }
-float __mulsf3(float a, float b) { return of_f32(f32_mul(f32_of(a), f32_of(b))); }
-float __divsf3(float a, float b) { return of_f32(f32_div(f32_of(a), f32_of(b))); }
-double __adddf3(double a, double b) { return of_f64(f64_add(f64_of(a), f64_of(b))); }
-double __subdf3(double a, double b) { return of_f64(f64_sub(f64_of(a), f64_of(b))); }
-double __muldf3(double a, double b) { return of_f64(f64_mul(f64_of(a), f64_of(b))); }
-double __divdf3(double a, double b) { return of_f64(f64_div(f64_of(a), f64_of(b))); }
+float __addsf3(float a, float b) { DENORMAL2(a, b); return of_f32(f32_add(f32_of(a), f32_of(b))); }
+float __subsf3(float a, float b) { DENORMAL2(a, b); return of_f32(f32_sub(f32_of(a), f32_of(b))); }
+float __mulsf3(float a, float b) { DENORMAL2(a, b); return of_f32(f32_mul(f32_of(a), f32_of(b))); }
+float __divsf3(float a, float b) {
+  if (!ZERO(b)) DENORMAL2(a, b);
+  return of_f32(f32_div(f32_of(a), f32_of(b)));
+}
+double __adddf3(double a, double b) { DENORMAL2(a, b); return of_f64(f64_add(f64_of(a), f64_of(b))); }
+double __subdf3(double a, double b) { DENORMAL2(a, b); return of_f64(f64_sub(f64_of(a), f64_of(b))); }
+double __muldf3(double a, double b) { DENORMAL2(a, b); return of_f64(f64_mul(f64_of(a), f64_of(b))); }
+double __divdf3(double a, double b) {
+  if (!ZERO(b)) DENORMAL2(a, b);
+  return of_f64(f64_div(f64_of(a), f64_of(b)));
+}
 /* long double rounds to the full 64-bit significand: extF80_roundingPrecision is never written and stays
  * 80 (x87 on Linux computes so by default). */
 static long double arith80(extFloat80_t (*op)(extFloat80_t, extFloat80_t), long double a, long double b) {
+  if (op != extF80_div || !ZERO(b)) DENORMAL2(a, b);
   bool invalid = false;
   extFloat80_t x = x80_operand(a, &invalid), y = x80_operand(b, &invalid);
   return of_x80(invalid ? indefinite80 : op(x, y));
@@ -165,37 +233,40 @@ static cmp_t order80(extFloat80_t a, extFloat80_t b, cmp_t unordered) {
   if (quiet_unordered80(a, b)) return unordered;
   return extF80_lt_quiet(a, b) ? -1 : extF80_eq(a, b) ? 0 : 1;
 }
-cmp_t __eqsf2(float a, float b) { return !f32_eq(f32_of(a), f32_of(b)); }
-cmp_t __nesf2(float a, float b) { return !f32_eq(f32_of(a), f32_of(b)); }
-cmp_t __ltsf2(float a, float b) { return order32(f32_of(a), f32_of(b), 1); }
-cmp_t __lesf2(float a, float b) { return order32(f32_of(a), f32_of(b), 1); }
-cmp_t __gtsf2(float a, float b) { return order32(f32_of(a), f32_of(b), -1); }
-cmp_t __gesf2(float a, float b) { return order32(f32_of(a), f32_of(b), -1); }
-cmp_t __unordsf2(float a, float b) { return quiet_unordered32(f32_of(a), f32_of(b)); }
-cmp_t __eqdf2(double a, double b) { return !f64_eq(f64_of(a), f64_of(b)); }
-cmp_t __nedf2(double a, double b) { return !f64_eq(f64_of(a), f64_of(b)); }
-cmp_t __ltdf2(double a, double b) { return order64(f64_of(a), f64_of(b), 1); }
-cmp_t __ledf2(double a, double b) { return order64(f64_of(a), f64_of(b), 1); }
-cmp_t __gtdf2(double a, double b) { return order64(f64_of(a), f64_of(b), -1); }
-cmp_t __gedf2(double a, double b) { return order64(f64_of(a), f64_of(b), -1); }
-cmp_t __unorddf2(double a, double b) { return quiet_unordered64(f64_of(a), f64_of(b)); }
-cmp_t __eqxf2(long double a, long double b) { return !extF80_eq(x80_of(a), x80_of(b)); }
-cmp_t __nexf2(long double a, long double b) { return !extF80_eq(x80_of(a), x80_of(b)); }
-cmp_t __ltxf2(long double a, long double b) { return order80(x80_of(a), x80_of(b), 1); }
-cmp_t __lexf2(long double a, long double b) { return order80(x80_of(a), x80_of(b), 1); }
-cmp_t __gtxf2(long double a, long double b) { return order80(x80_of(a), x80_of(b), -1); }
-cmp_t __gexf2(long double a, long double b) { return order80(x80_of(a), x80_of(b), -1); }
-cmp_t __unordxf2(long double a, long double b) { return quiet_unordered80(x80_of(a), x80_of(b)); }
+cmp_t __eqsf2(float a, float b) { DENORMAL2(a, b); return !f32_eq(f32_of(a), f32_of(b)); }
+cmp_t __nesf2(float a, float b) { DENORMAL2(a, b); return !f32_eq(f32_of(a), f32_of(b)); }
+cmp_t __ltsf2(float a, float b) { DENORMAL2(a, b); return order32(f32_of(a), f32_of(b), 1); }
+cmp_t __lesf2(float a, float b) { DENORMAL2(a, b); return order32(f32_of(a), f32_of(b), 1); }
+cmp_t __gtsf2(float a, float b) { DENORMAL2(a, b); return order32(f32_of(a), f32_of(b), -1); }
+cmp_t __gesf2(float a, float b) { DENORMAL2(a, b); return order32(f32_of(a), f32_of(b), -1); }
+cmp_t __unordsf2(float a, float b) { DENORMAL2(a, b); return quiet_unordered32(f32_of(a), f32_of(b)); }
+cmp_t __eqdf2(double a, double b) { DENORMAL2(a, b); return !f64_eq(f64_of(a), f64_of(b)); }
+cmp_t __nedf2(double a, double b) { DENORMAL2(a, b); return !f64_eq(f64_of(a), f64_of(b)); }
+cmp_t __ltdf2(double a, double b) { DENORMAL2(a, b); return order64(f64_of(a), f64_of(b), 1); }
+cmp_t __ledf2(double a, double b) { DENORMAL2(a, b); return order64(f64_of(a), f64_of(b), 1); }
+cmp_t __gtdf2(double a, double b) { DENORMAL2(a, b); return order64(f64_of(a), f64_of(b), -1); }
+cmp_t __gedf2(double a, double b) { DENORMAL2(a, b); return order64(f64_of(a), f64_of(b), -1); }
+cmp_t __unorddf2(double a, double b) { DENORMAL2(a, b); return quiet_unordered64(f64_of(a), f64_of(b)); }
+cmp_t __eqxf2(long double a, long double b) { DENORMAL2(a, b); return !extF80_eq(x80_of(a), x80_of(b)); }
+cmp_t __nexf2(long double a, long double b) { DENORMAL2(a, b); return !extF80_eq(x80_of(a), x80_of(b)); }
+cmp_t __ltxf2(long double a, long double b) { DENORMAL2(a, b); return order80(x80_of(a), x80_of(b), 1); }
+cmp_t __lexf2(long double a, long double b) { DENORMAL2(a, b); return order80(x80_of(a), x80_of(b), 1); }
+cmp_t __gtxf2(long double a, long double b) { DENORMAL2(a, b); return order80(x80_of(a), x80_of(b), -1); }
+cmp_t __gexf2(long double a, long double b) { DENORMAL2(a, b); return order80(x80_of(a), x80_of(b), -1); }
+cmp_t __unordxf2(long double a, long double b) { DENORMAL2(a, b); return quiet_unordered80(x80_of(a), x80_of(b)); }
 /* A signalling comparison (`llvm.experimental.constrained.fcmps`: C's <, <=, >, >= under FENV_ACCESS, x86's
  * comisd and fcomi) raises invalid for any NaN operand, a quiet one only for a signalling NaN; bennett-front
  * calls this beside the quiet comparison. */
 void __bennett_signalsf2(float a, float b) {
+  DENORMAL2(a, b);
   if (nan32(f32_of(a)) || nan32(f32_of(b))) softfloat_raiseFlags(softfloat_flag_invalid);
 }
 void __bennett_signaldf2(double a, double b) {
+  DENORMAL2(a, b);
   if (nan64(f64_of(a)) || nan64(f64_of(b))) softfloat_raiseFlags(softfloat_flag_invalid);
 }
 void __bennett_signalxf2(long double a, long double b) {
+  DENORMAL2(a, b);
   if (nan80(x80_of(a)) || nan80(x80_of(b))) softfloat_raiseFlags(softfloat_flag_invalid);
 }
 
@@ -208,12 +279,13 @@ void __bennett_signalxf2(long double a, long double b) {
  * width, out of range, and to 64 bits unsigned, the signed conversion below 2^63 and that of x - 2^63
  * with its top bit flipped from there on, which is 0 from 2^64 up and for a NaN. Beside invalid, these raise no
  * inexact (clang's unsigned 64-bit sequence can, from its subtraction of 2^63). */
-double __extendsfdf2(float a) { return of_f64(f32_to_f64(f32_of(a))); }
-float __truncdfsf2(double a) { return of_f32(f64_to_f32(f64_of(a))); }
+double __extendsfdf2(float a) { DENORMAL(a); return of_f64(f32_to_f64(f32_of(a))); }
+float __truncdfsf2(double a) { DENORMAL(a); return of_f32(f64_to_f32(f64_of(a))); }
 int __fixsfsi(float a) { return f32_to_i32_r_minMag(f32_of(a), true); }
 long long __fixsfdi(float a) { return f32_to_i64_r_minMag(f32_of(a), true); }
 unsigned __fixunssfsi(float a) { return (unsigned)f32_to_i64_r_minMag(f32_of(a), true); }
 unsigned long long __fixunssfdi(float a) {
+  DENORMAL(a); /* the comparison with 2^63 */
   float32_t x = f32_of(a), two63 = {0x5F000000}, two64 = {0x5F800000};
   if (f32_lt_quiet(x, two63)) return (unsigned long long)f32_to_i64_r_minMag(x, true);
   if (f32_lt_quiet(x, two64)) return f32_to_ui64_r_minMag(x, true);
@@ -224,14 +296,15 @@ int __fixdfsi(double a) { return f64_to_i32_r_minMag(f64_of(a), true); }
 long long __fixdfdi(double a) { return f64_to_i64_r_minMag(f64_of(a), true); }
 unsigned __fixunsdfsi(double a) { return (unsigned)f64_to_i64_r_minMag(f64_of(a), true); }
 unsigned long long __fixunsdfdi(double a) {
+  DENORMAL(a); /* the comparison with 2^63 */
   float64_t x = f64_of(a), two63 = {UINT64_C(0x43E0000000000000)}, two64 = {UINT64_C(0x43F0000000000000)};
   if (f64_lt_quiet(x, two63)) return (unsigned long long)f64_to_i64_r_minMag(x, true);
   if (f64_lt_quiet(x, two64)) return f64_to_ui64_r_minMag(x, true);
   softfloat_raiseFlags(softfloat_flag_invalid);
   return UINT64_C(0x8000000000000000);
 }
-long double __extendsfxf2(float a) { return of_x80(f32_to_extF80(f32_of(a))); }
-long double __extenddfxf2(double a) { return of_x80(f64_to_extF80(f64_of(a))); }
+long double __extendsfxf2(float a) { DENORMAL(a); return of_x80(f32_to_extF80(f32_of(a))); }
+long double __extenddfxf2(double a) { DENORMAL(a); return of_x80(f64_to_extF80(f64_of(a))); }
 float __truncxfsf2(long double a) { return of_f32(extF80_to_f32(x80_of(a))); }
 double __truncxfdf2(long double a) { return of_f64(extF80_to_f64(x80_of(a))); }
 int __fixxfsi(long double a) { return extF80_to_i32_r_minMag(x80_of(a), true); }
@@ -249,6 +322,7 @@ int __bennett_fixxfhi(long double a) {
 long long __fixxfdi(long double a) { return extF80_to_i64_r_minMag(x80_of(a), true); }
 unsigned __fixunsxfsi(long double a) { return (unsigned)extF80_to_i64_r_minMag(x80_of(a), true); }
 unsigned long long __fixunsxfdi(long double a) {
+  DENORMAL(a); /* the comparison with 2^63 */
   extFloat80_t x = x80_of(a), two63 = {UINT64_C(0x8000000000000000), 0x403E},
                two64 = {UINT64_C(0x8000000000000000), 0x403F};
   if (extF80_lt_quiet(x, two63)) return (unsigned long long)extF80_to_i64_r_minMag(x, true);
@@ -322,6 +396,7 @@ long double __floattixf(ti_t a) { return of_x80(x80_of_ti(a < 0, magnitude(a)));
 long double __floatuntixf(uti_t a) { return of_x80(x80_of_ti(false, a)); }
 
 static uint64_t u64_of_f64_gcc(float64_t x) {
+  DENORMAL(of_f64(x)); /* the comparison with 2^63 */
   const float64_t two63 = {UINT64_C(0x43E0000000000000)};
   if (f64_le_quiet(two63, x)) return (uint64_t)f64_to_i64_r_minMag(f64_sub(x, two63), true) ^ UINT64_C(0x8000000000000000);
   return (uint64_t)f64_to_i64_r_minMag(x, true);
@@ -337,12 +412,13 @@ static ti_t ti_of_f64(float64_t x) {
   if (f64_lt_quiet(x, zero)) return (ti_t)-uti_of_f64((float64_t){x.v ^ UINT64_C(0x8000000000000000)});
   return (ti_t)uti_of_f64(x);
 }
-ti_t __fixsfti(float a) { return ti_of_f64(f32_to_f64(f32_of(a))); }
-uti_t __fixunssfti(float a) { return uti_of_f64(f32_to_f64(f32_of(a))); }
-ti_t __fixdfti(double a) { return ti_of_f64(f64_of(a)); }
-uti_t __fixunsdfti(double a) { return uti_of_f64(f64_of(a)); }
+ti_t __fixsfti(float a) { DENORMAL(a); return ti_of_f64(f32_to_f64(f32_of(a))); }
+uti_t __fixunssfti(float a) { DENORMAL(a); return uti_of_f64(f32_to_f64(f32_of(a))); }
+ti_t __fixdfti(double a) { DENORMAL(a); return ti_of_f64(f64_of(a)); }
+uti_t __fixunsdfti(double a) { DENORMAL(a); return uti_of_f64(f64_of(a)); }
 
 static uint64_t u64_of_x80_gcc(extFloat80_t x) {
+  DENORMAL(of_x80(x)); /* the comparison with 2^63 */
   const extFloat80_t two63 = {UINT64_C(0x8000000000000000), 0x403E};
   if (extF80_le_quiet(two63, x)) return (uint64_t)extF80_to_i64_r_minMag(extF80_sub(x, two63), true) ^ UINT64_C(0x8000000000000000);
   return (uint64_t)extF80_to_i64_r_minMag(x, true);
@@ -356,11 +432,12 @@ static uti_t uti_of_x80(extFloat80_t x) {
   return v + u64_of_x80_gcc(rest);
 }
 ti_t __fixxfti(long double a) {
+  DENORMAL(a);
   extFloat80_t x = x80_of(a), zero = {0, 0};
   if (extF80_lt_quiet(x, zero)) return (ti_t)-uti_of_x80((extFloat80_t){x.signif, (uint16_t)(x.signExp ^ 0x8000)});
   return (ti_t)uti_of_x80(x);
 }
-uti_t __fixunsxfti(long double a) { return uti_of_x80(x80_of(a)); }
+uti_t __fixunsxfti(long double a) { DENORMAL(a); return uti_of_x80(x80_of(a)); }
 
 /* _Float16 and __bf16. The native program computes them as LLVM's x86-64 back end does without
  * half-precision hardware: every operation in float, rounded back after each, through these conversions,
@@ -380,12 +457,12 @@ static _Float16 of_f16(float16_t x) {
   __builtin_memcpy(&r, &x, sizeof r);
   return r;
 }
-float __extendhfsf2(_Float16 a) { return of_f32(f16_to_f32(f16_of(a))); }
-long double __extendhfxf2(_Float16 a) { return of_x80(f16_to_extF80(f16_of(a))); }
-_Float16 __truncsfhf2(float a) { return of_f16(f32_to_f16(f32_of(a))); }
-_Float16 __truncdfhf2(double a) { return of_f16(f64_to_f16(f64_of(a))); }
-_Float16 __truncxfhf2(long double a) { return of_f16(extF80_to_f16(x80_of(a))); }
-ti_t __fixhfti(_Float16 a) {
+static float extendhfsf2_value(_Float16 a) { return of_f32(f16_to_f32(f16_of(a))); }
+static long double extendhfxf2_value(_Float16 a) { return of_x80(f16_to_extF80(f16_of(a))); }
+static _Float16 truncsfhf2_value(float a) { return of_f16(f32_to_f16(f32_of(a))); }
+static _Float16 truncdfhf2_value(double a) { return of_f16(f64_to_f16(f64_of(a))); }
+static _Float16 truncxfhf2_value(long double a) { return of_f16(extF80_to_f16(x80_of(a))); }
+static ti_t fixhfti_value(_Float16 a) {
   float16_t x = f16_of(a);
   if ((x.v & 0x7C00) == 0x7C00) {
     softfloat_raiseFlags(softfloat_flag_invalid);
@@ -393,7 +470,7 @@ ti_t __fixhfti(_Float16 a) {
   }
   return f16_to_i64_r_minMag(x, true);
 }
-uti_t __fixunshfti(_Float16 a) {
+static uti_t fixunshfti_value(_Float16 a) {
   float16_t x = f16_of(a);
   if (x.v >> 15) {
     if (x.v & 0x7FFF) softfloat_raiseFlags((x.v & 0x7FFF) < 0x3C00 ? softfloat_flag_inexact : softfloat_flag_invalid);
@@ -405,10 +482,10 @@ uti_t __fixunshfti(_Float16 a) {
   }
   return f16_to_ui64_r_minMag(x, true);
 }
-_Float16 __floattihf(ti_t a) {
+static _Float16 floattihf_value(ti_t a) {
   return of_f16(i64_to_f16(a == (int64_t)a ? (int64_t)a : a < 0 ? INT64_MIN : INT64_MAX));
 }
-_Float16 __floatuntihf(uti_t a) { return of_f16(ui64_to_f16(a >> 64 ? UINT64_MAX : (uint64_t)a)); }
+static _Float16 floatuntihf_value(uti_t a) { return of_f16(ui64_to_f16(a >> 64 ? UINT64_MAX : (uint64_t)a)); }
 
 /* __bf16 is the top half of a float, which is all an extension does (the front writes it inline). SoftFloat
  * has no bfloat16, so the roundings to it are written here, as libgcc's soft-fp computes them: from float, the
@@ -465,8 +542,8 @@ static __bf16 bf16_overflow(bool sign) {
 static uint32_t odd_step(float32_t r, bool inexact, bool below) {
   return inexact && !(r.v & 1) ? (below ? r.v + 1 : r.v - 1) : r.v;
 }
-__bf16 __truncsfbf2(float a) { return bf16_of_bits(f32_of(a).v); }
-__bf16 __truncdfbf2(double a) {
+static __bf16 truncsfbf2_value(float a) { return bf16_of_bits(f32_of(a).v); }
+static __bf16 truncdfbf2_value(double a) {
   float64_t x = f64_of(a), ax = {x.v & UINT64_C(0x7FFFFFFFFFFFFFFF)};
   if (ax.v >= UINT64_C(0x47F0000000000000) && ax.v < UINT64_C(0x7FF0000000000000)) return bf16_overflow(x.v >> 63);
   uint_fast8_t before = softfloat_exceptionFlags;
@@ -476,7 +553,7 @@ __bf16 __truncdfbf2(double a) {
   softfloat_exceptionFlags = before | (softfloat_exceptionFlags & softfloat_flag_invalid);
   return bf16_of_bits(odd);
 }
-__bf16 __truncxfbf2(long double a) {
+static __bf16 truncxfbf2_value(long double a) {
   extFloat80_t x = x80_of(a), ax = {x.signif, (uint16_t)(x.signExp & 0x7FFF)};
   if (ax.signExp >= 0x407F && ax.signExp < 0x7FFF) return bf16_overflow(x.signExp >> 15);
   uint_fast8_t before = softfloat_exceptionFlags;
@@ -486,6 +563,37 @@ __bf16 __truncxfbf2(long double a) {
   softfloat_exceptionFlags = before | (softfloat_exceptionFlags & softfloat_flag_invalid);
   return bf16_of_bits(odd);
 }
+
+/* libgcc's soft-fp routines raise their flags through __sfp_handle_exceptions, which on x86-64 raises invalid,
+ * divide by zero and inexact with SSE instructions and overflow, underflow and denormal in the x87 status word;
+ * they read the rounding mode from MXCSR. So these compute in SSE's mode and put overflow and underflow in x87's
+ * flags. */
+static void softfp_flags(uint_fast8_t before) {
+  uint_fast8_t raised = softfloat_exceptionFlags;
+  softfloat_exceptionFlags = before | (raised & (softfloat_flag_invalid | softfloat_flag_infinite | softfloat_flag_inexact));
+  x87_exceptionFlags |= raised & (softfloat_flag_overflow | softfloat_flag_underflow | softfloat_flag_denormal);
+}
+#define SOFTFP(T, name, P)                                                                                 \
+  T __##name(P a) {                                                                                        \
+    uint_fast8_t before = softfloat_exceptionFlags;                                                       \
+    softfloat_exceptionFlags = 0;                                                                          \
+    DENORMAL(a);                                                                                           \
+    T r = name##_value(a);                                                                                 \
+    softfp_flags(before);                                                                                  \
+    return r;                                                                                              \
+  }
+SOFTFP(float, extendhfsf2, _Float16)
+SOFTFP(long double, extendhfxf2, _Float16)
+SOFTFP(_Float16, truncsfhf2, float)
+SOFTFP(_Float16, truncdfhf2, double)
+SOFTFP(_Float16, truncxfhf2, long double)
+SOFTFP(ti_t, fixhfti, _Float16)
+SOFTFP(uti_t, fixunshfti, _Float16)
+SOFTFP(_Float16, floattihf, ti_t)
+SOFTFP(_Float16, floatuntihf, uti_t)
+SOFTFP(__bf16, truncsfbf2, float)
+SOFTFP(__bf16, truncdfbf2, double)
+SOFTFP(__bf16, truncxfbf2, long double)
 
 /* x to the power m by repeated squaring, as libgcc2.c computes it (`__builtin_powi`). */
 float __powisf2(float x, int m) {
@@ -524,8 +632,8 @@ long double __powixf2(long double x, int m) {
 
 /* The C library names LLVM uses for the operations libgcc has no name for. Correctly rounded, as IEEE
  * 754 defines them; errno is not set (it is the C library's, and these are not its functions). */
-float sqrtf(float a) { return of_f32(f32_sqrt(f32_of(a))); }
-double sqrt(double a) { return of_f64(f64_sqrt(f64_of(a))); }
+float sqrtf(float a) { DENORMAL(a); return of_f32(f32_sqrt(f32_of(a))); }
+double sqrt(double a) { DENORMAL(a); return of_f64(f64_sqrt(f64_of(a))); }
 /* fmaf and fma: SoftFloat's, NaNs in the order of the operands as x86's FMA instructions (which glibc's use).
  * x86 also returns a NaN addend beside a product of zero and infinity, raising invalid only if it is a
  * signalling NaN; SoftFloat gives the default NaN and raises invalid. The flags follow x86 here: they are put
@@ -533,6 +641,7 @@ double sqrt(double a) { return of_f64(f64_sqrt(f64_of(a))); }
  * NaN comes back is not promised, `rt/softfloat/README.md`), so that in a program that does not read the flags
  * the check is deleted with them and a finite operation costs what SoftFloat's does. */
 float fmaf(float a, float b, float c) {
+  if (!ZERO_TIMES_INFINITY(a, b)) DENORMAL3(a, b, c);
   float32_t x = f32_of(a), y = f32_of(b), z = f32_of(c);
   uint_fast8_t before = softfloat_exceptionFlags;
   float32_t r = f32_mulAdd(x, y, z);
@@ -541,6 +650,7 @@ float fmaf(float a, float b, float c) {
   return of_f32(r);
 }
 double fma(double a, double b, double c) {
+  if (!ZERO_TIMES_INFINITY(a, b)) DENORMAL3(a, b, c);
   float64_t x = f64_of(a), y = f64_of(b), z = f64_of(c);
   uint_fast8_t before = softfloat_exceptionFlags;
   float64_t r = f64_mulAdd(x, y, z);
@@ -548,7 +658,7 @@ double fma(double a, double b, double c) {
     softfloat_exceptionFlags = before | (softfloat_isSigNaNF64UI(z.v) ? softfloat_flag_invalid : 0);
   return of_f64(r);
 }
-long double sqrtl(long double a) { return of_x80(extF80_sqrt(x80_of(a))); }
+long double sqrtl(long double a) { DENORMAL(a); return of_x80(extF80_sqrt(x80_of(a))); }
 
 /* fmal: SoftFloat has no extF80 fused multiply-add, so it is written here over SoftFloat's primitives and
  * rounded once by its softfloat_roundPackToExtF80. The native program calls glibc's (ldbl-96 s_fmal.c), whose
@@ -573,12 +683,25 @@ static struct exp32_sig64 unpacked80(extFloat80_t x) {
   }
   return r;
 }
+/* The denormal-operand flag as glibc's raises it: by its x87 operations and by its comparisons `z == 0`, `x != 0`,
+ * `y != 0`, `x == 0`, `y == 0`, in the order its special cases test them, and by its arithmetic on the operands
+ * otherwise. */
 long double fmal(long double a, long double b, long double c) {
   extFloat80_t x = x80_of(a), y = x80_of(b), z = x80_of(c);
-  if (special80(z) && !special80(x) && !special80(y)) return of_x80(extF80_add(extF80_add(z, x), y));
-  if (zero80(z) && !zero80(x) && !zero80(y)) return of_x80(extF80_mul(x, y));
-  if (special80(x) || special80(y) || special80(z) || zero80(x) || zero80(y))
-    return of_x80(extF80_add(extF80_mul(x, y), z));
+  if (special80(z) && !special80(x) && !special80(y)) return __addxf3(__addxf3(c, a), b);
+  DENORMAL(c);
+  if (zero80(z)) {
+    DENORMAL(a);
+    if (!zero80(x)) {
+      DENORMAL(b);
+      if (!zero80(y)) return __mulxf3(a, b);
+    }
+  }
+  if (special80(x) || special80(y) || special80(z)) return __addxf3(__mulxf3(a, b), c);
+  DENORMAL(a);
+  if (zero80(x)) return __addxf3(__mulxf3(a, b), c);
+  DENORMAL(b);
+  if (zero80(y)) return __addxf3(__mulxf3(a, b), c);
   struct exp32_sig64 ux = unpacked80(x), uy = unpacked80(y), uz = unpacked80(z);
   bool signP = (x.signExp ^ y.signExp) >> 15, signZ = z.signExp >> 15;
   /* A significand of 128 bits with bit 127 set and exponent e stands for sig * 2^(e - 0x3FFF - 127). */
@@ -658,7 +781,11 @@ ROUND(ceil, softfloat_round_max, false)
 ROUND(trunc, softfloat_round_minMag, false)
 ROUND_SSE(round, softfloat_round_near_maxMag, false)
 ROUND_SSE(roundeven, softfloat_round_near_even, false)
-ROUND(rint, softfloat_roundingMode, true)
+ROUND_SSE(rint, softfloat_roundingMode, true)
+long double rintl(long double a) { /* x87's frndint, which raises the denormal-operand flag */
+  DENORMAL(a);
+  return of_x80(extF80_roundToInt(x80_of(a), softfloat_roundingMode, true));
+}
 ROUND(nearbyint, softfloat_roundingMode, false)
 
 /* lrint and llrint (`llvm.lrint`, `llvm.llrint` to 64 bits): one conversion in the current mode, as x86's
@@ -792,18 +919,22 @@ long long llroundl(long double a) { return round_to_integer(a); }
  * two equal operands (+0 and -0 among them) the first. C allows either zero; this is the one the native
  * program gives. (The C library's own fmin, called only under -fno-builtin, keeps the second.) */
 float fminf(float x, float y) {
+  denormal_of(CLASS(x) == 1 || (CLASS(x) != 2 && CLASS(y) == 1)); /* cmpunord x, x; then maxsd */
   float32_t a = f32_of(x), b = f32_of(y);
   return nan32(a) ? y : f32_lt_quiet(b, a) ? y : x;
 }
 float fmaxf(float x, float y) {
+  denormal_of(CLASS(x) == 1 || (CLASS(x) != 2 && CLASS(y) == 1)); /* cmpunord x, x; then maxsd */
   float32_t a = f32_of(x), b = f32_of(y);
   return nan32(a) ? y : f32_lt_quiet(a, b) ? y : x;
 }
 double fmin(double x, double y) {
+  denormal_of(CLASS(x) == 1 || (CLASS(x) != 2 && CLASS(y) == 1)); /* cmpunord x, x; then maxsd */
   float64_t a = f64_of(x), b = f64_of(y);
   return nan64(a) ? y : f64_lt_quiet(b, a) ? y : x;
 }
 double fmax(double x, double y) {
+  denormal_of(CLASS(x) == 1 || (CLASS(x) != 2 && CLASS(y) == 1)); /* cmpunord x, x; then maxsd */
   float64_t a = f64_of(x), b = f64_of(y);
   return nan64(a) ? y : f64_lt_quiet(a, b) ? y : x;
 }
@@ -814,6 +945,7 @@ double fmax(double x, double y) {
  * so ordered operands raise nothing. */
 #define MINIMUM(T, name, s, before, join)                                                                  \
   T name(T x, T y) {                                                                                       \
+    DENORMAL2(x, y);                                                                                       \
     if (__unord##s##2(x, y)) return __add##s##3(x, y);                                                      \
     if (before) return x;                                                                                  \
     return __eq##s##2(x, y) ? y : join(x, y);                                                              \
@@ -844,6 +976,7 @@ MINIMUM(long double, __bennett_fmaximuml, xf, __gtxf2(x, y) > 0, and80)
  * one). */
 #define GLIBC_MINMAX(T, name, of, F, nan, signalling, before, add)                                         \
   T name(T x, T y) {                                                                                       \
+    DENORMAL_ANY(x, y);                                                                                    \
     F a = of(x), b = of(y);                                                                                \
     if (!nan(a) && !nan(b)) return before ? x : y;                                                         \
     if (!nan(b) && !signalling(a.v)) return y;                                                             \
@@ -869,11 +1002,13 @@ static long double unordered80(long double x, long double y) {
   return __addxf3(x, y);
 }
 long double fminl(long double x, long double y) {
+  DENORMAL_ANY(x, y);
   extFloat80_t a = x80_of(x), b = x80_of(y);
   if (nan80(a) || nan80(b)) return unordered80(x, y);
   return extF80_lt_quiet(b, a) ? y : x;
 }
 long double fmaxl(long double x, long double y) {
+  DENORMAL_ANY(x, y);
   extFloat80_t a = x80_of(x), b = x80_of(y);
   if (nan80(a) || nan80(b)) return unordered80(x, y);
   return extF80_lt_quiet(b, a) ? x : y;
@@ -881,13 +1016,24 @@ long double fmaxl(long double x, long double y) {
 
 /* The floating-point environment, for the C library's <fenv.h> (rt/musl/fenv.c), in x86's encodings: a
  * rounding mode is the RC field of the x87 control word (to nearest 0, downward 0x400, upward 0x800, toward
- * zero 0xC00), and the flags are the x87 status word's and MXCSR's (invalid 1, divide by zero 4, overflow 8,
- * underflow 16, inexact 32). x86 has one mode for SSE and one for x87, which glibc's fesetround sets alike,
- * and one set of flags in each unit, which its fetestexcept reads together: here they are one mode and one
- * set of flags. bennett-front links these like the routines above, also into a program with no other
- * floating point. */
-int __bennett_fegetround(void) {
-  switch (softfloat_roundingMode) {
+ * zero 0xC00), and the flags are the low six bits of the x87 status word and of MXCSR (invalid 1, denormal
+ * operand 2, divide by zero 4, overflow 8, underflow 16, inexact 32). x86 has two units, each with its own
+ * mode and flags: SSE, which clang's x86-64 code uses for float and double, and x87, for long double. SSE's
+ * are SoftFloat's own globals; x87's are `x87_roundingMode` and `x87_exceptionFlags`. In a program that links
+ * these functions, bennett-front calls `__bennett_x87_swap` before and after each routine the native program
+ * runs in the x87 unit, so that SoftFloat computes in x87's mode and raises x87's flags there; elsewhere it
+ * emits no swap, and x87's globals are never used. bennett-front links these like the routines above, also into
+ * a program with no other floating point. */
+void __bennett_x87_swap(void) {
+  uint_fast8_t mode = softfloat_roundingMode, flags = softfloat_exceptionFlags;
+  softfloat_roundingMode = x87_roundingMode;
+  softfloat_exceptionFlags = x87_exceptionFlags;
+  x87_roundingMode = mode;
+  x87_exceptionFlags = flags;
+}
+
+static int rc_of(uint_fast8_t mode) {
+  switch (mode) {
   case softfloat_round_min:
     return 0x400;
   case softfloat_round_max:
@@ -898,21 +1044,40 @@ int __bennett_fegetround(void) {
     return 0;
   }
 }
-/* `mode` is one of the four (the C library checks). */
-void __bennett_fesetround(int mode) {
-  softfloat_roundingMode = mode == 0x400   ? softfloat_round_min
-                           : mode == 0x800 ? softfloat_round_max
-                           : mode == 0xC00 ? softfloat_round_minMag
-                                           : softfloat_round_near_even;
+static uint_fast8_t mode_of(int rc) {
+  rc &= 0xC00;
+  return rc == 0x400   ? softfloat_round_min
+         : rc == 0x800 ? softfloat_round_max
+         : rc == 0xC00 ? softfloat_round_minMag
+                       : softfloat_round_near_even;
 }
-int __bennett_fegetexcept(void) {
-  uint_fast8_t f = softfloat_exceptionFlags;
-  return (f & softfloat_flag_invalid ? 1 : 0) | (f & softfloat_flag_infinite ? 4 : 0) |
-         (f & softfloat_flag_overflow ? 8 : 0) | (f & softfloat_flag_underflow ? 16 : 0) |
-         (f & softfloat_flag_inexact ? 32 : 0);
+static int x86_of(uint_fast8_t f) {
+  return (f & softfloat_flag_invalid ? 1 : 0) | (f & softfloat_flag_denormal ? 2 : 0) |
+         (f & softfloat_flag_infinite ? 4 : 0) | (f & softfloat_flag_overflow ? 8 : 0) |
+         (f & softfloat_flag_underflow ? 16 : 0) | (f & softfloat_flag_inexact ? 32 : 0);
 }
-void __bennett_fesetexcept(int flags) {
-  softfloat_exceptionFlags = (flags & 1 ? softfloat_flag_invalid : 0) | (flags & 4 ? softfloat_flag_infinite : 0) |
-                             (flags & 8 ? softfloat_flag_overflow : 0) | (flags & 16 ? softfloat_flag_underflow : 0) |
-                             (flags & 32 ? softfloat_flag_inexact : 0);
+static uint_fast8_t flags_of(int x) {
+  return (x & 1 ? softfloat_flag_invalid : 0) | (x & 2 ? softfloat_flag_denormal : 0) |
+         (x & 4 ? softfloat_flag_infinite : 0) | (x & 8 ? softfloat_flag_overflow : 0) |
+         (x & 16 ? softfloat_flag_underflow : 0) | (x & 32 ? softfloat_flag_inexact : 0);
+}
+/* x87's mode, which glibc's fegetround and LLVM's FLT_ROUNDS read; fesetround sets both units'. */
+int __bennett_fegetround(void) { return rc_of(x87_roundingMode); }
+void __bennett_fesetround(int mode) { softfloat_roundingMode = x87_roundingMode = mode_of(mode); }
+/* The flags of both units together, and setting both. */
+int __bennett_fegetexcept(void) { return x86_of(softfloat_exceptionFlags | x87_exceptionFlags); }
+void __bennett_fesetexcept(int flags) { softfloat_exceptionFlags = x87_exceptionFlags = flags_of(flags); }
+/* One unit's state (SSE 0, x87 1): its RC field and its six flags, as a word. */
+int __bennett_fegetunit(int unit) {
+  return unit ? rc_of(x87_roundingMode) | x86_of(x87_exceptionFlags)
+              : rc_of(softfloat_roundingMode) | x86_of(softfloat_exceptionFlags);
+}
+void __bennett_fesetunit(int unit, int state) {
+  if (unit) {
+    x87_roundingMode = mode_of(state);
+    x87_exceptionFlags = flags_of(state);
+  } else {
+    softfloat_roundingMode = mode_of(state);
+    softfloat_exceptionFlags = flags_of(state);
+  }
 }

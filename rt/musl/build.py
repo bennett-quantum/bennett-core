@@ -17,12 +17,15 @@ def run(args, **kwargs):
 
 
 # Members compiled from the device's own source, with extra options, in place of musl's: musl's generic <fenv.h>
-# dummies, and the functions IEEE 754 defines exactly, which the float runtime computes as the native glibc does.
-REPLACED = {Path("src/fenv/fenv.c"): (HERE / "fenv.c", [])}
+# dummies and the two of its generic fenv functions that differ from glibc's, and the functions IEEE 754 defines
+# exactly, which the float runtime computes as the native glibc does.
+REPLACED = {Path(f"src/fenv/{_name}.c"): (HERE / "fenv.c", [f"-DM_{_name}"])
+            for _name in ["fenv", "fesetexceptflag", "feholdexcept"]}
 for _base in ["sqrt", "fma", "rint", "nearbyint", "lrint", "llrint", "round", "lround", "llround", "floor", "ceil",
               "trunc", "fmin", "fmax"]:
     for _name in [_base, _base + "f", _base + "l"]:
         REPLACED[Path(f"src/math/{_name}.c")] = (HERE / "math.c", ["-fno-math-errno", f"-DM_{_name}"])
+REPLACED[Path("src/math/ilogbl.c")] = (HERE / "math.c", ["-fno-math-errno", "-DM_ilogbl"])
 
 
 def main():
@@ -52,7 +55,8 @@ def main():
                       build / "obj/include", SOURCE / "include"]:
         flags += ["-I", str(directory)]
     fingerprint = hashlib.sha256(json.dumps(flags).encode())
-    for path in sorted([*SOURCE.rglob("*"), *(HERE / "overlay").glob("*.h"), *{source for source, _ in REPLACED.values()}, Path(__file__)]):
+    own = {source for source, _ in REPLACED.values()}
+    for path in sorted([*SOURCE.rglob("*"), *(HERE / "overlay").glob("*.h"), *own, Path(__file__)]):
         if path.is_file():
             fingerprint.update(str(path.relative_to(HERE)).encode())
             fingerprint.update(path.read_bytes())

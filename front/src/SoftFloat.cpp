@@ -249,7 +249,9 @@ private:
 // allowed: anything else would need the runtime to call itself.
 class Lowerer {
 public:
-  Lowerer(Module &module, Runtime *runtime) : module(module), runtime(runtime) {}
+  // `units`: the program links the floating-point environment, so the x87 unit's routines run between swaps of
+  // the two units' states (`__bennett_x87_swap`).
+  Lowerer(Module &module, Runtime *runtime, bool units = false) : module(module), runtime(runtime), units(units) {}
 
   void lowerFunction(Function &function) {
     std::vector<Instruction *> work;
@@ -304,8 +306,36 @@ private:
       params.push_back(arg->getType());
     }
     Function *routine = runtime->routine(name, FunctionType::get(result, params, false), compare, at);
+    bool x87 = units && x87Unit(name, result, params);
+    Function *swap = x87 ? runtime->routine("__bennett_x87_swap", FunctionType::get(b.getVoidTy(), false), false, at)
+                         : nullptr;
+    if (swap) {
+      b.CreateCall(swap);
+    }
     CallInst *made = b.CreateCall(routine, args);
+    if (swap) {
+      b.CreateCall(swap);
+    }
     return made;
+  }
+
+  // Whether the native program runs the routine `name` in the x87 unit: one with a long double operand or
+  // result, as clang's x86-64 code computes long double with x87 instructions and glibc's and libgcc's long double
+  // routines do, but for libgcc's soft-fp conversions between long double and _Float16 or __bf16, which run in
+  // software and take SSE's mode (`rt/softfloat/libgcc.c`).
+  static bool x87Unit(StringRef name, Type *result, ArrayRef<Type *> params) {
+    if (name == "__extendhfxf2" || name == "__truncxfhf2" || name == "__truncxfbf2") {
+      return false;
+    }
+    if (result->isX86_FP80Ty()) {
+      return true;
+    }
+    for (Type *param : params) {
+      if (param->isX86_FP80Ty()) {
+        return true;
+      }
+    }
+    return false;
   }
 
   // The suffix of a libgcc name for `type`: sf, df or xf.
@@ -687,14 +717,6 @@ private:
   Value *lowerConstrained(ConstrainedFPIntrinsic *call) {
     IRBuilder<> b(call);
     Intrinsic::ID id = call->getIntrinsicID();
-    for (const Type *type : {call->getType(), call->getArgOperand(0)->getType()}) {
-      if (type->getScalarType()->isBFloatTy()) {
-        notHandled("the constrained floating-point intrinsic @" + call->getCalledFunction()->getName().str() +
-                       " on `bfloat` (__bf16): under FENV_ACCESS clang 18's x86-64 back end converts to the _Float16 "
-                       "encoding or cannot compile it, so the native program has no such result to agree with",
-                   call);
-      }
-    }
     std::vector<Value *> args;
     for (Value *arg : call->args()) {
       if (!isa<MetadataAsValue>(arg)) { // the rounding and exception arguments come last
@@ -916,9 +938,57 @@ private:
     return result;
   }
 
+  // An operation on _Float16 or __bf16 in a strict function (`#pragma STDC FENV_ACCESS ON`, `strictfp`) is
+  // refused by name: there clang 18's x86-64 back end gives _Float16's encoding for a __bf16 result, cannot
+  // compile most __bf16 operations, and computes some _Float16 ones differently at -O0 and -O2 (fabs of a
+  // signalling NaN quieted and raising invalid, or its bits kept), so no native result is determined. Moving
+  // such values is not an operation.
+  static void refuseStrictHalf(const Instruction &inst) {
+    const Function &function = *inst.getFunction();
+    if (!function.hasFnAttribute(Attribute::StrictFP)) {
+      return;
+    }
+    switch (inst.getOpcode()) {
+    case Instruction::FNeg:
+    case Instruction::FAdd:
+    case Instruction::FSub:
+    case Instruction::FMul:
+    case Instruction::FDiv:
+    case Instruction::FRem:
+    case Instruction::FCmp:
+    case Instruction::FPExt:
+    case Instruction::FPTrunc:
+    case Instruction::FPToSI:
+    case Instruction::FPToUI:
+    case Instruction::SIToFP:
+    case Instruction::UIToFP:
+      break;
+    case Instruction::Call:
+      if (!isa<IntrinsicInst>(inst) || isa<DbgInfoIntrinsic>(inst)) {
+        return;
+      }
+      break;
+    default:
+      return;
+    }
+    const Type *half = promoted(inst.getType()) ? inst.getType() : nullptr;
+    for (const Use &operand : inst.operands()) {
+      if (!half && promoted(operand->getType())) {
+        half = operand->getType();
+      }
+    }
+    if (half) {
+      notHandled("an operation on " + described(half) + " in @" + function.getName().str() +
+                     ", a function with `#pragma STDC FENV_ACCESS ON` (strictfp), where clang 18's x86-64 back end "
+                     "gives no determined native result for these types",
+                 &inst);
+    }
+  }
+
   // Lowers `inst` and returns what replaces it (itself if nothing does).
   Value *lower(Instruction *inst) {
     checkDenormalMode(*inst);
+    refuseStrictHalf(*inst);
     if (vectorOperation(*inst)) {
       return scalarise(inst);
     }
@@ -1004,6 +1074,7 @@ private:
 
   Module &module;
   Runtime *runtime;
+  bool units;
 };
 
 bool usesFloat(const Module &module) {
@@ -1227,8 +1298,8 @@ AttributeList mappedAttributes(LLVMContext &context, AttributeList attributes, u
 
 // The floating-point environment: the runtime's functions through which the C library's <fenv.h> reads and
 // writes the rounding mode and the exception flags, its state (`rt/softfloat/libgcc.c`).
-constexpr const char *stateRoutines[] = {"__bennett_fegetround", "__bennett_fesetround", "__bennett_fegetexcept",
-                                         "__bennett_fesetexcept"};
+constexpr const char *stateRoutines[] = {"__bennett_fegetround",  "__bennett_fesetround", "__bennett_fegetexcept",
+                                         "__bennett_fesetexcept", "__bennett_fegetunit",  "__bennett_fesetunit"};
 
 // Each call of one of the state routines becomes a call of the runtime's. Returns whether there was one.
 bool linkStateRoutines(Module &module, Runtime &runtime) {
@@ -1246,25 +1317,32 @@ bool linkStateRoutines(Module &module, Runtime &runtime) {
   return linked;
 }
 
-// The runtime's exception flags, when the program cannot read them (it has no call of `__bennett_fegetexcept`):
-// then every write to them is dead, and each is deleted, so that no routine writes memory (a routine that writes
-// memory cannot run under a qubit branch or coherently). With no store left, each load gives the initial value.
-// LLVM's optimiser deletes a global that is only or-ed with one constant, as SoftFloat's own writes of the inexact
-// flag are, but not one or-ed with several, as `softfloat_raiseFlags` does (measured). No routine computes a
-// result from the flags (`rt/softfloat/libgcc.c`).
+// The runtime's exception flags, both units', when the program cannot read them (it has no call of
+// `__bennett_fegetexcept` or `__bennett_fegetunit`): then every write to them is dead, and each is deleted, so that
+// no routine writes memory (a routine that writes memory cannot run under a qubit branch or coherently). With no
+// store left, each load gives the initial value. LLVM's optimiser deletes a global that is only or-ed with one
+// constant, as SoftFloat's own writes of the inexact flag are, but not one or-ed with several, as
+// `softfloat_raiseFlags` does (measured). No routine computes a result from the flags (`rt/softfloat/libgcc.c`).
 void removeUnreadFlags(Module &module) {
-  GlobalVariable *flags = module.getGlobalVariable(std::string(runtimePrefix) + "softfloat_exceptionFlags", true);
-  if (!flags || module.getFunction(std::string(runtimePrefix) + "__bennett_fegetexcept") || !flags->hasInitializer()) {
-    return;
+  for (const char *reader : {"__bennett_fegetexcept", "__bennett_fegetunit"}) {
+    if (module.getFunction(std::string(runtimePrefix) + reader)) {
+      return;
+    }
   }
-  for (User *user : make_early_inc_range(flags->users())) {
-    if (auto *store = dyn_cast<StoreInst>(user); store && store->getPointerOperand() == flags) {
-      store->eraseFromParent();
-    } else if (auto *load = dyn_cast<LoadInst>(user); load && load->getType() == flags->getValueType()) {
-      load->replaceAllUsesWith(flags->getInitializer());
-      load->eraseFromParent();
-    } else {
-      fail("internal: an unexpected use of the floating-point runtime's exception flags");
+  for (const char *unit : {"softfloat_exceptionFlags", "x87_exceptionFlags"}) {
+    GlobalVariable *flags = module.getGlobalVariable(std::string(runtimePrefix) + unit, true);
+    if (!flags || !flags->hasInitializer()) {
+      continue;
+    }
+    for (User *user : make_early_inc_range(flags->users())) {
+      if (auto *store = dyn_cast<StoreInst>(user); store && store->getPointerOperand() == flags) {
+        store->eraseFromParent();
+      } else if (auto *load = dyn_cast<LoadInst>(user); load && load->getType() == flags->getValueType()) {
+        load->replaceAllUsesWith(flags->getInitializer());
+        load->eraseFromParent();
+      } else {
+        fail("internal: an unexpected use of the floating-point runtime's exception flags");
+      }
     }
   }
 }
@@ -1322,7 +1400,7 @@ bool lowerFloatOperations(Module &module, const std::string &runtimePath) {
       functions.push_back(&function);
     }
   }
-  Lowerer program(module, &runtime);
+  Lowerer program(module, &runtime, state);
   for (Function *function : functions) {
     program.lowerFunction(*function);
   }
@@ -1457,7 +1535,8 @@ bool foldConstantCalls(Module &module) {
   // LLVM's Evaluator reads a global's initial value: where the program sets the rounding mode or reads the
   // flags (their globals were not made constants or deleted by the optimiser), a routine evaluated so would
   // round to nearest whatever the mode, and a read of the flags would give none.
-  for (const char *state : {"softfloat_roundingMode", "softfloat_exceptionFlags"}) {
+  for (const char *state :
+       {"softfloat_roundingMode", "softfloat_exceptionFlags", "x87_roundingMode", "x87_exceptionFlags"}) {
     if (const GlobalVariable *global = module.getGlobalVariable(std::string(runtimePrefix) + state, true);
         global && !global->isConstant()) {
       return false;

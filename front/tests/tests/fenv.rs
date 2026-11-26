@@ -3,7 +3,9 @@
 //! itself, with musl linked on the device (`rt/musl/fenv.c`, the state in `rt/softfloat/libgcc.c`). The C
 //! programs say what they compare (`front/tests/c/fenv_ops.c`, `fenv_api.c`).
 use bennett_exec::{Executor, Options, Outcome};
-use bennett_front_tests::{CLANG_FLAGS, lower, lower_text, native_build_with, out_dir, root, run, write_c};
+use bennett_front_tests::{
+    CLANG_FLAGS, CLANG_O2_FLAGS, lower, lower_text, native_build_with, out_dir, root, run, write_c,
+};
 use bennett_ir::Fault;
 use std::path::Path;
 use std::process::Command;
@@ -96,18 +98,14 @@ fn random_operands_round_and_raise_flags_as_native_code() {
     }
 }
 
-/// An environment that asks for what is not carried (a trap, x87 precision other than extended, flush to zero,
-/// two rounding modes, flags in one half only) or sets a reserved bit is a named fault, never a success that
-/// changes nothing.
+/// An environment that asks for what is not carried (a trap, x87 precision other than extended, flush to zero) or
+/// sets a reserved MXCSR bit is a named fault, never a success that changes nothing.
 #[test]
 fn an_environment_that_is_not_carried_is_a_named_fault() {
     for (name, change) in [
         ("fenv_trap", "env.__control_word &= ~FE_INEXACT;"),
         ("fenv_precision", "env.__control_word &= ~0x300;"),
         ("fenv_flush", "env.__mxcsr |= 0x8040;"),
-        ("fenv_modes", "env.__mxcsr |= FE_UPWARD << 3;"),
-        // A flag in one half only: natively each unit has its own flags, the device one set.
-        ("fenv_halves", "env.__status_word |= FE_INVALID;"),
         // A reserved MXCSR bit, which faults natively.
         ("fenv_reserved", "env.__mxcsr |= 1u << 16;"),
     ] {
@@ -173,22 +171,37 @@ fn minimum_and_maximum_of_finite_operands_raise_no_flag() {
     }
 }
 
-/// A constrained operation on `__bf16` is refused by name: under FENV_ACCESS clang 18 converts to the _Float16
-/// encoding (`(__bf16)1.0f` is 0x3c00 natively) or cannot compile it, so there is no native result to agree with.
+/// Every operation on `_Float16` or `__bf16` in a strict function is refused by name: there clang 18's x86-64
+/// back end gives `_Float16`'s encoding for `(__bf16)1.0f` (0x3c00), cannot compile most `__bf16` operations, and
+/// gives different results at -O0 and -O2 for `_Float16` (`fabs` of a signalling NaN), so no native result is
+/// determined. Conversions, absolute values and classification alike; moving the values is not an operation.
 #[test]
-fn a_strict_operation_on_bfloat_is_refused_by_name() {
+fn an_operation_on_half_or_bfloat_in_a_strict_function_is_refused_by_name() {
+    for (name, declaration, operation) in [
+        ("fenv_bfloat_trunc", "volatile float f = 1.0f;\nvolatile __bf16 r;", "r = (__bf16)f;"),
+        ("fenv_bfloat_abs", "volatile __bf16 v, r;", "r = __builtin_elementwise_abs(v);"),
+        ("fenv_bfloat_class", "volatile __bf16 v;\nvolatile int r;", "r = __builtin_isfpclass(v, 1);"),
+        ("fenv_half_abs", "volatile _Float16 v, r;", "r = __builtin_fabsf16(v);"),
+        ("fenv_half_add", "volatile _Float16 v, r;", "r = v + v;"),
+    ] {
+        let source = write_c(
+            name,
+            &format!("#pragma STDC FENV_ACCESS ON\n{declaration}\nint main(void) {{\n  {operation}\n  return 0;\n}}\n"),
+        );
+        for (flags, level) in [(CLANG_FLAGS, "o0"), (CLANG_O2_FLAGS, "o2")] {
+            let error = lower_text(&source, &format!("{name}_{level}"), flags, &[]).expect_err("refused");
+            assert!(
+                error.contains("in @main, a function with `#pragma STDC FENV_ACCESS ON`"),
+                "{name} {level}: {error}"
+            );
+        }
+    }
+    // Outside a strict function the same operations are computed.
     let source = write_c(
-        "fenv_bfloat",
-        "#pragma STDC FENV_ACCESS ON\nvolatile float f = 1.0f;\nvolatile __bf16 b;\n\
-         int main(void) {\n  b = (__bf16)f;\n  return 0;\n}\n",
+        "fenv_half_plain",
+        "volatile _Float16 v = 1.5, r;\nint main(void) {\n  r = __builtin_fabsf16(v) + v;\n  return 0;\n}\n",
     );
-    let error = lower_text(&source, "fenv_bfloat", CLANG_FLAGS, &[]).expect_err("refused");
-    assert!(
-        error.contains(
-            "constrained floating-point intrinsic @llvm.experimental.constrained.fptrunc.bf16.f32 on `bfloat`"
-        ),
-        "{error}"
-    );
+    lower_text(&source, "fenv_half_plain", CLANG_FLAGS, &[]).expect("accepted outside FENV_ACCESS");
 }
 
 /// A direct read of the flags after an overflow gives overflow and inexact: the front's evaluation of runtime calls

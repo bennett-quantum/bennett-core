@@ -35,11 +35,14 @@
 //    places float and double arguments in the vector-register save area and long double ones on the
 //    stack, and lowerValuesInMemory.
 //
-// The floating-point environment is the runtime's state: every routine reads its rounding mode and raises its
-// exception flags, as x86's instructions read MXCSR and the x87 control word and set their flags. A constrained
-// intrinsic (`#pragma STDC FENV_ACCESS ON`) is lowered as its plain operation; llvm.get.rounding and
-// llvm.set.rounding read and set the mode; the C library's <fenv.h> reaches the state through the runtime's
-// `__bennett_fe*` functions, which are linked like its routines. In a program that cannot read the flags every
+// The floating-point environment is the runtime's state, x86's two units (SSE for float and double, x87 for long
+// double), each with its own rounding mode and flags: every routine reads its unit's mode and raises its flags, as
+// x86's instructions read MXCSR and the x87 control word and set their flags; in a program that links the state,
+// each x87-unit routine runs between two calls of `__bennett_x87_swap`. A constrained intrinsic (`#pragma STDC
+// FENV_ACCESS ON`) is lowered as its plain operation; an operation on _Float16 or __bf16 in a strict function is
+// refused by name (no native result is determined there); llvm.get.rounding and llvm.set.rounding read and set
+// the mode; the C library's <fenv.h> reaches the state through the runtime's `__bennett_fe*` functions, which
+// are linked like its routines. In a program that cannot read the flags every
 // write to them is deleted, and in one that never sets the mode LLVM folds it to "to nearest", so a program
 // that never touches the environment pays nothing for it.
 //

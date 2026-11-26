@@ -18,7 +18,16 @@ float sqrtf(float x) { return __builtin_sqrtf(x); }
 #endif
 
 #ifdef M_sqrtl
-long double sqrtl(long double x) { return __builtin_sqrtl(x); }
+/* glibc's sqrtl, whose error path for a negative operand computes its NaN as 0/0 in float: invalid in SSE, not
+ * in x87 (measured). */
+long double sqrtl(long double x)
+{
+    if (__builtin_isless(x, 0)) {
+        volatile float zero = 0;
+        return zero / zero;
+    }
+    return __builtin_sqrtl(x);
+}
 #endif
 
 #ifdef M_fma
@@ -175,4 +184,48 @@ float fmaxf(float x, float y) { return __builtin_fmaxf(x, y); }
 
 #ifdef M_fmaxl
 long double fmaxl(long double x, long double y) { return __builtin_fmaxl(x, y); }
+#endif
+
+#ifdef M_ilogbl
+#include <limits.h>
+#include <math.h>
+#include <stdint.h>
+/* ilogbl: musl's value, with the flags of glibc's, which computes with x87's fxtract and fistp and raises invalid
+ * for 0, infinity and NaN in its wrapper (in SSE): x87's denormal-operand flag for a subnormal operand, x87's
+ * invalid for a NaN, SSE's invalid for 0, infinity and NaN. The flags are raised by the operations glibc's raise
+ * them with: a multiplication by 1 in long double, a conversion to int, and 0/0 in float. */
+int ilogbl(long double x)
+{
+    union {
+        long double f;
+        struct {
+            uint64_t m;
+            uint16_t se;
+        } i;
+    } u = {x};
+    uint64_t m = u.i.m;
+    int e = u.i.se & 0x7fff;
+    volatile float zero = 0;
+    if (!e) {
+        if (m == 0) {
+            (void)(zero / zero);
+            return FP_ILOGB0;
+        }
+        volatile long double read = x * 1.0L; /* x87's denormal-operand flag */
+        (void)read;
+        for (e = -0x3fff + 1; m >> 63 == 0; e--, m <<= 1)
+            ;
+        return e;
+    }
+    if (e == 0x7fff) {
+        (void)(zero / zero);
+        if (m << 1) {
+            volatile int converted = (int)x; /* x87's invalid, as fistp */
+            (void)converted;
+            return FP_ILOGBNAN;
+        }
+        return INT_MAX;
+    }
+    return e - 0x3fff;
+}
 #endif

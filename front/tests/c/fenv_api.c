@@ -99,17 +99,19 @@ int main(void) {
   show("updated", 0);
   third("after update");
 
-  /* Two calls of a strict function across a change of mode, and one through a pointer. */
+  /* Two calls of a strict function with the same operands (one volatile load each) across a change of mode, and
+   * one through a pointer. */
   fesetenv(FE_DFL_ENV);
+  double a = one, b = 0x1p-53;
   fesetround(FE_DOWNWARD);
-  volatile double down = add(one, 0x1p-53);
+  volatile double down = add(a, b);
   int down_flags = fetestexcept(FLAGS);
   feclearexcept(FE_ALL_EXCEPT);
   fesetround(FE_UPWARD);
-  volatile double up = add(one, 0x1p-53);
+  volatile double up = add(a, b);
   int up_flags = fetestexcept(FLAGS);
   feclearexcept(FE_ALL_EXCEPT);
-  volatile double through = add_through(one, 0x1p-53);
+  volatile double through = add_through(a, b);
   printf("calls %d %x %x %d %x\n", down != up, down_flags, up_flags, up == through, fetestexcept(FLAGS));
 
   /* lrintl out of range after rounding upward: one conversion, invalid only. */
@@ -121,6 +123,49 @@ int main(void) {
   feclearexcept(FE_ALL_EXCEPT);
   volatile int constant = __builtin_nans("") == 0.0;
   printf("constant compare %d %x\n", constant, fetestexcept(FLAGS));
+
+  /* The two units: SSE (double) and x87 (long double) with different modes, set through a saved environment, and
+   * the flags of each unit in its half. */
+  fesetenv(FE_DFL_ENV);
+  fenv_t split;
+  fegetenv(&split);
+  split.__mxcsr = (split.__mxcsr & ~0x6000u) | FE_UPWARD << 3;
+  split.__control_word = (split.__control_word & ~0xc00) | FE_DOWNWARD;
+  fesetenv(&split);
+  third("split modes");
+  fegetenv(&split);
+  printf("split halves %x %x round %d\n", split.__status_word & 0x3f, split.__mxcsr & 0x3f, fegetround());
+  fesetenv(FE_DFL_ENV);
+  feclearexcept(FE_ALL_EXCEPT);
+  volatile double divided = one / zero;
+  volatile long double tiny_l = (long double)tiny * tiny;
+  (void)divided;
+  (void)tiny_l;
+  fegetenv(&split);
+  printf("unit halves %x %x\n", split.__status_word & 0x3f, split.__mxcsr & 0x3f);
+  feraiseexcept(FE_INVALID | FE_OVERFLOW);
+  fegetenv(&split);
+  printf("raised halves %x %x\n", split.__status_word & 0x3f, split.__mxcsr & 0x3f);
+  fexcept_t saved_flags = FE_INEXACT | FE_DIVBYZERO;
+  fesetexceptflag(&saved_flags, FE_ALL_EXCEPT);
+  fegetenv(&split);
+  printf("set halves %x %x\n", split.__status_word & 0x3f, split.__mxcsr & 0x3f);
+  fesetenv(FE_DFL_ENV);
+
+  /* A saved half edited: SSE's divide-by-zero flag replaced by x87's (which is clear), then restored; and the
+   * denormal-operand flag set in one half, restored and saved again. */
+  feclearexcept(FE_ALL_EXCEPT);
+  divided = one / zero;
+  fegetenv(&split);
+  split.__mxcsr = (split.__mxcsr & ~FE_DIVBYZERO) | (split.__status_word & FE_DIVBYZERO);
+  fesetenv(&split);
+  printf("edited half %x\n", fetestexcept(FE_DIVBYZERO));
+  fegetenv(&split);
+  split.__mxcsr |= 2;
+  fesetenv(&split);
+  fegetenv(&split);
+  printf("denormal half %x %x\n", split.__status_word & 2, split.__mxcsr & 2);
+  fesetenv(FE_DFL_ENV);
 
   /* Operations whose flags depend on the mode. */
   fesetenv(FE_DFL_ENV);

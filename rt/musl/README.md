@@ -155,22 +155,24 @@ floating-point lowering and waits on the ordinary library dependency `__rem_pio2
 therefore uses `-fno-rounding-math`. This is a build choice for musl's own files: they compute in whatever
 mode is current, as natively, since every floating-point operation reads the floating-point runtime's mode.
 
-`<fenv.h>` is Bennett's (`fenv.c`), compiled by `build.py` in place of musl's `src/fenv/fenv.c`: musl's generic
+`<fenv.h>` is Bennett's (`fenv.c`), compiled by `build.py` in place of musl's `src/fenv/fenv.c` (musl's generic
 dummies, built where x86-64 has assembly, reported success for `fesetround(FE_UPWARD)` without changing the
-rounding and never saw a flag. The environment is the floating-point runtime's state, one rounding mode and one
-set of exception flags that every operation reads and raises (`rt/softfloat/README.md`, "Global state"); `fenv.c`
-reaches it through the runtime's `__bennett_fe*` functions, and musl's own `fesetround`, `feholdexcept`,
-`feupdateenv`, `fegetexceptflag` and `fesetexceptflag` sit on it. As glibc on x86-64, which the native program
-uses: all four rounding modes; the five standard flags (x87's denormal-operand flag, which musl's `FE_ALL_EXCEPT`
-names, is never set, as glibc's `fetestexcept` masks it out); `fegetenv` stores what `fnstenv` and `stmxcsr` store
-for that state, the flags in both halves (natively each half holds the flags its unit raised); `fesetenv` takes a
-saved or the default environment. An environment that asks for what is not carried is a named fault
-(`unreachable`): an unmasked exception (a trap), x87 precision other than extended, flush-to-zero or
-denormals-are-zero, different modes for SSE and x87, or different flags in the two halves (the device has one set
-of flags, so it cannot tell which unit's flag an edit of one half removes); so is a reserved MXCSR bit, which
-faults natively. The member is pulled from the archive
-only when a program names one of these functions, so a program that never does keeps floating point that writes
-no memory (`front/tests/tests/fenv.rs`).
+rounding and never saw a flag) and of musl's generic `fesetexceptflag.c` and `feholdexcept.c`. The environment is
+the floating-point runtime's state, as x86 has it: two units, SSE (`float`, `double`) and x87 (`long double`),
+each with its own rounding mode and six status flags (`rt/softfloat/README.md`, "Global state"); `fenv.c` reaches
+it through the runtime's `__bennett_fe*` functions, and musl's own `fesetround`, `feupdateenv` and
+`fegetexceptflag` sit on it. Each function does what glibc's does on x86-64, which the native program uses:
+`fesetround` sets both modes and `fegetround` reads x87's; `fetestexcept` reads both units' flags together and
+`feclearexcept` clears both; `feraiseexcept` raises invalid and divide by zero in SSE and overflow, underflow and
+inexact in x87; `fesetexceptflag` sets and clears SSE's flags and only clears x87's; these take the five standard
+flags (glibc's `FE_ALL_EXCEPT`; musl's also names the denormal-operand flag, which glibc masks out).
+`feholdexcept` saves and clears every flag of both units; `fegetenv` and `fesetenv` carry both halves of
+`fenv_t` as `fnstenv`, `stmxcsr` and glibc's `fesetenv` do, the two modes and the denormal-operand flag
+included. An environment that asks for what is not carried is a named fault (the device's `unreachable`: its
+faults are a fixed table with no room for a reason): an unmasked exception (a trap), x87 precision other than
+extended, or flush-to-zero or denormals-are-zero; so is a reserved MXCSR bit, which faults natively. The members
+are pulled from the archive only when a program names one of these functions, so a program that never does
+keeps floating point that writes no memory (`front/tests/tests/fenv.rs`).
 
 The C library's functions whose result IEEE 754 defines exactly, `sqrt`, `fma`, `rint`, `nearbyint`, `lrint`,
 `llrint`, `round`, `lround`, `llround`, `floor`, `ceil`, `trunc`, `fmin`, `fmax` and their `f` and `l` forms,
@@ -181,10 +183,13 @@ flags (a spurious inexact from `lround`, `lroundl`, `llroundf` and from exact re
 for `fmaf(0, inf, NaN)`) and passed signalling NaNs through unquieted (`nearbyint`, `fma`), measured by
 `front/tests/c/fenv_ops.c` against glibc; the other functions are replaced with them for the same reason, unmeasured
 one by one against musl's. errno is not set,
-as by musl's. Twelve musl math files use `#pragma STDC FENV_ACCESS ON`; those that remain musl's (`ilogb`,
-`ilogbf`, `ilogbl`) run with their constrained operations lowered and agree with glibc, except that `ilogbl`
-reads a long double encoding no arithmetic produces (an unnormal, a pseudo-denormal) at face value, where
-glibc's x87 code reads it as x87 does. Programs on the device include `include/math.h` before musl's headers
+as by musl's. `sqrtl` follows glibc's error path too: for a negative operand it raises invalid in SSE, as glibc's computes
+its NaN. `ilogbl` is `math.c`'s as well: musl's value with the flags of glibc's, which computes with x87's
+`fxtract` and `fistp` (the denormal-operand flag for a subnormal operand, x87's invalid for a NaN) and raises
+invalid in SSE for 0, infinity and NaN. Twelve musl math files use `#pragma STDC FENV_ACCESS ON`; those that remain
+musl's (`ilogb`, `ilogbf`) run with their constrained operations lowered and agree with glibc. `ilogbl` reads a
+long double encoding no arithmetic produces (an unnormal, a pseudo-denormal) at face value, where glibc's x87
+code reads it as x87 does. Programs on the device include `include/math.h` before musl's headers
 (`link.py`): musl's `<math.h>` with the six quiet comparison macros (`isless`, `isgreater`, ..., `isunordered`)
 as the compiler's builtins, as glibc's are. musl's test for a NaN first, so they never raised invalid, also not
 for a signalling NaN, where glibc's `ucomisd` does. Neither of the probe's integer-only printf/scanf

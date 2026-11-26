@@ -1249,27 +1249,27 @@ and utilities where they exist (`Abi.h`, `Normalise.h`):
   the native program then calls; `fminl`/`fmaxl` are glibc's, which the native program calls; an out-of-range
   conversion to an integer goes through the integer LLVM's x86-64 back end converts to (SSE 32 or 64 bits,
   x87 16 or 64), so it gives what native code gives.
-- **The floating-point environment** is the runtime's state, ordinary memory of the program: one rounding mode
-  and one set of exception flags, which every routine reads and raises as x86's instructions read MXCSR and
-  the x87 control word and set their flags (glibc's `fesetround` sets both units alike, its `fetestexcept`
-  reads both). The C library's `<fenv.h>` (`rt/musl/fenv.c`) reaches it through the runtime's four
-  `__bennett_fe*` functions. A constrained intrinsic (`#pragma STDC FENV_ACCESS ON`, `strictfp`) is lowered as
-  its plain operation, whatever its rounding and exception arguments, since every routine reads the current
-  mode: a static rounding argument is LLVM's promise that the current mode is that one. A signalling comparison
-  (`fcmps`: `<` under `FENV_ACCESS`) also raises invalid for a quiet NaN. `llvm.get.rounding` (`FLT_ROUNDS`) and
-  `llvm.set.rounding` read and set the mode. A plain operation after a change of mode without `FENV_ACCESS`,
-  which C leaves undefined, rounds in the current mode, as the hardware does for every operation the compiler
-  did not fold. Not carried, and a named fault in `fesetenv`: traps (an unmasked exception), x87 precision
-  other than extended, flush-to-zero and denormals-are-zero, different modes for SSE and x87, different flags in
-  the two halves of a saved environment; x87's denormal-operand flag is never set (glibc's `fetestexcept` masks
-  it out). A constrained operation on `__bf16` is refused by name: under `FENV_ACCESS` clang 18's x86-64 back end
-  converts to the `_Float16` encoding or cannot compile it, so there is no native result to agree with. Memory
-  effects that clang gave a strict function for the environment (`inaccessiblemem`) are widened to the runtime's
-  globals, so the optimiser does not merge two calls across a change of mode. Cost: a program that never names a
-  `<fenv.h>` function does not link it; the front then deletes every write to the flags and LLVM folds the
-  mode to "to nearest", so its routines are those of a fixed environment and write no memory. In a program
-  that reads the flags every routine writes them, so its floating point under a qubit branch or inside
-  `apply` is refused by name as any memory-writing call there is.
+- **The floating-point environment** is the runtime's state, ordinary memory of the program, and it is x86's: two
+  units, SSE for `float` and `double` and x87 for `long double` (as clang's x86-64 code computes them), each with
+  its own rounding mode and six status flags (the five IEEE exceptions and x86's denormal operand), which every
+  routine reads and raises in its unit as x86's instructions do. In a program that links `<fenv.h>` the front
+  calls `__bennett_x87_swap` around each x87-unit routine; libgcc's soft-fp `_Float16`/`__bf16` conversions take
+  SSE's mode and split their flags as libgcc raises them. The C library's `<fenv.h>` (`rt/musl/fenv.c`) does what
+  glibc's does with the two units, through the runtime's `__bennett_fe*` functions. A constrained intrinsic
+  (`#pragma STDC FENV_ACCESS ON`, `strictfp`) is lowered as its plain operation, whatever its rounding and
+  exception arguments, since every routine reads the current mode: a static rounding argument is LLVM's promise
+  that the current mode is that one. A signalling comparison (`fcmps`: `<` under `FENV_ACCESS`) also raises
+  invalid for a quiet NaN. `llvm.get.rounding` (`FLT_ROUNDS`) reads x87's mode and `llvm.set.rounding` sets both.
+  A plain operation after a change of mode without `FENV_ACCESS`, which C leaves undefined, rounds in the current
+  mode, as the hardware does for every operation the compiler did not fold. Not carried, and a named fault in
+  `fesetenv`: traps (an unmasked exception), x87 precision other than extended, flush-to-zero and
+  denormals-are-zero, and reserved MXCSR bits. Memory effects that clang gave a strict function for the
+  environment (`inaccessiblemem`) are widened to the runtime's globals, so the optimiser does not merge two calls
+  across a change of mode. Cost: a program that never names a `<fenv.h>` function does not link it; the front
+  then emits no swap, deletes every write to the flags and LLVM folds the modes to "to nearest", so its routines
+  are those of a fixed environment and write no memory. In a program that reads the flags every routine writes
+  them, so its floating point under a qubit branch or inside `apply` is refused by name as any memory-writing
+  call there is.
 - **The default runtime** is Berkeley SoftFloat 3e with the x86 SSE specialisation (`rt/softfloat`, measured
   in `rt/softfloat/README.md`); `long double` is computed at x87's full 64-bit precision. `--float-runtime`
   swaps the runtime at link time. Its global state is the floating-point environment (above). Runtime calls
@@ -1285,7 +1285,10 @@ and utilities where they exist (`Abi.h`, `Normalise.h`):
 - **Refused by name**: `frem` and the C library's functions (`sin`, `pow`, `strtod`, and `sqrt` under the
   default `-fmath-errno`, since errno is the C library's); operations on `__float128` (moving it is fine);
   conversions to and from integers wider than 128 bits; `powi` on `_Float16` and `__bf16` (natively the C
-  library's `powf`); an operation whose result depends on the subnormal mode
+  library's `powf`); every operation on `_Float16` or `__bf16` in a strict function (`#pragma STDC FENV_ACCESS
+  ON`), since there clang 18's x86-64 back end itself gives no determined result (the `_Float16` encoding for a
+  `__bf16` result, most `__bf16` operations not compiled, `_Float16` results that differ between `-O0` and
+  `-O2`); an operation whose result depends on the subnormal mode
   (arithmetic, comparison, conversion from floating point, every intrinsic but `fabs`, `copysign` and
   `is.fpclass`) in a function that promises a mode other than IEEE through `denormal-fp-math` or
   `denormal-fp-math-f32` (`-fdenormal-fp-math=preserve-sign`, `positive-zero`, `dynamic`), since SoftFloat
