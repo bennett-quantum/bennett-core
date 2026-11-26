@@ -5,6 +5,7 @@
 //! and at `-O2`, and the shapes only LLVM text can write are also given as LLVM text.
 use bennett_exec::{Executor, Outcome};
 use bennett_front_tests::{CLANG_FLAGS, CLANG_O2_FLAGS, clang, entry, front, options, out_dir, root, write_c};
+use bennett_ir::Fault;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -96,7 +97,12 @@ fn front_on_text(text: &str, name: &str) -> Output {
 fn run_through_driver(source: &Path, name: &str, flags: &[&str]) -> (Outcome, Vec<u8>) {
     let (compiled, bitcode) = driver_on(source, name, flags, &[]);
     assert!(compiled.status.success(), "{name}: {}", stderr(&compiled));
-    let lowered = front_of(&bitcode, name);
+    run_lowered(&bitcode, name)
+}
+
+/// `bennett-front` on a file of bitcode or LLVM text, then a run of `main`: the outcome and the console.
+fn run_lowered(input: &Path, name: &str) -> (Outcome, Vec<u8>) {
+    let lowered = front_of(input, name);
     assert!(lowered.status.success(), "{name}: {}", stderr(&lowered));
     let path = out_dir().join(format!("{name}.bn"));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {path:?}: {e}"));
@@ -448,8 +454,8 @@ const RESERVED: &[(&str, &str, &str, bool, &str, &str)] = &[
 
 /// The shapes in which a program can name a reserved primitive so that LLVM may drop or redirect its call, as
 /// LLVM text that clang can write or a program can hand to the front: attributes on a direct call, an alias or an
-/// ifunc in its place, attributes on a call through a pointer that may name it, and `noreturn` on such a call to
-/// a primitive that returns.
+/// ifunc in its place, and attributes that claim something about the callee on a call through a pointer that may
+/// name it.
 fn reserved_shapes(name: &str, ty: &str, args: &str, noreturn: bool) -> Vec<(&'static str, String, String)> {
     let params = ty.trim_start_matches("void ").trim_matches(|c| c == '(' || c == ')');
     let declare = format!("declare void @{name}({params}){}\n", if noreturn { " noreturn" } else { "" });
@@ -461,7 +467,7 @@ fn reserved_shapes(name: &str, ty: &str, args: &str, noreturn: bool) -> Vec<(&'s
              call void %callee({args}) {attributes}\n  ret i32 7\n}}\n"
         )
     };
-    let mut shapes = vec![
+    vec![
         (
             "call_attributes",
             format!(
@@ -487,19 +493,11 @@ fn reserved_shapes(name: &str, ty: &str, args: &str, noreturn: bool) -> Vec<(&'s
             format!("takes the address of the primitive @{name}, has attributes that let LLVM remove or move"),
         ),
         (
-            "indirect_convention",
-            indirect("").replace("call void %callee", "call fastcc void %callee"),
-            format!("takes the address of the primitive @{name}, uses the calling convention fastcc"),
+            "indirect_memory_read",
+            indirect("memory(read)"),
+            format!("takes the address of the primitive @{name}, has attributes that let LLVM remove or move"),
         ),
-    ];
-    if !noreturn {
-        shapes.push((
-            "indirect_noreturn",
-            indirect("noreturn"),
-            format!("takes the address of the primitive @{name}, is marked `noreturn`"),
-        ));
-    }
-    shapes
+    ]
 }
 
 /// Each shape is refused by name, before any code is generated, for every reserved effect primitive and an
@@ -516,14 +514,14 @@ fn a_reserved_primitive_cannot_be_dropped_or_redirected() {
 
 /// Review finding R9: the same shapes as C, where C can write them, through clang's optimiser at both levels: an
 /// alias and an ifunc in a primitive's place, refused by the driver and, compiled by clang alone, by the module
-/// check; and a call through a `noreturn` function pointer, refused where the primitive returns. (Attributes on a
-/// call of a `void` primitive cannot be written in C: clang ignores `const` and `pure` on a `void` function and on
-/// a function-pointer type; the `const` case of a primitive with a result is in the module cases above.)
+/// check. (Attributes on a call of a `void` primitive cannot be written in C: clang ignores `const` and `pure` on a
+/// `void` function and on a function-pointer type; the `const` case of a primitive with a result is in the module
+/// cases above. A call through a `noreturn` pointer is in a_call_through_a_pointer_is_checked_only_for_claims.)
 #[test]
 fn the_reserved_shapes_written_in_c_are_refused() {
-    for &(name, _, _, noreturn, params, args) in RESERVED {
+    for &(name, _, _, _, params, args) in RESERVED {
         let other = format!("void other({params}) {{}}\n");
-        let mut shapes = vec![
+        let shapes = vec![
             (
                 "alias",
                 format!(
@@ -542,24 +540,11 @@ fn the_reserved_shapes_written_in_c_are_refused() {
                 format!("an ifunc) named after the primitive @{name}"),
             ),
         ];
-        if !noreturn {
-            shapes.push((
-                "noreturn_pointer",
-                format!(
-                    "typedef void (*__attribute__((noreturn)) never)({params});\n\
-                     static never volatile target = (never){name};\nint main(void) {{ target({args}); }}\n"
-                ),
-                String::new(),
-                format!("takes the address of the primitive @{name}, is marked `noreturn`"),
-            ));
-        }
         for (shape, text, unit, module) in shapes {
             let source = write_c(&format!("handles_c_{name}_{shape}"), &text);
             for (level, flags) in LEVELS {
                 let tag = format!("handles_c_{name}_{shape}.{level}");
-                if !unit.is_empty() {
-                    assert_refused(&driver_on(&source, &tag, flags, &[]).0, REFUSED, &unit, &tag);
-                }
+                assert_refused(&driver_on(&source, &tag, flags, &[]).0, REFUSED, &unit, &tag);
                 assert_refused(&front_on(&source, &tag, flags), REFUSED, &module, &tag);
             }
         }
@@ -586,4 +571,287 @@ fn an_indirect_call_that_cannot_reach_a_primitive_is_not_refused_by_the_check() 
         let result = front_on_text(&text, name);
         assert!(!stderr(&result).contains("takes the address of the primitive"), "{name}: {}", stderr(&result));
     }
+}
+
+/// Review finding R11, and the principle the check follows (`docs/DESIGN.md`, front end): a call through a pointer,
+/// whose target the front does not know, gets only the checks that do not depend on its target. Its `noreturn` and
+/// its calling convention are the program's own callback's: an unrelated `noreturn` callback of the output
+/// primitive's LLVM type is accepted and runs; where such a call does reach a primitive, it reaches it, and a
+/// `noreturn` call that returns stops with the fault `unreachable`.
+#[test]
+fn a_call_through_a_pointer_is_checked_only_for_claims() {
+    let programs: &[(&str, &str, Outcome, &[u8])] = &[
+        (
+            "same_type_callback",
+            "typedef void (* __attribute__((noreturn)) stop_fn)(char);\n\
+             static void stop(char c) __attribute__((noreturn));\nstatic void stop(char c) { __bennett_exit(c); }\n\
+             static stop_fn volatile finish = stop;\nstatic void (*volatile output)(char) = __bennett_effect;\n\
+             int main(void) { output('A'); finish(7); }\n",
+            Outcome::Returned(Some(7)),
+            b"A",
+        ),
+        (
+            "noreturn_pointer",
+            "typedef void (*__attribute__((noreturn)) never)(char);\n\
+             static never volatile target = (never)__bennett_effect;\nint main(void) { target('A'); }\n",
+            Outcome::Faulted(Fault::Unreachable),
+            b"A",
+        ),
+    ];
+    for (case, text, outcome, console) in programs {
+        let source = write_c(&format!("handles_claims_{case}"), text);
+        for (level, flags) in LEVELS {
+            let name = format!("handles_claims_{case}.{level}");
+            let (got, tape) = run_through_driver(&source, &name, flags);
+            assert_eq!(&got, outcome, "{name}");
+            assert_eq!(&tape, console, "{name}");
+        }
+    }
+    let indirect = |call: &str| {
+        format!(
+            "declare void @__bennett_effect(i8)\n@target = internal constant ptr @__bennett_effect\n\
+             define i32 @main() {{\n  %callee = load ptr, ptr @target\n  {call}\n  ret i32 7\n}}\n"
+        )
+    };
+    let texts = [
+        ("noreturn", indirect("call void %callee(i8 65) noreturn"), Outcome::Faulted(Fault::Unreachable)),
+        ("fastcc", indirect("call fastcc void %callee(i8 65)"), Outcome::Returned(Some(7))),
+    ];
+    for (case, text, outcome) in texts {
+        let name = format!("handles_claims_ir_{case}");
+        let path = out_dir().join(format!("{name}.ll"));
+        std::fs::write(&path, text).unwrap_or_else(|e| panic!("cannot write {path:?}: {e}"));
+        let (got, tape) = run_lowered(&path, &name);
+        assert_eq!(got, outcome, "{name}");
+        assert_eq!(tape, b"A", "{name}");
+    }
+}
+
+/// Options for which clang 18 puts code-generation attributes, metadata or other value facts on the header's
+/// declarations and their calls (`optsize`, `minsize`, `nobuiltin`, `nonlazybind`, `"no-builtins"`, `zeroext`,
+/// `nofpclass`, `!kcfi_type`, `!dbg`, the target strings, ...): none says anything about what a primitive does.
+fn codegen_options() -> Vec<Vec<&'static str>> {
+    let mut options = vec![
+        vec!["-Os"],
+        vec!["-Oz"],
+        vec!["-O1"],
+        vec!["-O3"],
+        vec!["-O2", "-ffast-math"],
+        vec!["-O2", "-ffp-model=strict"],
+        vec!["-O2", "-fno-builtin"],
+        vec!["-O2", "-ffreestanding"],
+        vec!["-O2", "-fno-plt"],
+        vec!["-O2", "-fPIC"],
+        vec!["-O2", "-fno-pic"],
+        vec!["-O2", "-funsigned-char"],
+        vec!["-O2", "-g"],
+        vec!["-O2", "-fstack-protector-all"],
+        vec!["-O2", "-fzero-call-used-regs=all"],
+        vec!["-O2", "-fsplit-stack"],
+        vec!["-O2", "-fsanitize=kcfi"],
+    ];
+    if cfg!(target_arch = "x86_64") {
+        options.extend([
+            vec!["-O2", "-mno-red-zone"],
+            vec!["-O2", "-mspeculative-load-hardening"],
+            vec!["-O2", "-mstackrealign"],
+        ]);
+    }
+    options
+}
+
+/// Review finding R13: the conforming program passes both checks under each option (the front stops at the
+/// translation of its calls, which waits on the device forms); with `#pragma STDC FENV_ACCESS ON`, which puts
+/// `strictfp` on its calls, at both levels; and a program of the output and exit primitives runs to its end.
+#[test]
+fn the_attributes_clang_adds_for_an_option_are_accepted() {
+    let conforming = write_c("handles_options_conforming", CONFORMING);
+    let strict = write_c("handles_options_strict", &format!("#pragma STDC FENV_ACCESS ON\n{CONFORMING}"));
+    let effects = write_c("handles_options_effects", "int main(void) { __bennett_effect('A'); return 7; }\n");
+    let strict_effects = write_c(
+        "handles_options_strict_effects",
+        "#pragma STDC FENV_ACCESS ON\nint main(void) { __bennett_effect('A'); return 7; }\n",
+    );
+    let mut runs: Vec<(PathBuf, String, Vec<&str>)> = Vec::new();
+    for (i, option) in codegen_options().into_iter().enumerate() {
+        runs.push((conforming.clone(), format!("handles_options_{i}"), option.clone()));
+        runs.push((effects.clone(), format!("handles_options_effects_{i}"), option));
+    }
+    for (level, flags) in LEVELS {
+        runs.push((strict.clone(), format!("handles_options_strict.{level}"), flags.to_vec()));
+        runs.push((strict_effects.clone(), format!("handles_options_strict_effects.{level}"), flags.to_vec()));
+    }
+    std::thread::scope(|scope| {
+        for (source, name, option) in &runs {
+            scope.spawn(move || {
+                let context = format!("{name} ({})", option.join(" "));
+                if name.contains("effects") {
+                    let (got, tape) = run_through_driver(source, name, option);
+                    assert_eq!(got, Outcome::Returned(Some(7)), "{context}");
+                    assert_eq!(tape, b"A", "{context}");
+                } else {
+                    let (unit, bitcode) = driver_on(source, name, option, &[]);
+                    assert!(unit.status.success(), "{context}: {}", stderr(&unit));
+                    let result = front_of(&bitcode, name);
+                    assert_refused(
+                        &result,
+                        NOT_HANDLED,
+                        "translating its calls into device instructions waits",
+                        &context,
+                    );
+                }
+            });
+        }
+    });
+}
+
+/// Review finding R15: the module check compares the whole declaration and call, metadata and string attributes
+/// included. Each module passes LLVM's verifier; each adds a property the header's declaration does not have.
+#[test]
+fn the_module_check_compares_metadata_and_every_attribute_kind() {
+    let cases = [
+        (
+            "callback_metadata",
+            "declare !callback !0 void @bq_apply(ptr, i64, i64, ptr, i64, ptr, i64, ptr, i64)\n\
+             define i32 @main() {\n  ret i32 7\n}\n!0 = !{!1}\n!1 = !{i64 0, i64 3, i1 false}\n",
+            "the primitive @bq_apply is declared with the metadata !callback",
+        ),
+        (
+            "alloc_family",
+            "declare void @__bennett_effect(i8) \"alloc-family\"=\"malloc\"\n\
+             define i32 @main() {\n  call void @__bennett_effect(i8 65)\n  ret i32 7\n}\n",
+            "is declared with `\"alloc-family\"=\"malloc\"`",
+        ),
+        (
+            "vector_variant",
+            "declare void @__bennett_effect(i8) \"vector-function-abi-variant\"=\"_ZGV_LLVM_N2v___bennett_effect(v)\"\n\
+             define i32 @main() {\n  ret i32 7\n}\n",
+            "is declared with `\"vector-function-abi-variant\"",
+        ),
+        (
+            "call_string",
+            "declare void @__bennett_effect(i8)\n\
+             define i32 @main() {\n  call void @__bennett_effect(i8 65) \"unknown-claim\"\n  ret i32 7\n}\n",
+            "has attributes that let LLVM remove or move its calls (`\"unknown-claim\"`)",
+        ),
+        (
+            "call_range",
+            "declare i64 @bq_width(i64)\n\
+             define i32 @main() {\n  %w = call i64 @bq_width(i64 1), !range !0\n  %r = trunc i64 %w to i32\n  \
+             ret i32 %r\n}\n!0 = !{i64 0, i64 1}\n",
+            "a call of the device function @bq_width has the metadata !range",
+        ),
+        (
+            "operand_bundle",
+            "declare void @__bennett_effect(i8)\n\
+             define i32 @main() {\n  call void @__bennett_effect(i8 65) [ \"deopt\"() ]\n  ret i32 7\n}\n",
+            "a call of the device function @__bennett_effect has an operand bundle",
+        ),
+        (
+            "declaration_metadata",
+            "declare !other.claim !0 void @__bennett_effect(i8)\ndefine i32 @main() {\n  ret i32 7\n}\n!0 = !{}\n",
+            "the primitive @__bennett_effect is declared with the metadata !other.claim",
+        ),
+    ];
+    for (case, text, expected) in cases {
+        let name = format!("handles_whole_{case}");
+        assert_refused(&front_on_text(text, &name), REFUSED, expected, &name);
+    }
+}
+
+/// Review finding R12: a declaration that clang writes only into the text of a type (an array bound that is a
+/// statement expression, here never evaluated, and an initializer that a later one overrides) is not a node of the
+/// syntax-tree dump, so the unit check does not see it. It emits nothing into the module and affects no call. Kept
+/// as witnesses until the advisor settles whether the rule must refuse it (PROGRESS of the step).
+#[test]
+#[ignore = "open question: a reserved linker name declared only inside a type's text (docs/DESIGN.md, \"Not yet\"). \
+            Run: front/test.sh --test handles_front a_declaration_inside_a_type_is_refused_by_the_unit_check \
+            -- --ignored"]
+fn a_declaration_inside_a_type_is_refused_by_the_unit_check() {
+    let programs = [
+        (
+            "array_bound",
+            "int main(void) {\n  int a[({ extern void release(bq_reg) __asm__(\"bq_free\"); 1; })];\n  \
+             return sizeof a == sizeof(int) ? 7 : 1;\n}\n",
+        ),
+        (
+            "overridden_initializer",
+            "int main(void) {\n  int a[2] = { [0] = ({ extern void release(bq_reg) __asm__(\"bq_free\"); 1; }), \
+             [0] = 2 };\n  return a[0];\n}\n",
+        ),
+    ];
+    for (case, text) in programs {
+        let source = write_c(&format!("handles_type_text_{case}"), text);
+        for (level, flags) in LEVELS {
+            let name = format!("handles_type_text_{case}.{level}");
+            assert_refused(
+                &driver_on(&source, &name, flags, &[]).0,
+                REFUSED,
+                "has the linker name of the primitive bq_free",
+                &name,
+            );
+        }
+    }
+}
+
+/// Review finding R12, what the module check covers: where such a declaration reaches a call (an evaluated bound),
+/// its call and the declaration it makes are in the module, and the module check refuses them unless they are the
+/// header's.
+#[test]
+fn a_declaration_inside_a_type_that_reaches_a_call_is_refused_by_the_module_check() {
+    let source = write_c(
+        "handles_type_text_called",
+        "int main(int argc, char **argv) {\n  (void)argv;\n  \
+         int a[({ extern int release(bq_reg) __asm__(\"bq_free\"); release(bq_alloc(1)) + argc; })];\n  \
+         return sizeof a == sizeof(int) ? 7 : 1;\n}\n",
+    );
+    for (level, flags) in LEVELS {
+        let name = format!("handles_type_text_called.{level}");
+        let (unit, bitcode) = driver_on(&source, &name, flags, &[]);
+        assert!(unit.status.success(), "{name}: {}", stderr(&unit));
+        assert_refused(
+            &front_of(&bitcode, &name),
+            REFUSED,
+            "the primitive @bq_free is declared with the type i32 (i64)",
+            &name,
+        );
+    }
+}
+
+/// Review finding R14: `CLANG` may name clang by its file name alone, found on `PATH` as a shell finds it.
+#[test]
+fn the_driver_finds_clang_by_name_on_the_path() {
+    let clang = clang();
+    let bare = clang.file_name().expect("clang has a file name").to_owned();
+    let mut path = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect::<Vec<_>>();
+    if let Some(parent) = clang.parent().filter(|p| !p.as_os_str().is_empty()) {
+        path.insert(0, parent.to_path_buf());
+    }
+    let source = write_c("handles_clang_by_name", "int main(void) { __bennett_effect('A'); return 7; }\n");
+    let bitcode = out_dir().join("handles_clang_by_name.cc.bc");
+    let result = output(
+        Command::new(driver())
+            .env("CLANG", &bare)
+            .env("PATH", std::env::join_paths(path).expect("a PATH"))
+            .args(CLANG_FLAGS)
+            .arg("-o")
+            .arg(&bitcode)
+            .arg(&source),
+    );
+    assert!(result.status.success(), "CLANG={bare:?}: {}", stderr(&result));
+}
+
+/// Review finding R16: a unit that clang refuses leaves no temporary syntax-tree dump behind.
+#[test]
+fn a_unit_clang_refuses_leaves_no_temporary_file() {
+    let temporary = out_dir().join("handles_driver_tmp");
+    let _ = std::fs::remove_dir_all(&temporary);
+    std::fs::create_dir_all(&temporary).unwrap_or_else(|e| panic!("cannot create {temporary:?}: {e}"));
+    let source = write_c("handles_bad_syntax", "int main(void) { return ; }\n?!?\n");
+    let bitcode = out_dir().join("handles_bad_syntax.cc.bc");
+    let result =
+        output(Command::new(driver()).env("TMPDIR", &temporary).args(CLANG_FLAGS).arg("-o").arg(&bitcode).arg(&source));
+    assert!(!result.status.success(), "a syntax error must stop the driver");
+    let left: Vec<_> = std::fs::read_dir(&temporary).expect("read the folder").collect();
+    assert!(left.is_empty(), "left behind: {left:?}");
 }

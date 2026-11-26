@@ -1076,11 +1076,17 @@ The front end's own part, for the record (lane of the front end, not a device it
 and no `bad_gate` issued by the front end); the set of apply targets, read from the compiled signatures before
 pointers are lowered to integers, for D11; and the two named stops lowered to `fault NAME`.
 Built so far (`docs/DESIGN.md`, "From C to a device program"): the declaration check on the module, by linker
-name on every symbol against the header's whole declaration, and on each unit's parsed form in the driver
+name on every symbol against the header's whole declaration (each part the LLVM assembly writer prints for a
+declaration; every attribute kind of LLVM 18, every string key and every metadata kind classified once by what it
+says, so that clang's code-generation attributes for an option are accepted and any claim about the callee is
+refused; a call through a pointer that may reach a primitive gets only the checks independent of its target), and
+on each unit's parsed form in the driver
 `bennett-cc`, which includes the header by force and checks the unit before it writes bitcode (the header's
 declarations from clang's syntax tree filtered to the names containing `bq_` or `__bennett_`; every declaration's
-final linker name from the unfiltered tree). In a program from `bennett-cc`, a primitive's address is an internal device
-function whose body is the direct call, so a call through a pointer reaches the primitive. The named stop `out_of_memory` is lowered by the
+final linker name from the unfiltered tree; a declaration clang writes only into the text of a type is not in
+that tree, emits nothing into the module and affects no call). In a program from `bennett-cc`, a primitive's
+address is an internal device function whose body is the direct call, so a call through a pointer reaches the
+primitive. The named stop `out_of_memory` is lowered by the
 runtime's work; `bad_argument` waits on its code (D15). A program that uses the interface is refused by name,
 before any device instruction is written, until the forms of this section exist.
 

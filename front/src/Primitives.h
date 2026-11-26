@@ -46,17 +46,19 @@ llvm::FunctionType *primitiveType(const Primitive &primitive, llvm::LLVMContext 
 
 // The declaration rule as the module shows it, checked on the module as clang wrote it. One recognition, by linker
 // name, applied to every symbol of the module: a symbol whose linker name is a primitive's must be the header's
-// declaration as a whole, property by property of an LLVM function declaration (a declaration, external linkage,
-// default visibility and DLL storage, the C calling convention, the header's function type, `noreturn` exactly where
-// the header has it, only the target and code-generation attributes clang 18 puts on it, and nothing else an LLVM
-// declaration can carry), or it is refused by name; an alias, an ifunc or a variable under such a name is refused.
-// Every call of it, and every call through a pointer of its type where the program takes its address, has the
-// header's function type and calling convention, `noreturn` only where the header has it, and no attribute that
-// lets LLVM remove, merge, move or speculate a call. Other calls through a pointer are not touched. The check
-// applies to every module, whether or not its units include the handle header (the C library's and the marker
-// programs' too). Also refuses a program that uses (calls or takes the address of) both a marker (docs/MARKERS.md)
-// and one of the seven interface functions; a declaration nothing uses is checked and counts as no use. Stops at
-// the first violation with "error: ..." and status 2.
+// declaration in each part the LLVM assembly writer prints for a function declaration (a declaration, external
+// linkage, default visibility and DLL storage, the C calling convention, the header's function type, `noreturn`
+// exactly where the header has it, attributes, metadata, and none of the other properties), or it is refused by name;
+// an alias, an ifunc or a variable under such a name is refused. Attributes and metadata are judged by what they say
+// (Primitives.cpp, meaningOf): code-generation modes that clang adds for an option are accepted, a claim about what
+// the callee does is refused. Every direct call of it has the header's function type and calling convention,
+// `noreturn` only where the header has it, no operand bundle and no claim; every call through a pointer of its type,
+// where the program takes its address, has no claim (its other properties are its own callback's: the front does
+// not know its target). Other calls through a pointer are not touched. The check applies to every module, whether
+// or not its units include the handle header (the C library's and the marker programs' too). Also refuses a program
+// that uses (calls or takes the address of) both a marker (docs/MARKERS.md) and one of the seven interface
+// functions; a declaration nothing uses is checked and counts as no use. Stops at the first violation with
+// "error: ..." and status 2.
 void checkPrimitives(const llvm::Module &module);
 
 // The named metadata bennett-cc puts in the bitcode of every unit that passed the unit check (Driver.cpp); llvm-link

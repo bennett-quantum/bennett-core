@@ -7,8 +7,9 @@
 //   bennett-cc [clang options] -o unit.bc unit.c
 //
 // The last argument is the unit; `-o` names the bitcode; every other argument goes to clang unchanged, for the
-// check and for the compilation alike. clang is $CLANG if set, else the clang 18 the build found. The bitcode
-// carries the driver's mark (Primitives.h), which tells bennett-front that the unit came this way.
+// check and for the compilation alike. clang is $CLANG if set (a bare name is looked up on PATH), else the clang 18
+// the build found. The bitcode carries the driver's mark (Primitives.h), which tells bennett-front that the unit came
+// this way.
 
 #include "Diagnostic.h"
 #include "Primitives.h"
@@ -40,15 +41,23 @@ using namespace llvm;
 
 namespace {
 
+// clang is $CLANG if set, else the clang 18 the build found; a name without a folder is looked up on PATH, as a
+// shell would.
 std::string clangPath() {
-  if (const char *clang = std::getenv("CLANG"); clang && *clang) {
+  const char *chosen = std::getenv("CLANG");
+  std::string clang = chosen && *chosen ? chosen : BENNETT_CLANG;
+  if (sys::path::has_parent_path(clang)) {
     return clang;
   }
-  return BENNETT_CLANG;
+  ErrorOr<std::string> found = sys::findProgramByName(clang);
+  if (!found) {
+    bennett::fail("cannot find " + clang + " on PATH: " + found.getError().message());
+  }
+  return *found;
 }
 
 // Runs clang with `args`, its standard output to `out` if given; stops with clang's status if it fails (clang has
-// said why on standard error).
+// said why on standard error), after removing `out`: std::exit runs no destructor, so a FileRemover would not.
 void runClang(const std::vector<std::string> &args, std::optional<StringRef> out) {
   std::string clang = clangPath();
   std::vector<StringRef> argv = {clang};
@@ -57,9 +66,15 @@ void runClang(const std::vector<std::string> &args, std::optional<StringRef> out
   std::string error;
   int status = sys::ExecuteAndWait(clang, argv, std::nullopt, redirects, 0, 0, &error);
   if (status < 0) {
+    if (out) {
+      sys::fs::remove(*out);
+    }
     bennett::fail("cannot run " + clang + ": " + error);
   }
   if (status != 0) {
+    if (out) {
+      sys::fs::remove(*out);
+    }
     std::exit(status);
   }
 }
