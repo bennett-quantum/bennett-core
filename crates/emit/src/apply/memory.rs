@@ -379,26 +379,47 @@ impl<'a> Memory<'a> {
             .iter()
             .map(|(guard, byte)| Some((*guard, old ^ definite(byte)?)))
             .collect::<Option<Vec<_>>>()?;
+        let mut parities: Vec<(bool, Vec<usize>, Bit)> = Vec::new();
         Some(std::array::from_fn(|index| {
             let mask = 1 << index;
-            let changes = writes.iter().filter_map(|&(guard, delta)| (delta & mask != 0).then_some(guard));
-            self.guard_parity(circuit, old & mask != 0, changes)
+            let initial = old & mask != 0;
+            let changes = writes
+                .iter()
+                .enumerate()
+                .filter_map(|(write, &(_, delta))| (delta & mask != 0).then_some(write))
+                .collect::<Vec<_>>();
+            if let Some((_, _, bit)) = parities.iter().find(|(old, writes, _)| *old == initial && *writes == changes) {
+                return self.store_bit(circuit, *bit);
+            }
+            let bit = self.guard_parity(circuit, initial, changes.iter().map(|&write| writes[write].0));
+            parities.push((initial, changes, bit));
+            bit
         }))
     }
 
     fn guard_parity(&mut self, circuit: &mut Circuit, mut inverted: bool, guards: impl Iterator<Item = Bit>) -> Bit {
-        let mut wires = BTreeSet::new();
+        let mut terms = BTreeMap::new();
         for guard in guards {
-            match guard {
-                Bit::Constant(value) => inverted ^= value,
-                Bit::Wire(wire, complement) | Bit::Shared { wire, inverted: complement, .. } => {
-                    inverted ^= complement;
-                    if !wires.insert(wire) {
-                        wires.remove(&wire);
-                    }
-                }
+            let source = circuit.copy_source(guard);
+            let Some((wire, polarity)) = source.wire() else {
+                inverted ^= source == ONE;
+                continue;
+            };
+            if let Some((previous, _)) = terms.remove(&wire) {
+                inverted ^= previous ^ polarity;
+            } else {
+                terms.insert(wire, (polarity, guard));
             }
         }
+        // Resolve identities for cancellation and keep the original wires for emission.
+        let wires = terms
+            .into_values()
+            .map(|(_, guard)| {
+                let (wire, complement) = guard.wire().expect("a symbolic guard");
+                inverted ^= complement;
+                wire
+            })
+            .collect::<Vec<_>>();
         if wires.len() > 1 {
             let target = circuit.fresh();
             circuit.xor_into(target, Bit::Constant(inverted), ONE);

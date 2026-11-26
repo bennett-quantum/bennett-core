@@ -2116,3 +2116,58 @@ fn the_clock_can_stop_between_sets_of_fixed_writes() {
         assert_eq!(memory.retained_scratch_qubits, usize::from(budget >= 7));
     }
 }
+
+#[test]
+fn copied_guard_complements_keep_a_loaded_address_definite() {
+    let module = module_with_width(
+        r#"
+func @f(i9 %x) -> i8 {
+entry:
+    %low = trunc i9 %x to i1
+    %negative = xor i1 %low, 1
+    store i1 %negative, 24
+    %copied = load i1 24
+    %positive = xor i1 %copied, 1
+    br %low, confirm, delay
+confirm:
+    br %positive, set_high, unexpected
+delay:
+    br set_low
+set_high:
+    store i8 1, 12
+    br read
+set_low:
+    store i8 1, 12
+    br read
+read:
+    %offset = load i8 12
+    %address = zext i8 %offset to i64
+    %value = load i8 %address
+    ret %value
+unexpected:
+    ret 19
+}
+"#,
+        "    store i8 51, 1",
+        9,
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        let (_, memory, values) = compare(&module, "copied guard address", 20, mode);
+        assert_eq!(values, vec![(51, 0); 512]);
+        assert_eq!(memory.varying_loads, 0);
+    }
+}
+
+#[test]
+fn guarded_literal_bits_with_the_same_updates_share_one_parity() {
+    let source = GUARDED_TRIPLE
+        .replace("store i8 1, 8", "store i8 0, 8")
+        .replace("store i8 2, 8", "store i8 0, 8")
+        .replace("store i8 3, 8", "store i8 0, 8");
+    let module = module(&format!("data 8 = i8 255\n{source}"), "");
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        let (_, memory, values) = compare(&module, "one parity clears a byte", 6, mode);
+        assert_eq!(values, vec![(0, 0); 8]);
+        assert_eq!((memory.gates, memory.retained_scratch_qubits), (6, 1));
+    }
+}

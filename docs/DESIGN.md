@@ -527,8 +527,10 @@ When only fixed-address stores can reach a byte, the emitter can fold simultaneo
 literal writes. For each bit it starts with the old literal value and XORs the guards
 of writes that change that bit. Disjoint guards make this the selected value on each
 input. A single positive guard can be used directly as the byte's new bit, with a
-separate byte-version identity. Symbolic values and declared bytes that an unproved
-store address could reach use ordinary selection.
+separate byte-version identity. Guards cancel by their canonical source and polarity.
+Bits with the same old value and writes share one parity computation. Symbolic byte
+values use ordinary selection. Any unproved store address disables folding for all
+declared bytes, including those in a disjoint declared region.
 
 Earlier versions are available to reverse the call. The compiler can prove an
 address definite on its dispatch guard by replaying forward gates over at most eight distinct argument qubits and at most $2^{20}$ gates.
