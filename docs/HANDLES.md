@@ -1080,14 +1080,14 @@ name on every symbol against the header's whole declaration (each part the LLVM 
 declaration; every attribute kind of LLVM 18, every string key and every metadata kind classified once by what it
 says, so that clang's code-generation attributes for an option are accepted and any claim about the callee is
 refused; a call through a pointer that may reach a primitive gets only the checks independent of its target), and
-on each unit's parsed form in the driver
-`bennett-cc`, which includes the header by force and checks the unit before it writes bitcode (the header's
+on each unit's parsed form in the driver `bennett-cc`, which includes the header by force and checks the unit before
+it writes bitcode (the header's
 declarations from clang's syntax tree filtered to the names containing `bq_` or `__bennett_`; every declaration's
 final linker name from the unfiltered tree; a declaration clang writes only into the text of a type is not in
 that tree, emits nothing into the module and affects no call). In a program from `bennett-cc`, a primitive's
 address is an internal device function whose body is the direct call, so a call through a pointer reaches the
-primitive. The named stop `out_of_memory` is lowered by the
-runtime's work; `bad_argument` waits on its code (D15). A program that uses the interface is refused by name,
+primitive. The named stop `out_of_memory` is lowered by the runtime's work; `bad_argument` waits on its code
+(D15). A program that uses the interface is refused by name,
 before any device instruction is written, until the forms of this section exist.
 
 ## 15. What the runtime must provide
@@ -1096,7 +1096,7 @@ before any device instruction is written, until the forms of this section exist.
 |---|---|---|---|
 | R1 | The C library's files take their declarations of the four effect primitives (`__bennett_effect`, `__bennett_exit`, `__bennett_out_of_memory`, `__bennett_bad_argument`) from the force-included header and drop their own | 4, 5.5 | no: `rt/musl/runtime.c` declares the first two, `start.c` the exit primitive, `devices.h` the output primitive (which `devices.c` takes from it) |
 | R2 | The header force-included when the C library is compiled, so that the library passes the declaration rule | 4 | no |
-| R3 | A request of `malloc`, `calloc`, `realloc` or `aligned_alloc` that the arena cannot hold is the fault `out_of_memory` (19) through `__bennett_out_of_memory`; a request the C library rejects from its arguments alone, before any system call (an overflowing `calloc` or `reallocarray`, a `malloc` of half the address space or more, an impossible alignment), still returns a null result with its error code, exactly as natively | 5.5, 6.3, 8.4, 10 (A4) | no: in progress |
+| R3 | A request of `malloc`, `calloc`, `realloc` or `aligned_alloc` that the arena cannot hold is the fault `out_of_memory` (19) through `__bennett_out_of_memory`; a request the C library rejects from its arguments alone, before any system call (an overflowing `calloc` or `reallocarray`, a `malloc` of half the address space or more, an impossible alignment), still returns a null result with its error code, exactly as natively | 5.5, 6.3, 8.4, 10 (A4) | yes |
 | R4 | Weak definitions merged into one object for the whole program when its units and the C library are linked (the scope list and fault set of 8.4 and 8.2) | 8.4 | to be checked: the header defines its libraries inline, with no library file |
 | R5 | The C library's `realloc`, `printf` and `exit`, which the header's libraries call (`printf` to standard output, the console) | 8.2, 8.4 | yes (musl) |
 | R6 | Run arguments that reach `main`, if a program is to receive a measured budget as a run input (7, 13); a budget defined by the build needs none | 7 | partly: a program without the C library receives integer arguments (`bennett run --arg`); with musl, `main` gets `argc = 1` and `argv = {"prog"}` |
