@@ -54,24 +54,9 @@ else()
   target_link_libraries(bennett-front PRIVATE ${llvm_libs})
 endif()
 
-# The declaration rule of the handle interface on one unit's parsed form (docs/HANDLES.md, section 4).
-add_executable(bennett-handles
-  src/HandlesTool.cpp
-  src/Primitives.cpp
-  src/UnitDeclarations.cpp
-  src/Markers.cpp
-  src/Diagnostic.cpp
-)
-target_include_directories(bennett-handles SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
-target_compile_definitions(bennett-handles PRIVATE ${LLVM_DEFINITIONS})
-target_compile_options(bennett-handles PRIVATE -Wall -Wextra -fno-rtti -fno-exceptions)
-if(LLVM_LINK_LLVM_DYLIB)
-  target_link_libraries(bennett-handles PRIVATE LLVM)
-else()
-  llvm_map_components_to_libnames(handles_libs core support)
-  target_link_libraries(bennett-handles PRIVATE ${handles_libs})
-endif()
-
+# bennett-cc: one unit of a program in the handle interface to bitcode, with the header included by force and the
+# declaration rule checked on the unit's parsed form first (docs/HANDLES.md, section 4). Defined after clang is
+# found, below.
 # The default floating-point runtime, `float-runtime.bc` next to bennett-front: Berkeley SoftFloat 3e
 # (rt/softfloat, vendored unmodified) under the compiler runtime-call names of rt/softfloat/libgcc.c,
 # compiled to bitcode by clang 18 and linked into one file. The SoftFloat files are those its own
@@ -90,6 +75,23 @@ foreach(tool BENNETT_CLANG BENNETT_LLVM_LINK)
   endif()
 endforeach()
 
+add_executable(bennett-cc
+  src/Driver.cpp
+  src/UnitDeclarations.cpp
+  src/Primitives.cpp
+  src/Markers.cpp
+  src/Diagnostic.cpp
+)
+target_include_directories(bennett-cc SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+target_compile_definitions(bennett-cc PRIVATE ${LLVM_DEFINITIONS} BENNETT_CLANG="${BENNETT_CLANG}"
+  BENNETT_HANDLE_HEADER="${CMAKE_CURRENT_SOURCE_DIR}/include/bq.h")
+target_compile_options(bennett-cc PRIVATE -Wall -Wextra -fno-rtti -fno-exceptions)
+if(LLVM_LINK_LLVM_DYLIB)
+  target_link_libraries(bennett-cc PRIVATE LLVM)
+else()
+  llvm_map_components_to_libnames(cc_libs core support irreader bitreader bitwriter)
+  target_link_libraries(bennett-cc PRIVATE ${cc_libs})
+endif()
 
 set(softfloat "${CMAKE_CURRENT_SOURCE_DIR}/../rt/softfloat")
 set(softfloat_source "${softfloat}/berkeley-softfloat-3e/source")

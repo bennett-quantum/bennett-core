@@ -55,6 +55,15 @@ target/front/bennett-front prog.bc -o prog.bn --region-budget 100000 --stack-byt
 cargo run -p bennett -- run prog.bn
 ```
 
+A unit of a program in the handle interface (`front/include/bq.h`, `docs/HANDLES.md`) goes through the driver
+`bennett-cc` instead of `clang`: it includes the header by force and refuses, by name and before any bitcode is
+written, a unit that breaks the header's declaration rule. Its options are clang's. `bennett-front` refuses a
+program that calls the seven `bq_*` functions by name until their calls can be translated:
+
+```sh
+target/front/bennett-cc -O0 -Xclang -disable-O0-optnone -gline-tables-only -o prog.bc prog.c
+```
+
 For a program using the C library, build musl once and use its member resolver (LLVM/clang 18, GNU make,
 Python 3; no network):
 

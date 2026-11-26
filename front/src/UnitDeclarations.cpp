@@ -22,11 +22,13 @@ namespace {
 constexpr const char *route = "; the header bq.h, included by force in every unit, has the only declaration of each "
                               "primitive (docs/HANDLES.md, section 4)";
 
-// clang writes one JSON object per matching declaration, one after another. Splits the text into them; the
-// parse itself is LLVM's.
-std::vector<StringRef> objects(StringRef text) {
+// Splits JSON text into values, so that each is parsed alone (the parse itself is LLVM's). With `within` 0, the
+// values one after another at the top (clang writes one object per declaration a filter matches); with `within` 2,
+// the elements of the array in the top object (the unfiltered dump is one TranslationUnitDecl whose only array,
+// "inner", holds the unit's top-level declarations), so that no value is larger than one declaration.
+std::vector<StringRef> values(StringRef text, size_t within) {
   std::vector<StringRef> found;
-  size_t depth = 0;
+  std::vector<char> open; // the brackets open at this point
   size_t start = 0;
   bool inString = false;
   for (size_t i = 0; i < text.size(); ++i) {
@@ -42,19 +44,21 @@ std::vector<StringRef> objects(StringRef text) {
     if (c == '"') {
       inString = true;
     } else if (c == '{' || c == '[') {
-      if (depth++ == 0) {
+      if (open.size() == within && (within == 0 || open.back() == '[')) {
         start = i;
       }
+      open.push_back(c);
     } else if (c == '}' || c == ']') {
-      if (depth == 0) {
+      if (open.empty() || open.back() != (c == '}' ? '{' : '[')) {
         fail("the declaration dump is not clang's JSON: an unmatched closing bracket");
       }
-      if (--depth == 0) {
+      open.pop_back();
+      if (open.size() == within && (within == 0 || open.back() == '[')) {
         found.push_back(text.slice(start, i + 1));
       }
     }
   }
-  if (depth != 0 || inString) {
+  if (!open.empty() || inString) {
     fail("the declaration dump is not clang's JSON: it ends inside a value");
   }
   return found;
@@ -114,8 +118,27 @@ bool defines(const json::Object &declaration) {
   return declaration.getString("kind") == StringRef("VarDecl") && declaration.get("init") != nullptr;
 }
 
+// The attributes of a declaration's final form, which clang lists among its children (an attribute added by a
+// later pragma or redeclaration is there too, marked implicit or inherited).
+std::vector<StringRef> attributes(const json::Object &declaration) {
+  std::vector<StringRef> found;
+  if (const json::Array *inner = declaration.getArray("inner")) {
+    for (const json::Value &child : *inner) {
+      const json::Object *object = child.getAsObject();
+      std::optional<StringRef> kind = object ? object->getString("kind") : std::nullopt;
+      if (kind && kind->ends_with("Attr")) {
+        found.push_back(*kind);
+      }
+    }
+  }
+  return found;
+}
+
 struct Checker {
   std::string header;
+  // In the unfiltered dump, where clang writes a file name only when it changes and the order of keys is lost in
+  // the parse, a declaration's file is not known: only clause 2, which needs none, is checked there.
+  bool full = false;
   StringSet<> declared; // primitives the header declares in this unit
 
   void visit(const json::Value &value, const Where &outer, bool topLevel) {
@@ -151,6 +174,13 @@ struct Checker {
     if (!byName && !byLinker) {
       return;
     }
+    if (full) {
+      if (!byName) {
+        fail("the declaration of " + name.str() + " has the linker name of the primitive " + linker.str() +
+             " (an assembler label or #pragma redefine_extname)" + route);
+      }
+      return; // a declaration of the primitive's identifier: the filtered dumps show where it is
+    }
     bool fromHeader = topLevel && kind == "FunctionDecl" && byName && !object.get("previousDecl") &&
                       !where.file.empty() && canonical(where.file) == header;
     if (fromHeader) {
@@ -159,6 +189,14 @@ struct Checker {
         fail("the header's declaration of the primitive " + name.str() + " has the linker name `" + linker.str() +
              "` at the end of the unit (a #pragma redefine_extname or an assembler label renames it); calls of " +
              name.str() + " would not reach the primitive" + route + ", at " + where.text());
+      }
+      for (StringRef attribute : attributes(object)) {
+        if (!(attribute == "C11NoReturnAttr" && byName->noreturn)) {
+          fail("the header's declaration of the primitive " + name.str() + " has the attribute " + attribute.str() +
+               " at the end of the unit, which the header does not give it (a #pragma weak or another pragma adds "
+               "it); the header's declarations keep their linkage and attributes" +
+               route + ", at " + where.text());
+        }
       }
       return;
     }
@@ -173,15 +211,18 @@ struct Checker {
 
 } // namespace
 
-void checkUnitDeclarations(StringRef dump, StringRef header) {
+void checkUnitDeclarations(StringRef filtered, StringRef full, StringRef header) {
   Checker checker;
   checker.header = canonical(header);
-  for (StringRef text : objects(dump)) {
-    Expected<json::Value> value = json::parse(text);
-    if (!value) {
-      fail("the declaration dump is not clang's JSON: " + toString(value.takeError()));
+  for (bool whole : {false, true}) {
+    checker.full = whole;
+    for (StringRef text : values(whole ? full : filtered, whole ? 2 : 0)) {
+      Expected<json::Value> value = json::parse(text);
+      if (!value) {
+        fail("the declaration dump is not clang's JSON: " + toString(value.takeError()));
+      }
+      checker.visit(*value, Where(), true);
     }
-    checker.visit(*value, Where(), true);
   }
   for (const Primitive &primitive : allPrimitives()) {
     if (!checker.declared.contains(primitive.name)) {

@@ -8,9 +8,12 @@
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Module.h>
 #include <llvm/Support/raw_ostream.h>
+
+#include <vector>
 
 using namespace llvm;
 
@@ -108,6 +111,43 @@ std::string firstHarmful(const AttributeList &list, unsigned params, bool atCall
 constexpr const char *route = "; the header bq.h, included by force in every unit, has the only declaration of each "
                               "primitive (docs/HANDLES.md, section 4)";
 
+std::string conventionName(CallingConv::ID convention) {
+  switch (convention) {
+  case CallingConv::Fast:
+    return "fastcc";
+  case CallingConv::Cold:
+    return "coldcc";
+  case CallingConv::Win64:
+    return "win64cc (ms_abi)";
+  default:
+    return "cc " + std::to_string(convention);
+  }
+}
+
+// The checks of one call that may reach `primitive`: a direct call, or a call through a pointer of the primitive's
+// type in a program that takes its address. `subject` names the call, for the message.
+void checkCall(const CallBase &call, const Primitive &primitive, const std::string &subject) {
+  FunctionType *expected = primitiveType(primitive, call.getContext());
+  if (call.getFunctionType() != expected) {
+    misuse(subject + " through the type " + printed(call.getFunctionType()) + " where the header's is " +
+               printed(expected) + route,
+           &call);
+  }
+  if (call.getCallingConv() != CallingConv::C) {
+    misuse(subject + " uses the calling convention " + conventionName(call.getCallingConv()) +
+               " where the header's is C's" + route,
+           &call);
+  }
+  if (call.doesNotReturn() && !primitive.noreturn) {
+    misuse(subject + " is marked `noreturn`" + route, &call);
+  }
+  if (std::string bad = firstHarmful(call.getAttributes(), expected->getNumParams(), true); !bad.empty()) {
+    misuse(subject + " has attributes that let LLVM remove or move its calls (`" + bad + "`)" + route, &call);
+  }
+}
+
+// The header's declaration as a whole: a symbol with a primitive's linker name must be exactly what clang 18
+// writes for the header's declaration, property by property of an LLVM function declaration.
 void checkPrimitiveFunction(const Function &function, const Primitive &primitive) {
   std::string name = "@" + std::string(primitive.name);
   if (!function.isDeclaration()) {
@@ -115,6 +155,16 @@ void checkPrimitiveFunction(const Function &function, const Primitive &primitive
   }
   if (!function.hasExternalLinkage()) {
     misuse("the primitive " + name + " is declared weak or with other than external linkage" + route, &function);
+  }
+  if (function.getVisibility() != GlobalValue::DefaultVisibility ||
+      function.getDLLStorageClass() != GlobalValue::DefaultStorageClass) {
+    misuse("the primitive " + name + " is declared with a visibility or DLL storage other than the default" + route,
+           &function);
+  }
+  if (function.getCallingConv() != CallingConv::C) {
+    misuse("the primitive " + name + " is declared with the calling convention " +
+               conventionName(function.getCallingConv()) + " where the header's is C's" + route,
+           &function);
   }
   FunctionType *expected = primitiveType(primitive, function.getContext());
   if (function.getFunctionType() != expected) {
@@ -132,69 +182,112 @@ void checkPrimitiveFunction(const Function &function, const Primitive &primitive
                "`, one of the attributes that let LLVM remove or move its calls" + route,
            &function);
   }
+  // clang -O2 marks the declaration `local_unnamed_addr`; nothing else of these is in what clang writes for it.
+  if (function.getUnnamedAddr() == GlobalValue::UnnamedAddr::Global || function.hasSection() ||
+      function.hasPartition() || function.hasComdat() || function.hasGC() || function.hasPrefixData() ||
+      function.hasPrologueData() || function.hasPersonalityFn() || function.getAlign() ||
+      function.getAddressSpace() != 0 || function.isThreadLocal()) {
+    misuse("the primitive " + name +
+               " is declared with a property the header's declaration does not have (unnamed_addr, a section, a "
+               "partition, a comdat, a collector, prefix or prologue data, a personality, an alignment or an "
+               "address space)" +
+               route,
+           &function);
+  }
+  for (const Use &use : function.uses()) {
+    const auto *call = dyn_cast<CallBase>(use.getUser());
+    if (call && call->isCallee(&use)) {
+      checkCall(*call, primitive, "a call of the device function " + name);
+    }
+  }
+}
+
+// Whether the program uses `function` other than as the target of a direct call: then a call through a pointer
+// may reach it.
+bool addressTaken(const Function &function) {
   for (const Use &use : function.uses()) {
     const auto *call = dyn_cast<CallBase>(use.getUser());
     if (!call || !call->isCallee(&use)) {
-      continue; // its address, taken: a call through it is the same primitive call
-    }
-    if (call->getFunctionType() != expected) {
-      misuse("a call of the primitive " + name + " through the type " + printed(call->getFunctionType()) +
-                 " where the header's is " + printed(expected) + route,
-             call);
-    }
-    if (call->doesNotReturn() && !primitive.noreturn) {
-      misuse("a call of the primitive " + name + " is marked `noreturn`" + route, call);
-    }
-    if (std::string bad = firstHarmful(call->getAttributes(), expected->getNumParams(), true); !bad.empty()) {
-      misuse("a call of the device function " + name +
-                 " has attributes that let LLVM remove or move its calls (`" + bad + "`)" + route,
-             call);
+      return true;
     }
   }
+  return false;
 }
 
-// A primitive whose address the program takes, other than as the target of a direct call, if any.
-const Function *addressTaken(const Module &module) {
-  for (const Primitive &primitive : primitives) {
-    const Function *function = module.getFunction(primitive.name);
-    if (!function) {
-      continue;
-    }
-    for (const Use &use : function->uses()) {
-      const auto *call = dyn_cast<CallBase>(use.getUser());
-      if (!call || !call->isCallee(&use)) {
-        return function;
-      }
-    }
-  }
-  return nullptr;
-}
-
-// A primitive call is known by its target, and a call through a pointer may reach one wherever the program takes a
-// primitive's address. So, in such a program, no call through a pointer may carry an attribute that lets LLVM
-// remove, merge or move it: no pass may drop or move a primitive call that a pointer reaches.
+// A primitive call is known by its target, and a call through a pointer reaches a primitive only where the program
+// takes its address and the call has its type (any other call through a pointer that reaches it is a call through
+// a mismatched prototype, which the device refuses when it runs: `call_indirect` checks the signature). So every
+// call through a pointer of a taken primitive's type gets the checks of a direct call; other calls through a
+// pointer are the program's own.
 void checkIndirectCalls(const Module &module) {
-  const Function *taken = addressTaken(module);
-  if (!taken) {
+  std::vector<Primitive> taken;
+  for (const Primitive &primitive : primitives) {
+    if (const Function *function = module.getFunction(primitive.name); function && addressTaken(*function)) {
+      taken.push_back(primitive);
+    }
+  }
+  if (taken.empty()) {
     return;
   }
   for (const Function &function : module) {
     for (const BasicBlock &block : function) {
       for (const Instruction &inst : block) {
         const auto *call = dyn_cast<CallBase>(&inst);
-        if (!call || call->getCalledFunction() || call->isInlineAsm()) {
+        if (!call || call->isInlineAsm() || isa<GlobalValue>(call->getCalledOperand()->stripPointerCasts())) {
           continue;
         }
-        if (std::string bad = firstHarmful(call->getAttributes(), call->getFunctionType()->getNumParams(), true);
-            !bad.empty()) {
-          misuse("a call through a pointer carries `" + bad +
-                     "`, one of the attributes that let LLVM remove or move its calls, in a program that takes the "
-                     "address of the primitive @" +
-                     taken->getName().str() + ", which the pointer may name" + route,
-                 call);
+        for (const Primitive &primitive : taken) {
+          if (call->getFunctionType() == primitiveType(primitive, module.getContext())) {
+            checkCall(*call, primitive,
+                      "a call through a pointer of the type of the device function @" + std::string(primitive.name) +
+                          ", which it may reach because the program takes the address of the primitive @" +
+                          std::string(primitive.name) + ",");
+          }
         }
       }
     }
+  }
+}
+
+// Whether the program calls or takes the address of `function`.
+bool used(const Function *function) { return function && !function->use_empty(); }
+
+// Gives each primitive whose address the program takes a callable device function: an internal function
+// `<name>.address` of the primitive's type whose body is the direct call, which every use other than a direct call
+// now names. A call through a pointer then reaches the direct call, which the front translates as any other. Only in
+// a program from bennett-cc: on the marker path a call of a device function through a pointer stays refused by name
+// (front/tests/tests/device.rs), as the old layer has it.
+void giveAddresses(Module &module) {
+  if (!module.getNamedMetadata(driverMark)) {
+    return;
+  }
+  for (const Primitive &primitive : primitives) {
+    Function *function = module.getFunction(primitive.name);
+    if (!function || !addressTaken(*function)) {
+      continue;
+    }
+    Function *address = Function::Create(function->getFunctionType(), GlobalValue::InternalLinkage,
+                                         std::string(primitive.name) + ".address", module);
+    BasicBlock *entry = BasicBlock::Create(module.getContext(), "entry", address);
+    IRBuilder<> builder(entry);
+    std::vector<Value *> args;
+    for (Argument &arg : address->args()) {
+      args.push_back(&arg);
+    }
+    CallInst *call = builder.CreateCall(function, args);
+    if (primitive.noreturn) {
+      call->setDoesNotReturn();
+      address->setDoesNotReturn();
+      builder.CreateUnreachable();
+    } else if (function->getReturnType()->isVoidTy()) {
+      builder.CreateRetVoid();
+    } else {
+      builder.CreateRet(call);
+    }
+    function->replaceUsesWithIf(address, [](Use &use) {
+      const auto *user = dyn_cast<CallBase>(use.getUser());
+      return !user || !user->isCallee(&use);
+    });
   }
 }
 
@@ -278,11 +371,11 @@ void checkPrimitives(const Module &module) {
   const Function *marker = nullptr;
   const Function *handle = nullptr;
   for (const Function &function : module) {
-    if (!marker && markerOf(&function)) {
+    if (!marker && used(&function) && markerOf(&function)) {
       marker = &function;
     }
     std::optional<Primitive> primitive = primitiveNamed(function.getName());
-    if (!handle && primitive && primitive->group == PrimitiveGroup::Interface) {
+    if (!handle && used(&function) && primitive && primitive->group == PrimitiveGroup::Interface) {
       handle = &function;
     }
   }
@@ -297,18 +390,18 @@ void checkPrimitives(const Module &module) {
 bool usesHandleInterface(const Module &module) {
   for (const Function &function : module) {
     std::optional<Primitive> primitive = primitiveNamed(function.getName());
-    if (primitive && primitive->group == PrimitiveGroup::Interface) {
+    if (used(&function) && primitive && primitive->group == PrimitiveGroup::Interface) {
       return true;
     }
   }
   return false;
 }
 
-void checkHandleProgram(const Module &module) {
+void checkHandleProgram(Module &module) {
   checkPrimitives(module);
   for (const Function &function : module) {
     std::optional<Primitive> primitive = primitiveNamed(function.getName());
-    if (!primitive || primitive->group != PrimitiveGroup::Interface) {
+    if (!used(&function) || !primitive || primitive->group != PrimitiveGroup::Interface) {
       continue;
     }
     const Value *at = &function;
@@ -323,6 +416,7 @@ void checkHandleProgram(const Module &module) {
                    "docs/HANDLES.md, section 14",
                at);
   }
+  giveAddresses(module);
 }
 
 } // namespace bennett

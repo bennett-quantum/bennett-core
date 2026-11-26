@@ -1024,30 +1024,54 @@ an empty device program (`front/src/main.cpp`, `readInput`).
 The handle interface that replaces the marker surface, built beside it, is designed in `docs/HANDLES.md`. Of its
 translation path, the front end's own part is built (new files, beside the old layer):
 
-- **The declaration rule on the module** (`front/src/Primitives.h`). `bennett-front` checks, before anything else,
-  every symbol whose linker name is one of the eleven primitives (the seven `bq_*` functions and the four reserved
-  effect primitives): it must be a function declaration with
-  external linkage, the header's LLVM type as clang 18 emits it, `noreturn` exactly where the header has it, and
-  no attribute that lets LLVM remove, merge or move a call; every call of it must have that type and no such
-  attribute. The attributes allowed are the target and code-generation strings, `nounwind`, `nobuiltin`, and on
-  operands `noundef`, `signext`, `zeroext`, and at calls the operand facts `nonnull`, alignment and dereferenceable
-  bytes. A symbol of that name that is an alias or an ifunc is refused. A primitive call is known by its target, so
-  where the program takes a primitive's address other than as a direct callee, no call through a pointer may carry
-  such an attribute either (a pass could otherwise drop a call that the pointer makes to the primitive). The check
-  applies to every module, whether or not its units include the handle header: the C library's and the marker
-  programs' too. A break is refused by name with status 2. A program that refers to a marker and to one of the seven
-  interface functions is refused by name too. A program that passes and uses the interface is then refused with
-  "not handled yet" at its first interface call: the translation into device instructions waits on the device
-  forms (`docs/HANDLES.md`, section 14).
-- **The declaration rule on each unit's parsed form** (`front/src/UnitDeclarations.h`, the tool `bennett-handles
-  check-unit`). The driver runs clang 18 on the unit twice with `-fsyntax-only -Xclang -ast-dump=json` and the
-  filters `bq_` and `__bennett_` (2 MB and 0.6 s for the SQLite amalgamation, against 735 MB and 6 s unfiltered)
-  and passes both dumps. The check refuses by name a declaration with linkage of a primitive's identifier other
-  than the header's, a definition or `alias` of one, a declaration of another identifier with a primitive's
-  linker name, a header declaration whose final linker name is not its identifier (`#pragma redefine_extname`,
-  clause 3 of the rule), and a unit in which the header at the given path does not declare every primitive.
-- **Tests** (`front/tests/tests/handles_front.rs`): each refusal from a C program at `-O0` and at `-O2`, and a
-  conforming program that passes both checks. The gate kind and the rotation axis are run-time operands of the
+- **The declaration rule on the module** (`front/src/Primitives.h`). One recognition, by linker name, applied to
+  every symbol: `bennett-front` checks, before anything else, every symbol whose linker name is one of the eleven
+  primitives (the seven `bq_*` functions and the four reserved effect primitives). It must be the header's
+  declaration as a whole, property by property of an LLVM function declaration: a declaration with external
+  linkage, default visibility and DLL storage, the C calling convention, the header's LLVM type as clang 18 emits
+  it, `noreturn` exactly where the header has it, no attribute that lets LLVM remove, merge or move a call, and
+  nothing else an LLVM declaration can carry (a section, a comdat, prefix data, an alignment, ...; clang -O2's
+  `local_unnamed_addr` is allowed). The attributes allowed are the target and code-generation strings,
+  `nounwind`, `nobuiltin`, and on operands `noundef`, `signext`, `zeroext`, and at calls the operand facts
+  `nonnull`, alignment and dereferenceable bytes. Every call of it must have the header's type and calling
+  convention, `noreturn` only where the header has it and no other attribute. A symbol of that name that is an
+  alias, an ifunc or a variable is refused. A declaration nothing uses is checked too and is no use of the
+  interface. The check applies to every module, whether or not its units include the handle header: the C
+  library's and the marker programs' too. A break is refused by name with status 2. A program that uses (calls or
+  takes the address of) a marker and one of the seven interface functions is refused by name too. A program that
+  passes and uses the interface is then refused with "not handled yet" at its first interface call: the
+  translation into device instructions waits on the device forms (`docs/HANDLES.md`, section 14).
+- **Calls through a pointer.** In a program from `bennett-cc` (its bitcode carries the named metadata
+  `!bennett.cc`, which `llvm-link` keeps), a primitive whose address the program takes gets a callable device
+  function, `<name>.address`, internal, whose body is the direct call (with `noreturn` and `unreachable` where the header
+  has `noreturn`); every use other than a direct call names it. A call through a pointer then reaches the direct
+  call, which the front translates as any other: `output(c)` through `void (*)(char)` prints `c`, `quit(3)` through
+  `void (*)(int)` exits with 3. A call through a pointer of a taken primitive's type gets the checks of a direct
+  call (calling convention, `noreturn`, attributes), since it may reach the primitive; other calls through a
+  pointer are not touched (a callback that takes a structure by value is not refused). A call through a pointer of
+  another type that reaches the primitive's device function is a call through another prototype, as for any
+  function: `call_indirect` faults `bad_indirect`, or, where LLVM resolves the target, the call is lowered as
+  "Calls through a prototype that differs" says, and the primitive's own call gets the header's operand types.
+  A program compiled by clang alone (the marker path) keeps the old layer's behaviour: a call of
+  `__bennett_effect` or `__bennett_exit` through a pointer is refused by name ("not handled yet").
+- **The declaration rule on each unit's parsed form: the driver `bennett-cc`** (`front/src/Driver.cpp`,
+  `front/src/UnitDeclarations.h`). `bennett-cc [clang options] -o unit.bc unit.c` includes `front/include/bq.h` by
+  force (first, with its folder on the include path), runs clang 18 on the unit with `-fsyntax-only -Xclang
+  -ast-dump=json` three times (filtered to `bq_` and to `__bennett_`, and unfiltered), checks the dumps, and only
+  then compiles the unit to bitcode and marks it (`!bennett.cc`); a refused unit has no bitcode. The filtered dumps carry each declaration's
+  file, so they decide which declarations are the header's: the check refuses a declaration with linkage of a
+  primitive's identifier other than the header's, a definition, `alias` or `ifunc` of one, a header declaration
+  whose final linker name is not its identifier (`#pragma redefine_extname`) and a header declaration with an
+  attribute the header does not give it (`#pragma weak`), and a unit in which the header does not declare every
+  primitive (its guard macro defined beforehand). The unfiltered dump carries the final linker name of every
+  declaration with linkage, used or not and wherever it is, and the check refuses every one of another identifier
+  whose linker name is a primitive's (an assembler label, a pragma). Cost: the unfiltered dump is the unit's whole
+  syntax tree (5 MB for a unit that only includes the header; 735 MB and 6 s for the SQLite amalgamation),
+  mapped from a temporary file and parsed one top-level declaration at a time.
+- **Tests** (`front/tests/tests/handles_front.rs`): each refusal from a C program at `-O0` and at `-O2` (and as
+  LLVM text where only LLVM text can write the shape: attributes on a call of a `void` primitive, a calling
+  convention on a call through a pointer), calls through pointers run on the device, and a conforming program that
+  passes both checks. The gate kind and the rotation axis are run-time operands of the
   device instruction, which makes every check of the call in the interface's order; the front end does not switch
   on them.
 
@@ -2484,15 +2508,13 @@ The handle interface's front end (`docs/HANDLES.md`; the old layer above stays a
   the device language). Route: part two of the path, once the forms land.
 - **A program that uses both interfaces is refused by name.** Cheap to reverse: the check is one test in
   `checkPrimitives`; the two could be allowed side by side once both paths can run in one program.
-- **A compatible declaration of another identifier with a primitive's linker name is not refused** when the
-  identifier contains neither `bq_` nor `__bennett_` (`void my_free(bq_reg) __asm__("bq_free");`): the filtered
-  dumps do not contain it, and in the module it is the header's declaration. Its calls are the primitive's calls,
-  with the same type and no attribute (the module check refuses either), so the result is the right one; the rule
-  of `docs/HANDLES.md`, section 4, clause 2, refuses it. Route: a scan of every declaration's linker name in the
-  unfiltered dump, streamed, or a clang plugin when the clang development headers are part of the toolchain.
-- **The unit check runs only where the driver runs it.** No driver of the tree compiles a handle program yet (the
-  tests do), and the C library's units declare `__bennett_effect` and `__bennett_exit` themselves, so they would be
-  refused (runtime items R1 and R2 of `docs/HANDLES.md`). Route: the driver of the handle path, after R1 and R2.
+- **The unit check runs only where `bennett-cc` runs.** A unit compiled by clang alone, as the marker programs and
+  the C library are, gets only the module check, which cannot see an unused declaration or a rename. The C
+  library's units declare `__bennett_effect` and `__bennett_exit` themselves, so `bennett-cc` would refuse them
+  (runtime items R1 and R2 of `docs/HANDLES.md`); `rt/musl/link.py` keeps compiling with clang. Route: the C
+  library's units through `bennett-cc` after R1 and R2. `bennett-front` reads the driver's mark only to give primitives
+  callable addresses; it does not yet refuse a program in the handle interface without it (the module check runs on
+  every program). Route: require the mark once the C library's units go through `bennett-cc`.
 
 | Refused inside emitted `apply` | Construction needed |
 |---|---|
