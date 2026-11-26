@@ -598,23 +598,35 @@ SOFTFP(__bf16, truncsfbf2, float)
 SOFTFP(__bf16, truncdfbf2, double)
 SOFTFP(__bf16, truncxfbf2, long double)
 
-/* x to the power m by repeated squaring, as libgcc2.c computes it (`__builtin_powi`). */
+/* x to the power m by repeated squaring, as libgcc2.c computes it (`__builtin_powi`), each multiplication and the
+ * final division raising the denormal-operand flag as x86's instructions do; a path without arithmetic raises
+ * nothing. */
 float __powisf2(float x, int m) {
   unsigned n = m < 0 ? -(unsigned)m : (unsigned)m;
   float32_t a = f32_of(x), one = {0x3F800000}, y = n % 2 ? a : one;
   while (n >>= 1) {
+    DENORMAL(of_f32(a));
     a = f32_mul(a, a);
-    if (n % 2) y = f32_mul(y, a);
+    if (n % 2) {
+      DENORMAL2(of_f32(y), of_f32(a));
+      y = f32_mul(y, a);
+    }
   }
+  if (m < 0 && denormal_checks && !ZERO(of_f32(y))) DENORMAL(of_f32(y));
   return of_f32(m < 0 ? f32_div(one, y) : y);
 }
 double __powidf2(double x, int m) {
   unsigned n = m < 0 ? -(unsigned)m : (unsigned)m;
   float64_t a = f64_of(x), one = {UINT64_C(0x3FF0000000000000)}, y = n % 2 ? a : one;
   while (n >>= 1) {
+    DENORMAL(of_f64(a));
     a = f64_mul(a, a);
-    if (n % 2) y = f64_mul(y, a);
+    if (n % 2) {
+      DENORMAL2(of_f64(y), of_f64(a));
+      y = f64_mul(y, a);
+    }
   }
+  if (m < 0 && denormal_checks && !ZERO(of_f64(y))) DENORMAL(of_f64(y));
   return of_f64(m < 0 ? f64_div(one, y) : y);
 }
 
@@ -627,9 +639,14 @@ long double __powixf2(long double x, int m) {
   unsigned n = m < 0 ? -(unsigned)m : (unsigned)m;
   extFloat80_t a = x80_of(x), one = {UINT64_C(0x8000000000000000), 0x3FFF}, y = n % 2 ? a : one;
   while (n >>= 1) {
+    DENORMAL(of_x80(a));
     a = extF80_mul(a, a);
-    if (n % 2) y = extF80_mul(y, a);
+    if (n % 2) {
+      DENORMAL2(of_x80(y), of_x80(a));
+      y = extF80_mul(y, a);
+    }
   }
+  if (m < 0 && denormal_checks && !ZERO(of_x80(y))) DENORMAL(of_x80(y));
   return of_x80(m < 0 ? extF80_div(one, y) : y);
 }
 

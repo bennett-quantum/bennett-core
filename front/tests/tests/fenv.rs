@@ -86,6 +86,11 @@ fn every_operation_rounds_and_raises_flags_as_native_code_from_o2_without_errno(
 }
 
 #[test]
+fn integer_powers_raise_the_denormal_operand_flag_as_native_code() {
+    agrees("fenv_pows.c", "fenv_pows", &["-O0", "-O2"], &[]);
+}
+
+#[test]
 fn the_environment_functions_behave_as_glibcs() {
     agrees("fenv_api.c", "fenv_api", &["-O0", "-O2"], &[]);
 }
