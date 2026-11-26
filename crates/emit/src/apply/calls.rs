@@ -153,10 +153,7 @@ impl<'a> Program<'a> {
 
         // Use the same facts as the caller's return query. They hold across
         // visits to the site and can include identities local to its block.
-        let arguments = site.args.iter().enumerate().map(|(index, arg)| match &site.argument_facts {
-            Some(facts) => facts[index].clone(),
-            None => parent.frame.known_bits(arg),
-        });
+        let arguments = site.argument_facts.iter().cloned();
         let frame = Frame::check(module, callee, arguments, proofs)?;
         let available_stack =
             parent.available_stack.and_then(|bytes| bytes.checked_sub(frame_bytes(function.slot_count())?));

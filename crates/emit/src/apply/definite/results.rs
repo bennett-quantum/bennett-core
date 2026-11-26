@@ -63,12 +63,7 @@ impl<'a> CallProofs<'a> {
         Self { returns: Returns::new(module), words: CopyResults::new(work_limit) }
     }
 
-    pub(super) fn call(
-        &mut self,
-        module: &'a ValidModule,
-        target: FuncId,
-        args: Option<&[Option<Word>]>,
-    ) -> CallResult {
+    pub(super) fn call(&mut self, module: &'a ValidModule, target: FuncId, args: &[Option<Word>]) -> CallResult {
         self.words.call(module, &mut self.returns, target, args)
     }
 
@@ -93,12 +88,11 @@ impl CopyResults {
         module: &'a ValidModule,
         returns: &mut Returns<'a>,
         target: FuncId,
-        args: Option<&[Option<Word>]>,
+        args: &[Option<Word>],
     ) -> CallResult {
         if !returns.can_return(target) {
             return CallResult::Stops;
         }
-        let Some(args) = args else { return CallResult::Returns(Vec::new()) };
         let query = Query::new(&Frame::for_analysis(module, target), args);
         self.resolve(module, returns, &query.context);
         self.lookup(&query).unwrap_or_else(|| CallResult::Returns(Vec::new()))
@@ -140,9 +134,9 @@ impl CopyResults {
                 }
                 // The copy planner still checks recursive call paths. Use an
                 // unknown word for a query to a function already on this path.
-                let Some(args) = args.filter(|_| !active.contains(&target)) else {
+                if active.contains(&target) {
                     return CallResult::Returns(Vec::new());
-                };
+                }
                 let query = Query::new(&Frame::for_analysis(module, target), args);
                 self.lookup(&query).unwrap_or_else(|| {
                     if requested.insert(query.context.clone()) {

@@ -336,10 +336,7 @@ entry:
     assert_eq!(cost.operations, 80);
 }
 
-#[test]
-fn an_indirect_target_can_stop_for_the_supplied_argument() {
-    let module = module(
-        r#"
+const CALL_STOPPING_TARGET: &str = r#"
     %odd = trunc i2 %x to i1
     %a = faddr @seven
     %b = faddr @maybe
@@ -351,7 +348,12 @@ yes:
 no:
     %unreachable = call @cycle()
     ret %unreachable
-"#,
+"#;
+
+#[test]
+fn an_indirect_target_can_stop_for_the_supplied_argument() {
+    let module = module(
+        CALL_STOPPING_TARGET,
         &format!(
             r#"
 func @seven(i1 %flag) -> i8 {{
@@ -379,6 +381,48 @@ stopped:
                 (1 | 3, 10..) => (14, 0),
                 (_, _) => (0, Fault::Budget.code()),
             });
+        }
+    }
+}
+
+#[test]
+fn a_nested_call_can_stop_with_or_without_a_result_slot() {
+    for receiver in ["%unused = ", ""] {
+        let module = module(
+            CALL_STOPPING_TARGET,
+            &format!(
+                r#"
+func @seven(i1 %flag) -> i8 {{
+entry:
+    ret 7
+}}
+func @maybe(i1 %flag) -> i8 {{
+entry:
+    {receiver}call @inner(%flag)
+    ret 8
+}}
+func @inner(i1 %flag) -> i8 {{
+entry:
+    br %flag, normal, stopped
+normal:
+    ret 8
+stopped:
+    effect 65
+    ret 9
+}}
+{RECURSIVE}
+"#
+            ),
+        );
+        for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+            for budget in (0..=16).chain([32]) {
+                compare_mode(&module, budget, mode, |x| match (x, budget) {
+                    (0, 3..) => (9, 0),
+                    (2, 10..) => (0, Fault::EffectInRegion.code()),
+                    (1 | 3, 10..) => (14, 0),
+                    (_, _) => (0, Fault::Budget.code()),
+                });
+            }
         }
     }
 }

@@ -583,13 +583,13 @@ constant bits and shared qubit values. It selects candidates while the local ins
 still has those relationships and retains any candidates discovered on later visits. The emitter refuses
 reachable recursion and copy expansions above the limit before issuing gates. A copied frame keeps the
 caller's proved literal bits and equalities between argument bits across all visits to the call site.
-The return analysis and emitted copy use the same argument facts at the call site. The analysis keeps
-literals and argument-bit identities that agree across the reachable normal returns of the possible
-targets. A target proved to stop with those arguments contributes no return word. The analysis translates
-shared identities to the caller's argument bits for operand evaluation. The call executes and charges
-its normal steps, including any fault before a return. Proofs are cached by function and normalized
-argument facts. Active recursive queries and queries that exceed the proof-work allowance contribute
-an unknown return word.
+Every call's return analysis and emitted copy use the same argument facts at the call site, including
+calls whose results are discarded. The analysis keeps literals and argument-bit identities that agree
+across the reachable normal returns of the possible targets. A target proved to stop with those arguments
+contributes no normal continuation or return word. The analysis translates shared identities to the
+caller's argument bits for operand evaluation. The call executes and charges its normal steps, including
+any fault before a return. Proofs are cached by function and normalized argument facts. Active recursive
+queries and queries that exceed the proof-work allowance contribute an unknown return word.
 
 When the first qubit-dependent jump is in a frame
 entered by the definite prefix, the control construction can follow calls and returns under

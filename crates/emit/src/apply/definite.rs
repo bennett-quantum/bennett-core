@@ -75,7 +75,7 @@ fn fold_inst(
 pub(super) struct CallSite<'a> {
     pub(super) target: Option<&'a Operand>,
     pub(super) args: &'a [Operand],
-    pub(super) argument_facts: Option<Vec<Option<Word>>>,
+    pub(super) argument_facts: Vec<Option<Word>>,
     pub(super) dst: Option<Slot>,
     pub(super) candidates: BTreeSet<FuncId>,
     pub(super) invalid_possible: bool,
@@ -91,7 +91,7 @@ fn record_call<'a, 'sites>(
     let site = calls.entry(at).or_insert_with(|| CallSite {
         target: call.target,
         args: call.args,
-        argument_facts: None,
+        argument_facts: Vec::new(),
         dst: call.dst,
         candidates: BTreeSet::new(),
         invalid_possible: false,
@@ -139,8 +139,8 @@ fn intersect_return(joined: &mut Option<ReturnWord>, word: ReturnWord) {
 fn fold_call(
     slot: Option<Slot>,
     candidates: &BTreeSet<FuncId>,
-    args: Option<&[Option<Word>]>,
-    mut call_result: impl FnMut(FuncId, Option<&[Option<Word>]>) -> CallResult,
+    args: &[Option<Word>],
+    mut call_result: impl FnMut(FuncId, &[Option<Word>]) -> CallResult,
     unknown_word: impl FnOnce(Slot) -> Word,
 ) -> Option<Option<Word>> {
     let mut returning = false;
@@ -151,7 +151,7 @@ fn fold_call(
             continue;
         };
         returning = true;
-        let Some(unknown) = &unknown else { break };
+        let Some(unknown) = &unknown else { continue };
         word.resize(unknown.len(), None);
         intersect_return(&mut joined, word);
     }
@@ -241,13 +241,6 @@ impl<'a> Constants<'a> {
         word
     }
 
-    pub(super) fn word(&self, operand: &Operand) -> Option<Word> {
-        match operand {
-            Operand::Const(value) => Some(constant(value.value(), value.width().bits() as usize)),
-            Operand::Slot(slot) => self.slots.get(slot.index())?.clone(),
-        }
-    }
-
     pub(super) fn switch_edges(&self, block: BlockId) -> &Edges<'a> {
         &self.switches[block.index()]
     }
@@ -311,7 +304,7 @@ impl<'a> Constants<'a> {
     pub(super) fn analyze(
         frame: &Frame<'a>,
         inputs: impl Iterator<Item = Option<Word>>,
-        call_result: impl FnMut(FuncId, Option<&[Option<Word>]>) -> CallResult,
+        call_result: impl FnMut(FuncId, &[Option<Word>]) -> CallResult,
     ) -> Self {
         let (inputs, _) = normalize_arguments(frame, inputs);
         Self::solve(frame, &inputs, call_result)
@@ -338,7 +331,7 @@ impl<'a> Constants<'a> {
     fn solve(
         frame: &Frame<'a>,
         inputs: &[Word],
-        mut call_result: impl FnMut(FuncId, Option<&[Option<Word>]>) -> CallResult,
+        mut call_result: impl FnMut(FuncId, &[Option<Word>]) -> CallResult,
     ) -> Self {
         let function = frame.module.function(frame.callee);
         let Self { mut slots, argument_bits, .. } = Self::with_arguments(frame, inputs);
@@ -376,7 +369,7 @@ impl<'a> Constants<'a> {
                         Some(CallSite {
                             target: None,
                             args,
-                            argument_facts: None,
+                            argument_facts: Vec::new(),
                             dst: *dst,
                             candidates: BTreeSet::from([*callee]),
                             invalid_possible: false,
@@ -391,7 +384,7 @@ impl<'a> Constants<'a> {
                         Some(CallSite {
                             target: Some(target),
                             args,
-                            argument_facts: None,
+                            argument_facts: Vec::new(),
                             dst: *dst,
                             candidates,
                             invalid_possible,
@@ -400,15 +393,11 @@ impl<'a> Constants<'a> {
                         None
                     };
                     if let Some(mut call) = call {
-                        call.argument_facts = call.dst.map(|_| call.args.iter().map(|arg| read(&local, arg)).collect());
+                        call.argument_facts = call.args.iter().map(|arg| read(&local, arg)).collect();
                         let site = record_call(&mut calls, (BlockId(index as u32), at), call);
-                        let Some(word) = fold_call(
-                            site.dst,
-                            &site.candidates,
-                            site.argument_facts.as_deref(),
-                            &mut call_result,
-                            unknown_word,
-                        ) else {
+                        let Some(word) =
+                            fold_call(site.dst, &site.candidates, &site.argument_facts, &mut call_result, unknown_word)
+                        else {
                             term = None;
                             break;
                         };

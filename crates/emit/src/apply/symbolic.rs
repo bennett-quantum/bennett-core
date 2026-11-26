@@ -116,10 +116,6 @@ impl<'a> Frame<'a> {
         ApplyError::Unsupported { callee: self.callee, block: point.block, index: point.index, operation, route }
     }
 
-    pub(super) fn known_bits(&self, operand: &Operand) -> Option<Word> {
-        self.constants.word(operand)
-    }
-
     pub(super) fn take_calls(&mut self) -> BTreeMap<(BlockId, usize), CallSite<'a>> {
         std::mem::take(&mut self.constants.calls)
     }
