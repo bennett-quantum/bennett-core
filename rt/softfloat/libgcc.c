@@ -147,14 +147,17 @@ static int class_none(long long a) {
 }
 #define CLASS(a)                                                                                           \
   _Generic((a), _Float16: class16, float: class32, double: class64, long double: class80, default: class_none)(a)
+/* Whether the denormal-operand flag is computed: bennett-front makes this the constant 0 in a program that cannot
+ * read the flags, so that every check below is deleted before the optimiser sees it. */
+uint_fast8_t denormal_checks = 1;
 static void denormal_of(int classes) {
   if (classes == 1) softfloat_raiseFlags(softfloat_flag_denormal);
 }
-#define DENORMAL(a) denormal_of(CLASS(a))
-#define DENORMAL2(a, b) denormal_of(CLASS(a) | CLASS(b))
-#define DENORMAL3(a, b, c) denormal_of(CLASS(a) | CLASS(b) | CLASS(c))
+#define DENORMAL(a) (denormal_checks ? denormal_of(CLASS(a)) : (void)0)
+#define DENORMAL2(a, b) (denormal_checks ? denormal_of(CLASS(a) | CLASS(b)) : (void)0)
+#define DENORMAL3(a, b, c) (denormal_checks ? denormal_of(CLASS(a) | CLASS(b) | CLASS(c)) : (void)0)
 /* Beside a NaN too: glibc's fmin and fmax (and x87's fminl, fmaxl) compare each operand with itself. */
-#define DENORMAL_ANY(a, b) denormal_of(CLASS(a) & 1 || CLASS(b) & 1)
+#define DENORMAL_ANY(a, b) (denormal_checks ? denormal_of(CLASS(a) & 1 || CLASS(b) & 1) : (void)0)
 /* A division by zero raises divide by zero only, and a product of zero and infinity invalid only. */
 static bool zero_or_infinite32(float a, bool infinite) {
   uint32_t m = f32_of(a).v & 0x7FFFFFFF;
@@ -181,20 +184,20 @@ float __addsf3(float a, float b) { DENORMAL2(a, b); return of_f32(f32_add(f32_of
 float __subsf3(float a, float b) { DENORMAL2(a, b); return of_f32(f32_sub(f32_of(a), f32_of(b))); }
 float __mulsf3(float a, float b) { DENORMAL2(a, b); return of_f32(f32_mul(f32_of(a), f32_of(b))); }
 float __divsf3(float a, float b) {
-  if (!ZERO(b)) DENORMAL2(a, b);
+  if (denormal_checks && !ZERO(b)) DENORMAL2(a, b);
   return of_f32(f32_div(f32_of(a), f32_of(b)));
 }
 double __adddf3(double a, double b) { DENORMAL2(a, b); return of_f64(f64_add(f64_of(a), f64_of(b))); }
 double __subdf3(double a, double b) { DENORMAL2(a, b); return of_f64(f64_sub(f64_of(a), f64_of(b))); }
 double __muldf3(double a, double b) { DENORMAL2(a, b); return of_f64(f64_mul(f64_of(a), f64_of(b))); }
 double __divdf3(double a, double b) {
-  if (!ZERO(b)) DENORMAL2(a, b);
+  if (denormal_checks && !ZERO(b)) DENORMAL2(a, b);
   return of_f64(f64_div(f64_of(a), f64_of(b)));
 }
 /* long double rounds to the full 64-bit significand: extF80_roundingPrecision is never written and stays
  * 80 (x87 on Linux computes so by default). */
 static long double arith80(extFloat80_t (*op)(extFloat80_t, extFloat80_t), long double a, long double b) {
-  if (op != extF80_div || !ZERO(b)) DENORMAL2(a, b);
+  if (denormal_checks && (op != extF80_div || !ZERO(b))) DENORMAL2(a, b);
   bool invalid = false;
   extFloat80_t x = x80_operand(a, &invalid), y = x80_operand(b, &invalid);
   return of_x80(invalid ? indefinite80 : op(x, y));
@@ -641,7 +644,7 @@ double sqrt(double a) { DENORMAL(a); return of_f64(f64_sqrt(f64_of(a))); }
  * NaN comes back is not promised, `rt/softfloat/README.md`), so that in a program that does not read the flags
  * the check is deleted with them and a finite operation costs what SoftFloat's does. */
 float fmaf(float a, float b, float c) {
-  if (!ZERO_TIMES_INFINITY(a, b)) DENORMAL3(a, b, c);
+  if (denormal_checks && !ZERO_TIMES_INFINITY(a, b)) DENORMAL3(a, b, c);
   float32_t x = f32_of(a), y = f32_of(b), z = f32_of(c);
   uint_fast8_t before = softfloat_exceptionFlags;
   float32_t r = f32_mulAdd(x, y, z);
@@ -650,7 +653,7 @@ float fmaf(float a, float b, float c) {
   return of_f32(r);
 }
 double fma(double a, double b, double c) {
-  if (!ZERO_TIMES_INFINITY(a, b)) DENORMAL3(a, b, c);
+  if (denormal_checks && !ZERO_TIMES_INFINITY(a, b)) DENORMAL3(a, b, c);
   float64_t x = f64_of(a), y = f64_of(b), z = f64_of(c);
   uint_fast8_t before = softfloat_exceptionFlags;
   float64_t r = f64_mulAdd(x, y, z);
@@ -919,22 +922,22 @@ long long llroundl(long double a) { return round_to_integer(a); }
  * two equal operands (+0 and -0 among them) the first. C allows either zero; this is the one the native
  * program gives. (The C library's own fmin, called only under -fno-builtin, keeps the second.) */
 float fminf(float x, float y) {
-  denormal_of(CLASS(x) == 1 || (CLASS(x) != 2 && CLASS(y) == 1)); /* cmpunord x, x; then maxsd */
+  if (denormal_checks) denormal_of(CLASS(x) == 1 || (CLASS(x) != 2 && CLASS(y) == 1)); /* cmpunord x, x; maxsd */
   float32_t a = f32_of(x), b = f32_of(y);
   return nan32(a) ? y : f32_lt_quiet(b, a) ? y : x;
 }
 float fmaxf(float x, float y) {
-  denormal_of(CLASS(x) == 1 || (CLASS(x) != 2 && CLASS(y) == 1)); /* cmpunord x, x; then maxsd */
+  if (denormal_checks) denormal_of(CLASS(x) == 1 || (CLASS(x) != 2 && CLASS(y) == 1)); /* cmpunord x, x; maxsd */
   float32_t a = f32_of(x), b = f32_of(y);
   return nan32(a) ? y : f32_lt_quiet(a, b) ? y : x;
 }
 double fmin(double x, double y) {
-  denormal_of(CLASS(x) == 1 || (CLASS(x) != 2 && CLASS(y) == 1)); /* cmpunord x, x; then maxsd */
+  if (denormal_checks) denormal_of(CLASS(x) == 1 || (CLASS(x) != 2 && CLASS(y) == 1)); /* cmpunord x, x; maxsd */
   float64_t a = f64_of(x), b = f64_of(y);
   return nan64(a) ? y : f64_lt_quiet(b, a) ? y : x;
 }
 double fmax(double x, double y) {
-  denormal_of(CLASS(x) == 1 || (CLASS(x) != 2 && CLASS(y) == 1)); /* cmpunord x, x; then maxsd */
+  if (denormal_checks) denormal_of(CLASS(x) == 1 || (CLASS(x) != 2 && CLASS(y) == 1)); /* cmpunord x, x; maxsd */
   float64_t a = f64_of(x), b = f64_of(y);
   return nan64(a) ? y : f64_lt_quiet(a, b) ? y : x;
 }

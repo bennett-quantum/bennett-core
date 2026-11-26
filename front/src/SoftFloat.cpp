@@ -1320,7 +1320,8 @@ bool linkStateRoutines(Module &module, Runtime &runtime) {
 // The runtime's exception flags, both units', when the program cannot read them (it has no call of
 // `__bennett_fegetexcept` or `__bennett_fegetunit`): then every write to them is dead, and each is deleted, so that
 // no routine writes memory (a routine that writes memory cannot run under a qubit branch or coherently). With no
-// store left, each load gives the initial value. LLVM's optimiser deletes a global that is only or-ed with one
+// store left, each load gives the initial value, and the runtime's denormal-operand checks are switched off
+// (`denormal_checks`). LLVM's optimiser deletes a global that is only or-ed with one
 // constant, as SoftFloat's own writes of the inexact flag are, but not one or-ed with several, as
 // `softfloat_raiseFlags` does (measured). No routine computes a result from the flags (`rt/softfloat/libgcc.c`).
 void removeUnreadFlags(Module &module) {
@@ -1328,6 +1329,12 @@ void removeUnreadFlags(Module &module) {
     if (module.getFunction(std::string(runtimePrefix) + reader)) {
       return;
     }
+  }
+  // The denormal-operand checks, which only feed the flags, are switched off by a constant.
+  if (GlobalVariable *checks = module.getGlobalVariable(std::string(runtimePrefix) + "denormal_checks", true);
+      checks && checks->hasInitializer()) {
+    checks->setInitializer(ConstantInt::get(checks->getValueType(), 0));
+    checks->setConstant(true);
   }
   for (const char *unit : {"softfloat_exceptionFlags", "x87_exceptionFlags"}) {
     GlobalVariable *flags = module.getGlobalVariable(std::string(runtimePrefix) + unit, true);
