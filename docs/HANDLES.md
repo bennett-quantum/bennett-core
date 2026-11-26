@@ -447,8 +447,7 @@ It obtains it from a run that reports the steps an `apply` used:
 - **The report.** In a *measuring run*, the device reports, for each `bq_apply` the run executes, in order: its
   position in the run (the `j`-th `apply`), the applied function's name, the number of inputs it evaluated, the
   largest number of steps any of them used to return or to fault with a code other than `budget`, and how many
-  reached the budget. The run takes a ceiling as a parameter of the run (as `bennett run --budget` takes a step limit
-  today), and the program passes it to its `apply` calls.
+  reached the budget. The measuring run gives its `apply` calls a ceiling as their budget (below).
 - **Why that is enough.** A run that has returned or faulted stays so, and neither the block's base nor the entry
   state of the applied function depends on the budget (6.3). Hence, at the same `apply` of the same executable, with
   the same ordinary state at the call and the same operands other than the budget, any budget at least the reported
@@ -464,8 +463,41 @@ It obtains it from a run that reports the steps an `apply` used:
   `-O2`, so a budget is measured for the compilation that will run. Grover's oracle sees every input of its
   register in the first iteration; for a function applied to a register in a narrower state, the measuring run
   should apply it once to a uniform superposition of its inputs.
-- **How the program receives it.** As a run input (an argument of the run), or as a constant written next to the
-  command and the compilation that measured it. Never as a constant without that record.
+- **How the program receives it.** The header names each budget: `BQ_BUDGET(name)` expands to the macro
+  `BQ_BUDGET_name`, which the build defines, and no program writes a number. A *measuring build* defines every
+  budget as unbounded, each name with its own value (`BQ_UNBOUNDED - i` for the `i`-th name, `BQ_UNBOUNDED` being
+  `UINT64_MAX`), so that the report of each `apply` names its budget; the *result build* defines each name as the
+  largest count reported for it. Both are builds of the same compilation flags, so the count applies to the
+  compilation that runs. A function that never ends on some input cannot be measured without a bound: its measuring
+  build gives it a ceiling, doubled from 1 until every `apply` with that budget has an input that ended within it.
+  The alternative, a budget as a run input, needs run arguments under the C library (R6); a build-time definition
+  needs nothing from the device but the report (D16), so it was taken (13).
+
+The example programs of `examples/handles/` and the checks of `front/tests/handles/` run this way on a native
+stand-in for the device (`front/tests/handles/standin.c`, a state-vector simulator; `front/tests/tests/handles_native.rs`
+runs it). It is a comparison aid, not the device, and the device is the reference for everything it does. It
+evaluates the applied function once per input in a forked child process, whose memory is a private copy, as on the
+device. Its steps are its own count, not the device's: the entry into the applied function and each basic block of
+program code entered inside it (the program is compiled with `-fsanitize-coverage=trace-pc-guard,pc-table,no-prune`
+and the stand-in supplies the callbacks; the C library's own code is not counted), so a budget measured there is a
+budget for the stand-in only. The budget is the program's; the stand-in has no bound of its own. After each `apply`
+it writes `bq: apply <k> budget <b> inputs <e> steps <s> out-of-budget <n>` to standard error; the test measures with
+every seed, builds again with the counts, requires the result runs to give the measuring runs' output, and checks that
+one step less makes an input run out.
+
+The stand-in claims agreement with the device for one class of applied functions, and for nothing else: functions
+that compute on their block and on ordinary memory (allocating and releasing it included, every allocation
+succeeding), call no effect, exit or interface primitive, register no handler, do no buffered output, give out values
+that do not depend on numeric addresses, and return. Every applied function of the five programs and of the library
+checks is in it. Outside it a result, a fault code included, says nothing about the device's; for example, each of
+these gives a result natively that the device does not: an exit handler registered inside the applied function,
+buffered output to a file stream, fork callbacks of the program (they run at the stand-in's fork, before the applied
+function reads memory), output the program left buffered before the `apply` (the stand-in flushes standard output and
+error at each `apply`), and an explicit trap (natively a signal, reported as `out_of_bounds`; on the device
+`unreachable`). Some calls outside the class stop the run with `bq: limit <what> in <call>` instead (a system call
+other than those that map or unmap anonymous memory or end the process, a shared mapping at the `apply`, an `f` that
+is not a function entry of the program's code, the simulator's own storage running out), but that is a help, not a
+check of the class: a call outside it may also go unnoticed.
 
 A smaller budget makes the circuit a device builds for an `apply` smaller, so a measured budget is also a cost
 measure. Today the simulator reports only the sum of all steps inside applied functions (`region steps`); the
@@ -486,8 +518,13 @@ static inline bq_bit   bq_bit_of(bq_reg r, uint64_t bit)                  { retu
 static inline bq_slice bq_slice_of(bq_reg r, uint64_t low, uint64_t bits) { return (bq_slice){ r, low, bits }; }
 static inline bq_slice bq_all(bq_reg r)                                   { return bq_slice_of(r, 0, bq_width(r)); }
 
-#define BQ_IN(slice, type, member)    ((bq_field){ (slice), offsetof(type, member), BQ_DIR_IN })
-#define BQ_OUT(slice, type, member)   ((bq_field){ (slice), offsetof(type, member), BQ_DIR_OUT })
+static inline bq_field bq_field_of(bq_slice slice, uint64_t offset, uint64_t member_size, uint64_t direction) {
+    if (slice.bits / 8 + (slice.bits % 8 != 0) > member_size) __bennett_bad_argument();
+    return (bq_field){ slice, offset, direction };
+}
+#define BQ_MEMBER_SIZE(type, member)  sizeof(((type *)0)->member)
+#define BQ_IN(slice, type, member)    bq_field_of((slice), offsetof(type, member), BQ_MEMBER_SIZE(type, member), BQ_DIR_IN)
+#define BQ_OUT(slice, type, member)   bq_field_of((slice), offsetof(type, member), BQ_MEMBER_SIZE(type, member), BQ_DIR_OUT)
 #define BQ_IN_ALL(reg, type, member)  BQ_IN(bq_all(reg), type, member)
 #define BQ_OUT_ALL(reg, type, member) BQ_OUT(bq_all(reg), type, member)
 ```
@@ -497,7 +534,10 @@ macro argument. `bq_all` asks the register its width, so a whole-register field 
 
 A field's bytes and its member's type are separate things: a field writes and reads `ceil(w/8)` bytes, least
 significant first. A 4-qubit field on a `uint32_t` member fills its low byte and leaves the other three as the image
-had them; a 4-qubit *out* field on a `uint8_t` member drops bits 4 to 7 of whatever `f` stores there.
+had them; a 4-qubit *out* field on a `uint8_t` member drops bits 4 to 7 of whatever `f` stores there. The macros
+check one thing more than `bq_apply` does: that the field's bytes lie inside the member it names. A 40-qubit field
+on a `uint32_t` member would otherwise write into the next member, which `bq_apply` cannot see; it stops with
+`bad_argument` instead. The example programs use `uint64_t` members, which hold any slice of up to 64 qubits.
 
 ### 8.2 Fault registers
 
@@ -516,6 +556,22 @@ certainty, or at the end of a computation; in the middle of an algorithm, a faul
 measurement outcome like any other and changes the state. Nothing in the interface stops the run if any amplitude
 faulted without measuring.
 
+So that a fault register costs one argument at the `apply` and one line at the point the program chooses to read
+it, the header keeps a set of fault registers waiting to be read:
+
+```c
+bq_reg   bq_fault(void);                    /* bq_fault_alloc(), added to the set                       */
+uint64_t bq_faults_take(void);              /* bq_fault_take of each, oldest first; the first nonzero code */
+void     bq_faults_check(const char *where);/* bq_faults_take; on a fault: "fault <name> in <where>" on
+                                               standard output, exit(BQ_FAULT_EXIT_STATUS), which is 4  */
+```
+
+The message goes to standard output because the device's runtime has a console only: a write to standard error
+stops the run there. An oracle is then `bq_apply_scoped(f, BQ_BUDGET(f), bq_fault(), ...); ...;
+bq_faults_check("oracle");`. Reading
+later costs qubits (five per `apply` until the check); reading sooner measures sooner. The set is ordinary memory, one
+per program (8.4), grown on demand.
+
 ### 8.3 Scalar forms
 
 For a C function `g` of `k` integers, `k` from 0 to 4, the header defines a wrapper of type `bq_fn`, its image
@@ -527,7 +583,7 @@ static void bq_w1(void *p) { struct bq_w1 *w = p; w->r = w->g(w->a0); }
 
 static inline void bq_apply_1(uint64_t (*g)(uint64_t), uint64_t budget, bq_reg fault,
                               bq_slice out, bq_slice in0, const bq_bit *controls, uint64_t n) {
-    if (out.bits > 64 || in0.bits > 64) __bennett_bad_argument();
+    if (out.bits < 1 || out.bits > 64 || in0.bits < 1 || in0.bits > 64) __bennett_bad_argument();
     struct bq_w1 image = { g, 0, 0 };
     bq_field f[2] = { BQ_IN(in0, struct bq_w1, a0), BQ_OUT(out, struct bq_w1, r) };
     bq_apply(bq_w1, budget, fault, &image, sizeof image, f, 2, controls, n);
@@ -542,7 +598,7 @@ and passes `k + 1` fields, the *in* fields at the members' offsets followed by t
 
 The explicit width check is the choice of 2026-11-25: without it the rejection of a wide slice would rest on the
 layout of the image struct (a 65-qubit field overlaps the next member only when the members are contiguous 8-byte
-integers). A zero-width slice is left to `bq_apply`, which refuses it.
+integers). A zero-width slice stops there too (it would be `bad_argument` of `bq_apply` anyway).
 
 The budget is the wrapper's: it counts the wrapper's own steps and those of `g`.
 
@@ -553,7 +609,7 @@ ordinary C: it keeps the current list of control qubits in ordinary memory, and 
 calls of 5.4 and 6. On its successful paths:
 
 ```c
-static bq_bit  *active;                 /* one list per program (13) */
+static bq_bit  *active;                 /* one list per program: see below */
 static uint64_t depth;
 
 void bq_push(bq_reg r, uint64_t bit) {
@@ -595,7 +651,21 @@ return, `longjmp` or `exit` does to it is plain C: none of them pops. A measurem
 scope is, as always, not controlled. A routine that tests `bq_scope_depth()` can behave differently under a scope;
 that is ordinary C too (11, claim 8).
 
+The header defines this library inline. Its state, the list and its depth (and the fault set of 8.2), is a weak
+definition in the header, which the linker merges into one object for the whole program, so that a routine in
+another translation unit sees the scope it is called under; no library file is needed. Storage grows by doubling
+through `realloc`, with the checks above (the fault set's too). Two short forms add one control to one gate: `bq_cx(c, cb, r, b)` and
+`bq_cphase(theta, c, cb, r, b)` are a push of qubit `cb` of `c`, the gate on qubit `b` of `r`, and the pop.
+
 ## 9. Examples
+
+The programs in `examples/handles/` are written in this interface: the thesis program, Grover over a C predicate,
+Shor for 15 and for 21 (`shor.c` with the number and base defined by `shor15.c` and `shor21.c`), and Grover over
+SQLite. Both Grover programs take their diffusion step, the exact inversion about the mean, from `grover.h`; it is
+written with the scope wrappers and checked under a control by `front/tests/handles/library.c`. The programs run on
+the native stand-in of section 7 and give the same output at `-O0` and `-O2 -fno-finite-loops`
+(`front/tests/tests/handles_native.rs`; Grover over SQLite in an ignored test that needs the SQLite sources). The
+fragments below show the forms.
 
 The thesis program: put a qubit in superposition, let ordinary code depend on it, measure.
 
@@ -948,12 +1018,11 @@ this document; each is the reading easiest to reverse and is marked here until t
   and no primitive that raises an arbitrary code. The libraries report their own failed checks as `bad_argument` and
   a list that cannot grow as `out_of_memory`; a code of their own (for example for a pop without a push) would need a
   new device code.
-- **One scope per program.** The scope library's state is one list for the whole program, in a library file, so that a
-  routine in another translation unit sees the scope it is called under. A `static` list in the header would give one
-  per translation unit.
-- **Field macros do not check the member's size.** `BQ_IN` and `BQ_OUT` take the offset of the member and nothing
-  else (8.1); a check that the field's bytes fit the member could be added to the header without changing the
-  interface.
+- **One scope per program.** The scope library's state is one list for the whole program, a weak definition in the
+  header (8.4), so that a routine in another translation unit sees the scope it is called under. A `static` list in
+  the header would give one per translation unit.
+- **Field macros check the member's size.** `BQ_IN` and `BQ_OUT` stop with `bad_argument` when the field's bytes do
+  not fit the member they name (8.1). The interface is unchanged by it.
 - **The placement rule** is fixed by the device and stated in `docs/DESIGN.md` when it is built. This document lets it
   read only `size` and where the heap and live stack lie at the call (6.3), so that the budget and the other operands
   cannot move the block; that is the narrowest reading, and widening it later breaks nothing written here except
@@ -961,8 +1030,10 @@ this document; each is the reading easiest to reverse and is marked here until t
   16 at which the block ends at or below the stack pointer at the call, with `f`'s frames below it.
 - **A named stop inside an applied function** gives its own code (`bad_argument` or `out_of_memory`), as any `fault
   NAME` of ordinary code does, not the class code of an output or exit.
-- **How a measured budget reaches the program** (7): as a run input or as a recorded constant. The example programs
-  choose one; a run input needs run arguments under the C library (R6).
+- **How a measured budget reaches the program** (7): a definition of the build, `BQ_BUDGET_name`, from a measuring
+  build whose run reports the steps used. Taken because it needs nothing from the device beyond the report; the
+  alternative, a run input, needs run arguments under the C library (R6) and allows a budget computed at run time
+  from a measurement made in the same run.
 - **The function operand of `apply`** is settled by the decision of 2026-11-25 that each interface call is one
   device instruction: it is a run-time operand of the device's `apply` instruction like every other operand, and the
   device makes the in-region test (8) and the `bad_function` check (4) itself (5.7, 6.2, D11, D14).
@@ -1012,7 +1083,7 @@ pointers are lowered to integers, for D11; and the two named stops lowered to `f
 | R1 | The C library's files take their declarations of the four effect primitives (`__bennett_effect`, `__bennett_exit`, `__bennett_out_of_memory`, `__bennett_bad_argument`) from the force-included header and drop their own | 4, 5.5 | no: `rt/musl/runtime.c` declares the first two, `start.c` the exit primitive, `devices.h` the output primitive (which `devices.c` takes from it) |
 | R2 | The header force-included when the C library is compiled, so that the library passes the declaration rule | 4 | no |
 | R3 | A request of `malloc`, `calloc`, `realloc` or `aligned_alloc` that the arena cannot hold is the fault `out_of_memory` (19) through `__bennett_out_of_memory`; a request the C library rejects from its arguments alone, before any system call (an overflowing `calloc` or `reallocarray`, a `malloc` of half the address space or more, an impossible alignment), still returns a null result with its error code, exactly as natively | 5.5, 6.3, 8.4, 10 (A4) | no: in progress |
-| R4 | The control-scope library of 8.4 as one library file compiled into every program (one list per program), using the C library's allocator | 8.4 | no |
-| R5 | `bq_fault_name` and the other non-inline helpers of section 8 in a library file, if the header does not define them inline | 8.2 | no |
-| R6 | Run arguments that reach `main`, so that a program can receive a measured budget as a run input (7). Needed only for that choice of 7 (13); a budget recorded as a constant with its command and compilation needs none | 7 | partly: a program without the C library receives integer arguments (`bennett run --arg`); with musl, `main` gets `argc = 1` and `argv = {"prog"}` |
+| R4 | Weak definitions merged into one object for the whole program when its units and the C library are linked (the scope list and fault set of 8.4 and 8.2) | 8.4 | to be checked: the header defines its libraries inline, with no library file |
+| R5 | The C library's `realloc`, `printf` and `exit`, which the header's libraries call (`printf` to standard output, the console) | 8.2, 8.4 | yes (musl) |
+| R6 | Run arguments that reach `main`, if a program is to receive a measured budget as a run input (7, 13); a budget defined by the build needs none | 7 | partly: a program without the C library receives integer arguments (`bennett run --arg`); with musl, `main` gets `argc = 1` and `argv = {"prog"}` |
 | R7 | Loader choices fixed by the device: the C library's start-up makes no choice that depends on anything but the executable and the run input | 6.3 | yes: start-up is deterministic |
