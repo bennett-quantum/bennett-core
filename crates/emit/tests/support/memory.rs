@@ -1921,8 +1921,13 @@ fn a_maximum_divisor_still_reduces_an_equal_dividend() {
             128,
             &divisor.to_string(),
         );
-        let (_, _, values) = compare(&module(&source, ""), "maximum divisor", 6, ApplyMode::Automatic);
-        assert_eq!(values, vec![(0, 0); 8]);
+        for address in [8, 23] {
+            let read = source.replace("load i8 23", &format!("load i8 {address}"));
+            let label = format!("maximum divisor byte {address}");
+            let (_, _, values) = compare(&module(&read, ""), &label, 6, ApplyMode::Automatic);
+            let expected = (0..8).map(|x| (u64::from(address == 8 && x & 1 == 0), 0)).collect::<Vec<_>>();
+            assert_eq!(values, expected, "{op} by {divisor}, byte {address}");
+        }
     }
 }
 
@@ -1978,4 +1983,66 @@ entry:
     let (_, memory, values) = compare(&module, "constant address without replay", 5, ApplyMode::Automatic);
     assert_eq!(memory, MemoryCounts::default());
     assert_eq!(values, vec![(41, 0); 512]);
+}
+
+#[test]
+fn signed_remainder_facts_keep_a_negative_switch_case_reachable() {
+    let module = module_with_width(
+        r#"
+func @f(i9 %x) -> i8 {
+entry:
+    %residue = srem i9 %x, 3
+    switch i9 %residue, 510: negative_two, 1: positive_one, default: other
+negative_two:
+    ret 113
+positive_one:
+    ret 29
+other:
+    ret 4
+}
+"#,
+        "",
+        9,
+    );
+    let expected = (0..512)
+        .map(|x| {
+            let signed = if x < 256 { x } else { x - 512 };
+            let value = match signed % 3 {
+                -2 => 113,
+                1 => 29,
+                _ => 4,
+            };
+            (value, 0)
+        })
+        .collect::<Vec<_>>();
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        let (_, _, values) = compare(&module, "signed remainder switch", 3, mode);
+        assert_eq!(values, expected);
+    }
+}
+
+#[test]
+fn signed_nonunit_remainder_proves_a_declared_address_without_replay() {
+    let module = module_with_width(
+        r#"
+data 16 = i8 9, i8 41, i8 127, i8 251
+func @f(i9 %x) -> i8 {
+entry:
+    %number = zext i9 %x to i16
+    %offset = srem i16 %number, 3
+    %index = zext i16 %offset to i64
+    %address = or i64 %index, 16
+    %out = load i8 %address
+    ret %out
+}
+"#,
+        "",
+        9,
+    );
+    let expected = (0..512).map(|x| ([9, 41, 127][x % 3], 0)).collect::<Vec<_>>();
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        let (_, memory, values) = compare(&module, "nonunit remainder address", 6, mode);
+        assert_eq!(memory.varying_loads, 1);
+        assert_eq!(values, expected);
+    }
 }

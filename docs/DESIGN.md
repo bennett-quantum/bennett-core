@@ -529,8 +529,8 @@ by a qubit-dependent amount, and `(x*x) XOR x` on one bit. A remainder by a know
 nonzero divisor has magnitude at most the smaller of the dividend's maximum
 magnitude and the divisor magnitude minus one. A zero bound produces literal
 zero before memory lowering. A dividend whose magnitude is always less than the
-divisor supplies its own remainder. Signed results preserve the dividend's sign
-and extend it above the proved result width. Both arithmetic analysis and gate
+divisor's magnitude supplies its own remainder. A nonzero signed remainder takes
+the dividend's sign. The emitter extends the result above its proved width. Both arithmetic analysis and gate
 emission use the bounds. A zero divisor still faults at the instruction.
 
 Writing one or zero to initially zero byte 8 with two disjoint guarded stores retains one qubit
