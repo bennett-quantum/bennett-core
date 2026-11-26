@@ -469,7 +469,9 @@ routine computes a result from the flags), with which the denormal-operand check
 not delete them itself: it deletes a global or-ed with one constant only, which SoftFloat's own writes of the
 inexact flag were while `softfloat_raiseFlags` did nothing, not one or-ed with several (measured on LLVM 18's
 `opt -O2`). So such a program's routines write no memory and run under a qubit branch and inside `apply`, as
-before, at the same cost (a finite `fma` 127 steps, the corpora's programs as before the two units: measured).
+before, at the same cost: a finite `fma` 127 steps, and every program of the three C corpora the same step count as
+before the two units (measured on all 1,860 agreeing programs), but GCC `ieee/` `cdivchkld`, which calls `ilogbl`,
+now `math.c`'s with glibc's flags (+12 steps of 10,715).
 In a program that reads the flags every routine writes memory: its floating point under a qubit branch or inside
 `apply` is refused by name, as any memory-writing call there (`front/tests/tests/fenv.rs`). A routine that
 returns an aggregate (SoftFloat's `extFloat80_t`, a 128-bit integer as C returns it on x86-64) returns it as one
