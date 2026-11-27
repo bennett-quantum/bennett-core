@@ -6,11 +6,27 @@
 extern const uint64_t __bennett_clock_start;
 extern const unsigned char __bennett_entropy_image[];
 extern const uint64_t __bennett_entropy_size;
-static uint64_t clock_reads, entropy_pos;
+/* The run's clock: the start (an input of the run) plus the number of earlier reads, plus, for the clocks that
+ * count while the process sleeps, the nanoseconds slept so far. All three counters are ordinary memory, so undo
+ * restores them. */
+static uint64_t clock_reads, clock_slept, entropy_pos;
 
-uint64_t __bennett_clock_read(void)
+uint64_t __bennett_clock_now(int cpu)
 {
-    return __bennett_clock_start + clock_reads++; /* unsigned nanoseconds, wrapping modulo 2^64 */
+    /* unsigned nanoseconds, wrapping modulo 2^64 */
+    return __bennett_clock_start + clock_reads + (cpu ? 0 : clock_slept);
+}
+
+uint64_t __bennett_clock_read(int cpu)
+{
+    uint64_t value = __bennett_clock_now(cpu);
+    ++clock_reads;
+    return value;
+}
+
+void __bennett_clock_sleep(uint64_t nanoseconds)
+{
+    clock_slept += nanoseconds;
 }
 
 void __bennett_entropy_check(uint64_t length)

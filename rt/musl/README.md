@@ -130,12 +130,54 @@ The defaults are no user files, clock start zero, an empty entropy image and no 
 inputs of the run image; to use another image currently relink. Host paths are read only by the image builder.
 
 A clock read returns the unsigned 64-bit start plus the number of earlier clock reads, in nanoseconds,
-wrapping modulo 2^64. Accepted clock ids share that counter. `clock_gettime`, `gettimeofday` and `time`
+wrapping modulo 2^64, plus the nanoseconds slept so far (below) for every clock but the CPU-time ones.
+Accepted clock ids share that counter. `clock_gettime`, `gettimeofday` and `time`
 consume one read when they request a value; `clock_getres` returns 1 ns without consuming a read.
 This is independent of the number of executed instructions. `getrandom`/`getentropy` and both random
 devices consume the same exact byte image. It is a seeded input, not a host entropy source or a PRNG.
 Exhaustion traps as `unreachable` before writing any bytes, including on a multi-element readv.
-Empty reads consume none. Undo restores both counters, destinations and all filesystem state.
+Empty reads consume none. Undo restores the clock's counters, entropy's position, destinations and all
+filesystem state.
+
+### Sleeping
+
+A sleep advances the run's clock by the requested duration and returns at once. `nanosleep`, `sleep`, `usleep`
+and `clock_nanosleep` reach the system calls `nanosleep` and `clock_nanosleep`, which the runtime answers from a
+third counter beside the start and the reads: the nanoseconds slept, ordinary memory like the others, so undo
+restores it and a sleep inside `apply` is discarded with the applied function's other writes. This extends the
+clock's rule without reading host time: a clock read is the start, plus the earlier reads, plus the nanoseconds
+slept, modulo 2^64. The clock's unit is the nanosecond, so a duration needs no rounding.
+
+- A relative sleep of `d` nanoseconds adds `d` (modulo 2^64, as reads do); an absolute one (`TIMER_ABSTIME`) on a
+  clock whose current value (the next read's, without consuming it) is `v` adds `T - v` for a target `T > v`
+  and nothing otherwise, so the next read returns exactly `T`. Later reads of `CLOCK_REALTIME`,
+  `CLOCK_MONOTONIC`, `CLOCK_BOOTTIME`, `CLOCK_TAI` and the coarse and raw clocks, `gettimeofday` and `time`
+  see the advance. The CPU-time clocks (`CLOCK_PROCESS_CPUTIME_ID`, `CLOCK_THREAD_CPUTIME_ID`, the caller's
+  ids from `clock_getcpuclockid`, and so `clock()`) do not: natively a process's CPU time does not advance
+  while it sleeps.
+- A sleep returns 0 (`sleep` returns 0 seconds left). No signal can arrive while the device sleeps (signals are
+  only those a program sends itself, delivered before the call that raises them returns), so no sleep is
+  interrupted and the remaining time is never written, as natively for a sleep that is not interrupted.
+- Sleeps on `CLOCK_REALTIME`, `CLOCK_MONOTONIC`, `CLOCK_BOOTTIME` and `CLOCK_TAI` sleep; only the
+  `TIMER_ABSTIME` bit of the flags has a meaning. Errors are Linux's, in its order: an unknown clock id is
+  `EINVAL`; the thread CPU clock, the raw and coarse clocks and a clock behind a descriptor have no sleep
+  (`EOPNOTSUPP`; musl and glibc answer `EINVAL` for `CLOCK_THREAD_CPUTIME_ID` before the call); then a null
+  request is `EFAULT`; then a negative second count or nanoseconds outside `0 .. 999999999` is `EINVAL`; then a
+  CPU-time id of a thread, of another process or of an unknown kind is `EINVAL`.
+- On the process's CPU-time clock a sleep with nothing to wait (zero, or a target already reached) returns 0.
+  A sleep that would have to wait is refused by name (`unreachable`): natively it never ends, since the
+  process's CPU time does not advance while it sleeps.
+- Also refused by name: a duration or a target of 2^64 nanoseconds or more (about 584 years, beyond the
+  clock's range; natively such a sleep does not end in any run), and a sleep on `CLOCK_REALTIME_ALARM` or
+  `CLOCK_BOOTTIME_ALARM` with a valid request (natively `EPERM` or a sleep, by the host's capability to wake
+  the system).
+
+Timers that deliver a signal when they expire (`alarm`, `setitimer`, `timer_create` and the other `timer_*`
+calls, `timerfd`) are still unimplemented system calls and trap by name, as `pause` and `sigsuspend` do (with
+no timer and no asynchronous signal they never return natively). Their route is in `docs/DESIGN.md`, "Files,
+clock and entropy at the musl boundary": an expiry is a value of the same clock, a sleep or a clock read that
+carries the clock past it delivers the signal there, and a sleep interrupted that way returns `EINTR` with the
+remaining time.
 
 Metadata uses root ownership, a model inode/device identity, and zero timestamps. Unsupported
 operations and flags trap by name instead of claiming success. The remaining debts and their routes
@@ -231,12 +273,15 @@ strings that look like options or are `--`, another `argv[0]`, writes into the s
 the longest argument Linux passes, 131,071 bytes; each run natively with the same `argv` and an empty
 environment; relinks of `args-apply.c` and `args.c` with arguments of another count and length give the same
 text for every function, and the same steps inside an `apply`; arguments too large for their area are refused), and for complex products,
-quotients and `cexp` (`complex.c`, over libgcc's helpers), and for `setjmp`/`longjmp` across frames, `sigsetjmp` with
+quotients and `cexp` (`complex.c`, over libgcc's helpers), for sleeping (`sleep.c`: the advance of each
+clock seen by later reads, the CPU-time clocks unchanged, absolute targets, and Linux's errors in its order,
+also through the raw system call), and for `setjmp`/`longjmp` across frames, `sigsetjmp` with
 and without the signal mask (musl's `__sigsetjmp_tail`) and jumps out of signal handlers (`setjmp.c`); they check that heap
 exhaustion by `mmap`, `malloc`, `realloc` and the break is the fault `out_of_memory` with the output flushed
 before it kept (`arena`, `heap-exhaust`, `realloc-exhaust`, `mmap-exhaust`, `brk-exhaust`), that musl's
-arithmetic rejections stay null against native (`alloc-arithmetic`), and named faults for stderr and an
-unimplemented syscall; another rounding mode and a flag test agree with native.
+arithmetic rejections stay null against native (`alloc-arithmetic`), and named faults for stderr, an
+unimplemented syscall, the refused sleeps (`sleep-cpu`, `sleep-beyond`, `sleep-alarm-clock`) and a timer
+(`timer-alarm`); another rounding mode and a flag test agree with native.
 `tests/regress/` holds the self-checking witnesses of the independent testing pass of this boundary (each
 returns 0 natively and failed or faulted here before its fix). The 35 programs (42 runs with the
 `-O2` ones) took 173 seconds with the debug CLI on the shared machine, after building the library.
@@ -255,7 +300,9 @@ floating-point `printf`, `strtod`, `sqrt`, `sin` and `pow`) 652,468 bytes, of wh
 `test-devices.py`: **24 passes** (16 fixture runs at `-O0` and non-vectorized `-O2`, and the 8 witnesses of
 `tests/devices-regress/`), 147.31 s on the shared machine.
 Files and constructor-loaded byte images agree with native stdout/status. Clock arithmetic and seed
-bytes agree with a separate native C arithmetic oracle, including start `2^64-2` wrapping through zero.
+bytes agree with a separate native C arithmetic oracle, including start `2^64-2` wrapping through zero
+(since 2026-11-27 `clocks.c` also sleeps: relative, absolute, in the past, and a sleep that wraps the clock,
+with the CPU-time clock read between; 42,804 and 43,032 steps at `-O0` for the two starts, 24 runs in 141 s).
 `getentropy`, random-device reads and vectored tape consumption additionally check each expected byte.
 All forward runs un-run to the identical entry snapshot (including buffers, both consumption counters,
 filesystem/allocator state and the lazy image guard); amplitude error zero. The witnesses also un-run exactly

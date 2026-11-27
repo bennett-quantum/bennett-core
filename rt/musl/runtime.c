@@ -187,6 +187,7 @@ long __bennett_syscall(long number, long a1, long a2, long a3, long a4, long a5,
     case SYS_rmdir: case SYS_unlink: case SYS_chmod: case SYS_mkdirat:
     case SYS_umask: case SYS_newfstatat: case SYS_unlinkat: case SYS_faccessat:
     case SYS_clock_gettime: case SYS_clock_getres: case SYS_gettimeofday: case SYS_time:
+    case SYS_nanosleep: case SYS_clock_nanosleep:
     case SYS_getrandom:
         return __bennett_device_syscall(number, a1, a2, a3, a4, a5, a6);
     case SYS_brk:

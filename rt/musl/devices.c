@@ -8,6 +8,7 @@
 #include <sys/syscall.h>
 #include <fcntl.h>
 #include <sys/uio.h>
+#include <time.h>
 #include "vfs.h"
 #include "devices.h"
 static unsigned inputs_prepared;
@@ -42,6 +43,47 @@ static int clock_id(long id) {
     long owner=~(id>>3);
     return (id&3)!=3 && (owner==0 || owner==1);
 }
+/* The CPU-time clocks among the accepted ids: they do not count the time the process sleeps. */
+static int cpu_clock(long id) {
+    return id<0 || id==CLOCK_PROCESS_CPUTIME_ID || id==CLOCK_THREAD_CPUTIME_ID;
+}
+/* Sleeping on the run's clock (rt/musl/README.md, "Sleeping"). Linux's order of checks: the clock id (an
+ * unknown id, then a clock without a sleep), the request's address, the request's value, then what the clock's
+ * own sleep checks (a CPU-time clock of another thread or process, or of a thread at all). No signal arrives
+ * while the device sleeps, so a sleep is never interrupted and the remaining time is never written. */
+static long clock_sleep(long id,long flags,const long *request) {
+    int run=id==CLOCK_REALTIME || id==CLOCK_MONOTONIC || id==CLOCK_BOOTTIME || id==CLOCK_TAI;
+    int alarm=id==CLOCK_REALTIME_ALARM || id==CLOCK_BOOTTIME_ALARM;
+    int cpu=id==CLOCK_PROCESS_CPUTIME_ID;
+    int unsupported=id==CLOCK_THREAD_CPUTIME_ID || id==CLOCK_MONOTONIC_RAW || id==CLOCK_REALTIME_COARSE ||
+                    id==CLOCK_MONOTONIC_COARSE || (id<0 && (id&7)==3); /* the last: a clock behind a descriptor */
+    if(id>=0 && !run && !alarm && !cpu && !unsupported) return -EINVAL;
+    if(unsupported) return -EOPNOTSUPP;
+    if(!request) return -EFAULT;
+    if(request[0]<0 || request[1]<0 || request[1]>=1000000000) return -EINVAL;
+    if(id<0) {
+        /* A process's CPU-time clock: a kind below 3, not a thread's, the caller (0) or its process (1). */
+        long owner=~(id>>3);
+        if((id&3)==3 || (id&4) || (owner!=0 && owner!=1)) return -EINVAL;
+        cpu=1;
+    }
+    /* Natively EPERM without the capability to wake the system, a sleep with it: a fact of the host. */
+    if(alarm) __builtin_trap();
+    uint64_t wanted;
+    if(__builtin_mul_overflow((uint64_t)request[0],1000000000u,&wanted) ||
+       __builtin_add_overflow(wanted,(uint64_t)request[1],&wanted))
+        __builtin_trap(); /* 2^64 ns or more: beyond the clock's range */
+    if(flags&TIMER_ABSTIME) {
+        uint64_t now=__bennett_clock_now(cpu);
+        if(wanted<=now) return 0;
+        wanted-=now;
+    }
+    if(!wanted) return 0;
+    /* A process's CPU time does not advance while it sleeps: natively such a sleep never ends. */
+    if(cpu) __builtin_trap();
+    __bennett_clock_sleep(wanted);
+    return 0;
+}
 long __bennett_device_syscall(long nr,long a,long b,long c,long d,long e,long f) {
     (void)f;
     /* Lazy preparation runs with musl's allocator ready, also before a constructor's first open.
@@ -50,7 +92,7 @@ long __bennett_device_syscall(long nr,long a,long b,long c,long d,long e,long f)
     if(nr==SYS_clock_gettime) {
         if(!clock_id(a)) return -EINVAL;
         if(!b) return -EFAULT;
-        uint64_t value=__bennett_clock_read();
+        uint64_t value=__bennett_clock_read(cpu_clock(a));
         long *ts=(void *)b; ts[0]=value/1000000000; ts[1]=value%1000000000; return 0;
     }
     if(nr==SYS_clock_getres) {
@@ -60,17 +102,19 @@ long __bennett_device_syscall(long nr,long a,long b,long c,long d,long e,long f)
     }
     if(nr==SYS_gettimeofday) {
         if(a) {
-            uint64_t value=__bennett_clock_read();
+            uint64_t value=__bennett_clock_read(0);
             long *tv=(void *)a; tv[0]=value/1000000000; tv[1]=(value%1000000000)/1000;
         }
         if(b) { int *tz=(void *)b; tz[0]=tz[1]=0; }
         return 0;
     }
     if(nr==SYS_time) {
-        long seconds=__bennett_clock_read()/1000000000;
+        long seconds=__bennett_clock_read(0)/1000000000;
         if(a) *(long *)a=seconds;
         return seconds;
     }
+    if(nr==SYS_nanosleep) return clock_sleep(CLOCK_REALTIME,0,(const long *)a);
+    if(nr==SYS_clock_nanosleep) return clock_sleep((int)a,(int)b,(const long *)c); /* both are int in Linux */
     if(nr==SYS_getrandom) {
         if((unsigned long)b>LONG_MAX || (c&~7L) || ((c&6)==6)) return -EINVAL;
         if(b && !a) return -EFAULT;

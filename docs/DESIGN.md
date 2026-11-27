@@ -2463,9 +2463,21 @@ Stores and allocator changes are journalled by the existing machine. Un-running 
 buffer and consumption position; un-running a write restores file bytes, length and offset.
 
 The maintainer's 2026-11-16 decision fixes the inputs: unsigned 64-bit clock start (nanoseconds), and
-an exact seeded entropy byte image. Reading the clock returns `(start + reads_so_far) mod 2^64` and
-increments the count once. The clock is not execution time: no instruction or scheduler tick advances
-it. The clock ids accepted by the model share this counter. `clock_getres` reports one nanosecond and
+an exact seeded entropy byte image. Reading the clock returns `(start + reads_so_far + slept) mod 2^64` and
+increments the count once, where `slept` is the nanoseconds slept so far, and is left out for the CPU-time
+clocks (natively a process's CPU time does not advance while it sleeps). The clock is not execution time: no
+instruction or scheduler tick advances it. The clock ids accepted by the model share this counter.
+Sleeping is the one other thing that moves it, as an expansion of that decision: `nanosleep`, `sleep`, `usleep`
+and `clock_nanosleep` add the requested duration to `slept` (an absolute sleep what is left to its target) and
+return at once with nothing remaining. `slept` is ordinary memory like the read count, so undo restores it and
+an `apply` discards it; no host time is read. A sleep that natively never ends (a positive wait on the process's
+CPU-time clock; 2^64 nanoseconds or more) and one whose native result is the host's (the alarm clocks) are
+refused by name; invalid arguments give Linux's errors in its order (`rt/musl/README.md`, "Sleeping"). Timers
+that signal on expiry (`alarm`, `setitimer`, `timer_*`, `timerfd`) are not implemented and trap by name. Route:
+an expiry is a value of the same clock; a sleep or a clock read that carries the clock past it delivers the
+signal at that point through the existing delivery of self-sent signals, and a sleep interrupted that way
+returns `EINTR` with the remaining time, which is what a native program sees whenever its timing is set by its
+sleeps rather than by the speed of its computation. `clock_getres` reports one nanosecond and
 consumes no read; invalid ids consume none. `gettimeofday` divides nanoseconds into seconds and
 microseconds, `time` into seconds. Entropy is a finite tape shared by `getrandom`, `getentropy`,
 `/dev/random` and `/dev/urandom`. Exhaustion is a named `unreachable` fault before any destination or

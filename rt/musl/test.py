@@ -34,6 +34,11 @@ EXHAUSTED = {
 }
 
 
+# Programs the device refuses by name (`unreachable`): an unimplemented system call, a write to stderr, sleeps
+# that natively never end or depend on the host (`rt/musl/README.md`, "Sleeping"), and a timer.
+REFUSED = ["unimplemented", "stderr", "sleep-cpu", "sleep-beyond", "sleep-alarm-clock", "timer-alarm"]
+
+
 # Run arguments (link.py -- ARGUMENT ..., --argv0): each case runs natively with the same argv (argv[0] included) and an
 # empty environment, and on the device, comparing status and stdout. Arguments are exact bytes; link.py options
 # may follow. The longest native argument, 131071 bytes and its NUL (Linux's MAX_ARG_STRLEN), starts with '-'.
@@ -132,7 +137,7 @@ def main():
     started = time.monotonic()
     # tests/regress: witnesses of the independent testing pass, each self-checking (status 0 natively).
     regressions = sorted(f"regress/{path.stem}" for path in (HERE / "tests/regress").glob("*.c"))
-    names = ["library", "exit", *EXHAUSTED, "alloc-arithmetic", "unimplemented", "stderr", "heap", "signals",
+    names = ["library", "exit", *EXHAUSTED, "alloc-arithmetic", *REFUSED, "heap", "signals", "sleep",
              "abort", "stdin", "brk",
              "fenv", "fenv-mode", "fenv-flags", "complex", "setjmp", "setjmp-independent", "setjmp-masks",
              "prototypes", "proto-independent",
@@ -155,7 +160,7 @@ def main():
         result = run([args.executor, "run", "--entry", "__bennett_entry", "--budget", 1000000000, *reverse, program])
         if reverse:
             assert "returned to entry: classical state identical" in result.stdout, (name, level, result)
-        if name in ["unimplemented", "stderr"]:
+        if name in REFUSED:
             assert result.returncode == 1 and "fault: unreachable" in result.stdout, (name, result)
         elif name in EXHAUSTED:
             assert result.returncode == 1 and "fault: out_of_memory (code 19)" in result.stdout, (name, result)
