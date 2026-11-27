@@ -119,10 +119,6 @@ fn an_alias_cannot_define_the_out_of_memory_function() {
 }
 
 #[test]
-#[ignore = "defect: a call through a pointer with willreturn nounwind memory(none) is deleted before the front's \
-            second check (debt in docs/DESIGN.md, \"Not yet\"; removed by the declaration rule and reserved addresses \
-            of docs/HANDLES.md). Run: front/test.sh --test out_of_memory \
-            an_indirect_call_with_attributes_is_refused_or_faults -- --ignored"]
 fn an_indirect_call_with_attributes_is_refused_or_faults() {
     let path = out_dir().join("out_of_memory_indirect.ll");
     std::fs::write(
@@ -132,7 +128,8 @@ fn an_indirect_call_with_attributes_is_refused_or_faults() {
          ret i32 7\n}\n",
     )
     .expect("write IR");
-    // Either a refusal by name or a run that ends with the fault; today the call is deleted and main returns 7.
+    // Either a refusal by name or a run that ends with the fault: the front removes the call's claims, so the call
+    // stays and faults.
     if lower_text(&path, "out_of_memory_indirect", CLANG_FLAGS, &[]).is_ok() {
         let module = lower(&path, "out_of_memory_indirect", CLANG_FLAGS, &[]);
         let mut executor = Executor::new(&module, entry(&module, "main"), &[], options(0)).expect("starts");
@@ -141,9 +138,6 @@ fn an_indirect_call_with_attributes_is_refused_or_faults() {
 }
 
 #[test]
-#[ignore = "defect: an ifunc of the reserved name is refused, but the message calls it an alias or data (debt in \
-            docs/DESIGN.md, \"Not yet\"; removed by the declaration rule of docs/HANDLES.md). Run: front/test.sh \
-            --test out_of_memory an_ifunc_of_the_out_of_memory_name_is_refused_by_kind -- --ignored"]
 fn an_ifunc_of_the_out_of_memory_name_is_refused_by_kind() {
     let path = out_dir().join("out_of_memory_ifunc.ll");
     std::fs::write(

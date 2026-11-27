@@ -106,26 +106,39 @@ interface functions of section 5 (`bq_alloc`, `bq_free`, `bq_width`, `bq_measure
 
 **The declaration rule.** In every translation unit of a program, the C library's included:
 
-1. the only declarations of a primitive's C identifier are the header's, and none defines it;
-2. no declaration or definition other than the header's carries a primitive's *linker name*: the symbol the linker
-   sees after every renaming the C dialect offers (an assembler label `__asm__("...")` on a declaration,
-   `#pragma redefine_extname`, an `alias` attribute);
-3. the header's declarations keep their linker names and their external linkage to the end of the unit: no pragma,
-   attribute or later declaration changes the symbol a header declaration stands for.
+1. no global other than the header's declaration carries a primitive's *linker name* (the symbol the linker sees
+   after every renaming the C dialect offers: an assembler label `__asm__("...")`, `#pragma redefine_extname`, an
+   `alias` or `ifunc` attribute, a macro): no definition, alias, ifunc, variable or second declaration of it;
+2. the header's declarations keep their linker names, their external linkage and every other property to the end
+   of the unit: no pragma, attribute, macro or later declaration changes what a header declaration stands for;
+3. every call of a primitive is the header's call: the header's function type and calling convention, and nothing
+   on the call that the header's own call does not carry, except what a statement's context adds and says nothing
+   about the callee (`#pragma STDC FENV_ACCESS`, `[[clang::nomerge]]`, `[[clang::noinline]]`,
+   `[[clang::always_inline]]`, a loop pragma).
 
-Without the second clause, `void my_free(bq_reg) __asm__("bq_free");` would claim the release primitive unseen.
-Without the third, `#pragma redefine_extname bq_free ordinary_release` would rename the header's own declaration
-without adding one, and every call of `bq_free` in the unit would go to an ordinary external function.
+A declaration that emits nothing into the unit's code is accepted: one nothing uses, and one that appears only in
+a type (an unevaluated array bound, an initializer a later one overrides). It cannot affect any call. A
+redeclaration that makes the same call is accepted too. Without the first clause, a definition of `bq_free`, or an
+alias or ifunc in its place, would put the program's own code in the primitive's place. Without the second, `-Dbq_free=ordinary_release` would rename the header's own declaration, and
+every call of `bq_free` would go to an ordinary external function. Without the third, a redeclaration
+`__attribute__((const)) uint64_t bq_width(bq_reg);` would let the compiler drop a call.
 
-The rule is enforced before any code is generated. The driver includes the header in every translation unit by
-force (the compiler's `-include`), and the front end checks each unit's parsed form as `clang` builds it, with the
-linker name of each declaration computed there at the end of the unit, after every pragma. It refuses a unit that
-contains any other declaration of a primitive's identifier or linker name, even a compatible one (a redeclaration
-that adds an attribute such as `pure` can let the compiler drop a call), any definition of one, or a header
-declaration whose final linker name is not its identifier. This is the only compile-time refusal specific to
-primitives. It looks at declarations alone and asks nothing about what depends on what. Refusals of ordinary C that
-the compiler's lowering makes still apply, as for any program. A scan of the compiled module alone cannot enforce
-the rule: after a rename the module no longer shows which declaration was the header's.
+The rule is enforced before any optimisation, on what the compiler emits. The driver `bennett-cc` compiles each unit
+with every LLVM pass off and with two files included by force ahead of the user's own includes: the header, then an
+array of the eleven primitives' addresses. The compiler fixes the symbol a declaration stands for at its first use,
+so the array shows the symbol each header declaration finally stands for. The driver compares each declaration and
+each direct call of it with those of a *baseline* unit that only calls each primitive once, compiled with the same
+command and options. It refuses by name, before any bitcode is written, every break of the three clauses. Calls
+through a pointer are not refused: before optimising, the driver removes from them every attribute that is neither
+ABI nor a limit on the optimiser and every metadata attachment other than debug information, which only costs their
+optimisation. A pointer that reaches a primitive then makes that primitive's call whatever its declaration claimed.
+The driver then deletes the array and lets the compiler optimise the same unit. After that, it checks only that no
+global took a primitive's name and that every call of a primitive's declaration has its type and calling convention;
+what the optimiser added is trusted. `bennett-front` makes the same check on every module it reads and refuses a
+module that uses the interface without the driver's mark. This is the only compile-time refusal specific to
+primitives. It looks at declarations and calls alone and asks nothing about what depends on what. Refusals of
+ordinary C that the compiler's lowering makes still apply, as for any program. `docs/DESIGN.md`, "The declaration
+check", states each rule with the measured behaviour of clang 18 it rests on.
 
 Because the header is included everywhere, the C library's own files take their declarations of the effect
 primitives from it and lose their own (section 15). The header declares the exit primitive `_Noreturn`, as the
@@ -965,14 +978,16 @@ return and leaves the low `b` bits of the result in the *out* field; both count 
 low `b` result bits or the same fault code as the direct call: proved. Resource faults of the direct call are outside
 it.
 
-**Claim 10.** The only refusals on account of a primitive are those of the declaration rule (section 4): an extra
-declaration or a definition of its name, and, under clause 3, a pragma, attribute or later declaration that renames
-the header's own declaration. At a call site the front end translates an interface call wherever it would translate a
+**Claim 10.** The only refusals on account of a primitive are those of the declaration rule (section 4): another
+global with a primitive's linker name (clause 1), a header declaration that stands for another symbol or has other
+properties at the end of the unit (clause 2), and a call of a primitive that is not the header's call (clause 3),
+which includes a call through a `const` pointer that the compiler folds into a direct call carrying the pointer's
+`const` or `pure`. A call through a pointer that stays one is never refused. At a call site the front end translates an interface call wherever it would translate a
 call of an unknown external function of the same type. This is a requirement on the front end, not a consequence of A1
 to A4: a translator that adds a filter refusing direct calls of `bq_measure` satisfies them just as well. Equal
 acceptance at different optimisation levels is not claimed. The proof reads "name" as the C identifier; with the
-linker-name clauses 2 and 3 of section 4 (which also refuse a pragma renaming the header's own declaration) it is open
-and is to be checked again when the declaration check is built.
+linker-name clauses of section 4 as built (`docs/DESIGN.md`, "The declaration check") it is open and is to be checked
+again against that check.
 
 **Claim 11.** Grouped by cause, the known wrong results of the marker front end (`HANDOFF.md`) have no counterpart:
 optimiser rewrites of a qubit-dependent condition, store or choice (a call with explicit controls or an `apply` has no
@@ -983,7 +998,7 @@ reserved names (the declaration rule). Proved for these forms, assuming the decl
 
 **Claim 12.** The proofs were made for the interface without the additions of 2026-11-25: `bq_width`, the phase
 rotation, the two named stops, the libraries' use of `bad_argument` and `out_of_memory`, the explicit width check in
-the scalar forms, the fixed layouts of 5.1 and 6.1, and the third clause of the declaration rule. None has been checked
+the scalar forms, the fixed layouts of 5.1 and 6.1, and the second and third clauses of the declaration rule. None has been checked
 against them. The expected arguments are short: `bq_width` returns a function of the register table, so claim 1's
 argument covers it; the phase rotation is a controlled unitary of the same shape as the other gates (claims 7 and 8);
 a named stop is ordinary code ending in a named fault; the width check removes the layout condition from claim 9(c).
@@ -1067,11 +1082,12 @@ kind or axis that is not one of the codes of 5.1, then for a rotation `bad_angle
 | D14 | The device's instructions for the interface calls (the gate and rotation instructions with kind and axis as run-time operands, D6, and those of allocation, release, width, measurement and `apply`) make the in-region test as their first check: inside an applied function the instruction gives `quantum_in_region` (8), output `effect_in_region` (7), exit `exit_in_region` (13), before any other check of the call, then the call's checks in order outside one. A direct call is that one instruction, one step; a call through a pointer to a primitive's device function raises the code at the indirect call step. So with one step of the budget left the result is the class code (8 for a quantum call, 7 for output, 13 for exit), never `budget` (1), and `bq_gate` with kind 0 inside an applied function gives 8, not `bad_gate` | 5.7 | yes for today's quantum instructions, effect and exit, each one step; no: the new instructions of D2 to D10 must keep it, and an indirect call that raises 8 at the call step when its target is a primitive's device function |
 | D15 | New fault codes: `bad_width` 20, `out_of_handles` 21, `bad_range` 22, `bad_gate` 23, `bad_argument` 24 (`out_of_memory` 19 comes from the runtime's work); 25 to 31 stay free | 5.2 | yes: the codes are assigned (`crates/ir/src/fault.rs`); `bad_width`, `out_of_handles` and `bad_range` are raised by the device's checks, `bad_gate` and `bad_argument` only by `fault NAME` until D6 and D7 |
 | D16 | A per-`apply` step report in a measuring run (7): for each executed `apply`, its position in the run, the function, the inputs evaluated, the largest step count among inputs that finished, and how many reached the ceiling | 7 | partly: the simulator's library already records, for each executed `apply`, the callee and each evaluated input's step count and outcome (`JournalMeasurement` in `crates/exec`); `bennett run` reports only the sum of steps inside applied functions (`region steps`) |
-| D17 | The gate emitter, counter and OpenQASM writer accept D1 to D10 | 6, 7 | no; the emitter's memory costs decide what an `apply` of this interface costs |
+| D17 | The gate emitter, counter and OpenQASM writer accept D1 to D10 | 6, 7 | no; the emitter's memory costs decide what an `apply` of this interface costs. A private-memory wrapper modelling the handle form costs the same as the register form on identity, an 8-bit predicate and Shor for 15 (1,552 Toffolis) |
 
 The front end's own part, for the record (lane of the front end, not a device item): the declaration check of section
-4 with linker names, computed at the end of each unit so that a pragma renaming a header declaration is refused
-(clause 3); the force-included header; one device function per primitive at a reserved address; each `bq_gate` and
+4 with linker names, on each unit before any optimiser pass so that a rename of a header declaration is refused
+(clause 2), built in `bennett-cc` and `bennett-front` (`docs/DESIGN.md`, "The declaration check"); the force-included
+header; one device function per primitive at a reserved address; each `bq_gate` and
 `bq_rotate` translated to the one device instruction of D6, kind or axis passed as an operand (no switch on the codes
 and no `bad_gate` issued by the front end); the set of apply targets, read from the compiled signatures before
 pointers are lowered to integers, for D11; and the two named stops lowered to `fault NAME`.
@@ -1082,8 +1098,8 @@ pointers are lowered to integers, for D11; and the two named stops lowered to `f
 |---|---|---|---|
 | R1 | The C library's files take their declarations of the four effect primitives (`__bennett_effect`, `__bennett_exit`, `__bennett_out_of_memory`, `__bennett_bad_argument`) from the force-included header and drop their own | 4, 5.5 | no: `rt/musl/runtime.c` declares the first two, `start.c` the exit primitive, `devices.h` the output primitive (which `devices.c` takes from it) |
 | R2 | The header force-included when the C library is compiled, so that the library passes the declaration rule | 4 | no |
-| R3 | A request of `malloc`, `calloc`, `realloc` or `aligned_alloc` that the arena cannot hold is the fault `out_of_memory` (19) through `__bennett_out_of_memory`; a request the C library rejects from its arguments alone, before any system call (an overflowing `calloc` or `reallocarray`, a `malloc` of half the address space or more, an impossible alignment), still returns a null result with its error code, exactly as natively | 5.5, 6.3, 8.4, 10 (A4) | no: in progress |
+| R3 | A request of `malloc`, `calloc`, `realloc` or `aligned_alloc` that the arena cannot hold is the fault `out_of_memory` (19) through `__bennett_out_of_memory`; a request the C library rejects from its arguments alone, before any system call (an overflowing `calloc` or `reallocarray`, a `malloc` of half the address space or more, an impossible alignment), still returns a null result with its error code, exactly as natively | 5.5, 6.3, 8.4, 10 (A4) | yes |
 | R4 | Weak definitions merged into one object for the whole program when its units and the C library are linked (the scope list and fault set of 8.4 and 8.2) | 8.4 | to be checked: the header defines its libraries inline, with no library file |
 | R5 | The C library's `realloc`, `printf` and `exit`, which the header's libraries call (`printf` to standard output, the console) | 8.2, 8.4 | yes (musl) |
-| R6 | Run arguments that reach `main`, if a program is to receive a measured budget as a run input (7, 13); a budget defined by the build needs none | 7 | partly: a program without the C library receives integer arguments (`bennett run --arg`); with musl, `main` gets `argc = 1` and `argv = {"prog"}` |
+| R6 | Run arguments that reach `main`, if a program is to receive a measured budget as a run input (7, 13); a budget defined by the build needs none | 7 | yes, with one limit: a program without the C library receives integer arguments (`bennett run --arg`); a musl-linked one receives `argc` and `argv` from its run image, which `rt/musl/link.py` fixes at link time |
 | R7 | Loader choices fixed by the device: the C library's start-up makes no choice that depends on anything but the executable and the run input | 6.3 | yes: start-up is deterministic |

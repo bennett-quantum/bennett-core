@@ -13,6 +13,7 @@
 #include "Markers.h"
 #include "Normalise.h"
 #include "Outline.h"
+#include "HandleProgram.h"
 #include "Passes.h"
 #include "SoftFloat.h"
 #include "Startup.h"
@@ -139,6 +140,7 @@ int main(int argc, char **argv) {
 
   LLVMContext context;
   std::unique_ptr<Module> module = readInput(context, argv[0]);
+  bennett::checkHandleProgram(*module); // the handle interface's declaration check (docs/HANDLES.md, section 4)
   bennett::checkMarkers(*module);
   bennett::lowerStartup(*module, entryName);
   verify(*module, "after constructor/destructor startup");

@@ -42,7 +42,13 @@ add_executable(bennett-front
   src/Jumps.cpp
   src/Passes.cpp
   src/Classify.cpp
+  src/Claims.cpp
+  src/Primitives.cpp
+  src/HandleProgram.cpp
 )
+# A new LLVM attribute or metadata kind stops the build until Claims.cpp classifies it (docs/DESIGN.md, "The
+# declaration check").
+set_source_files_properties(src/Claims.cpp PROPERTIES COMPILE_OPTIONS "-Werror=switch")
 target_include_directories(bennett-front SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_compile_definitions(bennett-front PRIVATE ${LLVM_DEFINITIONS})
 target_compile_options(bennett-front PRIVATE -Wall -Wextra -fno-rtti -fno-exceptions)
@@ -71,6 +77,25 @@ foreach(tool BENNETT_CLANG BENNETT_LLVM_LINK)
   endif()
 endforeach()
 
+# bennett-cc: one unit of a program in the handle interface to bitcode, with bq.h and bq-references.h included by
+# force and the declaration check of docs/HANDLES.md, section 4, made before any optimiser pass (src/Driver.cpp).
+add_executable(bennett-cc
+  src/Driver.cpp
+  src/UnitCheck.cpp
+  src/Claims.cpp
+  src/Primitives.cpp
+  src/Diagnostic.cpp
+)
+target_include_directories(bennett-cc SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+target_compile_definitions(bennett-cc PRIVATE ${LLVM_DEFINITIONS} BENNETT_CLANG="${BENNETT_CLANG}"
+  BENNETT_HANDLE_HEADER="${CMAKE_CURRENT_SOURCE_DIR}/include/bq.h")
+target_compile_options(bennett-cc PRIVATE -Wall -Wextra -fno-rtti -fno-exceptions)
+if(LLVM_LINK_LLVM_DYLIB)
+  target_link_libraries(bennett-cc PRIVATE LLVM)
+else()
+  llvm_map_components_to_libnames(cc_libs core support irreader bitreader bitwriter transformutils)
+  target_link_libraries(bennett-cc PRIVATE ${cc_libs})
+endif()
 
 set(softfloat "${CMAKE_CURRENT_SOURCE_DIR}/../rt/softfloat")
 set(softfloat_source "${softfloat}/berkeley-softfloat-3e/source")

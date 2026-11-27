@@ -1156,7 +1156,8 @@ surface is `docs/MARKERS.md`. Input LLVM's reader cannot parse, stops on or cras
 verifier rejects, is named "the input is not valid LLVM IR" with status 2, and no device program is written; an empty file is LLVM's empty module and gives
 an empty device program (`front/src/main.cpp`, `readInput`).
 
-The handle interface that replaces the marker surface, built beside it, is designed in `docs/HANDLES.md`.
+The handle interface that replaces the marker surface, built beside it, is designed in `docs/HANDLES.md`. Its
+declaration check, the front end's first part of that path, is "The declaration check" below.
 
 - **A qubit is a variable, not a value.** A local variable whose address is passed to a marker becomes a quantum
   register as wide as the variable. There is no allocation call.
@@ -1365,6 +1366,94 @@ Two things the first C programs taught:
   dirty discard needs a *variable* that outlives the computation.
 - "The operands are still there" is not enough to uncompute; they must be unchanged. A value read from a qubit
   before a gate and used after it cannot be uncomputed, and is refused.
+
+## The declaration check
+
+The handle interface (`docs/HANDLES.md`, section 4) rests on one premise: every call of a primitive runs and reaches
+that primitive. A program breaks it only by putting something else in the primitive's place (a definition, alias,
+ifunc, variable or rename), by telling LLVM a fact about the callee that the header does not state (then LLVM may
+remove, merge, move or speculate the call), or by calling it with another type or calling convention. The check
+looks at declarations, globals and calls alone, never at what a value depends on, and it is made where clang has
+written everything a unit says and no pass has yet acted on it. The eleven primitives are the seven `bq_*`
+functions and the four effect primitives, known by their linker names (`front/src/Primitives.h`).
+
+The driver `bennett-cc [clang options] -o OUTPUT UNIT` (`front/src/Driver.cpp`) follows these rules for one unit:
+
+1. **What is compiled.** A C unit is compiled by clang 18 with the user's options at the requested level and
+   `-Xclang -disable-llvm-passes`, with `front/include/bq.h` and then `front/include/bq-references.h` included by
+   force ahead of anything the user passes (the header's folder is on the include path, so `#include "bq.h"` is
+   the same file). `bq-references.h` holds one internal `used` array of the eleven primitives' addresses in table
+   order. The *baseline* `front/include/bq-baseline.c`, one function calling each primitive once, is compiled with
+   the same command and options at the same time (not cached: it costs one clang run of a small file in parallel).
+   Reason: clang emits a declaration only where something uses it and fixes its symbol at that first use, so the
+   array makes every header declaration appear in every unit, fixed before any of the unit's own text.
+2. **Names.** The linker name is the IR name without a leading byte 1, with the target's global prefix, as LLVM's
+   Mangler computes it. Entry `k` of the array must have primitive `k`'s linker name (a macro such as
+   `-Dbq_free=other` is refused here, naming the symbol), and no other global may have that linker name: a
+   definition, an alias, an ifunc, a variable or a global named by an assembler label `"\01..."` is refused by its
+   kind. In C, `static int x __asm__("bq_alloc")` turns the header's function into the variable, and the array
+   then points at it.
+3. **Equality.** Entry `k`'s declaration must equal the baseline's: the line the LLVM 18 assembly writer prints,
+   with the function attributes written out instead of the group's number, and the metadata attachments other
+   than `!dbg` (the same objects, since both modules are read into one context). That covers type, linkage,
+   visibility, DLL storage, calling convention, `unnamed_addr`, every attribute, section, partition, comdat,
+   alignment, collector, prefix and prologue data and personality. Options that add attributes (`optsize`,
+   `minsize`, `"no-builtins"`, `!kcfi_type`, ...) agree by construction, since the baseline has the same options.
+4. **Direct calls.** Each call whose callee is that declaration must have the declaration's function type and
+   calling convention, the baseline call's result and parameter attributes, the baseline call's function
+   attributes plus at most `strictfp`, `nomerge`, `noinline` and `alwaysinline` (from `#pragma STDC FENV_ACCESS`,
+   `[[clang::nomerge]]`, `[[clang::noinline]]`, `[[clang::always_inline]]`: statements about the caller), metadata
+   only `!dbg` and `!llvm.access.group` (a loop pragma: the program's claim about its own loop), and no operand
+   bundle. A redeclaration after the array leaves the declaration as the header's but puts its own attributes on
+   the calls: `__attribute__((const)) uint64_t bq_width(bq_reg);` gives `call @bq_width ... memory(none)`, and an
+   assembler label of another type or with `ms_abi` gives a call of the declaration through that type or
+   convention. A `const` pointer variable initialised with a primitive is folded by clang into a direct call that
+   carries the pointer's `const` or `pure` even with every pass off, so it is refused here.
+5. **Calls through a pointer: a removal, not a refusal.** Every call whose callee is not a function (a pointer,
+   inline assembly, an alias, an ifunc) loses every attribute that is neither ABI nor a limit on the optimiser nor
+   `noreturn`/`nounwind`, and every metadata attachment other than `!dbg` (`front/src/Claims.h`). ABI: `zeroext`,
+   `signext`, `inreg`, `byval`, `byref`, `sret`, `inalloca`, `preallocated`, `elementtype`, `nest`, `swiftself`,
+   `swiftasync`, `swifterror`, `alignstack`, and `align` on a parameter with one of those. Limits: `strictfp`,
+   `nomerge`, `noinline`, `nobuiltin`, `convergent`, `noduplicate`, `returns_twice`, `cold`, `hot`. The kinds are
+   classified in one switch over LLVM 18's attribute kinds and one over its fixed metadata kinds, both without a
+   default and compiled with `-Werror=switch`, so a kind a later LLVM adds stops the build; string attributes and
+   metadata kinds registered by name are removed. An attribute or attachment only gives the optimiser permission,
+   so removing it never changes what a defined program does. clang 18 does write such claims: a pointer variable
+   declared `const` or `pure` puts `nounwind willreturn memory(none)` or `memory(read)` on the calls through it,
+   and plain `clang -O2` then deletes a measurement made through it. `noreturn` stays: a `noreturn` pointer that
+   reaches a primitive which returns is a call through a mismatched prototype and faults `unreachable` after it.
+6. **Then.** The array goes (and the declarations only it used), clang optimises the same module with the same
+   options (`clang <options> -x ir`, so the passes are those clang chooses for them; measured: the result is
+   plain clang's up to value names on three of `examples/handles` under six option sets), and the result is
+   checked again, for redirection by kind and shape only: each call of a primitive's declaration has its type and
+   calling convention, and the declaration keeps its type, linkage and convention. Whatever the optimiser added is
+   trusted. The output carries the named metadata `!bennett.cc`, which `llvm-link` keeps, and is bitcode or, for
+   an output named `*.ll`, LLVM text. A refused unit writes nothing and stops with status 2 (an earlier output of
+   that name is removed); a unit clang refuses stops with clang's status; no temporary file is left.
+7. **LLVM IR and the front.** A `.ll` or `.bc` unit gets rules 2 to 6 without the array (the global named after a
+   primitive, if any, is entry `k`). `bennett-front` (`front/src/HandleProgram.h`) first removes the claims of
+   every call through a pointer in every module (rule 5, sound for all), checks redirection and shape (rule 6),
+   and refuses by name a module that uses one of the seven interface functions without the mark ("compile each
+   unit with bennett-cc"). In a marked module a primitive whose address the program takes gets a callable device
+   function, `<name>.address`, internal, whose body is the direct call, so a call through a pointer reaches the
+   primitive: `output(c)` through `void (*)(char)` prints `c`. A module without the mark keeps the old layer's
+   behaviour for the effect primitives (the frozen checks of `front/src/Markers.cpp`).
+
+What clang 18 does with a rename after the array, pinned by tests: `#pragma redefine_extname`, `#pragma weak` and a
+`weak` redeclaration leave the IR as it was (calls stay on the external `@bq_free`), and an assembler label after
+the first use is clang's own error. A declaration nothing uses, one that appears only in a type (an unevaluated
+array bound, an initializer a later one overrides) and an unused assembler label emit nothing and are accepted; a
+label that names the same primitive with the same type makes the header's call and is accepted.
+
+Tests (`front/tests/tests/handles_front.rs`): every refusal of a C program at `-O0` and `-O2` with no output
+written; the rename facts above; the claims through pointers, where plain `clang -O2` deletes both measurements and
+`bennett-cc` keeps both; calls through pointers run on the device (a `const` pointer to the out-of-memory stop
+faults `out_of_memory`, output and exit through pointers print and exit, an unrelated `noreturn` callback of the
+output primitive's type runs, a `byval` callback is untouched); the conforming program under 20 option sets and
+with the context attributes of rule 4; LLVM IR units; the front's checks on LLVM text; clang found on `PATH`; no
+temporary file left. Lane 17's two witnesses in `front/tests/tests/out_of_memory.rs` pass: an indirect call to the
+out-of-memory stop marked `nounwind willreturn memory(none)` now faults on the device, and an ifunc of that name is
+refused as an ifunc.
 
 ## What LLVM's passes may not change
 
@@ -2641,15 +2730,28 @@ Refused by name or not yet excluded around the classification of "What LLVM's pa
   optimiser is later found to depend on a qubit. No program is known to do this. Route: let the later analysis
   meet two known values in a phi at the join, as the optimiser's copies are.
 
-Not yet excluded at the device's own functions: **a program that itself declares, aliases or takes the address of
-a reserved primitive's name can make the front drop or redirect the call.** A call through a pointer to
-`__bennett_out_of_memory` marked `willreturn nounwind memory(none)` is deleted by the optimiser before the front's
-second check, so the run returns where it should fault; an ifunc of that name is refused, but the message calls it
-an alias or data (ignored witnesses in `front/tests/tests/out_of_memory.rs`). The same holds today for the exit and
-output functions `__bennett_exit` and `__bennett_effect`, for attributes on a call and for an alias as well.
-Route: the declaration rule and reserved addresses of the handle path (`docs/HANDLES.md`): each primitive is one
-fixed device function at a reserved address, and a call to that address, direct or through a pointer, is that
-primitive's call.
+The handle interface's front end ("The declaration check" above; the old layer stays as it is):
+
+- **Every program that uses the handle interface is refused by name** ("not handled yet") after the check: the
+  translation of each of its calls into one device instruction waits on the device forms of `docs/HANDLES.md`,
+  section 14, and the codes 20 to 24. Route: the front end's second part, once the forms land.
+- **A program that uses both interfaces is refused by name.** Cheap to reverse: one test in
+  `front/src/HandleProgram.cpp`.
+- **The mark is per module.** A program linked from a marked unit and a unit clang compiled alone carries the mark,
+  so `bennett-front` does not see that the second unit skipped the check. The C library's units are compiled by
+  clang alone and declare `__bennett_effect` and `__bennett_exit` themselves (runtime items R1 and R2 of
+  `docs/HANDLES.md`). Route: the C library's units through `bennett-cc` after R1 and R2, then a mark on every
+  function of a checked unit, required of every function in a program that uses the interface.
+- **`-fsanitize=undefined` can refuse a conforming unit.** With `-fsanitize=unreachable`, clang 18 removes
+  `noreturn` from a primitive's declaration where it emits a call of it, so a unit that does not call every
+  noreturn primitive the baseline calls differs from the baseline (rule 3) and is refused by name. The device has no
+  run-time library for the sanitizer. Route, if needed: a baseline per set of primitives the unit calls.
+- **A `const` or `pure` pointer declared `const` is refused** (rule 4): clang folds its calls into direct calls that
+  carry the claim before any pass, and in the unit's IR they cannot be told from calls through a redeclaration.
+  Route: write the pointer without `const` (it is then a call through a pointer, whose claim is removed).
+- **Options that write files beside the output** (`-MD`, `-save-temps`) write them beside the driver's temporary
+  files, where they stay (measured for `-MD`: two `.d` files in the temporary folder). Route: pass the user's
+  output name to clang for those, if a build needs them.
 
 | Refused inside emitted `apply` | Construction needed |
 |---|---|
