@@ -35,7 +35,7 @@ int __bennett_entry(void)
      * environment's null pointer, then the auxiliary vector. musl finds the environment at argv + argc + 1 and
      * reads the auxiliary words after the environment's null pointer as size_t, which the x86-64 ABI represents
      * as it does a pointer. The array lives in this frame, which lasts until exit. */
-    char *vector[argc + 8];
+    char *vector[argc + (2 + BENNETT_AUXV_WORDS)];
     char *string = __bennett_argument_bytes;
     for (size_t i = 0; i < argc; i++) {
         vector[i] = string;

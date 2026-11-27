@@ -36,7 +36,8 @@ EXHAUSTED = {
 
 # Programs the device refuses by name (`unreachable`): an unimplemented system call, a write to stderr, sleeps
 # that natively never end or depend on the host (`rt/musl/README.md`, "Sleeping"), and a timer.
-REFUSED = ["unimplemented", "stderr", "sleep-cpu", "sleep-beyond", "sleep-alarm-clock", "timer-alarm"]
+REFUSED = ["unimplemented", "stderr", "sleep-cpu", "sleep-beyond", "sleep-alarm-clock", "timer-alarm",
+           "timer-create"]
 
 
 # Run arguments (link.py -- ARGUMENT ..., --argv0): each case runs natively with the same argv (argv[0] included) and an

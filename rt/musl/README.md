@@ -150,34 +150,50 @@ slept, modulo 2^64. The clock's unit is the nanosecond, so a duration needs no r
 
 - A relative sleep of `d` nanoseconds adds `d` (modulo 2^64, as reads do); an absolute one (`TIMER_ABSTIME`) on a
   clock whose current value (the next read's, without consuming it) is `v` adds `T - v` for a target `T > v`
-  and nothing otherwise, so the next read returns exactly `T`. Later reads of `CLOCK_REALTIME`,
+  and nothing otherwise, so the next read returns the greater of `v` and `T`. Later reads of `CLOCK_REALTIME`,
   `CLOCK_MONOTONIC`, `CLOCK_BOOTTIME`, `CLOCK_TAI` and the coarse and raw clocks, `gettimeofday` and `time`
   see the advance. The CPU-time clocks (`CLOCK_PROCESS_CPUTIME_ID`, `CLOCK_THREAD_CPUTIME_ID`, the caller's
   ids from `clock_getcpuclockid`, and so `clock()`) do not: natively a process's CPU time does not advance
   while it sleeps.
-- A sleep returns 0 (`sleep` returns 0 seconds left). No signal can arrive while the device sleeps (signals are
-  only those a program sends itself, delivered before the call that raises them returns), so no sleep is
-  interrupted and the remaining time is never written, as natively for a sleep that is not interrupted.
+- A sleep returns 0 (`sleep` returns 0 seconds left). No signal can arrive while the device sleeps: the only
+  signals are those a program sends itself, delivered when they are raised or, if blocked then, when the program
+  unblocks them, and a sleep does not change the signal mask. So no sleep is interrupted and the remaining time
+  is never written, as natively for a sleep that is not interrupted.
 - Sleeps on `CLOCK_REALTIME`, `CLOCK_MONOTONIC`, `CLOCK_BOOTTIME` and `CLOCK_TAI` sleep; only the
   `TIMER_ABSTIME` bit of the flags has a meaning. Errors are Linux's, in its order: an unknown clock id is
   `EINVAL`; the thread CPU clock, the raw and coarse clocks and a clock behind a descriptor have no sleep
-  (`EOPNOTSUPP`; musl and glibc answer `EINVAL` for `CLOCK_THREAD_CPUTIME_ID` before the call); then a null
-  request is `EFAULT`; then a negative second count or nanoseconds outside `0 .. 999999999` is `EINVAL`; then a
-  CPU-time id of a thread, of another process or of an unknown kind is `EINVAL`.
+  (`EOPNOTSUPP`; musl and glibc answer `EINVAL` for `CLOCK_THREAD_CPUTIME_ID` before the call); then a request
+  the program cannot read is `EFAULT` (Linux copies the whole request first): null, one that starts below address
+  16, where the device's data starts, one that wraps past the top of the address space, or one that ends beyond
+  start-up's argument vector, the highest object in memory (the stack grows down from the top; memory the
+  stack has not reached counts as readable, as a mapped native page does); then a negative second count or
+  nanoseconds outside `0 .. 999999999` is `EINVAL`; then a CPU-time id of a thread or of an unknown kind is
+  `EINVAL`, as on Linux; on the alarm clocks, flags other than `TIMER_ABSTIME` are `EINVAL` (a host without a
+  real-time clock device answers `EOPNOTSUPP` for them instead).
+- A CPU-time id of a process other than the device's one is `EINVAL` by the device's own rule: the device has
+  one process, so the id names nothing. Linux answers `EINVAL` for a process that does not exist and accepts
+  the clock of one that does (a parent's, say).
 - On the process's CPU-time clock a sleep with nothing to wait (zero, or a target already reached) returns 0.
   A sleep that would have to wait is refused by name (`unreachable`): natively it never ends, since the
   process's CPU time does not advance while it sleeps.
 - Also refused by name: a duration or a target of 2^64 nanoseconds or more (about 584 years, beyond the
   clock's range; natively such a sleep does not end in any run), and a sleep on `CLOCK_REALTIME_ALARM` or
-  `CLOCK_BOOTTIME_ALARM` with a valid request (natively `EPERM` or a sleep, by the host's capability to wake
-  the system).
+  `CLOCK_BOOTTIME_ALARM` with a valid request and flags (natively `EPERM` or a sleep, by the host's capability
+  to wake the system).
 
-Timers that deliver a signal when they expire (`alarm`, `setitimer`, `timer_create` and the other `timer_*`
-calls, `timerfd`) are still unimplemented system calls and trap by name, as `pause` and `sigsuspend` do (with
-no timer and no asynchronous signal they never return natively). Their route is in `docs/DESIGN.md`, "Files,
-clock and entropy at the musl boundary": an expiry is a value of the same clock, a sleep or a clock read that
-carries the clock past it delivers the signal there, and a sleep interrupted that way returns `EINTR` with the
-remaining time.
+Timers are not implemented: `alarm`, `ualarm`, `setitimer`, `getitimer`, the `timer_*` calls and `timerfd`
+stop by name (`unreachable`) at run time, as `pause` and `sigsuspend` do. All but `timer_create` reach the
+system call, which is unimplemented; musl's `timer_create` also links its thread notification, whose thread exit
+(`__unmapself`) is inline assembly the front does not translate, so the runtime defines `timer_create` as that
+stop (`tests/timer-create.c`). With no timer and no asynchronous signal `pause` never returns natively;
+`sigsuspend` traps even where natively it would return at once with `EINTR` (a pending signal that its mask
+unblocks), a debt of the same route. The route is in `docs/DESIGN.md`, "Files, clock and entropy at the musl
+boundary": an expiry is a value of the same clock; a sleep or a clock read that carries the clock past it makes
+the timer expire there. A timer that notifies by a signal delivers it at that point through the existing
+delivery of self-sent signals; a `timerfd` instead becomes readable, a read giving the number of expirations,
+and sends no signal. A relative sleep interrupted by a delivered signal returns `EINTR` and writes the
+remaining time; an interrupted absolute sleep leaves that output untouched (the caller retries with the same
+target).
 
 Metadata uses root ownership, a model inode/device identity, and zero timestamps. Unsupported
 operations and flags trap by name instead of claiming success. The remaining debts and their routes
@@ -302,7 +318,7 @@ floating-point `printf`, `strtod`, `sqrt`, `sin` and `pow`) 652,468 bytes, of wh
 Files and constructor-loaded byte images agree with native stdout/status. Clock arithmetic and seed
 bytes agree with a separate native C arithmetic oracle, including start `2^64-2` wrapping through zero
 (since 2026-11-27 `clocks.c` also sleeps: relative, absolute, in the past, and a sleep that wraps the clock,
-with the CPU-time clock read between; 42,804 and 43,032 steps at `-O0` for the two starts, 24 runs in 141 s).
+with the CPU-time clock read between; 42,868 and 43,096 steps at `-O0` for the two starts, 24 runs in 119 s).
 `getentropy`, random-device reads and vectored tape consumption additionally check each expected byte.
 All forward runs un-run to the identical entry snapshot (including buffers, both consumption counters,
 filesystem/allocator state and the lazy image guard); amplitude error zero. The witnesses also un-run exactly

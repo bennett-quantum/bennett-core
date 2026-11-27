@@ -9,6 +9,8 @@
 #include <fcntl.h>
 #include <sys/uio.h>
 #include <time.h>
+#include "libc.h"
+#include "start.h"
 #include "vfs.h"
 #include "devices.h"
 static unsigned inputs_prepared;
@@ -47,9 +49,20 @@ static int clock_id(long id) {
 static int cpu_clock(long id) {
     return id<0 || id==CLOCK_PROCESS_CPUTIME_ID || id==CLOCK_THREAD_CPUTIME_ID;
 }
+/* Whether the n bytes at p lie where a program's objects can: from address 16, where data starts (below it is
+ * no object, as natively the lowest pages are never mapped), to the end of start.c's argument vector, the
+ * highest object a program can name (the stack grows down from the top of memory and that vector is in the
+ * outermost frame; musl records its auxiliary words as libc.auxv). Before musl's start-up has run, or under an
+ * entry other than start.c's, only the low bound and the address's wrap are checked. Memory a program can
+ * name but has not reached (below the stack pointer) counts as readable here, as a mapped native page does. */
+static int readable(const void *p,uint64_t n) {
+    uintptr_t address=(uintptr_t)p, top=libc.auxv?(uintptr_t)(libc.auxv+BENNETT_AUXV_WORDS):UINTPTR_MAX;
+    return address>=16 && address<=top && n<=top-address;
+}
 /* Sleeping on the run's clock (rt/musl/README.md, "Sleeping"). Linux's order of checks: the clock id (an
  * unknown id, then a clock without a sleep), the request's address, the request's value, then what the clock's
- * own sleep checks (a CPU-time clock of another thread or process, or of a thread at all). No signal arrives
+ * own sleep checks (a CPU-time clock of a thread, of a process the device does not have, the alarm clocks'
+ * flags). No signal arrives
  * while the device sleeps, so a sleep is never interrupted and the remaining time is never written. */
 static long clock_sleep(long id,long flags,const long *request) {
     int run=id==CLOCK_REALTIME || id==CLOCK_MONOTONIC || id==CLOCK_BOOTTIME || id==CLOCK_TAI;
@@ -59,7 +72,7 @@ static long clock_sleep(long id,long flags,const long *request) {
                     id==CLOCK_MONOTONIC_COARSE || (id<0 && (id&7)==3); /* the last: a clock behind a descriptor */
     if(id>=0 && !run && !alarm && !cpu && !unsupported) return -EINVAL;
     if(unsupported) return -EOPNOTSUPP;
-    if(!request) return -EFAULT;
+    if(!readable(request,2*sizeof(long))) return -EFAULT; /* Linux copies the whole request first */
     if(request[0]<0 || request[1]<0 || request[1]>=1000000000) return -EINVAL;
     if(id<0) {
         /* A process's CPU-time clock: a kind below 3, not a thread's, the caller (0) or its process (1). */
@@ -67,7 +80,10 @@ static long clock_sleep(long id,long flags,const long *request) {
         if((id&3)==3 || (id&4) || (owner!=0 && owner!=1)) return -EINVAL;
         cpu=1;
     }
-    /* Natively EPERM without the capability to wake the system, a sleep with it: a fact of the host. */
+    /* The alarm clocks check their flags (a host without a real-time clock device answers EOPNOTSUPP first),
+     * then natively give EPERM without the capability to wake the system and a sleep with it: a fact of the
+     * host, refused by name. */
+    if(alarm && (flags&~TIMER_ABSTIME)) return -EINVAL;
     if(alarm) __builtin_trap();
     uint64_t wanted;
     if(__builtin_mul_overflow((uint64_t)request[0],1000000000u,&wanted) ||

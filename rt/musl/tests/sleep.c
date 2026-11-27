@@ -79,14 +79,22 @@ int main(void)
 
     /* Errors: the clock id, then the request's address, then its value, then the clock's own checks. */
     struct timespec bad_nsec = {0, 1000000000}, negative_nsec = {0, -1}, negative_sec = {-1, 0};
-    errno = 0;
-    printf("nanosleep(NULL): %d %d\n", nanosleep(0, &left), errno);
-    errno = 0;
-    printf("nanosleep 1e9 ns: %d %d\n", nanosleep(&bad_nsec, &left), errno);
-    errno = 0;
-    printf("nanosleep -1 ns: %d %d\n", nanosleep(&negative_nsec, &left), errno);
-    errno = 0;
-    printf("nanosleep -1 s: %d %d\n", nanosleep(&negative_sec, &left), errno);
+    /* Unreadable requests: null, the lowest addresses, one that wraps and one beyond any memory. Linux copies the
+     * whole request before it checks the value. */
+    const struct timespec *unreadable[] = {0, (void *)8, (void *)-1L, (void *)(1L << 62), (void *)-8L};
+    for (unsigned i = 0; i < sizeof unreadable / sizeof *unreadable; ++i) {
+        errno = 0;
+        int returned = nanosleep(unreadable[i], &left);
+        printf("nanosleep unreadable %u: %d %d\n", i, returned, errno);
+        printf("  clock_nanosleep: %d, raw monotonic %ld\n", clock_nanosleep(CLOCK_REALTIME, 0, unreadable[i], 0),
+               raw(CLOCK_MONOTONIC, TIMER_ABSTIME, unreadable[i]));
+    }
+    const struct timespec *invalid[] = {&bad_nsec, &negative_nsec, &negative_sec};
+    for (unsigned i = 0; i < sizeof invalid / sizeof *invalid; ++i) {
+        errno = 0;
+        int returned = nanosleep(invalid[i], &left);
+        printf("nanosleep invalid %u: %d %d\n", i, returned, errno);
+    }
     printf("absolute -1 s: %d\n", clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &negative_sec, 0));
     printf("library: thread cpu %d, raw %d, unknown %d\n",
            clock_nanosleep(CLOCK_THREAD_CPUTIME_ID, 0, &zero, 0), clock_nanosleep(CLOCK_MONOTONIC_RAW, 0, &zero, 0),
@@ -97,6 +105,13 @@ int main(void)
     printf("alarm clocks, bad requests: %ld %ld %ld %ld\n", raw(CLOCK_REALTIME_ALARM, 0, 0),
            raw(CLOCK_REALTIME_ALARM, 0, &bad_nsec), raw(CLOCK_BOOTTIME_ALARM, 0, 0),
            raw(CLOCK_BOOTTIME_ALARM, 0, &negative_sec));
+    /* The alarm clocks check their flags after the request and before the capability to wake the system. */
+    printf("alarm clocks, other flags:");
+    long flags[] = {2, 3, -1, -2};
+    for (unsigned i = 0; i < sizeof flags / sizeof *flags; ++i)
+        printf(" %ld %ld", raw(CLOCK_REALTIME_ALARM, flags[i], &zero), raw(CLOCK_BOOTTIME_ALARM, flags[i], &tenth));
+    printf("; bad requests first: %ld %ld\n", raw(CLOCK_REALTIME_ALARM, 2, (void *)-1L),
+           raw(CLOCK_BOOTTIME_ALARM, -1, &negative_nsec));
     printf("remaining untouched: %lld %ld\n", (long long)left.tv_sec, left.tv_nsec);
     return 0;
 }
