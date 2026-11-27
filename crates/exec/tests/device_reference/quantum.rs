@@ -1,18 +1,54 @@
 //! The live state is a density matrix in the computational basis, stored by its nonzero entries.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_4};
 
-use bennett_ir::{FixedGate, Gate, Rotation, Width};
+use bennett_ir::{FixedGate, Gate, Qubits, Rotation};
 use num_complex::Complex64 as C;
 
-pub type Basis = Vec<u64>;
+/// One logical register value, with storage for high bits only when they are set.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RegisterValue {
+    low: u128,
+    high: BTreeSet<u32>,
+}
+
+impl From<u128> for RegisterValue {
+    fn from(low: u128) -> Self {
+        Self { low, high: BTreeSet::new() }
+    }
+}
+
+impl RegisterValue {
+    pub fn integer(&self) -> u128 {
+        assert!(self.high.is_empty(), "whole-register integer read");
+        self.low
+    }
+
+    pub fn xor_integer(&mut self, value: u128) {
+        self.low ^= value;
+    }
+
+    fn bit(&self, bit: u32) -> bool {
+        if bit < u128::BITS { self.low & (1 << bit) != 0 } else { self.high.contains(&bit) }
+    }
+
+    pub fn flip(&mut self, bit: u32) {
+        if bit < u128::BITS {
+            self.low ^= 1 << bit;
+        } else if !self.high.remove(&bit) {
+            self.high.insert(bit);
+        }
+    }
+}
+
+pub type Basis = Vec<RegisterValue>;
 pub type Density = BTreeMap<(Basis, Basis), C>;
 
 pub struct Quantum {
     // Handles are monotonic. A register's position in a basis vector can change on release.
     next_handle: u64,
-    pub live: Vec<(u64, Width)>,
+    pub live: Vec<(u64, Qubits)>,
     pub cells: BTreeMap<u64, usize>,
     pub density: Density,
 }
@@ -27,7 +63,7 @@ impl Quantum {
         }
     }
 
-    pub fn allocate(&mut self, width: Width) -> u64 {
+    pub fn allocate(&mut self, width: Qubits) -> u64 {
         let handle = self.next_handle;
         self.next_handle += 1;
         // Register columns precede cells, whose positions are tracked independently of address order.
@@ -43,13 +79,13 @@ impl Quantum {
     pub fn promote(&mut self, address: u64, value: u8) -> usize {
         let column = self.live.len() + self.cells.len();
         assert!(self.cells.insert(address, column).is_none());
-        self.insert_column(column, u64::from(value));
+        self.insert_column(column, u128::from(value));
         column
     }
 
-    fn insert_column(&mut self, column: usize, value: u64) {
+    fn insert_column(&mut self, column: usize, value: u128) {
         self.permute(|mut basis| {
-            basis.insert(column, value);
+            basis.insert(column, value.into());
             basis
         });
     }
@@ -83,20 +119,22 @@ impl Quantum {
         self.density = reduced;
     }
 
-    pub fn gate(&mut self, gate: Gate, (column, bit): (usize, u8), controls: &[(usize, u8)]) {
+    pub fn gate(&mut self, gate: Gate, (column, bit): (usize, u32), controls: &[(usize, u32)]) {
         let matrix = unitary(gate);
         let image = |basis: Basis| {
-            if controls.iter().any(|&(reg, bit)| basis[reg] & (1 << bit) == 0) {
+            if controls.iter().any(|&(reg, bit)| !basis[reg].bit(bit)) {
                 return vec![(basis, C::ONE)];
             }
-            let input = ((basis[column] >> bit) & 1) as usize;
+            let input = usize::from(basis[column].bit(bit));
             matrix
                 .iter()
                 .enumerate()
                 .filter(|(_, row)| row[input] != C::ZERO)
                 .map(|(output, row)| {
                     let mut new = basis.clone();
-                    new[column] ^= ((input ^ output) as u64) << bit;
+                    if output != input {
+                        new[column].flip(bit);
+                    }
                     (new, row[input])
                 })
                 .collect()

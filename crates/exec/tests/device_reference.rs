@@ -14,6 +14,10 @@ mod nonlocal_generated;
 mod nonlocal_worked;
 #[path = "device_reference/compare.rs"]
 mod observe;
+#[path = "device_reference/registers.rs"]
+mod registers;
+#[path = "device_reference/registers_generated.rs"]
+mod registers_generated;
 #[path = "device_reference/wide.rs"]
 mod wide;
 #[path = "device_reference/wide_generated.rs"]
@@ -23,7 +27,7 @@ use std::f64::consts::FRAC_1_SQRT_2;
 use std::fmt::Write as _;
 
 use bennett_ir::{Fault, ValidModule};
-use device_reference::{Density, Finish};
+use device_reference::{Basis, Density, Finish};
 use num_complex::Complex64 as C;
 use observe::{assert_density, run};
 
@@ -34,6 +38,18 @@ fn module(text: &str) -> ValidModule {
 }
 
 fn pure(amplitudes: &[(Vec<u64>, C)]) -> Density {
+    let logical: Vec<_> = amplitudes
+        .iter()
+        .map(|(words, amplitude)| (basis(words.iter().copied().map(u128::from)), *amplitude))
+        .collect();
+    pure_basis(&logical)
+}
+
+fn basis(values: impl IntoIterator<Item = u128>) -> Basis {
+    values.into_iter().map(Into::into).collect()
+}
+
+fn pure_basis(amplitudes: &[(Basis, C)]) -> Density {
     amplitudes
         .iter()
         .flat_map(|(row, left)| {
@@ -113,7 +129,7 @@ entry:
     );
     let result = run(&bell, "main", &[], 0, BUDGET);
     let half = C::new(0.5, 0.0);
-    let expected = Density::from([((vec![0], vec![0]), half), ((vec![1], vec![1]), half)]);
+    let expected = Density::from([((basis([0]), basis([0])), half), ((basis([1]), basis([1])), half)]);
     assert_density(&result.reference.quantum.density, &expected, "half of a Bell pair");
 
     let ghz = module(

@@ -66,7 +66,7 @@ impl Device<'_> {
                         self.quantum.promote(address, value)
                     }
                 };
-                (column, bit)
+                (column, u32::from(bit))
             }
         });
         let target = qubits.next().expect("gate target");
@@ -97,7 +97,7 @@ impl Device<'_> {
         let (outcome, event) = self.measure(observed, |basis| {
             let word = cells
                 .iter()
-                .fold(ordinary, |word, &(_, offset, column)| word | (u128::from(basis[column]) << (8 * offset)));
+                .fold(ordinary, |word, &(_, offset, column)| word | (basis[column].integer() << (8 * offset)));
             word & width.mask()
         });
         for (byte, offset, _) in cells {
@@ -112,7 +112,7 @@ impl Device<'_> {
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum ResolvedPlace {
-    Register(usize, u8),
+    Register(usize, u32),
     Memory(u64, u8),
 }
 

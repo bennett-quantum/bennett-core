@@ -11,15 +11,15 @@ mod quantum;
 use std::collections::{BTreeMap, BTreeSet};
 
 use bennett_ir::{
-    BlockId, CastOp, Fault, FuncId, Inst, MeasureSource, Operand, Qubit, Slot, Target, Terminator, Type, ValidModule,
-    Width,
+    BlockId, CastOp, Fault, FuncId, Gate, Inst, MeasureSource, Operand, Qubit, Qubits, Slot, Target, Terminator, Type,
+    ValidModule,
 };
 
 use cells::little_endian;
 use integers::{binary, compare, signed};
 use quantum::Quantum;
 
-pub use quantum::{Basis, Density};
+pub use quantum::{Basis, Density, RegisterValue};
 
 const SLOT_BYTES: u64 = 8;
 const MIN_MEASUREMENT_PROBABILITY: f64 = 1e-22;
@@ -32,7 +32,7 @@ pub enum Finish {
 
 pub enum Event {
     Ordinary,
-    Allocated { id: u64, dst: Slot, width: Width },
+    Allocated { id: u64, dst: Slot, width: Qubits },
     Released(u64),
     Measured { outcome: u128, probabilities: BTreeMap<u128, f64> },
 }
@@ -217,9 +217,8 @@ impl<'m> Device<'m> {
         self.quantum.position(self.read_i64(Operand::Slot(slot))).ok_or(Fault::DanglingRegister)
     }
 
-    fn qubit(&self, qubit: Qubit) -> Result<(usize, u8), Fault> {
-        // The reference holds each register in one 64-bit word.
-        Ok((self.register(qubit.register)?, u8::try_from(qubit.bit).expect("a qubit of a register of at most 64")))
+    fn qubit(&self, qubit: Qubit) -> Result<(usize, u32), Fault> {
+        Ok((self.register(qubit.register)?, qubit.bit))
     }
 
     fn measure(&mut self, observed: Option<u128>, read: impl Fn(&Basis) -> u128) -> (u128, Event) {
@@ -295,6 +294,7 @@ impl<'m> Device<'m> {
             | Inst::Qfree { .. }
             | Inst::Gate { .. }
             | Inst::GateAt { .. }
+            | Inst::RotateBy { .. }
             | Inst::Measure { .. }
             | Inst::Apply { .. }
                 if self.applied.is_some() =>
@@ -302,7 +302,6 @@ impl<'m> Device<'m> {
                 return Err(Fault::QuantumInRegion);
             }
             Inst::Qalloc { width, dst } => {
-                let width = Width::new(width.count()).expect("the reference holds registers of at most 64 qubits");
                 let id = self.quantum.allocate(width);
                 event = Event::Allocated { id, dst, width };
                 Some(u128::from(id))
@@ -328,11 +327,19 @@ impl<'m> Device<'m> {
                 self.gate_at(gate, target, controls)?;
                 None
             }
+            Inst::RotateBy { axis, angle, target, ref controls } => {
+                let theta = f64::from_bits(self.read_i64(Operand::Slot(angle)));
+                if !theta.is_finite() {
+                    return Err(Fault::BadAngle);
+                }
+                self.gate_at(Gate::Rotate(axis, theta), target, controls)?;
+                None
+            }
             Inst::Measure { source, .. } => {
                 let (outcome, measured) = match source {
                     MeasureSource::Register(slot) => {
                         let register = self.register(slot)?;
-                        self.measure(observed, |basis| u128::from(basis[register]))
+                        self.measure(observed, |basis| basis[register].integer())
                     }
                     MeasureSource::Memory { address, width } => self.measure_memory(address, width, observed)?,
                 };
@@ -348,7 +355,6 @@ impl<'m> Device<'m> {
                 self.save_jump_record(buffer)?;
                 Some(0)
             }
-            Inst::RotateBy { .. } => panic!("instruction outside the outer reference: {inst:?}"),
         };
         if let Some(value) = value {
             self.put(inst.result().expect("value instruction"), value);
@@ -444,11 +450,11 @@ impl<'m> Device<'m> {
         if out == fault || arguments.iter().any(|arg| *arg == Ok(out) || *arg == Ok(fault)) {
             return Err(Fault::QubitAlias);
         }
-        let input = |basis: &[u64]| {
+        let input = |basis: &Basis| {
             arguments
                 .iter()
                 .map(|arg| match *arg {
-                    Ok(register) => u128::from(basis[register]),
+                    Ok(register) => basis[register].integer(),
                     Err(value) => value,
                 })
                 .collect::<Vec<_>>()
@@ -463,14 +469,14 @@ impl<'m> Device<'m> {
         }
         self.quantum.permute(|mut basis| {
             let (value, code) = outputs[&input(&basis)];
-            basis[out] ^= value;
-            basis[fault] ^= code;
+            basis[out].xor_integer(value);
+            basis[fault].xor_integer(code);
             basis
         });
         Ok(())
     }
 
-    fn private_run(&self, callee: FuncId, args: &[u128], budget: u64) -> (u64, u64) {
+    fn private_run(&self, callee: FuncId, args: &[u128], budget: u64) -> (u128, u128) {
         let mut private = Device::start(
             self.module,
             callee,
@@ -482,10 +488,8 @@ impl<'m> Device<'m> {
         );
         loop {
             match private.finish {
-                Some(Finish::Returned(Some(value))) => {
-                    return (value.try_into().expect("apply output fits its register"), 0);
-                }
-                Some(Finish::Faulted(fault)) => return (0, fault.code()),
+                Some(Finish::Returned(Some(value))) => return (value, 0),
+                Some(Finish::Faulted(fault)) => return (0, u128::from(fault.code())),
                 Some(Finish::Returned(None)) => panic!("apply requires an integer result"),
                 None => {
                     private.step(None);

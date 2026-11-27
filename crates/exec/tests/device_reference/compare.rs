@@ -1,12 +1,13 @@
 //! Observe the executor around measurements, after non-local jump operations and at completion.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 
-use bennett_exec::{Executor, Options, Outcome, QuantumSnapshot, RegisterState, Snapshot};
-use bennett_ir::{Slot, Type, ValidModule, Width};
+use bennett_exec::{Executor, Options, Outcome, QuantumSnapshot, RegisterState, RunError, Snapshot};
+use bennett_ir::{Fault, Qubits, Slot, Type, ValidModule, Width};
 use num_complex::Complex64 as C;
 
-use super::device_reference::{Basis, Density, Device, Event, Finish};
+use super::device_reference::{Basis, Density, Device, Event, Finish, RegisterValue};
 
 const TOLERANCE: f64 = 1e-11;
 
@@ -36,90 +37,106 @@ pub struct Run<'m> {
 }
 
 struct Register {
-    column: usize,
+    wire: u64,
     handle: u128,
-    state: RegisterState,
+    head: RegisterState,
 }
 
-type RegisterTable = BTreeMap<usize, RegisterState>;
+/// The start wire of each allocation maps to the full range of bits it occupies in the snapshot.
+type RegisterTable = BTreeMap<u64, Range<u64>>;
 
 #[derive(Default)]
 struct RegisterObservations {
     allocations: BTreeMap<u64, Register>,
     last_table: RegisterTable,
-    retired: RegisterTable,
 }
 
 impl RegisterObservations {
     fn live_table(&self, quantum: &QuantumSnapshot) -> RegisterTable {
-        let cells: BTreeSet<_> = quantum.cells.iter().map(|&(_, column)| column).collect();
+        let cells: BTreeSet<_> = quantum.cells.iter().map(|&(_, column)| 64 * column as u64).collect();
         quantum
-            .registers
+            .wires
             .iter()
-            .copied()
-            .enumerate()
-            .filter(|(column, state)| {
-                state.width.is_some() && !cells.contains(column) && self.retired.get(column) != Some(state)
-            })
+            .filter(|(_, packed)| !cells.contains(packed))
+            .map(|(wires, packed)| (wires.start, *packed..packed + (wires.end - wires.start)))
             .collect()
     }
 
-    fn changed(&self, next: &RegisterTable) -> Vec<usize> {
+    fn changed(&self, next: &RegisterTable) -> Vec<u64> {
         self.last_table
             .keys()
             .chain(next.keys())
             .copied()
             .collect::<BTreeSet<_>>()
             .into_iter()
-            .filter(|column| self.last_table.get(column) != next.get(column))
+            .filter(|wire| self.last_table.get(wire) != next.get(wire))
             .collect()
     }
 
-    fn allocate(&mut self, id: u64, width: Width, handle: u128, quantum: &QuantumSnapshot) {
+    fn allocate(&mut self, id: u64, width: Qubits, handle: u128, quantum: &QuantumSnapshot) {
         let table = self.live_table(quantum);
         let changed = self.changed(&table);
-        assert_eq!(changed.len(), 1, "qalloc changes a single register column");
-        let column = changed[0];
-        let state = table[&column];
-        assert_eq!(state.width, Some(width), "qalloc width");
+        assert_eq!(changed.len(), 1, "qalloc adds one register range");
+        let wire = changed[0];
+        let bits = &table[&wire];
+        assert!(!self.last_table.contains_key(&wire), "qalloc adds a fresh range");
+        assert_eq!(bits.end - bits.start, u64::from(width.count()), "qalloc width");
+        let head = quantum.registers[(bits.start / 64) as usize];
+        assert_eq!(head.width, Width::new(width.count().min(64)), "qalloc head width");
         assert_ne!(handle, 0, "qalloc produces a handle");
         assert!(
             self.allocations.values().all(|allocation| allocation.handle != handle),
             "qalloc never reuses a handle"
         );
-        self.allocations.insert(id, Register { column, handle, state });
+        self.allocations.insert(id, Register { wire, handle, head });
         self.last_table = table;
     }
 
     fn release(&mut self, id: u64, quantum: &QuantumSnapshot) {
-        let mut table = self.live_table(quantum);
+        let table = self.live_table(quantum);
         let register = &self.allocations[&id];
-        assert_eq!(self.changed(&table), [register.column], "qfree changes the released column");
-        assert_ne!(table.get(&register.column), Some(&register.state), "qfree retires the handle");
-        // A released register may still occupy a column in the snapshot's purification.
-        if let Some(state) = table.remove(&register.column) {
-            self.retired.insert(register.column, state);
-        }
+        assert_eq!(self.changed(&table), [register.wire], "qfree changes the released range");
+        assert!(!table.contains_key(&register.wire), "qfree removes live wires");
+        let head = (self.last_table[&register.wire].start / 64) as usize;
+        assert_ne!(quantum.registers.get(head), Some(&register.head), "qfree retires the handle");
         self.last_table = table;
     }
 
-    fn live_columns(&self, quantum: &QuantumSnapshot, live: &[(u64, Width)]) -> Vec<usize> {
+    fn live_ranges(&self, quantum: &QuantumSnapshot, live: &[(u64, Qubits)]) -> Vec<Range<u64>> {
         let table = self.live_table(quantum);
-        let observed: Vec<_> = self
-            .allocations
-            .iter()
-            .filter_map(|(&id, register)| {
-                let state = table.get(&register.column)?;
-                (state == &register.state).then(|| (id, state.width.expect("live width")))
+        assert_eq!(self.last_table, table, "only qalloc and qfree change live register ranges");
+        assert_eq!(table.len(), live.len(), "live register count");
+        live.iter()
+            .map(|(id, width)| {
+                let allocation = &self.allocations[id];
+                let bits = &table[&allocation.wire];
+                assert_eq!(bits.end - bits.start, u64::from(width.count()), "live width of register {id}");
+                assert_eq!(quantum.registers[(bits.start / 64) as usize], allocation.head, "live handle {id}");
+                bits.clone()
             })
-            .collect();
-        assert_eq!(observed, live, "live registers and widths");
-        assert_eq!(self.last_table, table, "only qalloc and qfree change live register columns");
-        live.iter().map(|(id, _)| self.allocations[id].column).collect()
+            .collect()
     }
 }
 
 pub fn run<'m>(module: &'m ValidModule, name: &str, args: &[u64], seed: u64, budget: u64) -> Run<'m> {
+    run_through(module, name, args, seed, budget, None)
+}
+
+pub fn run_until_stop(module: &ValidModule, budget: u64, after_steps: u64, error: RunError) -> Device<'_> {
+    let run = run_through(module, "main", &[], 0, budget, Some((after_steps, error)));
+    assert_eq!(run.reference.finish, None, "the stop is specific to the simulator");
+    assert_eq!(run.reference.steps, after_steps);
+    run.reference
+}
+
+fn run_through<'m>(
+    module: &'m ValidModule,
+    name: &str,
+    args: &[u64],
+    seed: u64,
+    budget: u64,
+    stop: Option<(u64, RunError)>,
+) -> Run<'m> {
     let entry = module.function_named(name).expect("entry function");
     let reference_args: Vec<_> = args.iter().copied().map(u128::from).collect();
     let mut reference = Device::new(module, entry, &reference_args, budget);
@@ -134,6 +151,23 @@ pub fn run<'m>(module: &'m ValidModule, name: &str, args: &[u64], seed: u64, bud
         assert_eq!(executor.step(), Some(outcome(finish)), "entry fault");
     }
     while reference.finish.is_none() {
+        if let Some((after_steps, error)) = stop
+            && reference.steps == after_steps
+        {
+            let before = executor.snapshot();
+            let stats = executor.stats();
+            checkpoint(&reference, &before, &registers, &mut counts, true);
+            let expected = Some(Outcome::Stopped(error));
+            assert_eq!(executor.step(), expected, "simulator stop at step {after_steps}");
+            let mut after = executor.snapshot();
+            assert_eq!(after.classical.outcome, expected);
+            after.classical.outcome = before.classical.outcome;
+            assert_eq!(after.classical, before.classical, "stop leaves the classical state unchanged");
+            assert_eq!(after.quantum, before.quantum, "stop leaves the quantum state unchanged");
+            assert_eq!(executor.stats().live_qubits, stats.live_qubits, "stop leaves the qubit count unchanged");
+            counts.operations = reference.steps;
+            return Run { reference, measurements, counts };
+        }
         let measurement = reference.next_measurement();
         if measurement.is_some() {
             checkpoint(&reference, &executor.snapshot(), &registers, &mut counts, true);
@@ -172,7 +206,8 @@ pub fn run<'m>(module: &'m ValidModule, name: &str, args: &[u64], seed: u64, bud
         }
     }
     assert_eq!(executor.outcome(), reference.finish.map(outcome), "completion");
-    checkpoint(&reference, &executor.snapshot(), &registers, &mut counts, jump_fault);
+    let bad_angle = reference.finish == Some(Finish::Faulted(Fault::BadAngle));
+    checkpoint(&reference, &executor.snapshot(), &registers, &mut counts, jump_fault || bad_angle);
     counts.operations = reference.steps;
     Run { reference, measurements, counts }
 }
@@ -215,7 +250,7 @@ fn checkpoint(
             }
         }
     }
-    let mut columns = registers.live_columns(&snapshot.quantum, &reference.quantum.live);
+    let mut ranges = registers.live_ranges(&snapshot.quantum, &reference.quantum.live);
     let actual_cells: BTreeMap<_, _> = snapshot.quantum.cells.iter().copied().collect();
     assert_eq!(actual_cells.len(), snapshot.quantum.cells.len(), "duplicate cell address at step {step}");
     assert!(
@@ -223,28 +258,51 @@ fn checkpoint(
         "cell addresses at step {step}: actual {actual_cells:?}, expected {:?}",
         reference.quantum.cells
     );
-    columns.resize(columns.len() + actual_cells.len(), usize::MAX);
+    ranges.resize(ranges.len() + actual_cells.len(), 0..0);
     for (&address, &column) in &reference.quantum.cells {
         let actual_column = actual_cells[&address];
         assert_eq!(snapshot.quantum.registers[actual_column].width, Some(Width::BYTE), "cell width at step {step}");
-        columns[column] = actual_column;
+        let start = 64 * actual_column as u64;
+        assert!(
+            snapshot.quantum.wires.iter().any(|(wires, packed)| *packed == start && wires.end - wires.start == 8),
+            "wire range for cell {address} at step {step}",
+        );
+        ranges[column] = start..start + 8;
     }
-    assert_eq!(columns.iter().collect::<BTreeSet<_>>().len(), columns.len(), "distinct live columns at step {step}");
-    let actual_density = reduced(&snapshot.quantum, &columns);
+    let mut sorted: Vec<_> = ranges.iter().collect();
+    sorted.sort_unstable_by_key(|bits| bits.start);
+    assert!(sorted.windows(2).all(|pair| pair[0].end <= pair[1].start), "disjoint live ranges at step {step}");
+    let actual_density = reduced(&snapshot.quantum, &ranges);
     counts.density_entries += assert_density(&actual_density, &reference.quantum.density, &format!("step {step}"));
     counts.states += 1;
 }
 
 /// The snapshot contains a purification. Cross terms survive only within the same assignment of
 /// discarded qubits. The reference's matrix already has those dimensions traced out.
-fn reduced(quantum: &QuantumSnapshot, keep: &[usize]) -> Density {
-    let mut by_environment: BTreeMap<Basis, Vec<(Basis, C)>> = BTreeMap::new();
+fn reduced(quantum: &QuantumSnapshot, keep: &[Range<u64>]) -> Density {
+    let mut by_environment: BTreeMap<Vec<u64>, Vec<(Basis, C)>> = BTreeMap::new();
     for (configuration, amplitude) in &quantum.amplitudes {
-        let live = keep.iter().map(|&col| configuration[col]).collect();
-        let discarded = configuration
+        let mut discarded = configuration.clone();
+        let live = keep
             .iter()
-            .enumerate()
-            .filter_map(|(col, &bits)| (!keep.contains(&col)).then_some(bits))
+            .map(|range| {
+                let mut value = RegisterValue::default();
+                let mut packed = range.start;
+                while packed < range.end {
+                    let word = (packed / 64) as usize;
+                    let offset = packed % 64;
+                    let length = (64 - offset).min(range.end - packed);
+                    let mask = u64::MAX >> (64 - length);
+                    discarded[word] &= !(mask << offset);
+                    let mut set = (configuration[word] >> offset) & mask;
+                    while set != 0 {
+                        value.flip((packed - range.start) as u32 + set.trailing_zeros());
+                        set &= set - 1;
+                    }
+                    packed += length;
+                }
+                value
+            })
             .collect();
         by_environment.entry(discarded).or_default().push((live, *amplitude));
     }
