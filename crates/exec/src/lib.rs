@@ -19,6 +19,8 @@ mod executor;
 mod forward;
 mod gates;
 mod handles;
+#[cfg(test)]
+mod handles_tests;
 mod journal;
 mod measure;
 mod memory;

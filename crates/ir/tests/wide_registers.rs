@@ -45,7 +45,9 @@ fn indices_and_widths_outside_the_register_are_refused() {
         |width: u32, bit: u64| format!("func @f() {{\nentry:\n    %q = qalloc {width}\n    x %q[{bit}]\n    ret\n}}\n");
     assert_eq!(problems(&gate(1000, 1000)), [Problem::QubitOutOfRange { bit: 1000, bits: 1000 }]);
     assert!(load(&gate(1000, 999)).is_ok());
-    let error = read(&gate(1000, 1 << 32)).expect_err("a qubit index is below 2^32");
+    // A literal position from 2^32 reads (an `i64` handle may be named so) and is past every register.
+    assert_eq!(problems(&gate(1000, 1 << 32)), [Problem::QubitOutOfRange { bit: 1 << 32, bits: 1000 }]);
+    let error = read(&gate(1000, 1 << 32).replace("4294967296", "18446744073709551616")).expect_err("past 2^64 - 1");
     assert!(matches!(error.kind, ReadErrorKind::BadNumber(_)), "{error:?}");
     let error = read("func @f(q4294967296 %q) {\nentry:\n    ret\n}\n").expect_err("too wide");
     assert!(matches!(error.kind, ReadErrorKind::BadType(_)), "{error:?}");

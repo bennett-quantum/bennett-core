@@ -274,7 +274,8 @@ impl fmt::Display for QubitText<'_> {
                 if bit == 0 { write!(f, "[{address}]") } else { write!(f, "[{address}:{bit}]") }
             }
             Place::Indexed { register, index } => {
-                write!(f, "{}[{}]", SlotText(self.0, register), SlotText(self.0, index))
+                let index = OperandText { function: self.0, operand: index, typed: false };
+                write!(f, "{}[{index}]", SlotText(self.0, register))
             }
         }
     }

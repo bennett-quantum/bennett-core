@@ -179,7 +179,7 @@ pub enum Problem {
     #[error("qubit {bit} is outside a register of {bits} qubits")]
     QubitOutOfRange {
         /// The index.
-        bit: u32,
+        bit: u64,
         /// The register width.
         bits: u32,
     },
@@ -231,7 +231,8 @@ pub enum Problem {
     /// The same memory qubit, by the same address operand and bit, twice in one gate.
     #[error("the memory qubit at bit {0} of one address appears twice in one gate")]
     RepeatedMemoryQubit(u8),
-    /// A `GateAt` whose qubits are all in registers: it is written, and read back, as a `Gate`.
-    #[error("a gate with every qubit in a register is a `Gate`, not a `GateAt`")]
+    /// A `GateAt` whose qubits are all register qubits at literal positions below 2^32: it is written, and
+    /// read back, as a `Gate`. A `GateAt` has a qubit in memory or a position given as an `i64` value.
+    #[error("a gate with every qubit in a register at a literal position is a `Gate`, not a `GateAt`")]
     GateAtWithoutMemory,
 }

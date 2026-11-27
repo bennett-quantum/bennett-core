@@ -310,14 +310,17 @@ impl<'a> Checker<'a> {
             match *place {
                 Place::Register(qubit) => {
                     // An `i64` handle's width is known only when the gate runs (`bad_range`).
-                    if let Some(qubits) = self.register_or_handle(site, qubit.register)
-                        && qubit.bit >= qubits.count()
-                    {
-                        self.error(site, Problem::QubitOutOfRange { bit: qubit.bit, bits: qubits.count() });
-                    }
-                    if places[..k].contains(place) {
-                        let name = self.slot_name(qubit.register);
-                        self.error(site, Problem::RepeatedQubit(name, qubit.bit));
+                    // An `i64` handle's register is known only when the gate runs: its handle is checked first
+                    // there, and a repetition after it (`qubit_alias`).
+                    if let Some(qubits) = self.register_or_handle(site, qubit.register) {
+                        if qubit.bit >= qubits.count() {
+                            let bit = u64::from(qubit.bit);
+                            self.error(site, Problem::QubitOutOfRange { bit, bits: qubits.count() });
+                        }
+                        if places[..k].contains(place) {
+                            let name = self.slot_name(qubit.register);
+                            self.error(site, Problem::RepeatedQubit(name, qubit.bit));
+                        }
                     }
                 }
                 Place::Memory { address, bit } => {
@@ -329,10 +332,17 @@ impl<'a> Checker<'a> {
                         self.error(site, Problem::RepeatedMemoryQubit(bit));
                     }
                 }
-                // The position is a value: its range and any repetition are checked when the gate runs.
+                // The position is a value: its range and any repetition are checked when the gate runs. A
+                // constant position (from 2^32, the reader's form) is past every `qN` register's width.
                 Place::Indexed { register, index } => {
-                    self.register_or_handle(site, register);
-                    self.expect(site, Operand::Slot(index), Type::Int(Width::WORD));
+                    let qubits = self.register_or_handle(site, register);
+                    self.expect(site, index, Type::Int(Width::WORD));
+                    if let (Some(qubits), Operand::Const(position)) = (qubits, index)
+                        && position.value() >= u128::from(qubits.count())
+                    {
+                        let bit = position.value() as u64;
+                        self.error(site, Problem::QubitOutOfRange { bit, bits: qubits.count() });
+                    }
                 }
             }
         }

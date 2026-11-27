@@ -106,6 +106,47 @@ entry:
     assert_eq!(returned(module, &[]), Outcome::Faulted(Fault::BadRange));
 }
 
+/// A literal position from 2^32 on an `i64` handle is `bad_range` when the gate runs, with the state as
+/// before, as the same position given in a slot is.
+#[test]
+fn a_literal_position_from_two_to_the_32_on_an_i64_handle_is_bad_range() {
+    for position in ["4294967296", "18446744073709551615"] {
+        let module = common::load(&format!(
+            "memory 256
+func @main() {{
+entry:
+    %h = qalloc i64 1
+    h %h
+    x %h[{position}]
+    ret
+}}"
+        ));
+        let mut executor = executor(&module, "main", &[], bounded());
+        for _ in 0..2 {
+            executor.step();
+        }
+        let before = executor.snapshot();
+        assert_eq!(executor.run(), Outcome::Faulted(Fault::BadRange), "{position}");
+        assert_eq!(executor.snapshot().quantum, before.quantum, "{position}");
+    }
+}
+
+/// The same `i64` handle slot twice in one gate: its handle is checked first, so a value naming no register
+/// is `dangling_register`; for a live register the repetition is `qubit_alias`.
+#[test]
+fn a_repeated_i64_handle_is_checked_for_its_handle_before_the_repetition() {
+    let module = "memory 256
+func @main(i64 %h) {
+entry:
+    %q = qalloc i64 1
+    x %h[0] ctrl %h[0]
+    ret
+}";
+    assert_eq!(returned(module, &[0]), Outcome::Faulted(Fault::DanglingRegister));
+    assert_eq!(returned(module, &[2]), Outcome::Faulted(Fault::DanglingRegister));
+    assert_eq!(returned(module, &[1]), Outcome::Faulted(Fault::QubitAlias));
+}
+
 /// Widths outside 1 to 2^32 - 1 are `bad_width` before anything is allocated.
 #[test]
 fn a_width_outside_one_to_two_to_the_32_minus_one_is_bad_width() {
@@ -190,7 +231,8 @@ entry:
         while executor.step().is_none() {
             before.push(executor.snapshot());
         }
-        assert_eq!(executor.snapshot().classical.handles, (4, vec![(1, 2)]), "{w}");
+        let (count, live) = executor.snapshot().classical.handles;
+        assert_eq!((count, live.iter().map(|&(handle, _, width)| (handle, width)).collect()), (4, vec![(1, 2)]), "{w}");
         while let Some(expected) = before.pop() {
             assert!(executor.step_back().expect("reversible"), "{w}");
             common::assert_same_state(&executor.snapshot(), &expected, &format!("{w}: step {}", before.len()));

@@ -9,7 +9,7 @@ use bennett_ir::{
 use crate::device::Wire;
 use crate::device_io::{DeviceContext, wire, wires, word_ranges};
 use crate::executor::{Executor, Frame, Halt, Outcome, SLOT_BYTES};
-use crate::handles::Entry;
+use crate::handles::{self, Entry};
 use crate::journal::Undo;
 
 /// Required address alignment in bytes for `alloca`.
@@ -72,7 +72,7 @@ impl<'m> Executor<'m> {
                 self.qalloc(*dst, width, true, context)?;
             }
             Inst::Qfree { register } => {
-                let handle = self.handle_number(*register)?;
+                let handle = self.handle_number(*register);
                 let (id, qubits) = self.register(*register)?;
                 self.discard_register(id, qubits, context)?;
                 let entry = self.handles.remove(handle);
@@ -513,8 +513,8 @@ impl<'m> Executor<'m> {
     }
 
     /// `qalloc` and `qalloc i64` of `width` qubits: `out_of_handles` after 2^64 - 1 allocations; else the
-    /// register, numbered by the next handle. `dst` gets the handle (`by_value`, `qalloc i64`) or the
-    /// simulator's handle of the register (`qalloc N`, a `qN` slot).
+    /// register, numbered by the next handle. `dst` gets the handle (`by_value`, `qalloc i64`) or the `qN`
+    /// value of the register, the handle above its head column (`qalloc N`).
     fn qalloc(
         &mut self,
         dst: Slot,
@@ -525,7 +525,7 @@ impl<'m> Executor<'m> {
         self.handles.admit()?;
         let register = self.allocate_register(width, context)?;
         let handle = self.handles.insert(Entry { register, qubits: width });
-        self.write_slot(dst, u128::from(if by_value { handle } else { register }));
+        self.write_slot(dst, if by_value { u128::from(handle) } else { handles::register_value(handle, register) });
         self.record(Undo::Qalloc);
         self.advance();
         Ok(())

@@ -137,9 +137,12 @@ straightforward expansion into ordinary code; none reads or acts on a qubit:
   metering code. A run may be given a step limit (`Options::budget`, `bennett run --budget`), a parameter of the
   run like its memory size.
 - **Handles.** The executor keeps the allocation count and a table from each live handle to the simulator's
-  register and its width (`crates/exec/src/handles.rs`); snapshots list both. A `qN` slot holds the
-  simulator's own handle of its register, which no instruction reads, and the table maps it back to the
-  allocation's number, so that both forms of `qalloc` are counted alike. `qfree` retires the handle and
+  register and its width (`crates/exec/src/handles.rs`); snapshots list the count and the whole table. A `qN`
+  slot holds the allocation's number too, above the register's head column in its low 32 bits (no
+  instruction reads a `qN` value), and every register operand is resolved through the table, so that both
+  forms of `qalloc` are counted alike and a released register's value never names a later allocation. The
+  simulator's own handle of a register (a column and a 32-bit count of the column's reuses, which wraps) is
+  never read back from a slot. `qfree` retires the handle and
   journals the register and its width, so that undoing it restores the table entry; undoing an allocation
   takes the count back by one. Memory bytes that hold qubits ("Qubits in memory") are no allocations and take
   no handle.
@@ -2113,7 +2116,10 @@ The front writes `retaddr N` for every `llvm.returnaddress(N)` in the default ad
   `bad_argument` are reached through `fault NAME` until a form checks them). 11 was `dirty_free` and 15
   `bad_rewind`, both removed on 2026-11-17. Those codes stay unused and the remaining codes keep their
   numbers because programs may have measured the old codes.
-- `qfree` is the partial trace and never faults ("Releasing a register", below).
+- `qfree` is the partial trace and never faults on what the register holds: a release of an allocated
+  register succeeds in every quantum state ("Releasing a register", below). Its one check is the handle: a
+  value that names no allocated register (released, never allocated, or 0) is `dangling_register`, before
+  anything changes.
 - `measure` reads a whole register, or the `N` bits from bit 0 of the integer at an address.
 - The simulator's own stops and reports (dropped amplitudes of rounding size, the configuration limit, the
   stop at an `apply` faulting for some argument values, amplitudes in snapshots, the report of nonzero

@@ -233,14 +233,16 @@ pub enum Place {
         /// The bit, below [`MEMORY_QUBIT_BITS`].
         bit: u8,
     },
-    /// `register[index]` with the position computed at run time: qubit `index` of the register named by
+    /// `register[index]` with the position given as an `i64` value: qubit `index` of the register named by
     /// `register` (a `qN` register or an `i64` handle); an index at or past the register's width is the
-    /// fault `bad_range`.
+    /// fault `bad_range`. The reader gives this form for a run-time position (`%r[%i]`) and for a literal
+    /// position from 2^32 (`%r[4294967296]`), which no register reaches; a literal below 2^32 is a
+    /// [`Place::Register`].
     Indexed {
         /// The slot holding the register handle.
         register: Slot,
-        /// The `i64` slot holding the qubit's position.
-        index: Slot,
+        /// The qubit's position: an `i64` slot, or a constant from 2^32.
+        index: Operand,
     },
 }
 
@@ -581,7 +583,7 @@ impl Inst {
                         Place::Memory { address, .. } => operand(address),
                         Place::Indexed { register, index } => {
                             operand(&Operand::Slot(*register));
-                            operand(&Operand::Slot(*index));
+                            operand(index);
                         }
                     }
                 }
@@ -593,7 +595,7 @@ impl Inst {
                         Place::Memory { address, .. } => operand(address),
                         Place::Indexed { register, index } => {
                             operand(&Operand::Slot(*register));
-                            operand(&Operand::Slot(*index));
+                            operand(index);
                         }
                     }
                 }

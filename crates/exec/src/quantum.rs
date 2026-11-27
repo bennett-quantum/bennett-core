@@ -430,6 +430,12 @@ impl QuantumState {
         self.device_wires.bind(wires(head, qubits.count()), column_bit(head));
     }
 
+    /// Sets the generation of column `column`, as reuses of it would (tests of the generation's wrap).
+    #[cfg(test)]
+    pub(crate) fn seed_generation(&mut self, column: usize, generation: u32) {
+        self.registers[column].generation = generation;
+    }
+
     /// Frees the register id `id` of a run on an external device, which stores no columns.
     pub(crate) fn retire(&mut self, id: usize) {
         self.registers[id].width = None;

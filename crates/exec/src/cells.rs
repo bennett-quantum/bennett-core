@@ -16,7 +16,7 @@
 
 use std::ops::Range;
 
-use bennett_ir::{Fault, Gate, Inst, Operand, Place, Width};
+use bennett_ir::{Fault, Gate, Inst, Place, Width};
 
 use crate::device::Wire;
 use crate::device_io::{DeviceContext, wire};
@@ -37,7 +37,7 @@ impl<'m> Executor<'m> {
         match *place {
             Place::Register(qubit) => Ok(Resolved::Register(self.qubit(&qubit)?)),
             Place::Indexed { register, index } => {
-                Ok(Resolved::Register(self.position(register, self.read_word(&Operand::Slot(index)))?))
+                Ok(Resolved::Register(self.position(register, self.read_word(&index))?))
             }
             Place::Memory { address, bit } => {
                 let byte = self.read_word(&address).checked_add(u64::from(bit / 8));

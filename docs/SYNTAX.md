@@ -138,9 +138,10 @@ done(i64 %sum):
 A gate's qubit is a register qubit, `%q[3]`, or a bit of memory, `[%p:3]`: bit `3 % 8` of the byte at
 `%p + 3 / 8`, so `[%p:BIT]` is bit BIT of the little-endian integer at `%p`, as `load` and `store` see it.
 The address is an `i64` value or a constant (`[64:0]`); the bit is a decimal from 0 to 127; `[%p]` is
-bit 0. One gate may mix them: `x [%p:1] ctrl %q[0], [16]`. A gate whose qubits are all in registers is
-`bennett_ir::Inst::Gate`, as before; one with a qubit in memory is `Inst::GateAt`, and the writer prints
-both in the same form, so reading what it wrote gives the same instruction. A rotation by a run-time angle,
+bit 0. One gate may mix them: `x [%p:1] ctrl %q[0], [16]`. A gate whose qubits are all register qubits at
+literal positions below 2^32 is `bennett_ir::Inst::Gate`, as before; one with a qubit in memory or a position
+given as an `i64` value ("Handles as integers") is `Inst::GateAt`, and the writer prints both in the same
+form, so reading what it wrote gives the same instruction. A rotation by a run-time angle,
 `rx|ry|rz|p(%a)`, is `Inst::RotateBy` with register and memory qubits alike. The validator reports a bit
 from 128 (`MemoryBitOutOfRange`), the same address operand and bit twice in one gate
 (`RepeatedMemoryQubit`; the same bit through different operands is the run-time fault `qubit_alias`),
@@ -164,11 +165,20 @@ fewer than 2^64 - 1 allocations (else `out_of_handles`, 21).
 A gate's target or control and `qfree` may name a register by an `i64` value holding its handle:
 `x %h[3] ctrl %q[1], %h[%i]`. A value that names no allocated register (released, never allocated, or 0) is
 the fault `dangling_register` (9). A position may be an `i64` slot, `%r[%i]`, on a `qN` register or an
-`i64` handle. A position at or past the register's width is the fault `bad_range` (22): a run-time position,
-and a literal position on an `i64` handle, whose width the validator cannot see (on a `qN` register the
-validator still reports a literal one, `QubitOutOfRange`). A gate checks its target and then each control in
-order, the handle and then the position, and then that no qubit is named twice (`qubit_alias`, 10, also
-through run-time positions); the first check that fails is the fault, before the gate acts.
+`i64` handle, and a literal position may be any integer from 0 to 2^64 - 1 (one from 2^32, past every
+register's width, is held as an `i64` constant, `Place::Indexed`). A position at or past the register's width
+is the fault `bad_range` (22): a run-time position, and a literal position on an `i64` handle, whose width
+the validator cannot see (on a `qN` register the validator still reports a literal one, `QubitOutOfRange`).
+A gate checks its target and then each control in order, the handle and then the position, and then that no
+qubit is named twice (`qubit_alias`, 10, also through run-time positions and `i64` handles; the validator
+reports a repetition only on a `qN` register at a literal position); the first check that fails is the
+fault, before the gate acts.
+
+Controls written in the instruction keep the device language's rule that a qubit appears once in a gate:
+a control repeated is `qubit_alias` like the target among its controls. The handle interface's controls come
+as a list in memory (`docs/HANDLES.md`, 5.1 and 5.4), where a repeated control means the same as once and
+only the target among the controls is `control_in_use` (`qubit_alias`); that is the form of the control list
+from memory (`docs/HANDLES.md`, section 14, D7), not of written controls.
 
 `measure` of a whole register, `apply` and calls still take `qN` registers. No instruction turns a `qN`
 register into its integer or an integer into a `qN` register; both name registers by the one numbering, so a

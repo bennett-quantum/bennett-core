@@ -4,8 +4,8 @@ use super::error::{Failure, ReadErrorKind};
 use super::lexer::Token;
 use super::{Parser, Scope};
 use crate::{
-    BinOp, BlockId, CastOp, Fault, FixedGate, FuncId, Gate, Inst, MeasureSource, Operand, Place, Predicate, Qubit,
-    Qubits, Rotation, Signature, Slot, SwitchCase, Target, Terminator, Type, Width,
+    BinOp, BlockId, CastOp, Const, Fault, FixedGate, FuncId, Gate, Inst, MeasureSource, Operand, Place, Predicate,
+    Qubit, Qubits, Rotation, Signature, Slot, SwitchCase, Target, Terminator, Type, Width,
 };
 
 /// The mnemonics that end a block.
@@ -261,11 +261,11 @@ impl<'s> Parser<'s> {
             if let (Some(Token::LBracket), Some(Token::Local(_))) = (self.cursor.peek_nth(1), self.cursor.peek_nth(2)) {
                 let register = self.slot_use(scope, "a qubit")?;
                 self.cursor.expect(Token::LBracket, "`[`")?;
-                let index = self.slot_use(scope, "a qubit index")?;
+                let index = Operand::Slot(self.slot_use(scope, "a qubit index")?);
                 self.cursor.expect(Token::RBracket, "`]`")?;
                 return Ok(Place::Indexed { register, index });
             }
-            return Ok(Place::Register(self.qubit(scope)?));
+            return self.qubit(scope);
         }
         let address = self.operand(scope, Width::WORD)?;
         let mut bit = 0;
@@ -383,16 +383,26 @@ impl<'s> Parser<'s> {
         Ok((lhs, self.operand(scope, width)?))
     }
 
-    /// `%register` or `%register[BIT]`; the bare form names qubit 0.
-    fn qubit(&mut self, scope: &mut Scope<'s>) -> Result<Qubit, Failure> {
+    /// `%register` or `%register[BIT]`; the bare form names qubit 0. A position below 2^32 is a register
+    /// qubit; one from 2^32 to 2^64 - 1, past every register's width but possible on an `i64` handle whose
+    /// width the validator cannot see, is a [`Place::Indexed`] by that constant (the fault `bad_range` when
+    /// the gate runs).
+    fn qubit(&mut self, scope: &mut Scope<'s>) -> Result<Place, Failure> {
         let register = self.slot_use(scope, "a qubit")?;
         if !self.cursor.eat(Token::LBracket) {
-            return Ok(Qubit { register, bit: 0 });
+            return Ok(Place::Register(Qubit { register, bit: 0 }));
         }
         let (text, offset) = self.cursor.number("a qubit index")?;
-        let bit = text.parse().map_err(|_| Failure { offset, kind: ReadErrorKind::BadNumber(text.to_owned()) })?;
+        let position: u64 =
+            text.parse().map_err(|_| Failure { offset, kind: ReadErrorKind::BadNumber(text.to_owned()) })?;
         self.cursor.expect(Token::RBracket, "`]`")?;
-        Ok(Qubit { register, bit })
+        Ok(match u32::try_from(position) {
+            Ok(bit) => Place::Register(Qubit { register, bit }),
+            Err(_) => Place::Indexed {
+                register,
+                index: Operand::Const(Const::new(Width::WORD, u128::from(position)).expect("a 64-bit position")),
+            },
+        })
     }
 
     /// `N` of `qalloc N`: from 1 to [`Qubits::MAX`].
