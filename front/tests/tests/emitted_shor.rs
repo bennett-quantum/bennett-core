@@ -250,9 +250,41 @@ fn check_oracle(block: &GateBlock, residues: &[u64]) {
         .unwrap_or_else(|error| panic!("{}: {error}", block.name()));
 }
 
+fn hand_built_toffolis(residues: &[u64], modulus: u64, width: u64) -> u128 {
+    let forward: u64 = (0..EXPONENT_BITS)
+        .map(|bit| residues[1 << bit])
+        .filter(|&factor| factor != 1)
+        .map(|factor| {
+            let inverse = (1..modulus).find(|x| x * factor % modulus == 1).expect("invertible factor");
+            // There are 2w modular adds, each with five ripple additions at
+            // 2w Toffolis apiece. Loading and clearing the effective addend twice
+            // costs four Toffolis per set bit. The controlled swap costs w.
+            let constant_bits: u64 = [factor, modulus - inverse]
+                .into_iter()
+                .flat_map(|multiplier| (0..width).map(move |bit| (multiplier << bit) % modulus))
+                .map(|constant| u64::from(constant.count_ones()))
+                .sum();
+            20 * width * width + 4 * constant_bits + width
+        })
+        .sum();
+    // Copying uses CNOTs. Uncomputation repeats the Toffoli count, and
+    // the benchmark's adjacent-Toffoli cancellation removes none here.
+    u128::from(2 * forward)
+}
+
 #[test]
 fn c_shor_period_distribution_and_counts() {
+    // For 15, factors 7 and 4 each cost 388. For 21, factor 2 costs
+    // 581 and seven factors of 4 or 16 cost 577 each. Double for uncomputation.
+    // Widths 4 and 5 need w + 2(w + 1) + 2 scratch qubits for the residue,
+    // sum, addend, carry and sign flag. The interface has 21 qubits and the
+    // full harness keeps two more five-qubit fault registers live.
     for (modulus, base) in CASES {
+        let (width, toffolis, isolated_peak, harness_peak) = match (modulus, base) {
+            (15, 7) => (4, 1_552, 37, 47),
+            (21, 2) => (5, 9_240, 40, 50),
+            _ => panic!("missing hand-built counts for N={modulus}, base={base}"),
+        };
         let (module, callee) = front_powmod(modulus, base, "shor_period");
         let oracle = compile_oracle(&module, callee);
         let residues = modular_powers(base, modulus);
@@ -262,6 +294,14 @@ fn c_shor_period_distribution_and_counts() {
         check_oracle(&hand_built, &residues);
         let generated_counts = count::isolated(&emitted);
         let baseline_counts = count::isolated(&hand_built);
+        assert_eq!(hand_built_toffolis(&residues, modulus, width), toffolis, "N={modulus}: Toffoli formula");
+        let scratch = 3 * width as usize + 4;
+        assert_eq!((isolated_peak, harness_peak), (21 + scratch, 31 + scratch), "N={modulus}: peak qubit formulas");
+        assert_eq!(baseline_counts.toffoli, toffolis, "N={modulus}: hand-built Toffolis");
+        assert_eq!(baseline_counts.peak_qubits, isolated_peak, "N={modulus}: hand-built isolated peak");
+        if modulus == 15 {
+            assert_eq!(generated_counts.toffoli, 1_552, "N=15: emitted Toffolis");
+        }
         assert!(
             generated_counts.toffoli <= 2 * baseline_counts.toffoli,
             "N={modulus}: Toffolis {} vs {}",
@@ -270,6 +310,7 @@ fn c_shor_period_distribution_and_counts() {
         );
         let (amplitude_error, distribution_error, [emitted_peak, hand_peak]) =
             check_period_harness(module, callee, &exact_probabilities(&residues, modulus), [&emitted, &hand_built]);
+        assert_eq!(hand_peak, harness_peak, "N={modulus}: hand-built harness peak");
         assert!(emitted_peak <= 2 * hand_peak, "N={modulus}: harness peak {emitted_peak} vs {hand_peak}");
         println!(
             "N={modulus}, base={base}, {EXPONENT_BITS} exponent bits, {}\nemitted {generated_counts:?}\nhand {baseline_counts:?}\nharness peaks: emitted {emitted_peak}, hand {hand_peak}\namplitude error {amplitude_error:e}, distribution error {distribution_error:e}",
