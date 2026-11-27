@@ -171,9 +171,12 @@ straightforward expansion into ordinary code; none reads or acts on a qubit:
   a bit of a live column that no wire names is zero in every stored configuration, so a wire allocated
   again starts at 0. Snapshots list the wire table, so two states whose columns hold the same words but
   form different registers do not compare equal. `apply` reads and XORs a register of up to 128 qubits
-  across its two columns. Everything that grows with a register (the column table, the wire table's
-  masks of bound bits, every configuration) is allocated fallibly before anything changes: a register the
-  host cannot hold stops the run (`RunError::QubitStorage`), for one column as for many. A run on an external device stores no columns: the device receives each
+  across its two columns. What an allocation adds (the column table, the wire table's masks of bound
+  bits, the words of every configuration) is allocated fallibly before anything changes: a register whose
+  columns the host cannot hold stops the run (`RunError::QubitStorage`), for one column as for many. The
+  nodes of the ordered map that holds the configurations, and every other growth of the stored state (a
+  gate's new configurations above all), are allocated infallibly: a host that cannot hold them ends the
+  process with an allocation failure, no named stop ("Not yet"). A run on an external device stores no columns: the device receives each
   register as one range of wires. The simulator holds at most 2^32 - 1 qubits at once, what the counts
   in `Stats` hold; an allocation or an applied circuit's scratch beyond that stops the run
   (`RunError::QubitCount`), though each register may have up to 2^32 - 1 qubits. Columns for discarded
@@ -301,7 +304,10 @@ comments. Both comments name each run of consecutive qubits of an array once: `q
 OpenQASM 3's inclusive range `q0[0:999]` for more. With the live wires kept as runs, one entry per
 allocation, a file's size and the writer's own memory grow with the qubits a run names, not with the
 width of its registers. With simulated outcomes (the default) the simulation's storage still grows with
-the width: a register the host cannot hold stops the run by name. Synthetic outcomes need no simulation. Declared qubits accumulate over the run, so their total can exceed the counter's peak live qubits.
+the width: an allocation whose columns the host cannot hold stops the run by name, as in `bennett run`.
+What is promised is that and no more: where the simulation grows otherwise, a gate that adds
+configurations above all, a host that cannot hold the growth ends the writer with an allocation failure
+("Running a program", "Not yet"). Synthetic outcomes need no simulation. Declared qubits accumulate over the run, so their total can exceed the counter's peak live qubits.
 
 Each qubit measurement is a `measure` statement annotated with the bit the controller received.
 The writer forwards every command, after the lowering, to a `SimulatedDevice` and takes the outcomes
@@ -2259,7 +2265,7 @@ every quantum step faults `quantum_in_region` before any stop could arise, so no
 | Amplitudes of magnitude at most `f64::EPSILON` are dropped after a gate (one unit of rounding, what cancellation leaves) | `quantum.rs`, `NEGLIGIBLE_AMPLITUDE` | A dropped configuration is never an outcome, and no instruction reads amplitudes. Each dropped amplitude is at most `f64::EPSILON` (weight about 5e-32), but the simulator does not sum what it drops: over many configurations and gates the losses add up with the other `f64` rounding, unbounded by that figure. The state is approximate in `f64` throughout (the tests compare amplitudes and weights with hand-worked values to tolerances from 1e-9 to 1e-20, most at 1e-12): evidence, not proof |
 | The limit on stored basis configurations | `Options::max_configurations`, `RunError::ConfigurationLimit` | A stop: the run ends with no result, the state as before the gate |
 | At most 2^32 - 1 qubits held at once, what the counts in `Stats` hold | `RunError::QubitCount` | A stop before the allocation, the applied circuit, or the first of a gate's memory bytes to become qubits (all its new bytes are counted at once), the state as before the step; a device is not limited so |
-| The host's memory for stored qubits | `RunError::QubitStorage` | A stop: an allocation (or the record of a release) the host cannot hold ends the run with no result, the state as before the step; on another host or a device the same program runs on |
+| The host's memory for stored qubits | `RunError::QubitStorage` | A stop: an allocation whose columns (or the record of a release) the host cannot hold ends the run with no result, the state as before the step; on another host or a device the same program runs on. Other growth of the stored state is not a named stop ("Not yet") |
 | The stop at an `apply` faulting for some values of its arguments (strict mode, below) | `RunError::RegionFault`, `region.rs` | A stop. With `allow_region_faults` the fault code is the program's, in its fault register: that is the meaning, not a report |
 | Amplitudes, the register table and cells in snapshots, and the distance `bennett run --reverse` prints | `snapshot.rs`, `crates/cli/src/run.rs` | Data for tests and reports; no device observation, read by no instruction |
 | The report of nonzero releases (count, weight, qubits kept) and the other counts of `Stats` | `executor.rs`, "Releasing a register" above | Read by tests and printed by `bennett run`, never by an instruction |
@@ -2649,6 +2655,19 @@ primitive's call.
 | `retaddr` | Pass the suspended callers' return sites in one field of the apply input and derive the applied function's return sites from its copied calls |
 | Varying-address `load` or `store` without a proved bound within a declared memory region | Prove the range or declare its full span |
 | `setjmp`, `longjmp` | Private memory and non-local control transfer |
+
+The simulator's storage is a named stop only where an allocation adds columns or a release records what it keeps
+("Running a program"). Elsewhere
+it is allocated infallibly, and a host that cannot hold it ends the process with Rust's allocation failure
+(exit status 134), no `RunError`: a gate's new configurations (`quantum.rs`, `apply_gate`), the ordered map's
+nodes when an allocation rebuilds the configurations with more columns, the moved configurations of a release
+kept in part, and the columns an undo regrows. Measured under a 192 MiB address-space limit: 16 Hadamard
+gates, then an allocation of 20,000 to 21,880 qubits completes and one of 21,920 qubits or more stops by name
+(`QubitStorage`), in `bennett run` and in the OpenQASM writer with simulated outcomes alike; a Hadamard on one
+qubit of a 10,000-qubit register after the 16 ends both with an allocation failure in `apply_gate`. The
+20,000-qubit allocation, run 400 times at limits within 16 KiB of its edge (about 177.6 MiB), each time either
+completed or stopped by name. Route: build each new state with fallible reservations before it replaces the
+old one, a stop naming the gate where the host cannot hold it, and a test hook for a host allocation refusal.
 
 
 Floating point: the strict 16-bit refusal is drawn on the function that holds the value after clang's inlining,
