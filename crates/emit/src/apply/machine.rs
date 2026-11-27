@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, btree_map::Entry};
 use bennett_ir::{Fault, Predicate, Slot, Target};
 
 use super::arithmetic;
-use super::bits::{Bit, Circuit, Word, ZERO, constant};
+use super::bits::{Bit, Circuit, Word, constant};
 use super::calls::Program;
 use super::memory::Memory;
 use super::symbolic::{Point, Step};
@@ -73,12 +73,12 @@ pub(super) fn run(
                         if call.invalid_possible {
                             unmatched = circuit.xor(unmatched, take);
                         }
-                        if take == ZERO {
+                        if take.is_zero() {
                             continue;
                         }
                         match program.enter(circuit, slots, point, index, call.args) {
                             Ok(entry) => {
-                                if entry.failed != ZERO {
+                                if !entry.failed.is_zero() {
                                     copies.faulted.push((circuit.and(take, entry.failed), Fault::StackOverflow));
                                 }
                                 let succeeded = circuit.and(take, entry.failed.not());
@@ -126,7 +126,7 @@ pub(super) fn run(
 }
 
 fn activate(circuit: &mut Circuit, dispatch: &mut Dispatch, point: Point, enabled: Bit) {
-    if enabled == ZERO {
+    if enabled.is_zero() {
         return;
     }
     match dispatch.entry(point) {
@@ -136,7 +136,7 @@ fn activate(circuit: &mut Circuit, dispatch: &mut Dispatch, point: Point, enable
         Entry::Occupied(mut entry) => {
             // An input can come from only one point and take only one edge in a tick.
             let joined = circuit.xor(*entry.get(), enabled);
-            if joined == ZERO {
+            if joined.is_zero() {
                 entry.remove();
             } else {
                 entry.insert(joined);
@@ -154,7 +154,7 @@ fn jump(
     (point, target): (Point, &Target),
     enabled: Bit,
 ) {
-    if enabled == ZERO {
+    if enabled.is_zero() {
         return;
     }
     for (dst, value) in program.incoming(slots, point, target) {
@@ -171,7 +171,7 @@ fn transfer(
     incoming: Vec<(Slot, Word)>,
     enabled: Bit,
 ) {
-    if enabled == ZERO {
+    if enabled.is_zero() {
         return;
     }
     for (dst, word) in incoming {

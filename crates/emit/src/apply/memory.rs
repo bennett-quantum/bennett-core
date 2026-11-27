@@ -7,6 +7,7 @@ use bennett_exec::{ApplyMemory, Wire};
 use bennett_ir::{DataSegment, Fault, Predicate, Width};
 
 use super::bits::{Bit, Circuit, ONE, Word, ZERO, constant, definite};
+use super::identity::Identity;
 use super::{ApplyInput, Argument, arithmetic, reach};
 
 pub(super) const DISPATCH_REQUIRED: &str = "private memory in the step machine";
@@ -178,19 +179,19 @@ impl<'a> Memory<'a> {
                 .iter()
                 .enumerate()
                 .map(|(index, &bit)| {
-                    if matches!(bit, Bit::Constant(_)) && candidates.iter().all(|(_, word)| word[index] == bit) {
+                    if bit.literal().is_some() && candidates.iter().all(|(_, word)| word[index].same_value(bit)) {
                         return bit;
                     }
                     let wire = circuit.fresh();
                     copies.push((index, wire));
-                    Bit::Wire(wire, false)
+                    circuit.value(wire)
                 })
                 .collect()
         } else {
             vec![ZERO; width.bits() as usize]
         };
         for (candidate, value) in candidates {
-            if copies.iter().any(|&(index, _)| value[index] != ZERO) {
+            if copies.iter().any(|&(index, _)| !value[index].is_zero()) {
                 let selected = address_equal(circuit, address, candidate);
                 for &(index, target) in &copies {
                     circuit.xor_into(target, value[index], selected);
@@ -294,10 +295,11 @@ impl<'a> Memory<'a> {
             return Ok((addresses.into_iter().take_while(|&address| address <= last).collect(), outside));
         }
         // Known bits bound all possible addresses, including those on inactive inputs.
-        let (fixed, mask) = address.iter().enumerate().fold((0u64, 0u64), |(fixed, mask), (index, bit)| match bit {
-            Bit::Constant(value) => (fixed | u64::from(*value) << index, mask | 1 << index),
-            Bit::Wire(..) | Bit::Shared { .. } => (fixed, mask),
-        });
+        let (fixed, mask) =
+            address.iter().enumerate().fold((0u64, 0u64), |(fixed, mask), (index, bit)| match bit.literal() {
+                Some(value) => (fixed | u64::from(value) << index, mask | 1 << index),
+                None => (fixed, mask),
+            });
         let maximum = fixed | !mask;
         let upper = maximum.min(last);
         if fixed > upper {
@@ -317,7 +319,7 @@ impl<'a> Memory<'a> {
     }
 
     fn queue(&mut self, address: u64, bytes: &[u8], guard: Bit, value: &[Bit], varying: bool) {
-        if guard != ZERO {
+        if !guard.is_zero() {
             for (offset, (&data, &initial)) in value.as_chunks::<8>().0.iter().zip(bytes).enumerate() {
                 let updates = self.pending.entry(address + offset as u64).or_insert_with(|| ByteWrites {
                     initial,
@@ -337,7 +339,7 @@ impl<'a> Memory<'a> {
             let scratch = circuit.scratch_end();
             let old = self.byte(address, pending.initial);
             let new = match pending.alternatives.as_slice() {
-                [(ONE, value)] => value.map(|bit| self.store_bit(circuit, bit)),
+                [(guard, value)] if guard.literal() == Some(true) => value.map(|bit| self.store_bit(circuit, bit)),
                 [(guard, value)] => std::array::from_fn(|i| circuit.select(*guard, value[i], old[i])),
                 alternatives => {
                     // A varying store can only reach declared bytes. Keep
@@ -360,14 +362,15 @@ impl<'a> Memory<'a> {
     }
 
     fn store_bit(&mut self, circuit: &mut Circuit, bit: Bit) -> Bit {
-        match (bit.wire(), self.shared_version.checked_add(1)) {
-            (None, _) => bit,
-            (Some((wire, false)), Some(version)) => {
-                // Keep the identity of the omitted copy for guarded selection.
-                self.shared_version = version;
-                Bit::Shared { wire, version, inverted: false }
-            }
-            (Some(_), _) => circuit.retain_copy(bit),
+        if let Some(value) = bit.literal() {
+            return Bit::Constant(value);
+        }
+        if let (Some((_, false)), Some(version)) = (bit.wire(), self.shared_version.checked_add(1)) {
+            // Keep the identity of the omitted copy for guarded selection.
+            self.shared_version = version;
+            bit.stored(version)
+        } else {
+            circuit.retain_copy(bit)
         }
     }
 
@@ -400,39 +403,37 @@ impl<'a> Memory<'a> {
     fn guard_parity(&mut self, circuit: &mut Circuit, mut inverted: bool, guards: impl Iterator<Item = Bit>) -> Bit {
         let mut terms = BTreeMap::new();
         for guard in guards {
-            let source = circuit.copy_source(guard);
-            let Some((wire, polarity)) = source.wire() else {
-                inverted ^= source == ONE;
-                continue;
+            let (source, polarity) = match guard.identity() {
+                Identity::Literal(value) => {
+                    inverted ^= value;
+                    continue;
+                }
+                Identity::Source(source, polarity) => (source, polarity),
             };
-            if let Some((previous, _)) = terms.remove(&wire) {
+            if let Some((previous, _)) = terms.remove(&source) {
                 inverted ^= previous ^ polarity;
             } else {
-                terms.insert(wire, (polarity, guard));
+                terms.insert(source, (polarity, guard));
             }
         }
         // Resolve identities for cancellation and keep the original wires for emission.
-        let wires = terms
+        let bits = terms
             .into_values()
             .map(|(_, guard)| {
-                let (wire, complement) = guard.wire().expect("a symbolic guard");
+                let (_, complement) = guard.wire().expect("a symbolic guard");
                 inverted ^= complement;
-                wire
+                guard.with_flip(complement)
             })
             .collect::<Vec<_>>();
-        if wires.len() > 1 {
+        if bits.len() > 1 {
             let target = circuit.fresh();
             circuit.xor_into(target, Bit::Constant(inverted), ONE);
-            for source in wires {
-                circuit.xor_into(target, Bit::Wire(source, false), ONE);
+            for source in bits {
+                circuit.xor_into(target, source, ONE);
             }
-            Bit::Wire(target, false)
-        } else if let Some(&source) = wires.first() {
-            if inverted {
-                circuit.retain_copy(Bit::Wire(source, true))
-            } else {
-                self.store_bit(circuit, Bit::Wire(source, false))
-            }
+            circuit.value(target)
+        } else if let Some(&source) = bits.first() {
+            if inverted { circuit.retain_copy(source.not()) } else { self.store_bit(circuit, source) }
         } else {
             Bit::Constant(inverted)
         }
@@ -455,8 +456,8 @@ fn select_byte(circuit: &mut Circuit, old: Byte, alternatives: &[(Bit, Byte)]) -
     // Its write guards are therefore disjoint even when the byte spans overlap.
     let keep_old = alternatives.iter().fold(ZERO, |touched, (select, _)| circuit.xor(touched, *select)).not();
     std::array::from_fn(|index| {
-        let first = if keep_old == ZERO { alternatives[0].1[index] } else { old[index] };
-        if alternatives.iter().all(|(_, value)| value[index] == first) {
+        let first = if keep_old.is_zero() { alternatives[0].1[index] } else { old[index] };
+        if alternatives.iter().all(|(_, value)| value[index].same_version(first)) {
             return first;
         }
         let wire = circuit.fresh();
@@ -464,7 +465,7 @@ fn select_byte(circuit: &mut Circuit, old: Byte, alternatives: &[(Bit, Byte)]) -
         for &(select, value) in alternatives {
             circuit.xor_into(wire, value[index], select);
         }
-        Bit::Wire(wire, false)
+        circuit.value(wire)
     })
 }
 
@@ -488,7 +489,7 @@ impl AddressChoices<'_> {
         let succeeded = if self.valid.is_empty() { ZERO } else { circuit.and(outside.not(), held.not()) };
         let faults = [(outside, Fault::OutOfBounds), (held, Fault::QubitMemoryAccess)]
             .into_iter()
-            .filter(|&(guard, _)| guard != ZERO)
+            .filter(|&(guard, _)| !guard.is_zero())
             .collect();
         (succeeded, faults)
     }
@@ -543,10 +544,11 @@ impl AddressProof {
     }
 
     fn values(&self, bit: Bit) -> Assignments {
-        match bit {
-            Bit::Constant(true) => self.domain,
-            Bit::Constant(false) => [0; PROOF_WORDS],
-            Bit::Wire(wire, inverted) | Bit::Shared { wire, inverted, .. } => {
+        // Gate replay follows the physical operands and changes to those wires.
+        match bit.wire() {
+            None if bit.literal() == Some(true) => self.domain,
+            None => [0; PROOF_WORDS],
+            Some((wire, inverted)) => {
                 let values = self.wires.get(&wire).copied().unwrap_or_default();
                 std::array::from_fn(|i| values[i] ^ if inverted { self.domain[i] } else { 0 })
             }
@@ -559,7 +561,7 @@ impl AddressProof {
         }
         for gate in &circuit.forward_gates()[self.read_gates..] {
             let mask = gate.controls.iter().fold(self.domain, |mask, &wire| {
-                let values = self.values(Bit::Wire(wire, false));
+                let values = self.wires.get(&wire).copied().unwrap_or_default();
                 std::array::from_fn(|i| mask[i] & values[i])
             });
             for (value, toggles) in self.wires.entry(gate.target).or_default().iter_mut().zip(mask) {

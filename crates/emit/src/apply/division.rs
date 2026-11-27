@@ -8,10 +8,10 @@ use super::ranges::{bits, unsigned_max};
 use super::shifts;
 
 pub(super) fn is_zero(circuit: &mut Circuit, divisor: &[Bit]) -> Bit {
-    if divisor.contains(&ONE) {
+    if divisor.iter().any(|bit| bit.is_one()) {
         return ZERO;
     }
-    let tested = divisor.iter().copied().filter(|&bit| bit != ZERO).collect::<Word>();
+    let tested = divisor.iter().copied().filter(|&bit| !bit.is_zero()).collect::<Word>();
     if tested.is_empty() {
         ONE
     } else if tested.len() == 1 {
@@ -26,7 +26,7 @@ pub(super) fn is_zero(circuit: &mut Circuit, divisor: &[Bit]) -> Bit {
 fn materialize(circuit: &mut Circuit, bit: Bit) -> Bit {
     let wire = circuit.fresh();
     circuit.xor_into(wire, bit, ONE);
-    Bit::Wire(wire, false)
+    circuit.value(wire)
 }
 
 pub(super) fn result_bits(dividend: &[Bit], divisor: &[Bit]) -> usize {
@@ -44,12 +44,12 @@ fn signed_value(value: u128, width: usize) -> i128 {
 // unproved low bit set. Correlations can only tighten these bounds.
 fn maximum_signed_magnitude(word: &[Bit]) -> u128 {
     let (&sign, low) = word.split_last().expect("integer has a sign bit");
-    let positive = if sign == ONE { 0 } else { unsigned_max(low) };
-    let negative = if sign == ZERO {
+    let positive = if sign.is_one() { 0 } else { unsigned_max(low) };
+    let negative = if sign.is_zero() {
         0
     } else {
         let minimum_low =
-            low.iter().enumerate().fold(0, |value, (index, bit)| value | (u128::from(*bit == ONE) << index));
+            low.iter().enumerate().fold(0, |value, (index, bit)| value | (u128::from(bit.is_one()) << index));
         (1 << low.len()) - minimum_low
     };
     positive.max(negative)
@@ -69,7 +69,7 @@ impl RemainderBounds {
             BinOp::Srem => Some(Self {
                 dividend: maximum_signed_magnitude(dividend),
                 modulus: signed_value(value, divisor.len()).unsigned_abs(),
-                can_be_negative: dividend.last() != Some(&ZERO),
+                can_be_negative: dividend.last().is_none_or(|bit| !bit.is_zero()),
             }),
             BinOp::Udiv
             | BinOp::Sdiv
@@ -219,7 +219,7 @@ fn signed_constant_remainder(circuit: &mut Circuit, dividend: &[Bit], bounds: &R
 
 // In two's complement negation, a bit flips exactly when a lower bit is one.
 fn negate_if(circuit: &mut Circuit, word: &[Bit], enabled: Bit) -> Word {
-    if enabled == ZERO {
+    if enabled.is_zero() {
         return word.to_vec();
     }
     let mut nonzero = ZERO;
@@ -318,6 +318,7 @@ fn trial(
 mod tests {
     use super::*;
     use crate::apply::gadget_tests::check;
+    use crate::apply::identity::same_word;
 
     #[test]
     fn remainder_counts_and_clears_its_work_wires() {
@@ -325,7 +326,7 @@ mod tests {
             let width = p.max(m);
             let inputs = |start, count| {
                 (start..start + count as u64)
-                    .map(|wire| Bit::Wire(wire, false))
+                    .map(Bit::input)
                     .chain(std::iter::repeat(ZERO))
                     .take(width)
                     .collect::<Word>()
@@ -345,7 +346,7 @@ mod tests {
     fn quotient_and_signed_counts_include_local_uncomputation() {
         for width in [1usize, 2, 4, 8, 64, 128] {
             for op in [BinOp::Udiv, BinOp::Sdiv, BinOp::Srem] {
-                let input = |start| (start..start + width as u64).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
+                let input = |start| (start..start + width as u64).map(Bit::input).collect::<Word>();
                 let mut circuit = Circuit::new(2 * width as u64);
                 let result = calculate(&mut circuit, op, &input(0), &input(width as u64));
                 let block = circuit.finish(0, "division").expect("valid gadget wires");
@@ -373,8 +374,8 @@ mod tests {
     #[test]
     fn unsigned_quotient_counts_unequal_significant_widths() {
         let (p, m) = (3, 5);
-        let dividend = (0..p as u64).map(|wire| Bit::Wire(wire, false)).chain([ZERO; 2]).collect::<Word>();
-        let divisor = (p as u64..(p + m) as u64).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
+        let dividend = (0..p as u64).map(Bit::input).chain([ZERO; 2]).collect::<Word>();
+        let divisor = (p as u64..(p + m) as u64).map(Bit::input).collect::<Word>();
         let mut circuit = Circuit::new((p + m) as u64);
         let result = calculate(&mut circuit, BinOp::Udiv, &dividend, &divisor);
         let block = circuit.finish(0, "unequal-width quotient").expect("valid gadget wires");
@@ -386,12 +387,12 @@ mod tests {
     #[test]
     fn fixed_quotients_preserve_rewiring_and_wrapping() {
         for (width, distance) in [(8, 3), (128, 65)] {
-            let dividend = (0..width as u64).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
+            let dividend = (0..width as u64).map(Bit::input).collect::<Word>();
             let mut circuit = Circuit::new(width as u64);
             let divisor = 1u128 << distance;
             let result = calculate(&mut circuit, BinOp::Udiv, &dividend, &constant(divisor, width));
-            assert_eq!(&result[..width - distance], &dividend[distance..]);
-            assert!(result[width - distance..].iter().all(|bit| *bit == ZERO));
+            assert!(same_word(&result[..width - distance], &dividend[distance..]));
+            assert!(result[width - distance..].iter().all(|bit| bit.is_zero()));
             assert_eq!(circuit.forward_len(), 0);
             let block = circuit.finish(0, "fixed quotient").expect("valid gadget wires");
             check(&block, &result, &[(width, divisor)], 1, 0);
@@ -401,16 +402,16 @@ mod tests {
             let min = 1u128 << (width - 1);
             let dividend = constant(min, width);
             let divisor = constant(u128::MAX, width);
-            assert_eq!(fold(BinOp::Sdiv, &dividend, &divisor), Some(dividend.clone()));
-            assert_eq!(fold(BinOp::Srem, &dividend, &divisor), Some(vec![ZERO; width]));
-            assert_eq!(fold(BinOp::Sdiv, &dividend, &constant(0, width)), None);
+            assert!(same_word(&fold(BinOp::Sdiv, &dividend, &divisor).expect("identity"), &dividend));
+            assert!(same_word(&fold(BinOp::Srem, &dividend, &divisor).expect("zero remainder"), &vec![ZERO; width]));
+            assert!(fold(BinOp::Sdiv, &dividend, &constant(0, width)).is_none());
         }
     }
 
     #[test]
     fn zero_predicate_counts_and_clears_its_work_wires() {
         for width in [2, 3, 4, 6, 8, 64] {
-            let input = (0..width as u64).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
+            let input = (0..width as u64).map(Bit::input).collect::<Word>();
             let mut circuit = Circuit::new(width as u64);
             let result = vec![is_zero(&mut circuit, &input)];
             let block = circuit.finish(0, "zero check").expect("valid wires");
@@ -422,21 +423,21 @@ mod tests {
     #[test]
     fn known_modulus_caps_the_result_and_powers_of_two_need_no_gates() {
         let mut circuit = Circuit::new(8);
-        let input = (0..8).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
+        let input = (0..8).map(Bit::input).collect::<Word>();
         let power = reduce(&mut circuit, &input, &constant(8, 8));
-        assert_eq!(&power[..3], &input[..3]);
-        assert_eq!(&power[3..], &[ZERO; 5]);
+        assert!(same_word(&power[..3], &input[..3]));
+        assert!(same_word(&power[3..], &[ZERO; 5]));
         assert_eq!(circuit.forward_len(), 0);
 
         let bounded = reduce(&mut circuit, &input, &constant(11, 8));
-        assert_eq!(&bounded[4..], &[ZERO; 4]);
+        assert!(same_word(&bounded[4..], &[ZERO; 4]));
         let block = circuit.finish(0, "bounded remainder").expect("valid wires");
         check(&block, &bounded, &[(8, 21)], 10, 6 * 8 * 4);
     }
 
     #[test]
     fn remainder_at_the_dividend_bound_only_clears_equality() {
-        let input = (0..4).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
+        let input = (0..4).map(Bit::input).collect::<Word>();
         // A smaller modulus needs reduction even when the words are unequal.
         for (modulus, toffolis) in [(15, 7), (11, 6 * 4 * 4)] {
             let mut circuit = Circuit::new(4);

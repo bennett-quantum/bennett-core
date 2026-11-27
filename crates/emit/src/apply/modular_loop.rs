@@ -6,8 +6,9 @@ use bennett_exec::Wire;
 use bennett_ir::{BinOp, BlockId, CastOp, Function, Inst, Operand, Predicate, Slot, Target, Terminator, Width};
 
 use super::ApplyInput;
-use super::bits::{Bit, Checkpoint, Circuit, ONE, Word, ZERO, constant, definite};
+use super::bits::{Bit, Checkpoint, Circuit, ONE, Word, ZERO, definite};
 use super::calls::Program;
+use super::identity::same_word;
 use super::memory::Memory;
 use super::modular::{self, Factor, Multiplier};
 use super::ranges::{bits, unsigned_max};
@@ -273,10 +274,7 @@ fn replay_exit(
             }
             Err(stop) => stop,
         };
-        let Step::Return(mut word) = stop else { return None };
-        for bit in &mut word {
-            *bit = circuit.copy_source(*bit);
-        }
+        let Step::Return(word) = stop else { return None };
         return Some(word);
     }
     None
@@ -464,7 +462,7 @@ impl<'a> Candidate<'a> {
         let initial = definite(&initial_word)?;
         let mut factor = definite(&base_word)?;
         let mut exponent_bits = exponent_word;
-        if initial >= modulus || exponent_bits != program.read(&slots, entry, &shape.tested) {
+        if initial >= modulus || !same_word(&exponent_bits, &program.read(&slots, entry, &shape.tested)) {
             return None;
         }
         let output_width = (input.out.end - input.out.start) as usize;
@@ -499,10 +497,10 @@ impl<'a> Candidate<'a> {
         let empty_point = program.jump(&mut empty_slots, entry, shape.empty);
         let zero_result =
             replay_exit(program, &mut empty_slots, empty_point, entry.copy, memory, probe_end, loop_budget)?;
-        if zero_result != constant(initial, output_width) {
+        if definite(&zero_result) != Some(initial) || zero_result.len() != output_width {
             return None;
         }
-        let probe = (scratch..probe_end).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
+        let probe = (scratch..probe_end).map(Bit::input).collect::<Word>();
         let joined = shape.joined;
         let mut joined_word = probe.clone();
         joined_word.resize(slots[joined].len(), ZERO);
@@ -514,7 +512,7 @@ impl<'a> Candidate<'a> {
         let result = replay_exit(program, &mut slots, exit_point, entry.copy, memory, probe_end, exit_budget)?;
         let mut expected = probe;
         expected.resize(output_width, ZERO);
-        if result != expected {
+        if !same_word(&result, &expected) {
             return None;
         }
 
@@ -560,7 +558,7 @@ impl Plan {
         for (enabled, &factor) in controls.into_iter().zip(&self.factors) {
             multiplier.multiply(circuit, &residue, factor, enabled);
         }
-        residue.into_iter().map(|wire| Bit::Wire(wire, false)).collect()
+        residue.into_iter().map(|wire| circuit.value(wire)).collect()
     }
 }
 

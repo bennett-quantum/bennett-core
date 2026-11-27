@@ -58,12 +58,10 @@ pub(super) enum Step<'a> {
 
 impl<'a> Step<'a> {
     pub(super) fn checked(next: Point, writes: Vec<(Slot, Word)>, failed: Bit, fault: Fault) -> Self {
-        match failed {
-            ZERO => Self::Transfer(next, writes),
-            super::bits::ONE => Self::Fault(fault),
-            Bit::Wire(..) | Bit::Shared { .. } => {
-                Self::CheckedTransfer(next, writes, failed.not(), vec![(failed, fault)])
-            }
+        match failed.literal() {
+            Some(false) => Self::Transfer(next, writes),
+            Some(true) => Self::Fault(fault),
+            None => Self::CheckedTransfer(next, writes, failed.not(), vec![(failed, fault)]),
         }
     }
 }
@@ -180,7 +178,7 @@ impl<'a> Frame<'a> {
     pub(super) fn step(
         &self,
         circuit: &mut Circuit,
-        read: impl Fn(&Circuit, &Operand) -> Word,
+        read: impl Fn(&Operand) -> Word,
         point: Point,
         widths: &[Option<usize>],
     ) -> Result<Step<'a>, ApplyError> {
@@ -195,21 +193,21 @@ impl<'a> Frame<'a> {
                     rhs,
                     ..
                 } => {
-                    let dividend = read(circuit, lhs);
-                    let divisor = read(circuit, rhs);
+                    let dividend = read(lhs);
+                    let divisor = read(rhs);
                     let zero = division::is_zero(circuit, &divisor);
-                    if zero == super::bits::ONE {
+                    if zero.is_one() {
                         return Ok(Step::Fault(Fault::DivideByZero));
                     }
                     let result = division::calculate(circuit, *op, &dividend, &divisor);
-                    if zero != ZERO {
+                    if !zero.is_zero() {
                         return Ok(Step::checked(point.next(), vec![(*dst, result)], zero, Fault::DivideByZero));
                     }
                     (*dst, result)
                 }
                 Inst::Binary { op, dst, lhs, rhs, .. } => {
-                    let mut left = read(circuit, lhs);
-                    let mut right = read(circuit, rhs);
+                    let mut left = read(lhs);
+                    let mut right = read(rhs);
                     let declared = left.len();
                     // Low bits of these operations never depend on higher input bits.
                     if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::And | BinOp::Or | BinOp::Xor) {
@@ -223,26 +221,24 @@ impl<'a> Frame<'a> {
                     (*dst, result)
                 }
                 Inst::Compare { pred, dst, lhs, rhs, .. } => {
-                    let left = read(circuit, lhs);
-                    let right = read(circuit, rhs);
+                    let left = read(lhs);
+                    let right = read(rhs);
                     (*dst, vec![arithmetic::compare(circuit, *pred, &left, &right)])
                 }
                 Inst::Select { dst, cond, if_true, if_false, .. } => {
-                    let condition = read(circuit, cond)[0];
-                    let left = read(circuit, if_true);
+                    let condition = read(cond)[0];
+                    let left = read(if_true);
                     let declared = left.len();
                     let mut result: Word = left
                         .into_iter()
-                        .zip(read(circuit, if_false))
+                        .zip(read(if_false))
                         .take(result_width(*dst, declared))
                         .map(|(a, b)| circuit.select(condition, a, b))
                         .collect();
                     result.resize(declared, ZERO);
                     (*dst, result)
                 }
-                Inst::Cast { op, dst, value, to, .. } => {
-                    (*dst, arithmetic::cast(*op, read(circuit, value), to.bits() as usize))
-                }
+                Inst::Cast { op, dst, value, to, .. } => (*dst, arithmetic::cast(*op, read(value), to.bits() as usize)),
                 Inst::FuncAddr { dst, func } => (*dst, constant(u128::from(func.address()), u64::BITS as usize)),
                 Inst::Call { .. } => return Err(self.error(point, "call", "a planned call copy")),
                 Inst::CallIndirect { .. } => return Err(self.error(point, "call_indirect", "a planned call copy")),
@@ -269,13 +265,16 @@ impl<'a> Frame<'a> {
         }
         Ok(match &block.term {
             Terminator::Jump(target) => Step::Jump(target),
-            Terminator::Branch { cond, if_true, if_false } => match read(circuit, cond)[0] {
-                Bit::Constant(true) => Step::Jump(if_true),
-                Bit::Constant(false) => Step::Jump(if_false),
-                bit @ (Bit::Wire(..) | Bit::Shared { .. }) => Step::Branch(bit, if_true, if_false),
-            },
+            Terminator::Branch { cond, if_true, if_false } => {
+                let bit = read(cond)[0];
+                match bit.literal() {
+                    Some(true) => Step::Jump(if_true),
+                    Some(false) => Step::Jump(if_false),
+                    None => Step::Branch(bit, if_true, if_false),
+                }
+            }
             Terminator::Switch { value, .. } => {
-                let selector = read(circuit, value);
+                let selector = read(value);
                 let mut edges = self.constants.switch_edges(point.block).clone();
                 edges.retain_possible(&selector);
                 if let ([], Some(default)) = (edges.cases.as_slice(), edges.default) {
@@ -286,7 +285,7 @@ impl<'a> Frame<'a> {
                     Step::Switch(selector, edges)
                 }
             }
-            Terminator::Return(Some(value)) => Step::Return(read(circuit, value)),
+            Terminator::Return(Some(value)) => Step::Return(read(value)),
             Terminator::Exit(_) => Step::Fault(Fault::ExitInRegion),
             Terminator::Fault(code) => Step::Fault(*code),
             Terminator::Return(None) | Terminator::Longjmp { .. } => {

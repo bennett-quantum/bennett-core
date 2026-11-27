@@ -2,12 +2,12 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use bennett_exec::Wire;
 use bennett_ir::{FuncId, ValidModule};
 
-use super::{Constants, normalize_arguments};
+use super::{ArgumentIdentities, Constants, normalize_arguments};
 use crate::apply::bits::{Bit, Word};
 use crate::apply::calls::work;
+use crate::apply::identity::Identity;
 use crate::apply::returns::Returns;
 use crate::apply::symbolic::Frame;
 
@@ -21,12 +21,12 @@ pub(in crate::apply) enum CallResult {
 #[derive(Clone, Hash, PartialEq, Eq)]
 struct Context {
     callee: FuncId,
-    arguments: Vec<Word>,
+    arguments: ArgumentIdentities,
 }
 
 struct Query {
     context: Context,
-    sources: Vec<Option<Wire>>,
+    sources: Vec<Option<Bit>>,
 }
 
 impl Query {
@@ -37,11 +37,12 @@ impl Query {
 
     fn translate(&self, word: &ReturnWord) -> ReturnWord {
         word.iter()
-            .map(|bit| match *bit {
-                Some(bit @ Bit::Constant(_)) => Some(bit),
-                Some(Bit::Wire(wire, inverted) | Bit::Shared { wire, inverted, .. }) => {
-                    self.sources[wire as usize].map(|source| Bit::Wire(source, inverted))
-                }
+            .map(|bit| match bit.map(Bit::identity) {
+                Some(literal @ Identity::Literal(_)) => Some(literal.argument_bit()),
+                Some(Identity::Source(source, inverted)) => source
+                    .argument_index()
+                    .and_then(|index| self.sources[index])
+                    .map(|argument| argument.with_flip(inverted)),
                 None => None,
             })
             .collect()
@@ -67,7 +68,7 @@ impl<'a> CallProofs<'a> {
         self.words.call(module, &mut self.returns, target, args)
     }
 
-    pub(super) fn stops_with_arguments(&self, callee: FuncId, arguments: &[Word]) -> bool {
+    pub(super) fn stops_with_arguments(&self, callee: FuncId, arguments: &[Vec<Identity>]) -> bool {
         let context = Context { callee, arguments: arguments.to_vec() };
         matches!(self.words.complete.get(&context), Some(CallResult::Stops))
     }
@@ -160,6 +161,48 @@ impl CopyResults {
                 // arguments and selectors can request more precise proofs.
                 task.dependencies = dependencies;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::apply::bits::Circuit;
+
+    #[test]
+    fn retained_argument_identity_survives_copied_call_proofs() {
+        let module = bennett_ir::load(
+            r#"
+func @wrapper(i1 %a, i1 %b) -> i2 {
+entry:
+    %result = call @leaf(%a, %b)
+    ret %result
+}
+func @leaf(i1 %a, i1 %b) -> i2 {
+entry:
+    %different = icmp ne i1 %a, %b
+    %high = select i2 %different, 2, 0
+    %low = zext i1 %b to i2
+    %result = or i2 %high, %low
+    ret %result
+}
+"#,
+        )
+        .expect("valid program");
+        let wrapper = module.function_named("wrapper").expect("wrapper");
+        let mut proofs = CallProofs::new(&module, 128);
+        let mut circuit = Circuit::new(2);
+        for wire in 0..2 {
+            let source = Bit::input(wire);
+            let complemented = circuit.retain_copy(source.not());
+            let CallResult::Returns(word) =
+                proofs.call(&module, wrapper, &[Some(vec![source]), Some(vec![complemented])])
+            else {
+                panic!("an ordinary copied call returns");
+            };
+            assert!(word[0].is_some_and(|value| value.same_value(complemented)));
+            assert!(word[1].is_some_and(Bit::is_one));
         }
     }
 }

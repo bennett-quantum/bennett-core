@@ -305,7 +305,7 @@ impl<'a> Program<'a> {
         point: Point,
         widths: &[Option<usize>],
     ) -> Result<Step<'a>, ApplyError> {
-        self.step_with(circuit, slots, point, widths, |_, word| word)
+        self.step_with(circuit, slots, point, widths, std::convert::identity)
     }
 
     pub(super) fn step_with(
@@ -314,17 +314,17 @@ impl<'a> Program<'a> {
         slots: &[Word],
         point: Point,
         widths: &[Option<usize>],
-        resolve: impl Fn(&Circuit, Word) -> Word,
+        resolve: impl Fn(Word) -> Word,
     ) -> Result<Step<'a>, ApplyError> {
         let copy = &self.copies[point.copy];
         let local = &slots[copy.slots.clone()];
-        let read = |circuit: &Circuit, operand: &Operand| resolve(circuit, copy.frame.operand(local, operand));
+        let read = |operand: &Operand| resolve(copy.frame.operand(local, operand));
         if let Some(site) = copy.sites.get(&(point.block, point.index)) {
             return Ok(match site {
                 Site::Call(index, args) => call_step(self.enter(circuit, slots, point, *index, args)),
                 Site::BadAddress => Step::Fault(Fault::BadIndirect),
                 Site::Indirect { target, args, targets, invalid_possible } => {
-                    let address = read(circuit, target);
+                    let address = read(target);
                     let facts = Selector::new(&address);
                     let targets: Vec<_> =
                         targets.iter().filter(|&&(value, _)| facts.allows(u128::from(value))).copied().collect();
@@ -441,7 +441,7 @@ pub(super) fn arguments(input: &ApplyInput<'_>) -> Vec<Word> {
                 let Type::Int(width) = param.ty else { unreachable!("checked the argument type") };
                 constant(*value, width.bits() as usize)
             }
-            Argument::Register(wires) => wires.clone().map(|wire| Bit::Wire(wire, false)).collect(),
+            Argument::Register(wires) => wires.clone().map(Bit::input).collect(),
         })
         .collect()
 }

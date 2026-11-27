@@ -124,7 +124,7 @@ impl Controls<'_, '_> {
     }
 
     fn follow(&mut self, mut route: Route) -> Result<Option<Route>, Failure> {
-        if route.enabled == ZERO {
+        if route.enabled.is_zero() {
             return Ok(None);
         }
         loop {
@@ -150,9 +150,7 @@ impl Controls<'_, '_> {
             }
             let point = route.point;
             let step = self.circuit.under(route.enabled, |circuit| {
-                self.program.step_with(circuit, &route.slots, point, &[], |circuit, word| {
-                    route.facts.resolve_word(circuit, word)
-                })
+                self.program.step_with(circuit, &route.slots, point, &[], |word| route.facts.resolve_word(word))
             })?;
             match step {
                 Step::Write(next, dst, word) => {
@@ -179,7 +177,7 @@ impl Controls<'_, '_> {
                         faults.into_iter().map(|(failed, fault)| (self.circuit.and(route.enabled, failed), fault)),
                     );
                     route.enabled = self.circuit.and(route.enabled, succeeded);
-                    if route.enabled == ZERO {
+                    if route.enabled.is_zero() {
                         return Ok(None);
                     }
                     for (slot, word) in writes {
@@ -227,8 +225,8 @@ impl Controls<'_, '_> {
         if self.can_revisit(point, false) {
             return Err(Failure::Control(Refusal::UnprovedLoop));
         }
-        if yes_mask != ZERO
-            && no_mask != ZERO
+        if !yes_mask.is_zero()
+            && !no_mask.is_zero()
             && flow.shares_code(yes.block, no.block, |block| {
                 self.boundaries
                     .iter()
@@ -243,15 +241,15 @@ impl Controls<'_, '_> {
         if let Some(equality) = BranchEquality::in_block(self.program.block(point)) {
             let equal_route = if equality.when_true { &mut yes_route } else { &mut no_route };
             let slot = self.program.slot(point, equality.slot);
-            equal_route.facts.assume(self.circuit, &equal_route.slots[slot.index()], equality.value.value());
+            equal_route.facts.assume(&equal_route.slots[slot.index()], equality.value.value());
         }
         let yes = self.transfer(yes_route, yes, yes_mask);
         let no = self.transfer(no_route, no, no_mask);
         let yes = self.follow(yes)?;
         let no = self.follow(no)?;
         self.boundaries.truncate(outer_boundaries);
-        let same_mask = yes.as_ref().is_some_and(|yes| yes.enabled == yes_mask)
-            && no.as_ref().is_some_and(|no| no.enabled == no_mask);
+        let same_mask = yes.as_ref().is_some_and(|yes| yes.enabled.same_value(yes_mask))
+            && no.as_ref().is_some_and(|no| no.enabled.same_value(no_mask));
         self.merge(yes, no, same_mask.then_some(parent_mask))
     }
 
@@ -269,7 +267,7 @@ impl Controls<'_, '_> {
                 condition.not()
             };
             let exit_mask = self.circuit.and(route.enabled, continuation.not());
-            if exit_mask != ZERO {
+            if !exit_mask.is_zero() {
                 let mut exiting = route.clone();
                 // Every enabled exit saw zero. Carry that fact through the
                 // transfer, including when the tested word is an exit argument.
@@ -279,7 +277,7 @@ impl Controls<'_, '_> {
                 exits = self.merge(exits, Some(exit), None)?;
             }
             route.enabled = self.circuit.and(route.enabled, continuation);
-            if route.enabled == ZERO {
+            if route.enabled.is_zero() {
                 break;
             }
             let enabled = route.enabled;
@@ -299,7 +297,7 @@ impl Controls<'_, '_> {
                 break;
             }
             let tested = self.program.read(&route.slots, route.point, plan.condition)[0];
-            condition = route.facts.resolve(self.circuit, tested);
+            condition = route.facts.resolve(tested);
         }
         Ok(exits)
     }

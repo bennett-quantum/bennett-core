@@ -1,9 +1,9 @@
 //! Unsigned bounds derived from definite bits in a little-endian word.
 
-use super::bits::{Bit, ZERO};
+use super::bits::Bit;
 
 pub(super) fn unsigned_max(word: &[Bit]) -> u128 {
-    word.iter().enumerate().fold(0, |maximum, (index, &bit)| maximum | (u128::from(bit != ZERO) << index))
+    word.iter().enumerate().fold(0, |maximum, (index, &bit)| maximum | (u128::from(!bit.is_zero()) << index))
 }
 
 pub(super) fn bits(maximum: u128) -> usize {

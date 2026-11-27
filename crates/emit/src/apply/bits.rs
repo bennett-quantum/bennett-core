@@ -7,34 +7,12 @@ use bennett_ir::{FixedGate, Gate};
 
 use super::ApplyError;
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-pub(super) enum Bit {
-    Constant(bool),
-    Wire(Wire, bool),
-    // A separately stored version of an immutable wire.
-    Shared { wire: Wire, version: u32, inverted: bool },
-}
+pub(super) use super::identity::Bit;
+use super::identity::{Generation, Identity};
 
 pub(super) const ZERO: Bit = Bit::Constant(false);
 pub(super) const ONE: Bit = Bit::Constant(true);
 const X: Gate = Gate::Fixed(FixedGate::X);
-
-impl Bit {
-    pub(super) fn not(self) -> Self {
-        match self {
-            Self::Constant(value) => Self::Constant(!value),
-            Self::Wire(wire, inverted) => Self::Wire(wire, !inverted),
-            Self::Shared { wire, version, inverted } => Self::Shared { wire, version, inverted: !inverted },
-        }
-    }
-
-    pub(super) fn wire(self) -> Option<(Wire, bool)> {
-        match self {
-            Self::Constant(_) => None,
-            Self::Wire(wire, inverted) | Self::Shared { wire, inverted, .. } => Some((wire, inverted)),
-        }
-    }
-}
 
 pub(super) type Word = Vec<Bit>;
 
@@ -43,10 +21,7 @@ pub(super) fn constant(value: u128, width: usize) -> Word {
 }
 
 pub(super) fn definite(word: &[Bit]) -> Option<u128> {
-    word.iter().enumerate().try_fold(0, |value, (index, bit)| match bit {
-        Bit::Constant(set) => Some(value | u128::from(*set) << index),
-        Bit::Wire(..) | Bit::Shared { .. } => None,
-    })
+    word.iter().enumerate().try_fold(0, |value, (index, bit)| bit.literal().map(|set| value | u128::from(set) << index))
 }
 
 pub(super) struct Circuit {
@@ -56,7 +31,7 @@ pub(super) struct Circuit {
     gates: Vec<GateOp>,
     enabled: Bit,
     control_scratch: Option<Wire>,
-    retained_copies: Vec<(Wire, Bit)>,
+    generation: Generation,
 }
 
 pub(super) struct Checkpoint {
@@ -64,7 +39,6 @@ pub(super) struct Checkpoint {
     peak: Option<Wire>,
     gates: usize,
     control_scratch: Option<Wire>,
-    retained_copies: usize,
 }
 
 impl Circuit {
@@ -76,7 +50,7 @@ impl Circuit {
             gates: Vec::new(),
             enabled: ONE,
             control_scratch: None,
-            retained_copies: Vec::new(),
+            generation: Generation::next(),
         }
     }
 
@@ -88,18 +62,17 @@ impl Circuit {
         wire
     }
 
+    // Publish a newly computed immutable wire in the current allocation lifetime.
+    pub(super) fn value(&self, wire: Wire) -> Bit {
+        Bit::produced(wire, self.generation)
+    }
+
     fn flip(&mut self, target: Wire, controls: Vec<Wire>) {
         self.gates.push(GateOp { kind: X, target, controls });
     }
 
     pub(super) fn checkpoint(&self) -> Checkpoint {
-        Checkpoint {
-            next: self.next,
-            peak: self.peak,
-            gates: self.gates.len(),
-            control_scratch: self.control_scratch,
-            retained_copies: self.retained_copies.len(),
-        }
+        Checkpoint { next: self.next, peak: self.peak, gates: self.gates.len(), control_scratch: self.control_scratch }
     }
 
     // The in-place update uses the saved allocator state without copying the
@@ -112,7 +85,7 @@ impl Circuit {
             gates: Vec::new(),
             enabled: self.enabled,
             control_scratch: checkpoint.control_scratch,
-            retained_copies: self.retained_copies[..checkpoint.retained_copies].to_vec(),
+            generation: Generation::next(),
         }
     }
 
@@ -128,11 +101,11 @@ impl Circuit {
         self.peak = checkpoint.peak;
         self.gates.truncate(checkpoint.gates);
         self.control_scratch = checkpoint.control_scratch;
-        self.retained_copies.truncate(checkpoint.retained_copies);
+        self.generation = Generation::next();
     }
 
     pub(super) fn under<T>(&mut self, enabled: Bit, emit: impl FnOnce(&mut Self) -> T) -> T {
-        debug_assert_eq!(self.enabled, ONE);
+        debug_assert!(self.enabled.is_one());
         self.enabled = enabled;
         let result = emit(self);
         self.enabled = ONE;
@@ -142,17 +115,19 @@ impl Circuit {
     pub(super) fn xor_into(&mut self, target: Wire, value: Bit, enabled: Bit) {
         let mut controls = Vec::new();
         for bit in [value, enabled, self.enabled] {
-            match bit {
-                ZERO => return,
-                ONE => continue,
-                Bit::Wire(wire, inverted) | Bit::Shared { wire, inverted, .. } => {
-                    if controls.contains(&(wire, !inverted)) {
-                        return;
-                    }
-                    if !controls.contains(&(wire, inverted)) {
-                        controls.push((wire, inverted));
-                    }
-                }
+            match bit.literal() {
+                Some(false) => return,
+                Some(true) => continue,
+                None => {}
+            }
+            // Deduplicate operands of this physical gate, including the
+            // mutable work wires of an in-place update.
+            let (wire, inverted) = bit.wire().expect("a nonliteral control has a wire");
+            if controls.contains(&(wire, !inverted)) {
+                return;
+            }
+            if !controls.contains(&(wire, inverted)) {
+                controls.push((wire, inverted));
             }
         }
         for &(wire, inverted) in &controls {
@@ -184,63 +159,60 @@ impl Circuit {
     }
 
     pub(super) fn and(&mut self, left: Bit, right: Bit) -> Bit {
-        let (known_left, known_right) = (self.copy_source(left), self.copy_source(right));
-        if known_left == known_right.not() || left == ZERO || right == ZERO {
+        if left.same_value(right.not()) || left.is_zero() || right.is_zero() {
             return ZERO;
         }
-        if left == ONE || known_left == known_right {
+        if left.is_one() || left.same_value(right) {
             return right;
         }
-        if right == ONE {
+        if right.is_one() {
             return left;
         }
         let wire = self.fresh();
         self.xor_into(wire, left, right);
-        Bit::Wire(wire, false)
+        self.value(wire)
     }
 
     pub(super) fn xor(&mut self, left: Bit, right: Bit) -> Bit {
-        match (left, right) {
-            (ZERO, bit) | (bit, ZERO) => bit,
-            (ONE, bit) | (bit, ONE) => bit.not(),
-            (left, right) => {
-                let (a, neg_a) = left.wire().expect("symbolic XOR operand");
-                let (b, neg_b) = right.wire().expect("symbolic XOR operand");
-                let (known_left, known_right) = (self.copy_source(left), self.copy_source(right));
-                if known_left == known_right {
+        match (left.literal(), right.literal()) {
+            (Some(value), _) => right.with_flip(value),
+            (_, Some(value)) => left.with_flip(value),
+            (None, None) => {
+                if left.same_value(right) {
                     return ZERO;
                 }
-                if known_left == known_right.not() {
+                if left.same_value(right.not()) {
                     return ONE;
                 }
+                let (_, neg_a) = left.wire().expect("symbolic XOR operand");
+                let (_, neg_b) = right.wire().expect("symbolic XOR operand");
                 let wire = self.fresh();
-                self.xor_into(wire, Bit::Wire(a, false), ONE);
-                self.xor_into(wire, Bit::Wire(b, false), ONE);
-                Bit::Wire(wire, neg_a != neg_b)
+                self.xor_into(wire, left.with_flip(neg_a), ONE);
+                self.xor_into(wire, right.with_flip(neg_b), ONE);
+                self.value(wire).with_flip(neg_a ^ neg_b)
             }
         }
     }
 
     pub(super) fn select(&mut self, condition: Bit, yes: Bit, no: Bit) -> Bit {
-        let (known_yes, known_no) = (self.copy_source(yes), self.copy_source(no));
-        if condition == ONE || known_yes == known_no {
+        if condition.is_one() || yes.same_value(no) {
             return yes;
         }
-        if condition == ZERO {
+        if condition.is_zero() {
             return no;
         }
-        match (yes, no) {
-            (ZERO, bit) => self.and(condition.not(), bit),
-            (ONE, bit) => self.and(condition.not(), bit.not()).not(),
-            (bit, ZERO) => self.and(condition, bit),
-            (bit, ONE) => self.and(condition, bit.not()).not(),
-            _ if known_yes == known_no.not() => self.xor(no, condition),
-            _ => {
+        match (yes.literal(), no.literal()) {
+            (Some(false), _) => self.and(condition.not(), no),
+            (Some(true), _) => self.and(condition.not(), no.not()).not(),
+            (_, Some(false)) => self.and(condition, yes),
+            (_, Some(true)) => self.and(condition, yes.not()).not(),
+            (None, None) if yes.same_value(no.not()) => self.xor(no, condition),
+            (None, None) => {
                 let wire = self.fresh();
                 self.xor_into(wire, no, ONE);
                 self.xor_into(wire, yes, condition);
                 self.xor_into(wire, no, condition);
-                Bit::Wire(wire, false)
+                self.value(wire)
             }
         }
     }
@@ -252,21 +224,10 @@ impl Circuit {
     }
 
     pub(super) fn retain_copy(&mut self, bit: Bit) -> Bit {
-        debug_assert_eq!(self.enabled, ONE);
+        debug_assert!(self.enabled.is_one());
         let wire = self.fresh();
         self.xor_into(wire, bit, ONE);
-        self.retained_copies.push((wire, self.copy_source(bit)));
-        Bit::Wire(wire, false)
-    }
-
-    // Follow a shared or retained copy back to its immutable source.
-    pub(super) fn copy_source(&self, bit: Bit) -> Bit {
-        let Some((wire, inverted)) = bit.wire() else { return bit };
-        if let Ok(index) = self.retained_copies.binary_search_by_key(&wire, |&(copy, _)| copy) {
-            let source = self.retained_copies[index].1;
-            return if inverted { source.not() } else { source };
-        }
-        Bit::Wire(wire, inverted)
+        bit.copied(wire, self.generation)
     }
 
     // Reserve the result before computing, then clear and reuse all later wires.
@@ -284,9 +245,9 @@ impl Circuit {
         if self.peak.is_none() {
             return computed;
         }
-        if definite(&computed).is_some() {
+        if let Some(value) = definite(&computed) {
             self.rewind(checkpoint);
-            return computed;
+            return constant(value, width);
         }
         let Some((first, temporary)) = checkpoint.next.zip(temporary) else {
             self.peak = None;
@@ -294,22 +255,20 @@ impl Circuit {
         };
         self.peak = self.peak.map(|peak| peak.max(temporary));
         let end = self.forward_len();
-        let mut copies = Vec::new();
+        let result_generation = Generation::next();
         let result = (first..temporary)
             .zip(computed)
-            .map(|(wire, value)| match value {
-                Bit::Constant(_) => value,
-                Bit::Wire(..) | Bit::Shared { .. } => {
+            .map(|(wire, value)| match value.identity() {
+                Identity::Literal(literal) => Bit::Constant(literal),
+                Identity::Source(source, _) => {
+                    self.xor_into(wire, value, ONE);
                     // Only an unconditional copy of a source that predates
                     // this computation survives its local reversal.
-                    if self.enabled == ONE
-                        && let source @ Bit::Wire(source_wire, _) = self.copy_source(value)
-                        && source_wire < first
-                    {
-                        copies.push((wire, source));
+                    if self.enabled.is_one() && source.precedes(first) {
+                        value.copied(wire, result_generation)
+                    } else {
+                        Bit::produced(wire, result_generation)
                     }
-                    self.xor_into(wire, value, ONE);
-                    Bit::Wire(wire, false)
                 }
             })
             .collect();
@@ -318,8 +277,7 @@ impl Circuit {
         }
         self.next = Some(temporary);
         self.control_scratch = control_scratch;
-        self.retained_copies.truncate(checkpoint.retained_copies);
-        self.retained_copies.extend(copies);
+        self.generation = result_generation;
         result
     }
 

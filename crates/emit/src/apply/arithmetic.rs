@@ -69,13 +69,9 @@ fn multiply(circuit: &mut Circuit, word: &[Bit], mut factor: u128) -> Word {
     product
 }
 
-fn known_different(circuit: &Circuit, left: Bit, right: Bit) -> bool {
-    circuit.copy_source(left) == circuit.copy_source(right).not()
-}
-
 pub(super) fn compare(circuit: &mut Circuit, pred: Predicate, lhs: &[Bit], rhs: &[Bit]) -> Bit {
     if matches!(pred, Predicate::Eq | Predicate::Ne)
-        && lhs.iter().zip(rhs).any(|(&left, &right)| known_different(circuit, left, right))
+        && lhs.iter().zip(rhs).any(|(&left, &right)| left.same_value(right.not()))
     {
         return Bit::Constant(pred == Predicate::Ne);
     }
@@ -89,8 +85,11 @@ pub(super) fn compare(circuit: &mut Circuit, pred: Predicate, lhs: &[Bit], rhs: 
     } else {
         order(circuit, pred, lhs, rhs)
     };
-    if matches!(result, Bit::Constant(_)) && circuit.fits() {
+    if let Some(value) = result.literal()
+        && circuit.fits()
+    {
         circuit.rewind(checkpoint);
+        return Bit::Constant(value);
     }
     result
 }
@@ -108,7 +107,7 @@ fn order(circuit: &mut Circuit, pred: Predicate, lhs: &[Bit], rhs: &[Bit]) -> Bi
         .enumerate()
         .map(|(index, (&a, &b))| if signed && index + 1 == lhs.len() { (a.not(), b.not()) } else { (a, b) });
     // Any known difference decides the comparison of its bit and all lower bits.
-    let decisive = pairs.clone().enumerate().rfind(|&(_, (a, b))| known_different(circuit, a, b));
+    let decisive = pairs.clone().enumerate().rfind(|&(_, (a, b))| a.same_value(b.not()));
     let (first, mut less) = decisive.map_or((0, ZERO), |(index, (_, b))| (index + 1, b));
     for (a, b) in pairs.skip(first) {
         let different = circuit.xor(a, b);
@@ -132,7 +131,7 @@ mod tests {
         use crate::apply::gadget_tests::check;
 
         for width in [1, 4, 8, 64, 128] {
-            let input = |start| (start..start + width as u64).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
+            let input = |start| (start..start + width as u64).map(Bit::input).collect::<Word>();
             let mut circuit = Circuit::new(2 * width as u64);
             let result = binary(&mut circuit, BinOp::Or, &input(0), &input(width as u64)).expect("or");
             let block = circuit.finish(0, "or").expect("valid gadget wires");
@@ -142,7 +141,7 @@ mod tests {
 
     #[test]
     fn proved_comparisons_skip_the_unneeded_low_bits() {
-        let mut left = (0..127).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
+        let mut left = (0..127).map(Bit::input).collect::<Word>();
         left.push(ONE);
         let right = [ZERO; 128];
         for (predicate, expected) in [
@@ -154,7 +153,7 @@ mod tests {
             (Predicate::Sge, false),
         ] {
             let mut circuit = Circuit::new(127);
-            assert_eq!(compare(&mut circuit, predicate, &left, &right), Bit::Constant(expected));
+            assert_eq!(compare(&mut circuit, predicate, &left, &right).literal(), Some(expected));
             assert_eq!(circuit.forward_len(), 0, "{predicate:?}");
             assert_eq!(circuit.scratch_end(), Some(127));
         }
@@ -163,13 +162,13 @@ mod tests {
     #[test]
     fn fixed_products_keep_proved_high_bits_zero() {
         let mut circuit = Circuit::new(4);
-        let mut input = (0..4).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
+        let mut input = (0..4).map(Bit::input).collect::<Word>();
         input.resize(128, ZERO);
         let product = multiply(&mut circuit, &input, 11);
         // 15 * 11 is 165. The high 120 bits are definite even though the
         // arithmetic instruction and its result are both 128 bits wide.
-        assert_eq!(&product[8..], &[ZERO; 120]);
-        assert_ne!(product[7], ZERO);
+        assert!(crate::apply::identity::same_word(&product[8..], &[ZERO; 120]));
+        assert!(!product[7].is_zero());
         assert_eq!(product_bits(1 << 127, 2, 128), 128);
     }
 }

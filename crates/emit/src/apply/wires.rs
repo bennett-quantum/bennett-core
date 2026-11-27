@@ -127,10 +127,10 @@ mod tests {
 
             let mut circuit = Circuit::new(layout.scratch_start());
             let temporary = circuit.fresh();
-            let source = Bit::Wire(layout.local(left).start, false);
+            let source = Bit::input(layout.local(left).start);
             circuit.xor_into(temporary, source, ONE);
             let forward = circuit.forward_len();
-            circuit.xor_into(layout.local(fault.clone()).start, Bit::Wire(temporary, false), ONE);
+            circuit.xor_into(layout.local(fault.clone()).start, circuit.value(temporary), ONE);
 
             let block = layout.finish(circuit, forward, "sparse").expect("fits at the end of wire space");
             let [

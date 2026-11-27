@@ -2,7 +2,7 @@
 
 use bennett_exec::Wire;
 
-use super::bits::{Bit, Circuit, ONE, ZERO};
+use super::bits::{Bit, Circuit, ONE};
 
 pub(super) fn width(modulus: u64) -> usize {
     (u64::BITS - (modulus - 1).leading_zeros()) as usize
@@ -42,7 +42,7 @@ pub(super) struct Multiplier {
 }
 
 fn wire(id: Wire) -> Bit {
-    Bit::Wire(id, false)
+    Bit::input(id)
 }
 
 impl Multiplier {
@@ -133,7 +133,7 @@ impl Multiplier {
     // The residue is in [0,N), and the factor and inverse multiply to 1 mod N.
     // The accumulator, addend, carry and flag start and finish at zero.
     pub(super) fn multiply(&self, circuit: &mut Circuit, residue: &[Wire], factor: Factor, enabled: Bit) {
-        if enabled == ZERO || factor.value == 1 {
+        if enabled.is_zero() || factor.value == 1 {
             return;
         }
         for (bit, &digit) in residue.iter().enumerate() {

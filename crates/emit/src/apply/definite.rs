@@ -6,6 +6,7 @@ use bennett_exec::Wire;
 use bennett_ir::{BinOp, BlockId, FuncId, Inst, Operand, Signature, Slot, Terminator, ValidModule, Width};
 
 use super::bits::{Bit, Circuit, Word, ZERO, constant, definite};
+use super::identity::{Identity, same_word};
 use super::selectors::Selector;
 use super::switches::Edges;
 use super::symbolic::{Frame, before_instruction_fault};
@@ -43,16 +44,20 @@ fn fold_inst(
             Some(vec![arithmetic::compare(circuit, *pred, &read(lhs)?, &read(rhs)?)])
         }
         Inst::Cast { op, to, value, .. } => Some(arithmetic::cast(*op, read(value)?, to.bits() as usize)),
-        Inst::Select { cond, if_true, if_false, .. } => match read(cond)?[0] {
-            Bit::Constant(choice) => read(if choice { if_true } else { if_false }),
-            condition @ (Bit::Wire(..) | Bit::Shared { .. }) => Some(
-                read(if_true)?
-                    .into_iter()
-                    .zip(read(if_false)?)
-                    .map(|(yes, no)| circuit.select(condition, yes, no))
-                    .collect(),
-            ),
-        },
+        Inst::Select { cond, if_true, if_false, .. } => {
+            let condition = read(cond)?[0];
+            if let Some(choice) = condition.literal() {
+                read(if choice { if_true } else { if_false })
+            } else {
+                Some(
+                    read(if_true)?
+                        .into_iter()
+                        .zip(read(if_false)?)
+                        .map(|(yes, no)| circuit.select(condition, yes, no))
+                        .collect(),
+                )
+            }
+        }
         Inst::FuncAddr { func, .. } => Some(constant(u128::from(func.address()), u64::BITS as usize)),
         Inst::Call { .. } | Inst::CallIndirect { .. } => unreachable!("calls use the return proof"),
         Inst::Load { .. }
@@ -127,7 +132,7 @@ fn indirect_targets(module: &ValidModule, signature: &Signature, address: &[Bit]
 fn intersect_return(joined: &mut Option<ReturnWord>, word: ReturnWord) {
     if let Some(joined) = joined {
         for (old, bit) in joined.iter_mut().zip(word) {
-            if *old != bit {
+            if !old.zip(bit).is_some_and(|(old, bit)| old.same_value(bit)) {
                 *old = None;
             }
         }
@@ -162,12 +167,14 @@ fn fold_call(
     })
 }
 
+type ArgumentIdentities = Vec<Vec<Identity>>;
+
 // Number the argument identities by their first occurrence. The reverse map
 // translates the callee's argument identities back into the caller's word.
 fn normalize_arguments(
     frame: &Frame<'_>,
     inputs: impl Iterator<Item = Option<Word>>,
-) -> (Vec<Word>, Vec<Option<Wire>>) {
+) -> (ArgumentIdentities, Vec<Option<Bit>>) {
     let mut identities = BTreeMap::new();
     let mut sources = Vec::new();
     let words = frame
@@ -179,15 +186,15 @@ fn normalize_arguments(
         .map(|(parameter, input)| match input {
             Some(word) => word
                 .into_iter()
-                .map(|bit| match bit {
-                    Bit::Constant(_) => bit,
-                    Bit::Wire(wire, inverted) | Bit::Shared { wire, inverted, .. } => {
-                        let number = *identities.entry(wire).or_insert_with(|| {
+                .map(|bit| match bit.identity() {
+                    literal @ Identity::Literal(_) => literal,
+                    Identity::Source(source, inverted) => {
+                        let number = *identities.entry(source).or_insert_with(|| {
                             let number = sources.len() as Wire;
-                            sources.push(Some(wire));
+                            sources.push(Some(bit.with_flip(inverted)));
                             number
                         });
-                        Bit::Wire(number, inverted)
+                        Identity::input(number, inverted)
                     }
                 })
                 .collect(),
@@ -195,7 +202,7 @@ fn normalize_arguments(
                 .map(|_| {
                     let number = sources.len() as Wire;
                     sources.push(None);
-                    Bit::Wire(number, false)
+                    Identity::input(number, false)
                 })
                 .collect(),
         })
@@ -232,14 +239,15 @@ impl<'a> Constants<'a> {
         let Operand::Slot(slot) = operand else { return word };
         if let Some(proved) = self.slots.get(slot.index()).and_then(Option::as_ref) {
             for (bit, fact) in word.iter_mut().zip(proved) {
-                match *fact {
-                    Bit::Constant(_) => *bit = *fact,
-                    Bit::Wire(wire, inverted) | Bit::Shared { wire, inverted, .. } => {
+                match fact.identity() {
+                    Identity::Literal(value) => *bit = Bit::Constant(value),
+                    Identity::Source(source, inverted) => {
                         // A current frame's immutable argument slots carry
                         // the physical bits for its abstract identities.
-                        if let Some(source) = self.argument_bits.get(wire as usize) {
-                            let original = slots[source.slot.index()][source.index];
-                            *bit = if inverted ^ source.inverted { original.not() } else { original };
+                        if let Some(argument) = source.argument_index().and_then(|index| self.argument_bits.get(index))
+                        {
+                            let original = slots[argument.slot.index()][argument.index];
+                            *bit = original.with_flip(inverted ^ argument.inverted);
                         }
                     }
                 }
@@ -317,19 +325,19 @@ impl<'a> Constants<'a> {
         Self::solve(frame, &inputs, call_result)
     }
 
-    fn with_arguments(frame: &Frame<'a>, inputs: &[Word]) -> Self {
+    fn with_arguments(frame: &Frame<'a>, inputs: &[Vec<Identity>]) -> Self {
         let function = frame.module.function(frame.callee);
         let mut slots = vec![None; function.slot_count()];
         let mut argument_bits = Vec::new();
         for (parameter, input) in function.params.iter().zip(inputs) {
             for (index, bit) in input.iter().enumerate() {
-                if let Bit::Wire(wire, inverted) = *bit
-                    && wire as usize == argument_bits.len()
+                if let Identity::Source(source, inverted) = *bit
+                    && source.argument_index() == Some(argument_bits.len())
                 {
                     argument_bits.push(ArgumentBit { slot: parameter.slot, index, inverted });
                 }
             }
-            slots[parameter.slot.index()] = Some(input.clone());
+            slots[parameter.slot.index()] = Some(input.iter().map(|&identity| identity.argument_bit()).collect());
         }
 
         Self { slots, argument_bits, ..Self::default() }
@@ -337,7 +345,7 @@ impl<'a> Constants<'a> {
 
     fn solve(
         frame: &Frame<'a>,
-        inputs: &[Word],
+        inputs: &[Vec<Identity>],
         mut call_result: impl FnMut(FuncId, &[Option<Word>]) -> CallResult,
     ) -> Self {
         let function = frame.module.function(frame.callee);
@@ -348,7 +356,7 @@ impl<'a> Constants<'a> {
         let slot_width = Wire::from(Width::MAX_BITS);
         let scratch = argument_wires + slot_width * slots.len() as Wire;
         let unknown_bit =
-            |slot: Slot, index| Bit::Wire(argument_wires + slot_width * Wire::from(slot.0) + index as Wire, false);
+            |slot: Slot, index| Bit::input(argument_wires + slot_width * Wire::from(slot.0) + index as Wire);
         let unknown_word = |slot| (0..frame.slot_width(slot)).map(|index| unknown_bit(slot, index)).collect();
         // Entry reachability grows with the value facts. For example, a loop can
         // first deliver a constant condition and later make both outcomes possible.
@@ -432,9 +440,9 @@ impl<'a> Constants<'a> {
                 };
                 if let Some(Terminator::Branch { cond, if_true, if_false }) = term {
                     if let Some(word) = read(&local, cond) {
-                        match word[0] {
-                            Bit::Constant(choice) => transfer(if choice { if_true } else { if_false }),
-                            Bit::Wire(..) | Bit::Shared { .. } => {
+                        match word[0].literal() {
+                            Some(choice) => transfer(if choice { if_true } else { if_false }),
+                            None => {
                                 transfer(if_true);
                                 transfer(if_false);
                             }
@@ -461,10 +469,14 @@ impl<'a> Constants<'a> {
                     if let Terminator::Return(Some(value)) = term
                         && let Some(word) = read(&local, value)
                     {
-                        let proof = word.into_iter().map(|bit| match bit {
-                            Bit::Constant(_) => Some(bit),
-                            Bit::Wire(wire, inverted) | Bit::Shared { wire, inverted, .. } => {
-                                (wire < argument_wires).then_some(Bit::Wire(wire, inverted))
+                        let proof = word.into_iter().map(|bit| {
+                            let identity = bit.identity();
+                            match identity {
+                                Identity::Literal(_) => Some(identity.argument_bit()),
+                                Identity::Source(source, _) => source
+                                    .argument_index()
+                                    .filter(|&index| index < argument_bits.len())
+                                    .map(|_| identity.argument_bit()),
                             }
                         });
                         intersect_return(&mut returned, proof.collect());
@@ -475,13 +487,19 @@ impl<'a> Constants<'a> {
                     let old = &mut slots[slot.index()];
                     for (index, bit) in word.iter_mut().enumerate() {
                         let unknown = unknown_bit(slot, index);
-                        if bit.wire().is_some_and(|(wire, _)| wire >= argument_wires)
-                            || old.as_ref().is_some_and(|old| old[index] != *bit)
-                        {
+                        let crosses_block = match bit.identity() {
+                            Identity::Literal(_) => true,
+                            Identity::Source(source, _) => {
+                                source.argument_index().is_some_and(|index| index < argument_bits.len())
+                            }
+                        };
+                        if !crosses_block || old.as_ref().is_some_and(|old| !old[index].same_value(*bit)) {
                             *bit = unknown;
+                        } else {
+                            *bit = bit.identity().argument_bit();
                         }
                     }
-                    changed |= old.as_ref() != Some(&word);
+                    changed |= old.as_ref().is_none_or(|old| !same_word(old, &word));
                     *old = Some(word);
                 }
             }

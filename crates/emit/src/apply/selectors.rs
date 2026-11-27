@@ -3,12 +3,13 @@
 use std::collections::{BTreeMap, btree_map::Entry};
 
 use super::bits::Bit;
+use super::identity::Identity;
 
 pub(super) struct Selector {
     fixed: u128,
     mask: u128,
     aliases: Vec<(usize, usize, bool)>,
-    distinct_wires: usize,
+    distinct_sources: usize,
 }
 
 impl Selector {
@@ -18,12 +19,12 @@ impl Selector {
         let mut first_use = BTreeMap::new();
         let mut aliases = Vec::new();
         for (index, &bit) in selector.iter().enumerate() {
-            match bit {
-                Bit::Constant(value) => {
+            match bit.identity() {
+                Identity::Literal(value) => {
                     mask |= 1u128 << index;
                     fixed |= u128::from(value) << index;
                 }
-                Bit::Wire(wire, inverted) | Bit::Shared { wire, inverted, .. } => match first_use.entry(wire) {
+                Identity::Source(source, inverted) => match first_use.entry(source) {
                     Entry::Vacant(entry) => {
                         entry.insert((index, inverted));
                     }
@@ -34,7 +35,7 @@ impl Selector {
                 },
             }
         }
-        Self { fixed, mask, aliases, distinct_wires: first_use.len() }
+        Self { fixed, mask, aliases, distinct_sources: first_use.len() }
     }
 
     pub(super) fn allows(&self, value: u128) -> bool {
@@ -45,9 +46,9 @@ impl Selector {
             })
     }
 
-    // Each compatible value describes one assignment to the distinct wires.
+    // Each compatible value describes one assignment to the distinct sources.
     // The caller supplies the count of distinct compatible values.
     pub(super) fn covered_by(&self, count: usize) -> bool {
-        1usize.checked_shl(self.distinct_wires as u32) == Some(count)
+        1usize.checked_shl(self.distinct_sources as u32) == Some(count)
     }
 }

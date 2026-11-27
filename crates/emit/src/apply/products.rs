@@ -11,7 +11,7 @@ pub(super) fn multiply(circuit: &mut Circuit, left: &[Bit], right: &[Bit]) -> Wo
         let mut columns = vec![Vec::new(); width];
         for (i, &a) in left.iter().take(width).enumerate() {
             for (j, &b) in right.iter().take(width - i).enumerate() {
-                if a != ZERO && b != ZERO {
+                if !a.is_zero() && !b.is_zero() {
                     columns[i + j].push(circuit.and(a, b));
                 }
             }
@@ -77,11 +77,7 @@ mod tests {
         {
             let args = (left + right) as u64;
             let input = |start: u64, n| {
-                (start..start + n as u64)
-                    .map(|wire| Bit::Wire(wire, false))
-                    .chain(std::iter::repeat(ZERO))
-                    .take(width)
-                    .collect::<Word>()
+                (start..start + n as u64).map(Bit::input).chain(std::iter::repeat(ZERO)).take(width).collect::<Word>()
             };
             let mut circuit = Circuit::new(args);
             let result = multiply(&mut circuit, &input(0, left), &input(left as u64, right));

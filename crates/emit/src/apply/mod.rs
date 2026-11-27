@@ -9,6 +9,7 @@ mod division;
 mod flow;
 #[cfg(test)]
 mod gadget_tests;
+mod identity;
 mod machine;
 mod memory;
 mod modular;

@@ -30,7 +30,7 @@ pub(super) fn shift(circuit: &mut Circuit, op: BinOp, word: &[Bit], amount: &[Bi
     let width = word.len();
     circuit.clean_word(width, |circuit| {
         let in_range = arithmetic::compare(circuit, Predicate::Ult, amount, &constant(width as u128, width));
-        if in_range == ZERO {
+        if in_range.is_zero() {
             return vec![ZERO; width];
         }
         let mut result = word.to_vec();
@@ -54,7 +54,7 @@ mod tests {
     fn shift_counts_and_clears_its_work_wires() {
         for width in [1usize, 2, 3, 4, 8, 64, 65, 128] {
             for op in [BinOp::Shl, BinOp::Lshr, BinOp::Ashr] {
-                let input = |start| (start..start + width as u64).map(|wire| Bit::Wire(wire, false)).collect::<Word>();
+                let input = |start| (start..start + width as u64).map(Bit::input).collect::<Word>();
                 let mut circuit = Circuit::new(2 * width as u64);
                 let result = shift(&mut circuit, op, &input(0), &input(width as u64));
                 let block = circuit.finish(0, "variable shift").expect("valid gadget wires");

@@ -546,6 +546,18 @@ On a controlled route it records the fault under the route guard AND the zero te
 continues on that route with its guard narrowed to the successful inputs. In the step machine
 itself only the successful inputs receive a successor and the result write.
 
+**Value identity.** The emitter represents an immutable bit by a literal or by its source and polarity.
+An unconditional copy carries the original identity, including copies of complemented copies. A fact on a
+control route can resolve an identity to a literal for the inputs taking that route. Arithmetic, route joins,
+selector and call proofs, write guards and modular exit replay use the same identities. Copied-call proofs
+number the argument sources by first occurrence and translate the result's identities back to the caller's
+bits. Gate operands retain their physical wire addresses. A private write also keeps a version for guarded
+byte selection.
+
+Reversal ends the lifetime of temporary sources. Reusing a wire gives the new value a fresh identity.
+An unconditional result copy made before local reversal keeps its source identity when that source
+survives. The in-place multiplier exposes its changing residue as immutable bits after the last update.
+
 **Private byte versions.** The emitter borrows the caller's ordinary
 bytes and held-byte addresses when it compiles an applied call. A sparse map holds the current
 private value of each written byte, shared across copied calls. A load or store checks the full
@@ -560,9 +572,8 @@ negative controls by conflating two copies. An inverted source uses the retained
 copy into a fresh positive wire. Plain stores use a retained copy once the 32-bit version counter fills.
 An overwrite replaces the map entry, so a value already loaded still refers to
 its original bits. The caller's memory stays intact.
-Arithmetic gadgets preserve constant results and the equality of an unconditional result copy
-with a source that survives local reversal. A failed work-wire allocation prevents folding the
-affected gadget and fails circuit construction before emission.
+A failed work-wire allocation prevents folding the affected gadget and fails circuit construction before
+emission.
 Calls and memory instructions use the same step budget.
 
 For each call the compiler reports the retained memory scratch qubits, the memory gates including the
@@ -667,9 +678,9 @@ per assignment, so XOR joins their dispatch bits. A returned or faulted assignme
 dispatching. At the budget boundary each still-running assignment gets the code `budget`.
 
 A `switch` with one possible edge follows that edge directly. The call planner and
-dispatcher skip case values that disagree with known selector bits or with bits that
-share a qubit. If the compatible cases cover every assignment to the selector's
-distinct qubits, they also skip the default. A switch with multiple possible edges uses
+dispatcher skip case values that disagree with known selector bits or with the
+polarity of bits that share a source. If the compatible cases cover every assignment to the selector's
+distinct sources, they also skip the default. A switch with multiple possible edges uses
 the step machine. Each remaining case compares the full selector with its case value
 and combines the match with the dispatch bit at that point. Case values are distinct,
 so XORing the matched dispatch bits out of the incoming dispatch bit gives the guard

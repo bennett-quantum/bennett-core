@@ -24,14 +24,8 @@ pub(super) struct Bounds {
 
 pub(super) fn analyze(program: &Program<'_>, input: &ApplyInput<'_>, count: usize, limit: usize) -> Option<Bounds> {
     let args = arguments(input);
-    let wires = args
-        .iter()
-        .flatten()
-        .filter_map(|bit| match *bit {
-            Bit::Wire(wire, _) | Bit::Shared { wire, .. } => Some(wire),
-            Bit::Constant(_) => None,
-        })
-        .collect::<BTreeSet<_>>();
+    // Enumerate the physical input qubits, including any overlapping argument slices.
+    let wires = args.iter().flatten().filter_map(|bit| bit.wire().map(|(wire, _)| wire)).collect::<BTreeSet<_>>();
     if wires.len() > MAX_INPUT_BITS {
         return None;
     }
@@ -43,9 +37,9 @@ pub(super) fn analyze(program: &Program<'_>, input: &ApplyInput<'_>, count: usiz
     for assignment in 0..1 << wires.len() {
         let args = args.iter().map(|word| {
             word.iter()
-                .map(|bit| match *bit {
-                    Bit::Constant(_) => *bit,
-                    Bit::Wire(wire, inverted) | Bit::Shared { wire, inverted, .. } => {
+                .map(|bit| match bit.wire() {
+                    None => *bit,
+                    Some((wire, inverted)) => {
                         let index = wires.binary_search(&wire).expect("input wire");
                         Bit::Constant((assignment & (1 << index) != 0) ^ inverted)
                     }

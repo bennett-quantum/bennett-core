@@ -2,7 +2,7 @@
 
 use bennett_exec::{BlockOp, GateBlock};
 
-use super::bits::{Bit, Word};
+use super::bits::Word;
 
 pub(super) fn check(block: &GateBlock, result: &Word, inputs: &[(usize, u128)], expected: u128, toffolis: usize) {
     let [BlockOp::Allocate(scratch), gates @ .., BlockOp::ReleaseZero(_)] = block.ops() else {
@@ -26,11 +26,11 @@ pub(super) fn check(block: &GateBlock, result: &Word, inputs: &[(usize, u128)], 
     }
     let mut work_start = args.len();
     let found = result.iter().enumerate().fold(0, |value, (i, bit)| {
-        let actual = match bit {
-            Bit::Constant(bit) => *bit,
-            Bit::Wire(wire, inverted) | Bit::Shared { wire, inverted, .. } => {
-                work_start = work_start.max(*wire as usize + 1);
-                wires[*wire as usize] ^ inverted
+        let actual = match bit.wire() {
+            None => bit.literal().expect("a literal bit"),
+            Some((wire, inverted)) => {
+                work_start = work_start.max(wire as usize + 1);
+                wires[wire as usize] ^ inverted
             }
         };
         value | (u128::from(actual) << i)

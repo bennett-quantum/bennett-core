@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use bennett_ir::{BinOp, Fault, Inst, Operand, Target, Terminator};
 
-use super::bits::{Bit, Circuit, ONE, Word, ZERO};
+use super::bits::{Bit, Circuit, ONE, Word};
 use super::calls::Program;
 use super::symbolic::{Point, Step};
 use super::{ApplyError, Copies};
@@ -66,7 +66,7 @@ impl<'a> Loop<'a> {
                 copies.faulted.push((active, Fault::Budget));
                 return Ok((copies, decisions));
             };
-            if after_entry < self.body.exiting.charge || active == ZERO {
+            if after_entry < self.body.exiting.charge || active.is_zero() {
                 copies.faulted.push((active, Fault::Budget));
                 return Ok((copies, decisions));
             }
@@ -76,7 +76,7 @@ impl<'a> Loop<'a> {
 
         // If no more returns fit, the remaining instructions are total and
         // active inputs can only exhaust the budget.
-        while remaining >= self.body.exiting.charge && active != ZERO {
+        while remaining >= self.body.exiting.charge && !active.is_zero() {
             let exit = self.body.exit(program, slots);
             let returning = circuit.and(active, exit);
             self.body.record(circuit, program, slots, returning, widths, &mut copies)?;
@@ -85,7 +85,7 @@ impl<'a> Loop<'a> {
             let Some(after_continue) = remaining.checked_sub(self.body.continuing.charge) else {
                 break;
             };
-            if after_continue < self.body.exiting.charge || active == ZERO {
+            if after_continue < self.body.exiting.charge || active.is_zero() {
                 break;
             }
             // Unselected inputs can run this total computation speculatively.
@@ -131,7 +131,7 @@ impl<'a> Test<'a> {
         widths: &[Option<usize>],
         copies: &mut Copies,
     ) -> Result<(), ApplyError> {
-        if returning != ZERO {
+        if !returning.is_zero() {
             let word = self
                 .exiting
                 .follow(circuit, program, &mut slots.to_vec(), self.point, widths)?
