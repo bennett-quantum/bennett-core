@@ -1,6 +1,6 @@
 # HANDOFF
 
-Updated on 2026-11-26 after `c63481a`. Earlier measurements and decisions are in `docs/RECORDS.md`.
+Updated on 2026-11-27 with the maintainer's decisions. Earlier measurements and decisions are in `docs/RECORDS.md`.
 
 ## The front end is being rebuilt on handles (2026-11-25)
 
@@ -133,8 +133,55 @@ Run each in the foreground, from the repository root (`CARGO_BUILD_JOBS=3` on th
 
 The newest decisions appear first.
 
-- **2026-11-26, interface layouts.** The device reads a control entry as 16 bytes (handle, qubit) and an `apply` field as 40 bytes (handle, lowest qubit, width, byte offset, direction 1 for input or 2 for output). Each member is a little-endian `u64`, aligned to 8 bytes.
-- **2026-11-26, phase rotation.** Use the OpenQASM spelling `p` for the gate that multiplies the amplitude of `1` by `exp(i angle)` and leaves `0` unchanged.
+- **2026-11-27, primitive declarations and calls.** Before any optimiser pass, compare the compiled unit's primitive
+  declarations and direct-call attributes with a header-only baseline built with the same flags, refuse other globals
+  with primitive names, and remove effect claims from pointer calls. Unused and type-only declarations that emit
+  nothing are accepted. After optimisation, check name redirection and call and declaration shape. Only modules
+  marked by the new driver may call primitives through pointers. Update `docs/HANDLES.md` section 4, test the
+  reserved-call witnesses, and measure the cost of removing effect claims on SQLite and c-testsuite.
+- **2026-11-27, device operations.** Lower each interface call to one device instruction with run-time operands,
+  including gate kind, rotation axis and angle, handle, position, control list and the applied function. A quantum
+  operation inside an applied function gives code 8 before any other check. Use `y` as gate 2 and OpenQASM's `p`
+  for the phase rotation, which multiplies the amplitude of `1` by `exp(i angle)` and leaves `0` unchanged.
+- **2026-11-27, handles and layouts.** Number `i64` handles from 1 in successful allocation order and never reuse
+  them. Widths and positions are run-time values. Slices consume no handle, `qwidth` queries a register's width,
+  and control lists come from memory. A control entry is 16 bytes (handle, qubit). An `apply` field is 40 bytes
+  (handle, lowest qubit, width, byte offset, direction 1 for input or 2 for output). Each member is a little-endian
+  `u64`, aligned to 8 bytes. Use codes 20–24 (`bad_width`, `out_of_handles`, `bad_range`, `bad_gate`,
+  `bad_argument`) and the widened meanings of 9 and 10 in `docs/HANDLES.md`.
+- **2026-11-27, header names and checks.** Keep `bq_` and `BQ_`, linker names equal to the C identifiers, gate
+  codes 1–8, rotation codes 9–12 and guard `BENNETT_BQ_H_INCLUDED`. `BQ_IN` and `BQ_OUT` check that the slice fits
+  the member named. Keep one weak definition of the scope list for the whole program and check its merge with the
+  linked C library.
+- **2026-11-27, named stops and fault reporting.** The only primitives for named faults are `__bennett_out_of_memory` and
+  `__bennett_bad_argument`, each with its own code inside `apply`. The scope list grows until allocation fails,
+  and `bad_argument` covers a scalar slice over 64 qubits and an unmatched scope pop. Leave codes 25–31 free.
+  On a fault, `bq_faults_check` reports on standard output and exits with status 4. Keep that output until the
+  runtime supports standard error.
+- **2026-11-27, block placement and budgets.** The device places the block from its size and the live stack and
+  heap. Try the highest 16-byte-aligned start at which the block ends at or below the call's stack pointer. Keep
+  link-time arguments and build definitions for `BQ_BUDGET(name)`. Decide whether to pass budgets as run
+  arguments when the device reports steps per `apply`.
+- **2026-11-27, musl allocation.** Requests musl can reject from their arguments alone return null with the native
+  error. A request the arena cannot hold gives `out_of_memory` (19). Fix the reserved-name witnesses with the new
+  driver.
+- **2026-11-27, floating-point environment.** SSE and x87 carry separate modes and flags. Guarantee exact rounding
+  modes and all five ISO C exceptions. Carry the denormal-operand flag outside that guarantee and document its
+  gaps. Refuse a strict function that holds any 16-bit floating value by type. Keep the generic `fesetenv` stop
+  until each unsupported setting has a name.
+- **2026-11-27, wires and OpenQASM comments.** Keep the shared wire table for simulator register allocation and
+  the device interface. Address the remaining storage debts there. Use ranges in OpenQASM discard and
+  `release_zero` comments so even wide registers can be recorded without listing each qubit.
+- **2026-11-27, emitter proofs.** Use one value identity across all proofs, including retained and complemented
+  copies. Do this before further cost reductions and keep the three review cases as regression tests.
+- **2026-11-27, native comparisons.** The native stand-in compares applied functions that compute on the block and
+  ordinary memory, allocate successfully, produce results independent of numeric addresses, and return without
+  calling an effect, exit or interface primitive, registering a handler or using buffered output. Keep generated
+  comparisons in that class and the named stop for functions outside the stand-in's table of function entries,
+  including native library functions such as `free`. Use the device as the reference from the first milestone.
+- **2026-11-27, handle proofs.** Publish them as a second paper after the declaration check lands and after
+  re-checking the width query, phase rotation, named stops, width checks, layouts and the declaration claim under
+  linker names.
 
 - **2026-11-25, the core of the C front end.** Qubits are handles, every quantum operation is an external call, and
   `apply` names a plain C function (the section at the top). `if (q) { ... }` and `y = q + 3` leave the language: the
@@ -364,24 +411,7 @@ Not to be started: the former steps on ordinary guards (1c), placement P2 and P3
 
 ## Questions for the maintainer
 
-- **Check declarations before optimisation?** The replacement driver compares primitives and direct-call attributes with a header-only baseline built with the same flags, refuses other globals of those names, removes effect claims from pointer calls, and checks redirection and shape after optimisation. Keep the rule on the compiled unit (unused and type-only declarations that emit nothing are accepted), update `docs/HANDLES.md` section 4, test the reserved-call witnesses, and measure the effect of removing claims on SQLite and c-testsuite.
-- **Keep pointer calls to primitives on the handle path only?** The new driver will mark its modules and accept these calls there. Keep the marker path's refusal until that path is removed.
-- **Use one identity for all emitter proofs?** The next step will compare values through retained and complemented copies in every proof. Keep this step ahead of further cost reductions and use the three review cases as regressions.
-- **Keep range comments in OpenQASM?** The pending writer uses ranges for discard and `release_zero` comments. Keep ranges so a wide register need not be listed one qubit at a time.
-- **Keep one wire table for both simulator clients?** The landed table tracks live wires for register allocation and for the device interface, with a test against a set of live wires. Keep the shared invariant and address the remaining storage debts there.
-- **Keep `y` and run-time operands in the device?** The handle design takes one device instruction per interface call, with run-time gate kind, rotation axis and `apply` function, and a fixed `y` gate (kind 2). Keep these forms and the fault order beginning with code 8 inside an applied function.
-- **Keep the remaining handle forms as designed?** The device work takes `i64` handles numbered by successful allocation from 1, run-time widths and indices, slices that consume no handle, `qwidth`, and controls from memory. Keep that design and codes 20–24 (`bad_width`, `out_of_handles`, `bad_range`, `bad_gate`, `bad_argument`), with the meanings of 9 and 10 widened as in `docs/HANDLES.md`.
-- **Keep two reserved named stops?** The header uses `__bennett_out_of_memory` and `__bennett_bad_argument`. The latter covers a scalar slice over 64 qubits and an unmatched scope pop. Keep dedicated primitives and their own fault codes inside `apply`, let the list grow until allocation fails, and leave codes 25–31 free.
-- **Keep musl's argument checks distinct from arena exhaustion?** Rejections that musl can decide from its arguments still return null with the native error. Keep `out_of_memory` for a request the arena cannot hold and fix the reserved-name witnesses with the new driver.
-- **Keep the native stand-in's comparison class?** The landed class is applied functions that compute on the block and ordinary memory, allocate successfully, produce outputs independent of numeric addresses, call no effect, exit or interface primitive, register no handler, do no buffered output and return. Keep generated native comparisons in that class and use the device as the reference from the milestone.
-- **Keep the stand-in's named stop for an applied function outside its table of function entries?** This includes native library functions such as `free`. Keep that limit on the native comparison aid.
-- **Keep the floating-point rules as landed?** SSE and x87 carry separate modes and flags. Keep the exact guarantee for rounding modes and standard exceptions, carry the denormal-operand flag with its gaps documented, and refuse a strict function holding any 16-bit floating value by type. Keep the generic `fesetenv` stop until it has names for each unsupported setting.
-- **Keep arguments at link time, and how should a measured budget arrive?** The run image holds the link-time arguments and `BQ_BUDGET(name)` takes a build definition today. Keep link-time arguments and build definitions until the per-`apply` report exists, then decide whether budgets should arrive as run arguments.
-- **Keep the landed names and field checks?** The header uses `bq_` and `BQ_`, linker names equal to the C identifiers, gate codes 1–8, rotation codes 9–12 and guard `BENNETT_BQ_H_INCLUDED`. Keep these and the `BQ_IN` and `BQ_OUT` checks that the slice fits the member named.
-- **Keep one scope list per program?** The header uses one weak definition shared by all units. Keep it and check the merge with the linked C library.
-- **Keep the device responsible for block placement?** The design leaves the placement rule to the device, given only the size and the live stack and heap. Keep this rule and try the highest 16-byte-aligned start that ends at or below the call's stack pointer (`docs/HANDLES.md` section 13).
-- **Keep fault reporting on standard output?** `bq_faults_check` prints there and exits with status 4 because a write to standard error stops the device. Keep this until the runtime supports standard error.
-- **Publish the handle proofs as a second paper?** The proofs are unpublished and `docs/HANDLES.md` records which claims have proofs. Re-check the width query, phase rotation, named stops, width checks and layouts against the proofs, including the declaration claim under linker names, before publishing.
+None open.
 
 ## Which commits no independent check has covered
 

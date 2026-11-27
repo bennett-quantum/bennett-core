@@ -1005,10 +1005,10 @@ Open until checked.
   exist, are hypotheses.
 - Programs written for the marker interface do not carry over automatically.
 
-## 13. Open choices
+## 13. Confirmed choices
 
-The decisions of 2026-11-25 settled the choices the proofs left open. These further points had to be settled to write
-this document; each is the reading easiest to reverse and is marked here until the maintainer confirms it.
+The decisions of 2026-11-25 settled the choices the proofs left open. The maintainer confirmed the choices below
+on 2026-11-27.
 
 - **Names.** The prefix `bq_` and `BQ_`; gate codes `BQ_GATE_*` and rotation codes `BQ_ROT_*` with distinct numbers;
   directions `BQ_DIR_IN` and `BQ_DIR_OUT`; field macros `BQ_IN`, `BQ_OUT`, `BQ_IN_ALL`, `BQ_OUT_ALL`; an include guard
