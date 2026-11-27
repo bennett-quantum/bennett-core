@@ -547,16 +547,19 @@ continues on that route with its guard narrowed to the successful inputs. In the
 itself only the successful inputs receive a successor and the result write.
 
 **Value identity.** The emitter represents an immutable bit by a literal or by its source and polarity.
-An unconditional copy carries the original identity, including copies of complemented copies. A fact on a
-control route can resolve an identity to a literal for the inputs taking that route. Arithmetic, route joins,
+Unconditional retained copies preserve the original identity, including copies of complemented copies.
+An unconditional result copy preserves its source identity when the source survives local reversal.
+Restoring division gives its trial-subtraction copies fresh identities, even when copying literals, to keep
+the trial gate sequence fixed.
+
+A fact on a control route can resolve an identity to a literal for the inputs taking that route. Arithmetic, route joins,
 selector and call proofs, write guards and modular exit replay use the same identities. Copied-call proofs
 number the argument sources by first occurrence and translate the result's identities back to the caller's
 bits. Gate operands retain their physical wire addresses. A private write also keeps a version for guarded
 byte selection.
 
 Reversal ends the lifetime of temporary sources. Reusing a wire gives the new value a fresh identity.
-An unconditional result copy made before local reversal keeps its source identity when that source
-survives. The in-place multiplier exposes its changing residue as immutable bits after the last update.
+The in-place multiplier exposes its changing residue as immutable bits after the last update.
 
 **Private byte versions.** The emitter borrows the caller's ordinary
 bytes and held-byte addresses when it compiles an applied call. A sparse map holds the current
