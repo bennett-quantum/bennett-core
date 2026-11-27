@@ -167,29 +167,43 @@ class Checks(unittest.TestCase):
         self.init_repo()
         path = self.root / file
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(before)
+        path.write_bytes(before if isinstance(before, bytes) else before.encode())
         base = self.commit('Add mutation fixture')
-        path.write_text(after)
+        path.write_bytes(after if isinstance(after, bytes) else after.encode())
         self.commit('Change mutation fixture')
         return base
 
-    def run_mutation(self, base, *flags, listing='', diagnostic='', status=0, package_dir='.'):
+    def run_mutation(self, base, *flags, listing=b'', diagnostic='', status=0, package_dir='.',
+                     metadata_output=None, metadata_status=0, mutation_status=0):
         # Run the CLI on a real Git diff with a fake Cargo so these tests need no mutation tool or builds.
         bin_dir = self.root / '.tmp/bin'
         bin_dir.mkdir(parents=True, exist_ok=True)
         cargo = bin_dir / 'cargo'
+        self.cargo_invocations = bin_dir / 'invocations'
+        self.cargo_invocations.write_text('')
         metadata = {'workspace_default_members': ['fixture'], 'packages': [
             {'id': 'fixture', 'name': 'fixture',
              'manifest_path': str(self.root / package_dir / 'Cargo.toml')}]}
+        if metadata_output is None:
+            metadata_output = json.dumps(metadata)
+        if isinstance(metadata_output, str):
+            metadata_output = metadata_output.encode()
+        if isinstance(listing, str):
+            listing = listing.encode()
         cargo.write_text(
             '#!/usr/bin/env python3\n'
-            'import sys\n'
+            'import json, sys\n'
+            f'with open({str(self.cargo_invocations)!r}, "a") as invocations:\n'
+            '    invocations.write(json.dumps(sys.argv[1:]) + "\\n")\n'
             'if sys.argv[1] == "metadata":\n'
-            f'    print({json.dumps(metadata)!r})\n'
+            f'    sys.stdout.buffer.write({metadata_output!r})\n'
+            f'    sys.exit({metadata_status})\n'
             'elif sys.argv[1] == "mutants" and sys.argv[-2:] == ["--list", "--json"]:\n'
-            f'    sys.stdout.write({listing!r})\n'
+            f'    sys.stdout.buffer.write({listing!r})\n'
             f'    sys.stderr.write({diagnostic!r})\n'
             f'    sys.exit({status})\n'
+            'elif sys.argv[1] == "mutants":\n'
+            f'    sys.exit({mutation_status})\n'
             'else:\n'
             '    sys.exit("unexpected cargo invocation: " + repr(sys.argv[1:]))\n')
         cargo.chmod(0o755)
@@ -197,13 +211,19 @@ class Checks(unittest.TestCase):
                             'BENNETT_FRONT': str(self.root / 'missing-front')}
         return subprocess.run(
             [sys.executable, str(ROOT / 'scripts/mutate-diff.py'), base, *flags],
-            cwd=self.root, env=env, text=True, capture_output=True)
+            cwd=self.root, env=env, encoding='utf-8', errors='surrogateescape', capture_output=True)
+
+    def mutant_invocations(self):
+        commands = [json.loads(row) for row in self.cargo_invocations.read_text().splitlines()]
+        return [command for command in commands if command[0] == 'mutants']
 
     def assert_empty_mutation_set(self, result, diagnostic=''):
         self.assertEqual(result.returncode, 1, result)
         self.assertEqual(result.stderr, diagnostic +
                          'no generated Rust mutants in this diff: record explicit seeded edits for unsupported changes\n')
         self.assertNotIn('changed-line mutants selected', result.stdout)
+        [preview] = self.mutant_invocations()
+        self.assertEqual(preview[-2:], ['--list', '--json'])
 
     def test_mutation_docs_only_rejects_blank_listing(self):
         base = self.mutation_step('README.md', 'Before\n', 'After\n')
@@ -256,6 +276,84 @@ class Checks(unittest.TestCase):
                 self.assertIn(message, result.stderr)
                 self.assertNotIn('no generated Rust mutants', result.stderr)
                 self.assertNotIn('Traceback', result.stderr)
+
+    def test_mutation_passes_git_diff_as_bytes(self):
+        base = self.mutation_step('src/lib.rs', b'// caf\xe9\nfn f() {}\n', b'// caf\xe9\nfn g() {}\n')
+        result = self.run_mutation(base, '--list', listing='[{"file": "src/lib.rs"}]')
+        self.assertEqual(result.returncode, 0, result)
+        [preview] = self.mutant_invocations()
+        patch = Path(preview[preview.index('--in-diff') + 1])
+        expected = subprocess.check_output(['git', 'diff', '--no-ext-diff', '--no-renames', base, 'HEAD'],
+                                           cwd=self.root)
+        self.assertIn(b'caf\xe9', expected)
+        self.assertEqual(patch.read_bytes(), expected)
+
+    def test_mutation_selects_changed_package_with_non_ascii_path(self):
+        directory = 'craté'
+        base = self.mutation_step(f'{directory}/src/lib.rs', 'fn f() {}\n', 'fn g() {}\n')
+        metadata = {'workspace_default_members': [], 'packages': [
+            {'id': 'fixture', 'name': 'fixture',
+             'manifest_path': str(self.root / directory / 'Cargo.toml')}]}
+        result = self.run_mutation(base, '--list', listing='[{}]', metadata_output=json.dumps(metadata))
+        self.assertEqual(result.returncode, 0, result)
+        [preview] = self.mutant_invocations()
+        self.assertEqual(preview[-4:], ['--test-package', 'fixture', '--list', '--json'])
+
+    def test_mutation_preserves_failed_preview_bytes_and_status(self):
+        base = self.mutation_step('src/lib.rs', 'fn f() {}\n', 'fn g() {}\n')
+        result = self.run_mutation(base, listing=b'bad byte \xff\n', status=23)
+        self.assertEqual(result.returncode, 23, result)
+        self.assertIn(b'bad byte \xff\n', result.stderr.encode('utf-8', 'surrogateescape'))
+        self.assertIn('cargo mutants --list --json failed (exit 23)', result.stderr)
+        self.assertNotIn('Traceback', result.stderr)
+        self.assertEqual(len(self.mutant_invocations()), 1)
+
+    def test_mutation_rejects_non_utf8_json(self):
+        base = self.mutation_step('src/lib.rs', 'fn f() {}\n', 'fn g() {}\n')
+        for options, command in [({'listing': b'["\xff"]'}, 'cargo mutants --list --json'),
+                                 ({'metadata_output': b'{"name":"\xff"}'}, 'cargo metadata')]:
+            with self.subTest(command=command):
+                result = self.run_mutation(base, '--list', **options)
+                self.assertEqual(result.returncode, 1, result)
+                self.assertIn(f'{command} returned invalid JSON', result.stderr)
+                self.assertNotIn('Traceback', result.stderr)
+
+    def test_mutation_rejects_nonfinite_json_numbers(self):
+        base = self.mutation_step('src/lib.rs', 'fn f() {}\n', 'fn g() {}\n')
+        metadata = '{{"workspace_default_members": [], "packages": [], "extra": {}}}'
+        for number in ['NaN', 'Infinity', '-Infinity', '1e1000', '-1e1000']:
+            for options, command in [({'listing': f'[{number}]'}, 'cargo mutants --list --json'),
+                                     ({'metadata_output': metadata.format(number)}, 'cargo metadata')]:
+                with self.subTest(number=number, command=command):
+                    result = self.run_mutation(base, '--list', **options)
+                    self.assertEqual(result.returncode, 1, result)
+                    self.assertIn(f'{command} returned invalid JSON', result.stderr)
+                    self.assertNotIn('Traceback', result.stderr)
+
+    def test_mutation_preserves_metadata_and_git_failure_status(self):
+        base = self.mutation_step('src/lib.rs', 'fn f() {}\n', 'fn g() {}\n')
+        result = self.run_mutation(base, metadata_output=b'metadata failed \xfe\n', metadata_status=47)
+        self.assertEqual(result.returncode, 47, result)
+        self.assertIn(b'metadata failed \xfe\n', result.stderr.encode('utf-8', 'surrogateescape'))
+        self.assertNotIn('Traceback', result.stderr)
+        self.assertEqual(self.mutant_invocations(), [])
+        result = self.run_mutation('missing-base')
+        self.assertEqual(result.returncode, 128, result)
+        self.assertIn('missing-base', result.stderr)
+        self.assertNotIn('Traceback', result.stderr)
+
+    def test_mutation_default_runs_the_previewed_selection(self):
+        base = self.mutation_step('src/lib.rs', 'fn f() {}\n', 'fn g() {}\n')
+        listing = '[{"file": "src/lib.rs", "replacement": "()"}]'
+        result = self.run_mutation(base, '--list', listing=listing, mutation_status=4)
+        self.assertEqual(result.returncode, 0, result)
+        [preview] = self.mutant_invocations()
+        self.assertEqual(preview[-2:], ['--list', '--json'])
+
+        result = self.run_mutation(base, listing=listing, mutation_status=4)
+        self.assertEqual(result.returncode, 4, result)
+        self.assertIn('1 changed-line mutants selected', result.stdout)
+        self.assertEqual(self.mutant_invocations(), [preview, preview[:-2]])
 
 
 if __name__ == '__main__':

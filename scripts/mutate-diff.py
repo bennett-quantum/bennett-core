@@ -2,6 +2,7 @@
 """Mutate changed Rust lines before landing; deliberately separate from cargo test."""
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -9,7 +10,30 @@ import sys
 
 
 def run(*args, **kwargs):
-    return subprocess.check_output(args, text=True, **kwargs)
+    return subprocess.check_output(args, **kwargs)
+
+
+def reject_constant(value):
+    raise ValueError(f'{value} is not a JSON number')
+
+
+def finite_float(value):
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f'number outside the finite float range: {value}')
+    return number
+
+
+def read_json(data, command):
+    try:
+        return json.loads(data.decode('utf-8'), parse_constant=reject_constant, parse_float=finite_float)
+    except ValueError as error:
+        sys.exit(f'{command} returned invalid JSON: {error}')
+
+
+def exit_status(returncode):
+    # subprocess uses negative return codes for signals. The shell uses 128 + signal.
+    return returncode if returncode >= 0 else 128 - returncode
 
 
 def main():
@@ -17,21 +41,22 @@ def main():
     parser.add_argument('base', help='accepted base revision (normally origin/main)')
     parser.add_argument('--list', action='store_true', help='preview mutations; does not count as a run')
     args = parser.parse_args()
-    root = Path(run('git', 'rev-parse', '--show-toplevel').strip())
+    root = Path(os.fsdecode(run('git', 'rev-parse', '--show-toplevel').removesuffix(b'\n')))
     if run('git', 'status', '--porcelain').strip():
         sys.exit('commit the step first: mutation testing requires a clean exact revision')
-    base = run('git', 'merge-base', args.base, 'HEAD').strip()
-    head = run('git', 'rev-parse', 'HEAD').strip()
+    base = run('git', 'merge-base', args.base, 'HEAD').strip().decode('ascii')
+    head = run('git', 'rev-parse', 'HEAD').strip().decode('ascii')
     output = root / '.tmp' / 'mutation' / f'{base[:12]}-{head[:12]}'
     output.mkdir(parents=True, exist_ok=True)
     diff = output / 'changed.diff'
-    diff.write_text(run('git', 'diff', '--no-ext-diff', '--no-renames', base, head))
-    if not diff.stat().st_size:
+    patch = run('git', 'diff', '--no-ext-diff', '--no-renames', base, head)
+    diff.write_bytes(patch)
+    if not patch:
         sys.exit('no changed lines: select the base of the step')
-    metadata = json.loads(run('cargo', 'metadata', '--no-deps', '--format-version', '1', cwd=root))
+    metadata = read_json(run('cargo', 'metadata', '--no-deps', '--format-version', '1', cwd=root), 'cargo metadata')
     members = metadata['workspace_default_members']
-    changed_rust = [root / name for name in run('git', 'diff', '--name-only', base, head).splitlines()
-                    if name.endswith('.rs')]
+    names = run('git', 'diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', base, head)
+    changed_rust = [root / os.fsdecode(name) for name in names.split(b'\0') if name.endswith(b'.rs')]
     selected = [p for p in metadata['packages'] if p['id'] in members or any(
         file.is_relative_to(Path(p['manifest_path']).parent) for file in changed_rust)]
     packages = [p['name'] for p in selected]
@@ -42,17 +67,14 @@ def main():
         command.extend(['--test-package', name])
     print(f'mutation step {base}..{head}; results {output.relative_to(root)}', flush=True)
     env = os.environ | {'TMPDIR': str(output)}
-    preview = subprocess.run([*command, '--list', '--json'], cwd=root, env=env,
-                             stdout=subprocess.PIPE, text=True)
+    preview = subprocess.run([*command, '--list', '--json'], cwd=root, env=env, stdout=subprocess.PIPE)
     if preview.returncode:
-        sys.stderr.write(preview.stdout)
-        print(f'cargo mutants --list --json failed (exit {preview.returncode})', file=sys.stderr)
-        return preview.returncode
+        status = exit_status(preview.returncode)
+        sys.stderr.buffer.write(preview.stdout)
+        print(f'cargo mutants --list --json failed (exit {status})', file=sys.stderr)
+        return status
     # cargo-mutants can leave stdout blank when it has no mutants to filter.
-    try:
-        candidates = json.loads(preview.stdout.strip() or '[]')
-    except json.JSONDecodeError as error:
-        sys.exit(f'cargo mutants --list --json returned invalid JSON: {error}')
+    candidates = read_json(preview.stdout if preview.stdout.strip() else b'[]', 'cargo mutants --list --json')
     if not isinstance(candidates, list):
         sys.exit('cargo mutants --list --json expected a JSON array')
     if not candidates:
@@ -72,8 +94,14 @@ def main():
     # A successful empty run is not evidence for changes outside cargo-mutants' Rust scope.
     print('Inspect missed/unviable/timeout outcomes. Non-Rust changes require explicit seeded edits; '
           'see docs/CHECKS.md. No mutation percentage is accepted as a substitute.', flush=True)
-    return code
+    return exit_status(code)
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except subprocess.CalledProcessError as error:
+        status = exit_status(error.returncode)
+        sys.stderr.buffer.write(error.stdout)
+        print(f'{error.cmd[0]} {error.cmd[1]} failed (exit {status})', file=sys.stderr)
+        sys.exit(status)
