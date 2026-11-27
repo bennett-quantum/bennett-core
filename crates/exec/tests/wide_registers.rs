@@ -346,6 +346,46 @@ fn a_register_the_host_cannot_hold_stops_the_simulator_by_name() {
     });
 }
 
+/// Check both limits with an existing wide superposition. The width under the count limit exceeds
+/// the address-space limit. At the greatest width the count must stop the step before any reservation.
+#[test]
+fn stopping_a_large_allocation_preserves_a_live_superposition_and_its_journal() {
+    under_address_limit("stopping_a_large_allocation_preserves_a_live_superposition_and_its_journal", false, || {
+        let live = 65;
+        let too_large_for_host = (1 << 31) + 1;
+        for (width, error) in [
+            (too_large_for_host, bennett_exec::RunError::QubitStorage { qubits: too_large_for_host }),
+            (u64::from(u32::MAX), bennett_exec::RunError::QubitCount { live, more: u64::from(u32::MAX) }),
+        ] {
+            let module = common::load(&format!(
+                "memory 128
+func @main() {{
+entry:
+    %held = qalloc {live}
+    h %held[64]
+    %too_large = qalloc {width}
+    ret
+}}"
+            ));
+            let mut executor =
+                common::executor(&module, "main", &[], bennett_exec::Options { reversible: true, ..bounded() });
+            let entry = executor.snapshot();
+            assert_eq!(executor.step(), None);
+            assert_eq!(executor.step(), None);
+            let before = executor.snapshot();
+            let stats = executor.stats();
+            assert_eq!(stats.configurations, 2);
+            assert_eq!(executor.step(), Some(Outcome::Stopped(error)), "q{width}");
+            let mut after = executor.snapshot();
+            after.classical.outcome = None;
+            assert_eq!(after, before, "q{width}");
+            assert_eq!(executor.stats(), stats, "q{width}");
+            assert_eq!(executor.reverse(), Ok(2), "q{width}");
+            common::assert_same_state(&executor.snapshot(), &entry, "reverse after the refused allocation");
+        }
+    });
+}
+
 /// A gate on two ordinary memory bytes needs 16 fresh qubits; with 2^32 - 9 held, only 8 fit under the
 /// simulator's count. The stop must come before either byte becomes qubits: no byte held, the same count,
 /// the same step. Reaching the count takes 2^26 columns (about 2.5 GB and a few seconds), so the test is
