@@ -20,6 +20,7 @@ pub(super) struct Plan {
     exponent: Word,
     factors: Vec<Factor>,
     condition: Condition,
+    pub(super) preserve_controlled: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -441,6 +442,10 @@ impl<'a> Candidate<'a> {
         Some(self)
     }
 
+    pub(super) fn can_skip_empty_exit(&self) -> bool {
+        !self.empty_possible
+    }
+
     // A recognized loop can leave only through its two exits. Its direct
     // product helpers return immediately and never modify the byte map.
     pub(super) fn exited(&self, next: Point) -> bool {
@@ -454,6 +459,7 @@ impl<'a> Candidate<'a> {
         input: &ApplyInput<'_>,
         program: &Program<'a>,
         memory: &Memory<'_>,
+        check_controlled: bool,
     ) -> Option<(Plan, Checkpoint)> {
         #[cfg(test)]
         tests::record_attempt();
@@ -500,15 +506,19 @@ impl<'a> Candidate<'a> {
         // the direct transfers. Check the possible complete returns, including
         // any conversion in the wrapper, with distinct probe bits.
         let probe_end = scratch.checked_add(residue_width as u64)?;
-        if empty_possible {
+        // For an impossible zero exit, this probe only determines whether
+        // a fitting controlled construction had precedence before the skip.
+        let zero_exit_matches = if empty_possible || check_controlled {
             let mut empty_slots = clone_slots(&slots);
             empty_slots[shape.entry_condition] = vec![Bit::Constant(shape.true_if_zero)];
             let empty_point = program.jump(&mut empty_slots, entry, shape.empty);
-            let zero_result =
-                replay_exit(program, &mut empty_slots, empty_point, entry.copy, memory, probe_end, loop_budget)?;
-            if definite(&zero_result) != Some(initial) || zero_result.len() != output_width {
-                return None;
-            }
+            replay_exit(program, &mut empty_slots, empty_point, entry.copy, memory, probe_end, loop_budget)
+                .is_some_and(|result| definite(&result) == Some(initial) && result.len() == output_width)
+        } else {
+            true
+        };
+        if empty_possible && !zero_exit_matches {
+            return None;
         }
         let probe = (scratch..probe_end).map(Bit::input).collect::<Word>();
         let joined = shape.joined;
@@ -527,7 +537,14 @@ impl<'a> Candidate<'a> {
         }
 
         Some((
-            Plan { initial, modulus: modulus64, exponent: exponent_bits, factors, condition: shape.condition },
+            Plan {
+                initial,
+                modulus: modulus64,
+                exponent: exponent_bits,
+                factors,
+                condition: shape.condition,
+                preserve_controlled: !zero_exit_matches,
+            },
             checkpoint,
         ))
     }

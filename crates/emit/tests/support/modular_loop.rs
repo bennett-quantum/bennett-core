@@ -380,6 +380,38 @@ fn modular_proof_checks_the_zero_exit_only_when_reachable() {
 }
 
 #[test]
+fn a_definitely_nonzero_exponent_keeps_the_controlled_circuit_when_it_fits() {
+    use bennett_exec::BlockOp;
+
+    for (base, operations, scratch, toffolis) in [(2, 6, 0, 0), (7, 1482, 164, 240)] {
+        let source = SOURCE
+            .replace("i3 %exponent) ->", "i3 %input) ->")
+            .replace("    %empty =", "    %bit = and i3 %input, 1\n    %exponent = or i3 %bit, 2\n    %empty =");
+        let source = source.replace("finish(i8 1), head(i8 1, i8 7,", &format!("finish(i8 99), head(i8 1, i8 {base},"));
+        let module = control_example(&source, 3, "");
+        let (construction, _) = compare_controls(&module, 50, ApplyMode::Automatic, |x| {
+            (reference(2 | (x & 1), 1, base, 15, Update::Odd), 0)
+        });
+        let compiled = compile_private_loop(&module, ApplyMode::Automatic);
+        let [BlockOp::Allocate(span), gates @ .., BlockOp::ReleaseZero(released)] = compiled.block.ops() else {
+            panic!("expected one scratch lifetime");
+        };
+        assert_eq!(span, released);
+        let actual_toffolis =
+            gates.iter().filter(|op| matches!(op, BlockOp::Gate(gate) if gate.controls.len() == 2)).count();
+        let measured = (compiled.block.ops().len(), span.end - span.start, actual_toffolis);
+        println!("base {base}, exponent 2 or 3: {construction:?}, {measured:?} operations/scratch/Toffolis");
+        assert_eq!(measured, (operations, scratch, toffolis), "base {base}");
+        assert_eq!(construction, Construction::Controlled { proved_passes: 0 });
+        if base == 7 {
+            let limited = compile_private_loop_at(&module, ApplyMode::Automatic, u64::MAX - 32)
+                .expect("the in-place update fits when the controlled circuit cannot");
+            assert_eq!(limited.construction, Construction::ModularInPlace { passes: 2 });
+        }
+    }
+}
+
+#[test]
 fn modular_proof_counts_the_definite_first_iteration() {
     let source = private_result(24, 24).replace("store i3 %x, 16", "%odd = or i3 %x, 1\n    store i3 %odd, 16");
     let module = control_example(&source, 3, "");
