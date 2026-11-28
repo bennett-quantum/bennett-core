@@ -1428,6 +1428,11 @@ The driver `bennett-cc [clang options] -o OUTPUT UNIT` (`front/src/Driver.cpp`) 
    declared `const` or `pure` puts `nounwind willreturn memory(none)` or `memory(read)` on the calls through it,
    and plain `clang -O2` then deletes a measurement made through it. `noreturn` stays: a `noreturn` pointer that
    reaches a primitive which returns is a call through a mismatched prototype and faults `unreachable` after it.
+   The cost, measured for the front's removal, which applies to every module (one binary with and without it,
+   2026-11-27): on c-testsuite with musl linked, outcomes unchanged (219 agree, one over the step budget), 219 of 220
+   programs with equal device steps and one with 30 more (`00187`, 103,494 to 103,524); on the SQLite acceptance,
+   equal steps in every query. The removal inside `bennett-cc` was not measured on a corpus: the corpora are
+   compiled by clang, not by the driver.
 6. **Then.** The array goes (and the declarations only it used), clang optimises the same module with the same
    options (`clang <options> -x ir`, so the passes are those clang chooses for them; measured: the result is
    plain clang's up to value names on three of `examples/handles` under six option sets), and the result is
