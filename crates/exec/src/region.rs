@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use bennett_ir::{Fault, FuncId, Operand, Qubits, Slot, Type};
 
 use crate::apply_device::{AppliedCircuit, ApplyInput, ApplyMemory, Argument};
-use crate::apply_report::ApplyReport;
+use crate::apply_report::{ApplyReport, RunSteps};
 use crate::device_io::{DeviceContext, wire, wires};
 use crate::executor::{Executor, Halt, Outcome, RunError};
 use crate::journal::Journal;
@@ -68,6 +68,7 @@ impl<'m> Executor<'m> {
         out: Slot,
         fault: Slot,
         budget: &Operand,
+        position: Option<u64>,
     ) -> Result<(), Halt> {
         let (out, fault, inputs) = self.region_operands(args, out, fault)?;
         let budget = self.read_word(budget);
@@ -93,8 +94,10 @@ impl<'m> Executor<'m> {
             }));
             runs.push(self.evaluate(callee, &values, budget));
         }
-        let position = self.apply_reports.len() as u64 + 1;
-        self.apply_reports.push(ApplyReport::new(position, callee, &runs));
+        if let Some(position) = position.filter(|_| self.keep_apply_reports) {
+            let steps: Vec<RunSteps> = runs.iter().map(|&(_, steps)| steps).collect();
+            self.apply_reports.push(ApplyReport::new(position, callee, budget, &steps));
+        }
         let outcomes: Vec<Outcome> = runs.into_iter().map(|(outcome, _)| outcome).collect();
         let faulting: Vec<(&Config, f64, Fault)> = original
             .iter()
@@ -224,8 +227,8 @@ impl<'m> Executor<'m> {
     }
 
     /// Runs `callee(args)` within `budget` steps on top of the current frames, then undoes the run. Returns
-    /// the outcome and the steps the run used.
-    fn evaluate(&mut self, callee: FuncId, args: &[u128], budget: u64) -> (Outcome, u64) {
+    /// the outcome and how the run ended in steps (`apply_report`).
+    fn evaluate(&mut self, callee: FuncId, args: &[u128], budget: u64) -> (Outcome, RunSteps) {
         let region_journal = std::mem::take(&mut self.spare_journal);
         let outer = Saved {
             journal: self.journal.replace(region_journal),
@@ -237,12 +240,19 @@ impl<'m> Executor<'m> {
         };
         self.run_journal_peak = 0;
         self.measure_begin_branch(args);
-        let outcome = match self.push_frame(callee, args) {
+        let (outcome, ran) = match self.push_frame(callee, args) {
             Ok(()) => {
                 self.measure_entry_call(callee);
-                self.run()
+                (self.run(), true)
             }
-            Err(fault) => Outcome::Faulted(fault),
+            Err(fault) => (Outcome::Faulted(fault), false),
+        };
+        // Read where the run ends: the budget ended it only if it faulted `budget` with every step taken; a
+        // fault from an instruction (an explicit `fault budget` included) took one step more, its own.
+        let steps = match outcome {
+            Outcome::Faulted(Fault::Budget) if self.budget_reached() => RunSteps::Exhausted,
+            Outcome::Faulted(_) if ran => RunSteps::Finished(self.steps + 1),
+            Outcome::Returned(_) | Outcome::Faulted(_) | Outcome::Stopped(_) => RunSteps::Finished(self.steps),
         };
         self.region_steps += self.steps;
         let journal = self.journal.as_ref().expect("a region runs with a journal");
@@ -254,7 +264,6 @@ impl<'m> Executor<'m> {
         self.region_cost.runs += 1;
         self.region_cost.work += self.steps + undone;
         self.region_cost.journal_bytes += self.run_journal_peak as u64;
-        let steps = self.steps;
         self.restore(outer);
         (outcome, steps)
     }

@@ -2464,16 +2464,23 @@ The step limit of a whole run (`Options::budget`) is a parameter of the run, lik
 ends the run with the fault `budget`, so a run given another limit is another run. Inside `apply`, `budget B` is the program's own bound, and its fault code is the program's.
 
 **The step report** (a measuring run). A program takes the budget of an `apply` from a run that measured it,
-not from a guess. For each `apply` the run executes forward, in order, the simulator's direct evaluation (its
-default) reports its position among them (from 1), the applied function, the number of inputs it evaluated
-(the basis configurations of nonzero amplitude at the `apply`), the largest number of steps any input used to
-return or to fault with a code other than `budget`, and how many inputs reached the budget, which have no
-count. The run's budget operand is the ceiling: a run that has returned or faulted stays so, so any budget at
-least the largest count gives the same result on every input the report covers; an input that reached the
-ceiling needs a run with a higher one, or does not finish. The report covers those inputs, on that
-compilation. `bennett run --stats` prints one line per `apply`; an `apply` compiled to gates
-(`--apply-circuit`, the counter, the OpenQASM writer) is not evaluated per input and has none, and undoing an
-`apply` adds none.
+not from a guess. A run asked for reports (`Executor::keep_apply_reports`, `bennett run --stats`) keeps one
+for each `apply` it executes forward and the simulator evaluates directly (its default): the `apply`'s
+position among all the `apply` instructions the run executed (from 1, those compiled to gates included), the
+applied function, the value of its budget operand (the ceiling the measuring run gave it), the number of
+inputs it evaluated (the basis configurations of nonzero amplitude at the `apply`), the largest step count
+of an input that returned or faulted, and how many inputs the budget ended. The counts are the executor's
+own accounting of each input's run, read where the run ends: a run that returned counts its steps; a run
+that faulted counts the faulting step too, since it needs that step of budget to fault (an entry frame that
+does not fit faults before any step, with 0); a run the budget ended, having taken every step the ceiling
+allowed, has no count. An explicit `fault budget` is a fault of the program, not the end of the budget: it
+has a count. What is guaranteed: a run that has returned or faulted stays so, so at the same `apply` with
+the same state, any budget at least the largest count gives the same result on every input that returned
+or faulted within the ceiling. Nothing is said about an input the ceiling ended: a larger budget can let it
+return. The report covers those inputs, on that compilation. `bennett run --stats` prints one line per
+report. An `apply` compiled to gates (`--apply-circuit`, the counter, the OpenQASM writer) is not evaluated
+per input and has no report, but takes its position; undoing an `apply` adds none and takes its position
+back, so the same `apply` executed again has the same position. A run not asked for reports keeps none.
 
 **Strict mode** (the maintainer's decision of 2026-11-16): a check of the simulator that no device can make,
 because it looks at every configuration, is a diagnostic, as a sanitizer's is, and strict mode, which makes it,

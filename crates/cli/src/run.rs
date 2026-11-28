@@ -148,6 +148,9 @@ fn run_simulator(module: &ValidModule, entry: FuncId, values: &[u64], args: &Run
         machine_meaning: args.machine_meaning,
     };
     let mut executor = Executor::new(module, entry, values, options)?;
+    if args.stats {
+        executor.keep_apply_reports();
+    }
     let entry_state = executor.snapshot();
 
     let started = Instant::now();
@@ -175,9 +178,10 @@ fn report_applies(module: &ValidModule, reports: &[ApplyReport]) {
     for report in reports {
         let largest = report.largest.map_or_else(|| "none".to_owned(), |steps| steps.to_string());
         println!(
-            "  apply {} @{}: {} inputs, largest step count {largest}, {} at the budget",
+            "  apply {} @{} budget {}: {} inputs, largest step count {largest}, {} at the budget",
             report.position,
             module.function(report.callee).name,
+            report.budget,
             report.inputs,
             report.at_budget
         );
