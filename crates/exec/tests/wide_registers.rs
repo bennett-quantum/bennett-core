@@ -251,31 +251,68 @@ entry:
 /// The address-space limit for the runs below, in bytes (192 MiB): the test binary and the controller's
 /// bookkeeping fit; the simulator's table for a register of 2^32 - 1 qubits (2^26 columns of 8 bytes)
 /// does not.
-const ADDRESS_SPACE: &str = "201326592";
+const ADDRESS_SPACE: u64 = 201_326_592;
+const LIMIT_PARENT: &str = "BENNETT_LIMIT_PARENT";
 
-/// Runs `test` in a child process of this binary under the address-space limit, when `prlimit` is present;
-/// otherwise in this process if `in_process` (a run that needs no more than the limit), else not at all.
-fn under_address_limit(test: &str, in_process: bool, body: fn()) {
-    if std::env::var_os("BENNETT_UNDER_LIMIT").is_some() {
+/// Runs the body in a process whose kernel address-space limit is at most `ADDRESS_SPACE`.
+/// The parent marker bounds recursion if `prlimit` starts the child without applying the limit.
+fn under_address_limit(test: &str, body: fn()) {
+    if address_space_limit().is_some_and(|limit| limit <= ADDRESS_SPACE) {
         return body();
     }
+    let started_by_a_parent =
+        std::env::var(LIMIT_PARENT).is_ok_and(|parent| parent == std::os::unix::process::parent_id().to_string());
+    assert!(!started_by_a_parent, "{test}: prlimit started this child without the limit of {ADDRESS_SPACE} bytes");
     let exe = std::env::current_exe().expect("the test binary");
-    let child = std::process::Command::new("prlimit")
+    let output = std::process::Command::new("prlimit")
         .args([format!("--as={ADDRESS_SPACE}"), "--core=0".into(), "--".into()])
         .arg(exe)
         .args(["--exact", test, "--test-threads", "1"])
-        .env("BENNETT_UNDER_LIMIT", "1")
-        .output();
-    match child {
-        Ok(output) => assert!(
-            output.status.success(),
-            "{test} under {ADDRESS_SPACE} bytes: {:?}\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stdout)
-        ),
-        Err(_) if in_process => body(),
-        Err(_) => {}
+        .env(LIMIT_PARENT, std::process::id().to_string())
+        .output()
+        .unwrap_or_else(|error| panic!("{test} needs prlimit (util-linux) for its memory limit: {error}"));
+    assert!(
+        output.status.success(),
+        "{test} under {ADDRESS_SPACE} bytes: {:?}\n{}{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The current process's soft address-space limit, in bytes. An unlimited process has no limit.
+fn address_space_limit() -> Option<u64> {
+    let limits = std::fs::read_to_string("/proc/self/limits").expect("the kernel's /proc/self/limits");
+    let row = limits.lines().find_map(|line| line.strip_prefix("Max address space")).expect("an address-space row");
+    match row.split_whitespace().next().expect("a soft limit") {
+        "unlimited" => None,
+        bytes => Some(bytes.parse().expect("a byte count")),
     }
+}
+
+#[test]
+fn the_body_runs_under_the_limit() {
+    under_address_limit("the_body_runs_under_the_limit", || {
+        let limit = address_space_limit();
+        assert!(limit.is_some_and(|limit| limit <= ADDRESS_SPACE), "address-space limit {limit:?}");
+    });
+}
+
+#[test]
+fn an_inherited_marker_does_not_lift_the_limit() {
+    let output = std::process::Command::new(std::env::current_exe().expect("the test binary"))
+        .args(["--exact", "the_body_runs_under_the_limit", "--test-threads", "1"])
+        .env("BENNETT_UNDER_LIMIT", "1")
+        .env(LIMIT_PARENT, "1")
+        .output()
+        .expect("the test binary runs");
+    assert!(
+        output.status.success(),
+        "with inherited markers: {:?}\n{}{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// A device that records the wire ranges it allocates and the gates it receives.
@@ -318,7 +355,7 @@ entry:
 /// addressed, within the address-space limit: the controller stores no columns for a device.
 #[test]
 fn the_widest_register_reaches_an_external_device_as_one_range() {
-    under_address_limit("the_widest_register_reaches_an_external_device_as_one_range", true, || {
+    under_address_limit("the_widest_register_reaches_an_external_device_as_one_range", || {
         let module = common::load(WIDEST);
         let mut device = RangeDevice::default();
         let entry = module.function_named("main").expect("entry");
@@ -333,7 +370,7 @@ fn the_widest_register_reaches_an_external_device_as_one_range() {
 /// `QubitStorage`, naming the width, with the state as before the allocation, instead of aborting.
 #[test]
 fn a_register_the_host_cannot_hold_stops_the_simulator_by_name() {
-    under_address_limit("a_register_the_host_cannot_hold_stops_the_simulator_by_name", false, || {
+    under_address_limit("a_register_the_host_cannot_hold_stops_the_simulator_by_name", || {
         let module = common::load(WIDEST);
         let mut executor = common::executor(&module, "main", &[], bounded());
         let before = executor.snapshot();
@@ -350,7 +387,7 @@ fn a_register_the_host_cannot_hold_stops_the_simulator_by_name() {
 /// the address-space limit. At the greatest width the count must stop the step before any reservation.
 #[test]
 fn stopping_a_large_allocation_preserves_a_live_superposition_and_its_journal() {
-    under_address_limit("stopping_a_large_allocation_preserves_a_live_superposition_and_its_journal", false, || {
+    under_address_limit("stopping_a_large_allocation_preserves_a_live_superposition_and_its_journal", || {
         let live = 65;
         let too_large_for_host = (1 << 31) + 1;
         for (width, error) in [
