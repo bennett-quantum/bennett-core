@@ -174,7 +174,7 @@ long __bennett_device_syscall(long nr,long a,long b,long c,long d,long e,long f)
         return !a || __bennett_copy_out((void *)a,&seconds,sizeof seconds)?seconds:-EFAULT;
     }
     if(nr==SYS_nanosleep) return clock_sleep(CLOCK_REALTIME,0,(const void *)a);
-    if(nr==SYS_clock_nanosleep) return clock_sleep((int)a,(int)b,(const void *)c); /* both are int in Linux */
+    if(nr==SYS_clock_nanosleep) return clock_sleep(a,b,(const void *)c);
     if(nr==SYS_getrandom) {
         /* Linux's order: the flags, the length capped at MAX_RW_COUNT, its range (copy.h), then the bytes. */
         if((c&~7L) || ((c&6)==6)) return -EINVAL;
@@ -182,7 +182,7 @@ long __bennett_device_syscall(long nr,long a,long b,long c,long d,long e,long f)
         if(!__bennett_user_range((void *)a,n) || __bennett_user_unmapped((void *)a,n)) return -EFAULT;
         __bennett_entropy_read((void *)a,n); return n;
     }
-    if(nr==SYS_open || nr==SYS_openat) return nr==SYS_open?__bennett_rt_vfs_open((void *)a,b,c,AT_FDCWD):__bennett_rt_vfs_open((void *)b,c,d,(int)a);
+    if(nr==SYS_open || nr==SYS_openat) return nr==SYS_open?__bennett_rt_vfs_open((void *)a,b,c,AT_FDCWD):__bennett_rt_vfs_open((void *)b,c,d,a);
     if(nr==SYS_creat) return __bennett_rt_vfs_open((void *)a,O_CREAT|O_WRONLY|O_TRUNC,b,AT_FDCWD);
     if(nr==SYS_close) return __bennett_rt_vfs_close(a);
     if(nr==SYS_dup) return __bennett_rt_vfs_dup(a,0,0,0);

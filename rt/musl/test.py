@@ -186,11 +186,12 @@ def partial_request(args):
 
 
 # Structure-pointer and error-order checks across all implemented syscalls taking struct pointers
-# (plus time(time_t *), the data buffers, the transfer cap and path strings): agreeing batches, single agreeing cases, a
+# (plus time(time_t *), the data buffers, the transfer cap, path strings and scalar arguments with their upper
+# 32 bits set, wide-args.c): agreeing batches, single agreeing cases, a
 # small-stack run, and named
 # out_of_bounds stops for a range that reaches the end of device memory (natively EFAULT; known debt).
 # Also in front/tests/tests/syscall_efault_independent.rs.
-EFAULT_AGREE = ["efault-time", "efault-stat", "efault-iov", "efault-signals", "efault-path"]
+EFAULT_AGREE = ["efault-time", "efault-stat", "efault-iov", "efault-signals", "efault-path", "wide-args"]
 EFAULT_CASES_AGREE = [
     *[("efault-time", case, False) for case in (
         "clock_gettime-low8", "clock_gettime-wrap8", "clock_getres-low8", "clock_getres-wrap8",

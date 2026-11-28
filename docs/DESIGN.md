@@ -2526,7 +2526,9 @@ descriptor flags, cwd, umask, the clock's read count and entropy's byte position
 Stores and allocator changes are journalled by the existing machine. Un-running a read restores its
 buffer and consumption position; un-running a write restores file bytes, length and offset.
 
-A system call takes the program's structures as Linux does: each input structure is copied whole into the
+A system call takes its scalar arguments as Linux does, each converted to the type the call declares before
+the call looks at it (an `int` or `unsigned int` keeps its low 32 bits; `rt/musl/arguments.h`), and the
+program's structures too: each input structure is copied whole into the
 runtime's own memory before any value is checked, only the copy is checked, and each output is written once the
 result is known, after the inputs are read and checked, so an output that aliases an input behaves as natively;
 no entry reads a field of the program's structure in place. One helper copies in and one copies out

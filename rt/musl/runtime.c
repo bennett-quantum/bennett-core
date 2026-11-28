@@ -11,6 +11,7 @@
 #include <sys/uio.h>
 #include "devices.h"
 #include "copy.h"
+#include "arguments.h"
 
 #ifndef BENNETT_ARENA_BYTES
 #define BENNETT_ARENA_BYTES (1 << 20)
@@ -174,8 +175,10 @@ static long send_self(long sig)
 
 long __bennett_syscall(long number, long a1, long a2, long a3, long a4, long a5, long a6)
 {
-    (void)a5;
-    (void)a6;
+    /* Each argument as the call declares it (arguments.h), before any call looks at one. */
+    long argument[6] = {a1, a2, a3, a4, a5, a6};
+    __bennett_linux_arguments(number, argument);
+    a1 = argument[0], a2 = argument[1], a3 = argument[2], a4 = argument[3], a5 = argument[4], a6 = argument[5];
     switch (number) {
     case SYS_read: case SYS_write: case SYS_readv: case SYS_writev:
     case SYS_open: case SYS_openat: case SYS_creat: case SYS_close:

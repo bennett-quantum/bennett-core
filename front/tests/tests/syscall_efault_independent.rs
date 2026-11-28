@@ -493,3 +493,13 @@ fn paths_at_the_end_of_device_memory_are_read_up_to_their_nul_in_linux_order() {
 fn rename_checks_in_linux_order() {
     assert_agrees("efault-path", "rename-order", false);
 }
+
+/// Witness of scalar arguments taken whole: Linux converts each argument to the type its call declares, so a
+/// descriptor, a vector count, a clock id, a signal number, `how`, a flag, a mode or a command with its upper 32
+/// bits set acts as its low bits (`rt/musl/arguments.h`). Device before: `EBADF` or `EINVAL` for every wide
+/// descriptor, count, clock id, `how` and access mode it reached, then the named stop `unreachable` at
+/// `newfstatat`, whose flags it refused.
+#[test]
+fn scalar_arguments_are_taken_as_their_declared_types() {
+    assert_agrees("wide-args", "agree", true);
+}

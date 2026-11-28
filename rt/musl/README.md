@@ -78,6 +78,19 @@ Process and thread ids are 1. Every unimplemented system call traps as `unreacha
 Threads and dynamic loading are not implemented. No unsupported operation is turned into a
 successful no-op with an observable result.
 
+### Arguments
+
+Each scalar argument of a system call is taken as the type the call declares, as Linux's entry
+(`SYSCALL_DEFINE`) converts every 64-bit argument before the call looks at it, so the upper bits of a narrower
+argument never matter. An `int` keeps its low 32 bits, sign-extended: a directory descriptor, `open`'s flags,
+the access mode, `readlink`'s size, a clock id, `clock_nanosleep`'s flags, a signal number, `how`, `madvise`'s
+advice, `umask`'s mask and the exit status. An `unsigned int` keeps its low 32 bits: a descriptor, `lseek`'s
+`whence`, the commands of `fcntl` and `ioctl`, `getrandom`'s flags, and the descriptor and count of `readv` and
+`writev` (declared `unsigned long`, passed on as `unsigned int`). A mode keeps its low 16 bits. A pointer, a
+size, a length or an offset is whole. `arguments.h` has each implemented call's types, from the kernel's
+`include/linux/syscalls.h`; the runtime converts all six arguments at its one entry, `__bennett_syscall`. As
+Linux's `do_fcntl`, the implemented `fcntl` commands take their argument as an `int`.
+
 ### Structures in system calls
 
 A system call reads and writes the program's memory as Linux does: it copies each input structure whole into
@@ -167,8 +180,8 @@ and `..` there, a recorded debt). `O_ACCMODE` opens for neither reading nor writ
 `fsync`, and `SEEK_DATA`/`SEEK_HOLE` report the model's unwritten 4096-byte pages as holes, as ext4 and tmpfs
 with 4 KiB blocks do. A vector with a bad element after a good one transfers the good part, except on the
 console, which is checked whole ("Structures in system calls"). A directory descriptor of the `*at` calls is
-an `int`, as in Linux, so `AT_FDCWD` passed with its upper 32 bits clear is still the working directory. The CPU-time clocks of the caller (`clock_getcpuclockid`,
-`pthread_getcpuclockid`) share the clock's counter.
+an `int` ("Arguments"), so `AT_FDCWD` passed with its upper 32 bits clear is still the working directory. The
+CPU-time clocks of the caller (`clock_getcpuclockid`, `pthread_getcpuclockid`) share the clock's counter.
 
 Supply the run's inputs when constructing its image:
 
@@ -189,8 +202,8 @@ of the stack). Start-up reads nothing but the image. The area's size is a link p
 both values are writable, so that no optimiser takes them into code, a relink with other arguments changes the
 image's data only: every function is the same text, so an applied function given the same inputs takes the
 same steps in both images. A caller that reads `argc` or `argv` can give it other inputs, and the whole run's
-step count can differ, since start-up reads the strings (an empty `main` takes 2,155 steps with `argv[0]`
-`prog` and 2,165 with `progg`). Each
+step count can differ, since start-up reads the strings (an empty `main` takes 2,229 steps with `argv[0]`
+`prog` and 2,239 with `progg`). Each
 argument is one string of `link.py`'s command line, so the host's `execve` limit of 128 KiB per string is the
 native run's (`--argv0=S` spends eight bytes of it); the limit on the whole command line (about 2 MiB) also counts
 `link.py`'s options and environment, so the longest accepted list is somewhat shorter than natively.

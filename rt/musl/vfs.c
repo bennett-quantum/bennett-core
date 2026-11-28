@@ -312,6 +312,7 @@ long __bennett_rt_vfs_meta(long nr,long a,long b,long c,long d,long e) {
     }
     if(nr==SYS_fcntl) {
         struct descriptor *fd=descriptor(a); if(!fd || !fd->file) return -EBADF;
+        c=(int)c; /* the commands below take their argument as an int, as in Linux's do_fcntl */
         if(b==F_DUPFD || b==F_DUPFD_CLOEXEC) return __bennett_rt_vfs_dup(a,c,0,b==F_DUPFD_CLOEXEC);
         if(b==F_GETFD) return fd->cloexec?FD_CLOEXEC:0;
         if(b==F_SETFD) { fd->cloexec=!!(c&FD_CLOEXEC); return 0; }
@@ -348,8 +349,8 @@ long __bennett_rt_vfs_meta(long nr,long a,long b,long c,long d,long e) {
     /* Argument errors Linux reports before the path walk. */
     if(nr==SYS_truncate && b<0) return -EINVAL;
     if((nr==SYS_access && (b&~7L)) || (nr==SYS_faccessat && (c&~7L))) return -EINVAL;
-    int at=AT_FDCWD; const char *path=(void *)a; /* a directory descriptor is an int in Linux */
-    if(nr==SYS_readlinkat || nr==SYS_openat || nr==SYS_newfstatat || nr==SYS_faccessat || nr==SYS_mkdirat || nr==SYS_unlinkat) { at=(int)a; path=(void *)b; }
+    int at=AT_FDCWD; const char *path=(void *)a; /* a directory descriptor is an int (arguments.h) */
+    if(nr==SYS_readlinkat || nr==SYS_openat || nr==SYS_newfstatat || nr==SYS_faccessat || nr==SYS_mkdirat || nr==SYS_unlinkat) { at=a; path=(void *)b; }
     int creating=nr==SYS_mkdir || nr==SYS_mkdirat, removing=nr==SYS_unlink || nr==SYS_rmdir || nr==SYS_unlinkat;
     /* Then the path is copied (Linux's getname). rename's new name is copied after the old name's walk: Linux
      * copies both first but reports the old name's error, then its walk's, then the new name's
