@@ -7,8 +7,9 @@
 //    declarations file bq-prefix.h included by force first (UnitCheck.h) and the header's folder on the include
 //    path; the variables that rewrite clang's command line are cleared. At the same time the baseline
 //    bq-baseline.c is compiled by the driver alone: the same declarations file by the driver's own path, every
-//    pass off, of the user's options only those of BaselineOptions.h's table, an environment with nothing but
-//    PATH and TMPDIR, no configuration file and no include path. A unit given as LLVM IR is read as it is.
+//    pass off, of the user's options only those of BaselineOptions.h's table in their closed forms, an environment
+//    of PATH, TMPDIR and CLANG_NO_DEFAULT_CONFIG=1 alone, no configuration file and no include path. A unit given
+//    as LLVM IR is read as it is.
 // 2. The unit is checked against the baseline (UnitCheck.h, rules 2 to 4); calls through a pointer lose their
 //    claims (Claims.h, rule 5); the reference array is deleted.
 // 3. clang optimises that module with the same options (`-x ir`), so the passes are those clang chooses for them.
@@ -121,7 +122,8 @@ std::vector<std::string> unitEnvironment() {
   return kept;
 }
 
-// The environment of the baseline's compilation: PATH and TMPDIR only, and default configuration files off.
+// The environment of the baseline's compilation: PATH and TMPDIR of the driver's, and CLANG_NO_DEFAULT_CONFIG=1
+// (default configuration files off), nothing else.
 std::vector<std::string> baselineEnvironment() {
   std::vector<std::string> kept = {"CLANG_NO_DEFAULT_CONFIG=1"};
   for (const char *name : {"PATH", "TMPDIR"}) {
@@ -328,7 +330,9 @@ int main(int argc, char **argv) {
                   "given:" + (given.empty() ? std::string(" none") : given) +
                   (error.empty() ? std::string() : ": " + error));
   }
-  std::unique_ptr<Module> header = read(baselinePath, context, "the baseline's bitcode");
+  // A context of its own, so that the unit's type names are not renamed against the baseline's (UnitCheck.h).
+  LLVMContext baselineContext;
+  std::unique_ptr<Module> header = read(baselinePath, baselineContext, "the baseline's bitcode");
 
   bennett::checkUnit(*module, *header, fromC, bennett::baselineNote(split));
   bennett::removePointerCallClaims(*module);

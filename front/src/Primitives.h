@@ -32,7 +32,7 @@ struct Primitive {
   PrimitiveGroup group;
 };
 
-// Every primitive, in the order of docs/HANDLES.md, sections 5.3 to 5.6. The forced include bq-references.h lists
+// Every primitive, in the order of docs/HANDLES.md, sections 5.3 to 5.6. The declarations file bq-prefix.h lists
 // their addresses in this order.
 llvm::ArrayRef<Primitive> allPrimitives();
 
@@ -58,8 +58,9 @@ extern const char *const declarationRoute;
 // Refuses by name (status 2) any global whose linker name is a primitive's and that is not a plain function
 // declaration under that IR name: a definition, an alias, an ifunc, a variable, or a global named by an assembler
 // label (a leading byte 1). Rule 2 of the check by kind; bennett-cc runs it before and after optimisation and
-// bennett-front on every module it reads.
-void checkRedirection(const llvm::Module &module);
+// bennett-front on every module it reads. `note` is added to each refusal (bennett-cc's baselineNote before
+// optimisation: an option withheld from the baseline, such as an `-include`, may carry the definition).
+void checkRedirection(const llvm::Module &module, const std::string &note = "");
 
 // The shape after optimisation: the declaration of each primitive the module has keeps external linkage and the C
 // calling convention, and every direct call of it has its function type and calling convention. Refused by name

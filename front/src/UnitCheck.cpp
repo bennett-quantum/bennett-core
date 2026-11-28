@@ -4,10 +4,13 @@
 #include "Diagnostic.h"
 #include "Primitives.h"
 
+#include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/InstrTypes.h>
@@ -63,8 +66,54 @@ Function *entryFunction(const GlobalValue *global, const Primitive &primitive, c
   return const_cast<Function *>(cast<Function>(global));
 }
 
+// The named structure types `type` reaches, each once, in the order met.
+void namedStructs(Type *type, SmallVectorImpl<StructType *> &found) {
+  if (auto *structure = dyn_cast<StructType>(type); structure && !structure->isLiteral()) {
+    if (is_contained(found, structure)) {
+      return;
+    }
+    found.push_back(structure);
+  }
+  for (Type *contained : type->subtypes()) {
+    namedStructs(contained, found);
+  }
+}
+
+void attributeStructs(const AttributeList &attributes, SmallVectorImpl<StructType *> &found) {
+  for (const AttributeSet &set : attributes) {
+    for (const Attribute &attribute : set) {
+      if (attribute.isTypeAttribute() && attribute.getValueAsType()) {
+        namedStructs(attribute.getValueAsType(), found);
+      }
+    }
+  }
+}
+
+// The bodies of named structure types, as the assembly writer prints them (`%struct.x = type { i64 }`), after
+// `where`; empty if there are none. The unit and the baseline are read into contexts of their own, so a type's name
+// is the one clang gave it in each, and the body says what it is.
+std::string bodies(const SmallVectorImpl<StructType *> &found) {
+  std::string text;
+  raw_string_ostream out(text);
+  for (StructType *structure : found) {
+    out << (text.empty() ? " where " : "; ");
+    structure->print(out);
+  }
+  return out.str();
+}
+
+// An attribute as text, with the bodies of the named structure types it names (`sret(%struct.__bennett_reg)`).
+std::string attributeText(const Attribute &attribute) {
+  SmallVector<StructType *, 2> found;
+  if (attribute.isTypeAttribute() && attribute.getValueAsType()) {
+    namedStructs(attribute.getValueAsType(), found);
+  }
+  return attribute.getAsString() + bodies(found);
+}
+
 // The declaration as the LLVM 18 assembly writer prints it, with its function attributes written out instead of
-// the attribute group's number, and without its metadata attachments (compared separately, sameMetadata).
+// the attribute group's number, without its metadata attachments (checkDeclaration compares them apart), and with the
+// bodies of the named structure types its type and attributes name.
 std::string declarationText(Function &function) {
   AttributeList attributes = function.getAttributes();
   SmallVector<std::pair<unsigned, MDNode *>, 4> attached;
@@ -87,32 +136,68 @@ std::string declarationText(Function &function) {
       line += part.str();
     }
   }
-  return line + " { " + attributes.getFnAttrs().getAsString() + " }";
+  SmallVector<StructType *, 4> found;
+  namedStructs(function.getFunctionType(), found);
+  attributeStructs(attributes, found);
+  return line + " { " + attributes.getFnAttrs().getAsString() + " }" + bodies(found);
+}
+
+// Metadata as text, through every node it reaches: a node met again is written as its number.
+std::string metadataText(const Metadata *metadata, const Module &module, DenseMap<const MDNode *, unsigned> &numbers) {
+  if (!metadata) {
+    return "null";
+  }
+  if (const auto *node = dyn_cast<MDNode>(metadata)) {
+    auto [entry, first] = numbers.try_emplace(node, numbers.size());
+    if (!first) {
+      return "!" + std::to_string(entry->second);
+    }
+    std::string text = std::string(node->isDistinct() ? "distinct " : "") + "!" +
+                       std::to_string(node->getMetadataID()) + "{";
+    for (const MDOperand &operand : node->operands()) {
+      text += metadataText(operand.get(), module, numbers) + ", ";
+    }
+    return text + "}";
+  }
+  std::string text;
+  raw_string_ostream out(text);
+  metadata->print(out, &module);
+  return out.str();
 }
 
 // The metadata attachments of the declaration other than `!dbg`, which differs from module to module and says
-// nothing about behaviour. Uniqued metadata of one LLVMContext with equal contents is one object.
-SmallVector<std::pair<unsigned, MDNode *>, 4> attachmentsWithoutDebug(const Function &function) {
+// nothing about behaviour: each kind's name and its node as text, ordered by name (the unit and the baseline have
+// contexts of their own, which number custom kinds in the order they meet them).
+std::vector<std::pair<std::string, std::string>> attachmentsWithoutDebug(const Function &function) {
   SmallVector<std::pair<unsigned, MDNode *>, 4> attached;
   function.getAllMetadata(attached);
-  SmallVector<std::pair<unsigned, MDNode *>, 4> kept;
-  for (const auto &entry : attached) {
-    if (entry.first != LLVMContext::MD_dbg) {
-      kept.push_back(entry);
+  SmallVector<StringRef, 64> names;
+  function.getContext().getMDKindNames(names);
+  std::vector<std::pair<std::string, std::string>> kept;
+  for (const auto &[kind, node] : attached) {
+    if (kind != LLVMContext::MD_dbg) {
+      DenseMap<const MDNode *, unsigned> numbers;
+      kept.emplace_back(kind < names.size() ? names[kind].str() : std::to_string(kind),
+                        metadataText(node, *function.getParent(), numbers));
     }
   }
+  llvm::sort(kept);
   return kept;
 }
 
-std::string kindNames(const SmallVector<std::pair<unsigned, MDNode *>, 4> &attached, const LLVMContext &context) {
-  SmallVector<StringRef, 64> names;
-  context.getMDKindNames(names);
+std::string kindNames(const std::vector<std::pair<std::string, std::string>> &attached) {
   std::string text;
   for (const auto &[kind, node] : attached) {
     (void)node;
-    text += " !" + (kind < names.size() ? names[kind].str() : std::to_string(kind));
+    text += " !" + kind;
   }
   return text.empty() ? " none" : text;
+}
+
+std::string kindName(unsigned kind, const LLVMContext &context) {
+  SmallVector<StringRef, 64> names;
+  context.getMDKindNames(names);
+  return kind < names.size() ? names[kind].str() : std::to_string(kind);
 }
 
 // Rule 3.
@@ -128,18 +213,23 @@ void checkDeclaration(Function &declaration, Function &header, const Primitive &
   auto theirsAttached = attachmentsWithoutDebug(header);
   if (mineAttached != theirsAttached) {
     misuse("the declaration of the primitive @" + std::string(primitive.name) + " has the metadata" +
-               kindNames(mineAttached, declaration.getContext()) + " where the header's has" +
-               kindNames(theirsAttached, header.getContext()) + note + declarationRoute,
+               kindNames(mineAttached) + " where the header's has" + kindNames(theirsAttached) + note +
+               declarationRoute,
            &declaration);
   }
+}
+
+// Whether `set` has `attribute`: one of its kind with the same text (the sets are of two contexts).
+bool hasSame(const AttributeSet &set, const Attribute &attribute) {
+  Attribute same = attribute.isStringAttribute() ? set.getAttribute(attribute.getKindAsString())
+                                                 : set.getAttribute(attribute.getKindAsEnum());
+  return same.isValid() && attributeText(same) == attributeText(attribute);
 }
 
 // The first attribute of `one` not in `other`, as text, or empty.
 std::string firstMissing(const AttributeSet &one, const AttributeSet &other) {
   for (const Attribute &attribute : one) {
-    Attribute same = attribute.isStringAttribute() ? other.getAttribute(attribute.getKindAsString())
-                                                   : other.getAttribute(attribute.getKindAsEnum());
-    if (same != attribute) {
+    if (!hasSame(other, attribute)) {
       return attribute.getAsString();
     }
   }
@@ -201,10 +291,8 @@ void checkDirectCall(const CallBase &call, const Function &declaration, const Ca
   }
   std::string extras;
   for (const Attribute &attribute : mine.getFnAttrs()) {
-    bool header = (attribute.isStringAttribute() ? theirs.getFnAttrs().getAttribute(attribute.getKindAsString())
-                                                 : theirs.getFnAttrs().getAttribute(attribute.getKindAsEnum())) ==
-                  attribute;
-    if (!header && (attribute.isStringAttribute() || !contextAttributeOnDirectCall(attribute.getKindAsEnum()))) {
+    bool context = !attribute.isStringAttribute() && contextAttributeOnDirectCall(attribute.getKindAsEnum());
+    if (!hasSame(theirs.getFnAttrs(), attribute) && !context) {
       extras += (extras.empty() ? "" : " ") + attribute.getAsString();
     }
   }
@@ -216,8 +304,7 @@ void checkDirectCall(const CallBase &call, const Function &declaration, const Ca
   for (const auto &[kind, node] : attached) {
     (void)node;
     if (!metadataOnDirectCall(kind)) {
-      SmallVector<std::pair<unsigned, MDNode *>, 4> one{{kind, node}};
-      misuse(subject + " has the metadata" + kindNames(one, call.getContext()) +
+      misuse(subject + " has the metadata !" + kindName(kind, call.getContext()) +
                  ", which states something about the callee" + note + declarationRoute,
              &call);
     }
@@ -227,7 +314,7 @@ void checkDirectCall(const CallBase &call, const Function &declaration, const Ca
 } // namespace
 
 void checkUnit(Module &unit, Module &baseline, bool withReferences, const std::string &note) {
-  checkRedirection(unit);
+  checkRedirection(unit, note);
   std::vector<const GlobalValue *> headers = referenced(baseline);
   std::vector<const GlobalValue *> entries;
   if (withReferences) {

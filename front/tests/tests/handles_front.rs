@@ -713,6 +713,7 @@ fn codegen_options() -> Vec<Vec<&'static str>> {
         vec!["-Oz"],
         vec!["-O1"],
         vec!["-O3"],
+        vec!["-O4"],
         vec!["-O2", "-ffast-math"],
         vec!["-O2", "-ffp-model=strict"],
         vec!["-O2", "-fno-builtin"],
@@ -734,15 +735,24 @@ fn codegen_options() -> Vec<Vec<&'static str>> {
             vec!["-O2", "-mspeculative-load-hardening"],
             vec!["-O2", "-mstackrealign"],
             vec!["-O2", "-march=x86-64-v3"],
+            vec!["-O2", "-mavx2"],
+            vec!["-O2", "-msse4.2"],
+            vec!["-O2", "-mfma"],
+            vec!["-O2", "-mbmi2"],
+            vec!["-O2", "-maes"],
+            vec!["-O2", "-mpopcnt"],
+            vec!["-O2", "-mno-avx"],
         ]);
     }
     options
 }
 
-/// Review finding R13 of the earlier step: the conforming program passes under each option (the front stops at the
+/// Review finding R13 of the earlier step (and P3 of review r1 of the prefix step: `-O4`, `-pg` and seven x86
+/// target features were refused before they were in the table): the conforming program passes under each option (the front stops at the
 /// translation of its calls); with `#pragma STDC FENV_ACCESS ON` (`strictfp` on its calls) and the statement
 /// attributes `nomerge`, `noinline` and `always_inline` on calls, at both levels; and a program of the output and
-/// exit primitives runs to its end.
+/// exit primitives runs to its end. Under `-pg` the driver accepts a unit with both calls of `bq_width` at both
+/// levels; its output calls `mcount`, which no device library defines yet, so it is not run.
 #[test]
 fn the_attributes_clang_adds_for_an_option_are_accepted() {
     let conforming = write_unit("handles_options_conforming", CONFORMING);
@@ -763,6 +773,14 @@ fn the_attributes_clang_adds_for_an_option_are_accepted() {
     for (level, flags) in LEVELS {
         runs.push((strict.clone(), format!("handles_options_strict.{level}"), flags.to_vec(), b""));
         runs.push((contexts.clone(), format!("handles_options_contexts.{level}"), flags.to_vec(), b"ABCDE"));
+    }
+    let widths_unit = write_unit("handles_options_pg", TWO_WIDTHS);
+    for (level, flags) in LEVELS {
+        let name = format!("handles_options_pg.{level}");
+        let flags: Vec<&str> = flags.iter().copied().chain(["-pg"]).collect();
+        let (result, compiled) = driver_with(&widths_unit, &name, &flags, &[]);
+        assert!(result.status.success(), "{name}: {}", stderr(&result));
+        assert_eq!(widths(&read(&compiled)), 2, "{name}");
     }
     std::thread::scope(|scope| {
         for (source, name, option, console) in &runs {
@@ -1187,6 +1205,9 @@ fn options_outside_the_table_stay_with_the_unit() {
         vec!["-DVALUE=7", "-UOTHER"],
         vec!["-I", path_text(&folder)],
         vec!["-include", path_text(&benign)],
+        // Review r1 of the prefix step, P4: `-O2` here is the value of `-Xclang`, not an option, and was forwarded
+        // alone, so the unit was refused at `-O0`.
+        vec!["-Xclang", "-O2"],
     ];
     for (level, flags) in LEVELS {
         for (i, option) in options.iter().enumerate() {
@@ -1211,5 +1232,187 @@ fn options_outside_the_table_stay_with_the_unit() {
             );
             assert!(!compiled.exists(), "{name}");
         }
+    }
+}
+
+/// Runs `work` on each item on a few threads at a time.
+fn on_threads<T: Sync>(items: &[T], work: impl Fn(&T) + Sync) {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get().min(8));
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| {
+                while let Some(item) = items.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
+                    work(item);
+                }
+            });
+        }
+    });
+}
+
+/// The entries of the table of `front/src/BaselineOptions.cpp`, spelling and form, read from its source.
+fn table_entries() -> Vec<(String, String)> {
+    let source = read(&root().join("front/src/BaselineOptions.cpp"));
+    let entries: Vec<(String, String)> = source
+        .lines()
+        .filter_map(|line| {
+            let (spelling, rest) = line.trim().strip_prefix("{\"")?.split_once('"')?;
+            let form = rest.strip_prefix(", Form::")?.split(|c: char| !c.is_alphanumeric()).next()?;
+            Some((spelling.to_string(), form.to_string()))
+        })
+        .collect();
+    assert!(entries.len() > 90 && entries.iter().any(|(s, f)| s == "-target" && f == "Triple"), "{entries:?}");
+    entries
+}
+
+/// The host's target triple, as clang names it.
+fn host_triple() -> String {
+    let printed = output(Command::new(clang()).arg("-dumpmachine"));
+    assert!(printed.status.success(), "{}", stderr(&printed));
+    String::from_utf8_lossy(&printed.stdout).trim().to_string()
+}
+
+/// Review r1 of the prefix step, P1: clang expands an argument `@file` into options wherever it stands, and its
+/// driver hands an option's value to its front end as an argument of its own, where an `@` value is expanded too.
+/// The table forwarded `-target` with whatever followed it, so `-target @file`, the file naming the host's triple
+/// and `-include` of a claim (or `-include-pch` of one), gave the claim to the baseline too, and the unit was
+/// accepted with both calls of `bq_width` deleted at `-O2`. A value is now forwarded only in a closed form, so both
+/// are refused by name at `-O0` and `-O2`, the refusal listing the response file as withheld. Then `@file` after
+/// and inside every entry of the table (a file that includes the claim): each is refused (by name or by clang)
+/// with no output, or accepted with both calls; a refusal by name never lists a response file as forwarded.
+#[test]
+fn a_response_file_never_reaches_the_baseline() {
+    let source = write_unit("handles_rsp", TWO_WIDTHS);
+    let claim = claim_header();
+    let triple = host_triple();
+    let anywhere = write_file("handles_rsp_anywhere.rsp", &format!("-include {}\n", path_text(&claim)));
+    let at_anywhere = format!("@{}", path_text(&anywhere));
+    let declaration = "the declaration of the primitive @bq_width is";
+    let call = "a call of the device function @bq_width has attributes that let LLVM remove or move its calls";
+    for (level, flags) in LEVELS {
+        let header = write_file(
+            &format!("handles_rsp_pch.{level}.h"),
+            "#include \"bq.h\"\n__attribute__((const)) uint64_t bq_width(bq_reg);\n",
+        );
+        let pch = out_dir().join(format!("handles_rsp.{level}.pch"));
+        let made = output(
+            Command::new(clang())
+                .arg("-I")
+                .arg(include())
+                .args(flags)
+                .args(["-x", "c-header"])
+                .arg(&header)
+                .arg("-o")
+                .arg(&pch),
+        );
+        assert!(made.status.success(), "{level}: {}", stderr(&made));
+        let included = write_file(
+            &format!("handles_rsp_include.{level}.rsp"),
+            &format!("{triple} -include {}\n", path_text(&claim)),
+        );
+        let precompiled = write_file(
+            &format!("handles_rsp_pch.{level}.rsp"),
+            &format!("{triple} -include-pch {}\n", path_text(&pch)),
+        );
+        for (case, file, expected) in [("include", &included, call), ("pch", &precompiled, declaration)] {
+            let name = format!("handles_rsp_target_{case}.{level}");
+            let at = format!("@{}", path_text(file));
+            let flags: Vec<&str> = flags.iter().copied().chain(["-target", at.as_str()]).collect();
+            let (result, compiled) = driver_with(&source, &name, &flags, &[]);
+            assert_refused(&result, REFUSED, expected, &name);
+            let withheld = format!("withheld from the baseline here: -target {at}");
+            assert!(stderr(&result).contains(&withheld), "{name}: expected `{withheld}` in: {}", stderr(&result));
+            assert!(!compiled.exists(), "{name}: a refused unit has no output");
+        }
+    }
+    let mut runs: Vec<(String, Vec<String>, &[&str])> = Vec::new();
+    for (i, (spelling, form)) in table_entries().into_iter().enumerate() {
+        let joined = form == "Joined" || (form == "Triple" && spelling.ends_with('='));
+        let placed =
+            if joined { vec![format!("{spelling}{at_anywhere}")] } else { vec![spelling.clone(), at_anywhere.clone()] };
+        for (level, flags) in LEVELS {
+            runs.push((format!("handles_rsp_entry_{i}.{level}"), placed.clone(), flags));
+        }
+    }
+    on_threads(&runs, |(name, placed, flags)| {
+        let flags: Vec<&str> = flags.iter().copied().chain(placed.iter().map(String::as_str)).collect();
+        let (result, compiled) = driver_with(&source, name, &flags, &[]);
+        let text = stderr(&result);
+        if result.status.success() {
+            assert_eq!(widths(&read(&compiled)), 2, "{name} {placed:?}");
+        } else {
+            assert!(!compiled.exists(), "{name} {placed:?}: a refused unit has no output");
+        }
+        if let Some((_, withheld)) = text.split_once("withheld from the baseline here: ") {
+            assert!(withheld.contains(&at_anywhere), "{name} {placed:?}: the response file is withheld: {text}");
+        }
+    });
+}
+
+/// Review r1 of the prefix step, P2: the unit and the baseline were read into one LLVM context, which renames the
+/// second module's copy of a named structure type (`%struct.__bennett_reg.0`). On targets that pass or return a
+/// handle in memory the declarations name that type (i386 `sret(%struct.__bennett_reg)`, sparc64 a returned
+/// `%struct.__bennett_reg`), so every unit for them was refused. Each is now read into a context of its own and
+/// types are compared by name and body: a unit of the declarations file alone (`bq.h` asserts a handle aligned to
+/// 8, which i386 does not give) passes at both levels with both calls, given the target joined, as the next
+/// argument, or as `-m32`; a claim on `bq_width` is still refused; and LLVM IR whose handle type has another body
+/// is refused, naming the body.
+#[test]
+fn targets_that_name_the_handle_type_are_accepted() {
+    let body = "struct __bennett_reg r = bq_alloc(1);\n  bq_width(r);\n  bq_width(r);\n  __bennett_effect('A');\n  \
+                return 7;\n}\n";
+    let plain = write_c("handles_targets", &format!("int main(void) {{\n  {body}"));
+    let claimed = write_c(
+        "handles_targets_claim",
+        &format!("__attribute__((const)) __UINT64_TYPE__ bq_width(struct __bennett_reg);\nint main(void) {{\n  {body}"),
+    );
+    let mut targets = vec![
+        vec!["--target=i386-pc-linux-gnu"],
+        vec!["-target", "i386-pc-linux-gnu"],
+        vec!["--target=sparc64-unknown-linux-gnu"],
+    ];
+    if cfg!(target_arch = "x86_64") {
+        targets.push(vec!["-m32"]);
+    }
+    for target in &targets {
+        for (level, flags) in LEVELS {
+            let name = format!("handles_targets_{}.{level}", target.join("_").replace(['-', '='], ""));
+            let flags: Vec<&str> = flags.iter().chain(target).copied().collect();
+            let (result, compiled) = driver_with(&plain, &name, &flags, &[]);
+            assert!(result.status.success(), "{name}: {}", stderr(&result));
+            let text = read(&compiled);
+            assert_eq!(widths(&text), 2, "{name}:\n{text}");
+            assert!(text.contains("%struct.__bennett_reg"), "{name}: the declarations name the type:\n{text}");
+            let (result, compiled) = driver_with(&claimed, &format!("{name}.claim"), &flags, &[]);
+            let call = "a call of the device function @bq_width has attributes that let LLVM remove or move its calls";
+            assert_refused(&result, REFUSED, call, &name);
+            assert!(!compiled.exists(), "{name}");
+        }
+    }
+    let i386 = ["--target=i386-pc-linux-gnu"];
+    let flags: Vec<&str> = CLANG_FLAGS.iter().chain(&i386).copied().collect();
+    let text = plain_text(&plain, "handles_targets_body", &flags, true);
+    let original = "%struct.__bennett_reg = type { i64 }";
+    assert!(text.contains(original), "{text}");
+    let changed = text.replace(original, "%struct.__bennett_reg = type { i32, i32 }");
+    let (result, compiled) = driver_on(&write_text(&changed, "handles_targets_body"), "handles_targets_body", &flags);
+    assert_refused(&result, REFUSED, "where %struct.__bennett_reg = type { i32, i32 }", "a changed body");
+    assert!(!compiled.exists(), "a changed body");
+}
+
+/// Review r1 of the prefix step, P5: a refusal by rule 2 (here a definition of a primitive that the unit's
+/// `-include` brings) lists the options withheld from the baseline, as the refusals of rules 3 and 4 do.
+#[test]
+fn a_redirection_refusal_names_the_withheld_options() {
+    let definition = write_file("handles_redirect.h", "void (__bennett_effect)(char c) { (void)c; }\n");
+    let source = write_unit("handles_redirect", "int main(void) { __bennett_effect('A'); return 7; }\n");
+    for (level, flags) in LEVELS {
+        let name = format!("handles_redirect.{level}");
+        let flags: Vec<&str> = flags.iter().copied().chain(["-include", path_text(&definition)]).collect();
+        let (result, compiled) = driver_with(&source, &name, &flags, &[]);
+        assert_refused(&result, REFUSED, "the program defines the primitive @__bennett_effect", &name);
+        let withheld = format!("withheld from the baseline here: -include {}", path_text(&definition));
+        assert!(stderr(&result).contains(&withheld), "{name}: expected `{withheld}` in: {}", stderr(&result));
+        assert!(!compiled.exists(), "{name}");
     }
 }

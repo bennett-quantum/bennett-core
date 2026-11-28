@@ -101,7 +101,7 @@ std::string linkerNameOf(StringRef name, const Module &module) {
   return mangled.str().str();
 }
 
-void checkRedirection(const Module &module) {
+void checkRedirection(const Module &module, const std::string &note) {
   for (const GlobalValue &global : module.global_values()) {
     std::optional<Primitive> primitive = primitiveWithLinkerName(linkerName(global), module);
     if (!primitive) {
@@ -110,21 +110,22 @@ void checkRedirection(const Module &module) {
     std::string name = "@" + std::string(primitive->name);
     if (global.getName().starts_with("\1")) {
       misuse("the program gives a symbol the linker name of the primitive " + name + " with an assembler label" +
-                 declarationRoute,
+                 note + declarationRoute,
              &global);
     }
     if (isa<GlobalAlias>(global)) {
-      fail("the primitive " + name + " is defined by an alias in the program" + declarationRoute);
+      fail("the primitive " + name + " is defined by an alias in the program" + note + declarationRoute);
     }
     if (isa<GlobalIFunc>(global)) {
       fail("the program defines a function chosen by a resolver (an ifunc) named after the primitive " + name +
-           declarationRoute);
+           note + declarationRoute);
     }
     if (isa<GlobalVariable>(global)) {
-      misuse("the program has a variable with the linker name of the primitive " + name + declarationRoute, &global);
+      misuse("the program has a variable with the linker name of the primitive " + name + note + declarationRoute,
+             &global);
     }
     if (!cast<Function>(global).isDeclaration()) {
-      misuse("the program defines the primitive " + name + declarationRoute, &global);
+      misuse("the program defines the primitive " + name + note + declarationRoute, &global);
     }
   }
 }

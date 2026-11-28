@@ -1386,8 +1386,10 @@ The driver `bennett-cc [clang options] -o OUTPUT UNIT` (`front/src/Driver.cpp`) 
 
 1. **What is compiled.** A C unit is compiled by clang 18 with the user's options at the requested level and
    `-Xclang -disable-llvm-passes`, with the *declarations file* `front/include/bq-prefix.h` included by force,
-   first, and the header's folder on the include path (so `#include "bq.h"` finds the driver's header, which then
-   does not include the declarations file again). The declarations file is the only file included by force, in
+   first, and the header's folder on the include path after the user's own (so `#include "bq.h"` finds the
+   driver's header unless the unit has a `bq.h` of its own beside it or earlier on its path, which wins the quoted
+   search as natively; the driver's header then does not include the declarations file again, and a unit's own
+   `bq.h` changes no call, since the declarations file is already in). The declarations file is the only file included by force, in
    every unit, the C library's included. It includes nothing, so no search path, overlay or header of the user's or
    the host's is read before it; it is written only with keywords, names reserved to the implementation (the
    struct tags `__bennett_reg`, `__bennett_bit`, `__bennett_field`, the compiler's `__UINT64_TYPE__`) and the
@@ -1406,13 +1408,26 @@ The driver `bennett-cc [clang options] -o OUTPUT UNIT` (`front/src/Driver.cpp`) 
    time (not cached: it costs one clang run of a small file in parallel) by the driver alone: the declarations
    file by the driver's own path, every pass off, `--no-default-config`, `-nostdinc`, an environment of `PATH`,
    `TMPDIR` and `CLANG_NO_DEFAULT_CONFIG=1` only, and of the user's options only those of one table of
-   code-generation kinds (`front/src/BaselineOptions.cpp`: the optimisation level, the target, floating-point,
-   builtin, exception, character-signedness, position-independence, stack, sanitizer and debug options): the
-   options for which clang puts attributes or metadata on the primitives' declarations and calls, each reading no
-   file and defining no macro. Nothing the user or the host controls reaches the baseline. An option outside the
+   code-generation kinds (`front/src/BaselineOptions.cpp`: the optimisation level, the target and its features,
+   floating-point, builtin, exception, character-signedness, position-independence, stack, sanitizer, profiling
+   and debug options): the options for which clang puts attributes or metadata on the primitives' declarations
+   and calls, each reading no file and defining no macro of its own choosing. Nothing the user or the host
+   controls reaches the baseline. No string of the user's reaches the baseline's command line in a form clang reads
+   further: an entry is a fixed spelling, or a fixed spelling joined to a value of a closed form (letters, digits
+   and `_ . , + -`; for the target, a triple whose architecture LLVM knows), forwarded in the joined spelling
+   (`-target T` becomes `--target=T`). A value of another form is not forwarded. The closed form is what keeps a
+   response file out: clang expands an argument `@file` into options wherever it stands, and its driver hands an
+   option's value on to its front end as an argument of its own, where an `@` value is expanded too (measured on
+   the previous step: `-target @file` gave the baseline the file's `-include` of a claim, and the unit with both
+   calls deleted at `-O2` was accepted; and `--target=@file` makes the front end of the unit's own compile read the
+   file). The values clang's driver reads after an option (`front/src/SeparateOptions.def`, generated from clang
+   18.1.3's option table by `front/src/separate-options.py`) are withheld with it and never matched as options, so
+   `-Xclang -O2` gives the baseline nothing (test `a_response_file_never_reaches_the_baseline`, which puts `@file`
+   after and into every entry of the table). An option outside the
    table is withheld from it; if the unit then differs from the baseline in a declaration or a call, rules 2 to 4
-   refuse it by name, and the refusal lists the withheld options and says that one of them, a configuration file or
-   an environment variable may be the cause. So soundness does not depend on the table being complete; the table
+   refuse it by name, and the refusal (of each of rules 2 to 4, a definition or other redirection by rule 2
+   included) lists the withheld options and says that one of them, a configuration file or an environment variable
+   may be the cause. So soundness does not depend on the table being complete; the table
    decides how much is accepted and grows from measured programs (test `options_outside_the_table_stay_with_the_unit`:
    a language standard, warnings, macros, include paths and an included file change nothing and are accepted; a
    target feature through `-Xclang` is refused, naming it). Measured on 2026-11-28 for every member of the class
@@ -1436,7 +1451,13 @@ The driver `bennett-cc [clang options] -o OUTPUT UNIT` (`front/src/Driver.cpp`) 
    then points at it.
 3. **Equality.** Entry `k`'s declaration must equal the baseline's: the line the LLVM 18 assembly writer prints,
    with the function attributes written out instead of the group's number, and the metadata attachments other
-   than `!dbg` (the same objects, since both modules are read into one context). That covers type, linkage,
+   than `!dbg`, each as text through every node it reaches. The unit and the baseline are read into LLVM contexts
+   of their own: in one context the second module's copy of a named structure type is renamed (`.0`), and a
+   declaration names that type on targets that return or pass a handle in memory (i386's
+   `sret(%struct.__bennett_reg)`, sparc64's returned `%struct.__bennett_reg`), so with one context every unit for
+   those targets was refused. Types are therefore compared by name and body (the printed line is followed by the
+   body of each named structure type its type and attributes name), and attributes in rule 4 as written (test
+   `targets_that_name_the_handle_type_are_accepted`). That covers type, linkage,
    visibility, DLL storage, calling convention, `unnamed_addr`, every attribute, section, partition, comdat,
    alignment, collector, prefix and prologue data and personality. Options that add attributes (`optsize`,
    `minsize`, `"no-builtins"`, `!kcfi_type`, ...) agree by construction, since the baseline has the same options.
@@ -1501,10 +1522,12 @@ Tests (`front/tests/tests/handles_front.rs`): every refusal of a C program at `-
 written; the rename facts above; the claims through pointers, where plain `clang -O2` deletes both measurements and
 `bennett-cc` keeps both; calls through pointers run on the device (a `const` pointer to the out-of-memory stop
 faults `out_of_memory`, output and exit through pointers print and exit, an unrelated `noreturn` callback of the
-output primitive's type runs, a `byval` callback is untouched); the conforming program under 20 option sets and
+output primitive's type runs, a `byval` callback is untouched); the conforming program under 30 option sets on x86-64 (19 elsewhere; `-pg` by the driver alone) and
 with the context attributes of rule 4; LLVM IR units, invalid LLVM IR and each branch of rule 3 alone; the
 user's macros against the baseline; every member of the class above, the cleared command-line variables, the
-configuration files that try to remove the driver's options, and options outside the table; a unit that defines
+configuration files that try to remove the driver's options, options outside the table, a response file after and
+inside every entry of the table, and a definition by `-include` (its refusal lists the withheld options); the
+targets that name the handle type in a declaration (accepted; a claim and a changed structure body refused); a unit that defines
 the declarations file's guard (refused, naming it); a claim on the program's own function (trusted); the optimiser's `!noalias`
 after inlining a `restrict` parameter (trusted); the front's checks on LLVM text; clang found on `PATH`; no
 temporary file left. Lane 17's two witnesses in `front/tests/tests/out_of_memory.rs` pass: an indirect call to the
@@ -2824,8 +2847,11 @@ The handle interface's front end ("The declaration check" above; the old layer s
   Route: write the pointer without `const` (it is then a call through a pointer, whose claim is removed).
 - **The table of the baseline's options is short.** A unit compiled with a code-generation option the table does not
   name, and for which clang puts something on a primitive's declaration or call, is refused by name (the refusal
-  lists the withheld options). Route: add the option to `front/src/BaselineOptions.cpp` once a measured program
-  needs it, after checking that it reads no file and defines no macro.
+  lists the withheld options). Measured and added on 2026-11-28: `-O4`, `-pg` and seven x86 target features
+  (`-mavx2`, `-msse4.2`, `-mfma`, `-mbmi2`, `-maes`, `-mpopcnt`, `-mno-avx`); every other `-m` feature option,
+  and the options of other targets, are still refused where they put something on a call. Route: add the option to
+  `front/src/BaselineOptions.cpp` once a measured program needs it, after checking that it reads no file and
+  defines no macro of its own choosing.
 - **A pass plugin runs in the optimisation after the check** (`-fpass-plugin=`, in the user's options or a
   configuration file): the optimiser is trusted, and a plugin is code the user adds to it, which can remove a call
   as a compiler of the user's own could. Not measured. Route, if needed: refuse plugin options for the

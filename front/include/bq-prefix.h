@@ -12,8 +12,10 @@
  * After the declarations comes the array of the primitives' addresses: clang emits a declaration only where
  * something uses it and fixes the symbol it stands for at that first use, so the array makes that first use come
  * here, before any text of the unit's own. bennett-cc checks the entries and deletes the array before any optimiser
- * pass; in a program compiled without the driver it is one unused internal array. The order is that of
- * docs/HANDLES.md, sections 5.3 to 5.6. */
+ * pass. In a program compiled without the driver it stays (it is `used`), so every unit that includes this file,
+ * through bq.h or by itself, references all eleven primitives, and a native link needs a definition of each (the
+ * native stand-in, front/tests/handles/standin.c, defines them all). The order is that of docs/HANDLES.md, sections
+ * 5.3 to 5.6. */
 #ifndef BENNETT_BQ_PREFIX_H_INCLUDED
 #define BENNETT_BQ_PREFIX_H_INCLUDED
 #pragma GCC system_header

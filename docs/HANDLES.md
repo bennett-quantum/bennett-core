@@ -132,8 +132,10 @@ includes nothing and is written only with keywords, reserved names and the primi
 array of the eleven primitives' addresses. The compiler fixes the symbol a declaration stands for at its first use,
 so the array shows the symbol each declaration finally stands for. The driver compares each declaration and each
 direct call of it with those of a *baseline*, a unit of the driver's own whose function calls each primitive once,
-compiled with the same declarations file, of the user's command only its code-generation options (one table), no
-macro, no include path, no configuration file and no environment of the user's or the host's. Nothing the user or
+compiled with the same declarations file, of the user's command only its code-generation options (one table, each
+option in a fixed spelling or joined to a value of a closed form, so no response file or other text of the user's
+is read through it), no macro, no include path, no configuration file, and an environment of only `PATH`, `TMPDIR`
+and the variable that turns clang's default configuration files off. Nothing the user or
 the host controls reaches the baseline, so whatever a precompiled header, a configuration file, an overlay, a
 search path, an environment variable or a macro does to the unit's declarations or calls shows as a difference. It
 refuses by name, before any bitcode is written, every break of the three clauses, and a refusal names the user's
