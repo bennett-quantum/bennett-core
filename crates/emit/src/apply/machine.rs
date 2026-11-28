@@ -9,6 +9,7 @@ use super::bits::{Bit, Circuit, Word, constant};
 use super::calls::Program;
 use super::memory::Memory;
 use super::symbolic::{Point, Step};
+use super::work::{self, Work};
 use super::{ApplyError, Copies};
 
 type Dispatch = BTreeMap<Point, Bit>;
@@ -51,6 +52,7 @@ pub(super) fn run(
                 Step::Switch(selector, edges) => {
                     let mut unmatched = enabled;
                     for case in edges.cases {
+                        work::add(Work::TargetChecks, 1);
                         let pattern = constant(case.value, selector.len());
                         let equal = arithmetic::compare(circuit, Predicate::Eq, &selector, &pattern);
                         let take = circuit.and(enabled, equal);
@@ -67,6 +69,7 @@ pub(super) fn run(
                 Step::Indirect(call) => {
                     let mut unmatched = enabled;
                     for (address, index) in call.targets {
+                        work::add(Work::TargetChecks, 1);
                         let pattern = constant(u128::from(address), call.address.len());
                         let equal = arithmetic::compare(circuit, Predicate::Eq, &call.address, &pattern);
                         let take = circuit.and(enabled, equal);
@@ -113,6 +116,7 @@ pub(super) fn run(
             let word = &mut slots[dst.index()];
             for (enabled, update) in alternatives {
                 for (old, value) in word.iter_mut().zip(update) {
+                    work::add(Work::FactJoins, 1);
                     *old = circuit.select(enabled, value, *old);
                 }
             }
@@ -126,6 +130,7 @@ pub(super) fn run(
 }
 
 fn activate(circuit: &mut Circuit, dispatch: &mut Dispatch, point: Point, enabled: Bit) {
+    work::add(Work::Successors, 1);
     if enabled.is_zero() {
         return;
     }

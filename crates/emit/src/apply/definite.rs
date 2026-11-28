@@ -1,24 +1,25 @@
 //! Prove constants for the operations that need them, independently of the step budget.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::rc::Rc;
 
 use bennett_exec::Wire;
-use bennett_ir::{BinOp, BlockId, FuncId, Inst, Operand, Signature, Slot, Terminator, ValidModule, Width};
+use bennett_ir::{BinOp, BlockId, FuncId, Inst, Operand, Slot, Terminator, Width};
 
 use super::bits::{Bit, Circuit, Word, ZERO, constant, definite};
-use super::identity::{Identity, same_word};
-use super::selectors::Selector;
-use super::switches::Edges;
-use super::symbolic::{Frame, before_instruction_fault};
+use super::identity::Identity;
+use super::successors::{self, Edges};
+use super::symbolic::Frame;
+use super::work::{self, Work};
 use super::{arithmetic, division, ranges};
 
 mod results;
+pub(super) use results::CallProofs;
 use results::ReturnWord;
-pub(super) use results::{CallProofs, CallResult};
 
 fn fold_inst(
     inst: &Inst,
-    read: impl Fn(&Operand) -> Option<Word>,
+    mut read: impl FnMut(&Operand) -> Option<Word>,
     circuit: &mut Circuit,
     unknown: impl FnOnce() -> Word,
 ) -> Option<Word> {
@@ -81,7 +82,7 @@ fn fold_inst(
 pub(super) struct CallSite<'a> {
     pub(super) target: Option<&'a Operand>,
     pub(super) args: &'a [Operand],
-    pub(super) argument_facts: Vec<Option<Word>>,
+    pub(super) argument_facts: Rc<[Option<Word>]>,
     pub(super) dst: Option<Slot>,
     pub(super) candidates: BTreeSet<FuncId>,
     pub(super) invalid_possible: bool,
@@ -97,7 +98,7 @@ fn record_call<'a, 'sites>(
     let site = calls.entry(at).or_insert_with(|| CallSite {
         target: call.target,
         args: call.args,
-        argument_facts: Vec::new(),
+        argument_facts: Rc::default(),
         dst: call.dst,
         candidates: BTreeSet::new(),
         invalid_possible: false,
@@ -109,63 +110,18 @@ fn record_call<'a, 'sites>(
     site
 }
 
-fn indirect_targets(module: &ValidModule, signature: &Signature, address: &[Bit]) -> (BTreeSet<FuncId>, bool) {
-    if let Some(address) = definite(address) {
-        let callee =
-            module.function_at(address as u64).filter(|&callee| module.function(callee).has_signature(signature));
-        return (callee.into_iter().collect(), callee.is_none());
-    }
-
-    let selector = Selector::new(address);
-    let candidates: BTreeSet<_> = module
-        .functions
-        .iter()
-        .enumerate()
-        .filter_map(|(index, function)| {
-            let callee = FuncId(index as u32);
-            (function.has_signature(signature) && selector.allows(u128::from(callee.address()))).then_some(callee)
-        })
-        .collect();
-    let invalid_possible = !selector.covered_by(candidates.len());
-    (candidates, invalid_possible)
-}
-
 fn intersect_return(joined: &mut Option<ReturnWord>, word: ReturnWord) {
     if let Some(joined) = joined {
         for (old, bit) in joined.iter_mut().zip(word) {
+            work::add(Work::FactJoins, 1);
             if !old.zip(bit).is_some_and(|(old, bit)| old.same_value(bit)) {
                 *old = None;
             }
         }
     } else {
+        work::add(Work::FactStores, word.len());
         *joined = Some(word);
     }
-}
-
-fn fold_call(
-    slot: Option<Slot>,
-    candidates: &BTreeSet<FuncId>,
-    args: &[Option<Word>],
-    mut call_result: impl FnMut(FuncId, &[Option<Word>]) -> CallResult,
-    unknown_word: impl FnOnce(Slot) -> Word,
-) -> Option<Option<Word>> {
-    let mut returning = false;
-    let mut joined = None;
-    let unknown = slot.map(unknown_word);
-    for &callee in candidates {
-        let CallResult::Returns(mut word) = call_result(callee, args) else {
-            continue;
-        };
-        returning = true;
-        let Some(unknown) = &unknown else { continue };
-        word.resize(unknown.len(), None);
-        intersect_return(&mut joined, word);
-    }
-    returning.then(|| {
-        joined.zip(unknown).map(|(proved, unknown)| {
-            proved.into_iter().zip(unknown).map(|(bit, unknown)| bit.unwrap_or(unknown)).collect()
-        })
-    })
 }
 
 type ArgumentIdentities = Vec<Vec<Identity>>;
@@ -190,12 +146,12 @@ fn normalize_arguments(
                 .map(|bit| match bit.identity() {
                     literal @ Identity::Literal(_) => literal,
                     Identity::Source(source, inverted) => {
-                        let number = *identities.entry(source).or_insert_with(|| {
+                        let (number, first_inverted) = *identities.entry(source).or_insert_with(|| {
                             let number = sources.len() as Wire;
-                            sources.push(Some(bit.with_flip(inverted)));
-                            number
+                            sources.push(Some(bit));
+                            (number, inverted)
                         });
-                        Identity::input(number, inverted)
+                        Identity::input(number, inverted ^ first_inverted)
                     }
                 })
                 .collect(),
@@ -218,6 +174,19 @@ struct ArgumentBit {
     inverted: bool,
 }
 
+#[derive(Clone, Copy, Default)]
+pub(super) struct Accesses {
+    pub(super) memory: bool,
+    pub(super) stack: bool,
+}
+
+impl Accesses {
+    pub(super) fn observe(&mut self, inst: &Inst) {
+        self.memory |= matches!(inst, Inst::Load { .. } | Inst::Store { .. });
+        self.stack |= matches!(inst, Inst::Alloca { .. } | Inst::StackSave { .. } | Inst::StackRestore { .. });
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Constants<'a> {
     slots: Vec<Option<Word>>,
@@ -226,20 +195,18 @@ pub(super) struct Constants<'a> {
     switches: Vec<Edges<'a>>,
     pub(super) calls: Calls<'a>,
     may_return: bool,
+    reached: BTreeSet<BlockId>,
+    outgoing: BTreeMap<BlockId, Vec<&'a bennett_ir::Target>>,
+    accesses: Option<Accesses>,
+    definite_stores: bool,
 }
 
 impl<'a> Constants<'a> {
-    pub(super) fn is_definite(&self, operand: &Operand) -> bool {
-        match operand {
-            Operand::Const(_) => true,
-            Operand::Slot(slot) => self.slots.get(slot.index()).and_then(Option::as_deref).and_then(definite).is_some(),
-        }
-    }
-
     pub(super) fn project(&self, slots: &[Word], operand: &Operand, mut word: Word) -> Word {
         let Operand::Slot(slot) = operand else { return word };
         if let Some(proved) = self.slots.get(slot.index()).and_then(Option::as_ref) {
             for (bit, fact) in word.iter_mut().zip(proved) {
+                work::add(Work::FactReads, 1);
                 match fact.identity() {
                     Identity::Literal(value) => *bit = Bit::Constant(value),
                     Identity::Source(source, inverted) => {
@@ -265,65 +232,22 @@ impl<'a> Constants<'a> {
         frame: &Frame<'a>,
         inputs: impl Iterator<Item = Option<Word>>,
         proofs: &mut CallProofs<'a>,
-    ) -> Self {
-        let function = frame.module.function(frame.callee);
+        needs_analysis: bool,
+    ) -> Rc<Self> {
         let (inputs, _) = normalize_arguments(frame, inputs);
-        let stopping_proof = proofs.returns.stopping_proof(frame.callee);
-        let needs_analysis = function.blocks.iter().any(|block| {
-            matches!(&block.term, Terminator::Switch { .. })
-                || block.insts.iter().any(|inst| {
-                    matches!(
-                        inst,
-                        Inst::Binary { op: BinOp::Shl | BinOp::Lshr | BinOp::Ashr, rhs: Operand::Slot(_), .. }
-                            | Inst::Call { .. }
-                            | Inst::CallIndirect { .. }
-                            | Inst::Binary { op: BinOp::Mul, lhs: Operand::Slot(_), rhs: Operand::Slot(_), .. }
-                            | Inst::Binary {
-                                op: BinOp::Udiv | BinOp::Sdiv | BinOp::Urem | BinOp::Srem,
-                                rhs: Operand::Slot(_),
-                                ..
-                            }
-                    )
-                })
-        });
-        // Emit a proved stopping copy with the same argument facts that
-        // let its caller omit the continuation.
-        let mut plan = if needs_analysis || proofs.stops_with_arguments(frame.callee, &inputs) {
-            Self::solve(frame, &inputs, |target, args| proofs.call(frame.module, target, args))
-        } else {
-            Self::with_arguments(frame, &inputs)
-        };
-        if let Some(proof) = stopping_proof.as_deref() {
-            // Keep the control constants behind the caller's non-return proof
-            // alongside any additional facts proved for this copy's arguments.
-            for (slot, fact) in plan.slots.iter_mut().zip(proof) {
-                if fact.is_some() {
-                    *slot = fact.clone();
-                }
-            }
-        }
-        plan
+        proofs.plan(frame.callee, inputs, needs_analysis)
     }
 
-    pub(super) fn into_stopping_proof(mut self) -> Option<Vec<Option<Word>>> {
-        if self.may_return {
-            return None;
-        }
-        for slot in &mut self.slots {
-            if slot.as_deref().and_then(definite).is_none() {
-                *slot = None;
-            }
-        }
-        Some(self.slots)
+    pub(super) fn accesses(&self) -> Option<Accesses> {
+        self.accesses
     }
 
-    pub(super) fn analyze(
-        frame: &Frame<'a>,
-        inputs: impl Iterator<Item = Option<Word>>,
-        call_result: impl FnMut(FuncId, &[Option<Word>]) -> CallResult,
-    ) -> Self {
-        let (inputs, _) = normalize_arguments(frame, inputs);
-        Self::solve(frame, &inputs, call_result)
+    pub(super) fn outgoing(&self, block: BlockId) -> Option<&[&'a bennett_ir::Target]> {
+        self.accesses.map(|_| self.outgoing.get(&block).map(Vec::as_slice).unwrap_or_default())
+    }
+
+    pub(super) fn definite_stores(&self) -> bool {
+        self.definite_stores
     }
 
     fn with_arguments(frame: &Frame<'a>, inputs: &[Vec<Identity>]) -> Self {
@@ -331,6 +255,7 @@ impl<'a> Constants<'a> {
         let mut slots = vec![None; function.slot_count()];
         let mut argument_bits = Vec::new();
         for (parameter, input) in function.params.iter().zip(inputs) {
+            work::add(Work::FactReads, input.len());
             for (index, bit) in input.iter().enumerate() {
                 if let Identity::Source(source, inverted) = *bit
                     && source.argument_index() == Some(argument_bits.len())
@@ -341,172 +266,310 @@ impl<'a> Constants<'a> {
             slots[parameter.slot.index()] = Some(input.iter().map(|&identity| identity.argument_bit()).collect());
         }
 
-        Self { slots, argument_bits, ..Self::default() }
+        Self {
+            slots,
+            argument_bits,
+            switches: vec![Edges::default(); function.blocks.len()],
+            reached: BTreeSet::from([BlockId(0)]),
+            definite_stores: true,
+            ..Self::default()
+        }
+    }
+}
+
+struct Visit {
+    block: BlockId,
+    at: usize,
+    local: BTreeMap<Slot, Word>,
+    circuit: Circuit,
+    call: Option<CallTransfer>,
+}
+
+struct CallTransfer {
+    dst: Option<Slot>,
+    arguments: Rc<[Option<Word>]>,
+    targets: VecDeque<FuncId>,
+    returning: bool,
+    returned: Option<ReturnWord>,
+}
+
+struct Solver<'a> {
+    frame: Frame<'a>,
+    plan: Constants<'a>,
+    worklist: VecDeque<BlockId>,
+    queued: BTreeSet<BlockId>,
+    readers: BTreeMap<Slot, BTreeSet<BlockId>>,
+    current: Option<Visit>,
+}
+
+impl<'a> Solver<'a> {
+    fn new(frame: Frame<'a>, inputs: &[Vec<Identity>]) -> Self {
+        let entry = BlockId(0);
+        let mut plan = Constants::with_arguments(&frame, inputs);
+        plan.accesses = Some(Accesses::default());
+        Self {
+            frame,
+            plan,
+            worklist: VecDeque::from([entry]),
+            queued: BTreeSet::from([entry]),
+            readers: BTreeMap::new(),
+            current: None,
+        }
     }
 
-    fn solve(
-        frame: &Frame<'a>,
-        inputs: &[Vec<Identity>],
-        mut call_result: impl FnMut(FuncId, &[Option<Word>]) -> CallResult,
-    ) -> Self {
-        let function = frame.module.function(frame.callee);
-        let Self { mut slots, argument_bits, .. } = Self::with_arguments(frame, inputs);
-        // Immutable argument bits keep their identities. Other unknown bits get distinct
-        // slot identities at block boundaries, where different loop visits can meet.
-        let argument_wires = argument_bits.len() as Wire;
-        let slot_width = Wire::from(Width::MAX_BITS);
-        let scratch = argument_wires + slot_width * slots.len() as Wire;
-        let unknown_bit =
-            |slot: Slot, index| Bit::input(argument_wires + slot_width * Wire::from(slot.0) + index as Wire);
-        let unknown_word = |slot| (0..frame.slot_width(slot)).map(|index| unknown_bit(slot, index)).collect();
-        // Entry reachability grows with the value facts. For example, a loop can
-        // first deliver a constant condition and later make both outcomes possible.
-        let mut reachable = vec![false; function.blocks.len()];
-        let mut switches = vec![Edges::default(); function.blocks.len()];
-        let mut calls = Calls::new();
-        let mut may_return = false;
-        let mut returned = None;
-        reachable[0] = true;
-        loop {
-            let mut changed = false;
-            for (index, block) in function.blocks.iter().enumerate() {
-                if !reachable[index] {
-                    continue;
-                }
-                let mut circuit = Circuit::new(scratch);
-                let mut local = BTreeMap::new();
-                let read = |local: &BTreeMap<Slot, Word>, operand: &Operand| match operand {
-                    Operand::Const(value) => Some(constant(value.value(), value.width().bits() as usize)),
-                    Operand::Slot(slot) => local.get(slot).or(slots[slot.index()].as_ref()).cloned(),
-                };
-                let (instructions, mut term) = before_instruction_fault(block);
-                for (at, inst) in instructions.iter().enumerate() {
-                    let call = if let Inst::Call { callee, args, dst } = inst {
-                        Some(CallSite {
-                            target: None,
-                            args,
-                            argument_facts: Vec::new(),
-                            dst: *dst,
-                            candidates: BTreeSet::from([*callee]),
-                            invalid_possible: false,
-                        })
-                    } else if let Inst::CallIndirect { signature, target, args, dst } = inst {
-                        let Some(address) = read(&local, target) else {
-                            // The address can acquire facts from a later predecessor.
-                            term = None;
-                            break;
-                        };
-                        let (candidates, invalid_possible) = indirect_targets(frame.module, signature, &address);
-                        Some(CallSite {
-                            target: Some(target),
-                            args,
-                            argument_facts: Vec::new(),
-                            dst: *dst,
-                            candidates,
-                            invalid_possible,
-                        })
-                    } else {
-                        None
-                    };
-                    if let Some(mut call) = call {
-                        call.argument_facts = call.args.iter().map(|arg| read(&local, arg)).collect();
-                        let site = record_call(&mut calls, (BlockId(index as u32), at), call);
-                        let Some(word) =
-                            fold_call(site.dst, &site.candidates, &site.argument_facts, &mut call_result, unknown_word)
-                        else {
-                            term = None;
-                            break;
-                        };
-                        if let Some((slot, word)) = site.dst.zip(word) {
-                            local.insert(slot, word);
-                        }
-                        continue;
-                    }
-                    let Some(result) = inst.result() else { continue };
-                    if let Some(word) = fold_inst(inst, |op| read(&local, op), &mut circuit, || unknown_word(result)) {
-                        local.insert(result, word);
-                    }
-                }
-                // Read every incoming word before joining any update into the slot facts.
-                let mut incoming = Vec::new();
-                let mut transfer = |target: &bennett_ir::Target| {
-                    let reached = &mut reachable[target.block.index()];
-                    changed |= !*reached;
-                    *reached = true;
-                    for (param, operand) in function.block(target.block).params.iter().zip(&target.args) {
-                        if let Some(word) = read(&local, operand) {
-                            incoming.push((param.slot, word));
-                        }
-                    }
-                };
-                if let Some(Terminator::Branch { cond, if_true, if_false }) = term {
-                    if let Some(word) = read(&local, cond) {
-                        match word[0].literal() {
-                            Some(choice) => transfer(if choice { if_true } else { if_false }),
-                            None => {
-                                transfer(if_true);
-                                transfer(if_false);
-                            }
-                        }
-                    }
-                } else if let Some(Terminator::Switch { value, cases, default, .. }) = term {
-                    if let Some(word) = read(&local, value) {
-                        let mut edges = Edges::new(cases, default);
-                        edges.retain_possible(&word);
-                        for case in &edges.cases {
-                            transfer(&case.target);
-                        }
-                        if let Some(default) = edges.default {
-                            transfer(default);
-                        }
-                        // Save the same edges for emission before the slot join
-                        // forgets identities of locally computed selector bits.
-                        switches[index] = edges;
-                    }
-                } else if let Some(term) = term {
-                    // Non-local control is unsupported by emission. Treat it
-                    // conservatively when summarizing potential callees.
-                    may_return |= matches!(term, Terminator::Return(_) | Terminator::Longjmp { .. });
-                    if let Terminator::Return(Some(value)) = term
-                        && let Some(word) = read(&local, value)
-                    {
-                        let proof = word.into_iter().map(|bit| {
-                            let identity = bit.identity();
-                            match identity {
-                                Identity::Literal(_) => Some(identity.argument_bit()),
-                                Identity::Source(source, _) => source
-                                    .argument_index()
-                                    .filter(|&index| index < argument_bits.len())
-                                    .map(|_| identity.argument_bit()),
-                            }
-                        });
-                        intersect_return(&mut returned, proof.collect());
-                    }
-                    term.visit_targets(transfer);
-                }
-                for (slot, mut word) in local.into_iter().chain(incoming) {
-                    let old = &mut slots[slot.index()];
-                    for (index, bit) in word.iter_mut().enumerate() {
-                        let unknown = unknown_bit(slot, index);
-                        let crosses_block = match bit.identity() {
-                            Identity::Literal(_) => true,
-                            Identity::Source(source, _) => {
-                                source.argument_index().is_some_and(|index| index < argument_bits.len())
-                            }
-                        };
-                        if !crosses_block || old.as_ref().is_some_and(|old| !old[index].same_value(*bit)) {
-                            *bit = unknown;
-                        } else {
-                            *bit = bit.identity().argument_bit();
-                        }
-                    }
-                    changed |= old.as_ref().is_none_or(|old| !same_word(old, &word));
-                    *old = Some(word);
+    fn enqueue(&mut self, block: BlockId) {
+        if self.queued.insert(block) {
+            self.worklist.push_back(block);
+            work::add(Work::BlockSchedules, 1);
+        }
+    }
+
+    fn read(&mut self, block: BlockId, local: &BTreeMap<Slot, Word>, operand: &Operand) -> Option<Word> {
+        let word = match operand {
+            Operand::Const(value) => Some(constant(value.value(), value.width().bits() as usize)),
+            Operand::Slot(slot) => {
+                work::add(Work::TableEntries, 1);
+                if let Some(word) = local.get(slot) {
+                    Some(word.clone())
+                } else {
+                    self.readers.entry(*slot).or_default().insert(block);
+                    self.plan.slots[slot.index()].clone()
                 }
             }
-            if !changed {
-                return Self { slots, argument_bits, returned, switches, calls, may_return };
+        };
+        work::add(Work::OperandBits, word.as_ref().map_or(0, Vec::len));
+        word
+    }
+
+    fn unknown_bit(&self, slot: Slot, index: usize) -> Bit {
+        let arguments = self.plan.argument_bits.len() as Wire;
+        let stride = Wire::from(Width::MAX_BITS);
+        Bit::input(arguments + stride * Wire::from(slot.0) + index as Wire)
+    }
+
+    fn unknown_word(&self, slot: Slot) -> Word {
+        (0..self.frame.slot_width(slot)).map(|index| self.unknown_bit(slot, index)).collect()
+    }
+
+    fn join(&mut self, slot: Slot, mut word: Word) {
+        let old = &self.plan.slots[slot.index()];
+        let mut changed = old.is_none();
+        for (index, bit) in word.iter_mut().enumerate() {
+            work::add(Work::FactJoins, 1);
+            let identity = bit.identity();
+            let crosses_block = match identity {
+                Identity::Literal(_) => true,
+                Identity::Source(source, _) => {
+                    source.argument_index().is_some_and(|i| i < self.plan.argument_bits.len())
+                }
+            };
+            *bit = if crosses_block && old.as_ref().is_none_or(|old| old[index].same_value(*bit)) {
+                identity.argument_bit()
+            } else {
+                self.unknown_bit(slot, index)
+            };
+            changed |= old.as_ref().is_some_and(|old| !old[index].same_value(*bit));
+        }
+        if changed {
+            work::add(Work::FactStores, 1 + word.len());
+            self.plan.slots[slot.index()] = Some(word);
+            if let Some(readers) = self.readers.get(&slot) {
+                for &block in readers {
+                    if self.queued.insert(block) {
+                        self.worklist.push_back(block);
+                        work::add(Work::BlockSchedules, 1);
+                    }
+                }
             }
         }
+    }
+
+    // Run to the next unresolved call. Keep the current transfer and its local
+    // facts so a return continues at the call instead of replaying the prefix.
+    fn advance(&mut self, mut answer: impl FnMut(FuncId, &[Option<Word>]) -> Option<results::CallResult>) -> bool {
+        let function = self.frame.module.function(self.frame.callee);
+        let _temporary = work::Temporary::start();
+        loop {
+            let mut visit = if let Some(visit) = self.current.take() {
+                visit
+            } else if let Some(block) = self.worklist.pop_front() {
+                self.queued.remove(&block);
+                work::add(Work::BlockVisits, 1);
+                work::add(Work::Transfers, 1);
+                let scratch = self.plan.argument_bits.len() + Width::MAX_BITS as usize * self.plan.slots.len();
+                Visit { block, at: 0, local: BTreeMap::new(), circuit: Circuit::new(scratch as Wire), call: None }
+            } else {
+                return true;
+            };
+            let block = function.block(visit.block);
+            let mut stopped = false;
+            while visit.at < block.insts.len() {
+                if let Some(call) = &mut visit.call {
+                    while let Some(&target) = call.targets.front() {
+                        let Some(result) = answer(target, &call.arguments) else {
+                            self.current = Some(visit);
+                            return false;
+                        };
+                        call.targets.pop_front();
+                        if let results::CallResult::Returns(mut word) = result {
+                            call.returning = true;
+                            if let Some(dst) = call.dst {
+                                word.resize(self.frame.slot_width(dst), None);
+                                intersect_return(&mut call.returned, word);
+                            }
+                        }
+                    }
+                    let call = visit.call.take().expect("finished call transfer");
+                    if !call.returning {
+                        stopped = true;
+                        break;
+                    }
+                    if let Some((slot, word)) = call.dst.zip(call.returned) {
+                        let unknown = self.unknown_word(slot);
+                        let word = word.into_iter().zip(unknown).map(|(bit, unknown)| bit.unwrap_or(unknown)).collect();
+                        visit.local.insert(slot, word);
+                    }
+                    visit.at += 1;
+                    continue;
+                }
+
+                let inst = &block.insts[visit.at];
+                work::add(Work::Operations, 1);
+                work::add(Work::FaultScans, 1);
+                if successors::instruction_fault(inst).is_some() {
+                    stopped = true;
+                    break;
+                }
+                self.plan.accesses.as_mut().expect("active proof").observe(inst);
+                let call = match inst {
+                    Inst::Call { callee, args, dst } => Some((None, *dst, args, BTreeSet::from([*callee]), false)),
+                    Inst::CallIndirect { signature, target, args, dst } => {
+                        let Some(address) = self.read(visit.block, &visit.local, target) else {
+                            stopped = true;
+                            break;
+                        };
+                        let (targets, invalid) = successors::indirect_targets(self.frame.module, signature, &address);
+                        Some((Some(target), *dst, args, targets, invalid))
+                    }
+                    Inst::Binary { .. }
+                    | Inst::Compare { .. }
+                    | Inst::Select { .. }
+                    | Inst::Cast { .. }
+                    | Inst::Load { .. }
+                    | Inst::Store { .. }
+                    | Inst::StackSave { .. }
+                    | Inst::StackRestore { .. }
+                    | Inst::Alloca { .. }
+                    | Inst::Setjmp { .. }
+                    | Inst::ReturnAddress { .. }
+                    | Inst::Effect { .. }
+                    | Inst::Qalloc { .. }
+                    | Inst::QallocBy { .. }
+                    | Inst::Qfree { .. }
+                    | Inst::Gate { .. }
+                    | Inst::GateAt { .. }
+                    | Inst::RotateBy { .. }
+                    | Inst::Measure { .. }
+                    | Inst::Apply { .. }
+                    | Inst::FuncAddr { .. } => None,
+                };
+                if let Some((target, dst, args, candidates, invalid_possible)) = call {
+                    let argument_facts: Rc<[_]> =
+                        args.iter().map(|arg| self.read(visit.block, &visit.local, arg)).collect();
+                    let site = record_call(
+                        &mut self.plan.calls,
+                        (visit.block, visit.at),
+                        CallSite { target, dst, args, candidates, invalid_possible, argument_facts },
+                    );
+                    visit.call = Some(CallTransfer {
+                        dst,
+                        arguments: Rc::clone(&site.argument_facts),
+                        targets: site.candidates.iter().copied().collect(),
+                        returning: false,
+                        returned: None,
+                    });
+                    work::add(Work::Successors, site.candidates.len());
+                    continue;
+                }
+                if let Inst::Store { address, .. } = inst {
+                    self.plan.definite_stores &=
+                        self.read(visit.block, &visit.local, address).as_deref().and_then(definite).is_some();
+                }
+                if let Some(result) = inst.result() {
+                    let width = self.frame.slot_width(result);
+                    let first = self.unknown_bit(result, 0).wire().expect("abstract slot bit").0;
+                    let word = fold_inst(
+                        inst,
+                        |op| self.read(visit.block, &visit.local, op),
+                        &mut visit.circuit,
+                        || (0..width).map(|index| Bit::input(first + index as Wire)).collect(),
+                    );
+                    if let Some(word) = word {
+                        visit.local.insert(result, word);
+                    }
+                }
+                visit.at += 1;
+            }
+            if !stopped {
+                self.terminator(&visit, &block.term);
+            }
+            for (slot, word) in visit.local {
+                self.join(slot, word);
+            }
+        }
+    }
+
+    fn terminator(&mut self, visit: &Visit, term: &'a Terminator) {
+        work::add(Work::Operations, 1);
+        let mut targets = Vec::new();
+        let facts = successors::terminator(
+            term,
+            |operand| self.read(visit.block, &visit.local, operand),
+            |target| targets.push(target),
+        );
+        if let Some(edges) = facts {
+            self.plan.switches[visit.block.index()] = edges;
+        }
+        // Non-local control is unsupported by emission. Keep its return
+        // possibility when summarizing potential callees.
+        self.plan.may_return |= matches!(term, Terminator::Return(_) | Terminator::Longjmp { .. });
+        if let Terminator::Return(Some(value)) = term
+            && let Some(word) = self.read(visit.block, &visit.local, value)
+        {
+            let proof = word.into_iter().map(|bit| {
+                let identity = bit.identity();
+                match identity {
+                    Identity::Literal(_) => Some(identity.argument_bit()),
+                    Identity::Source(source, _) => source
+                        .argument_index()
+                        .filter(|&index| index < self.plan.argument_bits.len())
+                        .map(|_| identity.argument_bit()),
+                }
+            });
+            intersect_return(&mut self.plan.returned, proof.collect());
+        }
+        let function = self.frame.module.function(self.frame.callee);
+        // Evaluate all incoming operands against the old facts before joining
+        // any updates, including on a back edge to the same block.
+        let mut incoming = Vec::new();
+        for &target in &targets {
+            if self.reach(target.block) {
+                self.enqueue(target.block);
+            }
+            for (param, operand) in function.block(target.block).params.iter().zip(&target.args) {
+                if let Some(word) = self.read(visit.block, &visit.local, operand) {
+                    incoming.push((param.slot, word));
+                }
+            }
+        }
+        for (slot, word) in incoming {
+            self.join(slot, word);
+        }
+        work::add(Work::FlowEdgeStores, targets.len());
+        self.plan.outgoing.insert(visit.block, targets);
+    }
+
+    fn reach(&mut self, block: BlockId) -> bool {
+        self.plan.reached.insert(block)
     }
 }

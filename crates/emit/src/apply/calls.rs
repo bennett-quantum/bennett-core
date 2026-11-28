@@ -9,9 +9,10 @@ use bennett_ir::{Block, BlockId, Fault, FuncId, Function, Inst, Operand, Slot, T
 use super::bits::{Bit, Circuit, Word, ZERO, constant};
 use super::definite::{CallProofs, CallSite};
 use super::memory::{AccessError, Memory};
-use super::selectors::Selector;
 use super::stack::{self, StackSlots};
+use super::successors;
 use super::symbolic::{Frame, IndirectCall, Point, Step};
+use super::work::{self, Work};
 use super::{ApplyError, ApplyInput, Argument};
 
 // Count a unit for each copied slot and each instruction or terminator, including
@@ -44,8 +45,6 @@ pub(super) struct Program<'a> {
     work: usize,
     has_memory: bool,
     stack_floor: u64,
-    #[cfg(test)]
-    pub(super) return_analysis_work: usize,
 }
 
 impl<'a> Program<'a> {
@@ -67,30 +66,21 @@ impl<'a> Program<'a> {
             work: work(source),
             has_memory: false,
             stack_floor: input.module.static_end(),
-            #[cfg(test)]
-            return_analysis_work: 0,
         };
 
         let mut has_stack = false;
         let mut index = 0;
         while index < program.copies.len() {
-            let func = program.copies[index].frame.callee;
-            let source = input.module.function(func);
-            program.has_memory |= source
-                .blocks
-                .iter()
-                .flat_map(|block| &block.insts)
-                .any(|inst| matches!(inst, Inst::Load { .. } | Inst::Store { .. }));
-            has_stack |=
-                source.blocks.iter().flat_map(|block| &block.insts).any(|inst| {
-                    matches!(inst, Inst::Alloca { .. } | Inst::StackSave { .. } | Inst::StackRestore { .. })
-                });
-            for ((block, instruction), call) in program.copies[index].frame.take_calls() {
+            let accesses = program.copies[index].frame.accesses();
+            program.has_memory |= accesses.memory;
+            has_stack |= accesses.stack;
+            let plan = program.copies[index].frame.plan();
+            for (&(block, instruction), call) in &plan.calls {
                 let point = Point { copy: index, block, index: instruction };
                 let operation = if call.target.is_some() { "call_indirect" } else { "call" };
                 let mut targets = Vec::new();
                 for &callee in &call.candidates {
-                    let child = program.child(&mut proofs, point, callee, &call, operation, &mut slots)?;
+                    let child = program.child(&mut proofs, point, callee, call, operation, &mut slots)?;
                     targets.push((callee.address(), child));
                 }
                 let site = match (targets.as_slice(), call.invalid_possible) {
@@ -118,10 +108,6 @@ impl<'a> Program<'a> {
                 copy.stack = Some(StackSlots::append(&mut slots, if index == 0 { entry } else { 0 }));
             }
         }
-        #[cfg(test)]
-        {
-            program.return_analysis_work = proofs.returns.work;
-        }
         Ok((program, slots))
     }
 
@@ -140,6 +126,7 @@ impl<'a> Program<'a> {
         let error = |route| parent.frame.error(at, operation, route);
         let mut ancestor = Some(at);
         while let Some(point) = ancestor {
+            work::add(Work::ShapeVisits, 1);
             let copy = &self.copies[point.copy];
             if copy.frame.callee == callee {
                 return Err(error("recursive call frames"));
@@ -189,15 +176,7 @@ impl<'a> Program<'a> {
     }
 
     pub(super) fn stores_have_definite_addresses(&self) -> bool {
-        self.frames().all(|frame| {
-            frame
-                .module
-                .function(frame.callee)
-                .blocks
-                .iter()
-                .flat_map(|block| &block.insts)
-                .all(|inst| if let Inst::Store { address, .. } = inst { frame.is_definite(address) } else { true })
-        })
+        self.frames().all(Frame::definite_stores)
     }
 
     pub(super) fn frames(&self) -> impl Iterator<Item = &Frame<'a>> {
@@ -224,6 +203,7 @@ impl<'a> Program<'a> {
         let Site::Call(index, _) = self.copies[point.copy].sites.get(&(point.block, point.index))? else {
             return None;
         };
+        work::add(Work::TargetChecks, 1);
         self.copies[*index].available_stack?;
         Some(Point { copy: *index, ..Point::entry(BlockId(0)) })
     }
@@ -248,6 +228,7 @@ impl<'a> Program<'a> {
         memory: &mut Memory<'_>,
         guard: Bit,
     ) -> Result<Step<'a>, ApplyError> {
+        work::add(Work::TableEntries, 1);
         let next = point.next();
         let copy = &self.copies[point.copy];
         let local = &slots[copy.slots.clone()];
@@ -319,16 +300,16 @@ impl<'a> Program<'a> {
         let copy = &self.copies[point.copy];
         let local = &slots[copy.slots.clone()];
         let read = |operand: &Operand| resolve(copy.frame.operand(local, operand));
+        work::add(Work::TableEntries, 1);
         if let Some(site) = copy.sites.get(&(point.block, point.index)) {
+            work::add(Work::Operations, 1);
             return Ok(match site {
                 Site::Call(index, args) => call_step(self.enter(circuit, slots, point, *index, args)),
                 Site::BadAddress => Step::Fault(Fault::BadIndirect),
                 Site::Indirect { target, args, targets, invalid_possible } => {
                     let address = read(target);
-                    let facts = Selector::new(&address);
-                    let targets: Vec<_> =
-                        targets.iter().filter(|&&(value, _)| facts.allows(u128::from(value))).copied().collect();
-                    let invalid_possible = *invalid_possible && !facts.covered_by(targets.len());
+                    let (targets, invalid_possible) =
+                        successors::dispatch(&address, *invalid_possible, targets.iter().copied());
                     if targets.is_empty() {
                         Step::Fault(Fault::BadIndirect)
                     } else if targets.len() == 1 && !invalid_possible {

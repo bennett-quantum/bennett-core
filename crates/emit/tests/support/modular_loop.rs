@@ -535,3 +535,16 @@ fn modular_proof_places_only_the_chosen_circuit_in_the_caller_range() {
         }
     }
 }
+
+#[test]
+fn a_residue_selecting_a_private_byte_needs_its_own_replay_domain() {
+    let source = private_result(24, 24).replace("data 48", "data 24 = i16 0\ndata 48").replace(
+        "%out = load i8 24",
+        "%seven = icmp eq i8 %result, 7\n    %addr = select i64 %seven, 25, 24\n    %out = load i8 %addr",
+    );
+    let module = control_example(&source, 3, "");
+    compare_controls(&module, 50, ApplyMode::Automatic, |x| {
+        let residue = reference(x, 1, 7, 15, Update::Odd);
+        (if residue == 7 { 0 } else { residue }, 0)
+    });
+}

@@ -7,7 +7,8 @@ use bennett_exec::{ApplyMemory, Wire};
 use bennett_ir::{DataSegment, Fault, Predicate, Width};
 
 use super::bits::{Bit, Circuit, ONE, Word, ZERO, constant, definite};
-use super::identity::Identity;
+use super::identity::{Generation, Identity};
+use super::work::{self, Work};
 use super::{ApplyInput, Argument, arithmetic, reach};
 
 pub(super) const DISPATCH_REQUIRED: &str = "private memory in the step machine";
@@ -122,6 +123,7 @@ impl<'a> Memory<'a> {
     // cannot evaluate those wires, so it may only use the symbolic address bounds.
     pub(super) fn fork_for_exit(&self) -> Self {
         debug_assert!(self.pending.is_empty());
+        work::add(Work::SnapshotWords, self.bytes.len().saturating_mul(9));
         Self {
             base: self.base,
             declarations: self.declarations,
@@ -179,7 +181,12 @@ impl<'a> Memory<'a> {
                 .iter()
                 .enumerate()
                 .map(|(index, &bit)| {
-                    if bit.literal().is_some() && candidates.iter().all(|(_, word)| word[index].same_value(bit)) {
+                    if bit.literal().is_some()
+                        && candidates.iter().all(|(_, word)| {
+                            work::add(Work::MemoryBits, 1);
+                            word[index].same_value(bit)
+                        })
+                    {
                         return bit;
                     }
                     let wire = circuit.fresh();
@@ -191,7 +198,10 @@ impl<'a> Memory<'a> {
             vec![ZERO; width.bits() as usize]
         };
         for (candidate, value) in candidates {
-            if copies.iter().any(|&(index, _)| !value[index].is_zero()) {
+            if copies.iter().any(|&(index, _)| {
+                work::add(Work::MemoryBits, 1);
+                !value[index].is_zero()
+            }) {
                 let selected = address_equal(circuit, address, candidate);
                 for &(index, target) in &copies {
                     circuit.xor_into(target, value[index], selected);
@@ -203,6 +213,7 @@ impl<'a> Memory<'a> {
     }
 
     fn word(&self, address: u64, bytes: &[u8], width: Width) -> Word {
+        work::add(Work::MemoryBits, width.bits() as usize);
         bytes
             .iter()
             .enumerate()
@@ -259,6 +270,8 @@ impl<'a> Memory<'a> {
         let mut choices =
             AddressChoices { valid: Vec::new(), held: Vec::new(), last_if_outside: may_be_outside.then_some(last) };
         for candidate in addresses {
+            work::add(Work::MemoryCandidates, 1);
+            work::add(Work::CandidateBytes, width.bytes() as usize);
             match base.read(candidate, width) {
                 Ok(bytes) => {
                     if !self.declared(candidate, candidate + width.bytes()) {
@@ -277,7 +290,10 @@ impl<'a> Memory<'a> {
     }
 
     fn declared(&self, first: u64, end: u64) -> bool {
-        self.declarations.iter().any(|segment| first >= segment.address && end <= segment.address + segment.len())
+        self.declarations.iter().any(|segment| {
+            work::add(Work::DeclarationChecks, 1);
+            first >= segment.address && end <= segment.address + segment.len()
+        })
     }
 
     fn lookup_addresses(
@@ -295,6 +311,7 @@ impl<'a> Memory<'a> {
             return Ok((addresses.into_iter().take_while(|&address| address <= last).collect(), outside));
         }
         // Known bits bound all possible addresses, including those on inactive inputs.
+        work::add(Work::AddressBoundBits, address.len());
         let (fixed, mask) =
             address.iter().enumerate().fold((0u64, 0u64), |(fixed, mask), (index, bit)| match bit.literal() {
                 Some(value) => (fixed | u64::from(value) << index, mask | 1 << index),
@@ -308,10 +325,17 @@ impl<'a> Memory<'a> {
         if !self.declared(fixed, upper + width.bytes()) {
             return Err(AccessError::Address);
         }
-        Ok(((fixed..=upper).filter(|&candidate| candidate & mask == fixed).collect(), maximum > last))
+        let addresses = (fixed..=upper)
+            .filter(|&candidate| {
+                work::add(Work::IntervalAddresses, 1);
+                candidate & mask == fixed
+            })
+            .collect();
+        Ok((addresses, maximum > last))
     }
 
     fn byte(&self, address: u64, initial: u8) -> Byte {
+        work::add(Work::MemoryBytes, 1);
         self.bytes
             .get(&address)
             .copied()
@@ -326,6 +350,8 @@ impl<'a> Memory<'a> {
                     alternatives: Vec::new(),
                     varying: false,
                 });
+                work::add(Work::MemoryBytes, 1);
+                work::add(Work::FactStores, 9);
                 updates.alternatives.push((guard, data));
                 updates.varying |= varying;
             }
@@ -505,14 +531,17 @@ const PROOF_BITS: usize = 8;
 const PROOF_WORDS: usize = (1 << PROOF_BITS) / u64::BITS as usize;
 type Assignments = [u64; PROOF_WORDS];
 
-struct AddressProof {
+pub(super) struct AddressProof {
+    inputs: BTreeMap<Wire, Assignments>,
     wires: BTreeMap<Wire, Assignments>,
     domain: Assignments,
     read_gates: usize,
+    revision: Option<Generation>,
+    opaque: bool,
 }
 
 impl AddressProof {
-    fn new(args: &[Argument]) -> Option<Self> {
+    pub(super) fn new(args: &[Argument]) -> Option<Self> {
         let mut inputs = BTreeSet::new();
         for arg in args {
             if let Argument::Register(wires) = arg {
@@ -528,7 +557,7 @@ impl AddressProof {
         for assignment in 0..1 << inputs.len() {
             domain[assignment / 64] |= 1 << (assignment % 64);
         }
-        let wires = inputs
+        let inputs: BTreeMap<_, _> = inputs
             .into_iter()
             .enumerate()
             .map(|(bit, wire)| {
@@ -540,36 +569,72 @@ impl AddressProof {
                 (wire, pattern)
             })
             .collect();
-        Some(Self { wires, domain, read_gates: 0 })
+        Some(Self { wires: inputs.clone(), inputs, domain, read_gates: 0, revision: None, opaque: false })
     }
 
-    fn values(&self, bit: Bit) -> Assignments {
-        // Gate replay follows the physical operands and changes to those wires.
+    fn values(&self, circuit: &Circuit, bit: Bit) -> Option<Assignments> {
+        work::add(Work::PackReads, PROOF_WORDS);
         match bit.wire() {
-            None if bit.literal() == Some(true) => self.domain,
-            None => [0; PROOF_WORDS],
+            None if bit.literal() == Some(true) => Some(self.domain),
+            None => Some([0; PROOF_WORDS]),
             Some((wire, inverted)) => {
-                let values = self.wires.get(&wire).copied().unwrap_or_default();
-                std::array::from_fn(|i| values[i] ^ if inverted { self.domain[i] } else { 0 })
+                let values = self
+                    .wires
+                    .get(&wire)
+                    .copied()
+                    .or_else(|| circuit.allocated_scratch(wire).then_some([0; PROOF_WORDS]))?;
+                Some(std::array::from_fn(|i| values[i] ^ if inverted { self.domain[i] } else { 0 }))
             }
         }
     }
 
     fn active(&mut self, circuit: &Circuit, guard: Bit) -> Result<Option<Assignments>, AccessError> {
+        work::add(Work::AddressQueries, 1);
         if circuit.forward_len() > reach::MAX_ATTEMPTS {
             return Ok(None);
         }
+        let revision = circuit.observe_replay_prefix();
+        if let Some(previous) = self.revision
+            && previous != revision
+        {
+            work::add(Work::SnapshotWords, self.inputs.len() * (1 + PROOF_WORDS));
+            self.wires.clone_from(&self.inputs);
+            self.read_gates = 0;
+            self.opaque = false;
+        }
+        self.revision = Some(revision);
+        if self.opaque {
+            return Ok(None);
+        }
         for gate in &circuit.forward_gates()[self.read_gates..] {
-            let mask = gate.controls.iter().fold(self.domain, |mask, &wire| {
-                let values = self.wires.get(&wire).copied().unwrap_or_default();
-                std::array::from_fn(|i| mask[i] & values[i])
-            });
+            work::add(Work::ReplayGates, 1);
+            let mut mask = self.domain;
+            for &wire in &gate.controls {
+                let values = self
+                    .wires
+                    .get(&wire)
+                    .copied()
+                    .or_else(|| circuit.starts_as_scratch(wire).then_some([0; PROOF_WORDS]));
+                let Some(values) = values else {
+                    self.opaque = true;
+                    return Ok(None);
+                };
+                work::add(Work::ControlPacks, PROOF_WORDS);
+                for (acc, value) in mask.iter_mut().zip(values) {
+                    *acc &= value;
+                }
+            }
+            if !self.wires.contains_key(&gate.target) && !circuit.starts_as_scratch(gate.target) {
+                self.opaque = true;
+                return Ok(None);
+            }
+            work::add(Work::TargetPacks, PROOF_WORDS);
             for (value, toggles) in self.wires.entry(gate.target).or_default().iter_mut().zip(mask) {
                 *value ^= toggles;
             }
         }
         self.read_gates = circuit.forward_len();
-        let mask = self.values(guard);
+        let Some(mask) = self.values(circuit, guard) else { return Ok(None) };
         if mask == [0; PROOF_WORDS] {
             return Err(AccessError::Inactive);
         }
@@ -583,10 +648,13 @@ impl AddressProof {
         guard: Bit,
     ) -> Result<Option<BTreeSet<u64>>, AccessError> {
         let Some(mask) = self.active(circuit, guard)? else { return Ok(None) };
-        let values: Vec<_> = address.iter().map(|&bit| self.values(bit)).collect();
+        let Some(values) = address.iter().map(|&bit| self.values(circuit, bit)).collect::<Option<Vec<_>>>() else {
+            return Ok(None);
+        };
         let mut addresses = BTreeSet::new();
         for (pack, mut enabled) in mask.into_iter().enumerate() {
             while enabled != 0 {
+                work::add(Work::AddressBits, values.len());
                 let assignment = 1u64 << enabled.trailing_zeros();
                 let addr = values
                     .iter()
@@ -599,12 +667,18 @@ impl AddressProof {
         Ok(Some(addresses))
     }
 
-    fn constant_under(&mut self, circuit: &Circuit, word: &[Bit], guard: Bit) -> Result<u64, AccessError> {
+    pub(super) fn constant_under(&mut self, circuit: &Circuit, word: &[Bit], guard: Bit) -> Result<u64, AccessError> {
         let mask = self.active(circuit, guard)?.ok_or(AccessError::Address)?;
         word.iter().enumerate().try_fold(0, |acc, (bit, &value)| {
-            let values = self.values(value);
-            let one = values.iter().zip(mask).any(|(value, enabled)| value & enabled != 0);
-            let zero = values.iter().zip(mask).any(|(value, enabled)| !value & enabled != 0);
+            let values = self.values(circuit, value).ok_or(AccessError::Address)?;
+            let one = values.iter().zip(mask).any(|(value, enabled)| {
+                work::add(Work::AddressBits, 1);
+                value & enabled != 0
+            });
+            let zero = values.iter().zip(mask).any(|(value, enabled)| {
+                work::add(Work::AddressBits, 1);
+                !value & enabled != 0
+            });
             if one && zero { Err(AccessError::Address) } else { Ok(acc | u64::from(one) << bit) }
         })
     }

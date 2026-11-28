@@ -8,6 +8,7 @@ use super::bits::{Bit, Circuit, ONE, Word, ZERO};
 use super::calls::Program;
 use super::flow::{BranchEquality, Flow, ShiftLoop};
 use super::symbolic::{Point, Step};
+use super::work::{self, Work};
 use super::{ApplyError, Copies};
 use facts::Facts;
 
@@ -237,6 +238,7 @@ impl Controls<'_, '_> {
         {
             return Err(Failure::Control(Refusal::RepeatedContinuation));
         }
+        work::add(Work::SnapshotWords, route.slots.len() + route.slots.iter().map(Vec::len).sum::<usize>());
         let (mut yes_route, mut no_route) = (route.clone(), route);
         if let Some(equality) = BranchEquality::in_block(self.program.block(point)) {
             let equal_route = if equality.when_true { &mut yes_route } else { &mut no_route };
@@ -268,6 +270,7 @@ impl Controls<'_, '_> {
             };
             let exit_mask = self.circuit.and(route.enabled, continuation.not());
             if !exit_mask.is_zero() {
+                work::add(Work::SnapshotWords, route.slots.len() + route.slots.iter().map(Vec::len).sum::<usize>());
                 let mut exiting = route.clone();
                 // Every enabled exit saw zero. Carry that fact through the
                 // transfer, including when the tested word is an exit argument.

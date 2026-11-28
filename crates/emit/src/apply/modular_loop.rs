@@ -13,6 +13,7 @@ use super::memory::Memory;
 use super::modular::{self, Factor, Multiplier};
 use super::ranges::{bits, unsigned_max};
 use super::symbolic::{Point, Step};
+use super::work::{self, Work};
 
 pub(super) struct Plan {
     initial: u128,
@@ -110,7 +111,9 @@ fn uses(function: &Function, slot: Slot) -> usize {
     let mut count = 0;
     let mut read = |source| count += usize::from(source == slot);
     for block in &function.blocks {
+        work::add(Work::ShapeVisits, 1);
         for inst in &block.insts {
+            work::add(Work::Operations, 1);
             inst.visit_uses(&mut read);
         }
         block.term.visit_uses(&mut read);
@@ -194,8 +197,8 @@ impl<'a> Update<'a> {
 }
 
 fn clone_slots(slots: &[Word]) -> Vec<Word> {
-    #[cfg(test)]
-    tests::record_slot_words(slots.len());
+    work::add(Work::SnapshotWords, slots.len() + slots.iter().map(Vec::len).sum::<usize>());
+    work::add(Work::SnapshotSlots, slots.len());
     slots.to_vec()
 }
 
@@ -241,9 +244,11 @@ fn replay_exit(
 ) -> Option<Word> {
     let mut seen = BTreeSet::new();
     let mut circuit = Circuit::new(scratch);
+    let _temporary = work::Temporary::exit();
     let mut memory = memory.fork_for_exit();
     let mut steps = 0;
     while steps < budget && seen.insert(point) {
+        work::add(Work::ShapeVisits, 1);
         if point.copy == loop_copy {
             let block = program.block(point);
             let safe = if let Some(inst) = block.insts.get(point.index) {
@@ -259,12 +264,8 @@ fn replay_exit(
             }
         }
         steps += 1;
-        #[cfg(test)]
-        let gates = circuit.forward_len();
         let step = program.step_in(&mut circuit, slots, point, &mut memory, ONE).ok()?;
         memory.commit(&mut circuit);
-        #[cfg(test)]
-        tests::record_replay_gates(circuit.forward_len() - gates);
         if !circuit.fits() {
             return None;
         }
@@ -425,6 +426,7 @@ impl<'a> Candidate<'a> {
         prefix_steps: u64,
         circuit: &Circuit,
     ) -> Option<Self> {
+        work::add(Work::ShapeVisits, 1);
         let shape = Shape::recognize(program, entry)?;
         Some(Self {
             shape,
@@ -456,8 +458,7 @@ impl<'a> Candidate<'a> {
         program: &Program<'a>,
         memory: &Memory<'_>,
     ) -> Option<(Plan, Checkpoint)> {
-        #[cfg(test)]
-        tests::record_attempt();
+        work::add(Work::ModularAttempts, 1);
         let Self { shape, mut slots, checkpoint, prefix_steps, scratch, empty_possible } = self;
         let loop_budget = input.budget.checked_sub(prefix_steps)?.checked_sub(2)?;
         let entry = shape.entry;
@@ -492,6 +493,7 @@ impl<'a> Candidate<'a> {
         }
         let mut factors = Vec::new();
         for _ in &exponent_bits {
+            work::add(Work::Operations, 1);
             shape.update.exact_product(modulus - 1, factor)?;
             factors.push(Factor::prove(factor, modulus64)?);
             factor = shape.square.exact_product(factor, factor)? % modulus;
@@ -546,6 +548,10 @@ impl<'a> Candidate<'a> {
 impl Plan {
     pub(super) fn passes(&self) -> usize {
         self.factors.len()
+    }
+
+    pub(super) fn minimum_workspace(&self) -> Wire {
+        (modular::width(self.modulus) + Multiplier::workspace(self.modulus)) as Wire
     }
 
     pub(super) fn emit(&self, circuit: &mut Circuit) -> Word {

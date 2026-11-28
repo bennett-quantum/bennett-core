@@ -7,6 +7,7 @@ use bennett_ir::{BinOp, Fault, Inst, Operand, Target, Terminator};
 use super::bits::{Bit, Circuit, ONE, Word};
 use super::calls::Program;
 use super::symbolic::{Point, Step};
+use super::work::{self, Work};
 use super::{ApplyError, Copies};
 
 struct Path<'a> {
@@ -148,6 +149,7 @@ impl<'a> Path<'a> {
         let mut seen = BTreeSet::new();
         let mut point = Point { block: start.block, index: 0, ..test };
         let next_test = loop {
+            work::add(Work::ShapeVisits, 1);
             if !seen.insert(point) {
                 return None;
             }

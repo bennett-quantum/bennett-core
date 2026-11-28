@@ -1,17 +1,16 @@
 //! The state of an applied frame and the transition for one instruction.
 
-use std::collections::BTreeMap;
+use std::rc::Rc;
 
-use bennett_ir::{
-    BinOp, Block, BlockId, Fault, FuncId, Inst, Operand, Slot, SwitchCase, Target, Terminator, Type, ValidModule,
-};
+use bennett_ir::{BinOp, BlockId, Fault, FuncId, Inst, Operand, Slot, Target, Terminator, Type, ValidModule};
 
 use super::ApplyError;
 use super::arithmetic;
 use super::bits::{Bit, Circuit, Word, ZERO, constant};
-use super::definite::{CallProofs, CallResult, CallSite, Constants};
+use super::definite::{Accesses, CallProofs, Constants};
 use super::division;
-use super::switches::Edges;
+use super::successors::{self, Edges};
+use super::work::{self, Work};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct Point {
@@ -69,7 +68,8 @@ impl<'a> Step<'a> {
 pub(super) struct Frame<'a> {
     pub(super) module: &'a ValidModule,
     pub(super) callee: FuncId,
-    constants: Constants<'a>,
+    constants: Rc<Constants<'a>>,
+    structural_accesses: Accesses,
 }
 
 impl<'a> Frame<'a> {
@@ -91,14 +91,34 @@ impl<'a> Frame<'a> {
     }
 
     pub(super) fn read(slots: &[Word], operand: &Operand) -> Word {
+        work::add(
+            Work::OperandBits,
+            match operand {
+                Operand::Const(value) => value.width().bits() as usize,
+                Operand::Slot(slot) => slots[slot.index()].len(),
+            },
+        );
         match operand {
             Operand::Const(value) => constant(value.value(), value.width().bits() as usize),
             Operand::Slot(slot) => slots[slot.index()].clone(),
         }
     }
 
-    pub(super) fn is_definite(&self, operand: &Operand) -> bool {
-        self.constants.is_definite(operand)
+    pub(super) fn accesses(&self) -> Accesses {
+        self.constants.accesses().unwrap_or(self.structural_accesses)
+    }
+
+    pub(super) fn visit_flow_targets(&self, block: BlockId, mut visit: impl FnMut(&'a Target)) {
+        if let Some(targets) = self.constants.outgoing(block) {
+            work::add(Work::FlowEdges, targets.len());
+            targets.iter().copied().for_each(visit);
+        } else if let Some(term) = successors::block_end(self.module.function(self.callee).block(block)) {
+            successors::visit_possible_targets(term, &mut visit);
+        }
+    }
+
+    pub(super) fn definite_stores(&self) -> bool {
+        self.constants.definite_stores()
     }
 
     pub(super) fn operand(&self, slots: &[Word], operand: &Operand) -> Word {
@@ -120,25 +140,12 @@ impl<'a> Frame<'a> {
         ApplyError::Unsupported { callee: self.callee, block: point.block, index: point.index, operation, route }
     }
 
-    pub(super) fn take_calls(&mut self) -> BTreeMap<(BlockId, usize), CallSite<'a>> {
-        std::mem::take(&mut self.constants.calls)
+    pub(super) fn plan(&self) -> Rc<Constants<'a>> {
+        Rc::clone(&self.constants)
     }
 
     pub(super) fn for_analysis(module: &'a ValidModule, callee: FuncId) -> Self {
-        Self { module, callee, constants: Constants::default() }
-    }
-
-    pub(super) fn return_analysis(
-        module: &'a ValidModule,
-        callee: FuncId,
-        mut can_return: impl FnMut(FuncId) -> bool,
-    ) -> Option<Vec<Option<Word>>> {
-        let frame = Self::for_analysis(module, callee);
-        let inputs = module.function(callee).params.iter().map(|_| None);
-        Constants::analyze(&frame, inputs, |target, _| {
-            if can_return(target) { CallResult::Returns(Vec::new()) } else { CallResult::Stops }
-        })
-        .into_stopping_proof()
+        Self { module, callee, constants: Rc::default(), structural_accesses: Accesses::default() }
     }
 
     pub(super) fn check(
@@ -148,19 +155,39 @@ impl<'a> Frame<'a> {
         proofs: &mut CallProofs<'a>,
     ) -> Result<Self, ApplyError> {
         let mut frame = Self::for_analysis(module, callee);
-        frame.check_instructions()?;
-        frame.constants = Constants::for_emission(&frame, input, proofs);
+        let (needs_analysis, accesses) = frame.check_instructions()?;
+        frame.structural_accesses = accesses;
+        frame.constants = Constants::for_emission(&frame, input, proofs, needs_analysis);
         Ok(frame)
     }
 
-    fn check_instructions(&self) -> Result<(), ApplyError> {
+    fn check_instructions(&self) -> Result<(bool, Accesses), ApplyError> {
+        let mut needs_analysis = false;
+        let mut accesses = Accesses::default();
         for (index, block) in self.module.function(self.callee).blocks.iter().enumerate() {
             let block_id = BlockId(index as u32);
+            needs_analysis |= matches!(block.term, Terminator::Switch { .. });
             for (index, inst) in block.insts.iter().enumerate() {
+                work::add(Work::StructuralCells, 1);
+                accesses.observe(inst);
+                needs_analysis |= matches!(
+                    inst,
+                    Inst::Binary { op: BinOp::Shl | BinOp::Lshr | BinOp::Ashr, rhs: Operand::Slot(_), .. }
+                        | Inst::Call { .. }
+                        | Inst::CallIndirect { .. }
+                        | Inst::Binary { op: BinOp::Mul, lhs: Operand::Slot(_), rhs: Operand::Slot(_), .. }
+                        | Inst::Binary {
+                            op: BinOp::Udiv | BinOp::Sdiv | BinOp::Urem | BinOp::Srem,
+                            rhs: Operand::Slot(_),
+                            ..
+                        }
+                        | Inst::Store { address: Operand::Slot(_), .. }
+                );
                 if let Some((operation, route)) = unsupported(inst) {
                     return Err(self.error(Point { block: block_id, index, copy: 0 }, operation, route));
                 }
             }
+            work::add(Work::StructuralCells, 1);
             let (operation, route) = match &block.term {
                 Terminator::Jump(_)
                 | Terminator::Branch { .. }
@@ -172,7 +199,7 @@ impl<'a> Frame<'a> {
             };
             return Err(self.error(Point { block: block_id, index: block.insts.len(), copy: 0 }, operation, route));
         }
-        Ok(())
+        Ok((needs_analysis, accesses))
     }
 
     pub(super) fn step(
@@ -182,9 +209,13 @@ impl<'a> Frame<'a> {
         point: Point,
         widths: &[Option<usize>],
     ) -> Result<Step<'a>, ApplyError> {
+        work::add(Work::Operations, 1);
         let block = self.module.function(self.callee).block(point.block);
         let result_width = |dst: Slot, declared| widths.get(dst.index()).copied().flatten().unwrap_or(declared);
         if let Some(inst) = block.insts.get(point.index) {
+            if let Some(fault) = successors::instruction_fault(inst) {
+                return Ok(Step::Fault(fault));
+            }
             let (dst, result) = match inst {
                 Inst::Binary {
                     op: op @ (BinOp::Udiv | BinOp::Sdiv | BinOp::Urem | BinOp::Srem),
@@ -242,7 +273,6 @@ impl<'a> Frame<'a> {
                 Inst::FuncAddr { dst, func } => (*dst, constant(u128::from(func.address()), u64::BITS as usize)),
                 Inst::Call { .. } => return Err(self.error(point, "call", "a planned call copy")),
                 Inst::CallIndirect { .. } => return Err(self.error(point, "call_indirect", "a planned call copy")),
-                Inst::Effect { .. } => return Ok(Step::Fault(Fault::EffectInRegion)),
                 Inst::Load { .. } => return Err(self.error(point, "load", super::memory::DISPATCH_REQUIRED)),
                 Inst::Store { .. } => return Err(self.error(point, "store", super::memory::DISPATCH_REQUIRED)),
                 Inst::Alloca { .. } => return Err(self.error(point, "alloca", super::memory::DISPATCH_REQUIRED)),
@@ -253,14 +283,15 @@ impl<'a> Frame<'a> {
                 Inst::Setjmp { .. } | Inst::ReturnAddress { .. } => {
                     unreachable!("checked instructions before lowering")
                 }
-                Inst::Qalloc { .. }
+                Inst::Effect { .. }
+                | Inst::Qalloc { .. }
                 | Inst::QallocBy { .. }
                 | Inst::Qfree { .. }
                 | Inst::Gate { .. }
                 | Inst::GateAt { .. }
                 | Inst::RotateBy { .. }
                 | Inst::Measure { .. }
-                | Inst::Apply { .. } => return Ok(Step::Fault(Fault::QuantumInRegion)),
+                | Inst::Apply { .. } => unreachable!("unconditional fault handled before lowering"),
             };
             return Ok(Step::Write(point.next(), dst, result));
         }
@@ -268,10 +299,10 @@ impl<'a> Frame<'a> {
             Terminator::Jump(target) => Step::Jump(target),
             Terminator::Branch { cond, if_true, if_false } => {
                 let bit = read(cond)[0];
-                match bit.literal() {
-                    Some(true) => Step::Jump(if_true),
-                    Some(false) => Step::Jump(if_false),
-                    None => Step::Branch(bit, if_true, if_false),
+                match successors::branch(bit, if_true, if_false) {
+                    [Some(target), None] | [None, Some(target)] => Step::Jump(target),
+                    [Some(yes), Some(no)] => Step::Branch(bit, yes, no),
+                    [None, None] => unreachable!("a Boolean value permits at least one successor"),
                 }
             }
             Terminator::Switch { value, .. } => {
@@ -293,43 +324,6 @@ impl<'a> Frame<'a> {
                 unreachable!("checked the terminators before lowering")
             }
         })
-    }
-}
-
-// Call planning and constant analysis stop before the first unconditional
-// instruction fault. The preflight check still validates the entire copy.
-pub(super) fn before_instruction_fault(block: &Block) -> (&[Inst], Option<&Terminator>) {
-    let fault = block.insts.iter().position(|inst| {
-        matches!(
-            inst,
-            Inst::Effect { .. }
-                | Inst::Qalloc { .. }
-                | Inst::QallocBy { .. }
-                | Inst::Qfree { .. }
-                | Inst::Gate { .. }
-                | Inst::GateAt { .. }
-                | Inst::RotateBy { .. }
-                | Inst::Measure { .. }
-                | Inst::Apply { .. }
-        )
-    });
-    match fault {
-        Some(index) => (&block.insts[..index], None),
-        None => (&block.insts, Some(&block.term)),
-    }
-}
-
-fn switch_target<'a>(value: u128, cases: &'a [SwitchCase], default: &'a Target) -> &'a Target {
-    cases.iter().find(|case| case.value == value).map_or(default, |case| &case.target)
-}
-
-pub(super) fn visit_possible_targets<'a>(term: &'a Terminator, mut visit: impl FnMut(&'a Target)) {
-    if let Terminator::Branch { cond: Operand::Const(value), if_true, if_false } = term {
-        visit(if value.value() == 1 { if_true } else { if_false });
-    } else if let Terminator::Switch { value: Operand::Const(value), cases, default, .. } = term {
-        visit(switch_target(value.value(), cases, default));
-    } else {
-        term.visit_targets(visit);
     }
 }
 

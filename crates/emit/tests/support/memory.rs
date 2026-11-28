@@ -64,6 +64,16 @@ fn compare(
     budget: u64,
     mode: ApplyMode,
 ) -> (Construction, MemoryCounts, Vec<(u64, u64)>) {
+    compare_checked(module, label, budget, mode, |_| {})
+}
+
+fn compare_checked(
+    module: &ValidModule,
+    label: &str,
+    budget: u64,
+    mode: ApplyMode,
+    check: impl Fn(&CompiledApply),
+) -> (Construction, MemoryCounts, Vec<(u64, u64)>) {
     let entry = module.function_named("main").expect("main");
     let options = Options { machine_meaning: true, ..Options::default() };
     let mut direct = Executor::new(module, entry, &[budget], options).expect("executor");
@@ -71,6 +81,7 @@ fn compare(
     let mut summary = None;
     let mut compiler = |input: ApplyInput<'_>| {
         let compiled = compile_apply_with(input, mode)?;
+        check(&compiled);
         println!("{label}, B={budget}, {mode:?}, @f: {}", compiled.memory);
         assert!(summary.replace((compiled.construction, compiled.memory)).is_none());
         Ok(compiled.block)
@@ -1635,8 +1646,17 @@ read:
 "#,
         "",
     );
-    let (_, _, values) =
-        compare(&module, "address after repeated use of stored complement", 8272, ApplyMode::Automatic);
+    let (_, _, values) = compare_checked(
+        &module,
+        "address after repeated use of stored complement",
+        8272,
+        ApplyMode::Automatic,
+        |compiled| {
+            assert!(compiled.work.replay_gates <= 633_887);
+            assert!(compiled.work.target_packs <= 2_535_548);
+            assert!(compiled.work.control_packs <= 3_380_764);
+        },
+    );
     let expected = (0..8).map(|x| (if x & 3 == 2 { 255 } else { 0 }, 0)).collect::<Vec<_>>();
     assert_eq!(values, expected);
 }

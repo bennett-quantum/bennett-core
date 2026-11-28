@@ -1,41 +1,13 @@
 //! Work counts for the speculative parts of the modular proof.
 
-use std::cell::Cell;
 use std::fmt::Write;
 
 use bennett_ir::load;
 
-use crate::{ApplyInput, ApplyMode, Argument, Construction, compile_apply_with};
+use crate::{ApplyInput, ApplyMode, Argument, Construction, WorkCounts, compile_apply_with};
 
-#[derive(Clone, Copy, Default)]
-struct Work {
-    attempts: usize,
-    slot_words: usize,
-    replay_gates: usize,
-}
-
-thread_local! {
-    static WORK: Cell<Work> = const { Cell::new(Work { attempts: 0, slot_words: 0, replay_gates: 0 }) };
-}
-
-pub(super) fn record_attempt() {
-    let work = WORK.get();
-    WORK.set(Work { attempts: work.attempts + 1, ..work });
-}
-
-pub(super) fn record_slot_words(words: usize) {
-    let work = WORK.get();
-    WORK.set(Work { slot_words: work.slot_words + words, ..work });
-}
-
-pub(super) fn record_replay_gates(gates: usize) {
-    let work = WORK.get();
-    WORK.set(Work { replay_gates: work.replay_gates + gates, ..work });
-}
-
-fn proof_work(source: &str, budget: u64) -> Work {
+fn proof_work(source: &str, budget: u64) -> WorkCounts {
     let module = load(source).expect("valid work-count program");
-    WORK.set(Work::default());
     let compiled = compile_apply_with(
         ApplyInput {
             module: &module,
@@ -53,7 +25,7 @@ fn proof_work(source: &str, budget: u64) -> Work {
     )
     .expect("compile work-count program");
     assert_eq!(compiled.construction, Construction::Definite);
-    WORK.get()
+    compiled.work
 }
 
 #[test]
@@ -89,7 +61,7 @@ entry:
     source.push_str("    %out = trunc i32 %v48 to i8\n    ret %out\n}\n");
     // The call and the entry comparison fit. The jump and returns do not.
     let work = proof_work(&source, 2);
-    assert_eq!(work.replay_gates, 0);
+    assert_eq!(work.exit_replay_gates, 0);
 }
 
 #[test]
@@ -113,7 +85,7 @@ finish:
 }
 "#,
     );
-    assert_eq!(proof_work(&source, 300).slot_words, 0);
+    assert_eq!(proof_work(&source, 300).snapshot_slots, 0);
 }
 
 #[test]
@@ -178,11 +150,66 @@ exit(i8 %answer):
 
 #[test]
 fn modular_proof_records_the_definite_loop_entry_once() {
-    WORK.set(Work::default());
     let compiled = definite_wide_loop();
     assert_eq!(compiled.construction, Construction::Definite);
-    let work = WORK.get();
-    assert_eq!(work.slot_words, 18);
-    assert_eq!(work.attempts, 0);
-    assert_eq!(work.replay_gates, 0);
+    let work = compiled.work;
+    assert_eq!(work.snapshot_slots, 18);
+    assert_eq!(work.modular_attempts, 0);
+    assert_eq!(work.exit_replay_gates, 0);
+}
+
+#[test]
+fn a_modular_suffix_requiring_more_scratch_is_skipped() {
+    for width in [7, 31, 63] {
+        let modulus = (1u64 << width) - 1;
+        let source = format!(
+            r#"
+memory 1024
+func @f(i3 %input) -> i{width} {{
+entry:
+    %bit = and i3 %input, 1
+    %exponent = or i3 %bit, 2
+    %empty = icmp eq i3 %exponent, 0
+    br %empty, finish(i128 99), head(i128 1, i128 2, %exponent)
+head(i128 %old, i128 %base, i3 %x):
+    %low = trunc i3 %x to i1
+    br %low, update, latch(%old)
+update:
+    %product = mul i128 %old, %base
+    %reduced = urem i128 %product, {modulus}
+    br latch(%reduced)
+latch(i128 %current):
+    %next = lshr i3 %x, 1
+    %square = mul i128 %base, %base
+    %factor = urem i128 %square, {modulus}
+    %last = icmp ult i3 %x, 2
+    br %last, finish(%current), head(%current, %factor, %next)
+finish(i128 %residue):
+    %answer = trunc i128 %residue to i{width}
+    ret %answer
+}}
+"#
+        );
+        let module = load(&source).expect("valid modular loop");
+        let result = compile_apply_with(
+            ApplyInput {
+                module: &module,
+                callee: module.function_named("f").expect("loop"),
+                args: &[Argument::Register(0..3)],
+                out: 3..3 + width,
+                fault: 3 + width..8 + width,
+                budget: 50,
+                entry_fault: None,
+                stack_available: 800,
+                memory: None,
+                scratch_start: 8 + width,
+            },
+            ApplyMode::Automatic,
+        )
+        .expect("compile the fitting ordinary circuit");
+        assert!(matches!(result.construction, Construction::Controlled { .. }));
+        assert_eq!(result.work.gates_generated, 4, "width {width}");
+        assert_eq!(result.work.comparison_gates, 0, "width {width}");
+        assert_eq!(result.block.ops().len(), 6, "width {width}");
+    }
 }

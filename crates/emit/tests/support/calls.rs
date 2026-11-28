@@ -964,3 +964,49 @@ fn call_refusals_precede_every_gate_of_the_apply() {
         }
     }
 }
+
+#[test]
+fn repeated_indirect_targets_keep_their_nested_return_and_fault_clock() {
+    let module = control_example(
+        r#"
+memory 4096
+func @returning() -> i8 {
+entry:
+    %value = call_indirect fn() -> i8 3()
+    ret %value
+}
+func @stopping() -> i8 {
+entry:
+    fault unreachable
+}
+func @leaf() -> i8 {
+entry:
+    ret 11
+}
+func @dispatch(i1 %x) -> i8 {
+entry:
+    %address = select i64 %x, 1, 2
+    %left = call_indirect fn() -> i8 %address()
+    %right = call_indirect fn() -> i8 %address()
+    %sum = add i8 %left, %right
+    ret %sum
+}
+func @f(i1 %x) -> i8 {
+entry:
+    %value = call_indirect fn(i1) -> i8 4(%x)
+    ret %value
+}
+"#,
+        1,
+        "",
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in 0..=14 {
+            compare_controls(&module, budget, mode, |x| match (x, budget) {
+                (0, 4..) => (0, Fault::Unreachable.code()),
+                (1, 13..) => (22, 0),
+                _ => (0, Fault::Budget.code()),
+            });
+        }
+    }
+}

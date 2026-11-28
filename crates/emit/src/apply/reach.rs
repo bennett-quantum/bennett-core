@@ -9,6 +9,7 @@ use super::bits::{Bit, Circuit, Word, definite};
 use super::calls::{Program, arguments};
 use super::ranges;
 use super::symbolic::{Point, Step};
+use super::work::{self, Work};
 
 // This caps classical analysis work. If it is exceeded, no bounds from the
 // partial analysis are used and the circuit is emitted at its original widths.
@@ -32,9 +33,11 @@ pub(super) fn analyze(program: &Program<'_>, input: &ApplyInput<'_>, count: usiz
     let wires = wires.into_iter().collect::<Vec<_>>();
     let mut widths = vec![None::<usize>; count];
     let mut circuit = Circuit::new(input.scratch_start);
+    let _temporary = work::Temporary::start();
     let mut attempts = limit;
     let mut last_attempt = Some(0u64);
     for assignment in 0..1 << wires.len() {
+        work::add(Work::SnapshotWords, count + args.iter().map(Vec::len).sum::<usize>());
         let args = args.iter().map(|word| {
             word.iter()
                 .map(|bit| match bit.wire() {
@@ -52,6 +55,7 @@ pub(super) fn analyze(program: &Program<'_>, input: &ApplyInput<'_>, count: usiz
         let mut stopped = None;
         for spent in 0..input.budget {
             attempts = attempts.checked_sub(1)?;
+            work::add(Work::TraceAttempts, 1);
             point = match program.step(&mut circuit, &slots, point).ok()? {
                 Step::Write(next, dst, word) => {
                     let bits = ranges::bits(definite(&word)?);
@@ -143,6 +147,7 @@ finish:
             // input 255 runs out of analysis attempts while still waiting.
             let limit = 255 * 7 + 4;
             let compiled = compile_with_analysis_limit(input, ApplyMode::Automatic, limit)?;
+            assert_eq!(compiled.work.trace_attempts, limit);
             assert!(matches!(compiled.construction, Construction::SavedDecisions { .. }));
             Ok(compiled.block)
         };

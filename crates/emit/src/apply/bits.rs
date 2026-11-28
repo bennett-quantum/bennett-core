@@ -1,11 +1,13 @@
 //! Little-endian words whose bits are constants or qubit values.
 
+use std::cell::Cell;
 use std::ops::Range;
 
 use bennett_exec::{BlockOp, GateBlock, GateOp, Wire};
 use bennett_ir::{FixedGate, Gate};
 
 use super::ApplyError;
+use super::work::{self, Work};
 
 pub(super) use super::identity::Bit;
 use super::identity::{Generation, Identity};
@@ -21,7 +23,10 @@ pub(super) fn constant(value: u128, width: usize) -> Word {
 }
 
 pub(super) fn definite(word: &[Bit]) -> Option<u128> {
-    word.iter().enumerate().try_fold(0, |value, (index, bit)| bit.literal().map(|set| value | u128::from(set) << index))
+    word.iter().enumerate().try_fold(0, |value, (index, bit)| {
+        work::add(Work::DefiniteBits, 1);
+        bit.literal().map(|set| value | u128::from(set) << index)
+    })
 }
 
 pub(super) struct Circuit {
@@ -32,6 +37,8 @@ pub(super) struct Circuit {
     enabled: Bit,
     control_scratch: Option<Wire>,
     generation: Generation,
+    replay_revision: Generation,
+    replayed_prefix: Cell<usize>,
 }
 
 pub(super) struct Checkpoint {
@@ -51,6 +58,8 @@ impl Circuit {
             enabled: ONE,
             control_scratch: None,
             generation: Generation::next(),
+            replay_revision: Generation::next(),
+            replayed_prefix: Cell::new(0),
         }
     }
 
@@ -68,11 +77,22 @@ impl Circuit {
     }
 
     fn flip(&mut self, target: Wire, controls: Vec<Wire>) {
+        work::gate();
         self.gates.push(GateOp { kind: X, target, controls });
     }
 
     pub(super) fn checkpoint(&self) -> Checkpoint {
         Checkpoint { next: self.next, peak: self.peak, gates: self.gates.len(), control_scratch: self.control_scratch }
+    }
+
+    // The proposed suffix starts with the live wires at the checkpoint.
+    // Any workspace reserved there contributes to the proposed peak.
+    pub(super) fn workspace_fits_before(&self, checkpoint: &Checkpoint, workspace: Wire) -> bool {
+        checkpoint
+            .next
+            .and_then(|next| next.checked_add(workspace))
+            .zip(self.peak)
+            .is_some_and(|(minimum, ordinary)| minimum <= ordinary)
     }
 
     // The in-place update uses the saved allocator state without copying the
@@ -86,11 +106,15 @@ impl Circuit {
             enabled: self.enabled,
             control_scratch: checkpoint.control_scratch,
             generation: Generation::next(),
+            replay_revision: Generation::next(),
+            replayed_prefix: Cell::new(0),
         }
     }
 
     pub(super) fn replace_after(&mut self, checkpoint: Checkpoint, mut suffix: Self) {
+        work::add(Work::GatesRewound, self.gates.len() - checkpoint.gates);
         self.gates.truncate(checkpoint.gates);
+        work::add(Work::MovedGates, suffix.gates.len());
         self.gates.append(&mut suffix.gates);
         std::mem::swap(&mut self.gates, &mut suffix.gates);
         *self = suffix;
@@ -99,9 +123,14 @@ impl Circuit {
     pub(super) fn rewind(&mut self, checkpoint: Checkpoint) {
         self.next = checkpoint.next;
         self.peak = checkpoint.peak;
+        work::add(Work::GatesRewound, self.gates.len() - checkpoint.gates);
         self.gates.truncate(checkpoint.gates);
         self.control_scratch = checkpoint.control_scratch;
         self.generation = Generation::next();
+        if checkpoint.gates < self.replayed_prefix.get() {
+            self.replay_revision = self.generation;
+            self.replayed_prefix.set(0);
+        }
     }
 
     pub(super) fn under<T>(&mut self, enabled: Bit, emit: impl FnOnce(&mut Self) -> T) -> T {
@@ -219,6 +248,7 @@ impl Circuit {
 
     pub(super) fn copy(&mut self, target: Range<Wire>, word: &[Bit], enabled: Bit) {
         for (wire, &bit) in target.zip(word) {
+            work::add(Work::ResultBits, 1);
             self.xor_into(wire, bit, enabled);
         }
     }
@@ -273,6 +303,7 @@ impl Circuit {
             })
             .collect();
         for index in (start..end).rev() {
+            work::gate();
             self.gates.push(self.gates[index].clone());
         }
         self.next = Some(temporary);
@@ -287,6 +318,19 @@ impl Circuit {
 
     pub(super) fn scratch_end(&self) -> Option<Wire> {
         self.next
+    }
+
+    pub(super) fn observe_replay_prefix(&self) -> Generation {
+        self.replayed_prefix.set(self.forward_len());
+        self.replay_revision
+    }
+
+    pub(super) fn allocated_scratch(&self, wire: Wire) -> bool {
+        self.next.is_some_and(|end| (self.start..end).contains(&wire))
+    }
+
+    pub(super) fn starts_as_scratch(&self, wire: Wire) -> bool {
+        self.peak.is_some_and(|end| (self.start..end).contains(&wire))
     }
 
     pub(super) fn forward_gates(&self) -> &[GateOp] {
@@ -321,6 +365,7 @@ impl Circuit {
     ) -> Result<GateBlock, ApplyError> {
         let scratch = place(self.start)..place(self.peak.ok_or(ApplyError::WireSpace)?);
         for gate in &mut self.gates {
+            work::add(Work::PlacementWires, 1 + gate.controls.len());
             gate.target = place(gate.target);
             for control in &mut gate.controls {
                 *control = place(*control);
@@ -328,8 +373,10 @@ impl Circuit {
         }
         self.gates.reserve(forward_len);
         for index in (0..forward_len).rev() {
+            work::gate();
             self.gates.push(self.gates[index].clone());
         }
+        work::add(Work::FinalGates, self.gates.len());
         let ops = [BlockOp::Allocate(scratch.clone())]
             .into_iter()
             .chain(self.gates.into_iter().map(BlockOp::Gate))

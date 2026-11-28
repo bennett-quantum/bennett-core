@@ -2,6 +2,8 @@
 
 mod arithmetic;
 mod bits;
+#[cfg(test)]
+mod call_planning_tests;
 mod calls;
 mod choice;
 mod controls;
@@ -13,19 +15,21 @@ mod gadget_tests;
 mod identity;
 mod machine;
 mod memory;
+#[cfg(test)]
+mod memory_tests;
 mod modular;
 mod modular_loop;
 mod products;
 mod ranges;
 mod reach;
-mod returns;
 mod saved;
 mod selectors;
 mod shifts;
 mod stack;
-mod switches;
+mod successors;
 mod symbolic;
 mod wires;
+mod work;
 
 use std::fmt;
 use std::ops::Range;
@@ -41,6 +45,7 @@ use self::wires::Layout;
 
 pub use bennett_exec::{ApplyError, ApplyInput, ApplyMemory, Argument};
 pub use memory::MemoryCounts;
+pub use work::WorkCounts;
 
 /// The control construction selected for one applied function.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,6 +111,8 @@ pub struct CompiledApply {
     pub reason: &'static str,
     /// Costs of the private memory versions in this call.
     pub memory: MemoryCounts,
+    /// Compiler work for the proofs and circuit construction.
+    pub work: WorkCounts,
 }
 
 impl CompiledApply {
@@ -185,6 +192,7 @@ fn compile_with_analysis_limit(
     mode: ApplyMode,
     analysis_limit: usize,
 ) -> Result<CompiledApply, ApplyError> {
+    let work = work::Scope::start();
     check_interface(&input)?;
     let wires = Layout::new(&input);
     let args = wires.arguments(input.args);
@@ -386,7 +394,9 @@ fn compile_with_analysis_limit(
         }
         Ok((forward, construction, reason, memory.counts()))
     });
-    if let Some((plan, checkpoint, memory_counts)) = alternative {
+    if let Some((plan, checkpoint, memory_counts)) = alternative
+        && (lowered.is_err() || circuit.workspace_fits_before(&checkpoint, plan.minimum_workspace()))
+    {
         let mut proposed = circuit.suffix(&checkpoint);
         let residue = plan.emit(&mut proposed);
         let forward = proposed.forward_len();
@@ -406,11 +416,6 @@ fn compile_with_analysis_limit(
         }
     }
     let (forward, construction, reason, memory) = lowered?;
-    Ok(CompiledApply {
-        block: wires.finish(circuit, forward, &input.module.function(input.callee).name)?,
-        definite_steps: spent,
-        construction,
-        reason,
-        memory,
-    })
+    let block = wires.finish(circuit, forward, &input.module.function(input.callee).name)?;
+    Ok(CompiledApply { block, work: work.counts(), definite_steps: spent, construction, reason, memory })
 }

@@ -46,6 +46,10 @@ fn wire(id: Wire) -> Bit {
 }
 
 impl Multiplier {
+    pub(super) fn workspace(modulus: u64) -> usize {
+        2 * (width(modulus) + 1) + 2
+    }
+
     pub(super) fn new(circuit: &mut Circuit, modulus: u64) -> Self {
         let size = width(modulus) + 1; // An extra digit for the sign after subtraction.
         Self {

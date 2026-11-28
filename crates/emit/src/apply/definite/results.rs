@@ -1,27 +1,67 @@
-//! Return word proofs indexed by the arguments known at a copied call.
+//! Resolve normalized call contexts without replaying suspended callers.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
+use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 use bennett_ir::{FuncId, ValidModule};
 
-use super::{ArgumentIdentities, Constants, normalize_arguments};
+use super::{ArgumentIdentities, Constants, Solver, normalize_arguments};
 use crate::apply::bits::{Bit, Word};
-use crate::apply::calls::work;
+use crate::apply::calls;
 use crate::apply::identity::Identity;
-use crate::apply::returns::Returns;
 use crate::apply::symbolic::Frame;
+use crate::apply::work::{self, Work};
 
 pub(super) type ReturnWord = Vec<Option<Bit>>;
 
-pub(in crate::apply) enum CallResult {
+pub(super) enum CallResult {
     Stops,
     Returns(ReturnWord),
 }
 
-#[derive(Clone, Hash, PartialEq, Eq)]
+#[derive(Clone, Eq)]
 struct Context {
     callee: FuncId,
     arguments: ArgumentIdentities,
+    independent: bool,
+}
+
+impl Context {
+    fn new(callee: FuncId, arguments: ArgumentIdentities) -> Self {
+        let independent = arguments.iter().flatten().enumerate().all(|(index, &bit)| {
+            work::add(Work::ContextBits, 1);
+            bit == Identity::input(index as u64, false)
+        });
+        Self { callee, arguments, independent }
+    }
+}
+
+impl Hash for Context {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        work::add(Work::KeyHashWords, 2 + self.arguments.iter().map(|word| 1 + word.len()).sum::<usize>());
+        self.callee.hash(state);
+        self.arguments.hash(state);
+    }
+}
+
+impl PartialEq for Context {
+    fn eq(&self, other: &Self) -> bool {
+        work::add(Work::KeyCompareWords, 1);
+        if self.callee != other.callee {
+            return false;
+        }
+        work::add(Work::KeyCompareWords, 1);
+        self.arguments.len() == other.arguments.len()
+            && self.arguments.iter().zip(&other.arguments).all(|(left, right)| {
+                work::add(Work::KeyCompareWords, 1);
+                left.len() == right.len()
+                    && left.iter().zip(right).all(|(left, right)| {
+                        work::add(Work::KeyCompareWords, 1);
+                        left == right
+                    })
+            })
+    }
 }
 
 struct Query {
@@ -29,139 +69,171 @@ struct Query {
     sources: Vec<Option<Bit>>,
 }
 
-impl Query {
-    fn new(frame: &Frame<'_>, args: &[Option<Word>]) -> Self {
-        let (arguments, sources) = normalize_arguments(frame, args.iter().cloned());
-        Self { context: Context { callee: frame.callee, arguments }, sources }
-    }
+enum Continuation {
+    Exact(Vec<Option<Bit>>),
+    Unconstrained,
+}
 
-    fn translate(&self, word: &ReturnWord) -> ReturnWord {
-        word.iter()
-            .map(|bit| match bit.map(Bit::identity) {
-                Some(literal @ Identity::Literal(_)) => Some(literal.argument_bit()),
-                Some(Identity::Source(source, inverted)) => source
-                    .argument_index()
-                    .and_then(|index| self.sources[index])
-                    .map(|argument| argument.with_flip(inverted)),
-                None => None,
-            })
-            .collect()
+impl Continuation {
+    fn answer(self, plan: &Constants<'_>) -> CallResult {
+        match self {
+            Self::Exact(sources) => Query::answer(&sources, plan),
+            Self::Unconstrained if plan.may_return => CallResult::Returns(Vec::new()),
+            Self::Unconstrained => CallResult::Stops,
+        }
     }
 }
 
-struct Pending {
-    context: Context,
-    dependencies: Vec<Context>,
+impl Query {
+    fn new(frame: &Frame<'_>, args: impl Iterator<Item = Option<Word>>) -> Self {
+        let (arguments, sources) = normalize_arguments(frame, args);
+        Self { context: Context::new(frame.callee, arguments), sources }
+    }
+
+    fn answer(sources: &[Option<Bit>], plan: &Constants<'_>) -> CallResult {
+        if !plan.may_return {
+            return CallResult::Stops;
+        }
+        let returned = plan.returned.as_deref().unwrap_or_default();
+        work::add(Work::CacheResultWords, returned.len());
+        CallResult::Returns(
+            returned
+                .iter()
+                .map(|bit| match bit.map(Bit::identity) {
+                    Some(literal @ Identity::Literal(_)) => Some(literal.argument_bit()),
+                    Some(Identity::Source(source, inverted)) => source
+                        .argument_index()
+                        .and_then(|index| sources[index])
+                        .map(|argument| argument.with_flip(inverted)),
+                    None => None,
+                })
+                .collect(),
+        )
+    }
 }
 
 pub(in crate::apply) struct CallProofs<'a> {
-    pub(in crate::apply) returns: Returns<'a>,
-    words: CopyResults,
+    module: &'a ValidModule,
+    independent: Vec<Option<Rc<Constants<'a>>>>,
+    specific: HashMap<Context, Rc<Constants<'a>>>,
+    has_completed_contexts: bool,
+    // The copied-result proof retains its old cell allowance. A completed
+    // context can be looked up or used to plan a copy without spending it again.
+    remaining: usize,
 }
 
 impl<'a> CallProofs<'a> {
     pub(in crate::apply) fn new(module: &'a ValidModule, work_limit: usize) -> Self {
-        Self { returns: Returns::new(module), words: CopyResults::new(work_limit) }
+        Self {
+            module,
+            independent: vec![None; module.functions.len()],
+            specific: HashMap::new(),
+            has_completed_contexts: false,
+            remaining: work_limit,
+        }
     }
 
-    pub(super) fn call(&mut self, module: &'a ValidModule, target: FuncId, args: &[Option<Word>]) -> CallResult {
-        self.words.call(module, &mut self.returns, target, args)
+    fn get(&self, context: &Context) -> Option<&Rc<Constants<'a>>> {
+        if context.independent {
+            work::add(Work::SummaryTableReads, 1);
+            self.independent[context.callee.index()].as_ref()
+        } else {
+            work::add(Work::CallLookups, 1);
+            self.specific.get(context)
+        }
     }
 
-    pub(super) fn stops_with_arguments(&self, callee: FuncId, arguments: &[Vec<Identity>]) -> bool {
-        let context = Context { callee, arguments: arguments.to_vec() };
-        matches!(self.words.complete.get(&context), Some(CallResult::Stops))
-    }
-}
-
-struct CopyResults {
-    complete: HashMap<Context, CallResult>,
-    remaining: usize,
-}
-
-impl CopyResults {
-    fn new(work_limit: usize) -> Self {
-        Self { complete: HashMap::new(), remaining: work_limit }
-    }
-
-    fn call<'a>(
+    pub(super) fn plan(
         &mut self,
-        module: &'a ValidModule,
-        returns: &mut Returns<'a>,
-        target: FuncId,
-        args: &[Option<Word>],
-    ) -> CallResult {
-        if !returns.can_return(target) {
-            return CallResult::Stops;
+        callee: FuncId,
+        arguments: ArgumentIdentities,
+        needs_analysis: bool,
+    ) -> Rc<Constants<'a>> {
+        let context = Context::new(callee, arguments);
+        if let Some(result) = self.has_completed_contexts.then(|| self.get(&context)).flatten() {
+            if needs_analysis || !result.may_return {
+                return Rc::clone(result);
+            }
+        } else if needs_analysis {
+            return self.resolve(context);
         }
-        let query = Query::new(&Frame::for_analysis(module, target), args);
-        self.resolve(module, returns, &query.context);
-        self.lookup(&query).unwrap_or_else(|| CallResult::Returns(Vec::new()))
+        Rc::new(Constants::with_arguments(&Frame::for_analysis(self.module, callee), &context.arguments))
     }
 
-    fn lookup(&self, query: &Query) -> Option<CallResult> {
-        self.complete.get(&query.context).map(|result| match result {
-            CallResult::Stops => CallResult::Stops,
-            CallResult::Returns(word) => CallResult::Returns(query.translate(word)),
-        })
-    }
-
-    fn resolve<'a>(&mut self, module: &'a ValidModule, returns: &mut Returns<'a>, root: &Context) {
-        if self.complete.contains_key(root) {
-            return;
-        }
+    fn resolve(&mut self, root: Context) -> Rc<Constants<'a>> {
+        let module = self.module;
         let mut active = BTreeSet::from([root.callee]);
-        let mut pending = vec![Pending { context: root.clone(), dependencies: Vec::new() }];
-        while let Some(task) = pending.last_mut() {
-            if let Some(context) = task.dependencies.pop() {
-                if !self.complete.contains_key(&context) {
-                    active.insert(context.callee);
-                    pending.push(Pending { context, dependencies: Vec::new() });
-                }
-                continue;
-            }
-
-            let context = &task.context;
-            let Some(remaining) = self.remaining.checked_sub(work(module.function(context.callee))) else {
-                return;
-            };
-            self.remaining = remaining;
-            let frame = Frame::for_analysis(module, context.callee);
-            let mut dependencies = Vec::new();
-            let mut requested = HashSet::new();
-            let plan = Constants::solve(&frame, &context.arguments, |target, args| {
-                if !returns.can_return(target) {
-                    return CallResult::Stops;
-                }
-                // The copy planner still checks recursive call paths. Use an
-                // unknown word for a query to a function already on this path.
-                if active.contains(&target) {
-                    return CallResult::Returns(Vec::new());
-                }
-                let query = Query::new(&Frame::for_analysis(module, target), args);
-                self.lookup(&query).unwrap_or_else(|| {
-                    if requested.insert(query.context.clone()) {
-                        dependencies.push(query.context);
+        let mut pending =
+            vec![(Solver::new(Frame::for_analysis(module, root.callee), &root.arguments), root, None::<Continuation>)];
+        let mut resumed = None;
+        while !pending.is_empty() {
+            let nested = pending.len() > 1;
+            let (solver, _, _) = pending.last_mut().expect("current proof");
+            let mut requested = None;
+            let complete = solver.advance(|callee, args| {
+                let mut lookup = || {
+                    if let Some(answer) = resumed.take() {
+                        return Some(answer);
                     }
-                    CallResult::Returns(Vec::new())
-                })
-            });
-            if dependencies.is_empty() {
-                let task = pending.pop().expect("current query exists");
-                active.remove(&task.context.callee);
-                let result = if plan.may_return {
-                    CallResult::Returns(plan.returned.unwrap_or_default())
-                } else {
-                    CallResult::Stops
+                    if active.contains(&callee) {
+                        // An unfinished recursive context cannot exclude a normal
+                        // continuation. Copy planning still rejects a reached cycle.
+                        return Some(CallResult::Returns(Vec::new()));
+                    }
+                    let frame = Frame::for_analysis(module, callee);
+                    let Query { context, sources } = Query::new(&frame, args.iter().cloned());
+                    if let Some(plan) = self.get(&context) {
+                        return Some(Query::answer(&sources, plan));
+                    }
+                    let price = calls::work(module.function(callee));
+                    if let Some(remaining) = self.remaining.checked_sub(price) {
+                        self.remaining = remaining;
+                        requested = Some((context, Continuation::Exact(sources)));
+                        return None;
+                    }
+                    // Keep the unconstrained stopping proof when the old copied-result
+                    // allowance is exhausted. Its word is insufficient for this query.
+                    let general = Query::new(&frame, module.function(callee).params.iter().map(|_| None));
+                    if let Some(plan) = self.get(&general.context) {
+                        Some(Continuation::Unconstrained.answer(plan))
+                    } else {
+                        requested = Some((general.context, Continuation::Unconstrained));
+                        None
+                    }
                 };
-                self.complete.insert(task.context, result);
+                let result = lookup();
+                if nested && result.is_some() {
+                    work::add(Work::SummaryLookups, 1);
+                }
+                result
+            });
+            if complete {
+                let (solver, context, continuation) = pending.pop().expect("current proof");
+                active.remove(&context.callee);
+                let plan = Rc::new(solver.plan);
+                let Some(continuation) = continuation else { return plan };
+                let answer = continuation.answer(&plan);
+                if pending.len() > 1 && matches!(answer, CallResult::Returns(_)) {
+                    work::add(Work::Dependencies, 1);
+                }
+                resumed = Some(answer);
+                self.has_completed_contexts = true;
+                if context.independent {
+                    work::add(Work::SummaryTableWrites, 1);
+                    self.independent[context.callee.index()] = Some(plan);
+                } else {
+                    work::add(Work::CacheWrites, 1);
+                    self.specific.insert(context, plan);
+                }
             } else {
-                // The provisional pass discovers independent calls together.
-                // Recompute after their results are available so refined
-                // arguments and selectors can request more precise proofs.
-                task.dependencies = dependencies;
+                let (context, continuation) = requested.expect("suspended call requested a proof");
+                active.insert(context.callee);
+                let solver = Solver::new(Frame::for_analysis(module, context.callee), &context.arguments);
+                work::add(Work::ContextSchedules, 1);
+                pending.push((solver, context, Some(continuation)));
             }
         }
+        unreachable!("the root proof always settles")
     }
 }
 
@@ -169,6 +241,29 @@ impl CopyResults {
 mod tests {
     use super::*;
     use crate::apply::bits::Circuit;
+
+    #[test]
+    fn specific_call_cache_counts_key_and_result_elements() {
+        let module = bennett_ir::load("func @f(i8 %a, i4 %b) -> i3 {\nentry:\n ret 3\n}\n").expect("valid program");
+        let callee = module.function_named("f").expect("function");
+        let frame = Frame::for_analysis(&module, callee);
+        let query =
+            Query::new(&frame, [Some(vec![Bit::Constant(false); 8]), Some(vec![Bit::Constant(true); 4])].into_iter());
+        let mut cache = CallProofs::new(&module, 0);
+        cache.specific.insert(
+            query.context.clone(),
+            Rc::new(Constants { may_return: true, returned: Some(vec![None; 3]), ..Constants::default() }),
+        );
+        let meter = work::Scope::start();
+        let plan = cache.get(&query.context).expect("cached proof");
+        assert!(matches!(Query::answer(&query.sources, plan), CallResult::Returns(word) if word.len() == 3));
+        let counts = meter.counts();
+        let key_words = 2 + (1 + 8) + (1 + 4);
+        assert_eq!(counts.call_lookups, 1);
+        assert_eq!(counts.key_hash_words, key_words);
+        assert_eq!(counts.key_compare_words, key_words);
+        assert_eq!(counts.cache_result_words, 3);
+    }
 
     #[test]
     fn retained_argument_identity_survives_copied_call_proofs() {
@@ -196,9 +291,10 @@ entry:
         for wire in 0..2 {
             let source = Bit::input(wire);
             let complemented = circuit.retain_copy(source.not());
-            let CallResult::Returns(word) =
-                proofs.call(&module, wrapper, &[Some(vec![source]), Some(vec![complemented])])
-            else {
+            let frame = Frame::for_analysis(&module, wrapper);
+            let query = Query::new(&frame, [Some(vec![source]), Some(vec![complemented])].into_iter());
+            let plan = proofs.plan(wrapper, query.context.arguments.clone(), true);
+            let CallResult::Returns(word) = Query::answer(&query.sources, &plan) else {
                 panic!("an ordinary copied call returns");
             };
             assert!(word[0].is_some_and(|value| value.same_value(complemented)));

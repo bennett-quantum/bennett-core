@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use super::super::bits::{Bit, Circuit, Word};
 use super::super::identity::{Identity, Source};
+use super::super::work::{self, Work};
 
 #[derive(Clone, Default)]
 pub(super) struct Facts {
@@ -13,14 +14,17 @@ pub(super) struct Facts {
 impl Facts {
     // Key facts on the underlying wire shared by a bit and its retained copies.
     pub(super) fn assume(&mut self, word: &[Bit], value: u128) {
+        work::add(Work::FactReads, word.len());
         for (index, &bit) in word.iter().enumerate() {
             if let Identity::Source(source, inverted) = bit.identity() {
+                work::add(Work::FactStores, 1);
                 self.bits.insert(source, (value >> index & 1 != 0) ^ inverted);
             }
         }
     }
 
     fn known(&self, bit: Bit) -> Option<bool> {
+        work::add(Work::FactReads, 1);
         match bit.identity() {
             Identity::Literal(value) => Some(value),
             Identity::Source(source, inverted) => self.bits.get(&source).map(|&value| value ^ inverted),
@@ -60,6 +64,7 @@ impl Facts {
     }
 
     pub(super) fn intersect(&mut self, other: &Self) {
+        work::add(Work::FactJoins, self.bits.len());
         self.bits.retain(|source, value| other.bits.get(source).copied() == Some(*value));
     }
 }

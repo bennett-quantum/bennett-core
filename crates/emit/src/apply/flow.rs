@@ -7,7 +7,8 @@ use petgraph::algo::dominators::{Dominators, simple_fast};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::Reversed;
 
-use super::symbolic::{Frame, Point, before_instruction_fault, visit_possible_targets};
+use super::symbolic::{Frame, Point};
+use super::work::{self, Work};
 
 pub(super) struct Flow<'a> {
     graph: DiGraph<(), ()>,
@@ -22,15 +23,21 @@ impl<'a> Flow<'a> {
         let mut graph = DiGraph::<(), ()>::new();
         let nodes: Vec<_> = function.blocks.iter().map(|_| graph.add_node(())).collect();
         let exit = graph.add_node(());
-        for (index, block) in function.blocks.iter().enumerate() {
-            let (_, term) = before_instruction_fault(block);
-            match term {
-                None | Some(Terminator::Return(_) | Terminator::Exit(_) | Terminator::Fault(_)) => {
-                    graph.add_edge(nodes[index], exit, ());
+        let mut pending = vec![BlockId(0)];
+        let mut reached = BTreeSet::from([BlockId(0)]);
+        while let Some(block) = pending.pop() {
+            work::add(Work::ShapeVisits, 1);
+            let here = nodes[block.index()];
+            let mut stop = true;
+            frame.visit_flow_targets(block, |target| {
+                stop = false;
+                graph.add_edge(here, nodes[target.block.index()], ());
+                if reached.insert(target.block) {
+                    pending.push(target.block);
                 }
-                Some(term) => visit_possible_targets(term, |target| {
-                    graph.add_edge(nodes[index], nodes[target.block.index()], ());
-                }),
+            });
+            if stop {
+                graph.add_edge(here, exit, ());
             }
         }
         let joins = simple_fast(Reversed(&graph), exit);
@@ -42,7 +49,10 @@ impl<'a> Flow<'a> {
             .enumerate()
             .map(|(index, _)| {
                 let block = BlockId(index as u32);
-                ShiftLoop::prove(function, &doms, block).or_else(|| ShiftLoop::prove_latch(function, &flow, block))
+                if !reached.contains(&block) {
+                    return None;
+                }
+                ShiftLoop::prove(frame, &doms, block).or_else(|| ShiftLoop::prove_latch(function, &flow, block))
             })
             .collect();
         flow
@@ -67,6 +77,7 @@ impl<'a> Flow<'a> {
         let mut work: Vec<_> = self.graph.neighbors(start).collect();
         let mut seen = BTreeSet::new();
         while let Some(next) = work.pop() {
+            work::add(Work::ShapeVisits, 1);
             if next == start {
                 return true;
             }
@@ -90,6 +101,7 @@ impl<'a> Flow<'a> {
         for (route, start) in [left, right].into_iter().enumerate() {
             let mut work = vec![NodeIndex::new(start.index())];
             while let Some(node) = work.pop() {
+                work::add(Work::ShapeVisits, 1);
                 if node == self.exit {
                     continue;
                 }
@@ -156,7 +168,8 @@ pub(super) struct ShiftLoop<'a> {
 }
 
 impl<'a> ShiftLoop<'a> {
-    fn prove(function: &'a Function, doms: &Dominators<NodeIndex>, header: BlockId) -> Option<Self> {
+    fn prove(frame: &Frame<'a>, doms: &Dominators<NodeIndex>, header: BlockId) -> Option<Self> {
+        let function = frame.module.function(frame.callee);
         let block = function.block(header);
         let Terminator::Branch { cond: condition, if_true, if_false } = &block.term else {
             return None;
@@ -179,6 +192,7 @@ impl<'a> ShiftLoop<'a> {
         let mut edges = vec![(header, continuing)];
         let mut found_back_edge = false;
         while let Some((source, target)) = edges.pop() {
+            work::add(Work::Successors, 1);
             if target.block == header {
                 let shifted = &target.args[parameter];
                 // Validation guarantees that an operand's definition dominates this use.
@@ -197,11 +211,8 @@ impl<'a> ShiftLoop<'a> {
                     return None;
                 }
                 found_back_edge = true;
-            } else if target.block != exiting.block
-                && seen.insert(target.block)
-                && let (_, Some(term)) = before_instruction_fault(function.block(target.block))
-            {
-                visit_possible_targets(term, |edge| edges.push((target.block, edge)));
+            } else if target.block != exiting.block && seen.insert(target.block) {
+                frame.visit_flow_targets(target.block, |edge| edges.push((target.block, edge)));
             }
         }
 

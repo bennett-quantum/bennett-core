@@ -488,7 +488,7 @@ if it can prove agreement with both incoming values under their respective guard
 selects the value of the enabled route.
 Wire facts survive the join when both routes agree on them.
 The compiler emits the continuation once. Its analysis looks for the nearest common continuation of the routes
-to a return or explicit stop, using only the selected target of each literal conditional or switch. If both
+to a return or stop, visiting successors allowed by the available operand facts. If both
 routes could emit shared code before reaching a common stop, the compiler uses the step machine, which
 represents each assignment's current point with qubits. This covers short-circuit tests whose early returns bypass
 the shared code. A loop whose test stays definite can use control gates for a choice in its body.
@@ -624,8 +624,8 @@ of writes that change that bit. Disjoint guards make this the selected value on 
 input. A single positive guard can be used directly as the byte's new bit, with a
 separate byte-version identity. Guards cancel by their canonical source and polarity.
 Bits with the same old value and writes share one parity computation. Symbolic byte
-values use ordinary selection. Any unproved store address disables folding for all
-declared bytes, including those in a disjoint declared region.
+values use ordinary selection. An unproved address at a potentially reached store
+disables folding for all declared bytes, including those in a disjoint declared region.
 
 Earlier versions are available to reverse the call. The compiler can prove an
 address definite on its dispatch guard by replaying forward gates over at most eight distinct argument qubits and at most $2^{20}$ gates.
@@ -641,6 +641,9 @@ emission use the bounds. A zero divisor still faults at the instruction.
 
 **Varying addresses.** A `data` segment declares a region for varying-address accesses.
 For small argument interfaces, the emitter replays every assignment allowed by the dispatch guard.
+It reuses the wire assignments while the replayed prefix is intact and starts over if
+that prefix is removed. Replay requires each queried wire to be an argument or a
+scratch wire whose starting value is known.
 The fallback interval from known address bits covers every configuration.
 Each non-faulting candidate span must fit entirely in a declared segment. An unproved bound
 is refused at the attempted instruction. The executor's bounds
@@ -688,13 +691,27 @@ constant bits and shared qubit values. It selects candidates while the local ins
 still has those relationships and retains any candidates discovered on later visits. The emitter refuses
 reachable recursion and copy expansions above the limit before issuing gates. A copied frame keeps the
 caller's proved literal bits and equalities between argument bits across all visits to the call site.
-Every call's return analysis and emitted copy use the same argument facts at the call site, including
-calls whose results are discarded. The analysis keeps literals and argument-bit identities that agree
-across the reachable normal returns of the possible targets. A target proved to stop with those arguments
-contributes no normal continuation or return word. The analysis translates shared identities to the
-caller's argument bits for operand evaluation. The call executes and charges its normal steps, including
-any fault before a return. Proofs are cached by function and normalized argument facts. Active recursive
-queries and queries that exceed the proof-work allowance contribute an unknown return word.
+Each proof has a worklist of reached blocks. The analysis pauses at an unresolved call
+with its current instruction and local facts, then continues there when the callee's
+proof finishes. A changed incoming value schedules the blocks that read it. The
+result records the possible successors and joins literals and argument-bit identities
+over all possible normal returns. A stopped target contributes no normal continuation.
+Normal returns and invalid-address outcomes can both be possible at one indirect site.
+The cache groups calls by function and normalized argument identities, including polarity,
+and translates the result to the caller's own bits. The emitted copy uses those
+argument facts, including at calls whose results are discarded. The call still charges
+its normal device steps, including any fault before a return. An unfinished recursive
+query keeps possible continuations and supplies an unknown word. When the copied-result
+allowance runs out, the analysis uses the unconstrained stopping proof and leaves
+argument-specific return bits unknown.
+
+Each compilation accumulates work in one meter. The counters cover reached transfers,
+successor and target tests, context and fact accesses, and the elements copied or joined.
+They also record address candidates, declaration and byte accesses, replayed gates and
+assignment packs. Speculative, result-copy, placement and inverse work remains recorded
+when a candidate circuit is dropped or rewound. The existing limits on individual proofs
+still select their conservative fallbacks. The device budget counts the steps of the
+applied function.
 
 When the first qubit-dependent jump is in a frame
 entered by the definite prefix, the control construction can follow calls and returns under
@@ -943,6 +960,8 @@ When that comparison excludes zero and skipping its exit is needed for the proof
 emission also tries the prior control construction. Among two fitting circuits, the new
 in-place update must improve a resource count and increase none. The comparison counts each
 native gate kind, isolated depth and peak scratch for the complete compute, copy and reversal.
+The compiler skips the in-place trial when its minimum scratch exceeds the peak of an
+already fitting ordinary circuit.
 Each exit replay stops at its remaining budget. The replays use the initial residue or fresh
 symbolic residue bits. Inside the loop frame it follows only lossless conversions
 and unconditional transfers, since it has replaced the loop's computation.
