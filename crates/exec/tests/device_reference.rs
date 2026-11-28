@@ -2,6 +2,10 @@
 
 #[path = "device_reference/mod.rs"]
 mod device_reference;
+#[path = "device_reference/forms.rs"]
+mod forms;
+#[path = "device_reference/forms_generated.rs"]
+mod forms_generated;
 #[path = "device_reference/generated.rs"]
 mod generated;
 #[path = "device_reference/handles.rs"]
@@ -72,6 +76,7 @@ fn every_gate_with_zero_to_three_controls_matches_worked_amplitudes() {
     let phase = C::new(FRAC_1_SQRT_2, FRAC_1_SQRT_2);
     let cases = [
         ("x", [two, one]),
+        ("y", [C::new(b, 0.0), C::new(0.0, a)]),
         ("h", [(one + two) * FRAC_1_SQRT_2, (one - two) * FRAC_1_SQRT_2]),
         ("z", [one, -two]),
         ("s", [one, C::new(-b, 0.0)]),
@@ -81,6 +86,7 @@ fn every_gate_with_zero_to_three_controls_matches_worked_amplitudes() {
         ("rx(-0.347)", [C::new(c * a - s * b, 0.0), C::new(0.0, c * b + s * a)]),
         ("ry(0.347)", [C::new(c * a, -s * b), C::new(s * a, c * b)]),
         ("rz(-0.347)", [one * C::new(c, s), two * C::new(c, -s)]),
+        ("p(0.347)", [one, two * C::from_polar(1.0, 0.347)]),
     ];
     for (gate, active) in cases {
         for count in 0..=3 {

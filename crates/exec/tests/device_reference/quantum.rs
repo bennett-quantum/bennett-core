@@ -29,8 +29,36 @@ impl RegisterValue {
         self.low ^= value;
     }
 
-    fn bit(&self, bit: u32) -> bool {
+    pub fn bit(&self, bit: u32) -> bool {
         if bit < u128::BITS { self.low & (1 << bit) != 0 } else { self.high.contains(&bit) }
+    }
+
+    pub fn slice(&self, low: u32, bits: u32) -> u64 {
+        let mut value = 0u64;
+        for offset in 0..bits {
+            if self.bit(low + offset) {
+                value |= 1u64 << offset;
+            }
+        }
+        value
+    }
+
+    pub fn read_slice_bytes(&self, low: u32, bits: u32) -> Vec<u8> {
+        let mut bytes = vec![0u8; (bits as usize).div_ceil(8)];
+        for offset in 0..bits {
+            if self.bit(low + offset) {
+                bytes[(offset / 8) as usize] |= 1u8 << (offset % 8);
+            }
+        }
+        bytes
+    }
+
+    pub fn xor_slice_bytes(&mut self, low: u32, bits: u32, bytes: &[u8]) {
+        for offset in 0..bits {
+            if (bytes[(offset / 8) as usize] >> (offset % 8)) & 1 != 0 {
+                self.flip(low + offset);
+            }
+        }
     }
 
     pub fn flip(&mut self, bit: u32) {
@@ -194,7 +222,7 @@ fn unitary(gate: Gate) -> [[C; 2]; 2] {
     let phase = |value| [[C::ONE, C::ZERO], [C::ZERO, value]];
     match gate {
         Gate::Fixed(FixedGate::X) => [[C::ZERO, C::ONE], [C::ONE, C::ZERO]],
-        Gate::Fixed(FixedGate::Y) => panic!("the gate y is outside this reference"),
+        Gate::Fixed(FixedGate::Y) => [[C::ZERO, -C::I], [C::I, C::ZERO]],
         Gate::Fixed(FixedGate::H) => {
             let h = real(FRAC_1_SQRT_2);
             [[h, h], [h, -h]]

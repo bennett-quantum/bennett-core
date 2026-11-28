@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
-use bennett_exec::{Executor, Options, Outcome, QuantumSnapshot, RegisterState, RunError, Snapshot};
+use bennett_exec::{ApplyReport, Executor, Options, Outcome, QuantumSnapshot, RegisterState, RunError, Snapshot};
 use bennett_ir::{Fault, Qubits, Slot, Type, ValidModule, Width};
 use num_complex::Complex64 as C;
 
@@ -33,6 +33,7 @@ impl Counts {
 pub struct Run<'m> {
     pub reference: Device<'m>,
     pub measurements: Vec<(u128, BTreeMap<u128, f64>)>,
+    pub apply_reports: Vec<ApplyReport>,
     pub counts: Counts,
 }
 
@@ -137,7 +138,11 @@ impl RegisterObservations {
 }
 
 pub fn run<'m>(module: &'m ValidModule, name: &str, args: &[u64], seed: u64, budget: u64) -> Run<'m> {
-    run_through(module, name, args, seed, budget, None)
+    run_through(module, name, args, seed, budget, true, None)
+}
+
+pub fn run_strict<'m>(module: &'m ValidModule, name: &str, args: &[u64], seed: u64, budget: u64) -> Run<'m> {
+    run_through(module, name, args, seed, budget, false, None)
 }
 
 pub fn run_until_stop(module: &ValidModule, budget: u64, after_steps: u64, error: RunError) -> Device<'_> {
@@ -152,7 +157,7 @@ pub fn run_until_stop_with_args<'m>(
     after_steps: u64,
     error: RunError,
 ) -> Device<'m> {
-    let run = run_through(module, name, args, 0, budget, Some((after_steps, error)));
+    let run = run_through(module, name, args, 0, budget, true, Some((after_steps, error)));
     assert_eq!(run.reference.finish, None, "the stop is specific to the simulator");
     assert_eq!(run.reference.steps, after_steps);
     run.reference
@@ -187,9 +192,11 @@ fn run_reversible<'m>(
     let options =
         Options { seed, budget: Some(budget), allow_region_faults: true, reversible: true, ..Options::default() };
     let mut executor = Executor::new(module, entry, args, options).expect("executor starts");
+    executor.keep_apply_reports();
     let mut counts = Counts { programs: 1, ..Counts::default() };
     let mut registers = RegisterObservations::default();
     let mut history: Vec<(Device<'m>, RegisterObservations, Snapshot)> = Vec::new();
+    let mut expected_reports: Vec<(ApplyReport, bool)> = Vec::new();
 
     assert!(reference.finish.is_none(), "reversible run expects a valid entry");
     let initial = executor.snapshot();
@@ -198,6 +205,7 @@ fn run_reversible<'m>(
 
     while reference.finish.is_none() {
         assert!(reference.next_measurement().is_none(), "reversible comparison requires measurement-free runs");
+        let before_reports = reference.apply_reports.len();
         let actual_finish = executor.step();
         match reference.step(None) {
             Event::Ordinary => {}
@@ -211,6 +219,10 @@ fn run_reversible<'m>(
             Event::Released(id) => registers.release(id, reference.quantum.allocation_count, &executor.snapshot()),
             Event::Measured { .. } => panic!("unexpected measurement in reversible run"),
         }
+        if reference.apply_reports.len() > before_reports {
+            expected_reports.extend(reference.apply_reports[before_reports..].iter().cloned());
+        }
+        assert_apply_reports(executor.apply_reports(), &expected_reports, &format!("forward step {}", reference.steps));
         assert_eq!(actual_finish, reference.finish.map(outcome), "outcome after {} steps", reference.steps);
         let snapshot = executor.snapshot();
         let compare_frames = reference.finish.is_none() || matches!(reference.finish, Some(Finish::Faulted(_)));
@@ -226,6 +238,7 @@ fn run_reversible<'m>(
         let mut last_step = None;
         for step_index in 0..undo_steps {
             assert!(executor.step_back().expect("reversible"), "partial undo step {step_index}");
+            assert_apply_reports(executor.apply_reports(), &expected_reports, &format!("partial undo {step_index}"));
             let snapshot = executor.snapshot();
             let step = snapshot.classical.steps as usize;
             let (ref expected_ref, ref expected_regs, ref expected_snap) = history[step];
@@ -241,6 +254,7 @@ fn run_reversible<'m>(
         let resume_step = last_step.expect("resumed step");
         let (mut replay_ref, mut replay_regs, _) = history[resume_step].clone();
         while replay_ref.finish.is_none() {
+            let before_reports = replay_ref.apply_reports.len();
             let actual_finish = executor.step();
             match replay_ref.step(None) {
                 Event::Ordinary => {}
@@ -256,6 +270,14 @@ fn run_reversible<'m>(
                 }
                 Event::Measured { .. } => panic!("unexpected measurement in replay run"),
             }
+            if replay_ref.apply_reports.len() > before_reports {
+                expected_reports.extend(replay_ref.apply_reports[before_reports..].iter().cloned());
+            }
+            assert_apply_reports(
+                executor.apply_reports(),
+                &expected_reports,
+                &format!("replay step {}", replay_ref.steps),
+            );
             assert_eq!(
                 actual_finish,
                 replay_ref.finish.map(outcome),
@@ -273,6 +295,7 @@ fn run_reversible<'m>(
     let mut previous_step: Option<usize> = None;
     while executor.step_back().expect("reversible") {
         undone += 1;
+        assert_apply_reports(executor.apply_reports(), &expected_reports, &format!("full reversal step {undone}"));
         let snapshot = executor.snapshot();
         let step = snapshot.classical.steps as usize;
         if let Some(prev) = previous_step {
@@ -305,7 +328,8 @@ fn run_reversible<'m>(
     }
 
     counts.operations = reference.steps;
-    Run { reference, measurements: Vec::new(), counts }
+    let apply_reports = executor.apply_reports().to_vec();
+    Run { reference, measurements: Vec::new(), apply_reports, counts }
 }
 
 fn run_through<'m>(
@@ -314,13 +338,15 @@ fn run_through<'m>(
     args: &[u64],
     seed: u64,
     budget: u64,
+    allow_region_faults: bool,
     stop: Option<(u64, RunError)>,
 ) -> Run<'m> {
     let entry = module.function_named(name).expect("entry function");
     let reference_args: Vec<_> = args.iter().copied().map(u128::from).collect();
     let mut reference = Device::new(module, entry, &reference_args, budget);
-    let options = Options { seed, budget: Some(budget), allow_region_faults: true, ..Options::default() };
+    let options = Options { seed, budget: Some(budget), allow_region_faults, ..Options::default() };
     let mut executor = Executor::new(module, entry, args, options).expect("executor starts");
+    executor.keep_apply_reports();
     let mut counts = Counts { programs: 1, ..Counts::default() };
     let mut registers = RegisterObservations::default();
     let mut measurements = Vec::new();
@@ -345,7 +371,8 @@ fn run_through<'m>(
             assert_eq!(after.quantum, before.quantum, "stop leaves the quantum state unchanged");
             assert_eq!(executor.stats().live_qubits, stats.live_qubits, "stop leaves the qubit count unchanged");
             counts.operations = reference.steps;
-            return Run { reference, measurements, counts };
+            let apply_reports = executor.apply_reports().to_vec();
+            return Run { reference, measurements, apply_reports, counts };
         }
         let measurement = reference.next_measurement();
         if measurement.is_some() {
@@ -378,6 +405,7 @@ fn run_through<'m>(
             }
         }
         assert_eq!(actual_finish, reference.finish.map(outcome), "outcome after {} steps", reference.steps);
+        assert_apply_reports(executor.apply_reports(), &reference.apply_reports, &format!("step {}", reference.steps));
         if jump {
             jump_fault = reference.finish.is_some();
             if !jump_fault {
@@ -395,11 +423,37 @@ fn run_through<'m>(
                 | Fault::BadRange
                 | Fault::DanglingRegister
                 | Fault::QubitAlias
+                | Fault::BadGate
+                | Fault::BadArgument
+                | Fault::BadIndirect
         ))
     );
     checkpoint(&reference, &executor.snapshot(), &registers, &mut counts, jump_fault || check_fault_frames);
+    assert_apply_reports(executor.apply_reports(), &reference.apply_reports, "completion");
     counts.operations = reference.steps;
-    Run { reference, measurements, counts }
+    let apply_reports = executor.apply_reports().to_vec();
+    Run { reference, measurements, apply_reports, counts }
+}
+
+fn assert_apply_reports(actual: &[ApplyReport], expected: &[(ApplyReport, bool)], context: &str) {
+    assert_eq!(
+        actual.len(),
+        expected.len(),
+        "{context}: apply report count\nactual: {actual:?}\nexpected: {expected:?}"
+    );
+    for (index, (actual, (expected, exact_inputs))) in actual.iter().zip(expected).enumerate() {
+        assert_eq!(actual.position, expected.position, "{context}: report {index} position");
+        assert_eq!(actual.callee, expected.callee, "{context}: report {index} callee");
+        assert_eq!(actual.budget, expected.budget, "{context}: report {index} budget");
+        assert_eq!(actual.largest, expected.largest, "{context}: report {index} largest");
+        if *exact_inputs {
+            assert_eq!(actual.inputs, expected.inputs, "{context}: report {index} inputs");
+            assert_eq!(actual.at_budget, expected.at_budget, "{context}: report {index} at_budget");
+        } else {
+            assert!(actual.inputs >= expected.inputs, "{context}: report {index} inputs");
+            assert!(actual.at_budget >= expected.at_budget, "{context}: report {index} at_budget");
+        }
+    }
 }
 
 fn outcome(finish: Finish) -> Outcome {

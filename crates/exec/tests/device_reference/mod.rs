@@ -3,6 +3,7 @@
 //! Classical control chooses instructions. Quantum instructions update a reduced density matrix
 //! directly. The only inputs from a run under comparison are the outcomes chosen by its measurements.
 
+mod apply_block;
 mod cells;
 mod integers;
 mod nonlocal;
@@ -10,9 +11,10 @@ mod quantum;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use bennett_exec::ApplyReport;
 use bennett_ir::{
-    BlockId, CastOp, Fault, FuncId, Gate, Inst, MeasureSource, Operand, Qubit, Qubits, Slot, Target, Terminator, Type,
-    ValidModule,
+    BlockId, CastOp, Controls, Fault, FuncId, Gate, GateKind, Inst, MeasureSource, Operand, Qubit, Qubits, Slot,
+    Target, Terminator, Type, ValidModule, gate_code, rotation_code,
 };
 
 use cells::little_endian;
@@ -67,6 +69,9 @@ pub struct Device<'m> {
     pub steps: u64,
     pub finish: Option<Finish>,
     pub quantum: Quantum,
+    pub apply_count: u64,
+    pub apply_reports: Vec<(ApplyReport, bool)>,
+    has_mixed_release: bool,
 }
 
 impl<'m> Device<'m> {
@@ -101,6 +106,9 @@ impl<'m> Device<'m> {
             steps: 0,
             finish: None,
             quantum: Quantum::new(),
+            apply_count: 0,
+            apply_reports: Vec::new(),
+            has_mixed_release: false,
         };
         if let Err(fault) = device.enter(entry, args, None) {
             device.finish = Some(Finish::Faulted(fault));
@@ -136,6 +144,9 @@ impl<'m> Device<'m> {
                     self.memory_range(self.read_i64(address), width).ok().map(|_| *dst)
                 }
             },
+            Inst::MeasureSlice { dst, register, low, bits } => {
+                self.slice_range(*register, *low, *bits).ok().map(|_| *dst)
+            }
             _ => None,
         }
     }
@@ -221,11 +232,15 @@ impl<'m> Device<'m> {
     }
 
     fn register(&self, slot: Slot) -> Result<usize, Fault> {
-        self.quantum.position(self.read_i64(Operand::Slot(slot))).ok_or(Fault::DanglingRegister)
+        self.register_operand(Operand::Slot(slot))
     }
 
-    pub(super) fn qubit_at(&self, slot: Slot, position: u64) -> Result<(usize, u32), Fault> {
-        let register = self.register(slot)?;
+    pub(super) fn register_operand(&self, register: Operand) -> Result<usize, Fault> {
+        self.quantum.position(self.read_i64(register)).ok_or(Fault::DanglingRegister)
+    }
+
+    pub(super) fn qubit_operand(&self, register: Operand, position: u64) -> Result<(usize, u32), Fault> {
+        let register = self.register_operand(register)?;
         let width = u64::from(self.quantum.live[register].1.count());
         if position >= width {
             return Err(Fault::BadRange);
@@ -233,8 +248,27 @@ impl<'m> Device<'m> {
         Ok((register, position as u32))
     }
 
+    pub(super) fn qubit_at(&self, slot: Slot, position: u64) -> Result<(usize, u32), Fault> {
+        self.qubit_operand(Operand::Slot(slot), position)
+    }
+
     fn qubit(&self, qubit: Qubit) -> Result<(usize, u32), Fault> {
         self.qubit_at(qubit.register, u64::from(qubit.bit))
+    }
+
+    fn slice_range(&self, register: Operand, low: Operand, bits: Operand) -> Result<(usize, u32, u32), Fault> {
+        let reg = self.register_operand(register)?;
+        let width = u64::from(self.quantum.live[reg].1.count());
+        let low = self.read_i64(low);
+        let bits = self.read_i64(bits);
+        if !(1..=64).contains(&bits) {
+            return Err(Fault::BadRange);
+        }
+        let end = low.checked_add(bits).ok_or(Fault::BadRange)?;
+        if end > width {
+            return Err(Fault::BadRange);
+        }
+        Ok((reg, low as u32, bits as u32))
     }
 
     fn measure(&mut self, observed: Option<u128>, read: impl Fn(&Basis) -> u128) -> (u128, Event) {
@@ -308,12 +342,16 @@ impl<'m> Device<'m> {
             }
             Inst::Qalloc { .. }
             | Inst::QallocBy { .. }
+            | Inst::Qwidth { .. }
             | Inst::Qfree { .. }
             | Inst::Gate { .. }
             | Inst::GateAt { .. }
             | Inst::RotateBy { .. }
+            | Inst::GateBy { .. }
             | Inst::Measure { .. }
+            | Inst::MeasureSlice { .. }
             | Inst::Apply { .. }
+            | Inst::ApplyBlock { .. }
                 if self.applied.is_some() =>
             {
                 return Err(Fault::QuantumInRegion);
@@ -330,12 +368,18 @@ impl<'m> Device<'m> {
                 event = Event::Allocated { id, dst, width };
                 Some(u128::from(id))
             }
+            Inst::Qwidth { register, .. } => {
+                let position = self.register_operand(register)?;
+                Some(u128::from(self.quantum.live[position].1.count()))
+            }
             Inst::Qfree { register } => {
-                let Operand::Slot(register) = register else {
-                    panic!("a constant handle is outside the outer reference: {inst:?}")
-                };
-                let position = self.register(register)?;
+                let position = self.register_operand(register)?;
                 let (id, _) = self.quantum.live[position];
+                let nonzero =
+                    self.quantum.density.keys().any(|(row, col)| row == col && row[position] != RegisterValue::from(0));
+                if nonzero {
+                    self.has_mixed_release = true;
+                }
                 self.quantum.release(position);
                 event = Event::Released(id);
                 None
@@ -362,6 +406,24 @@ impl<'m> Device<'m> {
                 self.gate_at(Gate::Rotate(axis, theta), target, controls)?;
                 None
             }
+            Inst::GateBy { kind, target, ref controls } => {
+                let gate = match kind {
+                    GateKind::Gate(code) => Gate::Fixed(gate_code(self.read_i64(code)).ok_or(Fault::BadGate)?),
+                    GateKind::Rotation { code, angle } => {
+                        let axis = rotation_code(self.read_i64(code)).ok_or(Fault::BadGate)?;
+                        let theta = f64::from_bits(self.read_i64(angle));
+                        if !theta.is_finite() {
+                            return Err(Fault::BadAngle);
+                        }
+                        Gate::Rotate(axis, theta)
+                    }
+                };
+                match controls {
+                    Controls::Written(places) => self.gate_at(gate, target, places)?,
+                    Controls::List { address, count } => self.gate_with_control_list(gate, target, *address, *count)?,
+                }
+                None
+            }
             Inst::Measure { source, .. } => {
                 let (outcome, measured) = match source {
                     MeasureSource::Register(slot) => {
@@ -373,17 +435,24 @@ impl<'m> Device<'m> {
                 event = measured;
                 Some(outcome)
             }
+            Inst::MeasureSlice { register, low, bits, .. } => {
+                let (reg, low, bits) = self.slice_range(register, low, bits)?;
+                let (outcome, measured) = self.measure(observed, |basis| u128::from(basis[reg].slice(low, bits)));
+                event = measured;
+                Some(outcome)
+            }
             Inst::Apply { callee, ref args, out, fault, budget } => {
                 self.apply(callee, args, out, fault, self.read_i64(budget))?;
+                None
+            }
+            Inst::ApplyBlock(ref apply) => {
+                self.apply_block(apply)?;
                 None
             }
             Inst::ReturnAddress { level, .. } => Some(u128::from(self.return_address(level))),
             Inst::Setjmp { buffer, .. } => {
                 self.save_jump_record(buffer)?;
                 Some(0)
-            }
-            Inst::Qwidth { .. } | Inst::GateBy { .. } | Inst::MeasureSlice { .. } | Inst::ApplyBlock { .. } => {
-                panic!("instruction outside the outer reference: {inst:?}")
             }
         };
         if let Some(value) = value {
@@ -497,8 +566,26 @@ impl<'m> Device<'m> {
                 outputs.entry(input(basis)).or_insert_with_key(|args| self.private_run(callee, args, budget));
             }
         }
+        let mut inputs = 0u64;
+        let mut largest: Option<u64> = None;
+        let mut at_budget = 0u64;
+        for (row, col) in self.quantum.density.keys() {
+            if row == col {
+                inputs += 1;
+                let (_, _, steps) = outputs[&input(row)];
+                match steps {
+                    Some(count) => largest = Some(largest.map_or(count, |best| best.max(count))),
+                    None => at_budget += 1,
+                }
+            }
+        }
+        self.apply_count += 1;
+        self.apply_reports.push((
+            ApplyReport { position: self.apply_count, callee, budget, inputs, largest, at_budget },
+            !self.has_mixed_release,
+        ));
         self.quantum.permute(|mut basis| {
-            let (value, code) = outputs[&input(&basis)];
+            let (value, code, _) = outputs[&input(&basis)];
             basis[out].xor_integer(value);
             basis[fault].xor_integer(code);
             basis
@@ -506,7 +593,7 @@ impl<'m> Device<'m> {
         Ok(())
     }
 
-    fn private_run(&self, callee: FuncId, args: &[u128], budget: u64) -> (u128, u128) {
+    fn private_run(&self, callee: FuncId, args: &[u128], budget: u64) -> (u128, u128, Option<u64>) {
         let mut private = Device::start(
             self.module,
             callee,
@@ -516,14 +603,19 @@ impl<'m> Device<'m> {
             self.memory.clone(),
             Some(AppliedContext { callers: &self.frames, cells: &self.quantum.cells }),
         );
+        if let Some(Finish::Faulted(fault)) = private.finish {
+            return (0, u128::from(fault.code()), Some(0));
+        }
         loop {
+            if private.steps >= budget {
+                return (0, u128::from(Fault::Budget.code()), None);
+            }
+            private.step(None);
             match private.finish {
-                Some(Finish::Returned(Some(value))) => return (value, 0),
-                Some(Finish::Faulted(fault)) => return (0, u128::from(fault.code())),
+                Some(Finish::Returned(Some(value))) => return (value, 0, Some(private.steps)),
+                Some(Finish::Faulted(fault)) => return (0, u128::from(fault.code()), Some(private.steps + 1)),
                 Some(Finish::Returned(None)) => panic!("apply requires an integer result"),
-                None => {
-                    private.step(None);
-                }
+                None => {}
             }
         }
     }
