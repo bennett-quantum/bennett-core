@@ -1,0 +1,17 @@
+; The fixed gate y under two controls through the counter (crates/cli/tests/pauli_y.rs), beside h and x.
+memory 64
+
+func @main(i64 %gate) {
+entry:
+    %q = qalloc 3
+    switch i64 %gate, 0: y, 1: h, default: x
+y:
+    y %q[2] ctrl %q[0], %q[1]
+    ret
+h:
+    h %q[2] ctrl %q[0], %q[1]
+    ret
+x:
+    x %q[2] ctrl %q[0], %q[1]
+    ret
+}

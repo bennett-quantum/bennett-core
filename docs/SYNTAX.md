@@ -58,7 +58,12 @@ terminator := br label[(typed, ...)]
 The fixed gates act on the target where every control is 1, by these matrices in the basis `|0⟩, |1⟩`:
 `x`, `y` and `z` are the Pauli matrices `[[0, 1], [1, 0]]`, `[[0, -i], [i, 0]]` and `diag(1, -1)`; `h` is
 `(1/√2)[[1, 1], [1, -1]]`; `s` is `diag(1, i)` and `t` is `diag(1, e^{iπ/4})`; `sdg` and `tdg` are their
-conjugate transposes. Each is one gate for the counter and has its own name in OpenQASM's `stdgates.inc`.
+conjugate transposes. Each has its own name in OpenQASM's `stdgates.inc`. The counter counts each with at
+most one control as one gate (one-qubit or two-qubit), and `x` with two controls as one Toffoli; any other
+gate with `k` controls it counts as lowered to the target's ideal gate set, a ladder of Toffolis computing
+the controls' AND into `k - 1` scratch wires, the gate under that one control, and the ladder undone
+(`docs/DESIGN.md`, "What a device carries out"): `y` with two controls is two Toffolis and one two-qubit
+gate.
 `rx`, `ry` and `rz` are the rotations `exp(-iθσ/2)` about X, Y and Z; `p` is the phase rotation
 `diag(1, e^{iθ})`, applied where every control is 1 (a controlled `p` is a controlled phase, which a
 controlled `rz` is not; `docs/DESIGN.md`, "The model").

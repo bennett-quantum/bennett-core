@@ -45,3 +45,15 @@ fn the_openqasm_file_writes_y_and_follows_the_simulator() {
         assert!(result(&written).is_some(), "{written}");
     }
 }
+
+/// With two controls the counter counts y as every gate but x: lowered to two Toffolis computing the
+/// controls' AND into a scratch wire, y under that one control, and no more (x with two controls is one
+/// Toffoli). The document states the same rule (`docs/SYNTAX.md`).
+#[test]
+fn the_counting_device_lowers_y_with_two_controls_as_it_lowers_h() {
+    let count = |gate: &str| bennett(&["--device", "count", "tests/fixtures/pauli-y-two-controls.bn", "--arg", gate]);
+    let (y, h, x) = (count("0"), count("1"), count("2"));
+    assert!(y.contains("one-qubit gates: 0\ntwo-qubit gates: 1\nToffoli gates: 2\npeak qubits: 4\n"), "{y}");
+    assert_eq!(y, h, "y and h are lowered alike");
+    assert!(x.contains("one-qubit gates: 0\ntwo-qubit gates: 0\nToffoli gates: 1\npeak qubits: 3\n"), "{x}");
+}
