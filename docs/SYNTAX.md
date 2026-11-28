@@ -47,7 +47,7 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | rotate(operand, operand) qubit [ctrl ...]  ; an i64 rotation code and an angle's binary64 bits
             | %d = measure %r                            ; every qubit of the register: an iN, N at most 128
             | %d = measure iN "[" operand "]"            ; N bits from bit 0 of the integer at the i64 address
-            | %d = measure i64 %r "[" operand, operand "]" ; a slice: BITS qubits from LOW ("Measuring a slice")
+            | %d = measure i64 operand "[" operand, operand "]" ; a slice of a register ("Measuring a slice")
             | apply @f(typed, ...) -> %out, %fault budget operand  ; %fault: a register of 5 qubits or more
                                                                    ; meaning: docs/DESIGN.md, "apply"
 terminator := br label[(typed, ...)]
@@ -205,7 +205,7 @@ program that counts its allocations knows the handle of each.
 ## Measuring a slice
 
 `%d = measure i64 %r[LOW, BITS]` measures the slice of `BITS` qubits from position `LOW` (both `i64` values or
-constants) of a `qN` register or an `i64` handle, read least significant first and zero-extended to the
+constants) of a `qN` register, an `i64` handle or an `i64` constant handle (`measure i64 1[0, 8]`), read least significant first and zero-extended to the
 `i64` `%d` (`Inst::MeasureSlice`). The register stays allocated, and the measurement takes no handle. It
 checks the handle (`dangling_register`) and then that `BITS` is from 1 to 64 and `LOW + BITS` at most the
 width, computed without wrapping (`bad_range`), before anything changes; the validator checks only the

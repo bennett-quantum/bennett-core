@@ -104,7 +104,9 @@ entry:
 }
 
 /// A slice across the boundary of two storage columns of a 200-qubit register, by an `i64` handle and
-/// run-time bounds: qubits 62 and 65 set, the slice from 60 of 10 qubits reads 2^2 + 2^5.
+/// run-time bounds: qubits 62, 65 and 199 set; the slice from 60 of 10 qubits reads 2^2 + 2^5, the one from 0
+/// of 64 reads 2^62, the 64 qubits from 136 read 2^63, the slice's top bit, returned whole; those from 135
+/// end below qubit 199, and the 63 from 137 end with it.
 #[test]
 fn a_slice_across_storage_columns_reads_the_qubits_in_order() {
     let module = common::load(
@@ -116,17 +118,51 @@ entry:
     x %h[65]
     x %h[199]
     %t = measure i64 %h[%low, %bits]
-    %u = measure i64 %h[136, 64]
-    %s = shl i64 %u, 32
-    %r = xor i64 %t, %s
-    ret %r
+    ret %t
 }",
     );
-    let (outcome, _) = run(&module, "main", &[60, 10], bounded());
-    // %u has qubit 199 at its bit 63: shifted left by 32 it leaves the word, so only %t remains.
-    assert_eq!(outcome, Outcome::Returned(Some(0b100100)));
-    let (outcome, _) = run(&module, "main", &[0, 64], bounded());
-    assert_eq!(outcome, Outcome::Returned(Some(1 << 62)));
+    for (low, bits, expected) in
+        [(60, 10, 0b100100), (0, 64, 1 << 62), (136, 64, 1 << 63), (135, 64, 0), (137, 63, 1 << 62)]
+    {
+        let (outcome, _) = run(&module, "main", &[low, bits], bounded());
+        assert_eq!(outcome, Outcome::Returned(Some(expected)), "{low}, {bits}");
+    }
+}
+
+/// The handle may be a constant, read as a slot's value is: `measure i64 1[0, 2]` is one instruction, so
+/// inside an applied function with one step of budget left it gives `quantum_in_region`.
+#[test]
+fn a_constant_handle_is_an_operand_of_the_one_instruction() {
+    let module = common::load(
+        "memory 256
+func @main() -> i64 {
+entry:
+    %q = qalloc 3
+    x %q[1]
+    x %q[2]
+    %t = measure i64 1[1, 2]
+    ret %t
+}",
+    );
+    assert_eq!(run(&module, "main", &[], bounded()).0, Outcome::Returned(Some(3)));
+    let applied = common::load(
+        "memory 256
+func @f(i64 %a) -> i1 {
+entry:
+    %t = measure i64 1[0, 1]
+    ret 0
+}
+func @main() -> i5 {
+entry:
+    %o = qalloc 1
+    %f = qalloc 5
+    apply @f(i64 0) -> %o, %f budget 1
+    %m = measure %f
+    ret %m
+}",
+    );
+    let (outcome, _) = run(&applied, "main", &[], common::allowing_region_faults());
+    assert_eq!(outcome, Outcome::Returned(Some(u128::from(Fault::QuantumInRegion.code()))));
 }
 
 /// The handle first (`dangling_register`), then the bounds (`bad_range`): `bits` from 1 to 64 and
