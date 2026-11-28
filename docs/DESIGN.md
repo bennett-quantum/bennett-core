@@ -2458,9 +2458,22 @@ every quantum step faults `quantum_in_region` before any stop could arise, so no
 | The stop at an `apply` faulting for some values of its arguments (strict mode, below) | `RunError::RegionFault`, `region.rs` | A stop. With `allow_region_faults` the fault code is the program's, in its fault register: that is the meaning, not a report |
 | Amplitudes, the register table and cells in snapshots, and the distance `bennett run --reverse` prints | `snapshot.rs`, `crates/cli/src/run.rs` | Data for tests and reports; no device observation, read by no instruction |
 | The report of nonzero releases (count, weight, qubits kept) and the other counts of `Stats` | `executor.rs`, "Releasing a register" above | Read by tests and printed by `bennett run`, never by an instruction |
+| The step report of each `apply` (below) | `apply_report.rs`, `Executor::apply_reports`, `bennett run --stats` | Read by tests and printed, never by an instruction; a program receives a budget taken from it only as an input of a later run |
 
 The step limit of a whole run (`Options::budget`) is a parameter of the run, like its memory size: reaching it
 ends the run with the fault `budget`, so a run given another limit is another run. Inside `apply`, `budget B` is the program's own bound, and its fault code is the program's.
+
+**The step report** (a measuring run). A program takes the budget of an `apply` from a run that measured it,
+not from a guess. For each `apply` the run executes forward, in order, the simulator's direct evaluation (its
+default) reports its position among them (from 1), the applied function, the number of inputs it evaluated
+(the basis configurations of nonzero amplitude at the `apply`), the largest number of steps any input used to
+return or to fault with a code other than `budget`, and how many inputs reached the budget, which have no
+count. The run's budget operand is the ceiling: a run that has returned or faulted stays so, so any budget at
+least the largest count gives the same result on every input the report covers; an input that reached the
+ceiling needs a run with a higher one, or does not finish. The report covers those inputs, on that
+compilation. `bennett run --stats` prints one line per `apply`; an `apply` compiled to gates
+(`--apply-circuit`, the counter, the OpenQASM writer) is not evaluated per input and has none, and undoing an
+`apply` adds none.
 
 **Strict mode** (the maintainer's decision of 2026-11-16): a check of the simulator that no device can make,
 because it looks at every configuration, is a diagnostic, as a sanitizer's is, and strict mode, which makes it,

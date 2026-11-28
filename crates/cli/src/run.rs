@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use bennett_emit::{ApplyMode, CountingDevice, LowerControls, compile_apply_with, seeded_bits};
 use bennett_exec::{
-    ApplyCompiler, ApplyError, ApplyInput, Executor, Options, Outcome, ReverseError, RunError, SimulatedDevice,
-    Snapshot, Stats,
+    ApplyCompiler, ApplyError, ApplyInput, ApplyReport, Executor, Options, Outcome, ReverseError, RunError,
+    SimulatedDevice, Snapshot, Stats,
 };
 use bennett_ir::{Const, FuncId, Type, ValidModule};
 
@@ -164,8 +164,24 @@ fn run_simulator(module: &ValidModule, entry: FuncId, values: &[u64], args: &Run
     let reverse = args.reverse.then(|| reverse_and_report(&mut executor, &entry_state, &stats));
     if args.stats {
         report_stats(&stats, forward, reverse.flatten());
+        report_applies(module, executor.apply_reports());
     }
     Ok(ExitCode::from(outcome_status(outcome)))
+}
+
+/// One line per `apply` the simulator evaluated directly: the steps its inputs used, from which a program
+/// takes its budget (`docs/DESIGN.md`, "Step budgets").
+fn report_applies(module: &ValidModule, reports: &[ApplyReport]) {
+    for report in reports {
+        let largest = report.largest.map_or_else(|| "none".to_owned(), |steps| steps.to_string());
+        println!(
+            "  apply {} @{}: {} inputs, largest step count {largest}, {} at the budget",
+            report.position,
+            module.function(report.callee).name,
+            report.inputs,
+            report.at_budget
+        );
+    }
 }
 
 fn outcome_status(outcome: Outcome) -> u8 {
