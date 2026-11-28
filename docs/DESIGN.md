@@ -2538,7 +2538,8 @@ starting below address 16 is `EFAULT` with nothing transferred, and any other by
 the end of device memory stops the run there with the named fault `out_of_bounds` (natively `EFAULT`; the runtime
 does not know the memory size). A structure copy does both stages; a data buffer's first byte is checked only
 where bytes move (none at the end of a file, for a directory or `/dev/null`), and one call transfers at most
-Linux's `MAX_RW_COUNT` bytes. Each call checks in Linux's order around these copies (`rt/musl/README.md`,
+Linux's `MAX_RW_COUNT` bytes, capped after a position plus the whole count beyond `LONG_MAX` is refused
+(`EINVAL`). Each call checks in Linux's order around these copies (`rt/musl/README.md`,
 "Structures in system calls", has the list); `readv` and `writev` copy their array element by element, checking
 each length as it is copied, then every element's range before any transfer, as Linux's import of a vector does,
 and keep the copies in their own frame, sized for the count. Route for the named stop: the memory size given to

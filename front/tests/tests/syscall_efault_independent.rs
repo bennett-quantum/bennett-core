@@ -449,3 +449,12 @@ fn transfers_check_ranges_where_linux_does_and_cap_counts() {
         assert_agrees(suite, case, false);
     }
 }
+
+/// Re-check witness of the copy-in step: `positional-overflow`. After the buffer's range and before the cap, a
+/// position plus the whole count beyond `LONG_MAX` is `EINVAL` (Linux's `rw_verify_area`), for `/dev/null`,
+/// `/dev/zero` and a regular file, by `pread64` and `pwrite64` (device: the capped count, 0, the bytes or
+/// `EFBIG`).
+#[test]
+fn positional_transfers_refuse_a_position_plus_count_beyond_long_max() {
+    assert_agrees("efault-iov", "positional-overflow", false);
+}

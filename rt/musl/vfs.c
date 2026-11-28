@@ -234,6 +234,8 @@ long __bennett_rt_vfs_io(struct bennett_file *f,void *buffer,uint64_t n,int writ
     struct bennett_inode *i=f->inode;
     uint64_t pos=positional?offset:f->pos;
     if(writing && (f->flags&O_APPEND)) pos=i->size;
+    /* The caller refused a position plus count beyond LONG_MAX (EINVAL, rw_verify_area); an appending write,
+     * whose position is the size, can still pass it. */
     if(pos>LONG_MAX || n>(uint64_t)LONG_MAX-pos) return -EFBIG;
     if(!writing) { if(pos>=i->size) n=0; else if(n>i->size-pos) n=i->size-pos; }
     if(__bennett_user_unmapped(buffer,n)) return -EFAULT;

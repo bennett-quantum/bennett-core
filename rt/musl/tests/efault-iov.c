@@ -289,6 +289,28 @@ int main(int argc, char **argv)
         errno = 0; r = syscall(SYS_writev, null, two, 2); report("writev-wrap-then-badlen", r, errno);
         return 0;
     }
+    if (!strcmp(c, "positional-overflow")) {
+        /* Linux's rw_verify_area: after the buffer's range and before the cap, a position plus the whole count
+         * beyond LONG_MAX is EINVAL, whatever the file would answer. */
+        int null = open("/dev/null", O_RDWR), zero = open("/dev/zero", O_RDONLY);
+        if (null < 0 || zero < 0) return 95;
+        static char area[16]; /* static: natively far below the top, where a stack buffer may not be */
+        long cap = 0x7ffff000l, at = LONG_MAX - cap;
+        errno = 0; r = syscall(SYS_pwrite64, null, area, cap + 1, at); report("null-pwrite-over", r, errno);
+        errno = 0; r = syscall(SYS_pwrite64, null, area, cap, at); report("null-pwrite-to-max", r, errno);
+        errno = 0; r = syscall(SYS_pread64, null, area, cap + 1, at); report("null-pread-over", r, errno);
+        errno = 0; r = syscall(SYS_pread64, null, area, 1l << 40, LONG_MAX - (1l << 40) + 1);
+        report("null-pread-over-uncapped", r, errno);
+        errno = 0; r = syscall(SYS_pread64, zero, area, 2, LONG_MAX - 1); report("zero-pread-over", r, errno);
+        errno = 0; r = syscall(SYS_pread64, zero, area, 1, LONG_MAX - 1); report("zero-pread-to-max", r, errno);
+        errno = 0; r = syscall(SYS_pwrite64, rw, area, 2, LONG_MAX - 1); report("file-pwrite-over", r, errno);
+        errno = 0; r = syscall(SYS_pread64, rw, area, 2, LONG_MAX - 1); report("file-pread-over", r, errno);
+        errno = 0; r = syscall(SYS_pread64, rw, area, 1, LONG_MAX - 1); report("file-pread-to-max", r, errno);
+        errno = 0; r = syscall(SYS_pwrite64, ro, area, 2, LONG_MAX - 1); report("ro-pwrite-over", r, errno);
+        errno = 0; r = syscall(SYS_pwrite64, rw, wrap8, 8, LONG_MAX - 1); report("wrap-pwrite-over", r, errno);
+        errno = 0; r = syscall(SYS_pread64, rw, area, 2, -1l); report("negative-pread-over", r, errno);
+        return 0;
+    }
     if (!strcmp(c, "getcwd-low8")) {
         errno = 0; r = syscall(SYS_getcwd, low, 4096);
         report(c, r, errno); return 0;

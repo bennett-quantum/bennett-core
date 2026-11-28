@@ -203,7 +203,7 @@ EFAULT_CASES_AGREE = [
         "writev-low8", "writev-wrap8", "writev-base-low8", "writev-ro-null", "writev-ro-badlen",
         "writev-ro-badcnt", "readv-low8", "readv-wrap8", "readv-base-low8", "readv-wo-null", "readv-wo-badlen",
         "readv-wo-badcnt", "readv-alias", "read-low8", "write-low8", "getrandom-low8", "getcwd-low8",
-        "writev-wrap-second", "readv-wrap-second", "low-untouched", "ranges-and-cap")],
+        "writev-wrap-second", "readv-wrap-second", "low-untouched", "ranges-and-cap", "positional-overflow")],
     ("efault-iov", "writev-ro-partial8", True),
     ("efault-iov", "readv-wo-partial8", True),
     *[("efault-signals", case, False) for case in (

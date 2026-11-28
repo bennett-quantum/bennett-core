@@ -36,21 +36,25 @@ static long move_bytes(struct bennett_file *file,void *p,uint64_t n,int writing,
 }
 static long transfer(long fd,void *p,uint64_t n,int writing,uint64_t offset,int positional) {
     /* Linux's order: a negative position, the descriptor, a seekable file, the access mode, the buffer's range
-     * (copy.h; a count above LONG_MAX never passes it), then the count capped at MAX_RW_COUNT. */
+     * (copy.h; a count above LONG_MAX never passes it), the position plus the whole count beyond LONG_MAX
+     * (EINVAL, rw_verify_area; read and write use the file's own position), then the count capped at
+     * MAX_RW_COUNT. */
     if(positional && offset>LONG_MAX) return -EINVAL;
     struct bennett_file *file=__bennett_rt_vfs_file(fd);
     if(!file) return -EBADF;
     if(positional && (file->kind==BRT_CONSOLE || file->kind==BRT_ERROR || file->kind==BRT_INPUT)) return -ESPIPE;
     if(writing?!__bennett_rt_writable(file->flags):!__bennett_rt_readable(file->flags)) return -EBADF;
     if(!__bennett_user_range(p,n)) return -EFAULT;
+    if(n>(uint64_t)LONG_MAX-(positional?offset:file->pos)) return -EINVAL;
     if(n>BENNETT_MAX_RW_COUNT) n=BENNETT_MAX_RW_COUNT;
     return move_bytes(file,p,n,writing,offset,positional);
 }
 /* readv and writev in Linux's order (import_iovec): the descriptor and its access mode, a count of 0 (nothing
  * done) or above UIO_MAXIOV, the array's range, then each element copied whole (copy.h) with a length above
  * LONG_MAX EINVAL as it is copied; then each buffer's range, every one before any byte moves, each length capped
- * so that the total stays within MAX_RW_COUNT. Linux imports one element as a single buffer, capped before its
- * range is checked; several are checked at their full length and then capped. Only the copies are used after.
+ * so that the total stays within MAX_RW_COUNT, then the file's position plus that total beyond LONG_MAX (EINVAL,
+ * rw_verify_area). Linux imports one element as a single buffer, capped before its range is checked; several are
+ * checked at their full length and then capped. Only the copies are used after.
  * They live in this call's own frame, sized for its count, so no other call pays for them. */
 static __attribute__((noinline)) long vector_io(long fd,const struct iovec *array,long count,int writing) {
     struct bennett_file *file=__bennett_rt_vfs_file(fd);
@@ -71,6 +75,7 @@ static __attribute__((noinline)) long vector_io(long fd,const struct iovec *arra
         v[i].iov_len=capped; total+=capped;
     }
     if(!total) return 0;
+    if(total>(uint64_t)LONG_MAX-file->pos) return -EINVAL;
     /* The console is checked whole before any effect; elsewhere a bad element ends a partial transfer, as on Linux. */
     if(file->kind==BRT_CONSOLE || file->kind==BRT_ERROR)
         for(long i=0;i<count;++i) if(__bennett_user_unmapped(v[i].iov_base,v[i].iov_len)) return -EFAULT;

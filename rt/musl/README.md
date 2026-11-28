@@ -113,15 +113,17 @@ change, the outputs written.
   `EFAULT` after the clock was read, so that read is consumed; `clock_getres` and a time-zone-only
   `gettimeofday` read no clock.
 - `read`, `write`, `pread`, `pwrite`: a negative position, the descriptor, a seekable file, the access mode,
-  the buffer's range (a count above `LONG_MAX` never passes it), the count capped, then the file's own answer
-  and the bytes.
+  the buffer's range (a count above `LONG_MAX` never passes it), the position plus the whole count beyond
+  `LONG_MAX` (`EINVAL`, Linux's `rw_verify_area`, whatever the file; `read` and `write` use the file's own
+  position), the count capped, then the file's own answer and the bytes.
 - `getrandom`: the flags, the length capped, its range, then the bytes.
 - `stat`, `lstat`, `fstat`, `newfstatat`: the descriptor or path, then the whole `struct stat` written.
 - `readv`, `writev`: the descriptor and its access mode (`EBADF`), a count of zero (0), a count above 1024
   (`EINVAL`), the whole array's range, then each element copied whole and its length checked as it is copied
   (a length above `LONG_MAX` is `EINVAL`, also before a later element that cannot be read, as natively), then
   every element's range before any byte moves, each length capped so that the total stays within
-  `MAX_RW_COUNT`, then the transfers from the copies. As Linux imports one element as a single buffer, its
+  `MAX_RW_COUNT`, the file's position plus that total beyond `LONG_MAX` (`EINVAL`), then the transfers from
+  the copies. As Linux imports one element as a single buffer, its
   length is capped before its range is checked; several are each checked at their full length, then capped.
   The copies live in the call's own frame, sized for its count. A bad element after a good one ends a partial
   transfer, except on the console, whose elements' first bytes are checked before any output.
