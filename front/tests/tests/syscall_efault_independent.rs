@@ -484,3 +484,12 @@ fn paths_at_the_end_of_device_memory_are_read_up_to_their_nul_in_linux_order() {
     assert_named_stop("efault-path", "path-to-edge", true, "ret=-1 errno=14");
     assert_named_stop("efault-path", "rename-new-past-edge", true, "ret=-1 errno=14");
 }
+
+/// Re-check witness of the path copy: `rename` checked each name's last component against `NAME_MAX` during the
+/// walk to its parent, where Linux checks it when it looks the name up, after both walks and the `EBUSY` checks.
+/// Device before: `ENAMETOOLONG` in 6 of the 15 rows of `rename-order`, where Linux answers the new name's
+/// `EFAULT`, a missing or non-directory new parent, `EBUSY` or a missing old name.
+#[test]
+fn rename_checks_in_linux_order() {
+    assert_agrees("efault-path", "rename-order", false);
+}

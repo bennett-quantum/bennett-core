@@ -143,9 +143,11 @@ change, the outputs written.
   at the top of the user address space or above it, or reaching the top before its NUL is `EFAULT`; `PATH_MAX`
   (4096) bytes without a NUL are `ENAMETOOLONG`, whatever follows; an empty string is `ENOENT`. A byte at the end
   of device memory stops the run with `out_of_bounds`, as for a structure; one whose NUL is the last byte of
-  memory is read up to it. `rename` reports the old name's error, then its walk's, then the new name's, as
-  Linux's `do_renameat2`; Linux copies both names first, the device the new one after the old walk, so that a
-  new name past device memory stops the run only where Linux's answer is its `EFAULT`.
+  memory is read up to it. `rename` checks in Linux's order (`filename_renameat2`): the old name's copy and the
+  walk to its parent, the new name's copy and the walk to its parent, a last component `.`, `..` or the root
+  (`EBUSY`), the old name's last component (longer than `NAME_MAX`, then missing), the new name's (longer than
+  `NAME_MAX`), then the rest. Linux copies both names first, the device the new one after the old walk, so that
+  a new name past device memory stops the run only where Linux's answer is its `EFAULT`.
 
 ## Files and deterministic inputs
 

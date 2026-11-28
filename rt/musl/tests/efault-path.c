@@ -4,7 +4,7 @@
  * copy falls in each call's order of checks.
  *
  * argv[1] selects a case (or "agree" for the batch of the order, length and alias cases). Optional argv[2]
- * supplies the end-of-memory address on the device for the cases that reach it; natively, partial_edge maps a
+ * supplies the end-of-memory address on the device for the case that reaches it; natively, partial_edge maps a
  * read/write page followed by a PROT_NONE guard page. */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -160,6 +160,34 @@ int main(int argc, char **argv)
         strcpy(shared.path, "efault_path.file");
         errno = 0; r = syscall(SYS_stat, shared.path, &shared.st);
         printf("%s: ret=%ld errno=%d regular=%d\n", c, r, errno, r == 0 && S_ISREG(shared.st.st_mode));
+        return 0;
+    }
+    if (!strcmp(c, "rename-order")) {
+        /* Linux's order for rename: both names copied, the walk to the old parent, the walk to the new parent,
+         * a last component ".", ".." or the root (EBUSY, old then new), the old name's lookup (a last component
+         * over NAME_MAX, then a missing name), the new name's lookup (over NAME_MAX), then the rest. */
+        static char long_name[NAME_MAX + 3], long_slash[NAME_MAX + 3], dir_long[NAME_MAX + 32];
+        memset(long_name, 'n', NAME_MAX + 1);
+        memcpy(long_slash, long_name, NAME_MAX + 1);
+        long_slash[NAME_MAX + 1] = '/';
+        snprintf(dir_long, sizeof dir_long, "efault_path.dir/%s", long_name);
+        if (mkdir("efault_path.dir", 0755)) return 94;
+        errno = 0; r = syscall(SYS_rename, "efault_path.missing/x", low); report(c, "old-parent-missing-new-low", r, errno);
+        errno = 0; r = syscall(SYS_rename, long_name, low); report(c, "old-long-new-low", r, errno);
+        errno = 0; r = syscall(SYS_rename, long_name, "efault_path.missing/x"); report(c, "old-long-new-parent-missing", r, errno);
+        errno = 0; r = syscall(SYS_rename, long_name, "efault_path.file/x"); report(c, "old-long-new-parent-file", r, errno);
+        errno = 0; r = syscall(SYS_rename, long_name, "."); report(c, "old-long-new-dot", r, errno);
+        errno = 0; r = syscall(SYS_rename, ".", long_name); report(c, "old-dot-new-long", r, errno);
+        errno = 0; r = syscall(SYS_rename, long_name, "efault_path.new"); report(c, "old-long-new-good", r, errno);
+        errno = 0; r = syscall(SYS_rename, long_slash, "efault_path.new"); report(c, "old-long-slash-new-good", r, errno);
+        errno = 0; r = syscall(SYS_rename, "efault_path.missing", long_name); report(c, "old-missing-new-long", r, errno);
+        errno = 0; r = syscall(SYS_rename, "efault_path.file", long_name); report(c, "old-file-new-long", r, errno);
+        errno = 0; r = syscall(SYS_rename, "efault_path.file", long_slash); report(c, "old-file-new-long-slash", r, errno);
+        errno = 0; r = syscall(SYS_rename, "efault_path.file/", long_name); report(c, "old-file-slash-new-long", r, errno);
+        errno = 0; r = syscall(SYS_rename, "efault_path.dir", dir_long); report(c, "old-dir-new-long-inside", r, errno);
+        errno = 0; r = syscall(SYS_rename, "efault_path.file/x", low); report(c, "old-parent-file-new-low", r, errno);
+        errno = 0; r = access("efault_path.file", F_OK); report(c, "file-still-there", r, errno);
+        rmdir("efault_path.dir");
         return 0;
     }
     if (!strcmp(c, "path-edge-agree")) {

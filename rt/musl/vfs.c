@@ -106,10 +106,18 @@ static int last_type(const char *path) {
     return 0;
 }
 static int trailing_slash(const char *path) { size_t n=strlen(path); return n && path[n-1]=='/'; }
+/* Whether a path's last component (before any trailing slashes) is longer than NAME_MAX. */
+static int last_too_long(const char *path) {
+    size_t end=strlen(path);
+    while(end && path[end-1]=='/') --end;
+    size_t begin=end; while(begin && path[begin-1]!='/') --begin;
+    return end-begin>NAME_MAX;
+}
 /* The walk of a path the call has copied (copy.h: so not empty and shorter than PATH_MAX). A component of more
- * than NAME_MAX bytes is too long, as in Linux. With `tail`, a trailing slash after an existing non-directory is
- * ENOTDIR (callers that order it otherwise pass 0). */
-static char *canonical(const char *path,int at,int *error,int tail) {
+ * than NAME_MAX bytes is too long, as in Linux; the last one only with `last` (rename checks it later, where
+ * Linux looks it up). With `tail`, a trailing slash after an existing non-directory is ENOTDIR (callers that
+ * order it otherwise pass 0). */
+static char *canonical(const char *path,int at,int *error,int tail,int last) {
     const char *begin_path=path;
     const char *base="/";
     if(*path!='/') {
@@ -131,7 +139,8 @@ static char *canonical(const char *path,int at,int *error,int tail) {
         while(*path=='/') ++path;
         const char *begin=path; while(*path && *path!='/') ++path;
         size_t len=path-begin;
-        if(len>NAME_MAX) { *error=ENAMETOOLONG; free(result); return 0; }
+        const char *rest=path; while(*rest=='/') ++rest;
+        if(len>NAME_MAX && (*rest || last)) { *error=ENAMETOOLONG; free(result); return 0; }
         if(!len || (len==1 && begin[0]=='.')) continue;
         if(len==2 && begin[0]=='.' && begin[1]=='.') {
             while(used>1 && result[used-1]!='/') --used;
@@ -140,7 +149,6 @@ static char *canonical(const char *path,int at,int *error,int tail) {
             if(used>1) result[used++]='/';
             memcpy(result+used,begin,len); used+=len;
         }
-        const char *rest=path; while(*rest=='/') ++rest;
         if(*rest) {
             result[used]=0; struct name *n=lookup(result);
             if(!n || n->inode->kind!=BRT_DIRECTORY) {
@@ -195,7 +203,7 @@ long __bennett_rt_vfs_open(const char *path,int flags,unsigned mode,int at) {
     /* Then the path is copied (Linux's getname), before the directory descriptor and the walk. */
     int error=__bennett_copy_path(path_copy,path); if(error) return -error;
     path=path_copy;
-    char *full=canonical(path,at,&error,0); if(!full) return -error;
+    char *full=canonical(path,at,&error,0,1); if(!full) return -error;
     struct name *n=lookup(full);
     if(trailing_slash(path) && (flags&O_CREAT)) { free(full); return -EISDIR; }
     if(trailing_slash(path) && n && n->inode->kind!=BRT_DIRECTORY) { free(full); return -ENOTDIR; }
@@ -344,21 +352,25 @@ long __bennett_rt_vfs_meta(long nr,long a,long b,long c,long d,long e) {
     if(nr==SYS_readlinkat || nr==SYS_openat || nr==SYS_newfstatat || nr==SYS_faccessat || nr==SYS_mkdirat || nr==SYS_unlinkat) { at=(int)a; path=(void *)b; }
     int creating=nr==SYS_mkdir || nr==SYS_mkdirat, removing=nr==SYS_unlink || nr==SYS_rmdir || nr==SYS_unlinkat;
     /* Then the path is copied (Linux's getname). rename's new name is copied after the old name's walk: Linux
-     * copies both first but reports the old name's error, then its walk's, then the new name's (do_renameat2
-     * walks to each parent in turn), so the new name's bytes are read only where its answer is the call's, and
-     * one past device memory stops the run only there. */
+     * copies both first but reports the old name's error, then its walk's, then the new name's
+     * (filename_renameat2 walks to each parent in turn), so the new name's bytes are read only where its answer
+     * is the call's, and one past device memory stops the run only there. */
     int error=__bennett_copy_path(path_copy,path); if(error) return -error;
     path=path_copy;
     const char *new_path=new_path_copy;
-    char *full=canonical(path,at,&error,!creating && nr!=SYS_rename); if(!full) return -error;
+    char *full=canonical(path,at,&error,!creating && nr!=SYS_rename,nr!=SYS_rename); if(!full) return -error;
     int new_error=nr==SYS_rename?__bennett_copy_path(new_path_copy,(void *)b):0;
     struct name *n=lookup(full); long result=0;
     /* A last component ".", ".." or the root: Linux refuses these by kind before looking the name up. */
     int kind=last_type(path), directory=nr==SYS_rmdir || (nr==SYS_unlinkat && (c&AT_REMOVEDIR));
     char *dest=0;
     if(nr==SYS_rename && new_error) result=-new_error;
-    else if(nr==SYS_rename && !(dest=canonical(new_path,AT_FDCWD,&error,0))) result=-error;
+    else if(nr==SYS_rename && !(dest=canonical(new_path,AT_FDCWD,&error,0,0))) result=-error;
     else if(nr==SYS_rename && (kind || last_type(new_path))) result=-EBUSY;
+    /* Then Linux looks up the old name (too long, then missing) and the new name (too long). */
+    else if(nr==SYS_rename && last_too_long(path)) result=-ENAMETOOLONG;
+    else if(nr==SYS_rename && !n) result=-ENOENT;
+    else if(nr==SYS_rename && last_too_long(new_path)) result=-ENAMETOOLONG;
     else if(creating && kind) result=-EEXIST;
     else if(removing && kind) result=!directory?-EISDIR:kind==1?-EINVAL:kind==2?-ENOTEMPTY:-EBUSY;
     else if(creating) {

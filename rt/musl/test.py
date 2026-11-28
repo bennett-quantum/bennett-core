@@ -215,6 +215,7 @@ EFAULT_CASES_AGREE = [
     ("efault-stat", "at-fdcwd-int", False),
     *[("efault-path", case, False) for case in ("path-low8", "path-wrap8", "path-above-top")],
     ("efault-path", "path-edge-agree", True),
+    ("efault-path", "rename-order", False),
 ]
 # Agreeing cases run on the device with a small stack (--stack-bytes): each call's copies live in its own frame.
 EFAULT_SMALL_STACK = [("efault-stack", "small-stack")]
