@@ -186,11 +186,11 @@ def partial_request(args):
 
 
 # Structure-pointer and error-order checks across all implemented syscalls taking struct pointers
-# (plus time(time_t *), the data buffers and the transfer cap): agreeing batches, single agreeing cases, a
+# (plus time(time_t *), the data buffers, the transfer cap and path strings): agreeing batches, single agreeing cases, a
 # small-stack run, and named
 # out_of_bounds stops for a range that reaches the end of device memory (natively EFAULT; known debt).
 # Also in front/tests/tests/syscall_efault_independent.rs.
-EFAULT_AGREE = ["efault-time", "efault-stat", "efault-iov", "efault-signals"]
+EFAULT_AGREE = ["efault-time", "efault-stat", "efault-iov", "efault-signals", "efault-path"]
 EFAULT_CASES_AGREE = [
     *[("efault-time", case, False) for case in (
         "clock_gettime-low8", "clock_gettime-wrap8", "clock_getres-low8", "clock_getres-wrap8",
@@ -213,6 +213,7 @@ EFAULT_CASES_AGREE = [
         "sigprocmask-old-wrap4", "sigpending-null", "sigpending-size4", "sigpending-low8", "sigpending-wrap4",
         "sigaction-stored-mask")],
     ("efault-stat", "at-fdcwd-int", False),
+    *[("efault-path", case, False) for case in ("path-low8", "path-wrap8", "path-above-top")],
 ]
 # Agreeing cases run on the device with a small stack (--stack-bytes): each call's copies live in its own frame.
 EFAULT_SMALL_STACK = [("efault-stack", "small-stack")]
@@ -245,6 +246,7 @@ EFAULT_NAMED_STOP = [
     ("efault-signals", "sigprocmask-set-partial4", True, "ret=-1 errno=14"),
     ("efault-signals", "sigprocmask-old-partial4", True, "ret=-1 errno=14"),
     ("efault-signals", "sigpending-partial4", True, "ret=-1 errno=14"),
+    ("efault-path", "path-at-edge", True, "ret=-1 errno=14"),
 ]
 
 

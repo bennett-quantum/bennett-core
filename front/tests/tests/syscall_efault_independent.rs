@@ -2,8 +2,8 @@
 //! implemented in `rt/musl/` that takes a pointer to a structure (`clock_gettime`, `clock_getres`,
 //! `gettimeofday`, `stat`, `lstat`, `fstat`, `newfstatat`, `readv`, `writev`, `rt_sigaction`,
 //! `rt_sigprocmask`, `rt_sigpending`) plus `time` (output `time_t *`) and the data buffers and transfer
-//! counts of `read`, `write`, `readv`, `writev` and `getrandom`, comparing the device
-//! against native Linux (clang 18 + host kernel).
+//! counts of `read`, `write`, `readv`, `writev` and `getrandom`, and the path strings of every path call,
+//! comparing the device against native Linux (clang 18 + host kernel).
 //!
 //! Each syscall is tested with:
 //! - (a) a fully readable valid argument,
@@ -457,4 +457,18 @@ fn transfers_check_ranges_where_linux_does_and_cap_counts() {
 #[test]
 fn positional_transfers_refuse_a_position_plus_count_beyond_long_max() {
     assert_agrees("efault-iov", "positional-overflow", false);
+}
+
+/// Witness of path strings read in place: every path call copies its string first, as Linux's `getname`: a
+/// string starting below 16, at or above the top of the user address space, or wrapping is `EFAULT` (device:
+/// `ENOENT` for one at 8, `out_of_bounds` for the others), and the copy comes after the arguments Linux checks
+/// first and before the directory descriptor and the walk (`rename`: the old name's walk before the new name's
+/// copy error). A string whose first byte lies past device memory stops by name.
+#[test]
+fn path_strings_are_copied_in_as_linux_copies_them() {
+    assert_agrees("efault-path", "agree", true);
+    for case in ["path-low8", "path-wrap8", "path-above-top"] {
+        assert_agrees("efault-path", case, false);
+    }
+    assert_named_stop("efault-path", "path-at-edge", true, "ret=-1 errno=14");
 }

@@ -135,9 +135,15 @@ change, the outputs written.
 - `rt_sigpending`: a set size above 8 is `EINVAL`; the first that many bytes of the pending set are written
   (none for 0, whatever the address).
 - `nanosleep`, `clock_nanosleep`: "Sleeping", below.
-
-Path strings are still read in place (null is `EFAULT`; one below 16 is read there): a debt, route a string
-copy-in by the same check up to `PATH_MAX` bytes.
+- The path calls (`open`, `openat`, `creat`, `stat`, `lstat`, `newfstatat`, `access`, `faccessat`, `readlink`,
+  `readlinkat`, `truncate`, `chdir`, `chmod`, `mkdir`, `mkdirat`, `rmdir`, `unlink`, `unlinkat`, `rename`): the
+  arguments Linux checks first (`open`'s flags, `truncate`'s negative length, the access mode, `readlink`'s
+  size), then each path string copied whole (`__bennett_copy_path`, Linux's `getname`), then the directory
+  descriptor and the walk. The copy reads the bytes one by one up to the first NUL: a string starting below 16,
+  at the top of the user address space or above it, or reaching the top before its NUL is `EFAULT`; `PATH_MAX`
+  (4096) bytes without a NUL are `ENAMETOOLONG`, whatever follows; an empty string is `ENOENT`. A byte at the end
+  of device memory stops the run with `out_of_bounds`, as for a structure. `rename` copies both names first and
+  reports the old name's error, then its walk's, then the new name's, as Linux's `do_renameat2`.
 
 ## Files and deterministic inputs
 

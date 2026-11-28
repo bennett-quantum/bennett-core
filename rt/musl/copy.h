@@ -5,7 +5,9 @@
  * is known, an entry copies every input in with __bennett_copy_in, checks only the copy, and writes every output
  * with __bennett_copy_out after its inputs are read and checked; no entry reads a field of the program's
  * structure in place. A data buffer is checked in Linux's two stages: its range where the call checks it
- * (__bennett_user_range), and its first byte where bytes are transferred (__bennett_user_unmapped). */
+ * (__bennett_user_range), and its first byte where bytes are transferred (__bennett_user_unmapped). A path string
+ * is copied whole by __bennett_copy_path before the call looks at it. */
+#include <errno.h>
 #include <stdint.h>
 
 /* The top of the user address space Linux checks ranges against on x86-64 with four-level page tables
@@ -54,6 +56,27 @@ static inline int __bennett_copy_in(void *to, const void *from, uint64_t n)
     unsigned char *copy = to;
     for (uint64_t i = 0; i < n; ++i) copy[i] = source[i];
     return 1;
+}
+
+/* Linux's PATH_MAX: a path string with its NUL fits in this many bytes. */
+#define BENNETT_PATH_MAX 4096
+
+/* Copies the path string at from, up to and including its NUL, into the runtime's own to, as Linux's getname
+ * (strncpy_from_user) does; returns 0 or the error: EFAULT for a string starting below 16, at the top of the user
+ * address space or above it, or reaching the top before its NUL; ENAMETOOLONG for BENNETT_PATH_MAX bytes without
+ * a NUL, whatever follows; ENOENT for an empty string. Bytes are read one by one up to the first NUL, never past
+ * it; one at the end of device memory or beyond stops the run there with `out_of_bounds`, as for a structure. */
+static inline int __bennett_copy_path(char to[BENNETT_PATH_MAX], const char *from)
+{
+    uintptr_t address = (uintptr_t)from;
+    if (address < 16 || address >= BENNETT_USER_TOP) return EFAULT;
+    const volatile char *source = from;
+    for (uint64_t i = 0; i < BENNETT_PATH_MAX; ++i) {
+        if (i == BENNETT_USER_TOP - address) return EFAULT;
+        to[i] = source[i];
+        if (!to[i]) return i ? 0 : ENOENT;
+    }
+    return ENAMETOOLONG;
 }
 
 /* Copies the n bytes of the runtime's own from to the program's memory at to; returns 0 (EFAULT) for a refused range,

@@ -2543,7 +2543,8 @@ Linux's `MAX_RW_COUNT` bytes, capped after a position plus the whole count beyon
 "Structures in system calls", has the list); `readv` and `writev` copy their array element by element, checking
 each length as it is copied, then every element's range before any transfer, as Linux's import of a vector does,
 and keep the copies in their own frame, sized for the count. Route for the named stop: the memory size given to
-the program. Debt: path strings are read in place.
+the program. A path string is copied in the same way before the call looks at it, byte by byte up to its NUL
+and at most `PATH_MAX` bytes (`ENAMETOOLONG` beyond, as Linux's `getname`).
 
 The maintainer's 2026-11-16 decision fixes the inputs: unsigned 64-bit clock start (nanoseconds), and
 an exact seeded entropy byte image. Reading the clock returns `(start + reads_so_far + slept) mod 2^64` and

@@ -53,6 +53,9 @@ static struct descriptor standard_fds[3] = {
     {2,0,standard_files+2,0}
 };
 static struct descriptor *fds=standard_fds;
+/* The copies of a call's path strings (copy.h): one call runs at a time and none outlives its call. */
+_Static_assert(BENNETT_PATH_MAX==PATH_MAX,"copy.h uses Linux's PATH_MAX");
+static char path_copy[PATH_MAX], new_path_copy[PATH_MAX];
 
 static struct descriptor *descriptor(long fd) {
     for(struct descriptor *d=fds;d;d=d->next) if(d->fd==fd) return d;
@@ -103,12 +106,10 @@ static int last_type(const char *path) {
     return 0;
 }
 static int trailing_slash(const char *path) { size_t n=strlen(path); return n && path[n-1]=='/'; }
-/* Linux's limits: a path of PATH_MAX bytes or more and a component of more than NAME_MAX bytes are too long.
- * With `tail`, a trailing slash after an existing non-directory is ENOTDIR (callers that order it otherwise pass 0). */
+/* The walk of a path the call has copied (copy.h: so not empty and shorter than PATH_MAX). A component of more
+ * than NAME_MAX bytes is too long, as in Linux. With `tail`, a trailing slash after an existing non-directory is
+ * ENOTDIR (callers that order it otherwise pass 0). */
 static char *canonical(const char *path,int at,int *error,int tail) {
-    if(!path) { *error=EFAULT; return 0; }
-    if(!*path) { *error=ENOENT; return 0; }
-    if(strnlen(path,PATH_MAX)>=PATH_MAX) { *error=ENAMETOOLONG; return 0; }
     const char *begin_path=path;
     const char *base="/";
     if(*path!='/') {
@@ -191,7 +192,10 @@ long __bennett_rt_vfs_open(const char *path,int flags,unsigned mode,int at) {
     if((flags&(O_DIRECTORY|O_CREAT))==(O_DIRECTORY|O_CREAT)) return -EINVAL;
     if((flags&(O_TMPFILE&~O_DIRECTORY)) && ((flags&O_TMPFILE)!=O_TMPFILE || (flags&O_ACCMODE)==O_RDONLY)) return -EINVAL;
     mode &= ~creation_mask;
-    int error=0; char *full=canonical(path,at,&error,0); if(!full) return -error;
+    /* Then the path is copied (Linux's getname), before the directory descriptor and the walk. */
+    int error=__bennett_copy_path(path_copy,path); if(error) return -error;
+    path=path_copy;
+    char *full=canonical(path,at,&error,0); if(!full) return -error;
     struct name *n=lookup(full);
     if(trailing_slash(path) && (flags&O_CREAT)) { free(full); return -EISDIR; }
     if(trailing_slash(path) && n && n->inode->kind!=BRT_DIRECTORY) { free(full); return -ENOTDIR; }
@@ -339,13 +343,20 @@ long __bennett_rt_vfs_meta(long nr,long a,long b,long c,long d,long e) {
     int at=AT_FDCWD; const char *path=(void *)a; /* a directory descriptor is an int in Linux */
     if(nr==SYS_readlinkat || nr==SYS_openat || nr==SYS_newfstatat || nr==SYS_faccessat || nr==SYS_mkdirat || nr==SYS_unlinkat) { at=(int)a; path=(void *)b; }
     int creating=nr==SYS_mkdir || nr==SYS_mkdirat, removing=nr==SYS_unlink || nr==SYS_rmdir || nr==SYS_unlinkat;
-    int error=0; char *full=canonical(path,at,&error,!creating && nr!=SYS_rename); if(!full) return -error;
+    /* Then each path is copied (Linux's getname). rename copies both names first; the old name's error comes
+     * first, then its walk's, then the new name's (do_renameat2 walks to each parent in turn). */
+    int error=__bennett_copy_path(path_copy,path); if(error) return -error;
+    path=path_copy;
+    const char *new_path=new_path_copy;
+    int new_error=nr==SYS_rename?__bennett_copy_path(new_path_copy,(void *)b):0;
+    char *full=canonical(path,at,&error,!creating && nr!=SYS_rename); if(!full) return -error;
     struct name *n=lookup(full); long result=0;
     /* A last component ".", ".." or the root: Linux refuses these by kind before looking the name up. */
     int kind=last_type(path), directory=nr==SYS_rmdir || (nr==SYS_unlinkat && (c&AT_REMOVEDIR));
     char *dest=0;
-    if(nr==SYS_rename && !(dest=canonical((void *)b,AT_FDCWD,&error,0))) result=-error;
-    else if(nr==SYS_rename && (kind || last_type((void *)b))) result=-EBUSY;
+    if(nr==SYS_rename && new_error) result=-new_error;
+    else if(nr==SYS_rename && !(dest=canonical(new_path,AT_FDCWD,&error,0))) result=-error;
+    else if(nr==SYS_rename && (kind || last_type(new_path))) result=-EBUSY;
     else if(creating && kind) result=-EEXIST;
     else if(removing && kind) result=!directory?-EISDIR:kind==1?-EINVAL:kind==2?-ENOTEMPTY:-EBUSY;
     else if(creating) {
@@ -354,7 +365,7 @@ long __bennett_rt_vfs_meta(long nr,long a,long b,long c,long d,long e) {
             create_name(full,S_IFDIR|((nr==SYS_mkdir?b:c)&07777&~creation_mask),BRT_DIRECTORY); full=0;
         }
     } else if(!n) result=-ENOENT;
-    else if(nr==SYS_rename && n->inode->kind!=BRT_DIRECTORY && (trailing_slash(path) || trailing_slash((void *)b))) result=-ENOTDIR;
+    else if(nr==SYS_rename && n->inode->kind!=BRT_DIRECTORY && (trailing_slash(path) || trailing_slash(new_path))) result=-ENOTDIR;
     else if(nr==SYS_readlink || nr==SYS_readlinkat) result=-EINVAL; /* no symlinks in this namespace yet */
     else if(nr==SYS_stat || nr==SYS_lstat || nr==SYS_newfstatat) result=fill_stat(n->inode,(void *)(nr==SYS_newfstatat?c:b));
     else if(nr==SYS_access || nr==SYS_faccessat) {
