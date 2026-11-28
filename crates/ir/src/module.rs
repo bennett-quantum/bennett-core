@@ -483,13 +483,14 @@ pub enum Inst {
     /// is an `i64` code given at run time ([`crate::GATE_CODES`], [`crate::ROTATION_CODES`]), one instruction
     /// for one gate call of the handle interface. A code outside its set is the fault `bad_gate`, checked
     /// first, then a rotation's angle (`bad_angle`), then the qubits as for `GateAt`, whose qubits it takes.
+    /// Its controls are written in the instruction or read from a list in memory ([`Controls::List`]).
     GateBy {
         /// The kind.
         kind: GateKind,
         /// The qubit acted on.
         target: Place,
         /// The control qubits.
-        controls: Vec<Place>,
+        controls: Controls,
     },
     /// `dst = measure register` or `dst = measure iN [address]`: samples the qubits' value and collapses
     /// the state.
@@ -544,6 +545,28 @@ pub enum GateKind {
         angle: Operand,
     },
 }
+
+/// The controls of an [`Inst::GateBy`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Controls {
+    /// Written in the instruction, as for `GateAt`.
+    Written(Vec<Place>),
+    /// `list(address, count)`: `count` entries of [`CONTROL_ENTRY_BYTES`] bytes from the `i64` `address`, each a
+    /// little-endian `u64` handle at offset 0 and a `u64` qubit position at offset 8 (the C interface's control
+    /// entry, `docs/HANDLES.md` 5.1). The list must be readable as ordinary memory (else `bad_argument`), then
+    /// each entry's handle names a register (`dangling_register`) and its position is below the width
+    /// (`bad_range`), in list order; a qubit listed twice is one control; the target among them is
+    /// `qubit_alias`.
+    List {
+        /// The `i64` address of the first entry.
+        address: Operand,
+        /// The `i64` number of entries.
+        count: Operand,
+    },
+}
+
+/// The bytes of one entry of a control list: the handle at offset 0, the position at offset 8.
+pub const CONTROL_ENTRY_BYTES: u64 = 16;
 
 /// What a `measure` reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -658,7 +681,15 @@ impl Inst {
                         operand(angle);
                     }
                 }
-                for place in std::iter::once(target).chain(controls) {
+                let written: &[Place] = match controls {
+                    Controls::Written(places) => places,
+                    Controls::List { address, count } => {
+                        operand(address);
+                        operand(count);
+                        &[]
+                    }
+                };
+                for place in std::iter::once(target).chain(written) {
                     match place {
                         Place::Register(qubit) => operand(&Operand::Slot(qubit.register)),
                         Place::Memory { address, .. } => operand(address),

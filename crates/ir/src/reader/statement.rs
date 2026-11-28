@@ -4,8 +4,8 @@ use super::error::{Failure, ReadErrorKind};
 use super::lexer::Token;
 use super::{Parser, Scope};
 use crate::{
-    BinOp, BlockId, CastOp, Const, Fault, FixedGate, FuncId, Gate, GateKind, Inst, MeasureSource, Operand, Place,
-    Predicate, Qubit, Qubits, Rotation, Signature, Slot, SwitchCase, Target, Terminator, Type, Width,
+    BinOp, BlockId, CastOp, Const, Controls, Fault, FixedGate, FuncId, Gate, GateKind, Inst, MeasureSource, Operand,
+    Place, Predicate, Qubit, Qubits, Rotation, Signature, Slot, SwitchCase, Target, Terminator, Type, Width,
 };
 
 /// The mnemonics that end a block.
@@ -77,7 +77,22 @@ impl<'s> Parser<'s> {
                     GateKind::Gate(code)
                 };
                 self.cursor.expect(Token::RParen, "`)`")?;
-                let (target, controls) = self.places(scope)?;
+                let target = self.place(scope)?;
+                // `ctrl list(ADDRESS, COUNT)`: the controls in memory; otherwise written as for any gate.
+                let controls = if let (Some(Token::Word("ctrl")), Some(Token::Word("list"))) =
+                    (self.cursor.peek(), self.cursor.peek_nth(1))
+                {
+                    self.cursor.expect(Token::Word("ctrl"), "`ctrl`")?;
+                    self.cursor.expect(Token::Word("list"), "`list`")?;
+                    self.cursor.expect(Token::LParen, "`(` and the list's address")?;
+                    let address = self.operand(scope, Width::WORD)?;
+                    self.cursor.expect(Token::Comma, "`,` and the number of entries")?;
+                    let count = self.operand(scope, Width::WORD)?;
+                    self.cursor.expect(Token::RParen, "`)`")?;
+                    Controls::List { address, count }
+                } else {
+                    Controls::Written(self.controls(scope)?)
+                };
                 Inst::GateBy { kind, target, controls }
             }
             "icmp" => self.compare(scope, line.result("icmp")?)?,
@@ -276,6 +291,11 @@ impl<'s> Parser<'s> {
     /// `target [ctrl qubit, ...]`: a gate's target and controls.
     fn places(&mut self, scope: &mut Scope<'s>) -> Result<(Place, Vec<Place>), Failure> {
         let target = self.place(scope)?;
+        Ok((target, self.controls(scope)?))
+    }
+
+    /// `[ctrl qubit, ...]`: written controls, none without `ctrl`.
+    fn controls(&mut self, scope: &mut Scope<'s>) -> Result<Vec<Place>, Failure> {
         let mut controls = Vec::new();
         if self.cursor.eat(Token::Word("ctrl")) {
             controls.push(self.place(scope)?);
@@ -283,7 +303,7 @@ impl<'s> Parser<'s> {
                 controls.push(self.place(scope)?);
             }
         }
-        Ok((target, controls))
+        Ok(controls)
     }
 
     /// A qubit in a register (`%register[BIT]`, or `%register[%index]` with the position computed at run

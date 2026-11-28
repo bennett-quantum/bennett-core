@@ -4,8 +4,8 @@
 use std::fmt::{self, Write};
 
 use crate::{
-    Block, DataItem, DataSegment, Function, Gate, GateKind, Inst, MeasureSource, Module, Operand, Param, Place, Qubit,
-    Signature, Slot, Target, Terminator, Type,
+    Block, Controls, DataItem, DataSegment, Function, Gate, GateKind, Inst, MeasureSource, Module, Operand, Param,
+    Place, Qubit, Signature, Slot, Target, Terminator, Type,
 };
 
 /// Writes a module in its text form.
@@ -134,13 +134,18 @@ impl Writer<'_> {
                 write!(self.out, "{}({})", axis.mnemonic(), name(angle))?;
                 self.places(f, *target, controls)
             }
-            Inst::GateBy { kind: GateKind::Gate(code), target, controls } => {
-                write!(self.out, "gate({})", op(code))?;
-                self.places(f, *target, controls)
-            }
-            Inst::GateBy { kind: GateKind::Rotation { code, angle }, target, controls } => {
-                write!(self.out, "rotate({}, {})", op(code), op(angle))?;
-                self.places(f, *target, controls)
+            Inst::GateBy { kind, target, controls } => {
+                match kind {
+                    GateKind::Gate(code) => write!(self.out, "gate({})", op(code))?,
+                    GateKind::Rotation { code, angle } => write!(self.out, "rotate({}, {})", op(code), op(angle))?,
+                }
+                match controls {
+                    Controls::Written(controls) => self.places(f, *target, controls),
+                    Controls::List { address, count } => {
+                        self.places(f, *target, &[])?;
+                        write!(self.out, " ctrl list({}, {})", op(address), op(count))
+                    }
+                }
             }
             Inst::Measure { source: MeasureSource::Register(register), .. } => {
                 write!(self.out, "measure {}", name(register))
