@@ -134,7 +134,9 @@ ABI nor a limit on the optimiser and every metadata attachment other than debug 
 optimisation. A pointer that reaches a primitive then makes that primitive's call whatever its declaration claimed.
 The driver then deletes the array and lets the compiler optimise the same unit. After that, it checks only that no
 global took a primitive's name and that every call of a primitive's declaration has its type and calling convention;
-what the optimiser added is trusted. `bennett-front` makes the same check on every module it reads and refuses a
+what the optimiser added is trusted. So is a claim the program makes about its own function: a GNU `const`
+function that applies a gate is a false claim, undefined in C as natively, and the compiler may delete its call
+with the gate inside, as natively. `bennett-front` makes the same check on every module it reads and refuses a
 module that uses the interface without the driver's mark. This is the only compile-time refusal specific to
 primitives. It looks at declarations and calls alone and asks nothing about what depends on what. Refusals of
 ordinary C that the compiler's lowering makes still apply, as for any program. `docs/DESIGN.md`, "The declaration

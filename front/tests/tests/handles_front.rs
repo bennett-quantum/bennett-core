@@ -817,3 +817,126 @@ fn the_driver_leaves_no_temporary_file() {
         assert!(left.is_empty(), "{case}: left behind: {left:?}");
     }
 }
+
+/// The pass-free LLVM IR clang writes for a unit that prints `A` and returns 7, with the header included by force
+/// (no array of references): what `bennett-cc` accepts as an LLVM IR unit, to be changed one property at a time.
+fn effect_ir(name: &str) -> String {
+    let source = write_c(&format!("{name}_source"), "int main(void) { __bennett_effect('A'); return 7; }\n");
+    let ir = out_dir().join(format!("{name}_source.ll"));
+    let written = output(
+        Command::new(clang())
+            .arg("-include")
+            .arg(header())
+            .args(CLANG_FLAGS)
+            .args(["-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes"])
+            .arg(&source)
+            .arg("-o")
+            .arg(&ir),
+    );
+    assert!(written.status.success(), "{name}: {}", stderr(&written));
+    read(&ir)
+}
+
+/// Rule 3, each branch alone (review finding F5 of this step): the declaration's printed text, here only an
+/// `alloc-family` string attribute added, and its metadata attachments, here only an `!annotation` added to a
+/// declaration whose text is the header's. The unchanged IR passes (`llvm_ir_units_get_the_same_check`).
+#[test]
+fn each_part_of_a_declaration_is_compared_alone() {
+    let text = effect_ir("handles_rule3");
+    let declaration = text.lines().find(|l| l.starts_with("declare void @__bennett_effect(")).expect("declared");
+    let (head, group) = declaration.rsplit_once(" #").expect("an attribute group");
+    let cases = [
+        (
+            "alloc_family",
+            text.replace(declaration, &format!("{head} \"alloc-family\"=\"malloc\" #{group}")),
+            "\"alloc-family\"=\"malloc\"",
+        ),
+        (
+            "annotation",
+            text.replace(declaration, &declaration.replacen("declare ", "declare !annotation !900 ", 1))
+                + "!900 = !{!\"claim\"}\n",
+            "has the metadata !annotation where the header's has none",
+        ),
+    ];
+    for (case, changed, expected) in cases {
+        let name = format!("handles_rule3_{case}");
+        let (result, compiled) = driver_on(&write_text(&changed, &name), &name, CLANG_FLAGS);
+        assert_refused(&result, REFUSED, expected, &format!("{name}:\n{changed}"));
+        assert!(!compiled.exists(), "{name}");
+    }
+}
+
+/// Review finding F4 of this step: LLVM IR that LLVM's reader stops on (here a `!tbaa` attachment that is not an
+/// access tag, which the verifier of upgraded debug information reports as a fatal error) is refused by name with
+/// status 2 and no output, as `bennett-front` refuses it, instead of stopping with a stack dump.
+#[test]
+fn invalid_llvm_ir_is_refused_by_name() {
+    let text = effect_ir("handles_invalid_ir");
+    let call = text.lines().find(|l| l.contains("call void @__bennett_effect(")).expect("the call");
+    let broken = text.replace(call, &format!("{call}, !tbaa !900")) + "!900 = !{!901, !901, i64 0}\n!901 = !{!\"x\"}\n";
+    let path = write_text(&broken, "handles_invalid_ir");
+    let (result, compiled) = driver_on(&path, "handles_invalid_ir", CLANG_FLAGS);
+    assert_refused(&result, REFUSED, "is not valid LLVM IR", "bennett-cc");
+    assert!(!compiled.exists(), "no output");
+    assert_refused(&front_of(&path, "handles_invalid_ir"), REFUSED, "the input is not valid LLVM IR", "bennett-front");
+}
+
+/// Review finding F2 of this step: the baseline is compiled with the user's options, so its identifiers are
+/// reserved ones. A unit compiled with `-include` of a header that defines, as macros, every ordinary name the
+/// baseline once used passes and runs.
+#[test]
+fn the_users_macros_cannot_change_the_baseline() {
+    let names = ["which", "r", "n", "angle", "controls", "f", "image", "fields", "byte", "status"];
+    let macros: String = names.iter().map(|name| format!("#define {name} @\n")).collect();
+    let header = out_dir().join("handles_user_macros.h");
+    std::fs::write(&header, macros).unwrap_or_else(|e| panic!("cannot write {header:?}: {e}"));
+    let source = write_c("handles_user_macros", "int main(void) { __bennett_effect('A'); return 7; }\n");
+    let include = header.to_str().expect("a UTF-8 path");
+    for (level, flags) in LEVELS {
+        let name = format!("handles_user_macros.{level}");
+        let flags: Vec<&str> = flags.iter().copied().chain(["-include", include]).collect();
+        let (outcome, tape) = run_through_driver(&source, &name, &flags);
+        assert_eq!((outcome, tape), (Outcome::Returned(Some(7)), b"A".to_vec()), "{name}");
+    }
+}
+
+/// Review finding F1 of this step, the documented limit of the check: a claim the program makes about its own
+/// function is the program's statement and is trusted, as native clang trusts it. A GNU `const` function that
+/// applies a gate is a false claim (undefined in C); at `-O2` clang deletes its call, and the gate with it, as it
+/// does natively. This pins that the check does not look at a program's own functions: if a change starts or stops
+/// doing so, this test fails and the documents must change with it.
+#[test]
+fn a_claim_on_the_programs_own_function_is_trusted() {
+    let source = write_c(
+        "handles_own_claim",
+        "__attribute__((const)) static int flip(bq_reg r) { bq_gate(BQ_GATE_X, r, 0, 0, 0); return 0; }\n\
+         int main(void) {\n  bq_reg r = bq_alloc(1);\n  flip(r);\n  return (int)bq_measure(r, 0, 1);\n}\n",
+    );
+    for (level, flags, gates) in [("O0", CLANG_FLAGS, 1), ("O2", CLANG_O2_FLAGS, 0)] {
+        let name = format!("handles_own_claim.{level}");
+        let compiled = driver_text(&source, &name, flags);
+        let found = compiled.lines().filter(|l| l.contains("call void @bq_gate(")).count();
+        assert_eq!(found, gates, "{name}:\n{compiled}");
+    }
+}
+
+/// Review finding R17 of the earlier step, its `restrict` half (finding F6 of this step): after clang inlines a
+/// function with a `restrict` parameter, the output call carries the optimiser's `!noalias`; it is the optimiser's
+/// and trusted (rule 6). The program prints `A` and returns 7 at both levels, and the `-O2` output has the
+/// attachment, so the test fails if clang stops writing it.
+#[test]
+fn metadata_the_optimiser_adds_is_trusted() {
+    let source = write_c(
+        "handles_restrict",
+        "static inline void send(char *restrict p) {\n    __bennett_effect(*p);\n    ++*p;\n}\n\
+         int main(void) {\n    char c = 'A';\n    send(&c);\n    return 7;\n}\n",
+    );
+    for (level, flags) in LEVELS {
+        let name = format!("handles_restrict.{level}");
+        let (outcome, tape) = run_through_driver(&source, &name, flags);
+        assert_eq!((outcome, tape), (Outcome::Returned(Some(7)), b"A".to_vec()), "{name}");
+    }
+    let compiled = driver_text(&source, "handles_restrict.text", CLANG_O2_FLAGS);
+    let call = compiled.lines().find(|l| l.contains("call void @__bennett_effect(")).expect("the call");
+    assert!(call.contains("!noalias"), "the optimiser's attachment:\n{compiled}");
+}

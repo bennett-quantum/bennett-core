@@ -29,6 +29,8 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/IRReader/IRReader.h>
+#include <llvm/Support/CrashRecoveryContext.h>
+#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/InitLLVM.h>
 #include <llvm/Support/MemoryBuffer.h>
@@ -111,14 +113,32 @@ void runClang(const std::string &clang, const std::vector<std::string> &args) {
   }
 }
 
+// Reads LLVM IR. Input that LLVM's reader cannot parse, stops on (its verifier of upgraded debug information
+// reports a fatal error) or crashes on (damaged metadata) is refused by name with status 2, as bennett-front does.
 std::unique_ptr<Module> read(StringRef path, LLVMContext &context, StringRef what) {
+  static std::string described;
+  described = what.str();
+  ScopedFatalErrorHandler handler([](void *, const char *reason, bool) {
+    errs() << "error: " << described << " is not valid LLVM IR (LLVM's reader stopped: " << reason
+           << "); no bitcode was written\n";
+    std::exit(2);
+  });
   SMDiagnostic error;
-  std::unique_ptr<Module> module = parseIRFile(path, error, context);
+  std::unique_ptr<Module> module;
+  CrashRecoveryContext::Enable();
+  CrashRecoveryContext recovery;
+  bool finished = recovery.RunSafely([&] { module = parseIRFile(path, error, context); });
+  CrashRecoveryContext::Disable();
+  if (!finished) {
+    bennett::fail(what.str() + " is not valid LLVM IR (LLVM's reader crashed on it, which damaged metadata does); "
+                               "no bitcode was written");
+  }
   if (!module) {
     std::string text;
     raw_string_ostream out(text);
     error.print("bennett-cc", out);
-    bennett::fail("cannot read " + what.str() + ":\n" + out.str());
+    bennett::fail(what.str() + " is not valid LLVM IR (LLVM's reader could not parse it); no bitcode was "
+                               "written:\n" + out.str());
   }
   return module;
 }
@@ -243,11 +263,12 @@ int main(int argc, char **argv) {
     runClang(clang, unitArgs);
     module = read(unitPath, context, "the bitcode clang wrote for " + unit.str());
   } else {
-    module = read(unit, context, unit);
+    module = read(unit, context, "the unit " + unit.str());
     std::string problems;
     raw_string_ostream out(problems);
     if (verifyModule(*module, &out)) {
-      bennett::fail("the unit " + unit.str() + " is not valid LLVM IR:\n" + out.str());
+      bennett::fail("the unit " + unit.str() + " is not valid LLVM IR (LLVM's verifier rejects it); no bitcode was "
+                    "written:\n" + out.str());
     }
   }
   sys::ProcessInfo ended = sys::Wait(baseline, std::nullopt, &error);

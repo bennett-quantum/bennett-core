@@ -1370,10 +1370,13 @@ Two things the first C programs taught:
 ## The declaration check
 
 The handle interface (`docs/HANDLES.md`, section 4) rests on one premise: every call of a primitive runs and reaches
-that primitive. A program breaks it only by putting something else in the primitive's place (a definition, alias,
-ifunc, variable or rename), by telling LLVM a fact about the callee that the header does not state (then LLVM may
-remove, merge, move or speculate the call), or by calling it with another type or calling convention. The check
-looks at declarations, globals and calls alone, never at what a value depends on, and it is made where clang has
+that primitive. The check covers the three ways a program can break it through what it says about a primitive:
+putting something else in the primitive's place (a definition, alias, ifunc, variable or rename), telling LLVM a
+fact about a primitive or a call of one that the header does not state (then LLVM may remove, merge, move or
+speculate the call), and calling it with another type or calling convention. A claim the program makes about its
+own function is the program's statement and is trusted, as native clang trusts it: a GNU `const` function that
+applies a gate is a false claim, undefined behaviour in C as natively, and at `-O2` clang deletes its unused call
+and the gate with it (test `a_claim_on_the_programs_own_function_is_trusted`). The check looks at declarations, globals and calls alone, never at what a value depends on, and it is made where clang has
 written everything a unit says and no pass has yet acted on it. The eleven primitives are the seven `bq_*`
 functions and the four effect primitives, known by their linker names (`front/src/Primitives.h`).
 
@@ -1384,7 +1387,10 @@ The driver `bennett-cc [clang options] -o OUTPUT UNIT` (`front/src/Driver.cpp`) 
    force ahead of anything the user passes (the header's folder is on the include path, so `#include "bq.h"` is
    the same file). `bq-references.h` holds one internal `used` array of the eleven primitives' addresses in table
    order. The *baseline* `front/include/bq-baseline.c`, one function calling each primitive once, is compiled with
-   the same command and options at the same time (not cached: it costs one clang run of a small file in parallel).
+   the same command and options at the same time (not cached: it costs one clang run of a small file in parallel);
+   its identifiers are reserved ones, so that no macro of the user's options changes it. The header comes ahead of
+   the unit's own text, so a feature macro the unit defines itself (`#define _GNU_SOURCE`) comes after the C
+   library's headers that `bq.h` includes and has no effect there; it is given as an option (`-D_GNU_SOURCE`).
    Reason: clang emits a declaration only where something uses it and fixes its symbol at that first use, so the
    array makes every header declaration appear in every unit, fixed before any of the unit's own text.
 2. **Names.** The linker name is the IR name without a leading byte 1, with the target's global prefix, as LLVM's
@@ -1430,7 +1436,9 @@ The driver `bennett-cc [clang options] -o OUTPUT UNIT` (`front/src/Driver.cpp`) 
    trusted. The output carries the named metadata `!bennett.cc`, which `llvm-link` keeps, and is bitcode or, for
    an output named `*.ll`, LLVM text. A refused unit writes nothing and stops with status 2 (an earlier output of
    that name is removed); a unit clang refuses stops with clang's status; no temporary file is left.
-7. **LLVM IR and the front.** A `.ll` or `.bc` unit gets rules 2 to 6 without the array (the global named after a
+7. **LLVM IR and the front.** A `.ll` or `.bc` unit that LLVM's reader cannot parse, stops on or crashes on, or that
+   its verifier rejects, is refused by name with status 2, as `bennett-front` refuses it. A valid one gets rules 2
+   to 6 without the array (the global named after a
    primitive, if any, is entry `k`). `bennett-front` (`front/src/HandleProgram.h`) first removes the claims of
    every call through a pointer in every module (rule 5, sound for all), checks redirection and shape (rule 6),
    and refuses by name a module that uses one of the seven interface functions without the mark ("compile each
@@ -1450,7 +1458,9 @@ written; the rename facts above; the claims through pointers, where plain `clang
 `bennett-cc` keeps both; calls through pointers run on the device (a `const` pointer to the out-of-memory stop
 faults `out_of_memory`, output and exit through pointers print and exit, an unrelated `noreturn` callback of the
 output primitive's type runs, a `byval` callback is untouched); the conforming program under 20 option sets and
-with the context attributes of rule 4; LLVM IR units; the front's checks on LLVM text; clang found on `PATH`; no
+with the context attributes of rule 4; LLVM IR units, invalid LLVM IR and each branch of rule 3 alone; the
+user's macros against the baseline; a claim on the program's own function (trusted); the optimiser's `!noalias`
+after inlining a `restrict` parameter (trusted); the front's checks on LLVM text; clang found on `PATH`; no
 temporary file left. Lane 17's two witnesses in `front/tests/tests/out_of_memory.rs` pass: an indirect call to the
 out-of-memory stop marked `nounwind willreturn memory(none)` now faults on the device, and an ifunc of that name is
 refused as an ifunc.
@@ -2749,6 +2759,10 @@ The handle interface's front end ("The declaration check" above; the old layer s
 - **A `const` or `pure` pointer declared `const` is refused** (rule 4): clang folds its calls into direct calls that
   carry the claim before any pass, and in the unit's IR they cannot be told from calls through a redeclaration.
   Route: write the pointer without `const` (it is then a call through a pointer, whose claim is removed).
+- **A feature macro defined in the unit** (`#define _GNU_SOURCE` before its includes) comes after the C library's
+  headers that the forced `bq.h` includes, so the declarations it would make visible stay hidden and clang may refuse
+  the unit. Route: give it as an option (`-D_GNU_SOURCE`), which comes ahead of the header; or a header that
+  includes no C library header before the unit's text.
 - **Options that write files beside the output** (`-MD`, `-save-temps`) write them beside the driver's temporary
   files, where they stay (measured for `-MD`: two `.d` files in the temporary folder). Route: pass the user's
   output name to clang for those, if a build needs them.
