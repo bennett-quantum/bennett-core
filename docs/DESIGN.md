@@ -676,6 +676,9 @@ contributes no normal continuation or return word. The analysis translates share
 caller's argument bits for operand evaluation. The call executes and charges its normal steps, including
 any fault before a return. Proofs are cached by function and normalized argument facts. Active recursive
 queries and queries that exceed the proof-work allowance contribute an unknown return word.
+That allowance charges each slot and each program point in blocks reachable from the entry
+along control-flow edges allowed by literal conditions. The copied-frame limit charges every
+program point in a copied function.
 
 When the first qubit-dependent jump is in a frame
 entered by the definite prefix, the control construction can follow calls and returns under

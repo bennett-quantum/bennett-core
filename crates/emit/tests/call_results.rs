@@ -213,6 +213,58 @@ no:
 }
 
 #[test]
+fn dead_blocks_in_a_discarded_call_leave_work_for_a_later_switch() {
+    let helpers = format!(
+        r#"
+func @discarded() {{
+entry:
+    call @finish()
+    ret
+unreached:
+{discarded_padding}
+    ret
+}}
+func @finish() {{
+entry:
+    ret
+}}
+func @tag() -> i2 {{
+entry:
+    ret 2
+unreached:
+{tag_padding}
+    ret 3
+}}
+{RECURSIVE}
+"#,
+        discarded_padding = "    effect 0\n".repeat(6144),
+        tag_padding = "    effect 0\n".repeat(4608),
+    );
+    let module = module(
+        r#"
+    call @discarded()
+    %tag = call @tag()
+    switch i2 %tag, 2: done, default: recurse
+done:
+    ret 21
+recurse:
+    %again = call @cycle()
+    ret %again
+"#,
+        &helpers,
+    );
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        for budget in [9, 10] {
+            compare_mode(&module, budget, mode, |x| match (x, budget) {
+                (0, _) => (9, 0),
+                (_, 9) => (0, Fault::Budget.code()),
+                (_, _) => (21, 0),
+            });
+        }
+    }
+}
+
+#[test]
 fn different_copy_arguments_keep_distinct_proofs_through_nested_calls() {
     let module = module(
         r#"

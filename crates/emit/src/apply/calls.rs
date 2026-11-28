@@ -11,7 +11,7 @@ use super::definite::{CallProofs, CallSite};
 use super::memory::{AccessError, Memory};
 use super::selectors::Selector;
 use super::stack::{self, StackSlots};
-use super::symbolic::{Frame, IndirectCall, Point, Step};
+use super::symbolic::{Frame, IndirectCall, Point, Step, before_instruction_fault, visit_possible_targets};
 use super::{ApplyError, ApplyInput, Argument};
 
 // Count a unit for each copied slot and each instruction or terminator, including
@@ -452,9 +452,27 @@ impl Copy<'_> {
     }
 }
 
-pub(super) fn work(function: &Function) -> usize {
-    function
-        .blocks
-        .iter()
-        .fold(function.slot_count(), |total, block| total.saturating_add(block.insts.len()).saturating_add(1))
+fn block_work(total: usize, block: &Block) -> usize {
+    total.saturating_add(block.insts.len()).saturating_add(1)
+}
+
+fn work(function: &Function) -> usize {
+    function.blocks.iter().fold(function.slot_count(), block_work)
+}
+
+pub(super) fn reachable_work(function: &Function) -> usize {
+    let mut total = function.slot_count();
+    let mut reached = vec![false; function.blocks.len()];
+    let mut pending = vec![BlockId(0)];
+    while let Some(block) = pending.pop() {
+        if std::mem::replace(&mut reached[block.index()], true) {
+            continue;
+        }
+        let block = function.block(block);
+        total = block_work(total, block);
+        if let (_, Some(term)) = before_instruction_fault(block) {
+            visit_possible_targets(term, |target| pending.push(target.block));
+        }
+    }
+    total
 }

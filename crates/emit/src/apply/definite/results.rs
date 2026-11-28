@@ -6,7 +6,7 @@ use bennett_ir::{FuncId, ValidModule};
 
 use super::{ArgumentIdentities, Constants, normalize_arguments};
 use crate::apply::bits::{Bit, Word};
-use crate::apply::calls::work;
+use crate::apply::calls::reachable_work;
 use crate::apply::identity::Identity;
 use crate::apply::returns::Returns;
 use crate::apply::symbolic::Frame;
@@ -76,12 +76,13 @@ impl<'a> CallProofs<'a> {
 
 struct CopyResults {
     complete: HashMap<Context, CallResult>,
+    proof_work: HashMap<FuncId, usize>,
     remaining: usize,
 }
 
 impl CopyResults {
     fn new(work_limit: usize) -> Self {
-        Self { complete: HashMap::new(), remaining: work_limit }
+        Self { complete: HashMap::new(), proof_work: HashMap::new(), remaining: work_limit }
     }
 
     fn call<'a>(
@@ -122,7 +123,11 @@ impl CopyResults {
             }
 
             let context = &task.context;
-            let Some(remaining) = self.remaining.checked_sub(work(module.function(context.callee))) else {
+            let work = *self
+                .proof_work
+                .entry(context.callee)
+                .or_insert_with(|| reachable_work(module.function(context.callee)));
+            let Some(remaining) = self.remaining.checked_sub(work) else {
                 return;
             };
             self.remaining = remaining;
