@@ -135,7 +135,7 @@ impl<'a> Test<'a> {
         if !returning.is_zero() {
             let word = self
                 .exiting
-                .follow(circuit, program, &mut slots.to_vec(), self.point, widths)?
+                .follow(circuit, program, &mut work::copy_slots(slots), self.point, widths)?
                 .expect("proved an exit to the applied return");
             copies.returned.push((returning, word));
         }

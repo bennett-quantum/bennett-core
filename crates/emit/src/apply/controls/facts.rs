@@ -6,12 +6,17 @@ use super::super::bits::{Bit, Circuit, Word};
 use super::super::identity::{Identity, Source};
 use super::super::work::{self, Work};
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub(super) struct Facts {
     bits: BTreeMap<Source, bool>,
 }
 
 impl Facts {
+    pub(super) fn snapshot(&self) -> Self {
+        work::add(Work::SnapshotWords, self.bits.len());
+        Self { bits: self.bits.clone() }
+    }
+
     // Key facts on the underlying wire shared by a bit and its retained copies.
     pub(super) fn assume(&mut self, word: &[Bit], value: u128) {
         work::add(Work::FactReads, word.len());

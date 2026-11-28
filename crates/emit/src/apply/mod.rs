@@ -15,8 +15,6 @@ mod gadget_tests;
 mod identity;
 mod machine;
 mod memory;
-#[cfg(test)]
-mod memory_tests;
 mod modular;
 mod modular_loop;
 mod products;

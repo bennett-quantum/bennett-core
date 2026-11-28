@@ -2,6 +2,8 @@
 
 use std::cell::{Cell, RefCell};
 
+use super::bits::Word;
+
 /// Work accumulated during one applied-function compilation.
 /// Each counter has its own unit. These counts do not limit the device clock.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -78,7 +80,7 @@ pub struct WorkCounts {
     pub definite_bits: usize,
     /// Bits of successfully resolved literal call targets.
     pub literal_target_bits: usize,
-    /// Slot, bit and memory elements copied into proof snapshots.
+    /// Slot, bit, guard fact and memory elements copied into proof snapshots.
     pub snapshot_words: usize,
     /// Point and block visits during loop-shape and copy-path inspection.
     pub shape_visits: usize,
@@ -185,6 +187,11 @@ pub(super) enum Work {
 thread_local! {
     static CURRENT: RefCell<Option<WorkCounts>> = const { RefCell::new(None) };
     static PHASE: Cell<Phase> = const { Cell::new(Phase::Emission) };
+}
+
+pub(super) fn copy_slots(slots: &[Word]) -> Vec<Word> {
+    add(Work::SnapshotWords, slots.len() + slots.iter().map(Vec::len).sum::<usize>());
+    slots.to_vec()
 }
 
 pub(super) fn add(kind: Work, count: usize) {

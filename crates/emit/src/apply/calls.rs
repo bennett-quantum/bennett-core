@@ -196,6 +196,10 @@ impl<'a> Program<'a> {
         frame.module.function(frame.callee)
     }
 
+    pub(super) fn reached_points(&self, point: Point, block: BlockId) -> Option<usize> {
+        self.copies[point.copy].frame.reached_points(block)
+    }
+
     pub(super) fn direct_child(&self, point: Point) -> Option<Point> {
         if !matches!(self.block(point).insts.get(point.index), Some(Inst::Call { .. })) {
             return None;

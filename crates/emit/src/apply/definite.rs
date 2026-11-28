@@ -195,7 +195,7 @@ pub(super) struct Constants<'a> {
     switches: Vec<Edges<'a>>,
     pub(super) calls: Calls<'a>,
     may_return: bool,
-    reached: BTreeSet<BlockId>,
+    reached: BTreeMap<BlockId, usize>,
     outgoing: BTreeMap<BlockId, Vec<&'a bennett_ir::Target>>,
     accesses: Option<Accesses>,
     definite_stores: bool,
@@ -246,6 +246,12 @@ impl<'a> Constants<'a> {
         self.accesses.map(|_| self.outgoing.get(&block).map(Vec::as_slice).unwrap_or_default())
     }
 
+    // Count the reached instruction prefix plus the terminator, when reached.
+    // A missing proof leaves the caller to use its conservative fallback.
+    pub(super) fn reached_points(&self, block: BlockId) -> Option<usize> {
+        self.accesses.map(|_| self.reached.get(&block).copied().unwrap_or(0))
+    }
+
     pub(super) fn definite_stores(&self) -> bool {
         self.definite_stores
     }
@@ -270,7 +276,7 @@ impl<'a> Constants<'a> {
             slots,
             argument_bits,
             switches: vec![Edges::default(); function.blocks.len()],
-            reached: BTreeSet::from([BlockId(0)]),
+            reached: BTreeMap::from([(BlockId(0), 0)]),
             definite_stores: true,
             ..Self::default()
         }
@@ -315,6 +321,25 @@ impl<'a> Solver<'a> {
             readers: BTreeMap::new(),
             current: None,
         }
+    }
+
+    // A stopping proof that read no parameter holds for every argument word.
+    // Its other facts do not reference the original argument identities.
+    fn generalize_stop(&mut self) -> bool {
+        let params = &self.frame.module.function(self.frame.callee).params;
+        if self.plan.may_return
+            || params.iter().any(|param| {
+                work::add(Work::TableEntries, 1);
+                self.readers.contains_key(&param.slot)
+            })
+        {
+            return false;
+        }
+        for param in params {
+            self.plan.slots[param.slot.index()] = None;
+        }
+        self.plan.argument_bits.clear();
+        true
     }
 
     fn enqueue(&mut self, block: BlockId) {
@@ -389,6 +414,7 @@ impl<'a> Solver<'a> {
     fn advance(&mut self, mut answer: impl FnMut(FuncId, &[Option<Word>]) -> Option<results::CallResult>) -> bool {
         let function = self.frame.module.function(self.frame.callee);
         let _temporary = work::Temporary::start();
+        let declared_memory = !self.frame.module.data.is_empty();
         loop {
             let mut visit = if let Some(visit) = self.current.take() {
                 visit
@@ -491,7 +517,7 @@ impl<'a> Solver<'a> {
                     work::add(Work::Successors, site.candidates.len());
                     continue;
                 }
-                if let Inst::Store { address, .. } = inst {
+                if declared_memory && let Inst::Store { address, .. } = inst {
                     self.plan.definite_stores &=
                         self.read(visit.block, &visit.local, address).as_deref().and_then(definite).is_some();
                 }
@@ -510,6 +536,8 @@ impl<'a> Solver<'a> {
                 }
                 visit.at += 1;
             }
+            let reached = self.plan.reached.get_mut(&visit.block).expect("scheduled block");
+            *reached = (*reached).max(visit.at + 1);
             if !stopped {
                 self.terminator(&visit, &block.term);
             }
@@ -570,6 +598,11 @@ impl<'a> Solver<'a> {
     }
 
     fn reach(&mut self, block: BlockId) -> bool {
-        self.plan.reached.insert(block)
+        if let std::collections::btree_map::Entry::Vacant(entry) = self.plan.reached.entry(block) {
+            entry.insert(0);
+            true
+        } else {
+            false
+        }
     }
 }

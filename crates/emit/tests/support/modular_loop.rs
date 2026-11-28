@@ -323,6 +323,15 @@ fn compile_private_loop_at(
     mode: ApplyMode,
     scratch_start: u64,
 ) -> Result<bennett_emit::CompiledApply, bennett_emit::ApplyError> {
+    compile_private_loop_with_budget(module, mode, scratch_start, 50)
+}
+
+fn compile_private_loop_with_budget(
+    module: &bennett_ir::ValidModule,
+    mode: ApplyMode,
+    scratch_start: u64,
+    budget: u64,
+) -> Result<bennett_emit::CompiledApply, bennett_emit::ApplyError> {
     use bennett_emit::{ApplyInput, Argument, compile_apply_with};
     use bennett_exec::ApplyMemory;
 
@@ -339,7 +348,7 @@ fn compile_private_loop_at(
             args: &[Argument::Register(0..3)],
             out: 3..11,
             fault: 11..16,
-            budget: 50,
+            budget,
             entry_fault: None,
             stack_available: 800,
             memory: Some(ApplyMemory::new(&bytes, &held)),
@@ -380,8 +389,26 @@ fn modular_proof_checks_the_zero_exit_only_when_reachable() {
 }
 
 #[test]
+fn a_winning_modular_wrapper_bounds_both_candidate_walks() {
+    let source = private_result(24, 24)
+        .replace("store i3 %x, 16", "%exponent = or i3 %x, 4\n    store i3 %exponent, 16")
+        .replace("finish(i8 1), head", "finish(i8 99), head");
+    let module = control_example(&source, 3, "");
+    for (budget, generated, compared) in
+        [(41, 37_658, 67_111), (50, 55_105, 101_983), (100, 195_136, 381_853), (200, 489_536, 970_253)]
+    {
+        let compiled =
+            compile_private_loop_with_budget(&module, ApplyMode::Automatic, 16, budget).expect("compile the wrapper");
+        assert_eq!(compiled.construction, Construction::ModularInPlace { passes: 3 }, "B={budget}");
+        assert_eq!(compiled.block.ops().len(), 5_752, "B={budget}");
+        assert!(compiled.work.gates_generated <= generated, "B={budget}: {:?}", compiled.work);
+        assert_eq!(compiled.work.comparison_gates, compared, "B={budget}");
+    }
+}
+
+#[test]
 fn a_definitely_nonzero_exponent_keeps_the_controlled_circuit_when_it_fits() {
-    for (base, operations, scratch, toffolis) in [(2, 6, 0, 0), (7, 1482, 164, 240)] {
+    for (base, operations, scratch, toffolis, comparison) in [(2, 6, 0, 0, 0), (7, 1482, 164, 240, 7_230)] {
         let source = nonzero_exponent_pair(SOURCE);
         let source = source.replace("finish(i8 1), head(i8 1, i8 7,", &format!("finish(i8 99), head(i8 1, i8 {base},"));
         let module = control_example(&source, 3, "");
@@ -393,11 +420,29 @@ fn a_definitely_nonzero_exponent_keeps_the_controlled_circuit_when_it_fits() {
         println!("base {base}, exponent 2 or 3: {construction:?}, {measured:?} operations/scratch/Toffolis");
         assert_eq!(measured, (operations, scratch, toffolis), "base {base}");
         assert_eq!(construction, Construction::Controlled { proved_passes: 0 });
+        assert_eq!(compiled.work.comparison_gates, comparison, "base {base}");
         if base == 7 {
             let limited = compile_private_loop_at(&module, ApplyMode::Automatic, u64::MAX - 32)
                 .expect("the in-place update fits when the controlled circuit cannot");
             assert_eq!(limited.construction, Construction::ModularInPlace { passes: 2 });
+            assert_eq!(limited.work.comparison_gates, 0);
         }
+    }
+}
+
+#[test]
+fn unreachable_product_uses_leave_the_fitting_modular_circuit_eligible() {
+    let source = nonzero_exponent_pair(SOURCE).replace("finish(i8 1), head", "finish(i8 99), head");
+    let control = control_example(&source, 3, "");
+    let expected = compile_private_loop_at(&control, ApplyMode::Automatic, u64::MAX - 32).expect("the control fits");
+    assert_eq!(expected.construction, Construction::ModularInPlace { passes: 2 });
+    for value in ["0", "%product"] {
+        let extended = source.replace("    ret %residue\n}", &format!("    ret %residue\ncold:\n    ret {value}\n}}"));
+        let module = control_example(&extended, 3, "");
+        let compiled = compile_private_loop_at(&module, ApplyMode::Automatic, u64::MAX - 32)
+            .expect("a cold return leaves the in-place circuit eligible");
+        assert_eq!(compiled.construction, expected.construction);
+        assert_eq!(compiled.block.ops(), expected.block.ops());
     }
 }
 

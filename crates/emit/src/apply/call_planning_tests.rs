@@ -296,3 +296,117 @@ no:
         assert_eq!(compiled.block.ops().len(), 3);
     }
 }
+
+#[test]
+fn argument_independent_stop_leaves_allowance_for_a_later_selector() {
+    let cold = "    effect 0\n".repeat(8189);
+    let module = load(&format!(
+        r#"
+memory 65536
+func @main() {{
+entry:
+    %x = qalloc 1
+    %y = qalloc 1
+    h %x[0]
+    h %y[0]
+    %out = qalloc 8
+    %fault = qalloc 5
+    apply @f(%x, %y) -> %out, %fault budget 12
+    ret
+}}
+func @f(i1 %x, i1 %y) -> i8 {{
+entry:
+    br %x, quick, fork
+quick:
+    br doomed(i1 0)
+fork:
+    br %y, slow, later
+doomed(i1 %arg):
+    call @stop(%arg)
+    ret 0
+slow:
+    br doomed(i1 1)
+later:
+    br last
+last:
+    %tag = call @tag()
+    switch i2 %tag, 2: done, default: recurse
+done:
+    ret 21
+recurse:
+    %again = call @cycle()
+    ret %again
+}}
+func @stop(i1 %arg) {{
+entry:
+    fault unreachable
+cold:
+{cold}
+    ret
+}}
+func @tag() -> i2 {{
+entry:
+    ret 2
+}}
+func @cycle() -> i8 {{
+entry:
+    %again = call @cycle()
+    ret %again
+}}
+"#,
+    ))
+    .expect("valid call program");
+    let main = module.function_named("main").expect("runner");
+    let options = Options { machine_meaning: true, ..Options::default() };
+    let mut direct = Executor::new(&module, main, &[], options).expect("reference");
+    assert_eq!(direct.run(), Outcome::Returned(None));
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        let mut emitted = Executor::new(&module, main, &[], options).expect("gate runner");
+        let mut compile = |input: ApplyInput<'_>| {
+            let compiled = compile_apply_with(input, mode).expect("both stopping calls leave room for the selector");
+            assert_eq!(compiled.block.ops().len(), 25);
+            assert_eq!(compiled.work.context_schedules, 2);
+            Ok(compiled.block)
+        };
+        assert_eq!(emitted.run_emitted(&mut compile), Outcome::Returned(None), "{mode:?}");
+        assert_eq!(emitted.snapshot(), direct.snapshot());
+        assert_eq!(emitted.stats().nonzero_release_weight, 0.0);
+    }
+}
+
+#[test]
+fn a_store_without_declarations_leaves_the_comparison_unproved() {
+    let module = load(
+        r#"
+memory 4096
+func @f(i64 %x, i64 %y) -> i1 {
+entry:
+    %equal = icmp eq i64 %x, %y
+    store i8 0, %x
+    ret %equal
+}
+"#,
+    )
+    .expect("valid store");
+    for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
+        let compiled = compile_apply_with(
+            ApplyInput {
+                module: &module,
+                callee: module.function_named("f").expect("entry"),
+                args: &[Argument::Register(0..64), Argument::Register(64..128)],
+                out: 128..129,
+                fault: 129..134,
+                budget: 0,
+                entry_fault: None,
+                stack_available: 4096,
+                memory: None,
+                scratch_start: 134,
+            },
+            mode,
+        )
+        .expect("compile the budget fault");
+        assert_eq!(compiled.work.temporary_gates, 0);
+        assert_eq!(compiled.work.gates_generated, 1);
+        assert_eq!(compiled.work.final_gates, 1);
+    }
+}

@@ -904,3 +904,38 @@ entry:
 
 #[path = "mulmod.rs"]
 mod mulmod;
+
+#[test]
+fn copies_every_slot_in_the_initial_and_split_control_routes() {
+    let module = load(
+        r#"
+func @f(i1 %x) -> i1 {
+entry:
+    br %x, yes, no
+yes:
+    ret 1
+no:
+    ret 0
+}
+"#,
+    )
+    .expect("valid conditional");
+    let compiled = compile_apply_with(
+        ApplyInput {
+            module: &module,
+            callee: module.function_named("f").expect("entry"),
+            args: &[Argument::Register(0..1)],
+            out: 1..2,
+            fault: 2..7,
+            budget: 2,
+            entry_fault: None,
+            stack_available: 64,
+            memory: None,
+            scratch_start: 7,
+        },
+        ApplyMode::Automatic,
+    )
+    .expect("compile the conditional");
+    assert_eq!(compiled.construction, Construction::Controlled { proved_passes: 0 });
+    assert_eq!(compiled.work.snapshot_words, 2 * (1 + 1));
+}

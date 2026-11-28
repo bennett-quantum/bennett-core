@@ -3,12 +3,11 @@
 use std::fmt::Write;
 
 use bennett_exec::{Executor, GateBlock, Options, Outcome};
-use bennett_ir::load;
+use bennett_ir::{Width, load};
 
-use super::Argument;
-use super::bits::{Bit, Circuit, ONE};
-use super::memory::{AccessError, AddressProof};
-use super::{ApplyInput, compile_apply};
+use super::{AccessError, AddressProof, Memory};
+use crate::apply::bits::{Bit, Circuit, ONE, ZERO};
+use crate::apply::{ApplyInput, Argument, compile_apply};
 
 #[test]
 fn dense_load_retains_every_overlapping_start() {
@@ -64,6 +63,18 @@ flip{bit}:
         let mut compile = |input: ApplyInput<'_>| {
             if let Some(block) = &block {
                 return Ok(block.clone());
+            }
+            let mut memory = Memory::new(&input, true);
+            let address_word = (0..18).map(Bit::input).chain(std::iter::repeat(ZERO)).take(64).collect::<Vec<_>>();
+            let width = Width::new(128).expect("i128");
+            let last = STARTS as u64 - 1;
+            let (addresses, outside) = memory
+                .lookup_addresses(&Circuit::new(18), &address_word, ONE, width, last)
+                .unwrap_or_else(|_| panic!("all dense starts fit the declared segment"));
+            assert!(!outside);
+            assert_eq!(addresses.len(), STARTS);
+            for (index, address) in addresses.into_iter().enumerate() {
+                assert_eq!(address, index as u64, "dense load start {index}");
             }
             let result = compile_apply(input)?;
             let work = result.work;

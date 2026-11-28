@@ -8,7 +8,7 @@ use super::bits::{Bit, Circuit, ONE, Word, ZERO};
 use super::calls::Program;
 use super::flow::{BranchEquality, Flow, ShiftLoop};
 use super::symbolic::{Point, Step};
-use super::work::{self, Work};
+use super::work;
 use super::{ApplyError, Copies};
 use facts::Facts;
 
@@ -48,7 +48,6 @@ impl Refusal {
     }
 }
 
-#[derive(Clone)]
 struct Route {
     point: Point,
     enabled: Bit,
@@ -57,6 +56,12 @@ struct Route {
     // Inclusive bounds on steps spent since the definite prefix, for enabled inputs only.
     first: u64,
     last: u64,
+}
+
+impl Route {
+    fn snapshot(&self) -> Self {
+        Self { slots: work::copy_slots(&self.slots), facts: self.facts.snapshot(), ..*self }
+    }
 }
 
 struct Boundary {
@@ -92,7 +97,14 @@ pub(super) fn run(
         choices: BTreeSet::new(),
         boundaries: Vec::new(),
     };
-    let route = Route { point: start, enabled: ONE, slots: slots.to_vec(), facts: Facts::default(), first: 0, last: 0 };
+    let route = Route {
+        point: start,
+        enabled: ONE,
+        slots: work::copy_slots(slots),
+        facts: Facts::default(),
+        first: 0,
+        last: 0,
+    };
     let end = controls.follow(route)?;
     debug_assert!(end.is_none(), "no enclosing continuation");
     Ok((controls.copies, controls.proved_passes))
@@ -238,8 +250,7 @@ impl Controls<'_, '_> {
         {
             return Err(Failure::Control(Refusal::RepeatedContinuation));
         }
-        work::add(Work::SnapshotWords, route.slots.len() + route.slots.iter().map(Vec::len).sum::<usize>());
-        let (mut yes_route, mut no_route) = (route.clone(), route);
+        let (mut yes_route, mut no_route) = (route.snapshot(), route);
         if let Some(equality) = BranchEquality::in_block(self.program.block(point)) {
             let equal_route = if equality.when_true { &mut yes_route } else { &mut no_route };
             let slot = self.program.slot(point, equality.slot);
@@ -270,8 +281,7 @@ impl Controls<'_, '_> {
             };
             let exit_mask = self.circuit.and(route.enabled, continuation.not());
             if !exit_mask.is_zero() {
-                work::add(Work::SnapshotWords, route.slots.len() + route.slots.iter().map(Vec::len).sum::<usize>());
-                let mut exiting = route.clone();
+                let mut exiting = route.snapshot();
                 // Every enabled exit saw zero. Carry that fact through the
                 // transfer, including when the tested word is an exit argument.
                 let zeroed = self.program.slot(test, plan.zero_on_exit);

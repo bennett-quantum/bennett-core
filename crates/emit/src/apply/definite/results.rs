@@ -70,14 +70,14 @@ struct Query {
 }
 
 enum Continuation {
-    Exact(Vec<Option<Bit>>),
+    Exact { sources: Vec<Option<Bit>>, price: usize },
     Unconstrained,
 }
 
 impl Continuation {
     fn answer(self, plan: &Constants<'_>) -> CallResult {
         match self {
-            Self::Exact(sources) => Query::answer(&sources, plan),
+            Self::Exact { sources, .. } => Query::answer(&sources, plan),
             Self::Unconstrained if plan.may_return => CallResult::Returns(Vec::new()),
             Self::Unconstrained => CallResult::Stops,
         }
@@ -134,9 +134,10 @@ impl<'a> CallProofs<'a> {
     }
 
     fn get(&self, context: &Context) -> Option<&Rc<Constants<'a>>> {
-        if context.independent {
-            work::add(Work::SummaryTableReads, 1);
-            self.independent[context.callee.index()].as_ref()
+        work::add(Work::SummaryTableReads, 1);
+        let independent = self.independent[context.callee.index()].as_ref();
+        if context.independent || independent.is_some_and(|plan| !plan.may_return) {
+            independent
         } else {
             work::add(Work::CallLookups, 1);
             self.specific.get(context)
@@ -188,7 +189,7 @@ impl<'a> CallProofs<'a> {
                     let price = calls::work(module.function(callee));
                     if let Some(remaining) = self.remaining.checked_sub(price) {
                         self.remaining = remaining;
-                        requested = Some((context, Continuation::Exact(sources)));
+                        requested = Some((context, Continuation::Exact { sources, price }));
                         return None;
                     }
                     // Keep the unconstrained stopping proof when the old copied-result
@@ -208,17 +209,24 @@ impl<'a> CallProofs<'a> {
                 result
             });
             if complete {
-                let (solver, context, continuation) = pending.pop().expect("current proof");
+                let (mut solver, context, continuation) = pending.pop().expect("current proof");
                 active.remove(&context.callee);
+                let Some(continuation) = continuation else { return Rc::new(solver.plan) };
+                let independent = context.independent || solver.generalize_stop();
+                if independent
+                    && !solver.plan.may_return
+                    && let Continuation::Exact { price, .. } = &continuation
+                {
+                    self.remaining += price;
+                }
                 let plan = Rc::new(solver.plan);
-                let Some(continuation) = continuation else { return plan };
                 let answer = continuation.answer(&plan);
                 if pending.len() > 1 && matches!(answer, CallResult::Returns(_)) {
                     work::add(Work::Dependencies, 1);
                 }
                 resumed = Some(answer);
                 self.has_completed_contexts = true;
-                if context.independent {
+                if independent {
                     work::add(Work::SummaryTableWrites, 1);
                     self.independent[context.callee.index()] = Some(plan);
                 } else {

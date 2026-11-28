@@ -703,12 +703,16 @@ argument facts, including at calls whose results are discarded. The call still c
 its normal device steps, including any fault before a return. An unfinished recursive
 query keeps possible continuations and supplies an unknown word. When the copied-result
 allowance runs out, the analysis uses the unconstrained stopping proof and leaves
-argument-specific return bits unknown.
+argument-specific return bits unknown. A stopping proof that reads no parameters
+can serve every argument shape and releases its reserved return-word allowance.
+Modular recognition checks uses in the recognized shape and at other points the
+shared worklist reaches.
 
 Each compilation accumulates work in one meter. The counters cover reached transfers,
 successor and target tests, context and fact accesses, and the elements copied or joined.
-They also record address candidates, declaration and byte accesses, replayed gates and
-assignment packs. Speculative, result-copy, placement and inverse work remains recorded
+The snapshot counts include the initial controlled slots, saved-decision exits and
+guard facts copied with a control route. The meter also records address candidates,
+declaration and byte accesses, replayed gates and assignment packs. Speculative, result-copy, placement and inverse work remains recorded
 when a candidate circuit is dropped or rewound. The existing limits on individual proofs
 still select their conservative fallbacks. The device budget counts the steps of the
 applied function.

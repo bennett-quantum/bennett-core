@@ -117,6 +117,10 @@ impl<'a> Frame<'a> {
         }
     }
 
+    pub(super) fn reached_points(&self, block: BlockId) -> Option<usize> {
+        self.constants.reached_points(block)
+    }
+
     pub(super) fn definite_stores(&self) -> bool {
         self.constants.definite_stores()
     }
@@ -163,6 +167,7 @@ impl<'a> Frame<'a> {
 
     fn check_instructions(&self) -> Result<(bool, Accesses), ApplyError> {
         let mut needs_analysis = false;
+        let declared_memory = !self.module.data.is_empty();
         let mut accesses = Accesses::default();
         for (index, block) in self.module.function(self.callee).blocks.iter().enumerate() {
             let block_id = BlockId(index as u32);
@@ -181,8 +186,7 @@ impl<'a> Frame<'a> {
                             rhs: Operand::Slot(_),
                             ..
                         }
-                        | Inst::Store { address: Operand::Slot(_), .. }
-                );
+                ) || declared_memory && matches!(inst, Inst::Store { address: Operand::Slot(_), .. });
                 if let Some((operation, route)) = unsupported(inst) {
                     return Err(self.error(Point { block: block_id, index, copy: 0 }, operation, route));
                 }

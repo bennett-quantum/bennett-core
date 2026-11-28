@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use bennett_exec::Wire;
-use bennett_ir::{BinOp, BlockId, CastOp, Function, Inst, Operand, Predicate, Slot, Target, Terminator, Width};
+use bennett_ir::{BinOp, BlockId, CastOp, Inst, Operand, Predicate, Slot, Target, Terminator, Width};
 
 use super::ApplyInput;
 use super::bits::{Bit, Checkpoint, Circuit, ONE, Word, ZERO, definite};
@@ -32,6 +32,7 @@ enum Condition {
 }
 
 struct Update<'a> {
+    point: Point,
     product: Product,
     latch: &'a Target,
     skipped: Option<Operand>,
@@ -76,7 +77,7 @@ impl Product {
             let child = program.direct_child(point)?;
             let body = program.block(child);
             let product = Self::inline(&body.insts)?;
-            if uses(program.function(child), product.dividend) != 1
+            if uses(program, child, product.dividend, &[child.block]) != 1
                 || !matches!(body.term, Terminator::Return(Some(Operand::Slot(slot))) if slot == product.result)
             {
                 return None;
@@ -98,7 +99,7 @@ impl Product {
             })
         } else {
             let product = Self::inline(instructions)?;
-            (uses(program.function(point), product.dividend) == 1).then_some(product)
+            (uses(program, point, product.dividend, &[point.block]) == 1).then_some(product)
         }
     }
 
@@ -107,16 +108,23 @@ impl Product {
     }
 }
 
-fn uses(function: &Function, slot: Slot) -> usize {
+fn uses(program: &Program<'_>, point: Point, slot: Slot, required: &[BlockId]) -> usize {
     let mut count = 0;
     let mut read = |source| count += usize::from(source == slot);
-    for block in &function.blocks {
+    for (index, block) in program.function(point).blocks.iter().enumerate() {
         work::add(Work::ShapeVisits, 1);
-        for inst in &block.insts {
+        let id = BlockId(index as u32);
+        let full = block.insts.len() + 1;
+        // Retain the known uses in the checked shape itself. Its use count
+        // must still detect an extra operand even if a mandatory use is cold.
+        let points = if required.contains(&id) { full } else { program.reached_points(point, id).unwrap_or(full) };
+        for inst in block.insts.iter().take(points) {
             work::add(Work::Operations, 1);
             inst.visit_uses(&mut read);
         }
-        block.term.visit_uses(&mut read);
+        if points == full {
+            block.term.visit_uses(&mut read);
+        }
     }
     count
 }
@@ -175,7 +183,7 @@ impl<'a> Update<'a> {
                     }
                     let condition = if set { Condition::BitSet(exponent) } else { Condition::BitClear(exponent) };
                     let steps = body.insts.len() as u64 + 2 + product.steps;
-                    return Some(Self { product, latch: join, skipped: Some(*old), condition, steps });
+                    return Some(Self { point: update, product, latch: join, skipped: Some(*old), condition, steps });
                 }
                 None
             }
@@ -185,7 +193,7 @@ impl<'a> Update<'a> {
                     return None;
                 }
                 let steps = product.steps + 1;
-                Some(Self { product, latch, skipped: None, condition: Condition::EveryPass, steps })
+                Some(Self { point: head, product, latch, skipped: None, condition: Condition::EveryPass, steps })
             }
             Terminator::Switch { .. }
             | Terminator::Return(_)
@@ -197,9 +205,8 @@ impl<'a> Update<'a> {
 }
 
 fn clone_slots(slots: &[Word]) -> Vec<Word> {
-    work::add(Work::SnapshotWords, slots.len() + slots.iter().map(Vec::len).sum::<usize>());
     work::add(Work::SnapshotSlots, slots.len());
-    slots.to_vec()
+    work::copy_slots(slots)
 }
 
 fn next_definite<'a>(
@@ -363,7 +370,8 @@ impl<'a> Shape<'a> {
         let old_residue = Operand::Slot(carried.params[residue].slot);
         let old_base = Operand::Slot(carried.params[base].slot);
         let residue_uses = 1 + usize::from(update.skipped.is_some()) + usize::from(pretested);
-        if uses(program.function(entry), carried.params[residue].slot) != residue_uses {
+        let required = [head.block, update.point.block, entry.block];
+        if uses(program, entry, carried.params[residue].slot, &required) != residue_uses {
             return None;
         }
         if *old_exp != Operand::Slot(carried.params[exponent].slot)
