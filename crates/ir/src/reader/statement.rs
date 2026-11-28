@@ -273,9 +273,10 @@ impl<'s> Parser<'s> {
         Ok(Inst::CallIndirect { signature: Signature { params, result }, target, args, dst })
     }
 
-    /// `GATE target [ctrl qubit, ...]`, after the mnemonic and any angle. A gate whose qubits are all register
-    /// qubits at literal positions below 2^32 is `Gate`; one with a qubit in memory or a position given as an
-    /// `i64` value (a run-time position, or a literal from 2^32) is `GateAt`.
+    /// `GATE target [ctrl qubit, ...]`, after the mnemonic and any angle. A gate whose qubits are all qubits of
+    /// named registers (slots) at literal positions below 2^32 is `Gate`; one with a qubit in memory, a position
+    /// given as an `i64` value (a run-time position, or a literal from 2^32), or a constant handle at any
+    /// position (`1[0]`) is `GateAt`.
     fn gate(&mut self, scope: &mut Scope<'s>, gate: Gate) -> Result<Inst, Failure> {
         let (target, controls) = self.places(scope)?;
         let register = |place: &Place| match place {

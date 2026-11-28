@@ -44,8 +44,8 @@ pub enum Undo {
     Apply,
     /// A `setjmp`. Words: the record's old bytes (two words, low half first), then the old result slot.
     Setjmp,
-    /// A gate with a qubit in memory or a qubit at a position given as a value (`GateAt`, `RotateBy`,
-    /// `GateBy`) whose memory bytes all held qubits already, undone by its inverse. Words: none, but for a
+    /// A gate of `GateAt`, `RotateBy` or `GateBy` (a coded gate, also on named register qubits at literal
+    /// positions) whose memory bytes, if any, all held qubits already, undone by its inverse. Words: none, but for a
     /// gate with a control list (`ctrl list`), the controls it read, as register wires in list order, then
     /// their number.
     GateAt,
