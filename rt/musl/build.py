@@ -6,6 +6,7 @@ front/include/bq-prefix.h by force and makes the declaration check of docs/HANDL
 takes its declarations of the effect primitives from that file (section 15, R1 and R2)."""
 import argparse
 import codecs
+import fcntl
 import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -14,6 +15,7 @@ import re
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 
 HERE = Path(__file__).resolve().parent
 SOURCE = HERE / "musl-1.2.5"
@@ -47,11 +49,13 @@ def driver_reads(driver, flags, scratch):
     strace = shutil.which("strace")
     if strace is None:
         return None
-    probe = scratch / "driver-probe"
-    shutil.rmtree(probe, ignore_errors=True)
-    probe.mkdir(parents=True)
+    with tempfile.TemporaryDirectory(dir=scratch) as folder:  # a folder of this run's own: builds may run at once
+        return traced_reads(strace, driver, flags, Path(folder))
+
+
+def traced_reads(strace, driver, flags, probe):
     (probe / "probe.c").write_text("")
-    trace = scratch / "driver-probe.trace"
+    trace = probe / "probe.trace"
     command = [strace, "-f", "-qq", "-s", "65535", "-e", "trace=open,openat,execve", "-o", trace,
                driver, *flags, "-O0", "-o", probe / "probe.bc", probe / "probe.c"]
     traced = subprocess.run([str(a) for a in command], cwd=probe, env={**os.environ, "TMPDIR": str(probe)})
@@ -70,6 +74,14 @@ def driver_reads(driver, flags, scratch):
     return sorted(read)
 
 
+def publish(path, write):
+    """Writes a file under a temporary name beside it and renames it into place, so that a program reading it (a
+    test linking with the archive while another test runs this build) sees the old file or the new one, never a part."""
+    part = path.with_name(path.name + f".part{os.getpid()}")
+    write(part)
+    os.replace(part, path)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("out", nargs="?", type=Path, default=HERE.parents[1] / "target/musl")
@@ -79,6 +91,14 @@ def main():
     out = options.out.resolve()
     build = out / "build"
     build.mkdir(parents=True, exist_ok=True)
+    # One build of a folder at a time: tests run this script at once on target/musl, and configure, musl's headers
+    # and the members are rewritten in place while a build that finds them changed runs.
+    with (out / "build.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        build_locked(options, out, build)
+
+
+def build_locked(options, out, build):
     clang = os.environ.get("CLANG", "clang-18")
     with (out / "configure.log").open("w") as log:
         run([SOURCE / "configure", "--target=x86_64", "--disable-shared"], cwd=build,
@@ -142,14 +162,14 @@ def main():
     with ThreadPoolExecutor(options.jobs) as pool:
         results = list(pool.map(compile_one, sources))
     members = [str(out / "bc" / source.with_suffix(".bc")) for source in sources if source.suffix == ".c"]
-    (out / "members.txt").write_text("".join(member + "\n" for member in members))
+    publish(out / "members.txt", lambda part: part.write_text("".join(member + "\n" for member in members)))
     if not unchanged:
         (out / "index.tsv").unlink(missing_ok=True)  # resolve.py's symbol cache names the members by path
-    (out / "compile.tsv").write_text("".join(f"{source}\t{state}\n" for source, state in results))
-    (out / "cflags.json").write_text(json.dumps(flags))
-    (out / "libc.a").unlink(missing_ok=True)
-    run([os.environ.get("LLVM_AR", "llvm-ar-18"), "rcs", out / "libc.a", *members])
-    stamp.write_text(fingerprint.hexdigest())
+    publish(out / "compile.tsv",
+            lambda part: part.write_text("".join(f"{source}\t{state}\n" for source, state in results)))
+    publish(out / "cflags.json", lambda part: part.write_text(json.dumps(flags)))
+    publish(out / "libc.a", lambda part: run([os.environ.get("LLVM_AR", "llvm-ar-18"), "rcs", part, *members]))
+    publish(stamp, lambda part: part.write_text(fingerprint.hexdigest()))
     print(f"musl 1.2.5: {len(members)} C members; {len(sources) - len(members)} assembly files omitted")
 
 
