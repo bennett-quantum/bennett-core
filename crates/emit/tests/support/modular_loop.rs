@@ -381,25 +381,15 @@ fn modular_proof_checks_the_zero_exit_only_when_reachable() {
 
 #[test]
 fn a_definitely_nonzero_exponent_keeps_the_controlled_circuit_when_it_fits() {
-    use bennett_exec::BlockOp;
-
     for (base, operations, scratch, toffolis) in [(2, 6, 0, 0), (7, 1482, 164, 240)] {
-        let source = SOURCE
-            .replace("i3 %exponent) ->", "i3 %input) ->")
-            .replace("    %empty =", "    %bit = and i3 %input, 1\n    %exponent = or i3 %bit, 2\n    %empty =");
+        let source = nonzero_exponent_pair(SOURCE);
         let source = source.replace("finish(i8 1), head(i8 1, i8 7,", &format!("finish(i8 99), head(i8 1, i8 {base},"));
         let module = control_example(&source, 3, "");
         let (construction, _) = compare_controls(&module, 50, ApplyMode::Automatic, |x| {
             (reference(2 | (x & 1), 1, base, 15, Update::Odd), 0)
         });
         let compiled = compile_private_loop(&module, ApplyMode::Automatic);
-        let [BlockOp::Allocate(span), gates @ .., BlockOp::ReleaseZero(released)] = compiled.block.ops() else {
-            panic!("expected one scratch lifetime");
-        };
-        assert_eq!(span, released);
-        let actual_toffolis =
-            gates.iter().filter(|op| matches!(op, BlockOp::Gate(gate) if gate.controls.len() == 2)).count();
-        let measured = (compiled.block.ops().len(), span.end - span.start, actual_toffolis);
+        let measured = circuit_size(&compiled);
         println!("base {base}, exponent 2 or 3: {construction:?}, {measured:?} operations/scratch/Toffolis");
         assert_eq!(measured, (operations, scratch, toffolis), "base {base}");
         assert_eq!(construction, Construction::Controlled { proved_passes: 0 });
@@ -409,6 +399,40 @@ fn a_definitely_nonzero_exponent_keeps_the_controlled_circuit_when_it_fits() {
             assert_eq!(limited.construction, Construction::ModularInPlace { passes: 2 });
         }
     }
+}
+
+fn nonzero_exponent_pair(source: &str) -> String {
+    source
+        .replace("i3 %exponent) ->", "i3 %input) ->")
+        .replace("    %empty =", "    %bit = and i3 %input, 1\n    %exponent = or i3 %bit, 2\n    %empty =")
+}
+
+fn circuit_size(compiled: &bennett_emit::CompiledApply) -> (usize, u64, usize) {
+    use bennett_exec::BlockOp;
+
+    let [BlockOp::Allocate(span), gates @ .., BlockOp::ReleaseZero(released)] = compiled.block.ops() else {
+        panic!("expected one scratch lifetime");
+    };
+    assert_eq!(span, released);
+    let toffolis = gates.iter().filter(|op| matches!(op, BlockOp::Gate(gate) if gate.controls.len() == 2)).count();
+    (compiled.block.ops().len(), span.end - span.start, toffolis)
+}
+
+#[test]
+fn a_modular_helper_can_keep_the_cheaper_step_machine_circuit() {
+    let source = nonzero_exponent_pair(&through_helper())
+        .replace("i8", "i16")
+        .replacen("-> i16", "-> i8", 1)
+        .replace("finish(i16 1), head(i16 1, i16 7,", "finish(i16 99), head(i16 1, i16 2,")
+        .replace("i16 15", "i16 127")
+        .replace("    ret %residue", "    %out = trunc i16 %residue to i8\n    ret %out");
+    let module = control_example(&source, 3, "");
+    let (construction, _) = compare_controls(&module, 50, ApplyMode::Automatic, |x| (4 << (x & 1), 0));
+    let compiled = compile_private_loop(&module, ApplyMode::Automatic);
+    let measured = circuit_size(&compiled);
+    println!("base 2 modulo 127 with helper: {construction:?}, {measured:?} operations/scratch/Toffolis");
+    assert_eq!(measured, (22, 11, 1));
+    assert!(matches!(construction, Construction::StepMachine { .. }));
 }
 
 #[test]

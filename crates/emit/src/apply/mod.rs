@@ -3,6 +3,7 @@
 mod arithmetic;
 mod bits;
 mod calls;
+mod choice;
 mod controls;
 mod definite;
 mod division;
@@ -167,6 +168,8 @@ impl Copies {
     }
 }
 
+const MODULAR_REASON: &str = "a proved modular residue update with a whole-function budget";
+
 /// Try proved in-place updates and structured control before instruction dispatch.
 pub fn compile_apply(input: ApplyInput<'_>) -> Result<CompiledApply, ApplyError> {
     compile_apply_with(input, ApplyMode::Automatic)
@@ -205,21 +208,22 @@ fn compile_with_analysis_limit(
     };
     let mut spent = 0;
     let mut candidate = None;
-    let (copies, construction, reason) = loop {
+    let mut alternative = None;
+    let lowered = loop {
         match status {
             Status::Returned(word) => {
-                break (
+                break Ok((
                     Copies { returned: vec![(ONE, word)], faulted: Vec::new() },
                     Construction::Definite,
                     "control stays definite",
-                );
+                ));
             }
             Status::Faulted(code) => {
-                break (
+                break Ok((
                     Copies { returned: Vec::new(), faulted: vec![(ONE, code)] },
                     Construction::Definite,
                     "control stays definite",
-                );
+                ));
             }
             Status::Running(_) if spent == input.budget => status = Status::Faulted(Fault::Budget),
             Status::Running(point) => {
@@ -261,11 +265,11 @@ fn compile_with_analysis_limit(
                             remaining,
                         )?;
                         copies.faulted.extend(faults);
-                        break (
+                        break Ok((
                             copies,
                             Construction::StepMachine { ticks: ticks + 1 },
                             "qubit-dependent instruction fault",
-                        );
+                        ));
                     }
                     Step::Fault(fault) => {
                         status = Status::Faulted(fault);
@@ -280,42 +284,25 @@ fn compile_with_analysis_limit(
                         let remaining = input.budget - spent;
                         let (copies, ticks) =
                             machine::run(&mut circuit, &program, &mut slots, &mut memory, (point, ONE), remaining)?;
-                        break (copies, Construction::StepMachine { ticks }, refusal.reason());
+                        break Ok((copies, Construction::StepMachine { ticks }, refusal.reason()));
                     }
                     Step::Branch(..) => {
                         let remaining = input.budget - spent;
-                        if let Some(candidate) = candidate.take() {
-                            let check_controlled = candidate.can_skip_empty_exit()
-                                && (!program.has_calls()
-                                    || (point.copy != 0
-                                        && (program.has_memory() || saved::Loop::prove(&program, point).is_none())));
-                            if let Some((plan, checkpoint)) =
-                                candidate.prove(&input, &program, &memory, check_controlled)
-                            {
-                                if plan.preserve_controlled {
-                                    let control_start = circuit.checkpoint();
-                                    let mut controlled = circuit.suffix(&control_start);
-                                    if let Ok((copies, proved_passes)) =
-                                        controls::run(&mut controlled, &program, &slots, point, remaining)
-                                        && wires.fits(&controlled)
-                                    {
-                                        circuit.replace_after(control_start, controlled);
-                                        break (
-                                            copies,
-                                            Construction::Controlled { proved_passes },
-                                            "qubit-dependent choices use controls within the shared budget",
-                                        );
-                                    }
-                                }
+                        if let Some(candidate) = candidate.take()
+                            && let Some((plan, checkpoint)) = candidate.prove(&input, &program, &memory)
+                        {
+                            if plan.skipped_empty_exit {
+                                alternative = Some((plan, checkpoint, memory.counts()));
+                            } else {
                                 let mut in_place = circuit.suffix(&checkpoint);
                                 let residue = plan.emit(&mut in_place);
                                 if wires.fits(&in_place) {
                                     circuit.replace_after(checkpoint, in_place);
-                                    break (
+                                    break Ok((
                                         Copies { returned: vec![(ONE, residue)], faulted: Vec::new() },
                                         Construction::ModularInPlace { passes: plan.passes() },
-                                        "a proved modular residue update with a whole-function budget",
-                                    );
+                                        MODULAR_REASON,
+                                    ));
                                 }
                             }
                         }
@@ -336,11 +323,11 @@ fn compile_with_analysis_limit(
                                     let checkpoint = circuit.checkpoint();
                                     let reason = match controls::run(&mut circuit, &program, &slots, point, remaining) {
                                         Ok((copies, proved_passes)) => {
-                                            break (
+                                            break Ok((
                                                 copies,
                                                 Construction::Controlled { proved_passes },
                                                 "qubit-dependent choices use controls within the shared budget",
-                                            );
+                                            ));
                                         }
                                         Err(controls::Failure::Control(refusal)) => {
                                             if can_save && refusal == controls::Refusal::UnprovedLoop {
@@ -353,7 +340,7 @@ fn compile_with_analysis_limit(
                                             route: DISPATCH_REQUIRED,
                                             ..
                                         })) => DISPATCH_REQUIRED,
-                                        Err(controls::Failure::Lowering(error)) => return Err(error),
+                                        Err(controls::Failure::Lowering(error)) => break Err(error),
                                     };
                                     circuit.rewind(checkpoint);
                                     reason
@@ -362,21 +349,22 @@ fn compile_with_analysis_limit(
                                     let bounds = reach::analyze(&program, &input, slots.len(), analysis_limit)
                                         .unwrap_or_default();
                                     let remaining = bounds.last_attempt.map_or(remaining, |last| last - spent);
-                                    let (copies, decisions) =
-                                        plan.run(&mut circuit, &program, &mut slots, remaining, &bounds.widths)?;
-                                    break (
-                                        copies,
-                                        Construction::SavedDecisions { decisions },
-                                        "one proved loop with fixed continuation and exit charges",
+                                    break plan.run(&mut circuit, &program, &mut slots, remaining, &bounds.widths).map(
+                                        |(copies, decisions)| {
+                                            (
+                                                copies,
+                                                Construction::SavedDecisions { decisions },
+                                                "one proved loop with fixed continuation and exit charges",
+                                            )
+                                        },
                                     );
                                 }
                                 reason
                             }
                             ApplyMode::StepMachine => "step machine requested for a qubit-dependent jump",
                         };
-                        let (copies, ticks) =
-                            machine::run(&mut circuit, &program, &mut slots, &mut memory, (point, ONE), remaining)?;
-                        break (copies, Construction::StepMachine { ticks }, reason);
+                        break machine::run(&mut circuit, &program, &mut slots, &mut memory, (point, ONE), remaining)
+                            .map(|(copies, ticks)| (copies, Construction::StepMachine { ticks }, reason));
                     }
                     Step::Return(word) => Status::Returned(word),
                     Step::Inactive => unreachable!("the definite prefix is active"),
@@ -390,13 +378,39 @@ fn compile_with_analysis_limit(
             }
         }
     };
-    let forward = circuit.forward_len();
-    copies.write(&mut circuit, input.out, input.fault);
+    let mut lowered = lowered.and_then(|(copies, construction, reason)| {
+        let forward = circuit.forward_len();
+        copies.write(&mut circuit, input.out.clone(), input.fault.clone());
+        if !wires.fits(&circuit) {
+            return Err(ApplyError::WireSpace);
+        }
+        Ok((forward, construction, reason, memory.counts()))
+    });
+    if let Some((plan, checkpoint, memory_counts)) = alternative {
+        let mut proposed = circuit.suffix(&checkpoint);
+        let residue = plan.emit(&mut proposed);
+        let forward = proposed.forward_len();
+        Copies { returned: vec![(ONE, residue)], faulted: Vec::new() }.write(&mut proposed, input.out, input.fault);
+        if wires.fits(&proposed) {
+            let prefix = circuit.before(&checkpoint);
+            let wins = match &lowered {
+                Ok((original_forward, ..)) => choice::cheaper(&proposed, prefix, forward, &circuit, *original_forward),
+                Err(_) => true,
+            };
+            if wins {
+                let forward = prefix.len() + forward;
+                circuit.replace_after(checkpoint, proposed);
+                let construction = Construction::ModularInPlace { passes: plan.passes() };
+                lowered = Ok((forward, construction, MODULAR_REASON, memory_counts));
+            }
+        }
+    }
+    let (forward, construction, reason, memory) = lowered?;
     Ok(CompiledApply {
         block: wires.finish(circuit, forward, &input.module.function(input.callee).name)?,
         definite_steps: spent,
         construction,
         reason,
-        memory: memory.counts(),
+        memory,
     })
 }

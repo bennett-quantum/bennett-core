@@ -293,12 +293,20 @@ impl Circuit {
         &self.gates
     }
 
+    pub(super) fn before(&self, checkpoint: &Checkpoint) -> &[GateOp] {
+        &self.gates[..checkpoint.gates]
+    }
+
     pub(super) fn forward_len(&self) -> usize {
         self.gates.len()
     }
 
     pub(super) fn fits_at(&self, start: Wire) -> bool {
         self.peak.is_some_and(|end| start.checked_add(end - self.start).is_some())
+    }
+
+    pub(super) fn peak_scratch(&self) -> Option<Wire> {
+        self.peak.map(|end| end - self.start)
     }
 
     pub(super) fn finish(self, forward_len: usize, name: &str) -> Result<GateBlock, ApplyError> {
