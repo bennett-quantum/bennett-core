@@ -1160,6 +1160,7 @@ impl Executor<'_> {
                                 | Inst::GateAt { .. }
                                 | Inst::RotateBy { .. }
                                 | Inst::GateBy { .. }
+                                | Inst::MeasureSlice { .. }
                                 | Inst::Measure { .. }
                                 | Inst::Apply { .. } => None,
                             }
@@ -1309,6 +1310,7 @@ impl Executor<'_> {
                 | Inst::GateAt { .. }
                 | Inst::RotateBy { .. }
                 | Inst::GateBy { .. }
+                | Inst::MeasureSlice { .. }
                 | Inst::Measure { .. }
                 | Inst::Apply { .. } => return None,
             }),
@@ -1380,6 +1382,7 @@ impl Executor<'_> {
                 | Inst::GateAt { .. }
                 | Inst::RotateBy { .. }
                 | Inst::GateBy { .. }
+                | Inst::MeasureSlice { .. }
                 | Inst::Measure { .. }
                 | Inst::Apply { .. } => None,
             },

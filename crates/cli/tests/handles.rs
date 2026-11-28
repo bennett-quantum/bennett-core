@@ -40,3 +40,18 @@ fn the_openqasm_file_declares_the_run_time_width_and_names_the_last_qubit() {
         assert!(text.contains(&format!("\nctrl @ x q1[1], q0[{}];\n", width - 1)), "{text}");
     }
 }
+
+#[test]
+fn the_counting_device_and_the_openqasm_file_take_a_slice_measurement() {
+    let counted = bennett(&["--device", "count", "tests/fixtures/slice-measure.bn"]);
+    assert!(counted.contains("one-qubit gates: 2\n"), "{counted}");
+    let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("slice-{}.qasm", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let target = path.to_str().expect("a UTF-8 path");
+    let report = bennett(&["--device", "qasm", "--qasm-output", target, "tests/fixtures/slice-measure.bn"]);
+    let text = std::fs::read_to_string(&path).expect("the OpenQASM file");
+    std::fs::remove_file(&path).expect("remove the OpenQASM file");
+    assert!(report.starts_with("result: 3"), "{report}");
+    assert!(text.contains("\nmeasure q0[1]; // outcome 1\nmeasure q0[2]; // outcome 1\n"), "{text}");
+    assert_eq!(text.matches("measure ").count(), 2, "{text}");
+}

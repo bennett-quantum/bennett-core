@@ -297,6 +297,7 @@ fn renumber_functions(module: &mut Module, order: &[u32]) {
             | Inst::GateAt { .. }
             | Inst::RotateBy { .. }
             | Inst::GateBy { .. }
+            | Inst::MeasureSlice { .. }
             | Inst::Measure { .. } => {}
         }
     }

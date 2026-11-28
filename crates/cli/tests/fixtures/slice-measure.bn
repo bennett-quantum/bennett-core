@@ -1,0 +1,13 @@
+; A slice measurement through the CLI (crates/cli/tests/handles.rs): qubits 1 and 2 of a register of five,
+; set by X gates, read as 3.
+memory 256
+
+func @main() -> i64 {
+entry:
+    %q = qalloc i64 5
+    x %q[1]
+    x %q[2]
+    %t = measure i64 %q[1, 2]
+    qfree %q
+    ret %t
+}

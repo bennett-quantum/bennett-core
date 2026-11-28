@@ -490,6 +490,21 @@ pub enum Inst {
         /// The qubits measured.
         source: MeasureSource,
     },
+    /// `dst = measure i64 register[low, bits]`: measures the `bits` qubits from position `low` of the register
+    /// (a `qN` register or an `i64` handle) in the computational basis, read least significant first and
+    /// zero-extended to the `i64` `dst`; the register stays allocated and no handle is taken. A handle that
+    /// names no register is `dangling_register`; then `bits` outside 1 to 64, or `low + bits` past the width,
+    /// is `bad_range`.
+    MeasureSlice {
+        /// The measured value, an `i64`.
+        dst: Slot,
+        /// The register handle.
+        register: Slot,
+        /// The `i64` lowest position.
+        low: Operand,
+        /// The `i64` number of qubits.
+        bits: Operand,
+    },
     /// `apply @callee(args) -> out, fault budget b`: runs `callee` coherently, on each basis
     /// configuration separately. See `docs/DESIGN.md`.
     Apply {
@@ -552,7 +567,8 @@ impl Inst {
             | Inst::FuncAddr { dst, .. }
             | Inst::Qalloc { dst, .. }
             | Inst::QallocBy { dst, .. }
-            | Inst::Measure { dst, .. } => Some(*dst),
+            | Inst::Measure { dst, .. }
+            | Inst::MeasureSlice { dst, .. } => Some(*dst),
             Inst::Call { dst, .. } | Inst::CallIndirect { dst, .. } => *dst,
             Inst::Store { .. }
             | Inst::StackRestore { .. }
@@ -602,6 +618,11 @@ impl Inst {
             Inst::Qfree { register } => operand(register),
             Inst::Measure { source: MeasureSource::Register(register), .. } => operand(&Operand::Slot(*register)),
             Inst::Measure { source: MeasureSource::Memory { address, .. }, .. } => operand(address),
+            Inst::MeasureSlice { register, low, bits, .. } => {
+                operand(&Operand::Slot(*register));
+                operand(low);
+                operand(bits);
+            }
             Inst::Gate { target, controls, .. } => {
                 operand(&Operand::Slot(target.register));
                 controls.iter().for_each(|c| operand(&Operand::Slot(c.register)));

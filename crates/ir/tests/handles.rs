@@ -193,3 +193,43 @@ fn a_position_reads_alike_after_every_handle_form() {
         assert_eq!(hex, decimal);
     }
 }
+
+#[test]
+fn a_slice_measurement_reads_writes_and_is_an_i64() {
+    let text = "memory 64
+func @main(i64 %lo, i64 %n, i32 %narrow) -> i64 {
+entry:
+    %q = qalloc 3
+    %h = qalloc i64 70
+    %a = measure i64 %q[1, 2]
+    %b = measure i64 %h[%lo, %n]
+    %m = measure %q
+    %c = measure i8 [%lo]
+    %s = add i64 %a, %b
+    ret %s
+}
+";
+    let module = read(text).expect("reads");
+    let insts = &module.functions[0].blocks[0].insts;
+    let (lo, n, h) = (Slot(0), Slot(1), Slot(4));
+    assert_eq!(
+        insts[3],
+        Inst::MeasureSlice { dst: Slot(6), register: h, low: Operand::Slot(lo), bits: Operand::Slot(n) }
+    );
+    assert!(matches!(insts[2], Inst::MeasureSlice { low: Operand::Const(_), bits: Operand::Const(_), .. }));
+    assert!(matches!(insts[4], Inst::Measure { source: bennett_ir::MeasureSource::Register(_), .. }));
+    assert!(matches!(insts[5], Inst::Measure { source: bennett_ir::MeasureSource::Memory { .. }, .. }));
+    let written = write(&module);
+    assert!(
+        written.contains("    %a = measure i64 %q[1, 2]\n") && written.contains("    %b = measure i64 %h[%lo, %n]\n")
+    );
+    assert_eq!(read(&written), Ok(module));
+    load(text).expect("valid");
+    let narrow = text.replace("%h[%lo, %n]", "%h[%lo, %narrow]");
+    assert!(matches!(problems(&narrow)[..], [Problem::TypeMismatch { .. }]));
+    let not_a_register = text.replace("%h[%lo, %n]", "%narrow[%lo, %n]");
+    assert!(matches!(
+        problems(&not_a_register)[..],
+        [Problem::TypeMismatch { expected: Expected::RegisterOrHandle, .. }]
+    ));
+}
