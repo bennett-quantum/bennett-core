@@ -122,7 +122,9 @@ A module is a list of functions, an initial memory image and a memory size.
   wherever a gate, a control or `qfree` names a register, with qubit positions given as literals or as `i64` values (`docs/SYNTAX.md`, "Handles as integers"). Each
   of these forms means the same as the form with that definite register and position written out; it adds the
   checks `bad_width`, `dangling_register` and `bad_range`, and a kind given as a code `bad_gate`, made from
-  definite values before anything changes.
+  definite values before anything changes. `qwidth %r` gives the width of a register's allocation as an
+  `i64`, a derived form: an ordinary value the program could have kept itself, read from the handle table,
+  with nothing done to the qubits.
 
 There is one instruction set for every tier. A tier is a way of running code, not a different language.
 

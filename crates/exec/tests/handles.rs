@@ -244,7 +244,7 @@ entry:
 /// `quantum_in_region`, before any operand is looked at (here a width of 0 and an unallocated handle).
 #[test]
 fn the_new_forms_inside_an_applied_function_fault_quantum_in_region() {
-    for body in ["%h = qalloc i64 %a", "x %a[%a]", "qfree %a"] {
+    for body in ["%h = qalloc i64 %a", "x %a[%a]", "qfree %a", "%w = qwidth %a"] {
         let module = common::load(&format!(
             "memory 64
 func @f(i64 %a) -> i1 {{
@@ -335,5 +335,41 @@ entry:
 }}"
         ));
         assert_eq!(run(&module, "main", &[], bounded()).0, Outcome::Returned(Some(2)), "{place}");
+    }
+}
+
+/// `qwidth` gives the width the allocation was given, for a `qN` register and an `i64` handle alike, and
+/// does nothing to the qubits; a handle that names no register is `dangling_register`.
+#[test]
+fn qwidth_reads_the_width_of_the_allocation() {
+    let module = common::load(
+        "memory 256
+func @main(i64 %w, i1 %late) -> i64 {
+entry:
+    %q = qalloc 3
+    h %q
+    %h = qalloc i64 %w
+    %a = qwidth %q
+    %b = qwidth %h
+    %s = shl i64 %a, 32
+    %r = or i64 %s, %b
+    br %late, freed, done
+freed:
+    qfree %h
+    %c = qwidth %h
+    ret %c
+done:
+    ret %r
+}",
+    );
+    for w in [1, 64, 65, 200] {
+        let (outcome, executor) = run(&module, "main", &[w, 0], bounded());
+        assert_eq!(outcome, Outcome::Returned(Some(u128::from(3u64 << 32 | w))), "{w}");
+        assert_eq!(executor.snapshot().quantum.amplitudes.len(), 2, "{w}: the superposition of %q is kept");
+        assert_eq!(run(&module, "main", &[w, 1], bounded()).0, Outcome::Faulted(Fault::DanglingRegister), "{w}");
+        assert_eq!(
+            assert_reverses(&module, "main", &[w, 0], bounded()),
+            Outcome::Returned(Some(u128::from(3u64 << 32 | w)))
+        );
     }
 }

@@ -239,6 +239,7 @@ fn total(inst: &Inst) -> bool {
         | Inst::Effect { .. }
         | Inst::Qalloc { .. }
         | Inst::QallocBy { .. }
+        | Inst::Qwidth { .. }
         | Inst::Qfree { .. }
         | Inst::Gate { .. }
         | Inst::GateAt { .. }

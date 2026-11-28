@@ -249,3 +249,27 @@ fn a_slice_measurement_takes_a_constant_handle() {
     assert_eq!(read(&write(&module)), Ok(module));
     load(text).expect("valid");
 }
+
+#[test]
+fn qwidth_reads_writes_and_is_an_i64() {
+    let text = "memory 64
+func @main(i32 %narrow) -> i64 {
+entry:
+    %q = qalloc 3
+    %h = qalloc i64 70
+    %a = qwidth %q
+    %b = qwidth %h
+    %s = add i64 %a, %b
+    ret %s
+}
+";
+    let module = read(text).expect("reads");
+    let insts = &module.functions[0].blocks[0].insts;
+    assert_eq!(insts[2], Inst::Qwidth { dst: Slot(3), register: Slot(1) });
+    let written = write(&module);
+    assert!(written.contains("    %a = qwidth %q\n") && written.contains("    %b = qwidth %h\n"), "{written}");
+    assert_eq!(read(&written), Ok(module));
+    load(text).expect("valid");
+    let narrow = text.replace("qwidth %h", "qwidth %narrow");
+    assert!(matches!(problems(&narrow)[..], [Problem::TypeMismatch { expected: Expected::RegisterOrHandle, .. }]));
+}

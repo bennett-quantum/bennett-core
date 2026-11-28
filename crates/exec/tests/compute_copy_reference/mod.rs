@@ -390,6 +390,7 @@ impl<'m> Reference<'m> {
             Inst::Effect { .. } => stop(&mut n, Fault::EffectInRegion),
             Inst::Qalloc { .. }
             | Inst::QallocBy { .. }
+            | Inst::Qwidth { .. }
             | Inst::Qfree { .. }
             | Inst::Gate { .. }
             | Inst::GateAt { .. }
