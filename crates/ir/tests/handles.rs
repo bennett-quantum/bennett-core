@@ -265,11 +265,23 @@ entry:
 ";
     let module = read(text).expect("reads");
     let insts = &module.functions[0].blocks[0].insts;
-    assert_eq!(insts[2], Inst::Qwidth { dst: Slot(3), register: Slot(1) });
+    assert_eq!(insts[2], Inst::Qwidth { dst: Slot(3), register: Operand::Slot(Slot(1)) });
     let written = write(&module);
     assert!(written.contains("    %a = qwidth %q\n") && written.contains("    %b = qwidth %h\n"), "{written}");
     assert_eq!(read(&written), Ok(module));
     load(text).expect("valid");
     let narrow = text.replace("qwidth %h", "qwidth %narrow");
     assert!(matches!(problems(&narrow)[..], [Problem::TypeMismatch { expected: Expected::RegisterOrHandle, .. }]));
+}
+
+/// `qwidth` of a constant handle reads, writes and validates.
+#[test]
+fn qwidth_takes_a_constant_handle() {
+    let text = "memory 64\nfunc @main() -> i64 {\nentry:\n    %w = qwidth 3\n    ret %w\n}\n";
+    let module = read(text).expect("reads");
+    let constant = Operand::Const(bennett_ir::Const::new(Width::WORD, 3).expect("i64"));
+    assert_eq!(module.functions[0].blocks[0].insts[0], Inst::Qwidth { dst: Slot(0), register: constant });
+    assert!(write(&module).contains("    %w = qwidth 3\n"));
+    assert_eq!(read(&write(&module)), Ok(module));
+    load(text).expect("valid");
 }

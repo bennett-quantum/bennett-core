@@ -373,3 +373,38 @@ done:
         );
     }
 }
+
+/// `qwidth` takes a constant handle, read as a slot's value is: `qwidth 2` is one instruction, so inside an
+/// applied function with one step of budget left it gives `quantum_in_region`.
+#[test]
+fn qwidth_takes_a_constant_handle_as_an_operand_of_the_one_instruction() {
+    let module = common::load(
+        "memory 64
+func @main() -> i64 {
+entry:
+    %q = qalloc 3
+    %h = qalloc i64 70
+    %w = qwidth 2
+    ret %w
+}",
+    );
+    assert_eq!(run(&module, "main", &[], bounded()).0, Outcome::Returned(Some(70)));
+    let applied = common::load(
+        "memory 64
+func @f(i64 %a) -> i1 {
+entry:
+    %w = qwidth 1
+    ret 0
+}
+func @main() -> i5 {
+entry:
+    %o = qalloc 1
+    %f = qalloc 5
+    apply @f(i64 0) -> %o, %f budget 1
+    %m = measure %f
+    ret %m
+}",
+    );
+    let (outcome, _) = run(&applied, "main", &[], common::allowing_region_faults());
+    assert_eq!(outcome, Outcome::Returned(Some(u128::from(Fault::QuantumInRegion.code()))));
+}

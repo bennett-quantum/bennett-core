@@ -72,7 +72,7 @@ impl<'m> Executor<'m> {
                 self.qalloc(*dst, width, true, context)?;
             }
             Inst::Qwidth { dst, register } => {
-                let (_, qubits) = self.register(*register)?;
+                let (_, qubits) = self.register_of(self.handle_of(register))?;
                 self.produce(*dst, u128::from(qubits.count()));
             }
             Inst::Qfree { register } => {

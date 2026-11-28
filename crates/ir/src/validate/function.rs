@@ -263,7 +263,7 @@ impl<'a> Checker<'a> {
             }
             Inst::QallocBy { width, .. } => self.expect(site, *width, Type::Int(Width::WORD)),
             Inst::Qwidth { register, .. } => {
-                self.register_or_handle(site, *register);
+                self.register_operand(site, *register);
             }
             // The bounds are checked when the measurement runs (`bad_range`), also when they are constants.
             Inst::MeasureSlice { register, low, bits, .. } => {
