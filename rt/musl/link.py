@@ -3,7 +3,13 @@
 
 Every unit, the program's and the runtime's own, is compiled with bennett-cc, which includes the declarations file
 front/include/bq-prefix.h by force and makes the declaration check of docs/HANDLES.md, section 4; musl's members were
-compiled with it by build.py. A unit that uses the handle interface includes bq.h itself."""
+compiled with it by build.py. A unit that uses the handle interface includes bq.h itself.
+
+The program's unit is C (.c), preprocessed C (.i), or LLVM IR (.ll, .bc). A preprocessed unit is compiled as it is,
+as clang compiles one, so it must already hold the declarations file: it was preprocessed from a unit that includes
+bq.h, or with `-include bq-prefix.h`; otherwise bennett-cc refuses it by name. Every module linked, archive members
+included, must carry bennett-cc's mark (`!bennett.cc`); one without it is refused by name, so that a member compiled
+by another compiler and supplied through --libdir is not linked unchecked."""
 import argparse
 import json
 import os
@@ -12,13 +18,25 @@ import re
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
+# The named metadata bennett-cc adds to every unit that passed its declaration check (front/src/Primitives.h).
+MARK = re.compile(r"^!bennett\.cc = ", re.M)
 
 
 def run(args, **kwargs):
     return subprocess.run([str(a) for a in args], check=True, **kwargs)
+
+
+def unmarked(modules):
+    """The modules among `modules` (bitcode files) that lack bennett-cc's mark."""
+    def lacks(module):
+        text = run(["llvm-dis-18", module, "-o", "-"], capture_output=True, text=True).stdout
+        return None if MARK.search(text) else module
+    with ThreadPoolExecutor() as pool:
+        return [module for module in pool.map(lacks, modules) if module is not None]
 
 
 def main():
@@ -66,8 +84,25 @@ def main():
     # bennett-cc takes clang's options, then `-o OUTPUT UNIT`; it adds -emit-llvm -c itself.
     def compile_unit(options, source, output):
         run([driver, *options, "-o", output, source])
-    compile_unit([*common, "-nostdinc", "-isystem", HERE / "include", "-isystem", lib / "sysroot/include",
-                  *args.clang_flag], args.source.resolve(), scratch / "program.bc")
+    source = args.source.resolve()
+    kinds = {".c": [], ".i": ["-x", "cpp-output"], ".ll": [], ".bc": []}
+    if source.suffix not in kinds:
+        parser.error(f"{args.source}: a unit is C (.c), preprocessed C (.i) or LLVM IR (.ll, .bc)")
+    if source.suffix == ".i":
+        # bennett-cc takes a C unit by the name .c; -x cpp-output makes clang read it as preprocessed, as for a .i.
+        (scratch / "program.c").unlink(missing_ok=True)
+        (scratch / "program.c").symlink_to(source)
+        source = scratch / "program.c"
+    try:
+        headers = [] if args.source.suffix == ".i" else [
+            "-nostdinc", "-isystem", HERE / "include", "-isystem", lib / "sysroot/include"]
+        compile_unit([*common, *headers, *kinds[args.source.suffix], *args.clang_flag], source, scratch / "program.bc")
+    except subprocess.CalledProcessError:
+        if args.source.suffix == ".i":
+            raise SystemExit(f"{args.source}: a preprocessed unit must hold the declarations file bq-prefix.h: "
+                             "preprocess it with `-include bq-prefix.h` (or from a unit that includes bq.h), "
+                             "or give link.py the C source")
+        raise
     ir = run(["llvm-dis-18", scratch / "program.bc", "-o", "-"], capture_output=True, text=True).stdout
     match = re.search(r"^define\b[^\n]* @main\(([^\n]*)\)", ir, re.M)
     if not match or "..." in match[1]:
@@ -129,10 +164,16 @@ def main():
         compile_unit([*flags, *common, *extra], HERE / source, scratch / output)
     compile_unit([*flags, *common, "-I", HERE], scratch / "inputs.c", scratch / "inputs.bc")
     inputs = [scratch / output for _, output, _ in sources] + [scratch / "program.bc", scratch / "inputs.bc"]
-    roots = []
+    roots, marked = [], set()
     for _ in range(16):
         selected = run(["python3", HERE / "resolve.py", lib / "members.txt", lib / "index.tsv", *inputs, *roots],
                        capture_output=True, text=True).stdout.splitlines()
+        refused = unmarked([module for module in [*inputs, *selected] if module not in marked])
+        if refused:
+            raise SystemExit(f"{refused[0]} lacks bennett-cc's mark (!bennett.cc): it was not compiled by "
+                             "bennett-cc, so it has not passed the declaration check; rebuild the library with "
+                             "rt/musl/build.py, or compile the member with bennett-cc")
+        marked.update([*inputs, *selected])
         run(["llvm-link-18", *inputs, *selected, "-o", scratch / "linked.bc"])
         run(["llvm-dis-18", scratch / "linked.bc", "-o", scratch / "linked.ll"])
         run(["python3", HERE / "weak.py", scratch / "linked.ll", scratch / "linked.ll"],

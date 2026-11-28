@@ -21,8 +21,11 @@ its own declarations of library functions reach the C library's headers as nativ
 The build configures musl out of tree, uses its own `LIBC_OBJS` selection, and substitutes its generic C
 files for x86-64 assembly wherever present. It produces 1,345 bitcode members, a member list, `libc.a`,
 installed public headers and JSON compiler flags. Its fingerprint includes all upstream files, the overlays,
-the build script, the driver binary, the driver's files in `front/include` and the compiler flags;
-unchanged builds reuse the members.
+the build script, the driver binary, the files the driver reads (the declarations file it includes by force, as its
+own dependency list of an empty unit names it, and every other file of that folder, its baseline among them: the
+folder built into that driver, which need not be this checkout's) and the compiler flags; unchanged builds reuse
+the members. `test-build.py` checks that a changed declarations file of a driver built elsewhere compiles the
+members again.
 
 Compile, resolve the archive members, and lower one C program:
 
@@ -32,7 +35,11 @@ cargo run -p bennett -- run program.bn --entry __bennett_entry --budget 10000000
 ```
 
 `link.py` compiles every unit, the program's and the device's own, with `bennett-cc` (`--driver`, by default the
-one beside `--front`), uses musl's public headers, preserves the program's linkage, and pulls archive members as the
+one beside `--front`), and refuses by name any module it would link, archive members included, that lacks
+`bennett-cc`'s mark (`!bennett.cc`), so that a member compiled otherwise and supplied through `--libdir` is not
+linked unchecked. The program's unit is C, preprocessed C (`.i`) or LLVM IR (`.ll`, `.bc`); a `.i` is compiled as
+it is, as clang compiles one, so it must hold the declarations file (preprocessed from a unit that includes `bq.h`,
+or with `-include bq-prefix.h`) and is refused by name otherwise, with that route. `link.py` uses musl's public headers, preserves the program's linkage, and pulls archive members as the
 probe's static-link experiment does (`resolve.py`). It resolves undefined weak references to null except
 the standard init/fini bounds supplied by the front, and retries library dependencies introduced by LLVM
 (such as `puts` from `printf`). It never merges the entire library or internalizes the whole program.
@@ -358,6 +365,7 @@ and what removes it:
 
 ```sh
 python3 rt/musl/test.py                   # needs the library build, front, and debug CLI already built
+python3 rt/musl/test-build.py             # build.py's reuse of members: builds a second bennett-cc and one member
 ```
 
 These offline integration tests are separate from `cargo test` and `front/test.sh`. They compare native
@@ -385,6 +393,9 @@ driver reads the device memory size from the program and passes a request addres
 Sleeps in `sleep`, `sleep-alarm-flags` and `sleep-caller` agree with native. The last runs under an entry that
 calls start-up. A program's own `timer_create` (`timer-own`), another rounding mode and a flag test also agree
 with native.
+`tests/units/` checks preprocessed units (a plain `.i` refused by name; one preprocessed with the declarations
+file, and one from a unit including `bq.h`, linked and run) and a library directory whose member list adds a member
+compiled by plain clang (refused by name, naming the member).
 `tests/regress/` holds the self-checking witnesses of the independent testing pass of this boundary (each
 returns 0 natively and failed or faulted here before its fix). The 35 programs (42 runs with the
 `-O2` ones) took 173 seconds with the debug CLI on the shared machine, after building the library.

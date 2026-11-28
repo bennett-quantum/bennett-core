@@ -9,6 +9,7 @@ import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 import os
+import re
 from pathlib import Path
 import subprocess
 
@@ -33,6 +34,25 @@ for _base in ["sqrt", "fma", "rint", "nearbyint", "lrint", "llrint", "round", "l
 REPLACED[Path("src/math/ilogbl.c")] = (HERE / "math.c", ["-fno-math-errno", "-DM_ilogbl"])
 # timer_create stops by name (timer.c): musl's links the thread exit's inline assembly.
 REPLACED[Path("src/time/timer_create.c")] = (HERE / "timer.c", [])
+
+
+def driver_files(driver, scratch):
+    """The files the driver reads besides a unit: those it includes by force, as its own dependency list of an empty
+    probe unit names them (`-MD`), and every other file of their folders, where it also keeps its baseline. These
+    are the files of the folder built into that driver, which need not be this checkout's front/include."""
+    probe, deps = scratch / "driver-probe.c", scratch / "driver-probe.d"
+    probe.write_text("")
+    probed = subprocess.run([str(driver), "-MD", "-MF", str(deps), "-o", str(scratch / "driver-probe.bc"), str(probe)])
+    if probed.returncode != 0:
+        raise SystemExit(f"{driver} refused an empty unit, so no member can be compiled with it")
+    # A make rule: `target: dependency ...`, lines joined by backslash-newline, spaces in names escaped.
+    text = deps.read_text().replace("\\\n", " ")
+    names = [name.replace("\\ ", " ") for name in re.split(r"(?<!\\)\s+", text.split(":", 1)[1]) if name]
+    forced = [Path(name).resolve() for name in names if Path(name).resolve() != probe.resolve()]
+    if not forced:
+        raise RuntimeError(f"{driver} names no file it includes by force (-MD of an empty unit)")
+    folders = {path.parent for path in forced}
+    return sorted({*forced, *(path for folder in folders for path in folder.iterdir() if path.is_file())})
 
 
 def main():
@@ -65,13 +85,15 @@ def main():
     fingerprint = hashlib.sha256(json.dumps(flags).encode())
     own = {source for source, _ in REPLACED.values()}
     driver = options.driver.resolve()
-    # The members depend on the driver and its files (the declarations file, the baseline), as on musl's sources.
+    # The members depend on the driver and on the files it reads, as on musl's own sources.
     fingerprint.update(driver.read_bytes())
-    for path in sorted([*SOURCE.rglob("*"), *(HERE / "overlay").glob("*.h"), *own, Path(__file__),
-                        *(ROOT / "front/include").glob("bq*")]):
+    for path in sorted([*SOURCE.rglob("*"), *(HERE / "overlay").glob("*.h"), *own, Path(__file__)]):
         if path.is_file():
             fingerprint.update(str(path.relative_to(ROOT)).encode())
             fingerprint.update(path.read_bytes())
+    for path in driver_files(driver, build):
+        fingerprint.update(str(path).encode())
+        fingerprint.update(path.read_bytes())
     stamp = out / "fingerprint"
     unchanged = stamp.exists() and stamp.read_text() == fingerprint.hexdigest()
     sources = []

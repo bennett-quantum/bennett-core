@@ -321,6 +321,56 @@ def efault_cases(args):
         print(f"efault {suite} {case}: passed ({SMALL_STACK_BYTES}-byte stack)", flush=True)
 
 
+def unit_kinds(args):
+    """link.py's units other than C source. Preprocessed C (.i) is compiled as it is, so it must hold the declarations
+    file: a .i preprocessed without it is refused by name with the route; one preprocessed with `-include
+    bq-prefix.h`, or from a unit that includes bq.h, is linked and runs."""
+    units = HERE / "tests/units"
+    headers = ["-nostdinc", "-isystem", HERE / "include", "-isystem", args.libdir / "sysroot/include",
+               "-I", ROOT / "front/include"]
+    cases = [("plain", units / "seven.c", [], None),
+             ("with the declarations file", units / "seven.c", ["-include", ROOT / "front/include/bq-prefix.h"], 7),
+             ("including bq.h", units / "scope.c", [], 7)]
+    for name, source, extra, status in cases:
+        preprocessed = args.out / f"unit-{source.stem}-{len(extra)}.i"
+        assert run(["clang-18", "-E", *headers, *extra, source, "-o", preprocessed]).returncode == 0, name
+        program = preprocessed.with_suffix(".bn")
+        program.unlink(missing_ok=True)
+        linked = run(["python3", HERE / "link.py", preprocessed, "--libdir", args.libdir, "--front", args.front,
+                      "-o", program])
+        if status is None:
+            assert linked.returncode != 0 and not program.exists(), (name, linked.stdout, linked.stderr)
+            assert "a preprocessed unit must hold the declarations file bq-prefix.h" in linked.stderr, linked.stderr
+            print(f"preprocessed unit {name}: refused by name", flush=True)
+            continue
+        assert linked.returncode == 0, (name, linked.stderr)
+        result = run([args.executor, "run", "--entry", "__bennett_entry", "--budget", 100000000, program])
+        assert f"result: {status}\n" in result.stdout, (name, result.stdout)
+        print(f"preprocessed unit {name}: passed ({steps_of(result.stdout)} steps)", flush=True)
+
+
+def unchecked_member(args):
+    """Every module link.py links carries bennett-cc's mark: a library directory whose member list adds a member
+    compiled by plain clang is refused by name, naming the member, and no program is written."""
+    units = HERE / "tests/units"
+    lib = args.out / "unchecked-lib"
+    lib.mkdir(parents=True, exist_ok=True)
+    member = lib / "plain-member.bc"
+    assert run(["clang-18", "-O0", "-emit-llvm", "-c", units / "plain-member.c", "-o", member]).returncode == 0
+    for name in ("cflags.json", "sysroot"):
+        (lib / name).unlink(missing_ok=True)
+        (lib / name).symlink_to(args.libdir.resolve() / name)
+    (lib / "members.txt").write_text((args.libdir / "members.txt").read_text() + f"{member}\n")
+    (lib / "index.tsv").unlink(missing_ok=True)
+    program = args.out / "unchecked.bn"
+    program.unlink(missing_ok=True)
+    linked = run(["python3", HERE / "link.py", units / "plain-caller.c", "--libdir", lib, "--front", args.front,
+                  "-o", program])
+    assert linked.returncode != 0 and not program.exists(), (linked.stdout, linked.stderr)
+    assert f"{member} lacks bennett-cc's mark" in linked.stderr, linked.stderr
+    print("unchecked member: refused by name", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--libdir", type=Path, default=ROOT / "target/musl")
@@ -398,6 +448,8 @@ def main():
     caller_frame(args)
     partial_request(args)
     efault_cases(args)
+    unit_kinds(args)
+    unchecked_member(args)
     print(f"library tests: {time.monotonic() - started:.2f}s", flush=True)
 
 
