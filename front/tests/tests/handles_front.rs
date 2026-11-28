@@ -1198,6 +1198,9 @@ fn options_outside_the_table_stay_with_the_unit() {
     let benign = write_file("handles_withheld_benign.h", "static inline int helper(int x) { return x + 1; }\n");
     let folder = out_dir().join("handles_withheld_folder");
     std::fs::create_dir_all(&folder).expect("a folder");
+    // A configuration file named `-O2` that sets no optimisation level.
+    std::fs::write(folder.join("-O2"), "-Wall\n").expect("write");
+    let config_folder = format!("--config-user-dir={}", path_text(&folder));
     let options: Vec<Vec<&str>> = vec![
         vec!["-std=c11"],
         vec!["-std=gnu2x"],
@@ -1208,6 +1211,17 @@ fn options_outside_the_table_stay_with_the_unit() {
         // Review r1 of the prefix step, P4: `-O2` here is the value of `-Xclang`, not an option, and was forwarded
         // alone, so the unit was refused at `-O0`.
         vec!["-Xclang", "-O2"],
+        // Re-check r2 of the prefix step, Q1: `-O2` is the value of options that clang's option table defines
+        // without a name (`--config`, `--system-header-prefix`, `-Xmicrosoft-windows-sdk-root`), which the list of
+        // such options missed, so it was forwarded and the unit refused at `-O0`.
+        vec![config_folder.as_str(), "--config", "-O2"],
+        vec!["--system-header-prefix", "-O2"],
+        vec!["-Xmicrosoft-windows-sdk-root", "-O2"],
+        // The other way round: options of clang's front end (`-cc1`), whose spellings the driver reads as other
+        // options of its own, so `-O2` after them is an option; the list had them and withheld it, refusing the
+        // unit at `-O0`.
+        vec!["-load", "-O2"],
+        vec!["-defsym", "-O2"],
     ];
     for (level, flags) in LEVELS {
         for (i, option) in options.iter().enumerate() {
@@ -1231,6 +1245,54 @@ fn options_outside_the_table_stay_with_the_unit() {
                 stderr(&result)
             );
             assert!(!compiled.exists(), "{name}");
+        }
+    }
+}
+
+/// Re-check r2 of the prefix step, Q2: the driver's folder is the first `-I` folder of the unit, before the
+/// user's. A `bq.h` that stops the compile (`#error`) in one of the user's `-I` or `-isystem` folders is not found,
+/// by `#include "bq.h"` or `#include <bq.h>`, and the unit is accepted with both calls; one beside the unit or in a
+/// `-iquote` folder is found by the quoted search, as natively, and clang's error stops the unit.
+#[test]
+fn the_drivers_header_comes_before_the_users_include_folders() {
+    let base = out_dir().join("handles_search");
+    let folder = |name: &str| {
+        let path = base.join(name);
+        std::fs::create_dir_all(&path).expect("a folder");
+        path
+    };
+    for name in ["beside", "angled", "system", "quote"] {
+        std::fs::write(folder(name).join("bq.h"), format!("#error the {name} bq.h\n")).expect("write");
+    }
+    let unit = |place: &str, include: &str| {
+        let path = folder(place).join(if include.starts_with('<') { "angled.c" } else { "quoted.c" });
+        std::fs::write(&path, format!("#include {include}\n{TWO_WIDTHS}")).expect("write");
+        path
+    };
+    let (angled, system, quote) = (folder("angled"), folder("system"), folder("quote"));
+    let cases: [(&str, &str, &str, &Path, Option<&str>); 6] = [
+        ("unit", "\"bq.h\"", "-I", &angled, None),
+        ("unit", "<bq.h>", "-I", &angled, None),
+        ("unit", "\"bq.h\"", "-isystem", &system, None),
+        ("unit", "<bq.h>", "-iquote", &quote, None),
+        ("unit", "\"bq.h\"", "-iquote", &quote, Some("the quote bq.h")),
+        ("beside", "\"bq.h\"", "-I", &angled, Some("the beside bq.h")),
+    ];
+    for (level, flags) in LEVELS {
+        for (i, (place, include, option, path, error)) in cases.iter().enumerate() {
+            let name = format!("handles_search_{i}.{level}");
+            let flags: Vec<&str> = flags.iter().copied().chain([*option, path_text(path)]).collect();
+            let (result, compiled) = driver_with(&unit(place, include), &name, &flags, &[]);
+            match error {
+                None => {
+                    assert!(result.status.success(), "{name}: {}", stderr(&result));
+                    assert_eq!(widths(&read(&compiled)), 2, "{name}");
+                }
+                Some(error) => {
+                    assert!(!result.status.success() && stderr(&result).contains(error), "{name}: {}", stderr(&result));
+                    assert!(!compiled.exists(), "{name}");
+                }
+            }
         }
     }
 }
@@ -1263,6 +1325,59 @@ fn table_entries() -> Vec<(String, String)> {
         .collect();
     assert!(entries.len() > 90 && entries.iter().any(|(s, f)| s == "-target" && f == "Triple"), "{entries:?}");
     entries
+}
+
+/// The entries of `front/src/SeparateOptions.def`: spelling, match (`Exact` or `Prefix`) and number of values.
+fn separate_entries() -> Vec<(String, String, usize)> {
+    read(&root().join("front/src/SeparateOptions.def"))
+        .lines()
+        .filter_map(|line| {
+            let (spelling, rest) = line.strip_prefix("BENNETT_SEPARATE(\"")?.split_once("\", ")?;
+            let (matching, values) = rest.strip_suffix(')')?.split_once(", ")?;
+            Some((spelling.to_string(), matching.to_string(), values.parse().expect("a count")))
+        })
+        .collect()
+}
+
+/// Re-check r2 of the prefix step, Q1: the list of options whose next arguments clang's driver reads as their
+/// values (`front/src/SeparateOptions.def`) says how clang 18 reads a command. For each entry, clang's driver given
+/// the spelling (a `Prefix` one with a value joined), one value fewer than the entry says, and an argument that is
+/// no option reads that argument as a value; given all the values, it reads the argument as an option (an unknown
+/// one). The options clang's table defines without a name or through a class, which the list once missed, are
+/// in it; the options of clang's front end that the driver reads as others, which it once had, are not.
+#[test]
+fn the_separate_options_are_those_clang_reads() {
+    let entries = separate_entries();
+    assert!(entries.len() > 100, "{entries:?}");
+    let listed = |spelling: &str| entries.iter().any(|(s, _, _)| s == spelling);
+    for spelling in ["--config", "--system-header-prefix", "-fnew-alignment", "-Xmicrosoft-windows-sdk-root", "-o"] {
+        assert!(listed(spelling), "{spelling} is not listed");
+    }
+    for spelling in ["-load", "-defsym", "-objc-isystem", "-Fo", "-E"] {
+        assert!(!listed(spelling), "{spelling} is listed");
+    }
+    let source = write_c("handles_separate", "int main(void) { return 0; }\n");
+    // The values are relative names of files in a folder of the test's own: the driver writes some even under
+    // `-###` (`--serialize-diagnostics v`).
+    let folder = out_dir().join("handles_separate");
+    std::fs::create_dir_all(&folder).expect("a folder");
+    let probe = "--bennett-not-an-option";
+    let unknown = format!("unknown argument: '{probe}'");
+    on_threads(&entries, |(spelling, matching, values)| {
+        let first = if matching == "Prefix" { format!("{spelling}x86_64") } else { spelling.clone() };
+        for given in [values - 1, *values] {
+            let args: Vec<&str> =
+                std::iter::once(first.as_str()).chain(std::iter::repeat_n("v", given)).chain([probe]).collect();
+            let result = output(
+                Command::new(clang())
+                    .current_dir(&folder)
+                    .args(["--no-default-config", "-###", "-c"])
+                    .arg(&source)
+                    .args(&args),
+            );
+            assert_eq!(stderr(&result).contains(&unknown), given == *values, "{args:?}: {}", stderr(&result));
+        }
+    });
 }
 
 /// The host's target triple, as clang names it.

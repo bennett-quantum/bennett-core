@@ -4,8 +4,8 @@
 //   bennett-cc [clang options] -o unit.bc unit.c        (or unit.ll, unit.bc)
 //
 // 1. A C unit is compiled with the user's options at the requested level with every LLVM pass off, with the
-//    declarations file bq-prefix.h included by force first (UnitCheck.h) and the header's folder on the include
-//    path; the variables that rewrite clang's command line are cleared. At the same time the baseline
+//    declarations file bq-prefix.h included by force first (UnitCheck.h) and the header's folder as the first
+//    `-I` folder; the variables that rewrite clang's command line are cleared. At the same time the baseline
 //    bq-baseline.c is compiled by the driver alone: the same declarations file by the driver's own path, every
 //    pass off, of the user's options only those of BaselineOptions.h's table in their closed forms, an environment
 //    of PATH, TMPDIR and CLANG_NO_DEFAULT_CONFIG=1 alone, no configuration file and no include path. A unit given
@@ -264,8 +264,9 @@ int main(int argc, char **argv) {
   // A refused unit leaves no output, not even an earlier one.
   sys::fs::remove(*output);
   std::string clang = clangPath();
-  // The declarations file first, then the user's options; the header's folder on the include path, so that
-  // `#include "bq.h"` finds the driver's header (which then does not include the declarations file again).
+  // The declarations file first, then the header's folder as the first `-I` folder, then the user's options: a
+  // `bq.h` in the user's `-I` folders is not found, one beside the unit or in its `-iquote` folders is, by the
+  // quoted search (docs/DESIGN.md, rule 1). The driver's header does not include the declarations file again.
   std::string folder = BENNETT_HANDLE_FOLDER;
   std::string prefix = folder + "/bq-prefix.h";
   const std::vector<std::string> passOff = {"-emit-llvm", "-c", "-Xclang", "-disable-llvm-passes"};
