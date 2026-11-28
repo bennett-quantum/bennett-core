@@ -191,6 +191,7 @@ impl<W: Write> QasmDevice<W> {
 fn fixed_name(gate: FixedGate) -> &'static str {
     match gate {
         FixedGate::X => "x",
+        FixedGate::Y => "y",
         FixedGate::H => "h",
         FixedGate::Z => "z",
         FixedGate::S => "s",

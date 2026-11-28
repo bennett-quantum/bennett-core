@@ -104,7 +104,7 @@ A module is a list of functions, an initial memory image and a memory size.
   bad indirect target, `unreachable` and an exhausted budget are *named faults*: part of the result, never a crash.
 - **Quantum instructions**, issued by ordinary code: `qalloc w` and `qalloc i64 %w` (the width at run time),
   `qfree`, single-qubit gates
-  (`x h z s sdg t tdg rx ry rz p`, a rotation's angle a literal or an `i64` computed at run time,
+  (`x y h z s sdg t tdg rx ry rz p`, a rotation's angle a literal or an `i64` computed at run time,
   `Inst::RotateBy`) with an optional list of control qubits, each qubit in a register or at a
   bit of memory ("Qubits in memory", below), `measure` of a register or of bits at an address, and `apply`
   (below). Every allocation has a handle, its number among the run's allocations, from 1, never given again

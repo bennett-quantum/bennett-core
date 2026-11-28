@@ -36,6 +36,7 @@ const PREDICATES: &[(Predicate, &str)] = &[
 const CASTS: &[(CastOp, &str)] = &[(CastOp::Zext, "zext"), (CastOp::Sext, "sext"), (CastOp::Trunc, "trunc")];
 const FIXED: &[(FixedGate, &str)] = &[
     (FixedGate::X, "x"),
+    (FixedGate::Y, "y"),
     (FixedGate::H, "h"),
     (FixedGate::Z, "z"),
     (FixedGate::S, "s"),

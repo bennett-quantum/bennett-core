@@ -194,6 +194,7 @@ fn unitary(gate: Gate) -> [[C; 2]; 2] {
     let phase = |value| [[C::ONE, C::ZERO], [C::ZERO, value]];
     match gate {
         Gate::Fixed(FixedGate::X) => [[C::ZERO, C::ONE], [C::ONE, C::ZERO]],
+        Gate::Fixed(FixedGate::Y) => panic!("the gate y is outside this reference"),
         Gate::Fixed(FixedGate::H) => {
             let h = real(FRAC_1_SQRT_2);
             [[h, h], [h, -h]]

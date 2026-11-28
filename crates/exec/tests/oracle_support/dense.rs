@@ -17,6 +17,7 @@ pub fn gate_matrix(gate: Gate) -> Matrix2<C> {
     match gate {
         Gate::Fixed(g) => match g {
             FixedGate::X => Matrix2::new(zero, one, one, zero),
+            FixedGate::Y => Matrix2::new(zero, -i, i, zero),
             FixedGate::H => Matrix2::new(one, one, one, -one) * C::new(FRAC_1_SQRT_2, 0.0),
             FixedGate::Z => Matrix2::new(one, zero, zero, -one),
             FixedGate::S => Matrix2::new(one, zero, zero, i),

@@ -39,7 +39,7 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | %d = qalloc N                              ; N from 1 to 2^32 - 1
             | %d = qalloc i64 operand                    ; the width at run time; %d an i64 handle
             | qfree %r                                   ; the partial trace: %r dropped unexamined
-            | GATE qubit [ctrl qubit {, qubit}]          ; x h z s sdg t tdg
+            | GATE qubit [ctrl qubit {, qubit}]          ; x y h z s sdg t tdg
             | (rx | ry | rz | p)(ANGLE) qubit [ctrl ...] ; radians, any finite angle
             | (rx | ry | rz | p)(%a) qubit [ctrl ...]    ; the angle computed at run time: an i64, binary64 bits
             | %d = measure %r                            ; every qubit of the register: an iN, N at most 128
@@ -55,6 +55,10 @@ terminator := br label[(typed, ...)]
             | fault NAME                                 ; budget, unreachable, ... (bennett_ir::Fault; 5-bit codes)
 ```
 
+The fixed gates act on the target where every control is 1, by these matrices in the basis `|0⟩, |1⟩`:
+`x`, `y` and `z` are the Pauli matrices `[[0, 1], [1, 0]]`, `[[0, -i], [i, 0]]` and `diag(1, -1)`; `h` is
+`(1/√2)[[1, 1], [1, -1]]`; `s` is `diag(1, i)` and `t` is `diag(1, e^{iπ/4})`; `sdg` and `tdg` are their
+conjugate transposes. Each is one gate for the counter and has its own name in OpenQASM's `stdgates.inc`.
 `rx`, `ry` and `rz` are the rotations `exp(-iθσ/2)` about X, Y and Z; `p` is the phase rotation
 `diag(1, e^{iθ})`, applied where every control is 1 (a controlled `p` is a controlled phase, which a
 controlled `rz` is not; `docs/DESIGN.md`, "The model").

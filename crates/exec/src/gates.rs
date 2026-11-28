@@ -21,6 +21,7 @@ pub(crate) fn matrix(gate: Gate) -> Matrix {
     let (zero, one, i) = (real(0.0), real(1.0), Complex64::i());
     match gate {
         Gate::Fixed(FixedGate::X) => [[zero, one], [one, zero]],
+        Gate::Fixed(FixedGate::Y) => [[zero, -i], [i, zero]],
         Gate::Fixed(FixedGate::H) => {
             let h = real(FRAC_1_SQRT_2);
             [[h, h], [h, -h]]

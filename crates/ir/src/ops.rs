@@ -100,6 +100,8 @@ mnemonic_enum! {
     FixedGate {
         /// Pauli X (NOT).
         X = "x",
+        /// Pauli Y, `[[0, -i], [i, 0]]`.
+        Y = "y",
         /// Hadamard.
         H = "h",
         /// Pauli Z.
