@@ -186,106 +186,58 @@ def partial_request(args):
 
 
 # Structure-pointer and error-order checks across all implemented syscalls taking struct pointers
-# (plus time(time_t *)): agreeing batches, named out_of_bounds stops (known debt), and documented
-# expected-to-differ cases (defect witnesses; also in front/tests/tests/syscall_efault_independent.rs).
+# (plus time(time_t *) and the data buffers): agreeing batches, single agreeing cases, and named
+# out_of_bounds stops for a range that reaches the end of device memory (natively EFAULT; known debt).
+# Also in front/tests/tests/syscall_efault_independent.rs.
 EFAULT_AGREE = ["efault-time", "efault-stat", "efault-iov", "efault-signals"]
+EFAULT_CASES_AGREE = [
+    *[("efault-time", case, False) for case in (
+        "clock_gettime-low8", "clock_gettime-wrap8", "clock_getres-low8", "clock_getres-wrap8",
+        "gettimeofday-tv-low8", "gettimeofday-tv-wrap8", "gettimeofday-tz-low8", "gettimeofday-tz-wrap4",
+        "time-low8", "time-wrap4")],
+    *[("efault-stat", case, False) for case in (
+        "stat-low8", "stat-wrap8", "lstat-low8", "lstat-wrap8", "fstat-low8", "fstat-wrap8",
+        "newfstatat-low8", "newfstatat-wrap8")],
+    *[("efault-iov", case, False) for case in (
+        "writev-low8", "writev-wrap8", "writev-base-low8", "writev-ro-null", "writev-ro-badlen",
+        "writev-ro-badcnt", "readv-low8", "readv-wrap8", "readv-base-low8", "readv-wo-null", "readv-wo-badlen",
+        "readv-wo-badcnt", "readv-alias", "read-low8", "write-low8", "getrandom-low8", "getcwd-low8")],
+    ("efault-iov", "writev-ro-partial8", True),
+    ("efault-iov", "readv-wo-partial8", True),
+    *[("efault-signals", case, False) for case in (
+        "sigaction-alias", "sigaction-sigkill-low8", "sigaction-sigkill-wrap8", "sigaction-act-low8",
+        "sigaction-act-wrap8", "sigaction-old-low8", "sigaction-old-wrap8", "sigprocmask-badhow-low8",
+        "sigprocmask-badhow-wrap4", "sigprocmask-set-low8", "sigprocmask-set-wrap4", "sigprocmask-old-low8",
+        "sigprocmask-old-wrap4", "sigpending-null", "sigpending-size4", "sigpending-low8", "sigpending-wrap4")],
+]
 EFAULT_NAMED_STOP = [
-    ("efault-time", "clock_gettime-wrap8", False, "ret=-1 errno=14"),
     ("efault-time", "clock_gettime-partial8", True, "ret=-1 errno=14"),
-    ("efault-time", "clock_getres-wrap8", False, "ret=-1 errno=14"),
     ("efault-time", "clock_getres-partial8", True, "ret=-1 errno=14"),
-    ("efault-time", "gettimeofday-tv-wrap8", False, "ret=-1 errno=14"),
     ("efault-time", "gettimeofday-tv-partial8", True, "ret=-1 errno=14"),
-    ("efault-time", "gettimeofday-tz-wrap4", False, "ret=-1 errno=14"),
     ("efault-time", "gettimeofday-tz-partial4", True, "ret=-1 errno=14"),
-    ("efault-time", "time-wrap4", False, "ok=0 errno=14"),
     ("efault-time", "time-partial4", True, "ok=0 errno=14"),
-    ("efault-stat", "stat-wrap8", False, "ret=-1 errno=14"),
     ("efault-stat", "stat-partial8", True, "ret=-1 errno=14"),
     ("efault-stat", "stat-partial136", True, "ret=-1 errno=14"),
-    ("efault-stat", "lstat-wrap8", False, "ret=-1 errno=14"),
     ("efault-stat", "lstat-partial8", True, "ret=-1 errno=14"),
-    ("efault-stat", "fstat-wrap8", False, "ret=-1 errno=14"),
     ("efault-stat", "fstat-partial8", True, "ret=-1 errno=14"),
-    ("efault-stat", "newfstatat-wrap8", False, "ret=-1 errno=14"),
     ("efault-stat", "newfstatat-partial8", True, "ret=-1 errno=14"),
     ("efault-iov", "writev-partial8", True, "ret=-1 errno=14"),
     ("efault-iov", "writev-partial16-valid0", True, "ret=-1 errno=14"),
-    ("efault-iov", "writev-ro-partial8", True, "ret=-1 errno=9"),
     ("efault-iov", "writev-base-partial4", True, "ret=4 errno=0"),
     ("efault-iov", "readv-partial8", True, "ret=-1 errno=14"),
     ("efault-iov", "readv-partial16-valid0", True, "ret=-1 errno=14"),
-    ("efault-iov", "readv-wo-partial8", True, "ret=-1 errno=9"),
     ("efault-iov", "readv-base-partial4", True, "ret=4 errno=0"),
-    ("efault-signals", "sigaction-act-wrap8", False, "ret=-1 errno=14"),
+    ("efault-signals", "sigaction-sigkill-partial8", True, "ret=-1 errno=14"),
+    ("efault-signals", "sigaction-sigstop-partial8", True, "ret=-1 errno=14"),
+    ("efault-signals", "sigaction-sig0-partial8", True, "ret=-1 errno=14"),
+    ("efault-signals", "sigaction-sig65-partial8", True, "ret=-1 errno=14"),
     ("efault-signals", "sigaction-act-partial8", True, "ret=-1 errno=14"),
     ("efault-signals", "sigaction-act-partial24", True, "ret=-1 errno=14"),
-    ("efault-signals", "sigaction-old-wrap8", False, "ret=-1 errno=14"),
     ("efault-signals", "sigaction-old-partial8", True, "ret=-1 errno=14"),
-    ("efault-signals", "sigprocmask-set-wrap4", False, "ret=-1 errno=14"),
+    ("efault-signals", "sigprocmask-badhow-partial4", True, "ret=-1 errno=14"),
     ("efault-signals", "sigprocmask-set-partial4", True, "ret=-1 errno=14"),
-    ("efault-signals", "sigprocmask-old-wrap4", False, "ret=-1 errno=14"),
     ("efault-signals", "sigprocmask-old-partial4", True, "ret=-1 errno=14"),
-    ("efault-signals", "sigpending-wrap4", False, "ret=-1 errno=14"),
     ("efault-signals", "sigpending-partial4", True, "ret=-1 errno=14"),
-]
-EFAULT_EXPECTED_TO_DIFFER = [
-    # (suite, case, pass_edge, expected_native_line, observed_device_line)
-    ("efault-signals", "sigaction-sigkill-partial8", True, "sigaction-sigkill-partial8: ret=-1 errno=14",
-     "sigaction-sigkill-partial8: ret=-1 errno=22"),
-    ("efault-signals", "sigaction-sigstop-partial8", True, "sigaction-sigstop-partial8: ret=-1 errno=14",
-     "sigaction-sigstop-partial8: ret=-1 errno=22"),
-    ("efault-signals", "sigaction-sigkill-wrap8", False, "sigaction-sigkill-wrap8: ret=-1 errno=14",
-     "sigaction-sigkill-wrap8: ret=-1 errno=22"),
-    ("efault-signals", "sigaction-sig0-partial8", True, "sigaction-sig0-partial8: ret=-1 errno=14",
-     "sigaction-sig0-partial8: ret=-1 errno=22"),
-    ("efault-signals", "sigaction-sig65-partial8", True, "sigaction-sig65-partial8: ret=-1 errno=14",
-     "sigaction-sig65-partial8: ret=-1 errno=22"),
-    ("efault-signals", "sigprocmask-badhow-partial4", True, "sigprocmask-badhow-partial4: ret=-1 errno=14",
-     "sigprocmask-badhow-partial4: ret=-1 errno=22"),
-    ("efault-signals", "sigprocmask-badhow-wrap4", False, "sigprocmask-badhow-wrap4: ret=-1 errno=14",
-     "sigprocmask-badhow-wrap4: ret=-1 errno=22"),
-    ("efault-iov", "writev-ro-null", False, "writev-ro-null: ret=-1 errno=9", "writev-ro-null: ret=-1 errno=14"),
-    ("efault-iov", "writev-ro-badlen", False, "writev-ro-badlen: ret=-1 errno=9", "writev-ro-badlen: ret=-1 errno=22"),
-    ("efault-iov", "writev-ro-badcnt", False, "writev-ro-badcnt: ret=-1 errno=9", "writev-ro-badcnt: ret=-1 errno=22"),
-    ("efault-iov", "readv-wo-null", False, "readv-wo-null: ret=-1 errno=9", "readv-wo-null: ret=-1 errno=14"),
-    ("efault-iov", "readv-wo-badlen", False, "readv-wo-badlen: ret=-1 errno=9", "readv-wo-badlen: ret=-1 errno=22"),
-    ("efault-iov", "readv-wo-badcnt", False, "readv-wo-badcnt: ret=-1 errno=9", "readv-wo-badcnt: ret=-1 errno=22"),
-    ("efault-iov", "writev-wrap8", False, "writev-wrap8: ret=-1 errno=14", "writev-wrap8: ret=0 errno=0"),
-    ("efault-iov", "readv-wrap8", False, "readv-wrap8: ret=-1 errno=14", "readv-wrap8: ret=0 errno=0"),
-    ("efault-signals", "sigaction-alias", False,
-     "sigaction-alias: ret=0 errno=0 installed_ign=1 old_dfl=1",
-     "sigaction-alias: ret=0 errno=0 installed_ign=0 old_dfl=1"),
-    ("efault-signals", "sigpending-null", False, "sigpending-null: ret=-1 errno=14", "sigpending-null: ret=0 errno=0"),
-    ("efault-signals", "sigpending-size4", False, "sigpending-size4: ret=0 errno=0",
-     "sigpending-size4: ret=-1 errno=22"),
-    ("efault-time", "clock_gettime-low8", False, "clock_gettime-low8: ret=-1 errno=14",
-     "clock_gettime-low8: ret=0 errno=0"),
-    ("efault-time", "clock_getres-low8", False, "clock_getres-low8: ret=-1 errno=14",
-     "clock_getres-low8: ret=0 errno=0"),
-    ("efault-time", "gettimeofday-tv-low8", False, "gettimeofday-tv-low8: ret=-1 errno=14",
-     "gettimeofday-tv-low8: ret=0 errno=0"),
-    ("efault-time", "gettimeofday-tz-low8", False, "gettimeofday-tz-low8: ret=-1 errno=14",
-     "gettimeofday-tz-low8: ret=0 errno=0"),
-    ("efault-time", "time-low8", False, "time-low8: ok=0 errno=14", "time-low8: ok=1 errno=0"),
-    ("efault-stat", "stat-low8", False, "stat-low8: ret=-1 errno=14", "stat-low8: ret=0 errno=0"),
-    ("efault-stat", "lstat-low8", False, "lstat-low8: ret=-1 errno=14", "lstat-low8: ret=0 errno=0"),
-    ("efault-stat", "fstat-low8", False, "fstat-low8: ret=-1 errno=14", "fstat-low8: ret=0 errno=0"),
-    ("efault-stat", "newfstatat-low8", False, "newfstatat-low8: ret=-1 errno=14", "newfstatat-low8: ret=0 errno=0"),
-    ("efault-iov", "writev-low8", False, "writev-low8: ret=-1 errno=14", "writev-low8: ret=0 errno=0"),
-    ("efault-iov", "writev-base-low8", False, "writev-base-low8: ret=-1 errno=14", "writev-base-low8: ret=4 errno=0"),
-    ("efault-iov", "readv-low8", False, "readv-low8: ret=-1 errno=14", "readv-low8: ret=0 errno=0"),
-    ("efault-iov", "readv-base-low8", False, "readv-base-low8: ret=-1 errno=14", "readv-base-low8: ret=4 errno=0"),
-    ("efault-signals", "sigaction-act-low8", False, "sigaction-act-low8: ret=-1 errno=14",
-     "sigaction-act-low8: ret=0 errno=0"),
-    ("efault-signals", "sigaction-old-low8", False, "sigaction-old-low8: ret=-1 errno=14",
-     "sigaction-old-low8: ret=0 errno=0"),
-    ("efault-signals", "sigprocmask-set-low8", False, "sigprocmask-set-low8: ret=-1 errno=14",
-     "sigprocmask-set-low8: ret=0 errno=0"),
-    ("efault-signals", "sigprocmask-old-low8", False, "sigprocmask-old-low8: ret=-1 errno=14",
-     "sigprocmask-old-low8: ret=0 errno=0"),
-    ("efault-signals", "sigpending-low8", False, "sigpending-low8: ret=-1 errno=14",
-     "sigpending-low8: ret=0 errno=0"),
 ]
 
 
@@ -335,14 +287,13 @@ def efault_cases(args):
         assert result.returncode == 1 and "fault: out_of_bounds (code 3)" in result.stdout, (suite, case, result)
         print(f"efault {case}: named stop (out_of_bounds)", flush=True)
 
-    for suite, case, pass_edge, expected_native, observed_device in EFAULT_EXPECTED_TO_DIFFER:
+    for suite, case, pass_edge in EFAULT_CASES_AGREE:
         output, result = run_pair(suite, case, pass_edge)
-        assert output.decode().strip() == expected_native, (suite, case, output)
         assert result.returncode == 0 and "result: 0\n" in result.stdout, (suite, case, result)
         console = next((line.removeprefix("console: ") for line in result.stdout.splitlines()
                         if line.startswith("console: ")), "")
-        assert console == escaped((observed_device + "\n").encode()), (suite, case, console, observed_device)
-        print(f"efault {case}: expected-to-differ (native: {expected_native}; device: {observed_device})", flush=True)
+        assert console == escaped(output), (suite, case, console, output)
+        print(f"efault {case}: passed ({output.decode().strip()})", flush=True)
 
 
 def main():

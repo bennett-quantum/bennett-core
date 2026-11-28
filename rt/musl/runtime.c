@@ -10,6 +10,7 @@
 #include <sys/syscall.h>
 #include <sys/uio.h>
 #include "devices.h"
+#include "copy.h"
 
 #ifndef BENNETT_ARENA_BYTES
 #define BENNETT_ARENA_BYTES (1 << 20)
@@ -216,34 +217,40 @@ long __bennett_syscall(long number, long a1, long a2, long a3, long a4, long a5,
         return 0; /* not enforced, as for map */
     case SYS_mremap:
         return -ENOMEM;
+    /* Linux's order for the signal calls: the set's size, each input copied whole (copy.h), the values, the
+     * change, then each output written. A signal the change makes deliverable is delivered after the outputs are
+     * written, as natively on the return to the program. */
     case SYS_rt_sigprocmask: {
         if (a4 != SIGNALS / 8) return -EINVAL;
-        if (a2 && a1 != SIG_BLOCK && a1 != SIG_UNBLOCK && a1 != SIG_SETMASK) return -EINVAL;
-        unsigned long desired = a2 ? *(const unsigned long *)a2 : 0;
-        if (a3) *(unsigned long *)a3 = signal_mask;
+        unsigned long desired, old = signal_mask;
         if (a2) {
+            if (!__bennett_copy_in(&desired, (const void *)a2, sizeof desired)) return -EFAULT;
             if (a1 == SIG_BLOCK) signal_mask |= desired;
             else if (a1 == SIG_UNBLOCK) signal_mask &= ~desired;
-            else signal_mask = desired;
+            else if (a1 == SIG_SETMASK) signal_mask = desired;
+            else return -EINVAL;
             signal_mask &= ~(bit(SIGKILL) | bit(SIGSTOP));
-            deliver();
         }
-        return 0;
+        int written = !a3 || __bennett_copy_out((void *)a3, &old, sizeof old);
+        if (a2) deliver();
+        return written ? 0 : -EFAULT;
     }
     case SYS_rt_sigpending:
-        if (a2 != SIGNALS / 8) return -EINVAL;
-        *(unsigned long *)a1 = pending;
-        return 0;
+        /* Linux writes the first sigsetsize bytes of the set, up to its whole size. */
+        if ((unsigned long)a2 > SIGNALS / 8) return -EINVAL;
+        return __bennett_copy_out((void *)a1, &pending, a2) ? 0 : -EFAULT;
     case SYS_rt_sigaction: {
-        if (a4 != SIGNALS / 8 || a1 < 1 || a1 > SIGNALS) return -EINVAL;
-        if (a2 && (a1 == SIGKILL || a1 == SIGSTOP)) return -EINVAL;
-        if (a3) *(struct k_sigaction *)a3 = actions[a1 - 1];
+        if (a4 != SIGNALS / 8) return -EINVAL;
+        struct k_sigaction action;
+        if (a2 && !__bennett_copy_in(&action, (const void *)a2, sizeof action)) return -EFAULT;
+        if (a1 < 1 || a1 > SIGNALS || (a2 && (a1 == SIGKILL || a1 == SIGSTOP))) return -EINVAL;
+        struct k_sigaction old = actions[a1 - 1];
         if (a2) {
-            actions[a1 - 1] = *(const struct k_sigaction *)a2;
+            actions[a1 - 1] = action;
             /* Ignoring a signal discards it if pending. */
-            if (actions[a1 - 1].handler == SIG_IGN) pending &= ~bit(a1);
+            if (action.handler == SIG_IGN) pending &= ~bit(a1);
         }
-        return 0;
+        return !a3 || __bennett_copy_out((void *)a3, &old, sizeof old) ? 0 : -EFAULT;
     }
     case SYS_gettid:
     case SYS_getpid:

@@ -11,6 +11,7 @@
 #include <time.h>
 #include "vfs.h"
 #include "devices.h"
+#include "copy.h"
 static unsigned inputs_prepared;
 
 static long transfer(long fd,void *p,uint64_t n,int writing,uint64_t offset,int positional) {
@@ -21,7 +22,7 @@ static long transfer(long fd,void *p,uint64_t n,int writing,uint64_t offset,int 
     if(positional && (file->kind==BRT_CONSOLE || file->kind==BRT_ERROR || file->kind==BRT_INPUT)) return -ESPIPE;
     if(writing?!__bennett_rt_writable(file->flags):!__bennett_rt_readable(file->flags)) return -EBADF;
     if(n>LONG_MAX) return -EINVAL;
-    if(n && !p) return -EFAULT;
+    if(__bennett_user_refused(p,n)) return -EFAULT;
     if(file->kind==BRT_CONSOLE || file->kind==BRT_ERROR) {
         if(file->kind==BRT_ERROR && n) __builtin_trap();
         for(uint64_t i=0;i<n;++i) __bennett_effect(((const char *)p)[i]);
@@ -47,22 +48,6 @@ static int clock_id(long id) {
 static int cpu_clock(long id) {
     return id<0 || id==CLOCK_PROCESS_CPUTIME_ID || id==CLOCK_THREAD_CPUTIME_ID;
 }
-/* Copies the n bytes at p into to, every byte before the caller looks at any of them, as Linux copies a request
- * whole before it checks a field; returns 0 for a request Linux answers EFAULT everywhere. Device memory is the
- * module's bytes [0, M), static data from address 16 and the stack down from M, and natively readable means
- * mapped, an unrelated address space. The two agree on null and the lowest addresses (no object below 16 on the
- * device; Linux never maps the lowest page) and on a range that wraps past the top of the address space: those
- * are EFAULT. Any other request is read byte by byte, and one reaching M or beyond stops with the device's
- * `out_of_bounds` in that read, since the runtime does not know M (rt/musl/README.md, "Sleeping"). The loads
- * are volatile so that no byte's load can be dropped or moved after a check of the copy. */
-static int copy_request(void *to,const void *p,uint64_t n) {
-    uintptr_t address=(uintptr_t)p;
-    if(address<16 || n>UINTPTR_MAX-address+1) return 0;
-    const volatile unsigned char *from=p;
-    unsigned char *copy=to;
-    for(uint64_t i=0;i<n;++i) copy[i]=from[i];
-    return 1;
-}
 /* Sleeping on the run's clock (rt/musl/README.md, "Sleeping"). Linux's order of checks: the clock id (an
  * unknown id, then a clock without a sleep), the request's address, the request's value, then what the clock's
  * own sleep checks (a CPU-time clock of a thread, of a process the device does not have, the alarm clocks'
@@ -77,7 +62,7 @@ static long clock_sleep(long id,long flags,const void *address) {
     if(id>=0 && !run && !alarm && !cpu && !unsupported) return -EINVAL;
     if(unsupported) return -EOPNOTSUPP;
     long request[2]; /* seconds, nanoseconds: only this copy is checked */
-    if(!copy_request(request,address,sizeof request)) return -EFAULT;
+    if(!__bennett_copy_in(request,address,sizeof request)) return -EFAULT;
     if(request[0]<0 || request[1]<0 || request[1]>=1000000000) return -EINVAL;
     if(id<0) {
         /* A process's CPU-time clock: a kind below 3, not a thread's, the caller (0) or its process (1). */
@@ -110,35 +95,37 @@ long __bennett_device_syscall(long nr,long a,long b,long c,long d,long e,long f)
     /* Lazy preparation runs with musl's allocator ready, also before a constructor's first open.
      * The guard and the preparation itself are ordinary memory, undone with the run. */
     if(!inputs_prepared) { inputs_prepared=1; __bennett_input_files(); }
+    /* Each result is written once it is known (copy.h): a refused output is EFAULT after the clock was read. */
     if(nr==SYS_clock_gettime) {
         if(!clock_id(a)) return -EINVAL;
-        if(!b) return -EFAULT;
         uint64_t value=__bennett_clock_read(cpu_clock(a));
-        long *ts=(void *)b; ts[0]=value/1000000000; ts[1]=value%1000000000; return 0;
+        long ts[2]={value/1000000000,value%1000000000};
+        return __bennett_copy_out((void *)b,ts,sizeof ts)?0:-EFAULT;
     }
     if(nr==SYS_clock_getres) {
         if(!clock_id(a)) return -EINVAL;
-        if(b) { long *ts=(void *)b; ts[0]=0; ts[1]=1; }
-        return 0;
+        long ts[2]={0,1};
+        return !b || __bennett_copy_out((void *)b,ts,sizeof ts)?0:-EFAULT;
     }
     if(nr==SYS_gettimeofday) {
+        /* Linux's order: the time value, then the time zone. */
         if(a) {
             uint64_t value=__bennett_clock_read(0);
-            long *tv=(void *)a; tv[0]=value/1000000000; tv[1]=(value%1000000000)/1000;
+            long tv[2]={value/1000000000,(value%1000000000)/1000};
+            if(!__bennett_copy_out((void *)a,tv,sizeof tv)) return -EFAULT;
         }
-        if(b) { int *tz=(void *)b; tz[0]=tz[1]=0; }
-        return 0;
+        int tz[2]={0,0};
+        return !b || __bennett_copy_out((void *)b,tz,sizeof tz)?0:-EFAULT;
     }
     if(nr==SYS_time) {
         long seconds=__bennett_clock_read(0)/1000000000;
-        if(a) *(long *)a=seconds;
-        return seconds;
+        return !a || __bennett_copy_out((void *)a,&seconds,sizeof seconds)?seconds:-EFAULT;
     }
     if(nr==SYS_nanosleep) return clock_sleep(CLOCK_REALTIME,0,(const void *)a);
     if(nr==SYS_clock_nanosleep) return clock_sleep((int)a,(int)b,(const void *)c); /* both are int in Linux */
     if(nr==SYS_getrandom) {
         if((unsigned long)b>LONG_MAX || (c&~7L) || ((c&6)==6)) return -EINVAL;
-        if(b && !a) return -EFAULT;
+        if(__bennett_user_refused((void *)a,b)) return -EFAULT;
         __bennett_entropy_read((void *)a,b); return b;
     }
     if(nr==SYS_open || nr==SYS_openat) return nr==SYS_open?__bennett_rt_vfs_open((void *)a,b,c,AT_FDCWD):__bennett_rt_vfs_open((void *)b,c,d,a);
@@ -152,19 +139,26 @@ long __bennett_device_syscall(long nr,long a,long b,long c,long d,long e,long f)
     }
     if(nr==SYS_read || nr==SYS_write || nr==SYS_pread64 || nr==SYS_pwrite64) return transfer(a,(void *)b,c,nr==SYS_write || nr==SYS_pwrite64,d,nr==SYS_pread64 || nr==SYS_pwrite64);
     if(nr==SYS_readv || nr==SYS_writev) {
-        if(!__bennett_rt_vfs_file(a)) return -EBADF;
-        if((unsigned long)c>1024) return -EINVAL;
-        if(c && !b) return -EFAULT;
-        struct iovec *v=(void *)b; uint64_t total=0;
+        /* Linux's order: the descriptor and its access mode, the count, the array's range, then each element
+         * copied whole (copy.h) and its length checked as it is copied. Only the copies are used after. */
+        struct bennett_file *file=__bennett_rt_vfs_file(a);
+        if(!file) return -EBADF;
+        if(nr==SYS_writev?!__bennett_rt_writable(file->flags):!__bennett_rt_readable(file->flags)) return -EBADF;
+        if(!c) return 0;
+        if((unsigned long)c>UIO_MAXIOV) return -EINVAL;
+        if(__bennett_user_refused((void *)b,c*sizeof(struct iovec))) return -EFAULT;
+        struct iovec v[UIO_MAXIOV]; uint64_t total=0;
+        for(long i=0;i<c;++i) {
+            if(!__bennett_copy_in(&v[i],(const struct iovec *)b+i,sizeof v[i])) return -EFAULT;
+            if(v[i].iov_len>LONG_MAX) return -EINVAL;
+        }
         for(long i=0;i<c;++i) {
             if(v[i].iov_len>LONG_MAX-total) return -EINVAL;
             total+=v[i].iov_len;
         }
-        struct bennett_file *file=__bennett_rt_vfs_file(a);
-        if(nr==SYS_writev?!__bennett_rt_writable(file->flags):!__bennett_rt_readable(file->flags)) return -EBADF;
         /* The console is checked whole before any effect; elsewhere a bad element ends a partial transfer, as on Linux. */
         if(file->kind==BRT_CONSOLE || file->kind==BRT_ERROR)
-            for(long i=0;i<c;++i) if(v[i].iov_len && !v[i].iov_base) return -EFAULT;
+            for(long i=0;i<c;++i) if(__bennett_user_refused(v[i].iov_base,v[i].iov_len)) return -EFAULT;
         if(file->kind==BRT_ERROR && nr==SYS_writev && total) __builtin_trap();
         if(file->kind==BRT_ENTROPY && nr==SYS_readv) __bennett_entropy_check(total);
         uint64_t done=0;

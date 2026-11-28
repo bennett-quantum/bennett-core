@@ -12,10 +12,11 @@
 //!   wrapping around 2^64), and
 //! - (d) an output pointer that is unreadable or partly so.
 //!
-//! Where the device stops by name with `Fault::OutOfBounds` for an address past `memory_size` or
-//! wrapping around 2^64 (a known debt; the device does not yet turn out-of-bounds memory accesses
-//! into `EFAULT`), the active tests assert that named stop. Every non-named-stop difference
-//! between native Linux and the device is recorded as an ignored `defect:` witness below.
+//! A range that starts below address 16 or wraps around 2^64 is `EFAULT` on the device as
+//! natively; where the device stops by name with `Fault::OutOfBounds` for a range that reaches
+//! `memory_size` (a known debt; the runtime does not know the memory size), the tests assert that
+//! named stop. The tests after the first four were defect witnesses of an independent testing pass,
+//! each observed failing before the runtime copied structures in and out whole (`rt/musl/copy.h`).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -155,7 +156,6 @@ fn assert_named_stop(suite: &str, case: &str, pass_edge: bool, expected_native_s
 fn time_syscalls_agree_on_valid_invalid_and_null_and_stop_on_out_of_bounds() {
     assert_agrees("efault-time", "agree", true);
     assert_named_stop("efault-time", "clock_gettime-partial8", true, "ret=-1 errno=14");
-    assert_named_stop("efault-time", "clock_gettime-wrap8", false, "ret=-1 errno=14");
     assert_named_stop("efault-time", "clock_getres-partial8", true, "ret=-1 errno=14");
     assert_named_stop("efault-time", "gettimeofday-tv-partial8", true, "ret=-1 errno=14");
     assert_named_stop("efault-time", "gettimeofday-tz-partial4", true, "ret=-1 errno=14");
@@ -191,20 +191,20 @@ fn signal_syscalls_agree_on_valid_invalid_and_size_order_and_stop_on_out_of_boun
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// Defect witnesses: non-named-stop differences between native Linux and the device.
+// Former defect witnesses, now regression tests: each failed on the runtime before structures
+// were copied in and out whole.
 
-/// Defect witness: Linux's `rt_sigaction` copies `act` from userspace before checking whether `sig`
-/// is in `1..=64` or is `SIGKILL`/`SIGSTOP`. `rt/musl/runtime.c` checks `sig` and `SIGKILL`/`SIGSTOP`
+/// Formerly a defect witness: Linux's `rt_sigaction` copies `act` from userspace before checking whether `sig`
+/// is in `1..=64` or is `SIGKILL`/`SIGSTOP`. `rt/musl/runtime.c` checked `sig` and `SIGKILL`/`SIGSTOP`
 /// first, so even a partially readable (`memory_size - 8`) or wrapping (`(void *)-8`) `act` pointer
 /// returns `-1 / EINVAL` instead of `-1 / EFAULT` (or `out_of_bounds`).
 ///
-/// Reproduce:
-///   `front/test.sh --test syscall_efault_independent rt_sigaction_checks_act_readability_before_signal_validity -- --ignored --exact --nocapture`
+/// Run:
+///   `front/test.sh --test syscall_efault_independent rt_sigaction_checks_act_readability_before_signal_validity -- --exact --nocapture`
 ///
 /// Expected (native Linux): `ret=-1 errno=14` (`EFAULT`) for all five cases (or `out_of_bounds` on device).
-/// Observed (device): `ret=-1 errno=22` (`EINVAL`) for all five cases.
+/// Observed on the device before the fix: `ret=-1 errno=22` (`EINVAL`) for all five cases.
 #[test]
-#[ignore = "defect: rt_sigaction checks sig and SIGKILL/SIGSTOP before reading act (observed EINVAL, expected EFAULT or out_of_bounds)"]
 fn rt_sigaction_checks_act_readability_before_signal_validity() {
     for (case, pass_edge) in [
         ("sigaction-sigkill-partial8", true),
@@ -221,18 +221,17 @@ fn rt_sigaction_checks_act_readability_before_signal_validity() {
     }
 }
 
-/// Defect witness: Linux's `rt_sigprocmask` copies `set` from userspace before checking `how`.
-/// `rt/musl/runtime.c` checks `how` first, so a partially readable (`memory_size - 4`) or wrapping
+/// Formerly a defect witness: Linux's `rt_sigprocmask` copies `set` from userspace before checking `how`.
+/// `rt/musl/runtime.c` checked `how` first, so a partially readable (`memory_size - 4`) or wrapping
 /// (`(void *)-4`) `set` pointer with `how = 99` returns `-1 / EINVAL` instead of `-1 / EFAULT`
 /// (or `out_of_bounds`).
 ///
-/// Reproduce:
-///   `front/test.sh --test syscall_efault_independent rt_sigprocmask_checks_set_readability_before_how -- --ignored --exact --nocapture`
+/// Run:
+///   `front/test.sh --test syscall_efault_independent rt_sigprocmask_checks_set_readability_before_how -- --exact --nocapture`
 ///
 /// Expected (native Linux): `ret=-1 errno=14` (`EFAULT`) (or `out_of_bounds` on device).
-/// Observed (device): `ret=-1 errno=22` (`EINVAL`).
+/// Observed on the device before the fix: `ret=-1 errno=22` (`EINVAL`).
 #[test]
-#[ignore = "defect: rt_sigprocmask checks how before reading set (observed EINVAL, expected EFAULT or out_of_bounds)"]
 fn rt_sigprocmask_checks_set_readability_before_how() {
     for (case, pass_edge) in [("sigprocmask-badhow-partial4", true), ("sigprocmask-badhow-wrap4", false)] {
         let native = run_native("efault-signals", case);
@@ -243,18 +242,17 @@ fn rt_sigprocmask_checks_set_readability_before_how() {
     }
 }
 
-/// Defect witness: Linux's `writev` and `readv` check the file descriptor's read/write access mode
+/// Formerly a defect witness: Linux's `writev` and `readv` check the file descriptor's read/write access mode
 /// (`EBADF`) before validating `iovcnt`, checking `iov` for null/fault, or summing `iov_len`.
-/// `rt/musl/devices.c` checks `iovcnt`, `!iov`, and `iov[i].iov_len` first and checks the descriptor's
+/// `rt/musl/devices.c` checked `iovcnt`, `!iov`, and `iov[i].iov_len` first and checked the descriptor's
 /// access mode afterward, returning `EFAULT` or `EINVAL` instead of `EBADF`.
 ///
-/// Reproduce:
-///   `front/test.sh --test syscall_efault_independent readv_and_writev_check_fd_access_mode_before_iov_arguments -- --ignored --exact --nocapture`
+/// Run:
+///   `front/test.sh --test syscall_efault_independent readv_and_writev_check_fd_access_mode_before_iov_arguments -- --exact --nocapture`
 ///
 /// Expected (native Linux): `ret=-1 errno=9` (`EBADF`) for all six cases.
-/// Observed (device): `ret=-1 errno=14` (`EFAULT`) for `*-null` and `ret=-1 errno=22` (`EINVAL`) for `*-badlen` and `*-badcnt`.
+/// Observed on the device before the fix: `ret=-1 errno=14` (`EFAULT`) for `*-null` and `ret=-1 errno=22` (`EINVAL`) for `*-badlen` and `*-badcnt`.
 #[test]
-#[ignore = "defect: readv/writev check iovcnt, iov, and iov_len before fd read/write mode (observed EFAULT/EINVAL, expected EBADF)"]
 fn readv_and_writev_check_fd_access_mode_before_iov_arguments() {
     for case in [
         "writev-ro-null",
@@ -268,18 +266,17 @@ fn readv_and_writev_check_fd_access_mode_before_iov_arguments() {
     }
 }
 
-/// Defect witness: with `iov = (void *)(uintptr_t)-8` and `iovcnt = 1`, `rt/musl/devices.c` reads
+/// Formerly a defect witness: with `iov = (void *)(uintptr_t)-8` and `iovcnt = 1`, `rt/musl/devices.c` read
 /// `v[0].iov_len` at `(uintptr_t)-8 + 8 == 0` (wrapping in 64-bit arithmetic to address 0, which
 /// is in bounds and holds 0). Because `iov_len == 0`, `v[0].iov_base` at `-8` is never read and
 /// both `writev` and `readv` return `0` instead of `-1 / EFAULT` (or `out_of_bounds`).
 ///
-/// Reproduce:
-///   `front/test.sh --test syscall_efault_independent readv_and_writev_reject_wrapping_iov_pointer -- --ignored --exact --nocapture`
+/// Run:
+///   `front/test.sh --test syscall_efault_independent readv_and_writev_reject_wrapping_iov_pointer -- --exact --nocapture`
 ///
 /// Expected (native Linux): `ret=-1 errno=14` (`EFAULT`) (or `out_of_bounds` on device).
-/// Observed (device): `ret=0 errno=0`.
+/// Observed on the device before the fix: `ret=0 errno=0`.
 #[test]
-#[ignore = "defect: readv/writev with iov=(void*)-8 wraps iov_len to address 0 and returns 0 (expected EFAULT or out_of_bounds)"]
 fn readv_and_writev_reject_wrapping_iov_pointer() {
     for case in ["writev-wrap8", "readv-wrap8"] {
         let native = run_native("efault-iov", case);
@@ -290,62 +287,58 @@ fn readv_and_writev_reject_wrapping_iov_pointer() {
     }
 }
 
-/// Defect witness: `rt/musl/runtime.c`'s `SYS_rt_sigaction` writes `*oldact` before reading `*act`.
+/// Formerly a defect witness: `rt/musl/runtime.c`'s `SYS_rt_sigaction` wrote `*oldact` before reading `*act`.
 /// When `act == oldact` (a valid, readable struct pointer), writing `*oldact` overwrites the new
 /// action with the old disposition before installing it.
 ///
-/// Reproduce:
-///   `front/test.sh --test syscall_efault_independent rt_sigaction_handles_aliased_act_and_oldact -- --ignored --exact --nocapture`
+/// Run:
+///   `front/test.sh --test syscall_efault_independent rt_sigaction_handles_aliased_act_and_oldact -- --exact --nocapture`
 ///
 /// Expected (native Linux): `sigaction-alias: ret=0 errno=0 installed_ign=1 old_dfl=1`
-/// Observed (device): `sigaction-alias: ret=0 errno=0 installed_ign=0 old_dfl=1`
+/// Observed on the device before the fix: `sigaction-alias: ret=0 errno=0 installed_ign=0 old_dfl=1`
 #[test]
-#[ignore = "defect: rt_sigaction writes oldact before reading act, breaking act == oldact (observed installed_ign=0, expected installed_ign=1)"]
 fn rt_sigaction_handles_aliased_act_and_oldact() {
     assert_agrees("efault-signals", "sigaction-alias", false);
 }
 
-/// Defect witness: `rt/musl/runtime.c`'s `SYS_rt_sigpending` does not check for a null `set`
+/// Formerly a defect witness: `rt/musl/runtime.c`'s `SYS_rt_sigpending` did not check for a null `set`
 /// pointer; it writes `pending` to address 0 (which is in bounds of device memory) and returns `0`.
 ///
-/// Reproduce:
-///   `front/test.sh --test syscall_efault_independent rt_sigpending_rejects_null_pointer_with_efault -- --ignored --exact --nocapture`
+/// Run:
+///   `front/test.sh --test syscall_efault_independent rt_sigpending_rejects_null_pointer_with_efault -- --exact --nocapture`
 ///
 /// Expected (native Linux): `sigpending-null: ret=-1 errno=14`
-/// Observed (device): `sigpending-null: ret=0 errno=0`
+/// Observed on the device before the fix: `sigpending-null: ret=0 errno=0`
 #[test]
-#[ignore = "defect: rt_sigpending omits the null check, writes address 0, and returns 0 (expected -1 / EFAULT)"]
 fn rt_sigpending_rejects_null_pointer_with_efault() {
     assert_agrees("efault-signals", "sigpending-null", false);
 }
 
-/// Defect witness: Linux's `rt_sigpending` accepts `sigsetsize <= sizeof(kernel_sigset_t)` (8),
-/// so `sigsetsize = 4` succeeds with `0`. `rt/musl/runtime.c` requires `sigsetsize == 8` and
+/// Formerly a defect witness: Linux's `rt_sigpending` accepts `sigsetsize <= sizeof(kernel_sigset_t)` (8),
+/// so `sigsetsize = 4` succeeds with `0`. `rt/musl/runtime.c` required `sigsetsize == 8` and
 /// returns `-1 / EINVAL`.
 ///
-/// Reproduce:
-///   `front/test.sh --test syscall_efault_independent rt_sigpending_accepts_sigsetsize_smaller_than_eight -- --ignored --exact --nocapture`
+/// Run:
+///   `front/test.sh --test syscall_efault_independent rt_sigpending_accepts_sigsetsize_smaller_than_eight -- --exact --nocapture`
 ///
 /// Expected (native Linux): `sigpending-size4: ret=0 errno=0`
-/// Observed (device): `sigpending-size4: ret=-1 errno=22`
+/// Observed on the device before the fix: `sigpending-size4: ret=-1 errno=22`
 #[test]
-#[ignore = "defect: rt_sigpending rejects sigsetsize=4 with EINVAL (expected 0 as on Linux)"]
 fn rt_sigpending_accepts_sigsetsize_smaller_than_eight() {
     assert_agrees("efault-signals", "sigpending-size4", false);
 }
 
-/// Defect witness: device memory is flat from address 0 (`firstDataAddress = 16`, where runtime
+/// Formerly a defect witness: device memory is flat from address 0 (`firstDataAddress = 16`, where runtime
 /// globals begin), and `rt/musl/` only checks `!ptr` (address 0). Every implemented structure-pointer
 /// syscall accepts non-null addresses below 16 (here `(void *)8`), returning success instead of
 /// `EFAULT` (and for output structures larger than 8 bytes, overwriting static globals from address 16).
 ///
-/// Reproduce:
-///   `front/test.sh --test syscall_efault_independent syscalls_reject_non_null_addresses_below_sixteen -- --ignored --exact --nocapture`
+/// Run:
+///   `front/test.sh --test syscall_efault_independent syscalls_reject_non_null_addresses_below_sixteen -- --exact --nocapture`
 ///
 /// Expected (native Linux): `ret=-1 errno=14` (`ok=0 errno=14` for `time`) for every case.
-/// Observed (device): `ret=0 errno=0` (`ret=4 errno=0` for `iov_base`, `ok=1 errno=0` for `time`) for every case.
+/// Observed on the device before the fix: `ret=0 errno=0` (`ret=4 errno=0` for `iov_base`, `ok=1 errno=0` for `time`) for every case.
 #[test]
-#[ignore = "defect: non-null addresses below 16 (e.g. (void*)8) are accepted as valid memory across all 13 structure-pointer syscalls (expected EFAULT)"]
 fn syscalls_reject_non_null_addresses_below_sixteen() {
     let cases = [
         ("efault-time", "clock_gettime-low8"),
@@ -369,5 +362,38 @@ fn syscalls_reject_non_null_addresses_below_sixteen() {
     ];
     for (suite, case) in cases {
         assert_agrees(suite, case, false);
+    }
+}
+
+/// Ranges the device can tell are unreadable (below 16 or wrapping) are `EFAULT` for every structure
+/// and data buffer, the descriptor's mode is checked before a vector that cannot be read, and a
+/// vector read over its own array uses the copy of the array, as natively.
+#[test]
+fn ranges_below_sixteen_or_wrapping_and_copied_vectors_agree() {
+    let cases = [
+        ("efault-time", "clock_gettime-wrap8", false),
+        ("efault-time", "clock_getres-wrap8", false),
+        ("efault-time", "gettimeofday-tv-wrap8", false),
+        ("efault-time", "gettimeofday-tz-wrap4", false),
+        ("efault-time", "time-wrap4", false),
+        ("efault-stat", "stat-wrap8", false),
+        ("efault-stat", "fstat-wrap8", false),
+        ("efault-iov", "writev-ro-partial8", true),
+        ("efault-iov", "readv-wo-partial8", true),
+        ("efault-iov", "readv-alias", false),
+        ("efault-iov", "read-low8", false),
+        ("efault-iov", "write-low8", false),
+        ("efault-iov", "getrandom-low8", false),
+        ("efault-iov", "getcwd-low8", false),
+        ("efault-signals", "sigaction-sigkill-low8", false),
+        ("efault-signals", "sigaction-act-wrap8", false),
+        ("efault-signals", "sigaction-old-wrap8", false),
+        ("efault-signals", "sigprocmask-badhow-low8", false),
+        ("efault-signals", "sigprocmask-set-wrap4", false),
+        ("efault-signals", "sigprocmask-old-wrap4", false),
+        ("efault-signals", "sigpending-wrap4", false),
+    ];
+    for (suite, case, pass_edge) in cases {
+        assert_agrees(suite, case, pass_edge);
     }
 }

@@ -78,6 +78,43 @@ Process and thread ids are 1. Every unimplemented system call traps as `unreacha
 Threads and dynamic loading are not implemented. No unsupported operation is turned into a
 successful no-op with an observable result.
 
+### Structures in system calls
+
+A system call reads and writes the program's memory as Linux does: it copies each input structure whole into
+its own memory before it checks any value, checks only the copy, and writes each output once the result is
+known, after its inputs are read and checked; no entry reads a field of the program's structure in place. So
+an output that is also an input (`sigaction(s, &a, &a)`) gets the old value after the new one is read, as
+natively. Two helpers in `copy.h` do every copy, `__bennett_copy_in` and `__bennett_copy_out`. Which bytes can
+be read: device memory is the module's bytes from 0 to its memory size (static data from address 16, the stack
+down from the top), a native program's address space is another, so the two agree only for live objects, null
+and the lowest addresses, and a range that wraps past the top of the address space. A range starting below
+address 16 or wrapping is `EFAULT` (nothing is read or written); any other is copied byte by byte, and one
+that reaches the end of device memory or beyond stops the run there with the device's `out_of_bounds`
+(natively `EFAULT`), since the runtime does not know the memory size (route: below, "Sleeping"). An empty
+range is never refused. The same check refuses a data buffer below 16 or wrapping in `read`, `write`,
+`pread`, `pwrite`, each element of `readv` and `writev`, `getrandom` and `getcwd`.
+
+Each call's order is Linux's: the arguments it checks first, its inputs copied in, the values in them, the
+change, the outputs written.
+
+- `clock_gettime`, `clock_getres`, `gettimeofday` (the time value, then the zone) and `time`: the clock id,
+  then the result written; a refused output is `EFAULT` after the clock was read, so that read is consumed.
+- `stat`, `lstat`, `fstat`, `newfstatat`: the descriptor or path, then the whole `struct stat` written.
+- `readv`, `writev`: the descriptor and its access mode (`EBADF`), a count of zero (0), a count above 1024
+  (`EINVAL`), the whole array's range, then each element copied whole and its length checked as it is copied
+  (a length above `LONG_MAX` is `EINVAL`, also before a later element that cannot be read, as natively), then
+  the sum of the lengths, then the transfers from the copies.
+- `rt_sigaction`: the set size, the new action copied, the signal number (and `SIGKILL`, `SIGSTOP` for a new
+  action), the change, the old action written.
+- `rt_sigprocmask`: the set size, the new set copied, `how`, the change, the old set written, then delivery
+  of what the change unblocked.
+- `rt_sigpending`: a set size above 8 is `EINVAL`; the first that many bytes of the pending set are written
+  (none for 0, whatever the address).
+- `nanosleep`, `clock_nanosleep`: "Sleeping", below.
+
+Path strings are still read in place (null is `EFAULT`; one below 16 is read there): a debt, route a string
+copy-in by the same check up to `PATH_MAX` bytes.
+
 ## Files and deterministic inputs
 
 The carried archive models run as C on the device, with no host IO. File bytes, sparse 4096-byte
@@ -170,18 +207,13 @@ slept, modulo 2^64. The clock's unit is the nanosecond, so a duration needs no r
   on the alarm clocks, flags other than `TIMER_ABSTIME` are `EINVAL`, as on a host with a real-time clock
   device (a host without one answers `EOPNOTSUPP` for every sleep on them with a valid request, whatever the
   flags; `tests/sleep-alarm-flags.c` is compared with that answer read as `EINVAL`).
-- Which requests can be read. Device memory is the module's bytes from 0 to its memory size: static data from
-  address 16 (the globals, and the heap, which lies in the runtime's arena), then the stack, down from the top,
-  where the entry's frame is (start-up's, which holds the argument vector, or that of another entry that calls
-  start-up); below the stack pointer the bytes are not yet reached but can be read. A native program's address
-  space is another, so the two agree on what is readable only for live objects, for null and the lowest
-  addresses, and for a range that wraps past the top of the address space. A request starting below address 16
-  or wrapping is `EFAULT`; any other is copied whole, every byte, before any field is checked, as Linux copies
-  it, and only the copy is checked. One that reaches the end of device memory or beyond stops the run in that
-  copy with the device's `out_of_bounds`, whatever its fields hold (`tests/sleep-beyond-memory.c`, and
-  `tests/sleep-partial.c` for seconds in memory and nanoseconds past its end; natively `EFAULT`): the runtime does not
-  know the memory size, which the front fixes after it lays out the data. Route to `EFAULT` there: the memory
-  size given to the program (a symbol the front defines, as ELF's `_end`, or a device instruction that reads it).
+- Which requests can be read: as for every structure ("Structures in system calls", above), the request is
+  copied whole before any field is checked; one starting below address 16 or wrapping is `EFAULT`, and one that
+  reaches the end of device memory or beyond stops the run in that copy with the device's `out_of_bounds`,
+  whatever its fields hold (`tests/sleep-beyond-memory.c`, and `tests/sleep-partial.c` for seconds in memory and
+  nanoseconds past its end; natively `EFAULT`): the runtime does not know the memory size, which the front fixes
+  after it lays out the data. Route to `EFAULT` there, for every structure: the memory size given to the program
+  (a symbol the front defines, as ELF's `_end`, or a device instruction that reads it).
 - A CPU-time id of a process other than the device's one is `EINVAL` by the device's own rule: the device has
   one process, so the id names nothing. Linux answers `EINVAL` for a process that does not exist and accepts
   the clock of one that does (a parent's, say).

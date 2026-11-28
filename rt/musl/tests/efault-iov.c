@@ -1,4 +1,5 @@
-/* Structure-pointer and error-order checks for vectored I/O syscalls: readv and writev.
+/* Structure-pointer and error-order checks for vectored I/O syscalls (readv and writev) and for the data
+ * buffers of read, write, getrandom and getcwd.
  *
  * argv[1] selects a case (or "agree" for the batch of non-faulting agreeing cases).
  * Optional argv[2] supplies the end-of-memory address on the device for partial-object cases;
@@ -191,6 +192,36 @@ int main(int argc, char **argv)
         char *edge = partial_edge(argc, argv);
         struct iovec v = { edge - 4, 8 };
         errno = 0; r = syscall(SYS_readv, rw, &v, 1);
+        report(c, r, errno); return 0;
+    }
+
+    if (!strcmp(c, "readv-alias")) {
+        /* The first element reads over the second: Linux reads from its copy of the array. */
+        if (lseek(rw, 16, SEEK_SET) != 16 || write(rw, "ghijklmnopqrstuv", 16) != 16 || lseek(rw, 0, SEEK_SET) != 0)
+            return 94;
+        struct iovec v[2];
+        v[0].iov_base = &v[1];
+        v[0].iov_len = sizeof v[1];
+        v[1].iov_base = buf;
+        v[1].iov_len = 4;
+        errno = 0; r = syscall(SYS_readv, rw, v, 2);
+        printf("%s: ret=%ld errno=%d buf=%.4s\n", c, r, errno, buf);
+        return 0;
+    }
+    if (!strcmp(c, "read-low8")) {
+        errno = 0; r = syscall(SYS_read, rw, low, 4);
+        report(c, r, errno); return 0;
+    }
+    if (!strcmp(c, "write-low8")) {
+        errno = 0; r = syscall(SYS_write, rw, low, 4);
+        report(c, r, errno); return 0;
+    }
+    if (!strcmp(c, "getrandom-low8")) {
+        errno = 0; r = syscall(SYS_getrandom, low, 4, 0);
+        report(c, r, errno); return 0;
+    }
+    if (!strcmp(c, "getcwd-low8")) {
+        errno = 0; r = syscall(SYS_getcwd, low, 4096);
         report(c, r, errno); return 0;
     }
 

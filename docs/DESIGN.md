@@ -2526,6 +2526,19 @@ descriptor flags, cwd, umask, the clock's read count and entropy's byte position
 Stores and allocator changes are journalled by the existing machine. Un-running a read restores its
 buffer and consumption position; un-running a write restores file bytes, length and offset.
 
+A system call takes the program's structures as Linux does: each input structure is copied whole into the
+runtime's own memory before any value is checked, only the copy is checked, and each output is written once the
+result is known, after the inputs are read and checked, so an output that aliases an input behaves as natively;
+no entry reads a field of the program's structure in place. One helper copies in and one copies out
+(`rt/musl/copy.h`). Device memory and a native address space are different spaces, so they agree on what is
+readable only for live objects, null and the lowest addresses, and a range that wraps past the top: a range
+starting below address 16 or wrapping is `EFAULT`, and any other is copied byte by byte, so one reaching the end
+of device memory stops the run there with the named fault `out_of_bounds` (natively `EFAULT`; the runtime does
+not know the memory size). Each call checks in Linux's order around these copies (`rt/musl/README.md`,
+"Structures in system calls", has the list); `readv` and `writev` copy their array element by element, checking
+each length as it is copied, as Linux's import of a vector does. Route for the named stop: the memory size given
+to the program. Debt: path strings are read in place.
+
 The maintainer's 2026-11-16 decision fixes the inputs: unsigned 64-bit clock start (nanoseconds), and
 an exact seeded entropy byte image. Reading the clock returns `(start + reads_so_far + slept) mod 2^64` and
 increments the count once, where `slept` is the nanoseconds slept so far, and is left out for the CPU-time
@@ -2536,10 +2549,9 @@ and `clock_nanosleep` add the requested duration to `slept` (an absolute sleep w
 nothing for one already reached) and return at once with nothing remaining. `slept` is ordinary memory like the read count, so undo restores it and
 an `apply` discards it; no host time is read. A sleep that natively never ends (a positive wait on the process's
 CPU-time clock; 2^64 nanoseconds or more) and one whose native result is the host's (the alarm clocks) are
-refused by name; invalid arguments give Linux's errors in its order, a request below address 16 or wrapping
-`EFAULT`; any other request is copied whole before a field is checked, so one past the end of device memory is the
-named stop `out_of_bounds` whatever its fields hold (the runtime does not know the memory
-size; `rt/musl/README.md`, "Sleeping"). Timers (`alarm`, `setitimer`, `timer_*`, `timerfd`) are not implemented
+refused by name; invalid arguments give Linux's errors in its order, the request copied in as every structure is
+(above), so one past the end of device memory is the named stop `out_of_bounds` whatever its fields hold
+(`rt/musl/README.md`, "Sleeping"). Timers (`alarm`, `setitimer`, `timer_*`, `timerfd`) are not implemented
 and stop by name at run time; `timer_create` is the runtime's own stop (`rt/musl/timer.c`, an archive member in
 place of musl's, which links thread code the front does not translate). Route: an expiry is a value of the same clock; a sleep or a clock read that carries the clock
 past it makes the timer expire at that point. A signal timer delivers its signal there through the existing

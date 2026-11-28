@@ -4,6 +4,7 @@
 #define _GNU_SOURCE
 #include "vfs.h"
 #include "devices.h"
+#include "copy.h"
 #include <errno.h>
 #include <sys/syscall.h>
 #include <fcntl.h>
@@ -273,12 +274,12 @@ long __bennett_rt_vfs_seek(struct bennett_file *f,int64_t offset,int whence,uint
     if(offset<0 ? magnitude>base : magnitude>(uint64_t)LONG_MAX-base) return -EINVAL;
     f->pos=offset<0?base-magnitude:base+magnitude; return f->pos;
 }
-static long fill_stat(struct bennett_inode *i,struct stat *st) {
-    if(!st) return -EFAULT;
-    memset(st,0,sizeof *st); st->st_dev=1; st->st_ino=i->number; st->st_nlink=i->links;
-    st->st_mode=i->mode; st->st_size=i->size; st->st_blksize=4096;
-    for(struct page *p=i->pages;p;p=p->next) st->st_blocks+=8;
-    return 0;
+/* The status is written whole once it is known (copy.h). */
+static long fill_stat(struct bennett_inode *i,void *user) {
+    struct stat st; memset(&st,0,sizeof st); st.st_dev=1; st.st_ino=i->number; st.st_nlink=i->links;
+    st.st_mode=i->mode; st.st_size=i->size; st.st_blksize=4096;
+    for(struct page *p=i->pages;p;p=p->next) st.st_blocks+=8;
+    return __bennett_copy_out(user,&st,sizeof st)?0:-EFAULT;
 }
 long __bennett_rt_vfs_meta(long nr,long a,long b,long c,long d,long e) {
     (void)e;
@@ -314,7 +315,7 @@ long __bennett_rt_vfs_meta(long nr,long a,long b,long c,long d,long e) {
     if(nr==SYS_getcwd) {
         const char *path=inode_path(cwd); if(!path) return -ENOENT;
         size_t n=strlen(path)+1; if((uint64_t)b<n) return -ERANGE;
-        if(!a) return -EFAULT; memcpy((void *)a,path,n); return n;
+        return __bennett_copy_out((void *)a,path,n)?(long)n:-EFAULT;
     }
     if(nr==SYS_fchdir) {
         struct bennett_file *f=__bennett_rt_vfs_file(a); if(!f) return -EBADF;
