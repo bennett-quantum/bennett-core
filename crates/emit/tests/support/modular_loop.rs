@@ -315,6 +315,14 @@ fn modular_private_return_requires_the_original_result_bits() {
 }
 
 fn compile_private_loop(module: &bennett_ir::ValidModule, mode: ApplyMode) -> bennett_emit::CompiledApply {
+    compile_private_loop_at(module, mode, 16).expect("compile wrapped loop")
+}
+
+fn compile_private_loop_at(
+    module: &bennett_ir::ValidModule,
+    mode: ApplyMode,
+    scratch_start: u64,
+) -> Result<bennett_emit::CompiledApply, bennett_emit::ApplyError> {
     use bennett_emit::{ApplyInput, Argument, compile_apply_with};
     use bennett_exec::ApplyMemory;
 
@@ -335,11 +343,40 @@ fn compile_private_loop(module: &bennett_ir::ValidModule, mode: ApplyMode) -> be
             entry_fault: None,
             stack_available: 800,
             memory: Some(ApplyMemory::new(&bytes, &held)),
-            scratch_start: 16,
+            scratch_start,
         },
         mode,
     )
-    .expect("compile wrapped loop")
+}
+
+#[test]
+fn modular_exit_preserves_the_identity_of_a_reloaded_input() {
+    let source = private_result(24, 24).replace(
+        "    ret %out",
+        "    %equal = icmp eq i3 %arg, %x\n    br %equal, done, mismatch\ndone:\n    ret %out\nmismatch:\n    ret 99",
+    );
+    let module = control_example(&source, 3, "");
+    let (construction, _) =
+        compare_controls(&module, 50, ApplyMode::Automatic, |x| (reference(x, 1, 7, 15, Update::Odd), 0));
+    assert_eq!(construction, Construction::ModularInPlace { passes: 3 });
+    let compiled = compile_private_loop_at(&module, ApplyMode::Automatic, u64::MAX - 32)
+        .expect("the in-place circuit fits in 32 scratch wires");
+    assert_eq!(compiled.construction, construction);
+}
+
+#[test]
+fn modular_proof_checks_the_zero_exit_only_when_reachable() {
+    for high_bit in [0, 4] {
+        let source = private_result(24, 24)
+            .replace("store i3 %x, 16", &format!("%exponent = or i3 %x, {high_bit}\n    store i3 %exponent, 16"))
+            .replace("finish(i8 1), head", "finish(i8 99), head");
+        let module = control_example(&source, 3, "");
+        let (construction, _) = compare_controls(&module, 50, ApplyMode::Automatic, |x| {
+            let exponent = x | high_bit;
+            (if exponent == 0 { 99 } else { reference(exponent, 1, 7, 15, Update::Odd) }, 0)
+        });
+        assert_eq!(matches!(construction, Construction::ModularInPlace { passes: 3 }), high_bit != 0);
+    }
 }
 
 #[test]

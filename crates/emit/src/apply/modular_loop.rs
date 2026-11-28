@@ -413,6 +413,7 @@ pub(super) struct Candidate<'a> {
     checkpoint: Checkpoint,
     prefix_steps: u64,
     scratch: Wire,
+    empty_possible: bool,
 }
 
 impl<'a> Candidate<'a> {
@@ -430,7 +431,14 @@ impl<'a> Candidate<'a> {
             checkpoint: circuit.checkpoint(),
             prefix_steps,
             scratch: circuit.scratch_end()?,
+            empty_possible: true,
         })
+    }
+
+    pub(super) fn after_entry_test(mut self, step: &Step<'_>) -> Option<Self> {
+        let Step::Write(_, _, word) = step else { return None };
+        self.empty_possible = word[0].literal().is_none_or(|value| value == self.shape.true_if_zero);
+        Some(self)
     }
 
     // A recognized loop can leave only through its two exits. Its direct
@@ -449,7 +457,7 @@ impl<'a> Candidate<'a> {
     ) -> Option<(Plan, Checkpoint)> {
         #[cfg(test)]
         tests::record_attempt();
-        let Self { shape, mut slots, checkpoint, prefix_steps, scratch } = self;
+        let Self { shape, mut slots, checkpoint, prefix_steps, scratch, empty_possible } = self;
         let loop_budget = input.budget.checked_sub(prefix_steps)?.checked_sub(2)?;
         let entry = shape.entry;
         slots[shape.entry_condition] = vec![Bit::Constant(!shape.true_if_zero)];
@@ -489,16 +497,18 @@ impl<'a> Candidate<'a> {
         }
 
         // The only residue reads on the reached routes are the update and
-        // the direct transfers. Check the two complete returns, including
+        // the direct transfers. Check the possible complete returns, including
         // any conversion in the wrapper, with distinct probe bits.
-        let mut empty_slots = clone_slots(&slots);
-        empty_slots[shape.entry_condition] = vec![Bit::Constant(shape.true_if_zero)];
         let probe_end = scratch.checked_add(residue_width as u64)?;
-        let empty_point = program.jump(&mut empty_slots, entry, shape.empty);
-        let zero_result =
-            replay_exit(program, &mut empty_slots, empty_point, entry.copy, memory, probe_end, loop_budget)?;
-        if definite(&zero_result) != Some(initial) || zero_result.len() != output_width {
-            return None;
+        if empty_possible {
+            let mut empty_slots = clone_slots(&slots);
+            empty_slots[shape.entry_condition] = vec![Bit::Constant(shape.true_if_zero)];
+            let empty_point = program.jump(&mut empty_slots, entry, shape.empty);
+            let zero_result =
+                replay_exit(program, &mut empty_slots, empty_point, entry.copy, memory, probe_end, loop_budget)?;
+            if definite(&zero_result) != Some(initial) || zero_result.len() != output_width {
+                return None;
+            }
         }
         let probe = (scratch..probe_end).map(Bit::input).collect::<Word>();
         let joined = shape.joined;
