@@ -8,7 +8,7 @@ use bennett_ir::{
 
 use crate::device::Wire;
 use crate::device_io::{DeviceContext, wire, wires, word_ranges};
-use crate::executor::{Executor, Frame, Halt, Outcome, SLOT_BYTES};
+use crate::executor::{Executor, Frame, Halt, Outcome, RunError, SLOT_BYTES};
 use crate::handles::{self, Entry};
 use crate::journal::Undo;
 
@@ -138,6 +138,19 @@ impl<'m> Executor<'m> {
                 let words = self.device_measure(std::slice::from_ref(&slice), context)?;
                 self.write_slot(*dst, u128::from(words[0]));
                 self.record(Undo::Measure);
+                self.advance();
+            }
+            Inst::ApplyBlock { .. } => {
+                if context.compiler.is_some() || context.external.is_some() {
+                    return Err(RunError::Device(
+                        "apply to a block is evaluated by the simulator only: it is not compiled to gates yet",
+                    )
+                    .into());
+                }
+                let position = self.applies + 1;
+                self.apply_block(inst, Some(position))?;
+                self.applies = position;
+                self.record(Undo::Apply);
                 self.advance();
             }
             Inst::Apply { callee, args, out, fault, budget } => {

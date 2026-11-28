@@ -4,8 +4,8 @@ use super::error::{Failure, ReadErrorKind};
 use super::lexer::Token;
 use super::{Parser, Scope};
 use crate::{
-    BinOp, BlockId, CastOp, Const, Controls, Fault, FixedGate, FuncId, Gate, GateKind, Inst, MeasureSource, Operand,
-    Place, Predicate, Qubit, Qubits, Rotation, Signature, Slot, SwitchCase, Target, Terminator, Type, Width,
+    BinOp, BlockApply, BlockId, CastOp, Const, Controls, Fault, FixedGate, FuncId, Gate, GateKind, Inst, MeasureSource,
+    Operand, Place, Predicate, Qubit, Qubits, Rotation, Signature, Slot, SwitchCase, Target, Terminator, Type, Width,
 };
 
 /// The mnemonics that end a block.
@@ -353,6 +353,9 @@ impl<'s> Parser<'s> {
 
     /// `apply @f(ARGS) -> %out, %fault budget B`
     fn apply(&mut self, scope: &mut Scope<'s>) -> Result<Inst, Failure> {
+        if let Some(Token::Local(_) | Token::Number(_)) = self.cursor.peek() {
+            return self.apply_block(scope);
+        }
         let callee = self.function_use()?;
         let args = self.arguments(scope)?;
         self.cursor.expect(Token::Arrow, "`->`")?;
@@ -362,6 +365,32 @@ impl<'s> Parser<'s> {
         self.cursor.expect(Token::Word("budget"), "`budget`")?;
         let budget = self.operand(scope, Width::WORD)?;
         Ok(Inst::Apply { callee, args, out, fault, budget })
+    }
+
+    /// `apply FUNCTION budget B, fault %r, image(ADDRESS, SIZE), fields(ADDRESS, COUNT), ctrl list(ADDRESS,
+    /// COUNT)`, after `apply`: every operand but the fault register an `i64` value or constant.
+    fn apply_block(&mut self, scope: &mut Scope<'s>) -> Result<Inst, Failure> {
+        let function = self.operand(scope, Width::WORD)?;
+        self.cursor.expect(Token::Word("budget"), "`budget`")?;
+        let budget = self.operand(scope, Width::WORD)?;
+        self.cursor.expect(Token::Comma, "`,`")?;
+        self.cursor.expect(Token::Word("fault"), "`fault`")?;
+        let fault = self.operand(scope, Width::WORD)?;
+        let mut pair = |parser: &mut Self, words: &[&'static str]| -> Result<(Operand, Operand), Failure> {
+            parser.cursor.expect(Token::Comma, "`,`")?;
+            for &word in words {
+                parser.cursor.expect(Token::Word(word), word)?;
+            }
+            parser.cursor.expect(Token::LParen, "`(`")?;
+            let pair = parser.operand_pair(scope, Width::WORD)?;
+            parser.cursor.expect(Token::RParen, "`)`")?;
+            Ok(pair)
+        };
+        let (image, size) = pair(self, &["image"])?;
+        let (fields, field_count) = pair(self, &["fields"])?;
+        let (controls, control_count) = pair(self, &["ctrl", "list"])?;
+        let apply = BlockApply { function, budget, fault, image, size, fields, field_count, controls, control_count };
+        Ok(Inst::ApplyBlock(Box::new(apply)))
     }
 
     /// `switch iN value, CASE: target, ..., default: target`

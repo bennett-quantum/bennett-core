@@ -220,6 +220,9 @@ pub enum Problem {
          parameters and result are integers of at most 128 bits"
     )]
     RegionOperandTooWide(String, u32),
+    /// An apply target (`applied func`) whose signature is not one `i64` parameter and no result.
+    #[error("an applied function takes one i64, its block's address, and returns nothing")]
+    AppliedSignature,
     /// An `apply` callee that does not return an integer.
     #[error("a coherent region must return an integer")]
     RegionResult,

@@ -1,0 +1,26 @@
+; An apply to a block through the CLI (crates/cli/tests/apply_block.rs): the simulator evaluates it, the
+; counter and the OpenQASM writer refuse it by name.
+memory 512
+data 64 = i64 1, i64 0, i64 2, i64 0, i64 1, i64 2, i64 0, i64 2, i64 1, i64 2
+
+applied func @inc(i64 %b) {
+entry:
+    %x = load i8 %b
+    %y = add i8 %x, 1
+    %z = and i8 %y, 3
+    %o = add i64 %b, 1
+    store i8 %z, %o
+    ret
+}
+
+func @main() -> i64 {
+entry:
+    %x = qalloc i64 2
+    %o = qalloc i64 2
+    %e = qalloc i64 5
+    x %x[1]
+    %fa = faddr @inc
+    apply %fa budget 20, fault %e, image(128, 2), fields(64, 2), ctrl list(0, 0)
+    %r = measure i64 %o[0, 2]
+    ret %r
+}

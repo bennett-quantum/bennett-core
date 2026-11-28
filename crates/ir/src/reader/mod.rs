@@ -67,8 +67,15 @@ impl<'s> Parser<'s> {
                 None => break,
                 Some(Token::Word("memory")) => self.memory()?,
                 Some(Token::Word("data")) => self.data_segment()?,
-                Some(Token::Word("func")) => self.function()?,
-                Some(_) => return Err(self.cursor.unexpected("`memory`, `data` or `func`")),
+                Some(Token::Word("func")) => self.function(false)?,
+                Some(Token::Word("applied")) => {
+                    self.cursor.advance();
+                    if !matches!(self.cursor.peek(), Some(Token::Word("func"))) {
+                        return Err(self.cursor.unexpected("`func` after `applied`"));
+                    }
+                    self.function(true)?;
+                }
+                Some(_) => return Err(self.cursor.unexpected("`memory`, `data`, `func` or `applied func`")),
             }
         }
         let order = self.functions.definition_order()?;
@@ -127,7 +134,8 @@ impl<'s> Parser<'s> {
     }
 
     /// `func @name(TYPE %param, ...) [-> TYPE] {`, the body, and `}`.
-    fn function(&mut self) -> Result<(), Failure> {
+    /// `func @name(...) [-> type] { ... }`, an apply target when `applied` (`applied func`).
+    fn function(&mut self, applied: bool) -> Result<(), Failure> {
         self.cursor.advance();
         let (name, offset) = self.cursor.global("a function name")?;
         self.functions.define(name, offset)?;
@@ -147,6 +155,7 @@ impl<'s> Parser<'s> {
             result: scope.result,
             blocks,
             slot_names: scope.slots.into_names(),
+            applied,
         });
         Ok(())
     }
@@ -299,6 +308,7 @@ fn renumber_functions(module: &mut Module, order: &[u32]) {
             | Inst::RotateBy { .. }
             | Inst::GateBy { .. }
             | Inst::MeasureSlice { .. }
+            | Inst::ApplyBlock { .. }
             | Inst::Measure { .. } => {}
         }
     }

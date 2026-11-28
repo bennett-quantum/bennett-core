@@ -305,6 +305,7 @@ pub fn registers(module: &ValidModule, name: &str) -> Vec<String> {
             | Inst::RotateBy { .. }
             | Inst::GateBy { .. }
             | Inst::MeasureSlice { .. }
+            | Inst::ApplyBlock { .. }
             | Inst::Measure { .. }
             | Inst::Apply { .. } => None,
         })

@@ -153,6 +153,7 @@ impl<'r> FunctionGen<'r> {
             result: Some(Type::Int(VALUE)),
             blocks,
             slot_names: self.slot_names,
+            applied: false,
         }
     }
 

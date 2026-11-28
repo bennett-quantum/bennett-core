@@ -8,7 +8,8 @@ One statement per line; `;` starts a comment. The single reader is `bennett_ir::
 ```
 module     := { "memory" INT | "data" INT "=" item {"," item} | function }
 item       := STRING | iN INT | iN @func | zero COUNT    ; bytes, integer, function address, zero bytes
-function   := "func" @name "(" [param {"," param}] ")" ["->" type] "{" block {block} "}"
+function   := ["applied"] "func" @name "(" [param {"," param}] ")" ["->" type] "{" block {block} "}"
+                                                         ; applied: an apply target, (i64 %block) and no result
 param      := type %name
 block      := label ":" {statement} terminator           ; a line ending in ":" is a label
 label      := name ["(" param {"," param} ")"]           ; block parameters replace phi nodes
@@ -52,6 +53,8 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | %d = measure i64 operand "[" operand, operand "]" ; a slice of a register ("Measuring a slice")
             | apply @f(typed, ...) -> %out, %fault budget operand  ; %fault: a register of 5 qubits or more
                                                                    ; meaning: docs/DESIGN.md, "apply"
+            | apply operand budget operand, fault operand, image(operand, operand),
+                    fields(operand, operand), ctrl list(operand, operand)  ; "Applying to a block"
 terminator := br label[(typed, ...)]
             | br operand, target, target
             | switch iN operand, INT: target, ..., default: target
@@ -265,6 +268,24 @@ A qubit listed twice is one control. Each form means the same gate with those de
 out, each once. Undoing the gate does not read the list again: the gate journals the controls it read, and
 undoing it applies the inverse gate under them, then turns any byte the gate made qubits back into ordinary
 memory (the gate may have made a byte of its own list qubits).
+
+## Applying to a block
+
+`apply F budget B, fault R, image(P, S), fields(Q, M), ctrl list(C, N)` is the handle interface's `apply`,
+every operand an `i64` value or constant: `F` the address of an apply target (`faddr @f` of an `applied
+func`), `B` the budget, `R` the fault register (a `qN` register, an `i64` handle or a constant handle), `P`
+and `S` the image's address and size in bytes, `Q` and `M` the field list's address and number of entries,
+`C` and `N` the control list's. A field entry is 40 bytes of five little-endian `u64` values: the handle at
+offset 0, the lowest qubit at 8, the number of qubits at 16, the byte offset in the block at 24, the direction
+at 32 (1 in, 2 out; `bennett_ir::FIELD_ENTRY_BYTES`, `FIELD_IN`, `FIELD_OUT`). An apply target is a function
+marked `applied func`, with one `i64` parameter, the block's address, and no result (else the validator's
+`AppliedSignature`).
+
+For each value of the in fields' qubits where every control is 1, the apply target runs for `B` steps on its
+block: the image, with the in fields' values written into their bytes; then the out fields' bytes are XORed
+into their qubits, or a fault code into the five low qubits of `R`. The checks, their order, the block's
+placement and the meaning are in `docs/DESIGN.md`, "`apply` to a block". Inside an applied function it is
+`quantum_in_region` before any check. Today only the simulator's direct evaluation runs it.
 
 ## Registers are not integers
 

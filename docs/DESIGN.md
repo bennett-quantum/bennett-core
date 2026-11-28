@@ -1163,6 +1163,56 @@ on, for programs that read their fault registers on purpose (`examples/fault.bn`
 always run with the stop in the tests. The stop is the simulator's ("The simulator's own stops and reports",
 below); the program's meaning is the fault code in the register.
 
+### `apply` to a block
+
+`apply F budget B, fault R, image(P, S), fields(Q, M), ctrl list(C, N)` (`Inst::ApplyBlock`,
+`crates/exec/src/apply_block.rs`) is the handle interface's `apply` (`docs/HANDLES.md`, section 6), one
+instruction whose every operand is a value given at run time: the function address `F`, the budget, the fault
+register's handle, the image's address and size, the field list's address and count (40-byte entries of
+6.1), the control list's (16-byte entries, "Control lists" in `docs/SYNTAX.md`). An *apply target* is a
+function the device program marks `applied func`, with one `i64` parameter, the block's address, and no
+result; the front end records the set from the C signatures (D11), and the device does not recompute it.
+
+**Checks**, in the order of 6.2, from definite values, the first that fails ending the run with its fault
+before anything changes: `F` an apply target (`bad_indirect`, the interface's `bad_function`); the fault
+register's handle (`dangling_register`), its width at least 5 (`bad_range`); `1 <= S <=` the memory size and
+`40 M`, `16 N` within 64 bits (`bad_argument`); the image's `S` bytes and the field list readable as ordinary
+memory (`bad_argument`), then the control list (`bad_argument`, then each entry's handle and position);
+each field in list order (`bad_argument` throughout): its direction 1 (in) or 2 (out), its handle, at least
+one qubit, its slice inside its register, its bytes inside the block; then no two fields' bytes overlapping,
+no qubit in two out fields, in an out and an in field, in a field and the fault register's five low qubits,
+or in the controls and an out field or those fault qubits (`bad_argument`). Inside an applied function the
+instruction is `quantum_in_region` before any of these.
+
+**The function `G`** (6.3), as the simulator computes it:
+
+- **Placement.** One base for the call: the highest multiple of 16 at which the block's `S` bytes end at or
+  below the stack pointer at the call, at or above the stack floor (the first byte above static data). The
+  rule reads `S`, the stack pointer and the stack floor; no other operand, not the budget, and no memory. If
+  there is none, or a byte of that range holds qubits, `G` is `out_of_memory` for every input (the base does
+  not move to avoid the qubits).
+- **Snapshot.** The image and the field list are read once, at the call.
+- **Setup**, for each input (the values of the in fields' qubits), not counted as steps: the image copied
+  into the block, each in field's value written into its bytes, least significant byte first, the unused high
+  bits of its last byte 0; the apply target entered with the block's address, its frames below the block. A
+  frame that does not fit is `stack_overflow`.
+- **Run** for `B` steps, as the device's other `apply` runs (budget, the fault codes of ordinary code).
+- **Extraction**, not counted: after a return each out field's bytes, reduced to its width. The run is then
+  undone and the block's bytes put back: nothing of it remains.
+
+**Meaning** (6.4): on each basis configuration where every control qubit is 1, the out values of `G(x)` are
+XORed into the out fields' qubits, or its fault code into the fault register's five low qubits; every other
+configuration is unchanged. The map is a permutation of configurations, so amplitudes are carried along. A
+fault of the applied function on some input is such a value, never a stop: the simulator's strict mode,
+which stops at the other `apply` when it faults for some argument values, does not apply to this form. Each
+input is evaluated once, whatever its number of configurations; a run asked for step reports keeps one for
+the `apply` (inputs evaluated, the largest count). Undoing the instruction runs it again: the XOR is its own
+inverse.
+
+The simulator's direct evaluation is the only implementation today: the counter, the OpenQASM writer and
+`--apply-circuit` refuse the instruction by name (`RunError::Device`) until the gate emitter compiles it
+(D17).
+
 ## From C to a device program (`front`)
 
 `front` is the only module that links LLVM. It reads the bitcode stock `clang` emits, runs LLVM's own pipeline
