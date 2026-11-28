@@ -4,9 +4,10 @@
 A copy of the front's sources is built into a second bennett-cc whose files lie in that copy (the folder is fixed
 when the driver is built); there its declarations file and its baseline are symbolic links into two other folders.
 build.py builds one member, musl's close.c, with that driver (a `make` wrapper on the path selects only that
-object). An unchanged second build reuses the member; after a line is added, through the links, to the declarations
-file and then to the baseline, the member is compiled again each time; an `#error` in the baseline stops the build,
-as it stops a fresh one. Needs what build.py needs, strace, CMake and LLVM 18; separate from the fast suites.
+object). An unchanged second build reuses the member, and so do four builds of the same folder started at once, as
+the front's tests start them; after a line is added, through the links, to the declarations file and then to the
+baseline, the member is compiled again each time; an `#error` in the baseline stops the build, as it stops a fresh
+one. Needs what build.py needs, strace, CMake and LLVM 18; separate from the fast suites.
 """
 import os
 from pathlib import Path
@@ -60,6 +61,13 @@ def main():
         assert result.returncode == 0 and states(lib) == {"src/unistd/close.c": "built"}, (result.stderr,)
         result = build()
         assert result.returncode == 0 and states(lib) == {"src/unistd/close.c": "cached"}, (result.stderr,)
+        command = ["python3", HERE / "build.py", lib, "--driver", driver, "--jobs", "1"]
+        at_once = [subprocess.Popen([str(a) for a in command], env=env, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True) for _ in range(4)]
+        for process in at_once:
+            _, stderr = process.communicate()
+            assert process.returncode == 0, stderr
+        assert states(lib) == {"src/unistd/close.c": "cached"} and (lib / "libc.a").is_file()
         # The declarations file and the baseline become links into folders of their own.
         for name, folder in (("bq-prefix.h", "shared"), ("bq-baseline.c", "elsewhere")):
             (work / folder).mkdir()
