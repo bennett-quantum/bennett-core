@@ -238,9 +238,10 @@ pub enum Problem {
     /// The same memory qubit, by the same address operand and bit, twice in one gate.
     #[error("the memory qubit at bit {0} of one address appears twice in one gate")]
     RepeatedMemoryQubit(u8),
-    /// A `GateAt` whose qubits are all register qubits at literal positions below 2^32: it is written, and
-    /// read back, as a `Gate`. A `GateAt` has a qubit in memory or a position given as an `i64` value (a slot,
-    /// or a constant from 2^32, which the reader gives for such a literal).
-    #[error("a gate with every qubit in a register at a literal position below 2^32 is a `Gate`, not a `GateAt`")]
+    /// A `GateAt` whose qubits are all qubits of named registers (slots) at literal positions below 2^32: it is
+    /// written, and read back, as a `Gate`. A `GateAt` has a qubit in memory, a position given as an `i64` value
+    /// (a slot, or a constant from 2^32, which the reader gives for such a literal), or a constant handle at any
+    /// position.
+    #[error("a gate with every qubit in a named register at a literal position below 2^32 is a `Gate`, not a `GateAt`")]
     GateAtWithoutMemory,
 }
