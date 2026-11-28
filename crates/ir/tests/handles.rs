@@ -180,3 +180,16 @@ fn a_built_constant_position_validates_only_in_the_form_the_reader_gives() {
     *index = Operand::Const(Const::new(Width::new(128).expect("i128"), 1 << 64).expect("2^64"));
     assert!(matches!(problems_of(wide)[..], [Problem::TypeMismatch { .. }]), "the type error alone");
 }
+
+/// A position has one spelling whatever names the register: decimal or `0x` hex, after a slot handle as after
+/// a constant handle, and the same instruction for the same value.
+#[test]
+fn a_position_reads_alike_after_every_handle_form() {
+    let text = |place: &str| format!("func @main(i64 %h) {{\nentry:\n %q = qalloc 2\n x {place}\n ret\n}}\n");
+    for (hex, decimal) in
+        [("%q[0x1]", "%q[1]"), ("%h[0x1]", "%h[1]"), ("1[0x1]", "1[1]"), ("%h[0x100000000]", "%h[4294967296]")]
+    {
+        let (hex, decimal) = (read(&text(hex)).expect(hex), read(&text(decimal)).expect(decimal));
+        assert_eq!(hex, decimal);
+    }
+}

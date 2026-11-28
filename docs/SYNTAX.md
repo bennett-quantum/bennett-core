@@ -150,9 +150,10 @@ done(i64 %sum):
 A gate's qubit is a register qubit, `%q[3]`, or a bit of memory, `[%p:3]`: bit `3 % 8` of the byte at
 `%p + 3 / 8`, so `[%p:BIT]` is bit BIT of the little-endian integer at `%p`, as `load` and `store` see it.
 The address is an `i64` value or a constant (`[64:0]`); the bit is a decimal from 0 to 127; `[%p]` is
-bit 0. One gate may mix them: `x [%p:1] ctrl %q[0], [16]`. A gate whose qubits are all register qubits at
-literal positions below 2^32 is `bennett_ir::Inst::Gate`, as before; one with a qubit in memory or a position
-given as an `i64` value ("Handles as integers") is `Inst::GateAt`, and the writer prints both in the same
+bit 0. One gate may mix them: `x [%p:1] ctrl %q[0], [16]`. A gate whose qubits are all qubits of named
+registers (a slot, `%q[3]`) at literal positions below 2^32 is `bennett_ir::Inst::Gate`, as before; one with
+a qubit in memory, a position given as an `i64` value, or a constant handle at any position (`x 1[0]`;
+"Handles as integers") is `Inst::GateAt`, and the writer prints both in the same
 form, so reading what it wrote gives the same instruction. A rotation by a run-time angle,
 `rx|ry|rz|p(%a)`, is `Inst::RotateBy` with register and memory qubits alike. The validator reports a bit
 from 128 (`MemoryBitOutOfRange`), the same address operand and bit twice in one gate

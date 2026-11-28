@@ -318,3 +318,22 @@ entry:
     assert_eq!(wires.end - wires.start, width);
     assert_eq!(device.targets, [wires.end - 1]);
 }
+
+/// A hexadecimal position names the same qubit after a named handle as after a constant one.
+#[test]
+fn a_hexadecimal_position_names_the_same_qubit_after_every_handle_form() {
+    for place in ["%q[0x1]", "%h[0x1]", "1[0x1]"] {
+        let module = common::load(&format!(
+            "memory 64
+func @main() -> i2 {{
+entry:
+    %q = qalloc 2
+    %h = add i64 0, 1
+    x {place}
+    %m = measure %q
+    ret %m
+}}"
+        ));
+        assert_eq!(run(&module, "main", &[], bounded()).0, Outcome::Returned(Some(2)), "{place}");
+    }
+}

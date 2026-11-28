@@ -1,6 +1,7 @@
-//! The fixed gate `y` through the CLI: the counting device counts it as one gate with its controls, and the
-//! OpenQASM file writes it as `stdgates.inc`'s `y`, Pauli Y as the device's (`fixtures/pauli-y.bn`). The
-//! writer's own simulated outcomes must equal the simulator's at the same seed.
+//! The fixed gate `y` through the CLI: the counting device counts it as one gate with at most one control,
+//! and with two as it lowers every gate but `x` (two Toffolis and one two-qubit gate); the OpenQASM file
+//! writes it as `stdgates.inc`'s `y`, Pauli Y as the device's (`fixtures/pauli-y.bn`). The writer's own
+//! simulated outcomes must equal the simulator's at the same seed.
 
 use std::path::Path;
 use std::process::Command;

@@ -1,6 +1,6 @@
 //! Gate kinds at run time in the text form (`docs/SYNTAX.md`, "Gate kinds at run time"): `gate(CODE)` and
-//! `rotate(CODE, %angle)` read, write and validate; the code is an `i64` value or constant, the angle an
-//! `i64` slot, the qubits as any gate's.
+//! `rotate(CODE, ANGLE)` read, write and validate; the code is an `i64` value or constant, the angle an `i64`
+//! value or an integer constant holding its binary64 bits, the qubits as any gate's.
 
 use bennett_ir::{GateKind, Inst, LoadError, Operand, Place, Problem, Qubit, Slot, load, read, write};
 
@@ -68,7 +68,10 @@ fn the_code_and_the_angle_are_i64_and_the_qubits_are_checked_as_for_any_gate() {
     let repeated = TEXT.replace("gate(4) %q[1]", "gate(4) %q[1] ctrl %q[1]");
     assert!(matches!(problems(&repeated)[..], [Problem::RepeatedQubit(..)]));
     assert!(read(&TEXT.replace("rotate(12, %a)", "rotate(12)")).is_err(), "a rotation needs its angle");
-    assert!(read(&TEXT.replace("rotate(12, %a)", "rotate(12, 0.5)")).is_err(), "the angle is a slot");
+    assert!(
+        read(&TEXT.replace("rotate(12, %a)", "rotate(12, 0.5)")).is_err(),
+        "the angle is an integer, its bits, not a decimal"
+    );
     assert!(read(&TEXT.replace("gate(4)", "%x = gate(4)")).is_err(), "no result");
 }
 

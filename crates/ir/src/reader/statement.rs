@@ -416,9 +416,9 @@ impl<'s> Parser<'s> {
         if !self.cursor.eat(Token::LBracket) {
             return Ok(Place::Register(Qubit { register, bit: 0 }));
         }
-        let (text, offset) = self.cursor.number("a qubit index")?;
-        let position: u64 =
-            text.parse().map_err(|_| Failure { offset, kind: ReadErrorKind::BadNumber(text.to_owned()) })?;
+        // The position's literal is an `i64`'s, as after a constant handle: decimal or `0x` hex, two's
+        // complement if negative.
+        let position = self.literal(Width::WORD)?.value() as u64;
         self.cursor.expect(Token::RBracket, "`]`")?;
         Ok(match u32::try_from(position) {
             Ok(bit) => Place::Register(Qubit { register, bit }),

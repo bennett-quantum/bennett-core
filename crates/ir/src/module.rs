@@ -242,7 +242,8 @@ pub enum Place {
     Indexed {
         /// The register: a slot holding a `qN` register or an `i64` handle, or an `i64` constant handle.
         register: Operand,
-        /// The qubit's position: an `i64` slot, or a constant from 2^32.
+        /// The qubit's position: an `i64` slot, or a constant (from 2^32 on a named register, any on a
+        /// constant handle).
         index: Operand,
     },
 }
@@ -445,8 +446,9 @@ pub enum Inst {
         controls: Vec<Qubit>,
     },
     /// `gate target [ctrl controls]` with at least one qubit in memory or at a position given as an `i64`
-    /// value, a slot or a constant from 2^32 ([`Place::Indexed`]): as `Gate`. A gate whose qubits are all
-    /// register qubits at literal positions below 2^32 is always written as `Gate`.
+    /// value, a slot or a constant from 2^32, or of a constant handle at any position ([`Place::Indexed`]): as
+    /// `Gate`. A gate whose qubits are all of named registers (slots) at literal positions below 2^32 is
+    /// always written as `Gate`.
     GateAt {
         /// The gate.
         gate: Gate,
