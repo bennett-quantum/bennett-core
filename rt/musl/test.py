@@ -186,7 +186,8 @@ def partial_request(args):
 
 
 # Structure-pointer and error-order checks across all implemented syscalls taking struct pointers
-# (plus time(time_t *) and the data buffers): agreeing batches, single agreeing cases, and named
+# (plus time(time_t *), the data buffers and the transfer cap): agreeing batches, single agreeing cases, a
+# small-stack run, and named
 # out_of_bounds stops for a range that reaches the end of device memory (natively EFAULT; known debt).
 # Also in front/tests/tests/syscall_efault_independent.rs.
 EFAULT_AGREE = ["efault-time", "efault-stat", "efault-iov", "efault-signals"]
@@ -194,22 +195,28 @@ EFAULT_CASES_AGREE = [
     *[("efault-time", case, False) for case in (
         "clock_gettime-low8", "clock_gettime-wrap8", "clock_getres-low8", "clock_getres-wrap8",
         "gettimeofday-tv-low8", "gettimeofday-tv-wrap8", "gettimeofday-tz-low8", "gettimeofday-tz-wrap4",
-        "time-low8", "time-wrap4")],
+        "time-low8", "time-wrap4", "nanosleep-above-top")],
     *[("efault-stat", case, False) for case in (
         "stat-low8", "stat-wrap8", "lstat-low8", "lstat-wrap8", "fstat-low8", "fstat-wrap8",
         "newfstatat-low8", "newfstatat-wrap8")],
     *[("efault-iov", case, False) for case in (
         "writev-low8", "writev-wrap8", "writev-base-low8", "writev-ro-null", "writev-ro-badlen",
         "writev-ro-badcnt", "readv-low8", "readv-wrap8", "readv-base-low8", "readv-wo-null", "readv-wo-badlen",
-        "readv-wo-badcnt", "readv-alias", "read-low8", "write-low8", "getrandom-low8", "getcwd-low8")],
+        "readv-wo-badcnt", "readv-alias", "read-low8", "write-low8", "getrandom-low8", "getcwd-low8",
+        "writev-wrap-second", "readv-wrap-second", "low-untouched", "ranges-and-cap")],
     ("efault-iov", "writev-ro-partial8", True),
     ("efault-iov", "readv-wo-partial8", True),
     *[("efault-signals", case, False) for case in (
         "sigaction-alias", "sigaction-sigkill-low8", "sigaction-sigkill-wrap8", "sigaction-act-low8",
         "sigaction-act-wrap8", "sigaction-old-low8", "sigaction-old-wrap8", "sigprocmask-badhow-low8",
         "sigprocmask-badhow-wrap4", "sigprocmask-set-low8", "sigprocmask-set-wrap4", "sigprocmask-old-low8",
-        "sigprocmask-old-wrap4", "sigpending-null", "sigpending-size4", "sigpending-low8", "sigpending-wrap4")],
+        "sigprocmask-old-wrap4", "sigpending-null", "sigpending-size4", "sigpending-low8", "sigpending-wrap4",
+        "sigaction-stored-mask")],
+    ("efault-stat", "at-fdcwd-int", False),
 ]
+# Agreeing cases run on the device with a small stack (--stack-bytes): each call's copies live in its own frame.
+EFAULT_SMALL_STACK = [("efault-stack", "small-stack")]
+SMALL_STACK_BYTES = 8192
 EFAULT_NAMED_STOP = [
     ("efault-time", "clock_gettime-partial8", True, "ret=-1 errno=14"),
     ("efault-time", "clock_getres-partial8", True, "ret=-1 errno=14"),
@@ -258,7 +265,7 @@ def efault_cases(args):
         assert match, probe
         memory_sizes[suite] = match[1]
 
-    def run_pair(suite, case, pass_edge):
+    def run_pair(suite, case, pass_edge, link_flags=()):
         with tempfile.TemporaryDirectory(dir=args.out) as directory:
             reference = subprocess.run([str(natives[suite]), case], cwd=directory, capture_output=True,
                                        stdin=subprocess.DEVNULL)
@@ -266,7 +273,7 @@ def efault_cases(args):
         program = args.out / f"{suite}-{case}.bn"
         dev_args = [case, memory_sizes[suite]] if pass_edge else [case]
         linked = run(["python3", HERE / "link.py", HERE / "tests" / f"{suite}.c", "--libdir", args.libdir,
-                      "--front", args.front, "--clang-flag=-O0", "-o", program, "--", *dev_args])
+                      "--front", args.front, "--clang-flag=-O0", *link_flags, "-o", program, "--", *dev_args])
         assert linked.returncode == 0, linked.stderr
         if pass_edge:
             assert f"memory {memory_sizes[suite]}\n" in program.read_text(), (suite, case)
@@ -294,6 +301,18 @@ def efault_cases(args):
                         if line.startswith("console: ")), "")
         assert console == escaped(output), (suite, case, console, output)
         print(f"efault {case}: passed ({output.decode().strip()})", flush=True)
+
+    for suite, case in EFAULT_SMALL_STACK:
+        native = args.out / f"{suite}.native"
+        built = run(["clang-18", "-O0", HERE / "tests" / f"{suite}.c", "-o", native])
+        assert built.returncode == 0, built.stderr
+        natives[suite] = native
+        output, result = run_pair(suite, case, False, [f"--stack-bytes={SMALL_STACK_BYTES}"])
+        assert result.returncode == 0 and "result: 0\n" in result.stdout, (suite, case, result)
+        console = next((line.removeprefix("console: ") for line in result.stdout.splitlines()
+                        if line.startswith("console: ")), "")
+        assert console == escaped(output), (suite, case, console, output)
+        print(f"efault {suite} {case}: passed ({SMALL_STACK_BYTES}-byte stack)", flush=True)
 
 
 def main():

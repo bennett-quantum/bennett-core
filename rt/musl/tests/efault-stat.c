@@ -132,6 +132,18 @@ int main(int argc, char **argv)
         errno = 0; r = syscall(SYS_fstat, fd, edge - 8);
         report(c, r, errno); return 0;
     }
+    if (!strcmp(c, "at-fdcwd-int")) {
+        /* AT_FDCWD as an int (its upper 32 bits clear): Linux's directory descriptor is an int. */
+        unsigned long at = (unsigned)AT_FDCWD;
+        struct stat st;
+        errno = 0; r = syscall(SYS_newfstatat, at, ".", &st, 0);
+        printf("%s newfstatat: ret=%ld errno=%d directory=%d\n", c, r, errno, r == 0 && S_ISDIR(st.st_mode));
+        errno = 0; r = syscall(SYS_openat, at, ".", O_RDONLY | O_DIRECTORY);
+        printf("%s openat: ok=%d errno=%d\n", c, r >= 0, errno);
+        errno = 0; r = syscall(SYS_faccessat, at, ".", F_OK);
+        report("at-fdcwd-int faccessat", r, errno);
+        return 0;
+    }
     if (!strcmp(c, "newfstatat-low8")) {
         errno = 0; r = syscall(SYS_newfstatat, AT_FDCWD, "/dev/null", low, 0);
         report(c, r, errno); return 0;

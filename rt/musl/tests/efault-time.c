@@ -145,6 +145,11 @@ int main(int argc, char **argv)
         errno = 0; r = syscall(SYS_time, wrap4);
         report_nonneg(c, r, errno); return 0;
     }
+    if (!strcmp(c, "nanosleep-above-top")) {
+        /* Above the top of the user address space (2^47 - 4096): EFAULT before the request is read. */
+        errno = 0; r = syscall(SYS_nanosleep, (void *)(uintptr_t)(1ull << 62), NULL);
+        report(c, r, errno); return 0;
+    }
     if (!strcmp(c, "time-partial4")) {
         char *edge = partial_edge(argc, argv);
         errno = 0; r = syscall(SYS_time, edge - 4);

@@ -246,6 +246,8 @@ long __bennett_syscall(long number, long a1, long a2, long a3, long a4, long a5,
         if (a1 < 1 || a1 > SIGNALS || (a2 && (a1 == SIGKILL || a1 == SIGSTOP))) return -EINVAL;
         struct k_sigaction old = actions[a1 - 1];
         if (a2) {
+            /* As Linux stores an action: SIGKILL and SIGSTOP cannot be blocked, so they leave its mask. */
+            action.mask[0] &= ~(unsigned)(bit(SIGKILL) | bit(SIGSTOP));
             actions[a1 - 1] = action;
             /* Ignoring a signal discards it if pending. */
             if (action.handler == SIG_IGN) pending &= ~bit(a1);

@@ -14,21 +14,18 @@
 #include "copy.h"
 static unsigned inputs_prepared;
 
-static long transfer(long fd,void *p,uint64_t n,int writing,uint64_t offset,int positional) {
-    /* Linux's order: a negative position, the descriptor, a seekable file, then the access mode. */
-    if(positional && offset>LONG_MAX) return -EINVAL;
-    struct bennett_file *file=__bennett_rt_vfs_file(fd);
-    if(!file) return -EBADF;
-    if(positional && (file->kind==BRT_CONSOLE || file->kind==BRT_ERROR || file->kind==BRT_INPUT)) return -ESPIPE;
-    if(writing?!__bennett_rt_writable(file->flags):!__bennett_rt_readable(file->flags)) return -EBADF;
-    if(n>LONG_MAX) return -EINVAL;
-    if(__bennett_user_refused(p,n)) return -EFAULT;
+/* Moves up to n bytes between the program's buffer p and an open file whose descriptor, access mode and buffer
+ * range were checked: what each kind does, with the buffer's first byte checked only where bytes are transferred
+ * (copy.h), as Linux faults only on a byte it touches. */
+static long move_bytes(struct bennett_file *file,void *p,uint64_t n,int writing,uint64_t offset,int positional) {
     if(file->kind==BRT_CONSOLE || file->kind==BRT_ERROR) {
+        if(__bennett_user_unmapped(p,n)) return -EFAULT;
         if(file->kind==BRT_ERROR && n) __builtin_trap();
         for(uint64_t i=0;i<n;++i) __bennett_effect(((const char *)p)[i]);
         return n;
     }
     if(file->kind==BRT_ENTROPY) {
+        if(__bennett_user_unmapped(p,n)) return -EFAULT;
         if(writing) __builtin_trap();
         __bennett_entropy_read(p,n); return n;
     }
@@ -36,6 +33,56 @@ static long transfer(long fd,void *p,uint64_t n,int writing,uint64_t offset,int 
         return 0; /* empty stdin */
     }
     return __bennett_rt_vfs_io(file,p,n,writing,offset,positional);
+}
+static long transfer(long fd,void *p,uint64_t n,int writing,uint64_t offset,int positional) {
+    /* Linux's order: a negative position, the descriptor, a seekable file, the access mode, the buffer's range
+     * (copy.h; a count above LONG_MAX never passes it), then the count capped at MAX_RW_COUNT. */
+    if(positional && offset>LONG_MAX) return -EINVAL;
+    struct bennett_file *file=__bennett_rt_vfs_file(fd);
+    if(!file) return -EBADF;
+    if(positional && (file->kind==BRT_CONSOLE || file->kind==BRT_ERROR || file->kind==BRT_INPUT)) return -ESPIPE;
+    if(writing?!__bennett_rt_writable(file->flags):!__bennett_rt_readable(file->flags)) return -EBADF;
+    if(!__bennett_user_range(p,n)) return -EFAULT;
+    if(n>BENNETT_MAX_RW_COUNT) n=BENNETT_MAX_RW_COUNT;
+    return move_bytes(file,p,n,writing,offset,positional);
+}
+/* readv and writev in Linux's order (import_iovec): the descriptor and its access mode, a count of 0 (nothing
+ * done) or above UIO_MAXIOV, the array's range, then each element copied whole (copy.h) with a length above
+ * LONG_MAX EINVAL as it is copied; then each buffer's range, every one before any byte moves, each length capped
+ * so that the total stays within MAX_RW_COUNT. Linux imports one element as a single buffer, capped before its
+ * range is checked; several are checked at their full length and then capped. Only the copies are used after.
+ * They live in this call's own frame, sized for its count, so no other call pays for them. */
+static __attribute__((noinline)) long vector_io(long fd,const struct iovec *array,long count,int writing) {
+    struct bennett_file *file=__bennett_rt_vfs_file(fd);
+    if(!file) return -EBADF;
+    if(writing?!__bennett_rt_writable(file->flags):!__bennett_rt_readable(file->flags)) return -EBADF;
+    if(!count) return 0;
+    if((unsigned long)count>UIO_MAXIOV) return -EINVAL;
+    if(!__bennett_user_range(array,count*sizeof *array)) return -EFAULT;
+    struct iovec v[count];
+    for(long i=0;i<count;++i) {
+        if(!__bennett_copy_in(&v[i],array+i,sizeof v[i])) return -EFAULT;
+        if(v[i].iov_len>LONG_MAX) return -EINVAL;
+    }
+    uint64_t total=0;
+    for(long i=0;i<count;++i) {
+        uint64_t capped=v[i].iov_len<BENNETT_MAX_RW_COUNT-total?v[i].iov_len:BENNETT_MAX_RW_COUNT-total;
+        if(!__bennett_user_range(v[i].iov_base,count==1?capped:v[i].iov_len)) return -EFAULT;
+        v[i].iov_len=capped; total+=capped;
+    }
+    if(!total) return 0;
+    /* The console is checked whole before any effect; elsewhere a bad element ends a partial transfer, as on Linux. */
+    if(file->kind==BRT_CONSOLE || file->kind==BRT_ERROR)
+        for(long i=0;i<count;++i) if(__bennett_user_unmapped(v[i].iov_base,v[i].iov_len)) return -EFAULT;
+    if(file->kind==BRT_ERROR && writing) __builtin_trap();
+    if(file->kind==BRT_ENTROPY && !writing) __bennett_entropy_check(total);
+    uint64_t done=0;
+    for(long i=0;i<count;++i) if(v[i].iov_len) {
+        long n=move_bytes(file,v[i].iov_base,v[i].iov_len,writing,0,0);
+        if(n<0) return done?(long)done:n;
+        done+=n; if((uint64_t)n<v[i].iov_len) break;
+    }
+    return done;
 }
 /* Fixed clocks 0..11 (10 is unused), and the CPU-time clocks of the caller: Linux encodes a process or thread
  * as ~id>>3 (0 is the caller; the device's only process and thread are 1) and rejects the clock kind 3. */
@@ -124,11 +171,13 @@ long __bennett_device_syscall(long nr,long a,long b,long c,long d,long e,long f)
     if(nr==SYS_nanosleep) return clock_sleep(CLOCK_REALTIME,0,(const void *)a);
     if(nr==SYS_clock_nanosleep) return clock_sleep((int)a,(int)b,(const void *)c); /* both are int in Linux */
     if(nr==SYS_getrandom) {
-        if((unsigned long)b>LONG_MAX || (c&~7L) || ((c&6)==6)) return -EINVAL;
-        if(__bennett_user_refused((void *)a,b)) return -EFAULT;
-        __bennett_entropy_read((void *)a,b); return b;
+        /* Linux's order: the flags, the length capped at MAX_RW_COUNT, its range (copy.h), then the bytes. */
+        if((c&~7L) || ((c&6)==6)) return -EINVAL;
+        uint64_t n=(uint64_t)b<BENNETT_MAX_RW_COUNT?(uint64_t)b:BENNETT_MAX_RW_COUNT;
+        if(!__bennett_user_range((void *)a,n) || __bennett_user_unmapped((void *)a,n)) return -EFAULT;
+        __bennett_entropy_read((void *)a,n); return n;
     }
-    if(nr==SYS_open || nr==SYS_openat) return nr==SYS_open?__bennett_rt_vfs_open((void *)a,b,c,AT_FDCWD):__bennett_rt_vfs_open((void *)b,c,d,a);
+    if(nr==SYS_open || nr==SYS_openat) return nr==SYS_open?__bennett_rt_vfs_open((void *)a,b,c,AT_FDCWD):__bennett_rt_vfs_open((void *)b,c,d,(int)a);
     if(nr==SYS_creat) return __bennett_rt_vfs_open((void *)a,O_CREAT|O_WRONLY|O_TRUNC,b,AT_FDCWD);
     if(nr==SYS_close) return __bennett_rt_vfs_close(a);
     if(nr==SYS_dup) return __bennett_rt_vfs_dup(a,0,0,0);
@@ -138,37 +187,7 @@ long __bennett_device_syscall(long nr,long a,long b,long c,long d,long e,long f)
         return __bennett_rt_vfs_dup(a,b,1,!!(c&O_CLOEXEC));
     }
     if(nr==SYS_read || nr==SYS_write || nr==SYS_pread64 || nr==SYS_pwrite64) return transfer(a,(void *)b,c,nr==SYS_write || nr==SYS_pwrite64,d,nr==SYS_pread64 || nr==SYS_pwrite64);
-    if(nr==SYS_readv || nr==SYS_writev) {
-        /* Linux's order: the descriptor and its access mode, the count, the array's range, then each element
-         * copied whole (copy.h) and its length checked as it is copied. Only the copies are used after. */
-        struct bennett_file *file=__bennett_rt_vfs_file(a);
-        if(!file) return -EBADF;
-        if(nr==SYS_writev?!__bennett_rt_writable(file->flags):!__bennett_rt_readable(file->flags)) return -EBADF;
-        if(!c) return 0;
-        if((unsigned long)c>UIO_MAXIOV) return -EINVAL;
-        if(__bennett_user_refused((void *)b,c*sizeof(struct iovec))) return -EFAULT;
-        struct iovec v[UIO_MAXIOV]; uint64_t total=0;
-        for(long i=0;i<c;++i) {
-            if(!__bennett_copy_in(&v[i],(const struct iovec *)b+i,sizeof v[i])) return -EFAULT;
-            if(v[i].iov_len>LONG_MAX) return -EINVAL;
-        }
-        for(long i=0;i<c;++i) {
-            if(v[i].iov_len>LONG_MAX-total) return -EINVAL;
-            total+=v[i].iov_len;
-        }
-        /* The console is checked whole before any effect; elsewhere a bad element ends a partial transfer, as on Linux. */
-        if(file->kind==BRT_CONSOLE || file->kind==BRT_ERROR)
-            for(long i=0;i<c;++i) if(__bennett_user_refused(v[i].iov_base,v[i].iov_len)) return -EFAULT;
-        if(file->kind==BRT_ERROR && nr==SYS_writev && total) __builtin_trap();
-        if(file->kind==BRT_ENTROPY && nr==SYS_readv) __bennett_entropy_check(total);
-        uint64_t done=0;
-        for(long i=0;i<c;++i) if(v[i].iov_len) {
-            long n=transfer(a,v[i].iov_base,v[i].iov_len,nr==SYS_writev,0,0);
-            if(n<0) return done?(long)done:n;
-            done+=n; if((uint64_t)n<v[i].iov_len) break;
-        }
-        return done;
-    }
+    if(nr==SYS_readv || nr==SYS_writev) return vector_io(a,(const struct iovec *)b,c,nr==SYS_writev);
     if(nr==SYS_lseek || nr==SYS_ioctl) {
         struct bennett_file *file=__bennett_rt_vfs_file(a); if(!file) return -EBADF;
         if(nr==SYS_lseek) {

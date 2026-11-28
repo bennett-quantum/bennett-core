@@ -197,8 +197,26 @@ int main(int argc, char **argv)
         report(c, r, errno); return 0;
     }
     if (!strcmp(c, "sigpending-size4")) {
-        errno = 0; r = syscall(SYS_rt_sigpending, &oldset, 4);
-        report(c, r, errno); return 0;
+        /* A pending SIGUSR1 (bit 9, in the second byte) and sentinel bytes around the four requested. */
+        unsigned long block = 1ul << (SIGUSR1 - 1);
+        if (syscall(SYS_rt_sigprocmask, SIG_BLOCK, &block, NULL, 8) != 0 || raise(SIGUSR1) != 0) return 95;
+        unsigned char bytes[12];
+        memset(bytes, 0xaa, sizeof bytes);
+        errno = 0; r = syscall(SYS_rt_sigpending, bytes + 2, 4);
+        printf("%s: ret=%ld errno=%d bytes=", c, r, errno);
+        for (unsigned i = 0; i < sizeof bytes; ++i) printf("%02x", bytes[i]);
+        printf("\n");
+        return 0;
+    }
+    if (!strcmp(c, "sigaction-stored-mask")) {
+        /* Linux drops SIGKILL and SIGSTOP from a stored action's mask; SIGUSR2 stays. */
+        struct ksa sa = { SIG_IGN, 0, NULL, (1ul << (SIGKILL - 1)) | (1ul << (SIGSTOP - 1)) | (1ul << (SIGUSR2 - 1)) };
+        struct ksa check = { 0 };
+        errno = 0; r = syscall(SYS_rt_sigaction, SIGUSR1, &sa, NULL, 8);
+        int e = errno;
+        long q = syscall(SYS_rt_sigaction, SIGUSR1, NULL, &check, 8);
+        printf("%s: ret=%ld errno=%d query=%ld mask=%#lx\n", c, r, e, q, check.mask);
+        return 0;
     }
     if (!strcmp(c, "sigpending-null")) {
         errno = 0; r = syscall(SYS_rt_sigpending, NULL, 8);

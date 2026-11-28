@@ -87,25 +87,47 @@ an output that is also an input (`sigaction(s, &a, &a)`) gets the old value afte
 natively. Two helpers in `copy.h` do every copy, `__bennett_copy_in` and `__bennett_copy_out`. Which bytes can
 be read: device memory is the module's bytes from 0 to its memory size (static data from address 16, the stack
 down from the top), a native program's address space is another, so the two agree only for live objects, null
-and the lowest addresses, and a range that wraps past the top of the address space. A range starting below
-address 16 or wrapping is `EFAULT` (nothing is read or written); any other is copied byte by byte, and one
-that reaches the end of device memory or beyond stops the run there with the device's `out_of_bounds`
-(natively `EFAULT`), since the runtime does not know the memory size (route: below, "Sleeping"). An empty
-range is never refused. The same check refuses a data buffer below 16 or wrapping in `read`, `write`,
-`pread`, `pwrite`, each element of `readv` and `writev`, `getrandom` and `getcwd`.
+and the lowest addresses, and ranges Linux refuses whatever is mapped. Linux checks a range in two stages, and so
+does the device:
+
+- The range, where the call checks it (Linux's `access_ok`): a range that wraps or ends above the top of the
+  user address space, 2^47 − 4096 on x86-64 with four-level page tables, is `EFAULT` before any byte is touched;
+  an empty range at an address above the top too. Device memory lies far below the top.
+- The bytes, as they are touched: a nonempty range starting below address 16 faults at its first byte, so the
+  call answers `EFAULT` with nothing transferred. Any other byte is read or written; one at the end of device
+  memory or beyond stops the run there with the device's `out_of_bounds` (natively `EFAULT`, or a short
+  transfer), since the runtime does not know the memory size (route: below, "Sleeping").
+
+A structure copy checks both stages, then copies every byte; a copy of no bytes always succeeds. A data buffer
+(`read`, `write`, `pread`, `pwrite`, the elements of `readv` and `writev`, `getrandom`) has its range checked
+where Linux checks it and its first byte only where bytes are transferred: none at the end of a file, for a
+directory (`EISDIR`), for `/dev/null` or for empty stdin, so a buffer below 16 is no error there, as natively.
+One call transfers at most `MAX_RW_COUNT` bytes (0x7ffff000, Linux's `INT_MAX` rounded down to a page); a larger
+count is capped. `getcwd` writes its result as a structure copy.
 
 Each call's order is Linux's: the arguments it checks first, its inputs copied in, the values in them, the
 change, the outputs written.
 
 - `clock_gettime`, `clock_getres`, `gettimeofday` (the time value, then the zone) and `time`: the clock id,
-  then the result written; a refused output is `EFAULT` after the clock was read, so that read is consumed.
+  then the result written. A refused output of `clock_gettime`, of `gettimeofday`'s time value or of `time` is
+  `EFAULT` after the clock was read, so that read is consumed; `clock_getres` and a time-zone-only
+  `gettimeofday` read no clock.
+- `read`, `write`, `pread`, `pwrite`: a negative position, the descriptor, a seekable file, the access mode,
+  the buffer's range (a count above `LONG_MAX` never passes it), the count capped, then the file's own answer
+  and the bytes.
+- `getrandom`: the flags, the length capped, its range, then the bytes.
 - `stat`, `lstat`, `fstat`, `newfstatat`: the descriptor or path, then the whole `struct stat` written.
 - `readv`, `writev`: the descriptor and its access mode (`EBADF`), a count of zero (0), a count above 1024
   (`EINVAL`), the whole array's range, then each element copied whole and its length checked as it is copied
   (a length above `LONG_MAX` is `EINVAL`, also before a later element that cannot be read, as natively), then
-  the sum of the lengths, then the transfers from the copies.
+  every element's range before any byte moves, each length capped so that the total stays within
+  `MAX_RW_COUNT`, then the transfers from the copies. As Linux imports one element as a single buffer, its
+  length is capped before its range is checked; several are each checked at their full length, then capped.
+  The copies live in the call's own frame, sized for its count. A bad element after a good one ends a partial
+  transfer, except on the console, whose elements' first bytes are checked before any output.
 - `rt_sigaction`: the set size, the new action copied, the signal number (and `SIGKILL`, `SIGSTOP` for a new
-  action), the change, the old action written.
+  action), the change (a stored action's mask without `SIGKILL` and `SIGSTOP`, as Linux stores it), the old
+  action written.
 - `rt_sigprocmask`: the set size, the new set copied, `how`, the change, the old set written, then delivery
   of what the change unblocked.
 - `rt_sigpending`: a set size above 8 is `EINVAL`; the first that many bytes of the pending set are written
@@ -132,7 +154,8 @@ renames, and once removed they name nothing (relative names then give `ENOENT`; 
 and `..` there, a recorded debt). `O_ACCMODE` opens for neither reading nor writing, directories accept
 `fsync`, and `SEEK_DATA`/`SEEK_HOLE` report the model's unwritten 4096-byte pages as holes, as ext4 and tmpfs
 with 4 KiB blocks do. A vector with a bad element after a good one transfers the good part, except on the
-console, which is checked whole. The CPU-time clocks of the caller (`clock_getcpuclockid`,
+console, which is checked whole ("Structures in system calls"). A directory descriptor of the `*at` calls is
+an `int`, as in Linux, so `AT_FDCWD` passed with its upper 32 bits clear is still the working directory. The CPU-time clocks of the caller (`clock_getcpuclockid`,
 `pthread_getcpuclockid`) share the clock's counter.
 
 Supply the run's inputs when constructing its image:
@@ -208,8 +231,8 @@ slept, modulo 2^64. The clock's unit is the nanosecond, so a duration needs no r
   device (a host without one answers `EOPNOTSUPP` for every sleep on them with a valid request, whatever the
   flags; `tests/sleep-alarm-flags.c` is compared with that answer read as `EINVAL`).
 - Which requests can be read: as for every structure ("Structures in system calls", above), the request is
-  copied whole before any field is checked; one starting below address 16 or wrapping is `EFAULT`, and one that
-  reaches the end of device memory or beyond stops the run in that copy with the device's `out_of_bounds`,
+  copied whole before any field is checked; one starting below address 16, wrapping or ending above the top of
+  the user address space is `EFAULT`, and one that reaches the end of device memory or beyond (below the top) stops the run in that copy with the device's `out_of_bounds`,
   whatever its fields hold (`tests/sleep-beyond-memory.c`, and `tests/sleep-partial.c` for seconds in memory and
   nanoseconds past its end; natively `EFAULT`): the runtime does not know the memory size, which the front fixes
   after it lays out the data. Route to `EFAULT` there, for every structure: the memory size given to the program

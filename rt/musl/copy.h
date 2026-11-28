@@ -4,18 +4,42 @@
  * As Linux copies each input structure whole before it checks any value and writes each output once the result
  * is known, an entry copies every input in with __bennett_copy_in, checks only the copy, and writes every output
  * with __bennett_copy_out after its inputs are read and checked; no entry reads a field of the program's
- * structure in place. */
+ * structure in place. A data buffer is checked in Linux's two stages: its range where the call checks it
+ * (__bennett_user_range), and its first byte where bytes are transferred (__bennett_user_unmapped). */
 #include <stdint.h>
 
-/* A range Linux answers EFAULT for everywhere and the device can tell: one that starts below address 16 (the
- * device has no object there; Linux never maps the lowest page) or wraps past the top of the address space. Device
- * memory is the module's bytes [0, M), static data from address 16 and the stack down from M; natively readable
- * means mapped, an unrelated address space, so the two agree on these ranges only. An empty range is never
- * refused: Linux copies nothing for it. */
-static inline int __bennett_user_refused(const void *p, uint64_t n)
+/* The top of the user address space Linux checks ranges against on x86-64 with four-level page tables
+ * (TASK_SIZE_MAX, 2^47 minus one page). Device memory lies far below it. */
+#define BENNETT_USER_TOP 0x7ffffffff000ull
+
+/* Linux's cap on the bytes one read, write or getrandom transfers (MAX_RW_COUNT: INT_MAX rounded down to a page);
+ * a vector's lengths are capped so that their total stays within it. */
+#define BENNETT_MAX_RW_COUNT 0x7ffff000ull
+
+/* Linux's access_ok: a range is acceptable unless it wraps or ends above BENNETT_USER_TOP, whatever is mapped; an
+ * empty range at an address above the top is refused too. Natively a refused range is EFAULT before any byte is
+ * touched, so the device answers the same. */
+static inline int __bennett_user_range(const void *p, uint64_t n)
 {
     uintptr_t address = (uintptr_t)p;
-    return n && (address < 16 || n - 1 > UINTPTR_MAX - address);
+    return address <= BENNETT_USER_TOP && n <= BENNETT_USER_TOP - address;
+}
+
+/* Whether touching the first byte of an acceptable nonempty range faults where the device can tell: it starts
+ * below address 16 (the device has no object there; Linux never maps the lowest page). Natively that fault
+ * transfers nothing and the call answers EFAULT. Device memory is the module's bytes [0, M), static data from
+ * address 16 and the stack down from M; natively readable means mapped, an unrelated address space, so the two
+ * agree on these low ranges and on refused ranges only. */
+static inline int __bennett_user_unmapped(const void *p, uint64_t n)
+{
+    return n && (uintptr_t)p < 16;
+}
+
+/* Whether a structure of n bytes at p can be copied: copy_from_user and copy_to_user check the range, then touch
+ * every byte. A copy of no bytes always succeeds. */
+static inline int __bennett_user_copyable(const void *p, uint64_t n)
+{
+    return !n || (__bennett_user_range(p, n) && !__bennett_user_unmapped(p, n));
 }
 
 /* Copies the n bytes at from, in the program's memory, into the runtime's own to; returns 0 (EFAULT) for a refused
@@ -25,7 +49,7 @@ static inline int __bennett_user_refused(const void *p, uint64_t n)
  * of the copy. */
 static inline int __bennett_copy_in(void *to, const void *from, uint64_t n)
 {
-    if (__bennett_user_refused(from, n)) return 0;
+    if (!__bennett_user_copyable(from, n)) return 0;
     const volatile unsigned char *source = from;
     unsigned char *copy = to;
     for (uint64_t i = 0; i < n; ++i) copy[i] = source[i];
@@ -37,7 +61,7 @@ static inline int __bennett_copy_in(void *to, const void *from, uint64_t n)
  * stops the run there (natively the bytes before an unmapped one are written and the call answers EFAULT). */
 static inline int __bennett_copy_out(void *to, const void *from, uint64_t n)
 {
-    if (__bennett_user_refused(to, n)) return 0;
+    if (!__bennett_user_copyable(to, n)) return 0;
     volatile unsigned char *target = to;
     const unsigned char *value = from;
     for (uint64_t i = 0; i < n; ++i) target[i] = value[i];

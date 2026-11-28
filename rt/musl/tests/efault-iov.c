@@ -220,6 +220,75 @@ int main(int argc, char **argv)
         errno = 0; r = syscall(SYS_getrandom, low, 4, 0);
         report(c, r, errno); return 0;
     }
+    if (!strcmp(c, "writev-wrap-second") || !strcmp(c, "readv-wrap-second")) {
+        /* Every element's range is checked before any byte moves: nothing is transferred, the offset stays. */
+        int writing = c[0] == 'w';
+        struct iovec v[2] = { { buf, 1 }, { (void *)(uintptr_t)-2, 4 } };
+        errno = 0; r = syscall(writing ? SYS_writev : SYS_readv, rw, v, 2);
+        int e = errno;
+        printf("%s: ret=%ld errno=%d offset=%ld buf=%c\n", c, r, e, (long)lseek(rw, 0, SEEK_CUR), buf[0]);
+        return 0;
+    }
+    if (!strcmp(c, "low-untouched")) {
+        /* A buffer below 16 faults only where bytes are transferred: none at the end of a file, for a directory,
+         * for /dev/null, for empty stdin; /dev/zero transfers. */
+        int null = open("/dev/null", O_RDWR), zero = open("/dev/zero", O_RDONLY), dir = open(".", O_RDONLY | O_DIRECTORY);
+        if (null < 0 || zero < 0 || dir < 0 || lseek(rw, 0, SEEK_END) != 16) return 95;
+        struct iovec v = { low, 1 };
+        errno = 0; r = syscall(SYS_read, rw, low, 1); report("eof-read", r, errno);
+        errno = 0; r = syscall(SYS_readv, rw, &v, 1); report("eof-readv", r, errno);
+        errno = 0; r = syscall(SYS_write, null, low, 1); report("null-write", r, errno);
+        errno = 0; r = syscall(SYS_read, null, low, 1); report("null-read", r, errno);
+        errno = 0; r = syscall(SYS_writev, null, &v, 1); report("null-writev", r, errno);
+        errno = 0; r = syscall(SYS_readv, null, &v, 1); report("null-readv", r, errno);
+        errno = 0; r = syscall(SYS_read, dir, low, 1); report("dir-read", r, errno);
+        errno = 0; r = syscall(SYS_readv, dir, &v, 1); report("dir-readv", r, errno);
+        errno = 0; r = syscall(SYS_read, 0, low, 1); report("stdin-read", r, errno);
+        errno = 0; r = syscall(SYS_read, zero, low, 1); report("zero-read", r, errno);
+        errno = 0; r = syscall(SYS_write, rw, low, 1); report("file-write", r, errno);
+        struct iovec two[2] = { { buf, 1 }, { low, 1 } };
+        errno = 0; r = syscall(SYS_writev, null, two, 2); report("null-writev-second", r, errno);
+        errno = 0; r = syscall(SYS_writev, rw, two, 2); report("file-writev-second", r, errno);
+        return 0;
+    }
+    if (!strcmp(c, "ranges-and-cap")) {
+        /* Linux's range check (ends at most 2^47 - 4096, an empty range above it refused too) and its cap of
+         * 0x7ffff000 bytes: read and write check before capping, getrandom and a one-element vector cap first,
+         * several elements are each checked at full length after all are copied, then capped. */
+        int null = open("/dev/null", O_RDWR), dir = open(".", O_RDONLY | O_DIRECTORY);
+        if (null < 0 || dir < 0) return 95;
+        char *top = (char *)(uintptr_t)0x7ffffffff000ull;
+        static char area[16]; /* static: natively far below the top, where a stack buffer may not be */
+        errno = 0; r = syscall(SYS_write, null, area, 1ul << 31); report("write-cap", r, errno);
+        errno = 0; r = syscall(SYS_write, null, area, (size_t)LONG_MAX); report("write-longmax", r, errno);
+        errno = 0; r = syscall(SYS_write, null, area, (size_t)LONG_MAX + 1); report("write-above-longmax", r, errno);
+        errno = 0; r = syscall(SYS_read, null, area, 1ul << 47); report("read-2^47", r, errno);
+        errno = 0; r = syscall(SYS_write, null, top - 8, 8); report("write-to-top", r, errno);
+        errno = 0; r = syscall(SYS_write, null, top - 8, 9); report("write-past-top", r, errno);
+        errno = 0; r = syscall(SYS_write, null, top, 0); report("write-top-empty", r, errno);
+        errno = 0; r = syscall(SYS_write, null, wrap8, 0); report("write-high-empty", r, errno);
+        errno = 0; r = syscall(SYS_getrandom, top - 4096, (size_t)LONG_MAX + 1, 0); report("getrandom-cap-top", r, errno);
+        errno = 0; r = syscall(SYS_getrandom, wrap8, 0, 0); report("getrandom-high-empty", r, errno);
+        struct iovec one = { area, 0x80000000ul };
+        errno = 0; r = syscall(SYS_writev, null, &one, 1); report("writev-cap-one", r, errno);
+        one.iov_len = LONG_MAX;
+        errno = 0; r = syscall(SYS_writev, null, &one, 1); report("writev-longmax-one", r, errno);
+        one.iov_base = top - 4096; one.iov_len = 0x80000000ul;
+        errno = 0; r = syscall(SYS_writev, null, &one, 1); report("writev-capped-past-top", r, errno);
+        one.iov_base = wrap8; one.iov_len = 0;
+        errno = 0; r = syscall(SYS_writev, null, &one, 1); report("writev-high-empty", r, errno);
+        struct iovec two[2] = { { area, 0x7ffff000ul }, { area, 1 } };
+        errno = 0; r = syscall(SYS_writev, null, two, 2); report("writev-cap-two", r, errno);
+        two[0].iov_len = LONG_MAX;
+        errno = 0; r = syscall(SYS_writev, null, two, 2); report("writev-sum", r, errno);
+        two[0].iov_len = 1; two[1].iov_base = wrap8; two[1].iov_len = 0;
+        errno = 0; r = syscall(SYS_writev, null, two, 2); report("writev-high-empty-second", r, errno);
+        two[1].iov_len = 4;
+        errno = 0; r = syscall(SYS_readv, dir, two, 2); report("readv-dir-wrap-second", r, errno);
+        two[0].iov_base = wrap8; two[1].iov_base = area; two[1].iov_len = SIZE_MAX;
+        errno = 0; r = syscall(SYS_writev, null, two, 2); report("writev-wrap-then-badlen", r, errno);
+        return 0;
+    }
     if (!strcmp(c, "getcwd-low8")) {
         errno = 0; r = syscall(SYS_getcwd, low, 4096);
         report(c, r, errno); return 0;

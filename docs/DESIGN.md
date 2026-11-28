@@ -2531,13 +2531,18 @@ runtime's own memory before any value is checked, only the copy is checked, and 
 result is known, after the inputs are read and checked, so an output that aliases an input behaves as natively;
 no entry reads a field of the program's structure in place. One helper copies in and one copies out
 (`rt/musl/copy.h`). Device memory and a native address space are different spaces, so they agree on what is
-readable only for live objects, null and the lowest addresses, and a range that wraps past the top: a range
-starting below address 16 or wrapping is `EFAULT`, and any other is copied byte by byte, so one reaching the end
-of device memory stops the run there with the named fault `out_of_bounds` (natively `EFAULT`; the runtime does
-not know the memory size). Each call checks in Linux's order around these copies (`rt/musl/README.md`,
+readable only for live objects, null and the lowest addresses, and ranges Linux refuses whatever is mapped. As in
+Linux a range is checked in two stages: where the call checks it, a range that wraps or ends above the top of the
+user address space (2^47 − 4096 on x86-64; Linux's `access_ok`) is `EFAULT`; where bytes are touched, a range
+starting below address 16 is `EFAULT` with nothing transferred, and any other byte is read or written, so one at
+the end of device memory stops the run there with the named fault `out_of_bounds` (natively `EFAULT`; the runtime
+does not know the memory size). A structure copy does both stages; a data buffer's first byte is checked only
+where bytes move (none at the end of a file, for a directory or `/dev/null`), and one call transfers at most
+Linux's `MAX_RW_COUNT` bytes. Each call checks in Linux's order around these copies (`rt/musl/README.md`,
 "Structures in system calls", has the list); `readv` and `writev` copy their array element by element, checking
-each length as it is copied, as Linux's import of a vector does. Route for the named stop: the memory size given
-to the program. Debt: path strings are read in place.
+each length as it is copied, then every element's range before any transfer, as Linux's import of a vector does,
+and keep the copies in their own frame, sized for the count. Route for the named stop: the memory size given to
+the program. Debt: path strings are read in place.
 
 The maintainer's 2026-11-16 decision fixes the inputs: unsigned 64-bit clock start (nanoseconds), and
 an exact seeded entropy byte image. Reading the clock returns `(start + reads_so_far + slept) mod 2^64` and

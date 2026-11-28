@@ -105,7 +105,7 @@ static int last_type(const char *path) {
 static int trailing_slash(const char *path) { size_t n=strlen(path); return n && path[n-1]=='/'; }
 /* Linux's limits: a path of PATH_MAX bytes or more and a component of more than NAME_MAX bytes are too long.
  * With `tail`, a trailing slash after an existing non-directory is ENOTDIR (callers that order it otherwise pass 0). */
-static char *canonical(const char *path,long at,int *error,int tail) {
+static char *canonical(const char *path,int at,int *error,int tail) {
     if(!path) { *error=EFAULT; return 0; }
     if(!*path) { *error=ENOENT; return 0; }
     if(strnlen(path,PATH_MAX)>=PATH_MAX) { *error=ENAMETOOLONG; return 0; }
@@ -185,7 +185,7 @@ static void truncate_inode(struct bennett_inode *i,uint64_t size) {
     }
     i->size=size;
 }
-long __bennett_rt_vfs_open(const char *path,int flags,unsigned mode,long at) {
+long __bennett_rt_vfs_open(const char *path,int flags,unsigned mode,int at) {
     if(flags & ~(O_ACCMODE|O_CREAT|O_EXCL|O_TRUNC|O_APPEND|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY|O_NOFOLLOW|O_LARGEFILE|O_NOCTTY|O_SYNC|O_DSYNC|O_TMPFILE)) __builtin_trap();
     /* Flag errors precede the path walk, as in Linux's build_open_flags. O_ACCMODE itself is a valid mode. */
     if((flags&(O_DIRECTORY|O_CREAT))==(O_DIRECTORY|O_CREAT)) return -EINVAL;
@@ -223,13 +223,20 @@ long __bennett_rt_vfs_io(struct bennett_file *f,void *buffer,uint64_t n,int writ
     if(writing?!__bennett_rt_writable(f->flags):!__bennett_rt_readable(f->flags)) return -EBADF;
     if(f->kind==BRT_DIRECTORY) return -EISDIR;
     if(f->kind==BRT_NULL) return writing?(long)n:0;
-    if(f->kind==BRT_ZERO) { if(!writing) memset(buffer,0,n); return n; }
+    /* The buffer's first byte is checked where bytes are transferred (copy.h): not at the end of the file, for a
+     * directory or for /dev/null, which touch none. */
+    if(f->kind==BRT_ZERO) {
+        if(!writing && __bennett_user_unmapped(buffer,n)) return -EFAULT;
+        if(!writing) memset(buffer,0,n);
+        return n;
+    }
     if(!n) return 0;
     struct bennett_inode *i=f->inode;
     uint64_t pos=positional?offset:f->pos;
     if(writing && (f->flags&O_APPEND)) pos=i->size;
     if(pos>LONG_MAX || n>(uint64_t)LONG_MAX-pos) return -EFBIG;
     if(!writing) { if(pos>=i->size) n=0; else if(n>i->size-pos) n=i->size-pos; }
+    if(__bennett_user_unmapped(buffer,n)) return -EFAULT;
     unsigned char *bytes=buffer; uint64_t done=0;
     while(done<n) {
         uint64_t number=(pos+done)/4096, index=(pos+done)%4096, count=4096-index;
@@ -327,8 +334,8 @@ long __bennett_rt_vfs_meta(long nr,long a,long b,long c,long d,long e) {
     /* Argument errors Linux reports before the path walk. */
     if(nr==SYS_truncate && b<0) return -EINVAL;
     if((nr==SYS_access && (b&~7L)) || (nr==SYS_faccessat && (c&~7L))) return -EINVAL;
-    long at=AT_FDCWD; const char *path=(void *)a;
-    if(nr==SYS_readlinkat || nr==SYS_openat || nr==SYS_newfstatat || nr==SYS_faccessat || nr==SYS_mkdirat || nr==SYS_unlinkat) { at=a; path=(void *)b; }
+    int at=AT_FDCWD; const char *path=(void *)a; /* a directory descriptor is an int in Linux */
+    if(nr==SYS_readlinkat || nr==SYS_openat || nr==SYS_newfstatat || nr==SYS_faccessat || nr==SYS_mkdirat || nr==SYS_unlinkat) { at=(int)a; path=(void *)b; }
     int creating=nr==SYS_mkdir || nr==SYS_mkdirat, removing=nr==SYS_unlink || nr==SYS_rmdir || nr==SYS_unlinkat;
     int error=0; char *full=canonical(path,at,&error,!creating && nr!=SYS_rename); if(!full) return -error;
     struct name *n=lookup(full); long result=0;

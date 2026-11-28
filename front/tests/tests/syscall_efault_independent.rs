@@ -1,7 +1,8 @@
 //! Independent tests of structure-pointer checking and error order across every system call
 //! implemented in `rt/musl/` that takes a pointer to a structure (`clock_gettime`, `clock_getres`,
 //! `gettimeofday`, `stat`, `lstat`, `fstat`, `newfstatat`, `readv`, `writev`, `rt_sigaction`,
-//! `rt_sigprocmask`, `rt_sigpending`) plus `time` (output `time_t *`), comparing the device
+//! `rt_sigprocmask`, `rt_sigpending`) plus `time` (output `time_t *`) and the data buffers and transfer
+//! counts of `read`, `write`, `readv`, `writev` and `getrandom`, comparing the device
 //! against native Linux (clang 18 + host kernel).
 //!
 //! Each syscall is tested with:
@@ -12,7 +13,8 @@
 //!   wrapping around 2^64), and
 //! - (d) an output pointer that is unreadable or partly so.
 //!
-//! A range that starts below address 16 or wraps around 2^64 is `EFAULT` on the device as
+//! A range that starts below address 16 (where bytes are touched) or wraps or ends above Linux's
+//! user address space top, 2^47 - 4096 (where the call checks it), is `EFAULT` on the device as
 //! natively; where the device stops by name with `Fault::OutOfBounds` for a range that reaches
 //! `memory_size` (a known debt; the runtime does not know the memory size), the tests assert that
 //! named stop. The tests after the first four were defect witnesses of an independent testing pass,
@@ -79,14 +81,15 @@ fn run_native(suite: &str, case: &str) -> String {
     String::from_utf8(output.stdout).expect("native stdout utf8")
 }
 
-/// Links `rt/musl/tests/{suite}.c` with `args` and returns the loaded device module.
-fn link_suite(suite: &str, tag: &str, args: &[&str]) -> bennett_ir::ValidModule {
+/// Links `rt/musl/tests/{suite}.c` with `link_flags` (options of `link.py`) and `args` and returns the loaded
+/// device module.
+fn link_suite(suite: &str, tag: &str, link_flags: &[&str], args: &[&str]) -> bennett_ir::ValidModule {
     ensure_musl();
     let workspace = root().canonicalize().expect("workspace");
     let source = workspace.join("rt/musl/tests").join(format!("{suite}.c"));
     let file = out_dir().join(format!("{suite}-{tag}.bn"));
     let mut cmd = Command::new("python3");
-    cmd.arg(workspace.join("rt/musl/link.py")).arg(&source).arg("-o").arg(&file).arg("--").args(args);
+    cmd.arg(workspace.join("rt/musl/link.py")).arg(&source).args(link_flags).arg("-o").arg(&file).arg("--").args(args);
     let linked = cmd.output().expect("musl link");
     assert!(linked.status.success(), "link {suite} {tag}: {}", String::from_utf8_lossy(&linked.stderr));
     let text = std::fs::read_to_string(&file).expect("read linked bn");
@@ -102,7 +105,7 @@ fn suite_memory_size(suite: &str) -> u64 {
     if let Some(&size) = guard.get(suite) {
         return size;
     }
-    let module = link_suite(suite, "probe-size", &["agree"]);
+    let module = link_suite(suite, "probe-size", &[], &["agree"]);
     let size = module.memory_size;
     guard.insert(suite.to_owned(), size);
     size
@@ -114,15 +117,20 @@ fn run_device(suite: &str, case: &str, pass_edge: bool) -> (Outcome, String) {
     let module = if pass_edge {
         let edge = suite_memory_size(suite);
         let edge_str = edge.to_string();
-        let module = link_suite(suite, case, &[case, &edge_str]);
+        let module = link_suite(suite, case, &[], &[case, &edge_str]);
         assert_eq!(module.memory_size, edge, "{suite} {case}: memory_size shifted across relink");
         module
     } else {
-        link_suite(suite, case, &[case])
+        link_suite(suite, case, &[], &[case])
     };
+    run_module(&module)
+}
+
+/// Runs a linked module from `__bennett_entry` and returns its outcome and console output.
+fn run_module(module: &bennett_ir::ValidModule) -> (Outcome, String) {
     let entry = module.function_named("__bennett_entry").expect("__bennett_entry");
     let options = Options { budget: Some(STEP_BUDGET), ..Options::default() };
-    let mut executor = Executor::new(&module, entry, &[], options).expect("executor start");
+    let mut executor = Executor::new(module, entry, &[], options).expect("executor start");
     let outcome = executor.run();
     let stdout = String::from_utf8(executor.tape().to_vec()).expect("device stdout utf8");
     (outcome, stdout)
@@ -395,5 +403,49 @@ fn ranges_below_sixteen_or_wrapping_and_copied_vectors_agree() {
     ];
     for (suite, case, pass_edge) in cases {
         assert_agrees(suite, case, pass_edge);
+    }
+}
+
+/// A review witness: the shared dispatcher kept the copies of a 1024-element vector (16 KiB) in its frame, so a
+/// valid `clock_gettime` stopped with `stack_overflow` on an 8 KiB stack. Each call's copies now live in its own
+/// frame, a vector's sized for its count.
+///
+/// Expected (native Linux): every call `ret=0 errno=0`. Observed on the device before the fix: `StackOverflow`.
+#[test]
+fn small_stack_calls_keep_their_copies_in_their_own_frames() {
+    for suite in ["efault-stack"] {
+        let native = run_native(suite, "small-stack");
+        let module = link_suite(suite, "small-stack", &["--stack-bytes=8192"], &["small-stack"]);
+        let (outcome, device) = run_module(&module);
+        assert_eq!(outcome, Outcome::Returned(Some(0)), "{suite}: device outcome {outcome:?} (native:\n{native})");
+        assert_eq!(device, native, "{suite}: device output differs from native");
+    }
+}
+
+/// Review witnesses of the copy-in step (each observed on the device before its fix):
+/// - `writev-wrap-second`, `readv-wrap-second`: a wrapping second buffer is `EFAULT` before the first byte moves,
+///   offset unchanged (device: `ret=1`, offset 1).
+/// - `low-untouched`: a buffer below 16 faults only where bytes are transferred (device: `EFAULT` at the end of a
+///   file, for `/dev/null`, a directory and empty stdin, where Linux answers 0, the count or `EISDIR`).
+/// - `ranges-and-cap`: Linux's range bound (end at most 2^47 - 4096) and its cap of 0x7ffff000 bytes per call
+///   (device: the uncapped count, `EINVAL` for an overflowing sum where Linux answers `EFAULT`).
+/// - `sigaction-stored-mask`: a stored action's mask drops `SIGKILL` and `SIGSTOP` (device: kept them).
+/// - `at-fdcwd-int`: `AT_FDCWD` passed as an int to the raw `*at` calls (device: `EBADF`).
+/// - `sigpending-size4`: exactly the four requested bytes of the pending set are written (a sentinel check).
+/// - `nanosleep-above-top`: a request above the top is `EFAULT` (device: the named stop `out_of_bounds`).
+#[test]
+fn transfers_check_ranges_where_linux_does_and_cap_counts() {
+    let cases = [
+        ("efault-iov", "writev-wrap-second"),
+        ("efault-iov", "readv-wrap-second"),
+        ("efault-iov", "low-untouched"),
+        ("efault-iov", "ranges-and-cap"),
+        ("efault-signals", "sigaction-stored-mask"),
+        ("efault-signals", "sigpending-size4"),
+        ("efault-stat", "at-fdcwd-int"),
+        ("efault-time", "nanosleep-above-top"),
+    ];
+    for (suite, case) in cases {
+        assert_agrees(suite, case, false);
     }
 }
