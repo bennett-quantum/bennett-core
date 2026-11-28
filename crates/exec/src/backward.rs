@@ -60,12 +60,12 @@ impl<'m> Executor<'m> {
                 };
                 // The operation is its own inverse, including fault codes written by a gate circuit.
                 let allow = std::mem::replace(&mut self.allow_region_faults, true);
-                let reports = self.apply_reports.len();
-                let result = self.apply(*callee, args, *out, *fault, budget);
+                // Running it again to undo it is no execution of the run's: it adds no report, and the
+                // count of executed `apply` instructions goes back by one.
+                let result = self.apply(*callee, args, *out, *fault, budget, None);
                 self.allow_region_faults = allow;
                 result.expect("an apply that ran forward runs again");
-                // Running it again to undo it is no execution of the run's: it adds no report.
-                self.apply_reports.truncate(reports);
+                self.applies -= 1;
             }
             Undo::Setjmp => {
                 let Inst::Setjmp { buffer, .. } = self.retreat() else { unreachable!("a setjmp record") };
