@@ -165,7 +165,7 @@ impl<'a> Checker<'a> {
                 Some(Type::Int(Width::WORD))
             }
             Inst::Qalloc { width, .. } => Some(Type::Qreg(*width)),
-            Inst::QallocBy { .. } => Some(Type::Int(Width::WORD)),
+            Inst::QallocBy { .. } | Inst::MeasureSlice { .. } => Some(Type::Int(Width::WORD)),
             Inst::Call { callee, .. } => self.call_result(site, self.module.function(*callee).result),
             Inst::CallIndirect { signature, .. } => self.call_result(site, signature.result),
             Inst::Measure { source: MeasureSource::Register(_), .. }
@@ -262,6 +262,12 @@ impl<'a> Checker<'a> {
                 self.register_operand(site, *register);
             }
             Inst::QallocBy { width, .. } => self.expect(site, *width, Type::Int(Width::WORD)),
+            // The bounds are checked when the measurement runs (`bad_range`), also when they are constants.
+            Inst::MeasureSlice { register, low, bits, .. } => {
+                self.register_or_handle(site, *register);
+                self.expect(site, *low, Type::Int(Width::WORD));
+                self.expect(site, *bits, Type::Int(Width::WORD));
+            }
             Inst::Measure { source: MeasureSource::Register(register), .. } => {
                 if let Some(qubits) = self.register_width(site, *register)
                     && qubits.as_width().is_none()
