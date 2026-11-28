@@ -91,11 +91,13 @@ impl<'m> Executor<'m> {
         context: &mut DeviceContext<'_>,
     ) -> Result<(), Halt> {
         let resolved = self.resolve_written(target, controls)?;
-        self.gate_resolved(gate, resolved, context)
+        self.gate_resolved(gate, resolved, false, context)
     }
 
     /// `gate target ctrl list(address, count)`: the target resolved, then the list read
     /// ([`Executor::control_list`]), then the target among the controls is `qubit_alias`; then as `gate_at`.
+    /// The record journals the controls as read, so that undoing the gate never reads the list again: the
+    /// gate may have turned a byte of the list into qubits.
     pub(crate) fn gate_listed(
         &mut self,
         gate: Gate,
@@ -105,7 +107,7 @@ impl<'m> Executor<'m> {
         context: &mut DeviceContext<'_>,
     ) -> Result<(), Halt> {
         let resolved = self.resolve_listed(target, address, count)?;
-        self.gate_resolved(gate, resolved, context)
+        self.gate_resolved(gate, resolved, true, context)
     }
 
     /// The target and the written controls resolved, in order; a qubit named twice is `qubit_alias`.
@@ -129,11 +131,13 @@ impl<'m> Executor<'m> {
         Ok(std::iter::once(target).chain(controls.into_iter().map(Resolved::Register)).collect())
     }
 
-    /// Applies `gate` to resolved qubits, the target first, which name no qubit twice.
+    /// Applies `gate` to resolved qubits, the target first, which name no qubit twice; with `listed`, the
+    /// record journals the controls (register wires) after the promotions.
     fn gate_resolved(
         &mut self,
         gate: Gate,
         resolved: Vec<Resolved>,
+        listed: bool,
         context: &mut DeviceContext<'_>,
     ) -> Result<(), Halt> {
         // The bytes to promote, distinct, in the order the gate names them. The simulator admits their
@@ -175,15 +179,19 @@ impl<'m> Executor<'m> {
             }
             return Err(error.into());
         }
-        if promoted.is_empty() {
-            self.record(Undo::GateAt);
-        } else {
+        if !promoted.is_empty() {
             for &(byte, old) in &promoted {
                 self.record_word(u128::from(byte) << 8 | u128::from(old));
             }
             self.record_word(promoted.len() as u128);
-            self.record(Undo::GateAtPromoted);
         }
+        if listed {
+            for &control in &controls {
+                self.record_word(u128::from(control));
+            }
+            self.record_word(controls.len() as u128);
+        }
+        self.record(if promoted.is_empty() { Undo::GateAt } else { Undo::GateAtPromoted });
         self.advance();
         Ok(())
     }
@@ -202,7 +210,16 @@ impl<'m> Executor<'m> {
             let gate = self.coded(kind).expect("a kind that ran is valid");
             match controls {
                 Controls::Written(controls) => (gate, self.resolve_written(target, controls)),
-                Controls::List { address, count } => (gate, self.resolve_listed(target, address, count)),
+                // The controls as the gate read them, journalled; the target resolves as it did.
+                Controls::List { .. } => {
+                    let journal = self.journal.as_mut().expect("undoing needs a journal");
+                    let count = journal.pop_word() as usize;
+                    let mut controls: Vec<Resolved> =
+                        (0..count).map(|_| Resolved::Register(journal.pop_word() as Wire)).collect();
+                    controls.reverse();
+                    let target = self.resolve_place(target);
+                    (gate, target.map(|target| std::iter::once(target).chain(controls).collect()))
+                }
             }
         } else {
             unreachable!("a GateAt, RotateBy or GateBy record")

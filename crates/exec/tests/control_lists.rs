@@ -25,6 +25,7 @@ entry:
     h %q[1]
     ry(0.6) %q[2]
     h %h[0]
+    ry(0.9) %h[1]
     store i64 %e0h, 64
     store i64 %e0p, 72
     store i64 %e1h, 80
@@ -36,7 +37,7 @@ entry:
 }
 
 /// The steps before the gate.
-const BEFORE: usize = 10;
+const BEFORE: usize = 11;
 
 /// Arguments: kind, angle, target handle and position, two entries, list address and count.
 struct Args {
@@ -77,12 +78,12 @@ fn a_list_gives_the_amplitudes_of_its_controls_written_out() {
         let listed = state(&program(gate, " ctrl list(%p, %n)"), &args);
         let written = state(&program(gate, " ctrl %q[0], %q[2]"), &args);
         assert_eq!(listed.distance(&written), Some(0.0), "{gate} {code}");
+        // The target `%h[1]` holds both values, so every gate, diagonal ones included, acts differently with
+        // and without the controls: a list whose controls were lost would fail here.
         let uncontrolled = state(&program(gate, ""), &args);
-        if listed.distance(&uncontrolled) == Some(0.0) {
-            // Only a gate that is diagonal on the target's state can leave it unchanged here; z, s, t and their
-            // inverses on `%h[1]` at 0 do.
-            assert!([3, 5, 6, 7, 8, 11, 12].contains(&code), "{gate} {code}: the controls act");
-        }
+        assert_ne!(listed.distance(&uncontrolled), Some(0.0), "{gate} {code}: the controls act");
+        let one_control = state(&program(gate, " ctrl %q[0]"), &args);
+        assert_ne!(listed.distance(&one_control), Some(0.0), "{gate} {code}: the second control acts");
     }
 }
 
@@ -225,5 +226,34 @@ entry:
         ));
         let (outcome, _) = run(&module, "main", &[u64::MAX], common::allowing_region_faults());
         assert_eq!(outcome, Outcome::Returned(Some(u128::from(Fault::QuantumInRegion.code()))), "{body}");
+    }
+}
+
+/// A listed gate whose target is a byte of its own list: the gate turns the byte into qubits, so the list can
+/// no longer be read as ordinary memory. Undoing it uses the controls as the gate read them, and every
+/// earlier state comes back.
+#[test]
+fn undoing_a_gate_on_a_byte_of_its_own_list_restores_each_earlier_state() {
+    let module = common::load(
+        "memory 128
+func @main() {
+entry:
+    %c = qalloc i64 1
+    h %c[0]
+    store i64 %c, 64
+    gate(1) [64:0] ctrl list(64, 1)
+    ret
+}",
+    );
+    let mut executor = executor(&module, "main", &[], Options { reversible: true, ..bounded() });
+    let mut before = vec![executor.snapshot()];
+    while executor.step().is_none() {
+        before.push(executor.snapshot());
+    }
+    assert_eq!(executor.outcome(), Some(Outcome::Returned(None)));
+    assert!(!executor.snapshot().quantum.cells.is_empty(), "the gate made the byte qubits");
+    while let Some(expected) = before.pop() {
+        assert!(executor.step_back().expect("reversible"));
+        common::assert_same_state(&executor.snapshot(), &expected, &format!("step {}", before.len()));
     }
 }
