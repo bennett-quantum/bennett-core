@@ -240,7 +240,8 @@ impl Executor<'_> {
         input: &[bool],
         config: &Config,
     ) -> (Value, Option<RunSteps>) {
-        let Some(base) = base else { return (Err(Fault::OutOfMemory), None) };
+        // A block with no base ends every input's run before any step: a finished run of no steps.
+        let Some(base) = base else { return (Err(Fault::OutOfMemory), Some(RunSteps::Finished(0))) };
         debug_assert_eq!(ins.iter().flatten().map(|qubit| qubit.is_set(config)).collect::<Vec<_>>(), input);
         let block = base as usize..base as usize + checked.image.len();
         let mut saved = vec![0; block.len()];
@@ -259,8 +260,10 @@ impl Executor<'_> {
         self.memory.write(block.start, &bytes);
         let outer_stack_pointer = std::mem::replace(&mut self.stack_pointer, base);
         let outs: Vec<&Field> = checked.fields.iter().filter(|f| f.out).collect();
+        // The whole block was set up (image and in fields): no byte of it holds the memory of the call.
+        let set_up = [block.clone()];
         let (outcome, steps, extracted) =
-            self.evaluate_with(checked.callee, &[u128::from(base)], checked.budget, |executor, outcome| {
+            self.evaluate_with(checked.callee, &[u128::from(base)], checked.budget, &set_up, |executor, outcome| {
                 let Outcome::Returned(_) = outcome else { return None };
                 let mut bits = Vec::new();
                 for field in &outs {

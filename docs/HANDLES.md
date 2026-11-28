@@ -487,8 +487,8 @@ It obtains it from a run that reports the steps an `apply` used:
   ordinary state must really be the same: if the ceiling or the budget is part of what the applied function reads (a
   global set from the run input, say), changing it changes the state the guarantee is about, so a program keeps the
   budget out of what its applied functions read.
-- **What it covers.** The inputs the measuring run evaluated (on the simulator, the basis configurations of nonzero
-  amplitude at that call), on that compilation. Counts differ between compilations, for example between `-O0` and
+- **What it covers.** The inputs the measuring run evaluated (on the simulator, the distinct values of the *in*
+  fields in the basis configurations of nonzero amplitude at that call where every control is 1), on that compilation. Counts differ between compilations, for example between `-O0` and
   `-O2`, so a budget is measured for the compilation that will run. Grover's oracle sees every input of its
   register in the first iteration; for a function applied to a register in a narrower state, the measuring run
   should apply it once to a uniform superposition of its inputs.
@@ -1082,7 +1082,7 @@ kind or axis that is not one of the codes of 5.1, then for a rotation `bad_angle
 
 | # | The device provides | Needed by | Today |
 |---|---|---|---|
-| D1 | Handles as `i64` values: the register made by the `k`-th successful allocation of the run is `k`, from 1, never reused; a value naming no allocated register is `bad_handle` (9, widened meaning) | 3, 5.3 | yes: `i64` handles in gates, controls and `qfree` (`docs/SYNTAX.md`, "Handles as integers"); `measure` of a whole register, `apply` and calls still take `qN` registers |
+| D1 | Handles as `i64` values: the register made by the `k`-th successful allocation of the run is `k`, from 1, never reused; a value naming no allocated register is `bad_handle` (9, widened meaning) | 3, 5.3 | yes: `i64` handles in gates, controls and `qfree` (`docs/SYNTAX.md`, "Handles as integers"); `measure` of a whole register, the register form of `apply` (`apply @f(...)`) and calls still take `qN` registers |
 | D2 | Allocation with a run-time width, returning the handle, with checks `bad_width` (20) and `out_of_handles` (21); release by handle | 5.3 | yes: `qalloc i64 %w` with both checks, `qfree` of an `i64` handle |
 | D3 | The width limit of a register raised to the planned limit (`1` to `2^32 - 1`) | 5.3, 6.1 | yes: 1 to 2^32 - 1 qubits |
 | D4 | The width query `qwidth`: an ordinary value from the register table, check `bad_handle` | 5.3, 8.1 | yes: `%w = qwidth %r`, by `qN` register or `i64` handle (`docs/SYNTAX.md`, "Handles as integers") |

@@ -11,6 +11,7 @@
 //! irreducible? The definitions there are the ones implemented here.
 
 use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::Arc;
 
 mod chains;
@@ -736,6 +737,17 @@ impl Executor<'_> {
                 collector.written = vec![false; memory_len];
             }
             collector.branch_args = args.to_vec();
+        }
+    }
+
+    /// Counts the bytes of `ranges`, which the device set before the region's entry from values that are not
+    /// the classical memory of the call, as written in this branch: a first store to them has no old value in
+    /// the region-entry memory.
+    pub(crate) fn measure_set_up(&mut self, ranges: &[Range<usize>]) {
+        if let Some(collector) = self.observing_mut() {
+            for range in ranges {
+                collector.written[range.clone()].fill(true);
+            }
         }
     }
 

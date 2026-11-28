@@ -425,3 +425,98 @@ entry:
     let (outcome, _) = run(&module, "main", &[], common::allowing_region_faults());
     assert_eq!(outcome, Outcome::Returned(Some(u128::from(Fault::QuantumInRegion.code()))));
 }
+
+/// A block that cannot be placed ends each enabled input's run before any step: the report counts the input,
+/// with a largest count of 0 and none at the budget; with the control at 0 no input is enabled and the report
+/// counts none.
+#[test]
+fn a_placement_failure_is_a_finished_input_of_no_steps_in_the_report() {
+    for (control, inputs, largest) in [("x %c", 1, Some(0)), ("", 0, None)] {
+        let module = common::load(&format!(
+            "memory 256
+data 0 = i64 1, i64 0
+applied func @f(i64 %b) {{
+entry:
+    ret
+}}
+func @main() -> i5 {{
+entry:
+    %c = qalloc i64 1
+    %e = qalloc i64 5
+    {control}
+    apply 1 budget 0, fault %e, image(0, 256), fields(0, 0), ctrl list(0, 1)
+    %r = measure i64 %e[0, 5]
+    %t = trunc i64 %r to i5
+    ret %t
+}}"
+        ));
+        let mut executor = executor(&module, "main", &[], bounded());
+        executor.keep_apply_reports();
+        let code = if inputs == 1 { Fault::OutOfMemory.code() } else { 0 };
+        assert_eq!(executor.run(), Outcome::Returned(Some(u128::from(code))), "{control}");
+        let [report] = executor.apply_reports() else { panic!("one report") };
+        assert_eq!((report.inputs, report.largest, report.at_budget), (inputs, largest, 0), "{control}");
+    }
+}
+
+/// An input is a value of the in fields (`docs/HANDLES.md` 6.1), counted once however many basis
+/// configurations carry it: a spectator qubit in superposition doubles the configurations, not the inputs.
+#[test]
+fn the_report_counts_inputs_not_configurations() {
+    for (prepare, inputs) in [("h %s", 1), ("h %x", 2), ("h %x\n    h %s", 2)] {
+        let module = common::load(&format!(
+            "memory 256
+data 64 = i64 1, i64 0, i64 1, i64 0, i64 1
+applied func @f(i64 %b) {{
+entry:
+    ret
+}}
+func @main() {{
+entry:
+    %x = qalloc i64 1
+    %s = qalloc i64 1
+    %e = qalloc i64 5
+    {prepare}
+    apply 1 budget 1, fault %e, image(0, 1), fields(64, 1), ctrl list(0, 0)
+    ret
+}}"
+        ));
+        let mut executor = executor(&module, "main", &[], bounded());
+        executor.keep_apply_reports();
+        assert_eq!(executor.run(), Outcome::Returned(None));
+        assert_eq!(executor.apply_reports()[0].inputs, inputs, "{prepare}");
+    }
+}
+
+/// The journal's observer must not take the memory at the call for the old value of a block byte: the block
+/// holds the image and the in fields, set before the run. A first store over the in field's byte is not
+/// recoverable from the memory at the call (it held 0 there, the input 0 or 1).
+#[test]
+fn a_first_store_over_the_block_is_not_credited_to_the_memory_at_the_call() {
+    use bennett_exec::{WordClass, WordRole, classify};
+    let module = common::load(
+        "memory 256
+data 16 = i64 1, i64 0, i64 1, i64 0, i64 1
+applied func @f(i64 %b) {
+entry:
+    store i8 2, %b
+    ret
+}
+func @main() {
+entry:
+    %x = qalloc 1
+    %e = qalloc 5
+    h %x
+    apply 1 budget 2, fault %e, image(0, 1), fields(16, 1), ctrl list(0, 0)
+    ret
+}",
+    );
+    let mut executor = executor(&module, "main", &[], bennett_exec::Options::default());
+    executor.measure_journal_content(true);
+    assert_eq!(executor.run(), Outcome::Returned(None));
+    let journal = executor.journal_measurement().expect("measured");
+    assert_eq!(journal.applies[0].branches.len(), 2, "two inputs");
+    let classes = classify(journal);
+    let store = classes[0].site_count.iter().find(|p| p.role == WordRole::Store).expect("the store's old byte");
+    assert_ne!(store.class, WordClass::Recoverable, "{store:?}");
+}

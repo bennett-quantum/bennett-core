@@ -7,6 +7,7 @@
 //! register, so the configurations are permuted and their amplitudes carried along unchanged.
 
 use std::collections::BTreeMap;
+use std::ops::Range;
 
 use bennett_ir::{Fault, FuncId, Operand, Qubits, Slot, Type};
 
@@ -229,16 +230,20 @@ impl<'m> Executor<'m> {
     /// Runs `callee(args)` within `budget` steps on top of the current frames, then undoes the run. Returns
     /// the outcome and how the run ended in steps (`apply_report`).
     fn evaluate(&mut self, callee: FuncId, args: &[u128], budget: u64) -> (Outcome, RunSteps) {
-        let (outcome, steps, ()) = self.evaluate_with(callee, args, budget, |_, _| ());
+        let (outcome, steps, ()) = self.evaluate_with(callee, args, budget, &[], |_, _| ());
         (outcome, steps)
     }
 
     /// [`Executor::evaluate`], with `extract` reading the machine after the run ends and before it is undone.
+    /// `set_up` names the memory bytes the caller set before the run, which do not hold the memory of the call
+    /// (an apply's block: its image and in fields): the journal's observer counts them as written, so that it
+    /// never takes the memory at the call for their old value.
     pub(crate) fn evaluate_with<T>(
         &mut self,
         callee: FuncId,
         args: &[u128],
         budget: u64,
+        set_up: &[Range<usize>],
         extract: impl FnOnce(&Self, Outcome) -> T,
     ) -> (Outcome, RunSteps, T) {
         let region_journal = std::mem::take(&mut self.spare_journal);
@@ -252,6 +257,7 @@ impl<'m> Executor<'m> {
         };
         self.run_journal_peak = 0;
         self.measure_begin_branch(args);
+        self.measure_set_up(set_up);
         let (outcome, ran) = match self.push_frame(callee, args) {
             Ok(()) => {
                 self.measure_entry_call(callee);
