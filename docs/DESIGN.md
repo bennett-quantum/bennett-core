@@ -339,7 +339,7 @@ outcomes, result and stop of `--device simulator --apply-circuit auto` with that
 amplitudes moves a draw across the boundary between two outcomes. An `apply` the gate compiler refuses stops
 both with status 2, and the trace is published with the stop. The simulator's default direct evaluation runs
 such an `apply`. It also stops, with a region fault (status 1, a diagnostic only a simulator can make), at an
-`apply` that faults for some argument value, unless `--machine-meaning` or `--allow-region-faults` is
+`apply` of the register form that faults for some argument value (an `apply` to a block never stops so), unless `--machine-meaning` or `--allow-region-faults` is
 given; the gate mode and the devices write the fault code and go on. `examples/fault.bn` with `--arg 5`
 returns 261 in the OpenQASM run, in the gate mode and under either option, and stops in the default.
 A `release_zero` request the simulated state does not satisfy stops the run. The simulation holds at
@@ -1157,7 +1157,8 @@ fault with probability equal to the total weight of the faulting configurations,
 the outcome found; nothing in the program learns more than that one measurement shows. The executor sees every
 configuration.
 It counts each `apply` execution that faulted for some configuration of nonzero amplitude, with their weight,
-in the run statistics. By default such an `apply` stops the run with the run error `region fault`, leaving the
+in the run statistics. By default such an `apply` of the register form stops the run (an `apply` to a block
+writes its fault codes in its fault register in every mode) with the run error `region fault`, leaving the
 state as it was before the `apply`. Either `--allow-region-faults` or `--machine-meaning` lets the run go
 on, for programs that read their fault registers on purpose (`examples/fault.bn`). Programs from `front` are
 always run with the stop in the tests. The stop is the simulator's ("The simulator's own stops and reports",
@@ -2379,7 +2380,7 @@ The front writes `retaddr N` for every `llvm.returnaddress(N)` in the default ad
 - `measure` reads a whole register, a slice of 1 to 64 qubits of one, or the `N` bits from bit 0 of the
   integer at an address.
 - The simulator's own stops and reports (dropped amplitudes of rounding size, the configuration limit, the
-  stop at an `apply` faulting for some argument values, amplitudes in snapshots, the report of nonzero
+  stop at an `apply` of the register form faulting for some argument values, amplitudes in snapshots, the report of nonzero
   releases) are listed below, "The simulator's own stops and reports".
 
 ### Qubits in memory
@@ -2507,7 +2508,7 @@ every quantum step faults `quantum_in_region` before any stop could arise, so no
 | The limit on stored basis configurations | `Options::max_configurations`, `RunError::ConfigurationLimit` | A stop: the run ends with no result, the state as before the gate |
 | At most 2^32 - 1 qubits held at once, what the counts in `Stats` hold | `RunError::QubitCount` | A stop before the allocation, the applied circuit, or the first of a gate's memory bytes to become qubits (all its new bytes are counted at once), the state as before the step; a device is not limited so |
 | The host's memory for stored qubits | `RunError::QubitStorage` | A stop: an allocation whose columns (or the record of a release) the host cannot hold ends the run with no result, the state as before the step; on another host or a device the same program runs on. Other growth of the stored state is not a named stop ("Not yet") |
-| The stop at an `apply` faulting for some values of its arguments (strict mode, below) | `RunError::RegionFault`, `region.rs` | A stop. With `allow_region_faults` the fault code is the program's, in its fault register: that is the meaning, not a report |
+| The stop at an `apply` of the register form faulting for some values of its arguments (strict mode, below) | `RunError::RegionFault`, `region.rs` | A stop; an `apply` to a block never stops so, its faults are values in its fault register. With `allow_region_faults` the fault code is the program's, in its fault register: that is the meaning, not a report |
 | Amplitudes, the register table and cells in snapshots, and the distance `bennett run --reverse` prints | `snapshot.rs`, `crates/cli/src/run.rs` | Data for tests and reports; no device observation, read by no instruction |
 | The report of nonzero releases (count, weight, qubits kept) and the other counts of `Stats` | `executor.rs`, "Releasing a register" above | Read by tests and printed by `bennett run`, never by an instruction |
 | The step report of each `apply` (below) | `apply_report.rs`, `Executor::apply_reports`, `bennett run --stats` | Read by tests and printed, never by an instruction; a program receives a budget taken from it only as an input of a later run |

@@ -520,3 +520,53 @@ entry:
     let store = classes[0].site_count.iter().find(|p| p.role == WordRole::Store).expect("the store's old byte");
     assert_ne!(store.class, WordClass::Recoverable, "{store:?}");
 }
+
+/// The block's set-up bytes belong to the apply that set them up: a later apply in the same measured run
+/// gets the memory at its call for the old value of its first store there (witness `StoreBase`), as it
+/// does without the earlier apply to a block over the same bytes.
+#[test]
+fn the_set_up_bytes_of_one_apply_are_not_marked_in_a_later_apply() {
+    use bennett_exec::{WordRole, WordWitness};
+    let witnesses = |block_apply: &str| {
+        let module = common::load(&format!(
+            "memory 256
+applied func @g(i64 %b) {{
+entry:
+    ret
+}}
+func @f(i1 %b) -> i8 {{
+entry:
+    store i8 3, 208
+    ret 0
+}}
+func @main() -> i8 {{
+entry:
+    %q = qalloc 1
+    h %q
+    %y = qalloc 8
+    %e = qalloc 5
+    %eb = qalloc 5
+{block_apply}    apply @f(%q) -> %y, %e budget 20
+    ret 0
+}}"
+        ));
+        let mut executor = executor(&module, "main", &[], Options::default());
+        executor.measure_journal_content(true);
+        assert_eq!(executor.run(), Outcome::Returned(Some(0)));
+        let journal = executor.journal_measurement().expect("measured");
+        let last = journal.applies.last().expect("the register-form apply");
+        last.branches
+            .iter()
+            .flat_map(|run| run.entries.iter())
+            .flat_map(|record| record.words.iter())
+            .filter(|word| word.role == WordRole::Store)
+            .map(|word| word.witness.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(witnesses(""), vec![WordWitness::StoreBase; 2], "alone");
+    assert_eq!(
+        witnesses("    apply 1 budget 1, fault %eb, image(0, 16), fields(0, 0), ctrl list(0, 0)\n"),
+        vec![WordWitness::StoreBase; 2],
+        "after an apply to a block over 208..224"
+    );
+}

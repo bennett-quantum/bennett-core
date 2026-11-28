@@ -17,7 +17,7 @@ pub(crate) enum RunSteps {
     Exhausted,
 }
 
-/// One executed `apply`, evaluated directly on each basis configuration of nonzero amplitude at it.
+/// One executed `apply`, evaluated directly on each of its inputs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ApplyReport {
     /// Its position among the `apply` instructions the run executed, from 1, whether evaluated directly or
@@ -27,7 +27,9 @@ pub struct ApplyReport {
     pub callee: FuncId,
     /// The budget operand's value at the `apply`: the ceiling a measuring run gave it.
     pub budget: u64,
-    /// The inputs evaluated: the basis configurations of nonzero amplitude at the `apply`.
+    /// The inputs evaluated: for the register form, the basis configurations of nonzero amplitude at the
+    /// `apply`; for `apply` to a block, the distinct values of its in fields among them where every control
+    /// is 1.
     pub inputs: u64,
     /// The largest step count of an input that returned or faulted; `None` if every input reached the budget.
     pub largest: Option<u64>,

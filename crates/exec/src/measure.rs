@@ -742,11 +742,17 @@ impl Executor<'_> {
 
     /// Counts the bytes of `ranges`, which the device set before the region's entry from values that are not
     /// the classical memory of the call, as written in this branch: a first store to them has no old value in
-    /// the region-entry memory.
+    /// the region-entry memory. The marks are this branch's record like a store's, so the next branch's
+    /// reset clears them and a later apply starts without them.
     pub(crate) fn measure_set_up(&mut self, ranges: &[Range<usize>]) {
         if let Some(collector) = self.observing_mut() {
             for range in ranges {
-                collector.written[range.clone()].fill(true);
+                for byte in range.clone() {
+                    if !collector.written[byte] {
+                        collector.written[byte] = true;
+                        collector.written_list.push(byte);
+                    }
+                }
             }
         }
     }

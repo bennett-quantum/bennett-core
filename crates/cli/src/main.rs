@@ -72,8 +72,8 @@ struct RunArgs {
     #[arg(long)]
     allow_region_faults: bool,
     /// Run the machine's meaning instead of the simulator's strict mode: a fault for some argument values of
-    /// an `apply` is a fault code the program may measure. Since `qfree` became the partial trace this is the
-    /// same as --allow-region-faults.
+    /// an `apply` of the register form is a fault code the program may measure (an `apply` to a block is so
+    /// in either mode). Since `qfree` became the partial trace this is the same as --allow-region-faults.
     #[arg(long)]
     machine_meaning: bool,
     /// The seed for simulator and QASM measurement sampling, or for synthetic count measurements.
