@@ -11,7 +11,7 @@ provide", "What the runtime must provide") say what exists today and what the ot
 
 Contents: 1 why handles; 2 the device as this design sees it; 3 handles; 4 programs and primitives; 5 the interface,
 call by call; 6 `apply`; 7 step budgets; 8 libraries in ordinary C; 9 examples; 10 assumptions; 11 claims and their
-status; 12 what is not claimed; 13 open choices; 14 what the device must provide; 15 what the runtime must provide.
+status; 12 what is not claimed; 13 confirmed choices; 14 what the device must provide; 15 what the runtime must provide.
 
 ## 1. Why handles
 

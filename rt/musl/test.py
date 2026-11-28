@@ -163,7 +163,7 @@ def caller_frame(args):
 def partial_request(args):
     """A sleep request whose seconds are the last eight bytes of device memory and whose nanoseconds lie past its
     end stops with `out_of_bounds` (natively EFAULT) for negative seconds too: the runtime copies the whole request
-    before it checks a field. The same request sixteen bytes lower is read whole and checked as natively."""
+    before it checks a field. Eight bytes lower, the whole request fits and its fields are checked as natively."""
     source = HERE / "tests/sleep-partial.c"
     program = args.out / "sleep-partial.bn"
     linked = run(["python3", HERE / "link.py", source, "--libdir", args.libdir, "--front", args.front, "-o", program])

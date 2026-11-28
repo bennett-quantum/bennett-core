@@ -370,9 +370,11 @@ before it kept (`arena`, `heap-exhaust`, `realloc-exhaust`, `mmap-exhaust`, `brk
 arithmetic rejections stay null against native (`alloc-arithmetic`), and named faults for stderr, an
 unimplemented syscall, the refused sleeps (`sleep-cpu`, `sleep-beyond`, `sleep-alarm-clock`) and timers
 (`timer-alarm`, `timer-create`), and `out_of_bounds` for a sleep request past device memory
-(`sleep-beyond-memory`, and `sleep-partial` with only its seconds in memory, under an entry given the memory
-size); sleeps (`sleep`, `sleep-alarm-flags`; `sleep-caller` under an entry that calls
-start-up), a program's own `timer_create` (`timer-own`), another rounding mode and a flag test agree with native.
+(`sleep-beyond-memory`, and `sleep-partial` with only its seconds in memory). For `sleep-partial`, the test
+driver reads the device memory size from the program and passes a request address to `partial_entry`.
+Sleeps in `sleep`, `sleep-alarm-flags` and `sleep-caller` agree with native. The last runs under an entry that
+calls start-up. A program's own `timer_create` (`timer-own`), another rounding mode and a flag test also agree
+with native.
 `tests/regress/` holds the self-checking witnesses of the independent testing pass of this boundary (each
 returns 0 natively and failed or faulted here before its fix). The 35 programs (42 runs with the
 `-O2` ones) took 173 seconds with the debug CLI on the shared machine, after building the library.
