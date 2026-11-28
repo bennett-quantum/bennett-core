@@ -44,7 +44,10 @@ impl Device<'_> {
                     .ok_or(Fault::OutOfBounds)?;
                 Ok(ResolvedPlace::Memory(byte, bit % 8))
             }
-            Place::Indexed { .. } => panic!("qubit position outside the outer reference: {place:?}"),
+            Place::Indexed { register, index } => {
+                let (column, bit) = self.qubit_at(register, self.read_i64(index))?;
+                Ok(ResolvedPlace::Register(column, bit))
+            }
         }
     }
 

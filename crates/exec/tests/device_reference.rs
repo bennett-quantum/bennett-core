@@ -4,6 +4,10 @@
 mod device_reference;
 #[path = "device_reference/generated.rs"]
 mod generated;
+#[path = "device_reference/handles.rs"]
+mod handles;
+#[path = "device_reference/handles_generated.rs"]
+mod handles_generated;
 #[path = "device_reference/memory.rs"]
 mod memory;
 #[path = "device_reference/memory_generated.rs"]

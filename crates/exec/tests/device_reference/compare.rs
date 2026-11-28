@@ -36,16 +36,18 @@ pub struct Run<'m> {
     pub counts: Counts,
 }
 
+#[derive(Clone)]
 struct Register {
     wire: u64,
-    handle: u128,
+    qreg_slot: Option<u128>,
+    sim_handle: u64,
     head: RegisterState,
 }
 
 /// The start wire of each allocation maps to the full range of bits it occupies in the snapshot.
 type RegisterTable = BTreeMap<u64, Range<u64>>;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct RegisterObservations {
     allocations: BTreeMap<u64, Register>,
     last_table: RegisterTable,
@@ -73,7 +75,8 @@ impl RegisterObservations {
             .collect()
     }
 
-    fn allocate(&mut self, id: u64, width: Qubits, handle: u128, quantum: &QuantumSnapshot) {
+    fn allocate(&mut self, id: u64, width: Qubits, slot_value: u128, is_qreg: bool, snapshot: &Snapshot) {
+        let quantum = &snapshot.quantum;
         let table = self.live_table(quantum);
         let changed = self.changed(&table);
         assert_eq!(changed.len(), 1, "qalloc adds one register range");
@@ -83,22 +86,37 @@ impl RegisterObservations {
         assert_eq!(bits.end - bits.start, u64::from(width.count()), "qalloc width");
         let head = quantum.registers[(bits.start / 64) as usize];
         assert_eq!(head.width, Width::new(width.count().min(64)), "qalloc head width");
-        assert_ne!(handle, 0, "qalloc produces a handle");
-        assert!(
-            self.allocations.values().all(|allocation| allocation.handle != handle),
-            "qalloc never reuses a handle"
-        );
-        self.allocations.insert(id, Register { wire, handle, head });
+        let (count, ref live) = snapshot.classical.handles;
+        assert_eq!(count, id, "qalloc advances allocation count");
+        let &(_, sim_handle, live_width) =
+            live.iter().find(|&&(handle, _, _)| handle == id).expect("qalloc records live handle");
+        assert_eq!(live_width, width.count(), "qalloc handle table width");
+        let qreg_slot = if is_qreg {
+            assert_ne!(slot_value, 0, "qalloc produces a handle");
+            assert!(
+                self.allocations.values().all(|allocation| allocation.qreg_slot != Some(slot_value)),
+                "qalloc never reuses a qN handle"
+            );
+            Some(slot_value)
+        } else {
+            assert_eq!(slot_value, u128::from(id), "qalloc i64 returns allocation number");
+            None
+        };
+        self.allocations.insert(id, Register { wire, qreg_slot, sim_handle, head });
         self.last_table = table;
     }
 
-    fn release(&mut self, id: u64, quantum: &QuantumSnapshot) {
+    fn release(&mut self, id: u64, allocation_count: u64, snapshot: &Snapshot) {
+        let quantum = &snapshot.quantum;
         let table = self.live_table(quantum);
         let register = &self.allocations[&id];
         assert_eq!(self.changed(&table), [register.wire], "qfree changes the released range");
         assert!(!table.contains_key(&register.wire), "qfree removes live wires");
         let head = (self.last_table[&register.wire].start / 64) as usize;
         assert_ne!(quantum.registers.get(head), Some(&register.head), "qfree retires the handle");
+        let (count, ref live) = snapshot.classical.handles;
+        assert_eq!(count, allocation_count, "qfree keeps allocation count");
+        assert!(live.iter().all(|&(handle, _, _)| handle != id), "qfree removes handle from table");
         self.last_table = table;
     }
 
@@ -123,10 +141,171 @@ pub fn run<'m>(module: &'m ValidModule, name: &str, args: &[u64], seed: u64, bud
 }
 
 pub fn run_until_stop(module: &ValidModule, budget: u64, after_steps: u64, error: RunError) -> Device<'_> {
-    let run = run_through(module, "main", &[], 0, budget, Some((after_steps, error)));
+    run_until_stop_with_args(module, "main", &[], budget, after_steps, error)
+}
+
+pub fn run_until_stop_with_args<'m>(
+    module: &'m ValidModule,
+    name: &str,
+    args: &[u64],
+    budget: u64,
+    after_steps: u64,
+    error: RunError,
+) -> Device<'m> {
+    let run = run_through(module, name, args, 0, budget, Some((after_steps, error)));
     assert_eq!(run.reference.finish, None, "the stop is specific to the simulator");
     assert_eq!(run.reference.steps, after_steps);
     run.reference
+}
+
+pub fn run_and_reverse<'m>(module: &'m ValidModule, name: &str, args: &[u64], seed: u64, budget: u64) -> Run<'m> {
+    run_reversible(module, name, args, seed, budget, None)
+}
+
+pub fn run_partial_undo_and_redo<'m>(
+    module: &'m ValidModule,
+    name: &str,
+    args: &[u64],
+    seed: u64,
+    budget: u64,
+    undo_steps: usize,
+) -> Run<'m> {
+    run_reversible(module, name, args, seed, budget, Some(undo_steps))
+}
+
+fn run_reversible<'m>(
+    module: &'m ValidModule,
+    name: &str,
+    args: &[u64],
+    seed: u64,
+    budget: u64,
+    partial_undo: Option<usize>,
+) -> Run<'m> {
+    let entry = module.function_named(name).expect("entry function");
+    let reference_args: Vec<_> = args.iter().copied().map(u128::from).collect();
+    let mut reference = Device::new(module, entry, &reference_args, budget);
+    let options =
+        Options { seed, budget: Some(budget), allow_region_faults: true, reversible: true, ..Options::default() };
+    let mut executor = Executor::new(module, entry, args, options).expect("executor starts");
+    let mut counts = Counts { programs: 1, ..Counts::default() };
+    let mut registers = RegisterObservations::default();
+    let mut history: Vec<(Device<'m>, RegisterObservations, Snapshot)> = Vec::new();
+
+    assert!(reference.finish.is_none(), "reversible run expects a valid entry");
+    let initial = executor.snapshot();
+    checkpoint(&reference, &initial, &registers, &mut counts, true);
+    history.push((reference.clone(), registers.clone(), initial));
+
+    while reference.finish.is_none() {
+        assert!(reference.next_measurement().is_none(), "reversible comparison requires measurement-free runs");
+        let actual_finish = executor.step();
+        match reference.step(None) {
+            Event::Ordinary => {}
+            Event::Allocated { id, dst, width } => {
+                let snapshot = executor.snapshot();
+                let frame = snapshot.classical.frames.last().expect("allocator's frame");
+                let slot_value = snapshot.classical.slots[frame.base + dst.index()];
+                let is_qreg = matches!(reference.slot_type(frame.func, dst), Type::Qreg(_));
+                registers.allocate(id, width, slot_value, is_qreg, &snapshot);
+            }
+            Event::Released(id) => registers.release(id, reference.quantum.allocation_count, &executor.snapshot()),
+            Event::Measured { .. } => panic!("unexpected measurement in reversible run"),
+        }
+        assert_eq!(actual_finish, reference.finish.map(outcome), "outcome after {} steps", reference.steps);
+        let snapshot = executor.snapshot();
+        let compare_frames = reference.finish.is_none() || matches!(reference.finish, Some(Finish::Faulted(_)));
+        checkpoint(&reference, &snapshot, &registers, &mut counts, compare_frames);
+        if reference.finish.is_none() {
+            history.push((reference.clone(), registers.clone(), snapshot));
+        }
+    }
+    assert_eq!(executor.outcome(), reference.finish.map(outcome), "completion");
+
+    if let Some(undo_steps) = partial_undo {
+        assert!(undo_steps > 0, "partial undo requires at least one step");
+        let mut last_step = None;
+        for step_index in 0..undo_steps {
+            assert!(executor.step_back().expect("reversible"), "partial undo step {step_index}");
+            let snapshot = executor.snapshot();
+            let step = snapshot.classical.steps as usize;
+            let (ref expected_ref, ref expected_regs, ref expected_snap) = history[step];
+            checkpoint(expected_ref, &snapshot, expected_regs, &mut counts, true);
+            assert_eq!(snapshot.classical, expected_snap.classical, "partial undo classical state at step {step}");
+            let distance = snapshot.quantum.distance(&expected_snap.quantum);
+            assert!(
+                distance.is_some_and(|d| d <= TOLERANCE),
+                "partial undo quantum state at step {step} differs by {distance:?}"
+            );
+            last_step = Some(step);
+        }
+        let resume_step = last_step.expect("resumed step");
+        let (mut replay_ref, mut replay_regs, _) = history[resume_step].clone();
+        while replay_ref.finish.is_none() {
+            let actual_finish = executor.step();
+            match replay_ref.step(None) {
+                Event::Ordinary => {}
+                Event::Allocated { id, dst, width } => {
+                    let snapshot = executor.snapshot();
+                    let frame = snapshot.classical.frames.last().expect("allocator's frame");
+                    let slot_value = snapshot.classical.slots[frame.base + dst.index()];
+                    let is_qreg = matches!(replay_ref.slot_type(frame.func, dst), Type::Qreg(_));
+                    replay_regs.allocate(id, width, slot_value, is_qreg, &snapshot);
+                }
+                Event::Released(id) => {
+                    replay_regs.release(id, replay_ref.quantum.allocation_count, &executor.snapshot());
+                }
+                Event::Measured { .. } => panic!("unexpected measurement in replay run"),
+            }
+            assert_eq!(
+                actual_finish,
+                replay_ref.finish.map(outcome),
+                "replay outcome after {} steps",
+                replay_ref.steps
+            );
+            let compare_frames = replay_ref.finish.is_none() || matches!(replay_ref.finish, Some(Finish::Faulted(_)));
+            checkpoint(&replay_ref, &executor.snapshot(), &replay_regs, &mut counts, compare_frames);
+        }
+        assert_eq!(replay_ref.finish, reference.finish, "replay matches original finish");
+        assert_density(&replay_ref.quantum.density, &reference.quantum.density, "replay density");
+    }
+
+    let mut undone = 0u64;
+    let mut previous_step: Option<usize> = None;
+    while executor.step_back().expect("reversible") {
+        undone += 1;
+        let snapshot = executor.snapshot();
+        let step = snapshot.classical.steps as usize;
+        if let Some(prev) = previous_step {
+            assert_eq!(step + 1, prev, "step_back walks steps down by one");
+        }
+        previous_step = Some(step);
+        let (ref expected_ref, ref expected_regs, ref expected_snap) = history[step];
+        checkpoint(expected_ref, &snapshot, expected_regs, &mut counts, true);
+        assert_eq!(snapshot.classical, expected_snap.classical, "reversed classical state at step {step}");
+        let distance = snapshot.quantum.distance(&expected_snap.quantum);
+        assert!(
+            distance.is_some_and(|d| d <= TOLERANCE),
+            "reversed quantum state at step {step} differs by {distance:?}"
+        );
+    }
+    let at_entry = executor.snapshot();
+    assert_eq!(at_entry.classical, history[0].2.classical, "full reversal restores entry classical state");
+    let distance = at_entry.quantum.distance(&history[0].2.quantum);
+    assert!(distance.is_some_and(|d| d <= TOLERANCE), "full reversal restores entry quantum state: {distance:?}");
+    match reference.finish {
+        Some(Finish::Returned(_)) => assert_eq!(undone, reference.steps, "all returned steps undone"),
+        Some(Finish::Faulted(_)) => {
+            assert!(
+                undone == reference.steps || undone == reference.steps + 1,
+                "faulted reversal undid {undone} steps for {} completed steps",
+                reference.steps
+            );
+        }
+        None => unreachable!(),
+    }
+
+    counts.operations = reference.steps;
+    Run { reference, measurements: Vec::new(), counts }
 }
 
 fn run_through<'m>(
@@ -187,10 +366,11 @@ fn run_through<'m>(
             Event::Allocated { id, dst, width } => {
                 let snapshot = executor.snapshot();
                 let frame = snapshot.classical.frames.last().expect("allocator's frame");
-                let handle = snapshot.classical.slots[frame.base + dst.index()];
-                registers.allocate(id, width, handle, &snapshot.quantum);
+                let slot_value = snapshot.classical.slots[frame.base + dst.index()];
+                let is_qreg = matches!(reference.slot_type(frame.func, dst), Type::Qreg(_));
+                registers.allocate(id, width, slot_value, is_qreg, &snapshot);
             }
-            Event::Released(id) => registers.release(id, &executor.snapshot().quantum),
+            Event::Released(id) => registers.release(id, reference.quantum.allocation_count, &executor.snapshot()),
             Event::Measured { outcome, probabilities } => {
                 counts.measurements += 1;
                 measurements.push((outcome, probabilities));
@@ -206,8 +386,18 @@ fn run_through<'m>(
         }
     }
     assert_eq!(executor.outcome(), reference.finish.map(outcome), "completion");
-    let bad_angle = reference.finish == Some(Finish::Faulted(Fault::BadAngle));
-    checkpoint(&reference, &executor.snapshot(), &registers, &mut counts, jump_fault || bad_angle);
+    let check_fault_frames = matches!(
+        reference.finish,
+        Some(Finish::Faulted(
+            Fault::BadAngle
+                | Fault::BadWidth
+                | Fault::OutOfHandles
+                | Fault::BadRange
+                | Fault::DanglingRegister
+                | Fault::QubitAlias
+        ))
+    );
+    checkpoint(&reference, &executor.snapshot(), &registers, &mut counts, jump_fault || check_fault_frames);
     counts.operations = reference.steps;
     Run { reference, measurements, counts }
 }
@@ -231,6 +421,14 @@ fn checkpoint(
     assert_eq!(actual.steps, step, "step count");
     assert_eq!(actual.memory, reference.memory, "memory at step {step}");
     assert_eq!(actual.tape, reference.tape, "tape at step {step}");
+    let expected_handles: Vec<_> = reference
+        .quantum
+        .live
+        .iter()
+        .map(|&(id, width)| (id, registers.allocations[&id].sim_handle, width.count()))
+        .collect();
+    assert_eq!(actual.handles.0, reference.quantum.allocation_count, "allocation count at step {step}");
+    assert_eq!(actual.handles.1, expected_handles, "live handles at step {step}");
     if compare_frames {
         assert_eq!(actual.stack_pointer, reference.stack, "stack at step {step}");
         assert_eq!(actual.frames.len(), reference.frames.len(), "call depth at step {step}");
@@ -241,9 +439,10 @@ fn checkpoint(
             assert_eq!(actual_frame.entry_stack_pointer, frame.entry_stack, "entry stack at step {step}");
             for (index, &value) in frame.slots.iter().enumerate() {
                 let expected = match reference.slot_type(frame.function, Slot(index as u32)) {
-                    Type::Qreg(_) if value != 0 => {
-                        registers.allocations[&u64::try_from(value).expect("reference handle")].handle
-                    }
+                    Type::Qreg(_) if value != 0 => registers.allocations
+                        [&u64::try_from(value).expect("reference handle")]
+                        .qreg_slot
+                        .expect("qN slot value"),
                     _ => value,
                 };
                 assert_eq!(actual.slots[actual_frame.base + index], expected, "slot {index} at step {step}");

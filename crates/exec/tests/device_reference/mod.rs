@@ -37,6 +37,7 @@ pub enum Event {
     Measured { outcome: u128, probabilities: BTreeMap<u128, f64> },
 }
 
+#[derive(Clone)]
 pub struct Frame {
     pub function: FuncId,
     pub block: BlockId,
@@ -47,11 +48,13 @@ pub struct Frame {
     destination: Option<Slot>,
 }
 
+#[derive(Clone)]
 struct AppliedContext<'a> {
     callers: &'a [Frame],
     cells: &'a BTreeMap<u64, usize>,
 }
 
+#[derive(Clone)]
 pub struct Device<'m> {
     module: &'m ValidModule,
     entry: FuncId,
@@ -103,6 +106,10 @@ impl<'m> Device<'m> {
             device.finish = Some(Finish::Faulted(fault));
         }
         device
+    }
+
+    pub fn set_allocation_count(&mut self, count: u64) {
+        self.quantum.set_allocation_count(count);
     }
 
     pub fn slot_type(&self, function: FuncId, slot: Slot) -> Type {
@@ -217,8 +224,17 @@ impl<'m> Device<'m> {
         self.quantum.position(self.read_i64(Operand::Slot(slot))).ok_or(Fault::DanglingRegister)
     }
 
+    pub(super) fn qubit_at(&self, slot: Slot, position: u64) -> Result<(usize, u32), Fault> {
+        let register = self.register(slot)?;
+        let width = u64::from(self.quantum.live[register].1.count());
+        if position >= width {
+            return Err(Fault::BadRange);
+        }
+        Ok((register, position as u32))
+    }
+
     fn qubit(&self, qubit: Qubit) -> Result<(usize, u32), Fault> {
-        Ok((self.register(qubit.register)?, qubit.bit))
+        self.qubit_at(qubit.register, u64::from(qubit.bit))
     }
 
     fn measure(&mut self, observed: Option<u128>, read: impl Fn(&Basis) -> u128) -> (u128, Event) {
@@ -291,6 +307,7 @@ impl<'m> Device<'m> {
                 None
             }
             Inst::Qalloc { .. }
+            | Inst::QallocBy { .. }
             | Inst::Qfree { .. }
             | Inst::Gate { .. }
             | Inst::GateAt { .. }
@@ -302,7 +319,14 @@ impl<'m> Device<'m> {
                 return Err(Fault::QuantumInRegion);
             }
             Inst::Qalloc { width, dst } => {
-                let id = self.quantum.allocate(width);
+                let id = self.quantum.allocate(width)?;
+                event = Event::Allocated { id, dst, width };
+                Some(u128::from(id))
+            }
+            Inst::QallocBy { width, dst } => {
+                let raw = self.read_i64(width);
+                let width = u32::try_from(raw).ok().and_then(Qubits::new).ok_or(Fault::BadWidth)?;
+                let id = self.quantum.allocate(width)?;
                 event = Event::Allocated { id, dst, width };
                 Some(u128::from(id))
             }
@@ -355,7 +379,6 @@ impl<'m> Device<'m> {
                 self.save_jump_record(buffer)?;
                 Some(0)
             }
-            Inst::QallocBy { .. } => panic!("instruction outside the outer reference: {inst:?}"),
         };
         if let Some(value) = value {
             self.put(inst.result().expect("value instruction"), value);

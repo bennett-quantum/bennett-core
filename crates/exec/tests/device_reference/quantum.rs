@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_4};
 
-use bennett_ir::{FixedGate, Gate, Qubits, Rotation};
+use bennett_ir::{Fault, FixedGate, Gate, Qubits, Rotation};
 use num_complex::Complex64 as C;
 
 /// One logical register value, with storage for high bits only when they are set.
@@ -45,9 +45,11 @@ impl RegisterValue {
 pub type Basis = Vec<RegisterValue>;
 pub type Density = BTreeMap<(Basis, Basis), C>;
 
+#[derive(Clone)]
 pub struct Quantum {
-    // Handles are monotonic. A register's position in a basis vector can change on release.
-    next_handle: u64,
+    // Successful allocations are numbered from 1, never reused, up to 2^64 - 1.
+    // A register's position in a basis vector can change on release.
+    pub allocation_count: u64,
     pub live: Vec<(u64, Qubits)>,
     pub cells: BTreeMap<u64, usize>,
     pub density: Density,
@@ -56,16 +58,20 @@ pub struct Quantum {
 impl Quantum {
     pub fn new() -> Self {
         Self {
-            next_handle: 1,
+            allocation_count: 0,
             live: Vec::new(),
             cells: BTreeMap::new(),
             density: BTreeMap::from([((Vec::new(), Vec::new()), C::ONE)]),
         }
     }
 
-    pub fn allocate(&mut self, width: Qubits) -> u64 {
-        let handle = self.next_handle;
-        self.next_handle += 1;
+    pub fn set_allocation_count(&mut self, count: u64) {
+        self.allocation_count = count;
+    }
+
+    pub fn allocate(&mut self, width: Qubits) -> Result<u64, Fault> {
+        let handle = self.allocation_count.checked_add(1).ok_or(Fault::OutOfHandles)?;
+        self.allocation_count = handle;
         // Register columns precede cells, whose positions are tracked independently of address order.
         let column = self.live.len();
         self.live.push((handle, width));
@@ -73,7 +79,7 @@ impl Quantum {
             *position += 1;
         }
         self.insert_column(column, 0);
-        handle
+        Ok(handle)
     }
 
     pub fn promote(&mut self, address: u64, value: u8) -> usize {
@@ -204,7 +210,7 @@ fn unitary(gate: Gate) -> [[C; 2]; 2] {
                 Rotation::Rx => [[c, -C::I * s], [-C::I * s, c]],
                 Rotation::Ry => [[c, real(-s)], [real(s), c]],
                 Rotation::Rz => [[c - C::I * s, C::ZERO], [C::ZERO, c + C::I * s]],
-                Rotation::P => panic!("the phase rotation is outside this reference"),
+                Rotation::P => phase(C::from_polar(1.0, theta)),
             }
         }
     }
