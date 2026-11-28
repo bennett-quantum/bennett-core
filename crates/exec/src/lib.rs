@@ -10,6 +10,7 @@
 //! argument registers, on private memory, and XORs the result into its target (`region`).
 
 mod apply_device;
+mod apply_report;
 mod arith;
 mod backward;
 mod cells;
@@ -35,6 +36,7 @@ mod snapshot;
 mod wire_storage;
 
 pub use apply_device::{ApplyCompiler, ApplyError, ApplyInput, ApplyMemory, Argument, frame_bytes};
+pub use apply_report::ApplyReport;
 
 pub use device::{BlockOp, Device, GateBlock, GateBlockKey, GateOp, Wire};
 pub use executor::{DeviceRun, Executor, Frame, Options, Outcome, ReverseError, RunError, StartError, Stats};
