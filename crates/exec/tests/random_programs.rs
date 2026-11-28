@@ -289,7 +289,7 @@ impl<'r> FunctionGen<'r> {
             2 => {
                 let index = self.rng.random_range(0..self.registers.len());
                 let (register, _) = self.registers.remove(index);
-                insts.push(Inst::Qfree { register });
+                insts.push(Inst::Qfree { register: Operand::Slot(register) });
             }
             3..=4 => self.apply(insts),
             _ => self.gate(insts),

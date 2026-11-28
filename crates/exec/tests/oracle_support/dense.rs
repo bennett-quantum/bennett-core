@@ -291,6 +291,9 @@ impl<'a> Oracle<'a> {
                     }
                     Inst::Qalloc { width, .. } => Some(Value::Reg(self.dense.allocate(width.count()))),
                     Inst::Qfree { register } => {
+                        let Operand::Slot(register) = register else {
+                            panic!("a constant handle is outside this oracle")
+                        };
                         let r = slots[register.index()].reg();
                         assert!(
                             self.dense

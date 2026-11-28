@@ -567,10 +567,23 @@ impl<'m> Executor<'m> {
         }
     }
 
+    /// The handle an operand names: a slot's as [`Executor::handle_number`] reads it, or an `i64` constant.
+    pub(crate) fn handle_of(&self, operand: &Operand) -> u64 {
+        match operand {
+            Operand::Slot(slot) => self.handle_number(*slot),
+            Operand::Const(_) => self.read_word(operand),
+        }
+    }
+
     /// The register the handle in `slot` names: its head column and its width; `dangling_register` if the
     /// handle names no allocated register (released, or never allocated).
     pub(crate) fn register(&self, slot: Slot) -> Result<(usize, Qubits), Fault> {
-        let entry = self.handles.get(self.handle_number(slot))?;
+        self.register_of(self.handle_number(slot))
+    }
+
+    /// The register `handle` names: its head column and its width; `dangling_register` if it names none.
+    pub(crate) fn register_of(&self, handle: u64) -> Result<(usize, Qubits), Fault> {
+        let entry = self.handles.get(handle)?;
         Ok((self.quantum.resolve(entry.register).expect("a live handle names a live register"), entry.qubits))
     }
 

@@ -331,6 +331,9 @@ impl<'m> Device<'m> {
                 Some(u128::from(id))
             }
             Inst::Qfree { register } => {
+                let Operand::Slot(register) = register else {
+                    panic!("a constant handle is outside the outer reference: {inst:?}")
+                };
                 let position = self.register(register)?;
                 let (id, _) = self.quantum.live[position];
                 self.quantum.release(position);

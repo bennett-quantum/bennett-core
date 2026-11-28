@@ -39,11 +39,22 @@ fn state(text: &str, args: &[u64]) -> bennett_exec::QuantumSnapshot {
     executor.snapshot().quantum
 }
 
+/// The codes of `docs/HANDLES.md` 5.1 and `front/include/bq.h`, written out here rather than taken from the
+/// device's table, so that a table with two codes exchanged fails.
+const GATES: [(u64, &str); 8] = [(1, "x"), (2, "y"), (3, "z"), (4, "h"), (5, "s"), (6, "sdg"), (7, "t"), (8, "tdg")];
+const ROTATIONS: [(u64, &str); 4] = [(9, "rx"), (10, "ry"), (11, "rz"), (12, "p")];
+
+#[test]
+fn the_device_tables_hold_the_interfaces_codes() {
+    assert_eq!(GATE_CODES.map(|(code, gate)| (code, gate.mnemonic())), GATES);
+    assert_eq!(ROTATION_CODES.map(|(code, axis)| (code, axis.mnemonic())), ROTATIONS);
+}
+
 #[test]
 fn each_gate_code_gives_the_gate_it_names() {
     let by_code = program("gate(%k)");
-    for (code, gate) in GATE_CODES {
-        let expected = state(&program(gate.mnemonic()), &[0, 0]);
+    for (code, gate) in GATES {
+        let expected = state(&program(gate), &[0, 0]);
         let actual = state(&by_code, &[code, 0]);
         assert_eq!(actual.distance(&expected), Some(0.0), "code {code}");
         assert!(actual.amplitudes.len() > 2, "code {code}: the gates act");
@@ -53,9 +64,9 @@ fn each_gate_code_gives_the_gate_it_names() {
 #[test]
 fn each_rotation_code_gives_the_rotation_it_names() {
     let by_code = program("rotate(%k, %a)");
-    for (code, axis) in ROTATION_CODES {
+    for (code, axis) in ROTATIONS {
         for angle in [0.7, -1.89, 7.5] {
-            let expected = state(&program(&format!("{}(%a)", axis.mnemonic())), &[0, f64::to_bits(angle)]);
+            let expected = state(&program(&format!("{axis}(%a)")), &[0, f64::to_bits(angle)]);
             let actual = state(&by_code, &[code, f64::to_bits(angle)]);
             assert_eq!(actual.distance(&expected), Some(0.0), "code {code}, {angle}");
         }
@@ -174,5 +185,73 @@ entry:
         ));
         let (outcome, _) = run(&module, "main", &[0], common::allowing_region_faults());
         assert_eq!(outcome, Outcome::Returned(Some(u128::from(Fault::QuantumInRegion.code()))), "{body}");
+    }
+}
+
+/// Every operand of the coded forms, and the handle of `qfree`, may be a constant, read as a slot's value
+/// is: a constant handle (`1[0]`), a constant position, a constant angle's bits. The same gate as the
+/// literal form, and one instruction: inside an applied function with one step of budget left the call
+/// gives `quantum_in_region`, never `budget`.
+#[test]
+fn constant_operands_are_operands_of_the_one_instruction() {
+    let half = 0.5f64.to_bits();
+    for (constant, literal) in [
+        ("gate(4) 1[0] ctrl %q[1]".to_owned(), "h %q[0] ctrl %q[1]".to_owned()),
+        (format!("rotate(9, {half}) 1[1]"), "rx(0.5) %q[1]".to_owned()),
+        (format!("rotate(12, {half}) %h[%i]"), "p(0.5) %q[1]".to_owned()),
+        ("x 1[1] ctrl 1[0]".to_owned(), "x %q[1] ctrl %q[0]".to_owned()),
+    ] {
+        let text = |gate: &str| {
+            format!(
+                "memory 64
+func @main(i64 %h, i64 %i) {{
+entry:
+    %q = qalloc 2
+    h %q
+    ry(0.3) %q[1]
+    {gate}
+    ret
+}}"
+            )
+        };
+        let expected = state(&text(&literal), &[1, 1]);
+        assert_eq!(state(&text(&constant), &[1, 1]).distance(&expected), Some(0.0), "{constant}");
+    }
+    let freed = common::load(
+        "memory 64
+func @main() {
+entry:
+    %q = qalloc 1
+    qfree 1
+    x %q
+    ret
+}",
+    );
+    assert_eq!(run(&freed, "main", &[], bounded()).0, Outcome::Faulted(Fault::DanglingRegister));
+    for call in [
+        "gate(4) 1[0]".to_owned(),
+        format!("rotate(9, {half}) 1[0] ctrl 2[3]"),
+        "qfree 1".to_owned(),
+        "%h = qalloc i64 3".to_owned(),
+        "x 1[0]".to_owned(),
+    ] {
+        let module = common::load(&format!(
+            "memory 64
+func @f(i64 %a) -> i1 {{
+entry:
+    {call}
+    ret 0
+}}
+func @main() -> i5 {{
+entry:
+    %o = qalloc 1
+    %f = qalloc 5
+    apply @f(i64 0) -> %o, %f budget 1
+    %m = measure %f
+    ret %m
+}}"
+        ));
+        let (outcome, _) = run(&module, "main", &[], common::allowing_region_faults());
+        assert_eq!(outcome, Outcome::Returned(Some(u128::from(Fault::QuantumInRegion.code()))), "{call}");
     }
 }

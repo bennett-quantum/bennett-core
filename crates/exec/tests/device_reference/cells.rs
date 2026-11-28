@@ -45,6 +45,9 @@ impl Device<'_> {
                 Ok(ResolvedPlace::Memory(byte, bit % 8))
             }
             Place::Indexed { register, index } => {
+                let Operand::Slot(register) = register else {
+                    panic!("a constant handle is outside the outer reference: {place:?}")
+                };
                 let (column, bit) = self.qubit_at(register, self.read_i64(index))?;
                 Ok(ResolvedPlace::Register(column, bit))
             }

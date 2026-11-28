@@ -123,7 +123,7 @@ impl Writer<'_> {
             Inst::Effect { byte } => write!(self.out, "effect {}", op(byte)),
             Inst::Qalloc { width, .. } => write!(self.out, "qalloc {}", width.count()),
             Inst::QallocBy { width, .. } => write!(self.out, "qalloc i64 {}", op(width)),
-            Inst::Qfree { register } => write!(self.out, "qfree {}", name(register)),
+            Inst::Qfree { register } => write!(self.out, "qfree {}", op(register)),
             Inst::Gate { gate, target, controls } => {
                 let controls: Vec<Place> = controls.iter().map(|&qubit| Place::Register(qubit)).collect();
                 self.gate(f, *gate, Place::Register(*target), &controls)
@@ -138,7 +138,7 @@ impl Writer<'_> {
                 self.places(f, *target, controls)
             }
             Inst::GateBy { kind: GateKind::Rotation { code, angle }, target, controls } => {
-                write!(self.out, "rotate({}, {})", op(code), name(angle))?;
+                write!(self.out, "rotate({}, {})", op(code), op(angle))?;
                 self.places(f, *target, controls)
             }
             Inst::Measure { source: MeasureSource::Register(register), .. } => {
@@ -282,8 +282,9 @@ impl fmt::Display for QubitText<'_> {
                 if bit == 0 { write!(f, "[{address}]") } else { write!(f, "[{address}:{bit}]") }
             }
             Place::Indexed { register, index } => {
+                let register = OperandText { function: self.0, operand: register, typed: false };
                 let index = OperandText { function: self.0, operand: index, typed: false };
-                write!(f, "{}[{index}]", SlotText(self.0, register))
+                write!(f, "{register}[{index}]")
             }
         }
     }

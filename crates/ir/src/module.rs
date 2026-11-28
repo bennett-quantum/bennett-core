@@ -234,13 +234,14 @@ pub enum Place {
         bit: u8,
     },
     /// `register[index]` with the position given as an `i64` value: qubit `index` of the register named by
-    /// `register` (a `qN` register or an `i64` handle); an index at or past the register's width is the
-    /// fault `bad_range`. The reader gives this form for a run-time position (`%r[%i]`) and for a literal
-    /// position from 2^32 (`%r[4294967296]`), which no register reaches; a literal below 2^32 is a
+    /// `register` (a `qN` register, an `i64` handle, or an `i64` constant handle); an index at or past the
+    /// register's width is the fault `bad_range`. The reader gives this form for a run-time position
+    /// (`%r[%i]`), for a literal position from 2^32 (`%r[4294967296]`), which no register reaches, and for
+    /// a constant handle at any position (`1[0]`, `1[%i]`); a literal below 2^32 on a named register is a
     /// [`Place::Register`].
     Indexed {
-        /// The slot holding the register handle.
-        register: Slot,
+        /// The register: a slot holding a `qN` register or an `i64` handle, or an `i64` constant handle.
+        register: Operand,
         /// The qubit's position: an `i64` slot, or a constant from 2^32.
         index: Operand,
     },
@@ -428,10 +429,11 @@ pub enum Inst {
         width: Operand,
     },
     /// `qfree register`: drops the register by partial trace, whatever it holds. The register is a `qN`
-    /// register or an `i64` handle; a handle that names no allocated register is `dangling_register`.
+    /// register, an `i64` handle or an `i64` constant handle; a handle that names no allocated register is
+    /// `dangling_register`.
     Qfree {
-        /// The register handle.
-        register: Slot,
+        /// The register: a slot, or an `i64` constant handle.
+        register: Operand,
     },
     /// `gate target [ctrl controls]`: a single-qubit gate, applied where every control is 1.
     Gate {
@@ -507,13 +509,13 @@ pub enum Inst {
 pub enum GateKind {
     /// `gate(code)`: an `i64` gate code.
     Gate(Operand),
-    /// `rotate(code, angle)`: an `i64` rotation code and, as for `RotateBy`, the `i64` slot holding the
-    /// angle's binary64 bits.
+    /// `rotate(code, angle)`: an `i64` rotation code and the angle's binary64 bits as an `i64` (a slot, as
+    /// for `RotateBy`, or a constant).
     Rotation {
         /// The rotation code.
         code: Operand,
-        /// The angle.
-        angle: Slot,
+        /// The angle's binary64 bits, an `i64` value or constant.
+        angle: Operand,
     },
 }
 
@@ -595,9 +597,8 @@ impl Inst {
             }
             Inst::Effect { byte } | Inst::QallocBy { width: byte, .. } => operand(byte),
             Inst::FuncAddr { .. } | Inst::Qalloc { .. } | Inst::StackSave { .. } | Inst::ReturnAddress { .. } => {}
-            Inst::Qfree { register } | Inst::Measure { source: MeasureSource::Register(register), .. } => {
-                operand(&Operand::Slot(*register))
-            }
+            Inst::Qfree { register } => operand(register),
+            Inst::Measure { source: MeasureSource::Register(register), .. } => operand(&Operand::Slot(*register)),
             Inst::Measure { source: MeasureSource::Memory { address, .. }, .. } => operand(address),
             Inst::Gate { target, controls, .. } => {
                 operand(&Operand::Slot(target.register));
@@ -610,7 +611,7 @@ impl Inst {
                         Place::Register(qubit) => operand(&Operand::Slot(qubit.register)),
                         Place::Memory { address, .. } => operand(address),
                         Place::Indexed { register, index } => {
-                            operand(&Operand::Slot(*register));
+                            operand(register);
                             operand(index);
                         }
                     }
@@ -621,7 +622,7 @@ impl Inst {
                     GateKind::Gate(code) => operand(code),
                     GateKind::Rotation { code, angle } => {
                         operand(code);
-                        operand(&Operand::Slot(*angle));
+                        operand(angle);
                     }
                 }
                 for place in std::iter::once(target).chain(controls) {
@@ -629,7 +630,7 @@ impl Inst {
                         Place::Register(qubit) => operand(&Operand::Slot(qubit.register)),
                         Place::Memory { address, .. } => operand(address),
                         Place::Indexed { register, index } => {
-                            operand(&Operand::Slot(*register));
+                            operand(register);
                             operand(index);
                         }
                     }
@@ -641,7 +642,7 @@ impl Inst {
                         Place::Register(qubit) => operand(&Operand::Slot(qubit.register)),
                         Place::Memory { address, .. } => operand(address),
                         Place::Indexed { register, index } => {
-                            operand(&Operand::Slot(*register));
+                            operand(register);
                             operand(index);
                         }
                     }

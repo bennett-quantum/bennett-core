@@ -259,7 +259,7 @@ impl<'a> Checker<'a> {
             }
             Inst::Effect { byte } => self.expect(site, *byte, Type::Int(Width::BYTE)),
             Inst::Qfree { register } => {
-                self.register_or_handle(site, *register);
+                self.register_operand(site, *register);
             }
             Inst::QallocBy { width, .. } => self.expect(site, *width, Type::Int(Width::WORD)),
             Inst::Measure { source: MeasureSource::Register(register), .. } => {
@@ -294,7 +294,7 @@ impl<'a> Checker<'a> {
                 let code = match kind {
                     GateKind::Gate(code) => code,
                     GateKind::Rotation { code, angle } => {
-                        self.expect(site, Operand::Slot(*angle), Type::Int(Width::WORD));
+                        self.expect(site, *angle, Type::Int(Width::WORD));
                         code
                     }
                 };
@@ -350,11 +350,12 @@ impl<'a> Checker<'a> {
                 // constant position is the reader's form of a literal from 2^32, past every `qN` register's
                 // width; a smaller one is a register qubit (`Place::Register`) and refused here, so that a module
                 // the validator accepts is read back from its text as itself (the text of a refused one may read
-                // as another, valid instruction). Only an `i64` constant is ranged.
+                // as another, valid instruction). Only an `i64` constant is ranged. A constant handle has only
+                // this form, at any position.
                 Place::Indexed { register, index } => {
-                    let qubits = self.register_or_handle(site, register);
+                    let qubits = self.register_operand(site, register);
                     self.expect(site, index, Type::Int(Width::WORD));
-                    if let Operand::Const(position) = index
+                    if let (Operand::Slot(_), Operand::Const(position)) = (register, index)
                         && position.width() == Width::WORD
                     {
                         if position.value() <= u128::from(u32::MAX) {
@@ -499,6 +500,18 @@ impl<'a> Checker<'a> {
             Type::Int(Width::WORD) => None,
             found @ Type::Int(_) => {
                 self.mismatch(site, Operand::Slot(slot), Expected::RegisterOrHandle, found);
+                None
+            }
+        }
+    }
+
+    /// [`Checker::register_or_handle`] for an operand: a constant is an `i64` handle, whose width is known
+    /// only when the instruction runs.
+    fn register_operand(&mut self, site: Site, operand: Operand) -> Option<Qubits> {
+        match operand {
+            Operand::Slot(slot) => self.register_or_handle(site, slot),
+            Operand::Const(_) => {
+                self.expect(site, operand, Type::Int(Width::WORD));
                 None
             }
         }

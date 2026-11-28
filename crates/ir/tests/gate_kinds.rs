@@ -31,7 +31,7 @@ fn the_run_time_kinds_read_write_and_validate() {
     assert!(matches!(
         &insts[1],
         Inst::GateBy { kind: GateKind::Gate(Operand::Slot(code)), target: Place::Indexed { register, index }, controls }
-            if *code == k && *register == h && *index == Operand::Slot(i) && controls.len() == 2
+            if *code == k && *register == Operand::Slot(h) && *index == Operand::Slot(i) && controls.len() == 2
     ));
     assert!(matches!(
         &insts[2],
@@ -40,7 +40,8 @@ fn the_run_time_kinds_read_write_and_validate() {
     ));
     assert!(matches!(
         &insts[3],
-        Inst::GateBy { kind: GateKind::Rotation { code: Operand::Slot(code), angle }, .. } if *code == k && *angle == a
+        Inst::GateBy { kind: GateKind::Rotation { code: Operand::Slot(code), angle }, .. }
+            if *code == k && *angle == Operand::Slot(a)
     ));
     assert!(matches!(
         &insts[4],
@@ -69,4 +70,49 @@ fn the_code_and_the_angle_are_i64_and_the_qubits_are_checked_as_for_any_gate() {
     assert!(read(&TEXT.replace("rotate(12, %a)", "rotate(12)")).is_err(), "a rotation needs its angle");
     assert!(read(&TEXT.replace("rotate(12, %a)", "rotate(12, 0.5)")).is_err(), "the angle is a slot");
     assert!(read(&TEXT.replace("gate(4)", "%x = gate(4)")).is_err(), "no result");
+}
+
+/// A constant handle (`1[0]`, `2[%i]`), a constant angle's bits and `qfree` of a constant handle read,
+/// write, read back and validate: every operand of these forms is a constant or a slot.
+#[test]
+fn constant_handles_and_angles_read_write_and_validate() {
+    let text = "memory 64
+func @main(i64 %i) {
+entry:
+    %q = qalloc 2
+    gate(4) 1[0] ctrl 2[%i]
+    rotate(9, 4602678819172646912) 1[%i]
+    x 1[3] ctrl 1[4294967296]
+    qfree 1
+    ret
+}
+";
+    let module = read(text).expect("reads");
+    let insts = &module.functions[0].blocks[0].insts;
+    let constant = |value: u128| Operand::Const(bennett_ir::Const::new(bennett_ir::Width::WORD, value).expect("i64"));
+    assert!(matches!(
+        &insts[1],
+        Inst::GateBy { target: Place::Indexed { register, index }, .. }
+            if *register == constant(1) && *index == constant(0)
+    ));
+    assert!(matches!(
+        &insts[2],
+        Inst::GateBy { kind: GateKind::Rotation { angle, .. }, .. } if *angle == constant(0.5f64.to_bits().into())
+    ));
+    assert!(
+        matches!(&insts[3], Inst::GateAt { target: Place::Indexed { register, .. }, .. } if *register == constant(1))
+    );
+    assert_eq!(insts[4], Inst::Qfree { register: constant(1) });
+    let written = write(&module);
+    for line in [
+        "gate(4) 1[0] ctrl 2[%i]\n",
+        "rotate(9, 4602678819172646912) 1[%i]\n",
+        "x 1[3] ctrl 1[4294967296]\n",
+        "qfree 1\n",
+    ] {
+        assert!(written.contains(line), "{line}{written}");
+    }
+    assert_eq!(read(&written).expect("reads back"), module);
+    load(text).expect("validates");
+    assert!(read(&text.replace("qfree 1", "qfree 1[0]")).is_err(), "qfree takes a handle, not a qubit");
 }
