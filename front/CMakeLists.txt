@@ -77,18 +77,19 @@ foreach(tool BENNETT_CLANG BENNETT_LLVM_LINK)
   endif()
 endforeach()
 
-# bennett-cc: one unit of a program in the handle interface to bitcode, with bq.h and bq-references.h included by
-# force and the declaration check of docs/HANDLES.md, section 4, made before any optimiser pass (src/Driver.cpp).
+# bennett-cc: one unit of a program in the handle interface to bitcode, with bq-prefix.h included by force and the
+# declaration check of docs/HANDLES.md, section 4, made before any optimiser pass (src/Driver.cpp).
 add_executable(bennett-cc
   src/Driver.cpp
   src/UnitCheck.cpp
+  src/BaselineOptions.cpp
   src/Claims.cpp
   src/Primitives.cpp
   src/Diagnostic.cpp
 )
 target_include_directories(bennett-cc SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_compile_definitions(bennett-cc PRIVATE ${LLVM_DEFINITIONS} BENNETT_CLANG="${BENNETT_CLANG}"
-  BENNETT_HANDLE_HEADER="${CMAKE_CURRENT_SOURCE_DIR}/include/bq.h")
+  BENNETT_HANDLE_FOLDER="${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_compile_options(bennett-cc PRIVATE -Wall -Wextra -fno-rtti -fno-exceptions)
 if(LLVM_LINK_LLVM_DYLIB)
   target_link_libraries(bennett-cc PRIVATE LLVM)

@@ -74,8 +74,9 @@ std::optional<Primitive> primitiveWithLinkerName(StringRef linker, const Module 
 
 } // namespace
 
-const char *const declarationRoute = "; the header bq.h, which bennett-cc includes by force in every unit, has the "
-                                     "only declaration of each primitive (docs/HANDLES.md, section 4)";
+const char *const declarationRoute = "; the declarations file bq-prefix.h, which bennett-cc includes by force "
+                                     "first in every unit, has the only declaration of each primitive "
+                                     "(docs/HANDLES.md, section 4)";
 
 ArrayRef<Primitive> allPrimitives() { return primitives; }
 

@@ -1,15 +1,21 @@
 /* bq.h: the handle interface of quantum C, and its libraries in ordinary C. See docs/HANDLES.md.
  *
  * Qubits live in the device; C holds only handles to registers of them. Every quantum operation is a call
- * of one of the primitives declared below, and the one bridge from qubits to ordinary code is bq_apply,
+ * of one of the primitives (bq-prefix.h), and the one bridge from qubits to ordinary code is bq_apply,
  * which applies a plain C function `void f(void *block)` to fields of a private block of bytes. Qubit 0
  * of a register is its least significant bit.
  *
- * Everything after the primitives is ordinary C that calls them: slices and fields, fault registers,
- * budgets, the scalar forms and the control scopes. Each is defined by what its C body does.
+ * The primitives are declared in bq-prefix.h, which this header includes (bennett-cc includes it by force,
+ * first, in every unit, so there this include is empty). Everything here is ordinary C that calls them:
+ * the types, slices and fields, fault registers, budgets, the scalar forms and the control scopes. Each is
+ * defined by what its C body does.
  */
 #ifndef BENNETT_BQ_H_INCLUDED
 #define BENNETT_BQ_H_INCLUDED
+
+#ifndef BENNETT_BQ_PREFIX_H_INCLUDED
+#include "bq-prefix.h"
+#endif
 
 #include <stddef.h>
 #include <stdint.h>
@@ -18,11 +24,9 @@
 
 #ifdef __cplusplus
 extern "C" {
-#define BQ_NORETURN [[noreturn]]
 #define BQ_STATIC_ASSERT(condition, message) static_assert(condition, message)
 #define BQ_ALIGNOF(type) alignof(type)
 #else
-#define BQ_NORETURN _Noreturn
 #define BQ_STATIC_ASSERT(condition, message) _Static_assert(condition, message)
 #define BQ_ALIGNOF(type) _Alignof(type)
 #endif
@@ -31,13 +35,13 @@ extern "C" {
 
 /* A handle: the k-th successful bq_alloc of a run returns the handle holding k, from 1. A handle is never
  * reused; after bq_free its number names nothing. */
-typedef struct { uint64_t id; } bq_reg;
+typedef struct __bennett_reg bq_reg;   /* struct __bennett_reg { uint64_t id; }, in bq-prefix.h */
 /* One qubit of a register: an entry of a control list. */
-typedef struct { bq_reg reg; uint64_t bit; } bq_bit;
+typedef struct __bennett_bit { bq_reg reg; uint64_t bit; } bq_bit;
 /* The `bits` qubits of a register from qubit `low` up, read as an integer with qubit `low` lowest. */
 typedef struct { bq_reg reg; uint64_t low, bits; } bq_slice;
 /* A field of an apply: a slice tied to the ceil(bits / 8) bytes of the block from `offset`. */
-typedef struct { bq_slice slice; uint64_t offset, direction; } bq_field;
+typedef struct __bennett_field { bq_slice slice; uint64_t offset, direction; } bq_field;
 /* The one type of an applied function. */
 typedef void bq_fn(void *block);
 
@@ -83,29 +87,32 @@ enum {
 
 /* ---- The primitives ------------------------------------------------------------------------------- */
 
-/* Registers. */
-bq_reg bq_alloc(uint64_t bits);                       /* a fresh register of `bits` qubits, all 0       */
-void bq_free(bq_reg r);                               /* the partial trace: r is dropped unexamined     */
-uint64_t bq_width(bq_reg r);                          /* the width r was allocated with                 */
-uint64_t bq_measure(bq_reg r, uint64_t low, uint64_t bits);   /* measures a slice; r stays allocated    */
-
-/* Gates: the gate on qubit `bit` of `r`, where every qubit of the control list is 1. */
-void bq_gate(uint64_t kind, bq_reg r, uint64_t bit, const bq_bit *controls, uint64_t n);
-void bq_rotate(uint64_t kind, double theta, bq_reg r, uint64_t bit, const bq_bit *controls, uint64_t n);
-
-/* Apply: for each definite value of the in fields, run f on a private copy of memory, with the image copied
+/* Declared in bq-prefix.h, with these types:
+ *
+ * Registers.
+ *   bq_reg bq_alloc(uint64_t bits);                      a fresh register of `bits` qubits, all 0
+ *   void bq_free(bq_reg r);                              the partial trace: r is dropped unexamined
+ *   uint64_t bq_width(bq_reg r);                         the width r was allocated with
+ *   uint64_t bq_measure(bq_reg r, uint64_t low, uint64_t bits);   measures a slice; r stays allocated
+ *
+ * Gates: the gate on qubit `bit` of `r`, where every qubit of the control list is 1.
+ *   void bq_gate(uint64_t kind, bq_reg r, uint64_t bit, const bq_bit *controls, uint64_t n);
+ *   void bq_rotate(uint64_t kind, double theta, bq_reg r, uint64_t bit, const bq_bit *controls, uint64_t n);
+ *
+ * Apply: for each definite value of the in fields, run f on a private copy of memory, with the image copied
  * into a fresh block and the in fields written into it, for at most `budget` steps; XOR the out fields it
- * leaves, or the fault code, into the out qubits or the fault register. */
-void bq_apply(bq_fn *f, uint64_t budget, bq_reg fault, const void *image, uint64_t size, const bq_field *fields,
-              uint64_t m, const bq_bit *controls, uint64_t n);
-
-/* The reserved effect primitives: console output of one byte, the end of the run with a status, and two
+ * leaves, or the fault code, into the out qubits or the fault register.
+ *   void bq_apply(bq_fn *f, uint64_t budget, bq_reg fault, const void *image, uint64_t size,
+ *                 const bq_field *fields, uint64_t m, const bq_bit *controls, uint64_t n);
+ *
+ * The reserved effect primitives: console output of one byte, the end of the run with a status, and two
  * named stops, out_of_memory (the C library's allocator, when its storage cannot hold a request) and
- * bad_argument (the libraries below, at a check of their own that fails). */
-void __bennett_effect(char byte);
-BQ_NORETURN void __bennett_exit(int status);
-BQ_NORETURN void __bennett_out_of_memory(void);
-BQ_NORETURN void __bennett_bad_argument(void);
+ * bad_argument (the libraries below, at a check of their own that fails). The last three do not return.
+ *   void __bennett_effect(char byte);
+ *   void __bennett_exit(int status);
+ *   void __bennett_out_of_memory(void);
+ *   void __bennett_bad_argument(void);
+ */
 
 /* ---- Slices and fields ---------------------------------------------------------------------------- */
 
@@ -171,7 +178,7 @@ static inline uint64_t bq_fault_take(bq_reg fault) {
  * written `bq_apply...(..., bq_fault(), ...)`; bq_faults_check reads them all at a point the program
  * chooses. One set per program (a weak definition, merged by the linker). */
 struct bq_fault_set { bq_reg *list; uint64_t count, capacity; };
-__attribute__((weak)) struct bq_fault_set bq_fault_set_;
+__attribute__((__weak__)) struct bq_fault_set bq_fault_set_;
 
 /* Room for one more entry of `size` bytes in a list that grows on demand (no fixed capacity), keeping the
  * old entries. The new capacity and its byte count are computed with checked arithmetic. A count that does
@@ -288,7 +295,7 @@ static inline void bq_apply_4(uint64_t (*g)(uint64_t, uint64_t, uint64_t, uint64
 
 /* The current control list, last in first out. One per program (a weak definition); it grows on demand. */
 struct bq_scope { bq_bit *list; uint64_t depth, capacity; };
-__attribute__((weak)) struct bq_scope bq_scope_;
+__attribute__((__weak__)) struct bq_scope bq_scope_;
 
 static inline void bq_push(bq_reg r, uint64_t bit) {
     struct bq_scope *s = &bq_scope_;
@@ -373,6 +380,5 @@ static inline void bq_apply_scoped_4(uint64_t (*g)(uint64_t, uint64_t, uint64_t,
 }
 #endif
 
-#undef BQ_NORETURN
 #undef BQ_STATIC_ASSERT
 #endif

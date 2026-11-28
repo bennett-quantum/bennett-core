@@ -56,8 +56,9 @@ cargo run -p bennett -- run prog.bn
 ```
 
 A unit of a program in the handle interface (`front/include/bq.h`, `docs/HANDLES.md`) goes through the driver
-`bennett-cc` instead of `clang`. Its options are clang's. It includes the header by force, checks the unit's
-declarations and calls of the primitives before any optimiser pass, and refuses a unit that breaks the header's
+`bennett-cc` instead of `clang`. Its options are clang's. It includes the primitives' declarations file
+(`front/include/bq-prefix.h`) by force, checks the unit's declarations and calls of the primitives before any
+optimiser pass against a baseline that nothing of the user's or the host's reaches, and refuses a unit that breaks the header's
 declaration rule by name, writing no bitcode ([the declaration check](docs/DESIGN.md#the-declaration-check)).
 `bennett-front` refuses a program that uses the seven `bq_*` functions until their calls can be translated:
 

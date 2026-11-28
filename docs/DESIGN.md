@@ -1374,7 +1374,7 @@ Two things the first C programs taught:
 The handle interface (`docs/HANDLES.md`, section 4) rests on one premise: every call of a primitive runs and reaches
 that primitive. The check covers the three ways a program can break it through what it says about a primitive:
 putting something else in the primitive's place (a definition, alias, ifunc, variable or rename), telling LLVM a
-fact about a primitive or a call of one that the header does not state (then LLVM may remove, merge, move or
+fact about a primitive or a call of one that the declarations file does not state (then LLVM may remove, merge, move or
 speculate the call), and calling it with another type or calling convention. A claim the program makes about its
 own function is the program's statement and is trusted, as native clang trusts it: a GNU `const` function that
 applies a gate is a false claim, undefined behaviour in C as natively, and at `-O2` clang deletes its unused call
@@ -1385,21 +1385,54 @@ functions and the four effect primitives, known by their linker names (`front/sr
 The driver `bennett-cc [clang options] -o OUTPUT UNIT` (`front/src/Driver.cpp`) follows these rules for one unit:
 
 1. **What is compiled.** A C unit is compiled by clang 18 with the user's options at the requested level and
-   `-Xclang -disable-llvm-passes`, with `front/include/bq.h` and then `front/include/bq-references.h` included by
-   force ahead of anything the user passes (the header's folder is on the include path, so `#include "bq.h"` is
-   the same file). `bq-references.h` holds one internal `used` array of the eleven primitives' addresses in table
-   order. The *baseline* `front/include/bq-baseline.c`, one function calling each primitive once, is compiled with
-   the same command and options at the same time (not cached: it costs one clang run of a small file in parallel);
-   its identifiers are reserved ones, so that no macro of the user's options changes it. The header comes ahead of
-   the unit's own text, so a feature macro the unit defines itself (`#define _GNU_SOURCE`) comes after the C
-   library's headers that `bq.h` includes and has no effect there; it is given as an option (`-D_GNU_SOURCE`).
-   Reason: clang emits a declaration only where something uses it and fixes its symbol at that first use, so the
-   array makes every header declaration appear in every unit, fixed before any of the unit's own text.
+   `-Xclang -disable-llvm-passes`, with the *declarations file* `front/include/bq-prefix.h` included by force,
+   first, and the header's folder on the include path (so `#include "bq.h"` finds the driver's header, which then
+   does not include the declarations file again). The declarations file is the only file included by force, in
+   every unit, the C library's included. It includes nothing, so no search path, overlay or header of the user's or
+   the host's is read before it; it is written only with keywords, names reserved to the implementation (the
+   struct tags `__bennett_reg`, `__bennett_bit`, `__bennett_field`, the compiler's `__UINT64_TYPE__`) and the
+   primitives' names, each in parentheses (`void (bq_free)(struct __bennett_reg);`), so that a function-like macro
+   of a primitive's name does not expand there; the handle's member `id` is kept from macros by `push_macro`. It
+   ends with one internal `used` array of the eleven primitives' addresses in table order. `bq.h` is an ordinary
+   header that a program includes where it chooses: it includes the declarations file under that file's guard (so
+   it also works without the driver, as for the native stand-in), its own `<stdio.h>` and `<stdlib.h>`, and
+   defines the public names of the types (`typedef struct __bennett_reg bq_reg;`) and the libraries. A unit's own
+   feature macros (`#define _GNU_SOURCE` before its includes) and its own declarations of library functions are
+   therefore as natively. The variables that rewrite clang's command line (`CCC_OVERRIDE_OPTIONS`; `CL` and `_CL_`
+   in clang-cl mode) are cleared for the unit and its optimisation; everything else of the user's command and
+   environment stays with the unit, configuration files included, which clang places before the command line, so
+   they cannot remove the driver's own options (test `no_configuration_file_removes_the_drivers_options`).
+   The *baseline* `front/include/bq-baseline.c`, one function calling each primitive once, is compiled at the same
+   time (not cached: it costs one clang run of a small file in parallel) by the driver alone: the declarations
+   file by the driver's own path, every pass off, `--no-default-config`, `-nostdinc`, an environment of `PATH`,
+   `TMPDIR` and `CLANG_NO_DEFAULT_CONFIG=1` only, and of the user's options only those of one table of
+   code-generation kinds (`front/src/BaselineOptions.cpp`: the optimisation level, the target, floating-point,
+   builtin, exception, character-signedness, position-independence, stack, sanitizer and debug options): the
+   options for which clang puts attributes or metadata on the primitives' declarations and calls, each reading no
+   file and defining no macro. Nothing the user or the host controls reaches the baseline. An option outside the
+   table is withheld from it; if the unit then differs from the baseline in a declaration or a call, rules 2 to 4
+   refuse it by name, and the refusal lists the withheld options and says that one of them, a configuration file or
+   an environment variable may be the cause. So soundness does not depend on the table being complete; the table
+   decides how much is accepted and grows from measured programs (test `options_outside_the_table_stay_with_the_unit`:
+   a language standard, warnings, macros, include paths and an included file change nothing and are accepted; a
+   target feature through `-Xclang` is refused, naming it). Measured on 2026-11-28 for every member of the class
+   (test `nothing_the_user_or_the_host_controls_reaches_the_baseline`), each of which `bennett-cc` accepted before
+   with both calls of a `const`-claimed `bq_width` deleted at `-O2`, because the claim reached the unit and the
+   baseline alike: a precompiled header (`-include-pch`), a `--config` file and a default configuration file, an
+   overlay (`-ivfsoverlay`) over the declarations file or over `bq.h`, a header that shadows `<stdint.h>` through
+   `-I` or `CPATH`, and a `-D` that makes a keyword carry the claim (`-Dlong=__attribute__((const)) long`). Each is
+   now refused at `-O0` and `-O2`: by rule 3 where the claim comes before the declarations file, by rule 4 where it
+   comes after it; `CCC_OVERRIDE_OPTIONS` is cleared, and both calls stay. A macro the user defines before the
+   declarations file (`-D`, `-imacros`) reaches the unit only: an object-like rename of a primitive is refused by
+   rule 2, naming the symbol; a function-like macro of a primitive's name and a macro of an ordinary name change
+   only the program's own text (test `the_users_macros_cannot_change_the_baseline`). Reason for the array:
+   clang emits a declaration only where something uses it and fixes its symbol at that first use, so the array
+   makes every declaration appear in every unit, fixed before any of the unit's own text.
 2. **Names.** The linker name is the IR name without a leading byte 1, with the target's global prefix, as LLVM's
    Mangler computes it. Entry `k` of the array must have primitive `k`'s linker name (a macro such as
    `-Dbq_free=other` is refused here, naming the symbol), and no other global may have that linker name: a
    definition, an alias, an ifunc, a variable or a global named by an assembler label `"\01..."` is refused by its
-   kind. In C, `static int x __asm__("bq_alloc")` turns the header's function into the variable, and the array
+   kind. In C, `static int x __asm__("bq_alloc")` turns the declared function into the variable, and the array
    then points at it.
 3. **Equality.** Entry `k`'s declaration must equal the baseline's: the line the LLVM 18 assembly writer prints,
    with the function attributes written out instead of the group's number, and the metadata attachments other
@@ -1412,11 +1445,15 @@ The driver `bennett-cc [clang options] -o OUTPUT UNIT` (`front/src/Driver.cpp`) 
    attributes plus at most `strictfp`, `nomerge`, `noinline` and `alwaysinline` (from `#pragma STDC FENV_ACCESS`,
    `[[clang::nomerge]]`, `[[clang::noinline]]`, `[[clang::always_inline]]`: statements about the caller), metadata
    only `!dbg` and `!llvm.access.group` (a loop pragma: the program's claim about its own loop), and no operand
-   bundle. A redeclaration after the array leaves the declaration as the header's but puts its own attributes on
-   the calls: `__attribute__((const)) uint64_t bq_width(bq_reg);` gives `call @bq_width ... memory(none)`, and an
+   bundle. A redeclaration after the array leaves the declaration as the declarations file's but puts its own
+   attributes on the calls (measured with clang 18 for 23 kinds of redeclaration, among them `const`, `pure`,
+   `noreturn`, `weak`, `visibility`, `section` and `#pragma weak`): `__attribute__((const)) uint64_t bq_width(bq_reg);` gives `call @bq_width ... memory(none)`, and an
    assembler label of another type or with `ms_abi` gives a call of the declaration through that type or
    convention. A `const` pointer variable initialised with a primitive is folded by clang into a direct call that
-   carries the pointer's `const` or `pure` even with every pass off, so it is refused here.
+   carries the pointer's `const` or `pure` even with every pass off, so it is refused here. A redeclaration that replaces the declaration
+   as a whole, a definition, an alias or an ifunc of a primitive's name, is refused by rule 2, which runs first;
+   any other that did change the emitted declaration would differ from the baseline's and be refused by rule 3,
+   since the baseline reads none of the unit's text.
 5. **Calls through a pointer: a removal, not a refusal.** Every call whose callee is not a function (a pointer,
    inline assembly, an alias, an ifunc) loses every attribute that is neither ABI nor a limit on the optimiser nor
    `noreturn`/`nounwind`, and every metadata attachment other than `!dbg` (`front/src/Claims.h`). ABI: `zeroext`,
@@ -1458,7 +1495,7 @@ What clang 18 does with a rename after the array, pinned by tests: `#pragma rede
 `weak` redeclaration leave the IR as it was (calls stay on the external `@bq_free`), and an assembler label after
 the first use is clang's own error. A declaration nothing uses, one that appears only in a type (an unevaluated
 array bound, an initializer a later one overrides) and an unused assembler label emit nothing and are accepted; a
-label that names the same primitive with the same type makes the header's call and is accepted.
+label that names the same primitive with the same type makes the declarations file's call and is accepted.
 
 Tests (`front/tests/tests/handles_front.rs`): every refusal of a C program at `-O0` and `-O2` with no output
 written; the rename facts above; the claims through pointers, where plain `clang -O2` deletes both measurements and
@@ -1466,7 +1503,9 @@ written; the rename facts above; the claims through pointers, where plain `clang
 faults `out_of_memory`, output and exit through pointers print and exit, an unrelated `noreturn` callback of the
 output primitive's type runs, a `byval` callback is untouched); the conforming program under 20 option sets and
 with the context attributes of rule 4; LLVM IR units, invalid LLVM IR and each branch of rule 3 alone; the
-user's macros against the baseline; a claim on the program's own function (trusted); the optimiser's `!noalias`
+user's macros against the baseline; every member of the class above, the cleared command-line variables, the
+configuration files that try to remove the driver's options, and options outside the table; a unit that defines
+the declarations file's guard (refused, naming it); a claim on the program's own function (trusted); the optimiser's `!noalias`
 after inlining a `restrict` parameter (trusted); the front's checks on LLVM text; clang found on `PATH`; no
 temporary file left. Lane 17's two witnesses in `front/tests/tests/out_of_memory.rs` pass: an indirect call to the
 out-of-memory stop marked `nounwind willreturn memory(none)` now faults on the device, and an ifunc of that name is
@@ -2783,10 +2822,14 @@ The handle interface's front end ("The declaration check" above; the old layer s
 - **A `const` or `pure` pointer declared `const` is refused** (rule 4): clang folds its calls into direct calls that
   carry the claim before any pass, and in the unit's IR they cannot be told from calls through a redeclaration.
   Route: write the pointer without `const` (it is then a call through a pointer, whose claim is removed).
-- **A feature macro defined in the unit** (`#define _GNU_SOURCE` before its includes) comes after the C library's
-  headers that the forced `bq.h` includes, so the declarations it would make visible stay hidden and clang may refuse
-  the unit. Route: give it as an option (`-D_GNU_SOURCE`), which comes ahead of the header; or a header that
-  includes no C library header before the unit's text.
+- **The table of the baseline's options is short.** A unit compiled with a code-generation option the table does not
+  name, and for which clang puts something on a primitive's declaration or call, is refused by name (the refusal
+  lists the withheld options). Route: add the option to `front/src/BaselineOptions.cpp` once a measured program
+  needs it, after checking that it reads no file and defines no macro.
+- **A pass plugin runs in the optimisation after the check** (`-fpass-plugin=`, in the user's options or a
+  configuration file): the optimiser is trusted, and a plugin is code the user adds to it, which can remove a call
+  as a compiler of the user's own could. Not measured. Route, if needed: refuse plugin options for the
+  optimisation run by name.
 - **Options that write files beside the output** (`-MD`, `-save-temps`) write them beside the driver's temporary
   files, where they stay (measured for `-MD`: two `.d` files in the temporary folder). Route: pass the user's
   output name to clang for those, if a build needs them.

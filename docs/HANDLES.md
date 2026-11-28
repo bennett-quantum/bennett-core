@@ -101,35 +101,44 @@ A **program** is a set of C translation units after preprocessing: the user's an
 all ordinary C. The **primitives** are the external functions a program calls and does not define: the seven
 interface functions of section 5 (`bq_alloc`, `bq_free`, `bq_width`, `bq_measure`, `bq_gate`, `bq_rotate`,
 `bq_apply`) and the device's four effect primitives: output of one byte (`__bennett_effect`), exit with a status
-(`__bennett_exit`), and two named stops, `__bennett_out_of_memory` and `__bennett_bad_argument` (5.5). The header
-`bq.h` declares all of them.
+(`__bennett_exit`), and two named stops, `__bennett_out_of_memory` and `__bennett_bad_argument` (5.5). The
+*declarations file* `bq-prefix.h` declares all of them, and nothing else that a program sees but the types of a
+handle, a control entry and a field entry under reserved names. The header `bq.h` includes it and adds the
+interface's types under their public names and its libraries; a program includes `bq.h` where it chooses.
 
 **The declaration rule.** In every translation unit of a program, the C library's included:
 
-1. no global other than the header's declaration carries a primitive's *linker name* (the symbol the linker sees
-   after every renaming the C dialect offers: an assembler label `__asm__("...")`, `#pragma redefine_extname`, an
-   `alias` or `ifunc` attribute, a macro): no definition, alias, ifunc, variable or second declaration of it;
-2. the header's declarations keep their linker names, their external linkage and every other property to the end
-   of the unit: no pragma, attribute, macro or later declaration changes what a header declaration stands for;
-3. every call of a primitive is the header's call: the header's function type and calling convention, and nothing
-   on the call that the header's own call does not carry, except what a statement's context adds and says nothing
-   about the callee (`#pragma STDC FENV_ACCESS`, `[[clang::nomerge]]`, `[[clang::noinline]]`,
+1. no global other than the declarations file's declaration carries a primitive's *linker name* (the symbol the
+   linker sees after every renaming the C dialect offers: an assembler label `__asm__("...")`, `#pragma
+   redefine_extname`, an `alias` or `ifunc` attribute, a macro): no definition, alias, ifunc, variable or second
+   declaration of it;
+2. those declarations keep their linker names, their external linkage and every other property to the end of the
+   unit: no pragma, attribute, macro or later declaration changes what one of them stands for;
+3. every call of a primitive is the declarations file's call: its function type and calling convention, and
+   nothing on the call that the file's own call does not carry, except what a statement's context adds and says
+   nothing about the callee (`#pragma STDC FENV_ACCESS`, `[[clang::nomerge]]`, `[[clang::noinline]]`,
    `[[clang::always_inline]]`, a loop pragma).
 
 A declaration that emits nothing into the unit's code is accepted: one nothing uses, and one that appears only in
 a type (an unevaluated array bound, an initializer a later one overrides). It cannot affect any call. A
 redeclaration that makes the same call is accepted too. Without the first clause, a definition of `bq_free`, or an
-alias or ifunc in its place, would put the program's own code in the primitive's place. Without the second, `-Dbq_free=ordinary_release` would rename the header's own declaration, and
+alias or ifunc in its place, would put the program's own code in the primitive's place. Without the second, `-Dbq_free=ordinary_release` would rename the declarations file's own declaration, and
 every call of `bq_free` would go to an ordinary external function. Without the third, a redeclaration
 `__attribute__((const)) uint64_t bq_width(bq_reg);` would let the compiler drop a call.
 
 The rule is enforced before any optimisation, on what the compiler emits. The driver `bennett-cc` compiles each unit
-with every LLVM pass off and with two files included by force ahead of the user's own includes: the header, then an
+with the user's options and every LLVM pass off, with the declarations file included by force, first. The file
+includes nothing and is written only with keywords, reserved names and the primitives' names, and it ends with an
 array of the eleven primitives' addresses. The compiler fixes the symbol a declaration stands for at its first use,
-so the array shows the symbol each header declaration finally stands for. The driver compares each declaration and
-each direct call of it with those of a *baseline* unit that only calls each primitive once, compiled with the same
-command and options. It refuses by name, before any bitcode is written, every break of the three clauses. Calls
-through a pointer are not refused: before optimising, the driver removes from them every attribute that is neither
+so the array shows the symbol each declaration finally stands for. The driver compares each declaration and each
+direct call of it with those of a *baseline*, a unit of the driver's own whose function calls each primitive once,
+compiled with the same declarations file, of the user's command only its code-generation options (one table), no
+macro, no include path, no configuration file and no environment of the user's or the host's. Nothing the user or
+the host controls reaches the baseline, so whatever a precompiled header, a configuration file, an overlay, a
+search path, an environment variable or a macro does to the unit's declarations or calls shows as a difference. It
+refuses by name, before any bitcode is written, every break of the three clauses, and a refusal names the user's
+options the baseline did not get. The variables that rewrite clang's command line are cleared, so the driver's own
+options stay as it gives them. Calls through a pointer are not refused: before optimising, the driver removes from them every attribute that is neither
 ABI nor a limit on the optimiser and every metadata attachment other than debug information, which only costs their
 optimisation. A pointer that reaches a primitive then makes that primitive's call whatever its declaration claimed.
 The driver then deletes the array and lets the compiler optimise the same unit. After that, it checks only that no
@@ -142,9 +151,11 @@ primitives. It looks at declarations and calls alone and asks nothing about what
 ordinary C that the compiler's lowering makes still apply, as for any program. `docs/DESIGN.md`, "The declaration
 check", states each rule with the measured behaviour of clang 18 it rests on.
 
-Because the header is included everywhere, the C library's own files take their declarations of the effect
-primitives from it and lose their own (section 15). The header declares the exit primitive `_Noreturn`, as the
-library does today.
+Because the declarations file is included everywhere, the C library's own files take their declarations of the
+effect primitives from it and lose their own (section 15). The file declares the exit primitive `noreturn`, as the
+library does today. Only that file is included by force: `bq.h`, with its own includes of the C library's headers,
+reaches only the units that include it, so a unit's own feature macros and its own declarations of library
+functions are as natively.
 
 **How a primitive is recognised.** A primitive's linker name is its C identifier. The names are not names `clang`
 knows as library functions, so no compiler pass treats them specially. The front end resolves the primitives itself,
@@ -1098,8 +1109,8 @@ pointers are lowered to integers, for D11; and the two named stops lowered to `f
 
 | # | The runtime provides | Needed by | Today |
 |---|---|---|---|
-| R1 | The C library's files take their declarations of the four effect primitives (`__bennett_effect`, `__bennett_exit`, `__bennett_out_of_memory`, `__bennett_bad_argument`) from the force-included header and drop their own | 4, 5.5 | no: `rt/musl/runtime.c` declares the first two, `start.c` the exit primitive, `devices.h` the output primitive (which `devices.c` takes from it) |
-| R2 | The header force-included when the C library is compiled, so that the library passes the declaration rule | 4 | no |
+| R1 | The C library's files take their declarations of the four effect primitives (`__bennett_effect`, `__bennett_exit`, `__bennett_out_of_memory`, `__bennett_bad_argument`) from the force-included declarations file and drop their own | 4, 5.5 | no: `rt/musl/runtime.c` declares the first two, `start.c` the exit primitive, `devices.h` the output primitive (which `devices.c` takes from it) |
+| R2 | The declarations file force-included when the C library is compiled (its units through `bennett-cc`), so that the library passes the declaration rule | 4 | no |
 | R3 | A request of `malloc`, `calloc`, `realloc` or `aligned_alloc` that the arena cannot hold is the fault `out_of_memory` (19) through `__bennett_out_of_memory`; a request the C library rejects from its arguments alone, before any system call (an overflowing `calloc` or `reallocarray`, a `malloc` of half the address space or more, an impossible alignment), still returns a null result with its error code, exactly as natively | 5.5, 6.3, 8.4, 10 (A4) | yes |
 | R4 | Weak definitions merged into one object for the whole program when its units and the C library are linked (the scope list and fault set of 8.4 and 8.2) | 8.4 | to be checked: the header defines its libraries inline, with no library file |
 | R5 | The C library's `realloc`, `printf` and `exit`, which the header's libraries call (`printf` to standard output, the console) | 8.2, 8.4 | yes (musl) |

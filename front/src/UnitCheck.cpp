@@ -33,8 +33,8 @@ std::vector<const GlobalValue *> referenced(const Module &module) {
   const GlobalVariable *array = module.getGlobalVariable(referencesName, true);
   const auto *entries = array && array->hasInitializer() ? dyn_cast<ConstantArray>(array->getInitializer()) : nullptr;
   if (!entries || entries->getNumOperands() != allPrimitives().size()) {
-    fail("the unit lacks bennett-cc's array of the primitives' addresses (bq-references.h, included by force after "
-         "bq.h); a unit must not define the guard macros of either header" +
+    fail("the unit lacks bennett-cc's array of the primitives' addresses, which the declarations file bq-prefix.h "
+         "holds; a unit must not define that file's guard macro BENNETT_BQ_PREFIX_H_INCLUDED, nor replace the file" +
          std::string(declarationRoute));
   }
   std::vector<const GlobalValue *> globals;
@@ -49,13 +49,14 @@ std::vector<const GlobalValue *> referenced(const Module &module) {
 }
 
 // Entry k of the array checked by rule 2: the function declaration whose linker name is primitive k's.
-Function *entryFunction(const GlobalValue *global, const Primitive &primitive, const Module &module) {
+Function *entryFunction(const GlobalValue *global, const Primitive &primitive, const Module &module,
+                        const std::string &note) {
   std::string name = "@" + std::string(primitive.name);
   std::string linker = linkerName(*global);
   if (linker != linkerNameOf(primitive.name, module)) {
     misuse("the header's declaration of the primitive " + std::string(primitive.name) +
                " stands for the symbol `" + linker +
-               "` at the end of the unit (a macro or a rename of the header's name)" + declarationRoute,
+               "` at the end of the unit (a macro or a rename of the header's name)" + note + declarationRoute,
            global);
   }
   // checkRedirection has refused the other kinds of global under the primitive's linker name.
@@ -115,12 +116,12 @@ std::string kindNames(const SmallVector<std::pair<unsigned, MDNode *>, 4> &attac
 }
 
 // Rule 3.
-void checkDeclaration(Function &declaration, Function &header, const Primitive &primitive) {
+void checkDeclaration(Function &declaration, Function &header, const Primitive &primitive, const std::string &note) {
   std::string mine = declarationText(declaration);
   std::string theirs = declarationText(header);
   if (mine != theirs) {
     misuse("the declaration of the primitive @" + std::string(primitive.name) + " is `" + mine +
-               "` where the header's is `" + theirs + "`" + declarationRoute,
+               "` where the header's is `" + theirs + "`" + note + declarationRoute,
            &declaration);
   }
   auto mineAttached = attachmentsWithoutDebug(declaration);
@@ -128,7 +129,7 @@ void checkDeclaration(Function &declaration, Function &header, const Primitive &
   if (mineAttached != theirsAttached) {
     misuse("the declaration of the primitive @" + std::string(primitive.name) + " has the metadata" +
                kindNames(mineAttached, declaration.getContext()) + " where the header's has" +
-               kindNames(theirsAttached, header.getContext()) + declarationRoute,
+               kindNames(theirsAttached, header.getContext()) + note + declarationRoute,
            &declaration);
   }
 }
@@ -156,26 +157,28 @@ const CallBase &headerCall(const Function &header, const Primitive &primitive) {
 }
 
 // Rule 4 on one direct call.
-void checkDirectCall(const CallBase &call, const Function &declaration, const CallBase &header) {
+void checkDirectCall(const CallBase &call, const Function &declaration, const CallBase &header,
+                     const std::string &note) {
   std::string subject = "a call of the device function @" + declaration.getName().str();
   if (call.getFunctionType() != declaration.getFunctionType()) {
     misuse(subject + " through the type " + printed(call.getFunctionType()) + " where its declaration's is " +
-               printed(declaration.getFunctionType()) + declarationRoute,
+               printed(declaration.getFunctionType()) + note + declarationRoute,
            &call);
   }
   if (call.getCallingConv() != declaration.getCallingConv()) {
     misuse(subject + " uses the calling convention " + conventionName(call.getCallingConv()) +
-               " where its declaration's is " + conventionName(declaration.getCallingConv()) + declarationRoute,
+               " where its declaration's is " + conventionName(declaration.getCallingConv()) + note +
+                   declarationRoute,
            &call);
   }
   if (call.hasOperandBundles()) {
-    misuse(subject + " has an operand bundle, which the header's calls do not have" + declarationRoute, &call);
+    misuse(subject + " has an operand bundle, which the header's calls do not have" + note + declarationRoute, &call);
   }
   AttributeList mine = call.getAttributes();
   AttributeList theirs = header.getAttributes();
   auto refuse = [&](const std::string &attribute, const std::string &where) {
     misuse(subject + " has attributes that let LLVM remove or move its calls (`" + attribute + "`" + where +
-               " differs from the header's call)" + declarationRoute,
+               " differs from the header's call)" + note + declarationRoute,
            &call);
   };
   if (std::string extra = firstMissing(mine.getRetAttrs(), theirs.getRetAttrs()); !extra.empty()) {
@@ -215,7 +218,7 @@ void checkDirectCall(const CallBase &call, const Function &declaration, const Ca
     if (!metadataOnDirectCall(kind)) {
       SmallVector<std::pair<unsigned, MDNode *>, 4> one{{kind, node}};
       misuse(subject + " has the metadata" + kindNames(one, call.getContext()) +
-                 ", which states something about the callee" + declarationRoute,
+                 ", which states something about the callee" + note + declarationRoute,
              &call);
     }
   }
@@ -223,7 +226,7 @@ void checkDirectCall(const CallBase &call, const Function &declaration, const Ca
 
 } // namespace
 
-void checkUnit(Module &unit, Module &baseline, bool withReferences) {
+void checkUnit(Module &unit, Module &baseline, bool withReferences, const std::string &note) {
   checkRedirection(unit);
   std::vector<const GlobalValue *> headers = referenced(baseline);
   std::vector<const GlobalValue *> entries;
@@ -239,14 +242,14 @@ void checkUnit(Module &unit, Module &baseline, bool withReferences) {
     if (!entries[k]) {
       continue; // LLVM IR that does not declare the primitive
     }
-    Function *declaration = entryFunction(entries[k], primitive, unit);
+    Function *declaration = entryFunction(entries[k], primitive, unit, note);
     auto *header = const_cast<Function *>(cast<Function>(headers[k]));
-    checkDeclaration(*declaration, *header, primitive);
+    checkDeclaration(*declaration, *header, primitive, note);
     const CallBase &headerCallOf = headerCall(*header, primitive);
     for (const Use &use : declaration->uses()) {
       const auto *call = dyn_cast<CallBase>(use.getUser());
       if (call && call->isCallee(&use)) {
-        checkDirectCall(*call, *declaration, headerCallOf);
+        checkDirectCall(*call, *declaration, headerCallOf, note);
       }
     }
   }

@@ -3,9 +3,12 @@
 //
 //   bennett-cc [clang options] -o unit.bc unit.c        (or unit.ll, unit.bc)
 //
-// 1. A C unit is compiled with the user's options at the requested level with every LLVM pass off, with two
-//    includes ahead of anything the user passes: bq.h, then bq-references.h (UnitCheck.h). The baseline
-//    bq-baseline.c is compiled the same way, at the same time. A unit given as LLVM IR is read as it is.
+// 1. A C unit is compiled with the user's options at the requested level with every LLVM pass off, with the
+//    declarations file bq-prefix.h included by force first (UnitCheck.h) and the header's folder on the include
+//    path; the variables that rewrite clang's command line are cleared. At the same time the baseline
+//    bq-baseline.c is compiled by the driver alone: the same declarations file by the driver's own path, every
+//    pass off, of the user's options only those of BaselineOptions.h's table, an environment with nothing but
+//    PATH and TMPDIR, no configuration file and no include path. A unit given as LLVM IR is read as it is.
 // 2. The unit is checked against the baseline (UnitCheck.h, rules 2 to 4); calls through a pointer lose their
 //    claims (Claims.h, rule 5); the reference array is deleted.
 // 3. clang optimises that module with the same options (`-x ir`), so the passes are those clang chooses for them.
@@ -15,6 +18,7 @@
 // $CLANG if set (a bare name is looked up on PATH), else the clang 18 the build found. Temporary files are removed
 // on every exit.
 
+#include "BaselineOptions.h"
 #include "Claims.h"
 #include "Diagnostic.h"
 #include "Primitives.h"
@@ -46,6 +50,8 @@
 #include <vector>
 
 using namespace llvm;
+
+extern char **environ;
 
 namespace {
 
@@ -101,10 +107,41 @@ std::vector<StringRef> commandLine(const std::string &clang, const std::vector<s
   return all;
 }
 
+// The environment of the unit's compilation and its optimisation: the driver's own, without the variables that
+// rewrite clang's command line (CCC_OVERRIDE_OPTIONS; CL and _CL_ in clang-cl mode), so that the driver's own
+// options stay as it gives them.
+std::vector<std::string> unitEnvironment() {
+  std::vector<std::string> kept;
+  for (char **entry = environ; *entry; ++entry) {
+    StringRef name = StringRef(*entry).split('=').first;
+    if (name != "CCC_OVERRIDE_OPTIONS" && name != "CL" && name != "_CL_") {
+      kept.emplace_back(*entry);
+    }
+  }
+  return kept;
+}
+
+// The environment of the baseline's compilation: PATH and TMPDIR only, and default configuration files off.
+std::vector<std::string> baselineEnvironment() {
+  std::vector<std::string> kept = {"CLANG_NO_DEFAULT_CONFIG=1"};
+  for (const char *name : {"PATH", "TMPDIR"}) {
+    if (const char *value = std::getenv(name)) {
+      kept.push_back(std::string(name) + "=" + value);
+    }
+  }
+  return kept;
+}
+
+std::vector<StringRef> references(const std::vector<std::string> &strings) {
+  return std::vector<StringRef>(strings.begin(), strings.end());
+}
+
 // Runs clang with `args` and stops with clang's status if it fails (clang has said why on standard error).
-void runClang(const std::string &clang, const std::vector<std::string> &args) {
+void runClang(const std::string &clang, const std::vector<std::string> &args, const std::vector<std::string> &env) {
   std::string error;
-  int status = sys::ExecuteAndWait(clang, commandLine(clang, args), std::nullopt, {}, 0, 0, &error);
+  std::vector<StringRef> environment = references(env);
+  int status =
+      sys::ExecuteAndWait(clang, commandLine(clang, args), ArrayRef<StringRef>(environment), {}, 0, 0, &error);
   if (status < 0) {
     bennett::fail("cannot run " + clang + ": " + error);
   }
@@ -225,28 +262,32 @@ int main(int argc, char **argv) {
   // A refused unit leaves no output, not even an earlier one.
   sys::fs::remove(*output);
   std::string clang = clangPath();
-  // The header first, then the array of references; the header's folder on the include path, so that
-  // `#include "bq.h"` finds the same file (its guard then makes that include empty).
-  StringRef folder = sys::path::parent_path(BENNETT_HANDLE_HEADER);
-  std::vector<std::string> passFree = {"-include", BENNETT_HANDLE_HEADER, "-include",
-                                       (folder + "/bq-references.h").str(), "-I", folder.str()};
-  passFree.insert(passFree.end(), options.begin(), options.end());
-  for (const char *arg : {"-emit-llvm", "-c", "-Xclang", "-disable-llvm-passes"}) {
-    passFree.emplace_back(arg);
-  }
+  // The declarations file first, then the user's options; the header's folder on the include path, so that
+  // `#include "bq.h"` finds the driver's header (which then does not include the declarations file again).
+  std::string folder = BENNETT_HANDLE_FOLDER;
+  std::string prefix = folder + "/bq-prefix.h";
+  const std::vector<std::string> passOff = {"-emit-llvm", "-c", "-Xclang", "-disable-llvm-passes"};
+  std::vector<std::string> unitEnv = unitEnvironment();
+  bennett::BaselineOptions split = bennett::baselineOptions(options);
 
   // The baseline, in parallel with the unit; its messages are shown only if it alone fails.
   std::string baselinePath = temporary("bc");
   std::string baselineErrors = temporary("txt");
-  std::vector<std::string> baselineArgs = passFree;
-  for (std::string arg : {(folder + "/bq-baseline.c").str(), std::string("-o"), baselinePath}) {
+  std::vector<std::string> baselineArgs = {"--no-default-config", "-nostdinc", "-include", prefix};
+  baselineArgs.insert(baselineArgs.end(), split.forwarded.begin(), split.forwarded.end());
+  baselineArgs.insert(baselineArgs.end(), passOff.begin(), passOff.end());
+  for (std::string arg :
+       {std::string("-x"), std::string("c"), folder + "/bq-baseline.c", std::string("-o"), baselinePath}) {
     baselineArgs.push_back(arg);
   }
+  std::vector<std::string> baselineEnv = baselineEnvironment();
+  std::vector<StringRef> baselineEnvRefs = references(baselineEnv);
   std::optional<StringRef> redirects[] = {std::nullopt, std::nullopt, StringRef(baselineErrors)};
   std::string error;
   bool failedToStart = false;
-  sys::ProcessInfo baseline =
-      sys::ExecuteNoWait(clang, commandLine(clang, baselineArgs), std::nullopt, redirects, 0, &error, &failedToStart);
+  sys::ProcessInfo baseline = sys::ExecuteNoWait(clang, commandLine(clang, baselineArgs),
+                                                 ArrayRef<StringRef>(baselineEnvRefs), redirects, 0, &error,
+                                                 &failedToStart);
   if (failedToStart) {
     bennett::fail("cannot run " + clang + ": " + error);
   }
@@ -256,11 +297,13 @@ int main(int argc, char **argv) {
   std::unique_ptr<Module> module;
   if (fromC) {
     std::string unitPath = temporary("bc");
-    std::vector<std::string> unitArgs = passFree;
+    std::vector<std::string> unitArgs = {"-include", prefix, "-I", folder};
+    unitArgs.insert(unitArgs.end(), options.begin(), options.end());
+    unitArgs.insert(unitArgs.end(), passOff.begin(), passOff.end());
     for (std::string arg : {unit.str(), std::string("-o"), unitPath}) {
       unitArgs.push_back(arg);
     }
-    runClang(clang, unitArgs);
+    runClang(clang, unitArgs, unitEnv);
     module = read(unitPath, context, "the bitcode clang wrote for " + unit.str());
   } else {
     module = read(unit, context, "the unit " + unit.str());
@@ -277,12 +320,17 @@ int main(int argc, char **argv) {
     if (ErrorOr<std::unique_ptr<MemoryBuffer>> text = MemoryBuffer::getFile(baselineErrors)) {
       errs() << (*text)->getBuffer();
     }
-    bennett::fail("the baseline of the declaration check (bq-baseline.c) does not compile with these options" +
+    std::string given;
+    for (const std::string &arg : split.forwarded) {
+      given += " " + arg;
+    }
+    bennett::fail("the baseline of the declaration check (bq-baseline.c) does not compile with the options it is "
+                  "given:" + (given.empty() ? std::string(" none") : given) +
                   (error.empty() ? std::string() : ": " + error));
   }
   std::unique_ptr<Module> header = read(baselinePath, context, "the baseline's bitcode");
 
-  bennett::checkUnit(*module, *header, fromC);
+  bennett::checkUnit(*module, *header, fromC, bennett::baselineNote(split));
   bennett::removePointerCallClaims(*module);
   bennett::removeReferences(*module);
   std::vector<Shape> before = shapes(*module);
@@ -296,7 +344,7 @@ int main(int argc, char **argv) {
                           optimised}) {
     optimise.push_back(arg);
   }
-  runClang(clang, optimise);
+  runClang(clang, optimise, unitEnv);
   // A context of its own, so that its type names are not renamed against the baseline's.
   LLVMContext resultContext;
   std::unique_ptr<Module> result = read(optimised, resultContext, "the bitcode clang optimised");

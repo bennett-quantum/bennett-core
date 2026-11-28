@@ -17,12 +17,19 @@ const LEVELS: [(&str, &[&str]); 2] = [("O0", CLANG_FLAGS), ("O2", CLANG_O2_FLAGS
 const REFUSED: i32 = 2;
 const NOT_HANDLED: i32 = 3;
 
-fn header() -> PathBuf {
-    root().join("front/include/bq.h")
+/// The declarations file `bennett-cc` includes by force first in every unit.
+fn prefix() -> PathBuf {
+    root().join("front/include/bq-prefix.h")
 }
 
-fn references() -> PathBuf {
-    root().join("front/include/bq-references.h")
+/// The folder of `bq.h`, on the include path of every compilation here.
+fn include() -> PathBuf {
+    root().join("front/include")
+}
+
+/// A C unit that includes `bq.h`, as a program in the handle interface does.
+fn write_unit(name: &str, text: &str) -> PathBuf {
+    write_c(name, &format!("#include \"bq.h\"\n{text}"))
 }
 
 fn driver() -> PathBuf {
@@ -83,15 +90,16 @@ fn front_on_text(text: &str, name: &str) -> Output {
     front_of(&write_text(text, name), name)
 }
 
-/// Plain clang on `source` with `flags`, the header included by force: `<name>.plain.ll`, LLVM text. With
-/// `pass_free`, every LLVM pass is disabled and the array of references is included too, as `bennett-cc` compiles.
+/// Plain clang on `source` with `flags` and the header's folder on the include path: `<name>.plain.ll`, LLVM text.
+/// With `pass_free`, every LLVM pass is disabled and the declarations file is included by force first, as
+/// `bennett-cc` compiles.
 fn plain_clang(source: &Path, name: &str, flags: &[&str], pass_free: bool) -> Output {
     let text = out_dir().join(format!("{name}.plain.ll"));
     let _ = std::fs::remove_file(&text);
     let mut command = Command::new(clang());
-    command.arg("-include").arg(header());
+    command.arg("-I").arg(include());
     if pass_free {
-        command.arg("-include").arg(references()).args(["-Xclang", "-disable-llvm-passes"]);
+        command.arg("-include").arg(prefix()).args(["-Xclang", "-disable-llvm-passes"]);
     }
     output(command.args(flags).args(["-S", "-emit-llvm"]).arg(source).arg("-o").arg(&text))
 }
@@ -128,7 +136,7 @@ fn assert_refused(result: &Output, status: i32, expected: &str, context: &str) {
 
 /// A refusal by `bennett-cc` at both levels, with no output written.
 fn assert_driver_refuses(case: &str, text: &str, extra: &[&str], expected: &str) {
-    let source = write_c(&format!("handles_cc_{case}"), text);
+    let source = write_unit(&format!("handles_cc_{case}"), text);
     for (level, flags) in LEVELS {
         let name = format!("handles_cc_{case}.{level}");
         let flags: Vec<&str> = flags.iter().chain(extra).copied().collect();
@@ -169,7 +177,7 @@ const NOT_YET: &str = "translating its calls into device instructions waits";
 /// which waits on the device forms.
 #[test]
 fn a_conforming_program_passes_the_check() {
-    let source = write_c("handles_conforming", CONFORMING);
+    let source = write_unit("handles_conforming", CONFORMING);
     for (level, flags) in LEVELS {
         let name = format!("handles_conforming.{level}");
         let (unit, bitcode) = driver_on(&source, &name, flags);
@@ -192,7 +200,7 @@ fn clang_fixes_a_declarations_symbol_at_its_first_use() {
     ];
     for (case, line) in programs {
         let text = format!("{line}int main(void) {{ bq_reg r = bq_alloc(1); bq_free(r); return 7; }}\n");
-        let source = write_c(&format!("handles_first_use_{case}"), &text);
+        let source = write_unit(&format!("handles_first_use_{case}"), &text);
         for (level, flags) in LEVELS {
             let name = format!("handles_first_use_{case}.{level}");
             let ir = plain_text(&source, &name, flags, true);
@@ -205,7 +213,7 @@ fn clang_fixes_a_declarations_symbol_at_its_first_use() {
             assert!(compiled.contains("call void @bq_free(i64"), "{name}:\n{compiled}");
         }
     }
-    let late_label = write_c(
+    let late_label = write_unit(
         "handles_first_use_late_label",
         "void bq_free(bq_reg) __asm__(\"ordinary_release\");\n\
          int main(void) { bq_reg r = bq_alloc(1); bq_free(r); return 7; }\n",
@@ -356,7 +364,7 @@ fn declarations_that_emit_nothing_are_accepted() {
         ),
     ];
     for (case, text) in programs {
-        let source = write_c(&format!("handles_nothing_{case}"), text);
+        let source = write_unit(&format!("handles_nothing_{case}"), text);
         for (level, flags) in LEVELS {
             let name = format!("handles_nothing_{case}.{level}");
             let (outcome, tape) = run_through_driver(&source, &name, flags);
@@ -367,21 +375,24 @@ fn declarations_that_emit_nothing_are_accepted() {
     }
 }
 
-/// A unit that defines the guard of the header or of the array: without the header, clang's own error; without the
-/// array, refused by name.
+/// A unit that defines the guard of the declarations file has no array of references and is refused by name,
+/// naming the guard (review finding H4 of the earlier step), also when it uses no primitive; one that defines
+/// `bq.h`'s guard and uses the header's library gets clang's own error.
 #[test]
-fn a_unit_without_the_forced_includes_is_refused() {
-    let source = write_c("handles_no_header", "int main(void) { return 7; }\n");
+fn a_unit_without_the_declarations_file_is_refused() {
+    let plain = write_c("handles_no_prefix", "int main(void) { return 7; }\n");
+    let library = write_unit("handles_no_header", "int main(void) { return (int)bq_fault_alloc().id; }\n");
     for (level, flags) in LEVELS {
+        let name = format!("handles_no_prefix.{level}");
+        let guarded: Vec<&str> = flags.iter().copied().chain(["-DBENNETT_BQ_PREFIX_H_INCLUDED"]).collect();
+        let (result, compiled) = driver_on(&plain, &name, &guarded);
+        assert_refused(&result, REFUSED, "must not define that file's guard macro BENNETT_BQ_PREFIX_H_INCLUDED", &name);
+        assert!(!compiled.exists(), "{name}");
         let name = format!("handles_no_header.{level}");
         let guarded: Vec<&str> = flags.iter().copied().chain(["-DBENNETT_BQ_H_INCLUDED"]).collect();
-        let (result, compiled) = driver_on(&source, &name, &guarded);
+        let (result, compiled) = driver_on(&library, &name, &guarded);
         assert!(!result.status.success() && !compiled.exists(), "{name}: {}", stderr(&result));
-        assert!(stderr(&result).contains("bq_alloc"), "{name}: {}", stderr(&result));
-        let guarded: Vec<&str> = flags.iter().copied().chain(["-DBENNETT_BQ_REFERENCES_H_INCLUDED"]).collect();
-        let (result, compiled) = driver_on(&source, &name, &guarded);
-        assert_refused(&result, REFUSED, "the unit lacks bennett-cc's array of the primitives' addresses", &name);
-        assert!(!compiled.exists(), "{name}");
+        assert!(stderr(&result).contains("bq_fault_alloc"), "{name}: {}", stderr(&result));
     }
 }
 
@@ -395,7 +406,7 @@ fn a_pointers_claim_cannot_remove_a_measurement() {
                 __attribute__((const)) uint64_t (*volatile mv)(bq_reg, uint64_t, uint64_t) = bq_measure;\n\
                 int main(void) {\n  bq_reg r = bq_alloc(1);\n  (void)m(r, 0, 1);\n  (void)mv(r, 0, 1);\n  \
                 return 7;\n}\n";
-    let source = write_c("handles_pointer_claims", text);
+    let source = write_unit("handles_pointer_claims", text);
     let measurements =
         |ir: &str| ir.lines().filter(|l| l.contains("call i64 @bq_measure(") || l.contains("call i64 %")).count();
     for (level, flags) in LEVELS {
@@ -421,7 +432,7 @@ fn a_claim_folded_into_a_direct_call_is_refused() {
                 __attribute__((pure)) uint64_t (*const measure2)(bq_reg, uint64_t, uint64_t) = bq_measure;\n\
                 int main(void) {\n  bq_reg r = bq_alloc(1);\n  (void)measure(r, 0, 1);\n  \
                 uint64_t a = measure2(r, 0, 1), b = measure2(r, 0, 1);\n  return (int)(a + b);\n}\n";
-    let source = write_c("handles_folded_claims", text);
+    let source = write_unit("handles_folded_claims", text);
     let measurements = |ir: &str| ir.lines().filter(|l| l.contains("call i64 @bq_measure(")).count();
     for (level, flags) in LEVELS {
         let name = format!("handles_folded_claims.{level}");
@@ -497,7 +508,7 @@ fn calls_through_pointers_reach_the_primitive() {
         ),
     ];
     for (case, text, outcome, console) in programs {
-        let source = write_c(&format!("handles_pointer_{case}"), text);
+        let source = write_unit(&format!("handles_pointer_{case}"), text);
         for (level, flags) in LEVELS {
             let name = format!("handles_pointer_{case}.{level}");
             let (got, tape) = run_through_driver(&source, &name, flags);
@@ -589,14 +600,14 @@ fn the_front_checks_redirection_and_shape_on_every_module() {
         assert_refused(&front_on_text(&text, &name), REFUSED, expected, &format!("{name}:\n{text}"));
     }
     // Compiled by clang alone, a program using the interface is refused the same way.
-    let source = write_c("handles_front_clang_alone", "int main(void) { bq_free(bq_alloc(1)); return 7; }\n");
+    let source = write_unit("handles_front_clang_alone", "int main(void) { bq_free(bq_alloc(1)); return 7; }\n");
     for (level, flags) in LEVELS {
         let name = format!("handles_front_clang_alone.{level}");
         let bitcode = out_dir().join(format!("{name}.bc"));
         let compiled = output(
             Command::new(clang())
-                .arg("-include")
-                .arg(header())
+                .arg("-I")
+                .arg(include())
                 .args(flags)
                 .args(["-emit-llvm", "-c"])
                 .arg(&source)
@@ -624,7 +635,7 @@ fn an_unused_declaration_is_no_use_of_an_interface() {
 /// (a choice that is cheap to reverse; `docs/DESIGN.md`, "Not yet").
 #[test]
 fn a_program_with_markers_and_handles_is_refused() {
-    let source = write_c(
+    let source = write_unit(
         "handles_mixed",
         "void bennett_h(_Bool *qubit);\nint main(void) { _Bool q = 0; bennett_h(&q); bq_free(bq_alloc(1)); \
          return q; }",
@@ -654,7 +665,7 @@ fn llvm_ir_units_get_the_same_check() {
         let written = output(
             command
                 .arg("-include")
-                .arg(header())
+                .arg(prefix())
                 .args(flags)
                 .args(["-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes"])
                 .arg(&source)
@@ -695,7 +706,7 @@ fn llvm_ir_units_get_the_same_check() {
 
 /// Options for which clang 18 puts code-generation attributes, metadata or value facts on the header's
 /// declarations and their calls (`optsize`, `minsize`, `nobuiltin`, `"no-builtins"`, `!kcfi_type`, `!dbg`, the
-/// target strings, ...): the baseline is compiled with the same options, so they agree.
+/// target strings, ...): the table of `front/src/BaselineOptions.cpp` gives each to the baseline too, so they agree.
 fn codegen_options() -> Vec<Vec<&'static str>> {
     let mut options = vec![
         vec!["-Os"],
@@ -715,12 +726,14 @@ fn codegen_options() -> Vec<Vec<&'static str>> {
         vec!["-O2", "-fzero-call-used-regs=all"],
         vec!["-O2", "-fsplit-stack"],
         vec!["-O2", "-fsanitize=kcfi"],
+        vec!["-O2", "-fexceptions"],
     ];
     if cfg!(target_arch = "x86_64") {
         options.extend([
             vec!["-O2", "-mno-red-zone"],
             vec!["-O2", "-mspeculative-load-hardening"],
             vec!["-O2", "-mstackrealign"],
+            vec!["-O2", "-march=x86-64-v3"],
         ]);
     }
     options
@@ -732,10 +745,10 @@ fn codegen_options() -> Vec<Vec<&'static str>> {
 /// exit primitives runs to its end.
 #[test]
 fn the_attributes_clang_adds_for_an_option_are_accepted() {
-    let conforming = write_c("handles_options_conforming", CONFORMING);
-    let strict = write_c("handles_options_strict", &format!("#pragma STDC FENV_ACCESS ON\n{CONFORMING}"));
-    let effects = write_c("handles_options_effects", "int main(void) { __bennett_effect('A'); return 7; }\n");
-    let contexts = write_c(
+    let conforming = write_unit("handles_options_conforming", CONFORMING);
+    let strict = write_unit("handles_options_strict", &format!("#pragma STDC FENV_ACCESS ON\n{CONFORMING}"));
+    let effects = write_unit("handles_options_effects", "int main(void) { __bennett_effect('A'); return 7; }\n");
+    let contexts = write_unit(
         "handles_options_contexts",
         "#pragma STDC FENV_ACCESS ON\nint main(void) {\n  __bennett_effect('A');\n  \
          [[clang::nomerge]] __bennett_effect('B');\n  [[clang::noinline]] __bennett_effect('C');\n  \
@@ -778,7 +791,7 @@ fn the_driver_finds_clang_by_name_on_the_path() {
     if let Some(parent) = clang.parent().filter(|p| !p.as_os_str().is_empty()) {
         path.insert(0, parent.to_path_buf());
     }
-    let source = write_c("handles_clang_by_name", "int main(void) { __bennett_effect('A'); return 7; }\n");
+    let source = write_unit("handles_clang_by_name", "int main(void) { __bennett_effect('A'); return 7; }\n");
     let compiled = out_dir().join("handles_clang_by_name.cc.bc");
     let result = output(
         Command::new(driver())
@@ -805,7 +818,7 @@ fn the_driver_leaves_no_temporary_file() {
         let temporary = out_dir().join(format!("handles_driver_tmp_{case}"));
         let _ = std::fs::remove_dir_all(&temporary);
         std::fs::create_dir_all(&temporary).unwrap_or_else(|e| panic!("cannot create {temporary:?}: {e}"));
-        let source = write_c(&format!("handles_driver_{case}"), text);
+        let source = write_unit(&format!("handles_driver_{case}"), text);
         let compiled = out_dir().join(format!("handles_driver_{case}.cc.bc"));
         std::fs::write(&compiled, "left from an earlier run").expect("write");
         let result = output(
@@ -818,15 +831,15 @@ fn the_driver_leaves_no_temporary_file() {
     }
 }
 
-/// The pass-free LLVM IR clang writes for a unit that prints `A` and returns 7, with the header included by force
-/// (no array of references): what `bennett-cc` accepts as an LLVM IR unit, to be changed one property at a time.
+/// The pass-free LLVM IR clang writes for a unit that prints `A` and returns 7, with the declarations file included
+/// by force: what `bennett-cc` accepts as an LLVM IR unit, to be changed one property at a time.
 fn effect_ir(name: &str) -> String {
     let source = write_c(&format!("{name}_source"), "int main(void) { __bennett_effect('A'); return 7; }\n");
     let ir = out_dir().join(format!("{name}_source.ll"));
     let written = output(
         Command::new(clang())
             .arg("-include")
-            .arg(header())
+            .arg(prefix())
             .args(CLANG_FLAGS)
             .args(["-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes"])
             .arg(&source)
@@ -881,21 +894,34 @@ fn invalid_llvm_ir_is_refused_by_name() {
     assert_refused(&front_of(&path, "handles_invalid_ir"), REFUSED, "the input is not valid LLVM IR", "bennett-front");
 }
 
-/// Review finding F2 of this step: the baseline is compiled with the user's options, so its identifiers are
-/// reserved ones. A unit compiled with `-include` of a header that defines, as macros, every ordinary name the
-/// baseline once used passes and runs.
+/// Review findings F2 and G1 of the earlier step: no macro of the user's reaches the baseline, and the declarations
+/// file is written only with keywords, reserved names and the primitives' names in parentheses. A unit that uses
+/// only the declarations file passes and runs with macros of every ordinary name the baseline or the declarations
+/// file ever used, given by `-include` (after the declarations file) and by `-D` (before it): object-like ones,
+/// the member `id` of a handle, and function-like ones with a primitive's name.
 #[test]
 fn the_users_macros_cannot_change_the_baseline() {
-    let names = ["which", "r", "n", "angle", "controls", "f", "image", "fields", "byte", "status"];
+    let names = [
+        "which", "r", "n", "angle", "controls", "f", "image", "fields", "byte", "status", "id", "uint64_t", "bq_reg",
+        "bq_bit", "bq_fn", "bq_field", "bq_slice",
+    ];
     let macros: String = names.iter().map(|name| format!("#define {name} @\n")).collect();
     let header = out_dir().join("handles_user_macros.h");
-    std::fs::write(&header, macros).unwrap_or_else(|e| panic!("cannot write {header:?}: {e}"));
+    std::fs::write(&header, format!("{macros}#define bq_gate(a, b, c, d, e) ((void)0)\n"))
+        .unwrap_or_else(|e| panic!("cannot write {header:?}: {e}"));
     let source = write_c("handles_user_macros", "int main(void) { __bennett_effect('A'); return 7; }\n");
     let include = header.to_str().expect("a UTF-8 path");
+    let mut defined: Vec<String> = names.iter().map(|name| format!("-D{name}=@")).collect();
+    defined.push("-Dbq_gate(a,b,c,d,e)=((void)0)".to_string());
+    defined.push("-Dbq_alloc(n)=((void)0)".to_string());
     for (level, flags) in LEVELS {
         let name = format!("handles_user_macros.{level}");
-        let flags: Vec<&str> = flags.iter().copied().chain(["-include", include]).collect();
-        let (outcome, tape) = run_through_driver(&source, &name, &flags);
+        let included: Vec<&str> = flags.iter().copied().chain(["-include", include]).collect();
+        let (outcome, tape) = run_through_driver(&source, &name, &included);
+        assert_eq!((outcome, tape), (Outcome::Returned(Some(7)), b"A".to_vec()), "{name}");
+        let name = format!("handles_user_macros_defined.{level}");
+        let defined: Vec<&str> = flags.iter().copied().chain(defined.iter().map(String::as_str)).collect();
+        let (outcome, tape) = run_through_driver(&source, &name, &defined);
         assert_eq!((outcome, tape), (Outcome::Returned(Some(7)), b"A".to_vec()), "{name}");
     }
 }
@@ -907,7 +933,7 @@ fn the_users_macros_cannot_change_the_baseline() {
 /// doing so, this test fails and the documents must change with it.
 #[test]
 fn a_claim_on_the_programs_own_function_is_trusted() {
-    let source = write_c(
+    let source = write_unit(
         "handles_own_claim",
         "__attribute__((const)) static int flip(bq_reg r) { bq_gate(BQ_GATE_X, r, 0, 0, 0); return 0; }\n\
          int main(void) {\n  bq_reg r = bq_alloc(1);\n  flip(r);\n  return (int)bq_measure(r, 0, 1);\n}\n",
@@ -926,7 +952,7 @@ fn a_claim_on_the_programs_own_function_is_trusted() {
 /// attachment, so the test fails if clang stops writing it.
 #[test]
 fn metadata_the_optimiser_adds_is_trusted() {
-    let source = write_c(
+    let source = write_unit(
         "handles_restrict",
         "static inline void send(char *restrict p) {\n    __bennett_effect(*p);\n    ++*p;\n}\n\
          int main(void) {\n    char c = 'A';\n    send(&c);\n    return 7;\n}\n",
@@ -939,4 +965,251 @@ fn metadata_the_optimiser_adds_is_trusted() {
     let compiled = driver_text(&source, "handles_restrict.text", CLANG_O2_FLAGS);
     let call = compiled.lines().find(|l| l.contains("call void @__bennett_effect(")).expect("the call");
     assert!(call.contains("!noalias"), "the optimiser's attachment:\n{compiled}");
+}
+
+/// `bennett-cc` on `source` with `flags` and the variables `env` added to its environment: LLVM text.
+fn driver_with(source: &Path, name: &str, flags: &[&str], env: &[(&str, &str)]) -> (Output, PathBuf) {
+    let compiled = out_dir().join(format!("{name}.cc.ll"));
+    let _ = std::fs::remove_file(&compiled);
+    let mut command = Command::new(driver());
+    command.args(flags).arg("-o").arg(&compiled).arg(source);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    (output(&mut command), compiled)
+}
+
+fn path_text(path: &Path) -> &str {
+    path.to_str().expect("a UTF-8 path")
+}
+
+fn write_file(name: &str, text: &str) -> PathBuf {
+    let path = out_dir().join(name);
+    std::fs::write(&path, text).unwrap_or_else(|e| panic!("cannot write {path:?}: {e}"));
+    path
+}
+
+/// A unit that discards two calls of `bq_width`, which a claim of `const` lets clang `-O2` delete.
+const TWO_WIDTHS: &str = "int main(void) { bq_reg r = bq_alloc(1); bq_width(r); bq_width(r); return 7; }\n";
+
+fn widths(ir: &str) -> usize {
+    ir.lines().filter(|l| l.contains("call i64 @bq_width(")).count()
+}
+
+/// The claim `const` on `bq_width`, unprototyped so that it also merges with a later prototype.
+fn claim_header() -> PathBuf {
+    write_file("handles_class_claim.h", "__attribute__((const)) unsigned long bq_width();\n")
+}
+
+/// A copy of `original` whose declaration of `bq_width` carries the claim, and an overlay file that puts it in
+/// the original's place: `-ivfsoverlay` remaps any path clang opens.
+fn overlay(name: &str, original: &Path, copy_text: &str) -> PathBuf {
+    let copy = write_file(&format!("handles_class_{name}.copy.h"), copy_text);
+    let yaml = format!(
+        "{{\"version\": 0, \"roots\": [{{\"name\": \"{}\", \"type\": \"file\", \"external-contents\": \"{}\"}}]}}\n",
+        path_text(original),
+        path_text(&copy)
+    );
+    write_file(&format!("handles_class_{name}.yaml"), &yaml)
+}
+
+/// The advisor's principle for the declaration check, nothing the user or the host controls reaches the baseline,
+/// tested on every member of the class measured on the earlier step (each accepted there with both calls of
+/// `bq_width` deleted at `-O2`): a precompiled header, a `--config` file, a default configuration file, an overlay
+/// over the declarations file and over `bq.h`, a header that shadows `<stdint.h>` through `-I` and through
+/// `CPATH`, and a `-D` that gives a keyword the claim. Each carries `const` on `bq_width` into the unit; the
+/// baseline never sees it, so the unit is refused by name at `-O0` and `-O2` with no output: by rule 3 where the
+/// claim comes before the declarations file, by rule 4 where it comes after it. A refusal of rule 3 names what the
+/// baseline did not get.
+#[test]
+fn nothing_the_user_or_the_host_controls_reaches_the_baseline() {
+    let source = write_unit("handles_class", TWO_WIDTHS);
+    let claim = claim_header();
+    let config = write_file("handles_class.cfg", &format!("-include {}\n", path_text(&claim)));
+    let config_dir = out_dir().join("handles_class_config");
+    std::fs::create_dir_all(&config_dir).expect("a folder");
+    std::fs::write(config_dir.join("clang.cfg"), format!("-include {}\n", path_text(&claim))).expect("write");
+    let shadow = out_dir().join("handles_class_shadow");
+    std::fs::create_dir_all(&shadow).expect("a folder");
+    std::fs::write(shadow.join("stdint.h"), "#include_next <stdint.h>\n__attribute__((const)) uint64_t bq_width();\n")
+        .expect("write");
+    let prefix_text = read(&prefix());
+    let claimed_prefix =
+        prefix_text.replace("__UINT64_TYPE__ (bq_width)(", "__attribute__((const)) __UINT64_TYPE__ (bq_width)(");
+    assert_ne!(claimed_prefix, prefix_text, "the copy carries the claim");
+    let header_text = read(&include().join("bq.h"));
+    let at = header_text.rfind("#endif").expect("the guard's end");
+    let claimed_header =
+        format!("{}__attribute__((const)) uint64_t bq_width(bq_reg);\n{}", &header_text[..at], &header_text[at..]);
+    let over_prefix = overlay("prefix", &prefix(), &claimed_prefix);
+    let over_header = overlay("header", &include().join("bq.h"), &claimed_header);
+    let declaration = "the declaration of the primitive @bq_width is `declare i64 @bq_width(i64) { nounwind willreturn \
+                       memory(none)";
+    let call = "a call of the device function @bq_width has attributes that let LLVM remove or move its calls";
+    for (level, flags) in LEVELS {
+        let header = write_file(
+            &format!("handles_class_pch.{level}.h"),
+            "#include \"bq.h\"\n__attribute__((const)) uint64_t bq_width(bq_reg);\n",
+        );
+        let pch = out_dir().join(format!("handles_class.{level}.pch"));
+        let made = output(
+            Command::new(clang())
+                .arg("-I")
+                .arg(include())
+                .args(flags)
+                .args(["-x", "c-header"])
+                .arg(&header)
+                .arg("-o")
+                .arg(&pch),
+        );
+        assert!(made.status.success(), "{level}: {}", stderr(&made));
+        let config_option = format!("--config={}", path_text(&config));
+        let config_dir_option = format!("--config-user-dir={}", path_text(&config_dir));
+        let shadow_text = path_text(&shadow);
+        let cases: Vec<(&str, Vec<&str>, Vec<(&str, &str)>, &str, &str)> = vec![
+            (
+                "pch",
+                vec!["-include-pch", path_text(&pch)],
+                vec![],
+                declaration,
+                "withheld from the baseline here: -include-pch",
+            ),
+            ("config", vec![&config_option], vec![], declaration, "withheld from the baseline here: --config="),
+            ("default_config", vec![&config_dir_option], vec![], declaration, "--config-user-dir="),
+            ("overlay_prefix", vec!["-ivfsoverlay", path_text(&over_prefix)], vec![], declaration, "-ivfsoverlay"),
+            ("overlay_header", vec!["-ivfsoverlay", path_text(&over_header)], vec![], call, "-ivfsoverlay"),
+            ("search_path", vec!["-I", shadow_text], vec![], call, "withheld from the baseline here: -I"),
+            ("cpath", vec![], vec![("CPATH", shadow_text)], call, "an environment variable may be the cause"),
+            ("keyword", vec!["-Dlong=__attribute__((const)) long"], vec![], declaration, "-Dlong="),
+        ];
+        for (case, extra, env, expected, named) in cases {
+            let name = format!("handles_class_{case}.{level}");
+            let flags: Vec<&str> = flags.iter().copied().chain(extra).collect();
+            let (result, compiled) = driver_with(&source, &name, &flags, &env);
+            assert_refused(&result, REFUSED, expected, &name);
+            assert!(stderr(&result).contains(named), "{name}: expected `{named}` in: {}", stderr(&result));
+            assert!(!compiled.exists(), "{name}: a refused unit has no output");
+        }
+    }
+    // The control: without any of them both calls stay.
+    let compiled = driver_text(&source, "handles_class_control", CLANG_O2_FLAGS);
+    assert_eq!(widths(&compiled), 2, "{compiled}");
+}
+
+/// The unit keeps the user's options, but no variable rewrites the driver's own command line: `bennett-cc` clears
+/// `CCC_OVERRIDE_OPTIONS` (and clang-cl's `CL` and `_CL_`, which clang reads only in clang-cl mode). With it set to
+/// append the claim's `-include`, plain clang `-O2` deletes both calls (the fact this rests on), and `bennett-cc`
+/// keeps both at both levels.
+#[test]
+fn variables_that_rewrite_the_command_line_are_cleared() {
+    let source = write_unit("handles_override", TWO_WIDTHS);
+    let claim = claim_header();
+    let rewrite = format!("#+-include +{}", path_text(&claim));
+    let plain = out_dir().join("handles_override.plain.ll");
+    let compiled = output(
+        Command::new(clang())
+            .env("CCC_OVERRIDE_OPTIONS", &rewrite)
+            .arg("-I")
+            .arg(include())
+            .args(CLANG_O2_FLAGS)
+            .args(["-S", "-emit-llvm"])
+            .arg(&source)
+            .arg("-o")
+            .arg(&plain),
+    );
+    assert!(compiled.status.success(), "{}", stderr(&compiled));
+    assert_eq!(widths(&read(&plain)), 0, "plain clang follows the variable");
+    for (level, flags) in LEVELS {
+        let name = format!("handles_override.{level}");
+        let (result, compiled) = driver_with(&source, &name, flags, &[("CCC_OVERRIDE_OPTIONS", &rewrite)]);
+        assert!(result.status.success(), "{name}: {}", stderr(&result));
+        assert_eq!(widths(&read(&compiled)), 2, "{name}");
+    }
+}
+
+/// A configuration file reaches the unit (it is the user's or the host's), but none can remove the driver's own
+/// options: clang places a file's options before the command line, where the forced declarations file, the
+/// pass-free compile and the driver's output come after them. Each file, given by `--config` and found as a
+/// default file, either is refused by name with no output or is accepted with both calls of `bq_width` kept: a
+/// file that stops the compile at syntax (`-fsyntax-only`, then no array of references) or makes the unit a header
+/// (refused: what clang wrote is not LLVM IR), one that asks for preprocessing or assembly text (refused as not
+/// LLVM IR, or accepted where clang's own `-c` comes later), and one that sets optimisation options of its own.
+#[test]
+fn no_configuration_file_removes_the_drivers_options() {
+    let source = write_unit("handles_config", TWO_WIDTHS);
+    let files: [(&str, &str, Option<&str>); 6] = [
+        ("syntax_only", "-fsyntax-only\n", Some("the unit lacks bennett-cc's array of the primitives' addresses")),
+        ("preprocess", "-E\n", None),
+        ("assembly", "-S\n", None),
+        ("level", "-O2 -mllvm -inline-threshold=10000\n", None),
+        ("pass_level", "-Xclang -disable-O0-optnone -O3\n", None),
+        ("header", "-x c-header\n", Some("is not valid LLVM IR")),
+    ];
+    for (case, text, refusal) in files {
+        let config = write_file(&format!("handles_config_{case}.cfg"), text);
+        let folder = out_dir().join(format!("handles_config_{case}"));
+        std::fs::create_dir_all(&folder).expect("a folder");
+        std::fs::write(folder.join("clang.cfg"), text).expect("write");
+        let ways = [format!("--config={}", path_text(&config)), format!("--config-user-dir={}", path_text(&folder))];
+        for (way, option) in ways.iter().enumerate() {
+            for (level, flags) in LEVELS {
+                let name = format!("handles_config_{case}_{way}.{level}");
+                let flags: Vec<&str> = flags.iter().copied().chain([option.as_str()]).collect();
+                let (result, compiled) = driver_with(&source, &name, &flags, &[]);
+                if result.status.success() {
+                    assert!(refusal.is_none(), "{name}: accepted");
+                    assert_eq!(widths(&read(&compiled)), 2, "{name}");
+                } else {
+                    let expected = refusal.unwrap_or("is not valid LLVM IR");
+                    assert_refused(&result, REFUSED, expected, &name);
+                    assert!(!compiled.exists(), "{name}");
+                }
+            }
+        }
+    }
+}
+
+/// The baseline gets only the code-generation options of `bennett-cc`'s table (`front/src/BaselineOptions.cpp`). The
+/// user's other options stay with the unit: options that change no declaration or call of a primitive (a language
+/// standard, warnings, macros, include paths, an included file) are accepted with both calls kept; one that does
+/// change them, here a target feature given to clang's front end through `-Xclang`, is refused by name, and the
+/// refusal says that an option outside the table may be the cause and lists the options withheld.
+#[test]
+fn options_outside_the_table_stay_with_the_unit() {
+    let source = write_unit("handles_withheld", TWO_WIDTHS);
+    let benign = write_file("handles_withheld_benign.h", "static inline int helper(int x) { return x + 1; }\n");
+    let folder = out_dir().join("handles_withheld_folder");
+    std::fs::create_dir_all(&folder).expect("a folder");
+    let options: Vec<Vec<&str>> = vec![
+        vec!["-std=c11"],
+        vec!["-std=gnu2x"],
+        vec!["-Wall", "-Wextra"],
+        vec!["-DVALUE=7", "-UOTHER"],
+        vec!["-I", path_text(&folder)],
+        vec!["-include", path_text(&benign)],
+    ];
+    for (level, flags) in LEVELS {
+        for (i, option) in options.iter().enumerate() {
+            let name = format!("handles_withheld_{i}.{level}");
+            let flags: Vec<&str> = flags.iter().chain(option).copied().collect();
+            let (result, compiled) = driver_with(&source, &name, &flags, &[]);
+            assert!(result.status.success(), "{name} {option:?}: {}", stderr(&result));
+            assert_eq!(widths(&read(&compiled)), 2, "{name}");
+        }
+    }
+    if cfg!(target_arch = "x86_64") {
+        let option = ["-Xclang", "-target-feature", "-Xclang", "+avx2"];
+        for (level, flags) in LEVELS {
+            let name = format!("handles_withheld_feature.{level}");
+            let flags: Vec<&str> = flags.iter().chain(&option).copied().collect();
+            let (result, compiled) = driver_with(&source, &name, &flags, &[]);
+            assert_refused(&result, REFUSED, "an option outside the table", &name);
+            assert!(
+                stderr(&result).contains("withheld from the baseline here: -Xclang -target-feature -Xclang +avx2"),
+                "{name}: {}",
+                stderr(&result)
+            );
+            assert!(!compiled.exists(), "{name}");
+        }
+    }
 }
