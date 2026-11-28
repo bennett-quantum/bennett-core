@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile one C program and resolve musl archive members, then emit its device program.
+"""Compile one C program of one or more units and resolve musl archive members, then emit its device program.
 
 Every unit, the program's and the runtime's own, is compiled with bennett-cc, which includes the declarations file
 front/include/bq-prefix.h by force and makes the declaration check of docs/HANDLES.md, section 4; musl's members were
@@ -45,9 +45,9 @@ def unmarked(modules):
 
 def main():
     parser = argparse.ArgumentParser(
-        description=__doc__, usage="%(prog)s [options] source -o OUTPUT [-- ARGUMENT ...]",
+        description=__doc__, usage="%(prog)s [options] source... -o OUTPUT [-- ARGUMENT ...]",
         epilog="run input: the strings after the first -- are main's argv[1], argv[2], ...")
-    parser.add_argument("source", type=Path)
+    parser.add_argument("source", type=Path, nargs="+", help="the program's units")
     parser.add_argument("-o", required=True, type=Path)
     parser.add_argument("--libdir", type=Path, default=ROOT / "target/musl")
     parser.add_argument("--front", type=Path, default=ROOT / "target/front/bennett-front")
@@ -88,27 +88,31 @@ def main():
     # bennett-cc takes clang's options, then `-o OUTPUT UNIT`; it adds -emit-llvm -c itself.
     def compile_unit(options, source, output):
         run([driver, *options, "-o", output, source])
-    source = args.source.resolve()
-    if source.suffix not in (".c", ".i", ".ll", ".bc"):
-        parser.error(f"{args.source}: a unit is C (.c), preprocessed C (.i) or LLVM IR (.ll, .bc)")
+    program = [scratch / f"program-{k}.bc" for k in range(len(args.source))]
     # link.py writes only its intermediate files (in the --keep folder or a temporary one), the links of a .i in a
     # temporary folder of its own, and the output, never an input: a unit that is one of those files is refused.
-    if source in {(scratch / name).resolve() for name in INTERMEDIATES} | {args.o.resolve()}:
-        parser.error(f"{args.source}: a unit must not be the output or one of link.py's intermediate files")
-    headers = ["-nostdinc", "-isystem", HERE / "include", "-isystem", lib / "sysroot/include"]
-    with tempfile.TemporaryDirectory(dir=scratch) as aliases:
-        language = []
-        if source.suffix == ".i":
-            # bennett-cc takes a C unit by the name .c, here a link in a folder of link.py's own. A .i that holds the
-            # declarations file (its array of references, a name reserved to the implementation) is compiled as it
-            # is, as preprocessed C; any other .i is compiled as C, so that bennett-cc includes the declarations
-            # file ahead of it, and its text is preprocessed a second time (rt/musl/README.md).
-            held = b"__bennett_references_" in source.read_bytes()
-            alias = Path(aliases) / "unit.c"
-            alias.symlink_to(source)
-            language, headers, source = (["-x", "cpp-output"] if held else []), [], alias
-        compile_unit([*common, *headers, *language, *args.clang_flag], source, scratch / "program.bc")
-    ir = run(["llvm-dis-18", scratch / "program.bc", "-o", "-"], capture_output=True, text=True).stdout
+    written = {(scratch / name).resolve() for name in INTERMEDIATES} | {unit.resolve() for unit in program}
+    resolved = [unit.resolve() for unit in args.source]
+    for unit, source in zip(args.source, resolved):
+        if source.suffix not in (".c", ".i", ".ll", ".bc"):
+            parser.error(f"{unit}: a unit is C (.c), preprocessed C (.i) or LLVM IR (.ll, .bc)")
+        if source in written | {args.o.resolve()}:
+            parser.error(f"{unit}: a unit must not be the output or one of link.py's intermediate files")
+    for source, output in zip(resolved, program):
+        headers = ["-nostdinc", "-isystem", HERE / "include", "-isystem", lib / "sysroot/include"]
+        with tempfile.TemporaryDirectory(dir=scratch) as aliases:
+            language = []
+            if source.suffix == ".i":
+                # bennett-cc takes a C unit by the name .c, here a link in a folder of link.py's own. A .i that holds
+                # the declarations file (its array of references, a name reserved to the implementation) is compiled
+                # as it is, as preprocessed C; any other .i is compiled as C, so that bennett-cc includes the
+                # declarations file ahead of it, and its text is preprocessed a second time (rt/musl/README.md).
+                held = b"__bennett_references_" in source.read_bytes()
+                alias = Path(aliases) / "unit.c"
+                alias.symlink_to(source)
+                language, headers, source = (["-x", "cpp-output"] if held else []), [], alias
+            compile_unit([*common, *headers, *language, *args.clang_flag], source, output)
+    ir = "".join(run(["llvm-dis-18", unit, "-o", "-"], capture_output=True, text=True).stdout for unit in program)
     match = re.search(r"^define\b[^\n]* @main\(([^\n]*)\)", ir, re.M)
     if not match or "..." in match[1]:
         parser.error("the program needs a defined nonvariadic int main")
@@ -168,7 +172,11 @@ def main():
     for source, output, extra in sources:
         compile_unit([*flags, *common, *extra], HERE / source, scratch / output)
     compile_unit([*flags, *common, "-I", HERE], scratch / "inputs.c", scratch / "inputs.bc")
-    inputs = [scratch / output for _, output, _ in sources] + [scratch / "program.bc", scratch / "inputs.bc"]
+    # The program's units in the order given. Among weak definitions of one symbol the linker keeps the first, so
+    # of the weak objects of bq.h (the scope list, the fault set) the first unit's definition is kept, as natively
+    # with the objects in that order; the C library's and the device's units carry none, since they include only
+    # the declarations file (docs/HANDLES.md, section 15, R4).
+    inputs = [*(scratch / output for _, output, _ in sources), *program, scratch / "inputs.bc"]
     roots, marked = [], set()
     for _ in range(16):
         selected = run(["python3", HERE / "resolve.py", lib / "members.txt", lib / "index.tsv", *inputs, *roots],

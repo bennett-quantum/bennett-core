@@ -393,6 +393,41 @@ def unchecked_member(args):
     assert linked.returncode != 0 and not program.exists(), (linked.stdout, linked.stderr)
     assert f"{member} lacks bennett-cc's mark" in linked.stderr, linked.stderr
     print("unchecked member: refused by name", flush=True)
+def definitions(text, name):
+    """The definitions of the global @name in a module's LLVM text (a declaration is `external global`)."""
+    return [line for line in text.splitlines()
+            if line.startswith(f"@{name} = ") and not re.match(rf"@{name} = (?:dso_local )?external ", line)]
+
+
+def merged_definitions(args):
+    """docs/HANDLES.md, section 15, R4: the header's weak definitions of the scope list and the fault set are one
+    object in the linked program. Every unit that includes bq.h carries them; the C library's and the device's own
+    units include only the declarations file and carry none (checked in the device's runtime.c and in the linked
+    module, which holds exactly one definition of each). A push in one unit of the program is seen in another
+    (tests/weak/scope-main.c, scope-push.c); a program that defines the list itself in its first unit keeps that
+    definition (scope-own.c: the header's declaration makes it weak too, so the first unit's is kept, as natively
+    with the objects in that order)."""
+    weak = HERE / "tests/weak"
+    cases = [("shared", [weak / "scope-main.c", weak / "scope-push.c"], "depth 2 handle 7 bit 1\\n", True),
+             ("own", [weak / "scope-own.c", weak / "scope-push.c"], "depth 2 handle 5\\n", False)]
+    for name, sources, console, zero in cases:
+        for level in ("-O0", "-O2"):
+            keep = args.out / f"weak-{name}{level}"
+            program = args.out / f"weak-{name}{level}.bn"
+            linked = run(["python3", HERE / "link.py", *sources, "--libdir", args.libdir, "--front", args.front,
+                          f"--clang-flag={level}", "--keep", keep, "-o", program])
+            assert linked.returncode == 0, linked.stderr
+            runtime = run(["llvm-dis-18", keep / "runtime.bc", "-o", "-"])
+            copies = [definitions(runtime.stdout, global_) for global_ in ("bq_scope_", "bq_fault_set_")]
+            assert copies == [[], []], (name, level, "the device's runtime defines a header object", copies)
+            text = (keep / "linked.ll").read_text()
+            scope, faults = definitions(text, "bq_scope_"), definitions(text, "bq_fault_set_")
+            assert len(scope) == 1 and len(faults) <= 1, (name, level, scope, faults)
+            assert ("zeroinitializer" in scope[0]) == zero, (name, level, "whose list was kept", scope)
+            result = run([args.executor, "run", "--entry", "__bennett_entry", "--budget", 100000000, program])
+            assert result.returncode == 0 and "result: 0\n" in result.stdout, (name, level, result.stdout)
+            assert f'console: "{console}"' in result.stdout, (name, level, result.stdout)
+            print(f"merged definitions {name} {level}: passed ({steps_of(result.stdout)} steps)", flush=True)
 
 
 def main():
@@ -474,6 +509,7 @@ def main():
     efault_cases(args)
     unit_kinds(args)
     unchecked_member(args)
+    merged_definitions(args)
     print(f"library tests: {time.monotonic() - started:.2f}s", flush=True)
 
 
