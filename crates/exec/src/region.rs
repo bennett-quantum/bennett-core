@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use bennett_ir::{Fault, FuncId, Operand, Qubits, Slot, Type};
 
 use crate::apply_device::{AppliedCircuit, ApplyInput, ApplyMemory, Argument};
+use crate::apply_report::ApplyReport;
 use crate::device_io::{DeviceContext, wire, wires};
 use crate::executor::{Executor, Halt, Outcome, RunError};
 use crate::journal::Journal;
@@ -83,15 +84,18 @@ impl<'m> Executor<'m> {
         // This evaluation is the simulator's implementation of apply. It requires amplitudes.
         let original = self.quantum.take_amplitudes();
         self.measure_begin_apply(callee);
-        let mut outcomes = Vec::with_capacity(original.len());
+        let mut runs = Vec::with_capacity(original.len());
         for config in original.keys() {
             values.clear();
             values.extend(inputs.iter().zip(&input_columns).map(|(input, columns)| match *input {
                 Input::Register(..) => register_value(config, columns),
                 Input::Value(value) => value,
             }));
-            outcomes.push(self.evaluate(callee, &values, budget));
+            runs.push(self.evaluate(callee, &values, budget));
         }
+        let position = self.apply_reports.len() as u64 + 1;
+        self.apply_reports.push(ApplyReport::new(position, callee, &runs));
+        let outcomes: Vec<Outcome> = runs.into_iter().map(|(outcome, _)| outcome).collect();
         let faulting: Vec<(&Config, f64, Fault)> = original
             .iter()
             .zip(&outcomes)
@@ -219,8 +223,9 @@ impl<'m> Executor<'m> {
         self.region_fault_max_weight = self.region_fault_max_weight.max(weight);
     }
 
-    /// Runs `callee(args)` within `budget` steps on top of the current frames, then undoes the run.
-    fn evaluate(&mut self, callee: FuncId, args: &[u128], budget: u64) -> Outcome {
+    /// Runs `callee(args)` within `budget` steps on top of the current frames, then undoes the run. Returns
+    /// the outcome and the steps the run used.
+    fn evaluate(&mut self, callee: FuncId, args: &[u128], budget: u64) -> (Outcome, u64) {
         let region_journal = std::mem::take(&mut self.spare_journal);
         let outer = Saved {
             journal: self.journal.replace(region_journal),
@@ -249,8 +254,9 @@ impl<'m> Executor<'m> {
         self.region_cost.runs += 1;
         self.region_cost.work += self.steps + undone;
         self.region_cost.journal_bytes += self.run_journal_peak as u64;
+        let steps = self.steps;
         self.restore(outer);
-        outcome
+        (outcome, steps)
     }
 
     fn restore(&mut self, outer: Saved) {

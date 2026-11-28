@@ -1,0 +1,28 @@
+; The step report through the CLI (crates/cli/tests/apply_report.rs): `@count` counts down from its input,
+; applied to a register of two qubits in uniform superposition, once with room and once with a budget of 1.
+memory 256
+
+func @count(i2 %x) -> i2 {
+entry:
+    br loop(%x)
+loop(i2 %n):
+    %done = icmp eq i2 %n, 0
+    br %done, out, next
+next:
+    %m = sub i2 %n, 1
+    br loop(%m)
+out:
+    ret %x
+}
+
+func @main() {
+entry:
+    %x = qalloc 2
+    h %x
+    h %x[1]
+    %o = qalloc 2
+    %f = qalloc 5
+    apply @count(%x) -> %o, %f budget 100
+    apply @count(%x) -> %o, %f budget 1
+    ret
+}

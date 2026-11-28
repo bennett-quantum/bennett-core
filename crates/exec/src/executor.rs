@@ -6,6 +6,7 @@ use rand_chacha::ChaCha8Rng;
 use thiserror::Error;
 
 use crate::apply_device::{ApplyCompiler, ApplyError};
+use crate::apply_report::ApplyReport;
 use crate::device::Device;
 use crate::device_io::DeviceContext;
 use crate::handles::{self, Handles};
@@ -285,6 +286,8 @@ pub struct Executor<'m> {
     pub(crate) scratch: Vec<u128>,
     pub(crate) rng: ChaCha8Rng,
     pub(crate) region_steps: u64,
+    /// One report per `apply` executed forward and evaluated directly (`apply_report`).
+    pub(crate) apply_reports: Vec<ApplyReport>,
     pub(crate) allow_region_faults: bool,
     pub(crate) region_faults: u64,
     pub(crate) region_fault_weight: f64,
@@ -381,6 +384,7 @@ impl<'m> Executor<'m> {
             scratch: Vec::new(),
             rng: ChaCha8Rng::seed_from_u64(options.seed),
             region_steps: 0,
+            apply_reports: Vec::new(),
             allow_region_faults: options.allow_region_faults || options.machine_meaning,
             region_faults: 0,
             region_fault_weight: 0.0,
@@ -511,6 +515,13 @@ impl<'m> Executor<'m> {
             },
             quantum: QuantumSnapshot::of(&self.quantum),
         }
+    }
+
+    /// The step report of each `apply` the run executed and the simulator evaluated directly (its default),
+    /// in order; an `apply` compiled to gates (`--apply-circuit`, another device) has none, and undoing an
+    /// `apply` adds none.
+    pub fn apply_reports(&self) -> &[ApplyReport] {
+        &self.apply_reports
     }
 
     /// The counts of the run so far.
