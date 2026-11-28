@@ -134,7 +134,19 @@ impl<'s> Parser<'s> {
             }
             "measure" => {
                 let dst = line.result("measure")?;
-                // `measure iN [ADDRESS]` names qubits in memory; `measure %r` a register.
+                // `measure i64 %r[LOW, BITS]` names a slice of a register; `measure iN [ADDRESS]` qubits in
+                // memory; `measure %r` a register.
+                if let (Some(Token::Word("i64")), Some(Token::Local(_))) = (self.cursor.peek(), self.cursor.peek_nth(1))
+                {
+                    self.cursor.expect(Token::Word("i64"), "`i64`")?;
+                    let register = self.slot_use(scope, "a register")?;
+                    self.cursor.expect(Token::LBracket, "`[`")?;
+                    let low = self.operand(scope, Width::WORD)?;
+                    self.cursor.expect(Token::Comma, "`,`")?;
+                    let bits = self.operand(scope, Width::WORD)?;
+                    self.cursor.expect(Token::RBracket, "`]`")?;
+                    return Ok(Statement::Inst(Inst::MeasureSlice { dst, register, low, bits }));
+                }
                 let source = if matches!(self.cursor.peek(), Some(Token::Word(_))) {
                     let width = self.int_type("an integer type or a register")?;
                     self.cursor.expect(Token::LBracket, "`[`")?;

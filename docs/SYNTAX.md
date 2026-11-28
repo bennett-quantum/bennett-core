@@ -47,6 +47,7 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | rotate(operand, operand) qubit [ctrl ...]  ; an i64 rotation code and an angle's binary64 bits
             | %d = measure %r                            ; every qubit of the register: an iN, N at most 128
             | %d = measure iN "[" operand "]"            ; N bits from bit 0 of the integer at the i64 address
+            | %d = measure i64 %r "[" operand, operand "]" ; a slice: BITS qubits from LOW ("Measuring a slice")
             | apply @f(typed, ...) -> %out, %fault budget operand  ; %fault: a register of 5 qubits or more
                                                                    ; meaning: docs/DESIGN.md, "apply"
 terminator := br label[(typed, ...)]
@@ -201,6 +202,17 @@ from memory (`docs/HANDLES.md`, section 14, D7), not of written controls.
 register into its integer or an integer into a `qN` register; both name registers by the one numbering, so a
 program that counts its allocations knows the handle of each.
 
+## Measuring a slice
+
+`%d = measure i64 %r[LOW, BITS]` measures the slice of `BITS` qubits from position `LOW` (both `i64` values or
+constants) of a `qN` register or an `i64` handle, read least significant first and zero-extended to the
+`i64` `%d` (`Inst::MeasureSlice`). The register stays allocated, and the measurement takes no handle. It
+checks the handle (`dangling_register`) and then that `BITS` is from 1 to 64 and `LOW + BITS` at most the
+width, computed without wrapping (`bad_range`), before anything changes; the validator checks only the
+types, constants included. Inside an applied function it is `quantum_in_region` before either check. Its
+meaning is the measurement of those qubits in the computational basis (`docs/DESIGN.md`, "The model"). As
+every measurement it ends reversal: a reversible run cannot step back over it.
+
 ## Gate kinds at run time
 
 `gate(%k) qubit [ctrl ...]` applies the fixed gate whose code `%k` (an `i64` value or constant) holds, and
@@ -239,11 +251,11 @@ simulator's `QubitStorage`, not a fault of the program; a run on an external dev
 read a whole register as an integer, so there its width is at most 128, the widest integer:
 
 - `%d = measure %r` gives an `iN` of the register's width. A wider register is the validator's
-  `MeasureTooWide`. To measure some of its qubits, copy at most 128 of them into a fresh register with
-  controlled X gates (`x %c[i] ctrl %r[j]`), measure that (the same as measuring those qubits), undo the
-  copy and `qfree` the copy.
+  `MeasureTooWide`. To measure some of its qubits, measure slices of at most 64 of them
+  (`measure i64 %r[LOW, BITS]`, "Measuring a slice").
 - An `apply` argument register has the width of its `iN` parameter and `out` the width of the result, so a
-  wider one is `RegionOperandTooWide`. For an argument, copy the qubits into a fresh register as above,
+  wider one is `RegionOperandTooWide`. For an argument, copy the qubits into a fresh register with
+  controlled X gates (`x %c[i] ctrl %r[j]`),
   apply to it, undo the copy and `qfree` it. For the output, exchange the qubits with a fresh register (a
   swap: three controlled X per qubit), apply into it, exchange them back and `qfree` it, which is zero
   again: `apply` XORs into the qubits themselves, which a copy would not. The `fault` register has at

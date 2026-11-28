@@ -116,6 +116,22 @@ impl<'m> Executor<'m> {
                 self.record(Undo::Measure);
                 self.advance();
             }
+            Inst::MeasureSlice { dst, register, low, bits } => {
+                let (id, qubits) = self.register(*register)?;
+                let (low, bits) = (self.read_word(low), self.read_word(bits));
+                // The bound is a mathematical integer: `low + bits` does not wrap.
+                if !(1..=u64::from(u64::BITS)).contains(&bits)
+                    || u128::from(low) + u128::from(bits) > u128::from(qubits.count())
+                {
+                    return Err(Fault::BadRange.into());
+                }
+                let first = wire(id, low as u32);
+                let slice = first..first + bits;
+                let words = self.device_measure(std::slice::from_ref(&slice), context)?;
+                self.write_slot(*dst, u128::from(words[0]));
+                self.record(Undo::Measure);
+                self.advance();
+            }
             Inst::Apply { callee, args, out, fault, budget } => {
                 if context.compiler.is_some() {
                     self.apply_gates(*callee, args, *out, *fault, budget, context)?;

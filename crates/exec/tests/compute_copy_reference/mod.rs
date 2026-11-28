@@ -395,6 +395,7 @@ impl<'m> Reference<'m> {
             | Inst::GateAt { .. }
             | Inst::RotateBy { .. }
             | Inst::GateBy { .. }
+            | Inst::MeasureSlice { .. }
             | Inst::Measure { .. }
             | Inst::Apply { .. } => stop(&mut n, Fault::QuantumInRegion),
             // APPLY-STEP, "Stack". None of the three changes bytes.

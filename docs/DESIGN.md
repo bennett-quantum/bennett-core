@@ -56,6 +56,13 @@ The model has three parts.
    trace**: the register is dropped unexamined, whatever it holds, and the other qubits are left in the state
    they have without it (a mixture, if they were entangled with it: their interference with it is gone). A
    gate or a measurement may name a qubit by an ordinary address ("Qubits in memory", a derived form).
+   A measurement may read a **slice** of a register, the `bits` qubits from position `low`
+   (`measure i64 %r[low, bits]`, 1 to 64 qubits): with `Π_t` the projector onto the basis configurations in
+   which the slice reads `t`, outcome `t` has probability `tr(Π_t ρ Π_t)` and leaves the state
+   `Π_t ρ Π_t / tr(Π_t ρ Π_t)`; the register stays allocated. It gives the same outcome and state as copying
+   the slice into a fresh register with controlled X, measuring that, undoing the copy and releasing it,
+   except that this temporary register is no allocation of the program: it takes no handle and the
+   allocation count does not change.
    Ordinary code never sees a qubit: a register is not an integer (`docs/SYNTAX.md`), and a `load` or `store`
    touching a byte that holds qubits is the named fault `qubit_memory_access`.
 3. **`apply @f(args) -> out, fault budget B`**, the one bridge from qubits to ordinary code: `@f` is ordinary
@@ -87,8 +94,9 @@ A module is a list of functions, an initial memory image and a memory size.
   A quantum register holds from 1 to 2^32 - 1 qubits (`crates/ir/src/types.rs`, `Qubits`); a qubit's
   index in it is a `u32`. Only the forms that read a whole register as an integer limit its width to the
   widest integer, 128: `measure` of the register (else `MeasureTooWide`) and the arguments and output of
-  `apply` (else `RegionOperandTooWide`); a wider register is read in parts by copying them into narrower
-  registers with controlled X (`docs/SYNTAX.md`, "Registers are not integers"). Objects with more than 8
+  `apply` (else `RegionOperandTooWide`); a wider register is measured in slices of at most 64 qubits and
+  applied to in parts copied into narrower registers with controlled X (`docs/SYNTAX.md`, "Registers are not
+  integers"). Objects with more than 8
   bytes holding qubits are not built: they are code under a qubit (HANDOFF, "STOP").
   There are no floating-point values: floating point arrives as library code.
 - **Functions** have typed parameters and at most one result. Bodies are basic blocks in SSA form with block
@@ -2310,7 +2318,8 @@ The front writes `retaddr N` for every `llvm.returnaddress(N)` in the default ad
   register succeeds in every quantum state ("Releasing a register", below). Its one check is the handle: a
   value that names no allocated register (released, never allocated, or 0) is `dangling_register`, before
   anything changes.
-- `measure` reads a whole register, or the `N` bits from bit 0 of the integer at an address.
+- `measure` reads a whole register, a slice of 1 to 64 qubits of one, or the `N` bits from bit 0 of the
+  integer at an address.
 - The simulator's own stops and reports (dropped amplitudes of rounding size, the configuration limit, the
   stop at an `apply` faulting for some argument values, amplitudes in snapshots, the report of nonzero
   releases) are listed below, "The simulator's own stops and reports".
