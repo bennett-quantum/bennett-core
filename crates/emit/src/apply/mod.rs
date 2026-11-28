@@ -223,11 +223,16 @@ fn compile_with_analysis_limit(
             }
             Status::Running(_) if spent == input.budget => status = Status::Faulted(Fault::Budget),
             Status::Running(point) => {
-                if try_modular && candidate.is_none() && input.budget - spent > 2 {
-                    candidate = modular_loop::Candidate::remember(&program, &slots, point, spent, &circuit);
-                }
+                let entry = if try_modular && candidate.is_none() && input.budget - spent > 2 {
+                    modular_loop::Candidate::remember(&program, &slots, point, spent, &circuit)
+                } else {
+                    None
+                };
                 let step = program.step_in(&mut circuit, &slots, point, &mut memory, ONE)?;
                 memory.commit(&mut circuit);
+                if let Some(entry) = entry {
+                    candidate = entry.after_entry_test(&step);
+                }
                 status = match step {
                     Step::Write(next, dst, word) => {
                         slots[dst.index()] = word;

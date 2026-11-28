@@ -937,8 +937,9 @@ overlapping or adjacent interface ranges and maps each resulting span with one
 offset. Overlapping arguments keep sharing the same wires, and layout storage
 depends on the number of spans. Only the selected block's scratch range must fit
 the caller's wire placement. The compiler charges the
-entry and the longest loop route before trying either exit. Each exit replay
-stops at its remaining budget. The replays use the initial residue or fresh
+entry and the longest loop route before trying an exit. It replays the
+zero-exponent exit when the original entry comparison can take it. Each
+exit replay stops at its remaining budget. The replays use the initial residue or fresh
 symbolic residue bits. Inside the loop frame it follows only lossless conversions
 and unconditional transfers, since it has replaced the loop's computation.
 After a return to a caller it has the caller's suspended state, including the
