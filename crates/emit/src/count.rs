@@ -261,6 +261,20 @@ impl Default for CountingDevice {
     }
 }
 
+/// Native gate counts and depth with every participating wire starting in layer zero.
+pub(crate) fn isolated_gate_counts<'a>(gates: impl IntoIterator<Item = &'a GateOp>) -> Counts {
+    let mut device = CountingDevice::default();
+    for gate in gates {
+        for &wire in std::iter::once(&gate.target).chain(&gate.controls) {
+            if !device.live.contains(wire) {
+                device.live.allocate(wire..wire + 1);
+            }
+        }
+        device.gate(gate.borrowed()).expect("the emitter has lowered the controls");
+    }
+    device.counts()
+}
+
 /// Reproducible synthetic measurement bits, independent of the gates issued.
 pub fn seeded_bits(seed: u64) -> impl Iterator<Item = bool> {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);

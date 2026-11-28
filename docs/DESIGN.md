@@ -939,8 +939,10 @@ depends on the number of spans. Only the selected block's scratch range must fit
 the caller's wire placement. The compiler charges the
 entry and the longest loop route before trying an exit. It requires a successful replay
 of the zero-exponent exit when the original entry comparison can take it.
-When that comparison excludes zero, an existing controlled circuit that fits
-keeps precedence over an in-place update whose proof depends on skipping the exit.
+When that comparison excludes zero and skipping its exit is needed for the proof, automatic
+emission also tries the prior control construction. Among two fitting circuits, the new
+in-place update must improve a resource count and increase none. The comparison counts each
+native gate kind, isolated depth and peak scratch for the complete compute, copy and reversal.
 Each exit replay stops at its remaining budget. The replays use the initial residue or fresh
 symbolic residue bits. Inside the loop frame it follows only lossless conversions
 and unconditional transfers, since it has replaced the loop's computation.

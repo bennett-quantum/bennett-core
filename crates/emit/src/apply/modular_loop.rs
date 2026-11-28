@@ -20,7 +20,7 @@ pub(super) struct Plan {
     exponent: Word,
     factors: Vec<Factor>,
     condition: Condition,
-    pub(super) preserve_controlled: bool,
+    pub(super) skipped_empty_exit: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -442,10 +442,6 @@ impl<'a> Candidate<'a> {
         Some(self)
     }
 
-    pub(super) fn can_skip_empty_exit(&self) -> bool {
-        !self.empty_possible
-    }
-
     // A recognized loop can leave only through its two exits. Its direct
     // product helpers return immediately and never modify the byte map.
     pub(super) fn exited(&self, next: Point) -> bool {
@@ -459,7 +455,6 @@ impl<'a> Candidate<'a> {
         input: &ApplyInput<'_>,
         program: &Program<'a>,
         memory: &Memory<'_>,
-        check_controlled: bool,
     ) -> Option<(Plan, Checkpoint)> {
         #[cfg(test)]
         tests::record_attempt();
@@ -506,16 +501,14 @@ impl<'a> Candidate<'a> {
         // the direct transfers. Check the possible complete returns, including
         // any conversion in the wrapper, with distinct probe bits.
         let probe_end = scratch.checked_add(residue_width as u64)?;
-        // For an impossible zero exit, this probe only determines whether
-        // a fitting controlled construction had precedence before the skip.
-        let zero_exit_matches = if empty_possible || check_controlled {
+        // When this exit is impossible the probe only tells whether the
+        // in-place construction was already eligible without the skip.
+        let zero_exit_matches = {
             let mut empty_slots = clone_slots(&slots);
             empty_slots[shape.entry_condition] = vec![Bit::Constant(shape.true_if_zero)];
             let empty_point = program.jump(&mut empty_slots, entry, shape.empty);
             replay_exit(program, &mut empty_slots, empty_point, entry.copy, memory, probe_end, loop_budget)
                 .is_some_and(|result| definite(&result) == Some(initial) && result.len() == output_width)
-        } else {
-            true
         };
         if empty_possible && !zero_exit_matches {
             return None;
@@ -543,7 +536,7 @@ impl<'a> Candidate<'a> {
                 exponent: exponent_bits,
                 factors,
                 condition: shape.condition,
-                preserve_controlled: !zero_exit_matches,
+                skipped_empty_exit: !zero_exit_matches,
             },
             checkpoint,
         ))
