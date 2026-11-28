@@ -228,7 +228,8 @@ impl<'s> Parser<'s> {
     }
 
     /// `GATE target [ctrl qubit, ...]`, after the mnemonic and any angle. A gate whose qubits are all register
-    /// qubits at literal positions is `Gate`; one with a qubit in memory or at a run-time position is `GateAt`.
+    /// qubits at literal positions below 2^32 is `Gate`; one with a qubit in memory or a position given as an
+    /// `i64` value (a run-time position, or a literal from 2^32) is `GateAt`.
     fn gate(&mut self, scope: &mut Scope<'s>, gate: Gate) -> Result<Inst, Failure> {
         let (target, controls) = self.places(scope)?;
         let register = |place: &Place| match place {

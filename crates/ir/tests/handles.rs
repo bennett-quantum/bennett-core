@@ -154,27 +154,26 @@ fn a_built_constant_position_validates_only_in_the_form_the_reader_gives() {
                 };
                 *index = Operand::Const(Const::new(Width::WORD, position).expect("a 64-bit position"));
                 let context = format!("{register}[{position}], instruction {inst}");
-                match validate(module.clone()) {
-                    Ok(_) => {
-                        let back = read(&write(&module)).expect("reads back");
-                        assert_eq!(back, module, "{context}");
-                        assert!(validate(back).is_ok(), "{context}");
-                        assert!(position >> 32 != 0 && register == "%h", "{context}: accepted");
-                    }
-                    Err(ValidationErrors(errors)) => {
-                        let found: Vec<Problem> = errors.into_iter().map(|error| error.problem).collect();
-                        let expected = if position >> 32 == 0 {
-                            Problem::SmallConstantPosition(position as u32)
-                        } else {
-                            Problem::QubitOutOfRange { bit: position as u64, bits: 2 }
-                        };
-                        assert_eq!(found, [expected], "{context}");
-                    }
+                // A constant below 2^32 is refused by name; from 2^32 it is past the two qubits of `%q`, and on
+                // the `i64` handle `%h` it must be accepted, its range being the run's to check.
+                let expected = if position >> 32 == 0 {
+                    vec![Problem::SmallConstantPosition(position as u32)]
+                } else if register == "%q" {
+                    vec![Problem::QubitOutOfRange { bit: position as u64, bits: 2 }]
+                } else {
+                    Vec::new()
+                };
+                assert_eq!(problems_of(module.clone()), expected, "{context}");
+                if expected.is_empty() {
+                    let back = read(&write(&module)).expect("reads back");
+                    assert_eq!(back, module, "{context}");
+                    assert!(validate(back).is_ok(), "{context}");
                 }
             }
         }
     }
-    let mut wide = base("%h");
+    // On `%q`, a register of known width, an earlier validator also ranged the constant (qubit 0 of 2).
+    let mut wide = base("%q");
     let Inst::GateAt { target: Place::Indexed { index, .. }, .. } = &mut wide.functions[0].blocks[0].insts[2] else {
         panic!("an indexed gate")
     };

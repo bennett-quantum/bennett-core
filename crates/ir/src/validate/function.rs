@@ -334,8 +334,9 @@ impl<'a> Checker<'a> {
                 }
                 // The position is a value: its range and any repetition are checked when the gate runs. A
                 // constant position is the reader's form of a literal from 2^32, past every `qN` register's
-                // width; a smaller one is a register qubit (`Place::Register`), so that the validator decides
-                // the same for a module and for its text read back. Only an `i64` constant is ranged.
+                // width; a smaller one is a register qubit (`Place::Register`) and refused here, so that a module
+                // the validator accepts is read back from its text as itself (the text of a refused one may read
+                // as another, valid instruction). Only an `i64` constant is ranged.
                 Place::Indexed { register, index } => {
                     let qubits = self.register_or_handle(site, register);
                     self.expect(site, index, Type::Int(Width::WORD));
