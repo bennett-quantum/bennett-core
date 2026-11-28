@@ -133,11 +133,13 @@ impl<'m> Executor<'m> {
                 self.advance();
             }
             Inst::Apply { callee, args, out, fault, budget } => {
+                let position = self.applies + 1;
                 if context.compiler.is_some() {
                     self.apply_gates(*callee, args, *out, *fault, budget, context)?;
                 } else {
-                    self.apply(*callee, args, *out, *fault, budget)?;
+                    self.apply(*callee, args, *out, *fault, budget, Some(position))?;
                 }
+                self.applies = position;
                 self.record(Undo::Apply);
                 self.advance();
             }
