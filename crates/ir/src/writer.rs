@@ -148,7 +148,7 @@ impl Writer<'_> {
                 write!(self.out, "measure i{} [{}]", width.bits(), op(address))
             }
             Inst::MeasureSlice { register, low, bits, .. } => {
-                write!(self.out, "measure i64 {}[{}, {}]", name(register), op(low), op(bits))
+                write!(self.out, "measure i64 {}[{}, {}]", op(register), op(low), op(bits))
             }
             Inst::Apply { callee, args, out, fault, budget } => {
                 write!(self.out, "apply @{}", self.module.function(*callee).name)?;
