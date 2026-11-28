@@ -37,7 +37,7 @@ impl<'m> Executor<'m> {
         match *place {
             Place::Register(qubit) => Ok(Resolved::Register(self.qubit(&qubit)?)),
             Place::Indexed { register, index } => {
-                Ok(Resolved::Register(self.position(register, self.read_word(&index))?))
+                Ok(Resolved::Register(self.wire_of(self.handle_of(&register), self.read_word(&index))?))
             }
             Place::Memory { address, bit } => {
                 let byte = self.read_word(&address).checked_add(u64::from(bit / 8));

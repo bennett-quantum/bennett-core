@@ -92,7 +92,7 @@ fn faults_inside_a_loop_are_kept_per_execution() {
         if let Inst::Apply { fault, .. } = inst {
             assert!(matches!(insts[i - 1], Inst::Qalloc { dst, .. } if dst == *fault), "allocated just before\n{text}");
             assert!(
-                matches!(insts[i + 1], Inst::Qfree { register } if register == *fault),
+                matches!(insts[i + 1], Inst::Qfree { register } if register == bennett_ir::Operand::Slot(*fault)),
                 "released just after\n{text}"
             );
         }

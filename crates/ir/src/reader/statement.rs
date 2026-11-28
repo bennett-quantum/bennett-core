@@ -72,7 +72,7 @@ impl<'s> Parser<'s> {
                 let code = self.operand(scope, Width::WORD)?;
                 let kind = if mnemonic == "rotate" {
                     self.cursor.expect(Token::Comma, "`,` and an angle")?;
-                    GateKind::Rotation { code, angle: self.slot_use(scope, "an angle")? }
+                    GateKind::Rotation { code, angle: self.operand(scope, Width::WORD)? }
                 } else {
                     GateKind::Gate(code)
                 };
@@ -130,7 +130,7 @@ impl<'s> Parser<'s> {
             }
             "qfree" => {
                 line.no_result("qfree")?;
-                Inst::Qfree { register: self.slot_use(scope, "a register")? }
+                Inst::Qfree { register: self.operand(scope, Width::WORD)? }
             }
             "measure" => {
                 let dst = line.result("measure")?;
@@ -274,8 +274,16 @@ impl<'s> Parser<'s> {
     /// time) or in memory: `[ADDRESS:BIT]`, the address an `i64` value or constant; `[ADDRESS]` names bit 0.
     fn place(&mut self, scope: &mut Scope<'s>) -> Result<Place, Failure> {
         if !self.cursor.eat(Token::LBracket) {
+            // `HANDLE[POSITION]`: an `i64` constant handle, the position an `i64` value or constant.
+            if let Some(Token::Number(_)) = self.cursor.peek() {
+                let register = Operand::Const(self.literal(Width::WORD)?);
+                self.cursor.expect(Token::LBracket, "`[` and a qubit position")?;
+                let index = self.operand(scope, Width::WORD)?;
+                self.cursor.expect(Token::RBracket, "`]`")?;
+                return Ok(Place::Indexed { register, index });
+            }
             if let (Some(Token::LBracket), Some(Token::Local(_))) = (self.cursor.peek_nth(1), self.cursor.peek_nth(2)) {
-                let register = self.slot_use(scope, "a qubit")?;
+                let register = Operand::Slot(self.slot_use(scope, "a qubit")?);
                 self.cursor.expect(Token::LBracket, "`[`")?;
                 let index = Operand::Slot(self.slot_use(scope, "a qubit index")?);
                 self.cursor.expect(Token::RBracket, "`]`")?;
@@ -415,7 +423,7 @@ impl<'s> Parser<'s> {
         Ok(match u32::try_from(position) {
             Ok(bit) => Place::Register(Qubit { register, bit }),
             Err(_) => Place::Indexed {
-                register,
+                register: Operand::Slot(register),
                 index: Operand::Const(Const::new(Width::WORD, u128::from(position)).expect("a 64-bit position")),
             },
         })

@@ -110,8 +110,8 @@ A module is a list of functions, an initial memory image and a memory size.
   (`gate(%k)`, `rotate(%k, %a)`, `Inst::GateBy`; `docs/SYNTAX.md`, "Gate kinds at run time"),
   `measure` of a register or of bits at an address, and `apply`
   (below). Every allocation has a handle, its number among the run's allocations, from 1, never given again
-  in the run. A register is named by a `qN` value, or by an `i64` value holding its handle wherever a gate, a
-  control or `qfree` names a register, with qubit positions given as literals or as `i64` values (`docs/SYNTAX.md`, "Handles as integers"). Each
+  in the run. A register is named by a `qN` value, or by an `i64` value or constant holding its handle
+  wherever a gate, a control or `qfree` names a register, with qubit positions given as literals or as `i64` values (`docs/SYNTAX.md`, "Handles as integers"). Each
   of these forms means the same as the form with that definite register and position written out; it adds the
   checks `bad_width`, `dangling_register` and `bad_range`, and a kind given as a code `bad_gate`, made from
   definite values before anything changes.

@@ -72,8 +72,8 @@ impl<'m> Executor<'m> {
                 self.qalloc(*dst, width, true, context)?;
             }
             Inst::Qfree { register } => {
-                let handle = self.handle_number(*register);
-                let (id, qubits) = self.register(*register)?;
+                let handle = self.handle_of(register);
+                let (id, qubits) = self.register_of(handle)?;
                 self.discard_register(id, qubits, context)?;
                 let entry = self.handles.remove(handle);
                 // The simulator's journal takes back kept columns or recreates zero columns: a register's
@@ -499,7 +499,12 @@ impl<'m> Executor<'m> {
     /// The rotation about `axis` by the angle in `angle`: its `i64` read as the bits of an IEEE 754 binary64.
     /// An angle that is not finite (an infinity or a NaN) is the fault `bad_angle`, before anything changes.
     pub(crate) fn rotation(&self, axis: Rotation, angle: Slot) -> Result<Gate, Fault> {
-        let radians = f64::from_bits(self.read(&Operand::Slot(angle)) as u64);
+        self.rotation_by(axis, self.read(&Operand::Slot(angle)) as u64)
+    }
+
+    /// The rotation about `axis` by the angle whose binary64 bits are `bits`; `bad_angle` if it is not finite.
+    pub(crate) fn rotation_by(&self, axis: Rotation, bits: u64) -> Result<Gate, Fault> {
+        let radians = f64::from_bits(bits);
         if radians.is_finite() { Ok(Gate::Rotate(axis, radians)) } else { Err(Fault::BadAngle) }
     }
 
@@ -510,7 +515,7 @@ impl<'m> Executor<'m> {
             GateKind::Gate(code) => gate_code(self.read_word(code)).map(Gate::Fixed).ok_or(Fault::BadGate),
             GateKind::Rotation { code, angle } => {
                 let axis = rotation_code(self.read_word(code)).ok_or(Fault::BadGate)?;
-                self.rotation(axis, *angle)
+                self.rotation_by(axis, self.read_word(angle))
             }
         }
     }
@@ -523,7 +528,13 @@ impl<'m> Executor<'m> {
 
     /// The wire of qubit `bit` of the register named in `register`, checked as [`Executor::qubit`] checks.
     pub(crate) fn position(&self, register: Slot, bit: u64) -> Result<Wire, Fault> {
-        let (id, qubits) = self.register(register)?;
+        self.wire_of(self.handle_number(register), bit)
+    }
+
+    /// The wire of qubit `bit` of the register `handle` names: `dangling_register` if it names none, then
+    /// `bad_range` if `bit` is not below its width.
+    pub(crate) fn wire_of(&self, handle: u64, bit: u64) -> Result<Wire, Fault> {
+        let (id, qubits) = self.register_of(handle)?;
         let bit = u32::try_from(bit).ok().filter(|&bit| bit < qubits.count()).ok_or(Fault::BadRange)?;
         Ok(wire(id, bit))
     }

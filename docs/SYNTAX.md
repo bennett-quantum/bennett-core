@@ -18,6 +18,7 @@ operand    := %name | INT          ; an INT takes its type from the instruction
 typed      := %name | iN INT       ; in argument lists, a constant names its type
 qubit      := %name ["[" INT "]"]  ; bare %q means %q[0]; the index is below the register's width
             | %name "[" %index "]"             ; the position an i64 computed at run time
+            | INT "[" operand "]"              ; an i64 constant handle, the position an i64 value or constant
                                                ; %name: a qN register or an i64 handle ("Handles as integers")
             | "[" operand [":" INT] "]"        ; a bit of memory: bit INT of the integer at the i64 address
 
@@ -38,12 +39,12 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | effect operand                             ; one i8 to the console
             | %d = qalloc N                              ; N from 1 to 2^32 - 1
             | %d = qalloc i64 operand                    ; the width at run time; %d an i64 handle
-            | qfree %r                                   ; the partial trace: %r dropped unexamined
+            | qfree operand                              ; the partial trace: the register dropped unexamined
             | GATE qubit [ctrl qubit {, qubit}]          ; x y h z s sdg t tdg
             | (rx | ry | rz | p)(ANGLE) qubit [ctrl ...] ; radians, any finite angle
             | (rx | ry | rz | p)(%a) qubit [ctrl ...]    ; the angle computed at run time: an i64, binary64 bits
             | gate(operand) qubit [ctrl ...]             ; the kind an i64 gate code ("Gate kinds at run time")
-            | rotate(operand, %a) qubit [ctrl ...]       ; an i64 rotation code and a run-time angle
+            | rotate(operand, operand) qubit [ctrl ...]  ; an i64 rotation code and an angle's binary64 bits
             | %d = measure %r                            ; every qubit of the register: an iN, N at most 128
             | %d = measure iN "[" operand "]"            ; N bits from bit 0 of the integer at the i64 address
             | apply @f(typed, ...) -> %out, %fault budget operand  ; %fault: a register of 5 qubits or more
@@ -174,7 +175,9 @@ in this order, that `%w` is from 1 to 2^32 - 1 (else the fault `bad_width`, 20) 
 fewer than 2^64 - 1 allocations (else `out_of_handles`, 21).
 
 A gate's target or control and `qfree` may name a register by an `i64` value holding its handle:
-`x %h[3] ctrl %q[1], %h[%i]`. A value that names no allocated register (released, never allocated, or 0) is
+`x %h[3] ctrl %q[1], %h[%i]`, or by an `i64` constant handle: `x 1[3]` (a constant handle takes its
+position in brackets, a constant or a value), `qfree 1`. A constant is read as a slot's value is, so a call
+of the interface with constant operands is the one instruction, nothing prepared before it. A value that names no allocated register (released, never allocated, or 0) is
 the fault `dangling_register` (9). A position may be an `i64` slot, `%r[%i]`, on a `qN` register or an
 `i64` handle, and a literal position may be any integer from 0 to 2^64 - 1 (one from 2^32, past every
 register's width, is held as an `i64` constant, `Place::Indexed`). A position at or past the register's width
@@ -200,7 +203,8 @@ program that counts its allocations knows the handle of each.
 ## Gate kinds at run time
 
 `gate(%k) qubit [ctrl ...]` applies the fixed gate whose code `%k` (an `i64` value or constant) holds, and
-`rotate(%k, %a) qubit [ctrl ...]` the rotation whose code `%k` holds, by the angle in `%a` as for `rz(%a)`
+`rotate(%k, %a) qubit [ctrl ...]` the rotation whose code `%k` holds, by the angle whose binary64 bits `%a`
+holds (an `i64` value, as for `rz(%a)`, or constant: `rotate(9, 4602678819172646912)` is `rx(0.5)`)
 (`Inst::GateBy`). The codes are fixed numbers, the same in the C interface's header (`docs/HANDLES.md`, 5.1)
 and the device (`bennett_ir::GATE_CODES`, `ROTATION_CODES`):
 

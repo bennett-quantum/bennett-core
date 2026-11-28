@@ -33,9 +33,9 @@ fn the_handle_forms_read_write_and_keep_the_literal_forms() {
         insts[3],
         Inst::GateAt {
             gate: bennett_ir::Gate::Fixed(bennett_ir::FixedGate::X),
-            target: Place::Indexed { register: h, index: Operand::Slot(i) },
+            target: Place::Indexed { register: Operand::Slot(h), index: Operand::Slot(i) },
             controls: vec![
-                Place::Indexed { register: q, index: Operand::Slot(i) },
+                Place::Indexed { register: Operand::Slot(q), index: Operand::Slot(i) },
                 Place::Register(Qubit { register: k, bit: 2 }),
                 Place::Memory { address: Operand::Const(bennett_ir::Const::new(Width::WORD, 8).expect("8")), bit: 1 },
             ],
@@ -44,7 +44,7 @@ fn the_handle_forms_read_write_and_keep_the_literal_forms() {
     // A literal position on an `i64` handle is an ordinary register qubit, `Gate`.
     assert!(matches!(insts[4], Inst::Gate { target: Qubit { register, bit: 5 }, .. } if register == h));
     assert!(matches!(insts[5], Inst::RotateBy { target: Place::Indexed { register, index }, .. }
-        if register == k && index == Operand::Slot(i)));
+        if register == Operand::Slot(k) && index == Operand::Slot(i)));
     let written = write(&module);
     for line in ["    %h = qalloc i64 %w\n", "    %k = qalloc i64 3\n", "    x %h[%i] ctrl %q[%i], %k[2], [8:1]\n"] {
         assert!(written.contains(line), "{line}{written}");
