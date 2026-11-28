@@ -402,18 +402,22 @@ def definitions(text, name):
 def merged_definitions(args):
     """docs/HANDLES.md, section 15, R4: the header's weak definitions of the scope list and the fault set are one
     object in the linked program. Every unit that includes bq.h carries them; the C library's and the device's own
-    units include only the declarations file and carry none (checked in the device's runtime.c and in the linked
-    module, which holds exactly one definition of each). A push in one unit of the program is seen in another
-    (tests/weak/scope-main.c, scope-push.c); a program that defines the list itself in its first unit keeps that
-    definition (scope-own.c: the header's declaration makes it weak too, so the first unit's is kept, as natively
-    with the objects in that order)."""
+    units include only the declarations file and carry none (checked in the device's runtime.c), and the linked
+    module holds exactly one definition of each. What one unit of the program writes to either is read in another
+    (tests/weak/scope-main.c with scope-push.c, faults-main.c with faults-note.c); a program that defines one itself
+    in its first unit keeps that definition and its initial value (scope-own.c, faults-own.c: the header's
+    declaration makes the definition weak too, so the first unit's is kept, as natively with the objects in that
+    order)."""
     weak = HERE / "tests/weak"
-    cases = [("shared", [weak / "scope-main.c", weak / "scope-push.c"], "depth 2 handle 7 bit 1\\n", True),
-             ("own", [weak / "scope-own.c", weak / "scope-push.c"], "depth 2 handle 5\\n", False)]
-    for name, sources, console, zero in cases:
+    cases = [("shared", [weak / "scope-main.c", weak / "scope-push.c"], "depth 2 handle 7 bit 1\\n", "bq_scope_", True),
+             ("own", [weak / "scope-own.c", weak / "scope-push.c"], "depth 2 handle 5\\n", "bq_scope_", False),
+             ("faults shared", [weak / "faults-main.c", weak / "faults-note.c"], "faults 2\\n", "bq_fault_set_", True),
+             ("faults own", [weak / "faults-own.c", weak / "faults-note.c"], "faults 12\\n", "bq_fault_set_", False)]
+    for name, sources, console, written, zero in cases:
         for level in ("-O0", "-O2"):
-            keep = args.out / f"weak-{name}{level}"
-            program = args.out / f"weak-{name}{level}.bn"
+            stem = name.replace(" ", "-")
+            keep = args.out / f"weak-{stem}{level}"
+            program = args.out / f"weak-{stem}{level}.bn"
             linked = run(["python3", HERE / "link.py", *sources, "--libdir", args.libdir, "--front", args.front,
                           f"--clang-flag={level}", "--keep", keep, "-o", program])
             assert linked.returncode == 0, linked.stderr
@@ -421,13 +425,34 @@ def merged_definitions(args):
             copies = [definitions(runtime.stdout, global_) for global_ in ("bq_scope_", "bq_fault_set_")]
             assert copies == [[], []], (name, level, "the device's runtime defines a header object", copies)
             text = (keep / "linked.ll").read_text()
-            scope, faults = definitions(text, "bq_scope_"), definitions(text, "bq_fault_set_")
-            assert len(scope) == 1 and len(faults) <= 1, (name, level, scope, faults)
-            assert ("zeroinitializer" in scope[0]) == zero, (name, level, "whose list was kept", scope)
+            found = {global_: definitions(text, global_) for global_ in ("bq_scope_", "bq_fault_set_")}
+            assert all(len(d) == 1 for d in found.values()), (name, level, found)
+            assert ("zeroinitializer" in found[written][0]) == zero, (name, level, "whose definition was kept", found)
             result = run([args.executor, "run", "--entry", "__bennett_entry", "--budget", 100000000, program])
             assert result.returncode == 0 and "result: 0\n" in result.stdout, (name, level, result.stdout)
             assert f'console: "{console}"' in result.stdout, (name, level, result.stdout)
             print(f"merged definitions {name} {level}: passed ({steps_of(result.stdout)} steps)", flush=True)
+
+
+def main_selection(args):
+    """Start-up passes the arguments of the program's main as the linked program resolves it: the one external
+    definition, after a private function of that symbol name (tests/main/helper.c) or a weak main that it replaces
+    (fallback.c) in the first unit. Each agrees with the native program run with the argument `x`."""
+    units = HERE / "tests/main"
+    cases = [("private main first", [units / "helper.c", units / "entry.c"], ["-DWITH_HELPER"], 3),
+             ("weak main first", [units / "fallback.c", units / "entry.c"], [], 2)]
+    for name, sources, extra, status in cases:
+        stem = name.replace(" ", "-")
+        native = args.out / f"main-{stem}.native"
+        assert run(["clang-18", *extra, *sources, "-o", native]).returncode == 0, name
+        assert run([native, "x"]).returncode == status, (name, "native")
+        program = args.out / f"main-{stem}.bn"
+        linked = run(["python3", HERE / "link.py", *sources, "--libdir", args.libdir, "--front", args.front,
+                      *(f"--clang-flag={flag}" for flag in extra), "-o", program, "--", "x"])
+        assert linked.returncode == 0, (name, linked.stderr)
+        result = run([args.executor, "run", "--entry", "__bennett_entry", "--budget", 100000000, program])
+        assert f"result: {status}\n" in result.stdout, (name, result.stdout)
+        print(f"main {name}: passed ({steps_of(result.stdout)} steps)", flush=True)
 
 
 def main():
@@ -510,6 +535,7 @@ def main():
     unit_kinds(args)
     unchecked_member(args)
     merged_definitions(args)
+    main_selection(args)
     print(f"library tests: {time.monotonic() - started:.2f}s", flush=True)
 
 
