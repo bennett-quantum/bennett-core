@@ -1,0 +1,14 @@
+; Gate kinds at run time through the CLI (crates/cli/tests/gate_kinds.rs): `%k` is a gate code and `%r` a
+; rotation code, given with `--arg`, `%a` the angle's binary64 bits; each acts on qubit 1 under a control on
+; qubit 0.
+memory 256
+
+func @main(i64 %k, i64 %r, i64 %a) -> i2 {
+entry:
+    %q = qalloc 2
+    h %q
+    gate(%k) %q[1] ctrl %q
+    rotate(%r, %a) %q[1] ctrl %q
+    %m = measure %q
+    ret %m
+}

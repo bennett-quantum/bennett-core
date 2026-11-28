@@ -156,8 +156,11 @@ impl<'m> Executor<'m> {
             (self.rotation(*axis, *angle).expect("an angle that ran is finite"), target, controls)
         } else if let Inst::GateAt { gate, target, controls } = inst {
             (*gate, target, controls)
+        } else if let Inst::GateBy { kind, target, controls } = inst {
+            // The kind's slots hold the values they held when the gate ran.
+            (self.coded(kind).expect("a kind that ran is valid"), target, controls)
         } else {
-            unreachable!("a GateAt or RotateBy record")
+            unreachable!("a GateAt, RotateBy or GateBy record")
         };
         let places = std::iter::once(target).chain(controls);
         let resolved: Vec<Resolved> =

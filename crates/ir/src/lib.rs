@@ -6,6 +6,7 @@
 //! [`ValidModule`], and is printed by [`write`]. Every name is resolved to a dense index when the
 //! module is read; nothing downstream looks anything up by name. [`load`] reads and validates in one go.
 
+mod codes;
 mod fault;
 mod module;
 mod ops;
@@ -14,9 +15,10 @@ mod types;
 mod validate;
 mod writer;
 
+pub use codes::{GATE_CODES, ROTATION_CODES, gate_code, rotation_code};
 pub use fault::Fault;
 pub use module::{
-    Block, DataItem, DataSegment, ENTRY_RETURN_ADDRESS, Function, Inst, JUMP_RECORD_BYTES, MEMORY_QUBIT_BITS,
+    Block, DataItem, DataSegment, ENTRY_RETURN_ADDRESS, Function, GateKind, Inst, JUMP_RECORD_BYTES, MEMORY_QUBIT_BITS,
     MeasureSource, Module, Param, Place, Qubit, Signature, SwitchCase, Target, Terminator, code_address,
 };
 pub use ops::{BinOp, CastOp, FixedGate, Gate, Predicate, Rotation};

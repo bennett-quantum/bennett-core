@@ -2,8 +2,8 @@
 //! state and journals exactly what it overwrote.
 
 use bennett_ir::{
-    BlockId, ENTRY_RETURN_ADDRESS, Fault, FuncId, Gate, Inst, JUMP_RECORD_BYTES, MeasureSource, Operand, Qubit, Qubits,
-    Rotation, Slot, Target, Terminator, Type, Width,
+    BlockId, ENTRY_RETURN_ADDRESS, Fault, FuncId, Gate, GateKind, Inst, JUMP_RECORD_BYTES, MeasureSource, Operand,
+    Qubit, Qubits, Rotation, Slot, Target, Terminator, Type, Width, gate_code, rotation_code,
 };
 
 use crate::device::Wire;
@@ -94,6 +94,10 @@ impl<'m> Executor<'m> {
             }
             Inst::RotateBy { axis, angle, target, controls } => {
                 let gate = self.rotation(*axis, *angle)?;
+                self.gate_at(gate, target, controls, context)?;
+            }
+            Inst::GateBy { kind, target, controls } => {
+                let gate = self.coded(kind)?;
                 self.gate_at(gate, target, controls, context)?;
             }
             Inst::Measure { dst, source: MeasureSource::Memory { width, address } } => {
@@ -497,6 +501,18 @@ impl<'m> Executor<'m> {
     pub(crate) fn rotation(&self, axis: Rotation, angle: Slot) -> Result<Gate, Fault> {
         let radians = f64::from_bits(self.read(&Operand::Slot(angle)) as u64);
         if radians.is_finite() { Ok(Gate::Rotate(axis, radians)) } else { Err(Fault::BadAngle) }
+    }
+
+    /// The gate a run-time kind names: `bad_gate` for a code outside its set, then for a rotation `bad_angle`
+    /// for an angle that is not finite.
+    pub(crate) fn coded(&self, kind: &GateKind) -> Result<Gate, Fault> {
+        match kind {
+            GateKind::Gate(code) => gate_code(self.read_word(code)).map(Gate::Fixed).ok_or(Fault::BadGate),
+            GateKind::Rotation { code, angle } => {
+                let axis = rotation_code(self.read_word(code)).ok_or(Fault::BadGate)?;
+                self.rotation(axis, *angle)
+            }
+        }
     }
 
     /// The wire of `qubit`: `dangling_register` if its handle names no register, `bad_range` if its position

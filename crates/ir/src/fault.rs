@@ -79,8 +79,8 @@ faults! {
     OutOfHandles = 21 "out_of_handles",
     /// A qubit position at or past its register's width, given at run time.
     BadRange = 22 "bad_range",
-    /// A gate or rotation code outside its set; the device's gate kinds are literals, so only a program that
-    /// switches on a code reaches it, through `fault bad_gate`.
+    /// A gate or rotation code outside its set (`gate(%k)`, `rotate(%k, %a)`; `docs/SYNTAX.md`, "Gate kinds
+    /// at run time").
     BadGate = 23 "bad_gate",
     /// A list read from memory that cannot be read, or an argument of the handle interface that is malformed.
     BadArgument = 24 "bad_argument",

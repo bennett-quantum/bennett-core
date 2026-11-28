@@ -379,6 +379,7 @@ impl<'m> Device<'m> {
                 self.save_jump_record(buffer)?;
                 Some(0)
             }
+            Inst::GateBy { .. } => panic!("instruction outside the outer reference: {inst:?}"),
         };
         if let Some(value) = value {
             self.put(inst.result().expect("value instruction"), value);
