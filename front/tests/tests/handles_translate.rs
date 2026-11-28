@@ -422,11 +422,19 @@ fn each_interface_call_is_one_device_instruction_with_its_operands() {
                         assert!(lines.iter().any(slot), "{name}: no `{start}` with a run-time operand: {lines:#?}");
                     }
                 }
-                assert!(text.contains("applied func @inc("), "{name}: `inc` is not marked as an apply target");
-                assert!(text.contains("applied func @inc_int("), "{name}: `inc_int` is not marked");
-                for function in ["@main(", "@not_target(", "@plain("] {
-                    assert!(!text.contains(&format!("applied func {function}")), "{name}: {function} is marked");
-                }
+                // Exactly the functions of type one pointer parameter and no result are marked: the nine the cases
+                // apply, `void *` and `int *` parameters alike; `not_target`, `plain`, `main` and the helpers of
+                // the run-time form are not.
+                let mut marked: Vec<&str> = text
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("applied func @")?.split_once('(').map(|(name, _)| name))
+                    .collect();
+                marked.sort_unstable();
+                assert_eq!(
+                    marked,
+                    ["bad_kind", "divide", "finish", "inc", "inc_int", "no_memory", "output", "quantum", "stop"],
+                    "{name}: the apply targets"
+                );
                 for (i, (case, _, expected)) in cases.iter().enumerate() {
                     for seed in 0..3 {
                         let mut executor = Executor::new(&module, entry(&module, "main"), &[i as u64], options(seed))

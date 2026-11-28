@@ -1657,7 +1657,8 @@ outcome on three seeds: a result, or the first failing check's fault in the orde
 (every check of every primitive but `out_of_handles`, each field check of 6.2, list order, the angle before the
 handle, the kind before everything), the applied function's codes in its fault register (1, 2, 7, 8, 13, 19, 24),
 and the marks: constant operands at `-O2` (a constant handle, function address and angle among them), slots in the
-run-time form, `applied func` on the two targets and on no other function. One program of one call of each kind
+run-time form, `applied func` on exactly the nine functions of type one pointer parameter and no result (`void *`
+and `int *` parameters alike) and on no other (`int64_t (int64_t)`, `void (uint64_t)`, `main`, the helpers). One program of one call of each kind
 has exactly one interface instruction per call at both levels. The conforming program of `handles_front.rs` runs
 under every option of the baseline's table.
 
