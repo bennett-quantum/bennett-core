@@ -150,6 +150,11 @@ pub struct Function {
     pub blocks: Vec<Block>,
     /// The name of each slot, without the `%`, indexed by [`Slot`]. The length is the frame size.
     pub slot_names: Vec<String>,
+    /// Whether the function is an *apply target* (`applied func`): one the program may name as the function
+    /// operand of [`Inst::ApplyBlock`]. The front end records the set from the compiled C signatures
+    /// (`docs/HANDLES.md`, D11); the validator requires one `i64` parameter, the block's address, and no
+    /// result.
+    pub applied: bool,
 }
 
 impl Function {
@@ -515,6 +520,13 @@ pub enum Inst {
         /// The `i64` number of qubits.
         bits: Operand,
     },
+    /// `apply function budget b, fault register, image(address, size), fields(address, count), ctrl
+    /// list(address, count)`: the handle interface's `apply` (`docs/SYNTAX.md`, "Applying to a block"), every
+    /// operand a value given at run time. For each definite value of its *in* fields where every control is
+    /// 1, the apply target at the address `function` runs for `budget` steps on a private copy of the machine,
+    /// its block holding the image and the *in* fields; the *out* fields' bytes are XORed into their qubits,
+    /// or a fault code into the five low qubits of the fault register.
+    ApplyBlock(Box<BlockApply>),
     /// `apply @callee(args) -> out, fault budget b`: runs `callee` coherently, on each basis
     /// configuration separately. See `docs/DESIGN.md`.
     Apply {
@@ -568,6 +580,41 @@ pub enum Controls {
 /// The bytes of one entry of a control list: the handle at offset 0, the position at offset 8.
 pub const CONTROL_ENTRY_BYTES: u64 = 16;
 
+/// The operands of an [`Inst::ApplyBlock`], each a value given at run time (`docs/SYNTAX.md`, "Applying to
+/// a block").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockApply {
+    /// The `i64` function address of an apply target.
+    pub function: Operand,
+    /// The `i64` step budget.
+    pub budget: Operand,
+    /// The fault register: a slot holding a `qN` register or an `i64` handle, or an `i64` constant handle.
+    pub fault: Operand,
+    /// The `i64` address of the image.
+    pub image: Operand,
+    /// The `i64` size of the image and the block, in bytes.
+    pub size: Operand,
+    /// The `i64` address of the field list.
+    pub fields: Operand,
+    /// The `i64` number of fields.
+    pub field_count: Operand,
+    /// The `i64` address of the control list.
+    pub controls: Operand,
+    /// The `i64` number of controls.
+    pub control_count: Operand,
+}
+
+/// The bytes of one entry of a field list of [`Inst::ApplyBlock`] (`docs/HANDLES.md` 6.1): five little-endian
+/// `u64` values, the handle at offset 0, the lowest qubit at 8, the width at 16, the byte offset in the block
+/// at 24 and the direction at 32 ([`FIELD_IN`] or [`FIELD_OUT`]).
+pub const FIELD_ENTRY_BYTES: u64 = 40;
+
+/// The direction of a field whose qubits are written into the block before the applied function runs.
+pub const FIELD_IN: u64 = 1;
+
+/// The direction of a field whose bytes are XORed into its qubits after the applied function returns.
+pub const FIELD_OUT: u64 = 2;
+
 /// What a `measure` reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MeasureSource {
@@ -611,7 +658,8 @@ impl Inst {
             | Inst::GateAt { .. }
             | Inst::RotateBy { .. }
             | Inst::GateBy { .. }
-            | Inst::Apply { .. } => None,
+            | Inst::Apply { .. }
+            | Inst::ApplyBlock { .. } => None,
         }
     }
 
@@ -717,6 +765,13 @@ impl Inst {
                 operand(&Operand::Slot(*out));
                 operand(&Operand::Slot(*fault));
                 operand(budget);
+            }
+            Inst::ApplyBlock(apply) => {
+                let BlockApply { function, budget, fault, image, size, fields, field_count, controls, control_count } =
+                    &**apply;
+                [function, budget, fault, image, size, fields, field_count, controls, control_count]
+                    .into_iter()
+                    .for_each(&mut operand);
             }
         }
     }

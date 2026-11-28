@@ -246,6 +246,7 @@ fn total(inst: &Inst) -> bool {
         | Inst::RotateBy { .. }
         | Inst::GateBy { .. }
         | Inst::MeasureSlice { .. }
+        | Inst::ApplyBlock { .. }
         | Inst::Measure { .. }
         | Inst::Apply { .. } => false,
     }

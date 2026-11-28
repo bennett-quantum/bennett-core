@@ -220,7 +220,7 @@ impl<'m> Executor<'m> {
         })
     }
 
-    fn record_region_fault_weight(&mut self, weight: f64) {
+    pub(crate) fn record_region_fault_weight(&mut self, weight: f64) {
         self.region_faults += 1;
         self.region_fault_weight += weight;
         self.region_fault_max_weight = self.region_fault_max_weight.max(weight);
@@ -229,6 +229,18 @@ impl<'m> Executor<'m> {
     /// Runs `callee(args)` within `budget` steps on top of the current frames, then undoes the run. Returns
     /// the outcome and how the run ended in steps (`apply_report`).
     fn evaluate(&mut self, callee: FuncId, args: &[u128], budget: u64) -> (Outcome, RunSteps) {
+        let (outcome, steps, ()) = self.evaluate_with(callee, args, budget, |_, _| ());
+        (outcome, steps)
+    }
+
+    /// [`Executor::evaluate`], with `extract` reading the machine after the run ends and before it is undone.
+    pub(crate) fn evaluate_with<T>(
+        &mut self,
+        callee: FuncId,
+        args: &[u128],
+        budget: u64,
+        extract: impl FnOnce(&Self, Outcome) -> T,
+    ) -> (Outcome, RunSteps, T) {
         let region_journal = std::mem::take(&mut self.spare_journal);
         let outer = Saved {
             journal: self.journal.replace(region_journal),
@@ -255,6 +267,7 @@ impl<'m> Executor<'m> {
             Outcome::Returned(_) | Outcome::Faulted(_) | Outcome::Stopped(_) => RunSteps::Finished(self.steps),
         };
         self.region_steps += self.steps;
+        let extracted = extract(self, outcome);
         let journal = self.journal.as_ref().expect("a region runs with a journal");
         let (records, words) = (journal.records(), journal.words().len());
         if self.journal_measurement.is_some() {
@@ -265,7 +278,7 @@ impl<'m> Executor<'m> {
         self.region_cost.work += self.steps + undone;
         self.region_cost.journal_bytes += self.run_journal_peak as u64;
         self.restore(outer);
-        (outcome, steps)
+        (outcome, steps, extracted)
     }
 
     fn restore(&mut self, outer: Saved) {

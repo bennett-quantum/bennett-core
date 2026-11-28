@@ -76,6 +76,7 @@ fn fold_inst(
         | Inst::RotateBy { .. }
         | Inst::GateBy { .. }
         | Inst::MeasureSlice { .. }
+        | Inst::ApplyBlock { .. }
         | Inst::Measure { .. }
         | Inst::Apply { .. } => unreachable!("checked the supported instructions"),
     }

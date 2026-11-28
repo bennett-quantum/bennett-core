@@ -19,19 +19,7 @@ impl Executor<'_> {
     /// names a register (`dangling_register`) and its position is below the register's width (`bad_range`).
     /// A qubit listed twice is one control: each appears once, where it was first listed.
     pub(crate) fn control_list(&self, address: u64, count: u64) -> Result<Vec<Wire>, Fault> {
-        if count == 0 {
-            return Ok(Vec::new());
-        }
-        let end = u128::from(address) + u128::from(count) * u128::from(CONTROL_ENTRY_BYTES);
-        if end > self.memory.len() as u128 {
-            return Err(Fault::BadArgument);
-        }
-        let range = address as usize..end as usize;
-        if self.quantum.has_cells_in(range.start as u64..range.end as u64) {
-            return Err(Fault::BadArgument);
-        }
-        let mut bytes = vec![0; range.len()];
-        self.memory.read_into(range, &mut bytes);
+        let bytes = self.list_bytes(address, count, CONTROL_ENTRY_BYTES)?;
         let word = |at: &[u8]| u64::from_le_bytes(at.try_into().expect("eight bytes"));
         let (mut controls, mut listed) = (Vec::new(), BTreeSet::new());
         let (entries, rest) = bytes.as_chunks::<{ CONTROL_ENTRY_BYTES as usize }>();
@@ -44,5 +32,25 @@ impl Executor<'_> {
             }
         }
         Ok(controls)
+    }
+
+    /// The bytes of a list of `count` entries of `entry_bytes` at `address` in the interface's memory: inside
+    /// memory, the byte count computed as a mathematical integer, and none holding qubits (else
+    /// `bad_argument`); a list of no entry reads no byte, at any address.
+    pub(crate) fn list_bytes(&self, address: u64, count: u64, entry_bytes: u64) -> Result<Vec<u8>, Fault> {
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        let end = u128::from(address) + u128::from(count) * u128::from(entry_bytes);
+        if end > self.memory.len() as u128 {
+            return Err(Fault::BadArgument);
+        }
+        let range = address as usize..end as usize;
+        if self.quantum.has_cells_in(range.start as u64..range.end as u64) {
+            return Err(Fault::BadArgument);
+        }
+        let mut bytes = vec![0; range.len()];
+        self.memory.read_into(range, &mut bytes);
+        Ok(bytes)
     }
 }

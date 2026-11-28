@@ -9,6 +9,7 @@
 //! a faulted one alike. A coherent region (`apply`) runs its callee once for each definite value of its
 //! argument registers, on private memory, and XORs the result into its target (`region`).
 
+mod apply_block;
 mod apply_device;
 mod apply_report;
 mod arith;

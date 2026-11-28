@@ -18,9 +18,9 @@ mod writer;
 pub use codes::{GATE_CODES, ROTATION_CODES, gate_code, rotation_code};
 pub use fault::Fault;
 pub use module::{
-    Block, CONTROL_ENTRY_BYTES, Controls, DataItem, DataSegment, ENTRY_RETURN_ADDRESS, Function, GateKind, Inst,
-    JUMP_RECORD_BYTES, MEMORY_QUBIT_BITS, MeasureSource, Module, Param, Place, Qubit, Signature, SwitchCase, Target,
-    Terminator, code_address,
+    Block, BlockApply, CONTROL_ENTRY_BYTES, Controls, DataItem, DataSegment, ENTRY_RETURN_ADDRESS, FIELD_ENTRY_BYTES,
+    FIELD_IN, FIELD_OUT, Function, GateKind, Inst, JUMP_RECORD_BYTES, MEMORY_QUBIT_BITS, MeasureSource, Module, Param,
+    Place, Qubit, Signature, SwitchCase, Target, Terminator, code_address,
 };
 pub use ops::{BinOp, CastOp, FixedGate, Gate, Predicate, Rotation};
 pub use reader::{NameKind, ReadError, ReadErrorKind, read};

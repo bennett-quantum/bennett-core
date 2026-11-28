@@ -69,7 +69,7 @@ fn malformed_statements_are_named() {
     assert!(matches!(read_error(twice).2, ReadErrorKind::Redefined { .. }));
     assert_eq!(
         read_error("ret\n").2,
-        ReadErrorKind::Unexpected { expected: "`memory`, `data` or `func`", found: "`ret`".into() }
+        ReadErrorKind::Unexpected { expected: "`memory`, `data`, `func` or `applied func`", found: "`ret`".into() }
     );
 }
 

@@ -5,8 +5,8 @@ use petgraph::graph::{DiGraph, NodeIndex};
 
 use super::error::{Expected, Location, Problem, ValidationError};
 use crate::{
-    CastOp, Controls, Fault, FixedGate, Function, Gate, GateKind, Inst, MEMORY_QUBIT_BITS, MeasureSource, Module,
-    Operand, Place, Qubits, Slot, Terminator, Type, Width,
+    BlockApply, CastOp, Controls, Fault, FixedGate, Function, Gate, GateKind, Inst, MEMORY_QUBIT_BITS, MeasureSource,
+    Module, Operand, Place, Qubits, Slot, Terminator, Type, Width,
 };
 
 /// Checks `function`, appending what is wrong to `errors`, and returns the type of every slot. The types
@@ -17,6 +17,7 @@ pub(super) fn check(module: &Module, function: &Function, errors: &mut Vec<Valid
     if !checker.indices_in_range() {
         return Vec::new();
     }
+    checker.applied_signature();
     checker.definitions();
     checker.undefined_uses();
     checker.operand_types();
@@ -49,6 +50,14 @@ struct Checker<'a> {
 }
 
 impl<'a> Checker<'a> {
+    /// An apply target (`applied func`) takes one `i64`, its block's address, and returns nothing.
+    fn applied_signature(&mut self) {
+        let params: Vec<Type> = self.function.params.iter().map(|param| param.ty).collect();
+        if self.function.applied && (params != [Type::Int(Width::WORD)] || self.function.result.is_some()) {
+            self.error(Site::Function, Problem::AppliedSignature);
+        }
+    }
+
     fn error(&mut self, site: Site, problem: Problem) {
         let function = self.function.name.clone();
         let block = |b: usize| self.function.blocks[b].name.clone();
@@ -177,7 +186,8 @@ impl<'a> Checker<'a> {
             | Inst::GateAt { .. }
             | Inst::RotateBy { .. }
             | Inst::GateBy { .. }
-            | Inst::Apply { .. } => None,
+            | Inst::Apply { .. }
+            | Inst::ApplyBlock { .. } => None,
         }
     }
 
@@ -324,6 +334,15 @@ impl<'a> Checker<'a> {
             Inst::Apply { callee, args, out, fault, budget } => {
                 self.apply(site, *callee, args, *out, *fault);
                 self.expect(site, *budget, Type::Int(Width::WORD));
+            }
+            // Every operand is checked when the `apply` runs (`docs/SYNTAX.md`, "Applying to a block").
+            Inst::ApplyBlock(apply) => {
+                let BlockApply { function, budget, fault, image, size, fields, field_count, controls, control_count } =
+                    &**apply;
+                for operand in [function, budget, image, size, fields, field_count, controls, control_count] {
+                    self.expect(site, *operand, Type::Int(Width::WORD));
+                }
+                self.register_operand(site, *fault);
             }
             Inst::FuncAddr { .. } | Inst::Qalloc { .. } | Inst::StackSave { .. } | Inst::ReturnAddress { .. } => {}
         }

@@ -4,8 +4,8 @@
 use std::fmt::{self, Write};
 
 use crate::{
-    Block, Controls, DataItem, DataSegment, Function, Gate, GateKind, Inst, MeasureSource, Module, Operand, Param,
-    Place, Qubit, Signature, Slot, Target, Terminator, Type,
+    Block, BlockApply, Controls, DataItem, DataSegment, Function, Gate, GateKind, Inst, MeasureSource, Module, Operand,
+    Param, Place, Qubit, Signature, Slot, Target, Terminator, Type,
 };
 
 /// Writes a module in its text form.
@@ -53,7 +53,8 @@ impl Writer<'_> {
     }
 
     fn function(&mut self, function: &Function) -> fmt::Result {
-        write!(self.out, "func @{}", function.name)?;
+        let applied = if function.applied { "applied " } else { "" };
+        write!(self.out, "{applied}func @{}", function.name)?;
         write_params(self.out, function, &function.params)?;
         if let Some(result) = function.result {
             write!(self.out, " -> {result}")?;
@@ -160,6 +161,23 @@ impl Writer<'_> {
                 write!(self.out, "apply @{}", self.module.function(*callee).name)?;
                 write_args(self.out, f, args)?;
                 write!(self.out, " -> {}, {} budget {}", name(out), name(fault), op(budget))
+            }
+            Inst::ApplyBlock(apply) => {
+                let BlockApply { function, budget, fault, image, size, fields, field_count, controls, control_count } =
+                    &**apply;
+                write!(
+                    self.out,
+                    "apply {} budget {}, fault {}, image({}, {}), fields({}, {}), ctrl list({}, {})",
+                    op(function),
+                    op(budget),
+                    op(fault),
+                    op(image),
+                    op(size),
+                    op(fields),
+                    op(field_count),
+                    op(controls),
+                    op(control_count)
+                )
             }
         }
     }
