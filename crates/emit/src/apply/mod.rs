@@ -283,21 +283,42 @@ fn compile_with_analysis_limit(
                         break (copies, Construction::StepMachine { ticks }, refusal.reason());
                     }
                     Step::Branch(..) => {
-                        if let Some(candidate) = candidate.take()
-                            && let Some((plan, checkpoint)) = candidate.prove(&input, &program, &memory)
-                        {
-                            let mut in_place = circuit.suffix(&checkpoint);
-                            let residue = plan.emit(&mut in_place);
-                            if wires.fits(&in_place) {
-                                circuit.replace_after(checkpoint, in_place);
-                                break (
-                                    Copies { returned: vec![(ONE, residue)], faulted: Vec::new() },
-                                    Construction::ModularInPlace { passes: plan.passes() },
-                                    "a proved modular residue update with a whole-function budget",
-                                );
+                        let remaining = input.budget - spent;
+                        if let Some(candidate) = candidate.take() {
+                            let check_controlled = candidate.can_skip_empty_exit()
+                                && (!program.has_calls()
+                                    || (point.copy != 0
+                                        && (program.has_memory() || saved::Loop::prove(&program, point).is_none())));
+                            if let Some((plan, checkpoint)) =
+                                candidate.prove(&input, &program, &memory, check_controlled)
+                            {
+                                if plan.preserve_controlled {
+                                    let control_start = circuit.checkpoint();
+                                    let mut controlled = circuit.suffix(&control_start);
+                                    if let Ok((copies, proved_passes)) =
+                                        controls::run(&mut controlled, &program, &slots, point, remaining)
+                                        && wires.fits(&controlled)
+                                    {
+                                        circuit.replace_after(control_start, controlled);
+                                        break (
+                                            copies,
+                                            Construction::Controlled { proved_passes },
+                                            "qubit-dependent choices use controls within the shared budget",
+                                        );
+                                    }
+                                }
+                                let mut in_place = circuit.suffix(&checkpoint);
+                                let residue = plan.emit(&mut in_place);
+                                if wires.fits(&in_place) {
+                                    circuit.replace_after(checkpoint, in_place);
+                                    break (
+                                        Copies { returned: vec![(ONE, residue)], faulted: Vec::new() },
+                                        Construction::ModularInPlace { passes: plan.passes() },
+                                        "a proved modular residue update with a whole-function budget",
+                                    );
+                                }
                             }
                         }
-                        let remaining = input.budget - spent;
                         let reason = match mode {
                             ApplyMode::Automatic => {
                                 // Preserve the cheaper fixed-charge schedule for covered copied loops.
