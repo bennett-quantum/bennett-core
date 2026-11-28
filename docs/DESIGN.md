@@ -2320,7 +2320,7 @@ The front writes `retaddr N` for every `llvm.returnaddress(N)` in the default ad
   of the 31 nonzero codes are used: 1 to 10, 12 to 14, 16 to 18 (`bad_angle`, a rotation whose computed angle
   is not finite), 19 (`out_of_memory`, the C runtime's heap exhausted) and 20 to 24 (`bad_width`,
   `out_of_handles`, `bad_range`, `bad_gate`, `bad_argument`, the checks of the handle interface; `bad_argument` is
-  reached through `fault NAME` until a form checks it). 11 was `dirty_free` and 15
+  raised by an unreadable control list, `ctrl list(...)`, and through `fault NAME`). 11 was `dirty_free` and 15
   `bad_rewind`, both removed on 2026-11-17. Those codes stay unused and the remaining codes keep their
   numbers because programs may have measured the old codes.
 - `qfree` is the partial trace and never faults on what the register holds: a release of an allocated
