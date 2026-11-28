@@ -43,6 +43,19 @@ def unmarked(modules):
         return [module for module in pool.map(lacks, modules) if module is not None]
 
 
+def main_parameters(ir):
+    """The number of parameters of the external definition of main in a module's LLVM text, or None if it has none."""
+    match = re.search(r"^define (?!(?:internal|private) )[^\n]* @main\(([^\n]*)\)", ir, re.M)
+    if match is None:
+        return None
+    if "..." in match[1]:
+        raise SystemExit("the program needs a defined nonvariadic int main")
+    count = 0 if not match[1].strip() else len(match[1].split(","))
+    if count > 3:
+        raise SystemExit("main has more than three parameters")
+    return count
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=__doc__, usage="%(prog)s [options] source... -o OUTPUT [-- ARGUMENT ...]",
@@ -112,17 +125,13 @@ def main():
                 alias.symlink_to(source)
                 language, headers, source = (["-x", "cpp-output"] if held else []), [], alias
             compile_unit([*common, *headers, *language, *args.clang_flag], source, output)
-    # The program's units linked in the order given, as a native link of its objects resolves them: start-up passes
-    # the arguments of the main that wins there, the one external definition, not a unit's private function of
-    # that symbol name or a weak one that another unit's definition replaces.
+    # The program's units linked in the order given, as a native link of its objects resolves them. Start-up
+    # passes the arguments of the main that wins the whole link, the library's members included: the one external
+    # definition, not a unit's private function of that symbol name or a weak one that another definition
+    # replaces. A first guess from the program's units is checked after each selection of members below.
     run(["llvm-link-18", *program, "-o", scratch / "program.bc"])
     ir = run(["llvm-dis-18", scratch / "program.bc", "-o", "-"], capture_output=True, text=True).stdout
-    match = re.search(r"^define (?!(?:internal|private) )[^\n]* @main\(([^\n]*)\)", ir, re.M)
-    if not match or "..." in match[1]:
-        parser.error("the program needs a defined nonvariadic int main")
-    count = 0 if not match[1].strip() else len(match[1].split(","))
-    if count > 3:
-        parser.error("main has more than three parameters")
+    count = main_parameters(ir) or 0
     # Inputs are data in the run image, never host calls made by the device. Keep them separately
     # compilable: the linked C functions consume these bytes with ordinary journalled loads/stores.
     entropy = args.entropy_image.read_bytes() if args.entropy_image else b""
@@ -193,6 +202,14 @@ def main():
         marked.update([*inputs, *selected])
         run(["llvm-link-18", *inputs, *selected, "-o", scratch / "linked.bc"])
         run(["llvm-dis-18", scratch / "linked.bc", "-o", scratch / "linked.ll"])
+        winner = main_parameters((scratch / "linked.ll").read_text())
+        if winner is None:
+            raise SystemExit("the program needs a defined nonvariadic int main")
+        if winner != count:
+            # A member selected from the library defines the main that wins: start-up passes its parameters.
+            count = winner
+            compile_unit([*flags, *common, f"-DMAIN_ARGS={count}"], HERE / "start.c", scratch / "start.bc")
+            continue
         run(["python3", HERE / "weak.py", scratch / "linked.ll", scratch / "linked.ll"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         run(["llvm-as-18", scratch / "linked.ll", "-o", scratch / "linked.bc"])

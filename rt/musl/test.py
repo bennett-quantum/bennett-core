@@ -437,7 +437,8 @@ def merged_definitions(args):
 def main_selection(args):
     """Start-up passes the arguments of the program's main as the linked program resolves it: the one external
     definition, after a private function of that symbol name (tests/main/helper.c) or a weak main that it replaces
-    (fallback.c) in the first unit. Each agrees with the native program run with the argument `x`."""
+    (fallback.c) in the first unit, and a strong main of a library member that the program's weak main pulls in
+    (weak-entry.c, archive-entry.c). Each agrees with the native program run with the argument `x`."""
     units = HERE / "tests/main"
     cases = [("private main first", [units / "helper.c", units / "entry.c"], ["-DWITH_HELPER"], 3),
              ("weak main first", [units / "fallback.c", units / "entry.c"], [], 2)]
@@ -453,6 +454,30 @@ def main_selection(args):
         result = run([args.executor, "run", "--entry", "__bennett_entry", "--budget", 100000000, program])
         assert f"result: {status}\n" in result.stdout, (name, result.stdout)
         print(f"main {name}: passed ({steps_of(result.stdout)} steps)", flush=True)
+    # The winning main can come from the library: a member that the program's weak main pulls in defines a strong one.
+    lib = args.out / "main-lib"
+    lib.mkdir(parents=True, exist_ok=True)
+    member = lib / "archive-entry.bc"
+    compiled = run([args.front.with_name("bennett-cc"), "-o", member, units / "archive-entry.c"])
+    assert compiled.returncode == 0, compiled.stderr
+    for name in ("cflags.json", "sysroot"):
+        (lib / name).unlink(missing_ok=True)
+        (lib / name).symlink_to(args.libdir.resolve() / name)
+    (lib / "members.txt").write_text((args.libdir / "members.txt").read_text() + f"{member}\n")
+    (lib / "index.tsv").unlink(missing_ok=True)
+    archive, native = args.out / "main-archive.a", args.out / "main-archive.native"
+    archive.unlink(missing_ok=True)
+    assert run(["clang-18", "-c", units / "archive-entry.c", "-o", args.out / "archive-entry.o"]).returncode == 0
+    assert run(["llvm-ar-18", "rcs", archive, args.out / "archive-entry.o"]).returncode == 0
+    assert run(["clang-18", units / "weak-entry.c", archive, "-o", native]).returncode == 0
+    assert run([native, "x"]).returncode == 3, "native"
+    program = args.out / "main-archive.bn"
+    linked = run(["python3", HERE / "link.py", units / "weak-entry.c", "--libdir", lib, "--front", args.front,
+                  "-o", program, "--", "x"])
+    assert linked.returncode == 0, linked.stderr
+    result = run([args.executor, "run", "--entry", "__bennett_entry", "--budget", 100000000, program])
+    assert "result: 3\n" in result.stdout, result.stdout
+    print(f"main from a library member: passed ({steps_of(result.stdout)} steps)", flush=True)
 
 
 def main():
