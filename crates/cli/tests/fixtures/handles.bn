@@ -1,5 +1,6 @@
 ; Handles as integers through the CLI (crates/cli/tests/handles.rs): a register of `%w` qubits allocated at
-; run time, its last qubit named by a position computed at run time, under a control in a `qN` register.
+; run time, its last qubit named by a position computed from its width (`qwidth`) at run time, under a
+; control in a `qN` register.
 memory 256
 
 func @main(i64 %w) {
@@ -7,7 +8,8 @@ entry:
     %h = qalloc i64 %w
     %q = qalloc 2
     h %q
-    %last = sub i64 %w, 1
+    %width = qwidth %h
+    %last = sub i64 %width, 1
     x %h[%last] ctrl %q[1]
     qfree %h
     qfree %q

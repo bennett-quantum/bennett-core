@@ -39,6 +39,7 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | effect operand                             ; one i8 to the console
             | %d = qalloc N                              ; N from 1 to 2^32 - 1
             | %d = qalloc i64 operand                    ; the width at run time; %d an i64 handle
+            | %d = qwidth %r                             ; the i64 width %r's allocation was given
             | qfree operand                              ; the partial trace: the register dropped unexamined
             | GATE qubit [ctrl qubit {, qubit}]          ; x y h z s sdg t tdg
             | (rx | ry | rz | p)(ANGLE) qubit [ctrl ...] ; radians, any finite angle
@@ -191,6 +192,11 @@ validator refuses two repetitions it can see in the text, and no other: the same
 same literal position (`RepeatedQubit`), and the same address operand at the same bit (`RepeatedMemoryQubit`).
 Every other way of naming one qubit twice (through `i64` handles, run-time positions, two slots holding one
 register, two addresses naming one byte) is the run-time `qubit_alias`.
+
+`%w = qwidth %r` gives, as an `i64`, the width the allocation that made `%r` (a `qN` register or an `i64`
+handle) was given; a handle that names no register is `dangling_register`. It is a derived form: the program
+could have kept the width it allocated with; it reads the handle table and does nothing to the qubits.
+Inside an applied function it is a quantum instruction, `quantum_in_region` (8), like the other forms here.
 
 Controls written in the instruction keep the device language's rule that a qubit appears once in a gate:
 a control repeated is refused like the target among its controls, by the validator or at run time as above. The handle interface's controls come

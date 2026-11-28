@@ -123,6 +123,7 @@ impl Writer<'_> {
             Inst::Effect { byte } => write!(self.out, "effect {}", op(byte)),
             Inst::Qalloc { width, .. } => write!(self.out, "qalloc {}", width.count()),
             Inst::QallocBy { width, .. } => write!(self.out, "qalloc i64 {}", op(width)),
+            Inst::Qwidth { register, .. } => write!(self.out, "qwidth {}", name(register)),
             Inst::Qfree { register } => write!(self.out, "qfree {}", op(register)),
             Inst::Gate { gate, target, controls } => {
                 let controls: Vec<Place> = controls.iter().map(|&qubit| Place::Register(qubit)).collect();

@@ -255,6 +255,7 @@ impl<'a> Frame<'a> {
                 }
                 Inst::Qalloc { .. }
                 | Inst::QallocBy { .. }
+                | Inst::Qwidth { .. }
                 | Inst::Qfree { .. }
                 | Inst::Gate { .. }
                 | Inst::GateAt { .. }
@@ -307,6 +308,7 @@ pub(super) fn before_instruction_fault(block: &Block) -> (&[Inst], Option<&Termi
             Inst::Effect { .. }
                 | Inst::Qalloc { .. }
                 | Inst::QallocBy { .. }
+                | Inst::Qwidth { .. }
                 | Inst::Qfree { .. }
                 | Inst::Gate { .. }
                 | Inst::GateAt { .. }
@@ -348,6 +350,7 @@ fn unsupported(inst: &Inst) -> Option<(&'static str, &'static str)> {
         Inst::Effect { .. }
         | Inst::Qalloc { .. }
         | Inst::QallocBy { .. }
+        | Inst::Qwidth { .. }
         | Inst::Qfree { .. }
         | Inst::Gate { .. }
         | Inst::GateAt { .. }

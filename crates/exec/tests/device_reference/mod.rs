@@ -382,7 +382,7 @@ impl<'m> Device<'m> {
                 self.save_jump_record(buffer)?;
                 Some(0)
             }
-            Inst::GateBy { .. } | Inst::MeasureSlice { .. } => {
+            Inst::Qwidth { .. } | Inst::GateBy { .. } | Inst::MeasureSlice { .. } => {
                 panic!("instruction outside the outer reference: {inst:?}")
             }
         };

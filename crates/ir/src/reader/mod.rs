@@ -292,6 +292,7 @@ fn renumber_functions(module: &mut Module, order: &[u32]) {
             | Inst::Effect { .. }
             | Inst::Qalloc { .. }
             | Inst::QallocBy { .. }
+            | Inst::Qwidth { .. }
             | Inst::Qfree { .. }
             | Inst::Gate { .. }
             | Inst::GateAt { .. }

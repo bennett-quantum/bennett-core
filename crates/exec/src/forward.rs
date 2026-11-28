@@ -71,6 +71,10 @@ impl<'m> Executor<'m> {
                 let width = u32::try_from(self.read_word(width)).ok().and_then(Qubits::new).ok_or(Fault::BadWidth)?;
                 self.qalloc(*dst, width, true, context)?;
             }
+            Inst::Qwidth { dst, register } => {
+                let (_, qubits) = self.register(*register)?;
+                self.produce(*dst, u128::from(qubits.count()));
+            }
             Inst::Qfree { register } => {
                 let handle = self.handle_of(register);
                 let (id, qubits) = self.register_of(handle)?;
