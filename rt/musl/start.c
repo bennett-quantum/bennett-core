@@ -26,7 +26,7 @@ static int invoke_main(int argc, char **argv, char **envp)
     return CALL_MAIN;
 }
 int __libc_start_main(int (*)(int, char **, char **), int, char **, void (*)(), void (*)(), void (*)());
-_Noreturn void __bennett_exit(int);
+/* __bennett_exit is declared by bq-prefix.h, which bennett-cc includes by force (docs/HANDLES.md, section 15). */
 
 int __bennett_entry(void)
 {

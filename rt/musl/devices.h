@@ -1,7 +1,7 @@
 #ifndef BENNETT_DEVICES_H
 #define BENNETT_DEVICES_H
 #include <stdint.h>
-void __bennett_effect(char);
+/* __bennett_effect is declared by bq-prefix.h, which bennett-cc includes by force (docs/HANDLES.md, section 15). */
 /* cpu: a CPU-time clock, which does not count the time the process sleeps. */
 uint64_t __bennett_clock_now(int cpu);
 uint64_t __bennett_clock_read(int cpu);
