@@ -1665,6 +1665,27 @@ and `int *` parameters alike) and on no other (`int64_t (int64_t)`, `void (uint6
 has exactly one interface instruction per call at both levels. The conforming program of `handles_front.rs` runs
 under every option of the baseline's table.
 
+**The milestone programs on the device** (`front/tests/tests/handles_device.rs`). The thesis program, Grover over a
+C predicate and Shor for 15 (`examples/handles/`) are linked with musl by `rt/musl/link.py`, every unit through
+`bennett-cc`, and run on the simulator, at `-O0` and `-O2`, with three seeds. Each is built twice, as section 7 of
+`docs/HANDLES.md` says: a measuring build with every budget unbounded, whose step report (D16) gives the most steps
+each `apply` used, and a result build with those counts, which prints what the measuring build prints, seed by seed;
+with one step less, an input of that `apply` ends at the budget. Both levels print the same with every seed. What
+they print is in the stand-in's comparison class: the thesis program's eight shots each measure `q = 0, r = 1` or
+`q = 1, r = 0`; Grover prints the stand-in's line, `iterations 12, measured 235, is_marked = 1`; each `y` Shor
+measures has nonzero probability in the stand-in's table for its exponent register, and the last line is `15 = 3 x
+5`. The budgets measured on the device, at `-O0` and `-O2`: `negate` 17 and 17 steps, `is_marked` 21 and 21,
+`modexp` 100 and 99 (the stand-in counts its own steps, `docs/HANDLES.md`, section 7).
+
+Every `apply` of the three programs runs on the simulator's direct evaluation. The counter, the OpenQASM writer and
+`--apply-circuit` stop at the first one by name ("apply to a block is evaluated by the simulator only"), so the
+Toffoli and qubit counts of these programs wait on the gate emitter's D17.
+
+The simulator holds a released register's qubits as unnamed columns (the partial trace kept exactly), so a register
+released while entangled keeps its values in the state: Shor for 15 releases its residue register (4 values) in
+every attempt, and the number of basis configurations grows fourfold per attempt: at most 256 in the first, 4,096
+measured in the third. The test allows 2^16, five attempts; its seeds need at most three.
+
 ## What LLVM's passes may not change
 
 LLVM's optimiser, and every simplifier the front runs on code it made, keep the behaviour of native C. The
