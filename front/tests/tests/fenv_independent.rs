@@ -421,22 +421,18 @@ fn builtin_set_flt_rounds_agrees_with_native() {
     }
 }
 
-/// Defect witness: `lroundl` and `llroundl` of `0x1.fffffffffffffffep62L` (`2^63 - 0.5L`) round away
-/// from zero to `+2^63`, which overflows signed 64-bit `long`/`long long`. Native glibc raises
-/// `FE_INVALID` (in SSE), whereas `rt/softfloat/libgcc.c`'s `round_to_integer` wraps the carry into
-/// `INT64_MIN` without raising any exception flag.
-///
-/// Reproduce:
-///   `front/test.sh --test fenv_independent lroundl_and_llroundl_at_two_to_63_minus_half_raise_invalid -- --ignored --exact --nocapture`
+/// `lroundl` and `llroundl` of `0x1.fffffffffffffffep62L` (`2^63 - 0.5L`) round away from zero to `+2^63`,
+/// which overflows signed 64-bit `long`/`long long`. Native glibc raises `FE_INVALID` (in SSE); the device
+/// wrapped the carry into `INT64_MIN` without raising any exception flag until `rt/softfloat/libgcc.c`'s
+/// `round_to_integer` raised it too.
 ///
 /// Expected (native clang 18 + glibc at `-O0` and `-O2`, with and without `-fno-math-errno`):
 ///   `lroundl inv=1 sse=01 x87=00`
 ///   `llroundl inv=1 sse=01 x87=00`
-/// Observed (device at `-O0`, `-O2`, and `-O2 -fno-math-errno`):
+/// Observed on the device before the fix (`-O0`, `-O2`, and `-O2 -fno-math-errno`):
 ///   `lroundl inv=0 sse=00 x87=00`
 ///   `llroundl inv=0 sse=00 x87=00`
 #[test]
-#[ignore = "defect: lroundl/llroundl(2^63 - 0.5L) omits FE_INVALID (observed inv=0 sse=00 x87=00, expected inv=1 sse=01 x87=00)"]
 fn lroundl_and_llroundl_at_two_to_63_minus_half_raise_invalid() {
     let source = write_c(
         "fenv_indep_lroundl_overflow",

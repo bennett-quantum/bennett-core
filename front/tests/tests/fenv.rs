@@ -1,7 +1,8 @@
 //! The floating-point environment against the native program (clang 18 with glibc on x86-64): every operation
 //! under each of the four rounding modes, its result's bits and the exception flags it raised, and `<fenv.h>`
 //! itself, with musl linked on the device (`rt/musl/fenv.c`, the state in `rt/softfloat/libgcc.c`). The C
-//! programs say what they compare (`front/tests/c/fenv_ops.c`, `fenv_api.c`, `fenv_pows.c`). The rounding modes and
+//! programs say what they compare (`front/tests/c/fenv_ops.c`, `fenv_api.c`, `fenv_pows.c`,
+//! `round_to_integer_bounds.c`). The rounding modes and
 //! ISO C's five exceptions are the guarantee; x86's denormal-operand flag, compared beside them, is outside it:
 //! best effort, its known gap (glibc's `fmal`) not compared.
 use bennett_exec::{Executor, Options, Outcome};
@@ -90,6 +91,15 @@ fn every_operation_rounds_and_raises_flags_as_native_code_from_o2_without_errno(
 #[test]
 fn integer_powers_raise_the_denormal_operand_flag_as_native_code() {
     agrees("fenv_pows.c", "fenv_pows", &["-O0", "-O2"], &[]);
+}
+
+/// lround, llround, lrint and llrint on each format, directly and through pointers, in each mode, just inside, at
+/// and just outside the 64-bit range of both signs: the result and the flags in each unit. lroundl and llroundl of
+/// 2^63 - 0.5 rounded to 2^63 without glibc's invalid (in SSE) before.
+#[test]
+fn rounding_to_64_bits_at_the_edges_of_the_range_raises_flags_as_native_code() {
+    agrees("round_to_integer_bounds.c", "round_to_integer_bounds", &["-O0", "-O2"], &[]);
+    agrees("round_to_integer_bounds.c", "round_to_integer_bounds_o2", &["-O2"], &["-fno-math-errno"]);
 }
 
 #[test]

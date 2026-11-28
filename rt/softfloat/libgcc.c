@@ -905,7 +905,11 @@ long double roundl(long double a) {
  * integer bit and moves the point one place) and the integral part taken; up to 0x3FFF + 62 the same in the
  * low half, with a carry into the high half. From 0x3FFF + 63 (the integer is too large, or the operand is an
  * infinity or a NaN) glibc converts the operand itself as x87 does (`(long long int) x`), which `__fixxfdi`
- * gives. The sign is applied last, wrapping. */
+ * gives. The sign is applied last, wrapping. A positive operand that rounds to 2^63 (only 2^63 - 0.5, at
+ * 0x3FFF + 62) is out of range: glibc raises invalid with feraiseexcept, which x86-64's raises in SSE (a
+ * division of zero by zero in float), and returns the wrapped value. This routine runs between the two
+ * `__bennett_x87_swap` calls of an x87-unit routine (below), where SSE's flags are held in
+ * `x87_exceptionFlags`; in a program without the environment those are never read. */
 static long long round_to_integer(long double a) {
   extFloat80_t x = x80_bits(a);
   int_fast32_t exponent = (int_fast32_t)(x.signExp & 0x7FFF) - 0x3FFF;
@@ -925,6 +929,7 @@ static long long round_to_integer(long double a) {
     uint64_t integral = high;
     if (sum < low) ++integral;
     result = exponent == 31 ? integral : integral << (exponent - 31) | sum >> (63 - exponent);
+    if (!(x.signExp & 0x8000) && result == UINT64_C(0x8000000000000000)) x87_exceptionFlags |= softfloat_flag_invalid;
   } else {
     return __fixxfdi(a);
   }
