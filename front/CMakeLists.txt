@@ -46,6 +46,7 @@ add_executable(bennett-front
   src/Primitives.cpp
   src/HandleProgram.cpp
   src/HandleCalls.cpp
+  src/RelativeLoads.cpp
 )
 # A new LLVM attribute or metadata kind stops the build until Claims.cpp classifies it (docs/DESIGN.md, "The
 # declaration check").

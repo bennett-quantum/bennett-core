@@ -15,6 +15,7 @@
 #include "Outline.h"
 #include "HandleProgram.h"
 #include "Passes.h"
+#include "RelativeLoads.h"
 #include "SoftFloat.h"
 #include "Startup.h"
 
@@ -199,6 +200,8 @@ int main(int argc, char **argv) {
   // Memory effects of the outlined functions, which decide what may run coherently.
   bennett::inferAttributes(*module);
   verify(*module, "after outlining");
+  bennett::lowerRelativeLoads(*module); // after the last LLVM pass (RelativeLoads.h)
+  verify(*module, "after lowering relative loads");
 
   if (!emitLLVM.empty()) {
     std::error_code code;

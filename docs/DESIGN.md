@@ -1354,7 +1354,10 @@ and utilities where they exist (`Abi.h`, `Normalise.h`):
   set as the operand constraints say; any other assembly is refused.
 - **Intrinsics**: LLVM's IntrinsicLowering and memory-intrinsic expansion where they exist; overflow-checking
   and saturating arithmetic by their definition in twice the width; `trap` is the fault `unreachable`.
-  `stacksave` and `stackrestore` are the device program's own instructions.
+  `stacksave` and `stackrestore` are the device program's own instructions. `load.relative`, which clang's
+  optimiser makes of a table of pointers to constants in position-independent code (a `static const char *const`
+  table, `bq_fault_name` of `bq.h`), is written out after the last LLVM pass by its definition, `p + sext(load i32
+  (p + off))` (`RelativeLoads.h`; test `front/tests/tests/relative_loads.rs`).
 - **Constant expressions** over addresses are evaluated once every global is placed.
 - **Floating point** (`SoftFloat.h`) is what LLVM's soft-float legalisation does for a machine without
   floating-point hardware, as a pass over LLVM IR: each `float`, `double` and `long double` (x87 80-bit)
