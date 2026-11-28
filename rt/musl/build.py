@@ -26,6 +26,8 @@ for _base in ["sqrt", "fma", "rint", "nearbyint", "lrint", "llrint", "round", "l
     for _name in [_base, _base + "f", _base + "l"]:
         REPLACED[Path(f"src/math/{_name}.c")] = (HERE / "math.c", ["-fno-math-errno", f"-DM_{_name}"])
 REPLACED[Path("src/math/ilogbl.c")] = (HERE / "math.c", ["-fno-math-errno", "-DM_ilogbl"])
+# timer_create stops by name (timer.c): musl's links the thread exit's inline assembly.
+REPLACED[Path("src/time/timer_create.c")] = (HERE / "timer.c", [])
 
 
 def main():

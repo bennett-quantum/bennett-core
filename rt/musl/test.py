@@ -40,6 +40,17 @@ REFUSED = ["unimplemented", "stderr", "sleep-cpu", "sleep-beyond", "sleep-alarm-
            "timer-create"]
 
 
+# Programs the device stops with `out_of_bounds`: a sleep request beyond device memory, which the runtime reads
+# since it does not know where memory ends (natively EFAULT; `rt/musl/README.md`, "Sleeping").
+BEYOND_MEMORY = ["sleep-beyond-memory"]
+
+
+# Programs whose native output depends on the host, each with the device's output as a function of the native
+# one: a host without a real-time clock device answers EOPNOTSUPP (-95) where the device, like a host with one,
+# answers EINVAL (-22) for the alarm clocks' other flags.
+HOST_DEPENDENT = {"sleep-alarm-flags": lambda native: native.replace(b" -95", b" -22")}
+
+
 # Run arguments (link.py -- ARGUMENT ..., --argv0): each case runs natively with the same argv (argv[0] included) and an
 # empty environment, and on the device, comparing status and stdout. Arguments are exact bytes; link.py options
 # may follow. The longest native argument, 131071 bytes and its NUL (Linux's MAX_ARG_STRLEN), starts with '-'.
@@ -127,6 +138,25 @@ def relinked_images(args):
     print(f"arguments relinked: passed (code identical; {', '.join(first_counts)} in both)", flush=True)
 
 
+def caller_frame(args):
+    """A sleep request in a frame above the C library's start-up (the entry caller_entry calls start-up), against
+    native, where main is the entry and the request in its own frame."""
+    source = HERE / "tests/sleep-caller.c"
+    program = args.out / "sleep-caller.bn"
+    linked = run(["python3", HERE / "link.py", source, "--libdir", args.libdir, "--front", args.front, "-o", program])
+    assert linked.returncode == 0, linked.stderr
+    result = run([args.executor, "run", "--entry", "caller_entry", "--budget", 100000000, program])
+    native = args.out / "sleep-caller.native"
+    built = run(["clang-18", "-O0", "-DNATIVE", source, "-o", native])
+    assert built.returncode == 0, built.stderr
+    reference = subprocess.run([native], capture_output=True, stdin=subprocess.DEVNULL)
+    assert result.returncode == 0 and f"result: {reference.returncode}\n" in result.stdout, result
+    console = next((line.removeprefix("console: ") for line in result.stdout.splitlines()
+                    if line.startswith("console: ")), "")
+    assert console == escaped(reference.stdout), (console, reference.stdout)
+    print(f"sleep-caller: passed (status {reference.returncode})", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--libdir", type=Path, default=ROOT / "target/musl")
@@ -138,7 +168,8 @@ def main():
     started = time.monotonic()
     # tests/regress: witnesses of the independent testing pass, each self-checking (status 0 natively).
     regressions = sorted(f"regress/{path.stem}" for path in (HERE / "tests/regress").glob("*.c"))
-    names = ["library", "exit", *EXHAUSTED, "alloc-arithmetic", *REFUSED, "heap", "signals", "sleep",
+    names = ["library", "exit", *EXHAUSTED, "alloc-arithmetic", *REFUSED, *BEYOND_MEMORY, "heap", "signals", "sleep",
+             "sleep-alarm-flags", "timer-own",
              "abort", "stdin", "brk",
              "fenv", "fenv-mode", "fenv-flags", "complex", "setjmp", "setjmp-independent", "setjmp-masks",
              "prototypes", "proto-independent",
@@ -163,6 +194,8 @@ def main():
             assert "returned to entry: classical state identical" in result.stdout, (name, level, result)
         if name in REFUSED:
             assert result.returncode == 1 and "fault: unreachable" in result.stdout, (name, result)
+        elif name in BEYOND_MEMORY:
+            assert result.returncode == 1 and "fault: out_of_bounds" in result.stdout, (name, result)
         elif name in EXHAUSTED:
             assert result.returncode == 1 and "fault: out_of_memory (code 19)" in result.stdout, (name, result)
             console = next((line.removeprefix("console: ") for line in result.stdout.splitlines()
@@ -181,7 +214,9 @@ def main():
                 assert (reference.returncode, reference.stdout) == (reference_o2.returncode, reference_o2.stdout), name
             # A process killed by a signal has the status a shell reports.
             status = reference.returncode if reference.returncode >= 0 else 128 - reference.returncode
-            output = reference.stdout
+            output = HOST_DEPENDENT.get(name, lambda native: native)(reference.stdout)
+            if output != reference.stdout:
+                print(f"{name}: the host answers {reference.stdout!r}, compared as {output!r}", flush=True)
             assert result.returncode == 0 and f"result: {status}\n" in result.stdout, (name, result)
             console = next((line.removeprefix("console: ") for line in result.stdout.splitlines()
                             if line.startswith("console: ")), "")
@@ -189,6 +224,7 @@ def main():
         print(f"{name} {level}: passed ({program.stat().st_size} text bytes)", flush=True)
     argument_cases(args)
     relinked_images(args)
+    caller_frame(args)
     print(f"library tests: {time.monotonic() - started:.2f}s", flush=True)
 
 

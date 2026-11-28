@@ -8,6 +8,4 @@
 #include <stddef.h>
 extern size_t __bennett_argument_count;
 extern char __bennett_argument_bytes[];
-/* start.c's vector of pointers ends with the auxiliary vector's words, from where musl's libc.auxv points. */
-#define BENNETT_AUXV_WORDS 6
 #endif

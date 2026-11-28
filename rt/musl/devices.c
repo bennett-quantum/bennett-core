@@ -9,8 +9,6 @@
 #include <fcntl.h>
 #include <sys/uio.h>
 #include <time.h>
-#include "libc.h"
-#include "start.h"
 #include "vfs.h"
 #include "devices.h"
 static unsigned inputs_prepared;
@@ -49,15 +47,15 @@ static int clock_id(long id) {
 static int cpu_clock(long id) {
     return id<0 || id==CLOCK_PROCESS_CPUTIME_ID || id==CLOCK_THREAD_CPUTIME_ID;
 }
-/* Whether the n bytes at p lie where a program's objects can: from address 16, where data starts (below it is
- * no object, as natively the lowest pages are never mapped), to the end of start.c's argument vector, the
- * highest object a program can name (the stack grows down from the top of memory and that vector is in the
- * outermost frame; musl records its auxiliary words as libc.auxv). Before musl's start-up has run, or under an
- * entry other than start.c's, only the low bound and the address's wrap are checked. Memory a program can
- * name but has not reached (below the stack pointer) counts as readable here, as a mapped native page does. */
+/* Whether the n bytes at p may be read, as far as Linux's answer is the same everywhere: device memory is the
+ * module's bytes [0, M), static data from address 16 and the stack down from M, and natively readable means
+ * mapped, an unrelated address space. The two agree on null and the lowest addresses (no object below 16 on the
+ * device; Linux never maps the lowest page) and on a range that wraps past the top of the address space: those
+ * are EFAULT. Any other request is read, and one reaching M or beyond stops with the device's `out_of_bounds`,
+ * since the runtime does not know M (rt/musl/README.md, "Sleeping"). */
 static int readable(const void *p,uint64_t n) {
-    uintptr_t address=(uintptr_t)p, top=libc.auxv?(uintptr_t)(libc.auxv+BENNETT_AUXV_WORDS):UINTPTR_MAX;
-    return address>=16 && address<=top && n<=top-address;
+    uintptr_t address=(uintptr_t)p;
+    return address>=16 && n<=UINTPTR_MAX-address+1;
 }
 /* Sleeping on the run's clock (rt/musl/README.md, "Sleeping"). Linux's order of checks: the clock id (an
  * unknown id, then a clock without a sleep), the request's address, the request's value, then what the clock's

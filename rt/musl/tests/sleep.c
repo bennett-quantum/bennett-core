@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
 #include <sys/syscall.h>
@@ -28,7 +29,16 @@ static void sleeps(const char *name, int returned, struct timespec left)
     printf("%s: %d, remaining %lld %ld\n", name, returned, (long long)left.tv_sec, left.tv_nsec);
 }
 
-int main(void)
+/* The last element of a static array: a request in static data. */
+static struct timespec statics[3];
+
+/* A request somewhere a program can name it, read as Linux reads it: only EFAULT says it was not readable. */
+static int readable_at(const struct timespec *request)
+{
+    return raw(CLOCK_MONOTONIC, 0, request) != -EFAULT;
+}
+
+int main(int argc, char **argv)
 {
     /* The remaining time is written only when a signal interrupts the sleep. */
     struct timespec left = {77, 77};
@@ -79,9 +89,9 @@ int main(void)
 
     /* Errors: the clock id, then the request's address, then its value, then the clock's own checks. */
     struct timespec bad_nsec = {0, 1000000000}, negative_nsec = {0, -1}, negative_sec = {-1, 0};
-    /* Unreadable requests: null, the lowest addresses, one that wraps and one beyond any memory. Linux copies the
-     * whole request before it checks the value. */
-    const struct timespec *unreadable[] = {0, (void *)8, (void *)-1L, (void *)(1L << 62), (void *)-8L};
+    /* Unreadable requests: null, the lowest addresses, and ones that wrap past the top of the address space. Linux
+     * copies the whole request before it checks the value. */
+    const struct timespec *unreadable[] = {0, (void *)8, (void *)15, (void *)-1L, (void *)-8L};
     for (unsigned i = 0; i < sizeof unreadable / sizeof *unreadable; ++i) {
         errno = 0;
         int returned = nanosleep(unreadable[i], &left);
@@ -89,6 +99,15 @@ int main(void)
         printf("  clock_nanosleep: %d, raw monotonic %ld\n", clock_nanosleep(CLOCK_REALTIME, 0, unreadable[i], 0),
                raw(CLOCK_MONOTONIC, TIMER_ABSTIME, unreadable[i]));
     }
+    /* Readable requests at the ends of the regions a program names: static data, the heap, the stack and the
+     * argument vector (argv's null pointer and the word after it, the environment's first pointer; its value
+     * differs with the environment, so only whether it was readable is compared). */
+    struct timespec *heap = malloc(4 * sizeof *heap);
+    struct timespec local = {0, 0};
+    heap[3] = local;
+    printf("readable: static %d, heap %d, stack %d, argument vector %d\n", readable_at(&statics[2]),
+           readable_at(&heap[3]), readable_at(&local), readable_at((const void *)&argv[argc]));
+    free(heap);
     const struct timespec *invalid[] = {&bad_nsec, &negative_nsec, &negative_sec};
     for (unsigned i = 0; i < sizeof invalid / sizeof *invalid; ++i) {
         errno = 0;
@@ -105,12 +124,8 @@ int main(void)
     printf("alarm clocks, bad requests: %ld %ld %ld %ld\n", raw(CLOCK_REALTIME_ALARM, 0, 0),
            raw(CLOCK_REALTIME_ALARM, 0, &bad_nsec), raw(CLOCK_BOOTTIME_ALARM, 0, 0),
            raw(CLOCK_BOOTTIME_ALARM, 0, &negative_sec));
-    /* The alarm clocks check their flags after the request and before the capability to wake the system. */
-    printf("alarm clocks, other flags:");
-    long flags[] = {2, 3, -1, -2};
-    for (unsigned i = 0; i < sizeof flags / sizeof *flags; ++i)
-        printf(" %ld %ld", raw(CLOCK_REALTIME_ALARM, flags[i], &zero), raw(CLOCK_BOOTTIME_ALARM, flags[i], &tenth));
-    printf("; bad requests first: %ld %ld\n", raw(CLOCK_REALTIME_ALARM, 2, (void *)-1L),
+    /* The alarm clocks check the request before their flags (tests/sleep-alarm-flags.c). */
+    printf("alarm clocks, other flags, bad requests first: %ld %ld\n", raw(CLOCK_REALTIME_ALARM, 2, (void *)-1L),
            raw(CLOCK_BOOTTIME_ALARM, -1, &negative_nsec));
     printf("remaining untouched: %lld %ld\n", (long long)left.tv_sec, left.tv_nsec);
     return 0;

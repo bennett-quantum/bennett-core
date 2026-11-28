@@ -9,7 +9,6 @@
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
-#include <time.h>
 #include "devices.h"
 
 #ifndef BENNETT_ARENA_BYTES
@@ -170,15 +169,6 @@ static long send_self(long sig)
     pending |= bit(sig);
     deliver();
     return 0;
-}
-
-/* Timers are refused by name (rt/musl/README.md, "Sleeping"). musl's timer_create also links its thread
- * notification, whose thread exit (__unmapself) is inline assembly the front does not translate, so the
- * runtime defines it: every call stops at run time, as the raw system call and the other timer calls do. */
-int timer_create(clockid_t clock, struct sigevent *restrict event, timer_t *restrict timer)
-{
-    (void)clock; (void)event; (void)timer;
-    __builtin_trap();
 }
 
 long __bennett_syscall(long number, long a1, long a2, long a3, long a4, long a5, long a6)

@@ -163,13 +163,23 @@ slept, modulo 2^64. The clock's unit is the nanosecond, so a duration needs no r
   `TIMER_ABSTIME` bit of the flags has a meaning. Errors are Linux's, in its order: an unknown clock id is
   `EINVAL`; the thread CPU clock, the raw and coarse clocks and a clock behind a descriptor have no sleep
   (`EOPNOTSUPP`; musl and glibc answer `EINVAL` for `CLOCK_THREAD_CPUTIME_ID` before the call); then a request
-  the program cannot read is `EFAULT` (Linux copies the whole request first): null, one that starts below address
-  16, where the device's data starts, one that wraps past the top of the address space, or one that ends beyond
-  start-up's argument vector, the highest object in memory (the stack grows down from the top; memory the
-  stack has not reached counts as readable, as a mapped native page does); then a negative second count or
-  nanoseconds outside `0 .. 999999999` is `EINVAL`; then a CPU-time id of a thread or of an unknown kind is
-  `EINVAL`, as on Linux; on the alarm clocks, flags other than `TIMER_ABSTIME` are `EINVAL` (a host without a
-  real-time clock device answers `EOPNOTSUPP` for them instead).
+  that cannot be read is `EFAULT` (Linux copies the whole request first, below); then a negative second count or
+  nanoseconds outside `0 .. 999999999` is `EINVAL`; then a CPU-time id of an unknown kind is `EINVAL`, as on
+  Linux, and so is a thread's: Linux refuses a sleep on the calling thread's own CPU-time clock and accepts one
+  on another live thread's, and the device has one thread, so every thread id is the caller's or names nothing;
+  on the alarm clocks, flags other than `TIMER_ABSTIME` are `EINVAL`, as on a host with a real-time clock
+  device (a host without one answers `EOPNOTSUPP` for every sleep on them with a valid request, whatever the
+  flags; `tests/sleep-alarm-flags.c` is compared with that answer read as `EINVAL`).
+- Which requests can be read. Device memory is the module's bytes from 0 to its memory size: static data from
+  address 16 (the globals, and the heap, which lies in the runtime's arena), then the stack, down from the top,
+  where the entry's frame is (start-up's, which holds the argument vector, or that of another entry that calls
+  start-up); below the stack pointer the bytes are not yet reached but can be read. A native program's address
+  space is another, so the two agree on what is readable only for live objects, for null and the lowest
+  addresses, and for a range that wraps past the top of the address space. A request starting below address 16
+  or wrapping is `EFAULT`; any other is read. One that reaches the end of device memory or beyond stops the run
+  with the device's `out_of_bounds` (`tests/sleep-beyond-memory.c`; natively `EFAULT`): the runtime does not
+  know the memory size, which the front fixes after it lays out the data. Route to `EFAULT` there: the memory
+  size given to the program (a symbol the front defines, as ELF's `_end`, or a device instruction that reads it).
 - A CPU-time id of a process other than the device's one is `EINVAL` by the device's own rule: the device has
   one process, so the id names nothing. Linux answers `EINVAL` for a process that does not exist and accepts
   the clock of one that does (a parent's, say).
@@ -178,14 +188,15 @@ slept, modulo 2^64. The clock's unit is the nanosecond, so a duration needs no r
   process's CPU time does not advance while it sleeps.
 - Also refused by name: a duration or a target of 2^64 nanoseconds or more (about 584 years, beyond the
   clock's range; natively such a sleep does not end in any run), and a sleep on `CLOCK_REALTIME_ALARM` or
-  `CLOCK_BOOTTIME_ALARM` with a valid request and flags (natively `EPERM` or a sleep, by the host's capability
-  to wake the system).
+  `CLOCK_BOOTTIME_ALARM` with a valid request and flags (natively `EOPNOTSUPP` without a real-time clock
+  device, else `EPERM` or a sleep, by the host's capability to wake the system).
 
 Timers are not implemented: `alarm`, `ualarm`, `setitimer`, `getitimer`, the `timer_*` calls and `timerfd`
 stop by name (`unreachable`) at run time, as `pause` and `sigsuspend` do. All but `timer_create` reach the
 system call, which is unimplemented; musl's `timer_create` also links its thread notification, whose thread exit
-(`__unmapself`) is inline assembly the front does not translate, so the runtime defines `timer_create` as that
-stop (`tests/timer-create.c`). With no timer and no asynchronous signal `pause` never returns natively;
+(`__unmapself`) is inline assembly the front does not translate, so `build.py` compiles `timer.c`, that stop, in
+place of musl's member (`tests/timer-create.c`). Like musl's, it is pulled from the archive only when a program
+calls `timer_create` without defining it: ISO C does not reserve the name (`tests/timer-own.c`). With no timer and no asynchronous signal `pause` never returns natively;
 `sigsuspend` traps even where natively it would return at once with `EINTR` (a pending signal that its mask
 unblocks), a debt of the same route. The route is in `docs/DESIGN.md`, "Files, clock and entropy at the musl
 boundary": an expiry is a value of the same clock; a sleep or a clock read that carries the clock past it makes
@@ -296,8 +307,10 @@ and without the signal mask (musl's `__sigsetjmp_tail`) and jumps out of signal 
 exhaustion by `mmap`, `malloc`, `realloc` and the break is the fault `out_of_memory` with the output flushed
 before it kept (`arena`, `heap-exhaust`, `realloc-exhaust`, `mmap-exhaust`, `brk-exhaust`), that musl's
 arithmetic rejections stay null against native (`alloc-arithmetic`), and named faults for stderr, an
-unimplemented syscall, the refused sleeps (`sleep-cpu`, `sleep-beyond`, `sleep-alarm-clock`) and a timer
-(`timer-alarm`); another rounding mode and a flag test agree with native.
+unimplemented syscall, the refused sleeps (`sleep-cpu`, `sleep-beyond`, `sleep-alarm-clock`) and timers
+(`timer-alarm`, `timer-create`), and `out_of_bounds` for a sleep request past device memory
+(`sleep-beyond-memory`); sleeps (`sleep`, `sleep-alarm-flags`; `sleep-caller` under an entry that calls
+start-up), a program's own `timer_create` (`timer-own`), another rounding mode and a flag test agree with native.
 `tests/regress/` holds the self-checking witnesses of the independent testing pass of this boundary (each
 returns 0 natively and failed or faulted here before its fix). The 35 programs (42 runs with the
 `-O2` ones) took 173 seconds with the debug CLI on the shared machine, after building the library.
@@ -318,7 +331,7 @@ floating-point `printf`, `strtod`, `sqrt`, `sin` and `pow`) 652,468 bytes, of wh
 Files and constructor-loaded byte images agree with native stdout/status. Clock arithmetic and seed
 bytes agree with a separate native C arithmetic oracle, including start `2^64-2` wrapping through zero
 (since 2026-11-27 `clocks.c` also sleeps: relative, absolute, in the past, and a sleep that wraps the clock,
-with the CPU-time clock read between; 42,868 and 43,096 steps at `-O0` for the two starts, 24 runs in 119 s).
+with the CPU-time clock read between; 42,844 and 43,072 steps at `-O0` for the two starts, 24 runs in 158 s).
 `getentropy`, random-device reads and vectored tape consumption additionally check each expected byte.
 All forward runs un-run to the identical entry snapshot (including buffers, both consumption counters,
 filesystem/allocator state and the lazy image guard); amplitude error zero. The witnesses also un-run exactly
