@@ -5,12 +5,14 @@ configure runs with clang; each member is compiled with bennett-cc, which includ
 front/include/bq-prefix.h by force and makes the declaration check of docs/HANDLES.md, section 4, so that the library
 takes its declarations of the effect primitives from that file (section 15, R1 and R2)."""
 import argparse
+import codecs
 import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 import os
 import re
 from pathlib import Path
+import shutil
 import subprocess
 
 HERE = Path(__file__).resolve().parent
@@ -36,23 +38,36 @@ REPLACED[Path("src/math/ilogbl.c")] = (HERE / "math.c", ["-fno-math-errno", "-DM
 REPLACED[Path("src/time/timer_create.c")] = (HERE / "timer.c", [])
 
 
-def driver_files(driver, scratch):
-    """The files the driver reads besides a unit: those it includes by force, as its own dependency list of an empty
-    probe unit names them (`-MD`), and every other file of their folders, where it also keeps its baseline. These
-    are the files of the folder built into that driver, which need not be this checkout's front/include."""
-    probe, deps = scratch / "driver-probe.c", scratch / "driver-probe.d"
-    probe.write_text("")
-    probed = subprocess.run([str(driver), "-MD", "-MF", str(deps), "-o", str(scratch / "driver-probe.bc"), str(probe)])
-    if probed.returncode != 0:
+def driver_reads(driver, flags, scratch):
+    """The files the driver reads besides a unit, as the system reports them: every regular file that the driver or a
+    process it starts (clang for the unit and for its baseline) opens for reading or executes, while it compiles an
+    empty unit with the members' own options, recorded by strace. These are the driver's declarations file and
+    baseline wherever they lie (through symbolic links too), the clang it runs and their libraries; the driver's
+    temporary files, in a folder of the probe's own, are left out. None (no reuse) where strace cannot be run."""
+    strace = shutil.which("strace")
+    if strace is None:
+        return None
+    probe = scratch / "driver-probe"
+    shutil.rmtree(probe, ignore_errors=True)
+    probe.mkdir(parents=True)
+    (probe / "probe.c").write_text("")
+    trace = scratch / "driver-probe.trace"
+    command = [strace, "-f", "-qq", "-s", "65535", "-e", "trace=open,openat,execve", "-o", trace,
+               driver, *flags, "-O0", "-o", probe / "probe.bc", probe / "probe.c"]
+    traced = subprocess.run([str(a) for a in command], cwd=probe, env={**os.environ, "TMPDIR": str(probe)})
+    if traced.returncode != 0:
         raise SystemExit(f"{driver} refused an empty unit, so no member can be compiled with it")
-    # A make rule: `target: dependency ...`, lines joined by backslash-newline, spaces in names escaped.
-    text = deps.read_text().replace("\\\n", " ")
-    names = [name.replace("\\ ", " ") for name in re.split(r"(?<!\\)\s+", text.split(":", 1)[1]) if name]
-    forced = [Path(name).resolve() for name in names if Path(name).resolve() != probe.resolve()]
-    if not forced:
-        raise RuntimeError(f"{driver} names no file it includes by force (-MD of an empty unit)")
-    folders = {path.parent for path in forced}
-    return sorted({*forced, *(path for folder in folders for path in folder.iterdir() if path.is_file())})
+    read = set()
+    for line in trace.read_text(errors="replace").splitlines():
+        call = re.search(r'\b(open|openat|execve)\((?:AT_FDCWD, )?"((?:[^"\\]|\\.)*)"(?:, ([A-Z_|]+))?', line)
+        if not call or line.rstrip().endswith("= -1") or re.search(r"= -1 E[A-Z]+ ", line):
+            continue
+        if call[1] != "execve" and re.search(r"O_WRONLY|O_RDWR|O_CREAT", call[3] or ""):
+            continue
+        path = (probe / os.fsdecode(codecs.escape_decode(call[2].encode())[0])).resolve()
+        if path.is_file() and probe.resolve() not in path.parents and not path.is_relative_to("/proc"):
+            read.add(path)
+    return sorted(read)
 
 
 def main():
@@ -91,11 +106,14 @@ def main():
         if path.is_file():
             fingerprint.update(str(path.relative_to(ROOT)).encode())
             fingerprint.update(path.read_bytes())
-    for path in driver_files(driver, build):
+    reads = driver_reads(driver, flags, build)
+    for path in reads or []:
         fingerprint.update(str(path).encode())
         fingerprint.update(path.read_bytes())
     stamp = out / "fingerprint"
-    unchanged = stamp.exists() and stamp.read_text() == fingerprint.hexdigest()
+    unchanged = reads is not None and stamp.exists() and stamp.read_text() == fingerprint.hexdigest()
+    if reads is None:
+        print("strace not found: the files the driver reads are unknown, so no member is reused")
     sources = []
     for obj in objects:
         base = Path(obj.removeprefix("obj/")).with_suffix("")

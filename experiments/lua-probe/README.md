@@ -33,7 +33,8 @@ Configuration: upstream generic C99 build with `LUA_COMPAT_5_3`, default 64-bit
 integers and double-precision numbers; no POSIX, dynamic loading or readline
 build flags. All standard libraries are registered by `luaL_openlibs`.
 Native uses clang 18 `-O2`, host libc and libm. Device input uses clang 18 `-O0
--disable-O0-optnone`, musl 1.2.5 and the front's normal O2 pipeline. Vectorizers
+-disable-O0-optnone` through the front's driver `bennett-cc` (which `link.py` requires of every member
+it links), musl 1.2.5 and the front's normal O2 pipeline. Vectorizers
 are disabled on both sides. Lua bitcode members are appended to a probe-local
 view of musl's archive index, so the existing `rt/musl/link.py` resolves them.
 The interpreter and Lua compiler execute on the device, including parsing the

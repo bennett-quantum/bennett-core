@@ -3017,9 +3017,13 @@ The handle interface's front end ("The declaration check" above; the old layer s
   so `bennett-front` does not see that the second unit skipped the check. `rt/musl/build.py` and `link.py` compile
   every unit they link with `bennett-cc`, musl's members, the device's own runtime files and the program's units
   (runtime items R1 and R2 of `docs/HANDLES.md`), and `link.py` refuses by name every module it would link, archive
-  members of another `--libdir` included, that lacks the mark, so a program linked by `link.py` has no unchecked
-  unit; a unit compiled by clang alone and linked by hand still goes unseen. Route: a mark on every function of a
-  checked unit, required of every function in a program that uses the interface.
+  members of another `--libdir` included, that lacks the mark. The mark proves only that some unit merged into the
+  module passed the check: a member that was itself linked from a checked unit and an unchecked one carries the mark
+  and is linked, its unchecked functions too (measured: a function compiled by plain clang, merged into a marked
+  member, ran). So the program has no unchecked unit when every module it links was compiled by `bennett-cc` from
+  one unit, as `build.py` and `link.py` compile them; a unit compiled by clang alone and linked by hand, or merged
+  into a marked module, still goes unseen. Route: a mark on every function of a checked unit, required of every
+  function in a program that uses the interface.
 - **`-fsanitize=undefined` can refuse a conforming unit.** With `-fsanitize=unreachable`, clang 18 removes
   `noreturn` from a primitive's declaration where it emits a call of it, so a unit that does not call every
   noreturn primitive the baseline calls differs from the baseline (rule 3) and is refused by name. The device has no

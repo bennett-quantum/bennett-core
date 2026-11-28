@@ -5,9 +5,10 @@ Every unit, the program's and the runtime's own, is compiled with bennett-cc, wh
 front/include/bq-prefix.h by force and makes the declaration check of docs/HANDLES.md, section 4; musl's members were
 compiled with it by build.py. A unit that uses the handle interface includes bq.h itself.
 
-The program's unit is C (.c), preprocessed C (.i), or LLVM IR (.ll, .bc). A preprocessed unit is compiled as it is,
-as clang compiles one, so it must already hold the declarations file: it was preprocessed from a unit that includes
-bq.h, or with `-include bq-prefix.h`; otherwise bennett-cc refuses it by name. Every module linked, archive members
+The program's unit is C (.c), preprocessed C (.i), or LLVM IR (.ll, .bc), by the name it resolves to. A .i that
+holds the declarations file (preprocessed from a unit that includes bq.h, or with `-include bq-prefix.h`) is compiled
+as it is, as clang compiles one; any other .i is compiled as C, so that bennett-cc includes the declarations file
+ahead of it (rt/musl/README.md says what a second preprocessing changes). Every module linked, archive members
 included, must carry bennett-cc's mark (`!bennett.cc`); one without it is refused by name, so that a member compiled
 by another compiler and supplied through --libdir is not linked unchecked."""
 import argparse
@@ -22,6 +23,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
+# The files link.py writes beside its output's temporary folder, or in the --keep folder.
+INTERMEDIATES = ["program.bc", "runtime.bc", "start.bc", "vfs.bc", "devices.bc", "models.bc", "inputs.c", "inputs.bc",
+                 "linked.bc", "linked.ll"]
 # The named metadata bennett-cc adds to every unit that passed its declaration check (front/src/Primitives.h).
 MARK = re.compile(r"^!bennett\.cc = ", re.M)
 
@@ -85,24 +89,25 @@ def main():
     def compile_unit(options, source, output):
         run([driver, *options, "-o", output, source])
     source = args.source.resolve()
-    kinds = {".c": [], ".i": ["-x", "cpp-output"], ".ll": [], ".bc": []}
-    if source.suffix not in kinds:
+    if source.suffix not in (".c", ".i", ".ll", ".bc"):
         parser.error(f"{args.source}: a unit is C (.c), preprocessed C (.i) or LLVM IR (.ll, .bc)")
-    if source.suffix == ".i":
-        # bennett-cc takes a C unit by the name .c; -x cpp-output makes clang read it as preprocessed, as for a .i.
-        (scratch / "program.c").unlink(missing_ok=True)
-        (scratch / "program.c").symlink_to(source)
-        source = scratch / "program.c"
-    try:
-        headers = [] if args.source.suffix == ".i" else [
-            "-nostdinc", "-isystem", HERE / "include", "-isystem", lib / "sysroot/include"]
-        compile_unit([*common, *headers, *kinds[args.source.suffix], *args.clang_flag], source, scratch / "program.bc")
-    except subprocess.CalledProcessError:
-        if args.source.suffix == ".i":
-            raise SystemExit(f"{args.source}: a preprocessed unit must hold the declarations file bq-prefix.h: "
-                             "preprocess it with `-include bq-prefix.h` (or from a unit that includes bq.h), "
-                             "or give link.py the C source")
-        raise
+    # link.py writes only its intermediate files (in the --keep folder or a temporary one), the links of a .i in a
+    # temporary folder of its own, and the output, never an input: a unit that is one of those files is refused.
+    if source in {(scratch / name).resolve() for name in INTERMEDIATES} | {args.o.resolve()}:
+        parser.error(f"{args.source}: a unit must not be the output or one of link.py's intermediate files")
+    headers = ["-nostdinc", "-isystem", HERE / "include", "-isystem", lib / "sysroot/include"]
+    with tempfile.TemporaryDirectory(dir=scratch) as aliases:
+        language = []
+        if source.suffix == ".i":
+            # bennett-cc takes a C unit by the name .c, here a link in a folder of link.py's own. A .i that holds the
+            # declarations file (its array of references, a name reserved to the implementation) is compiled as it
+            # is, as preprocessed C; any other .i is compiled as C, so that bennett-cc includes the declarations
+            # file ahead of it, and its text is preprocessed a second time (rt/musl/README.md).
+            held = b"__bennett_references_" in source.read_bytes()
+            alias = Path(aliases) / "unit.c"
+            alias.symlink_to(source)
+            language, headers, source = (["-x", "cpp-output"] if held else []), [], alias
+        compile_unit([*common, *headers, *language, *args.clang_flag], source, scratch / "program.bc")
     ir = run(["llvm-dis-18", scratch / "program.bc", "-o", "-"], capture_output=True, text=True).stdout
     match = re.search(r"^define\b[^\n]* @main\(([^\n]*)\)", ir, re.M)
     if not match or "..." in match[1]:
