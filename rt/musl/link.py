@@ -112,8 +112,12 @@ def main():
                 alias.symlink_to(source)
                 language, headers, source = (["-x", "cpp-output"] if held else []), [], alias
             compile_unit([*common, *headers, *language, *args.clang_flag], source, output)
-    ir = "".join(run(["llvm-dis-18", unit, "-o", "-"], capture_output=True, text=True).stdout for unit in program)
-    match = re.search(r"^define\b[^\n]* @main\(([^\n]*)\)", ir, re.M)
+    # The program's units linked in the order given, as a native link of its objects resolves them: start-up passes
+    # the arguments of the main that wins there, the one external definition, not a unit's private function of
+    # that symbol name or a weak one that another unit's definition replaces.
+    run(["llvm-link-18", *program, "-o", scratch / "program.bc"])
+    ir = run(["llvm-dis-18", scratch / "program.bc", "-o", "-"], capture_output=True, text=True).stdout
+    match = re.search(r"^define (?!(?:internal|private) )[^\n]* @main\(([^\n]*)\)", ir, re.M)
     if not match or "..." in match[1]:
         parser.error("the program needs a defined nonvariadic int main")
     count = 0 if not match[1].strip() else len(match[1].split(","))
@@ -176,7 +180,7 @@ def main():
     # of the weak objects of bq.h (the scope list, the fault set) the first unit's definition is kept, as natively
     # with the objects in that order; the C library's and the device's units carry none, since they include only
     # the declarations file (docs/HANDLES.md, section 15, R4).
-    inputs = [*(scratch / output for _, output, _ in sources), *program, scratch / "inputs.bc"]
+    inputs = [*(scratch / output for _, output, _ in sources), scratch / "program.bc", scratch / "inputs.bc"]
     roots, marked = [], set()
     for _ in range(16):
         selected = run(["python3", HERE / "resolve.py", lib / "members.txt", lib / "index.tsv", *inputs, *roots],

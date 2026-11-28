@@ -406,9 +406,11 @@ each linked and run, with `--keep` naming the folder that holds the `.i` and its
 a link without a suffix to a C file, a unit that is an intermediate file (refused by name), and a library directory
 whose member list adds a member compiled by plain clang (refused by name, naming the member).
 `tests/weak/` checks that the weak scope list and fault set of `bq.h` are one object in the linked program: the
-library's and the device's units, which include only the declarations file, define neither; a push in one unit is
-seen in another; a program's own definition in its first unit is kept, since `link.py` links the program's units
-in the order given, as a native link does with its objects. `tests/regress/` holds the self-checking witnesses of
+library's and the device's units, which include only the declarations file, define neither; the linked module has
+one definition of each; what one unit writes to either is read in another; a program's own definition of either
+in its first unit is kept with its initial value, since `link.py` links the program's units in the order given, as a
+native link does with its objects. `tests/main/` checks that start-up passes the arguments of the program's main as
+that link resolves it, after a private function of that symbol name or a weak main in the first unit. `tests/regress/` holds the self-checking witnesses of
 the independent testing pass of this boundary (each
 returns 0 natively and failed or faulted here before its fix). The 35 programs (42 runs with the
 `-O2` ones) took 173 seconds with the debug CLI on the shared machine, after building the library.
