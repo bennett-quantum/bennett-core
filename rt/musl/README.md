@@ -176,8 +176,10 @@ slept, modulo 2^64. The clock's unit is the nanosecond, so a duration needs no r
   start-up); below the stack pointer the bytes are not yet reached but can be read. A native program's address
   space is another, so the two agree on what is readable only for live objects, for null and the lowest
   addresses, and for a range that wraps past the top of the address space. A request starting below address 16
-  or wrapping is `EFAULT`; any other is read. One that reaches the end of device memory or beyond stops the run
-  with the device's `out_of_bounds` (`tests/sleep-beyond-memory.c`; natively `EFAULT`): the runtime does not
+  or wrapping is `EFAULT`; any other is copied whole, every byte, before any field is checked, as Linux copies
+  it, and only the copy is checked. One that reaches the end of device memory or beyond stops the run in that
+  copy with the device's `out_of_bounds`, whatever its fields hold (`tests/sleep-beyond-memory.c`, and
+  `tests/sleep-partial.c` for seconds in memory and nanoseconds past its end; natively `EFAULT`): the runtime does not
   know the memory size, which the front fixes after it lays out the data. Route to `EFAULT` there: the memory
   size given to the program (a symbol the front defines, as ELF's `_end`, or a device instruction that reads it).
 - A CPU-time id of a process other than the device's one is `EINVAL` by the device's own rule: the device has
@@ -196,7 +198,9 @@ stop by name (`unreachable`) at run time, as `pause` and `sigsuspend` do. All bu
 system call, which is unimplemented; musl's `timer_create` also links its thread notification, whose thread exit
 (`__unmapself`) is inline assembly the front does not translate, so `build.py` compiles `timer.c`, that stop, in
 place of musl's member (`tests/timer-create.c`). Like musl's, it is pulled from the archive only when a program
-calls `timer_create` without defining it: ISO C does not reserve the name (`tests/timer-own.c`). With no timer and no asynchronous signal `pause` never returns natively;
+calls `timer_create` or takes its address without defining it (an address taken is a reference as a call
+is, so such a program links the stop and runs to the end if it never calls it): ISO C does not reserve the
+name (`tests/timer-own.c`). With no timer and no asynchronous signal `pause` never returns natively;
 `sigsuspend` traps even where natively it would return at once with `EINTR` (a pending signal that its mask
 unblocks), a debt of the same route. The route is in `docs/DESIGN.md`, "Files, clock and entropy at the musl
 boundary": an expiry is a value of the same clock; a sleep or a clock read that carries the clock past it makes
@@ -309,7 +313,8 @@ before it kept (`arena`, `heap-exhaust`, `realloc-exhaust`, `mmap-exhaust`, `brk
 arithmetic rejections stay null against native (`alloc-arithmetic`), and named faults for stderr, an
 unimplemented syscall, the refused sleeps (`sleep-cpu`, `sleep-beyond`, `sleep-alarm-clock`) and timers
 (`timer-alarm`, `timer-create`), and `out_of_bounds` for a sleep request past device memory
-(`sleep-beyond-memory`); sleeps (`sleep`, `sleep-alarm-flags`; `sleep-caller` under an entry that calls
+(`sleep-beyond-memory`, and `sleep-partial` with only its seconds in memory, under an entry given the memory
+size); sleeps (`sleep`, `sleep-alarm-flags`; `sleep-caller` under an entry that calls
 start-up), a program's own `timer_create` (`timer-own`), another rounding mode and a flag test agree with native.
 `tests/regress/` holds the self-checking witnesses of the independent testing pass of this boundary (each
 returns 0 natively and failed or faulted here before its fix). The 35 programs (42 runs with the
@@ -331,7 +336,7 @@ floating-point `printf`, `strtod`, `sqrt`, `sin` and `pow`) 652,468 bytes, of wh
 Files and constructor-loaded byte images agree with native stdout/status. Clock arithmetic and seed
 bytes agree with a separate native C arithmetic oracle, including start `2^64-2` wrapping through zero
 (since 2026-11-27 `clocks.c` also sleeps: relative, absolute, in the past, and a sleep that wraps the clock,
-with the CPU-time clock read between; 42,844 and 43,072 steps at `-O0` for the two starts, 24 runs in 158 s).
+with the CPU-time clock read between; 43,108 and 43,336 steps at `-O0` for the two starts, 24 runs in 149 s).
 `getentropy`, random-device reads and vectored tape consumption additionally check each expected byte.
 All forward runs un-run to the identical entry snapshot (including buffers, both consumption counters,
 filesystem/allocator state and the lazy image guard); amplitude error zero. The witnesses also un-run exactly

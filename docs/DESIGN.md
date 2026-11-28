@@ -2473,7 +2473,8 @@ nothing for one already reached) and return at once with nothing remaining. `sle
 an `apply` discards it; no host time is read. A sleep that natively never ends (a positive wait on the process's
 CPU-time clock; 2^64 nanoseconds or more) and one whose native result is the host's (the alarm clocks) are
 refused by name; invalid arguments give Linux's errors in its order, a request below address 16 or wrapping
-`EFAULT`, one past the end of device memory the named stop `out_of_bounds` (the runtime does not know the memory
+`EFAULT`; any other request is copied whole before a field is checked, so one past the end of device memory is the
+named stop `out_of_bounds` whatever its fields hold (the runtime does not know the memory
 size; `rt/musl/README.md`, "Sleeping"). Timers (`alarm`, `setitimer`, `timer_*`, `timerfd`) are not implemented
 and stop by name at run time; `timer_create` is the runtime's own stop (`rt/musl/timer.c`, an archive member in
 place of musl's, which links thread code the front does not translate). Route: an expiry is a value of the same clock; a sleep or a clock read that carries the clock

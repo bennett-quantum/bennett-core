@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline library integration tests, separate from the fast Rust and front suites."""
 import argparse
+import re
 from pathlib import Path
 import subprocess
 import time
@@ -157,6 +158,31 @@ def caller_frame(args):
     print(f"sleep-caller: passed (status {reference.returncode})", flush=True)
 
 
+def partial_request(args):
+    """A sleep request whose seconds are the last eight bytes of device memory and whose nanoseconds lie past its
+    end stops with `out_of_bounds` (natively EFAULT) for negative seconds too: the runtime copies the whole request
+    before it checks a field. The same request sixteen bytes lower is read whole and checked as natively."""
+    source = HERE / "tests/sleep-partial.c"
+    program = args.out / "sleep-partial.bn"
+    linked = run(["python3", HERE / "link.py", source, "--libdir", args.libdir, "--front", args.front, "-o", program])
+    assert linked.returncode == 0, linked.stderr
+    memory = int(re.search(r"^memory (\d+)$", program.read_text(), re.M)[1])
+    cases = [(memory - 8, seconds, 0, 1, None) for seconds in (-1, 0)]
+    # A request in memory: a negative second count or nanoseconds of a second or more is EINVAL, zero sleeps.
+    cases += [(memory - 16, -1, 0, 2, "result: 22"), (memory - 16, 0, 10**9, 2, "result: 22"),
+              (memory - 16, 0, 0, 2, "result: 0")]
+    for address, seconds, nanoseconds, fields, expected in cases:
+        for call in range(3):  # nanosleep, clock_nanosleep, the raw system call
+            values = [address, seconds % (1 << 64), nanoseconds, fields, call]
+            result = run([args.executor, "run", "--entry", "partial_entry", "--budget", 10000000,
+                          *[f"--arg={value}" for value in values], program])
+            if expected is None:
+                assert result.returncode == 1 and "fault: out_of_bounds" in result.stdout, (values, result)
+            else:
+                assert result.returncode == 0 and f"{expected}\n" in result.stdout, (values, result)
+    print(f"sleep-partial: passed ({len(cases) * 3} runs)", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--libdir", type=Path, default=ROOT / "target/musl")
@@ -225,6 +251,7 @@ def main():
     argument_cases(args)
     relinked_images(args)
     caller_frame(args)
+    partial_request(args)
     print(f"library tests: {time.monotonic() - started:.2f}s", flush=True)
 
 

@@ -47,22 +47,28 @@ static int clock_id(long id) {
 static int cpu_clock(long id) {
     return id<0 || id==CLOCK_PROCESS_CPUTIME_ID || id==CLOCK_THREAD_CPUTIME_ID;
 }
-/* Whether the n bytes at p may be read, as far as Linux's answer is the same everywhere: device memory is the
+/* Copies the n bytes at p into to, every byte before the caller looks at any of them, as Linux copies a request
+ * whole before it checks a field; returns 0 for a request Linux answers EFAULT everywhere. Device memory is the
  * module's bytes [0, M), static data from address 16 and the stack down from M, and natively readable means
  * mapped, an unrelated address space. The two agree on null and the lowest addresses (no object below 16 on the
  * device; Linux never maps the lowest page) and on a range that wraps past the top of the address space: those
- * are EFAULT. Any other request is read, and one reaching M or beyond stops with the device's `out_of_bounds`,
- * since the runtime does not know M (rt/musl/README.md, "Sleeping"). */
-static int readable(const void *p,uint64_t n) {
+ * are EFAULT. Any other request is read byte by byte, and one reaching M or beyond stops with the device's
+ * `out_of_bounds` in that read, since the runtime does not know M (rt/musl/README.md, "Sleeping"). The loads
+ * are volatile so that no byte's load can be dropped or moved after a check of the copy. */
+static int copy_request(void *to,const void *p,uint64_t n) {
     uintptr_t address=(uintptr_t)p;
-    return address>=16 && n<=UINTPTR_MAX-address+1;
+    if(address<16 || n>UINTPTR_MAX-address+1) return 0;
+    const volatile unsigned char *from=p;
+    unsigned char *copy=to;
+    for(uint64_t i=0;i<n;++i) copy[i]=from[i];
+    return 1;
 }
 /* Sleeping on the run's clock (rt/musl/README.md, "Sleeping"). Linux's order of checks: the clock id (an
  * unknown id, then a clock without a sleep), the request's address, the request's value, then what the clock's
  * own sleep checks (a CPU-time clock of a thread, of a process the device does not have, the alarm clocks'
  * flags). No signal arrives
  * while the device sleeps, so a sleep is never interrupted and the remaining time is never written. */
-static long clock_sleep(long id,long flags,const long *request) {
+static long clock_sleep(long id,long flags,const void *address) {
     int run=id==CLOCK_REALTIME || id==CLOCK_MONOTONIC || id==CLOCK_BOOTTIME || id==CLOCK_TAI;
     int alarm=id==CLOCK_REALTIME_ALARM || id==CLOCK_BOOTTIME_ALARM;
     int cpu=id==CLOCK_PROCESS_CPUTIME_ID;
@@ -70,7 +76,8 @@ static long clock_sleep(long id,long flags,const long *request) {
                     id==CLOCK_MONOTONIC_COARSE || (id<0 && (id&7)==3); /* the last: a clock behind a descriptor */
     if(id>=0 && !run && !alarm && !cpu && !unsupported) return -EINVAL;
     if(unsupported) return -EOPNOTSUPP;
-    if(!readable(request,2*sizeof(long))) return -EFAULT; /* Linux copies the whole request first */
+    long request[2]; /* seconds, nanoseconds: only this copy is checked */
+    if(!copy_request(request,address,sizeof request)) return -EFAULT;
     if(request[0]<0 || request[1]<0 || request[1]>=1000000000) return -EINVAL;
     if(id<0) {
         /* A process's CPU-time clock: a kind below 3, not a thread's, the caller (0) or its process (1). */
@@ -127,8 +134,8 @@ long __bennett_device_syscall(long nr,long a,long b,long c,long d,long e,long f)
         if(a) *(long *)a=seconds;
         return seconds;
     }
-    if(nr==SYS_nanosleep) return clock_sleep(CLOCK_REALTIME,0,(const long *)a);
-    if(nr==SYS_clock_nanosleep) return clock_sleep((int)a,(int)b,(const long *)c); /* both are int in Linux */
+    if(nr==SYS_nanosleep) return clock_sleep(CLOCK_REALTIME,0,(const void *)a);
+    if(nr==SYS_clock_nanosleep) return clock_sleep((int)a,(int)b,(const void *)c); /* both are int in Linux */
     if(nr==SYS_getrandom) {
         if((unsigned long)b>LONG_MAX || (c&~7L) || ((c&6)==6)) return -EINVAL;
         if(b && !a) return -EFAULT;
