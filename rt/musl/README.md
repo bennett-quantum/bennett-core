@@ -142,8 +142,10 @@ change, the outputs written.
   descriptor and the walk. The copy reads the bytes one by one up to the first NUL: a string starting below 16,
   at the top of the user address space or above it, or reaching the top before its NUL is `EFAULT`; `PATH_MAX`
   (4096) bytes without a NUL are `ENAMETOOLONG`, whatever follows; an empty string is `ENOENT`. A byte at the end
-  of device memory stops the run with `out_of_bounds`, as for a structure. `rename` copies both names first and
-  reports the old name's error, then its walk's, then the new name's, as Linux's `do_renameat2`.
+  of device memory stops the run with `out_of_bounds`, as for a structure; one whose NUL is the last byte of
+  memory is read up to it. `rename` reports the old name's error, then its walk's, then the new name's, as
+  Linux's `do_renameat2`; Linux copies both names first, the device the new one after the old walk, so that a
+  new name past device memory stops the run only where Linux's answer is its `EFAULT`.
 
 ## Files and deterministic inputs
 

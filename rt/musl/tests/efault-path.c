@@ -4,7 +4,7 @@
  * copy falls in each call's order of checks.
  *
  * argv[1] selects a case (or "agree" for the batch of the order, length and alias cases). Optional argv[2]
- * supplies the end-of-memory address on the device for the case that reaches it; natively, partial_edge maps a
+ * supplies the end-of-memory address on the device for the cases that reach it; natively, partial_edge maps a
  * read/write page followed by a PROT_NONE guard page. */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -160,6 +160,39 @@ int main(int argc, char **argv)
         strcpy(shared.path, "efault_path.file");
         errno = 0; r = syscall(SYS_stat, shared.path, &shared.st);
         printf("%s: ret=%ld errno=%d regular=%d\n", c, r, errno, r == 0 && S_ISREG(shared.st.st_mode));
+        return 0;
+    }
+    if (!strcmp(c, "path-edge-agree")) {
+        /* Paths at the end of device memory (natively a guard page) that Linux answers without a fault. The
+         * last bytes are restored after each call. */
+        char *edge = partial_edge(argc, argv);
+        struct stat st;
+        char saved[2];
+        memcpy(saved, edge - 2, 2);
+        /* rename with a missing old parent: the old walk's ENOENT; the new name past the end is not read. */
+        errno = 0; r = syscall(SYS_rename, "efault_path.missing/x", edge);
+        report(c, "rename-missing-parent-new-past-end", r, errno);
+        /* A path whose NUL is the last byte is read up to it and no further. */
+        memcpy(edge - 2, "/", 2);
+        errno = 0; r = syscall(SYS_stat, edge - 2, &st); report(c, "root-ending-at-end", r, errno);
+        errno = 0; r = syscall(SYS_rename, "efault_path.missing/x", edge - 2);
+        report(c, "rename-missing-parent-new-at-end", r, errno);
+        errno = 0; r = syscall(SYS_stat, edge - 1, &st); report(c, "empty-at-last-byte", r, errno);
+        memcpy(edge - 2, saved, 2);
+        return 0;
+    }
+    if (!strcmp(c, "path-to-edge")) {
+        /* A path with no NUL before the end of device memory (natively a guard page). */
+        char *edge = partial_edge(argc, argv);
+        struct stat st;
+        memcpy(edge - 2, "ab", 2);
+        errno = 0; r = syscall(SYS_stat, edge - 2, &st); report(c, "stat", r, errno);
+        return 0;
+    }
+    if (!strcmp(c, "rename-new-past-edge")) {
+        /* rename's new name past the end of device memory once the old name's walk has succeeded. */
+        char *edge = partial_edge(argc, argv);
+        errno = 0; r = syscall(SYS_rename, "efault_path.file", edge); report(c, "rename", r, errno);
         return 0;
     }
     if (!strcmp(c, "path-at-edge")) {

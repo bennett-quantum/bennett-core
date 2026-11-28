@@ -472,3 +472,15 @@ fn path_strings_are_copied_in_as_linux_copies_them() {
     }
     assert_named_stop("efault-path", "path-at-edge", true, "ret=-1 errno=14");
 }
+
+/// Review witness of the path copy: `rename` read its new name's bytes before the old name's walk, so a new name
+/// past device memory stopped the run with `out_of_bounds` where Linux answers the old walk's `ENOENT` (device
+/// before: the named stop at the first row). A path whose NUL is the last byte of device memory is read up to it
+/// (`path-edge-agree`); one with no NUL before the end, and a new name past the end after a good old walk, stop
+/// by name (natively `EFAULT`).
+#[test]
+fn paths_at_the_end_of_device_memory_are_read_up_to_their_nul_in_linux_order() {
+    assert_agrees("efault-path", "path-edge-agree", true);
+    assert_named_stop("efault-path", "path-to-edge", true, "ret=-1 errno=14");
+    assert_named_stop("efault-path", "rename-new-past-edge", true, "ret=-1 errno=14");
+}

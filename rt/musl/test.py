@@ -214,6 +214,7 @@ EFAULT_CASES_AGREE = [
         "sigaction-stored-mask")],
     ("efault-stat", "at-fdcwd-int", False),
     *[("efault-path", case, False) for case in ("path-low8", "path-wrap8", "path-above-top")],
+    ("efault-path", "path-edge-agree", True),
 ]
 # Agreeing cases run on the device with a small stack (--stack-bytes): each call's copies live in its own frame.
 EFAULT_SMALL_STACK = [("efault-stack", "small-stack")]
@@ -247,6 +248,8 @@ EFAULT_NAMED_STOP = [
     ("efault-signals", "sigprocmask-old-partial4", True, "ret=-1 errno=14"),
     ("efault-signals", "sigpending-partial4", True, "ret=-1 errno=14"),
     ("efault-path", "path-at-edge", True, "ret=-1 errno=14"),
+    ("efault-path", "path-to-edge", True, "ret=-1 errno=14"),
+    ("efault-path", "rename-new-past-edge", True, "ret=-1 errno=14"),
 ]
 
 

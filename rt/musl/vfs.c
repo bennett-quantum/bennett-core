@@ -343,13 +343,15 @@ long __bennett_rt_vfs_meta(long nr,long a,long b,long c,long d,long e) {
     int at=AT_FDCWD; const char *path=(void *)a; /* a directory descriptor is an int in Linux */
     if(nr==SYS_readlinkat || nr==SYS_openat || nr==SYS_newfstatat || nr==SYS_faccessat || nr==SYS_mkdirat || nr==SYS_unlinkat) { at=(int)a; path=(void *)b; }
     int creating=nr==SYS_mkdir || nr==SYS_mkdirat, removing=nr==SYS_unlink || nr==SYS_rmdir || nr==SYS_unlinkat;
-    /* Then each path is copied (Linux's getname). rename copies both names first; the old name's error comes
-     * first, then its walk's, then the new name's (do_renameat2 walks to each parent in turn). */
+    /* Then the path is copied (Linux's getname). rename's new name is copied after the old name's walk: Linux
+     * copies both first but reports the old name's error, then its walk's, then the new name's (do_renameat2
+     * walks to each parent in turn), so the new name's bytes are read only where its answer is the call's, and
+     * one past device memory stops the run only there. */
     int error=__bennett_copy_path(path_copy,path); if(error) return -error;
     path=path_copy;
     const char *new_path=new_path_copy;
-    int new_error=nr==SYS_rename?__bennett_copy_path(new_path_copy,(void *)b):0;
     char *full=canonical(path,at,&error,!creating && nr!=SYS_rename); if(!full) return -error;
+    int new_error=nr==SYS_rename?__bennett_copy_path(new_path_copy,(void *)b):0;
     struct name *n=lookup(full); long result=0;
     /* A last component ".", ".." or the root: Linux refuses these by kind before looking the name up. */
     int kind=last_type(path), directory=nr==SYS_rmdir || (nr==SYS_unlinkat && (c&AT_REMOVEDIR));
