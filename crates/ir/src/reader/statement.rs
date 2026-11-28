@@ -4,8 +4,8 @@ use super::error::{Failure, ReadErrorKind};
 use super::lexer::Token;
 use super::{Parser, Scope};
 use crate::{
-    BinOp, BlockId, CastOp, Const, Fault, FixedGate, FuncId, Gate, Inst, MeasureSource, Operand, Place, Predicate,
-    Qubit, Qubits, Rotation, Signature, Slot, SwitchCase, Target, Terminator, Type, Width,
+    BinOp, BlockId, CastOp, Const, Fault, FixedGate, FuncId, Gate, GateKind, Inst, MeasureSource, Operand, Place,
+    Predicate, Qubit, Qubits, Rotation, Signature, Slot, SwitchCase, Target, Terminator, Type, Width,
 };
 
 /// The mnemonics that end a block.
@@ -65,6 +65,21 @@ impl<'s> Parser<'s> {
             return self.gate(scope, Gate::Rotate(axis, angle)).map(Statement::Inst);
         }
         let inst = match mnemonic {
+            // `gate(CODE)` and `rotate(CODE, %angle)`: the kind given at run time.
+            "gate" | "rotate" => {
+                line.no_result(if mnemonic == "rotate" { "rotate" } else { "gate" })?;
+                self.cursor.expect(Token::LParen, "`(` and a gate code")?;
+                let code = self.operand(scope, Width::WORD)?;
+                let kind = if mnemonic == "rotate" {
+                    self.cursor.expect(Token::Comma, "`,` and an angle")?;
+                    GateKind::Rotation { code, angle: self.slot_use(scope, "an angle")? }
+                } else {
+                    GateKind::Gate(code)
+                };
+                self.cursor.expect(Token::RParen, "`)`")?;
+                let (target, controls) = self.places(scope)?;
+                Inst::GateBy { kind, target, controls }
+            }
             "icmp" => self.compare(scope, line.result("icmp")?)?,
             "select" => self.select(scope, line.result("select")?)?,
             "load" => {

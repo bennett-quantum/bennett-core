@@ -42,6 +42,8 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | GATE qubit [ctrl qubit {, qubit}]          ; x y h z s sdg t tdg
             | (rx | ry | rz | p)(ANGLE) qubit [ctrl ...] ; radians, any finite angle
             | (rx | ry | rz | p)(%a) qubit [ctrl ...]    ; the angle computed at run time: an i64, binary64 bits
+            | gate(operand) qubit [ctrl ...]             ; the kind an i64 gate code ("Gate kinds at run time")
+            | rotate(operand, %a) qubit [ctrl ...]       ; an i64 rotation code and a run-time angle
             | %d = measure %r                            ; every qubit of the register: an iN, N at most 128
             | %d = measure iN "[" operand "]"            ; N bits from bit 0 of the integer at the i64 address
             | apply @f(typed, ...) -> %out, %fault budget operand  ; %fault: a register of 5 qubits or more
@@ -194,6 +196,29 @@ from memory (`docs/HANDLES.md`, section 14, D7), not of written controls.
 `measure` of a whole register, `apply` and calls still take `qN` registers. No instruction turns a `qN`
 register into its integer or an integer into a `qN` register; both name registers by the one numbering, so a
 program that counts its allocations knows the handle of each.
+
+## Gate kinds at run time
+
+`gate(%k) qubit [ctrl ...]` applies the fixed gate whose code `%k` (an `i64` value or constant) holds, and
+`rotate(%k, %a) qubit [ctrl ...]` the rotation whose code `%k` holds, by the angle in `%a` as for `rz(%a)`
+(`Inst::GateBy`). The codes are fixed numbers, the same in the C interface's header (`docs/HANDLES.md`, 5.1)
+and the device (`bennett_ir::GATE_CODES`, `ROTATION_CODES`):
+
+| Gate code | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|---|---|
+| Gate | `x` | `y` | `z` | `h` | `s` | `sdg` | `t` | `tdg` |
+
+| Rotation code | 9 | 10 | 11 | 12 |
+|---|---|---|---|---|
+| Rotation | `rx` | `ry` | `rz` | `p` |
+
+Any other value of `%k`, a rotation code given to `gate` or a gate code given to `rotate` included, is the
+fault `bad_gate` (23). The checks run in this order, the first that fails being the fault, before the gate
+acts: the kind (`bad_gate`), for `rotate` the angle (`bad_angle`), then the qubits as for any gate (handle,
+position, repetition; "Handles as integers"). Inside an applied function either form is `quantum_in_region`
+(8) before any of these, as every quantum instruction. Each form means the gate with its definite kind
+written out: `gate(4) %q[1]` is `h %q[1]`. The qubits are those of `GateAt`, in registers, by handles or in
+memory; the controls are written in the instruction.
 
 ## Registers are not integers
 

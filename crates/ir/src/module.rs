@@ -466,6 +466,18 @@ pub enum Inst {
         /// The control qubits.
         controls: Vec<Place>,
     },
+    /// `gate(code) target [ctrl controls]` or `rotate(code, angle) target [ctrl controls]`: a gate whose kind
+    /// is an `i64` code given at run time ([`crate::GATE_CODES`], [`crate::ROTATION_CODES`]), one instruction
+    /// for one gate call of the handle interface. A code outside its set is the fault `bad_gate`, checked
+    /// first, then a rotation's angle (`bad_angle`), then the qubits as for `GateAt`, whose qubits it takes.
+    GateBy {
+        /// The kind.
+        kind: GateKind,
+        /// The qubit acted on.
+        target: Place,
+        /// The control qubits.
+        controls: Vec<Place>,
+    },
     /// `dst = measure register` or `dst = measure iN [address]`: samples the qubits' value and collapses
     /// the state.
     Measure {
@@ -487,6 +499,21 @@ pub enum Inst {
         fault: Slot,
         /// The `i64` step budget of each run of the callee.
         budget: Operand,
+    },
+}
+
+/// The kind of an [`Inst::GateBy`], given at run time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GateKind {
+    /// `gate(code)`: an `i64` gate code.
+    Gate(Operand),
+    /// `rotate(code, angle)`: an `i64` rotation code and, as for `RotateBy`, the `i64` slot holding the
+    /// angle's binary64 bits.
+    Rotation {
+        /// The rotation code.
+        code: Operand,
+        /// The angle.
+        angle: Slot,
     },
 }
 
@@ -530,6 +557,7 @@ impl Inst {
             | Inst::Gate { .. }
             | Inst::GateAt { .. }
             | Inst::RotateBy { .. }
+            | Inst::GateBy { .. }
             | Inst::Apply { .. } => None,
         }
     }
@@ -577,6 +605,25 @@ impl Inst {
             }
             Inst::RotateBy { angle, target, controls, .. } => {
                 operand(&Operand::Slot(*angle));
+                for place in std::iter::once(target).chain(controls) {
+                    match place {
+                        Place::Register(qubit) => operand(&Operand::Slot(qubit.register)),
+                        Place::Memory { address, .. } => operand(address),
+                        Place::Indexed { register, index } => {
+                            operand(&Operand::Slot(*register));
+                            operand(index);
+                        }
+                    }
+                }
+            }
+            Inst::GateBy { kind, target, controls } => {
+                match kind {
+                    GateKind::Gate(code) => operand(code),
+                    GateKind::Rotation { code, angle } => {
+                        operand(code);
+                        operand(&Operand::Slot(*angle));
+                    }
+                }
                 for place in std::iter::once(target).chain(controls) {
                     match place {
                         Place::Register(qubit) => operand(&Operand::Slot(qubit.register)),

@@ -243,6 +243,7 @@ fn total(inst: &Inst) -> bool {
         | Inst::Gate { .. }
         | Inst::GateAt { .. }
         | Inst::RotateBy { .. }
+        | Inst::GateBy { .. }
         | Inst::Measure { .. }
         | Inst::Apply { .. } => false,
     }

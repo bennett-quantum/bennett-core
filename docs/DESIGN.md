@@ -106,12 +106,15 @@ A module is a list of functions, an initial memory image and a memory size.
   `qfree`, single-qubit gates
   (`x y h z s sdg t tdg rx ry rz p`, a rotation's angle a literal or an `i64` computed at run time,
   `Inst::RotateBy`) with an optional list of control qubits, each qubit in a register or at a
-  bit of memory ("Qubits in memory", below), `measure` of a register or of bits at an address, and `apply`
+  bit of memory ("Qubits in memory", below), the gate or rotation whose kind is a code given at run time
+  (`gate(%k)`, `rotate(%k, %a)`, `Inst::GateBy`; `docs/SYNTAX.md`, "Gate kinds at run time"),
+  `measure` of a register or of bits at an address, and `apply`
   (below). Every allocation has a handle, its number among the run's allocations, from 1, never given again
   in the run. A register is named by a `qN` value, or by an `i64` value holding its handle wherever a gate, a
   control or `qfree` names a register, with qubit positions given as literals or as `i64` values (`docs/SYNTAX.md`, "Handles as integers"). Each
   of these forms means the same as the form with that definite register and position written out; it adds the
-  checks `bad_width`, `dangling_register` and `bad_range`, made from definite values before anything changes.
+  checks `bad_width`, `dangling_register` and `bad_range`, and a kind given as a code `bad_gate`, made from
+  definite values before anything changes.
 
 There is one instruction set for every tier. A tier is a way of running code, not a different language.
 
@@ -2299,8 +2302,8 @@ The front writes `retaddr N` for every `llvm.returnaddress(N)` in the default ad
   fault register is at least that wide, so every fault register of a program is a `q5` or wider. Twenty-two
   of the 31 nonzero codes are used: 1 to 10, 12 to 14, 16 to 18 (`bad_angle`, a rotation whose computed angle
   is not finite), 19 (`out_of_memory`, the C runtime's heap exhausted) and 20 to 24 (`bad_width`,
-  `out_of_handles`, `bad_range`, `bad_gate`, `bad_argument`, the checks of the handle interface; `bad_gate` and
-  `bad_argument` are reached through `fault NAME` until a form checks them). 11 was `dirty_free` and 15
+  `out_of_handles`, `bad_range`, `bad_gate`, `bad_argument`, the checks of the handle interface; `bad_argument` is
+  reached through `fault NAME` until a form checks it). 11 was `dirty_free` and 15
   `bad_rewind`, both removed on 2026-11-17. Those codes stay unused and the remaining codes keep their
   numbers because programs may have measured the old codes.
 - `qfree` is the partial trace and never faults on what the register holds: a release of an allocated
