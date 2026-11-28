@@ -117,7 +117,7 @@ impl<'m> Executor<'m> {
                 self.advance();
             }
             Inst::MeasureSlice { dst, register, low, bits } => {
-                let (id, qubits) = self.register(*register)?;
+                let (id, qubits) = self.register_of(self.handle_of(register))?;
                 let (low, bits) = (self.read_word(low), self.read_word(bits));
                 // The bound is a mathematical integer: `low + bits` does not wrap.
                 if !(1..=u64::from(u64::BITS)).contains(&bits)

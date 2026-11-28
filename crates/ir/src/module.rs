@@ -491,15 +491,15 @@ pub enum Inst {
         source: MeasureSource,
     },
     /// `dst = measure i64 register[low, bits]`: measures the `bits` qubits from position `low` of the register
-    /// (a `qN` register or an `i64` handle) in the computational basis, read least significant first and
+    /// (a `qN` register, an `i64` handle or an `i64` constant handle) in the computational basis, read least significant first and
     /// zero-extended to the `i64` `dst`; the register stays allocated and no handle is taken. A handle that
     /// names no register is `dangling_register`; then `bits` outside 1 to 64, or `low + bits` past the width,
     /// is `bad_range`.
     MeasureSlice {
         /// The measured value, an `i64`.
         dst: Slot,
-        /// The register handle.
-        register: Slot,
+        /// The register: a slot holding a `qN` register or an `i64` handle, or an `i64` constant handle.
+        register: Operand,
         /// The `i64` lowest position.
         low: Operand,
         /// The `i64` number of qubits.
@@ -619,7 +619,7 @@ impl Inst {
             Inst::Measure { source: MeasureSource::Register(register), .. } => operand(&Operand::Slot(*register)),
             Inst::Measure { source: MeasureSource::Memory { address, .. }, .. } => operand(address),
             Inst::MeasureSlice { register, low, bits, .. } => {
-                operand(&Operand::Slot(*register));
+                operand(register);
                 operand(low);
                 operand(bits);
             }

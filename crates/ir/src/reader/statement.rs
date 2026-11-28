@@ -136,10 +136,13 @@ impl<'s> Parser<'s> {
                 let dst = line.result("measure")?;
                 // `measure i64 %r[LOW, BITS]` names a slice of a register; `measure iN [ADDRESS]` qubits in
                 // memory; `measure %r` a register.
-                if let (Some(Token::Word("i64")), Some(Token::Local(_))) = (self.cursor.peek(), self.cursor.peek_nth(1))
-                {
+                let slice = matches!(
+                    (self.cursor.peek(), self.cursor.peek_nth(1)),
+                    (Some(Token::Word("i64")), Some(Token::Local(_) | Token::Number(_)))
+                );
+                if slice {
                     self.cursor.expect(Token::Word("i64"), "`i64`")?;
-                    let register = self.slot_use(scope, "a register")?;
+                    let register = self.operand(scope, Width::WORD)?;
                     self.cursor.expect(Token::LBracket, "`[`")?;
                     let low = self.operand(scope, Width::WORD)?;
                     self.cursor.expect(Token::Comma, "`,`")?;

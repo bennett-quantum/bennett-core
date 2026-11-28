@@ -214,7 +214,7 @@ entry:
     let (lo, n, h) = (Slot(0), Slot(1), Slot(4));
     assert_eq!(
         insts[3],
-        Inst::MeasureSlice { dst: Slot(6), register: h, low: Operand::Slot(lo), bits: Operand::Slot(n) }
+        Inst::MeasureSlice { dst: Slot(6), register: Operand::Slot(h), low: Operand::Slot(lo), bits: Operand::Slot(n) }
     );
     assert!(matches!(insts[2], Inst::MeasureSlice { low: Operand::Const(_), bits: Operand::Const(_), .. }));
     assert!(matches!(insts[4], Inst::Measure { source: bennett_ir::MeasureSource::Register(_), .. }));
@@ -232,4 +232,20 @@ entry:
         problems(&not_a_register)[..],
         [Problem::TypeMismatch { expected: Expected::RegisterOrHandle, .. }]
     ));
+}
+
+/// The handle of a slice measurement may be a constant: `measure i64 1[0, 2]` reads, writes and validates.
+#[test]
+fn a_slice_measurement_takes_a_constant_handle() {
+    let text =
+        "memory 64\nfunc @main() -> i64 {\nentry:\n    %q = qalloc 3\n    %a = measure i64 1[0, 2]\n    ret %a\n}\n";
+    let module = read(text).expect("reads");
+    let constant = |value: u128| Operand::Const(bennett_ir::Const::new(Width::WORD, value).expect("i64"));
+    assert_eq!(
+        module.functions[0].blocks[0].insts[1],
+        Inst::MeasureSlice { dst: Slot(1), register: constant(1), low: constant(0), bits: constant(2) }
+    );
+    assert!(write(&module).contains("    %a = measure i64 1[0, 2]\n"));
+    assert_eq!(read(&write(&module)), Ok(module));
+    load(text).expect("valid");
 }
