@@ -442,9 +442,9 @@ pub enum Inst {
         /// The control qubits.
         controls: Vec<Qubit>,
     },
-    /// `gate target [ctrl controls]` with at least one qubit in memory or at a position computed at run time
-    /// ([`Place`]): as `Gate`. A gate whose qubits are all register qubits at literal positions is always
-    /// written as `Gate`.
+    /// `gate target [ctrl controls]` with at least one qubit in memory or at a position given as an `i64`
+    /// value, a slot or a constant from 2^32 ([`Place::Indexed`]): as `Gate`. A gate whose qubits are all
+    /// register qubits at literal positions below 2^32 is always written as `Gate`.
     GateAt {
         /// The gate.
         gate: Gate,

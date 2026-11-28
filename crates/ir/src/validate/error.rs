@@ -183,6 +183,10 @@ pub enum Problem {
         /// The register width.
         bits: u32,
     },
+    /// A position given as a constant below 2^32 (`Place::Indexed`): that is a register qubit at a literal
+    /// position (`Place::Register`), the form the reader gives for it.
+    #[error("the constant position {0} is a register qubit `%r[{0}]`, not a position given as a value")]
+    SmallConstantPosition(u32),
     /// The same qubit twice in one gate.
     #[error("`%{0}[{1}]` appears twice in one gate")]
     RepeatedQubit(String, u32),
@@ -232,7 +236,8 @@ pub enum Problem {
     #[error("the memory qubit at bit {0} of one address appears twice in one gate")]
     RepeatedMemoryQubit(u8),
     /// A `GateAt` whose qubits are all register qubits at literal positions below 2^32: it is written, and
-    /// read back, as a `Gate`. A `GateAt` has a qubit in memory or a position given as an `i64` value.
-    #[error("a gate with every qubit in a register at a literal position is a `Gate`, not a `GateAt`")]
+    /// read back, as a `Gate`. A `GateAt` has a qubit in memory or a position given as an `i64` value (a slot,
+    /// or a constant from 2^32, which the reader gives for such a literal).
+    #[error("a gate with every qubit in a register at a literal position below 2^32 is a `Gate`, not a `GateAt`")]
     GateAtWithoutMemory,
 }

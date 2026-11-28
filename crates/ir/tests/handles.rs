@@ -125,3 +125,59 @@ fn a_literal_position_from_two_to_the_32_reads_and_is_checked_by_range() {
     assert!(matches!(below.functions[0].blocks[0].insts[1], Inst::Gate { .. }));
     assert!(read(&text("18446744073709551616")).is_err(), "past 2^64 - 1");
 }
+
+/// A module built through the API with a position as a constant: the validator accepts it only in the form
+/// the reader gives (a constant from 2^32, an `i64`), so a module that validates is read back from its text
+/// as itself and validates again. A constant below 2^32 is refused by name (it is a register qubit), and a
+/// constant that is not an `i64` gives the type error alone.
+#[test]
+fn a_built_constant_position_validates_only_in_the_form_the_reader_gives() {
+    use bennett_ir::{Const, ValidationErrors, validate};
+    let base = |register: &str| {
+        let text = format!(
+            "func @main(i64 %h, i64 %i) {{\nentry:\n %q = qalloc 2\n x {register}[%i] ctrl %q[1]\n x {register}[%i]\n ret\n}}\n"
+        );
+        read(&text).expect("reads")
+    };
+    let problems_of = |module: bennett_ir::Module| match validate(module) {
+        Ok(_) => Vec::new(),
+        Err(ValidationErrors(errors)) => errors.into_iter().map(|error| error.problem).collect::<Vec<_>>(),
+    };
+    for register in ["%q", "%h"] {
+        for position in [0u128, 1, u128::from(u32::MAX), 1 << 32, u128::from(u64::MAX)] {
+            for inst in [1, 2] {
+                let mut module = base(register);
+                let Inst::GateAt { target: Place::Indexed { index, .. }, .. } =
+                    &mut module.functions[0].blocks[0].insts[inst]
+                else {
+                    panic!("an indexed gate")
+                };
+                *index = Operand::Const(Const::new(Width::WORD, position).expect("a 64-bit position"));
+                let context = format!("{register}[{position}], instruction {inst}");
+                match validate(module.clone()) {
+                    Ok(_) => {
+                        let back = read(&write(&module)).expect("reads back");
+                        assert_eq!(back, module, "{context}");
+                        assert!(validate(back).is_ok(), "{context}");
+                        assert!(position >> 32 != 0 && register == "%h", "{context}: accepted");
+                    }
+                    Err(ValidationErrors(errors)) => {
+                        let found: Vec<Problem> = errors.into_iter().map(|error| error.problem).collect();
+                        let expected = if position >> 32 == 0 {
+                            Problem::SmallConstantPosition(position as u32)
+                        } else {
+                            Problem::QubitOutOfRange { bit: position as u64, bits: 2 }
+                        };
+                        assert_eq!(found, [expected], "{context}");
+                    }
+                }
+            }
+        }
+    }
+    let mut wide = base("%h");
+    let Inst::GateAt { target: Place::Indexed { index, .. }, .. } = &mut wide.functions[0].blocks[0].insts[2] else {
+        panic!("an indexed gate")
+    };
+    *index = Operand::Const(Const::new(Width::new(128).expect("i128"), 1 << 64).expect("2^64"));
+    assert!(matches!(problems_of(wide)[..], [Problem::TypeMismatch { .. }]), "the type error alone");
+}

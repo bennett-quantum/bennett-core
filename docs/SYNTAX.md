@@ -170,12 +170,14 @@ register's width, is held as an `i64` constant, `Place::Indexed`). A position at
 is the fault `bad_range` (22): a run-time position, and a literal position on an `i64` handle, whose width
 the validator cannot see (on a `qN` register the validator still reports a literal one, `QubitOutOfRange`).
 A gate checks its target and then each control in order, the handle and then the position, and then that no
-qubit is named twice (`qubit_alias`, 10, also through run-time positions and `i64` handles; the validator
-reports a repetition only on a `qN` register at a literal position); the first check that fails is the
-fault, before the gate acts.
+qubit is named twice (`qubit_alias`, 10); the first check that fails is the fault, before the gate acts. The
+validator refuses two repetitions it can see in the text, and no other: the same `qN` register slot at the
+same literal position (`RepeatedQubit`), and the same address operand at the same bit (`RepeatedMemoryQubit`).
+Every other way of naming one qubit twice (through `i64` handles, run-time positions, two slots holding one
+register, two addresses naming one byte) is the run-time `qubit_alias`.
 
 Controls written in the instruction keep the device language's rule that a qubit appears once in a gate:
-a control repeated is `qubit_alias` like the target among its controls. The handle interface's controls come
+a control repeated is refused like the target among its controls, by the validator or at run time as above. The handle interface's controls come
 as a list in memory (`docs/HANDLES.md`, 5.1 and 5.4), where a repeated control means the same as once and
 only the target among the controls is `control_in_use` (`qubit_alias`); that is the form of the control list
 from memory (`docs/HANDLES.md`, section 14, D7), not of written controls.
