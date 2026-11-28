@@ -28,10 +28,10 @@ it runs and their libraries; its temporary files left out). Without strace no me
 reuse the members. `test-build.py` checks that changes to a declarations file and a baseline reached through links,
 of a driver built elsewhere, compile the members again.
 
-Compile, resolve the archive members, and lower one C program:
+Compile, resolve the archive members, and lower one C program of one or more units:
 
 ```sh
-python3 rt/musl/link.py program.c -o program.bn
+python3 rt/musl/link.py program.c [more.c ...] -o program.bn
 cargo run -p bennett -- run program.bn --entry __bennett_entry --budget 100000000
 ```
 
@@ -405,7 +405,11 @@ with native.
 each linked and run, with `--keep` naming the folder that holds the `.i` and its sources, which stay as they were),
 a link without a suffix to a C file, a unit that is an intermediate file (refused by name), and a library directory
 whose member list adds a member compiled by plain clang (refused by name, naming the member).
-`tests/regress/` holds the self-checking witnesses of the independent testing pass of this boundary (each
+`tests/weak/` checks that the weak scope list and fault set of `bq.h` are one object in the linked program: the
+library's and the device's units, which include only the declarations file, define neither; a push in one unit is
+seen in another; a program's own definition in its first unit is kept, since `link.py` links the program's units
+in the order given, as a native link does with its objects. `tests/regress/` holds the self-checking witnesses of
+the independent testing pass of this boundary (each
 returns 0 natively and failed or faulted here before its fix). The 35 programs (42 runs with the
 `-O2` ones) took 173 seconds with the debug CLI on the shared machine, after building the library.
 The run-argument cases and the relinks were measured with the 24 tests before the allocator ones and
