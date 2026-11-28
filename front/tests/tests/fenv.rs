@@ -12,15 +12,20 @@ use bennett_front_tests::{
 use bennett_ir::Fault;
 use std::path::Path;
 use std::process::Command;
+use std::sync::Once;
 
 /// A bound on the steps of one run, far above the programs': the operation table takes about 5·10^7.
 const STEP_BUDGET: u64 = 2_000_000_000;
 
-/// Links `source` with musl at the clang options `flags` and runs it: the outcome and what it printed.
+/// Links `source` with musl at the clang options `flags` and runs it: the outcome and what it printed. musl's
+/// build is checked once per test process: even with nothing to rebuild it reconfigures, tens of seconds.
 fn device(source: &Path, name: &str, flags: &[&str]) -> (Outcome, String) {
+    static BUILD: Once = Once::new();
     let workspace = root().canonicalize().expect("workspace");
-    let build = Command::new("python3").arg(workspace.join("rt/musl/build.py")).output().expect("musl build");
-    assert!(build.status.success(), "{}", String::from_utf8_lossy(&build.stderr));
+    BUILD.call_once(|| {
+        let build = Command::new("python3").arg(workspace.join("rt/musl/build.py")).output().expect("musl build");
+        assert!(build.status.success(), "{}", String::from_utf8_lossy(&build.stderr));
+    });
     let file = out_dir().join(format!("{name}.bn"));
     let mut link = Command::new("python3");
     link.arg(workspace.join("rt/musl/link.py")).arg(source).arg("-o").arg(&file);

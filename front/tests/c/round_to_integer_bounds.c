@@ -1,7 +1,7 @@
 /* Rounding to a 64-bit integer at the edges of its range: lround, llround, lrint and llrint on float, double and
  * long double, called directly and through function pointers, under each of the four rounding modes, on the
  * values just inside, at and just outside -2^63 and 2^63 (both signs), and on infinities and NaNs. Each case
- * prints the function, the mode, the operand's bits, the result's bits and the flags each unit raised (SSE's
+ * records the function, the mode, the operand's bits, the result's bits and the flags each unit raised (SSE's
  * MXCSR and x87's status word). Compiled natively (glibc) and for the device (musl), run, and the outputs
  * compared line for line by `front/tests/tests/fenv.rs`.
  *
@@ -41,8 +41,8 @@ static volatile double vd[] = {
     __builtin_nan(""),
 };
 static volatile long double vl[] = {
-    0x1.fffffffcp30L,            /* 2^31 - 0.5 */
-    0x1.fffffffep31L,            /* 2^32 - 0.5, the last half of the high 32 bits */
+    0x1.fffffffep30L,            /* 2^31 - 0.5 */
+    0x1.ffffffffp31L,            /* 2^32 - 0.5, the last half of the high 32 bits */
     0x1.0000000000000002p62L,    /* 2^62 + 0.5 */
     0x1.fffffffffffffffap62L,    /* 2^63 - 1.5 */
     0x1.fffffffffffffffcp62L,    /* 2^63 - 1 */
@@ -56,18 +56,44 @@ static volatile long double vl[] = {
     __builtin_nanl(""),
 };
 
-static void bits(const void *p, size_t n) {
+/* The lines are formatted into one buffer and written once at the end: a formatted output call per byte took
+ * over 25 million device steps per program. Each line is at most 72 characters. */
+static char out[1728 * 80];
+static size_t used;
+
+static void put(const char *s) {
+  while (*s) {
+    if (used == sizeof out) __builtin_trap();
+    out[used++] = *s++;
+  }
+}
+
+/* The bytes at p, most significant first, in hexadecimal. */
+static void hex(const void *p, size_t n) {
+  static const char digits[] = "0123456789abcdef";
   const unsigned char *b = p;
-  for (size_t i = n; i-- > 0;) printf("%02x", b[i]);
+  for (size_t i = n; i-- > 0;) {
+    char two[3] = {digits[b[i] >> 4], digits[b[i] & 15], 0};
+    put(two);
+  }
 }
 
 static void record(const char *name, int mode, const void *operand, size_t size, long long result) {
   fenv_t e;
   fegetenv(&e);
-  printf("%s %s ", name, mode_names[mode]);
-  bits(operand, size);
-  printf(" %016llx sse %02x x87 %02x\n", (unsigned long long)result, e.__mxcsr & FE_ALL_EXCEPT,
-         e.__status_word & FE_ALL_EXCEPT);
+  unsigned char sse = e.__mxcsr & FE_ALL_EXCEPT, x87 = e.__status_word & FE_ALL_EXCEPT;
+  put(name);
+  put(" ");
+  put(mode_names[mode]);
+  put(" ");
+  hex(operand, size);
+  put(" ");
+  hex(&result, sizeof result);
+  put(" sse ");
+  hex(&sse, 1);
+  put(" x87 ");
+  hex(&x87, 1);
+  put("\n");
 }
 
 static long (*volatile p_lroundf)(float) = lroundf;
@@ -148,5 +174,6 @@ int main(void) {
   lib_llroundl();
   lib_lrintl();
   lib_llrintl();
+  fwrite(out, 1, used, stdout);
   return 0;
 }

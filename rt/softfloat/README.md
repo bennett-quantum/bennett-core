@@ -467,8 +467,8 @@ calls: the truncations to `__bf16` round in the current mode and raise inexact, 
 (tininess after rounding, as x86), a 128-bit integer outside 64 bits overflows to `_Float16` as the mode says
 (it gave infinity in every mode), and the conversions of `_Float16` to 128-bit integers raise invalid for an
 infinity or a NaN, and unsigned, inexact in (-1, 0) and invalid from -1 down. `lroundl` and `llroundl` raise
-invalid in SSE, as glibc's `feraiseexcept` does, when a positive operand rounds to 2^63 (only 2^63 - 0.5), and
-return the wrapped -2^63.
+invalid in SSE, as glibc's `feraiseexcept` does, when a positive operand rounds up from below to 2^63 (only
+2^63 - 0.5), and return the wrapped -2^63; from exactly 2^63 up invalid is raised in x87, as glibc's conversion.
 
 **Cost.** A program that never names a `<fenv.h>` function never links the state functions: the front emits no
 swap, nothing writes the modes, and LLVM's optimiser folds their loads to "to nearest"; nothing reads the
@@ -524,8 +524,8 @@ double` to `__bf16` at all. A mutant runtime that ignores the mode in `rint`, on
 whose signalling comparison raises nothing each made the comparison fail (10, 100 and 1 of the 112 groups);
 with musl's `isless` alone restored, 268 comparison results differ. `round_to_integer_bounds.c` takes
 `lround`, `llround`, `lrint` and `llrint` on the three formats, directly and through pointers, in the four modes,
-to the edges of the 64-bit range (just inside, at and just outside 2^63 of both signs, the last half, infinities
-and NaNs), printing the result and each unit's flags: all 1,728 lines agree at `-O0`, `-O2` and `-O2
+to the edges of the 64-bit range (just inside, at and just outside 2^63 of both signs, the halves below 2^31,
+2^32 and 2^63, infinities and NaNs), printing the result and each unit's flags: all 1,728 lines agree at `-O0`, `-O2` and `-O2
 -fno-math-errno`; before `lroundl` and `llroundl` raised invalid for 2^63 - 0.5, 16 lines differed at each
 (measured 2026-11-28). `fenv_api.c` checks `<fenv.h>` itself
 against glibc: setting, reading and rejecting modes, raising, testing, clearing, saving and restoring flags,
