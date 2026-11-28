@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Build musl's own selected archive members as LLVM 18 bitcode, without network or source edits."""
+"""Build musl's own selected archive members as LLVM 18 bitcode, without network or source edits.
+
+configure runs with clang; each member is compiled with bennett-cc, which includes the declarations file
+front/include/bq-prefix.h by force and makes the declaration check of docs/HANDLES.md, section 4, so that the library
+takes its declarations of the effect primitives from that file (section 15, R1 and R2)."""
 import argparse
 import hashlib
 import json
@@ -10,6 +14,7 @@ import subprocess
 
 HERE = Path(__file__).resolve().parent
 SOURCE = HERE / "musl-1.2.5"
+ROOT = HERE.parents[1]
 
 
 def run(args, **kwargs):
@@ -34,6 +39,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("out", nargs="?", type=Path, default=HERE.parents[1] / "target/musl")
     parser.add_argument("--jobs", type=int, default=min(16, os.cpu_count() or 1))
+    parser.add_argument("--driver", type=Path, default=ROOT / "target/front/bennett-cc", help="bennett-cc")
     options = parser.parse_args()
     out = options.out.resolve()
     build = out / "build"
@@ -58,9 +64,13 @@ def main():
         flags += ["-I", str(directory)]
     fingerprint = hashlib.sha256(json.dumps(flags).encode())
     own = {source for source, _ in REPLACED.values()}
-    for path in sorted([*SOURCE.rglob("*"), *(HERE / "overlay").glob("*.h"), *own, Path(__file__)]):
+    driver = options.driver.resolve()
+    # The members depend on the driver and its files (the declarations file, the baseline), as on musl's sources.
+    fingerprint.update(driver.read_bytes())
+    for path in sorted([*SOURCE.rglob("*"), *(HERE / "overlay").glob("*.h"), *own, Path(__file__),
+                        *(ROOT / "front/include").glob("bq*")]):
         if path.is_file():
-            fingerprint.update(str(path.relative_to(HERE)).encode())
+            fingerprint.update(str(path.relative_to(ROOT)).encode())
             fingerprint.update(path.read_bytes())
     stamp = out / "fingerprint"
     unchanged = stamp.exists() and stamp.read_text() == fingerprint.hexdigest()
@@ -85,8 +95,9 @@ def main():
             return str(source), "cached"
         with target.with_suffix(".log").open("w") as log:
             own, extra = REPLACED.get(source, (SOURCE / source, []))
-            run([clang, *flags, *extra, "-O0", "-Xclang", "-disable-O0-optnone", "-gline-tables-only",
-                 "-emit-llvm", "-c", own, "-o", target], stdout=log, stderr=log)
+            # bennett-cc takes clang's options, then `-o OUTPUT UNIT`; it adds -emit-llvm -c itself.
+            run([driver, *flags, *extra, "-O0", "-Xclang", "-disable-O0-optnone",
+                 "-gline-tables-only", "-o", target, own], stdout=log, stderr=log)
         return str(source), "built"
     with ThreadPoolExecutor(options.jobs) as pool:
         results = list(pool.map(compile_one, sources))

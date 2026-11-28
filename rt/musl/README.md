@@ -4,16 +4,25 @@ The upstream release is vendored unmodified; its licence and archive identity ar
 The three overlay headers replace x86-64 system-call assembly, atomics and the thread pointer for the
 single-threaded device. No network is used by the build.
 
-Build the library's bitcode archive members with LLVM/clang 18, GNU make and Python 3:
+Build the library's bitcode archive members with LLVM/clang 18, GNU make, Python 3 and the front's driver
+`bennett-cc` (built with the front, `front/test.sh` or `cmake --build target/front`):
 
 ```sh
-python3 rt/musl/build.py                  # target/musl; an output directory may be supplied
+python3 rt/musl/build.py                  # target/musl; an output directory may be supplied; --driver DRIVER
 ```
+
+Every member is compiled with `bennett-cc`, which includes the declarations file `front/include/bq-prefix.h` by
+force and makes the declaration check of `docs/HANDLES.md`, section 4, so the library passes the declaration rule
+like any unit of a program (section 15, R1 and R2). musl's own files declare no primitive; the device's files here
+(`runtime.c`, `start.c`, `devices.c`) take their declarations of `__bennett_effect`, `__bennett_exit` and
+`__bennett_out_of_memory` from it. The declarations file includes nothing, so a unit's own feature-test macros and
+its own declarations of library functions reach the C library's headers as natively.
 
 The build configures musl out of tree, uses its own `LIBC_OBJS` selection, and substitutes its generic C
 files for x86-64 assembly wherever present. It produces 1,345 bitcode members, a member list, `libc.a`,
 installed public headers and JSON compiler flags. Its fingerprint includes all upstream files, the overlays,
-the build script and compiler flags; unchanged builds reuse the members.
+the build script, the driver binary, the driver's files in `front/include` and the compiler flags;
+unchanged builds reuse the members.
 
 Compile, resolve the archive members, and lower one C program:
 
@@ -22,7 +31,8 @@ python3 rt/musl/link.py program.c -o program.bn
 cargo run -p bennett -- run program.bn --entry __bennett_entry --budget 100000000
 ```
 
-`link.py` uses musl's public headers, preserves the program's linkage, and pulls archive members as the
+`link.py` compiles every unit, the program's and the device's own, with `bennett-cc` (`--driver`, by default the
+one beside `--front`), uses musl's public headers, preserves the program's linkage, and pulls archive members as the
 probe's static-link experiment does (`resolve.py`). It resolves undefined weak references to null except
 the standard init/fini bounds supplied by the front, and retries library dependencies introduced by LLVM
 (such as `puts` from `printf`). It never merges the entire library or internalizes the whole program.

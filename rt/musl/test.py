@@ -97,7 +97,13 @@ def argument_cases(args):
             console = next((line.removeprefix("console: ") for line in result.stdout.splitlines()
                             if line.startswith("console: ")), "")
             assert console == escaped(reference.stdout), (case, level, console, reference.stdout)
-            print(f"arguments {case} {level}: passed (status {reference.returncode})", flush=True)
+            print(f"arguments {case} {level}: passed (status {reference.returncode}, {steps_of(result.stdout)} steps)",
+                  flush=True)
+
+
+def steps_of(stdout):
+    """The device steps a run reports (`steps: N`), for the record each passing case prints."""
+    return next((line.removeprefix("steps: ") for line in stdout.splitlines() if line.startswith("steps: ")), "?")
 
 
 def code_lines(path):
@@ -385,7 +391,8 @@ def main():
             console = next((line.removeprefix("console: ") for line in result.stdout.splitlines()
                             if line.startswith("console: ")), "")
             assert console == escaped(output), (name, console, output)
-        print(f"{name} {level}: passed ({program.stat().st_size} text bytes)", flush=True)
+        print(f"{name} {level}: passed ({program.stat().st_size} text bytes, {steps_of(result.stdout)} steps)",
+              flush=True)
     argument_cases(args)
     relinked_images(args)
     caller_frame(args)

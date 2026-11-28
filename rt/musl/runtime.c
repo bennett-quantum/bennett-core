@@ -19,10 +19,9 @@
 _Static_assert(BENNETT_ARENA_BYTES >= PAGE && BENNETT_ARENA_BYTES % PAGE == 0,
                "the arena is a positive whole number of 4096-byte pages");
 
-void __bennett_effect(char);
-_Noreturn void __bennett_exit(int);
-/* Ends the run with the named fault `out_of_memory`: the arena cannot hold a request. */
-_Noreturn void __bennett_out_of_memory(void);
+/* The effect primitives (__bennett_effect, __bennett_exit, and __bennett_out_of_memory, which ends the run with the
+ * named fault `out_of_memory` when the arena cannot hold a request) are declared by bq-prefix.h, which bennett-cc
+ * includes by force in every unit (docs/HANDLES.md, sections 4 and 15). */
 struct pthread *__bennett_thread_pointer;
 int __set_thread_area(void *pointer)
 {

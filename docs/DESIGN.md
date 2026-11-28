@@ -2852,10 +2852,11 @@ The handle interface's front end ("The declaration check" above; the old layer s
 - **A program that uses both interfaces is refused by name.** Cheap to reverse: one test in
   `front/src/HandleProgram.cpp`.
 - **The mark is per module.** A program linked from a marked unit and a unit clang compiled alone carries the mark,
-  so `bennett-front` does not see that the second unit skipped the check. The C library's units are compiled by
-  clang alone and declare `__bennett_effect` and `__bennett_exit` themselves (runtime items R1 and R2 of
-  `docs/HANDLES.md`). Route: the C library's units through `bennett-cc` after R1 and R2, then a mark on every
-  function of a checked unit, required of every function in a program that uses the interface.
+  so `bennett-front` does not see that the second unit skipped the check. `rt/musl/build.py` and `link.py` compile
+  every unit they link with `bennett-cc`, musl's members, the device's own runtime files and the program's units
+  (runtime items R1 and R2 of `docs/HANDLES.md`), so a program linked by them has no unchecked unit; a unit compiled
+  by clang alone and linked by hand still goes unseen. Route: a mark on every function of a checked unit, required
+  of every function in a program that uses the interface.
 - **`-fsanitize=undefined` can refuse a conforming unit.** With `-fsanitize=unreachable`, clang 18 removes
   `noreturn` from a primitive's declaration where it emits a call of it, so a unit that does not call every
   noreturn primitive the baseline calls differs from the baseline (rule 3) and is refused by name. The device has no

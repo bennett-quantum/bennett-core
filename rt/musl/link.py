@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Compile one C program and resolve musl archive members, then emit its device program."""
+"""Compile one C program and resolve musl archive members, then emit its device program.
+
+Every unit, the program's and the runtime's own, is compiled with bennett-cc, which includes the declarations file
+front/include/bq-prefix.h by force and makes the declaration check of docs/HANDLES.md, section 4; musl's members were
+compiled with it by build.py. A unit that uses the handle interface includes bq.h itself."""
 import argparse
 import json
 import os
@@ -25,6 +29,7 @@ def main():
     parser.add_argument("-o", required=True, type=Path)
     parser.add_argument("--libdir", type=Path, default=ROOT / "target/musl")
     parser.add_argument("--front", type=Path, default=ROOT / "target/front/bennett-front")
+    parser.add_argument("--driver", type=Path, help="bennett-cc (default: beside --front)")
     parser.add_argument("--arena-bytes", type=int, default=1 << 20)
     parser.add_argument("--stack-bytes", type=int, default=1 << 20)
     parser.add_argument("--region-budget", type=int, default=100000)
@@ -48,7 +53,7 @@ def main():
     lib = args.libdir.resolve()
     args.o = args.o.resolve()
     args.o.parent.mkdir(parents=True, exist_ok=True)
-    clang = os.environ.get("CLANG", "clang-18")
+    driver = (args.driver or args.front.with_name("bennett-cc")).resolve()
     flags = json.loads((lib / "cflags.json").read_text())
     if args.arena_bytes < 4096 or args.arena_bytes % 4096:
         parser.error("--arena-bytes must be a positive whole number of 4096-byte pages")
@@ -57,9 +62,12 @@ def main():
     temporary = tempfile.TemporaryDirectory(dir=args.o.parent) if args.keep is None else None
     scratch = Path(temporary.name) if temporary else args.keep.resolve()
     scratch.mkdir(parents=True, exist_ok=True)
-    common = ["-O0", "-Xclang", "-disable-O0-optnone", "-gline-tables-only", "-emit-llvm", "-c"]
-    run([clang, *common, "-nostdinc", "-isystem", HERE / "include", "-isystem", lib / "sysroot/include",
-         "-I", ROOT / "front/include", *args.clang_flag, args.source.resolve(), "-o", scratch / "program.bc"])
+    common = ["-O0", "-Xclang", "-disable-O0-optnone", "-gline-tables-only"]
+    # bennett-cc takes clang's options, then `-o OUTPUT UNIT`; it adds -emit-llvm -c itself.
+    def compile_unit(options, source, output):
+        run([driver, *options, "-o", output, source])
+    compile_unit([*common, "-nostdinc", "-isystem", HERE / "include", "-isystem", lib / "sysroot/include",
+                  *args.clang_flag], args.source.resolve(), scratch / "program.bc")
     ir = run(["llvm-dis-18", scratch / "program.bc", "-o", "-"], capture_output=True, text=True).stdout
     match = re.search(r"^define\b[^\n]* @main\(([^\n]*)\)", ir, re.M)
     if not match or "..." in match[1]:
@@ -118,8 +126,8 @@ def main():
                ("start.c", "start.bc", [f"-DMAIN_ARGS={count}"]),
                ("vfs.c", "vfs.bc", []), ("devices.c", "devices.bc", []), ("models.c", "models.bc", [])]
     for source, output, extra in sources:
-        run([clang, *flags, *common, *extra, HERE / source, "-o", scratch / output])
-    run([clang, *flags, *common, "-I", HERE, scratch / "inputs.c", "-o", scratch / "inputs.bc"])
+        compile_unit([*flags, *common, *extra], HERE / source, scratch / output)
+    compile_unit([*flags, *common, "-I", HERE], scratch / "inputs.c", scratch / "inputs.bc")
     inputs = [scratch / output for _, output, _ in sources] + [scratch / "program.bc", scratch / "inputs.bc"]
     roots = []
     for _ in range(16):
