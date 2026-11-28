@@ -12,10 +12,8 @@ use std::process::{Command, Output};
 
 /// The two optimisation levels, as the other front-end tests compile C.
 const LEVELS: [(&str, &[&str]); 2] = [("O0", CLANG_FLAGS), ("O2", CLANG_O2_FLAGS)];
-/// The status of a refusal of input that breaks a rule (`misuse`), and of one that waits on work not done
-/// yet (`notHandled`), as `front/src/Diagnostic.h` gives them.
+/// The status of a refusal of input that breaks a rule (`misuse`), as `front/src/Diagnostic.h` gives it.
 const REFUSED: i32 = 2;
-const NOT_HANDLED: i32 = 3;
 
 /// The declarations file `bennett-cc` includes by force first in every unit.
 fn prefix() -> PathBuf {
@@ -171,18 +169,22 @@ int main(void) {
 }
 "#;
 
-const NOT_YET: &str = "translating its calls into device instructions waits";
+/// What the conforming program prints: `r` is a Bell pair, 0 or 3, and `out` is its low qubit XOR 1, so the sum is
+/// 1 or 3.
+fn assert_conforming_run(outcome: &Outcome, console: &[u8], context: &str) {
+    assert_eq!(outcome, &Outcome::Returned(Some(0)), "{context}");
+    assert!(console == b"1" || console == b"3", "{context}: console {console:?}");
+}
 
-/// A conforming program passes `bennett-cc`; `bennett-front` then stops, by name, at the translation of its calls,
-/// which waits on the device forms.
+/// A conforming program passes `bennett-cc`, and `bennett-front` translates its calls (front/tests/tests/
+/// handles_translate.rs tests the translation call by call); the program runs.
 #[test]
 fn a_conforming_program_passes_the_check() {
     let source = write_unit("handles_conforming", CONFORMING);
     for (level, flags) in LEVELS {
         let name = format!("handles_conforming.{level}");
-        let (unit, bitcode) = driver_on(&source, &name, flags);
-        assert!(unit.status.success(), "{name}: {}", stderr(&unit));
-        assert_refused(&front_of(&bitcode, &name), NOT_HANDLED, NOT_YET, &name);
+        let (outcome, console) = run_through_driver(&source, &name, flags);
+        assert_conforming_run(&outcome, &console, &name);
     }
 }
 
@@ -748,8 +750,8 @@ fn codegen_options() -> Vec<Vec<&'static str>> {
 }
 
 /// Review finding R13 of the earlier step (and P3 of review r1 of the prefix step: `-O4`, `-pg` and seven x86
-/// target features were refused before they were in the table): the conforming program passes under each option (the front stops at the
-/// translation of its calls); with `#pragma STDC FENV_ACCESS ON` (`strictfp` on its calls) and the statement
+/// target features were refused before they were in the table): the conforming program passes under each option and
+/// runs; with `#pragma STDC FENV_ACCESS ON` (`strictfp` on its calls) and the statement
 /// attributes `nomerge`, `noinline` and `always_inline` on calls, at both levels; and a program of the output and
 /// exit primitives runs to its end. Under `-pg` the driver accepts a unit with both calls of `bq_width` at both
 /// levels; its output calls `mcount`, which no device library defines yet, so it is not run.
@@ -787,9 +789,8 @@ fn the_attributes_clang_adds_for_an_option_are_accepted() {
             scope.spawn(move || {
                 let context = format!("{name} ({})", option.join(" "));
                 if console.is_empty() {
-                    let (unit, bitcode) = driver_on(source, name, option);
-                    assert!(unit.status.success(), "{context}: {}", stderr(&unit));
-                    assert_refused(&front_of(&bitcode, name), NOT_HANDLED, NOT_YET, &context);
+                    let (got, tape) = run_through_driver(source, name, option);
+                    assert_conforming_run(&got, &tape, &context);
                 } else {
                     let (got, tape) = run_through_driver(source, name, option);
                     assert_eq!(got, Outcome::Returned(Some(7)), "{context}");

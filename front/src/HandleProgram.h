@@ -15,9 +15,8 @@ namespace bennett {
 // - refuses by name a module that uses one of the seven interface functions and lacks the mark of bennett-cc
 //   ("compile each unit with bennett-cc"), and a program that uses both the marker interface (docs/MARKERS.md) and
 //   the handle interface;
-// - refuses a program that uses the handle interface with "not handled yet" (status 3) at its first interface
-//   call: the translation of the calls into device instructions waits on the device forms of docs/HANDLES.md,
-//   section 14;
+// - marks the program's apply targets (HandleCalls.h, markApplyTargets), whose calls the writer later translates
+//   one device instruction each (translateInterfaceCall);
 // - in a module with the mark, gives each primitive whose address the program takes a callable device function,
 //   `<name>.address`, internal, whose body is the direct call; every use other than a direct call names it, so that
 //   a call through a pointer reaches the primitive as a direct call does. A module without the mark keeps the old

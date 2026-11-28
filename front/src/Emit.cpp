@@ -4,6 +4,7 @@
 
 #include "Diagnostic.h"
 #include "Jumps.h"
+#include "HandleCalls.h"
 #include "Markers.h"
 
 #include <llvm/ADT/MapVector.h>
@@ -644,7 +645,8 @@ std::string BodyWriter::header(const Function &function) {
     bind(&arg, name);
     params += (params.empty() ? "" : ", ") + intType(widthOf(arg.getType(), &function)) + " " + name;
   }
-  std::string text = "func " + module.functionName(&function) + "(" + params + ")";
+  std::string text = std::string(isApplyTarget(function) ? "applied " : "") + "func " +
+                     module.functionName(&function) + "(" + params + ")";
   if (!function.getReturnType()->isVoidTy()) {
     text += " -> " + intType(widthOf(function.getReturnType(), &function));
   }
@@ -681,7 +683,7 @@ void BodyWriter::body(const Function &function) {
             call && call->getCalledFunction() &&
             (call->getCalledFunction()->getName() == "__bennett_exit" ||
              call->getCalledFunction()->getName() == "__bennett_out_of_memory" ||
-             call->getCalledFunction()->getName() == deviceLongjmp)) {
+             call->getCalledFunction()->getName() == deviceLongjmp || endsBlock(*call))) {
           // `exit`, `fault` and `longjmp` are device terminators; LLVM follows a noreturn call with unreachable.
           break;
         }
@@ -850,6 +852,9 @@ void BodyWriter::call(const Instruction &inst) {
   }
   if (const auto *callee = call.getCalledFunction(); callee && callee->getName() == deviceLongjmp) {
     line("longjmp " + operand(call.getArgOperand(0)) + ", " + operand(call.getArgOperand(1)));
+    return;
+  }
+  if (translateInterfaceCall(*this, call)) { // the handle interface: one device instruction (HandleCalls.h)
     return;
   }
   if (const auto *callee = dyn_cast<Function>(call.getCalledOperand()); callee && callee->isDeclaration()) {

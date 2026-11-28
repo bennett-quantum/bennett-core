@@ -1171,9 +1171,8 @@ instruction whose every operand is a value given at run time: the function addre
 register's handle, the image's address and size, the field list's address and count (40-byte entries of
 6.1), the control list's (16-byte entries, "Control lists" in `docs/SYNTAX.md`). An *apply target* is a
 function the device program marks `applied func`, with one `i64` parameter, the block's address, and no
-result. Today the device text marks them: the front end's writer emits no mark yet, and writing it from the
-C signatures (D11) is part of the front end's translation of the interface, a later step. The device does not
-recompute the set.
+result. `bennett-front` marks them from the compiled C signatures (D11; "Translating the handle interface"
+below). The device does not recompute the set.
 
 **Checks**, in the order of 6.2, from definite values, the first that fails ending the run with its fault
 before anything changes: `F` an apply target (`bad_indirect`, the interface's `bad_function`); the fault
@@ -1608,6 +1607,59 @@ after inlining a `restrict` parameter (trusted); the front's checks on LLVM text
 temporary file left. Lane 17's two witnesses in `front/tests/tests/out_of_memory.rs` pass: an indirect call to the
 out-of-memory stop marked `nounwind willreturn memory(none)` now faults on the device, and an ifunc of that name is
 refused as an ifunc.
+
+## Translating the handle interface
+
+After the declaration check, `bennett-front` translates a program of the handle interface (`docs/HANDLES.md`,
+sections 5, 6 and 14) with nothing but rule R: each call of an interface function becomes exactly one device
+instruction, whose operands are the call's operands, written as the writer writes any value (a slot, or a constant:
+a handle, a code, an angle's binary64 bits, an address). Nothing asks where an operand came from or what a value
+depends on, and the front end issues no check of its own: every check, and its order, is the device's, made when the
+instruction runs (`front/src/HandleCalls.h`).
+
+| Call | Device instruction (`docs/SYNTAX.md`) |
+|---|---|
+| `bq_alloc(bits)` | `%h = qalloc i64 bits` |
+| `bq_free(r)` | `qfree r` |
+| `bq_width(r)` | `%w = qwidth r` |
+| `bq_measure(r, low, bits)` | `%v = measure i64 r[low, bits]` |
+| `bq_gate(kind, r, bit, c, n)` | `gate(kind) r[bit] ctrl list(c, n)` |
+| `bq_rotate(kind, theta, r, bit, c, n)` | `rotate(kind, theta) r[bit] ctrl list(c, n)` |
+| `bq_apply(f, B, e, p, s, q, m, c, n)` | `apply f budget B, fault e, image(p, s), fields(q, m), ctrl list(c, n)` |
+| `__bennett_bad_argument()` | `fault bad_argument` |
+| `__bennett_out_of_memory()` | `fault out_of_memory` |
+
+A handle is the one `i64` member of `bq_reg`, which x86-64 passes and returns in one register, so a call's handle
+operand is that integer. The angle is the `double`'s bits after floating-point values become integers (as every
+`double` of a program does). A call through a pointer reaches the primitive's device function `<name>.address`
+("The declaration check", rule 7), whose body is the direct call and so the one instruction. Output and exit keep
+their lowering (`effect`, `exit`).
+
+**Apply targets.** Right after the check, on the module as compiled and before any lowering, every defined
+function whose type is one pointer parameter and no result is marked an apply target (D11): `void a(void *)` and
+`void b(int *)` are, `void c(uint64_t)` is not, though its device signature is the same. No primitive is one: the
+primitives are declarations, and none of their device functions has that type. The writer prints a marked function
+as `applied func`; it stays an ordinary function too, callable directly and through a pointer. A function of the C
+library with that type (`free`) is an apply target like any other. The device checks the function operand of
+`apply` against the marks (`bad_indirect`) in the same step as the in-region test.
+
+**Inside an applied function** an interface call is the same one instruction, and the device gives
+`quantum_in_region` (8) at it before any check of the call (D14); the two named stops give their own codes, 24 and
+19, as ordinary code does; output and exit give 7 and 13.
+
+The rest of the pipeline is the one every C program takes. The old layer's analyses find no marker call in such a
+program and leave it to the ordinary writer.
+
+Tests (`front/tests/tests/handles_translate.rs`): one C program of 86 cases through `bennett-cc` and
+`bennett-front` four ways, at `-O0` and `-O2`, with the operands of the calls under test written as constants and
+passed through `volatile` objects (run-time values at both levels); the four device programs give each case's one
+outcome on three seeds: a result, or the first failing check's fault in the order of `docs/HANDLES.md`, section 5
+(every check of every primitive but `out_of_handles`, each field check of 6.2, list order, the angle before the
+handle, the kind before everything), the applied function's codes in its fault register (1, 2, 7, 8, 13, 19, 24),
+and the marks: constant operands at `-O2` (a constant handle, function address and angle among them), slots in the
+run-time form, `applied func` on the two targets and on no other function. One program of one call of each kind
+has exactly one interface instruction per call at both levels. The conforming program of `handles_front.rs` runs
+under every option of the baseline's table.
 
 ## What LLVM's passes may not change
 
@@ -2946,9 +2998,15 @@ Refused by name or not yet excluded around the classification of "What LLVM's pa
 
 The handle interface's front end ("The declaration check" above; the old layer stays as it is):
 
-- **Every program that uses the handle interface is refused by name** ("not handled yet") after the check: the
-  translation of each of its calls into one device instruction waits on the device forms of `docs/HANDLES.md`,
-  section 14, and the codes 20 to 24. Route: the front end's second part, once the forms land.
+- **Only the simulator's direct evaluation runs a translated `bq_apply`.** The counter, the OpenQASM writer and
+  `--apply-circuit` refuse the device's `apply` to a block by name. Route: the gate emitter's D17
+  (`docs/HANDLES.md`, section 14).
+- **A primitive called through a pointer inside an applied function takes one step more** than the direct call:
+  the indirect call enters `<name>.address`, whose instruction then gives the class code. With one step of the
+  budget left at that call the code is `budget` (1), not 8, 7 or 13. Route: the device's D14 for indirect calls
+  (the call step raises the class code when its target is a primitive's device function).
+- **`out_of_handles` is not tested through C.** It needs 2^64 - 1 allocations; the device's own tests cover the
+  check. Route: none needed beyond the device's.
 - **A program that uses both interfaces is refused by name.** Cheap to reverse: one test in
   `front/src/HandleProgram.cpp`.
 - **The mark is per module.** A program linked from a marked unit and a unit clang compiled alone carries the mark,

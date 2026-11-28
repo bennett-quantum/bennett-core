@@ -60,10 +60,13 @@ A unit of a program in the handle interface (`front/include/bq.h`, `docs/HANDLES
 (`front/include/bq-prefix.h`) by force, checks the unit's declarations and calls of the primitives before any
 optimiser pass against a baseline that nothing of the user's or the host's reaches, and refuses a unit that breaks the header's
 declaration rule by name, writing no bitcode ([the declaration check](docs/DESIGN.md#the-declaration-check)).
-`bennett-front` refuses a program that uses the seven `bq_*` functions until their calls can be translated:
+`bennett-front` then translates each call of the seven `bq_*` functions into one device instruction
+([translating the handle interface](docs/DESIGN.md#translating-the-handle-interface)):
 
 ```sh
 target/front/bennett-cc -O0 -Xclang -disable-O0-optnone -gline-tables-only -o prog.bc prog.c
+target/front/bennett-front prog.bc -o prog.bn --region-budget 64 --stack-bytes 65536
+cargo run -p bennett -- run prog.bn
 ```
 
 For a program using the C library, build musl once and use its member resolver (LLVM/clang 18, GNU make,

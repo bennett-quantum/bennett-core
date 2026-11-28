@@ -2,6 +2,7 @@
 
 #include "Claims.h"
 #include "Diagnostic.h"
+#include "HandleCalls.h"
 #include "Markers.h"
 #include "Primitives.h"
 
@@ -109,11 +110,10 @@ void checkHandleProgram(Module &module) {
                firstUse(*handle));
       }
     }
-    notHandled("the handle interface's @" + handle->getName().str() +
-                   ": translating its calls into device instructions waits on the device forms of "
-                   "docs/HANDLES.md, section 14",
-               firstUse(*handle));
   }
+  // The apply targets, from the module as compiled, before any lowering (HandleCalls.h); then the primitives'
+  // device functions, which are never targets (none has the type of one).
+  markApplyTargets(module);
   if (marked) {
     giveAddresses(module);
   }
