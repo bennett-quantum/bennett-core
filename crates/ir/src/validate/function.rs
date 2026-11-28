@@ -5,8 +5,8 @@ use petgraph::graph::{DiGraph, NodeIndex};
 
 use super::error::{Expected, Location, Problem, ValidationError};
 use crate::{
-    CastOp, Fault, FixedGate, Function, Gate, GateKind, Inst, MEMORY_QUBIT_BITS, MeasureSource, Module, Operand, Place,
-    Qubits, Slot, Terminator, Type, Width,
+    CastOp, Controls, Fault, FixedGate, Function, Gate, GateKind, Inst, MEMORY_QUBIT_BITS, MeasureSource, Module,
+    Operand, Place, Qubits, Slot, Terminator, Type, Width,
 };
 
 /// Checks `function`, appending what is wrong to `errors`, and returns the type of every slot. The types
@@ -308,7 +308,16 @@ impl<'a> Checker<'a> {
                     }
                 };
                 self.expect(site, *code, Type::Int(Width::WORD));
-                let places: Vec<Place> = std::iter::once(target).chain(controls).copied().collect();
+                // The list's entries are read when the gate runs; its address and count are `i64` values.
+                let written: &[Place] = match controls {
+                    Controls::Written(places) => places,
+                    Controls::List { address, count } => {
+                        self.expect(site, *address, Type::Int(Width::WORD));
+                        self.expect(site, *count, Type::Int(Width::WORD));
+                        &[]
+                    }
+                };
+                let places: Vec<Place> = std::iter::once(target).chain(written).copied().collect();
                 // The kind and the angle are checked when the gate runs; X stands for the gate here.
                 self.gate(site, Gate::Fixed(FixedGate::X), &places);
             }

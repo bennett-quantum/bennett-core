@@ -1,0 +1,17 @@
+; A control list in memory through the CLI (crates/cli/tests/control_lists.rs): two entries naming qubit 0
+; of the register with handle 1, and `%n` of them used: one control, written once, either way.
+memory 256
+
+func @main(i64 %n) -> i2 {
+entry:
+    %q = qalloc i64 2
+    h %q[0]
+    store i64 1, 64
+    store i64 0, 72
+    store i64 1, 80
+    store i64 0, 88
+    gate(1) %q[1] ctrl list(64, %n)
+    %m = measure i64 %q[0, 2]
+    %r = trunc i64 %m to i2
+    ret %r
+}

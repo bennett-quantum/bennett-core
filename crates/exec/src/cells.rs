@@ -16,7 +16,7 @@
 
 use std::ops::Range;
 
-use bennett_ir::{Fault, Gate, Inst, Place, Width};
+use bennett_ir::{Controls, Fault, Gate, Inst, Operand, Place, Width};
 
 use crate::device::Wire;
 use crate::device_io::{DeviceContext, wire};
@@ -90,11 +90,52 @@ impl<'m> Executor<'m> {
         controls: &[Place],
         context: &mut DeviceContext<'_>,
     ) -> Result<(), Halt> {
+        let resolved = self.resolve_written(target, controls)?;
+        self.gate_resolved(gate, resolved, context)
+    }
+
+    /// `gate target ctrl list(address, count)`: the target resolved, then the list read
+    /// ([`Executor::control_list`]), then the target among the controls is `qubit_alias`; then as `gate_at`.
+    pub(crate) fn gate_listed(
+        &mut self,
+        gate: Gate,
+        target: &Place,
+        address: &Operand,
+        count: &Operand,
+        context: &mut DeviceContext<'_>,
+    ) -> Result<(), Halt> {
+        let resolved = self.resolve_listed(target, address, count)?;
+        self.gate_resolved(gate, resolved, context)
+    }
+
+    /// The target and the written controls resolved, in order; a qubit named twice is `qubit_alias`.
+    fn resolve_written(&self, target: &Place, controls: &[Place]) -> Result<Vec<Resolved>, Fault> {
         let places = std::iter::once(target).chain(controls);
         let resolved = places.map(|place| self.resolve_place(place)).collect::<Result<Vec<_>, _>>()?;
         if resolved.iter().enumerate().any(|(k, place)| resolved[..k].contains(place)) {
-            return Err(Fault::QubitAlias.into());
+            return Err(Fault::QubitAlias);
         }
+        Ok(resolved)
+    }
+
+    /// The target and the controls of a list resolved: a qubit listed twice is one control; the target among
+    /// them is `qubit_alias`.
+    fn resolve_listed(&self, target: &Place, address: &Operand, count: &Operand) -> Result<Vec<Resolved>, Fault> {
+        let target = self.resolve_place(target)?;
+        let controls = self.control_list(self.read_word(address), self.read_word(count))?;
+        if controls.iter().any(|&control| Resolved::Register(control) == target) {
+            return Err(Fault::QubitAlias);
+        }
+        Ok(std::iter::once(target).chain(controls.into_iter().map(Resolved::Register)).collect())
+    }
+
+    /// Applies `gate` to resolved qubits, the target first, which name no qubit twice.
+    fn gate_resolved(
+        &mut self,
+        gate: Gate,
+        resolved: Vec<Resolved>,
+        context: &mut DeviceContext<'_>,
+    ) -> Result<(), Halt> {
         // The bytes to promote, distinct, in the order the gate names them. The simulator admits their
         // qubits all at once, and a promotion that fails takes back those before it: a stop leaves the
         // state as it was.
@@ -151,20 +192,22 @@ impl<'m> Executor<'m> {
     /// promotions undone, the latest first.
     pub(crate) fn undo_gate_at(&mut self, promoting: bool) {
         let inst = self.retreat();
-        let (gate, target, controls) = if let Inst::RotateBy { axis, angle, target, controls } = inst {
-            // The angle's slot holds the value it held when the gate ran: every later step is undone.
-            (self.rotation(*axis, *angle).expect("an angle that ran is finite"), target, controls)
+        // The slots of an angle or a kind, the list's bytes and the handle table hold what they held when the
+        // gate ran: every later step is undone.
+        let (gate, resolved) = if let Inst::RotateBy { axis, angle, target, controls } = inst {
+            (self.rotation(*axis, *angle).expect("an angle that ran is finite"), self.resolve_written(target, controls))
         } else if let Inst::GateAt { gate, target, controls } = inst {
-            (*gate, target, controls)
+            (*gate, self.resolve_written(target, controls))
         } else if let Inst::GateBy { kind, target, controls } = inst {
-            // The kind's slots hold the values they held when the gate ran.
-            (self.coded(kind).expect("a kind that ran is valid"), target, controls)
+            let gate = self.coded(kind).expect("a kind that ran is valid");
+            match controls {
+                Controls::Written(controls) => (gate, self.resolve_written(target, controls)),
+                Controls::List { address, count } => (gate, self.resolve_listed(target, address, count)),
+            }
         } else {
             unreachable!("a GateAt, RotateBy or GateBy record")
         };
-        let places = std::iter::once(target).chain(controls);
-        let resolved: Vec<Resolved> =
-            places.map(|place| self.resolve_place(place).expect("a gate that ran resolves again")).collect();
+        let resolved = resolved.expect("a gate that ran resolves again");
         let qubits: Vec<Wire> = resolved.iter().map(|&place| self.resolve_wire(place)).collect();
         // Undoing returns to a state the run held, so the configuration limit is not applied.
         self.device_gate(gates::inverse(gate), qubits[0], &qubits[1..], &mut DeviceContext::default())

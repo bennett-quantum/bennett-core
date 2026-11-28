@@ -115,7 +115,8 @@ A module is a list of functions, an initial memory image and a memory size.
   (`x y h z s sdg t tdg rx ry rz p`, a rotation's angle a literal or an `i64` computed at run time,
   `Inst::RotateBy`) with an optional list of control qubits, each qubit in a register or at a
   bit of memory ("Qubits in memory", below), the gate or rotation whose kind is a code given at run time
-  (`gate(%k)`, `rotate(%k, %a)`, `Inst::GateBy`; `docs/SYNTAX.md`, "Gate kinds at run time"),
+  (`gate(%k)`, `rotate(%k, %a)`, `Inst::GateBy`; `docs/SYNTAX.md`, "Gate kinds at run time"), its
+  controls written or read from a list in memory (`ctrl list(%p, %n)`, "Control lists" there),
   `measure` of a register or of bits at an address, and `apply`
   (below). Every allocation has a handle, its number among the run's allocations, from 1, never given again
   in the run. A register is named by a `qN` value, or by an `i64` value or constant holding its handle

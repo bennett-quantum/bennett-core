@@ -14,6 +14,7 @@ mod apply_report;
 mod arith;
 mod backward;
 mod cells;
+mod control_list;
 mod device;
 mod device_io;
 mod executor;

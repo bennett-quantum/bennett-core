@@ -46,6 +46,7 @@ statement  := %d = BINOP iN operand, operand             ; add sub mul udiv sdiv
             | (rx | ry | rz | p)(%a) qubit [ctrl ...]    ; the angle computed at run time: an i64, binary64 bits
             | gate(operand) qubit [ctrl ...]             ; the kind an i64 gate code ("Gate kinds at run time")
             | rotate(operand, operand) qubit [ctrl ...]  ; an i64 rotation code and an angle's binary64 bits
+            | (gate(...) | rotate(...)) qubit ctrl list(operand, operand) ; the controls in memory ("Control lists")
             | %d = measure %r                            ; every qubit of the register: an iN, N at most 128
             | %d = measure iN "[" operand "]"            ; N bits from bit 0 of the integer at the i64 address
             | %d = measure i64 operand "[" operand, operand "]" ; a slice of a register ("Measuring a slice")
@@ -199,10 +200,10 @@ could have kept the width it allocated with; it reads the handle table and does 
 Inside an applied function it is a quantum instruction, `quantum_in_region` (8), like the other forms here.
 
 Controls written in the instruction keep the device language's rule that a qubit appears once in a gate:
-a control repeated is refused like the target among its controls, by the validator or at run time as above. The handle interface's controls come
-as a list in memory (`docs/HANDLES.md`, 5.1 and 5.4), where a repeated control means the same as once and
-only the target among the controls is `control_in_use` (`qubit_alias`); that is the form of the control list
-from memory (`docs/HANDLES.md`, section 14, D7), not of written controls.
+a control repeated is refused like the target among its controls, by the validator or at run time as above.
+The handle interface's controls come as a list in memory (`docs/HANDLES.md`, 5.1 and 5.4), where a repeated
+control means the same as once and only the target among the controls is `control_in_use` (`qubit_alias`):
+that is the rule of `ctrl list(...)` ("Control lists"), not of written controls.
 
 `measure` of a whole register, `apply` and calls still take `qN` registers. No instruction turns a `qN`
 register into its integer or an integer into a `qN` register; both name registers by the one numbering, so a
@@ -241,7 +242,27 @@ acts: the kind (`bad_gate`), for `rotate` the angle (`bad_angle`), then the qubi
 position, repetition; "Handles as integers"). Inside an applied function either form is `quantum_in_region`
 (8) before any of these, as every quantum instruction. Each form means the gate with its definite kind
 written out: `gate(4) %q[1]` is `h %q[1]`. The qubits are those of `GateAt`, in registers, by handles or in
-memory; the controls are written in the instruction.
+memory; the controls are written in the instruction or read from memory ("Control lists").
+
+## Control lists
+
+`gate(%k) qubit ctrl list(%p, %n)` and `rotate(%k, %a) qubit ctrl list(%p, %n)` take their controls from
+memory: `%n` entries of 16 bytes from the address `%p` (both `i64` values or constants), each the handle of a
+register as a little-endian `u64` at offset 0 and a qubit position as a little-endian `u64` at offset 8 (the
+C interface's control entry, `docs/HANDLES.md` 5.1; `bennett_ir::CONTROL_ENTRY_BYTES`, `Controls::List`). A
+list is the only control of its instruction, and only `gate` and `rotate` take one. After the kind, the
+angle and the target (handle, then position), the checks run in this order, the first that fails being the
+fault, before the gate acts:
+
+1. the `16 %n` bytes from `%p` are readable as ordinary memory: inside memory, the byte count computed as a
+   mathematical integer, and none of them holding qubits (else `bad_argument`, 24); a list of no entry reads
+   no byte, whatever `%p` is;
+2. for each entry in list order, its handle names a register (`dangling_register`, 9) and its position is
+   below the register's width (`bad_range`, 22);
+3. the target is not among the controls (`qubit_alias`, 10, the interface's `control_in_use`).
+
+A qubit listed twice is one control. Each form means the same gate with those definite controls written
+out, each once. Undoing the gate reads the list again: every later step is undone, so it holds what it held.
 
 ## Registers are not integers
 

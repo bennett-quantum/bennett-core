@@ -2,8 +2,8 @@
 //! state and journals exactly what it overwrote.
 
 use bennett_ir::{
-    BlockId, ENTRY_RETURN_ADDRESS, Fault, FuncId, Gate, GateKind, Inst, JUMP_RECORD_BYTES, MeasureSource, Operand,
-    Qubit, Qubits, Rotation, Slot, Target, Terminator, Type, Width, gate_code, rotation_code,
+    BlockId, Controls, ENTRY_RETURN_ADDRESS, Fault, FuncId, Gate, GateKind, Inst, JUMP_RECORD_BYTES, MeasureSource,
+    Operand, Qubit, Qubits, Rotation, Slot, Target, Terminator, Type, Width, gate_code, rotation_code,
 };
 
 use crate::device::Wire;
@@ -100,9 +100,13 @@ impl<'m> Executor<'m> {
                 let gate = self.rotation(*axis, *angle)?;
                 self.gate_at(gate, target, controls, context)?;
             }
-            Inst::GateBy { kind, target, controls } => {
+            Inst::GateBy { kind, target, controls: Controls::Written(controls) } => {
                 let gate = self.coded(kind)?;
                 self.gate_at(gate, target, controls, context)?;
+            }
+            Inst::GateBy { kind, target, controls: Controls::List { address, count } } => {
+                let gate = self.coded(kind)?;
+                self.gate_listed(gate, target, address, count, context)?;
             }
             Inst::Measure { dst, source: MeasureSource::Memory { width, address } } => {
                 let range = self.memory_range(self.read_word(address), *width)?;
