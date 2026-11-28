@@ -1155,6 +1155,7 @@ impl Executor<'_> {
                                 | Inst::Effect { .. }
                                 | Inst::Qalloc { .. }
                                 | Inst::QallocBy { .. }
+                                | Inst::Qwidth { .. }
                                 | Inst::Qfree { .. }
                                 | Inst::Gate { .. }
                                 | Inst::GateAt { .. }
@@ -1305,6 +1306,7 @@ impl Executor<'_> {
                 | Inst::Effect { .. }
                 | Inst::Qalloc { .. }
                 | Inst::QallocBy { .. }
+                | Inst::Qwidth { .. }
                 | Inst::Qfree { .. }
                 | Inst::Gate { .. }
                 | Inst::GateAt { .. }
@@ -1377,6 +1379,7 @@ impl Executor<'_> {
                 | Inst::Effect { .. }
                 | Inst::Qalloc { .. }
                 | Inst::QallocBy { .. }
+                | Inst::Qwidth { .. }
                 | Inst::Qfree { .. }
                 | Inst::Gate { .. }
                 | Inst::GateAt { .. }

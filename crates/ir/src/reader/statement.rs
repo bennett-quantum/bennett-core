@@ -119,6 +119,7 @@ impl<'s> Parser<'s> {
                 line.no_result("effect")?;
                 Inst::Effect { byte: self.operand(scope, Width::BYTE)? }
             }
+            "qwidth" => Inst::Qwidth { dst: line.result("qwidth")?, register: self.slot_use(scope, "a register")? },
             "qalloc" => {
                 let dst = line.result("qalloc")?;
                 // `qalloc i64 WIDTH`: the width computed at run time, the result an `i64` handle.

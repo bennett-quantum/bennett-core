@@ -429,6 +429,15 @@ pub enum Inst {
         /// The `i64` number of qubits.
         width: Operand,
     },
+    /// `dst = qwidth register`: the `i64` width of the register (a `qN` register or an `i64` handle), the width
+    /// its allocation was given; a handle that names no register is `dangling_register`. It reads the handle
+    /// table only and does not act on the qubits.
+    Qwidth {
+        /// The `i64` width.
+        dst: Slot,
+        /// The register handle.
+        register: Slot,
+    },
     /// `qfree register`: drops the register by partial trace, whatever it holds. The register is a `qN`
     /// register, an `i64` handle or an `i64` constant handle; a handle that names no allocated register is
     /// `dangling_register`.
@@ -567,6 +576,7 @@ impl Inst {
             | Inst::FuncAddr { dst, .. }
             | Inst::Qalloc { dst, .. }
             | Inst::QallocBy { dst, .. }
+            | Inst::Qwidth { dst, .. }
             | Inst::Measure { dst, .. }
             | Inst::MeasureSlice { dst, .. } => Some(*dst),
             Inst::Call { dst, .. } | Inst::CallIndirect { dst, .. } => *dst,
@@ -616,7 +626,9 @@ impl Inst {
             Inst::Effect { byte } | Inst::QallocBy { width: byte, .. } => operand(byte),
             Inst::FuncAddr { .. } | Inst::Qalloc { .. } | Inst::StackSave { .. } | Inst::ReturnAddress { .. } => {}
             Inst::Qfree { register } => operand(register),
-            Inst::Measure { source: MeasureSource::Register(register), .. } => operand(&Operand::Slot(*register)),
+            Inst::Qwidth { register, .. } | Inst::Measure { source: MeasureSource::Register(register), .. } => {
+                operand(&Operand::Slot(*register))
+            }
             Inst::Measure { source: MeasureSource::Memory { address, .. }, .. } => operand(address),
             Inst::MeasureSlice { register, low, bits, .. } => {
                 operand(register);
