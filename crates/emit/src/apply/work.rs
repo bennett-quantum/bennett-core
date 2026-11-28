@@ -122,6 +122,8 @@ pub struct WorkCounts {
     pub flow_edge_stores: usize,
     /// Abstract blocks placed on the worklist after an edge or fact change.
     pub block_schedules: usize,
+    /// Reached operand definitions and dependency entries handled during proof scheduling.
+    pub operand_definitions: usize,
 }
 
 pub(super) enum Work {
@@ -182,6 +184,7 @@ pub(super) enum Work {
     ContextBits,
     FlowEdgeStores,
     BlockSchedules,
+    OperandDefinitions,
 }
 
 thread_local! {
@@ -255,6 +258,7 @@ pub(super) fn add(kind: Work, count: usize) {
                 Work::ContextBits => &mut current.context_bits,
                 Work::FlowEdgeStores => &mut current.flow_edge_stores,
                 Work::BlockSchedules => &mut current.block_schedules,
+                Work::OperandDefinitions => &mut current.operand_definitions,
             };
             *units = units.saturating_add(count);
         }

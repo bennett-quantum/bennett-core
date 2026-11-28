@@ -695,21 +695,25 @@ Each proof has a worklist of reached blocks. The analysis pauses at an unresolve
 with its current instruction and local facts, then continues there when the callee's
 proof finishes. A changed incoming value schedules the blocks that read it. The
 result records the possible successors and joins literals and argument-bit identities
-over all possible normal returns. A stopped target contributes no normal continuation.
+over all possible normal returns. A reached operand query evaluates the definitions
+it needs. It uses the local circuit for definitions in the same block and joins facts
+across block boundaries. A stopped target contributes no normal continuation.
 Normal returns and invalid-address outcomes can both be possible at one indirect site.
 The cache groups calls by function and normalized argument identities, including polarity,
 and translates the result to the caller's own bits. The emitted copy uses those
 argument facts, including at calls whose results are discarded. The call still charges
 its normal device steps, including any fault before a return. An unfinished recursive
-query keeps possible continuations and supplies an unknown word. When the copied-result
-allowance runs out, the analysis uses the unconstrained stopping proof and leaves
-argument-specific return bits unknown. A stopping proof that reads no parameters
-can serve every argument shape and releases its reserved return-word allowance.
-Modular recognition checks uses in the recognized shape and at other points the
-shared worklist reaches.
+query keeps possible continuations and supplies an unknown word. A new return proof
+charges its reached cells once in its argument context, including reached instruction
+results, parameters and terminators. When the copied-result allowance runs out, the
+analysis uses the unconstrained stopping proof and leaves argument-specific return bits
+unknown. A stopping proof that reads no parameters can serve every argument shape.
+Modular recognition checks uses in the recognized shape and at other points the shared
+worklist reaches. Each lookup of a block's reached instruction count is metered.
 
 Each compilation accumulates work in one meter. The counters cover reached transfers,
 successor and target tests, context and fact accesses, and the elements copied or joined.
+The meter records the definition and dependency entries used to schedule operand proofs.
 The snapshot counts include the initial controlled slots, saved-decision exits and
 guard facts copied with a control route. The meter also records address candidates,
 declaration and byte accesses, replayed gates and assignment packs. Speculative, result-copy, placement and inverse work remains recorded

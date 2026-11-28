@@ -299,7 +299,22 @@ no:
 
 #[test]
 fn argument_independent_stop_leaves_allowance_for_a_later_selector() {
-    let cold = "    effect 0\n".repeat(8189);
+    check_stopping_contexts(8189, "i1", 1, "    fault unreachable", 25);
+}
+
+#[test]
+fn argument_dependent_stops_leave_allowance_for_a_later_selector() {
+    check_stopping_contexts(
+        8185,
+        "i2",
+        2,
+        "    %zero = icmp eq i2 %arg, 0\n    br %zero, stopped, other\nstopped:\n    fault unreachable\nother:\n    fault divide_by_zero",
+        38,
+    );
+}
+
+fn check_stopping_contexts(padding: usize, ty: &str, other: u8, stop: &str, operations: usize) {
+    let cold = "    effect 0\n".repeat(padding);
     let module = load(&format!(
         r#"
 memory 65536
@@ -318,14 +333,14 @@ func @f(i1 %x, i1 %y) -> i8 {{
 entry:
     br %x, quick, fork
 quick:
-    br doomed(i1 0)
+    br doomed({ty} 0)
 fork:
     br %y, slow, later
-doomed(i1 %arg):
+doomed({ty} %arg):
     call @stop(%arg)
     ret 0
 slow:
-    br doomed(i1 1)
+    br doomed({ty} {other})
 later:
     br last
 last:
@@ -337,9 +352,9 @@ recurse:
     %again = call @cycle()
     ret %again
 }}
-func @stop(i1 %arg) {{
+func @stop({ty} %arg) {{
 entry:
-    fault unreachable
+{stop}
 cold:
 {cold}
     ret
@@ -364,8 +379,8 @@ entry:
         let mut emitted = Executor::new(&module, main, &[], options).expect("gate runner");
         let mut compile = |input: ApplyInput<'_>| {
             let compiled = compile_apply_with(input, mode).expect("both stopping calls leave room for the selector");
-            assert_eq!(compiled.block.ops().len(), 25);
-            assert_eq!(compiled.work.context_schedules, 2);
+            assert!(compiled.block.ops().len() <= operations);
+            assert_eq!(compiled.work.context_schedules, if other == 1 { 2 } else { 3 });
             Ok(compiled.block)
         };
         assert_eq!(emitted.run_emitted(&mut compile), Outcome::Returned(None), "{mode:?}");
@@ -376,37 +391,72 @@ entry:
 
 #[test]
 fn a_store_without_declarations_leaves_the_comparison_unproved() {
-    let module = load(
+    check_store_proof("");
+}
+
+#[test]
+fn a_declaration_does_not_activate_an_unrelated_store_proof() {
+    check_store_proof("data 32 = zero 1\n");
+}
+
+fn check_store_proof(declaration: &str) {
+    let module = load(&format!(
         r#"
 memory 4096
-func @f(i64 %x, i64 %y) -> i1 {
+{declaration}func @f(i64 %x, i64 %y) -> i1 {{
 entry:
     %equal = icmp eq i64 %x, %y
     store i8 0, %x
     ret %equal
-}
+}}
 "#,
-    )
+    ))
     .expect("valid store");
+    let held = Default::default();
+    let memory = bennett_exec::ApplyMemory::new(&[0; 4096], &held);
     for mode in [ApplyMode::Automatic, ApplyMode::StepMachine] {
-        let compiled = compile_apply_with(
-            ApplyInput {
-                module: &module,
-                callee: module.function_named("f").expect("entry"),
-                args: &[Argument::Register(0..64), Argument::Register(64..128)],
-                out: 128..129,
-                fault: 129..134,
-                budget: 0,
-                entry_fault: None,
-                stack_available: 4096,
-                memory: None,
-                scratch_start: 134,
-            },
-            mode,
-        )
-        .expect("compile the budget fault");
-        assert_eq!(compiled.work.temporary_gates, 0);
-        assert_eq!(compiled.work.gates_generated, 1);
-        assert_eq!(compiled.work.final_gates, 1);
+        for (budget, gates, memory) in [(0, 1, None), (1, 639, Some(memory))] {
+            let compiled = compile_apply_with(
+                ApplyInput {
+                    module: &module,
+                    callee: module.function_named("f").expect("entry"),
+                    args: &[Argument::Register(0..64), Argument::Register(64..128)],
+                    out: 128..129,
+                    fault: 129..134,
+                    budget,
+                    entry_fault: None,
+                    stack_available: 4096,
+                    memory,
+                    scratch_start: 134,
+                },
+                mode,
+            )
+            .expect("compile the budget fault");
+            assert_eq!(compiled.work.temporary_gates, 0, "{mode:?}, B={budget}");
+            assert_eq!(compiled.work.gates_generated, gates);
+            assert_eq!(compiled.work.final_gates, gates);
+        }
     }
+}
+
+#[test]
+fn reached_point_lookups_charge_the_table_meter() {
+    use bennett_ir::BlockId;
+
+    use super::{bits::Bit, definite::CallProofs, symbolic::Frame};
+
+    let module = load(
+        "func @f(i1 %x) -> i1 {\nentry:\n switch i1 %x, 0: yes, default: no\nyes:\n ret 1\nno:\n ret 0\ncold:\n ret 0\n}\n",
+    )
+    .expect("valid switch");
+    let callee = module.function_named("f").expect("entry");
+    let mut proofs = CallProofs::new(&module, 16_384);
+    let frame =
+        Frame::check(&module, callee, [Some(vec![Bit::input(0)])].into_iter(), &mut proofs).expect("plan the switch");
+    let meter = Scope::start();
+    for _ in 0..500 {
+        assert_eq!(frame.reached_points(BlockId(1)), Some(1));
+        assert_eq!(frame.reached_points(BlockId(3)), Some(0));
+    }
+    assert_eq!(meter.counts().table_entries, 1000);
 }

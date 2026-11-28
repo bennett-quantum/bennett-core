@@ -13,7 +13,9 @@ use super::symbolic::Frame;
 use super::work::{self, Work};
 use super::{arithmetic, division, ranges};
 
+mod operands;
 mod results;
+use operands::Definition;
 pub(super) use results::CallProofs;
 use results::ReturnWord;
 
@@ -249,7 +251,10 @@ impl<'a> Constants<'a> {
     // Count the reached instruction prefix plus the terminator, when reached.
     // A missing proof leaves the caller to use its conservative fallback.
     pub(super) fn reached_points(&self, block: BlockId) -> Option<usize> {
-        self.accesses.map(|_| self.reached.get(&block).copied().unwrap_or(0))
+        self.accesses.map(|_| {
+            work::add(Work::TableEntries, 1);
+            self.reached.get(&block).copied().unwrap_or(0)
+        })
     }
 
     pub(super) fn definite_stores(&self) -> bool {
@@ -283,10 +288,11 @@ impl<'a> Constants<'a> {
     }
 }
 
-struct Visit {
+struct Visit<'a> {
     block: BlockId,
     at: usize,
-    local: BTreeMap<Slot, Word>,
+    reached: usize,
+    local: BTreeMap<Slot, Definition<'a>>,
     circuit: Circuit,
     call: Option<CallTransfer>,
 }
@@ -299,26 +305,40 @@ struct CallTransfer {
     returned: Option<ReturnWord>,
 }
 
+enum Progress {
+    Complete,
+    NeedsCall,
+    Exhausted,
+}
+
 struct Solver<'a> {
     frame: Frame<'a>,
     plan: Constants<'a>,
     worklist: VecDeque<BlockId>,
     queued: BTreeSet<BlockId>,
     readers: BTreeMap<Slot, BTreeSet<BlockId>>,
-    current: Option<Visit>,
+    producers: BTreeMap<Slot, BlockId>,
+    // A call queries the return word. The emission entry queries its operands.
+    return_word: bool,
+    reached_cells: usize,
+    current: Option<Visit<'a>>,
 }
 
 impl<'a> Solver<'a> {
-    fn new(frame: Frame<'a>, inputs: &[Vec<Identity>]) -> Self {
+    fn new(frame: Frame<'a>, inputs: &[Vec<Identity>], return_word: bool) -> Self {
         let entry = BlockId(0);
         let mut plan = Constants::with_arguments(&frame, inputs);
         plan.accesses = Some(Accesses::default());
+        let reached_cells = frame.module.function(frame.callee).params.len();
         Self {
             frame,
             plan,
             worklist: VecDeque::from([entry]),
             queued: BTreeSet::from([entry]),
             readers: BTreeMap::new(),
+            producers: BTreeMap::new(),
+            return_word,
+            reached_cells,
             current: None,
         }
     }
@@ -347,23 +367,6 @@ impl<'a> Solver<'a> {
             self.worklist.push_back(block);
             work::add(Work::BlockSchedules, 1);
         }
-    }
-
-    fn read(&mut self, block: BlockId, local: &BTreeMap<Slot, Word>, operand: &Operand) -> Option<Word> {
-        let word = match operand {
-            Operand::Const(value) => Some(constant(value.value(), value.width().bits() as usize)),
-            Operand::Slot(slot) => {
-                work::add(Work::TableEntries, 1);
-                if let Some(word) = local.get(slot) {
-                    Some(word.clone())
-                } else {
-                    self.readers.entry(*slot).or_default().insert(block);
-                    self.plan.slots[slot.index()].clone()
-                }
-            }
-        };
-        work::add(Work::OperandBits, word.as_ref().map_or(0, Vec::len));
-        word
     }
 
     fn unknown_bit(&self, slot: Slot, index: usize) -> Bit {
@@ -411,11 +414,18 @@ impl<'a> Solver<'a> {
 
     // Run to the next unresolved call. Keep the current transfer and its local
     // facts so a return continues at the call instead of replaying the prefix.
-    fn advance(&mut self, mut answer: impl FnMut(FuncId, &[Option<Word>]) -> Option<results::CallResult>) -> bool {
+    fn advance(
+        &mut self,
+        allowance: usize,
+        mut answer: impl FnMut(FuncId, &[Option<Word>]) -> Option<results::CallResult>,
+    ) -> Progress {
         let function = self.frame.module.function(self.frame.callee);
         let _temporary = work::Temporary::start();
         let declared_memory = !self.frame.module.data.is_empty();
         loop {
+            if self.reached_cells > allowance {
+                return Progress::Exhausted;
+            }
             let mut visit = if let Some(visit) = self.current.take() {
                 visit
             } else if let Some(block) = self.worklist.pop_front() {
@@ -423,9 +433,16 @@ impl<'a> Solver<'a> {
                 work::add(Work::BlockVisits, 1);
                 work::add(Work::Transfers, 1);
                 let scratch = self.plan.argument_bits.len() + Width::MAX_BITS as usize * self.plan.slots.len();
-                Visit { block, at: 0, local: BTreeMap::new(), circuit: Circuit::new(scratch as Wire), call: None }
+                Visit {
+                    block,
+                    at: 0,
+                    reached: self.plan.reached[&block],
+                    local: BTreeMap::new(),
+                    circuit: Circuit::new(scratch as Wire),
+                    call: None,
+                }
             } else {
-                return true;
+                return Progress::Complete;
             };
             let block = function.block(visit.block);
             let mut stopped = false;
@@ -434,7 +451,7 @@ impl<'a> Solver<'a> {
                     while let Some(&target) = call.targets.front() {
                         let Some(result) = answer(target, &call.arguments) else {
                             self.current = Some(visit);
-                            return false;
+                            return Progress::NeedsCall;
                         };
                         call.targets.pop_front();
                         if let results::CallResult::Returns(mut word) = result {
@@ -453,13 +470,16 @@ impl<'a> Solver<'a> {
                     if let Some((slot, word)) = call.dst.zip(call.returned) {
                         let unknown = self.unknown_word(slot);
                         let word = word.into_iter().zip(unknown).map(|(bit, unknown)| bit.unwrap_or(unknown)).collect();
-                        visit.local.insert(slot, word);
+                        visit.local.insert(slot, Definition::Ready(Some(word)));
                     }
                     visit.at += 1;
                     continue;
                 }
 
                 let inst = &block.insts[visit.at];
+                if !self.visit_point(&mut visit, usize::from(inst.result().is_some()), allowance) {
+                    return Progress::Exhausted;
+                }
                 work::add(Work::Operations, 1);
                 work::add(Work::FaultScans, 1);
                 if successors::instruction_fault(inst).is_some() {
@@ -470,7 +490,7 @@ impl<'a> Solver<'a> {
                 let call = match inst {
                     Inst::Call { callee, args, dst } => Some((None, *dst, args, BTreeSet::from([*callee]), false)),
                     Inst::CallIndirect { signature, target, args, dst } => {
-                        let Some(address) = self.read(visit.block, &visit.local, target) else {
+                        let Some(address) = self.read(&mut visit, target) else {
                             stopped = true;
                             break;
                         };
@@ -500,8 +520,12 @@ impl<'a> Solver<'a> {
                     | Inst::FuncAddr { .. } => None,
                 };
                 if let Some((target, dst, args, candidates, invalid_possible)) = call {
-                    let argument_facts: Rc<[_]> =
-                        args.iter().map(|arg| self.read(visit.block, &visit.local, arg)).collect();
+                    let Some(argument_facts) =
+                        args.iter().map(|arg| self.read(&mut visit, arg).map(Some)).collect::<Option<Rc<[_]>>>()
+                    else {
+                        stopped = true;
+                        break;
+                    };
                     let site = record_call(
                         &mut self.plan.calls,
                         (visit.block, visit.at),
@@ -517,52 +541,70 @@ impl<'a> Solver<'a> {
                     work::add(Work::Successors, site.candidates.len());
                     continue;
                 }
-                if declared_memory && let Inst::Store { address, .. } = inst {
-                    self.plan.definite_stores &=
-                        self.read(visit.block, &visit.local, address).as_deref().and_then(definite).is_some();
+                if let Inst::Store { address, value, .. } = inst {
+                    if declared_memory {
+                        let Some(word) = self.read(&mut visit, address) else {
+                            stopped = true;
+                            break;
+                        };
+                        self.plan.definite_stores &= definite(&word).is_some();
+                    } else {
+                        self.demand(&mut visit, address);
+                    }
+                    self.demand(&mut visit, value);
+                }
+                if let Inst::Load { address, .. } = inst {
+                    self.demand(&mut visit, address);
+                }
+                if let Inst::Binary { op, lhs, rhs, .. } = inst {
+                    if *op == BinOp::Mul {
+                        self.demand(&mut visit, lhs);
+                    }
+                    if !matches!(op, BinOp::Add | BinOp::Sub | BinOp::And | BinOp::Or | BinOp::Xor) {
+                        self.demand(&mut visit, rhs);
+                    }
                 }
                 if let Some(result) = inst.result() {
-                    let width = self.frame.slot_width(result);
-                    let first = self.unknown_bit(result, 0).wire().expect("abstract slot bit").0;
-                    let word = fold_inst(
-                        inst,
-                        |op| self.read(visit.block, &visit.local, op),
-                        &mut visit.circuit,
-                        || (0..width).map(|index| Bit::input(first + index as Wire)).collect(),
-                    );
-                    if let Some(word) = word {
-                        visit.local.insert(result, word);
-                    }
+                    self.define(&mut visit, result, inst);
                 }
                 visit.at += 1;
             }
-            let reached = self.plan.reached.get_mut(&visit.block).expect("scheduled block");
-            *reached = (*reached).max(visit.at + 1);
             if !stopped {
-                self.terminator(&visit, &block.term);
+                if !self.visit_point(&mut visit, 0, allowance) {
+                    return Progress::Exhausted;
+                }
+                self.terminator(&mut visit, &block.term);
             }
+            self.plan.reached.insert(visit.block, visit.reached);
             for (slot, word) in visit.local {
-                self.join(slot, word);
+                if let Definition::Ready(Some(word)) = word {
+                    self.join(slot, word);
+                }
             }
         }
     }
 
-    fn terminator(&mut self, visit: &Visit, term: &'a Terminator) {
+    fn visit_point(&mut self, visit: &mut Visit<'a>, result_slots: usize, allowance: usize) -> bool {
+        if visit.at == visit.reached {
+            visit.reached += 1;
+            self.reached_cells += 1 + result_slots;
+        }
+        self.reached_cells <= allowance
+    }
+
+    fn terminator(&mut self, visit: &mut Visit<'a>, term: &'a Terminator) {
         work::add(Work::Operations, 1);
         let mut targets = Vec::new();
-        let facts = successors::terminator(
-            term,
-            |operand| self.read(visit.block, &visit.local, operand),
-            |target| targets.push(target),
-        );
+        let facts = successors::terminator(term, |operand| self.read(visit, operand), |target| targets.push(target));
         if let Some(edges) = facts {
             self.plan.switches[visit.block.index()] = edges;
         }
         // Non-local control is unsupported by emission. Keep its return
         // possibility when summarizing potential callees.
         self.plan.may_return |= matches!(term, Terminator::Return(_) | Terminator::Longjmp { .. });
-        if let Terminator::Return(Some(value)) = term
-            && let Some(word) = self.read(visit.block, &visit.local, value)
+        if self.return_word
+            && let Terminator::Return(Some(value)) = term
+            && let Some(word) = self.read(visit, value)
         {
             let proof = word.into_iter().map(|bit| {
                 let identity = bit.identity();
@@ -585,7 +627,7 @@ impl<'a> Solver<'a> {
                 self.enqueue(target.block);
             }
             for (param, operand) in function.block(target.block).params.iter().zip(&target.args) {
-                if let Some(word) = self.read(visit.block, &visit.local, operand) {
+                if let Some(word) = self.read(visit, operand) {
                     incoming.push((param.slot, word));
                 }
             }
@@ -600,6 +642,7 @@ impl<'a> Solver<'a> {
     fn reach(&mut self, block: BlockId) -> bool {
         if let std::collections::btree_map::Entry::Vacant(entry) = self.plan.reached.entry(block) {
             entry.insert(0);
+            self.reached_cells += self.frame.module.function(self.frame.callee).block(block).params.len();
             true
         } else {
             false

@@ -6,9 +6,8 @@ use std::rc::Rc;
 
 use bennett_ir::{FuncId, ValidModule};
 
-use super::{ArgumentIdentities, Constants, Solver, normalize_arguments};
+use super::{ArgumentIdentities, Constants, Progress, Solver, normalize_arguments};
 use crate::apply::bits::{Bit, Word};
-use crate::apply::calls;
 use crate::apply::identity::Identity;
 use crate::apply::symbolic::Frame;
 use crate::apply::work::{self, Work};
@@ -70,7 +69,7 @@ struct Query {
 }
 
 enum Continuation {
-    Exact { sources: Vec<Option<Bit>>, price: usize },
+    Exact { sources: Vec<Option<Bit>>, charged: usize },
     Unconstrained,
 }
 
@@ -117,8 +116,8 @@ pub(in crate::apply) struct CallProofs<'a> {
     independent: Vec<Option<Rc<Constants<'a>>>>,
     specific: HashMap<Context, Rc<Constants<'a>>>,
     has_completed_contexts: bool,
-    // The copied-result proof retains its old cell allowance. A completed
-    // context can be looked up or used to plan a copy without spending it again.
+    // Charge each new return proof for the cells reached in its context.
+    // Looking up a completed proof or planning a copy does not charge it again.
     remaining: usize,
 }
 
@@ -164,14 +163,21 @@ impl<'a> CallProofs<'a> {
     fn resolve(&mut self, root: Context) -> Rc<Constants<'a>> {
         let module = self.module;
         let mut active = BTreeSet::from([root.callee]);
-        let mut pending =
-            vec![(Solver::new(Frame::for_analysis(module, root.callee), &root.arguments), root, None::<Continuation>)];
+        let mut pending = vec![(
+            Solver::new(Frame::for_analysis(module, root.callee), &root.arguments, false),
+            root,
+            None::<Continuation>,
+        )];
         let mut resumed = None;
         while !pending.is_empty() {
             let nested = pending.len() > 1;
-            let (solver, _, _) = pending.last_mut().expect("current proof");
+            let (solver, _, continuation) = pending.last_mut().expect("current proof");
+            let allowance = match continuation {
+                Some(Continuation::Exact { charged, .. }) => self.remaining + *charged,
+                Some(Continuation::Unconstrained) | None => usize::MAX,
+            };
             let mut requested = None;
-            let complete = solver.advance(|callee, args| {
+            let progress = solver.advance(allowance, |callee, args| {
                 let mut lookup = || {
                     if let Some(answer) = resumed.take() {
                         return Some(answer);
@@ -186,10 +192,8 @@ impl<'a> CallProofs<'a> {
                     if let Some(plan) = self.get(&context) {
                         return Some(Query::answer(&sources, plan));
                     }
-                    let price = calls::work(module.function(callee));
-                    if let Some(remaining) = self.remaining.checked_sub(price) {
-                        self.remaining = remaining;
-                        requested = Some((context, Continuation::Exact { sources, price }));
+                    if self.remaining != 0 {
+                        requested = Some((context, Continuation::Exact { sources, charged: 0 }));
                         return None;
                     }
                     // Keep the unconstrained stopping proof when the old copied-result
@@ -208,37 +212,49 @@ impl<'a> CallProofs<'a> {
                 }
                 result
             });
-            if complete {
-                let (mut solver, context, continuation) = pending.pop().expect("current proof");
-                active.remove(&context.callee);
-                let Some(continuation) = continuation else { return Rc::new(solver.plan) };
-                let independent = context.independent || solver.generalize_stop();
-                if independent
-                    && !solver.plan.may_return
-                    && let Continuation::Exact { price, .. } = &continuation
-                {
-                    self.remaining += price;
+            if let Some(Continuation::Exact { charged, .. }) = continuation {
+                let charge = (solver.reached_cells - *charged).min(self.remaining);
+                *charged += charge;
+                self.remaining -= charge;
+            }
+            match progress {
+                Progress::Complete => {
+                    let (mut solver, context, continuation) = pending.pop().expect("current proof");
+                    active.remove(&context.callee);
+                    let Some(continuation) = continuation else { return Rc::new(solver.plan) };
+                    let independent = context.independent || solver.generalize_stop();
+                    let plan = Rc::new(solver.plan);
+                    let answer = continuation.answer(&plan);
+                    if pending.len() > 1 && matches!(answer, CallResult::Returns(_)) {
+                        work::add(Work::Dependencies, 1);
+                    }
+                    resumed = Some(answer);
+                    self.has_completed_contexts = true;
+                    if independent {
+                        work::add(Work::SummaryTableWrites, 1);
+                        self.independent[context.callee.index()] = Some(plan);
+                    } else {
+                        work::add(Work::CacheWrites, 1);
+                        self.specific.insert(context, plan);
+                    }
                 }
-                let plan = Rc::new(solver.plan);
-                let answer = continuation.answer(&plan);
-                if pending.len() > 1 && matches!(answer, CallResult::Returns(_)) {
-                    work::add(Work::Dependencies, 1);
+                Progress::NeedsCall => {
+                    let (context, continuation) = requested.expect("suspended call requested a proof");
+                    if self.remaining == 0 && matches!(continuation, Continuation::Exact { .. }) {
+                        continue;
+                    }
+                    active.insert(context.callee);
+                    let solver = Solver::new(Frame::for_analysis(module, context.callee), &context.arguments, true);
+                    work::add(Work::ContextSchedules, 1);
+                    pending.push((solver, context, Some(continuation)));
                 }
-                resumed = Some(answer);
-                self.has_completed_contexts = true;
-                if independent {
-                    work::add(Work::SummaryTableWrites, 1);
-                    self.independent[context.callee.index()] = Some(plan);
-                } else {
-                    work::add(Work::CacheWrites, 1);
-                    self.specific.insert(context, plan);
+                Progress::Exhausted => {
+                    let (_, context, _) = pending.pop().expect("exhausted copied-result proof");
+                    active.remove(&context.callee);
+                    resumed = None;
+                    // A caller retries the unresolved site using the same
+                    // worklist with unconstrained arguments.
                 }
-            } else {
-                let (context, continuation) = requested.expect("suspended call requested a proof");
-                active.insert(context.callee);
-                let solver = Solver::new(Frame::for_analysis(module, context.callee), &context.arguments);
-                work::add(Work::ContextSchedules, 1);
-                pending.push((solver, context, Some(continuation)));
             }
         }
         unreachable!("the root proof always settles")
@@ -277,6 +293,11 @@ mod tests {
     fn retained_argument_identity_survives_copied_call_proofs() {
         let module = bennett_ir::load(
             r#"
+func @top(i1 %a, i1 %b) -> i2 {
+entry:
+    %result = call @wrapper(%a, %b)
+    ret %result
+}
 func @wrapper(i1 %a, i1 %b) -> i2 {
 entry:
     %result = call @leaf(%a, %b)
@@ -293,6 +314,7 @@ entry:
 "#,
         )
         .expect("valid program");
+        let top = module.function_named("top").expect("entry");
         let wrapper = module.function_named("wrapper").expect("wrapper");
         let mut proofs = CallProofs::new(&module, 128);
         let mut circuit = Circuit::new(2);
@@ -301,8 +323,9 @@ entry:
             let complemented = circuit.retain_copy(source.not());
             let frame = Frame::for_analysis(&module, wrapper);
             let query = Query::new(&frame, [Some(vec![source]), Some(vec![complemented])].into_iter());
-            let plan = proofs.plan(wrapper, query.context.arguments.clone(), true);
-            let CallResult::Returns(word) = Query::answer(&query.sources, &plan) else {
+            proofs.plan(top, query.context.arguments.clone(), true);
+            let plan = proofs.get(&query.context).expect("cached wrapper return proof");
+            let CallResult::Returns(word) = Query::answer(&query.sources, plan) else {
                 panic!("an ordinary copied call returns");
             };
             assert!(word[0].is_some_and(|value| value.same_value(complemented)));
