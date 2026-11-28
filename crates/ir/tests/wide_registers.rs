@@ -47,8 +47,9 @@ fn indices_and_widths_outside_the_register_are_refused() {
     assert!(load(&gate(1000, 999)).is_ok());
     // A literal position from 2^32 reads (an `i64` handle may be named so) and is past every register.
     assert_eq!(problems(&gate(1000, 1 << 32)), [Problem::QubitOutOfRange { bit: 1 << 32, bits: 1000 }]);
+    // Past 2^64 - 1 the position is no `i64` literal, as for any `i64` operand.
     let error = read(&gate(1000, 1 << 32).replace("4294967296", "18446744073709551616")).expect_err("past 2^64 - 1");
-    assert!(matches!(error.kind, ReadErrorKind::BadNumber(_)), "{error:?}");
+    assert!(matches!(error.kind, ReadErrorKind::OutOfRange { .. }), "{error:?}");
     let error = read("func @f(q4294967296 %q) {\nentry:\n    ret\n}\n").expect_err("too wide");
     assert!(matches!(error.kind, ReadErrorKind::BadType(_)), "{error:?}");
 }
