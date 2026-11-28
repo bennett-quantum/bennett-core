@@ -64,10 +64,11 @@ struct RunArgs {
     /// the simulator, not a fault of the program. It also bounds the simulation behind --device qasm.
     #[arg(long, value_name = "N")]
     max_configurations: Option<usize>,
-    /// Let an `apply` fault for some values of its arguments and the run go on, for programs that inspect
-    /// their fault registers on purpose. Without it the first such `apply` ends the run as a region fault:
-    /// the program could not detect it with certainty, and the other values would go on with the
-    /// interference gone.
+    /// Let an `apply` of the register form (`apply @f(...)`) fault for some values of its arguments and the
+    /// run go on, for programs that inspect their fault registers on purpose. Without it the first such
+    /// `apply` ends the run as a region fault: the program could not detect it with certainty, and the other
+    /// values would go on with the interference gone. An `apply` to a block never stops so: its faults are
+    /// values in its fault register.
     #[arg(long)]
     allow_region_faults: bool,
     /// Run the machine's meaning instead of the simulator's strict mode: a fault for some argument values of

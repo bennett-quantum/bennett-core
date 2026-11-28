@@ -208,7 +208,8 @@ The handle interface's controls come as a list in memory (`docs/HANDLES.md`, 5.1
 control means the same as once and only the target among the controls is `control_in_use` (`qubit_alias`):
 that is the rule of `ctrl list(...)` ("Control lists"), not of written controls.
 
-`measure` of a whole register, `apply` and calls still take `qN` registers. No instruction turns a `qN`
+`measure` of a whole register, the register form of `apply` (`apply @f(...)`) and calls still take `qN`
+registers. No instruction turns a `qN`
 register into its integer or an integer into a `qN` register; both name registers by the one numbering, so a
 program that counts its allocations knows the handle of each.
 
@@ -272,8 +273,9 @@ memory (the gate may have made a byte of its own list qubits).
 ## Applying to a block
 
 `apply F budget B, fault R, image(P, S), fields(Q, M), ctrl list(C, N)` is the handle interface's `apply`,
-every operand an `i64` value or constant: `F` the address of an apply target (`faddr @f` of an `applied
-func`), `B` the budget, `R` the fault register (a `qN` register, an `i64` handle or a constant handle), `P`
+every operand but `R` an `i64` value or constant, `R` a `qN` register, an `i64` handle or an `i64` constant
+handle: `F` the address of an apply target (`faddr @f` of an `applied
+func`), `B` the budget, `R` the fault register, `P`
 and `S` the image's address and size in bytes, `Q` and `M` the field list's address and number of entries,
 `C` and `N` the control list's. A field entry is 40 bytes of five little-endian `u64` values: the handle at
 offset 0, the lowest qubit at 8, the number of qubits at 16, the byte offset in the block at 24, the direction

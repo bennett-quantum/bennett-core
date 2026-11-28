@@ -1171,7 +1171,9 @@ instruction whose every operand is a value given at run time: the function addre
 register's handle, the image's address and size, the field list's address and count (40-byte entries of
 6.1), the control list's (16-byte entries, "Control lists" in `docs/SYNTAX.md`). An *apply target* is a
 function the device program marks `applied func`, with one `i64` parameter, the block's address, and no
-result; the front end records the set from the C signatures (D11), and the device does not recompute it.
+result. Today the device text marks them: the front end's writer emits no mark yet, and writing it from the
+C signatures (D11) is part of the front end's translation of the interface, a later step. The device does not
+recompute the set.
 
 **Checks**, in the order of 6.2, from definite values, the first that fails ending the run with its fault
 before anything changes: `F` an apply target (`bad_indirect`, the interface's `bad_function`); the fault
@@ -1204,10 +1206,13 @@ instruction is `quantum_in_region` before any of these.
 XORed into the out fields' qubits, or its fault code into the fault register's five low qubits; every other
 configuration is unchanged. The map is a permutation of configurations, so amplitudes are carried along. A
 fault of the applied function on some input is such a value, never a stop: the simulator's strict mode,
-which stops at the other `apply` when it faults for some argument values, does not apply to this form. Each
-input is evaluated once, whatever its number of configurations; a run asked for step reports keeps one for
-the `apply` (inputs evaluated, the largest count). Undoing the instruction runs it again: the XOR is its own
-inverse.
+which stops at the register form when it faults for some argument values, does not apply to this form. An
+input is a value of the in fields (6.1) on a configuration where every control is 1; each is evaluated once,
+whatever the number of configurations that carry it, since `G` is a function of the input. A run asked for
+step reports keeps one for the `apply` whose inputs are these distinct values: what a budget needs is the
+largest count over the inputs, which the number of configurations carrying each does not change. A block
+that cannot be placed ends each input's run before any step, a count of 0. Undoing the instruction runs it
+again: the XOR is its own inverse.
 
 The simulator's direct evaluation is the only implementation today: the counter, the OpenQASM writer and
 `--apply-circuit` refuse the instruction by name (`RunError::Device`) until the gate emitter compiles it
@@ -2521,7 +2526,9 @@ not from a guess. A run asked for reports (`Executor::keep_apply_reports`, `benn
 for each `apply` it executes forward and the simulator evaluates directly (its default): the `apply`'s
 position among all the `apply` instructions the run executed (from 1, those compiled to gates included), the
 applied function, the value of its budget operand (the ceiling the measuring run gave it), the number of
-inputs it evaluated (the basis configurations of nonzero amplitude at the `apply`), the largest step count
+inputs it evaluated (for the register form, the basis configurations of nonzero amplitude at the `apply`; for
+`apply` to a block, the distinct values of its in fields among them where every control is 1, "`apply` to a
+block"), the largest step count
 of an input that returned or faulted, and how many inputs the budget ended. The counts are the executor's
 own accounting of each input's run, read where the run ends: a run that returned counts its steps; a run
 that faulted counts the faulting step too, since it needs that step of budget to fault (an entry frame that
@@ -2537,7 +2544,9 @@ back, so the same `apply` executed again has the same position. A run not asked 
 
 **Strict mode** (the maintainer's decision of 2026-11-16): a check of the simulator that no device can make,
 because it looks at every configuration, is a diagnostic, as a sanitizer's is, and strict mode, which makes it,
-is the default. The one such check is the stop at an `apply` faulting for some values of its arguments.
+is the default. The one such check is the stop at an `apply` of the register form (`apply @f(...)`)
+faulting for some values of its arguments. `apply` to a block never stops there: its faults are values in its
+fault register in every mode, as the handle interface requires (`docs/HANDLES.md`, D10).
 `allow_region_faults` (`--allow-region-faults`) and `Options::machine_meaning` (`--machine-meaning`) each turn
 it off. Both options stay. In `crates/exec/tests/strict.rs`, an `apply` out of budget stops the run
 in strict mode. With `machine_meaning` the outcome matches `allow_region_faults` seed by seed.
