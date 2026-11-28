@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """build.py's reuse of archive members follows the files the driver reads.
 
-A copy of the front's sources is built into a second bennett-cc whose declarations file lies in that copy (the
-folder is fixed when the driver is built), and build.py builds one member, musl's close.c, with it (a `make`
-wrapper on the path selects only that object). An unchanged second build reuses the member; after a line is added
-to the copy's declarations file the member is compiled again, and an `#error` there stops the build, as it stops a
-fresh one. Needs what build.py needs, CMake and LLVM 18; separate from the fast suites.
+A copy of the front's sources is built into a second bennett-cc whose files lie in that copy (the folder is fixed
+when the driver is built); there its declarations file and its baseline are symbolic links into two other folders.
+build.py builds one member, musl's close.c, with that driver (a `make` wrapper on the path selects only that
+object). An unchanged second build reuses the member; after a line is added, through the links, to the declarations
+file and then to the baseline, the member is compiled again each time; an `#error` in the baseline stops the build,
+as it stops a fresh one. Needs what build.py needs, strace, CMake and LLVM 18; separate from the fast suites.
 """
 import os
 from pathlib import Path
@@ -59,17 +60,28 @@ def main():
         assert result.returncode == 0 and states(lib) == {"src/unistd/close.c": "built"}, (result.stderr,)
         result = build()
         assert result.returncode == 0 and states(lib) == {"src/unistd/close.c": "cached"}, (result.stderr,)
-        prefix = front / "include/bq-prefix.h"
-        prefix.write_text(prefix.read_text() + "/* changed */\n")
+        # The declarations file and the baseline become links into folders of their own.
+        for name, folder in (("bq-prefix.h", "shared"), ("bq-baseline.c", "elsewhere")):
+            (work / folder).mkdir()
+            (front / "include" / name).rename(work / folder / name)
+            (front / "include" / name).symlink_to(work / folder / name)
         result = build()
         assert result.returncode == 0 and states(lib) == {"src/unistd/close.c": "built"}, (result.stderr,)
-        prefix.write_text(prefix.read_text() + "#error changed_declarations_file\n")
+        result = build()
+        assert result.returncode == 0 and states(lib) == {"src/unistd/close.c": "cached"}, (result.stderr,)
+        for name in ("bq-prefix.h", "bq-baseline.c"):
+            linked = front / "include" / name
+            linked.resolve().write_text(linked.read_text() + "/* changed */\n")
+            result = build()
+            assert result.returncode == 0 and states(lib) == {"src/unistd/close.c": "built"}, (name, result.stderr)
+        baseline = front / "include/bq-baseline.c"
+        baseline.resolve().write_text(baseline.read_text() + "#error changed_baseline\n")
         result = build()
         # The driver's empty probe unit stops on the error first, before any member.
-        assert result.returncode != 0 and "changed_declarations_file" in result.stderr, result.stderr
+        assert result.returncode != 0 and "changed_baseline" in result.stderr, result.stderr
         assert "refused an empty unit" in result.stderr, result.stderr
-        print("build reuse: passed (reused when unchanged; compiled again after the driver's declarations file "
-              "changed)", flush=True)
+        print("build reuse: passed (reused when unchanged; compiled again after the driver's declarations file and "
+              "baseline changed through links)", flush=True)
 
 
 if __name__ == "__main__":

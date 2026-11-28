@@ -3,7 +3,7 @@
 import argparse
 import re
 from pathlib import Path
-import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -322,31 +322,55 @@ def efault_cases(args):
 
 
 def unit_kinds(args):
-    """link.py's units other than C source. Preprocessed C (.i) is compiled as it is, so it must hold the declarations
-    file: a .i preprocessed without it is refused by name with the route; one preprocessed with `-include
-    bq-prefix.h`, or from a unit that includes bq.h, is linked and runs."""
+    """link.py's units other than C source by name. Preprocessed C (.i) is linked and runs whether or not it holds the
+    declarations file (preprocessed plainly, with `-include bq-prefix.h`, or from a unit that includes bq.h), also
+    with --keep naming the folder that holds the .i and its sources, which stay as they were; a link without a suffix
+    to a C file is C. A unit that is one of link.py's own intermediate files is refused by name."""
     units = HERE / "tests/units"
     headers = ["-nostdinc", "-isystem", HERE / "include", "-isystem", args.libdir / "sysroot/include",
                "-I", ROOT / "front/include"]
-    cases = [("plain", units / "seven.c", [], None),
-             ("with the declarations file", units / "seven.c", ["-include", ROOT / "front/include/bq-prefix.h"], 7),
-             ("including bq.h", units / "scope.c", [], 7)]
-    for name, source, extra, status in cases:
-        preprocessed = args.out / f"unit-{source.stem}-{len(extra)}.i"
+    cases = [("plain", units / "seven.c", []),
+             ("with the declarations file", units / "seven.c", ["-include", ROOT / "front/include/bq-prefix.h"]),
+             ("including bq.h", units / "scope.c", [])]
+    for name, source, extra in cases:
+        folder = args.out / f"unit-{source.stem}-{len(extra)}"
+        shutil.rmtree(folder, ignore_errors=True)
+        folder.mkdir(parents=True)
+        # The folder also holds the unit's own C files under the names link.py once gave its links.
+        own = {folder / "program.c": source.read_bytes(), folder / "unit.c": source.read_bytes()}
+        for path, data in own.items():
+            path.write_bytes(data)
+        preprocessed = folder / "input.i"
         assert run(["clang-18", "-E", *headers, *extra, source, "-o", preprocessed]).returncode == 0, name
-        program = preprocessed.with_suffix(".bn")
+        program = folder.with_suffix(".bn")
         program.unlink(missing_ok=True)
         linked = run(["python3", HERE / "link.py", preprocessed, "--libdir", args.libdir, "--front", args.front,
-                      "-o", program])
-        if status is None:
-            assert linked.returncode != 0 and not program.exists(), (name, linked.stdout, linked.stderr)
-            assert "a preprocessed unit must hold the declarations file bq-prefix.h" in linked.stderr, linked.stderr
-            print(f"preprocessed unit {name}: refused by name", flush=True)
-            continue
+                      "--keep", folder, "-o", program])
         assert linked.returncode == 0, (name, linked.stderr)
+        assert all(not path.is_symlink() and path.read_bytes() == data for path, data in own.items()), name
         result = run([args.executor, "run", "--entry", "__bennett_entry", "--budget", 100000000, program])
-        assert f"result: {status}\n" in result.stdout, (name, result.stdout)
+        assert "result: 7\n" in result.stdout, (name, result.stdout)
         print(f"preprocessed unit {name}: passed ({steps_of(result.stdout)} steps)", flush=True)
+    bare = args.out / "unit-without-suffix"
+    bare.unlink(missing_ok=True)
+    bare.symlink_to(units / "seven.c")
+    program = args.out / "unit-without-suffix.bn"
+    linked = run(["python3", HERE / "link.py", bare, "--libdir", args.libdir, "--front", args.front, "-o", program])
+    assert linked.returncode == 0, linked.stderr
+    result = run([args.executor, "run", "--entry", "__bennett_entry", "--budget", 100000000, program])
+    assert "result: 7\n" in result.stdout, result.stdout
+    print(f"unit by a link without a suffix: passed ({steps_of(result.stdout)} steps)", flush=True)
+    keep = args.out / "unit-intermediate"
+    intermediate = keep / "program.bc"
+    shutil.rmtree(keep, ignore_errors=True)
+    keep.mkdir(parents=True)
+    assert run(["clang-18", "-emit-llvm", "-c", units / "seven.c", "-o", intermediate]).returncode == 0
+    before = intermediate.read_bytes()
+    linked = run(["python3", HERE / "link.py", intermediate, "--libdir", args.libdir, "--front", args.front,
+                  "--keep", keep, "-o", args.out / "unit-intermediate.bn"])
+    assert linked.returncode != 0 and "one of link.py's intermediate files" in linked.stderr, linked.stderr
+    assert intermediate.read_bytes() == before
+    print("unit that is an intermediate file: refused by name", flush=True)
 
 
 def unchecked_member(args):

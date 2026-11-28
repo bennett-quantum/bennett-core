@@ -59,15 +59,17 @@ def main():
     (out / 'predicate.h').write_text('static const char predicate_source[] = ' +
                                     json.dumps(args.predicate.read_text()) + ';\n')
     driver = HERE / ('oracle.c' if args.oracle else 'driver.c')
+    cc = ROOT / 'target/front/bennett-cc'
     native_objects, members = [], []
     musl = ROOT / 'target/musl'
     start = time.monotonic()
     for source in names:
         obj, bc = out / (source.stem + '.o'), out / (source.stem + '.bc')
         run([clang, *common, '-O2', '-c', source, '-o', obj])
-        run([clang, *common, '-nostdinc', '-isystem', musl / 'sysroot/include',
-             '-O0', '-Xclang', '-disable-O0-optnone', '-gline-tables-only',
-             '-emit-llvm', '-c', source, '-o', bc])
+        # The device's members pass bennett-cc's declaration check, as link.py requires of every module it links;
+        # bennett-cc takes clang's options, then `-o OUTPUT UNIT`, and adds -emit-llvm -c itself.
+        run([cc, *common, '-nostdinc', '-isystem', musl / 'sysroot/include',
+             '-O0', '-Xclang', '-disable-O0-optnone', '-gline-tables-only', '-o', bc, source])
         native_objects.append(obj)
         members.append(bc)
     if args.oracle:

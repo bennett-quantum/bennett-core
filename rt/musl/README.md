@@ -21,11 +21,12 @@ its own declarations of library functions reach the C library's headers as nativ
 The build configures musl out of tree, uses its own `LIBC_OBJS` selection, and substitutes its generic C
 files for x86-64 assembly wherever present. It produces 1,345 bitcode members, a member list, `libc.a`,
 installed public headers and JSON compiler flags. Its fingerprint includes all upstream files, the overlays,
-the build script, the driver binary, the files the driver reads (the declarations file it includes by force, as its
-own dependency list of an empty unit names it, and every other file of that folder, its baseline among them: the
-folder built into that driver, which need not be this checkout's) and the compiler flags; unchanged builds reuse
-the members. `test-build.py` checks that a changed declarations file of a driver built elsewhere compiles the
-members again.
+the build script, the compiler flags and the content of every file the driver reads: every regular file that the
+driver or a process it starts opens for reading or executes while it compiles an empty unit with the members'
+options, as strace records it (its declarations file and baseline wherever they lie, through links too, the clang
+it runs and their libraries; its temporary files left out). Without strace no member is reused. Unchanged builds
+reuse the members. `test-build.py` checks that changes to a declarations file and a baseline reached through links,
+of a driver built elsewhere, compile the members again.
 
 Compile, resolve the archive members, and lower one C program:
 
@@ -37,9 +38,16 @@ cargo run -p bennett -- run program.bn --entry __bennett_entry --budget 10000000
 `link.py` compiles every unit, the program's and the device's own, with `bennett-cc` (`--driver`, by default the
 one beside `--front`), and refuses by name any module it would link, archive members included, that lacks
 `bennett-cc`'s mark (`!bennett.cc`), so that a member compiled otherwise and supplied through `--libdir` is not
-linked unchecked. The program's unit is C, preprocessed C (`.i`) or LLVM IR (`.ll`, `.bc`); a `.i` is compiled as
-it is, as clang compiles one, so it must hold the declarations file (preprocessed from a unit that includes `bq.h`,
-or with `-include bq-prefix.h`) and is refused by name otherwise, with that route. `link.py` uses musl's public headers, preserves the program's linkage, and pulls archive members as the
+linked unchecked; the mark is per module (`docs/DESIGN.md`, "The mark is per module"), so a member merged from a
+checked and an unchecked unit is linked. The program's unit is C, preprocessed C (`.i`) or LLVM IR (`.ll`, `.bc`),
+by the name it resolves to. A `.i` that holds the declarations file (preprocessed from a unit that includes `bq.h`,
+or with `-include bq-prefix.h`) is compiled as it is, as clang compiles one; any other `.i` is compiled as C, so
+that `bennett-cc` includes the declarations file ahead of it, and its text is preprocessed a second time. That
+changes nothing in it unless it uses as an ordinary name a name the compiler predefines as a macro (one the source
+had undefined: `linux` or `unix` in the GNU modes), which is then read as the macro; give the C source then.
+`link.py` writes only its output, its intermediate files (in the `--keep` folder or a temporary one) and, for a
+`.i`, a link in a temporary folder of its own; a unit that is the output or one of the intermediate files is
+refused by name. `link.py` uses musl's public headers, preserves the program's linkage, and pulls archive members as the
 probe's static-link experiment does (`resolve.py`). It resolves undefined weak references to null except
 the standard init/fini bounds supplied by the front, and retries library dependencies introduced by LLVM
 (such as `puts` from `printf`). It never merges the entire library or internalizes the whole program.
@@ -393,9 +401,10 @@ driver reads the device memory size from the program and passes a request addres
 Sleeps in `sleep`, `sleep-alarm-flags` and `sleep-caller` agree with native. The last runs under an entry that
 calls start-up. A program's own `timer_create` (`timer-own`), another rounding mode and a flag test also agree
 with native.
-`tests/units/` checks preprocessed units (a plain `.i` refused by name; one preprocessed with the declarations
-file, and one from a unit including `bq.h`, linked and run) and a library directory whose member list adds a member
-compiled by plain clang (refused by name, naming the member).
+`tests/units/` checks preprocessed units (plain, with the declarations file, and from a unit including `bq.h`:
+each linked and run, with `--keep` naming the folder that holds the `.i` and its sources, which stay as they were),
+a link without a suffix to a C file, a unit that is an intermediate file (refused by name), and a library directory
+whose member list adds a member compiled by plain clang (refused by name, naming the member).
 `tests/regress/` holds the self-checking witnesses of the independent testing pass of this boundary (each
 returns 0 natively and failed or faulted here before its fix). The 35 programs (42 runs with the
 `-O2` ones) took 173 seconds with the debug CLI on the shared machine, after building the library.
