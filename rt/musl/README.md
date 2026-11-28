@@ -410,9 +410,9 @@ library's and the device's units, which include only the declarations file, defi
 one definition of each; what one unit writes to either is read in another; a program's own definition of either
 in its first unit is kept with its initial value, since `link.py` links the program's units in the order given, as a
 native link does with its objects. `tests/main/` checks that start-up passes the arguments of the program's main as
-that link resolves it, after a private function of that symbol name or a weak main in the first unit. `tests/regress/` holds the self-checking witnesses of
-the independent testing pass of this boundary (each
-returns 0 natively and failed or faulted here before its fix). The 35 programs (42 runs with the
+the whole link resolves it, the library's members included: after a private function of that symbol name or a weak
+main in the first unit, and a strong main of a member that the program's weak main pulls in. `tests/regress/`
+holds the self-checking witnesses of the independent testing pass of this boundary (each returns 0 natively and failed or faulted here before its fix). The 35 programs (42 runs with the
 `-O2` ones) took 173 seconds with the debug CLI on the shared machine, after building the library.
 The run-argument cases and the relinks were measured with the 24 tests before the allocator ones and
 before the longest-argument case: 243 s together on the shared machine (2026-11-25).
