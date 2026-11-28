@@ -200,8 +200,9 @@ impl<'m> Executor<'m> {
     /// promotions undone, the latest first.
     pub(crate) fn undo_gate_at(&mut self, promoting: bool) {
         let inst = self.retreat();
-        // The slots of an angle or a kind, the list's bytes and the handle table hold what they held when the
-        // gate ran: every later step is undone.
+        // The slots of an angle or a kind and the handle table hold what they held when the gate ran: every
+        // later step is undone. A control list's bytes may not: the gate may have made one of them qubits, so
+        // its controls come from the journal, as the gate read them.
         let (gate, resolved) = if let Inst::RotateBy { axis, angle, target, controls } = inst {
             (self.rotation(*axis, *angle).expect("an angle that ran is finite"), self.resolve_written(target, controls))
         } else if let Inst::GateAt { gate, target, controls } = inst {

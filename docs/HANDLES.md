@@ -474,8 +474,9 @@ It obtains it from a run that reports the steps an `apply` used:
 
 - **The report.** In a *measuring run*, the device reports, for each `bq_apply` the run executes, in order: its
   position in the run (the `j`-th `apply`), the applied function's name, the number of inputs it evaluated, the
-  largest number of steps any of them used to return or to fault with a code other than `budget`, and how many
-  reached the budget. The measuring run gives its `apply` calls a ceiling as their budget (below).
+  largest number of steps any of them used to return or to fault (the faulting step counted, also for an
+  explicit fault with the code `budget`), and how many the budget ended (those that had taken every step it
+  allowed and were still running; they have no count). The measuring run gives its `apply` calls a ceiling as their budget (below).
 - **Why that is enough.** A run that has returned or faulted stays so, and neither the block's base nor the entry
   state of the applied function depends on the budget (6.3). Hence, at the same `apply` of the same executable, with
   the same ordinary state at the call and the same operands other than the budget, any budget at least the reported

@@ -44,12 +44,15 @@ pub enum Undo {
     Apply,
     /// A `setjmp`. Words: the record's old bytes (two words, low half first), then the old result slot.
     Setjmp,
-    /// A gate with a qubit in memory (`GateAt`) whose memory bytes all held qubits already, undone by its
-    /// inverse. No words.
+    /// A gate with a qubit in memory or a qubit at a position given as a value (`GateAt`, `RotateBy`,
+    /// `GateBy`) whose memory bytes all held qubits already, undone by its inverse. Words: none, but for a
+    /// gate with a control list (`ctrl list`), the controls it read, as register wires in list order, then
+    /// their number.
     GateAt,
-    /// A `GateAt` that promoted memory bytes to qubits, undone by its inverse and then by un-promoting
-    /// them. Words: for each byte it promoted, in order, the address (shifted left by 8) and the byte's
-    /// old value (the low 8 bits); then the number of bytes promoted.
+    /// A `GateAt` record whose gate promoted memory bytes to qubits, undone by its inverse and then by
+    /// un-promoting them. Words: for each byte it promoted, in order, the address (shifted left by 8) and the
+    /// byte's old value (the low 8 bits); then the number of bytes promoted; then, for a gate with a control
+    /// list, its controls and their number as for `GateAt`.
     GateAtPromoted,
     /// A `longjmp`. Words: for each discarded frame from the top down, its packed position and its entry
     /// stack pointer; then the target frame's packed position and the stack pointer before the jump, the

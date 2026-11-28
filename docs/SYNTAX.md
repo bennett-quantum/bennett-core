@@ -262,7 +262,9 @@ fault, before the gate acts:
 3. the target is not among the controls (`qubit_alias`, 10, the interface's `control_in_use`).
 
 A qubit listed twice is one control. Each form means the same gate with those definite controls written
-out, each once. Undoing the gate reads the list again: every later step is undone, so it holds what it held.
+out, each once. Undoing the gate does not read the list again: the gate journals the controls it read, and
+undoing it applies the inverse gate under them, then turns any byte the gate made qubits back into ordinary
+memory (the gate may have made a byte of its own list qubits).
 
 ## Registers are not integers
 
